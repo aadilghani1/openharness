@@ -442,12 +442,6 @@ const kSwarmShortcuts = [
     group: ShortcutGroup.actions,
   ),
   AppShortcut(
-    action: ShortcutAction.showHistory,
-    activator: SingleActivator(LogicalKeyboardKey.keyY, meta: true),
-    label: 'Show full history',
-    group: ShortcutGroup.navigate,
-  ),
-  AppShortcut(
     action: ShortcutAction.newSwarm,
     activator: SingleActivator(LogicalKeyboardKey.keyT, meta: true),
     label: 'New Tab',

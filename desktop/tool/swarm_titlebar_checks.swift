@@ -1461,7 +1461,7 @@ private extension SwarmTitlebar {
     let closedItems = historyMenu.items.filter { $0.action == #selector(closedHistoryAction(_:)) }
     try checkTitlebar(recentItems.count == 15 && closedItems.count == 10, "Chrome-style direct History sections remain bounded")
     try checkTitlebar(historyMenu.items.filter { !$0.isSeparatorItem }.prefix(2).map(\.title) == ["Back", "Forward"], "History begins with Back and Forward")
-    try checkTitlebar(historyMenu.items.last?.title == "Show Full History" && historyMenu.items.last?.keyEquivalent == "y", "Full History uses Command-Y")
+    try checkTitlebar(historyMenu.items.last?.title == "Show Full History" && historyMenu.items.last?.keyEquivalent.isEmpty == true, "Full History remains available without a default shortcut")
     try checkTitlebar(historyMenu.items.allSatisfy { $0.submenu == nil }, "Recent work is available without nested menus")
     let recent = recentItems[0]
     let closed = closedItems[0]

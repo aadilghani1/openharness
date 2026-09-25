@@ -391,7 +391,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     historyMenu.addItem(.separator())
     appendHistorySection("Recently Visited", entries: visited, closed: false, trailingEdge: trailingEdge)
     historyMenu.addItem(.separator())
-    command("Show Full History", "y", "showHistory")
+    command("Show Full History", "", "showHistory")
     if let keymap { keymap.applyMenuKeys(to: historyMenu, context: flutterKeyContext) }
     let rowWidth = ceil(historyMenu.size.width * 1.2)
     historyMenu.minimumWidth = rowWidth
