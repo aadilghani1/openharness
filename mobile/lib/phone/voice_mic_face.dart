@@ -110,9 +110,10 @@ bool _spins(VoiceMicFace face) =>
 class VoiceMicCore extends StatelessWidget {
   const VoiceMicCore({super.key, required this.face, required this.dead});
 
-  /// The visible circle's diameter — and the voice capsule's height, so the
-  /// circle closes the capsule's right end. See `voice_status_pill.dart`.
-  static const double diameter = 52;
+  /// The visible circle's diameter. A size up from the 52 it was in the corner:
+  /// centred at the foot of Focus it is the one control on the screen, the way
+  /// a camera's shutter is.
+  static const double diameter = 64;
 
   final VoiceMicFace face;
 

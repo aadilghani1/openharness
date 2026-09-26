@@ -1696,20 +1696,34 @@ class _TerminalPageState extends State<TerminalPage>
                                   // what the keyboard is for; up there it covers
                                   // the oldest rows on screen.
                                   Positioned(
-                                    right: TerminalActionColumn.inset,
+                                    // Keyboard up: Find, top right. Down: the
+                                    // mic, centred across the foot — see
+                                    // [TerminalActionColumn.bottomInset].
+                                    left: _ownsInput ? null : 0,
+                                    right: _ownsInput
+                                        ? TerminalActionColumn.inset
+                                        : 0,
                                     top: _ownsInput
                                         ? TerminalActionColumn.topInset
                                         : null,
                                     bottom: _ownsInput
                                         ? null
                                         : TerminalActionColumn.bottomInset,
-                                    child: TerminalActionColumn(
-                                      voice: widget.voice,
-                                      session: session,
-                                      onSearch: _openSearch,
-                                      searchOnly: _ownsInput,
-                                      unread:
-                                          widget.notifier.agentNotices.unread,
+                                    // Centred in the full width it is given,
+                                    // at its own size — the mic's slot must
+                                    // not stretch to the terminal's width.
+                                    child: Align(
+                                      alignment: Alignment.bottomCenter,
+                                      widthFactor: _ownsInput ? 1 : null,
+                                      heightFactor: 1,
+                                      child: TerminalActionColumn(
+                                        voice: widget.voice,
+                                        session: session,
+                                        onSearch: _openSearch,
+                                        searchOnly: _ownsInput,
+                                        unread:
+                                            widget.notifier.agentNotices.unread,
+                                      ),
                                     ),
                                   ),
                                 ],
