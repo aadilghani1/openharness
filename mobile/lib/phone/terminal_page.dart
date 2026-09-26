@@ -1998,7 +1998,12 @@ class _TerminalPageState extends State<TerminalPage>
     final agentName = agent.displayName;
     showPhoneSheet(
       context,
-      title: '$agentName · $machineName',
+      // Where it runs, since the status line keeps only the name: `hn · M2:autonomous-harness (main)`.
+      title: [
+        '$agentName · $machineName',
+        if (agent.project?.label case final folder?) ':$folder',
+        if (agent.project?.shownBranch case final branch?) ' ($branch)',
+      ].join(),
       // The agent, then where it runs — the machine, then the folder with its parent beside the
       // branch — each behind its icon. The header has no room for the path.
       titleParts: [agentName],
