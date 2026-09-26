@@ -259,7 +259,21 @@ const daemonRosterJson = r'''
       "     |      |",
       "      \\    /",
       "   \\___'--'___/"
-    ]
+    ],
+    "lineSlots": [
+      "who",
+      "q",
+      "recap",
+      "n",
+      "summary"
+    ],
+    "lineExample": {
+      "who": "codex@office",
+      "q": "Bash: npm run migrate",
+      "recap": "3 files changed, tests pass",
+      "n": "3",
+      "summary": "2 done, 1 waiting 40m"
+    }
   },
   "drops": [
     {
@@ -292,15 +306,15 @@ const daemonRosterJson = r'''
           2026
         ]
       ],
-      "lore": "Named the way vim was: vi improved. tmux replaced screen; tim is tmux improved, and so is the app it lives in.",
+      "lore": "Named the way vim was: vi improved. tmux followed screen; tim is tmux improved, and so is the app it lives in.",
       "first": "oh hi. i'm tim. tmux, improved. what are we building?",
       "lines": {
-        "idle": "two agents idle. nothing needs you.",
-        "work": "two panes busy. i'm watching both.",
-        "need": "codex@office wants to run the migration. i'd say yes. [y/n]",
-        "done": "claude finished the refactor. 3 files, tests pass.",
-        "fail": "codex exited 1. same flaky test as tuesday.",
-        "back": "welcome back. 2 done, 1 waiting 40m. nothing on fire.",
+        "idle": "all quiet. no alerts.",
+        "work": "{n} panes busy. watching.",
+        "need": "bell in {who}: {q}",
+        "done": "silence in {who}: {recap}",
+        "fail": "pane is dead: {who}. {recap}",
+        "back": "reattached. {summary}.",
         "nap": "detached. reattach any time.",
         "boop": "hey. that's my status line."
       },
@@ -386,7 +400,17 @@ const daemonRosterJson = r'''
           "boop": "*"
         }
       },
-      "turn": "arms: a twirling baton in the status line, waving in the portrait"
+      "turn": "arms: a twirling baton in the status line, waving in the portrait",
+      "examples": {
+        "idle": "all quiet. no alerts.",
+        "work": "3 panes busy. watching.",
+        "need": "bell in codex@office: Bash: npm run migrate",
+        "done": "silence in codex@office: 3 files changed, tests pass",
+        "fail": "pane is dead: codex@office. 3 files changed, tests pass",
+        "back": "reattached. 2 done, 1 waiting 40m.",
+        "nap": "detached. reattach any time.",
+        "boop": "hey. that's my status line."
+      }
     },
     {
       "id": "fish",
@@ -411,16 +435,15 @@ const daemonRosterJson = r'''
       "first": "finally, a buddy for the 90s. hi!",
       "lines": {
         "idle": "all quiet in the pond.",
-        "work": "agents are swimming along nicely.",
-        "need": "claude has a question for you.",
-        "done": "codex finished!",
-        "fail": "that one sank. same test as last time.",
-        "back": "welcome back! 2 done while you were out.",
+        "work": "{n} swimming along nicely.",
+        "need": "{who} has a question: {q}",
+        "done": "{who} finished! {recap}",
+        "fail": "{who} sank: {recap}",
+        "back": "welcome back! {summary}.",
         "nap": "drifting for a bit. blub.",
-        "boop": "blub!"
+        "boop": "fish: Unknown command: boop"
       },
       "suggest": {
-        "need": " answer yes",
         "done": " open the diff"
       },
       "sprites": {
@@ -491,7 +514,17 @@ const daemonRosterJson = r'''
           "boop": " O"
         }
       },
-      "turn": "bubbles, . o O"
+      "turn": "bubbles, . o O",
+      "examples": {
+        "idle": "all quiet in the pond.",
+        "work": "3 swimming along nicely.",
+        "need": "codex@office has a question: Bash: npm run migrate",
+        "done": "codex@office finished! 3 files changed, tests pass",
+        "fail": "codex@office sank: 3 files changed, tests pass",
+        "back": "welcome back! 2 done, 1 waiting 40m.",
+        "nap": "drifting for a bit. blub.",
+        "boop": "fish: Unknown command: boop"
+      }
     },
     {
       "id": "ping",
@@ -511,12 +544,12 @@ const daemonRosterJson = r'''
       "lore": "Named after the sound of sonar. It shares its name with a 1933 picture book about a duck. It measures every round trip.",
       "first": "PING you (127.0.0.1): hi. you there?",
       "lines": {
-        "idle": "0 packets waiting. all good.",
-        "work": "3 agents replying. avg 12s per turn.",
-        "need": "PING you: codex@office is waiting. you there?",
-        "done": "64 bytes from claude: done time=4m12s",
-        "fail": "request timeout for codex. exit 1.",
-        "back": "you're back. 2 replies, 1 waiting, 0% loss.",
+        "idle": "0 packets waiting.",
+        "work": "{n} in flight.",
+        "need": "PING you: {who} is waiting: {q}",
+        "done": "64 bytes from {who}: {recap}",
+        "fail": "Request timeout for {who}: {recap}",
+        "back": "you're back. {summary}.",
         "nap": "floating. no packets for a bit.",
         "boop": "pong."
       },
@@ -581,7 +614,17 @@ const daemonRosterJson = r'''
           "boop": ""
         }
       },
-      "turn": "ripples, ~ ^ -"
+      "turn": "ripples, ~ ^ -",
+      "examples": {
+        "idle": "0 packets waiting.",
+        "work": "3 in flight.",
+        "need": "PING you: codex@office is waiting: Bash: npm run migrate",
+        "done": "64 bytes from codex@office: 3 files changed, tests pass",
+        "fail": "Request timeout for codex@office: 3 files changed, tests pass",
+        "back": "you're back. 2 done, 1 waiting 40m.",
+        "nap": "floating. no packets for a bit.",
+        "boop": "pong."
+      }
     },
     {
       "id": "bat",
@@ -605,12 +648,12 @@ const daemonRosterJson = r'''
       "lore": "cat has printed files since Unix v1. bat calls itself \"a cat(1) clone with wings.\" It hatches as a kitten; the wings ship in 2.0.",
       "first": "a cat(1) clone, with wings. i'll take it from here.",
       "lines": {
-        "idle": "watching. from above.",
-        "work": "three agents busy. i have the high ground.",
-        "need": "claude is waiting on you. it's been pacing.",
-        "done": "codex finished. i highlighted the interesting lines.",
-        "fail": "a test fell over. i'd start at line 212.",
-        "back": "you're back. i kept the lights low. 2 done.",
+        "idle": "watching from above.",
+        "work": "{n} busy. watching from above.",
+        "need": "{who} is waiting: {q}",
+        "done": "{who} finished. highlighted: {recap}",
+        "fail": "{who} fell over: {recap}",
+        "back": "you're back. {summary}. i kept the lights low.",
         "nap": "hanging upside down for a bit.",
         "boop": "...rude."
       },
@@ -672,7 +715,17 @@ const daemonRosterJson = r'''
           "ms": 150
         }
       },
-      "turn": "wings, flapping"
+      "turn": "wings, flapping",
+      "examples": {
+        "idle": "watching from above.",
+        "work": "3 busy. watching from above.",
+        "need": "codex@office is waiting: Bash: npm run migrate",
+        "done": "codex@office finished. highlighted: 3 files changed, tests pass",
+        "fail": "codex@office fell over: 3 files changed, tests pass",
+        "back": "you're back. 2 done, 1 waiting 40m. i kept the lights low.",
+        "nap": "hanging upside down for a bit.",
+        "boop": "...rude."
+      }
     },
     {
       "id": "vim",
@@ -697,16 +750,16 @@ const daemonRosterJson = r'''
           1991
         ]
       ],
-      "lore": "ed begat vi, and vi begat vim, Vi IMproved. The ~ are the empty lines of its buffer. Famous for being hard to leave.",
+      "lore": "ed begat vi, and vi begat vim, Vi IMproved. The ~ marks lines past the end of the buffer. Famous for being hard to leave.",
       "first": "hi. i'm vim. no, you can't exit me. :help pairing",
       "lines": {
-        "idle": "-- NORMAL -- nothing pending.",
-        "work": "-- INSERT -- three agents typing.",
-        "need": "E37: claude wants to write. add ! to approve.",
-        "done": "\"auth.ts\" 3L written. clean.",
-        "fail": "E492: codex tried something odd. exit 1.",
-        "back": ":earlier 40m  2 done, 1 waiting.",
-        "nap": "-- NORMAL -- resting my eyes.",
+        "idle": "--No lines in buffer--",
+        "work": "-- INSERT -- {n} agents typing.",
+        "need": "E325: ATTENTION  {who}: {q}",
+        "done": "\"{who}\" written. {recap}",
+        "fail": "(1 of 1): {who}: {recap}",
+        "back": ":earlier  {summary}.",
+        "nap": ":sleep 900",
         "boop": "-- VISUAL -- you selected me."
       },
       "sprites": {
@@ -760,17 +813,27 @@ const daemonRosterJson = r'''
       },
       "moodParts": {
         "mode": {
-          "idle": "-- NORMAL --",
+          "idle": "",
           "work": "-- INSERT --",
-          "need": ":confirm (y/n)?",
-          "done": "\"auth.ts\" 3L written",
+          "need": "(y/n/a/q/l/^E/^Y)?",
+          "done": "\"pair.log\" 3L, 64B written",
           "fail": "E492: Not an editor command",
           "back": ":earlier 40m",
-          "nap": "-- NORMAL -- zz",
+          "nap": ":sleep 900",
           "boop": "-- VISUAL --"
         }
       },
-      "turn": "a blinking cursor, _"
+      "turn": "a blinking cursor, _",
+      "examples": {
+        "idle": "--No lines in buffer--",
+        "work": "-- INSERT -- 3 agents typing.",
+        "need": "E325: ATTENTION  codex@office: Bash: npm run migrate",
+        "done": "\"codex@office\" written. 3 files changed, tests pass",
+        "fail": "(1 of 1): codex@office: 3 files changed, tests pass",
+        "back": ":earlier  2 done, 1 waiting 40m.",
+        "nap": ":sleep 900",
+        "boop": "-- VISUAL -- you selected me."
+      }
     },
     {
       "id": "zsh",
@@ -784,26 +847,26 @@ const daemonRosterJson = r'''
       "family": [
         [
           "sh",
-          1971
+          1979
         ],
         [
-          "bash",
-          1989
+          "ksh",
+          1983
         ],
         [
           "zsh",
           1990
         ]
       ],
-      "lore": "A hermit crab that keeps moving into better shells: the Thompson shell, bash (the Bourne-Again SHell), then zsh, named after a teaching assistant's login.",
-      "first": "sh, then bash, now me. born again, twice.",
+      "lore": "A hermit crab that keeps moving into better shells: the Bourne shell, the Korn shell, then zsh, named after a teaching assistant's login.",
+      "first": "the default interactive shell is now zsh. hi.",
       "lines": {
-        "idle": "no jobs. clean prompt.",
-        "work": "[3] jobs running in the background.",
-        "need": "zsh: suspended (tty input)  codex@office",
-        "done": "[1]  + done  claude  auth refactor",
-        "fail": "[2]  - exit 1  codex  billing.spec.ts",
-        "back": "you were away 40m. i autocorrected nothing. promise.",
+        "idle": "no jobs.",
+        "work": "{n} jobs running in the background.",
+        "need": "zsh: suspended (tty input)  {who}: {q}",
+        "done": "[1]  + done       {who}  {recap}",
+        "fail": "[1]  + exit 1     {who}  {recap}",
+        "back": "you were away. {summary}. i autocorrected nothing.",
         "nap": "moving into a quieter shell for a bit.",
         "boop": "zsh: command not found: boop"
       },
@@ -851,7 +914,17 @@ const daemonRosterJson = r'''
           "ms": 260
         }
       },
-      "turn": "claws, (\\/) (/\\) snapping"
+      "turn": "claws, (\\/) (/\\) snapping",
+      "examples": {
+        "idle": "no jobs.",
+        "work": "3 jobs running in the background.",
+        "need": "zsh: suspended (tty input)  codex@office: Bash: npm run migrate",
+        "done": "[1]  + done       codex@office  3 files changed, tests pass",
+        "fail": "[1]  + exit 1     codex@office  3 files changed, tests pass",
+        "back": "you were away. 2 done, 1 waiting 40m. i autocorrected nothing.",
+        "nap": "moving into a quieter shell for a bit.",
+        "boop": "zsh: command not found: boop"
+      }
     },
     {
       "id": "biff",
@@ -868,17 +941,17 @@ const daemonRosterJson = r'''
           1980
         ]
       ],
-      "lore": "biff told Berkeley Unix users when mail arrived. It was named after a dog who barked at the mail carrier. Now it barks when an agent needs you.",
+      "lore": "biff told Berkeley Unix users when mail arrived (4.0BSD). It was named after a dog who barked at the mail carrier, and `biff y` switched it on. Now it barks when an agent needs you.",
       "first": "woof. i'm biff. i bark when you have mail. and agents.",
       "lines": {
         "idle": "watching the door.",
-        "work": "three agents inside. i hear them working.",
-        "need": "woof! codex@office needs you!",
-        "done": "claude's done! good agent! good!",
-        "fail": "grr. a test failed. i'm sitting next to it.",
-        "back": "you're back!!! 2 done, 1 waiting. i waited too.",
+        "work": "{n} inside. i hear them working.",
+        "need": "new mail for you: {who} asks {q}",
+        "done": "{who}'s done! good agent! {recap}",
+        "fail": "grr. {who}: {recap}",
+        "back": "you're back! {summary}.",
         "nap": "lying down by the door.",
-        "boop": "!!!"
+        "boop": "woof."
       },
       "sprites": {
         "0.1": "U{e}w{e}U",
@@ -943,7 +1016,17 @@ const daemonRosterJson = r'''
           "boop": "\\U/"
         }
       },
-      "turn": "tail, ~ / | \\ wagging"
+      "turn": "tail, ~ / | \\ wagging",
+      "examples": {
+        "idle": "watching the door.",
+        "work": "3 inside. i hear them working.",
+        "need": "new mail for you: codex@office asks Bash: npm run migrate",
+        "done": "codex@office's done! good agent! 3 files changed, tests pass",
+        "fail": "grr. codex@office: 3 files changed, tests pass",
+        "back": "you're back! 2 done, 1 waiting 40m.",
+        "nap": "lying down by the door.",
+        "boop": "woof."
+      }
     },
     {
       "id": "fzf",
@@ -957,24 +1040,24 @@ const daemonRosterJson = r'''
       "family": [
         [
           "find",
-          null
+          1974
         ],
         [
           "fzf",
           2013
         ]
       ],
-      "lore": "find walks directory trees. fzf finds things fuzzily, shows its match count, and keeps the best match next to the prompt.",
+      "lore": "find has walked directory trees since 1974. fzf finds things fuzzily, shows its match count, and keeps the best match next to the prompt.",
       "first": "> hello   1/1   it's me, fzf. i find things.",
       "lines": {
         "idle": "0/0. nothing to find.",
-        "work": "3/12 agents busy. filtering out the noise.",
-        "need": "> needs you   1/1   codex@office",
-        "done": "best match for 'done': claude, auth refactor.",
-        "fail": "0/1 matches for 'passing tests'. codex failed.",
-        "back": "4/7 things changed. want the top one?",
+        "work": "{n} busy. filtering out the noise.",
+        "need": "> needs you  {who}: {q}",
+        "done": "match: {who}  {recap}",
+        "fail": "0 matches for 'passing': {who}: {recap}",
+        "back": "{summary}. best match at the bottom, as always.",
         "nap": "no query. resting.",
-        "boop": "> boop   0/0"
+        "boop": "> boop  0/0"
       },
       "sprites": {
         "0.1": ";{e};{e};",
@@ -1034,7 +1117,17 @@ const daemonRosterJson = r'''
           "boop": "0/0"
         }
       },
-      "turn": "fuzz, ; : , '"
+      "turn": "fuzz, ; : , '",
+      "examples": {
+        "idle": "0/0. nothing to find.",
+        "work": "3 busy. filtering out the noise.",
+        "need": "> needs you  codex@office: Bash: npm run migrate",
+        "done": "match: codex@office  3 files changed, tests pass",
+        "fail": "0 matches for 'passing': codex@office: 3 files changed, tests pass",
+        "back": "2 done, 1 waiting 40m. best match at the bottom, as always.",
+        "nap": "no query. resting.",
+        "boop": "> boop  0/0"
+      }
     },
     {
       "id": "tldr",
@@ -1052,18 +1145,18 @@ const daemonRosterJson = r'''
         ],
         [
           "tldr",
-          null
+          2013
         ]
       ],
-      "lore": "man pages date from the first Unix Programmer's Manual. tldr pages are the short version: one example, no essay. It gets smaller with every release.",
+      "lore": "man pages date from the first Unix Programmer's Manual. tldr pages are the short version: a few examples, no essay. It gets smaller with every release.",
       "first": "tldr: hi.",
       "lines": {
         "idle": "nothing.",
-        "work": "3 working.",
-        "need": "codex: needs you.",
-        "done": "done. tests pass.",
-        "fail": "failed. flaky test.",
-        "back": "tl;dr 2 done, 1 waiting.",
+        "work": "{n} working.",
+        "need": "{who}: {q}",
+        "done": "{who}: done.",
+        "fail": "{who}: failed.",
+        "back": "tl;dr {summary}.",
         "nap": "zz.",
         "boop": "no."
       },
@@ -1105,7 +1198,17 @@ const daemonRosterJson = r'''
           " tl;dr"
         ]
       },
-      "turn": "a twirling baton beside it"
+      "turn": "a twirling baton beside it",
+      "examples": {
+        "idle": "nothing.",
+        "work": "3 working.",
+        "need": "codex@office: Bash: npm run migrate",
+        "done": "codex@office: done.",
+        "fail": "codex@office: failed.",
+        "back": "tl;dr 2 done, 1 waiting 40m.",
+        "nap": "zz.",
+        "boop": "no."
+      }
     },
     {
       "id": "grue",
@@ -1126,11 +1229,11 @@ const daemonRosterJson = r'''
       "first": "it is pitch black. you are likely to be paired with a grue.",
       "lines": {
         "idle": "...",
-        "work": "it is dark. your agents are working. i can hear them.",
-        "need": "something in the dark wants your answer.",
-        "done": "the lamp is lit. codex is done.",
-        "fail": "a test was eaten. it wasn't me.",
-        "back": "you came back to the dark. brave.",
+        "work": "it is dark. {n} are working. i can hear them.",
+        "need": "something in the dark wants your answer: {q}",
+        "done": "the lamp is lit. {who} is done.",
+        "fail": "{who} was eaten. it wasn't me.",
+        "back": "you have moved into a dark place.",
         "nap": "...",
         "boop": "you touched something in the dark."
       },
@@ -1188,7 +1291,17 @@ const daemonRosterJson = r'''
           "boop": "       "
         }
       },
-      "turn": "eyes, flickering"
+      "turn": "eyes, flickering",
+      "examples": {
+        "idle": "...",
+        "work": "it is dark. 3 are working. i can hear them.",
+        "need": "something in the dark wants your answer: Bash: npm run migrate",
+        "done": "the lamp is lit. codex@office is done.",
+        "fail": "codex@office was eaten. it wasn't me.",
+        "back": "you have moved into a dark place.",
+        "nap": "...",
+        "boop": "you touched something in the dark."
+      }
     }
   ]
 }

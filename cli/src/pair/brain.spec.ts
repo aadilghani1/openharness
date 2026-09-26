@@ -14,9 +14,10 @@ import { PairJournal } from './journal.js'
 import { PairSensor, type PairSubject } from './sensor.js'
 import { PairFleet, relayPairLinkOpener, type PairLinkOpener } from './fleet.js'
 import { PairTriage, actionsFor, parseTriage, type PairOneShot } from './triage.js'
-import { PairVoice, DONE_COOLDOWN_MS } from './voice.js'
+import { PairVoice, DISPLAY_MS, UNSOLICITED_GAP_MS, doneLine, failLine, fillLine, needLine } from './voice.js'
 import { PairBrain, type AnswerResult } from './brain.js'
-import type { DaemonSay, PairEvent } from './protocol.js'
+import type { DaemonSay, PairEvent, PairQuestion } from './protocol.js'
+import type { Autonomy } from './floor.js'
 import { BackendSocket } from '../backendSocket.js'
 
 type Frame = Record<string, unknown>
@@ -65,7 +66,7 @@ function laptop() {
   return { sensor, open, answers, links, reply: (r: Frame) => { answerReply = r } }
 }
 
-function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>; linked?: boolean } = {}) {
+function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>; linked?: boolean; model?: boolean; autonomy?: Autonomy } = {}) {
   const local = sensorFor('machine-a')
   const remote = laptop()
   const frames: Frame[] = []
@@ -80,14 +81,14 @@ function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: str
   })
   const oneshot = opts.oneshot === undefined ? null : opts.oneshot
   const answer = vi.fn(opts.answer ?? (async () => ({ ok: true })))
-  const triage = new PairTriage({ oneshot, now: Date.now })
+  const triage = new PairTriage({ oneshot, modelEnabled: () => opts.model === true, now: Date.now })
   const voice = new PairVoice({ sendLocal: (f) => frames.push(f), now: Date.now })
   brain = new PairBrain({
     pairing: { enabled: () => local.enabled(), pairedDaemon: () => local.pairedDaemon() },
     fleet, triage, voice,
     sendLocal: (f) => frames.push(f),
     sendLocalTo: (connId, frame) => { toClient.push({ connId, frame }); return true },
-    answer, now: Date.now,
+    answer, autonomy: () => opts.autonomy ?? 'suggest', now: Date.now,
   })
   const says = () => frames.filter((f) => f.type === 'daemon_say').map((f) => f.payload as DaemonSay)
   const unsays = () => frames.filter((f) => f.type === 'daemon_unsay').map((f) => f.payload as Frame)
@@ -109,110 +110,177 @@ afterEach(() => {
 })
 
 describe('triage', () => {
-  const question = { requestId: 'q1', text: 'Bash: npm test', options: ['1. Yes', '2. No, and tell Claude what to do'], multi: false, deny: false, since: 0 }
+  const question: PairQuestion = { requestId: 'q1', text: 'Approve Bash command: npm test', options: ['1. Yes', '2. Yes, and don\'t ask again for: npm *', '3. No, and tell Claude what to do'], multi: false, deny: false, allow: true, permission: true, since: 0 }
   const input = { daemonId: 'tim', machineId: 'machine-a', who: 'api', engine: 'claude', question, present: true }
+  const on = () => true
 
-  it('uses one small model call, cached per requestId', async () => {
-    const oneshot = vi.fn<PairOneShot>(async () => '{"line": "api wants to run the tests. harmless.", "recommend": "1. Yes"}')
-    const triage = new PairTriage({ oneshot, now: Date.now })
-    const first = await triage.triage(input)
-    const again = await triage.triage(input)
-    expect(first).toEqual({ line: 'api wants to run the tests. harmless. [y/n]', recommend: '1. Yes', tier: 1,
-      actions: [{ key: 'y', label: 'Yes', choice: '1. Yes' }, { key: 'n', label: 'No, and tell Claude what to do', choice: '2. No, and tell Claude what to do' }] })
-    expect(again).toBe(first)
+  it('says the template at once, keys first; [y] is a ONE-TIME yes, never "don\'t ask again"', () => {
+    const triage = new PairTriage({ oneshot: null, now: Date.now })
+    expect(triage.template(input)).toEqual({
+      line: '[y/n/g] bell in api: Approve Bash command: npm test', recommend: null, tier: 0,
+      actions: [{ key: 'y', label: 'Yes', choice: '1. Yes' }, { key: 'n', label: 'No, and tell Claude what to do', choice: '3. No, and tell Claude what to do' }, { key: 'g', label: 'open', choice: 'open' }],
+    })
+  })
+
+  it('offers no [y] when the only yes answers for more than this once', () => {
+    const only = { ...question, options: ['1. Yes, allow all edits during this session (shift+tab)', '2. No'] }
+    expect(actionsFor(only, null).map((a) => a.key)).toEqual(['n', 'g'])
+    expect(actionsFor(only, '1. Yes, allow all edits during this session (shift+tab)').map((a) => a.key)).toEqual(['n', 'g'])
+    const codex = { ...question, options: ['1. Yes, proceed (y)', "2. Yes, and don't ask again for commands that start with `npm test` (p)", '3. No, and tell Codex what to do differently (esc)'] }
+    expect(actionsFor(codex, null)[0]).toEqual({ key: 'y', label: 'Yes, proceed (y)', choice: '1. Yes, proceed (y)' })
+    expect(parseTriage('{"line":"x","recommend":"2. Yes, and don\'t ask again for: npm *"}', question.options)).toBe('off-list')
+  })
+
+  it('offers [y] only on an allow-class permission prompt; anything else gets [g] to open the pane', () => {
+    expect(actionsFor({ ...question, allow: false }, null).map((a) => a.key)).toEqual(['n', 'g'])
+    expect(actionsFor({ ...question, permission: false }, null).map((a) => a.key)).toEqual(['n', 'g'])
+    expect(actionsFor({ ...question, deny: true }, '1. Yes').map((a) => a.key)).toEqual(['n', 'g'])
+    expect(actionsFor({ ...question, multi: true }, null).map((a) => a.key)).toEqual(['n', 'g'])
+    expect(actionsFor({ ...question, options: ['Postgres', 'SQLite'] }, 'SQLite')).toEqual([{ key: 'g', label: 'open', choice: 'open' }])
+    expect(actionsFor(question, null, { watch: true })).toEqual([{ key: 'g', label: 'open', choice: 'open' }])
+  })
+
+  it('asks a model only when the person opted in, once per requestId, and replaces the line whole', async () => {
+    const oneshot = vi.fn<PairOneShot>(async () => '{"line": "api wants to run the tests.", "recommend": "1. Yes"}')
+    const off = new PairTriage({ oneshot, now: Date.now })
+    expect(await off.refine(input)).toBeNull()
+    expect(oneshot).not.toHaveBeenCalled()
+    const triage = new PairTriage({ oneshot, modelEnabled: on, now: Date.now })
+    const first = await triage.refine(input)
+    expect(first).toEqual({ line: '[y/n/g] api wants to run the tests.', recommend: '1. Yes', tier: 1, actions: triage.template(input).actions })
+    expect(await triage.refine(input)).toBe(first)
     expect(oneshot).toHaveBeenCalledTimes(1)
     const prompt = oneshot.mock.calls[0][0]
-    expect(prompt).toContain('<question>\nBash: npm test\n</question>')
+    expect(prompt).toContain('<question>\nApprove Bash command: npm test\n</question>')
+    // No example that leans toward yes: the need line is not among the voice samples.
+    expect(prompt).not.toMatch(/i'd say|\[y\/n\]/)
     expect(prompt.length).toBeLessThan(4_500)   // ~1k tokens
   })
 
-  it('falls back to the template whole on a timeout', async () => {
-    const triage = new PairTriage({ oneshot: () => new Promise(() => {}), now: Date.now })
-    const pending = triage.triage(input)
+  it('keeps the template on a timeout, bad JSON, an off-list suggestion or a bad line', async () => {
+    const hang = new PairTriage({ oneshot: () => new Promise(() => {}), modelEnabled: on, now: Date.now })
+    const pending = hang.triage(input)
     await settle(2_500)
-    expect(await pending).toMatchObject({ tier: 0, why: 'timeout', recommend: null, line: 'api needs you. Bash: npm test [y/n]' })
+    expect(await pending).toMatchObject({ tier: 0, why: 'timeout', recommend: null, line: '[y/n/g] bell in api: Approve Bash command: npm test' })
+    for (const [reply, why] of [
+      ['sure! api wants to run tests', 'bad-json'],
+      ['{"line": "api wants to run the tests.", "recommend": "Yes, and always allow rm"}', 'off-list'],
+      ['{"line": "", "recommend": null}', 'bad-line'],
+    ] as const) {
+      const triage = new PairTriage({ oneshot: async () => reply, modelEnabled: on, now: Date.now })
+      expect(await triage.triage(input)).toMatchObject({ tier: 0, why, recommend: null })
+    }
   })
 
-  it.each([
-    ['bad JSON', 'sure! api wants to run tests', 'bad-json'],
-    ['an off-list suggestion', '{"line": "api wants to run the tests.", "recommend": "Yes, and always allow rm"}', 'off-list'],
-    ['a line that is not a line', '{"line": "", "recommend": null}', 'bad-line'],
-  ])('falls back to the template whole on %s', async (_name, reply, why) => {
-    const triage = new PairTriage({ oneshot: async () => reply, now: Date.now })
-    const result = await triage.triage(input)
-    expect(result).toMatchObject({ tier: 0, why, recommend: null })
-    expect(result.line).toBe('api needs you. Bash: npm test [y/n]')
-  })
-
-  it('never sends a deny-class prompt to the model, never recommends it, and never offers [y]', async () => {
+  it('never sends a deny-class prompt to the model, nor asks while nobody is here or past the cap', async () => {
     const oneshot = vi.fn<PairOneShot>(async () => '{"line": "ship it", "recommend": "1. Yes"}')
-    const triage = new PairTriage({ oneshot, now: Date.now })
-    const result = await triage.triage({ ...input, question: { ...question, requestId: 'q-push', text: 'Bash: git push --force origin main', deny: true } })
-    expect(oneshot).not.toHaveBeenCalled()
-    expect(result).toMatchObject({ tier: 0, why: 'deny', recommend: null })
-    expect(result.actions.map((a) => a.key)).toEqual(['n'])
-    expect(result.line).toMatch(/\[n\]$/)
-    expect(result.line).not.toContain('[y')
-  })
-
-  it('does not call the model while nobody is at the computer, nor past the hourly cap', async () => {
-    const oneshot = vi.fn<PairOneShot>(async () => '{"line": "api wants to run the tests.", "recommend": null}')
-    const triage = new PairTriage({ oneshot, now: Date.now, hourlyCap: 2 })
+    const triage = new PairTriage({ oneshot, modelEnabled: on, now: Date.now, hourlyCap: 2 })
+    expect(await triage.triage({ ...input, question: { ...question, requestId: 'q-push', deny: true } })).toMatchObject({ tier: 0, why: 'deny' })
     expect(await triage.triage({ ...input, present: false })).toMatchObject({ tier: 0, why: 'absent' })
-    for (const id of ['a', 'b', 'c']) await triage.triage({ ...input, question: { ...question, requestId: id } })
+    expect(oneshot).not.toHaveBeenCalled()
+    for (const id of ['a', 'b', 'c']) await triage.refine({ ...input, question: { ...question, requestId: id } })
     expect(oneshot).toHaveBeenCalledTimes(2)
     expect(await triage.triage({ ...input, question: { ...question, requestId: 'd' } })).toMatchObject({ tier: 0, why: 'cap' })
-    await settle(60 * 60_000)
-    expect(await triage.triage({ ...input, question: { ...question, requestId: 'e' } })).toMatchObject({ tier: 1 })
-  })
-
-  it('offers keys only a person can check: [y] is the recommendation or a plain yes, [n] a plain no', () => {
-    const q = (options: string[], extra = {}) => ({ ...question, options, ...extra })
-    expect(actionsFor(q(['Yes', 'No']), 'No').map((a) => a.key)).toEqual(['n'])
-    expect(actionsFor(q(['Postgres', 'SQLite']), null)).toEqual([])
-    expect(actionsFor(q(['Postgres', 'SQLite']), 'SQLite')).toEqual([{ key: 'y', label: 'SQLite', choice: 'SQLite' }])
-    expect(actionsFor(q(['Yes', 'No'], { multi: true }), 'Yes').map((a) => a.key)).toEqual(['n'])
-    expect(parseTriage('{"line":"x","recommend":"2. no, and tell claude what to do"}', question.options))
-      .toEqual({ line: 'x', recommend: '2. No, and tell Claude what to do' })
   })
 })
 
 describe('voice', () => {
-  it('never repeats a line, keeps the done cooldown, and caps what it says per minute', () => {
+  it('fills slots, keeps case, spacing and digits, and never shows a line with a slot it cannot fill', () => {
+    expect(fillLine('bell in {who}: {q}', { who: 'api@office', q: 'Bash: npm test' })).toBe('bell in api@office: Bash: npm test')
+    expect(fillLine('{who} finished! {recap}', { who: 'api' })).toBeNull()
+    expect(needLine('vim', { who: 'api', question: 'Bash: npm test' }, [{ key: 'n' }, { key: 'g' }])).toBe('[n/g] E325: ATTENTION  api: Bash: npm test')
+    expect(needLine('ping', { who: 'api', question: 'Bash: npm run 2' }, [])).toBe('PING you: api is waiting: Bash: npm run 2')
+    // grue's need has no {who}: the harness is appended rather than left out.
+    expect(needLine('grue', { who: 'api', question: 'Bash: ls' }, [{ key: 'g' }])).toBe('[g] something in the dark wants your answer: Bash: ls (api)')
+    expect(failLine('zsh', { who: 'api', reason: 'exit 1' })).toBe('[1]  + exit 1     api  exit 1')
+    expect(doneLine('fish', { who: 'web' })).toBe('web finished.')   // {recap} missing: the neutral fact
+    expect(doneLine('fish', { who: 'web', recap: '3 tests fixed' })).toBe('web finished! 3 tests fixed')
+  })
+
+  it('says at most one unsolicited line every two minutes, never twice, and takes lines back', () => {
     const frames: Frame[] = []
     const voice = new PairVoice({ sendLocal: (f) => frames.push(f), now: Date.now })
-    const say = (id: string, mood: DaemonSay['mood']) => voice.say({ id, mood, line: id, actions: [], ttlMs: 30_000, about: { machineId: 'm', agentId: 'a' } })
-    expect(say('done:1', 'done')).toBe(true)
-    expect(say('done:1', 'done')).toBe(false)
-    expect(say('done:2', 'done')).toBe(false)
-    vi.advanceTimersByTime(DONE_COOLDOWN_MS)
-    expect(say('done:2', 'done')).toBe(true)
-    for (let i = 0; i < 4; i++) expect(say(`fail:${i}`, 'fail')).toBe(true)
-    expect(say('fail:x', 'fail')).toBe(false)        // six in a minute
-    expect(say('need:x', 'need')).toBe(true)         // a question still gets through
-    expect(frames.filter((f) => f.type === 'daemon_say')).toHaveLength(7)
-    expect(voice.unsay('need:x', 'answered')).toBe(true)
-    expect(voice.unsay('need:x', 'answered')).toBe(false)
+    const say = (id: string, mood: DaemonSay['mood']) => voice.say({ id, mood, line: id, actions: [], ttlMs: DISPLAY_MS, about: { machineId: 'm', agentId: 'a' } })
+    expect(say('need:1', 'need')).toBe(true)
+    expect(say('need:1', 'need')).toBe(false)
+    expect(say('fail:1', 'fail')).toBe(false)          // within two minutes of the last unsolicited line
+    expect(say('back:1', 'back')).toBe(true)           // a return is asked for: it speaks
+    expect(say('say:1', 'say')).toBe(true)
+    vi.advanceTimersByTime(UNSOLICITED_GAP_MS)
+    expect(say('fail:1', 'fail')).toBe(true)
+    expect(frames.filter((f) => f.type === 'daemon_say')).toHaveLength(4)
+    expect(voice.unsay('fail:1', 'gone')).toBe(true)
+    expect(voice.unsay('fail:1', 'gone')).toBe(false)
+  })
+
+  it('keys work only while the line shows; a replacement keeps the time it had left', () => {
+    const frames: Frame[] = []
+    const voice = new PairVoice({ sendLocal: (f) => frames.push(f), now: Date.now })
+    voice.say({ id: 'need:1', mood: 'need', line: 'a', actions: [{ key: 'y', label: 'Yes', choice: 'Yes' }], ttlMs: DISPLAY_MS, about: { machineId: 'm', agentId: 'a' } })
+    vi.advanceTimersByTime(2_000)
+    expect(voice.replace('need:1', { line: 'b', actions: [] })).toBe(true)
+    expect(frames.at(-1)).toMatchObject({ type: 'daemon_say', payload: { id: 'need:1', line: 'b', ttlMs: DISPLAY_MS - 2_000 } })
+    vi.advanceTimersByTime(DISPLAY_MS - 2_000)
+    expect(voice.get('need:1')).toBeNull()
+    expect(voice.replace('need:1', { line: 'c', actions: [] })).toBe(false)
   })
 })
 
+/** A permission prompt as the watcher reads it: the whole dialog, every line. */
+const permit = (cmd: string, description = 'Run it') => ({ permission: true, dialog: `Bash command\n\n  ${cmd}\n  ${description}\n\nDo you want to proceed?\n1. Yes\n2. No` })
+const tick = async (): Promise<void> => { await settle(UNSOLICITED_GAP_MS) }
+
 describe('the brain', () => {
-  it('says a new question once, with its keys, and puts it in daemon_state', async () => {
+  it('says a new question at once, keys first, and lists it in daemon_state with its keys while it shows', async () => {
     const w = world()
     w.brain.clientAttached('local:window')
     await settle()
     w.remote.sensor.turnStarted('api')
-    w.remote.sensor.question('api', 'q_1', ask('Bash: npm test'))
+    w.remote.sensor.question('api', 'q_1', ask('Approve Bash command: npm test'), permit('npm test'))
     await settle(200)
     expect(w.says()).toEqual([expect.objectContaining({
-      mood: 'need', line: 'api@laptop needs you. Bash: npm test [y/n]',
+      mood: 'need', line: '[y/n/g] bell in api@laptop: Approve Bash command: npm test', ttlMs: DISPLAY_MS,
       about: { machineId: 'machine-b', agentId: 'api', requestId: 'q_1' },
-      actions: [{ key: 'y', label: 'Yes', choice: 'Yes' }, { key: 'n', label: 'No', choice: 'No' }],
+      actions: [{ key: 'y', label: 'Yes', choice: 'Yes' }, { key: 'n', label: 'No', choice: 'No' }, { key: 'g', label: 'open', choice: 'open' }],
     })])
-    const state = w.frames.filter((f) => f.type === 'daemon_state').at(-1)!.payload as Frame
-    expect(state).toMatchObject({ pair: 'tim', working: 0, needs: [{ machineId: 'machine-b', machine: 'laptop', agentId: 'api',
-      requestId: 'q_1', question: 'Bash: npm test', id: w.says()[0].id }] })
-    expect((state.machines as Frame[]).map((m) => [m.machineId, m.status])).toEqual([['machine-a', 'ok'], ['machine-b', 'ok']])
+    const state = () => w.frames.filter((f) => f.type === 'daemon_state').at(-1)!.payload as Frame
+    expect(state()).toMatchObject({ pair: 'tim', working: 0, needs: [{ machineId: 'machine-b', machine: 'laptop', agentId: 'api',
+      requestId: 'q_1', question: 'Approve Bash command: npm test', allow: true, id: w.says()[0].id }] })
+    expect((state().machines as Frame[]).map((m) => [m.machineId, m.status])).toEqual([['machine-a', 'ok'], ['machine-b', 'ok']])
+    // Once the line has gone, so have its keys: the need stays listed, for the person to open.
+    await settle(DISPLAY_MS + 200)
+    expect((state().needs as Frame[])[0]).not.toHaveProperty('actions')
+    expect(await w.act({ requestId: 'r1', id: w.says()[0].id, choice: 'y' })).toMatchObject({ ok: false, error: 'GONE' })
+  })
+
+  it('replaces the template in place when an opted-in model answers in time — never waits for it', async () => {
+    let answer: (text: string) => void = () => {}
+    const w = world({ oneshot: () => new Promise((resolve) => { answer = resolve }), model: true })
+    w.brain.clientAttached('local:window')
+    await settle()
+    w.local.question('web', 'q_1', ask('Approve Bash command: npm test'), permit('npm test'))
+    await settle(10)
+    expect(w.says()).toEqual([expect.objectContaining({ line: '[y/n/g] bell in web: Approve Bash command: npm test' })])
+    answer('{"line": "web wants to run the tests.", "recommend": null}')
+    await settle(10)
+    const replaced = w.frames.filter((f) => f.type === 'daemon_say').map((f) => f.payload as DaemonSay)
+    expect(replaced.map((s) => [s.id, s.line])).toEqual([[replaced[0].id, '[y/n/g] bell in web: Approve Bash command: npm test'], [replaced[0].id, '[y/n/g] web wants to run the tests.']])
+  })
+
+  it('never speaks about the pane the person is looking at', async () => {
+    const w = world()
+    w.brain.clientAttached('local:window')
+    w.brain.onPresence('local:window', { active: true, focusAgentId: 'web' })
+    await settle()
+    w.local.question('web', 'q_1', ask('Approve Bash command: npm test'), permit('npm test'))
+    w.local.failed('web', 'the engine exited')
+    await settle(200)
+    expect(w.says()).toEqual([])
+    expect((w.brain.state().needs as Frame[]).map((n) => n.agentId)).toEqual(['web'])
+    w.brain.onPresence('local:window', { focusAgentId: null })
+    w.local.question('api', 'q_2', ask('Approve Bash command: ls'), permit('ls'))
+    await settle(200)
+    expect(w.says().map((s) => s.about.agentId)).toEqual(['api'])
   })
 
   it('a reconnect does not repeat a line — neither the laptop\'s relay nor the window', async () => {
@@ -231,8 +299,7 @@ describe('the brain', () => {
     w.brain.clientAttached('local:window')
     await settle(200)
     expect(w.says()).toHaveLength(1)
-    // It is handed the state at once, and the state again once the laptop has answered.
-    expect(w.toClient.filter((t) => t.frame.type === 'daemon_state')).toHaveLength(2)
+    expect(w.toClient.filter((t) => t.frame.type === 'daemon_state').length).toBeGreaterThanOrEqual(2)
     expect(w.frames.filter((f) => f.type === 'daemon_state').at(-1)?.payload).toMatchObject({ needs: [{ requestId: 'q_1' }] })
   })
 
@@ -246,7 +313,7 @@ describe('the brain', () => {
     expect((w.brain.state().needs as unknown[]).length).toBe(2)
   })
 
-  it('says a finished turn with its recap, a failure with its reason, and nothing for an interrupt', async () => {
+  it('counts finished turns instead of saying them (cleared when the person looks); says a failure', async () => {
     const w = world()
     w.brain.clientAttached('local:window')
     await settle()
@@ -255,13 +322,20 @@ describe('the brain', () => {
     w.local.recap('web', 'Fixed the login redirect.')
     w.local.turnStarted('api')
     w.local.turnEnded('api', { aborted: true })
-    await settle(DONE_COOLDOWN_MS)
+    w.remote.sensor.turnStarted('api')
+    w.remote.sensor.turnEnded('api')
+    await settle(200)
+    expect(w.says()).toEqual([])
+    expect(w.brain.state().done).toEqual({ count: 2, last: [
+      expect.objectContaining({ machineId: 'machine-b', name: 'api@laptop', recap: null }),
+      expect.objectContaining({ machineId: 'machine-a', name: 'web', recap: 'Fixed the login redirect.' }),
+    ] })
+    w.brain.onPresence('local:window', { doneSeen: true })
+    expect(w.brain.state().done).toEqual({ count: 0, last: [] })
     w.remote.sensor.failed('api', 'the engine exited')
-    await settle(2_000)
-    expect(w.says().map((s) => [s.mood, s.line])).toEqual([
-      ['done', 'web finished. Fixed the login redirect.'],
-      ['fail', 'api@laptop failed. the engine exited'],
-    ])
+    await settle(200)
+    expect(w.says().map((s) => [s.mood, s.line])).toEqual([['fail', '[g] pane is dead: api@laptop. the engine exited']])
+    expect(w.brain.state().failing).toEqual([expect.objectContaining({ name: 'api', reason: 'the engine exited' })])
   })
 
   it('answered elsewhere sends daemon_unsay', async () => {
@@ -282,16 +356,34 @@ describe('the brain', () => {
     w.remote.reply({ ok: true })
     w.brain.clientAttached('local:window')
     await settle()
-    w.remote.sensor.question('api', 'q_remote', ask('Bash: npm test'))
+    w.remote.sensor.question('api', 'q_remote', ask('Approve Bash command: npm test'), permit('npm test'))
+    await settle(200)
+    const remoteSay = w.says()[0]
+    expect(await w.act({ requestId: 'r1', id: remoteSay.id, choice: 'y' })).toEqual({ requestId: 'r1', id: remoteSay.id, ok: true, machineId: 'machine-b' })
+    expect(w.remote.answers).toEqual([expect.objectContaining({ agentId: 'api', requestId: 'q_remote', expectRequestId: 'q_remote', choice: 'Yes', by: 'key' })])
+    expect(w.answer).not.toHaveBeenCalled()
+    await tick()
     w.local.question('web', 'q_local', ask('Read src/auth.ts?'))
     await settle(200)
-    const [remoteSay, localSay] = w.says()
-    expect(await w.act({ requestId: 'r1', id: remoteSay.id, choice: 'Yes' })).toEqual({ requestId: 'r1', id: remoteSay.id, ok: true, machineId: 'machine-b' })
-    expect(w.remote.answers).toEqual([expect.objectContaining({ agentId: 'api', requestId: 'q_remote', expectRequestId: 'q_remote', choice: 'Yes' })])
-    expect(w.answer).not.toHaveBeenCalled()
+    const localSay = w.says()[1]
     expect(await w.act({ requestId: 'r2', id: localSay.id, choice: 'n' })).toMatchObject({ ok: true, machineId: 'machine-a' })
     expect(w.answer).toHaveBeenCalledWith({ agentId: 'web', requestId: 'q_local', choice: 'No' })
+    expect(await w.act({ requestId: 'r3', id: localSay.id, choice: 'g' })).toMatchObject({ ok: false, error: 'GONE' })
     expect(w.unsays().map((u) => u.id)).toEqual([remoteSay.id, localSay.id])
+  })
+
+  it('[g] only opens the pane; at autonomy watch the lines carry nothing else and no key answers', async () => {
+    const w = world({ autonomy: 'watch' })
+    w.brain.clientAttached('local:window')
+    await settle()
+    w.local.question('web', 'q_1', ask('Approve Bash command: npm test'), permit('npm test'))
+    await settle(200)
+    const say = w.says()[0]
+    expect(say.actions).toEqual([{ key: 'g', label: 'open', choice: 'open' }])
+    expect(say.line).toBe('[g] bell in web: Approve Bash command: npm test')
+    expect(await w.act({ requestId: 'r1', id: say.id, choice: 'g' })).toMatchObject({ ok: true, open: { machineId: 'machine-a', agentId: 'web' } })
+    expect(await w.act({ requestId: 'r2', id: say.id, choice: 'y' })).toMatchObject({ ok: false, error: 'NOT_OFFERED' })
+    expect(w.answer).not.toHaveBeenCalled()
   })
 
   it('a stale answer sends no keys: the question on the harness is no longer the one the line was about', async () => {
@@ -303,24 +395,60 @@ describe('the brain', () => {
     const first = w.says()[0]
     // The dialog moved on before the key arrived (the watcher reports a different question).
     w.local.question('web', 'q_second', ask('Bash: git push origin main'))
-    expect(await w.act({ requestId: 'r1', id: first.id, choice: 'Yes' })).toMatchObject({ ok: false, error: expect.stringMatching(/GONE|STALE_QUESTION/) })
+    expect(await w.act({ requestId: 'r1', id: first.id, choice: 'n' })).toMatchObject({ ok: false, error: expect.stringMatching(/GONE|STALE_QUESTION/) })
     expect(w.answer).not.toHaveBeenCalled()
   })
 
-  it('refuses a key for a deny-class prompt whatever the client sends, and one never offered', async () => {
+  it('surfaces the dialog\'s own STALE_QUESTION in daemon_act_result, from this machine and from another', async () => {
+    const w = world({ answer: async () => ({ ok: false, error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' }) })
+    w.remote.reply({ error: 'STALE_QUESTION', detail: 'That question is no longer open.' })
+    w.brain.clientAttached('local:window')
+    await settle()
+    w.local.question('web', 'q_local', ask('Approve Bash command: ls'), permit('ls'))
+    await settle(200)
+    const localSay = w.says()[0]
+    expect(await w.act({ requestId: 'r1', id: localSay.id, choice: 'y' }))
+      .toEqual({ requestId: 'r1', id: localSay.id, ok: false, machineId: 'machine-a', error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' })
+    await tick()
+    w.remote.sensor.question('api', 'q_remote', ask('Approve Bash command: npm test'), permit('npm test'))
+    await settle(200)
+    const remoteSay = w.says()[1]
+    expect(await w.act({ requestId: 'r2', id: remoteSay.id, choice: 'y' }))
+      .toEqual({ requestId: 'r2', id: remoteSay.id, ok: false, machineId: 'machine-b', error: 'STALE_QUESTION', detail: 'That question is no longer open.' })
+    expect(w.remote.answers[0]).toMatchObject({ expectRequestId: 'q_remote', by: 'key' })
+    // Nothing was typed, and those keys can never work again: both lines go, as stale.
+    expect(w.unsays()).toEqual([{ id: localSay.id, reason: 'stale' }, { id: remoteSay.id, reason: 'stale' }])
+  })
+
+  it('reads the WHOLE dialog: a wrapped `&& git push` is deny-class, and gets no [y] from any key', async () => {
     const w = world()
     w.brain.clientAttached('local:window')
     await settle()
-    w.local.question('web', 'q_push', ask('Bash: git push --force origin main'))
+    // The clipped title shows only the first line; the second line pushes.
+    w.local.question('web', 'q_push', ask('Approve Bash command: npm test &&'), { permission: true, dialog: 'Bash command\n\n  npm test &&\n  git push origin main\n  Test then push\n\nDo you want to proceed?\n1. Yes\n2. No' })
     await settle(200)
     const say = w.says()[0]
-    expect(say.actions.map((a) => a.key)).toEqual(['n'])
+    expect(w.local.snapshot().harnesses[0].question).toMatchObject({ deny: true, allow: false })
+    expect(say.actions.map((a) => a.key)).toEqual(['n', 'g'])
     expect(await w.act({ requestId: 'r1', id: say.id, choice: 'Yes' })).toMatchObject({ ok: false, error: 'NOT_OFFERED' })
     expect(await w.act({ requestId: 'r2', id: say.id, choice: 'y' })).toMatchObject({ ok: false, error: 'NOT_OFFERED' })
     expect(w.answer).not.toHaveBeenCalled()
   })
 
-  it('a laptop that is not linked is never dialled; one too old for the pair brain is named as such', async () => {
+  it('reports what a rule or the pair did on its own, afterwards; a key\'s own act is not reported', async () => {
+    const w = world()
+    w.brain.clientAttached('local:window')
+    await settle()
+    w.local.turnStarted('web')
+    w.local.acted({ agentId: 'web', name: 'web', engine: 'codex' }, { by: 'rule', action: 'answer', text: 'answered "Yes" to "Bash: npm test"' })
+    await settle(200)
+    expect(w.says().map((s) => [s.mood, s.line])).toEqual([['auto', 'rule: web answered "Yes" to "Bash: npm test"']])
+    w.local.acted({ agentId: 'web', name: 'web', engine: 'codex' }, { by: 'key', action: 'stop', text: 'stopped the turn' })
+    await settle(200)
+    expect((w.brain.state().acted as Frame[]).map((a) => a.by)).toEqual(['rule'])
+  })
+
+  it('a laptop that is not linked is never dialled; a sleeping one is asleep, not failing; one too old is named', async () => {
     const unlinked = world({ linked: false })
     const open = vi.spyOn(unlinked.remote, 'open')
     unlinked.brain.clientAttached('local:window')
@@ -328,7 +456,7 @@ describe('the brain', () => {
     expect(open).not.toHaveBeenCalled()
     expect(unlinked.fleet.machines()[1].status).toBe('unlinked')
 
-    // One the account already lists as offline (a sleeping laptop) is named unreachable without a dial.
+    // One the account already lists as offline (a sleeping laptop) is asleep, without a dial.
     const dial = vi.fn(async () => { throw new Error('unused') })
     const asleep = new PairFleet({
       local: { machineId: () => 'a', name: () => 'desk', snapshot: () => ({ machineId: 'a', epoch: 'e', seq: 0, rev: 0, harnesses: [] }), subscribe: () => () => {}, journal: () => ({ epoch: 'e', seq: 0, entries: [] }) },
@@ -338,7 +466,7 @@ describe('the brain', () => {
     asleep.start()
     await settle()
     expect(dial).not.toHaveBeenCalled()
-    expect(asleep.machines()[1].status).toBe('unreachable')
+    expect(asleep.machines()[1].status).toBe('asleep')
     asleep.stop()
 
     let fleetStatus = ''

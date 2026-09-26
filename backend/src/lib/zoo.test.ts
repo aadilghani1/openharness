@@ -234,6 +234,37 @@ describe('pair, nickname, easter', () => {
   })
 })
 
+describe('autonomy — the pair brain\'s dial', () => {
+  it('defaults to suggest, and a stored zoo without one reads as suggest', () => {
+    expect(emptyZoo().autonomy).toBe('suggest')
+    expect(parseZoo({ daemons: [daemon('tim')], pair: 'tim' }).autonomy).toBe('suggest')
+    expect(parseZoo({ autonomy: 'act-on-key' }).autonomy).toBe('act-on-key')
+    expect(parseZoo({ autonomy: 'yolo' }).autonomy).toBe('suggest')
+  })
+
+  it('sets each level, is a no-op when unchanged, and drops a level it does not know without refusing the batch', () => {
+    let zoo = emptyZoo()
+    for (const level of ['watch', 'act-on-key', 'act-within-rules', 'suggest'] as const) {
+      const r = apply(zoo, [{ op: 'zoo.autonomy', level }])
+      expect(r.changed).toBe(true)
+      expect(r.zoo.autonomy).toBe(level)
+      zoo = r.zoo
+    }
+    expect(apply(zoo, [{ op: 'zoo.autonomy', level: 'suggest' }]).changed).toBe(false)
+    const mixed = apply(zoo, [{ op: 'zoo.autonomy', level: 'bypass' }, { op: 'zoo.habit', key: 'turn' }])
+    expect(mixed.zoo.autonomy).toBe('suggest')
+    expect(mixed.zoo.habits).toEqual(['turn'])
+    expect(zooOpSchema.safeParse({ op: 'zoo.autonomy', level: '' }).success).toBe(false)
+    expect(zooOpSchema.safeParse({ op: 'zoo.autonomy', level: 'watch', extra: 1 }).success).toBe(false)
+  })
+
+  it('a guest seed brings its dial when it set one, and keeps the account\'s otherwise', () => {
+    const account = apply(emptyZoo(), [{ op: 'zoo.autonomy', level: 'watch' }]).zoo
+    expect(apply(account, [{ op: 'zoo.seed', zoo: { daemons: [daemon('tim')] } }]).zoo.autonomy).toBe('watch')
+    expect(apply(account, [{ op: 'zoo.seed', zoo: { daemons: [daemon('tim')], autonomy: 'act-on-key' } }]).zoo.autonomy).toBe('act-on-key')
+  })
+})
+
 describe('seed — a guest zoo on first sign-in', () => {
   const guest = {
     daemons: [daemon('fish', { nickname: 'wanda', shiny: true }), daemon('nope'), { id: 'vim' }, daemon('bat', { egg: 'night' })],

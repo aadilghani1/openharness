@@ -16,9 +16,11 @@ const FLEET_REQUESTS = new Set(['grid_fleet_capabilities', 'grid_fleet_run', 'gr
 const FLEET_RESULTS = new Set([...FLEET_REQUESTS].map(type => `${type}_result`))
 const MACHINE_REQUESTS = new Set(['git_project_info', 'git_pull_request', 'machine_resources', 'api_connections'])
 const MACHINE_RESULTS = new Set([...MACHINE_REQUESTS].map(type => `${type}_result`))
-/** The pair brain, machine to machine (daemons/BRAIN.md). A watch carries question text and recaps; an
- * answer or a pause acts on a harness. Sealed both ways, always: the relay sees the outer type only. */
-export const PAIR_REQUESTS = new Set(['pair_watch', 'pair_journal', 'pair_read', 'pair_pause', 'pair_answer'])
+/** The pair brain, machine to machine (daemons/BRAIN.md). A watch carries question text and recaps; the
+ * writes (answer, send, stop, start, pause, resume) act on a harness through the owning machine's floor
+ * (pair/owner.ts). Sealed both ways, always: the relay sees the outer type only. */
+export const PAIR_REQUESTS = new Set(['pair_watch', 'pair_journal', 'pair_read', 'pair_list',
+  'pair_answer', 'pair_send', 'pair_stop', 'pair_start', 'pair_pause', 'pair_resume'])
 export const PAIR_RESULTS = new Set([...PAIR_REQUESTS].map(type => `${type}_result`))
 /** Pushed to one watcher with the daemon's `wrapTarget` (pairwise, that connection only), never broadcast. */
 export const PAIR_PUSHES = new Set(['pair_event'])

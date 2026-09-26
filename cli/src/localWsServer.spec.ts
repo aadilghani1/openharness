@@ -19,10 +19,12 @@ class FakeBackend implements LocalWsBackend {
   binaries: TerminalBinaryClear[] = []
   unregisters: string[] = []
   focuses: Array<[string, string | null]> = []
+  tools: string[] = []
 
-  registerLocalClient(connId: string, sink: LocalClientSink): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean } = {}): boolean {
     this.connId = connId
     this.sink = sink
+    if (opts.tool) this.tools.push(connId)
     return true
   }
   async unregisterLocalClient(connId: string): Promise<void> {
@@ -478,6 +480,29 @@ describe('local CLI WebSocket', () => {
     // Neither this daemon's dispatcher (whose send() uploads) nor the relayed machine ever saw one.
     expect(backend.frames).toEqual([])
     expect(relayed).toEqual([])
+  })
+
+  it('hands daemon_talk to the pair harness and never passes it on; says a tool client is one', async () => {
+    const backend = new FakeBackend()
+    const talks: Array<Record<string, unknown>> = []
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, {
+      machineId, backend,
+      onDaemonTalk: (_connId, payload, reply) => { talks.push(payload); reply({ type: 'daemon_talk_result', payload: { requestId: payload.requestId, ok: true, started: true } }) },
+    })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, tool: true } }))
+    await connected
+    expect(backend.tools).toEqual([backend.connId])
+    const result = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'daemon_talk', payload: { requestId: 't1', text: 'what needs me?' } }))
+    expect(await result).toEqual({ type: 'daemon_talk_result', payload: { requestId: 't1', ok: true, started: true } })
+    expect(talks).toEqual([{ requestId: 't1', text: 'what needs me?' }])
+    expect(backend.frames).toEqual([])
+    ws.close()
   })
 
   it('answers daemon_act UNSUPPORTED when there is no pair brain, rather than passing it on', async () => {

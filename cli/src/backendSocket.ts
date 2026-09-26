@@ -29,6 +29,7 @@ import { AuthSessionManager, AuthSessionError } from './lib/authSession.js'
 import { VERSION } from './version.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
 import { AgentStopError } from './lib/stopAgentService.js'
+import { isHiddenBuiltin } from './dsh/builtins.js'
 import { ENGINES, PROCESS_ENGINES, isTerminalEngine, type AgentEngine, type ProcessEngine } from './engines/types.js'
 import { listDir } from './lib/fsBrowse.js'
 import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
@@ -447,6 +448,12 @@ export class BackendSocket {
   private appOpenOwed = false
   private readonly downChains = new Map<string, Promise<void>>()
   private readonly localClients = new Map<string, LocalClientSink>()
+  /**
+   * Loopback clients that are TOOLS, not windows (`machine_select { tool: true }`): `harness pair`, the
+   * `harnessd` MCP server. They get their RPC replies like any local client, but they are not a person at
+   * this computer — not presence, not a window to push to, and never what wakes the pair brain.
+   */
+  private readonly toolClients = new Set<string>()
   private terminalStreams: TerminalStreamManager | null = null
   private readonly terminalP2p: TerminalP2pResponderPool
   private readonly p2pPendingOpens = new Map<string, Set<string>>()
@@ -539,7 +546,7 @@ export class BackendSocket {
       stateDir: join(env.ADAPTER_DATA_DIR, 'orchestrator'),
       workspaceDir: join(homedir(), 'harnesses', 'orchestrated'),
       command: this.orchestratorCommand ?? `${[process.execPath, ...process.execArgv, process.argv[1]].map(shellQuote).join(' ')} orchestrator --port ${env.PORT} --machine ${shellQuote(this.machineId)}`,
-      catalog: () => listInstalledDsh().filter(d => d.manifest.kind !== 'viewer' && !!d.manifest.engine && supportsFirstPrompt(d.manifest.engine)).map(d => ({
+      catalog: () => listInstalledDsh().filter(d => d.manifest.kind !== 'viewer' && !isHiddenBuiltin(d) && !!d.manifest.engine && supportsFirstPrompt(d.manifest.engine)).map(d => ({
         id: d.id, name: d.manifest.name, description: d.manifest.description ?? '', engine: d.manifest.engine!, viewer: !!d.manifest.viewer,
       })),
       supportsEngine: engine => ENGINES.includes(engine as AgentEngine) && supportsFirstPrompt(engine as AgentEngine),
@@ -639,6 +646,10 @@ export class BackendSocket {
    * sends, and the loopback-only `pair` request. Null answers UNSUPPORTED, like an older daemon.
    */
   pairService: PairService | null = null
+  /** The owning machine's reads and writes for the pair (pair/owner.ts). Null: those answer UNSUPPORTED. */
+  pairOwner: { handle: (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>> } | null = null
+  /** The control interface (pair/control.ts) behind the loopback `pair` request: the verbs it answers. */
+  pairControl: { verbs: ReadonlySet<string>; local: (payload: Record<string, unknown>, connId: string) => Promise<Record<string, unknown>> } | null = null
   /** The account's zoo changed (a `zoo_changed` from the backend) — cli.ts re-reads which daemon is paired. */
   onZooChanged: ((revision: number) => void) | null = null
   runtimeProfileProvider: ((session: RegisteredSession) => string | null) | null = null
@@ -683,7 +694,7 @@ export class BackendSocket {
    *  polling a pane for a dialog is pointless with nobody rendering it, but "nobody" used to mean
    *  "no device", which left the window unable to learn that an agent was blocked. */
   hasLocalClient(): boolean {
-    return this.localClients.size > 0
+    return this.localClients.size > this.toolClients.size
   }
 
   /** True after a paired device has completed the E2EE hello/welcome session. */
@@ -1049,6 +1060,7 @@ export class BackendSocket {
   /** One frame to every window on this computer — or, given a function, each window its own. */
   sendLocal(frame: Frame | ((connId: string) => Frame)): void {
     for (const [connId, sink] of this.localClients) {
+      if (this.toolClients.has(connId)) continue
       const sent = typeof frame === 'function' ? frame(connId) : frame
       if (env.LOG_FRAMES) logFrame('→', 'local', sent)
       if (!sink.sendFrame(sent)) void this.unregisterLocalClient(connId)
@@ -1068,6 +1080,7 @@ export class BackendSocket {
   /** Ask one local desktop to select focus, without opening panes in every window. */
   sendFirstLocal(frame: Frame): boolean {
     for (const [connId, sink] of this.localClients) {
+      if (this.toolClients.has(connId)) continue
       if (sink.sendFrame(frame)) return true
       void this.unregisterLocalClient(connId)
     }
@@ -1181,16 +1194,17 @@ export class BackendSocket {
   }
 
   /** Attach one authenticated loopback desktop client to the same RPC and event plane as cloud web. */
-  registerLocalClient(connId: string, sink: LocalClientSink): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean } = {}): boolean {
     if (!isLocalClientId(connId) || this.localClients.has(connId)) return false
     this.localClients.set(connId, sink)
+    if (opts.tool) { this.toolClients.add(connId); return true }
     this.sendAppPresence('open')
     this.onLocalClient?.(connId, true)
     return true
   }
 
   /** The windows attached right now — for a listener that arrives after some of them did. */
-  localClientIds(): string[] { return [...this.localClients.keys()] }
+  localClientIds(): string[] { return [...this.localClients.keys()].filter((connId) => !this.toolClients.has(connId)) }
 
   /** A window (or `hn`) on this computer attached or went away — the pair brain thinks only while one is here. */
   onLocalClient: ((connId: string, attached: boolean) => void) | null = null
@@ -1198,7 +1212,7 @@ export class BackendSocket {
   /** Release all connection-scoped state when the loopback WebSocket closes. */
   async unregisterLocalClient(connId: string): Promise<void> {
     if (!this.localClients.delete(connId)) return
-    this.onLocalClient?.(connId, false)
+    if (!this.toolClients.delete(connId)) this.onLocalClient?.(connId, false)
     this.rowStateWindows.delete(connId)
     this.viewerForwarder.closeConnection(connId)
     this.pairService?.unwatch(connId)
@@ -1455,25 +1469,32 @@ export class BackendSocket {
   }
 
   /**
-   * `pair_watch` / `pair_journal` / `pair_read` from another machine's brain, and the local `pair`.
-   *
-   * `pair_answer` and `pair_pause` are contract only for now: answering waits on the stale-answer guard
-   * (a late answer must never land on the NEXT dialog), and pausing on the pair harness's control layer.
-   * Both answer UNSUPPORTED, which is exactly what an older daemon says, so a brain already handles it.
+   * The pair brain's requests (daemons/BRAIN.md):
+   *   - `pair_watch` / `pair_journal` from another machine's brain, answered by the sensor;
+   *   - `pair_list`, `pair_read` and the writes (`pair_answer`, `pair_send`, `pair_stop`, `pair_start`,
+   *     `pair_pause`, `pair_resume`), answered by the owning machine's PairOwner (pair/owner.ts), which
+   *     re-checks the floor and journals every action;
+   *   - the loopback-only `pair`: the control interface's verbs (pair/control.ts) when it is wired, the
+   *     sensor's own read verbs otherwise.
+   * An older daemon answers every one of them UNSUPPORTED, which a brain already handles.
    */
   private handlePair(connId: string, type: string, payload: Record<string, unknown>, local: boolean,
     reply: (t: string, rid: unknown, p: Record<string, unknown>) => void): void {
     const requestId = payload.requestId
     const service = this.pairService
+    const detached = (work: Promise<Record<string, unknown>>): void => {
+      void work.then((result) => reply(type, requestId, result)).catch(() => reply(type, requestId, { error: 'PAIR_FAILED' }))
+    }
     if (type === 'pair') {
       if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Ask the pair brain on this computer.' }); return }
+      const verb = typeof payload.verb === 'string' ? payload.verb : ''
+      const control = this.pairControl
+      if (control && control.verbs.has(verb)) { detached(control.local(payload, connId)); return }
       if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-      void service.local(payload)
-        .then((result) => reply(type, requestId, result))
-        .catch(() => reply(type, requestId, { error: 'PAIR_FAILED' }))
+      detached(service.local(payload))
       return
     }
-    if (type === 'pair_answer' || type === 'pair_pause' || !service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+    if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
     if (!service.enabled()) { reply(type, requestId, { error: 'PAIR_OFF' }); return }
     if (type === 'pair_watch') {
       if (payload.off === true) { service.unwatch(connId); reply(type, requestId, { ok: true }); return }
@@ -1481,7 +1502,15 @@ export class BackendSocket {
       reply(type, requestId, { snapshot })
       return
     }
-    reply(type, requestId, type === 'pair_journal' ? { ...service.journal(payload) } : service.read(payload))
+    if (type === 'pair_journal') { reply(type, requestId, { ...service.journal(payload) }); return }
+    const owner = this.pairOwner
+    if (!owner) {
+      reply(type, requestId, type === 'pair_read' ? service.read(payload) : { error: 'UNSUPPORTED' })
+      return
+    }
+    // Detached: an answer keys a dialog and a pause saves a conversation, both seconds of work that must
+    // not hold the watch's pushes behind them on this connection.
+    detached(owner.handle(type, payload))
   }
 
   /** One `pair_event` to one watcher: plaintext over loopback, sealed pairwise (`wrapTarget`) otherwise.

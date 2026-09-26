@@ -30,7 +30,8 @@ const MAX_WS_MESSAGE_BYTES = TERMINAL_LOCAL_PASTE_MAX_PAYLOAD_BYTES + 4_096
 import type { WindowVoiceReply } from './cable/windowRoute.js'
 
 export interface LocalWsBackend {
-  registerLocalClient: (connId: string, sink: LocalClientSink) => boolean
+  /** `tool`: `harness pair` or the harnessd MCP server — answered like any local client, never presence. */
+  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean }) => boolean
   unregisterLocalClient: (connId: string) => Promise<void>
   handleLocalFrame: (connId: string, frame: Frame) => void
   handleLocalBinary: (connId: string, frame: TerminalBinaryClear) => Promise<void>
@@ -108,6 +109,8 @@ export interface LocalWsServerOptions {
    */
   onDaemonAct?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
   onDaemonPresence?: (connId: string, payload: Record<string, unknown>) => void
+  /** `daemon_talk { requestId, text }`: the person's words to their daemon (the pair harness) → `daemon_talk_result`. */
+  onDaemonTalk?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
 }
 
 /** One candidate, as the window draws it in the picker. */
@@ -326,7 +329,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             return
           }
           if (requestedMachineId === options.machineId) {
-            if (!options.backend.registerLocalClient(connId, sink)) {
+            if (!options.backend.registerLocalClient(connId, sink, payload.tool === true ? { tool: true } : {})) {
               close(1011, 'local registration failed')
               return
             }
@@ -530,10 +533,15 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // THE PAIR BRAIN'S FRAMES. Loopback only, in both directions: never forwarded to a relayed machine,
         // never dispatched into the backend socket (whose `send()` uploads). Not awaited on this chain — an
         // answer relayed to another machine takes seconds, and this chain carries the terminal's keystrokes.
-        if (!isBinary && (parsed?.type === 'daemon_act' || parsed?.type === 'daemon_presence')) {
+        if (!isBinary && (parsed?.type === 'daemon_act' || parsed?.type === 'daemon_presence' || parsed?.type === 'daemon_talk')) {
           const payload = (parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
             ? parsed.payload : {}) as Record<string, unknown>
           if (parsed.type === 'daemon_presence') { options.onDaemonPresence?.(connId, payload); return }
+          if (parsed.type === 'daemon_talk') {
+            if (options.onDaemonTalk) { options.onDaemonTalk(connId, payload, (frame) => sink.sendFrame(frame)); return }
+            sink.sendFrame({ type: 'daemon_talk_result', payload: { requestId: payload.requestId, ok: false, error: 'UNSUPPORTED' } })
+            return
+          }
           if (options.onDaemonAct) { options.onDaemonAct(connId, payload, (frame) => sink.sendFrame(frame)); return }
           sink.sendFrame({ type: 'daemon_act_result', payload: { requestId: payload.requestId, id: payload.id, ok: false, error: 'UNSUPPORTED' } })
           return

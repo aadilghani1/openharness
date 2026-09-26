@@ -18,9 +18,11 @@
  */
 import type { ShapedQuestion } from '../lib/askQuestion.js'
 import type { PairJournal } from './journal.js'
+import { isAllowClass } from './classify.js'
 import {
   isDenyClass, statusText, str,
-  type PairEvent, type PairHarness, type PairJournalEntry, type PairJournalPage, type PairService, type PairSnapshot,
+  type PairAction, type PairActor, type PairEvent, type PairHarness, type PairJournalEntry, type PairJournalPage,
+  type PairService, type PairSnapshot,
 } from './protocol.js'
 
 export interface PairSubject {
@@ -28,6 +30,8 @@ export interface PairSubject {
   engine: string
   /** Why this agent is not watched, if it is not. */
   excluded?: 'terminal' | 'pair' | 'subagent' | null
+  /** Its folder: an edit or read inside it is in the project (pair/classify.ts inProject). */
+  cwd?: string | null
 }
 
 export interface PairSensorDeps {
@@ -99,7 +103,11 @@ export class PairSensor implements PairService {
     this.change(h, opts.replay ? null : { kind: 'done', ...(opts.aborted ? { text: 'interrupted' } : {}) }, opts.replay)
   }
 
-  question(agentId: string, requestId: string, shaped: ShapedQuestion[]): void {
+  /**
+   * A dialog opened. `detail.dialog` is the WHOLE dialog as painted (askQuestion.ts `dialog`): deny-class
+   * and allow-class are read over all of it, here on the owning machine, never over the clipped title.
+   */
+  question(agentId: string, requestId: string, shaped: ShapedQuestion[], detail?: { permission: boolean; dialog: string }): void {
     const h = this.admit(agentId)
     if (!h || !requestId) return
     // The watcher re-announces an open question to a device that (re)joins: same id, not a new ask.
@@ -107,8 +115,11 @@ export class PairSensor implements PairService {
     const first = shaped[0]
     const text = statusText(first?.q ?? '', 500)
     const options = (first?.options ?? []).map((option) => statusText(option, 120)).slice(0, 12)
-    const deny = isDenyClass(first?.q ?? '', first?.options ?? [])
-    h.question = { requestId, text, options, multi: first?.multi === true, deny, since: this.now() }
+    const dialog = [detail?.dialog ?? '', first?.q ?? ''].join('\n')
+    const deny = isDenyClass(dialog, first?.options ?? [])
+    const permission = detail?.permission === true
+    const allow = !deny && isAllowClass(detail?.dialog ?? first?.q ?? '', { permission, cwd: this.deps.describe(agentId)?.cwd ?? null })
+    h.question = { requestId, text, options, multi: first?.multi === true, deny, allow, permission, since: this.now() }
     const baseline = this.carried.delete(requestId)
     this.change(h, baseline ? null : { kind: 'question', requestId, text, options, deny }, baseline)
   }
@@ -136,6 +147,33 @@ export class PairSensor implements PairService {
     h.failing = text
     h.working = false
     this.change(h, { kind: 'fail', text })
+  }
+
+  /**
+   * Something the daemon did to a harness on this machine (pair/owner.ts): EVERY action is journaled,
+   * whoever asked for it. Pushed like any change, so the brain can report what a rule or the pair did.
+   * A harness that is no longer live (it was just paused) is journaled under the name it had and pushed
+   * as gone.
+   */
+  acted(subject: { agentId: string; name: string; engine: string },
+    fields: { by: PairActor; action: PairAction; text: string; requestId?: string }): PairJournalEntry | null {
+    if (!this.on || !subject.agentId) return null
+    const text = statusText(fields.text, 300)
+    const entryFields = { kind: 'act' as const, by: fields.by, action: fields.action, text, ...(fields.requestId ? { requestId: fields.requestId } : {}) }
+    const h = this.harnesses.get(subject.agentId) ?? this.admit(subject.agentId)
+    if (h) return this.change(h, entryFields)
+    const entry = this.deps.journal.append({
+      at: this.now(), agentId: subject.agentId, name: statusText(subject.name, 80) || subject.agentId.slice(0, 8), engine: subject.engine, ...entryFields,
+    })
+    this.rev++
+    this.emit({ machineId: this.deps.machineId(), rev: this.rev, agentId: subject.agentId, harness: null, removed: true, entry })
+    return entry
+  }
+
+  /** One harness's state, or null when it is not watched. */
+  harness(agentId: string): PairHarness | null {
+    const h = this.harnesses.get(agentId)
+    return h ? copy(h) : null
   }
 
   removed(agentId: string): void {
@@ -226,7 +264,7 @@ export class PairSensor implements PairService {
     return h
   }
 
-  private change(h: PairHarness, fields: EntryFields | null, baseline = false): void {
+  private change(h: PairHarness, fields: EntryFields | null, baseline = false): PairJournalEntry | null {
     this.rev++
     const entry = fields
       ? this.deps.journal.append({ at: this.now(), agentId: h.agentId, name: h.name, engine: h.engine, ...fields })
@@ -239,6 +277,7 @@ export class PairSensor implements PairService {
       ...(entry ? { entry } : {}),
       ...(baseline ? { baseline: true } : {}),
     })
+    return entry ?? null
   }
 
   private emit(event: PairEvent): void {

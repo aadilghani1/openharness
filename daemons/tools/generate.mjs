@@ -167,9 +167,13 @@ const server = {
   daemons: roster.daemons.map(d => ({ id: d.id, n: d.n, drop: d.drop, rarity: d.rarity })),
 }
 output('backend/src/lib/daemonRoster.g.ts', `${header}export const DAEMON_ROSTER = ${JSON.stringify(server, null, 2)} as const\n`)
-// The pair brain's template voice (cli/src/pair/voice.ts): who exists and what each says per mood. The cli
-// compiles only what is under cli/src, so it gets its own copy rather than reading this folder.
-const pair = { daemons: roster.daemons.map(d => ({ id: d.id, lines: d.lines })) }
+// The pair brain's template voice (cli/src/pair/voice.ts): who exists and what each says per mood, and —
+// for the pair harness's instructions (cli/src/pair/pairHarness.ts) — each daemon's lore, first words and
+// family. The cli compiles only what is under cli/src, so it gets its own copy rather than reading this folder.
+const pair = {
+  lineSlots: rules.lineSlots ?? [],
+  daemons: roster.daemons.map(d => ({ id: d.id, lore: d.lore, first: d.first, family: d.family, lines: d.lines })),
+}
 output('cli/src/pair/roster.g.ts', `${header}export const PAIR_ROSTER = ${JSON.stringify(pair, null, 2)} as const\n`)
 // Frames every port must reproduce exactly (desktop and hn tests read this file).
 const frames = { sprites: [], portraits: [] }

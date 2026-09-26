@@ -2,84 +2,128 @@
  * The daemon's voice, as the pair brain speaks it (daemons/README.md "Voice", BRAIN.md "Three tiers").
  *
  * Two halves:
- *   - TEMPLATE LINES (tier 0): the paired daemon's own roster line for the mood, with the example facts in
- *     it swapped for real ones. Roster lines are written about an example harness ("codex@office wants to
- *     run the migration"); a line is used only when, once its example harness is replaced by the real one,
- *     it claims nothing else that might be false. Otherwise the fact is said plainly. Every line carries
- *     information: the harness, and what it wants or did.
- *   - PairVoice: whether a line may be said at all. Silent by default; it speaks for need, done (20 s
- *     cooldown), fail and back; never the same line twice (a reconnect is not a reason to repeat); and a
- *     line about a question answered elsewhere is taken back (`daemon_unsay`).
+ *   - LINES: the paired daemon's roster line for the mood is a TEMPLATE with slots — `{who}` the harness
+ *     (`name`, or `name@machine` off this computer), `{q}` the question, `{recap}` the turn's recap or why
+ *     it failed, `{n}` the count that matters for the mood, `{summary}` the brief's facts. Slots are filled
+ *     from the event, verbatim; the daemon's own words keep their case and their digits. A line whose slot
+ *     cannot be filled is dropped for a neutral fact line — never shown with a made-up fact. A template
+ *     that leaves out a fact the mood must carry (who is waiting, what was asked) gets it appended.
+ *   - PairVoice: whether a line may be said at all. Silent by default. Only what needs you takes over the
+ *     status line — a question and a failure (and a report of something the daemon did on its own); a
+ *     finished turn is a count in `daemon_state`, not a line. At most one line nobody asked for every two
+ *     minutes. A line shows for 5.2 s and its keys work only while it shows; after that the question
+ *     stays in `daemon_state.needs` for the person to open. Never the same line twice.
  *
  * Everything goes out through `sendLocal` — loopback only. `send()` would upload it, unencrypted.
  */
 import { PAIR_ROSTER } from './roster.g.js'
-import { statusText, type DaemonMood, type DaemonSay } from './protocol.js'
+import { statusText, type DaemonAction, type DaemonMood, type DaemonSay } from './protocol.js'
 
 type Mood = keyof (typeof PAIR_ROSTER.daemons)[number]['lines']
+export type Slot = 'who' | 'q' | 'recap' | 'n' | 'summary'
+export type Slots = Partial<Record<Slot, string | number | null>>
+
+export function rosterDaemon(daemonId: string): (typeof PAIR_ROSTER.daemons)[number] | null {
+  return PAIR_ROSTER.daemons.find((d) => d.id === daemonId) ?? null
+}
 
 export function rosterLine(daemonId: string, mood: Mood): string | null {
-  const daemon = PAIR_ROSTER.daemons.find((d) => d.id === daemonId)
-  return daemon ? daemon.lines[mood] : null
+  return rosterDaemon(daemonId)?.lines[mood] ?? null
 }
 
 export function isRosterDaemon(id: unknown): id is string {
   return typeof id === 'string' && PAIR_ROSTER.daemons.some((d) => d.id === id)
 }
 
-/** The example harness the roster's lines are written about. */
-const WHO = /\bcodex@office\b|\bclaude\b|\bcodex\b/i
-/** Facts only the example had. A line still holding one after the swap would be telling a story. */
-const EXAMPLE_FACTS = /\d|\b(migration|refactor|auth|billing|flaky|tuesday|files?|tests?|lines?|yes|write|written)\b/i
+/**
+ * Fill a template's slots with facts. Null when a slot it names has no value: the line would otherwise
+ * claim something nobody said. A slot the roster does not know is left as written (the generator refuses
+ * such a roster; this never invents a meaning for one).
+ */
+export function fillLine(template: string, slots: Slots): string | null {
+  let missing = false
+  const known = PAIR_ROSTER.lineSlots as readonly string[]
+  const filled = template.replace(/\{(\w+)\}/g, (whole, name: string) => {
+    if (!known.includes(name)) return whole
+    const value = slots[name as Slot]
+    const text = value === null || value === undefined ? '' : statusText(String(value), 160)
+    if (!text) { missing = true; return whole }
+    return text
+  })
+  return missing ? null : filled
+}
+
+/**
+ * A line of the daemon's own words, safe for any status line: one line, printable 7-bit ASCII, bounded —
+ * but its spacing kept (zsh's `[1]  + done`, vim's `:earlier  …` are laid out on purpose). Facts put into
+ * it are flattened on the way in (fillLine).
+ */
+export function lineText(value: string, max: number): string {
+  const flat = value.replace(/[\r\n\t]+/g, ' ').replace(/[^\x20-\x7e]/g, '').trim()
+  return flat.length > max ? `${flat.slice(0, Math.max(0, max - 3)).trimEnd()}...` : flat
+}
+
+/** `[y/n/g] ` — the keys a line offers, FIRST, so a narrow pane that cuts the end still shows them. */
+export function keysPrefix(actions: readonly { key: string }[]): string {
+  const keys = (['y', 'n', 'g'] as const).filter((k) => actions.some((a) => a.key === k))
+  return keys.length ? `[${keys.join('/')}] ` : ''
+}
+
+/** How an appended fact reads when a template leaves it out. */
+const APPEND: Record<Slot, (value: string) => string> = {
+  who: (v) => ` (${v})`,
+  q: (v) => `: ${v}`,
+  recap: (v) => ` ${v}`,
+  n: (v) => ` (${v})`,
+  summary: (v) => ` ${v}.`,
+}
+
+/**
+ * The daemon's line for a mood with these facts: its template filled, with every `required` fact present
+ * (appended when the template has no slot for it), or `fallback` when a slot cannot be filled.
+ */
+export function voicedLine(daemonId: string, mood: Mood, slots: Slots, required: Slot[], fallback: string): string {
+  const template = rosterLine(daemonId, mood)
+  const filled = template ? fillLine(template, slots) : null
+  if (template === null || filled === null) return fallback
+  let line = filled.replace(/\s+$/, '')
+  for (const slot of required) {
+    const value = slots[slot]
+    if (value === null || value === undefined || template.includes(`{${slot}}`)) continue
+    const text = statusText(String(value), 160)
+    if (text) line += APPEND[slot](text)
+  }
+  return line
+}
 
 export interface LineFacts {
   /** The harness, as the person names it: `api`, or `api@laptop` when it is on another machine. */
   who: string
 }
 
-/**
- * Swap the example harness for the real one; null when anything else in the line would be invented.
- * The daemon's own words are lowercased (that is its voice); the facts put into them — a harness name,
- * a question, a recap, a path — are never touched, because a person may have to read them exactly.
- */
-function voiced(line: string, who: string, strip: RegExp[] = []): { text: string; hasWho: boolean } | null {
-  let text = line.toLowerCase()
-  for (const pattern of strip) text = text.replace(pattern, ' ')
-  const hasWho = WHO.test(text)
-  text = text.replace(WHO, '\u0000')
-  if (EXAMPLE_FACTS.test(text) || WHO.test(text)) return null
-  return { text: text.replace('\u0000', who).replace(/\s+/g, ' ').trim(), hasWho }
-}
-
-function keys(actions: { key: string }[]): string {
-  const has = (k: string): boolean => actions.some((a) => a.key === k)
-  return has('y') && has('n') ? ' [y/n]' : has('y') ? ' [y]' : has('n') ? ' [n]' : ''
-}
-
-/** Tier 0 for a question: the daemon's need line when it can be told truthfully, then what is asked. */
-export function needLine(daemonId: string, facts: LineFacts & { question: string; index?: number; count?: number },
-  actions: { key: string }[]): string {
-  // fzf counts what needs you ("1/1"): a real count here, so it is kept as a slot rather than refused.
-  const roster = (rosterLine(daemonId, 'need') ?? '').replace(/\b\d+\/\d+\b/, '\u0001')
-  // A template never recommends (that is a judgement), and its keys come from the real actions.
-  const line = voiced(roster, facts.who, [/\[y\/n\]/gi, /i'd say \w+\./gi])
-  const q = statusText(facts.question, 70)
-  const base = line ? line.text.replace('\u0001', `${facts.index ?? 1}/${facts.count ?? 1}`) : `${facts.who} needs you.`
-  const joined = (head: string): string => /[.!?]$/.test(head) ? `${head} ${q}` : `${head}: ${q}`
-  const told = line && !line.hasWho ? joined(`${base} ${facts.who}`) : joined(base)
-  return statusText(`${told}${keys(actions)}`, 140)
-}
-
-export function doneLine(daemonId: string, facts: LineFacts & { recap?: string | null }): string {
-  const line = voiced(rosterLine(daemonId, 'done') ?? '', facts.who)
-  const base = line?.hasWho ? line.text : `${facts.who} finished.`
-  return statusText(facts.recap ? `${base} ${facts.recap}` : base, 140)
+/** A question, keys first: `[y/n/g] bell in api@office: Bash: npm test`. */
+export function needLine(daemonId: string, facts: LineFacts & { question: string; count?: number },
+  actions: readonly { key: string }[]): string {
+  const q = statusText(facts.question, 90)
+  const line = voicedLine(daemonId, 'need', { who: facts.who, q, n: facts.count ?? 1 }, ['who', 'q'], `${facts.who}: ${q}`)
+  return lineText(`${keysPrefix(actions)}${line}`, 140)
 }
 
 export function failLine(daemonId: string, facts: LineFacts & { reason: string }): string {
-  const line = voiced(rosterLine(daemonId, 'fail') ?? '', facts.who)
-  const base = line?.hasWho ? line.text : `${facts.who} failed.`
-  return statusText(`${base} ${facts.reason}`, 140)
+  const reason = statusText(facts.reason, 90) || 'failed'
+  return lineText(voicedLine(daemonId, 'fail', { who: facts.who, recap: reason }, ['who', 'recap'], `${facts.who} failed: ${reason}`), 140)
+}
+
+/** A finished turn, for a client that wants the daemon's words for its `+n` (never spoken on its own). */
+export function doneLine(daemonId: string, facts: LineFacts & { recap?: string | null; count?: number }): string {
+  const recap = facts.recap ? statusText(facts.recap, 90) : null
+  const fallback = recap ? `${facts.who} finished: ${recap}` : `${facts.who} finished.`
+  return lineText(voicedLine(daemonId, 'done', { who: facts.who, recap, n: facts.count ?? 1 }, ['who'], fallback), 140)
+}
+
+/** Something the daemon did without a key (a pair.jsonc rule, or the pair driving a harness it started). */
+export function autoLine(facts: LineFacts & { by: 'rule' | 'pair'; text: string }): string {
+  return statusText(`${facts.by}: ${facts.who} ${facts.text}`, 140)
 }
 
 export interface BackFacts {
@@ -90,44 +134,32 @@ export interface BackFacts {
   awayMs: number
   /** Harnesses that failed while you were away, by name. */
   failed: string[]
-  /** Machines whose journal could not be read, by name. */
+  /** Machines that should have answered and did not, by name. */
   unreachable: string[]
-  /** Machines asked, this one included — ping's "0% loss". */
+  /** Machines the account says are asleep (offline): named calmly, never as a failure. */
+  asleep: string[]
+  /** Machines asked, this one included. */
   machines: number
-  /** Harnesses with anything to report, and how many are watched — fzf's "4/7 things changed". */
+  /** Harnesses with anything to report, and how many are watched. */
   changed: number
   total: number
 }
 
-/**
- * The line on return: "welcome back. 2 done, 1 waiting 40m. nothing on fire." A failure or an
- * unreachable machine replaces "nothing on fire"; a daemon whose line has no slot for a fact gets the
- * fact appended, so every daemon says the same things in its own words.
- */
+/** The brief's facts as one phrase — `{summary}`: "2 done, 1 waiting 40m, api failed, laptop asleep". */
+export function summaryOf(facts: BackFacts): string {
+  const parts: string[] = []
+  if (facts.done) parts.push(`${facts.done} done`)
+  if (facts.waiting) parts.push(`${facts.waiting} waiting${facts.oldestWaitMs != null ? ` ${ago(facts.oldestWaitMs)}` : ''}`)
+  for (const name of facts.failed) parts.push(`${name} failed`)
+  for (const machine of facts.unreachable) parts.push(`${machine} unreachable`)
+  for (const machine of facts.asleep) parts.push(`${machine} asleep`)
+  return parts.length ? parts.join(', ') : 'nothing new'
+}
+
+/** The line on return: "reattached. 2 done, 1 waiting 40m." — every daemon says the same facts. */
 export function backLine(daemonId: string, facts: BackFacts): string {
-  const slots = { done: false, waiting: false, fire: false, loss: false }
-  const waited = facts.waiting && facts.oldestWaitMs != null ? ` ${ago(facts.oldestWaitMs)}` : ''
-  let line = (rosterLine(daemonId, 'back') ?? 'welcome back.').toLowerCase()
-  line = line.replace(/\b\d+ done\b/, () => { slots.done = true; return `${facts.done} done` })
-  line = line.replace(/\b\d+ replies\b/, () => { slots.done = true; return `${facts.done} ${facts.done === 1 ? 'reply' : 'replies'}` })
-  line = line.replace(/\b\d+ waiting( \d+[smhd])?/, () => { slots.waiting = true; return `${facts.waiting} waiting${waited}` })
-  line = line.replace(/\b\d+\/\d+ things changed/, () => { slots.done = slots.waiting = true; return `${facts.changed}/${facts.total} things changed` })
-  line = line.replace(/\b\d+% loss/, () => {
-    slots.loss = true
-    return `${Math.round((facts.unreachable.length / Math.max(1, facts.machines)) * 100)}% loss`
-  })
-  line = line.replace(/(away|:earlier) \d+[smhd]/, (_m, word: string) => `${word} ${ago(facts.awayMs)}`)
-  const fire = [
-    ...facts.failed.map((name) => `${name} failed.`),
-    ...(slots.loss ? [] : facts.unreachable.map((machine) => `${machine} unreachable.`)),
-  ].join(' ')
-  line = line.replace(/nothing on fire\./, () => { slots.fire = true; return fire || 'nothing on fire.' })
-  const extra: string[] = []
-  if (!slots.done && facts.done) extra.push(`${facts.done} done`)
-  if (!slots.waiting && facts.waiting) extra.push(`${facts.waiting} waiting${waited}`)
-  let out = extra.length ? `${line} ${extra.join(', ')}.` : line
-  if (!slots.fire && fire) out = `${out} ${fire}`
-  return statusText(out, 160)
+  const summary = summaryOf(facts)
+  return lineText(voicedLine(daemonId, 'back', { summary, n: facts.done }, ['summary'], `welcome back. ${summary}.`), 160)
 }
 
 export function ago(ms: number): string {
@@ -140,10 +172,17 @@ export function ago(ms: number): string {
 
 // ── when it may speak ───────────────────────────────────────────────────────────────────────────────
 
-export const DONE_COOLDOWN_MS = 20_000
+/** How long a line shows (tmux's message line) — and how long its keys work. */
+export const DISPLAY_MS = 5_200
+/** At most one line nobody asked for this often. */
+export const UNSOLICITED_GAP_MS = 2 * 60_000
 export const SAY_WINDOW_MS = 60_000
 export const SAY_WINDOW_MAX = 6
 const SPOKEN_MAX = 500
+
+/** Lines nobody asked for. `back` (you returned), `say` (the pair answering you) and `ask` (a proposal
+ *  you asked the pair for) answer something the person did. */
+const UNSOLICITED = new Set<DaemonMood>(['need', 'fail', 'auto', 'done'])
 
 export interface PairVoiceDeps {
   /** Loopback only: backendSocket.sendLocal. */
@@ -158,7 +197,7 @@ export class PairVoice {
   /** Every id ever said, bounded — a line is said once, whatever reconnects in between. */
   private readonly spoken = new Set<string>()
   private readonly recent: number[] = []
-  private lastDone = -Infinity
+  private lastUnsolicited = -Infinity
 
   constructor(private readonly deps: PairVoiceDeps) {}
 
@@ -167,16 +206,42 @@ export class PairVoice {
     const now = this.deps.now()
     this.sweep(now)
     if (this.spoken.has(say.id)) return false
-    if (say.mood === 'done' && now - this.lastDone < DONE_COOLDOWN_MS) return false
+    const unsolicited = UNSOLICITED.has(say.mood)
+    if (unsolicited && now - this.lastUnsolicited < UNSOLICITED_GAP_MS) return false
     while (this.recent.length && now - this.recent[0] >= SAY_WINDOW_MS) this.recent.shift()
-    // A question is the one thing worth saying over the limit: it is what the voice is for.
-    if (this.recent.length >= SAY_WINDOW_MAX && say.mood !== 'need') return false
+    // A proposal is the one thing worth saying over the per-minute window: nothing happens until it is heard.
+    if (this.recent.length >= SAY_WINDOW_MAX && say.mood !== 'ask') return false
     this.recent.push(now)
-    if (say.mood === 'done') this.lastDone = now
+    if (unsolicited) this.lastUnsolicited = now
     this.remember(say.id)
     this.live.set(say.id, { say, at: now })
     this.deps.sendLocal({ type: 'daemon_say', payload: say })
     return true
+  }
+
+  /**
+   * Replace a line still showing, in place (`daemon_say` again, same id): the model's better words, or
+   * keys that changed. It keeps the time it has left — a replacement never extends how long keys work.
+   */
+  replace(id: string, fields: { line: string; actions: DaemonAction[] }): boolean {
+    const now = this.deps.now()
+    this.sweep(now)
+    const live = this.live.get(id)
+    if (!live) return false
+    const say: DaemonSay = { ...live.say, line: fields.line, actions: fields.actions }
+    this.live.set(id, { say, at: live.at })
+    this.deps.sendLocal({ type: 'daemon_say', payload: { ...say, ttlMs: Math.max(0, live.say.ttlMs - (now - live.at)) } })
+    return true
+  }
+
+  /**
+   * Keys that live in something else the person is looking at (a brief item), not a status line: held
+   * for `say.ttlMs` so `daemon_act` can find them, never sent as `daemon_say`.
+   */
+  hold(say: DaemonSay): void {
+    const now = this.deps.now()
+    this.sweep(now)
+    this.live.set(say.id, { say, at: now })
   }
 
   /** Take back a line still showing — answered elsewhere, or the harness went away. */
@@ -195,7 +260,7 @@ export class PairVoice {
     }
   }
 
-  /** A line still showing, for `daemon_act`. Expired lines are gone. */
+  /** A line still showing, for `daemon_act`. A line past its time is gone, and so are its keys. */
   get(id: string): DaemonSay | null {
     this.sweep(this.deps.now())
     return this.live.get(id)?.say ?? null

@@ -13,7 +13,11 @@
  */
 import type { PairEvent, PairHarness, PairJournalEntry, PairJournalPage, PairSnapshot } from './protocol.js'
 
-export type MachineStatus = 'ok' | 'connecting' | 'unreachable' | 'unlinked' | 'old' | 'off'
+/**
+ * `asleep`: the account's list says the machine is offline (a closed laptop) — calm, never a failure.
+ * `unreachable`: it should be up and did not answer.
+ */
+export type MachineStatus = 'ok' | 'connecting' | 'unreachable' | 'asleep' | 'unlinked' | 'old' | 'off'
 
 export interface FleetMachineInfo {
   machineId: string
@@ -155,7 +159,7 @@ export class PairFleet {
       remote.name = info.name || remote.name
       if (!info.linked) { this.setStatus(remote, 'unlinked'); continue }
       if (remote.link || remote.status === 'old') continue
-      if (info.online === false) { this.setStatus(remote, 'unreachable'); continue }
+      if (info.online === false) { this.setStatus(remote, 'asleep'); continue }
       if (remote.status === 'unreachable' && this.now() < remote.retryAt) continue
       if (remote.connecting) continue
       const connecting = this.connect(remote).finally(() => { if (remote.connecting === connecting) remote.connecting = null })
@@ -202,7 +206,7 @@ export class PairFleet {
       // A machine still being dialled (the brain just woke for this return) gets the same few seconds.
       if (r.connecting) await this.withTimeout(r.connecting, timeoutMs).catch(() => {})
       if (r.status === 'unlinked' || r.status === 'old' || r.status === 'off') return null
-      if (!r.link) return { machineId: r.machineId, machine: r.name, local: false, entries: [], error: 'unreachable' }
+      if (!r.link) return { machineId: r.machineId, machine: r.name, local: false, entries: [], error: r.status === 'asleep' ? 'asleep' : 'unreachable' }
       try {
         const page = await this.withTimeout(r.link.request('pair_journal', { at }, timeoutMs), timeoutMs)
         if (typeof page.error === 'string') return { machineId: r.machineId, machine: r.name, local: false, entries: [], error: page.error }

@@ -10,8 +10,13 @@
  *     machine (`pair_*`, sealed — see lib/e2ee/applicationFrames.ts).
  */
 
-/** What the journal records. `question`/`answered` pair up by requestId. */
-export type PairKind = 'start' | 'done' | 'fail' | 'question' | 'answered' | 'recap'
+/** What the journal records. `question`/`answered` pair up by requestId. `act` is something the daemon
+ *  did to a harness (pair/owner.ts): who asked is `by`, what it did is `action`. */
+export type PairKind = 'start' | 'done' | 'fail' | 'question' | 'answered' | 'recap' | 'act'
+
+/** Who made the daemon act: a key a person pressed, the pair harness's own tool call, a pair.jsonc rule. */
+export type PairActor = 'key' | 'pair' | 'rule'
+export type PairAction = 'answer' | 'send' | 'stop' | 'start' | 'pause' | 'resume'
 
 export interface PairJournalEntry {
   /** The journal's lifetime: a new file (or one that could not be read) is a new epoch. */
@@ -29,6 +34,9 @@ export interface PairJournalEntry {
   options?: string[]
   /** The question matches a deny-class prompt (see isDenyClass). Decided here, on the owning machine. */
   deny?: boolean
+  /** On an `act`: who asked for it, and what was done. */
+  by?: PairActor
+  action?: PairAction
 }
 
 export interface PairQuestion {
@@ -36,7 +44,12 @@ export interface PairQuestion {
   text: string
   options: string[]
   multi: boolean
+  /** Never approved by anything but the person (pair/classify.ts), read over the whole dialog. */
   deny: boolean
+  /** A permission prompt a `[y]` may approve: a read, test, build, formatter or in-project edit. */
+  allow: boolean
+  /** A permission prompt (the engine asks to run something), not a question the agent asks. */
+  permission: boolean
   since: number
 }
 
@@ -108,37 +121,27 @@ export function isPairDaemonId(value: unknown): value is string {
 
 // ── deny class ──────────────────────────────────────────────────────────────────────────────────────
 
-/**
- * Permission prompts that are never approved by a key, a rule or a recommendation: push, force,
- * `rm -rf`, deploy, publish, drop, merge. Matched on the question text AND its options, because a
- * dialog can put the command in either. Word-bounded so "dropdown" or "emergency" do not trip it; a
- * false positive only costs the `[y]` key, a false negative approves a push — so it leans wide.
- */
-const DENY_PATTERNS: RegExp[] = [
-  /\bpush(ed|es|ing)?\b/i,
-  /--force\b|\bforce[- ]?(push|with-lease)?\b|(^|\s)-f(\s|$)/i,
-  /\brm\s+(-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*|-r\s+-f|-f\s+-r|--recursive\s+--force|--force\s+--recursive)\b/i,
-  /\bdeploy(s|ed|ing|ment)?\b/i,
-  /\bpublish(es|ed|ing)?\b/i,
-  /\bdrop\s+(table|database|schema|index|column|collection|view)\b|\bdropdb\b|\bdrop\b(?!down)/i,
-  /\bmerge(s|d)?\b/i,
-]
-
-export function isDenyClass(question: string, options: string[] = []): boolean {
-  const text = [question, ...options].join('\n')
-  return DENY_PATTERNS.some((pattern) => pattern.test(text))
-}
+/** Which prompts are never approved, read over the whole dialog (pair/classify.ts). */
+export { isDenyClass } from './classify.js'
 
 // ── local frames (loopback only) ────────────────────────────────────────────────────────────────────
 
-export const DAEMON_OUT_TYPES = new Set(['daemon_state', 'daemon_say', 'daemon_unsay', 'daemon_brief', 'daemon_act_result'])
-export const DAEMON_IN_TYPES = new Set(['daemon_act', 'daemon_presence'])
+export const DAEMON_OUT_TYPES = new Set(['daemon_state', 'daemon_say', 'daemon_unsay', 'daemon_brief', 'daemon_act_result', 'daemon_talk_result'])
+export const DAEMON_IN_TYPES = new Set(['daemon_act', 'daemon_presence', 'daemon_talk'])
 
-export type DaemonMood = 'need' | 'done' | 'fail' | 'back'
+/**
+ * The face a line wants. `auto` reports something it already did (a rule, or the pair driving a harness
+ * it started) — drawn like `done`; `say` is the pair harness talking (its `say` tool) — drawn like `idle`;
+ * `ask` is a proposal waiting for your key (autonomy `suggest`/`act-on-key`) — drawn like `need`.
+ */
+export type DaemonMood = 'need' | 'done' | 'fail' | 'back' | 'auto' | 'say' | 'ask'
 
 export interface DaemonAction {
-  /** The key a client binds: `y` approves the recommendation, `n` declines. */
-  key: 'y' | 'n'
+  /**
+   * The key a client binds: `y` a ONE-TIME yes (only on an allow-class prompt, pair/classify.ts), `n` the
+   * dialog's decline, `g` go to the pane (the client opens the harness; nothing is answered).
+   */
+  key: 'y' | 'n' | 'g'
   label: string
   /** The option label the answer keys in. */
   choice: string

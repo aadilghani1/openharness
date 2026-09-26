@@ -80,6 +80,16 @@ import { PairBrain } from './pair/brain.js'
 import { PairFleet, relayPairLinkOpener } from './pair/fleet.js'
 import { PairTriage } from './pair/triage.js'
 import { PairVoice, isRosterDaemon } from './pair/voice.js'
+import { PairOwner, type OwnerSubject } from './pair/owner.js'
+import { PairControl, StartedHarnesses } from './pair/control.js'
+import { PairToken } from './pair/token.js'
+import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClientDeps } from './pair/client.js'
+import { serveMcp } from './pair/mcp.js'
+import { PairHarness, type PairEngine } from './pair/pairHarness.js'
+import { PairConfigFile, pairConfigPath, ruleRunner } from './pair/rules.js'
+import { probeEngines } from './lib/engineProbe.js'
+import { ensureBuiltinPair } from './dsh/builtins.js'
+import { DEFAULT_AUTONOMY, isAutonomy, type Autonomy } from './pair/floor.js'
 import { randomUUID } from 'node:crypto'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './lib/engineLaunch.js'
@@ -409,6 +419,8 @@ ${apiUsage}
 Browser end-to-end encryption:
   harness autonomous-device <command>     pair/status/list/revoke an Autonomous device
   harness pair <code>          pair a BROWSER (code shown on the machine page)
+  harness pair <verb>          your paired daemon's control interface: status, list_harnesses,
+                               read_harness, brief, talk, mcp, … (harness pair status --help)
   harness pairings             list paired clients
   harness unpair <#|fp>        unpair one browser (by list number or fingerprint)
   harness unpair --all         unpair every browser
@@ -1786,6 +1798,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let refreshPairFromZoo: () => void = () => {}
   /** The thinking half (pair/brain.ts), built once the relay pool exists. */
   let pairBrain: PairBrain | null = null
+  /** How much the daemon may do on its own (zoo `autonomy`, pair/floor.ts). Read with the paired daemon. */
+  let pairAutonomyLevel: Autonomy = DEFAULT_AUTONOMY
+  const pairAutonomy = (): Autonomy => pairAutonomyLevel
+  /** HARNESSD_PAIR_TOKEN (pair/token.ts): rotated at every launch of the pair harness. */
+  const pairToken = new PairToken(join(env.ADAPTER_DATA_DIR, 'pair', 'token'))
+  /** `talk` / `daemon_talk`: the person's words to the pair harness — bound once it can be started. */
+  let pairTalk: (text: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
+  /** A turn started or ended on the pair harness: it is in use (its idle pause waits). Bound with it. */
+  let pairHarnessActivity: (agentId: string) => void = () => {}
+  /** The person's pair.jsonc (pair/rules.ts): the model opt-in, and the rules act-within-rules runs here. */
+  const pairConfig = new PairConfigFile(pairConfigPath())
+  /** A question opened on this machine: answer it by rule if the dial and a rule say so. Bound with the owner. */
+  let pairRules: (agentId: string, requestId: string) => void = () => {}
+  /** The pair harness is the daemon's own: its turns are nobody's news (no notification, no count). */
+  const isPairHarnessSession = (sessionId: string): boolean => registry.bySession(sessionId)?.dsh === PAIR_HARNESS_DSH
   const pairSensor = new PairSensor({
     machineId: () => backendRef?.machineId ?? session?.machineId ?? computerId(),
     journal: new PairJournal({ dir: join(env.ADAPTER_DATA_DIR, 'pair') }),
@@ -1796,6 +1823,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         name: projectDisplayName(s),
         engine: s.engine,
         excluded: isTerminalEngine(s.engine) ? 'terminal' : s.dsh === PAIR_HARNESS_DSH ? 'pair' : null,
+        cwd: s.cwd ?? null,
       }
     },
     onEnabledChanged: (on) => onPairToggled(on),
@@ -2680,7 +2708,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     capture: captureTerminal,
     hasDevice: () => someoneCanAnswer(),
     isDriving: (sessionId) => questions.isDriving(sessionId),
-    onQuestion: (sessionId, requestId, shaped) => {
+    onQuestion: (sessionId, requestId, shaped, detail) => {
       deviceInput.setUserAction(agentIdFor(sessionId), true)
       questions.remember(requestId, sessionId)
       showAwaitingAnswer(sessionId)
@@ -2703,7 +2731,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // today: a remote machine's watcher is gated on ITS OWN audience, which a window attached over
       // here is not part of either way.
       backend.sendLocal(asked)
-      pairSensor.question(agentIdFor(sessionId), requestId, shaped)
+      // With the WHOLE dialog: the pair's floor reads every line of the command, not the clipped title.
+      pairSensor.question(agentIdFor(sessionId), requestId, shaped, detail)
+      pairRules(agentIdFor(sessionId), requestId)
       console.log(`[question] ${sid(sessionId)} asking the user · "${preview(shaped[0]?.q ?? '')}" · req=${requestId}`)
     },
     // Answered somewhere else — the app, or the pane by hand. Every client drawing it is told to stop
@@ -2780,7 +2810,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     agentIdFor: (sessionId) => registry.bySession(sessionId)?.agentId,
     // An Orchestrator specialist's turn end, or the Director's while specialists are still out, is not
     // announced: the person asked to hear from the main agent once, not from every sub-agent.
-    isSubagent: isSubagentSession,
+    // The pair harness's turns are silent on the dial too, like a sub-agent's.
+    isSubagent: (sessionId: string) => isSubagentSession(sessionId) || isPairHarnessSession(sessionId),
     // A claude sub-agent still at work is one whose transcript is still growing:
     // `<session>/subagents/agent-<id>.jsonl` beside the parent's (the same file enrichSubagentStats
     // reads). Written in the last SUBAGENT_IDLE_MS = alive; the held turn end waits for it.
@@ -2952,8 +2983,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // it always did.
       if (event.type === 'turn_ended') {
         if (opts?.resumed || opts?.replay) frame.replay = true
-        if (isSubagentSession(sessionId)) frame.subagent = true
+        // The pair harness is the daemon talking to you, not work finishing: no app notifies on it.
+        if (isSubagentSession(sessionId) || isPairHarnessSession(sessionId)) frame.subagent = true
       }
+      if (event.type === 'turn_started' || event.type === 'turn_ended') pairHarnessActivity(agentId)
       backend.send(frame)
       // The pair sensor reads the same two flags the apps do: a replay is a baseline, a sub-agent is nobody's news.
       if (event.type === 'turn_started') {
@@ -3599,16 +3632,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // every reconnect. Signed out there is no account zoo: a guest's window keeps its own and says which
   // daemon is paired in `daemon_presence` (pair/brain.ts), which is what `guestPair` holds. A backend that
   // cannot be reached keeps the last answer rather than switching pairing off on a blip.
-  let zooPair: { known: boolean; pair: string | null } = { known: false, pair: null }
+  let zooPair: { known: boolean; pair: string | null; autonomy: Autonomy } = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY }
   let guestPair: string | null = null
-  const applyPair = (): void => pairSensor.setPair(zooPair.known ? zooPair.pair : guestPair)
+  let guestAutonomy: Autonomy | null = null
+  // The autonomy dial rides with the pair: the account's zoo, or a guest window's own (daemon_presence).
+  const applyPair = (): void => {
+    pairAutonomyLevel = zooPair.known ? zooPair.autonomy : guestAutonomy ?? DEFAULT_AUTONOMY
+    pairSensor.setPair(zooPair.known ? zooPair.pair : guestPair)
+  }
   refreshPairFromZoo = () => {
     void proxyBackend('GET', '/api/zoo').then((result) => {
       if (result.status === 200) {
-        const pair = (result.body.data as { zoo?: { pair?: unknown } } | undefined)?.zoo?.pair
-        zooPair = { known: true, pair: isRosterDaemon(pair) ? pair : null }
+        const zoo = (result.body.data as { zoo?: { pair?: unknown; autonomy?: unknown } } | undefined)?.zoo
+        const pair = zoo?.pair
+        zooPair = { known: true, pair: isRosterDaemon(pair) ? pair : null, autonomy: isAutonomy(zoo?.autonomy) ? zoo.autonomy : DEFAULT_AUTONOMY }
       } else if (result.status === 401) {
-        zooPair = { known: false, pair: null }
+        zooPair = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY }
       }
       applyPair()
     }).catch(() => {})
@@ -4171,18 +4210,165 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     }),
     onChange: (change) => pairBrain?.onFleetChange(change),
   })
+  // THE OWNING MACHINE'S HALF of every pair write (pair/owner.ts): a key pressed here, the pair harness's
+  // tool call, a rule, or another machine's brain over sealed pair_* — all go through the same floor, and
+  // every action is journaled. `agent_delete` is Stop/Pause (the conversation is kept); nothing here can
+  // delete, restart, fork or bypass.
+  const pairSubject = (s: RegisteredSession, status: OwnerSubject['status']): OwnerSubject => ({
+    agentId: s.agentId, name: projectDisplayName(s), engine: s.engine, status,
+    untouchable: isTerminalEngine(s.engine) ? 'terminal' : s.dsh === PAIR_HARNESS_DSH ? 'pair' : null,
+    cwd: s.cwd ?? null, dsh: s.dsh ?? null,
+  })
+  const pairOwner = new PairOwner({
+    sensor: pairSensor,
+    autonomy: () => pairAutonomy(),
+    subject: (agentId) => {
+      const live = registry.resolve(agentId)
+      if (live && registry.terminalAvailable(live.agentId)) return pairSubject(live, 'live')
+      const stopped = stoppedAgents.get(agentId)
+      return stopped ? pairSubject(stopped, 'stopped') : null
+    },
+    subjects: () => {
+      const live = registry.advertised()
+      return [...live.map((s) => pairSubject(s, 'live')), ...stoppedAgents.available(live).map((s) => pairSubject(s, 'stopped'))]
+    },
+    recent: (agentId) => ({
+      recaps: (backend.recentProvider?.(agentId, 3) ?? []).map((r) => r?.recap || r?.text || '').filter(Boolean),
+      asks: backend.recentAsksProvider?.(agentId, 3) ?? [],
+    }),
+    // Keyed by the question's own text; AskQuestionController checks the dialog on screen is still
+    // `requestId` before a single key goes in, and answers STALE_QUESTION otherwise.
+    keyAnswer: ({ agentId, requestId, question, option }) => questions.answer({ agentId, requestId, answers: { [question || 'answer']: option } })
+      .then((result) => result.ok ? { ok: true as const } : { ok: false as const, error: result.error, detail: result.detail }),
+    message: (agentId, text, deliveryId) => {
+      if (!backend.onMessage) throw new Error('message handler not wired')
+      backend.onMessage(agentId, text, deliveryId)
+    },
+    cancel: (agentId) => backend.onCancel?.(agentId),
+    // Mode `ask`, bypass off, always: the daemon never starts anything that approves itself.
+    create: async ({ engine, cwd, prompt, name }) => {
+      if (!backend.onCreateAgent) return { ok: false, error: 'UNSUPPORTED' }
+      if (!ENGINES.includes(engine as AgentEngine)) return { ok: false, error: 'INVALID_ENGINE' }
+      const created = await backend.onCreateAgent({
+        engine: engine as AgentEngine, cwd, bypassPermission: false, permissionMode: 'ask',
+        grid: null, codexHome: null, dsh: null, prompt, name, agent: null,
+      })
+      return created.ok ? { ok: true, agentId: created.session.agentId } : created
+    },
+    stop: async (agentId) => {
+      if (!backend.onDeleteAgent) throw Object.assign(new Error('stop is not wired'), { code: 'UNSUPPORTED' })
+      await backend.onDeleteAgent(agentId)
+    },
+    resume: async (agentId) => {
+      if (!backend.onResumeAgent) return { ok: false, error: 'UNSUPPORTED' }
+      const resumed = await backend.onResumeAgent(agentId)
+      return resumed.ok ? { ok: true } : resumed
+    },
+    newId: () => randomUUID(),
+  })
+  backend.pairOwner = pairOwner
+  // AUTONOMY act-within-rules (pair/rules.ts): this machine's rules answer this machine's questions, through
+  // the same owner floor as a key — journaled by `rule`, reported afterwards by whichever brain is watching.
+  const runRules = ruleRunner({
+    active: () => pairSensor.enabled() && pairAutonomy() === 'act-within-rules',
+    config: () => pairConfig.get(),
+    question: (agentId) => pairSensor.harness(agentId)?.question ?? null,
+    subject: (agentId) => {
+      const s = registry.resolve(agentId)
+      return s ? { name: projectDisplayName(s), engine: s.engine, cwd: s.cwd ?? null } : null
+    },
+    answer: (input, by, why) => pairOwner.answer(input, by, why),
+    log: (line) => console.log(line),
+  })
+  pairRules = (agentId, requestId) => { void runRules(agentId, requestId).catch(() => {}) }
+  const pairVoice = new PairVoice({ sendLocal: (frame) => backend.sendLocal(frame), now: Date.now })
+  // THE CONTROL INTERFACE (pair/control.ts): the pair harness's tools, behind the loopback `pair` request —
+  // `harness pair <verb>` and the harnessd MCP server. Writes need the pair harness's token and pass the
+  // autonomy dial; then this machine's PairOwner, or another machine's over the fleet's sealed link.
+  const pairControl = new PairControl({
+    owner: pairOwner,
+    fleet: pairFleet,
+    local: {
+      machineId: () => backend.machineId,
+      name: () => terminalHintMachineName(),
+      journal: (payload) => pairSensor.journal(payload),
+      harnesses: () => pairSensor.snapshot().harnesses,
+    },
+    pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
+    autonomy: () => pairAutonomy(),
+    tokenMatches: (candidate) => pairToken.matches(candidate),
+    voice: pairVoice,
+    present: () => !!pairBrain?.isActive && pairBrain.present(),
+    started: new StartedHarnesses(join(env.ADAPTER_DATA_DIR, 'pair', 'started.json')),
+    talk: (text) => pairTalk(text),
+    changed: () => pairBrain?.stateChanged(),
+    now: Date.now,
+    newId: () => randomUUID(),
+  })
+  backend.pairControl = pairControl
+  // THE PAIR HARNESS (pair/pairHarness.ts): the daemon as a conversation, started or resumed when you talk
+  // to it, paused when idle. Mode ask, the harnessd MCP server injected, a fresh token every launch.
+  const pairHarness = new PairHarness({
+    pairedDaemon: () => pairSensor.pairedDaemon(),
+    engine: async () => {
+      const found = await probeEngines(['claude', 'codex']).catch(() => [])
+      return (['claude', 'codex'] as PairEngine[]).find((engine) => found.some((e) => e.engine === engine && e.installed)) ?? null
+    },
+    // The launcher when this daemon is the installed release it runs; otherwise exactly this process.
+    mcpCommand: () => {
+      const launcher = join(env.HARNESS_BIN_DIR, 'harness')
+      const script = process.argv[1] ? resolve(process.argv[1]) : ''
+      return script === join(env.ADAPTER_CLI_DIR, 'cli.js') && existsSync(launcher) ? [launcher] : [process.execPath, ...process.execArgv, script]
+    },
+    token: pairToken,
+    workspace: join(env.ADAPTER_DATA_DIR, 'pair', 'workspace'),
+    stateFile: join(env.ADAPTER_DATA_DIR, 'pair', 'harness.json'),
+    install: (files) => ensureBuiltinPair(PAIR_HARNESS_DSH, files),
+    find: () => {
+      const live = registry.advertised()
+      return [
+        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const })),
+        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const })),
+      ]
+    },
+    create: async ({ engine, cwd, prompt, name }) => {
+      if (!backend.onCreateAgent) return { ok: false, error: 'UNSUPPORTED' }
+      const created = await backend.onCreateAgent({
+        engine, cwd, bypassPermission: false, permissionMode: 'ask', grid: null, codexHome: null,
+        dsh: PAIR_HARNESS_DSH, prompt, name, agent: null,
+      })
+      return created.ok ? { ok: true, agentId: created.session.agentId } : created
+    },
+    resume: async (agentId) => {
+      if (!backend.onResumeAgent) return { ok: false, error: 'UNSUPPORTED' }
+      const resumed = await backend.onResumeAgent(agentId)
+      return resumed.ok ? { ok: true } : resumed
+    },
+    stop: async (agentId) => { await backend.onDeleteAgent?.(agentId) },
+    send: (agentId, text) => backend.onMessage?.(agentId, text, randomUUID()),
+    working: (agentId) => {
+      const sessionId = registry.resolve(agentId)?.sessionId
+      return !!sessionId && mirror.isBusy(sessionId)
+    },
+    now: Date.now,
+  })
+  pairTalk = (text) => pairHarness.talk(text)
+  pairHarnessActivity = (agentId) => pairHarness.activity(agentId)
   pairBrain = new PairBrain({
     pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
     fleet: pairFleet,
-    triage: new PairTriage({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), now: Date.now }),
-    voice: new PairVoice({ sendLocal: (frame) => backend.sendLocal(frame), now: Date.now }),
+    // A model's words only when the person opted in (pair.jsonc "model": true).
+    triage: new PairTriage({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairConfig.get().model, now: Date.now }),
+    voice: pairVoice,
+    proposals: pairControl,
+    autonomy: () => pairAutonomy(),
     sendLocal: (frame) => backend.sendLocal(frame),
     sendLocalTo: (connId, frame) => backend.sendLocalTo(connId, frame),
-    // A key is REFUSED, not typed, until the stale-answer guard lands (BRAIN.md "Risks": a late answer
-    // landing on the next dialog). The brain has already checked that the question is still the one
-    // the person saw; this is where `answer({ expectRequestId })` plugs in.
-    answer: async () => ({ ok: false, error: 'UNSUPPORTED', detail: 'Answering from a daemon key waits on the stale-answer guard.' }),
+    // A key pressed on a line about THIS machine's harness: the owner's floor, then the dialog's own
+    // requestId, checked as the keys go in (STALE_QUESTION, nothing typed, when it changed).
+    answer: (input) => pairOwner.answer(input, 'key'),
     onGuestPair: (daemonId) => { guestPair = isRosterDaemon(daemonId) ? daemonId : null; applyPair() },
+    onGuestAutonomy: (level) => { guestAutonomy = isAutonomy(level) ? level : null; applyPair() },
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
     now: Date.now,
   })
@@ -4422,6 +4608,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     onVoiceRouteReply: (voiceId, reply) => windowRouter.reply(voiceId, reply),
     onDaemonAct: (_connId, payload, reply) => { void pairBrain?.onAct(payload, (frame) => { reply(frame) }) },
+    // The person talking to their daemon: forwarded to the pair harness, which starts or wakes for it.
+    onDaemonTalk: (_connId, payload, reply) => {
+      const requestId = typeof payload.requestId === 'string' ? payload.requestId.slice(0, 120) : ''
+      const text = typeof payload.text === 'string' ? payload.text.slice(0, 8_000) : ''
+      void pairTalk(text)
+        .catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
+        .then((result) => { reply({ type: 'daemon_talk_result', payload: { requestId, ...result } }) })
+    },
     onDaemonPresence: (connId, payload) => pairBrain?.onPresence(connId, payload),
     machineId: backend.machineId,
     backend,
@@ -6514,7 +6708,11 @@ async function daemonCall(method: 'GET' | 'POST', path: string, body?: unknown):
 
 /** `harness pair <code>` — send a browser/device pairing code to the running daemon (localhost). */
 async function pairCommand(code: string | undefined): Promise<void> {
-  if (!code) { console.error('Usage: harness pair <code>   (the code is shown on the browser or device)'); process.exit(1) }
+  if (!code) {
+    console.error('Usage: harness pair <code>   (the code is shown on the browser or device)')
+    console.error('       harness pair <verb>   your daemon\'s control interface (harness pair status --help)')
+    process.exit(1)
+  }
   const { res, json } = await daemonCall('POST', '/api/pair', { code })
   const body = json as { label?: string; fingerprint?: string; error?: string }
   if (res.ok) {
@@ -7252,9 +7450,31 @@ switch (cmd) {
   case 'autonomous-device':
     runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, env.PORT).then(code => { process.exitCode = code }).catch(onError)
     break
-  case 'pair':
-    pairCommand(args[0]).catch(onError)
+  case 'pair': {
+    // `harness pair <code>` pairs a browser; `harness pair <verb>` is the daemon's control interface
+    // (pair/client.ts). No pairing code is ever one of the verbs.
+    const verb = pairVerb(args[0])
+    if (!verb) { pairCommand(args[0]).catch(onError); break }
+    const pairClient: PairClientDeps = {
+      port: daemonPort(),
+      machineId: async () => process.env.HARNESSD_MACHINE_ID || (await runningDaemonStatus())?.machineId || null,
+      connect: (url) => new NewCommandSocket(url),
+      env: process.env,
+    }
+    if (verb === 'mcp') {
+      // stdout is the protocol: anything else printed there would corrupt it.
+      console.log = (...line: unknown[]) => console.error(...line)
+      const at = rest.findIndex((word) => word === '--token-file' || word.startsWith('--token-file='))
+      const tokenFile = at < 0 ? null : rest[at]!.includes('=') ? rest[at]!.slice('--token-file='.length) : rest[at + 1] ?? null
+      serveMcp({ input: process.stdin, output: process.stdout, version: VERSION, call: (payload) => pairRequest({ ...pairClient, tokenFile }, payload),
+        log: (line) => console.error(line) })
+        .then(() => { process.exitCode = 0 }).catch(onError)
+      break
+    }
+    pairControlCommand(rest, { ...pairClient, output: (line) => process.stdout.write(`${line}\n`), error: (line) => console.error(line) })
+      .then((code) => { process.exitCode = code }).catch(onError)
     break
+  }
   case 'browser-link':
   case 'e2ee-link':
     // Browser setup links served the retired web client. Said plainly rather than falling to "unknown

@@ -166,10 +166,24 @@ export interface ZooProgress {
   /** The last `zoo.turn` batch ids applied. */
   batches: string[]
 }
+/**
+ * How much the paired daemon may do on its own (daemons/BRAIN.md, "Autonomy dial"), read by every
+ * harnessd's pair brain: `watch` only reads and tells; `suggest` (the default) proposes, and every action
+ * waits for a key; `act-on-key` drives harnesses it started and batches the rest behind one key;
+ * `act-within-rules` also runs the person's `pair.jsonc` rules on the machine that owns a harness.
+ */
+export const ZOO_AUTONOMY_LEVELS = ['watch', 'suggest', 'act-on-key', 'act-within-rules'] as const
+export type ZooAutonomy = typeof ZOO_AUTONOMY_LEVELS[number]
+export const ZOO_DEFAULT_AUTONOMY: ZooAutonomy = 'suggest'
+const isAutonomy = (value: unknown): value is ZooAutonomy =>
+  typeof value === 'string' && (ZOO_AUTONOMY_LEVELS as readonly string[]).includes(value)
+
 export interface Zoo {
   daemons: ZooDaemon[]
   eggs: ZooEgg[]
   pair: string | null
+  /** The autonomy dial. Account state like the pair, so every machine's brain reads the same level. */
+  autonomy: ZooAutonomy
   habits: string[]
   firstEgg: boolean
   pity: number
@@ -186,7 +200,7 @@ export interface LevelUp { id: string; level: number; version: string }
 export const emptyProgress = (): ZooProgress =>
   ({ turns: 0, days: {}, weeks: [], nights: [], machines: [], marathon: [], history: [], held: [], batches: [] })
 export const emptyZoo = (): Zoo =>
-  ({ daemons: [], eggs: [], pair: null, habits: [], firstEgg: false, pity: 0, easter: [], progress: emptyProgress() })
+  ({ daemons: [], eggs: [], pair: null, autonomy: ZOO_DEFAULT_AUTONOMY, habits: [], firstEgg: false, pity: 0, easter: [], progress: emptyProgress() })
 
 // Names in ops are plain strings rather than roster enums on purpose: a newer client naming a habit or
 // a word this server does not know yet gets that op dropped, not the whole batch refused.
@@ -195,6 +209,8 @@ export const zooOpSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('zoo.hatch'), eggId: key }).strict(),
   z.object({ op: z.literal('zoo.pair'), id: daemonId }).strict(),
   z.object({ op: z.literal('zoo.nickname'), id: daemonId, nickname: zooNicknameSchema.nullable() }).strict(),
+  // A level this server does not know (a newer client's) is dropped, not refused, like any unknown name.
+  z.object({ op: z.literal('zoo.autonomy'), level: z.string().min(1).max(32) }).strict(),
   z.object({ op: z.literal('zoo.easter'), word: z.string().min(1).max(64) }).strict(),
   // A guest's local zoo, read entry by entry like a stored one (a bad entry is dropped, not the seed).
   z.object({ op: z.literal('zoo.seed'), zoo: z.record(z.string(), z.unknown()) }).strict(),
@@ -320,6 +336,7 @@ export function parseZoo(raw: unknown, opts: { roster?: boolean } = {}): Zoo {
     daemons,
     eggs,
     pair,
+    autonomy: isAutonomy(src.autonomy) ? src.autonomy : ZOO_DEFAULT_AUTONOMY,
     habits: uniqueStrings(src.habits, (h) => !strict || HABIT_KEYS.has(h), 64),
     firstEgg: src.firstEgg === true,
     pity,
@@ -562,6 +579,7 @@ const clone = (zoo: Zoo): Zoo => ({
   daemons: zoo.daemons.map((d) => ({ ...d })),
   eggs: zoo.eggs.map((e) => ({ ...e })),
   pair: zoo.pair,
+  autonomy: zoo.autonomy,
   habits: [...zoo.habits],
   firstEgg: zoo.firstEgg,
   pity: zoo.pity,
@@ -603,6 +621,11 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
       zoo.pair = op.id
       return true
     }
+    case 'zoo.autonomy': {
+      if (!isAutonomy(op.level) || zoo.autonomy === op.level) return false
+      zoo.autonomy = op.level
+      return true
+    }
     case 'zoo.nickname': {
       const d = zoo.daemons.find((x) => x.id === op.id)
       if (!d || (d.nickname ?? null) === op.nickname) return false
@@ -628,7 +651,9 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
       // or batch ids. Turns this account already reported from a signed-in harnessd are kept instead.
       const fresh = zoo.progress.turns === 0 && zoo.progress.batches.length === 0
       const progress = fresh ? { ...seed.progress, machines: [], batches: [] } : zoo.progress
-      Object.assign(zoo, seed, { eggs, pair: seed.pair ?? seed.daemons[0]?.id ?? null, progress })
+      // The guest's dial comes along when it set one; otherwise the account keeps its own.
+      const autonomy = isAutonomy((op.zoo as { autonomy?: unknown }).autonomy) ? seed.autonomy : zoo.autonomy
+      Object.assign(zoo, seed, { eggs, pair: seed.pair ?? seed.daemons[0]?.id ?? null, progress, autonomy })
       return true
     }
     case 'zoo.turn':
