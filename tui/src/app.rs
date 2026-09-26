@@ -60,6 +60,8 @@ pub struct Stash {
     pub lastw: Vec<String>,
     pub nums: HashMap<String, usize>,
     pub created: i64,
+    /// When it was last used (session_update_activity): when the client left it, else when made.
+    pub activity: i64,
     pub options: std::collections::BTreeMap<String, String>,
     pub env: std::collections::BTreeMap<String, EnvVar>,
 }
@@ -313,6 +315,9 @@ pub struct App {
     pub session_id: u32,
     pub session_desk: bool,
     pub session_created: i64,
+    /// When the session in front was last used: when the client last left it (the client's own
+    /// is in use now).
+    pub session_activity: i64,
     /// The session the client was in before this one (switch-client -l, C-b L).
     pub last_session: Option<u32>,
     pub next_session_id: u32,
@@ -447,6 +452,7 @@ impl App {
             session_id: 0,
             session_desk: true,
             session_created: epoch_secs(),
+            session_activity: epoch_secs(),
             last_session: None,
             next_session_id: 1,
             swap_back: None,
@@ -1325,10 +1331,11 @@ impl App {
     // ── sessions ────────────────────────────────────────────────────────────────
 
     fn stash_current(&mut self) -> Stash {
+        let activity = self.session_activity;
         Stash {
             id: self.session_id, alias: self.session_alias.take(), desk: self.session_desk,
             tabs: std::mem::take(&mut self.tabs), active: self.active, lastw: std::mem::take(&mut self.lastw), nums: std::mem::take(&mut self.nums),
-            created: self.session_created, options: std::mem::take(&mut self.options.session), env: std::mem::take(&mut self.session_env),
+            created: self.session_created, activity, options: std::mem::take(&mut self.options.session), env: std::mem::take(&mut self.session_env),
         }
     }
 
@@ -1342,6 +1349,7 @@ impl App {
         self.lastw = s.lastw;
         self.nums = s.nums;
         self.session_created = s.created;
+        self.session_activity = s.activity;
         self.options.session = s.options;
         self.session_env = s.env;
     }
@@ -1363,7 +1371,9 @@ impl App {
     pub fn switch_session(&mut self, id: u32) {
         if id == self.session_id { return }
         let from = self.session_id;
-        if !self.swap_session(id) { return }
+        // The session the client leaves was in use until now (session_update_activity).
+        let used = std::mem::replace(&mut self.session_activity, epoch_secs());
+        if !self.swap_session(id) { self.session_activity = used; return }
         self.last_session = Some(from);
         let a = self.active;
         self.tabs[a].alerts = 0;
@@ -1382,7 +1392,8 @@ impl App {
             "session_id" => format!("${}", s.id),
             "session_windows" => s.tabs.len().to_string(),
             "session_attached" | "session_many_attached" | "session_marked" | "session_alerts" => "0".into(),
-            "session_created" | "session_activity" | "session_last_attached" => s.created.to_string(),
+            "session_created" | "session_last_attached" => s.created.to_string(),
+            "session_activity" => s.activity.to_string(),
             "window_index" => s.tabs.get(s.active).and_then(|t| s.nums.get(&t.id)).map(|n| n.to_string()).unwrap_or_default(),
             "window_name" => s.tabs.get(s.active).map(|t| t.name.clone()).unwrap_or_default(),
             _ => return None,
@@ -1452,7 +1463,7 @@ impl App {
         let tab_id = tab.id.clone();
         let base = self.base_index;
         self.sessions.push(Stash { id, alias: Some(name), desk: false, tabs: vec![tab], active: 0, lastw: Vec::new(), nums: HashMap::from([(tab_id.clone(), base)]),
-            created: epoch_secs(), options: Default::default(), env: Default::default() });
+            created: epoch_secs(), activity: epoch_secs(), options: Default::default(), env: Default::default() });
         // Its shell, on this computer, into its window wherever that is by then.
         crate::input::new_shell_from(self, None, Placement::Fill(tab_id), cwd, command);
         if !detached { self.switch_session(id) }
@@ -1475,7 +1486,7 @@ impl App {
             json!({ "name": t.name, "named": t.named, "num": nums.get(&t.id).copied(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus })
         };
         let mut rows = Vec::new();
-        let here = Stash { id: self.session_id, alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, options: Default::default(), env: Default::default() };
+        let here = Stash { id: self.session_id, alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), options: Default::default(), env: Default::default() };
         for (s, tabs, nums) in std::iter::once((&here, &self.tabs, &self.nums)).chain(self.sessions.iter().map(|s| (s, &s.tabs, &s.nums))) {
             let windows: Vec<Value> = if s.desk { Vec::new() } else { tabs.iter().filter(|t| t.root.is_some()).map(|t| window(self, t, nums)).collect() };
             if !s.desk && windows.is_empty() { continue }
@@ -1521,8 +1532,9 @@ impl App {
             let id = self.next_session_id;
             self.next_session_id += 1;
             let active = row.get("active").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let created = row.get("created").and_then(Value::as_i64).unwrap_or_else(epoch_secs);
             self.sessions.push(Stash { id, alias: Some(name), desk: false, active: active.min(tabs.len() - 1), tabs, lastw: Vec::new(), nums,
-                created: row.get("created").and_then(Value::as_i64).unwrap_or_else(epoch_secs), options: Default::default(), env: Default::default() });
+                created, activity: created, options: Default::default(), env: Default::default() });
         }
         let current = doc.get("current").and_then(Value::as_str).map(str::to_string);
         let Some(start) = self.start_session.clone() else {

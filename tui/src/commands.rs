@@ -34,7 +34,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("choose-buffer", "choose-buffer", "Choose a paste buffer"),
     ("list-buffers", "lsb", "List paste buffers"),
     ("delete-buffer", "deleteb", "Delete a buffer (-b name, else the newest)"),
-    ("choose-tree", "choose-tree", "-w windows · -s harnesses · -m machines · -a waiting · -i models · -S store"),
+    ("choose-tree", "choose-tree", "-w windows · -s harnesses (sessions, with -F -f -K -O -r -N) · -m machines · -a waiting · -i models · -S store"),
     ("find-window", "findw", "Find a harness on any machine by what you type"),
     ("display-message", "display", "A message or format (-p prints it, -t a pane)"),
     ("show-messages", "showmsgs", "Messages so far"),
@@ -1333,20 +1333,24 @@ fn run_words_in(app: &mut App, words: &[String]) {
             app.paste.free(&name);
         }
         "choose-tree" => {
-            if flag(words, "-s") { input::launch(app, "", Filter::All) }
+            // -s alone — C-b s, tmux's `choose-tree -Zs` — is hn's list of every harness; -s with
+            // any of the tree's own options (as a tmux.conf binds it) is tmux's tree of sessions.
+            let tree_options = ["-F", "-f", "-K", "-O", "-t"].iter().any(|o| opt(words, o).is_some())
+                || ["-G", "-N", "-r", "-w"].iter().any(|f| flag(words, f)) || !positional(words).is_empty();
+            if flag(words, "-s") && !tree_options { input::launch(app, "", Filter::All) }
             else if flag(words, "-m") { input::launch(app, "@", Filter::All) }
             else if flag(words, "-a") { input::run(app, "inbox") }
             else if flag(words, "-i") { input::launch(app, ":", Filter::All) }
             else if flag(words, "-S") { input::launch(app, "*", Filter::All) }
             else {
-                // cmd-choose-tree.c: the pane into tree mode (window-tree.c) — -w starting on its
-                // window, collapsed; -F the items' format, -K their keys', -f a filter, -O the
-                // sort, -r reversed, -N no preview, -Z zoomed while it lasts; the template run on
-                // the chosen item (switch-client -Zt '%%').
+                // cmd-choose-tree.c: the pane into tree mode (window-tree.c), every session in it —
+                // -s starting on its session and -w on its window, collapsed; -F the items' format,
+                // -K their keys', -f a filter, -O the sort, -r reversed, -N no preview, -Z zoomed
+                // while it lasts; the template run on the chosen item (switch-client -Zt '%%').
                 let Some((w, p)) = target_pane(app, words) else { return };
                 let command = positional(words).first().cloned().filter(|c| !c.is_empty());
                 let a = crate::tree::Start {
-                    session: false, window: flag(words, "-w"), format: opt(words, "-F"), key_format: opt(words, "-K"), command,
+                    session: flag(words, "-s"), window: flag(words, "-w"), format: opt(words, "-F"), key_format: opt(words, "-K"), command,
                     filter: opt(words, "-f"), sort: opt(words, "-O"), reversed: flag(words, "-r"), no_preview: flag(words, "-N"), zoom: flag(words, "-Z"),
                 };
                 crate::tree::enter(app, p, w, &a);

@@ -1,13 +1,15 @@
 //! choose-tree, as tmux's mode-tree.c and window-tree.c make it: a mode of one pane that lists
-//! the session, its windows and their panes as a tree — the list at the top of the pane, the
+//! every session, its windows and their panes as a tree — the list at the top of the pane, the
 //! current item previewed in a box below it (a window's panes side by side, each numbered in a
 //! small box; a session's windows likewise; a pane itself) — chosen with Enter (the template,
 //! `switch-client -Zt '%%'` by default) or the key its line shows ((0)…(9), (M-a)…), tagged with
 //! t, searched (/ ? n N), filtered (f), sorted (O r), collapsed and expanded (h l - +), killed
-//! (x X), or given a command (:). hn has one session: this computer.
+//! (x X), or given a command (:).
 //!
 //! The tree is the pane's while it lasts (tmux's wp->modes): drawn over the pane's cells, the
-//! keys of the pane it is in going to it, rebuilt as windows and panes come and go.
+//! keys of the pane it is in going to it, rebuilt as windows and panes come and go. A session
+//! not on screen is read with it in front for the moment (App::swap_session), as a command that
+//! names it runs.
 
 use std::collections::HashMap;
 
@@ -53,9 +55,13 @@ pub const FORMAT_PANE: u8 = 3;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind { None, Session, Window, Pane }
 
-/// What an item is (window_tree_itemdata): the session, a window (its tab), a pane.
+/// What an item is (window_tree_itemdata): a session (its id), a window of it (its tab), a pane.
 #[derive(Clone, PartialEq, Eq, Debug)]
-enum What { Session, Window(String), Pane(String, u64) }
+enum What { Session(u32), Window(u32, String), Pane(u32, String, u64) }
+
+impl What {
+    fn session(&self) -> u32 { match self { What::Session(s) | What::Window(s, _) | What::Pane(s, ..) => *s } }
+}
 
 /// mode_tree_item.
 #[derive(Clone, Debug)]
@@ -127,8 +133,8 @@ pub struct Tree {
     key_format: String,
     command: String,
     kind: Kind,
-    /// The target it was started for (the session, its window's tab and its pane).
-    fs: (String, u64),
+    /// The target it was started for (its session, its window's tab and its pane).
+    fs: (u32, String, u64),
     /// The preview's window of items when they don't all fit (data->offset, left, right …).
     poffset: i64,
     left: i64,
@@ -145,9 +151,31 @@ pub struct Tree {
     status_seen: (u64, u64, String),
 }
 
-const SESSION_TAG: u64 = 1;
-fn window_tag(wid: u64) -> u64 { (1u64 << 40) | wid }
-fn pane_tag(id: u64) -> u64 { (2u64 << 40) | id }
+/// Each item's tag (tmux's is the session, winlink or pane pointer): a session's, a window's in
+/// that session, a pane's.
+fn session_tag(sid: u32) -> u64 { (3u64 << 56) | sid as u64 }
+fn window_tag(sid: u32, wid: u64) -> u64 { (1u64 << 56) | ((sid as u64) << 32) | wid }
+fn pane_tag(id: u64) -> u64 { (2u64 << 56) | id }
+
+/// [f] with session [sid] in front — quietly, as a command that names it runs there, so its
+/// #{session_attached} is 0 — and the one in front back after; None when there is no such session.
+fn in_session<R>(app: &mut App, sid: u32, f: impl FnOnce(&mut App) -> R) -> Option<R> {
+    if sid == app.session_id { return Some(f(app)) }
+    let (me, outer) = (app.session_id, app.swap_back);
+    if !app.swap_session(sid) { return None }
+    app.swap_back = Some(me);
+    let r = f(app);
+    // (A session killed while in front has already gone back.)
+    if app.session_id != me { app.swap_session(me); }
+    app.swap_back = outer;
+    Some(r)
+}
+
+/// A session's windows and which is current: the one in front's, or another's, kept aside.
+fn session_tabs(app: &App, sid: u32) -> Option<(&[crate::app::Tab], usize)> {
+    if sid == app.session_id { return Some((&app.tabs, app.active)) }
+    app.sessions.iter().find(|s| s.id == sid).map(|s| (&s.tabs[..], s.active))
+}
 
 /// An item's format against the session, a window or a pane (format_single with them).
 fn expand(app: &mut App, fmt: &str, ftype: u8, window: usize, pane: Option<u64>) -> String {
@@ -186,7 +214,7 @@ impl Tree {
             key_format: a.key_format.clone().unwrap_or_else(|| DEFAULT_KEY_FORMAT.to_string()),
             command: a.command.clone().unwrap_or_else(|| DEFAULT_COMMAND.to_string()),
             kind: if a.session { Kind::Session } else if a.window { Kind::Window } else { Kind::Pane },
-            fs: (tab, pane),
+            fs: (app.session_id, tab, pane),
             poffset: 0,
             left: -1,
             right: -1,
@@ -258,18 +286,29 @@ impl Tree {
         if self.current == current && self.lines.len() == n && self.size == size { self.offset = offset }
     }
 
+    /// window_tree_build: every session, in the sort's order (window_tree_cmp_session: by index
+    /// its id, by name, by time the most recently used first), each built with it in front.
     fn build_items(&mut self, app: &mut App, saved: &HashMap<u64, (bool, bool)>, tag: &mut u64, filter: Option<&str>) {
-        self.build_session(app, saved, filter);
-        let fs_window = app.tabs.iter().position(|t| t.id == self.fs.0);
+        let front = app.session_id;
+        let mut order: Vec<(u32, String, i64)> = app.session_list().into_iter().map(|(id, name)| {
+            // The session on screen is the one in use now; another, when it was last.
+            let used = if id == front { i64::MAX } else { app.stash_value(id, "session_activity").and_then(|v| v.parse().ok()).unwrap_or(0) };
+            (id, name, used)
+        }).collect();
+        let (field, reversed) = (self.sort, self.reversed);
+        order.sort_by(|a, b| {
+            let by_name = || a.1.as_bytes().cmp(b.1.as_bytes());
+            let r = match field { 0 => a.0.cmp(&b.0), 2 => b.2.cmp(&a.2).then_with(by_name), _ => by_name() };
+            if reversed { r.reverse() } else { r }
+        });
+        for (sid, ..) in order { in_session(app, sid, |app| self.build_session(app, saved, filter, sid)); }
+        let (fsid, ftab, fpane) = self.fs.clone();
+        let fs_window = session_tabs(app, fsid).and_then(|(tabs, _)| tabs.iter().find(|t| t.id == ftab).map(|t| (t.wid, t.panes().len())));
         match self.kind {
             Kind::None => {}
-            Kind::Session => *tag = SESSION_TAG,
-            Kind::Window => { if let Some(w) = fs_window { *tag = window_tag(app.tabs[w].wid) } }
-            Kind::Pane => {
-                if let Some(w) = fs_window {
-                    *tag = if app.tabs[w].panes().len() == 1 { window_tag(app.tabs[w].wid) } else { pane_tag(self.fs.1) };
-                }
-            }
+            Kind::Session => *tag = session_tag(fsid),
+            Kind::Window => { if let Some((wid, _)) = fs_window { *tag = window_tag(fsid, wid) } }
+            Kind::Pane => { if let Some((wid, n)) = fs_window { *tag = if n == 1 { window_tag(fsid, wid) } else { pane_tag(fpane) } } }
         }
     }
 
@@ -295,14 +334,14 @@ impl Tree {
         match self.items[id].parent { Some(p) => self.items[p].children.retain(|c| *c != id), None => self.roots.retain(|c| *c != id) }
     }
 
-    /// window_tree_build_session: the session, its windows sorted, gone if none has a pane that
-    /// passes the filter.
-    fn build_session(&mut self, app: &mut App, saved: &HashMap<u64, (bool, bool)>, filter: Option<&str>) {
+    /// window_tree_build_session: session [sid] (in front), its windows sorted, gone if none has a
+    /// pane that passes the filter.
+    fn build_session(&mut self, app: &mut App, saved: &HashMap<u64, (bool, bool)>, filter: Option<&str>, sid: u32) {
         let (active, focus) = (app.active, app.tabs.get(app.active).and_then(|t| t.focus));
         let text = expand(app, &self.format, FORMAT_SESSION, active, focus);
         let expanded = if self.kind == Kind::Session { 0 } else { 1 };
         let name = app.session_name();
-        let s = self.add(saved, None, What::Session, SESSION_TAG, name, Some(text), expanded);
+        let s = self.add(saved, None, What::Session(sid), session_tag(sid), name, Some(text), expanded);
         let mut order: Vec<usize> = (0..app.tabs.len()).collect();
         let (field, reversed) = (self.sort, self.reversed);
         order.sort_by(|a, b| {
@@ -317,7 +356,7 @@ impl Tree {
         });
         let n = order.len();
         let mut empty = 0;
-        for w in order { if !self.build_window(app, saved, s, w, filter) { empty += 1 } }
+        for w in order { if !self.build_window(app, saved, s, w, filter, sid) { empty += 1 } }
         if empty == n { self.remove(s) }
     }
 
@@ -326,13 +365,15 @@ impl Tree {
         match filter { None => true, Some(f) => is_true(&expand(app, f, FORMAT_PANE, w, Some(p))) }
     }
 
-    /// window_tree_build_window: a window and (with more than one) its panes.
-    fn build_window(&mut self, app: &mut App, saved: &HashMap<u64, (bool, bool)>, parent: usize, w: usize, filter: Option<&str>) -> bool {
+    /// window_tree_build_window: a window of session [sid] (in front) and, with more than one,
+    /// its panes.
+    #[allow(clippy::too_many_arguments)]
+    fn build_window(&mut self, app: &mut App, saved: &HashMap<u64, (bool, bool)>, parent: usize, w: usize, filter: Option<&str>, sid: u32) -> bool {
         let (id, wid, focus, panes) = { let t = &app.tabs[w]; (t.id.clone(), t.wid, t.focus, t.panes()) };
         let text = expand(app, &self.format, FORMAT_WINDOW, w, focus);
         let name = app.win_num(w).to_string();
         let expanded = if matches!(self.kind, Kind::Session | Kind::Window) { 0 } else { 1 };
-        let item = self.add(saved, Some(parent), What::Window(id.clone()), window_tag(wid), name, Some(text), expanded);
+        let item = self.add(saved, Some(parent), What::Window(sid, id.clone()), window_tag(sid, wid), name, Some(text), expanded);
         if panes.is_empty() { self.remove(item); return false }
         if panes.len() == 1 {
             if !Self::passes(app, w, panes[0], filter) { self.remove(item); return false }
@@ -352,7 +393,7 @@ impl Tree {
         for p in l {
             let idx = panes.iter().position(|x| *x == p).unwrap_or(0) + app.pane_base(w);
             let text = expand(app, &self.format, FORMAT_PANE, w, Some(p));
-            self.add(saved, Some(item), What::Pane(id.clone(), p), pane_tag(p), idx.to_string(), Some(text), -1);
+            self.add(saved, Some(item), What::Pane(sid, id.clone(), p), pane_tag(p), idx.to_string(), Some(text), -1);
         }
         true
     }
@@ -377,34 +418,40 @@ impl Tree {
         for &id in list { let l = self.items[id].line; self.lines[l].flat = flat }
     }
 
-    /// window_tree_get_key: the key format against the item, #{line} its line.
+    /// window_tree_get_key: the key format against the item (its session in front), #{line} its
+    /// line.
     fn get_key(&self, app: &mut App, id: usize, line: usize) -> Option<Chord> {
-        let (ftype, w, p) = match self.pull(app, id) {
-            Some(Pulled { window, pane, .. }) => match self.items[id].what {
-                What::Session => (FORMAT_SESSION, window, pane),
-                What::Window(_) => (FORMAT_WINDOW, window, pane),
-                What::Pane(..) => (FORMAT_PANE, window, pane),
-            },
-            None => return None,
-        };
-        app.format_line = Some(line);
-        let s = expand(app, &self.key_format, ftype, w, p);
-        app.format_line = None;
+        let ftype = match self.items[id].what { What::Session(_) => FORMAT_SESSION, What::Window(..) => FORMAT_WINDOW, What::Pane(..) => FORMAT_PANE };
+        let s = in_session(app, self.items[id].what.session(), |app| {
+            let Pulled { window, pane } = self.pull(app, id)?;
+            app.format_line = Some(line);
+            let s = expand(app, &self.key_format, ftype, window, pane);
+            app.format_line = None;
+            Some(s)
+        }).flatten()?;
         keys::parse(&s).ok()
     }
 
-    /// window_tree_pull_item: where an item is now — its window and pane (a session's: its
-    /// current window's active pane; a window's: its active pane). None if it has gone.
+    /// window_tree_pull_item: where an item is now, its session in front — its window and pane
+    /// (a session's: its current window's active pane; a window's: its active pane). None if it
+    /// has gone, or its session is not the one in front.
     fn pull(&self, app: &App, id: usize) -> Option<Pulled> {
-        match &self.items[id].what {
-            What::Session => { let w = app.active; Some(Pulled { window: w, pane: app.tabs.get(w)?.focus }) }
-            What::Window(tab) => { let w = app.tabs.iter().position(|t| &t.id == tab)?; Some(Pulled { window: w, pane: app.tabs[w].focus }) }
-            What::Pane(tab, p) => {
+        let what = &self.items[id].what;
+        if what.session() != app.session_id { return None }
+        match what {
+            What::Session(_) => { let w = app.active; Some(Pulled { window: w, pane: app.tabs.get(w)?.focus }) }
+            What::Window(_, tab) => { let w = app.tabs.iter().position(|t| &t.id == tab)?; Some(Pulled { window: w, pane: app.tabs[w].focus }) }
+            What::Pane(_, tab, p) => {
                 let w = app.tabs.iter().position(|t| &t.id == tab)?;
                 if !app.tabs[w].panes().contains(p) { return None }
                 Some(Pulled { window: w, pane: Some(*p) })
             }
         }
+    }
+
+    /// pull, with the item's session in front for the moment: what [f] makes of where it is.
+    fn pulled<R>(&self, app: &mut App, id: usize, f: impl FnOnce(&mut App, Pulled) -> Option<R>) -> Option<R> {
+        in_session(app, self.items[id].what.session(), |app| { let p = self.pull(app, id)?; f(app, p) }).flatten()
     }
 
     // ── mode_tree's moves ────────────────────────────────────────────────────
@@ -479,16 +526,15 @@ impl Tree {
 
     // ── search ───────────────────────────────────────────────────────────────
 
-    fn matches(&self, app: &App, id: usize, s: &str) -> bool {
+    fn matches(&self, app: &mut App, id: usize, s: &str) -> bool {
         // window_tree_search: a session's name, a window's name, a pane's command.
         match &self.items[id].what {
-            What::Session => app.session_name().contains(s),
-            What::Window(tab) => app.tabs.iter().find(|t| &t.id == tab).map(|t| t.name.contains(s)).unwrap_or(false),
-            What::Pane(tab, p) => {
-                let Some(w) = app.tabs.iter().position(|t| &t.id == tab) else { return false };
-                let cmd = crate::format::expand(app, "#{pane_current_command}", w, Some(*p), false);
-                !cmd.is_empty() && cmd.contains(s)
-            }
+            What::Session(sid) => app.session_list().iter().any(|(i, name)| i == sid && name.contains(s)),
+            What::Window(sid, tab) => session_tabs(app, *sid).and_then(|(tabs, _)| tabs.iter().find(|t| &t.id == tab).map(|t| t.name.contains(s))).unwrap_or(false),
+            What::Pane(..) => self.pulled(app, id, |app, Pulled { window, pane }| {
+                let cmd = crate::format::expand(app, "#{pane_current_command}", window, pane, false);
+                Some(!cmd.is_empty() && cmd.contains(s))
+            }).unwrap_or(false),
         }
     }
 
@@ -506,7 +552,7 @@ impl Tree {
 
     /// mode_tree_search_forward / _backward: through every item (collapsed ones too), from the
     /// current one round, for the first that matches.
-    fn search_from(&self, app: &App) -> Option<usize> {
+    fn search_from(&self, app: &mut App) -> Option<usize> {
         let s = self.search.as_deref()?;
         let last = self.current_item()?;
         let mut mti = last;
@@ -549,8 +595,35 @@ impl Tree {
 
     // ── drawing ──────────────────────────────────────────────────────────────
 
-    /// mode_tree_draw into [area] (the pane's cells): the list, then the preview box.
-    pub fn draw(&mut self, app: &App, buf: &mut Buffer, area: Rect) {
+    /// What the preview shows for the current item, read with its session in front.
+    fn plan(&self, app: &mut App) -> Plan {
+        let Some(id) = self.current_item() else { return Plan::Nothing };
+        let what = self.items[id].what.clone();
+        self.pulled(app, id, |app, Pulled { window, pane }| {
+            let pane = pane?;
+            // The session's display-panes-colour and display-panes-active-colour (s->options).
+            let colour = |name: &str, d: Color| crate::tmuxconf::colour(&app.options.get(name, "", None).unwrap_or_default()).unwrap_or(d);
+            let colours = (colour("display-panes-colour", Color::Blue), colour("display-panes-active-colour", Color::Red));
+            Some(match what {
+                What::Pane(..) => Plan::Pane(pane),
+                What::Window(..) => {
+                    let (panes, active, base) = (app.tabs[window].panes(), app.tabs[window].focus, app.pane_base(window));
+                    let items = panes.iter().enumerate().map(|(i, p)| (*p, format!(" {} ", i + base), Some(*p) == active)).collect();
+                    Plan::Row { items, session: false, colours }
+                }
+                What::Session(_) => {
+                    let mut order: Vec<usize> = (0..app.tabs.len()).collect();
+                    order.sort_by_key(|w| app.win_num(*w));
+                    let items = order.iter().filter_map(|w| app.tabs[*w].focus.map(|f| (f, format!(" {}:{} ", app.win_num(*w), app.tabs[*w].name), *w == app.active))).collect();
+                    Plan::Row { items, session: true, colours }
+                }
+            })
+        }).unwrap_or(Plan::Nothing)
+    }
+
+    /// mode_tree_draw into [area] (the pane's cells): the list, then the preview box, showing
+    /// [plan].
+    pub fn draw(&mut self, app: &App, buf: &mut Buffer, area: Rect, plan: &Plan) {
         for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
         if self.lines.is_empty() { return }
         let tab = app.tabs.iter().find(|t| t.panes().contains(&self.pane)).map(|t| t.id.clone()).unwrap_or_default();
@@ -617,27 +690,16 @@ impl Tree {
             } else { put(" ", Style::default(), &mut x) }
         }
         let (box_x, box_y) = (w - 4, sy - h - 2);
-        if box_x != 0 && box_y != 0 { self.draw_item(app, buf, id, area.x + 2, by + 1, box_x, box_y) }
+        if box_x != 0 && box_y != 0 { self.draw_item(app, buf, plan, area.x + 2, by + 1, box_x, box_y) }
     }
 
     /// window_tree_draw: a pane's cells; a window's panes, or a session's windows, side by side.
-    fn draw_item(&mut self, app: &App, buf: &mut Buffer, id: usize, x: u16, y: u16, sx: u32, sy: u32) {
-        let Some(Pulled { window, pane }) = self.pull(app, id) else { return };
-        let Some(pane) = pane else { return };
-        match self.items[id].what.clone() {
-            What::Pane(..) => { if let Some(p) = app.panes.get(&pane) { crate::ui::screen_preview(buf, p, x, y, sx as u16, sy as u16) } }
-            What::Window(_) => {
-                let panes = app.tabs[window].panes();
-                let active = app.tabs[window].focus;
-                let items: Vec<(u64, String, bool)> = panes.iter().enumerate().map(|(i, p)| (*p, format!(" {} ", i + app.pane_base(window)), Some(*p) == active)).collect();
-                self.draw_row(app, buf, x, y, sx, sy, &items, false);
-            }
-            What::Session => {
-                let mut order: Vec<usize> = (0..app.tabs.len()).collect();
-                order.sort_by_key(|w| app.win_num(*w));
-                let items: Vec<(u64, String, bool)> = order.iter().filter_map(|w| app.tabs[*w].focus.map(|f| (f, format!(" {}:{} ", app.win_num(*w), app.tabs[*w].name), *w == app.active))).collect();
-                self.draw_row(app, buf, x, y, sx, sy, &items, true);
-            }
+    #[allow(clippy::too_many_arguments)]
+    fn draw_item(&mut self, app: &App, buf: &mut Buffer, plan: &Plan, x: u16, y: u16, sx: u32, sy: u32) {
+        match plan {
+            Plan::Nothing => {}
+            Plan::Pane(pane) => { if let Some(p) = app.panes.get(pane) { crate::ui::screen_preview(buf, p, x, y, sx as u16, sy as u16) } }
+            Plan::Row { items, session, colours } => self.draw_row(app, buf, x, y, sx, sy, items, *session, *colours),
         }
     }
 
@@ -646,11 +708,10 @@ impl Tree {
     /// offset moving them), each numbered in a box in display-panes-colour
     /// (display-panes-active-colour for the current one), a line between them.
     #[allow(clippy::too_many_arguments)]
-    fn draw_row(&mut self, app: &App, buf: &mut Buffer, cx: u16, cy: u16, sx: u32, sy: u32, items: &[(u64, String, bool)], session: bool) {
+    fn draw_row(&mut self, app: &App, buf: &mut Buffer, cx: u16, cy: u16, sx: u32, sy: u32, items: &[(u64, String, bool)], session: bool, colours: (Color, Color)) {
         let total = items.len() as u32;
         if total == 0 { return }
-        let colour = crate::tmuxconf::colour(&app.options.get("display-panes-colour", "", None).unwrap_or_default()).unwrap_or(Color::Blue);
-        let active_colour = crate::tmuxconf::colour(&app.options.get("display-panes-active-colour", "", None).unwrap_or_default()).unwrap_or(Color::Red);
+        let (colour, active_colour) = colours;
         let visible = if sx / total < 24 { (sx / 24).max(1) } else { total };
         let current = items.iter().position(|i| i.2).unwrap_or(0) as u32;
         let (mut start, mut end) = if current < visible { (0, visible) } else if current >= total - visible { (total - visible, total) } else { let s = current - visible / 2; (s, s + visible) };
@@ -692,19 +753,29 @@ impl Tree {
     // ── keys ─────────────────────────────────────────────────────────────────
 
     /// The target an item names (window_tree_get_target): `=session:`, `=session:1.`, or
-    /// `=session:1.%3`.
-    fn target(&self, app: &App, id: usize) -> Option<String> {
-        let s = app.session_name();
-        let Pulled { window, pane } = self.pull(app, id)?;
-        Some(match &self.items[id].what {
-            What::Session => format!("={s}:"),
-            What::Window(_) => format!("={s}:{}.", app.win_num(window)),
-            What::Pane(..) => format!("={s}:{}.{}", app.win_num(window), crate::pane::tag(pane?)),
+    /// `=session:1.%3`, with its own session's name.
+    fn target(&self, app: &mut App, id: usize) -> Option<String> {
+        self.pulled(app, id, |app, Pulled { window, pane }| {
+            let s = app.session_name();
+            Some(match &self.items[id].what {
+                What::Session(_) => format!("={s}:"),
+                What::Window(..) => format!("={s}:{}.", app.win_num(window)),
+                What::Pane(..) => format!("={s}:{}.{}", app.win_num(window), crate::pane::tag(pane?)),
+            })
         })
     }
 }
 
 struct Pulled { window: usize, pane: Option<u64> }
+
+/// What the preview shows (window_tree_draw's pane, window and session): nothing, a pane's
+/// cells, or things side by side — each one's pane, its label and whether it is the current one
+/// (a session's windows, or a window's panes), in display-panes-colour and -active-colour.
+pub enum Plan {
+    Nothing,
+    Pane(u64),
+    Row { items: Vec<(u64, String, bool)>, session: bool, colours: (Color, Color) },
+}
 
 /// screen_write_box, BOX_LINES_DEFAULT: ┌─┐ │ │ └─┘.
 fn draw_box(buf: &mut Buffer, x: u16, y: u16, w: u16, h: u16, st: Style) {
@@ -802,7 +873,8 @@ pub fn draw(app: &mut App, pane: u64, buf: &mut Buffer, area: Rect) {
     let (sx, sy) = (area.width as u32, area.height as u32);
     let mark = status_mark(app);
     if t.status_seen != mark { t.status_seen = mark; t.build(app, sx, sy) } else { t.refresh(app, sx, sy) }
-    t.draw(app, buf, area);
+    let plan = t.plan(app);
+    t.draw(app, buf, area, &plan);
     put(app, pane, t);
 }
 
@@ -833,33 +905,31 @@ pub fn key(app: &mut App, pane: u64, chord: Chord, m: Option<&crate::mouse::Even
     }
     let Some(k) = key else { return put(app, pane, t) };
     let item = t.current_item();
-    let s = app.session_name();
     if is_char(&k, '<') { t.poffset -= 1 }
     else if is_char(&k, '>') { t.poffset += 1 }
     else if is_char(&k, 'H') {
-        // To where the tree was opened: its window and pane, expanded.
-        t.expand_tag(app, SESSION_TAG, sx, sy);
-        if let Some(w) = app.tabs.iter().find(|x| x.id == t.fs.0).map(|x| x.wid) { t.expand_tag(app, window_tag(w), sx, sy) }
-        if !t.set_current(pane_tag(pane)) { if let Some(w) = app.tabs.iter().find(|x| x.id == t.fs.0).map(|x| x.wid) { t.set_current(window_tag(w)); } }
+        // To where the tree was opened: its session and window expanded, its pane (else window).
+        let (fsid, ftab) = (t.fs.0, t.fs.1.clone());
+        t.expand_tag(app, session_tag(fsid), sx, sy);
+        let wid = session_tabs(app, fsid).and_then(|(tabs, _)| tabs.iter().find(|x| x.id == ftab).map(|x| x.wid));
+        if let Some(w) = wid { t.expand_tag(app, window_tag(fsid, w), sx, sy) }
+        if !t.set_current(pane_tag(pane)) { if let Some(w) = wid { t.set_current(window_tag(fsid, w)); } }
     } else if is_char(&k, 'm') {
-        if let Some(Pulled { pane: Some(p), .. }) = item.and_then(|i| t.pull(app, i)) { app.marked = Some(p) }
+        if let Some(p) = item.and_then(|i| t.pulled(app, i, |_, p| p.pane)) { app.marked = Some(p) }
         t.build(app, sx, sy);
     } else if is_char(&k, 'M') {
         app.marked = None;
         t.build(app, sx, sy);
     } else if is_char(&k, 'x') {
-        let prompt = item.and_then(|i| {
-            let pulled = t.pull(app, i)?;
-            Some(match &t.items[i].what {
-                What::Session => format!("Kill session {s}? "),
-                What::Window(_) => format!("Kill window {}? ", app.win_num(pulled.window)),
-                What::Pane(tab, p) => {
-                    let w = app.tabs.iter().position(|x| &x.id == tab)?;
-                    let idx = app.tabs[w].panes().iter().position(|x| x == p)? + app.pane_base(w);
-                    format!("Kill pane {idx}? ")
-                }
-            })
-        });
+        let prompt = item.and_then(|i| t.pulled(app, i, |app, pulled| Some(match &t.items[i].what {
+            What::Session(_) => format!("Kill session {}? ", app.session_name()),
+            What::Window(..) => format!("Kill window {}? ", app.win_num(pulled.window)),
+            What::Pane(_, _, p) => {
+                let w = pulled.window;
+                let idx = app.tabs[w].panes().iter().position(|x| x == p)? + app.pane_base(w);
+                format!("Kill pane {idx}? ")
+            }
+        })));
         if let Some(prompt) = prompt { app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Tree { pane, ask: Ask::Kill }, &prompt, ""))) }
     } else if is_char(&k, 'X') {
         let n = t.count_tagged();
@@ -1050,17 +1120,21 @@ fn window_mouse(app: &mut App, t: &mut Tree, k: Chord, x: u32, item: Option<usiz
     let item = item?;
     let enter = Some(Chord::normal(KeyCode::Enter, KeyModifiers::NONE));
     match t.items[item].what.clone() {
-        What::Session => {
-            // mode_tree_expand_current, then the window at that place.
+        What::Session(sid) => {
+            // mode_tree_expand_current, then the window at that place (the session's, by index).
             if !t.items[item].expanded { t.items[item].expanded = true; t.build(app, sx, sy) }
-            let mut order: Vec<usize> = (0..app.tabs.len()).collect();
-            order.sort_by_key(|w| app.win_num(*w));
-            if let Some(w) = order.get((t.start + x) as usize) { let wid = app.tabs[*w].wid; t.set_current(window_tag(wid)); }
+            let at = (t.start + x) as usize;
+            let wid = in_session(app, sid, |app| {
+                let mut order: Vec<usize> = (0..app.tabs.len()).collect();
+                order.sort_by_key(|w| app.win_num(*w));
+                order.get(at).map(|w| app.tabs[*w].wid)
+            }).flatten();
+            if let Some(wid) = wid { t.set_current(window_tag(sid, wid)); }
             enter
         }
-        What::Window(tab) => {
+        What::Window(sid, tab) => {
             if !t.items[item].expanded { t.items[item].expanded = true; t.build(app, sx, sy) }
-            let panes = app.tabs.iter().find(|w| w.id == tab).map(|w| w.panes()).unwrap_or_default();
+            let panes = session_tabs(app, sid).and_then(|(tabs, _)| tabs.iter().find(|w| w.id == tab).map(|w| w.panes())).unwrap_or_default();
             if let Some(p) = panes.get((t.start + x) as usize) { t.set_current(pane_tag(*p)); }
             enter
         }
@@ -1068,13 +1142,25 @@ fn window_mouse(app: &mut App, t: &mut Tree, k: Chord, x: u32, item: Option<usiz
     }
 }
 
-/// mode_tree_run_command: the template, `%%` the target, run with [target] as current.
-fn run_command(app: &mut App, target: Option<(String, u64)>, template: &str, name: &str) {
+/// mode_tree_run_command: the template, `%%` the target, run with [target] (its session, window
+/// and pane) as the current one. A command that names the item finds it itself (in whatever
+/// session); one that does not runs where the item is, its session in front for it.
+fn run_command(app: &mut App, target: Option<(u32, String, u64)>, template: &str, name: &str) {
     let command = crate::commands::template_replace(template, name, 1);
     if command.trim().is_empty() { return }
-    let saved = std::mem::replace(&mut app.hook_state, target.map(|t| std::sync::Arc::new(crate::commands::HookState { formats: Vec::new(), target: Some(t) })));
-    crate::commands::execute(app, &command);
-    app.hook_state = saved;
+    let run = |app: &mut App, current: Option<(String, u64)>| {
+        let saved = std::mem::replace(&mut app.hook_state, current.map(|t| std::sync::Arc::new(crate::commands::HookState { formats: Vec::new(), target: Some(t) })));
+        crate::commands::execute(app, &command);
+        app.hook_state = saved;
+    };
+    match target {
+        Some((sid, tab, pane)) if sid != app.session_id && command == template => {
+            in_session(app, sid, |app| run(app, Some((tab, pane))));
+            changed_elsewhere(app);
+        }
+        Some((sid, tab, pane)) => run(app, (sid == app.session_id).then_some((tab, pane))),
+        None => run(app, None),
+    }
 }
 
 /// What a tree's prompt was answered with (window_tree_*_callback, mode_tree_*_callback).
@@ -1095,11 +1181,9 @@ pub fn answer(app: &mut App, pane: u64, ask: Ask, value: Option<&str>) {
             let yes = value.map(|s| { let mut c = s.chars(); matches!((c.next(), c.next()), (Some('y' | 'Y'), None)) }).unwrap_or(false);
             if yes {
                 let items = if ask == Ask::Kill { t.current_item().into_iter().collect() } else { t.each_tagged(true) };
-                let targets: Vec<(What, Option<Pulled>)> = items.iter().map(|i| (t.items[*i].what.clone(), t.pull(app, *i))).collect();
+                let targets: Vec<What> = items.iter().map(|i| t.items[*i].what.clone()).collect();
                 put(app, pane, t);
-                for (what, pulled) in targets { kill(app, what, pulled) }
-                // server_renumber_all.
-                app.renumber();
+                for what in targets { kill(app, what) }
                 if app.panes.get(&pane).map(|p| p.tree.is_some()).unwrap_or(false) { update(app, pane) }
                 return;
             }
@@ -1107,10 +1191,10 @@ pub fn answer(app: &mut App, pane: u64, ask: Ask, value: Option<&str>) {
         Ask::Command => {
             if let Some(v) = value.filter(|s| !s.is_empty()) {
                 let items = t.each_tagged(true);
-                let targets: Vec<(Option<String>, Option<(String, u64)>)> = items.iter().map(|i| {
-                    let pulled = t.pull(app, *i);
-                    let target = pulled.as_ref().and_then(|p| Some((app.tabs.get(p.window)?.id.clone(), p.pane?)));
-                    (t.target(app, *i), target)
+                let targets: Vec<(Option<String>, Option<(u32, String, u64)>)> = items.iter().map(|i| {
+                    let sid = t.items[*i].what.session();
+                    let current = t.pulled(app, *i, |app, p| Some((sid, app.tabs.get(p.window)?.id.clone(), p.pane?)));
+                    (t.target(app, *i), current)
                 }).collect();
                 put(app, pane, t);
                 for (name, target) in targets { if let Some(name) = name { run_command(app, target, v, &name) } }
@@ -1122,14 +1206,27 @@ pub fn answer(app: &mut App, pane: u64, ask: Ask, value: Option<&str>) {
     put(app, pane, t);
 }
 
-/// window_tree_kill_each.
-fn kill(app: &mut App, what: What, pulled: Option<Pulled>) {
-    let Some(Pulled { window, pane }) = pulled else { return };
-    match what {
-        What::Session => crate::commands::execute(app, "kill-session"),
-        What::Window(tab) => { if let Some(w) = app.tabs.iter().position(|t| t.id == tab) { let _ = window; app.close_tab(w) } }
-        What::Pane(..) => { if let Some(p) = pane { app.close_pane(p) } }
-    }
+/// window_tree_kill_each, in the item's session: a session (its windows closed, the last taking
+/// it), a window, a pane — then its windows renumbered (server_renumber_all).
+fn kill(app: &mut App, what: What) {
+    let sid = what.session();
+    let other = sid != app.session_id;
+    in_session(app, sid, |app| {
+        match &what {
+            What::Session(_) => crate::commands::execute(app, "kill-session"),
+            What::Window(_, tab) => { if let Some(w) = app.tabs.iter().position(|t| &t.id == tab) { app.close_tab(w) } }
+            What::Pane(_, tab, p) => { if app.tabs.iter().any(|t| &t.id == tab && t.panes().contains(p)) { app.close_pane(*p) } }
+        }
+        if app.session_id == sid { app.renumber() }
+    });
+    if other { changed_elsewhere(app) }
+}
+
+/// After another session changed with it in front: the one on screen laid out again, and the
+/// sessions kept (as a command run in another session leaves them).
+fn changed_elsewhere(app: &mut App) {
+    app.fit_panes();
+    app.save_sessions();
 }
 
 /// #{pane_mode} for a pane whose top mode is the tree.

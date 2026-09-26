@@ -1149,6 +1149,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // Times: when this client started, and when a window last had something happen.
         "session_created" => return Some(Val::Time(app.session_created)),
         "session_last_attached" | "client_created" | "start_time" => return Some(Val::Time(started(app))),
+        // The client's session is in use now; one a command has in front, when it last was.
+        "session_activity" if app.swap_back.is_some_and(|b| b != app.session_id) => return Some(Val::Time(app.session_activity)),
         "session_activity" | "client_activity" => return Some(Val::Time(now_secs())),
         "window_activity" => {
             // The last output seen here, or the harness's own last activity when that is later
