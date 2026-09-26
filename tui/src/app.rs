@@ -1016,6 +1016,18 @@ impl App {
     /// Open (or re-open) a pane's terminal. [takeover]: take the keyboard from any other window.
     pub fn open_stream(&mut self, pane_id: u64, takeover: bool) {
         let content = self.content_size(pane_id);
+        // A harness whose start failed has no terminal: its pane says why (the daemon's words)
+        // and what to do.
+        let failed = self.panes.get(&pane_id).and_then(|p| self.fleet.agent(&p.machine_id, &p.agent_id)).filter(|a| a.launch == "failed").map(|a| a.launch_error.clone());
+        if let Some(why) = failed {
+            let restart = self.keymap.hint("confirm-before -p \"restart #T? (y/n)\" restart-harness").unwrap_or_else(|| "C-b R".into());
+            let close = self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into());
+            if let Some(pane) = self.panes.get_mut(&pane_id) {
+                pane.phase = Phase::Card { title: "Failed to start".into(), detail: if why.is_empty() { "The daemon did not say why.".into() } else { why }, keys: vec![(restart, "restart".into()), (close, "close pane".into())] };
+                pane.dirty = true;
+            }
+            return;
+        }
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         if pane.opening { return }
         let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone()) else {
