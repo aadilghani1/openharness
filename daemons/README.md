@@ -18,7 +18,7 @@ clients and the server build against.
 | `tools/generate.mjs` | Checks the roster against the art rules and writes the copies below. `--check` in CI. |
 | `frames.json` | Generated. Frames every port must reproduce, byte for byte. |
 | `desktop/lib/daemons/roster.g.dart` | Generated. The roster as a Dart raw string. |
-| `backend/src/lib/daemonRoster.g.ts` | Generated. Only what decides a draw: ids, rarities, drops, egg rules. |
+| `backend/src/lib/daemonRoster.g.ts` | Generated. Only what decides a draw, a grant or a level: ids, rarities, drops, egg, earn and bond rules. |
 
 `hn` (the Rust terminal client) reads `roster.json` with `include_str!` and tests against `frames.json`.
 
@@ -92,21 +92,39 @@ change never re-fetches the zoo and the other way round.
 
 ```
 GET  /api/zoo        -> { revision, zoo }
-POST /api/zoo/ops    -> { ops: [...] } applied in order under `revision`; answers { revision, zoo, hatched }
-event zoo_changed    { revision }   (same path as desk_changed: bus -> adapter -> harnessd -> local clients)
+POST /api/zoo/ops    -> { ops: [...] } applied in order under `revision`;
+                        answers { revision, zoo, hatched, grants, levelUps }
+event zoo_changed    { revision }   (same paths as desk_changed: bus -> adapter -> harnessd -> local clients,
+                                     and bus -> web socket -> phone and browser)
 ```
+
+`grants: [{ kind, eggId }]` is every egg that arrived in the nest during the request (first, easter,
+earned, or held until there was room); `levelUps: [{ id, level, version }]` is every daemon whose bond
+reached a new level. Only the client that sent the request sees them; every other client learns the
+same thing by re-reading the zoo after `zoo_changed` (a new egg id, a higher `bond`).
 
 `harnessd` proxies `/api/zoo` for local clients exactly as it proxies `/api/desk`.
 
 ```
 zoo = {
-  daemons: [{ id, hatchedAt, egg, shiny, nickname?, bond, version }],   // id is a roster id
-  eggs:    [{ id, kind, grantedAt }],                                     // kind is a key of rules.eggs
+  daemons: [{ id, hatchedAt, egg, shiny, nickname?, bond, xp, version }],   // id is a roster id
+  eggs:    [{ id, kind, grantedAt, date? }],     // kind is a key of rules.eggs; date on a history egg
   pair:    daemonId | null,
   habits:  [habitKey],             // first-egg habits done, from rules.firstEgg.habits
   firstEgg: bool,                  // the first egg has been granted
   pity:    number,                 // hatches since the last secret
   easter:  [word],                 // easter words already used
+  progress: {                      // what counts toward eggs earned from work (server-written)
+    turns:    number,              // counted turns, all time
+    days:     { 'YYYY-MM-DD': n }, // counted turns per local day, the last 14 days
+    weeks:    ['YYYY-Www'],        // ISO weeks whose week egg was earned (last 8)
+    nights:   ['YYYY-MM-DD'],      // nights counted since the last night egg
+    machines: [machineId],         // the first 2 of the account's machines that reported turns
+    marathon: ['turns' | 'machines'],  // marathon eggs earned
+    history:  ['YYYY-MM-DD'],      // days whose history egg was earned (last 16)
+    held:     [{ kind, date? }],   // eggs earned while the nest was full, oldest first (up to 64)
+    batches:  [batchId],           // the last 64 zoo.turn batches applied
+  },
 }
 ```
 
@@ -120,9 +138,10 @@ Ops (every op is idempotent; an op on something missing is dropped, never an err
 | `zoo.nickname { id, nickname }` | 1–24 printable ASCII characters, or null to clear. |
 | `zoo.easter { word }` | A word from `rules.easterWords` grants one `easter` egg, once per word. |
 | `zoo.seed { zoo }` | A guest's local zoo on first sign-in. Applied only while the account zoo is empty. |
+| `zoo.turn { batchId, n, day, hour, machineId }` | Turns finished on one machine in one local hour (see "Earning eggs and growing"). harnessd sends it. |
 
 Limits: 12 eggs, 64 daemons. The server alone grants turn, week, marathon, night and history eggs
-(a later step); clients never send a draw result.
+from the turns reported to it; clients never send a draw result or an egg.
 
 **The draw** (`zoo.hatch`, server only, `crypto.randomInt`):
 
@@ -146,10 +165,78 @@ Limits: 12 eggs, 64 daemons. The server alone grants turn, week, marathon, night
 - A full nest does not lose anything: the first egg arrives with the next habit report, and an easter
   word stays unspent.
 - `zoo.seed` keeps only what the roster knows, gives each egg a server id, and pairs the first daemon
-  if the guest's pair did not survive.
+  if the guest's pair did not survive. It takes the guest's `progress` too, except its machine and
+  batch ids, unless this account has already reported turns (a signed-in harnessd got there first):
+  then the account's progress stays. A guest with only progress still seeds. `zoo.seed` is refused once
+  the account holds any daemon, egg or habit, so a client seeds right at sign-in.
+- Held eggs land after any op that leaves room, a hatch included, oldest first, and are answered in
+  `grants` like any other.
 
 **Guests** (no Harness account) keep a local zoo with the same shape and rules, drawn on the client.
-On first sign-in it is sent once with `zoo.seed`.
+On first sign-in it is sent once with `zoo.seed`. A guest's turns are counted by its client, not by
+harnessd (which reports only while signed in).
+
+## Earning eggs and growing
+
+Work earns eggs; the server decides. `harnessd` reports turns, the server counts them under
+`rules.earn`, grants eggs, and grows the paired daemon under `rules.bond` (`backend/src/lib/zoo.ts`).
+
+**What counts as a turn** (`cli/src/lib/zooTurns.ts`). A turn counts when `turn_ended` arrives for a
+turn whose `turn_started` harnessd saw live: the engine normalizers' prompt record, which already
+leaves out tool results, injected context, compaction summaries and interrupts. Never counted: a
+replayed transcript or a turn picked up at attach, a sub-agent's turn (an Orchestrator specialist, or
+its Director while specialists are out), a terminal, the pair harness (`dsh` `autonomous/pair`), a turn
+killed by an interrupt. There is no per-prompt signal that a person typed it (a delivered message has a
+`deliveryId`, a prompt typed straight into a pane has nothing), so a prompt typed by a script or a
+`/loop` counts too; the daily cap bounds it.
+
+**Reporting.** Counted turns gather for 60 s, then go out as `zoo.turn` ops, one per local day and hour,
+through the same signed-in backend path harnessd uses for `/api/zoo`. `day` and `hour` are the machine's
+local time when the turn finished; `machineId` is the machine's id. Each op has a fresh `batchId`; a send
+that failed is retried a minute later with the same ids, beside newer ops (at most 64 wait). A 400,
+401 or 403 drops the report; a day the server would no longer take is let go. Shutdown sends the last
+minute, waiting at most 2 s.
+
+**`zoo.turn { batchId, n, day, hour, machineId }`**: `batchId` and `machineId` are 1–64 id-safe
+characters, `n` is 1–50, `day` a real `YYYY-MM-DD` in 2000–2999, `hour` 0–23. Anything else refuses the
+request. Then, in order:
+
+1. A batch id among the last 64 applied is dropped (a retry of a send that landed).
+2. A `day` that cannot be today anywhere on Earth (UTC−12 to UTC+14) is dropped, allowing one day late:
+   from two days before the server's UTC date to one day after.
+3. **Machine**: the first 2 of the account's machines to report are remembered; the second earns a
+   **marathon** egg, once. An id that is not one of the account's machines is not remembered, but its
+   turns count.
+4. **Daily cap**: at most `earn.turn.dailyCap` (20) turns count per local day, whatever machine reports
+   them. Only counted turns do anything below.
+5. **turn** egg every `earn.turn.every` (40) counted turns. **marathon** egg once at
+   `earn.marathon.turns` (500).
+6. **week** egg once per ISO week (Monday start; 2027-01-01 is in 2026-W53) once `earn.week.days` (3)
+   distinct local days of that week have a counted turn.
+7. **night** egg when `earn.night.nights` (3) distinct local days have had a counted turn in hours
+   `fromHour`–`toHour` (00:00–04:59); the count then starts again from none. Nights need not be in a row.
+8. **history** egg on the first counted turn of a day whose `MM-DD` is in `rules.historyDates`, once per
+   date per year. The egg carries `date: 'YYYY-MM-DD'`. `historyDates` maps `MM-DD` to the daemon that
+   day belongs to, or null: `04-01` teapot (HTTP 418), `09-09` moth (the first actual bug, 1947),
+   `10-31` zombie (processes). None of them exists yet. Hatched, a history egg gives its date's daemon
+   when a released drop holds it and you do not own it; otherwise (today: always) it draws from the
+   usual pool with `eggs.history` weights.
+9. **Bond**: the paired daemon (the first hatched with the paired id) gains `bond.xpPerTurn` (1) xp per
+   counted turn, plus `bond.xpPerDay` (5) for the first counted turn of a local day. `bond` is the level
+   its xp reached on `bond.levels` [0, 50, 150, 300, 600] (levels 0–4); `version` follows
+   `bondForVersion`: 0.1, 1.0 at level 2, 2.0 at level 4. Nothing is earned without a pair, and xp never
+   goes down. At the cap a full day is 25 xp, so 2.0 takes about 24 full days.
+10. A batch that changed nothing (its day already at the cap) is not remembered, and writes nothing.
+
+**A full nest** (12 eggs): an earned egg is held in `progress.held`, oldest first, up to 64, and lands
+when there is room (after the op that makes it). Earned past 64 held, an egg is lost.
+
+**Stored daemons** from before xp read `xp` as the least xp their stored `bond` needs; `bond` and
+`version` are always read back from `xp`, so they never disagree.
+
+Not built: the lookbook's "first merged PR" marathon, and bond from suggestions you take or talking to
+the daemon (later, with the pair brain). What the client shows for a grant or a level-up (a new egg in
+the nest, a slow blink, the release's changelog) is the client's.
 
 ## First egg: habits
 
@@ -204,4 +291,5 @@ block:
    you come back.
 4. **Learning**: notice real signals, propose in one line, teach every agent with SKILL.md, only with
    your yes. See the lookbook's LEARNING section.
-5. **The rest of the zoo**: turn/week/marathon/night/history eggs, bond and versions, logbooks, drops.
+5. **The rest of the zoo**: turn/week/marathon/night/history eggs, bond and versions (the server and
+   harnessd: see "Earning eggs and growing"; the clients' side is still to do), logbooks, drops.
