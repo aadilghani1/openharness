@@ -112,7 +112,9 @@ class TerminalTitle extends StatelessWidget {
         height: height,
         child: Row(
           children: [
+            // The name and where it runs get the larger share; the words at the right give way.
             Expanded(
+              flex: 3,
               child: Semantics(
                 button: true,
                 label: 'Find an agent',
@@ -174,6 +176,7 @@ class TerminalTitle extends StatelessWidget {
             // The words between the name and `…` give way first: clipped rather than pushing the
             // row past the screen when a state, a way out and an asking harness all want a say.
             Flexible(
+              flex: 2,
               child: ClipRect(
                 child: SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
