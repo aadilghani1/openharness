@@ -153,7 +153,7 @@ class _FocusHintsState extends State<FocusHints> {
               'Tips: swipe right for all your harnesses, swipe left to start '
               'one, tap the name to switch, the mic to talk.',
           child: Material(
-            color: tty.ground.withValues(alpha: 0.92),
+            color: tty.ground.withValues(alpha: 0.95),
             child: Stack(
               children: [
                 // Under the title, never on it: the title is three rows tall.

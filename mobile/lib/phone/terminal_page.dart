@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 // `defaultTargetPlatform` — the navigation bar this page keeps clear of is
 // Android's alone; see [_TerminalPageState._navigationBar].
@@ -824,31 +823,45 @@ class _TerminalPageState extends State<TerminalPage>
     return '${_windowName(asking.single.agent.displayName)} asking';
   }
 
-  /// In the sample, the one thing to try next — a guide that follows what has been done: go to the
+  /// In the sample, the one thing to try next, as a step counter the way copy-mode counts —
+  /// `[1/3] refactor-db needs you — swipe right →` — following what has been done: go to the
   /// harness that is asking, answer it, start one of your own. Null outside the sample, and once
   /// the sample is done.
   String? _sampleGuide() {
     final sample = SampleMode.maybeOf(context);
     if (sample == null || sample.endCardSeen) return null;
-    if (widget.agentId.startsWith('sample-new-')) {
-      _scheduleEndCard(sample);
-      return 'sample · your harness is working — watch it go';
+    final (step, text) = switch (null) {
+      _ when widget.agentId.startsWith('sample-new-') => (
+        4,
+        '✓ yours is running — watch it work',
+      ),
+      _ when _questionWatcher?.view != null => (
+        2,
+        '[2/3] tap an answer below — or say “yes”',
+      ),
+      _ when _askingElsewhere() != null => (
+        1,
+        '[1/3] ${_askingElsewhere()!.replaceFirst(' asking', '')} needs you — swipe right →',
+      ),
+      _ => (3, '[3/3] ← swipe left: start one of your own'),
+    };
+    if (step == 4) _scheduleEndCard(sample);
+    // A step done: a tick you can feel, once.
+    if (_guideStep != null && step > _guideStep!) {
+      HapticFeedback.mediumImpact();
     }
-    if (_questionWatcher?.view != null) {
-      return 'sample · it’s asking — tap an answer, or say “yes”';
-    }
-    if (_askingElsewhere() case final asking?) {
-      return 'sample · $asking — swipe right →';
-    }
-    return 'sample · ← swipe left to start a harness of your own';
+    _guideStep = step;
+    return text;
   }
+
+  int? _guideStep;
 
   bool _showEndCard = false;
   Timer? _endCardTimer;
 
   void _scheduleEndCard(SampleSession sample) {
     if (_endCardTimer != null || sample.endCardSeen) return;
-    _endCardTimer = Timer(const Duration(seconds: 9), () {
+    _endCardTimer = Timer(const Duration(seconds: 8), () {
       if (!mounted || sample.endCardSeen) return;
       sample.endCardSeen = true;
       setState(() => _showEndCard = true);
@@ -2059,16 +2072,16 @@ class _TerminalPageState extends State<TerminalPage>
                       Positioned(
                         left: 0,
                         right: 0,
-                        bottom:
-                            _windowBottomInset -
-                            math.min(_windowBottomInset, 13.0),
+                        bottom: 0,
                         child: ListenableBuilder(
                           listenable: Listenable.merge([
                             widget.voice,
                             _barMessage,
                           ]),
                           builder: (context, _) {
-                            final slop = math.min(_windowBottomInset, 13.0);
+                            // The whole home strip: the line's touch — and, with a question open, its
+                            // yellow — runs to the screen's edge.
+                            final slop = _windowBottomInset;
                             if (VoiceBarLine.shows(widget.voice)) {
                               return VoiceBarLine(
                                 voice: widget.voice,
@@ -2183,6 +2196,9 @@ class _TerminalPageState extends State<TerminalPage>
                     if (_showEndCard)
                       Positioned.fill(
                         child: _SampleEndCard(
+                          started: _windowName(
+                            agent?.displayName ?? 'your harness',
+                          ),
                           onSetUp: () =>
                               SampleMode.maybeOf(context)
                                   ?.leave(SampleExit.setUp),
@@ -3463,14 +3479,15 @@ class _SampleGuideLine extends StatelessWidget {
     final tty = Tty.of(context);
     return Container(
       width: double.infinity,
-      color: Color.alphaBlend(tty.yellow.withValues(alpha: 0.14), tty.ground),
+      // Green, the hints' colour: yellow already means "asking".
+      color: Color.alphaBlend(tty.green.withValues(alpha: 0.14), tty.ground),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(Tty.origin, 7, Tty.origin, 7),
         child: Text(
           text,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-          style: tty.style(size: TtySize.meta, color: tty.yellow),
+          style: tty.style(size: TtySize.meta, color: tty.green),
         ),
       ),
     );
@@ -3479,16 +3496,39 @@ class _SampleGuideLine extends StatelessWidget {
 
 /// The sample's last word: what it was, and the way to the real thing.
 class _SampleEndCard extends StatelessWidget {
-  const _SampleEndCard({required this.onSetUp, required this.onKeepPlaying});
+  const _SampleEndCard({
+    required this.started,
+    required this.onSetUp,
+    required this.onKeepPlaying,
+  });
 
+  /// The harness the person started — the last line of the tally.
+  final String started;
   final VoidCallback onSetUp;
   final VoidCallback onKeepPlaying;
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
+    Widget tick(String text) => Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(
+              text: '✓ ',
+              style: tty.style(color: tty.green, size: TtySize.row),
+            ),
+            TextSpan(
+              text: text,
+              style: tty.style(size: TtySize.row),
+            ),
+          ],
+        ),
+      ),
+    );
     return Material(
-      color: tty.ground.withValues(alpha: 0.98),
+      color: tty.ground,
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
@@ -3497,12 +3537,17 @@ class _SampleEndCard extends StatelessWidget {
             children: [
               const Spacer(),
               TtyText('That’s Harness.', size: 26, weight: FontWeight.w700),
-              const SizedBox(height: 14),
+              const SizedBox(height: 20),
+              tick('watched a harness work'),
+              tick('answered its question'),
+              tick('started $started'),
+              const SizedBox(height: 6),
+              TtyText('3 passed', size: TtySize.meta, color: tty.green),
+              const SizedBox(height: 24),
               Text(
-                'You watched an agent work, answered it and started one of '
-                'your own — from a phone. The real ones run on your computer, '
-                'on your code.',
-                style: tty.style(size: TtySize.row, color: tty.faint),
+                'Now do it on your own code. The real ones run on your '
+                'computer; this phone is the remote.',
+                style: tty.style(size: TtySize.row),
               ),
               const Spacer(),
               TtyPrimaryButton(label: 'Set up my computer', onPressed: onSetUp),

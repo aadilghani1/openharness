@@ -72,11 +72,13 @@ class CommandLine extends StatelessWidget {
         height: bar + slop,
         child: Stack(
           children: [
+            // Yellow to the screen's edge: the keys' touch runs down through the home strip, so
+            // the colour does too — a bar that stopped short read as a strip of black under it.
             Positioned(
               left: 0,
               right: 0,
               top: 0,
-              height: bar,
+              height: bar + slop,
               child: ColoredBox(color: tty.yellow),
             ),
             if (keys.isEmpty)

@@ -311,7 +311,13 @@ class _Choice extends StatelessWidget {
                   child: Container(
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: i == selected ? tty.ground : Colors.transparent,
+                      // The chosen one lifts off the track, as iOS draws it.
+                      color: i == selected
+                          ? Color.alphaBlend(
+                              tty.text.withValues(alpha: 0.2),
+                              tty.ground,
+                            )
+                          : Colors.transparent,
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: TtyText(
