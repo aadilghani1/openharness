@@ -29,10 +29,14 @@ class UnlockComputer extends StatefulWidget {
     super.key,
     required this.notifier,
     required this.machineState,
+    this.onUnlocked,
   });
 
   final AppNotifier notifier;
   final MachineState machineState;
+
+  /// Called once the computer is unlocked.
+  final VoidCallback? onUnlocked;
 
   @override
   State<UnlockComputer> createState() => _UnlockComputerState();
@@ -97,6 +101,7 @@ class _UnlockComputerState extends State<UnlockComputer> {
     if (error == null) {
       _password.clear();
       HapticFeedback.mediumImpact();
+      widget.onUnlocked?.call();
     } else {
       HapticFeedback.heavyImpact();
     }

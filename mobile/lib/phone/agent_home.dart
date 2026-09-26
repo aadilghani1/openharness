@@ -2,11 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/logging/startup_trace.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
-import 'package:harness_mobile/shared/widgets/empty_state.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
@@ -17,13 +15,13 @@ import 'agents_page.dart' show openNewAgent;
 import 'desk_groups.dart';
 import 'link_page.dart';
 import 'machines_tab.dart';
+import 'tty_controls.dart';
+import 'tty.dart';
 import 'welcome/connect_computer.dart';
 
 import 'package:harness_mobile/demo/sample_mode.dart';
 
-import 'phone_fab.dart';
 import 'phone_header.dart';
-import 'phone_search_button.dart';
 import 'phone_status.dart';
 
 /// The phone's home: one agent's terminal, at the ROOT of the stack rather than pushed over a list.
@@ -1042,35 +1040,43 @@ class _AgentHomeEmpty extends StatelessWidget {
     // test and this one. Falling back to the machines screen keeps the two in step rather than
     // drawing a `+` that cannot fire.
     if (ready.isEmpty) return MachinesTab(notifier: notifier);
+    final tty = Tty.of(context);
+    final machine = ready.first.machine;
+    // A computer, and nothing running on it: say so in a line, and the one thing to do — start one.
     return Scaffold(
-      backgroundColor: AppPalette.windowBg,
-      floatingActionButton: PhoneFab(
-        icon: LucideIcons.plus300,
-        tooltip: 'New Harness',
-        // The first machine that can host one. Which machine is the form's first question, and it
-        // is changed there.
-        onPressed: () =>
-            openNewAgent(context, notifier, ready.first.machine.machineId),
-      ),
+      backgroundColor: tty.ground,
       body: SafeArea(
-        bottom: false,
-        child: Column(
-          children: [
-            PhoneHeader(
-              large: true,
-              title: 'Harnesses',
-              trailing: [PhoneSearchButton(notifier: notifier)],
-            ),
-            const Expanded(
-              child: EmptyState(
-                icon: LucideIcons.squareTerminal300,
-                title: 'No harnesses yet',
-                message:
-                    'Tap + to start one, or launch a harness from Harness on a '
-                    'machine and it will appear here.',
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TtyText(
+                machine.displayName,
+                size: TtySize.meta,
+                color: tty.green,
               ),
-            ),
-          ],
+              const Spacer(),
+              TtyText(
+                'Nothing running yet.',
+                size: 24,
+                weight: FontWeight.w700,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Start a harness — an agent on a project on your computer — and '
+                'watch it work from here. Swipe right any time to find one '
+                'started elsewhere.',
+                style: tty.style(size: TtySize.row, color: tty.faint),
+              ),
+              const Spacer(),
+              TtyPrimaryButton(
+                label: 'Start a harness',
+                onPressed: () =>
+                    openNewAgent(context, notifier, machine.machineId),
+              ),
+            ],
+          ),
         ),
       ),
     );

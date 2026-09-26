@@ -128,6 +128,13 @@ class _LinkPageState extends State<LinkPage> {
                 child: UnlockComputer(
                   notifier: widget.notifier,
                   machineState: machine,
+                  // Home, not a pushed page: nothing pops here, so the shell is told — and it
+                  // carries on to the harnesses, or to New when there are none.
+                  onUnlocked: widget.embedded
+                      ? () =>
+                            PhoneShellScope.maybeOf(context)
+                                ?.onMachineLinked(widget.machineId)
+                      : null,
                 ),
               ),
           ],
