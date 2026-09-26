@@ -95,6 +95,7 @@ import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from './lib/sessionSearch/indexer.js'
 import { SessionSearchStore } from './lib/sessionSearch/store.js'
+import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.js'
 import { sweepWorktrees } from './lib/worktreeSweep.js'
 import { nameBranchAfterSession } from './lib/branchNaming.js'
 import { forgetAgentProject } from './lib/agentProject.js'
@@ -379,6 +380,8 @@ Machine:
   harness new [agent] [@machine] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
   harness machines             list the machines on this account (this computer's is marked)
+  harness search <words>       find the conversation on this computer that said them: every turn of
+                               every session, live or stopped (--limit=N, --json)
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
   harness version              print the installed version (v${VERSION})
@@ -2790,7 +2793,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // but the hits for a query. A Node without `node:sqlite` has no index; the RPC then says so.
   const sessionSearch = (() => {
     try {
-      const store = SessionSearchStore.open(join(env.ADAPTER_DATA_DIR, 'session-search.db'))
+      const store = SessionSearchStore.open(join(env.ADAPTER_DATA_DIR, SESSION_SEARCH_FILE))
       if (!store) {
         console.warn('[search] node:sqlite is not available on this Node — session search is off')
         return null
@@ -7216,6 +7219,15 @@ switch (cmd) {
       output: process.stdout,
       error: (line) => console.error(line),
     }).then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'search':
+    process.exitCode = searchCommand({
+      argv: rest,
+      dataDir: env.ADAPTER_DATA_DIR,
+      output: (line) => console.log(line),
+      error: (line) => console.error(line),
+      color: process.stdout.isTTY === true,
+    })
     break
   case 'machines':
     if (!args[0]) machinesListCommand(flags.includes('--json')).catch(onError)
