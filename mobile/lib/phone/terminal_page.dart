@@ -2162,7 +2162,9 @@ class _TerminalPageState extends State<TerminalPage>
                     // terminal person reaches for most, and the one a phone keyboard does not have.
                     if (!_ownsInput &&
                         session != null &&
-                        (_agentWorking || _questionWatcher?.view != null))
+                        (_agentWorking ||
+                            _questionWatcher?.view != null ||
+                            (_questionWatcher?.interruptible ?? false)))
                       Positioned(
                         right:
                             MediaQuery.sizeOf(context).width / 2 +
