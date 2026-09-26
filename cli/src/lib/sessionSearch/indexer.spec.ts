@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { LiveEvent } from '../normalize.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from './indexer.js'
 import { SessionSearchStore } from './store.js'
 
@@ -96,6 +97,41 @@ describe('SessionSearchIndex', () => {
     index.touch('s1')
     index.touch('s1')
     await vi.waitFor(() => { expect(found('tmux')).toEqual(['s1']) })
+  })
+
+  it('reads a database-backed history whole, again only when the session changed', async () => {
+    const store = SessionSearchStore.open(':memory:')!
+    let reads = 0
+    let history: LiveEvent[] = [
+      { type: 'user_message', payload: { content: 'draft the release notes' } },
+      { type: 'text_delta', payload: { content: 'Drafted them in RELEASE.md.' } },
+    ]
+    let source: SearchSource = {
+      agentId: 'agent-oc', sessionId: 'ses_1', engine: 'opencode', transcriptPath: null, header: 'OpenCode harness',
+      updatedAt: 100, readHistory: async () => { reads++; return history },
+    }
+    const index = new SessionSearchIndex({ store, sources: () => [source], touchDelayMs: 5 })
+    cleanups.push(() => { index.stop(); store.close() })
+    const found = (query: string) => index.search(query).hits.map((hit) => hit.sessionId)
+    index.sweep()
+    await vi.waitFor(() => { expect(found('release')).toEqual(['ses_1']) })
+    expect(store.session('ses_1')).toMatchObject({ turns: 1, lastAt: 100 })
+
+    index.sweep()
+    await index.drain()
+    expect(reads).toBe(1)
+
+    // A turn event marks it changed even before its update time moves.
+    history = [...history, { type: 'user_message', payload: { content: 'now tag v2' } }]
+    index.touch('ses_1')
+    await vi.waitFor(() => { expect(found('tag')).toEqual(['ses_1']) })
+    expect(reads).toBe(2)
+
+    history = [...history, { type: 'user_message', payload: { content: 'publish the changelog' } }]
+    source = { ...source, updatedAt: 200 }
+    index.sweep()
+    await vi.waitFor(() => { expect(found('changelog')).toEqual(['ses_1']) })
+    expect(store.session('ses_1')).toMatchObject({ turns: 3, lastAt: 200 })
   })
 
   it('names folders the way a person would: the last two segments', () => {

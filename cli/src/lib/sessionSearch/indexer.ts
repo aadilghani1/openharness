@@ -14,6 +14,7 @@
 import { stat } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
 
+import type { LiveEvent } from '../normalize.js'
 import { forEachLine, lineNormalizer, lineTime, skipPredicate } from './transcript.js'
 import { TurnCollector } from './turns.js'
 import type { IndexedSession, SearchHit, SessionSearchStore } from './store.js'
@@ -27,6 +28,12 @@ export interface SearchSource {
   header: string
   /** Last activity (epoch ms): the most recent sessions are indexed first. */
   updatedAt: number
+  /**
+   * The whole history, for an engine that keeps it in a database rather than a transcript file
+   * (OpenCode, Kilo, Hermes, Devin). Read in full when the session changed: there is no offset to
+   * resume from.
+   */
+  readHistory?: () => Promise<readonly LiveEvent[]>
 }
 
 export interface SessionSearchResult {
@@ -60,6 +67,8 @@ export function folderWords(cwd: string | null | undefined): string {
 
 export class SessionSearchIndex {
   private readonly queue = new Set<string>()
+  /** Sessions with a turn event since their last pass: a database history has no size to compare. */
+  private readonly dirty = new Set<string>()
   private readonly touches = new Map<string, NodeJS.Timeout>()
   private sources = new Map<string, SearchSource>()
   private sourcesReadAt = 0
@@ -93,6 +102,7 @@ export class SessionSearchIndex {
   /** A turn started or ended in this session: index it shortly. */
   touch(sessionId: string): void {
     if (this.stopped) return
+    this.dirty.add(sessionId)
     const pending = this.touches.get(sessionId)
     if (pending) clearTimeout(pending)
     const timer = setTimeout(() => {
@@ -170,6 +180,8 @@ export class SessionSearchIndex {
   async pass(source: SearchSource): Promise<void> {
     const store = this.opts.store
     const existing = store.session(source.sessionId)
+    const dirty = this.dirty.delete(source.sessionId)
+    if (!source.transcriptPath && source.readHistory) return this.historyPass(source, existing, dirty)
     const normalize = source.transcriptPath ? lineNormalizer(source.engine, source.sessionId) : null
     const file = source.transcriptPath && normalize ? await stat(source.transcriptPath).catch(() => null) : null
     const header = source.header
@@ -221,6 +233,32 @@ export class SessionSearchIndex {
     if (!resume) {
       this.opts.log?.(`[search] indexed ${source.sessionId.slice(0, 8)} · ${source.engine} · ${closed.length + (open ? 1 : 0)} turns · ${Math.round(file.size / 1024)} KB`)
     }
+  }
+
+  /** A database-backed session, read whole when it changed; its update time stands in for a size. */
+  private async historyPass(source: SearchSource, existing: IndexedSession | undefined, dirty: boolean): Promise<void> {
+    const store = this.opts.store
+    const stamp = source.updatedAt
+    if (existing && existing.mtime === stamp && !dirty) {
+      if (existing.header !== source.header || existing.agentId !== source.agentId) {
+        store.writeSession({ ...existing, header: source.header, agentId: source.agentId }, NO_TURN_DELETE, [])
+      }
+      return
+    }
+    const events = await source.readHistory!()
+    if (this.stopped) return
+    const collector = new TurnCollector(0)
+    for (let at = 0; at < events.length; at += 200) {
+      collector.feed(events.slice(at, at + 200), 0, null)
+      await this.pace()
+    }
+    const { closed, open } = collector.finish()
+    store.writeSession({
+      sessionId: source.sessionId, agentId: source.agentId, engine: source.engine, path: '',
+      header: source.header, size: 0, mtime: stamp, resumeOffset: 0, resumeTurn: 0,
+      lastAt: stamp || existing?.lastAt || null, turns: 0,
+    }, 0, open ? [...closed, open] : closed)
+    if (!existing) this.opts.log?.(`[search] indexed ${source.sessionId.slice(0, 8)} · ${source.engine} · ${closed.length + (open ? 1 : 0)} turns`)
   }
 
   private async pace(): Promise<void> {

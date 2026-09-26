@@ -202,9 +202,9 @@ import { CursorTaskHookQueue } from './engines/cursor/taskHookQueue.js'
 import { loadCursorPendingTasks, removeCursorPendingTasks } from './engines/cursor/pendingTasks.js'
 import { OpencodeReader, readOpencodeMessages } from './engines/opencode/reader.js'
 import { opencodeModelFromArgv, setOpencodeSessionModel } from './engines/opencode/sessionModel.js'
-import { lastOpencodeTurnText } from './engines/opencode/normalizer.js'
+import { lastOpencodeTurnText, opencodeMessagesToEvents } from './engines/opencode/normalizer.js'
 import { KiloReader, readKiloMessages } from './engines/kilo/reader.js'
-import { lastKiloTurnText } from './engines/kilo/normalizer.js'
+import { kiloMessagesToEvents, lastKiloTurnText } from './engines/kilo/normalizer.js'
 import { MuseNormalizer, lastMuseTurnText, museMessagesToEvents } from './engines/muse/normalizer.js'
 import { AmpNormalizer, lastAmpTurnText, ampMessagesToEvents } from './engines/amp/normalizer.js'
 import { GrokNormalizer, lastGrokTurnText } from './engines/grok/normalizer.js'
@@ -218,8 +218,8 @@ import { PiNormalizer, lastPiTurnText } from './engines/pi/normalizer.js'
 import { HermesReader, readHermesMessages } from './engines/hermes/reader.js'
 import { hermesDbForSession } from './lib/hermesHome.js'
 import { DevinReader, readDevinMessages } from './engines/devin/reader.js'
-import { lastHermesTurnText } from './engines/hermes/normalizer.js'
-import { lastDevinTurnText } from './engines/devin/normalizer.js'
+import { hermesMessagesToEvents, lastHermesTurnText } from './engines/hermes/normalizer.js'
+import { devinMessagesToEvents, lastDevinTurnText } from './engines/devin/normalizer.js'
 import {
   CommandCodeNormalizer,
   commandCodeRunError,
@@ -2788,6 +2788,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.recentProvider = (id, n) => mirror.recent(registry.resolve(id)?.sessionId || stoppedAgents.get(id)?.sessionId || id, n)
   backend.recentAsksProvider = (id, n) => mirror.recentAsks(registry.resolve(id)?.sessionId || stoppedAgents.get(id)?.sessionId || id, n)
 
+  // The engines that keep a conversation in a database instead of a transcript file, read through
+  // the same readers and replay normalizers as `session_get`.
+  const databaseHistory = (s: RegisteredSession): (() => Promise<readonly LiveEvent[]>) | undefined => {
+    switch (s.engine) {
+      case 'opencode': return async () => opencodeMessagesToEvents(await readOpencodeMessages(join(env.OPENCODE_DATA_DIR, 'opencode.db'), s.sessionId))
+      case 'kilo': return async () => kiloMessagesToEvents(await readKiloMessages(join(env.KILO_DATA_DIR, 'kilo.db'), s.sessionId))
+      case 'devin': return async () => devinMessagesToEvents(await readDevinMessages(join(env.DEVIN_HOME, 'sessions.db'), s.sessionId))
+      case 'hermes': return async () => hermesMessagesToEvents(await readHermesMessages(await hermesDbForSession(s), s.sessionId))
+      default: return undefined
+    }
+  }
+
   // Session search: every turn of every conversation on this machine, live and stopped, indexed from
   // its transcript and searched by `session_search` (lib/sessionSearch/). Nothing leaves the machine
   // but the hits for a query. A Node without `node:sqlite` has no index; the RPC then says so.
@@ -2800,16 +2812,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       const index = new SessionSearchIndex({
         store,
-        sources: () => [...registry.list(), ...stoppedAgents.list()].flatMap((s): SearchSource[] => (
-          s.sessionId && s.transcriptPath ? [{
+        sources: () => [...registry.list(), ...stoppedAgents.list()].flatMap((s): SearchSource[] => {
+          const readHistory = s.transcriptPath ? undefined : databaseHistory(s)
+          if (!s.sessionId || (!s.transcriptPath && !readHistory)) return []
+          return [{
             agentId: s.agentId,
             sessionId: s.sessionId,
             engine: s.engine,
-            transcriptPath: s.transcriptPath,
+            transcriptPath: s.transcriptPath || null,
             header: [projectDisplayName(s), s.title, folderWords(s.cwd)].filter(Boolean).join(' · '),
             updatedAt: s.updatedAt ?? 0,
-          }] : []
-        )),
+            readHistory,
+          }]
+        }),
         log: (line) => console.log(line),
       })
       index.start()
