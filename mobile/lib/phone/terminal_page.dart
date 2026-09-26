@@ -51,6 +51,7 @@ import 'phone_navigation.dart';
 import 'agent_index.dart';
 import 'command_line.dart';
 import 'terminal_title.dart';
+import 'welcome/focus_hints.dart';
 import 'voice_input_controller.dart';
 
 /// One agent's terminal, filling the phone. The header says whose it is and whether it is live;
@@ -2062,6 +2063,14 @@ class _TerminalPageState extends State<TerminalPage>
                             unread: widget.notifier.agentNotices.unread,
                             working: _agentWorking,
                           ),
+                        ),
+                      ),
+                    // The first time a terminal is up: what the swipes and the mic do. Once.
+                    if (session != null && widget.isActive && !_keyBarUp)
+                      Positioned.fill(
+                        child: FocusHints(
+                          micBottom:
+                              _windowBottomInset + 4 * Tty.of(context).row,
                         ),
                       ),
                   ],

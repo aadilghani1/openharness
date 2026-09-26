@@ -9,6 +9,8 @@ import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
+import 'package:harness_mobile/core/local_key_value_store.dart';
+import 'package:harness_mobile/phone/welcome/focus_hints.dart';
 import 'package:harness_mobile/phone/link_page.dart';
 import 'package:harness_mobile/phone/machines_tab.dart';
 import 'package:harness_mobile/phone/welcome/connect_computer.dart';
@@ -465,6 +467,25 @@ void main() {
     await shoot(tester, key, '1e-focus-prompt');
   });
 
+  testWidgets('focus, first time', skip: skip, (tester) async {
+    final key = await pumpScreen(
+      tester,
+      Stack(
+        children: [
+          focus(),
+          Positioned.fill(
+            child: FocusHints(
+              micBottom: 34 + 4 * 15.6,
+              store: FocusHintsSeen(storage: _MemoryStore()),
+            ),
+          ),
+        ],
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await shoot(tester, key, '1f-focus-first-time');
+  });
+
   testWidgets('focus, actions', skip: skip, (tester) async {
     final key = await pumpScreen(tester, focus());
     await tester.tap(find.text('…'));
@@ -534,4 +555,17 @@ void main() {
     final key = await pumpScreen(tester, SettingsPage(notifier: notifier));
     await shoot(tester, key, '5-settings');
   });
+}
+
+class _MemoryStore implements LocalKeyValueStore {
+  final _values = <String, String>{};
+
+  @override
+  Future<String?> read(String key) async => _values[key];
+
+  @override
+  Future<void> write(String key, String value) async => _values[key] = value;
+
+  @override
+  Future<void> delete(String key) async => _values.remove(key);
 }
