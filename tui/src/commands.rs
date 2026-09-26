@@ -1269,6 +1269,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let from = app.panes.get(&p).map(|x| (x.machine_id.clone(), x.agent_id.clone()));
             let pane = app.tabs[w].panes().contains(&p).then_some(p);
             let at = crate::app::At { tab: app.tabs[w].id.clone(), pane, dir, before: flag(words, "-b"), full: flag(words, "-f"), size, detached: flag(words, "-d"), zoom: flag(words, "-Z") };
+            // No room: tmux's error, and no shell made.
+            if !app.can_split(&at) { app.print_new = None; return app.error("no space for new pane") }
             input::new_shell_from(app, from, Placement::At(at), cwd, command);
         }
         "kill-pane" => {

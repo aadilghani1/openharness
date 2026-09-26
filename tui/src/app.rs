@@ -2436,6 +2436,17 @@ impl App {
 
     /// split-window's (and join-pane's) split: `id` gets a cell beside `at.pane` (-b before it,
     /// -f across the window) of `at.size`; false, and nothing changed, when there is no room.
+    /// Whether split_at would find room (spawn_pane's check before anything is made): tried on a
+    /// copy of the window's layout.
+    pub fn can_split(&mut self, at: &At) -> bool {
+        let Some(t) = self.tabs.iter().position(|x| x.id == at.tab) else { return false };
+        let saved = (self.tabs[t].root.clone(), self.tabs[t].zoomed);
+        let ok = self.split_at(t, u64::MAX - 1, at);
+        let tab = &mut self.tabs[t];
+        (tab.root, tab.zoomed) = saved;
+        ok
+    }
+
     fn split_at(&mut self, t: usize, id: u64, at: &At) -> bool {
         let body = self.body();
         // -l n%: of the target pane's width or height (-f: the window's), measured as tmux
