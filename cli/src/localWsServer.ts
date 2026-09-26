@@ -15,6 +15,7 @@ import {
   type TerminalBinaryClear,
 } from './lib/terminalBinary.js'
 import { RelayConnectError, type RelaySession, type RemoteRelayPool } from './lib/remoteRelay.js'
+import { DAEMON_IN_TYPES } from './pair/protocol.js'
 
 export const LOCAL_WS_PATH = '/api/local-ws'
 export const LOCAL_WS_PROTOCOL_VERSION = 1
@@ -121,8 +122,8 @@ export interface LocalWsServerOptions {
   onDaemonConfirm?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
 }
 
-/** The pair brain's frames from a window. */
-const DAEMON_IN = new Set(['daemon_act', 'daemon_presence', 'daemon_talk', 'daemon_shown', 'daemon_confirm'])
+/** The pair brain's frames from a window (pair/protocol.ts DAEMON_IN_TYPES). */
+const DAEMON_IN = DAEMON_IN_TYPES
 /** The reply each request among them gets. */
 const DAEMON_RESULT: Record<string, string> = { daemon_act: 'daemon_act_result', daemon_talk: 'daemon_talk_result', daemon_confirm: 'daemon_confirm_result' }
 

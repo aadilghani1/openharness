@@ -147,8 +147,9 @@ export { isDenyClass } from './classify.js'
 
 // ── local frames (loopback only) ────────────────────────────────────────────────────────────────────
 
-export const DAEMON_OUT_TYPES = new Set(['daemon_state', 'daemon_say', 'daemon_unsay', 'daemon_brief', 'daemon_act_result', 'daemon_talk_result'])
-export const DAEMON_IN_TYPES = new Set(['daemon_act', 'daemon_presence', 'daemon_talk'])
+export const DAEMON_OUT_TYPES = new Set(['daemon_state', 'daemon_say', 'daemon_unsay', 'daemon_brief', 'daemon_act_result', 'daemon_talk_result', 'daemon_confirm_result'])
+/** Taken only over the daemon's Unix socket, and all but presence only from a window (localWsServer.ts). */
+export const DAEMON_IN_TYPES = new Set(['daemon_act', 'daemon_presence', 'daemon_talk', 'daemon_shown', 'daemon_confirm'])
 
 /**
  * The face a line wants. `auto` reports something it already did (a rule, or the pair driving a harness

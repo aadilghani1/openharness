@@ -44,19 +44,21 @@ One implementation, `pair/control.ts`, behind a local-only `pair` request. Expos
 | `list_harnesses` | owner: registry + stopped + sensor state | `pair_list` | read |
 | `read_harness` (state, question, recaps, asks) | owner: sensor + mirror | `pair_read` | read |
 | `brief` | journal | `pair_journal` (fleet) | read |
-| `answer_question` | owner → `answer({ requestId })` | `pair_answer` | write |
-| `send_prompt`, `stop_turn` | owner → message (deliveryId), cancel | `pair_send`, `pair_stop` | write |
-| `start_harness` | owner → create, mode `ask`, never bypass | `pair_start` | write |
-| `pause_harness`, `resume_harness` | owner → stop service (guarded), resume | `pair_pause`, `pair_resume` | write |
-| `say` | `daemon_say` (mood `say`) | – | rate-limited |
+| `answer_question` | owner → `answer({ requestId })` | `pair_answer` (allow-class only) | write |
+| `send_prompt`, `stop_turn` | owner → message (deliveryId), cancel | – (`REMOTE_ANSWERS_ONLY`) | write |
+| `start_harness` | owner → create, mode `ask`, never bypass | – (`REMOTE_ANSWERS_ONLY`) | write |
+| `pause_harness`, `resume_harness` | owner → stop service (guarded), resume | – (`REMOTE_ANSWERS_ONLY`) | write |
+| `say` | `daemon_say` (mood `say`, `from: 'pair'`) | – | rate-limited |
 
 Every write, local or remote, runs through the owning machine's `PairOwner` (`pair/owner.ts`), so the
 floor and the journal live where the harness does.
 
-**Autonomy dial** (zoo op `zoo.autonomy`, default `suggest`): `watch` (read tools only, facts; lines
-carry only `[g]`) · `suggest` (it recommends, every action waits for your key) · `act-on-key` (one key
-approves a batch; it may drive harnesses it started) · `act-within-rules` (as `act-on-key`, and runs
-`~/.config/harness/pair.jsonc` rules on the owning machine and reports after).
+**Autonomy dial** (zoo op `zoo.autonomy`, default `watch`): `watch` (read tools only, facts; lines
+carry only `[g]`) · `suggest` (it recommends, every action waits for your key) · `act-on-key` (it may
+drive harnesses it started; everything else is a proposal, one key each) · `act-within-rules` (as
+`act-on-key`, and runs `~/.config/harness/pair.jsonc` rules on the owning machine and reports after).
+The zoo's level is a request: each daemon acts above `suggest` only once the person confirmed it at a
+window there, and runs pair.jsonc only once they confirmed that exact file (see "Security").
 
 **The floor, at every level**: no delete, restart, fork or bypass. It never types into terminals or
 into its own harness, and never into a pane that shows a dialog. Deny-class prompts — push, force,
@@ -64,8 +66,68 @@ into its own harness, and never into a pane that shows a dialog. Deny-class prom
 publish, drop, merge — read over the WHOLE dialog, get no `[y]` key and are never recommended or approved
 automatically. A `[y]` is only ever a one-time yes, and only on an allow-class permission prompt (reads,
 tests, builds, linters, formatters, in-project edits); no daemon action ever keys "don't ask again",
-"always" or "allow all". Question text and recaps are untrusted data; the floor is enforced in code on
-the owning machine.
+"always" or "allow all". Only a permission prompt is ever answered for the person — its decline, or that
+one-time yes — never a question the agent asks or a plan to approve, whoever asks (a key, the pair, a
+rule, another machine) and whichever harness (one the pair started too). Question text and recaps are
+untrusted data; the floor is enforced in code on the owning machine.
+
+## Security
+
+**Threat model.** A process running as the same user on this computer can already drive tmux, read the
+panes and type into them: a key a daemon accepts from this computer is not a hard boundary, and the
+daemon does not pretend it is. What the daemon must never do is EXTEND such a process's reach — to
+another machine, to more than it could do by typing, or past what the person agreed to. Question text,
+recaps, file contents and anything a model says are untrusted data. So:
+
+1. **Keys.** (a) `daemon_act`, `daemon_shown`, `daemon_confirm`, `daemon_talk` and `daemon_presence` are
+   taken only over the daemon's Unix socket (0600, in a 0700 folder), never the TCP port any user's
+   process can open (`LOCAL_SOCKET_REQUIRED`), and all but presence only from a window bound to this
+   machine — not a tool, not a relayed machine's socket (`UI_ONLY`). (b) A key counts only for a line
+   THIS connection received and acknowledged as displayed with `daemon_shown { id }`, at least 400 ms
+   before the key (`NOT_SHOWN`, `TOO_SOON`), and only while the line lives (its ttl, a proposal's ten
+   minutes, a brief's minute) — `pair/shown.ts`. (c) A key relayed to ANOTHER machine is only ever an
+   answer to an allow-class prompt, re-checked there; six a minute and sixty an hour on each side; and
+   journaled on both: here as `relayed` with the window it came from, there as `act { by: 'remote',
+   origin }`. Nothing else crosses: `REMOTE_ANSWERS_ONLY`. (d) The owning machine never believes a
+   `pair_*` request's `by`: a sealed request is `remote`; a loopback `pair_*` is refused (`REMOTE_ONLY`).
+2. **The floor for every answer.** `answerFloor` re-checks allow-class whoever asks and whatever harness
+   (one the pair started included): only a permission prompt, only its decline or a one-time yes to an
+   allow-class prompt (`NOT_ALLOW_CLASS`). A proposal shows the harness by name and machine and, in full
+   (`detail`), the exact command or diff it answers, the whole prompt, a start's folder and first prompt.
+   There are no batches: one proposal, one key; at most five wait at once.
+3. **Allow-class is read with certainty** (`pair/classify.ts`, `pair/shell.ts`): one line only; a small
+   tokenizer splits on `;` `&` `&&` `||` `|` and refuses any expansion, substitution, heredoc, subshell,
+   brace or comment; an environment prefix is not allow-class; write- and exec-capable forms are off the
+   list (`sort -o`, `git --output`/`-O`/`--ext-diff`/`-c`, `sed` other than `-n …p`, `find
+   -exec`/`-delete`/`-fprint`, `xargs`, `awk`, `rg --pre`, `go -exec`/`-vettool`, `cargo --config`,
+   `npx -y` …). A painted Bash block of more than one line (a description line and a second command line
+   look the same), a Codex command with a line under it, or an edit whose question is not the single one
+   after the preview naming the header's file, gets no `[y]`. The transcript's open tool call
+   (`CommanderMirror.openTools`) is preferred when exactly one matches the dialog: it has the exact
+   command. Every path — an edit's file, a command's arguments, a redirection — is resolved through
+   every symlink and must stay inside the project, never under `.git/`, `.harness/`, `.claude/`,
+   `.codex/`, never a home dotfile, never a file with a second hard link.
+4. **What the person agreed to** (`pair/gate.ts`). The zoo's autonomy (reachable through the loopback
+   proxy with `x-adapter-local`), a guest window's dial and pair.jsonc are requests. Lowering, and
+   watch → suggest, apply at once; a level above `suggest`, and a pair.jsonc with rules or the model
+   on, take effect only after `daemon_confirm { kind: 'autonomy' | 'rules', nonce }` from a window that
+   displayed the request. Every change is announced with a `daemon_say`; `daemon_state` carries
+   `autonomy`, `autonomyRequested` and `confirms`. What was confirmed is kept 0600
+   (`pair/confirmed.json`); lowering below it has to be confirmed again to go back. Rules apply only to
+   allow-class permission prompts, never to a plan or a question the agent asks.
+5. **Talk and the pair's words.** `talk` is only `daemon_talk` from a window (the `pair` verb answers
+   `UI_ONLY`), six a minute and sixty an hour, each answer with a cost note. The pair harness's `say` is
+   `from: 'pair'`, carries no keys, loses any `[y/n]`-looking start, and is capped at six a minute and
+   thirty an hour.
+6. **Secrets.** Every journal line is redacted (the learner's `guard.redact`) before it is written, a
+   journal page again on its way out, the triage prompt and every read tool's answer to the pair
+   harness too. What a window shows the person stays exact.
+7. **Consent.** Until the zoo's `consent.watching` is true (op `zoo.consent`, from the first-day
+   screen), nothing is paired: no sensor, no journal, and the dial asks for `watch`.
+
+Out of scope, and why: a same-user process can read the pair token, the socket, the confirmation file and
+the panes — it can type into tmux without us. Windows has no Unix socket, so none of these frames are
+taken there. The zoo's `zoo.turn` and presence are self-reported (a person can only cheat their own zoo).
 
 ## Frames
 
@@ -73,22 +135,27 @@ the owning machine.
 frame and leaves types outside `ENCRYPTED_UP_TYPES` unencrypted). Older daemons answer UNSUPPORTED
 and clients keep the roster lines.
 
-- daemon → client: `daemon_state { needs[], working, failing[], machines[] }`,
-  `daemon_say { id, about, mood, line, actions: [{ key, label, choice }], ttlMs }`,
+- daemon → client: `daemon_state { needs[], working, failing[], machines[], autonomy, confirms[] }`,
+  `daemon_say { id, about, mood, line, actions: [{ key, label, choice }], ttlMs, from?, detail?, harness?, confirm? }`,
   `daemon_unsay { id, reason }`, `daemon_brief { items[] }`
-- client → daemon: `daemon_act { requestId, id, choice }` → `daemon_act_result`,
-  `daemon_presence { active, awayMs }`
+- client → daemon, over the Unix socket only: `daemon_shown { id }`, `daemon_act { requestId, id, choice }` →
+  `daemon_act_result`, `daemon_confirm { requestId, kind, nonce, accept }` → `daemon_confirm_result`,
+  `daemon_talk { requestId, text }` → `daemon_talk_result`, `daemon_presence { active, awayMs }`
 
 **Machine to machine**, sealed through new `PAIR_REQUESTS`/`PAIR_RESULTS` entries in
 `lib/e2ee/applicationFrames.ts` (`core.ts` is hash-pinned and never touched): `pair_watch` (pushes
-`pair_event` via `wrapTarget`), `pair_journal`, `pair_list`, `pair_read`, and the writes `pair_answer`
-(which re-checks that the dialog still shows the same question before typing: `STALE_QUESTION` if not),
-`pair_send`, `pair_stop`, `pair_start`, `pair_pause`, `pair_resume`, all answered by the owning machine's
-floor.
+`pair_event` via `wrapTarget`), `pair_journal`, `pair_list`, `pair_read`, and the one write another
+machine may ask for, `pair_answer` (allow-class prompts only; it re-checks that the dialog still shows the
+same question before typing: `STALE_QUESTION` if not). `pair_send`, `pair_stop`, `pair_start`,
+`pair_pause`, `pair_resume` are answered `REMOTE_ANSWERS_ONLY`. All are answered by the owning machine's
+floor, which decides who asked from how the request arrived (`remote`), never from its `by`.
 
 **Clients**: the desktop merges `daemon_state` into its face and shows a `daemon_say` for its `ttlMs`
 (5.2 s); the keys come first in the line (`[y/n/g] …`), are clickable and bound to a key chord, and
-work only while the line shows. `[g]` opens the harness (the client's to do). `hn` handles them beside
+work only while the line shows. A line with a `detail` shows it in full with the line, and the client
+sends `daemon_shown { id }` once it has drawn both; its keys count 400 ms after that. A `from: 'pair'`
+line is drawn as the pair speaking. A line with `confirm` is answered with `daemon_confirm`. The badge
+shows `daemon_state.autonomy`. `[g]` opens the harness (the client's to do). `hn` handles them beside
 `commander_question`, answering with `prefix y` / `prefix n`.
 
 ## Brief on return
@@ -125,61 +192,80 @@ restart is a baseline, not a return.
   every reconnect) has `pair` set to a roster id; the same read takes `autonomy`. Signed out, a guest
   window says which daemon its local zoo pairs, and its dial, with `daemon_presence { pair, autonomy }`.
   Off, every daemon senses nothing and answers `pair_*` with `PAIR_OFF`.
-- **Local frames** go only to the loopback socket bound to this computer's machine (`sendLocal`), and
-  `daemon_act`/`daemon_presence`/`daemon_talk` are consumed on any bound socket and never forwarded. A
-  TOOL client (`machine_select { tool: true }`: `harness pair`, the MCP server) is answered but gets no
-  `daemon_*` frames and is never presence.
+- **Local frames** go only to the loopback sockets bound to this computer's machine (`sendLocal`), and
+  every one that carries a keyed id is recorded against the connections it reached (`pair/shown.ts`).
+  `daemon_act`, `daemon_shown`, `daemon_confirm`, `daemon_talk` and `daemon_presence` are consumed and
+  never forwarded, only over the Unix socket (`LOCAL_SOCKET_REQUIRED` on TCP), and all but presence only
+  from a window bound to this machine (`UI_ONLY` for a tool or a relayed socket, whose presence carries
+  no guest pair, dial or consent). A TOOL client (`machine_select { tool: true }`: `harness pair`, the MCP
+  server) is answered but gets no `daemon_*` frames and is never presence.
   - `daemon_state { pair, needs: [{ machineId, machine, agentId, name, engine, requestId, question, options,
     deny, allow, since, id?, line?, actions? }], working, failing: [{ machineId, machine, agentId, name,
     reason }], machines: [{ machineId, name, status, local }], done: { count, last: [{ machineId, machine,
-    agentId, name, recap, at }] }, asks: [{ id, line, actions }], acted: [{ machineId, machine, agentId,
-    name, by, action, text, at }] }` on change and to a client as it attaches; `pair: null` means use the
-    roster lines. A need carries `id/line/actions` only while its line shows. `status` is `ok`,
+    agentId, name, recap, at }] }, asks: [{ id, line, actions, verb, from: 'pair', harness, detail, at }],
+    acted: [{ machineId, machine, agentId, name, by, action, text, at }], autonomy, autonomyRequested?,
+    confirms: [{ id, kind, nonce, line, detail, actions, at, level? }] }` on change and to a client as it
+    attaches; `pair: null` means use the roster lines (autonomy and confirms are there too). A need
+    carries `detail` (the whole dialog) always, and `id/line/actions` only while its line shows. `status` is `ok`,
     `connecting`, `unreachable`, `asleep` (the account lists it offline: calm, never a failure),
     `unlinked`, `old` or `off`. `done` is the `+n` of finished turns, cleared by
     `daemon_presence { doneSeen: true }` or a brief; finished turns are never spoken.
-  - `daemon_say { id, about, mood, line, actions, ttlMs }`, moods `need`, `fail`, `back`, `auto` (a rule or
-    the pair acted: drawn like done), `say` (the pair talking: idle) and `ask` (a proposal: need). Keys
+  - `daemon_say { id, about, mood, line, actions, ttlMs, from?, detail?, harness?, confirm? }`, moods
+    `need`, `fail`, `back`, `auto` (a rule or the pair acted: drawn like done), `say` (the pair talking,
+    `from: 'pair'`, or a setting that changed: idle) and `ask` (a proposal, `from: 'pair'`, or a setting
+    waiting for a yes, with `confirm { kind, nonce }`: need). Keys
     first, `ttlMs` 5.2 s; a second `daemon_say` with the same id replaces the line in place (the model's
     words), keeping the time it had left. At most one unsolicited line (`need`, `fail`, `auto`) every two
     minutes, never about `daemon_presence.focusAgentId` (+ `focusMachineId`, default this machine).
     `daemon_unsay { id, reason }` with `answered`, `gone`, `done`, `stale`, `declined` or `replaced`.
   - `daemon_brief { desk, line, items: [{ id, kind, machineId, machine, agentId?, name?, line, actions? }] }`,
     `kind` one of `waiting`, `failed`, `unreachable`, `asleep`, `done`; at most five.
-  - `daemon_presence { active, awayMs?, desk?, pair?, autonomy?, focusAgentId?, focusMachineId?, doneSeen? }`;
+  - `daemon_presence { active, awayMs?, desk?, pair?, autonomy?, consent?, focusAgentId?, focusMachineId?,
+    doneSeen? }`; `daemon_shown { id }` (this window drew the line and its detail);
     `daemon_act { requestId, id, choice }` → `daemon_act_result { requestId, id, ok, machineId?, open?,
     results?, error?, detail? }`. `choice` is an action's `choice` or its key; `g` answers `open` and types
-    nothing. Errors: `PAIR_OFF`, `GONE`, `NOT_OFFERED`, `STALE_QUESTION` (the dialog on screen changed:
-    nothing typed, the line goes as `stale`), `DENY_CLASS`, `PERSISTENT`, `AUTONOMY_WATCH`, `UNTOUCHABLE`,
-    `MACHINE_<STATUS>`.
+    nothing. Errors: `LOCAL_SOCKET_REQUIRED`, `UI_ONLY`, `NOT_SHOWN`, `TOO_SOON`, `PAIR_OFF`, `GONE`,
+    `NOT_OFFERED`, `STALE_QUESTION` (the dialog on screen changed: nothing typed, the line goes as
+    `stale`), `DENY_CLASS`, `NOT_ALLOW_CLASS`, `PERSISTENT`, `AUTONOMY_WATCH`, `UNTOUCHABLE`,
+    `REMOTE_ANSWERS_ONLY`, `RATE_LIMITED`, `MACHINE_<STATUS>`.
+  - `daemon_confirm { requestId, kind, nonce, accept }` → `daemon_confirm_result { requestId, kind, nonce,
+    ok, accepted?, error? }` (`STALE_CONFIRM`, `NOT_SHOWN`, `TOO_SOON`, `UI_ONLY`).
   - `daemon_talk { requestId, text }` → `daemon_talk_result { requestId, ok, agentId?, started? | resumed?
-    | sent?, error? }`: the person's words to the pair harness.
+    | sent?, error?, retryAfterMs?, cost }`: the person's words to the pair harness.
 - **Machine to machine**, all sealed: `pair_watch { off? }` → `{ snapshot }`, then `pair_event { machineId,
   rev, agentId, harness, entry?, baseline?, removed? }`; `pair_journal { epoch?, seq? | at?, limit? }` →
   `{ epoch, seq, entries, reset?, truncated? }`; `pair_list` → `{ harnesses }`; `pair_read { agentId }` →
   `{ harness, row, recaps?, asks? }`; writes `pair_answer { agentId, expectRequestId, choice, by }`,
   `pair_send { agentId, text }`, `pair_stop`, `pair_start { engine, cwd, prompt?, name? }`, `pair_pause`,
-  `pair_resume`, each with `by` (`key`, `pair`, `rule`) → `{ ok, … }` or `{ error, detail? }`. The owning
-  machine's `PairOwner` answers them with the same floor a local key gets (`pair/owner.ts`): not a
-  terminal or the pair harness (`UNTOUCHABLE`), `GONE`, `STALE_QUESTION` against its sensor and then
-  against the dialog on screen (`AskQuestionController`, which types nothing), `NOT_OFFERED`,
-  `DENY_CLASS`, `PERSISTENT`, `QUESTION_OPEN` for a prompt sent into a dialog, `AUTONOMY_WATCH`.
-  Pause is the guarded stop service (`agent_delete`: conversation kept). Every action is journaled as
-  `act { by, action, text }`; the brain reports `rule`/`pair` ones afterwards (`auto`, `acted`).
+  `pair_resume` → `{ ok, … }` or `{ error, detail? }`. The owning machine's `PairOwner` answers them: a
+  sealed request is `by: 'remote'` whatever it says, may read and may answer an ALLOW-CLASS prompt (six a
+  minute, sixty an hour per connection, journaled with its `origin`), and nothing else
+  (`REMOTE_ANSWERS_ONLY`); a loopback `pair_*` is `REMOTE_ONLY`. The floor is the one a local key gets
+  (`pair/owner.ts`): not a terminal or the pair harness (`UNTOUCHABLE`), `GONE`, `STALE_QUESTION` against
+  its sensor and then against the dialog on screen (`AskQuestionController`, which types nothing),
+  `NOT_OFFERED`, `DENY_CLASS`, `NOT_ALLOW_CLASS`, `PERSISTENT`, `QUESTION_OPEN` for a prompt sent into a
+  dialog, `AUTONOMY_WATCH`. Pause is the guarded stop service (`agent_delete`: conversation kept). Every
+  action is journaled as `act { by, action, text, origin? }`; the brain reports `rule`/`pair` ones
+  afterwards (`auto`) and lists `remote` ones in `acted`.
 - **What a dialog is** (`pair/classify.ts`): the question watcher keeps the WHOLE dialog (every line,
-  `askQuestion.ts` `dialog`, also in its fingerprint) and whether it is an approval. Deny-class is read
-  over all of it; allow-class is a permission prompt whose every command segment is a read, test, build,
-  linter or formatter (no redirection, no substitution), or an edit/read of a file in the project.
-  `[y]` = a one-time yes on an allow-class prompt; `[n]` = the dialog's decline; `[g]` = open, always.
+  `askQuestion.ts` `dialog`, also in its fingerprint, and on the question as `dialog`, 16k at most) and
+  whether it is an approval. Deny-class is read over all of it; allow-class is a permission prompt read
+  with certainty (see "Security", 3) whose every command is a read, test, build, linter or formatter, or
+  an edit/read of a file in the project; the transcript's open tool call decides when exactly one
+  matches. `[y]` = a one-time yes on an allow-class prompt; `[n]` = a permission prompt's decline (on
+  another machine's line only an allow-class one's); `[g]` = open, always.
 - **Control interface** (`pair/control.ts`, P4): the local-only `pair { verb, … }` → `pair_result`, verbs
   as in the table plus `talk`; the sensor keeps `status | list | journal | read`. Writes need
   `HARNESSD_PAIR_TOKEN` (`pair/token.ts`: 32 random bytes, rotated at every launch of the pair harness,
   kept 0600 in `ADAPTER_DATA_DIR/pair/token`, passed to the harness as `HARNESSD_PAIR_TOKEN_FILE` and to its
   MCP server as `--token-file`), else `TOKEN_REQUIRED`. It keeps a same-user shell or another harness's
   agent out, not a determined local process (it can read the file); the floor holds regardless. Then the
-  dial: `watch` → `AUTONOMY_WATCH`; `suggest` → `{ proposed, id }` and an `ask` line; `act-on-key` /
-  `act-within-rules` → runs at once on a harness the pair started (`pair/started.json`), else joins one
-  batch behind one key. Proposals stay in `daemon_state.asks` for ten minutes; a key runs them as `key`.
+  dial: `watch` → `AUTONOMY_WATCH`; `suggest` → `{ proposed, id }` and an `ask` line with the harness and
+  the exact `detail`; `act-on-key` / `act-within-rules` → runs at once on a harness the pair started
+  (`pair/started.json`, the owner's floor still deciding), else its own proposal. Another machine: an
+  answer only (`REMOTE_ANSWERS_ONLY`). Proposals stay in `daemon_state.asks` for ten minutes, at most five
+  (`TOO_MANY_PROPOSALS`); a key runs one as `key`. Read tools answer with secrets redacted. `talk` is
+  refused here (`UI_ONLY`): the person talks from a window.
   `harness pair <verb> [--json]` (pair/client.ts; a pairing code is never a verb) and `harness pair mcp`, a
   stdio MCP server named `harnessd` (`pair/mcp.ts`: JSON-RPC 2.0 lines, `initialize`, `tools/list`,
   `tools/call`, `ping`; no SDK dependency) speak it as tool clients.
@@ -188,19 +274,25 @@ restart is a baseline, not a return.
   Orchestrator's catalog). Claude Code, else Codex; mode `ask` pinned (`DSH_PERMISSION_MODE`); harnessd
   injected like gridWebMcp (`--mcp-config` with only the read tools in `--allowedTools`; Codex
   `-c mcp_servers.harnessd.*`); instructions carry the paired daemon's lore, first words, family, line
-  templates, the tools, the dial's answers and the floor. Started by `talk` / `daemon_talk` (new token),
+  templates, the tools, the dial's answers and the floor. Started by `daemon_talk` (new token),
   resumed if paused (new token), words forwarded if live; paused through the guarded stop after 10 minutes
   without a turn or a talk; a new paired daemon, engine or CLI path is a new harness (the old one paused,
   never deleted). Its turns carry `subagent` (no notification; silent on the dial), are not zoo turns, and
   the sensor never watches it.
 - **Autonomy and rules** (P5): `zoo.autonomy { level }` (backend `lib/zoo.ts`; an unknown level is dropped;
-  default `suggest`). `pair.jsonc` at `$XDG_CONFIG_HOME/harness/pair.jsonc` (else `~/.config/…`), JSON with
-  comments, re-read when it changes: `model` (the opt-in above) and `rules: [{ name?, harness? (glob),
-  engine?, project? (folder, `~`), question (regex over the question text), choice }]`. Under
-  `act-within-rules` the first matching rule answers a question as it opens on the owning machine, through
-  the owner (`by: rule`, the rule's name in the journal). A rule never answers deny-class, never picks a
-  persistent option, and approves a permission prompt only when a key could (allow-class); declining is
-  always allowed. A malformed file is no rules at all. Not built: `start_project`.
+  default `watch`), a request the gate lets through (`pair/gate.ts`, "Security" 4). `pair.jsonc` at
+  `$XDG_CONFIG_HOME/harness/pair.jsonc` (else `~/.config/…`), JSON with comments, re-read when it changes
+  (and every 30 s): `model` (the opt-in above) and `rules: [{ name?, harness? (glob), engine?, project?
+  (folder, `~`), question (regex over the question text), choice }]` — applied once the person confirmed
+  that exact text. Under `act-within-rules` the first matching rule answers a question as it opens on the
+  owning machine, through the owner (`by: rule`, the rule's name in the journal). A rule answers only an
+  allow-class permission prompt (its one-time yes or its decline): never deny-class, never a plan or an
+  agent's question, never a persistent option. A malformed file is no rules at all. Not built:
+  `start_project`.
+- **Consent** (`zoo.consent { watching }`, `consent { watching, at }`): until it is true, `pairingFrom`
+  pairs nothing (no sensor, no journal, no learner) and asks for `watch`; agreeing sets the dial to
+  `watch`. A guest window says it in `daemon_presence { consent }`. What the daemon reads and writes, for
+  the consent screen: [README.md](README.md), "What your daemon sees".
 - **Voice** (`pair/voice.ts`): roster lines are slot templates (`{who}`, `{q}`, `{recap}`, `{n}`,
   `{summary}`), filled verbatim; the daemon's words keep their case, digits and spacing; a template with an
   unfillable slot falls back to a plain fact line, and one that leaves out a fact the mood must carry gets
@@ -251,7 +343,13 @@ harnesses, and only while pairing is on.
 ## Risks
 
 - A late answer landing on the next dialog: fixed (the answer re-checks the dialog's id as it types).
-- The token is a same-user file: it keeps casual callers out, not a determined local process.
+- The token, the socket and `confirmed.json` are same-user files: they keep other users and casual callers
+  out, not a determined local process — which can type into tmux anyway ("Security").
+- A Claude Bash prompt gets a `[y]` only when the transcript's tool call matches it (the painted block is
+  ambiguous); a transcript that lags the pane costs the key, never approves more.
+- Windows has no Unix socket: the pair's keys, talk and confirmations are not taken there.
+- Rules and a level above `suggest` need a window on THAT machine to be confirmed: a headless machine
+  stays at `suggest` and runs no rules.
 - A model's recommendation is only ever a label on an allow-class prompt; the allow-list is the
   boundary, and it leans narrow.
 - Frames leaking unencrypted through `send()`: `daemon_*` only via `sendLocal`, `pair_*` only sealed.

@@ -150,9 +150,10 @@ request sees them; every other client learns the same thing by re-reading the zo
 zoo = {
   daemons: [{ id, hatchedAt, egg, shiny, nickname?, bond, xp, version,
               dupes?, serial?, origin? }],   // one record per roster id; see "Serials and duplicates"
-  eggs:    [{ id, kind, grantedAt, date? }],     // kind is a key of rules.eggs; date on a history egg
+  eggs:    [{ id, kind, grantedAt, date?, origin? }],  // kind is a key of rules.eggs; date on a history egg
   pair:    daemonId | null,
-  autonomy: 'watch' | 'suggest' | 'act-on-key' | 'act-within-rules',   // the pair's dial; default suggest
+  autonomy: 'watch' | 'suggest' | 'act-on-key' | 'act-within-rules',   // the pair's dial; default watch
+  consent: { watching, at } | null,  // the first-day answer: may the daemon watch at all (null: not asked)
   habits:  [habitKey],             // habits done, from rules.firstEgg.habits
   firstEgg: bool,                  // the first egg has been granted
   setupEgg: bool,                  // the setup egg has been granted
@@ -180,14 +181,21 @@ Ops (every op is idempotent; an op on something missing is dropped, never an err
 | `zoo.hatch { eggId }` | Draws on the server, removes the egg, and adds the daemon (with its serial) or merges a duplicate into the one you have; pairs a new daemon if nothing is paired. Answers `hatched`. |
 | `zoo.pair { id }` | Pairs a daemon you own. |
 | `zoo.nickname { id, nickname }` | 1–24 printable ASCII characters, or null to clear. |
-| `zoo.autonomy { level }` | How much the paired daemon may do on its own ([BRAIN.md](BRAIN.md), "Autonomy dial"). A level the server does not know is dropped. |
+| `zoo.autonomy { level }` | How much the paired daemon may do on its own ([BRAIN.md](BRAIN.md), "Autonomy dial"). A level the server does not know is dropped. A request: each harnessd acts above `suggest` only after the person confirms it at a window there ([BRAIN.md](BRAIN.md), "Security"). |
+| `zoo.consent { watching }` | The first-day consent screen's answer (see "What your daemon sees"). Sets `consent { watching, at }`; agreeing sets the dial to `watch` (the person opts into more). Until `watching` is true no harnessd senses anything. Never seeded. |
 | `zoo.easter { word }` | The server trims and lowercases the word and hashes it (sha256); a hash in `rules.easterHashes` grants one `easter` egg, once per word. |
-| `zoo.seed { zoo }` | A guest's local zoo on first sign-in. Applied only while the account zoo is empty. |
-| `zoo.turn { batchId, n, minutes?, away?, day, hour, machineId }` | Turns finished on one machine in one local hour (see "Earning eggs and growing"). harnessd sends it. |
+| `zoo.seed { zoo }` | A guest's local zoo on first sign-in. Applied only while the account zoo is empty. Brings only regular daemon ids, first and turn eggs, and habits (see Details). |
+| `zoo.turn { batchId, n, minutes?, away?, day, hour, machineId }` | Turns finished on one machine in one local hour (see "Earning eggs and growing"). harnessd sends it. Self-reported (see below). |
 
 Limits: 12 eggs, 64 daemons (a duplicate merges, so it never needs a place). The server alone grants
 turn, week, marathon, night and history eggs from the turns reported to it; clients never send a draw
 result or an egg.
+
+**Self-reported.** `zoo.turn` (and the presence behind its `away`) is what a harnessd says happened;
+anything holding the account's token can say it. A person can only ever cheat their own zoo, and the
+daily cap bounds even that. Nothing in a zoo is proof to anyone else: a card's serial and rarity are not
+verified (a later verify endpoint will be), and a guest's seeded daemons and eggs are marked
+`origin: 'local'`.
 
 **Drops.** Each drop in `roster.drops` has `announce` and `release` (UTC `YYYY-MM-DD`, announced 14
 days before release). Only released drops are drawn from; a drop announced but not yet released shows
@@ -223,12 +231,14 @@ on shelves as silhouettes, and one not yet announced shows nowhere. Drop 1, `uni
   than its `n`, refuses the whole request. Nicknames are trimmed.
 - A full nest does not lose anything: the first and setup eggs arrive with the next habit report, an
   easter word stays unspent, and earned eggs are held.
-- `zoo.seed` keeps only what the roster knows, gives each egg a server id, marks each daemon
-  `origin: 'local'` and drops any serial it claims (only the server mints), and pairs the first daemon
-  if the guest's pair did not survive. It takes the guest's `progress` too, except its machine and
-  batch ids, unless this account has already reported turns (a signed-in harnessd got there first):
-  then the account's progress stays. A guest with only progress still seeds. `zoo.seed` is refused once
-  the account holds any daemon, egg or habit, so a client seeds right at sign-in.
+- `zoo.seed` brings only what a client could not have made valuable, because all of it was drawn and
+  counted on a client: the REGULAR daemons the roster knows (never a secret), each fresh at `0.1` —
+  no shiny, xp, bond, duplicates or serial, its nickname kept — the `first` and `turn` eggs (never an
+  egg that can hold a secret: night, easter; nor setup, week, marathon or history eggs), and the habits,
+  every daemon and egg marked `origin: 'local'` and each egg given a server id. Pity, easter words,
+  progress, the dial and consent stay the account's own. It pairs the guest's pair if it survived, else
+  the first daemon. A guest with nothing that survives seeds nothing. `zoo.seed` is refused once the
+  account holds any daemon, egg or habit, so a client seeds right at sign-in.
 - Held eggs land after any op that leaves room, a hatch included, oldest first, and are answered in
   `grants` like any other.
 - Easter words never ship: the roster holds `rules.easterHashes` (sha256 of the lowercased word), and
@@ -253,8 +263,45 @@ on shelves as silhouettes, and one not yet announced shows nowhere. Drop 1, `uni
   duplicate: true, xp }`, `shiny` being the duplicate's own roll.
 
 **Guests** (no Harness account) keep a local zoo with the same shape and rules, drawn on the client.
-On first sign-in it is sent once with `zoo.seed`. A guest's turns are counted by its client, not by
-harnessd (which reports only while signed in).
+On first sign-in it is sent once with `zoo.seed` (which keeps only what is listed above). A guest's
+turns are counted by its client, not by harnessd (which reports only while signed in). A guest window
+says its pair, dial and consent in `daemon_presence { pair, autonomy, consent }`.
+
+## What your daemon sees
+
+For the first-day consent screen (`zoo.consent`). Nothing below happens until the person says yes; saying
+no (or never answering) leaves every harnessd sensing nothing. [BRAIN.md](BRAIN.md) has the detail.
+
+**What it reads**, on each of your machines, only for that machine's own coding agents:
+
+- when each agent's turns start and end (from the session transcripts Harness already reads);
+- a question an agent is waiting on: the whole dialog on its pane — the command, the edit's preview,
+  the options — and the agent's open tool call from its transcript, to read it exactly;
+- the short recap of each finished turn;
+- `~/.config/harness/pair.jsonc`, your rules (they run only after you confirm them at a window).
+
+It never reads a terminal (a shell is not an agent), an Orchestrator's sub-agents, or its own harness.
+
+**What it writes**, on that machine, in Harness's data folder (0600):
+
+- a journal of the last 2,000 events: turns done, questions and answers, recaps, failures, and everything
+  it did and who asked (a key, the pair, a rule, another of your machines). Keys, tokens, passwords,
+  emails and your home folder are taken out before a line is written;
+- what you confirmed (`pair/confirmed.json`), the harnesses the pair started, the pair harness's token and
+  workspace, and — only on your yes — lessons in `~/.harness/lessons` (LEARNING.md).
+
+**Where it goes.** The journal stays on the machine. Another of YOUR machines' daemons can read it over
+the end-to-end sealed link, redacted; the Harness backend never can (it holds no keys). The account zoo
+holds only which daemon is paired, the dial, this consent and when, habits, eggs and turn counts — no
+questions, commands or recaps. A model sees any of it only if you opt in (`"model": true`: one small
+call per new question, redacted) or when you talk to the pair harness (it reads through its tools,
+redacted), each a turn of your own engine.
+
+**What it does.** At `watch` (where it starts) nothing but tell you. Above that, only what the dial you
+chose — and confirmed at a window — allows, and never: delete, restart, fork or bypass anything; type
+into a terminal; approve a push, force, `rm -r`, sudo, deploy, publish, drop or merge; choose "don't ask
+again"; answer a question the agent asks you or a plan. Another machine can only answer an allow-class
+prompt here.
 
 ## Earning eggs and growing
 

@@ -4,7 +4,7 @@
  * `harnessd` MCP server — the control interface (pair/control.ts) — and instructions that give it the
  * paired daemon's voice (roster lore, first words, lines) and the floor.
  *
- * On demand only. `harness pair talk <words>` or the window's `daemon_talk { text }` forwards the words
+ * On demand only. The window's `daemon_talk { text }` (never a tool: BRAIN.md "Security") forwards the words
  * to it — starting it, or resuming it if it was paused. Paused when idle (the guarded stop: its
  * conversation is kept; the next talk resumes it). Never a tile anyone picks (hidden from the catalog),
  * never counted as a person's turn (zooTurns), never a notification, never watched by the sensor.
