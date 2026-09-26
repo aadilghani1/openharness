@@ -95,10 +95,17 @@ In the daemon:
 4. For each hit, a snippet built from the stored turn: the ask first, then the name, the answer,
    the tools.
 
-In the app, a hit is one more kind of match. Name matches rank first, as before. A turn holding
-every word ranks under name and context matches but above scattered letters; spread words rank
-last. Within that, the daemon's score decides. The row shows the matched words on its line,
-fzf-style (`> …`, `$ …`), and the preview says where they were found and when. Requests are
+In the app, a hit is one more kind of match:
+
+- Name matches rank first, as before.
+- A turn holding every word ranks under name and context matches.
+- Words spread across a conversation come next, and letters scattered across a name come last:
+  real words anywhere are better evidence.
+- Hits from several machines merge by reciprocal rank. Each daemon scores against its own best
+  hit, so a machine's first is treated as another's first, and activity breaks the tie.
+
+The row shows the matched words on its line, fzf-style (`> …`, `$ …`), and the preview says where
+they were found and when. Requests are
 debounced 110 ms and stale answers dropped. The best row stays selected as hits arrive, unless you
 have moved. A machine that cannot answer, because it is offline or runs an older CLI, adds nothing.
 
