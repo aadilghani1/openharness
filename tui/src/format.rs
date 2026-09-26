@@ -1066,6 +1066,19 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_todos" => agent.filter(|a| !a.todos.is_empty()).map(|a| format!("{}/{}", a.todos.iter().filter(|(_, s)| s == "completed").count(), a.todos.len())).unwrap_or_default(),
         "pane_subagents" => agent.map(|a| a.subagents.len().to_string()).unwrap_or_else(|| "0".into()),
         "pane_did" => agent.and_then(|a| a.did.clone()).unwrap_or_default(),
+        // The agent accounts' rate limits: the focused pane's machine's (`claude 5h 42% week
+        // 18%`), and the one nearest its limit anywhere, once it is at 80% or more.
+        "usage" => {
+            let m = pane.map(|p| p.machine_id.clone()).unwrap_or_else(|| app.fleet.local_id.clone());
+            app.usage.get(&m).map(|u| u.iter().map(|x| x.line()).collect::<Vec<_>>().join(" · ")).unwrap_or_default()
+        }
+        "usage_high" => {
+            let mut worst: Option<(f64, String)> = None;
+            for u in app.usage.values().flatten() {
+                for w in &u.windows { if w.used >= 80.0 && worst.as_ref().map(|(p, _)| w.used > *p).unwrap_or(true) { worst = Some((w.used, format!("{} {} {:.0}%", u.provider, w.label, w.used))) } }
+            }
+            worst.map(|(_, t)| t).unwrap_or_default()
+        }
         "fleet_tokens" => { let t: u64 = app.fleet.agents.values().map(|a| a.tokens).sum(); if t > 0 { crate::fleet::compact(t) } else { String::new() } }
         "pane_branch" => agent.map(|a| a.branch.clone()).unwrap_or_default(),
         "window_agent_state" => tab.and_then(|_| app.window_state(window)).map(state_word).unwrap_or("").into(),

@@ -107,6 +107,56 @@ impl Pr {
     }
 }
 
+/// A rate limit's window as its vendor reports it: its name (5h, week, fable…), how much of it is
+/// used (percent) and when it resets.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Window { pub label: String, pub used: f64, pub resets: Option<String> }
+
+/// One agent account's limits (usage_read's reading of Claude's or Codex's), read as the desktop
+/// reads them (claude_usage_source.dart, codex_usage_source.dart).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Usage { pub provider: String, pub account: Option<String>, pub windows: Vec<Window> }
+
+impl Usage {
+    /// `claude 5h 42% week 18%`.
+    pub fn line(&self) -> String {
+        let windows: Vec<String> = self.windows.iter().map(|w| format!("{} {:.0}%", w.label, w.used)).collect();
+        format!("{} {}", self.provider, windows.join(" "))
+    }
+}
+
+/// A usage_read reading, when the vendor answered with limits.
+pub fn usage_from(reading: &Value) -> Option<Usage> {
+    if reading.get("outcome").and_then(Value::as_str) != Some("answered") { return None }
+    if reading.get("httpStatus").and_then(Value::as_u64).map(|s| s >= 300).unwrap_or(false) { return None }
+    let body = reading.get("body")?;
+    let provider = reading.get("provider").and_then(Value::as_str)?;
+    // parseUsedPercent: a number or a numeral, held to 0–100.
+    let percent = |v: Option<&Value>| v.and_then(|x| x.as_f64().or_else(|| x.as_str().and_then(|s| s.trim().parse().ok()))).filter(|f: &f64| f.is_finite()).map(|f| f.clamp(0.0, 100.0));
+    let text = |w: &Value, k: &str| w.get(k).and_then(|v| v.as_str().map(str::to_string).or_else(|| v.as_i64().map(|n| n.to_string())));
+    let windows: Vec<Window> = match provider {
+        "claude" => {
+            let one = |label: &str, w: Option<&Value>| w.and_then(|w| Some(Window { label: label.into(), used: percent(w.get("utilization")).or_else(|| percent(w.get("used_percentage")))?, resets: text(w, "resets_at") }));
+            let fable = ["fable_weekly", "fable_seven_day", "seven_day_fable"].iter().find_map(|k| body.get(*k));
+            [one("5h", body.get("five_hour")), one("week", body.get("seven_day")), one("fable", fable)].into_iter().flatten().collect()
+        }
+        "codex" => {
+            // A window named by how long it is (_labelFor).
+            let label = |w: &Value| match w.get("limit_window_seconds").and_then(Value::as_f64).filter(|s| *s > 0.0).map(|s| s.round() as u64) {
+                None => "limit".to_string(),
+                Some(s) if s < 3600 => format!("{}m", s / 60),
+                Some(s) if s < 86400 => format!("{}h", s / 3600),
+                Some(s) if s / 86400 == 7 => "week".to_string(),
+                Some(s) => format!("{}d", s / 86400),
+            };
+            let limits = body.get("rate_limit");
+            ["primary_window", "secondary_window"].iter().filter_map(|k| limits.and_then(|l| l.get(*k))).filter_map(|w| Some(Window { label: label(w), used: percent(w.get("used_percent"))?, resets: text(w, "reset_at") })).collect()
+        }
+        _ => Vec::new(),
+    };
+    (!windows.is_empty()).then(|| Usage { provider: provider.to_string(), account: reading.get("account").and_then(Value::as_str).map(str::to_string), windows })
+}
+
 /// A count of tokens as a list says it: 950, 12k, 1.2M.
 pub fn compact(n: u64) -> String {
     match n {
@@ -433,5 +483,24 @@ mod tests {
     fn parses_iso() {
         assert_eq!(parse_iso("1970-01-01T00:00:01.500Z"), Some(1500));
         assert_eq!(parse_iso("2026-09-25T17:13:11.614Z"), Some(1790356391614));
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+
+    #[test]
+    fn limits_read_as_the_desktop_reads_them() {
+        let claude = serde_json::json!({ "provider": "claude", "account": "a", "outcome": "answered", "httpStatus": 200, "body": { "five_hour": { "utilization": 92.4 }, "seven_day": { "utilization": "18" }, "seven_day_fable": { "used_percentage": 5 } } });
+        assert_eq!(usage_from(&claude).unwrap().line(), "claude 5h 92% week 18% fable 5%");
+        let codex = serde_json::json!({ "provider": "codex", "outcome": "answered", "body": { "rate_limit": { "primary_window": { "used_percent": 3, "limit_window_seconds": 18000 }, "secondary_window": { "used_percent": 150, "limit_window_seconds": 604800 } } } });
+        assert_eq!(usage_from(&codex).unwrap().line(), "codex 5h 3% week 100%");
+        assert!(usage_from(&serde_json::json!({ "provider": "claude", "outcome": "signedOut" })).is_none());
+        assert!(usage_from(&serde_json::json!({ "provider": "claude", "outcome": "answered", "httpStatus": 401, "body": {} })).is_none());
+        assert_eq!(compact(1_240_000), "1.2M");
+        assert_eq!(compact(88_400), "88.4k");
+        assert_eq!(compact(12_000), "12k");
+        assert_eq!(compact(356_000), "356k");
     }
 }

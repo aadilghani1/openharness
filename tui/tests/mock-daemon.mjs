@@ -192,6 +192,11 @@ wss.on('connection', (ws) => {
       case 'agents_list': return reply({ agents: agents[machine].filter((a) => payload.includeStopped || a.status !== 'stopped') })
       case 'models_list': return reply({ models: [{ id: 'runtime-v1:x:claude:opus@high', displayName: 'Opus / High' }, { id: 'runtime-v1:x:claude:sonnet@high', displayName: 'Sonnet / High' }] })
       case 'dsh_list': return reply({ dsh: [] })
+      // The agent accounts' limits, as the vendors answer (MOCK_USAGE: Claude's 5-hour window, %).
+      case 'usage_read': return reply({ providers: [
+        { provider: 'claude', account: 'acct-claude', outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: Number(process.env.MOCK_USAGE || 42), resets_at: '2026-09-26T21:00:00Z' }, seven_day: { utilization: 18, resets_at: '2026-10-01T00:00:00Z' } } },
+        { provider: 'codex', account: 'acct-codex', outcome: 'answered', httpStatus: 200, body: { rate_limit: { primary_window: { used_percent: 3, limit_window_seconds: 18000 }, secondary_window: { used_percent: 11, limit_window_seconds: 604800 } } } },
+      ] })
       case 'git_pull_request': {
         const a = agents[machine].find((x) => x.id === payload.agentId)
         const pr = a && PRS[a.project.branch]

@@ -73,7 +73,7 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         // a space first, so a full window list never runs into it. Narrower than 110 columns only
         // the branch, narrower than 100 no tim: the window list keeps its room.
         m.insert("status-left".into(), "#{?client_prefix,#[reverse],}[#{session_name}]#{?client_prefix,#[noreverse],} ".into());
-        m.insert("status-right".into(), " #{?daemon_down,#[reverse]daemon down#[noreverse] ,}#{?fleet,#{fleet} ,}#{?pane_watching,[watching] ,}#{?#{e|>=:#{client_width},110},#{?pane_far,#{pane_machine}#{?pane_project,:, },}#{?pane_project,#{=/16/…:pane_project} ,}#{?pane_branch,git:(#{=/24/…:pane_branch}) ,},#{?pane_branch,git:(#{=/16/…:pane_branch}) ,}}#{?#{e|>=:#{client_width},100},#{?#{tim},#{tim} ,},}%H:%M".into());
+        m.insert("status-right".into(), " #{?daemon_down,#[reverse]daemon down#[noreverse] ,}#{?usage_high,#[reverse]#{usage_high}#[noreverse] ,}#{?fleet,#{fleet} ,}#{?pane_watching,[watching] ,}#{?#{e|>=:#{client_width},110},#{?pane_far,#{pane_machine}#{?pane_project,:, },}#{?pane_project,#{=/16/…:pane_project} ,}#{?pane_branch,git:(#{=/24/…:pane_branch}) ,},#{?pane_branch,git:(#{=/16/…:pane_branch}) ,}}#{?#{e|>=:#{client_width},100},#{?#{tim},#{tim} ,},}%H:%M".into());
         // Each window's most urgent harness at a glance (the symbol its pane titles show) and its
         // name in a few whole words (#{window_short_name}): a harness is named for its task.
         for name in ["window-status-format", "window-status-current-format"] {
@@ -84,7 +84,7 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         m.insert("set-titles-string".into(), "#{?fleet_needs,?#{fleet_needs} ,}#{pane_title} — Harness".into());
         // A session is a machine, named as the machine is (tmux's are 0, 1, …): room for its name.
         m.insert("status-left-length".into(), "24".into());
-        m.insert("status-right-length".into(), "60".into());
+        m.insert("status-right-length".into(), "72".into());
         // Agents print a lot: ten thousand lines of scrollback (tmux keeps two).
         m.insert("history-limit".into(), "10000".into());
         // A harness's name is its pane's title; a program's own (OSC 2) only if you say so.

@@ -116,6 +116,8 @@ fn machine(app: &App, id: &str) -> Vec<Line<'static>> {
     let Some(m) = app.fleet.machine(id) else { return vec![] };
     let mut out = vec![Line::from(vec![bold(m.name.clone()), dim(if m.local { "  this computer" } else { "" })]), Line::raw("")];
     if let Some(rtt) = app.rtt.get(id) { out.push(kv("rtt", format!("{}ms", rtt.as_millis()))) }
+    // Its agent accounts' rate limits (claude 5h 42% week 18%).
+    for u in app.usage.get(id).into_iter().flatten() { out.push(kv("limits", u.line())) }
     let mut agents: Vec<_> = app.fleet.agents.values().filter(|a| a.machine_id == id && a.status != "stopped").collect();
     agents.sort_by_key(|a| std::cmp::Reverse(a.recency()));
     out.push(kv("running", agents.len().to_string()));

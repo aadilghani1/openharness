@@ -333,6 +333,9 @@ pub struct App {
     pub enriching: u32,
     /// The key being handled (its tmux name), and the one whose binding's commands are running —
     /// for the message log (`/dev/ttys003 key C-b: …`); the log starts once the config is read.
+    /// Each machine's agent accounts' rate limits (usage_read), and when they were last asked.
+    pub usage: HashMap<String, Vec<fleet::Usage>>,
+    pub usage_checked: Option<Instant>,
     pub key_name: Option<String>,
     pub key_run: Option<String>,
     pub cfg_finished: bool,
@@ -460,6 +463,8 @@ impl App {
             start_failed: None,
             forget_sessions: false,
             enriching: 0,
+            usage: HashMap::new(),
+            usage_checked: None,
             key_name: None,
             key_run: None,
             cfg_finished: false,
@@ -2934,6 +2939,20 @@ impl App {
     /// most every five minutes; none for main or master).
     fn enrich(&mut self) {
         const AT_ONCE: u32 = 4;
+        // The accounts' rate limits, from each machine that holds one (every five minutes; the
+        // first a few seconds in).
+        if self.started.elapsed() > Duration::from_secs(4) && self.usage_checked.map(|t| t.elapsed() > Duration::from_secs(300)).unwrap_or(true) {
+            self.usage_checked = Some(Instant::now());
+            let ids: Vec<String> = self.fleet.machines.iter().filter(|m| m.usable()).map(|m| m.id.clone()).collect();
+            for id in ids {
+                let Some(link) = self.link(&id) else { continue };
+                self.spawn(async move { link.rpc("usage_read", json!({}), Duration::from_secs(30)).await }, move |app, reply| {
+                    let Ok(reply) = reply else { return };
+                    let readings: Vec<fleet::Usage> = reply.get("providers").and_then(Value::as_array).map(|p| p.iter().filter_map(fleet::usage_from).collect()).unwrap_or_default();
+                    app.usage.insert(id, readings);
+                });
+            }
+        }
         if self.enriching >= AT_ONCE { return }
         let now = Instant::now();
         let focused = self.focused().and_then(|f| self.panes.get(&f)).map(|p| (p.machine_id.clone(), p.agent_id.clone()));

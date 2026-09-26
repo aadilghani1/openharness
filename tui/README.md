@@ -155,6 +155,9 @@ paused, offline), `#{pane_agent_mark}` (the icon in its colour, as the title row
 and `#{fleet_tokens}` (what it, and all of them, have used: `1.2M`), `#{pane_lines}` (`+340 −52`),
 `#{pane_asked}` and `#{pane_did}` (what it was last asked, and what its last turn came to),
 `#{pane_todos}` (its plan's progress, `3/7`) and `#{pane_subagents}` (how many it has running),
+`#{usage}` (the agent accounts' rate limits on the focused pane's machine: `claude 5h 42% week
+18% · codex 5h 3%`) and `#{usage_high}` (the one nearest its limit, from 80%; the status line shows
+it reversed, so you know before you start more agents),
 `#{pane_machine}`, `#{pane_far}` (another machine's), `#{pane_watched}` and `#{pane_watcher}`
 (another window has the pane to type in, and who), and `#{waiting}` (the harnesses waiting on
 you).
