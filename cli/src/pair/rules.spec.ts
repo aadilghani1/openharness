@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { matchRule, PAIR_CONFIG_EXAMPLE, PairConfigFile, pairConfigPath, parseJsonc, parsePairConfig, ruleRunner } from './rules.js'
+import { inProjects, matchRule, PAIR_CONFIG_EXAMPLE, PairConfigFile, pairConfigPath, parseJsonc, parsePairConfig, ruleRunner } from './rules.js'
 import { PairJournal } from './journal.js'
 import { PairSensor } from './sensor.js'
 import { PairOwner, type OwnerSubject } from './owner.js'
@@ -41,13 +41,28 @@ describe('the file', () => {
     expect(parsePairConfig('{ "rules": [{ "question": "(", "choice": "Yes" }] }')).toMatchObject({ rules: [], error: expect.stringMatching(/pattern/) })
     expect(parsePairConfig('{ "rules": [{ "question": "x", "choice": "Yes" }, { "question": "y", "choice": "Yes, and don\'t ask again" }] }'))
       .toMatchObject({ rules: [], error: expect.stringMatching(/more than this once/) })
-    expect(parsePairConfig('{ "model": true }')).toEqual({ model: true, rules: [] })
+    expect(parsePairConfig('{ "model": true }')).toEqual({ model: true, rules: [], learn: { borrow: false, export: [], agentsMd: [] } })
+  })
+
+  it('reads learn: borrow and export are off unless written, and only known destinations count', () => {
+    expect(parsePairConfig(PAIR_CONFIG_EXAMPLE, '/home/me').learn).toEqual({ borrow: false, export: [], agentsMd: [] })
+    expect(parsePairConfig('{ "learn": { "borrow": true, "export": ["claude", "agents", "hermes", 7] } }').learn)
+      .toEqual({ borrow: true, export: ['agents', 'claude'], agentsMd: [] })
+    for (const learn of ['"yes"', '[]', '{ "borrow": "true", "export": "claude" }', 'null']) {
+      expect(parsePairConfig(`{ "learn": ${learn} }`).learn, learn).toEqual({ borrow: false, export: [], agentsMd: [] })
+    }
+    expect(parsePairConfig('{ "learn": { "agentsMd": ["~/code/api", "/srv/web/", "", 3, "~/code/api"] } }', '/home/me').learn.agentsMd)
+      .toEqual(['/home/me/code/api', '/srv/web'])
+    expect(inProjects('/home/me/code/api/sub', ['/home/me/code/api'])).toBe(true)
+    expect(inProjects('/home/me/code/apiary', ['/home/me/code/api'])).toBe(false)
+    // A malformed file turns learning's opt-ins off too.
+    expect(parsePairConfig('{ "learn": { "borrow": true }, "rules": [{ "question": "x" }] }').learn).toEqual({ borrow: false, export: [], agentsMd: [] })
   })
 
   it('is re-read when it changes, and a missing file is no rules and no model', () => {
     const path = join(dir, 'pair.jsonc')
     const file = new PairConfigFile(path)
-    expect(file.get()).toEqual({ model: false, rules: [] })
+    expect(file.get()).toEqual({ model: false, rules: [], learn: { borrow: false, export: [], agentsMd: [] } })
     writeFileSync(path, '{ "model": true }')
     expect(file.get().model).toBe(true)
     writeFileSync(path, '{ "model": false, "rules": [{ "question": "x", "choice": "No" }] }')

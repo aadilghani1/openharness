@@ -4,6 +4,13 @@
  * `~/.config/harness/pair.jsonc` when that is unset. JSON with comments and trailing commas.
  *
  *   model   true to let the daemon ask one small model for better status-line words (off by default).
+ *   learn   Learning L2 (daemons/LEARNING.md), every part off by default:
+ *             borrow  true: what Hermes, Claude Code and Codex learned on their own becomes lesson candidates
+ *                     (read-only; proposed like any lesson);
+ *             export  ["agents", "claude"]: approved skills are also written to ~/.agents/skills and/or
+ *                     ~/.claude/skills, marked as Harness's, for sessions outside Harness.
+ *             agentsMd  ["~/code/api"]: projects whose approved notes go into their AGENTS.md (or CLAUDE.md)
+ *                     block; every other project's go into its untracked .harness/lessons.md.
  *   rules   answers to give without asking, used only while the account's autonomy is
  *           `act-within-rules`. Each rule: optional `harness` (its name, `*` wildcards), `engine`,
  *           `project` (a folder the harness works in or under, `~` allowed); a `question` pattern
@@ -33,14 +40,45 @@ export interface PairRule {
   choice: string
 }
 
+/** Where approved skills may be exported (pair/learn/export.ts). */
+export const EXPORT_DESTINATIONS = ['agents', 'claude'] as const
+export type ExportDestination = typeof EXPORT_DESTINATIONS[number]
+
+export interface LearnConfig {
+  borrow: boolean
+  export: ExportDestination[]
+  /** Project folders (absolute) opted in to notes in their AGENTS.md or CLAUDE.md. */
+  agentsMd: string[]
+}
+
 export interface PairConfig {
   model: boolean
   rules: PairRule[]
+  learn: LearnConfig
   /** What was wrong with the file, if anything: it is then read as no rules at all. */
   error?: string
 }
 
-export const EMPTY_PAIR_CONFIG: PairConfig = { model: false, rules: [] }
+export const EMPTY_PAIR_CONFIG: PairConfig = { model: false, rules: [], learn: { borrow: false, export: [], agentsMd: [] } }
+
+/** `learn` as written; anything else in it is off. */
+export function parseLearnConfig(raw: unknown, home = homedir()): LearnConfig {
+  const learn = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
+  const wanted = Array.isArray(learn.export) ? learn.export : []
+  const folders = Array.isArray(learn.agentsMd) ? learn.agentsMd : []
+  return {
+    borrow: learn.borrow === true,
+    export: EXPORT_DESTINATIONS.filter((dest) => wanted.includes(dest)),
+    agentsMd: [...new Set(folders.filter((f): f is string => typeof f === 'string' && f.trim().length > 0)
+      .map((f) => resolve(f.trim().replace(/^~(?=\/|$)/, home))))],
+  }
+}
+
+/** Whether `folder` is one of the opted-in projects, or inside one. */
+export function inProjects(folder: string, projects: readonly string[]): boolean {
+  const at = resolve(folder)
+  return projects.some((p) => at === p || at.startsWith(`${p}/`))
+}
 
 export function pairConfigPath(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
   const base = env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.startsWith('/') ? env.XDG_CONFIG_HOME : join(home, '.config')
@@ -103,7 +141,7 @@ export function parsePairConfig(text: string, home = homedir()): PairConfig {
     return { ...EMPTY_PAIR_CONFIG, error: `pair.jsonc is not JSON: ${err instanceof Error ? err.message : String(err)}` }
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { ...EMPTY_PAIR_CONFIG, error: 'pair.jsonc must be an object' }
-  const raw = value as { model?: unknown; rules?: unknown }
+  const raw = value as { model?: unknown; rules?: unknown; learn?: unknown }
   const rules: PairRule[] = []
   const list = Array.isArray(raw.rules) ? raw.rules : []
   for (const [index, item] of list.entries()) {
@@ -125,7 +163,7 @@ export function parsePairConfig(text: string, home = homedir()): PairConfig {
       choice: r.choice.trim(),
     })
   }
-  return { model: raw.model === true, rules }
+  return { model: raw.model === true, rules, learn: parseLearnConfig(raw.learn, home) }
 }
 
 export interface RuleSubject { name: string; engine: string; cwd?: string | null }
@@ -218,6 +256,10 @@ export const PAIR_CONFIG_EXAMPLE = `// ~/.config/harness/pair.jsonc — your pai
 {
   // Better status-line words from one small model call per question (off by default).
   "model": false,
+  // Learning (off by default): borrow what Hermes, Claude Code and Codex learned on their own as lesson
+  // candidates; export approved skills to ~/.agents/skills and ~/.claude/skills for sessions outside Harness;
+  // and the projects whose notes may go into their AGENTS.md (others get an untracked .harness/lessons.md).
+  "learn": { "borrow": false, "export": [], "agentsMd": [] },
   // Answers given without asking, only while autonomy is "act-within-rules".
   // Never on push, force, rm -rf, sudo, deploy, publish, drop or merge; never "don't ask again".
   "rules": [

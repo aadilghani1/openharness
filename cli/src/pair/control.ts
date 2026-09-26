@@ -28,6 +28,7 @@ import { composeBrief } from './brief.js'
 import { backLine, DISPLAY_MS, keysPrefix } from './voice.js'
 import { statusText, str, type DaemonSay, type PairHarness, type PairJournalPage } from './protocol.js'
 import type { Autonomy } from './floor.js'
+import { APPROVAL_NONCE_TTL_MS, isPersonAction, PERSON_ACTIONS, type ApprovalNonces, type CallerVerdict } from './learn/approval.js'
 
 export type ToolKind = 'read' | 'write' | 'say'
 
@@ -130,6 +131,11 @@ export interface ControlDeps {
   changed?: () => void
   /** `lessons { action, id?, confirmed?, create? }`: the learner's verbs (pair/learn/propose.ts). */
   lessons?: (payload: Record<string, unknown>) => Promise<Result>
+  /**
+   * Person-only lesson actions (approve, restore, export; pair/learn/approval.ts): who is asking, and the
+   * one-time nonces. Absent: those actions are refused.
+   */
+  person?: { verify: (connId: string) => Promise<CallerVerdict>; nonces: ApprovalNonces }
   now: () => number
   newId: () => string
 }
@@ -155,7 +161,7 @@ export class PairControl {
       if (!text) return fail('EMPTY')
       return this.deps.talk(text)
     }
-    if (verb === 'lessons') return this.lessons(payload)
+    if (verb === 'lessons') return this.lessons(payload, _connId)
     const tool = TOOL_BY_NAME.get(verb)
     if (!tool) return fail('UNKNOWN_VERB', `pair has no verb "${verb}"`)
     if (!this.deps.pairing.enabled()) return fail('PAIR_OFF', 'Nothing is paired: hatch or pair a daemon first.')
@@ -171,17 +177,40 @@ export class PairControl {
 
   /**
    * The person's lessons, from a shell (`harness pair lessons …`). Work with pairing off: the lessons folder is
-   * the person's, not the daemon's. The pair harness is an agent: it may list and show them, never approve
-   * one (a lesson it approved would be an agent teaching itself).
+   * the person's, not the daemon's. An agent may list and show them; approving, restoring and exporting are the
+   * person's alone (pair/learn/approval.ts): never with the pair token, never on a mere `confirmed`, only with
+   * a nonce from a `challenge` the daemon answered to a verified caller outside every harness.
    */
-  private async lessons(payload: Record<string, unknown>): Promise<Result> {
-    if (!this.deps.lessons) return fail('UNSUPPORTED')
-    const token = str(payload.token, 200)
-    if (str(payload.action, 20) === 'approve' && token && this.deps.tokenMatches(token)) {
+  private async lessons(payload: Record<string, unknown>, connId: string): Promise<Result> {
+    const lessons = this.deps.lessons
+    if (!lessons) return fail('UNSUPPORTED')
+    const action = str(payload.action, 20)
+    const id = str(payload.id, 40)
+    // A caller's own `confirmed` never counts, and its token and nonce go no further than here.
+    const { token: _token, confirmed: _confirmed, nonce: _nonce, for: _for, ...rest } = payload
+    const forAction = str(payload.for, 20)
+    const person = action === 'challenge' || (isPersonAction(action) && !(action === 'export' && payload.dryRun === true))
+    const run = (args: Record<string, unknown>): Promise<Result> =>
+      lessons(args).catch((err) => fail('FAILED', err instanceof Error ? err.message.slice(0, 200) : undefined))
+    if (!person) return run(rest)
+    if (typeof payload.token === 'string' && payload.token) {
       return fail('PERSON_ONLY', 'Only the person approves a lesson: a key on the daemon\'s line, or the CLI at their terminal.')
     }
-    const { token: _token, ...rest } = payload
-    try { return await this.deps.lessons(rest) } catch (err) { return fail('FAILED', err instanceof Error ? err.message.slice(0, 200) : undefined) }
+    const gate = this.deps.person
+    if (!gate) return fail('PERSON_ONLY', 'this daemon cannot tell who is asking: press [y] on the daemon\'s line')
+    if (action === 'challenge' && !isPersonAction(forAction)) return fail('BAD_REQUEST', `challenge is for ${PERSON_ACTIONS.join(', ')}`)
+    const verdict = await gate.verify(connId)
+    if (!verdict.ok) return fail(verdict.error, verdict.detail)
+    if (action === 'challenge') {
+      // What the person reads before they say yes: the lesson itself, or what export would do.
+      const shown = await run(forAction === 'export' ? { action: 'export', dryRun: true } : { action: 'show', id })
+      if (shown.ok === false) return shown
+      return { ...shown, ok: true, nonce: gate.nonces.issue(forAction, forAction === 'export' ? '' : id, verdict.pid), expiresInMs: APPROVAL_NONCE_TTL_MS }
+    }
+    if (!gate.nonces.consume(action, action === 'export' ? '' : id, payload.nonce, verdict.pid)) {
+      return fail('NONCE_REQUIRED', `${action} needs the person: run \`harness pair lessons ${action}${action === 'export' ? '' : ' <id>'}\` in a terminal, or press [y] on the daemon's line`)
+    }
+    return run({ ...rest, confirmed: true })
   }
 
   // ── reads ────────────────────────────────────────────────────────────────────────────────────────
