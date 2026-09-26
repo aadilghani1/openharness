@@ -678,6 +678,15 @@ class _NewAgentPageState extends State<NewAgentPage> {
       final ready = _engine != null && (_folder != null || _project != null);
       final nothingRunning = _machines.every((m) => m.agents.isEmpty);
       final count = _task.text.trim().length;
+      // Typing the task, the keyboard leaves room for one line of the choices, not four cut ones.
+      final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
+      final summary = [
+        if (_engine != null) _engineName(_engine!),
+        if (_folder != null || _project != null) _projectValue,
+        if (_repository != null) _worktree ? 'worktree' : _branchTitle,
+        if (_permissionModes.isNotEmpty)
+          (_permissionModeChoice?.label ?? 'Auto-approve'),
+      ].join(' · ');
       return Scaffold(
         backgroundColor: tty.ground,
         body: SafeArea(
@@ -728,79 +737,89 @@ class _NewAgentPageState extends State<NewAgentPage> {
                     ),
                   ),
                 const SizedBox(height: 8),
-                Expanded(
-                  child: ListView(
-                    keyboardDismissBehavior:
-                        ScrollViewKeyboardDismissBehavior.onDrag,
-                    padding: EdgeInsets.zero,
-                    children: [
-                      TtyFormRow(
-                        label: 'agent',
-                        value: _engine == null
-                            ? 'Choose an agent'
-                            : _engineName(_engine!),
-                        valueColor: _engine == null ? tty.cyan : null,
-                        detail: _engine == null ? null : _engineNote(_engine!),
-                        onTap: _creating
-                            ? null
-                            : () => unawaited(_chooseAgent()),
-                      ),
-                      TtyFormRow(
-                        label: 'project',
-                        value: _folder == null && _project == null
-                            ? 'Choose a project'
-                            : _projectValue,
-                        valueColor: _folder == null && _project == null
-                            ? tty.cyan
-                            : null,
-                        detail: _folder == null ? null : _tilde(_folder!),
-                        onTap: _creating
-                            ? null
-                            : () => unawaited(_chooseProject()),
-                      ),
-                      if (info != null || _gitLoading || _gitFailed)
+                if (typing)
+                  TtyFormRow(
+                    label: 'harness',
+                    value: summary.isEmpty ? 'Choose an agent' : summary,
+                    onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+                  )
+                else
+                  Expanded(
+                    child: ListView(
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      padding: EdgeInsets.zero,
+                      children: [
                         TtyFormRow(
-                          label: 'branch',
-                          valueColor: info == null && !_gitLoading
-                              ? tty.faint
+                          label: 'agent',
+                          value: _engine == null
+                              ? 'Choose an agent'
+                              : _engineName(_engine!),
+                          valueColor: _engine == null ? tty.cyan : null,
+                          detail: _engine == null
+                              ? null
+                              : _engineNote(_engine!),
+                          onTap: _creating
+                              ? null
+                              : () => unawaited(_chooseAgent()),
+                        ),
+                        TtyFormRow(
+                          label: 'project',
+                          value: _folder == null && _project == null
+                              ? 'Choose a project'
+                              : _projectValue,
+                          valueColor: _folder == null && _project == null
+                              ? tty.cyan
                               : null,
-                          value: _gitLoading
-                              ? 'Reading…'
-                              : info == null
-                              ? 'No answer from the computer'
-                              : _worktree
-                              ? 'New worktree'
-                              : _branchTitle,
-                          detail: info == null
-                              ? null
-                              : _worktree
-                              ? 'from $_branchTitle, in its own folder'
-                              : _branchNote,
-                          onTap: info == null || _creating
-                              ? null
-                              : () => unawaited(_chooseBranch(info)),
-                        ),
-                      if (_permissionModes.isNotEmpty)
-                        TtyFormRow(
-                          label: 'approvals',
-                          value: mode?.label ?? 'Auto-approve',
-                          detail: mode?.detail,
-                          valueColor: (mode?.risky ?? false) ? tty.red : null,
+                          detail: _folder == null ? null : _tilde(_folder!),
                           onTap: _creating
                               ? null
-                              : () => unawaited(_chooseApprovals()),
+                              : () => unawaited(_chooseProject()),
                         ),
-                      if (_showsCodexProfile)
-                        TtyFormRow(
-                          label: 'profile',
-                          value: _codexProfile?.label ?? 'Default',
-                          onTap: _creating
-                              ? null
-                              : () => unawaited(_chooseProfile()),
-                        ),
-                    ],
+                        if (info != null || _gitLoading || _gitFailed)
+                          TtyFormRow(
+                            label: 'branch',
+                            valueColor: info == null && !_gitLoading
+                                ? tty.faint
+                                : null,
+                            value: _gitLoading
+                                ? 'Reading…'
+                                : info == null
+                                ? 'No answer from the computer'
+                                : _worktree
+                                ? 'New worktree'
+                                : _branchTitle,
+                            detail: info == null
+                                ? null
+                                : _worktree
+                                ? 'from $_branchTitle, in its own folder'
+                                : _branchNote,
+                            onTap: info == null || _creating
+                                ? null
+                                : () => unawaited(_chooseBranch(info)),
+                          ),
+                        if (_permissionModes.isNotEmpty)
+                          TtyFormRow(
+                            label: 'approvals',
+                            value: mode?.label ?? 'Auto-approve',
+                            detail: mode?.detail,
+                            valueColor: (mode?.risky ?? false) ? tty.red : null,
+                            onTap: _creating
+                                ? null
+                                : () => unawaited(_chooseApprovals()),
+                          ),
+                        if (_showsCodexProfile)
+                          TtyFormRow(
+                            label: 'profile',
+                            value: _codexProfile?.label ?? 'Default',
+                            onTap: _creating
+                                ? null
+                                : () => unawaited(_chooseProfile()),
+                          ),
+                      ],
+                    ),
                   ),
-                ),
+                if (typing) const Spacer(),
                 // The dock: the task, then Start. It rides the keyboard.
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),

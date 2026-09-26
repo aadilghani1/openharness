@@ -8,7 +8,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import '../find_row.dart';
-import 'connect_computer.dart';
 import '../tty.dart';
 import '../tty_controls.dart';
 
@@ -93,18 +92,16 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     _openSetUp();
   }
 
-  void _openSetUp() => unawaited(
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (route) => ConnectComputerPage(
-          notifier: widget.notifier,
-          signedIn: false,
-          onBack: () => Navigator.of(route).pop(),
-          onTrySample: widget.onTrySample,
-        ),
-      ),
-    ),
-  );
+  /// Setting up a computer starts with signing in here: the computer signs in with the same
+  /// email, and only a signed-in phone can watch for it to appear and address the steps to you.
+  /// Signed in, home IS the set-up page — see `ConnectComputerPage`.
+  void _openSetUp() {
+    setState(() => _forSetUp = true);
+    _go(_Step.email);
+  }
+
+  /// Signing in on the way to setting up a computer — the email step says why it comes first.
+  bool _forSetUp = false;
 
   void _go(_Step step) {
     setState(() {
@@ -113,7 +110,10 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     });
     if (step == _Step.email) _emailFocus.requestFocus();
     if (step == _Step.code) _codeFocus.requestFocus();
-    if (step == _Step.hello) FocusManager.instance.primaryFocus?.unfocus();
+    if (step == _Step.hello) {
+      FocusManager.instance.primaryFocus?.unfocus();
+      _forSetUp = false;
+    }
   }
 
   Future<void> _sendCode() async {
@@ -204,9 +204,11 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
             ),
             _Step.email => _Form(
               onBack: () => _go(_Step.hello),
-              title: 'Your email',
-              lines: const [
-                'We’ll send you a 4-digit code. You’ll sign in with this email on your computer too.',
+              title: _forSetUp ? 'First, your email' : 'Your email',
+              lines: [
+                _forSetUp
+                    ? 'Your computer signs in to Harness with the same email, so it comes first. We’ll send you a 4-digit code.'
+                    : 'We’ll send you a 4-digit code. You’ll sign in with this email on your computer too.',
               ],
               field: TtyField(
                 key: const Key('welcome-email'),

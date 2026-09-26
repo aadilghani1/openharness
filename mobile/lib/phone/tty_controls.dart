@@ -252,11 +252,15 @@ class TtyFormRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  TtyText(
+                  Text(
                     value,
-                    color: valueColor ?? tty.text,
-                    size: TtySize.row,
-                    weight: FontWeight.w600,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: tty.style(
+                      color: valueColor ?? tty.text,
+                      size: TtySize.row,
+                      weight: FontWeight.w600,
+                    ),
                   ),
                   if (detail case final detail? when detail.isNotEmpty) ...[
                     const SizedBox(height: 2),

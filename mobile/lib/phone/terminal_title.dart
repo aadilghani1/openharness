@@ -116,117 +116,117 @@ class TerminalTitle extends StatelessWidget {
       ),
       child: SizedBox(
         height: height,
-        child: Row(
-          children: [
-            // The name and where it runs get the larger share; the words at the right give way.
-            Expanded(
-              flex: 3,
-              child: Semantics(
-                button: true,
-                label: 'Find an agent',
-                child: GestureDetector(
-                  key: const ValueKey('terminal-find'),
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    onFind();
-                  },
-                  onLongPress: onHoldName == null
-                      ? null
-                      : () {
-                          HapticFeedback.mediumImpact();
-                          onHoldName!();
-                        },
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: Tty.origin),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        TtyText(
-                          name,
-                          weight: FontWeight.w700,
-                          size: TtySize.title,
-                        ),
-                        Text.rich(
-                          TextSpan(
-                            children: [
-                              if (place case final place?)
-                                TextSpan(
-                                  text: place,
-                                  style: tty.style(
-                                    color: tty.faint,
-                                    size: TtySize.meta,
-                                  ),
-                                ),
-                              if (branch case final branch?)
-                                TextSpan(
-                                  text:
-                                      '${place == null ? '' : ' · '}${_short(branch)}',
-                                  style: tty.style(
-                                    color: tty.magenta,
-                                    size: TtySize.meta,
-                                  ),
-                                ),
-                            ],
-                          ),
-                          maxLines: 1,
-                          softWrap: false,
-                          overflow: TextOverflow.clip,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            // The words between the name and `…` give way first: clipped rather than pushing the
-            // row past the screen when a state, a way out and an asking harness all want a say.
-            Flexible(
-              flex: 2,
-              fit: FlexFit.tight,
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: ClipRect(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    reverse: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (asking case final asking?)
-                          word(
-                            asking,
-                            color: tty.yellow,
-                            size: TtySize.meta,
-                            onTap: onFind,
-                            semanticsLabel: '$asking — open Find',
-                          ),
-                        if (state case final state?)
-                          word(state, color: tty.faint),
-                        if (action case final action?)
-                          word(
-                            '[${action.label}]',
+        child: LayoutBuilder(
+          builder: (context, box) => Row(
+            children: [
+              // The name and where it runs take what the words at the right leave — all of it when
+              // there are none.
+              Expanded(
+                child: Semantics(
+                  button: true,
+                  label: 'Find an agent',
+                  child: GestureDetector(
+                    key: const ValueKey('terminal-find'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      onFind();
+                    },
+                    onLongPress: onHoldName == null
+                        ? null
+                        : () {
+                            HapticFeedback.mediumImpact();
+                            onHoldName!();
+                          },
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: Tty.origin),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          TtyText(
+                            name,
                             weight: FontWeight.w700,
-                            onTap: action.onTap,
+                            size: TtySize.title,
                           ),
-                      ],
+                          Text.rich(
+                            TextSpan(
+                              children: [
+                                if (place case final place?)
+                                  TextSpan(
+                                    text: place,
+                                    style: tty.style(
+                                      color: tty.faint,
+                                      size: TtySize.meta,
+                                    ),
+                                  ),
+                                if (branch case final branch?
+                                    when branch.trim().isNotEmpty)
+                                  TextSpan(
+                                    text:
+                                        '${place == null ? '' : ' · '}${_short(branch)}',
+                                    style: tty.style(
+                                      color: tty.magenta,
+                                      size: TtySize.meta,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-            if (onActions != null)
-              word(
-                // SF Mono's own glyph — it has no ⋮, and a fallback face would break the grid.
-                '…',
-                weight: FontWeight.w700,
-                onTap: onActions,
-                semanticsLabel: 'Harness actions',
-              ),
-            SizedBox(width: Tty.origin - tty.cell / 2),
-          ],
+              // The words between the name and `…` take only what they need, and never more than
+              // under half the row: clipped rather than crowding out where the harness runs.
+              if (asking != null || state != null || action != null)
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: box.maxWidth * 0.45),
+                  child: ClipRect(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      reverse: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (asking case final asking?)
+                            word(
+                              asking,
+                              color: tty.yellow,
+                              size: TtySize.meta,
+                              onTap: onFind,
+                              semanticsLabel: '$asking — open Find',
+                            ),
+                          if (state case final state?)
+                            word(state, color: tty.faint),
+                          if (action case final action?)
+                            word(
+                              '[${action.label}]',
+                              weight: FontWeight.w700,
+                              onTap: action.onTap,
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              if (onActions != null)
+                word(
+                  // SF Mono's own glyph — it has no ⋮, and a fallback face would break the grid.
+                  '…',
+                  weight: FontWeight.w700,
+                  onTap: onActions,
+                  semanticsLabel: 'Harness actions',
+                ),
+              SizedBox(width: Tty.origin - tty.cell / 2),
+            ],
+          ),
         ),
       ),
     );

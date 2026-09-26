@@ -1781,6 +1781,15 @@ class _TerminalPageState extends State<TerminalPage>
                               child: Stack(
                                 children: [
                                   Positioned.fill(
+                                    // In the sample, while its guide shows, the terminal starts
+                                    // under the title and the guide rather than behind them: the
+                                    // guide is read with the rows it points at.
+                                    top: _sampleGuide() == null
+                                        ? 0
+                                        : TerminalTitle.heightOf(
+                                                Tty.of(context),
+                                              ) +
+                                              34,
                                     // Prompt mode: the terminal lifts four rows so
                                     // the dialog at its foot sits above the mic,
                                     // not under it. A translate, not a resize — a
@@ -2205,7 +2214,12 @@ class _TerminalPageState extends State<TerminalPage>
                         ),
                       ),
                     // The first time a terminal is up: what the swipes and the mic do. Once.
-                    if (session != null && widget.isActive && !_keyBarUp)
+                    // Not in the sample: its guide line teaches the same by having them done, and the
+                    // hints stay unseen for the real first terminal.
+                    if (session != null &&
+                        widget.isActive &&
+                        !_keyBarUp &&
+                        SampleMode.maybeOf(context) == null)
                       Positioned.fill(
                         child: FocusHints(
                           onDone: () => unawaited(
