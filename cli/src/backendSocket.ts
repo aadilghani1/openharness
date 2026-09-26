@@ -447,6 +447,12 @@ export class BackendSocket {
   private appOpenOwed = false
   private readonly downChains = new Map<string, Promise<void>>()
   private readonly localClients = new Map<string, LocalClientSink>()
+  /**
+   * Loopback clients that are TOOLS, not windows (`machine_select { tool: true }`): `harness pair`, the
+   * `harnessd` MCP server. They get their RPC replies like any local client, but they are not a person at
+   * this computer — not presence, not a window to push to, and never what wakes the pair brain.
+   */
+  private readonly toolClients = new Set<string>()
   private terminalStreams: TerminalStreamManager | null = null
   private readonly terminalP2p: TerminalP2pResponderPool
   private readonly p2pPendingOpens = new Map<string, Set<string>>()
@@ -687,7 +693,7 @@ export class BackendSocket {
    *  polling a pane for a dialog is pointless with nobody rendering it, but "nobody" used to mean
    *  "no device", which left the window unable to learn that an agent was blocked. */
   hasLocalClient(): boolean {
-    return this.localClients.size > 0
+    return this.localClients.size > this.toolClients.size
   }
 
   /** True after a paired device has completed the E2EE hello/welcome session. */
@@ -1053,6 +1059,7 @@ export class BackendSocket {
   /** One frame to every window on this computer — or, given a function, each window its own. */
   sendLocal(frame: Frame | ((connId: string) => Frame)): void {
     for (const [connId, sink] of this.localClients) {
+      if (this.toolClients.has(connId)) continue
       const sent = typeof frame === 'function' ? frame(connId) : frame
       if (env.LOG_FRAMES) logFrame('→', 'local', sent)
       if (!sink.sendFrame(sent)) void this.unregisterLocalClient(connId)
@@ -1072,6 +1079,7 @@ export class BackendSocket {
   /** Ask one local desktop to select focus, without opening panes in every window. */
   sendFirstLocal(frame: Frame): boolean {
     for (const [connId, sink] of this.localClients) {
+      if (this.toolClients.has(connId)) continue
       if (sink.sendFrame(frame)) return true
       void this.unregisterLocalClient(connId)
     }
@@ -1185,16 +1193,17 @@ export class BackendSocket {
   }
 
   /** Attach one authenticated loopback desktop client to the same RPC and event plane as cloud web. */
-  registerLocalClient(connId: string, sink: LocalClientSink): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean } = {}): boolean {
     if (!isLocalClientId(connId) || this.localClients.has(connId)) return false
     this.localClients.set(connId, sink)
+    if (opts.tool) { this.toolClients.add(connId); return true }
     this.sendAppPresence('open')
     this.onLocalClient?.(connId, true)
     return true
   }
 
   /** The windows attached right now — for a listener that arrives after some of them did. */
-  localClientIds(): string[] { return [...this.localClients.keys()] }
+  localClientIds(): string[] { return [...this.localClients.keys()].filter((connId) => !this.toolClients.has(connId)) }
 
   /** A window (or `hn`) on this computer attached or went away — the pair brain thinks only while one is here. */
   onLocalClient: ((connId: string, attached: boolean) => void) | null = null
@@ -1202,7 +1211,7 @@ export class BackendSocket {
   /** Release all connection-scoped state when the loopback WebSocket closes. */
   async unregisterLocalClient(connId: string): Promise<void> {
     if (!this.localClients.delete(connId)) return
-    this.onLocalClient?.(connId, false)
+    if (!this.toolClients.delete(connId)) this.onLocalClient?.(connId, false)
     this.rowStateWindows.delete(connId)
     this.viewerForwarder.closeConnection(connId)
     this.pairService?.unwatch(connId)

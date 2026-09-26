@@ -50,6 +50,8 @@ export interface PairBrainDeps {
    * (STALE_QUESTION otherwise). The brain has already checked the question is the one the person saw.
    */
   answer: (input: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>
+  /** The control interface's proposals (pair/control.ts): a key on one of its lines is its to run. */
+  proposals?: { owns: (id: string) => boolean; act: (id: string, choice: string) => Promise<Record<string, unknown>> }
   /** A guest's window says which daemon its local zoo pairs (daemon_presence.pair). */
   onGuestPair?: (daemonId: string | null) => void
   /** The brain started or stopped thinking (cli.ts keeps the router's worker warm while it does). */
@@ -312,6 +314,13 @@ export class PairBrain {
       send({ type: 'daemon_act_result', payload: { requestId, id, ...fields } })
     }
     if (!this.active) { reply({ ok: false, error: 'PAIR_OFF' }); return }
+    const proposals = this.deps.proposals
+    if (proposals?.owns(id)) {
+      const result = await proposals.act(id, choice).catch((err): Record<string, unknown> => ({ ok: false, error: err instanceof Error ? err.message.slice(0, 60) : 'FAILED' }))
+      reply({ ok: result.ok === true, ...(typeof result.error === 'string' ? { error: result.error } : {}), ...(typeof result.detail === 'string' ? { detail: result.detail } : {}),
+        ...(Array.isArray(result.results) ? { results: result.results } : {}) })
+      return
+    }
     const say = this.deps.voice.get(id)
     if (!say || !say.about.requestId) { reply({ ok: false, error: 'GONE' }); return }
     const action: DaemonAction | undefined = say.actions.find((a) => a.choice === choice || a.key === choice)

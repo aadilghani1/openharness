@@ -30,7 +30,8 @@ const MAX_WS_MESSAGE_BYTES = TERMINAL_LOCAL_PASTE_MAX_PAYLOAD_BYTES + 4_096
 import type { WindowVoiceReply } from './cable/windowRoute.js'
 
 export interface LocalWsBackend {
-  registerLocalClient: (connId: string, sink: LocalClientSink) => boolean
+  /** `tool`: `harness pair` or the harnessd MCP server — answered like any local client, never presence. */
+  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean }) => boolean
   unregisterLocalClient: (connId: string) => Promise<void>
   handleLocalFrame: (connId: string, frame: Frame) => void
   handleLocalBinary: (connId: string, frame: TerminalBinaryClear) => Promise<void>
@@ -326,7 +327,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             return
           }
           if (requestedMachineId === options.machineId) {
-            if (!options.backend.registerLocalClient(connId, sink)) {
+            if (!options.backend.registerLocalClient(connId, sink, payload.tool === true ? { tool: true } : {})) {
               close(1011, 'local registration failed')
               return
             }

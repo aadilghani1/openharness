@@ -81,6 +81,10 @@ import { PairFleet, relayPairLinkOpener } from './pair/fleet.js'
 import { PairTriage } from './pair/triage.js'
 import { PairVoice, isRosterDaemon } from './pair/voice.js'
 import { PairOwner, type OwnerSubject } from './pair/owner.js'
+import { PairControl, StartedHarnesses } from './pair/control.js'
+import { PairToken } from './pair/token.js'
+import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClientDeps } from './pair/client.js'
+import { serveMcp } from './pair/mcp.js'
 import { DEFAULT_AUTONOMY, type Autonomy } from './pair/floor.js'
 import { randomUUID } from 'node:crypto'
 import { engineInstallRecipe } from './lib/engineInstall.js'
@@ -411,6 +415,8 @@ ${apiUsage}
 Browser end-to-end encryption:
   harness autonomous-device <command>     pair/status/list/revoke an Autonomous device
   harness pair <code>          pair a BROWSER (code shown on the machine page)
+  harness pair <verb>          your paired daemon's control interface: status, list_harnesses,
+                               read_harness, brief, talk, mcp, … (harness pair status --help)
   harness pairings             list paired clients
   harness unpair <#|fp>        unpair one browser (by list number or fingerprint)
   harness unpair --all         unpair every browser
@@ -1791,6 +1797,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   /** How much the daemon may do on its own (zoo `autonomy`, pair/floor.ts). Read with the paired daemon. */
   let pairAutonomyLevel: Autonomy = DEFAULT_AUTONOMY
   const pairAutonomy = (): Autonomy => pairAutonomyLevel
+  /** HARNESSD_PAIR_TOKEN (pair/token.ts): rotated at every launch of the pair harness. */
+  const pairToken = new PairToken(join(env.ADAPTER_DATA_DIR, 'pair', 'token'))
+  /** `talk` / `daemon_talk`: the person's words to the pair harness — bound once it can be started. */
+  let pairTalk: (text: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
   const pairSensor = new PairSensor({
     machineId: () => backendRef?.machineId ?? session?.machineId ?? computerId(),
     journal: new PairJournal({ dir: join(env.ADAPTER_DATA_DIR, 'pair') }),
@@ -4233,11 +4243,36 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     newId: () => randomUUID(),
   })
   backend.pairOwner = pairOwner
+  const pairVoice = new PairVoice({ sendLocal: (frame) => backend.sendLocal(frame), now: Date.now })
+  // THE CONTROL INTERFACE (pair/control.ts): the pair harness's tools, behind the loopback `pair` request —
+  // `harness pair <verb>` and the harnessd MCP server. Writes need the pair harness's token and pass the
+  // autonomy dial; then this machine's PairOwner, or another machine's over the fleet's sealed link.
+  const pairControl = new PairControl({
+    owner: pairOwner,
+    fleet: pairFleet,
+    local: {
+      machineId: () => backend.machineId,
+      name: () => terminalHintMachineName(),
+      journal: (payload) => pairSensor.journal(payload),
+      harnesses: () => pairSensor.snapshot().harnesses,
+    },
+    pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
+    autonomy: () => pairAutonomy(),
+    tokenMatches: (candidate) => pairToken.matches(candidate),
+    voice: pairVoice,
+    present: () => !!pairBrain?.isActive && pairBrain.present(),
+    started: new StartedHarnesses(join(env.ADAPTER_DATA_DIR, 'pair', 'started.json')),
+    talk: (text) => pairTalk(text),
+    now: Date.now,
+    newId: () => randomUUID(),
+  })
+  backend.pairControl = pairControl
   pairBrain = new PairBrain({
     pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
     fleet: pairFleet,
     triage: new PairTriage({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), now: Date.now }),
-    voice: new PairVoice({ sendLocal: (frame) => backend.sendLocal(frame), now: Date.now }),
+    voice: pairVoice,
+    proposals: pairControl,
     sendLocal: (frame) => backend.sendLocal(frame),
     sendLocalTo: (connId, frame) => backend.sendLocalTo(connId, frame),
     // A key pressed on a line about THIS machine's harness: the owner's floor, then the dialog's own
@@ -6575,7 +6610,11 @@ async function daemonCall(method: 'GET' | 'POST', path: string, body?: unknown):
 
 /** `harness pair <code>` — send a browser/device pairing code to the running daemon (localhost). */
 async function pairCommand(code: string | undefined): Promise<void> {
-  if (!code) { console.error('Usage: harness pair <code>   (the code is shown on the browser or device)'); process.exit(1) }
+  if (!code) {
+    console.error('Usage: harness pair <code>   (the code is shown on the browser or device)')
+    console.error('       harness pair <verb>   your daemon\'s control interface (harness pair status --help)')
+    process.exit(1)
+  }
   const { res, json } = await daemonCall('POST', '/api/pair', { code })
   const body = json as { label?: string; fingerprint?: string; error?: string }
   if (res.ok) {
@@ -7313,9 +7352,31 @@ switch (cmd) {
   case 'autonomous-device':
     runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, env.PORT).then(code => { process.exitCode = code }).catch(onError)
     break
-  case 'pair':
-    pairCommand(args[0]).catch(onError)
+  case 'pair': {
+    // `harness pair <code>` pairs a browser; `harness pair <verb>` is the daemon's control interface
+    // (pair/client.ts). No pairing code is ever one of the verbs.
+    const verb = pairVerb(args[0])
+    if (!verb) { pairCommand(args[0]).catch(onError); break }
+    const pairClient: PairClientDeps = {
+      port: daemonPort(),
+      machineId: async () => process.env.HARNESSD_MACHINE_ID || (await runningDaemonStatus())?.machineId || null,
+      connect: (url) => new NewCommandSocket(url),
+      env: process.env,
+    }
+    if (verb === 'mcp') {
+      // stdout is the protocol: anything else printed there would corrupt it.
+      console.log = (...line: unknown[]) => console.error(...line)
+      const at = rest.findIndex((word) => word === '--token-file' || word.startsWith('--token-file='))
+      const tokenFile = at < 0 ? null : rest[at]!.includes('=') ? rest[at]!.slice('--token-file='.length) : rest[at + 1] ?? null
+      serveMcp({ input: process.stdin, output: process.stdout, version: VERSION, call: (payload) => pairRequest({ ...pairClient, tokenFile }, payload),
+        log: (line) => console.error(line) })
+        .then(() => { process.exitCode = 0 }).catch(onError)
+      break
+    }
+    pairControlCommand(rest, { ...pairClient, output: (line) => process.stdout.write(`${line}\n`), error: (line) => console.error(line) })
+      .then((code) => { process.exitCode = code }).catch(onError)
     break
+  }
   case 'browser-link':
   case 'e2ee-link':
     // Browser setup links served the retired web client. Said plainly rather than falling to "unknown
