@@ -6,7 +6,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:harness_mobile/core/app_version.dart';
 import 'package:harness_mobile/demo/sample_mode.dart'
-    show SampleMode, SampleSession;
+    show SampleMode, SampleSession, openSampleMode;
 import 'package:harness_mobile/core/device_name.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -201,6 +201,13 @@ class _Body extends StatelessWidget {
             title: 'How Harness works',
             onTap: () => unawaited(openHowItWorks(context)),
           ),
+          // The offline sample, from inside the real app too — to show somebody, or to try a
+          // gesture without touching a real harness. Not offered inside the sample itself.
+          if (_sample(context) == null)
+            SettingsRow(
+              title: 'Try the sample',
+              onTap: () => unawaited(openSampleMode(context)),
+            ),
           SettingsRow(
             title: 'Show the tips again',
             onTap: () {
