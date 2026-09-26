@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/daemons/card.dart';
 import 'package:harness_mobile/daemons/render.dart';
 import 'package:harness_mobile/daemons/roster.dart';
+import 'package:harness_mobile/daemons/zoo.dart';
 
 void main() {
   final frames =
@@ -24,6 +25,96 @@ void main() {
     ]);
     expect(roster.rules.statusCells, 8);
     expect(roster.rules.habits.map((h) => h.key), contains('elsewhere'));
+    // Economy v2: the setup egg, duplicate and overflow xp, shiny colours and
+    // drop dates, all read from the roster rather than written down here.
+    final rules = source['rules'] as Map;
+    expect(roster.rules.setupEggNeed, (rules['setupEgg'] as Map)['need']);
+    expect(roster.rules.duplicateXp, rules['duplicateXp']);
+    expect(roster.rules.overflowXp, rules['overflowXp']);
+    expect(roster.rules.eggs['setup']!.look, r'\_$_/');
+    for (final (i, raw) in (source['daemons'] as List).indexed) {
+      final shiny = (raw as Map)['shiny'] as Map;
+      expect(roster.daemons[i].shinyHex, shiny['hex']);
+      expect(
+        roster.daemons[i].colorFor(shiny: true),
+        isNot(roster.daemons[i].color),
+      );
+    }
+    for (final (i, raw) in (source['drops'] as List).indexed) {
+      expect(roster.drops[i].announce, (raw as Map)['announce']);
+      expect(roster.drops[i].release, raw['release']);
+    }
+  });
+
+  test(
+    'a drop is announced, then released, on UTC days (card.mjs dropState)',
+    () {
+      final unix = roster.drop('unix')!;
+      expect(
+        unix.stateAt(DateTime.utc(2026, 9, 11, 23, 59, 59)),
+        DropState.hidden,
+      );
+      expect(unix.stateAt(DateTime.utc(2026, 9, 12)), DropState.announced);
+      expect(
+        unix.stateAt(DateTime.utc(2026, 9, 25, 23, 59, 59)),
+        DropState.announced,
+      );
+      expect(unix.stateAt(DateTime.utc(2026, 9, 26)), DropState.released);
+      // A drop without dates is out.
+      expect(
+        const DaemonDrop('x', 2, 'x').stateAt(DateTime.utc(2000)),
+        DropState.released,
+      );
+      expect(shelfDrops(roster, DateTime.utc(2026, 9, 1)), isEmpty);
+      expect(shelfDrops(roster, DateTime.utc(2026, 9, 20)).single.id, 'unix');
+    },
+  );
+
+  test('a card carries its serial; a guest\'s daemon has none', () {
+    final tim = roster.byId('tim')!;
+    final framed = (frames['cards'] as List).cast<Map>().firstWhere(
+      (f) => f['id'] == 'tim' && f['version'] == '2.0' && f['serial'] == 42,
+    );
+    // The card of a daemon you own is card.mjs's card with its own facts.
+    final mine = ZooDaemon.fromJson({
+      'id': 'tim',
+      'hatchedAt': '2026-09-26T12:00:00Z',
+      'egg': 'first',
+      'shiny': true,
+      'nickname': 'pip',
+      'xp': 600,
+      'serial': 42,
+    }, roster)!;
+    final lines = ownedCardLines(roster, tim, mine);
+    expect(lines, [for (final l in framed['out'] as List) l as String]);
+    expect(lines.join('\n'), contains('pip the tim 2.0  #0042'));
+    expect(serialLabel(7), '#0007');
+
+    final seeded = ZooDaemon.fromJson({
+      'id': 'tim',
+      'hatchedAt': '2026-09-26T12:00:00Z',
+      'egg': 'first',
+      'xp': 600,
+      'serial': 42,
+      'origin': 'local',
+    }, roster)!;
+    expect(
+      ownedCardLines(roster, tim, seeded).join('\n'),
+      isNot(contains('#00')),
+    );
+    // The portrait rows are the ones a card colours.
+    final rows = cardPortraitRows(roster, tim, '2.0');
+    final portrait = renderPortrait(
+      roster,
+      tim,
+      '2.0',
+      DaemonMood.idle,
+      motion: false,
+    );
+    expect(rows.to - rows.from, portrait.length);
+    for (final (i, line) in portrait.indexed) {
+      expect(lines[rows.from + i], contains(line));
+    }
   });
 
   test('every sprite frame matches the reference renderer', () {
@@ -155,7 +246,7 @@ void main() {
   });
 
   test('the shelf matches card.mjs shelfLines', () {
-    expect(shelfLines(roster, ['tim', 'vim', 'grue']), [
+    expect(shelfLines(roster, shelfEntries(['tim', 'vim', 'grue'])), [
       'zoo: drop 1 unix  2/9  +secret',
       '',
       r'\[o|o]/   [ ? ]     [ ? ]     [ ? ]     < o_o >_',
@@ -176,11 +267,77 @@ void main() {
     expect(fencedCard(['a', 'b']), '```\na\nb\n```');
   });
 
+  test(
+    'the shelf counts duplicates and shows announced drops, as card.mjs',
+    () {
+      // node daemons/tools/card.mjs --shelf 'tim*x2,vim,grue x4'
+      final released = DateTime.utc(2026, 9, 27);
+      expect(
+        shelfLines(roster, const [
+          ShelfEntry('tim', shiny: true, dupes: 1),
+          ShelfEntry('vim'),
+          ShelfEntry('grue', dupes: 3),
+        ], now: released),
+        [
+          'zoo: drop 1 unix  2/9  +secret',
+          '',
+          r'\[o|o]/   [ ? ]     [ ? ]     [ ? ]     < o_o >_',
+          'tim x2    #02       #03       #04       vim',
+          '',
+          '[ ? ]     [ ? ]     [ ? ]     [ ? ]     .   .',
+          '#06       #07       #08       #09       grue x4',
+        ],
+      );
+      final cells = shelfCells(roster, const [
+        ShelfEntry('tim', shiny: true, dupes: 1),
+      ], now: released);
+      expect(cells.first.shiny, isTrue);
+      expect(cells.first.count, 2);
+      // Announced, not released: silhouettes of the 0.1 sprites, the release
+      // date, and what you own does not show yet.
+      expect(
+        shelfLines(
+          roster,
+          shelfEntries(['tim']),
+          now: DateTime.utc(2026, 9, 25, 23, 59, 59),
+        ),
+        [
+          'zoo: drop 1 unix  out 2026-09-26',
+          '',
+          '## ##     #####     ## ##     #####     # ###',
+          '#01       #02       #03       #04       #05',
+          '',
+          '# ####    #####     #####     #######   [ ! ]',
+          '#06       #07       #08       #09       secret',
+        ],
+      );
+      final announced = shelfCells(
+        roster,
+        const [],
+        now: DateTime.utc(2026, 9, 20),
+      );
+      expect(announced.where((c) => c.silhouette), hasLength(9));
+      expect(announced.any((c) => c.owned), isFalse);
+      // Not announced yet: shown nowhere.
+      expect(
+        shelfLines(roster, const [], now: DateTime.utc(2026, 9, 1)),
+        isEmpty,
+      );
+      expect(
+        shelfCells(roster, const [], now: DateTime.utc(2026, 9, 1)),
+        isEmpty,
+      );
+    },
+  );
+
   test('nest stages follow habits done, as render.mjs nestStage', () {
     final nests = (frames['nests'] as List).cast<Map>();
     expect(nests, isNotEmpty);
     expect(
-      [for (final n in nests) nestFor(roster, (n['habits'] as List).cast<String>())],
+      [
+        for (final n in nests)
+          nestFor(roster, (n['habits'] as List).cast<String>()),
+      ],
       [for (final n in nests) n['out'] as String],
     );
   });

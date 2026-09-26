@@ -80,9 +80,13 @@ class DaemonRules {
       rarities = [for (final r in raw['rarities'] as List) r as String],
       shinyOneIn = (raw['shinyOneIn'] as num).toInt(),
       pityPerMiss = raw['pityPerMiss'] as num,
+      duplicateXp = (raw['duplicateXp'] as num? ?? 0).toInt(),
+      overflowXp = (raw['overflowXp'] as num? ?? 0).toInt(),
       firstEggNeed = ((raw['firstEgg'] as Map)['need'] as num).toInt(),
+      setupEggNeed = ((raw['setupEgg'] as Map?)?['need'] as num?)?.toInt(),
       firstEggRequire = [
-        for (final k in (raw['firstEgg'] as Map)['require'] as List? ?? const [])
+        for (final k
+            in (raw['firstEgg'] as Map)['require'] as List? ?? const [])
           k as String,
       ],
       habits = [
@@ -130,12 +134,22 @@ class DaemonRules {
   final List<String> rarities;
   final int shinyOneIn;
   final num pityPerMiss;
+
+  /// xp a duplicate hatch gives the daemon it merges into, and xp an egg
+  /// earned past a full queue of held eggs becomes (README, "Serials and
+  /// duplicates", "A full nest").
+  final int duplicateXp, overflowXp;
   final int firstEggNeed;
+
+  /// Habits that bring the setup egg, the second habit egg (after the first);
+  /// null on a roster without one.
+  final int? setupEggNeed;
 
   /// Habits the first egg cannot come without (a finished turn).
   final List<String> firstEggRequire;
   final List<DaemonHabit> habits;
   final Map<String, DaemonEggKind> eggs;
+
   /// sha256 of each lowercased easter word: the words themselves never ship.
   final List<String> easterHashes;
   final List<String> nest;
@@ -170,11 +184,31 @@ class DaemonEarn {
   final int nights, nightFrom, nightTo;
 }
 
+/// Where a drop stands on a day (card.mjs `dropState`): `released` (its
+/// daemons hatch), `announced` (shelves show them as silhouettes), `hidden`
+/// (not announced yet: shown nowhere).
+enum DropState { released, announced, hidden }
+
 class DaemonDrop {
-  const DaemonDrop(this.id, this.n, this.name);
+  const DaemonDrop(this.id, this.n, this.name, {this.announce, this.release});
   final String id;
   final int n;
   final String name;
+
+  /// UTC days, `YYYY-MM-DD`; a drop without a release date is out.
+  final String? announce, release;
+
+  /// Its state at [now]. Dates are UTC days that begin at 00:00 UTC.
+  DropState stateAt(DateTime now) {
+    DateTime? at(String? day) =>
+        day == null ? null : DateTime.tryParse('${day}T00:00:00.000Z');
+    final out = at(release);
+    if (out == null || !out.isAfter(now)) return DropState.released;
+    final shown = at(announce);
+    return shown != null && !shown.isAfter(now)
+        ? DropState.announced
+        : DropState.hidden;
+  }
 }
 
 class DaemonDef {
@@ -185,6 +219,7 @@ class DaemonDef {
       rarity = raw['rarity'] as String,
       xterm = ((raw['color'] as Map)['xterm'] as num).toInt(),
       hex = (raw['color'] as Map)['hex'] as String,
+      shinyHex = (raw['shiny'] as Map?)?['hex'] as String?,
       family = [
         for (final f in raw['family'] as List)
           ((f as List)[0] as String, (f[1] as num?)?.toInt()),
@@ -228,6 +263,10 @@ class DaemonDef {
   final String drop, rarity;
   final int xterm;
   final String hex;
+
+  /// The colour a shiny one wears on the terminal background instead; null
+  /// on a roster without one (it then wears its usual colour).
+  final String? shinyHex;
   final List<(String, int?)> family;
   final String lore, first;
   final Map<String, String> lines, suggest;
@@ -246,7 +285,14 @@ class DaemonDef {
   final Map<String, String> examples;
 
   bool get secret => rarity == 'secret';
-  Color get color => Color(0xff000000 | int.parse(hex.substring(1), radix: 16));
+  Color get color => _colour(hex);
+
+  /// Its colour on the terminal background: the shiny one when [shiny].
+  Color colorFor({required bool shiny}) =>
+      shiny && shinyHex != null ? _colour(shinyHex!) : color;
+
+  static Color _colour(String hex) =>
+      Color(0xff000000 | int.parse(hex.substring(1), radix: 16));
   String line(DaemonMood mood) => lines[mood.name] ?? '';
 
   /// `screen -> tmux -> tim`
@@ -267,6 +313,8 @@ class DaemonRoster {
             (d as Map)['id'] as String,
             (d['n'] as num).toInt(),
             d['name'] as String,
+            announce: d['announce'] as String?,
+            release: d['release'] as String?,
           ),
       ],
       daemons = [for (final d in raw['daemons'] as List) DaemonDef._(d as Map)];

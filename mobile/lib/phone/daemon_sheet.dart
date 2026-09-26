@@ -16,7 +16,8 @@ import 'daemon_scope.dart';
 import 'daemon_style.dart';
 
 /// Open the daemon's sheet: it looks back at you (one blink), and the zoo is
-/// read again so a new egg from a computer is there when the sheet is.
+/// read again so a new egg from a computer is there when the sheet is. Eggs
+/// that became xp are shown once: closing the sheet forgets them.
 Future<void> showDaemonSheet(BuildContext context, DaemonHostState host) {
   host.face.look();
   unawaited(host.zoo.refresh());
@@ -38,13 +39,14 @@ Future<void> showDaemonSheet(BuildContext context, DaemonHostState host) {
         unawaited(hatchEgg(navigator, host.face, egg));
       },
     ),
-  );
+  ).whenComplete(host.zoo.seenXp);
 }
 
-/// The daemon's sheet: its portrait at its version and mood, its names, the
-/// line it would say now, its lore and lineage, the zoo as a shelf (tap one
-/// to pair it), and the eggs waiting. Before any daemon: the nest, and the
-/// habits that bring the first egg.
+/// The daemon's sheet: its portrait at its version and mood (in its shiny
+/// colour when it is shiny), its names and serial, the line it would say
+/// now, its lore and lineage, its bond, the eggs waiting, the habits still to
+/// bring an egg, the zoo as shelves (tap one to pair it) and its card. Before
+/// any daemon: the nest, and the habits that bring the first egg.
 class DaemonSheet extends StatelessWidget {
   const DaemonSheet({
     super.key,
@@ -93,15 +95,20 @@ class DaemonSheet extends StatelessWidget {
     final mood = face.mood;
     final line = daemonLine(roster, def, mood, facts());
     final nick = daemon.nickname;
+    final colour = def.colorFor(shiny: daemon.shiny);
     final rarity =
         '${daemon.shiny ? 'SHINY ' : ''}${def.rarity.toUpperCase()}'
         '  ${cardNumber(roster, def)}';
+    // Only the server mints: a guest's daemon has no serial.
+    final serial = daemon.origin == 'local' ? null : daemon.serial;
     return [
       _Panel(
         key: const ValueKey('daemon-portrait'),
         pitch: def.darkOnly,
-        semantics: '${def.id} ${daemon.version}, ${DaemonFace.moodWords[mood]}',
-        child: _Art(face.portrait, colour: def.color, size: 14),
+        semantics:
+            '${def.id} ${daemon.version}${daemon.shiny ? ', shiny' : ''}, '
+            '${DaemonFace.moodWords[mood]}',
+        child: _Art(face.portrait, colour: colour, size: 14),
       ),
       const SizedBox(height: 14),
       Wrap(
@@ -120,8 +127,10 @@ class DaemonSheet extends StatelessWidget {
             ),
           ),
           Text(
-            nick == null ? daemon.version : '${def.id} ${daemon.version}',
-            style: DaemonInk.mono(size: 14, color: def.color),
+            '${nick == null ? daemon.version : '${def.id} ${daemon.version}'}'
+            '${serial == null ? '' : '  ${serialLabel(serial)}'}',
+            key: const ValueKey('daemon-version'),
+            style: DaemonInk.mono(size: 14, color: colour),
           ),
         ],
       ),
@@ -150,9 +159,85 @@ class DaemonSheet extends StatelessWidget {
         _bondLine(daemon),
         style: DaemonInk.mono(size: 12, color: DaemonInk.dim),
       ),
+      // Eggs earned past a full queue of held ones: xp, never an egg.
+      for (final grant in zoo.xpGrants)
+        Text(
+          '+${grant.xp} xp · a ${grant.kind} egg, with no room to hold it',
+          key: const ValueKey('daemon-xp-grant'),
+          style: DaemonInk.mono(size: 12, color: DaemonInk.green),
+        ),
       if (zoo.zoo.eggs.isNotEmpty) ...[const _Caption('EGGS'), ..._eggRows()],
       const _Caption('ZOO'),
-      _Shelf(zoo: zoo, roster: roster),
+      _Shelves(zoo: zoo, roster: roster, now: face.now()),
+      if (_habitsLeft) ...[
+        const _Caption('HABITS'),
+        _habitIntro(),
+        const SizedBox(height: 8),
+        ..._habitRows(),
+      ],
+      const _Caption('CARD'),
+      _ShareCard(
+        roster: roster,
+        def: def,
+        lines: ownedCardLines(roster, def, daemon),
+        version: daemon.version,
+        shiny: daemon.shiny,
+        serial: serial,
+      ),
+    ];
+  }
+
+  // ── habits ─────────────────────────────────────────────────────────────────
+
+  /// An egg the habits bring is still to come: the first, or the setup egg.
+  bool get _habitsLeft {
+    final z = zoo.zoo;
+    return !z.firstEgg || (!z.setupEgg && zoo.setupHabitsNeeded != null);
+  }
+
+  /// What the habits bring, from the roster's rules: the first egg after
+  /// `firstEgg.need` of them, the required ones among them, and the setup egg
+  /// at `setupEgg.need`.
+  Widget _habitIntro() {
+    final z = zoo.zoo;
+    final done = z.habits.length;
+    final required = roster.rules.firstEggRequire.length;
+    final setup = zoo.setupHabitsNeeded;
+    final String text;
+    if (!z.firstEgg) {
+      text =
+          'The first egg arrives after any ${zoo.habitsNeeded} of these, '
+          '${required == 0
+              ? 'in any order'
+              : required == 1
+              ? 'the required one included'
+              : 'the required ones included'}.'
+          '${setup == null ? '' : ' The setup egg follows at $setup.'}'
+          ' $done done.';
+    } else if (setup != null) {
+      text = 'The setup egg arrives after any $setup of these. $done done.';
+    } else {
+      text = '$done done.';
+    }
+    return Text(
+      text,
+      key: const ValueKey('daemon-habits-intro'),
+      style: DaemonInk.sans(size: 14.5, color: DaemonInk.dim),
+    );
+  }
+
+  List<Widget> _habitRows() {
+    final done = zoo.zoo.habits.toSet();
+    final required = zoo.zoo.firstEgg
+        ? const <String>{}
+        : roster.rules.firstEggRequire.toSet();
+    return [
+      for (final habit in roster.rules.habits)
+        _Habit(
+          label: habit.label,
+          done: done.contains(habit.key),
+          required: required.contains(habit.key),
+        ),
     ];
   }
 
@@ -169,8 +254,8 @@ class DaemonSheet extends StatelessWidget {
   // ── before any daemon: the nest ────────────────────────────────────────────
 
   List<Widget> _nest(BuildContext context) {
-    final rules = roster.rules;
     final ready = zoo.readyEgg != null;
+    final many = zoo.zoo.eggs.length > 1;
     final done = zoo.zoo.habits.toSet();
     final glyph = face.glyph;
     return [
@@ -187,7 +272,9 @@ class DaemonSheet extends StatelessWidget {
       ),
       const SizedBox(height: 14),
       Text(
-        ready ? 'Your egg is ready' : 'A daemon is incubating',
+        ready
+            ? (many ? 'Your eggs are ready' : 'Your egg is ready')
+            : 'A daemon is incubating',
         style: DaemonInk.sans(
           size: 22,
           color: DaemonInk.bright,
@@ -196,19 +283,15 @@ class DaemonSheet extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 6),
-      Text(
-        ready
-            ? 'Open it to meet the daemon that pairs with you on every '
-                  'device.'
-            : 'The first egg arrives after ${zoo.habitsNeeded} of these, '
-                  'in any order. ${done.length} done.',
-        style: DaemonInk.sans(size: 14.5, color: DaemonInk.dim),
-      ),
-      if (!ready) ...[
-        const SizedBox(height: 12),
-        for (final habit in rules.habits)
-          _Habit(label: habit.label, done: done.contains(habit.key)),
-      ],
+      if (ready)
+        Text(
+          'Open ${many ? 'one' : 'it'} to meet the daemon that pairs with you '
+          'on every device.',
+          style: DaemonInk.sans(size: 14.5, color: DaemonInk.dim),
+        )
+      else
+        _habitIntro(),
+      if (!ready) ...[const SizedBox(height: 12), ..._habitRows()],
       if (zoo.zoo.eggs.isNotEmpty) ...[const _Caption('EGGS'), ..._eggRows()],
     ];
   }
@@ -355,14 +438,22 @@ class _Caption extends StatelessWidget {
 }
 
 class _Habit extends StatelessWidget {
-  const _Habit({required this.label, required this.done});
+  const _Habit({
+    required this.label,
+    required this.done,
+    this.required = false,
+  });
 
   final String label;
   final bool done;
 
+  /// The first egg cannot come without it.
+  final bool required;
+
   @override
   Widget build(BuildContext context) => Semantics(
-    label: '$label, ${done ? 'done' : 'not yet'}',
+    label:
+        '$label${required ? ', required' : ''}, ${done ? 'done' : 'not yet'}',
     excludeSemantics: true,
     child: Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
@@ -379,8 +470,20 @@ class _Habit extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              label,
+            child: Text.rich(
+              TextSpan(
+                text: label,
+                children: [
+                  if (required)
+                    TextSpan(
+                      text: '  required',
+                      style: DaemonInk.mono(
+                        size: 12,
+                        color: done ? DaemonInk.faint : DaemonInk.yellow,
+                      ),
+                    ),
+                ],
+              ),
               style: DaemonInk.sans(
                 size: 14.5,
                 color: done ? DaemonInk.ink : DaemonInk.dim,
@@ -454,27 +557,74 @@ class _EggRow extends StatelessWidget {
   );
 }
 
-/// The zoo as a box back: owned sprites in their colours, `[ ? ]` for a
-/// numbered slot still empty, `[ ! ]` for a secret. Laid out to the screen
-/// (card.mjs's five to a row is fifty columns, wider than a phone), and a tap
-/// on a daemon you own pairs it.
-class _Shelf extends StatelessWidget {
-  const _Shelf({required this.zoo, required this.roster});
+/// The zoo as box backs, one shelf per drop that shows at [now]: owned
+/// sprites in their colours (shiny ones in their shiny colour, marked `*`),
+/// `x2` beside one with a duplicate merged in, `[ ? ]` for a numbered slot
+/// still empty, `[ ! ]` for a secret. A drop announced but not released
+/// shows its regulars as `#` silhouettes and its release date; one not yet
+/// announced shows nothing. Laid out to the screen (card.mjs's five to a row
+/// is fifty columns, wider than a phone), and a tap on a daemon you own
+/// pairs it.
+class _Shelves extends StatelessWidget {
+  const _Shelves({required this.zoo, required this.roster, required this.now});
 
   final ZooClient zoo;
   final DaemonRoster roster;
+  final DateTime now;
 
   @override
   Widget build(BuildContext context) {
-    final owned = zoo.zoo.ownedIds;
-    final pair = zoo.paired?.id;
-    final cells = shelfCells(roster, owned);
+    final owned = [for (final d in zoo.zoo.daemons) ShelfEntry.of(d)];
+    final drops = shelfDrops(roster, now);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        for (final (i, drop) in drops.indexed) ...[
+          if (i > 0) const SizedBox(height: 16),
+          _Shelf(zoo: zoo, roster: roster, drop: drop, owned: owned, now: now),
+        ],
+        if (owned.length > 1) ...[
+          const SizedBox(height: 10),
+          Text(
+            'Tap a daemon to pair it. The pair is the same on every device.',
+            style: DaemonInk.sans(size: 13, color: DaemonInk.faint),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _Shelf extends StatelessWidget {
+  const _Shelf({
+    required this.zoo,
+    required this.roster,
+    required this.drop,
+    required this.owned,
+    required this.now,
+  });
+
+  final ZooClient zoo;
+  final DaemonRoster roster;
+  final DaemonDrop drop;
+  final List<ShelfEntry> owned;
+  final DateTime now;
+
+  @override
+  Widget build(BuildContext context) {
+    final pair = zoo.paired?.id;
+    final cells = shelfCells(roster, owned, drop: drop.id, now: now);
+    final announced = drop.stateAt(now) == DropState.announced;
+    return Column(
+      key: ValueKey('daemon-shelf-drop-${drop.id}'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
         Text(
-          shelfTitle(roster, owned),
-          style: DaemonInk.mono(size: 12.5, color: DaemonInk.dim),
+          shelfTitle(roster, owned, drop: drop.id, now: now),
+          style: DaemonInk.mono(
+            size: 12.5,
+            color: announced ? DaemonInk.faint : DaemonInk.dim,
+          ),
         ),
         const SizedBox(height: 10),
         // An even grid, as many slots to a row as fit: a box back, whatever
@@ -496,6 +646,8 @@ class _Shelf extends StatelessWidget {
                     width: width,
                     child: _ShelfCell(
                       cell: cell,
+                      drop: drop,
+                      announced: announced,
                       paired: cell.daemon?.id == pair,
                       onPair: cell.daemon == null || cell.daemon!.id == pair
                           ? null
@@ -509,35 +661,55 @@ class _Shelf extends StatelessWidget {
             );
           },
         ),
-        if (owned.length > 1) ...[
-          const SizedBox(height: 10),
-          Text(
-            'Tap a daemon to pair it. The pair is the same on every device.',
-            style: DaemonInk.sans(size: 13, color: DaemonInk.faint),
-          ),
-        ],
       ],
     );
   }
 }
 
 class _ShelfCell extends StatelessWidget {
-  const _ShelfCell({required this.cell, required this.paired, this.onPair});
+  const _ShelfCell({
+    required this.cell,
+    required this.drop,
+    required this.announced,
+    required this.paired,
+    this.onPair,
+  });
 
   final ShelfCell cell;
+  final DaemonDrop drop;
+
+  /// Its drop is announced, not released: a silhouette or a secret to come.
+  final bool announced;
   final bool paired;
   final VoidCallback? onPair;
 
   @override
   Widget build(BuildContext context) {
     final d = cell.daemon;
-    final label = d == null
-        ? (cell.label == 'secret'
-              ? 'A secret, not found yet'
-              : 'Number ${cell.label.substring(1)}, not hatched yet')
-        : '${d.id}${paired ? ', paired' : ''}';
+    final number = cell.label == 'secret'
+        ? 'A secret'
+        : 'Number ${cell.label.substring(1)}';
+    final String label;
+    if (d != null) {
+      label =
+          '${d.id}${cell.shiny ? ', shiny' : ''}'
+          '${cell.count > 1 ? ', ${cell.count} of it' : ''}'
+          '${paired ? ', paired' : ''}';
+    } else if (announced) {
+      label = '$number of drop ${drop.n} ${drop.name}, out ${drop.release}';
+    } else {
+      label = cell.label == 'secret'
+          ? 'A secret, not found yet'
+          : '$number, not hatched yet';
+    }
+    // The pair is `> tim`, fzf's pointer; `*` is a shiny one, as on the chip.
+    final name = d == null
+        ? cell.label
+        : '${paired ? '> ' : ''}${d.id}${cell.shiny ? '*' : ''}'
+              '${cell.count > 1 ? ' x${cell.count}' : ''}';
+    final colour = d?.colorFor(shiny: cell.shiny);
     return Semantics(
-      key: ValueKey('daemon-shelf-${d?.id ?? cell.label}'),
+      key: ValueKey('daemon-shelf-${d?.id ?? '${drop.id}-${cell.label}'}'),
       button: onPair != null,
       selected: paired,
       label: label,
@@ -553,7 +725,7 @@ class _ShelfCell extends StatelessWidget {
             color: DaemonInk.deep,
             borderRadius: BorderRadius.circular(6),
             border: Border.all(
-              color: paired ? d!.color : DaemonInk.line,
+              color: paired ? colour! : DaemonInk.line,
               width: paired ? 1.5 : 1,
             ),
           ),
@@ -568,13 +740,13 @@ class _ShelfCell extends StatelessWidget {
                   textScaler: TextScaler.noScaling,
                   style: DaemonInk.mono(
                     size: 13,
-                    color: d?.color ?? DaemonInk.faint,
+                    color: colour ?? DaemonInk.faint,
                     weight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  paired ? '${cell.label} *' : cell.label,
+                  name,
                   softWrap: false,
                   textScaler: TextScaler.noScaling,
                   style: DaemonInk.mono(
@@ -589,4 +761,90 @@ class _ShelfCell extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The card people share, and a button that copies it as a fenced code block.
+class _ShareCard extends StatefulWidget {
+  const _ShareCard({
+    required this.roster,
+    required this.def,
+    required this.lines,
+    required this.version,
+    required this.shiny,
+    this.serial,
+  });
+
+  final DaemonRoster roster;
+  final DaemonDef def;
+  final List<String> lines;
+  final String version;
+  final bool shiny;
+  final int? serial;
+
+  @override
+  State<_ShareCard> createState() => _ShareCardState();
+}
+
+class _ShareCardState extends State<_ShareCard> {
+  String? _note;
+
+  Future<void> _copy() async {
+    try {
+      await Clipboard.setData(ClipboardData(text: fencedCard(widget.lines)));
+      if (mounted) setState(() => _note = 'Copied as a code block.');
+    } catch (_) {
+      if (mounted) setState(() => _note = 'Could not copy the card.');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      DaemonCardView(
+        key: const ValueKey('daemon-card'),
+        roster: widget.roster,
+        def: widget.def,
+        lines: widget.lines,
+        version: widget.version,
+        shiny: widget.shiny,
+        serial: widget.serial,
+        ground: DaemonInk.deep,
+      ),
+      const SizedBox(height: 8),
+      Row(
+        children: [
+          Semantics(
+            hint: 'Copies the card as a code block',
+            child: TextButton(
+              key: const ValueKey('daemon-card-share'),
+              onPressed: _copy,
+              style: TextButton.styleFrom(
+                foregroundColor: DaemonInk.yellow,
+                minimumSize: const Size(64, 44),
+              ),
+              child: Text(
+                'Share card',
+                style: TextStyle(
+                  fontFamily: AppFont.sans,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                _note ?? '',
+                style: DaemonInk.sans(size: 13, color: DaemonInk.dim),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
 }
