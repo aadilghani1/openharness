@@ -13,12 +13,15 @@
  *     another harness's agent, or a person at a terminal does not, and is refused TOKEN_REQUIRED.
  *   - Then the autonomy dial (zoo `autonomy`):
  *       watch             read tools only; every write is refused.
- *       suggest           every write becomes a proposal: a line with [y/n] keys, done only on your `y`.
- *       act-on-key        writes to a harness the pair started run at once; the rest wait in ONE batch that
- *                         one key approves.
+ *       suggest           every write becomes a proposal: a line with [y/n] keys and, in full, exactly what
+ *                         it would do (the command or diff, the prompt, the folder); done only on your `y`.
+ *       act-on-key        writes to a harness the pair started run at once; the rest are proposals, one key
+ *                         each (never a batch), at most PROPOSALS_MAX waiting.
  *       act-within-rules  as act-on-key; pair.jsonc rules answer questions on the owning machine
  *                         (pair/rules.ts) and are reported afterwards.
- *   - Everything that runs is journaled on the owning machine, with who asked (`key`, `pair`, `rule`).
+ *   - Another machine takes nothing from here but an answer to an allow-class prompt (REMOTE_ANSWERS_ONLY),
+ *     and decides for itself who asked.
+ *   - Everything that runs is journaled on the owning machine, with who asked (`key`, `pair`, `rule`, `remote`).
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -26,8 +29,9 @@ import type { FleetHarness, MachineStatus, PairFleet } from './fleet.js'
 import type { PairOwner } from './owner.js'
 import { composeBrief } from './brief.js'
 import { backLine, DISPLAY_MS, keysPrefix } from './voice.js'
-import { statusText, str, type DaemonSay, type PairHarness, type PairJournalPage } from './protocol.js'
-import type { Autonomy } from './floor.js'
+import { DIALOG_MAX, statusText, str, type DaemonAction, type DaemonHarness, type DaemonSay, type PairHarness, type PairJournalPage } from './protocol.js'
+import { answerFloor, bareOption, type Autonomy } from './floor.js'
+import type { OwnerRow } from './owner.js'
 
 export type ToolKind = 'read' | 'write' | 'say'
 
@@ -73,6 +77,9 @@ const WRITE_REQUESTS: Record<string, string> = {
 }
 
 export const PROPOSAL_TTL_MS = 10 * 60_000
+/** Proposals waiting for the person at once: past this the pair is told to wait (TOO_MANY_PROPOSALS). */
+export const PROPOSALS_MAX = 5
+const ACTIONS: DaemonAction[] = [{ key: 'y', label: 'do it', choice: 'y' }, { key: 'n', label: 'skip', choice: 'n' }]
 export const SAY_MIN_GAP_MS = 5_000
 const LIST_TIMEOUT_MS = 5_000
 const BRIEF_TIMEOUT_MS = 3_000
@@ -134,13 +141,11 @@ export interface ControlDeps {
   newId: () => string
 }
 
-interface Proposal { id: string; verb: string; machineId: string; args: Result; line: string; at: number }
+interface Proposal { id: string; verb: string; machineId: string; args: Result; harness: DaemonHarness; line: string; detail: string; at: number }
 
 export class PairControl {
   readonly verbs = CONTROL_VERBS
   private readonly proposals = new Map<string, Proposal>()
-  /** The one live line for the act-on-key batch, and the proposals it carries. */
-  private batch: { sayId: string; ids: string[] } | null = null
   private lastSay = -Infinity
   private seq = 0
 
@@ -270,14 +275,21 @@ export class PairControl {
     }
     const autonomy = this.deps.autonomy()
     if (autonomy === 'watch') return fail('AUTONOMY_WATCH', 'The daemon only watches: ask the person to do it.')
-    const machineId = str(args.machineId, 120) || this.deps.local.machineId()
+    const self = this.deps.local.machineId()
+    const machineId = str(args.machineId, 120) || self
+    // Another machine takes nothing from here but an answer to an allow-class prompt, re-checked there: a
+    // daemon never lets a process on this computer reach further than it already could (BRAIN.md, Security).
+    if (machineId !== self && verb !== 'answer_question') {
+      return fail('REMOTE_ANSWERS_ONLY', 'On another machine the daemon only answers an allow-class prompt; ask the person to do this there.')
+    }
     const clean = this.writeArgs(verb, args)
     if (!clean.ok) return clean
     const agentId = str(clean.args.agentId, 200)
-    // act-on-key and act-within-rules: a harness it started is its own to drive. Starting one is not.
+    // act-on-key and act-within-rules: a harness it started is its own to drive (the owning machine's floor
+    // still decides every answer). Starting one is not.
     const own = autonomy !== 'suggest' && verb !== 'start_harness' && !!agentId && this.deps.started.has(machineId, agentId)
     if (own) return this.execute(verb, machineId, clean.args, 'pair')
-    return this.propose(verb, machineId, clean.args, autonomy)
+    return this.propose(verb, machineId, clean.args)
   }
 
   /** Only the fields each write takes, bounded; anything else a caller sent is dropped. */
@@ -324,11 +336,10 @@ export class PairControl {
         default: return fail('UNKNOWN_VERB')
       }
     } else {
-      // The question's id rides as `expectRequestId`: `requestId` on the wire is the RPC's own.
-      const wire: Result = verb === 'answer_question'
-        ? { agentId: args.agentId, expectRequestId: args.requestId, choice: args.choice }
-        : { ...args }
-      result = await this.remote(machineId, WRITE_REQUESTS[verb], { ...wire, by })
+      if (verb !== 'answer_question') return fail('REMOTE_ANSWERS_ONLY')
+      // The question's id rides as `expectRequestId`: `requestId` on the wire is the RPC's own. `by` is not
+      // sent: the owning machine decides who asked from how the request reached it (a remote machine).
+      result = await this.remote(machineId, WRITE_REQUESTS[verb]!, { agentId: args.agentId, expectRequestId: args.requestId, choice: args.choice })
     }
     const ok = result.ok === true || (result.ok === undefined && typeof result.error !== 'string')
     if (ok && verb === 'start_harness' && typeof result.agentId === 'string') this.deps.started.add(machineId, result.agentId)
@@ -346,92 +357,118 @@ export class PairControl {
 
   // ── proposals: a write that waits for the person's key ───────────────────────────────────────────
 
-  private summary(verb: string, machineId: string, args: Result): string {
-    const where = machineId === this.deps.local.machineId() ? '' : `@${statusText(machineId, 12)}`
-    const who = `${str(args.agentId, 12)}${where}`
+  /**
+   * What a write would do, for the person to read before their key: the harness by name and machine, a
+   * one-line summary, and — in full, never cut — the exact command or diff it answers, the prompt it sends,
+   * the folder and first prompt of a start. An answer is checked against the question on screen and the
+   * floor first: a proposal the owner would refuse is refused now.
+   */
+  private async describe(verb: string, machineId: string, args: Result):
+    Promise<{ ok: true; args: Result; harness: DaemonHarness; line: string; detail: string } | { ok: false; error: string; detail?: string }> {
+    const self = this.deps.local.machineId()
+    const machine = this.machines().find((m) => m.machineId === machineId)?.name ?? machineId
+    const local = machineId === self
+    if (verb === 'start_harness') {
+      const engine = str(args.engine, 40)
+      const cwd = str(args.cwd, 1024)
+      const prompt = typeof args.prompt === 'string' ? args.prompt : ''
+      const name = typeof args.name === 'string' ? args.name : ''
+      return {
+        ok: true, args, harness: { machineId, machine, agentId: null, name: name || engine },
+        line: `start ${statusText(engine, 20)} in ${statusText(cwd.split('/').filter(Boolean).pop() ?? cwd, 40)}${local ? '' : ` on ${statusText(machine, 20)}`}`,
+        detail: [`start ${engine} (mode ask) on ${machine}`, `folder: ${cwd}`, ...(name ? [`name: ${name}`] : []), '', prompt ? `first prompt:\n${prompt}` : 'no first prompt'].join('\n'),
+      }
+    }
+    const agentId = str(args.agentId, 200)
+    const read: Result = local ? this.deps.owner.read(agentId) : await this.remote(machineId, 'pair_read', { agentId })
+    const row = (read.ok === false || typeof read.error === 'string') ? null : read.row as OwnerRow | undefined
+    if (!row) return { ok: false, error: typeof read.error === 'string' ? read.error : 'GONE', detail: 'That harness is not there.' }
+    const name = statusText(row.name || agentId.slice(0, 8), 40)
+    const who = local ? name : `${name}@${statusText(machine, 20)}`
+    const harness: DaemonHarness = { machineId, machine, agentId, name }
     switch (verb) {
-      case 'answer_question': return `answer ${who} with "${statusText(str(args.choice), 40)}"`
-      case 'send_prompt': return `tell ${who}: "${statusText(str(args.text), 60)}"`
-      case 'stop_turn': return `stop ${who}'s turn`
-      case 'start_harness': return `start ${str(args.engine)} in ${statusText(str(args.cwd), 40)}${where}`
-      case 'pause_harness': return `pause ${who}`
-      case 'resume_harness': return `resume ${who}`
-      default: return verb
+      case 'answer_question': {
+        const question = row.question
+        if (!question || question.requestId !== str(args.requestId, 120)) return { ok: false, error: 'STALE_QUESTION', detail: 'That question is no longer the one on screen.' }
+        if (typeof question.dialog !== 'string') return { ok: false, error: 'UNSUPPORTED', detail: 'That machine\'s daemon is older: open the harness to answer it.' }
+        if (question.dialog.length > DIALOG_MAX) return { ok: false, error: 'TOO_LONG_TO_SHOW', detail: 'The dialog is too long to show in full: open the harness.' }
+        const floor = answerFloor(question, str(args.choice, 300))
+        if (!floor.ok) return floor
+        return {
+          ok: true, args: { ...args, choice: floor.option }, harness,
+          line: `answer ${who}: "${statusText(bareOption(floor.option), 40)}"`,
+          detail: `${question.dialog}\n\nanswer: ${floor.option}`,
+        }
+      }
+      case 'send_prompt': {
+        const text = str(args.text, 8_001).trim()
+        return { ok: true, args, harness, line: `send ${who} a prompt (${text.length} chars)`, detail: text }
+      }
+      case 'stop_turn': return { ok: true, args, harness, line: `stop ${who}'s turn`, detail: `stop the turn ${name} is working on, on ${machine}` }
+      case 'pause_harness': return { ok: true, args, harness, line: `pause ${who}`, detail: `pause ${name} on ${machine}: its process stops, its conversation is kept` }
+      case 'resume_harness': return { ok: true, args, harness, line: `resume ${who}`, detail: `resume ${name} on ${machine}` }
+      default: return { ok: false, error: 'UNKNOWN_VERB' }
     }
   }
 
-  private propose(verb: string, machineId: string, args: Result, autonomy: Autonomy): Result {
+  private async propose(verb: string, machineId: string, args: Result): Promise<Result> {
     if (!this.deps.present()) return fail('NOBODY_HERE', 'Nobody is at this computer to approve it.')
     this.sweep()
-    const id = `ask:${this.deps.newId()}`
-    const line = this.summary(verb, machineId, args)
-    const proposal: Proposal = { id, verb, machineId, args, line, at: this.deps.now() }
-    this.proposals.set(id, proposal)
-    const actions = [{ key: 'y' as const, label: 'do it', choice: 'y' }, { key: 'n' as const, label: 'skip', choice: 'n' }]
-    // The line shows for DISPLAY_MS like any other; the proposal stays in daemon_state `asks`, where a
-    // client lists it with its keys, until it is answered or PROPOSAL_TTL_MS passes.
-    if (autonomy === 'suggest') {
-      this.deps.voice.say({ id, about: { machineId, agentId: str(args.agentId, 200) }, mood: 'ask', line: statusText(`[y/n] ${line}?`, 140), actions, ttlMs: DISPLAY_MS })
-      this.deps.changed?.()
-      return { ok: true, proposed: true, id, waiting: 'the person\'s key; the outcome is journaled (brief, read_harness)' }
+    if (this.proposals.size >= PROPOSALS_MAX) {
+      return fail('TOO_MANY_PROPOSALS', `${this.proposals.size} proposals already wait for the person: wait for their answer.`)
     }
-    // act-on-key: one line for everything waiting, replaced as the batch grows; one key approves it all.
-    const ids = [...(this.batch?.ids ?? []), id]
-    if (this.batch) this.deps.voice.unsay(this.batch.sayId, 'replaced')
-    const sayId = `ask:batch:${this.deps.newId()}`
-    this.batch = { sayId, ids }
-    this.deps.voice.say({ id: sayId, about: { machineId, agentId: '' }, mood: 'ask', line: this.batchLine(), actions, ttlMs: DISPLAY_MS })
+    const described = await this.describe(verb, machineId, args)
+    if (!described.ok) return { ...described, ok: false }
+    const id = `ask:${this.deps.newId()}`
+    const proposal: Proposal = { id, verb, machineId, args: described.args, harness: described.harness, line: described.line, detail: described.detail, at: this.deps.now() }
+    this.proposals.set(id, proposal)
+    // The line shows for DISPLAY_MS like any other; the proposal stays in daemon_state `asks`, with its
+    // detail, until it is answered or PROPOSAL_TTL_MS passes. One proposal, one key: there are no batches.
+    this.deps.voice.say({
+      id, about: { machineId, agentId: described.harness.agentId ?? '' }, mood: 'ask', from: 'pair',
+      line: statusText(`${keysPrefix(ACTIONS)}${described.line}?`, 140), actions: ACTIONS, ttlMs: DISPLAY_MS,
+      detail: described.detail, harness: described.harness,
+    })
     this.deps.changed?.()
-    return { ok: true, proposed: true, id, batch: ids.length, waiting: 'one key from the person approves the batch' }
+    return { ok: true, proposed: true, id, waiting: 'the person\'s key; the outcome is journaled (brief, read_harness)' }
   }
 
-  private batchLine(): string {
-    const ids = this.batch?.ids ?? []
-    const lines = ids.map((i) => this.proposals.get(i)?.line).filter(Boolean)
-    return statusText(ids.length === 1 ? `[y/n] ${lines[0]}?` : `[y/n] ${ids.length} things to do: ${lines.join('; ')}.`, 140)
-  }
-
-  /** What waits for a key, for daemon_state `asks`: one row per proposal, or the one batch. */
-  pending(): Array<{ id: string; line: string; actions: Array<{ key: 'y' | 'n'; label: string; choice: string }> }> {
+  /** What waits for a key, for daemon_state `asks`: one row per proposal, its detail in full. */
+  pending(): Array<{ id: string; line: string; actions: DaemonAction[]; verb: string; from: 'pair'; harness: DaemonHarness; detail: string; at: number }> {
     this.sweep()
-    const actions = [{ key: 'y' as const, label: 'do it', choice: 'y' }, { key: 'n' as const, label: 'skip', choice: 'n' }]
-    if (this.batch) return [{ id: this.batch.sayId, line: this.batchLine(), actions }]
-    return [...this.proposals.values()].map((p) => ({ id: p.id, line: statusText(`${keysPrefix(actions)}${p.line}?`, 140), actions }))
+    return [...this.proposals.values()].map((p) => ({
+      id: p.id, line: statusText(`${keysPrefix(ACTIONS)}${p.line}?`, 140), actions: ACTIONS, verb: p.verb, from: 'pair' as const,
+      harness: p.harness, detail: p.detail, at: p.at,
+    }))
   }
 
   private sweep(): void {
     const now = this.deps.now()
     for (const [id, p] of this.proposals) if (now - p.at >= PROPOSAL_TTL_MS) this.proposals.delete(id)
-    if (this.batch) {
-      this.batch.ids = this.batch.ids.filter((id) => this.proposals.has(id))
-      if (!this.batch.ids.length) this.batch = null
-    }
   }
 
   /** True for a line id the control interface said (a proposal), so `daemon_act` is routed here. */
   owns(id: string): boolean { return id.startsWith('ask:') }
 
+  /** A proposal still waiting, for the brain's check that the key is for something shown (pair/brain.ts). */
+  has(id: string): boolean { this.sweep(); return this.proposals.has(id) }
+
   /**
-   * The person pressed a key on a proposal (`daemon_act`). `y` runs it (or the whole batch) as `key`;
-   * `n` drops it. Every run goes through the owning machine's floor, like any other write.
+   * The person pressed a key on a proposal (`daemon_act`). `y` runs it as `key`; `n` drops it. It runs
+   * through the owning machine's floor, like any other write.
    */
   async act(id: string, choice: string): Promise<Result> {
     this.sweep()
-    const batch = this.batch?.sayId === id ? this.batch : null
-    const ids = batch ? batch.ids : this.proposals.has(id) ? [id] : []
-    if (!ids.length) return fail('GONE')
+    const proposal = this.proposals.get(id)
+    if (!proposal) return fail('GONE')
     const yes = choice === 'y'
     if (!yes && choice !== 'n') return fail('NOT_OFFERED')
-    if (batch) this.batch = null
+    this.proposals.delete(id)
     this.deps.voice.unsay(id, yes ? 'answered' : 'declined')
-    const proposals = ids.map((i) => this.proposals.get(i)).filter((p): p is Proposal => !!p)
-    for (const p of proposals) this.proposals.delete(p.id)
     this.deps.changed?.()
-    if (!yes) return { ok: true, declined: proposals.length }
+    if (!yes) return { ok: true, declined: 1 }
     if (this.deps.autonomy() === 'watch') return fail('AUTONOMY_WATCH')
-    const results: Result[] = []
-    for (const p of proposals) results.push({ id: p.id, verb: p.verb, ...(await this.execute(p.verb, p.machineId, p.args, 'key')) })
-    const failed = results.find((r) => r.ok !== true)
-    return { ok: !failed, results, ...(failed ? { error: String(failed.error ?? 'FAILED'), ...(failed.detail ? { detail: failed.detail } : {}) } : {}) }
+    const result: Result = { id: proposal.id, verb: proposal.verb, ...(await this.execute(proposal.verb, proposal.machineId, proposal.args, 'key')) }
+    return { ok: result.ok === true, results: [result], ...(result.ok === true ? {} : { error: String(result.error ?? 'FAILED'), ...(result.detail ? { detail: result.detail } : {}) }) }
   }
 }

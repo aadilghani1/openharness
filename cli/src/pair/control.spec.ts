@@ -7,12 +7,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CONTROL_TOOLS, PairControl, PROPOSAL_TTL_MS, StartedHarnesses, type ControlDeps } from './control.js'
+import { CONTROL_TOOLS, PairControl, PROPOSAL_TTL_MS, PROPOSALS_MAX, StartedHarnesses, type ControlDeps } from './control.js'
 import { PairToken } from './token.js'
 import type { Autonomy } from './floor.js'
 import type { DaemonSay } from './protocol.js'
 
 type Result = Record<string, unknown>
+
+/** An allow-class permission prompt on another machine, as its owner reports it (pair_read). */
+const remoteQuestion = { requestId: 'q9', text: 'Approve Bash command: npm test', options: ['1. Yes', '2. No'], multi: false, deny: false, allow: true, permission: true, since: 0,
+  dialog: 'Bash command\n\n  npm test\n\nDo you want to proceed?\n1. Yes\n2. No' }
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'pair-control-')); vi.useFakeTimers({ now: 1_000_000 }) })
@@ -24,7 +28,7 @@ function world(opts: { autonomy?: Autonomy; present?: boolean; fleet?: boolean }
   const secret = token.rotate()
   const owner = {
     list: vi.fn(() => [{ agentId: 'api', name: 'api', engine: 'claude', status: 'idle' as const }]),
-    read: vi.fn((agentId: string) => ({ ok: true as const, harness: null, row: { agentId } })),
+    read: vi.fn((agentId: string): { ok: true; [key: string]: unknown } => ({ ok: true as const, harness: null, row: { agentId, name: agentId, engine: 'claude', status: 'idle' } })),
     answer: vi.fn(async () => ({ ok: true as const, option: '1. Yes' })),
     send: vi.fn(() => ({ ok: true as const, deliveryId: 'd1' })),
     stop: vi.fn(() => ({ ok: true as const })),
@@ -41,9 +45,10 @@ function world(opts: { autonomy?: Autonomy; present?: boolean; fleet?: boolean }
       { machineId: 'machine-c', name: 'mini', status: 'unreachable' as const, local: false },
     ],
     harnesses: () => [],
-    request: vi.fn(async (machineId: string, type: string, payload: Result) => {
+    request: vi.fn(async (machineId: string, type: string, payload: Result): Promise<Result> => {
       requests.push({ machineId, type, payload })
       if (type === 'pair_list') return { harnesses: [{ agentId: 'web', name: 'web', engine: 'codex', status: 'waiting' }] }
+      if (type === 'pair_read') return { ok: true, harness: null, row: { agentId: payload.agentId, name: 'web', engine: 'codex', status: 'waiting', question: remoteQuestion } }
       if (type === 'pair_start') return { ok: true, agentId: 'remote-new' }
       return { ok: true }
     }),
@@ -117,17 +122,14 @@ describe('each tool maps to the right call', () => {
       expect(await w.call(verb, args)).toMatchObject({ ok: true, machineId: 'machine-a' })
       expect(w.owner[method as 'answer']).toHaveBeenLastCalledWith(...expected)
     }
-    const remote: Array<[string, Result, string, Result]> = [
-      ['answer_question', { agentId: 'web', requestId: 'q9', choice: 'No' }, 'pair_answer', { agentId: 'web', expectRequestId: 'q9', choice: 'No', by: 'pair' }],
-      ['send_prompt', { agentId: 'web', text: 'go' }, 'pair_send', { agentId: 'web', text: 'go', by: 'pair' }],
-      ['stop_turn', { agentId: 'web' }, 'pair_stop', { agentId: 'web', by: 'pair' }],
-      ['pause_harness', { agentId: 'web' }, 'pair_pause', { agentId: 'web', by: 'pair' }],
-      ['resume_harness', { agentId: 'web' }, 'pair_resume', { agentId: 'web', by: 'pair' }],
-    ]
-    for (const [verb, args, type, payload] of remote) {
-      expect(await w.call(verb, { ...args, machineId: 'machine-b' })).toMatchObject({ ok: true, machineId: 'machine-b' })
-      expect(w.requests.at(-1)).toEqual({ machineId: 'machine-b', type, payload })
+    // Another machine: an answer only, sealed, and without a `by` — that machine decides who asked.
+    expect(await w.call('answer_question', { agentId: 'web', requestId: 'q9', choice: 'No', machineId: 'machine-b' })).toMatchObject({ ok: true, machineId: 'machine-b' })
+    expect(w.requests.at(-1)).toEqual({ machineId: 'machine-b', type: 'pair_answer', payload: { agentId: 'web', expectRequestId: 'q9', choice: 'No' } })
+    const before = w.requests.length
+    for (const verb of ['send_prompt', 'stop_turn', 'pause_harness', 'resume_harness', 'start_harness']) {
+      expect(await w.call(verb, { agentId: 'web', text: 'go', engine: 'codex', cwd: '/w', machineId: 'machine-b' })).toMatchObject({ ok: false, error: 'REMOTE_ANSWERS_ONLY' })
     }
+    expect(w.requests.length).toBe(before)
   })
 })
 
@@ -177,7 +179,8 @@ describe('the autonomy matrix', () => {
     const proposed = await w.call('send_prompt', write)
     expect(proposed).toMatchObject({ ok: true, proposed: true })
     expect(w.owner.send).not.toHaveBeenCalled()
-    expect(w.said).toEqual([expect.objectContaining({ id: proposed.id, mood: 'ask', line: '[y/n] tell api: "run the tests"?',
+    expect(w.said).toEqual([expect.objectContaining({ id: proposed.id, mood: 'ask', from: 'pair', line: '[y/n] send api a prompt (13 chars)?',
+      detail: 'run the tests', harness: { machineId: 'machine-a', machine: 'desk', agentId: 'api', name: 'api' },
       actions: [{ key: 'y', label: 'do it', choice: 'y' }, { key: 'n', label: 'skip', choice: 'n' }] })])
     expect(w.control.owns(String(proposed.id))).toBe(true)
     expect(await w.control.act(String(proposed.id), 'y')).toMatchObject({ ok: true, results: [expect.objectContaining({ ok: true, verb: 'send_prompt' })] })
@@ -197,28 +200,56 @@ describe('the autonomy matrix', () => {
     expect(w.owner.stop).not.toHaveBeenCalled()
   })
 
-  it('act-on-key: drives a harness it started; the rest wait in one batch that one key approves', async () => {
+  it('act-on-key: drives a harness it started; everything else is its own proposal, one key each — never a batch', async () => {
     const w = world({ autonomy: 'act-on-key' })
     // Starting is never "its own": it waits for the key, then the new harness is its own to drive.
-    const start = await w.call('start_harness', { engine: 'codex', cwd: '/w/api', prompt: 'add a test' })
-    expect(start).toMatchObject({ proposed: true, batch: 1 })
-    const batchLine = w.said.at(-1)!
-    expect(await w.control.act(batchLine.id, 'y')).toMatchObject({ ok: true })
-    expect(w.owner.start).toHaveBeenCalledWith({ engine: 'codex', cwd: '/w/api', prompt: 'add a test', name: null }, 'key')
+    const start = await w.call('start_harness', { engine: 'codex', cwd: '/w/api', prompt: 'add a test for the login redirect' })
+    expect(start).toMatchObject({ proposed: true })
+    expect(w.said.at(-1)).toMatchObject({ line: '[y/n] start codex in api?', detail: 'start codex (mode ask) on desk\nfolder: /w/api\n\nfirst prompt:\nadd a test for the login redirect' })
+    expect(await w.control.act(String(start.id), 'y')).toMatchObject({ ok: true })
+    expect(w.owner.start).toHaveBeenCalledWith({ engine: 'codex', cwd: '/w/api', prompt: 'add a test for the login redirect', name: null }, 'key')
     expect(await w.call('send_prompt', { agentId: 'new-1', text: 'now the docs' })).toMatchObject({ ok: true, deliveryId: 'd1' })
     expect(w.owner.send).toHaveBeenLastCalledWith({ agentId: 'new-1', text: 'now the docs' }, 'pair')
 
     const one = await w.call('stop_turn', { agentId: 'api' })
-    const two = await w.call('pause_harness', { agentId: 'web', machineId: 'machine-b' })
-    expect([one.batch, two.batch]).toEqual([1, 2])
-    const line = w.said.at(-1)!
-    expect(line.line).toBe("[y/n] 2 things to do: stop api's turn; pause web@machine-b.")
-    // The line shows for its moment; the batch stays in daemon_state `asks` with its keys.
-    expect(w.control.pending()).toEqual([{ id: line.id, line: line.line, actions: expect.arrayContaining([expect.objectContaining({ key: 'y' })]) }])
-    expect(w.unsaid.at(-1)).toMatchObject({ reason: 'replaced' })
-    expect(await w.control.act(line.id, 'y')).toMatchObject({ ok: true, results: [expect.objectContaining({ verb: 'stop_turn' }), expect.objectContaining({ verb: 'pause_harness' })] })
+    const two = await w.call('pause_harness', { agentId: 'web' })
+    expect(one.id).not.toBe(two.id)
+    expect(w.control.pending()).toEqual([
+      expect.objectContaining({ id: one.id, line: "[y/n] stop api's turn?", verb: 'stop_turn', from: 'pair', detail: 'stop the turn api is working on, on desk' }),
+      expect.objectContaining({ id: two.id, line: '[y/n] pause web?', verb: 'pause_harness', harness: expect.objectContaining({ name: 'web' }) }),
+    ])
+    // One key runs one proposal.
+    expect(await w.control.act(String(one.id), 'y')).toMatchObject({ ok: true, results: [expect.objectContaining({ verb: 'stop_turn' })] })
     expect(w.owner.stop).toHaveBeenCalledWith({ agentId: 'api' }, 'key')
-    expect(w.requests.at(-1)).toEqual({ machineId: 'machine-b', type: 'pair_pause', payload: { agentId: 'web', by: 'key' } })
+    expect(w.owner.pause).not.toHaveBeenCalled()
+    expect(w.control.pending().map((p) => p.id)).toEqual([two.id])
+  })
+
+  it('an answer proposal shows the WHOLE dialog and the option, and is refused now if the floor would refuse it', async () => {
+    const w = world({ autonomy: 'suggest' })
+    const dialog = `Bash command\n\n  npm test -- --reporter=verbose --testNamePattern="a very long pattern that goes on and on past sixty characters"\n\nDo you want to proceed?\n1. Yes\n2. No`
+    const question = { requestId: 'q1', text: 'Approve Bash command: npm test', options: ['1. Yes', '2. No'], multi: false, deny: false, allow: true, permission: true, since: 0, dialog }
+    w.owner.read.mockImplementation((agentId: string) => ({ ok: true as const, harness: null, row: { agentId, name: 'api', engine: 'claude', status: 'waiting', question } }))
+    const proposed = await w.call('answer_question', { agentId: 'api', requestId: 'q1', choice: 'yes' })
+    expect(proposed).toMatchObject({ ok: true, proposed: true })
+    expect(w.said.at(-1)).toMatchObject({ line: '[y/n] answer api: "Yes"?', detail: `${dialog}\n\nanswer: 1. Yes` })
+    await w.control.act(String(proposed.id), 'y')
+    expect(w.owner.answer).toHaveBeenCalledWith({ agentId: 'api', requestId: 'q1', choice: '1. Yes' }, 'key')
+    // Stale, not allow-class, not a permission prompt: refused at once, nothing proposed.
+    expect(await w.call('answer_question', { agentId: 'api', requestId: 'q0', choice: 'Yes' })).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    w.owner.read.mockImplementation((agentId: string) => ({ ok: true as const, harness: null, row: { agentId, name: 'api', engine: 'claude', status: 'waiting', question: { ...question, allow: false } } }))
+    expect(await w.call('answer_question', { agentId: 'api', requestId: 'q1', choice: 'Yes' })).toMatchObject({ ok: false, error: 'NOT_ALLOW_CLASS' })
+    w.owner.read.mockImplementation((agentId: string) => ({ ok: true as const, harness: null, row: { agentId, name: 'api', engine: 'claude', status: 'waiting', question: { ...question, permission: false, options: ['npm', 'pnpm'] } } }))
+    expect(await w.call('answer_question', { agentId: 'api', requestId: 'q1', choice: 'pnpm' })).toMatchObject({ ok: false, error: 'NOT_ALLOW_CLASS' })
+    expect(w.said).toHaveLength(1)
+  })
+
+  it('caps what waits for the person', async () => {
+    const w = world({ autonomy: 'suggest' })
+    for (let i = 0; i < PROPOSALS_MAX; i++) expect(await w.call('stop_turn', { agentId: `a${i}` })).toMatchObject({ proposed: true })
+    expect(await w.call('stop_turn', { agentId: 'one-more' })).toMatchObject({ ok: false, error: 'TOO_MANY_PROPOSALS' })
+    vi.advanceTimersByTime(PROPOSAL_TTL_MS)
+    expect(await w.call('stop_turn', { agentId: 'one-more' })).toMatchObject({ proposed: true })
   })
 
   it('act-within-rules: tools behave as act-on-key (rules are the owning machine\'s, pair/rules.ts)', async () => {

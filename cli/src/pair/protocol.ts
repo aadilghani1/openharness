@@ -54,7 +54,15 @@ export interface PairQuestion {
   /** A permission prompt (the engine asks to run something), not a question the agent asks. */
   permission: boolean
   since: number
+  /**
+   * The WHOLE dialog as painted — the exact command, or the edit's preview — bounded to DIALOG_MAX. What a
+   * proposal or a line with a [y] shows in full before a key may approve it. Absent from older daemons.
+   */
+  dialog?: string
 }
+
+/** The most of a dialog kept and shown: past this, it is cut and marked, and nothing proposes answering it. */
+export const DIALOG_MAX = 16_000
 
 /** One harness as the sensor sees it. Everything a `daemon_state` needs, nothing a pane has to be read for. */
 export interface PairHarness {
@@ -151,6 +159,9 @@ export interface DaemonAction {
   choice: string
 }
 
+/** The harness a line is about, named the way the person names it. */
+export interface DaemonHarness { machineId: string; machine: string; agentId: string | null; name: string }
+
 export interface DaemonSay {
   id: string
   about: { machineId: string; agentId: string; requestId?: string }
@@ -158,6 +169,21 @@ export interface DaemonSay {
   line: string
   actions: DaemonAction[]
   ttlMs: number
+  /**
+   * Who is speaking. `pair`: the pair harness — its `say` tool, or a write it proposed. A client draws a
+   * `pair` line distinctly (it is a model's words or request, not the daemon's own facts). Absent: the daemon.
+   */
+  from?: 'pair' | 'daemon'
+  /**
+   * What a key on this line would do, EXACTLY and in full: the whole command or diff, the whole prompt, the
+   * folder and first prompt of a start. A client shows it — all of it — before it acknowledges the line as
+   * displayed (`daemon_shown`); `line` is only its one-line summary.
+   */
+  detail?: string
+  /** The harness a proposal is about, by name and machine. */
+  harness?: DaemonHarness
+  /** A setting waiting for the person's yes at a window (pair/gate.ts): answered with `daemon_confirm`. */
+  confirm?: { kind: 'autonomy' | 'rules'; nonce: string }
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────────────────────────────

@@ -20,7 +20,7 @@ import type { ShapedQuestion } from '../lib/askQuestion.js'
 import type { PairJournal } from './journal.js'
 import { isAllowClass, type ToolCall } from './classify.js'
 import {
-  isDenyClass, statusText, str,
+  DIALOG_MAX, isDenyClass, statusText, str,
   type PairAction, type PairActor, type PairEvent, type PairHarness, type PairJournalEntry, type PairJournalPage,
   type PairService, type PairSnapshot,
 } from './protocol.js'
@@ -121,7 +121,11 @@ export class PairSensor implements PairService {
     const deny = isDenyClass(dialog, first?.options ?? [])
     const permission = detail?.permission === true
     const allow = !deny && isAllowClass(detail?.dialog ?? first?.q ?? '', { permission, cwd: this.deps.describe(agentId)?.cwd ?? null, tools: detail?.tools })
-    h.question = { requestId, text, options, multi: first?.multi === true, deny, allow, permission, since: this.now() }
+    // The whole dialog, kept for what a key would approve to be shown in full (control characters out).
+    // eslint-disable-next-line no-control-regex
+    const painted = (detail?.dialog || first?.q || '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
+    const whole = painted.length > DIALOG_MAX ? `${painted.slice(0, DIALOG_MAX)}\n[cut: the dialog is longer than ${DIALOG_MAX} characters]` : painted
+    h.question = { requestId, text, options, multi: first?.multi === true, deny, allow: allow && painted.length <= DIALOG_MAX, permission, since: this.now(), dialog: whole }
     const baseline = this.carried.delete(requestId)
     this.change(h, baseline ? null : { kind: 'question', requestId, text, options, deny }, baseline)
   }

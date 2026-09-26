@@ -84,8 +84,13 @@ answering a question, and answer with one of its options copied exactly.
 ## How much you may do on your own
 
 The person sets it (the autonomy dial). A write tool answers with what happened:
-- \`proposed: true\`: it waits for the person's key in the status line. Say so; do not repeat it.
+- \`proposed: true\`: it waits for the person's key in the status line, shown to them in full. Say so;
+  do not repeat it. At most a few wait at once (\`TOO_MANY_PROPOSALS\`): wait for their answers.
 - \`AUTONOMY_WATCH\`: you only watch. Tell the person what to do instead.
+- \`REMOTE_ANSWERS_ONLY\`: on another machine you may only answer an allow-class prompt; the rest is the
+  person's to do there.
+- \`NOT_ALLOW_CLASS\`: only a permission prompt is answered for the person — its no, or a one-time yes to
+  a read, test, build, formatter or in-project edit. A question the agent asks, or a plan, is theirs.
 - \`TOKEN_REQUIRED\`: you are not the running pair harness; say so and stop.
 Everything you do is journaled on the machine that owns the harness, with you as the one who asked.
 
