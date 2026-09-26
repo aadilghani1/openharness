@@ -67,7 +67,8 @@ export async function pairRequest(deps: PairClientDeps, payload: Record<string, 
 
 // ── `harness pair <verb>` ─────────────────────────────────────────────────────────────────────────────
 
-export const PAIR_CLI_VERBS = new Set([...CONTROL_TOOLS.map((tool) => tool.name), 'talk', 'status', 'journal', 'mcp', 'lessons'])
+/** `talk` is not one: the person talks to their daemon from a window (`daemon_talk`), never from a tool. */
+export const PAIR_CLI_VERBS = new Set([...CONTROL_TOOLS.map((tool) => tool.name), 'status', 'journal', 'mcp', 'lessons'])
 export const LESSON_ACTIONS = ['list', 'show', 'approve', 'skip', 'revert'] as const
 
 /** `list-harnesses` and `list_harnesses` are the same verb. */
@@ -95,7 +96,7 @@ export const PAIR_USAGE = [
   '    resume_harness <agentId> [--machine id]',
   '    say <line…>                            one line in the status line (rate-limited)',
   '',
-  '  talk <words…>                            talk to your daemon: starts or wakes the pair harness',
+  '  (talk to your daemon from a window: a talk is a model turn, and only a window is you)',
   '',
   '  Lessons (daemons/LEARNING.md; the lessons folder, ~/.harness/lessons):',
   '    lessons [list]                         every lesson: pending, approved, reverted, skipped',
@@ -166,10 +167,10 @@ export function parsePairArgs(verb: string, argv: string[]): { payload: Record<s
       payload = { verb, action, ...(words[1] ? { id: words[1] } : {}), ...(options.create && action === 'approve' ? { create: true } : {}) }
       break
     }
-    case 'say': case 'talk': {
+    case 'say': {
       const text = rest(0)
       if (!text) throw new PairUsageError(`${verb} needs words.`)
-      payload = verb === 'say' ? { verb, line: text } : { verb, text }
+      payload = { verb, line: text }
       break
     }
     default: throw new PairUsageError(`pair has no verb "${verb}".`)

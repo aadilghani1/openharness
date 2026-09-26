@@ -427,7 +427,7 @@ Browser end-to-end encryption:
   harness autonomous-device <command>     pair/status/list/revoke an Autonomous device
   harness pair <code>          pair a BROWSER (code shown on the machine page)
   harness pair <verb>          your paired daemon's control interface: status, list_harnesses,
-                               read_harness, brief, talk, mcp, … (harness pair status --help)
+                               read_harness, brief, mcp, … (harness pair status --help)
   harness pairings             list paired clients
   harness unpair <#|fp>        unpair one browser (by list number or fingerprint)
   harness unpair --all         unpair every browser
@@ -4350,7 +4350,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     voice: pairVoice,
     present: () => !!pairBrain?.isActive && pairBrain.present(),
     started: new StartedHarnesses(join(env.ADAPTER_DATA_DIR, 'pair', 'started.json')),
-    talk: (text) => pairTalk(text),
     changed: () => pairBrain?.stateChanged(),
     lessons: async (payload) => pairLearner ? pairLearner.local(payload) : { ok: false, error: 'UNSUPPORTED' },
     now: Date.now,
@@ -4449,6 +4448,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onGuestPair: (daemonId) => { guestPair = isRosterDaemon(daemonId) ? daemonId : null; applyPair() },
     onGuestAutonomy: (level) => { guestAutonomy = isAutonomy(level) ? level : null; applyPair() },
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
+    talk: (text) => pairTalk(text),
     now: Date.now,
   })
   // pair.jsonc is read when something needs it, and on this tick: a change asks for the person's yes soon.
@@ -4700,13 +4700,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (!pairBrain) { reply({ type: 'daemon_confirm_result', payload: { requestId: payload.requestId, kind: payload.kind, nonce: payload.nonce, ok: false, error: 'UNSUPPORTED' } }); return }
       pairBrain.onConfirm(connId, payload, (frame) => { reply(frame) })
     },
-    // The person talking to their daemon: forwarded to the pair harness, which starts or wakes for it.
-    onDaemonTalk: (_connId, payload, reply) => {
-      const requestId = typeof payload.requestId === 'string' ? payload.requestId.slice(0, 120) : ''
-      const text = typeof payload.text === 'string' ? payload.text.slice(0, 8_000) : ''
-      void pairTalk(text)
-        .catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
-        .then((result) => { reply({ type: 'daemon_talk_result', payload: { requestId, ...result } }) })
+    // The person talking to their daemon, from a window: forwarded to the pair harness (which starts or
+    // wakes for it), rate-limited, with what it costs.
+    onDaemonTalk: (connId, payload, reply) => {
+      if (!pairBrain) { reply({ type: 'daemon_talk_result', payload: { requestId: payload.requestId, ok: false, error: 'UNSUPPORTED' } }); return }
+      void pairBrain.onTalk(connId, payload, (frame) => { reply(frame) })
     },
     onDaemonPresence: (connId, payload, meta) => { zooPresence.presence(connId, payload); pairBrain?.onPresence(connId, payload, meta) },
     machineId: backend.machineId,

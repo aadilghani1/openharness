@@ -122,7 +122,8 @@ describe('harness pair <verb>', () => {
     expect(parsePairArgs('start_harness', ['codex', '/w/api', '--name=tests', '--', 'add', 'a', 'test']).payload)
       .toEqual({ verb: 'start_harness', engine: 'codex', cwd: '/w/api', name: 'tests', prompt: 'add a test' })
     expect(parsePairArgs('brief', ['--since', '30', '--json'])).toEqual({ payload: { verb: 'brief', sinceMinutes: 30 }, json: true })
-    expect(parsePairArgs('talk', ['what', 'needs', 'me?']).payload).toEqual({ verb: 'talk', text: 'what needs me?' })
+    // `talk` is not a verb of the CLI: the person talks to their daemon from a window.
+    expect(pairVerb('talk')).toBeNull()
     expect(() => parsePairArgs('send_prompt', ['api'])).toThrow(PairUsageError)
     expect(() => parsePairArgs('brief', ['--since'])).toThrow(PairUsageError)
   })

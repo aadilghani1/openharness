@@ -33,6 +33,9 @@ import type { ConfirmRequest, GateEvent } from './gate.js'
 
 /** Keys this brain relays to other machines: a minute's worth and an hour's (the owner limits them too). */
 export const RELAY_LIMITS = [{ windowMs: 60_000, max: 6 }, { windowMs: 60 * 60_000, max: 60 }]
+/** Talks to the pair harness: each is a model turn the person pays for. */
+export const TALK_LIMITS = [{ windowMs: 60_000, max: 6 }, { windowMs: 60 * 60_000, max: 60 }]
+export const TALK_COST_NOTE = 'Each talk is a turn of your pair harness on its engine: it spends your model usage.'
 
 /** An absence this long is a return worth a brief (daemons/README.md: `back` after 15 minutes). */
 export const BRIEF_AWAY_MS = 15 * 60_000
@@ -79,6 +82,8 @@ export interface PairBrainDeps {
    * line and acknowledged it as displayed, ARM_MS before the key (`onKey`).
    */
   shown?: ShownLines
+  /** `daemon_talk`: the person's words to the pair harness (pair/pairHarness.ts), which starts or wakes. */
+  talk?: (text: string) => Promise<Record<string, unknown>>
   /** How many keys may be relayed to other machines, per window (RELAY_LIMITS unless a spec says). */
   relayLimits?: Array<{ windowMs: number; max: number }>
   /**
@@ -126,11 +131,13 @@ export class PairBrain {
   private readonly cursors = new Map<string, number>()
 
   private readonly relayLimit: RateLimit
+  private readonly talkLimit: RateLimit
   private setSeq = 0
 
   constructor(private readonly deps: PairBrainDeps) {
     this.startedAt = deps.now()
     this.relayLimit = new RateLimit(deps.relayLimits ?? RELAY_LIMITS, deps.now)
+    this.talkLimit = new RateLimit(TALK_LIMITS, deps.now)
   }
 
   get isActive(): boolean { return this.active }
@@ -464,6 +471,26 @@ export class PairBrain {
     if (shown) { reply({ ok: false, error: shown }); return }
     const result = gate.confirm(kind, nonce, payload.accept !== false)
     reply(result.ok ? { ok: true, accepted: payload.accept !== false } : { ok: false, error: result.error, ...(result.detail ? { detail: result.detail } : {}) })
+  }
+
+  /**
+   * `daemon_talk { requestId, text }`: the person's words to their daemon, from a window attached here —
+   * never a tool, never the pair harness itself (it has no window) — six a minute, sixty an hour, each a
+   * model turn the person pays for (`cost` in every answer). Always replies (`daemon_talk_result`).
+   */
+  async onTalk(connId: string, payload: Record<string, unknown>, send: (frame: Record<string, unknown>) => void): Promise<void> {
+    const requestId = str(payload.requestId, 120)
+    const reply = (fields: Record<string, unknown>): void => { send({ type: 'daemon_talk_result', payload: { requestId, ...fields, cost: TALK_COST_NOTE } }) }
+    if (!this.clients.has(connId)) { reply({ ok: false, error: 'UI_ONLY', detail: 'Talk to your daemon from a window.' }); return }
+    const text = str(payload.text, 8_000).trim()
+    if (!text) { reply({ ok: false, error: 'EMPTY' }); return }
+    if (!this.deps.talk) { reply({ ok: false, error: 'UNSUPPORTED' }); return }
+    if (!this.talkLimit.take(connId)) {
+      reply({ ok: false, error: 'RATE_LIMITED', detail: 'Six talks a minute, sixty an hour.', retryAfterMs: this.talkLimit.retryAfter(connId) })
+      return
+    }
+    const result = await this.deps.talk(text).catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
+    reply(result)
   }
 
   /** `daemon_shown { id }`: this window has drawn that line (its keys, and its detail in full). */

@@ -15,7 +15,7 @@ import { PairSensor, type PairSubject } from './sensor.js'
 import { PairFleet, relayPairLinkOpener, type PairLinkOpener } from './fleet.js'
 import { PairTriage, actionsFor, parseTriage, type PairOneShot } from './triage.js'
 import { PairVoice, DISPLAY_MS, UNSOLICITED_GAP_MS, doneLine, failLine, fillLine, needLine } from './voice.js'
-import { PairBrain, type AnswerResult } from './brain.js'
+import { PairBrain, TALK_COST_NOTE, type AnswerResult } from './brain.js'
 import { ARM_MS, ShownLines } from './shown.js'
 import type { DaemonSay, PairEvent, PairQuestion } from './protocol.js'
 import type { Autonomy } from './floor.js'
@@ -67,7 +67,7 @@ function laptop() {
   return { sensor, open, answers, links, reply: (r: Frame) => { answerReply = r } }
 }
 
-function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>; linked?: boolean; model?: boolean; autonomy?: Autonomy; relayLimits?: Array<{ windowMs: number; max: number }> } = {}) {
+function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>; linked?: boolean; model?: boolean; autonomy?: Autonomy; relayLimits?: Array<{ windowMs: number; max: number }>; talk?: (text: string) => Promise<Frame> } = {}) {
   const local = sensorFor('machine-a')
   const remote = laptop()
   const frames: Frame[] = []
@@ -95,6 +95,7 @@ function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: str
     answer, autonomy: () => opts.autonomy ?? 'suggest', now: Date.now,
     relayed: (fields) => { local.relayed(fields) },
     ...(opts.relayLimits ? { relayLimits: opts.relayLimits } : {}),
+    ...(opts.talk ? { talk: opts.talk } : {}),
   })
   const says = () => frames.filter((f) => f.type === 'daemon_say').map((f) => f.payload as DaemonSay)
   const unsays = () => frames.filter((f) => f.type === 'daemon_unsay').map((f) => f.payload as Frame)
@@ -290,6 +291,23 @@ describe('the brain', () => {
       await tick()
     }
     expect(w.remote.answers).toHaveLength(2)
+  })
+
+  it('talk comes only from a window, six a minute, and every answer says what it costs', async () => {
+    const talked: string[] = []
+    const w = world({ talk: async (text) => { talked.push(text); return { ok: true, sent: true } } })
+    const talk = async (conn: string, text: string): Promise<Frame> => {
+      const replies: Frame[] = []
+      await w.brain.onTalk(conn, { requestId: 't', text }, (f) => replies.push(f))
+      return replies[0].payload as Frame
+    }
+    expect(await talk('local:tool', 'hi')).toMatchObject({ ok: false, error: 'UI_ONLY', cost: TALK_COST_NOTE })
+    w.brain.clientAttached('local:window')
+    for (let i = 0; i < 6; i++) expect(await talk('local:window', `hi ${i}`)).toEqual({ requestId: 't', ok: true, sent: true, cost: TALK_COST_NOTE })
+    expect(await talk('local:window', 'once more')).toMatchObject({ ok: false, error: 'RATE_LIMITED', retryAfterMs: 60_000 })
+    await settle(60_000)
+    expect(await talk('local:window', 'later')).toMatchObject({ ok: true })
+    expect(talked).toHaveLength(7)
   })
 
   it('a key counts only from the window that was shown the line, a moment after it was shown', async () => {

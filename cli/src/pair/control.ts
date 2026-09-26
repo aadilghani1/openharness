@@ -32,6 +32,7 @@ import { backLine, DISPLAY_MS, keysPrefix } from './voice.js'
 import { DIALOG_MAX, statusText, str, type DaemonAction, type DaemonHarness, type DaemonSay, type PairHarness, type PairJournalPage } from './protocol.js'
 import { answerFloor, bareOption, type Autonomy } from './floor.js'
 import type { OwnerRow } from './owner.js'
+import { RateLimit } from './limit.js'
 
 export type ToolKind = 'read' | 'write' | 'say'
 
@@ -66,6 +67,9 @@ export const CONTROL_TOOLS: readonly ControlTool[] = [
 const TOOL_BY_NAME = new Map(CONTROL_TOOLS.map((tool) => [tool.name, tool]))
 /** Verbs the `pair` request hands to the control interface (the sensor keeps status/list/journal/read). */
 export const CONTROL_VERBS: ReadonlySet<string> = new Set([...TOOL_BY_NAME.keys(), 'talk', 'lessons'])
+
+/** The pair's own lines: a minute's worth and an hour's, on top of one every SAY_MIN_GAP_MS. */
+export const SAY_LIMITS = [{ windowMs: 60_000, max: 6 }, { windowMs: 60 * 60_000, max: 30 }]
 
 type Result = Record<string, unknown>
 const fail = (error: string, detail?: string): Result => ({ ok: false, error, ...(detail ? { detail } : {}) })
@@ -131,8 +135,6 @@ export interface ControlDeps {
   voice: { say: (say: DaemonSay) => boolean; unsay: (id: string, reason: string) => boolean }
   present: () => boolean
   started: StartedHarnesses
-  /** `talk`: forward the person's words to the pair harness (pair/pairHarness.ts). */
-  talk?: (text: string) => Promise<Result>
   /** What is waiting for a key changed: daemon_state's `asks` should be sent again. */
   changed?: () => void
   /** `lessons { action, id?, confirmed?, create? }`: the learner's verbs (pair/learn/propose.ts). */
@@ -146,20 +148,20 @@ interface Proposal { id: string; verb: string; machineId: string; args: Result; 
 export class PairControl {
   readonly verbs = CONTROL_VERBS
   private readonly proposals = new Map<string, Proposal>()
+  private readonly sayLimit: RateLimit
   private lastSay = -Infinity
   private seq = 0
 
-  constructor(private readonly deps: ControlDeps) {}
+  constructor(private readonly deps: ControlDeps) {
+    this.sayLimit = new RateLimit(SAY_LIMITS, deps.now)
+  }
 
   /** The loopback `pair` request: `{ verb, token?, ...args }`. Always answers. */
   async local(payload: Record<string, unknown>, _connId = ''): Promise<Result> {
     const verb = str(payload.verb, 40).replace(/-/g, '_')
-    if (verb === 'talk') {
-      if (!this.deps.talk) return fail('UNSUPPORTED')
-      const text = str(payload.text, 8_001).trim()
-      if (!text) return fail('EMPTY')
-      return this.deps.talk(text)
-    }
+    // The person talks to their daemon from a window (`daemon_talk`): a tool, a shell or the pair harness
+    // itself is not the person, and every talk is a model turn they pay for.
+    if (verb === 'talk') return fail('UI_ONLY', 'Talk to your daemon from a window: `harness pair talk` is not the person.')
     if (verb === 'lessons') return this.lessons(payload)
     const tool = TOOL_BY_NAME.get(verb)
     if (!tool) return fail('UNKNOWN_VERB', `pair has no verb "${verb}"`)
@@ -254,13 +256,19 @@ export class PairControl {
 
   // ── say ──────────────────────────────────────────────────────────────────────────────────────────
 
+  /**
+   * The pair's own line: marked `from: 'pair'` (a client draws it as the pair speaking, never as the
+   * daemon's own facts), never with keys — and a `[y/n]`-looking start is taken off, so a model's words can
+   * never pose as a line that asks for a key. One every SAY_MIN_GAP_MS, and SAY_LIMITS.
+   */
   private say(args: Result): Result {
-    const line = statusText(str(args.line, 400), 140)
+    const line = statusText(str(args.line, 400), 140).replace(/^(\[[a-z/ ]*\]\s*)+/i, '').trim()
     if (!line) return fail('EMPTY')
     if (!this.deps.present()) return fail('NOBODY_HERE', 'Nobody is at this computer to hear it.')
     const now = this.deps.now()
     if (now - this.lastSay < SAY_MIN_GAP_MS) return fail('RATE_LIMITED', `One line every ${SAY_MIN_GAP_MS / 1000} s.`)
-    const said = this.deps.voice.say({ id: `say:${now}:${++this.seq}`, about: { machineId: this.deps.local.machineId(), agentId: '' }, mood: 'say', line, actions: [], ttlMs: 30_000 })
+    if (!this.sayLimit.take()) return fail('RATE_LIMITED', 'Six lines a minute, thirty an hour.')
+    const said = this.deps.voice.say({ id: `say:${now}:${++this.seq}`, about: { machineId: this.deps.local.machineId(), agentId: '' }, mood: 'say', from: 'pair', line, actions: [], ttlMs: 30_000 })
     if (!said) return fail('RATE_LIMITED', 'The voice is over its limit for this minute.')
     this.lastSay = now
     return { ok: true }
