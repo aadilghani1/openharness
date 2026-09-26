@@ -25,7 +25,7 @@ pub fn lines(app: &App, kind: &PickerKind, id: &str) -> Vec<Line<'static>> {
         PickerKind::Projects => project(app, id),
         PickerKind::Palette => command(app, id),
         PickerKind::Keys => id.split_once('\t').map(|(k, c)| vec![Line::from(vec![bold(format!("{} {k}", crate::keys::name(&app.keymap.prefix)))]), Line::raw(""), Line::raw(c.to_string())]).unwrap_or_default(),
-        PickerKind::Buffers => app.paste.get(id).map(|b| b.data.lines().map(|l| Line::raw(l.to_string())).collect()).unwrap_or_default(),
+        PickerKind::Buffers => app.paste.get(id).map(|b| b.data.lines().map(|l| ansi_line(l, crate::theme::fzf_opts().tabstop)).collect()).unwrap_or_default(),
         PickerKind::Store => store(app, id),
         PickerKind::Models => vec![Line::raw(id.rsplit(':').next().unwrap_or(id).to_string())],
         _ => vec![],
@@ -155,6 +155,82 @@ fn store(app: &App, id: &str) -> Vec<Line<'static>> {
     out.push(Line::raw(""));
     out.push(dim(if row.get("installed").and_then(Value::as_bool) == Some(false) { "M-i installs it" } else { "enter starts one" }).into());
     out
+}
+
+/// A line as fzf's preview draws a command's output: its SGR codes as colours and attributes (30–37,
+/// 90–97, 38;5;N, 38;2;R;G;B and their backgrounds, bold, dim, italic, underline, reverse,
+/// strikethrough and their undoing), other escape sequences left out, tabs to the next tab stop.
+pub fn ansi_line(text: &str, tabstop: usize) -> Line<'static> {
+    let tabstop = tabstop.max(1);
+    let (mut spans, mut run, mut style, mut col) = (Vec::new(), String::new(), Style::default(), 0usize);
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    let flush = |spans: &mut Vec<Span<'static>>, run: &mut String, style: Style| if !run.is_empty() { spans.push(Span::styled(std::mem::take(run), style)) };
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\x1b' {
+            // CSI … final byte: SGR (m) read, the others dropped; OSC … BEL / ST dropped.
+            if chars.get(i + 1) == Some(&'[') {
+                let mut j = i + 2;
+                while j < chars.len() && !('@'..='~').contains(&chars[j]) { j += 1 }
+                if chars.get(j) == Some(&'m') {
+                    flush(&mut spans, &mut run, style);
+                    let params: String = chars[i + 2..j].iter().collect();
+                    style = sgr(style, &params);
+                }
+                i = j + 1;
+                continue;
+            }
+            if chars.get(i + 1) == Some(&']') {
+                let mut j = i + 2;
+                while j < chars.len() && chars[j] != '\x07' && !(chars[j] == '\x1b' && chars.get(j + 1) == Some(&'\\')) { j += 1 }
+                i = if chars.get(j) == Some(&'\x07') { j + 1 } else { j + 2 };
+                continue;
+            }
+            i += 2;
+            continue;
+        }
+        if c == '\t' { let n = tabstop - col % tabstop; run.push_str(&" ".repeat(n)); col += n; i += 1; continue }
+        if (c as u32) < 0x20 { i += 1; continue }
+        run.push(c);
+        col += unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        i += 1;
+    }
+    flush(&mut spans, &mut run, style);
+    Line::from(spans)
+}
+
+/// An SGR sequence's parameters over a style.
+fn sgr(mut style: Style, params: &str) -> Style {
+    let p: Vec<u16> = if params.is_empty() { vec![0] } else { params.split([';', ':']).map(|x| x.parse().unwrap_or(0)).collect() };
+    let named = [Color::Black, Color::Red, Color::Green, Color::Yellow, Color::Blue, Color::Magenta, Color::Cyan, Color::Gray];
+    let bright = [Color::DarkGray, Color::LightRed, Color::LightGreen, Color::LightYellow, Color::LightBlue, Color::LightMagenta, Color::LightCyan, Color::White];
+    let mut k = 0;
+    while k < p.len() {
+        let n = p[k];
+        let extended = |k: &mut usize| -> Option<Color> {
+            match p.get(*k + 1) {
+                Some(5) => { let c = p.get(*k + 2).map(|v| Color::Indexed(*v as u8)); *k += 2; c }
+                Some(2) => { let c = (p.get(*k + 2), p.get(*k + 3), p.get(*k + 4)); *k += 4; match c { (Some(r), Some(g), Some(b)) => Some(Color::Rgb(*r as u8, *g as u8, *b as u8)), _ => None } }
+                _ => None,
+            }
+        };
+        style = match n {
+            0 => Style::default(),
+            1 => style.add_modifier(Modifier::BOLD), 2 => style.add_modifier(Modifier::DIM), 3 => style.add_modifier(Modifier::ITALIC),
+            4 => style.add_modifier(Modifier::UNDERLINED), 5 => style.add_modifier(Modifier::SLOW_BLINK), 7 => style.add_modifier(Modifier::REVERSED),
+            8 => style.add_modifier(Modifier::HIDDEN), 9 => style.add_modifier(Modifier::CROSSED_OUT),
+            22 => style.remove_modifier(Modifier::BOLD | Modifier::DIM), 23 => style.remove_modifier(Modifier::ITALIC), 24 => style.remove_modifier(Modifier::UNDERLINED),
+            25 => style.remove_modifier(Modifier::SLOW_BLINK), 27 => style.remove_modifier(Modifier::REVERSED), 28 => style.remove_modifier(Modifier::HIDDEN), 29 => style.remove_modifier(Modifier::CROSSED_OUT),
+            30..=37 => style.fg(named[(n - 30) as usize]), 39 => style.fg(Color::Reset), 40..=47 => style.bg(named[(n - 40) as usize]), 49 => style.bg(Color::Reset),
+            90..=97 => style.fg(bright[(n - 90) as usize]), 100..=107 => style.bg(bright[(n - 100) as usize]),
+            38 => match extended(&mut k) { Some(c) => style.fg(c), None => style },
+            48 => match extended(&mut k) { Some(c) => style.bg(c), None => style },
+            _ => style,
+        };
+        k += 1;
+    }
+    style
 }
 
 fn textwrap(text: &str, width: usize) -> Vec<String> {

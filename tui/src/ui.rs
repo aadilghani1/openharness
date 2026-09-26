@@ -472,7 +472,7 @@ fn local_time(offset: i64) -> (String, String) {
 /// window, or with --height its bottom rows, as fzf takes the rows under a prompt at the bottom of
 /// a terminal (the panes stay in view above) — the outer --border's box, and the area inside the
 /// margin, the border and the padding, where the list and its preview go.
-pub struct FzfFrame { pub screen: Rect, pub border: Option<Rect>, pub inner: Rect }
+pub struct FzfFrame { pub screen: Rect, pub border: Option<Rect>, pub inner: Rect, pub padded: Rect }
 
 /// The --border shape's sides (top, right, bottom, left); none without one.
 fn border_sides() -> (bool, bool, bool, bool) {
@@ -570,7 +570,9 @@ pub fn fzf_frame(body: Rect, picker: &Picker) -> FzfFrame {
         Rect::new(x, y, width + 2 * l as u16 + 2 * r as u16, height + t as u16 + b as u16)
     });
     let inner = Rect::new(screen.x + m[3] + p[3], screen.y + m[0] + p[0], width.saturating_sub(p[1] + p[3]), height.saturating_sub(p[0] + p[2]));
-    FzfFrame { screen, border, inner }
+    // The window inside its margin: its padding is its own, in its colours.
+    let padded = Rect::new(screen.x + m[3], screen.y + m[0], width, height);
+    FzfFrame { screen, border, inner, padded }
 }
 
 /// The outer --border (rounded, sharp, bold, block, thinblock, double, horizontal, vertical, top,
@@ -604,7 +606,9 @@ fn fzf_border(buf: &mut Buffer, body: Rect) {
     // rows have no margin).
     let (y0, yn) = if top || bottom { (body.y + top as u16, y1 - bottom as u16) } else { (body.y, y1) };
     if left { for y in body.y..=y1 { buf.set_string(body.x, y, left_c, st) } for y in y0..=yn { buf.set_string(body.x + 1, y, " ", st) } }
-    if right { for y in body.y..=y1 { buf.set_string(x1, y, right_c, st) } for y in y0..=yn { buf.set_string(x1 - 1, y, " ", st) } }
+    // The right side's glyph only: the column inside it is the window's (default colours), where
+    // the left one's is the border's (LightWindow.drawBorder).
+    if right { for y in body.y..=y1 { buf.set_string(x1, y, right_c, st) } for y in y0..=yn { buf.set_string(x1 - 1, y, " ", st.fg(Color::Reset)) } }
     if top && left { buf.set_string(body.x, body.y, tl, st) }
     if top && right { buf.set_string(x1, body.y, tr, st) }
     if bottom && left { buf.set_string(body.x, y1, bl, st) }
@@ -664,6 +668,7 @@ fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
     let alone = |stick: bool| (rect(x, y, width + stick as i64, height), None, stick);
     if !picker.preview { return alone(outer_right) }
     let mut pw = picker.preview_window.as_ref().unwrap_or(&o.preview_window);
+    picker.preview_alt.set(false);
     loop {
         let shape = pw.shape().to_string();
         let (bt, br, bb, bl) = shape_sides(&shape);
@@ -674,7 +679,7 @@ fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
             'u' | 'd' => {
                 // Its border dragged: the rows it was given, its border's included.
                 let ph = match picker.preview_cells { Some(n) => n.clamp(min_h, (height - (3 - no_separator_line() as i64)).max(min_h)), None => calculate_size(height, pw.size, 3 - no_separator_line() as i64, min_h) };
-                if pw.threshold > 0 && ph < pw.threshold as i64 { if let Some(alt) = &pw.alternative { if alt.hidden { return alone(outer_right) } pw = alt; continue } }
+                if pw.threshold > 0 && ph < pw.threshold as i64 { if let Some(alt) = &pw.alternative { picker.preview_alt.set(true); if alt.hidden { return alone(outer_right) } pw = alt; continue } }
                 if pw.hidden { return alone(outer_right) }
                 let stick = outer_right && !br;
                 let w = width + stick as i64;
@@ -685,7 +690,7 @@ fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
             }
             _ => {
                 let pwidth = match picker.preview_cells { Some(n) => n.clamp(min_w, (width - 4).max(min_w)), None => calculate_size(width, pw.size, 4, min_w) };
-                if pw.threshold > 0 && pwidth < pw.threshold as i64 { if let Some(alt) = &pw.alternative { if alt.hidden { return alone(outer_right) } pw = alt; continue } }
+                if pw.threshold > 0 && pwidth < pw.threshold as i64 { if let Some(alt) = &pw.alternative { picker.preview_alt.set(true); if alt.hidden { return alone(outer_right) } pw = alt; continue } }
                 if pw.hidden { return alone(outer_right) }
                 if pw.position == 'l' {
                     // A column between the preview and the list; the list against the outer border.
@@ -713,15 +718,16 @@ fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
 /// `  4/7 ───` (144, separator 59), the prompt `> ` (110). Returns where the cursor goes.
 fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: &str) -> Position {
     let frame = fzf_frame(body, picker);
+    picker.screen_area.set(frame.screen);
     // (A --height list is drawn over the panes: its rows are its own.)
     for y in frame.screen.y..frame.screen.y + frame.screen.height {
         for x in frame.screen.x..frame.screen.x + frame.screen.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } }
     }
     if let Some(b) = frame.border { fzf_border(buf, b) }
     let body = frame.inner;
-    // --color=bg: under everything (the preview too); list-bg: under the list alone.
+    // --color=bg: under everything (the preview and the padding too); list-bg: under the list alone.
     let pal = theme::fzf().pal;
-    if let Some(bg) = pal.border.style().bg { buf.set_style(body, Style::default().bg(bg)) }
+    if let Some(bg) = pal.border.style().bg { buf.set_style(frame.padded, Style::default().bg(bg)) }
     let (area, pbox, stick) = fzf_split(body, picker);
     picker.list_area.set(area);
     picker.preview_area.set(pbox.as_ref().map(|p| (p.rect, p.opts.position)));
@@ -814,7 +820,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let mut count = format!("{}/{}", picker.visible.len(), total);
     // A toggle-sort binding: whether it sorts (+S) or not (-S), as fzf's info says.
     if theme::fzf_opts().binds.iter().any(|(_, a)| a.split('+').any(|x| x == "toggle-sort")) { count.push_str(if o_sorts(picker) { " +S" } else { " -S" }) }
-    if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) { count.push_str(&format!(" ({})", picker.marked.len())) }
+    let limit = theme::fzf_opts().multi_limit;
+    if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) || limit > 0 { count.push_str(&if limit > 0 { format!(" ({}/{limit})", picker.marked.len()) } else { format!(" ({})", picker.marked.len()) }) }
     // fzf's printInfoImpl, each --info laid out as it lays it out: the count in the info pair, cut
     // with `..` when the room runs out (trimMessage); the separator's line filled with its string
     // (RepeatToFill) after a blank in its pair; the last column left blank. A list still loading
@@ -1710,8 +1717,10 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: 
         buf.set_line(inner.x, inner.y + i as u16, &line, inner.width);
     }
     // getScrollbar(1, lines, height, min(lines - height, offset)): the thumb, in its colour.
+    picker.preview_bar.set(None);
     if let (Some(bar), true) = (&scrollbar, total > height && height > 0) {
         let thumb = (height * height / total).max(1);
+        picker.preview_bar.set(Some((pb.bar_x, inner.y, height, total, thumb)));
         let at = offset.min(total - height);
         let start = if total == height { 0 } else { ((height - thumb) * at / (total - height)).min(height - thumb) };
         for i in 0..thumb { buf.set_string(pb.bar_x, inner.y + (start + i) as u16, bar, pal.preview_scrollbar.style()); }

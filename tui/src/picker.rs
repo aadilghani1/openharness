@@ -122,20 +122,41 @@ pub struct Picker {
     pub box_rows: std::cell::Cell<(u16, u16)>,
     /// Where the list and the preview window are (from the last draw): what the mouse is over.
     pub list_area: std::cell::Cell<ratatui::layout::Rect>,
+    /// The whole of the list's window on screen (its margin, padding and border included).
+    pub screen_area: std::cell::Cell<ratatui::layout::Rect>,
     pub preview_area: std::cell::Cell<Option<(ratatui::layout::Rect, char)>>,
     /// A drag in the preview (it scrolls: the row and offset it began at), or on its border (it
     /// resizes), and the size it was given that way (columns, or rows above and below).
     pub preview_drag: Option<(u16, u16)>,
+    /// The preview's scrollbar (the last draw's: its column, top row, height, the lines, the
+    /// thumb's length), and whether the mouse is dragging it.
+    pub preview_bar: std::cell::Cell<Option<(u16, u16, usize, usize, usize)>>,
+    pub preview_bar_drag: bool,
     pub border_drag: bool,
     pub preview_cells: Option<i64>,
     /// change-preview-window and toggle-preview-wrap: the preview window as they left it (and
     /// which of change-preview-window's alternatives is next); toggle-sort: sorting turned over.
     pub preview_window: Option<crate::theme::PreviewWindow>,
+    /// Whether the --preview-window's <N(…) alternative is the one in use (the last draw's), which
+    /// toggle-preview then shows or hides.
+    pub preview_alt: std::cell::Cell<bool>,
     pub pw_next: usize,
     pub sort_flipped: bool,
 }
 
 impl Picker {
+    /// toggle-preview, show-preview, hide-preview (fzf's activePreviewOpts.Toggle): the preview
+    /// window in use — --preview-window's, or its <N(…) alternative — shown or hidden, as asked
+    /// (None: the other way). A preview that starts hidden is shown this way.
+    pub fn show_preview(&mut self, show: Option<bool>) {
+        let mut pw = self.preview_window.clone().unwrap_or_else(|| crate::theme::fzf_opts().preview_window.clone());
+        let active: &mut crate::theme::PreviewWindow = match (self.preview_alt.get(), pw.alternative.as_deref_mut()) { (true, Some(a)) => a, _ => &mut pw };
+        active.hidden = match show { Some(s) => !s, None => !active.hidden };
+        self.preview_window = Some(pw);
+        self.preview = true;
+        self.preview_scroll.set(0);
+    }
+
     pub fn new(title: impl Into<String>, placeholder: impl Into<String>) -> Picker {
         Picker {
             title: title.into(),
@@ -159,14 +180,18 @@ impl Picker {
             qcursor: 0,
             xoffset: Default::default(),
             marked: Vec::new(),
-            preview: !crate::theme::fzf_opts().preview_window.hidden,
+            preview: true,
             preview_scroll: Default::default(),
             list_area: Default::default(),
+            screen_area: Default::default(),
             preview_area: Default::default(),
             preview_drag: None,
+            preview_bar: Default::default(),
+            preview_bar_drag: false,
             border_drag: false,
             preview_cells: None,
             preview_window: None,
+            preview_alt: Default::default(),
             pw_next: 0,
             sort_flipped: false,
             preview_of: None,
@@ -427,7 +452,25 @@ impl Picker {
     /// Tab: mark or unmark the row under the cursor (fzf --multi).
     pub fn toggle_mark(&mut self) {
         let Some(id) = self.current_id() else { return };
-        if let Some(at) = self.marked.iter().position(|m| *m == id) { self.marked.remove(at); } else { self.marked.push(id) }
+        if let Some(at) = self.marked.iter().position(|m| *m == id) { self.marked.remove(at); }
+        // --multi=N: no more than N.
+        else if crate::theme::fzf_opts().multi_limit == 0 || self.marked.len() < crate::theme::fzf_opts().multi_limit { self.marked.push(id) }
+    }
+
+    /// select / deselect: the current row marked, or not, whichever it was.
+    pub fn set_mark(&mut self, on: bool) {
+        let Some(id) = self.current_id() else { return };
+        if self.marked.contains(&id) != on { self.toggle_mark() }
+    }
+
+    /// next-selected / prev-selected: the cursor to the next (or previous) marked row, round.
+    pub fn to_marked(&mut self, next: bool) {
+        let n = self.visible.len();
+        if n == 0 || self.marked.is_empty() { return }
+        for i in 1..=n {
+            let at = if next { (self.cursor + i) % n } else { (self.cursor + n - i % n) % n };
+            if self.marked.contains(&self.rows[self.visible[at].0].id) { self.move_by(at as i64 - self.cursor as i64); return }
+        }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -468,6 +511,18 @@ impl Picker {
         let prev = self.scroll as i64;
         self.scroll = offset.max(0) as usize;
         self.vset(offset + self.cursor as i64 - prev, 1);
+        true
+    }
+
+    /// The preview's scrollbar pressed or dragged (fzf's pbarDragging): its thumb's middle under
+    /// the mouse, the preview's offset following. False when [start] is not on the bar.
+    pub fn drag_preview_bar(&mut self, x: u16, y: u16, start: bool) -> bool {
+        let Some((bx, top, height, total, thumb)) = self.preview_bar.get() else { return false };
+        if start && (x != bx || y < top || (y as usize) >= top as usize + height) { return false }
+        if thumb == 0 || height <= thumb || total <= height { return true }
+        let at = (y as i64 - top as i64 - thumb as i64 / 2).clamp(0, (height - thumb) as i64);
+        let offset = ((at as f64) * (total - height) as f64 / (height - thumb) as f64).ceil() as i64;
+        self.preview_to(offset);
         true
     }
 
