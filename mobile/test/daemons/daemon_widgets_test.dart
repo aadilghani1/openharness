@@ -161,9 +161,9 @@ void main() {
     );
     expect(portrait.data, contains('O'));
     await tester.pump(const Duration(seconds: 1));
-    // The line is the truth: nothing is waiting on this phone.
+    // The line is the truth: nothing is waiting on this phone, and tim's idle template has no slots.
     expect(find.byKey(const ValueKey('daemon-line')), findsOneWidget);
-    expect(find.textContaining('idle. nothing needs you.'), findsOneWidget);
+    expect(find.textContaining('all quiet. no alerts.'), findsOneWidget);
     expect(find.textContaining('screen -> tmux -> tim'), findsOneWidget);
     expect(find.textContaining('zoo: drop 1 unix  2/9'), findsOneWidget);
     expect(find.text('Hatch'), findsOneWidget);
