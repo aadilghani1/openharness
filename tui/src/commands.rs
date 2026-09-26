@@ -647,6 +647,23 @@ pub fn notify(app: &mut App, name: &str, window: Option<usize>, pane: Option<u64
     app.pending_hooks.extend(items);
 }
 
+/// An event about a session (notify_session: session-created, -closed, -renamed; with a window,
+/// notify_session_window: window-linked and -unlinked of a session not in front) — its $id and
+/// name, and the window's @number and name.
+pub fn notify_session(app: &mut App, name: &str, sid: u32, session_name: &str, window: Option<(u64, String)>) {
+    let mut formats = vec![
+        ("hook".to_string(), name.to_string()),
+        ("hook_client".to_string(), crate::format::expand(app, "#{client_name}", app.active, None, false)),
+        ("hook_session".to_string(), format!("${sid}")),
+        ("hook_session_name".to_string(), session_name.to_string()),
+    ];
+    if let Some((wid, w)) = window { formats.push(("hook_window".to_string(), format!("@{wid}"))); formats.push(("hook_window_name".to_string(), w)) }
+    let target = app.tabs.get(app.active).and_then(|t| t.focus).map(|p| (app.active, p));
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))) };
+    let items = hook_items(app, name, target, state);
+    app.pending_hooks.extend(items);
+}
+
 /// An event about a window that is gone (window-unlinked): its @number and name, as it was.
 pub fn notify_gone(app: &mut App, name: &str, wid: u64, window_name: &str) {
     let formats = vec![
@@ -2067,8 +2084,10 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let raw = positional(words).first().cloned().unwrap_or_default();
             let Some(name) = crate::app::session_check_name(&raw) else { return app.error(format!("invalid session: {raw}")) };
             if name != app.session_name() && app.find_session(&format!("={name}")).is_some() { return app.error(format!("duplicate session: {name}")) }
-            app.session_alias = Some(name);
+            let renamed = name != app.session_name();
+            app.session_alias = Some(name.clone());
             app.save_sessions();
+            if renamed { let sid = app.session_id; notify_session(app, "session-renamed", sid, &name, None) }
         }
         "clock-mode" => { if let Some(f) = app.focused() { app.modal = Some(Modal::Clock { pane: f }) } else { app.modal = Some(Modal::Clock { pane: 0 }) } }
         "refresh-client" => { app.redraw_all = true; for id in app.panes.keys().copied().collect::<Vec<_>>() { if app.rects.iter().any(|(r, _)| *r == id) { app.open_stream(id, false) } } }

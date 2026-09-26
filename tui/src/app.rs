@@ -1732,8 +1732,12 @@ impl App {
         }
         let tab_id = tab.id.clone();
         let base = self.base_index;
-        self.sessions.push(Stash { id, alias: Some(name), desk: false, tabs: vec![tab], active: 0, lastw: Vec::new(), nums: HashMap::from([(tab_id.clone(), base)]),
+        let linked = (tab.wid, tab.name.clone());
+        self.sessions.push(Stash { id, alias: Some(name.clone()), desk: false, tabs: vec![tab], active: 0, lastw: Vec::new(), nums: HashMap::from([(tab_id.clone(), base)]),
             created: epoch_secs(), activity: epoch_secs(), options: Default::default(), env: Default::default() });
+        // cmd-new-session.c: its window linked (spawn_window), then the session created.
+        crate::commands::notify_session(self, "window-linked", id, &name, Some(linked));
+        crate::commands::notify_session(self, "session-created", id, &name, None);
         // Its shell, on this computer, into its window wherever that is by then.
         crate::input::new_shell_from(self, None, Placement::Fill(tab_id), cwd, command);
         // A headless client shows nothing: the newest session is the one a command with no -t
@@ -1933,6 +1937,16 @@ impl App {
     /// previous, next: by name), else the client exits (`[exited]`). The desk's session stays,
     /// its window the home screen, for the desk's tabs to come back to.
     pub fn session_gone(&mut self) {
+        self.notify_closed();
+        self.session_gone_quiet()
+    }
+
+    /// session-closed, for the session in front (session_destroy's first notify).
+    fn notify_closed(&mut self) {
+        if !self.session_desk { let (sid, name) = (self.session_id, self.session_name()); crate::commands::notify_session(self, "session-closed", sid, &name, None) }
+    }
+
+    fn session_gone_quiet(&mut self) {
         let gone = self.session_id;
         // A session a command ran in for a moment: gone, and nothing else changes.
         if let Some(back) = self.swap_back.filter(|b| *b != gone) {
@@ -2659,17 +2673,24 @@ impl App {
         }
         let tab = self.tabs.remove(index);
         self.lastw.retain(|id| *id != tab.id);
+        // A window of a session not in front (a command there): notify_changes does not see it.
+        let unlinked = self.swap_back.is_some_and(|b| b != self.session_id).then(|| (self.session_id, self.session_name(), tab.wid, tab.name.clone()));
+        let unlinked = |app: &mut App| if let Some((sid, name, wid, w)) = unlinked { crate::commands::notify_session(app, "window-unlinked", sid, &name, Some((wid, w))) };
         for id in tab.panes() { self.end_shell(id); self.drop_pane(id) }
         if tab.on_desk { self.desk_op(json!({ "op": "tab.close", "id": tab.id })) }
         // The last window gone: the session is over (tmux's `[exited]` when it was the last).
         if self.tabs.is_empty() {
             self.tabs.push(Tab::new("home"));
             self.active = 0;
-            self.session_gone();
+            // session_destroy: session-closed, then its windows unlinked.
+            self.notify_closed();
+            unlinked(self);
+            self.session_gone_quiet();
             self.fit_panes();
             return;
         }
         if index < self.active || self.active >= self.tabs.len() { self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1) }
+        unlinked(self);
         self.fit_panes();
     }
 
@@ -2689,7 +2710,6 @@ impl App {
             windows: self.tabs.iter().map(|t| (t.id.clone(), t.wid, t.name.clone(), t.focus, t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default())).collect(),
             current: self.tabs.get(self.active).map(|t| t.id.clone()),
             client,
-            session: self.session_name(),
             modes: self.panes.values().filter(|p| p.in_mode()).map(|p| p.id).collect(),
             focused: self.hooks_seen.focused.clone(),
         };
@@ -2750,7 +2770,6 @@ impl App {
             let w = self.tabs.iter().position(|t| t.panes().contains(&p));
             crate::commands::notify(self, "pane-mode-changed", w, Some(p));
         }
-        if before.session != now.session { crate::commands::notify(self, "session-renamed", None, None) }
     }
 
     /// notify_window("window-layout-changed"), where tmux calls it: each preset (layout-set.c),
@@ -2773,8 +2792,17 @@ impl App {
         let client = !focus_events || self.terminal_focused;
         let is = w == current && self.tabs[w].focus == Some(pane) && client && !overlay;
         let had = focused.contains(&pane);
-        if !is && had { focused.retain(|p| *p != pane); if notify { crate::commands::notify(self, "pane-focus-out", Some(w), Some(pane)) } }
-        else if is && !had { focused.push(pane); if notify { crate::commands::notify(self, "pane-focus-in", Some(w), Some(pane)) } }
+        // A program that asked for focus reports (\e[?1004h) is told, as tmux writes to the pane.
+        let reports = self.panes.get(&pane).map(|p| p.mode().contains(alacritty_terminal::term::TermMode::FOCUS_IN_OUT)).unwrap_or(false);
+        if !is && had {
+            focused.retain(|p| *p != pane);
+            if reports { self.send_input(pane, b"\x1b[O") }
+            if notify { crate::commands::notify(self, "pane-focus-out", Some(w), Some(pane)) }
+        } else if is && !had {
+            focused.push(pane);
+            if reports { self.send_input(pane, b"\x1b[I") }
+            if notify { crate::commands::notify(self, "pane-focus-in", Some(w), Some(pane)) }
+        }
     }
 
     /// cmd-pipe-pane.c's child: `sh -c` [command], its stdin what [pane] prints from now on
@@ -3578,7 +3606,7 @@ pub struct Pipe { out: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>, id: 
 /// and layout), the current window, the focused pane, the session's name, and which panes are
 /// in a mode.
 #[derive(Default, Clone)]
-pub struct HooksSeen { ready: bool, session_id: u32, windows: Vec<(String, u64, String, Option<u64>, String)>, current: Option<String>, client: bool, session: String, modes: Vec<u64>, focused: Vec<u64> }
+pub struct HooksSeen { ready: bool, session_id: u32, windows: Vec<(String, u64, String, Option<u64>, String)>, current: Option<String>, client: bool, modes: Vec<u64>, focused: Vec<u64> }
 
 /// gethostname(3), as tmux's #{host} reads it (`mac.lan`, not `hostname -s`'s `mac`).
 pub fn full_hostname() -> String {
