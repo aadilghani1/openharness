@@ -1773,6 +1773,17 @@ impl App {
         Ok(id)
     }
 
+    /// A session [name] with one empty window (its windows to come: a project's harnesses).
+    pub fn empty_session(&mut self, name: &str) -> u32 {
+        let id = self.alloc_session_id();
+        let tab = Tab::new("home");
+        let base = self.base_index;
+        self.sessions.push(Stash { id, alias: Some(name.to_string()), desk: false, nums: HashMap::from([(tab.id.clone(), base)]), tabs: vec![tab], active: 0, lastw: Vec::new(),
+            created: epoch_secs(), activity: epoch_secs(), options: Default::default(), env: Default::default() });
+        crate::commands::notify_session(self, "session-created", id, name, None);
+        id
+    }
+
     /// Where the sessions are kept between clients (`hn` again after C-b d, or after the last
     /// window of the session in front went): one file per server name (-L).
     fn sessions_path() -> std::path::PathBuf { sessions_path(None) }
@@ -2353,7 +2364,7 @@ impl App {
             self.save_sessions();
             return;
         }
-        if placement != Placement::Replace {
+        if placement != Placement::Replace && placement != Placement::Window {
             // Open in another session of this client: that session, as tmux's chooser goes there.
             if self.find_pane(machine_id, agent_id).is_none() {
                 if let Some((sid, _, _)) = self.find_pane_anywhere(machine_id, agent_id) { self.switch_session(sid) }
@@ -2387,7 +2398,7 @@ impl App {
         }
         let empty = self.tab().root.is_none();
         match (placement, empty) {
-            (Placement::Tab, false) => {
+            (Placement::Tab, false) | (Placement::Window, false) => {
                 let name = self.fleet.agent(machine_id, agent_id).map(|a| a.name.clone()).unwrap_or_else(|| "tab".into());
                 let mut tab = Tab::new(&name);
                 tab.root = Some(Node::new(id, self.size.0, self.size.1.saturating_sub(1)));
@@ -3627,6 +3638,9 @@ pub enum Placement {
     Auto(Option<Dir>),
     Split(Dir),
     Tab,
+    /// A window of its own in the session in front, even when it is open in another session (a
+    /// project's session gathers its harnesses: each shown in both).
+    Window,
     Replace,
     At(At),
     /// Into the empty window with this id, in whichever session it is (a new session's first).

@@ -154,6 +154,9 @@ pane counts as done and unread (`✓`) until you go to that pane.
   final message whole, what it was last asked, its plan (its to-do list,
   `✓` done, `▸` doing), the sub-agents it has running, and what it has used (`1.2M tokens · +340
   −52 · 1 PR`).
+- **A session per project**: in `C-b s` then `#` (the projects, each with its counts), `C-t` makes
+  a session named for the project with each of its harnesses in a window of its own (or goes to
+  it and adds the ones it lacks).
 - **Back after a while** (the terminal's focus gone three minutes or more), hn says what changed:
   `While you were away (12m): ✓5 finished · ?2 need you · ✗1 failed — C-b a goes through them`.
 - **`C-b g`** sends a task to the harness it fits: at once when the router is sure (as the desktop

@@ -440,7 +440,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
         PickerKind::Palette => { picker.set_rows(modal::palette_rows(app)); picker.hints = vec![("enter", "run"), ("C-b :", "type one")] }
         PickerKind::Projects => {
             picker.set_rows(modal::project_rows(app));
-            picker.hints = vec![("enter", "its harnesses"), ("M-n", "new harness there")];
+            picker.hints = vec![("enter", "its harnesses"), ("C-t", "a session of them"), ("M-n", "new harness there")];
             picker.empty = "No projects yet.".into();
         }
         PickerKind::Models => {
@@ -855,6 +855,23 @@ pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cw
         app.modal = Some(Modal::Popup { pane, x, y, width: w, height: h, border, title: title.clone(), look: look.clone() });
         app.open_stream(pane, true);
     });
+}
+
+/// A project's session: named for the project (its folder's name), each of its harnesses on that
+/// machine in a window of its own, the most urgent first — made, or gone to and given the ones it
+/// lacks.
+pub fn project_session(app: &mut App, machine: &str, root: &str) {
+    let name = crate::app::session_check_name(root.rsplit('/').next().unwrap_or(root)).unwrap_or_else(|| "project".into());
+    let keys: Vec<(String, String)> = app.fleet.ranked().into_iter().filter(|a| a.machine_id == machine && a.project_root == root && a.status != "stopped").map(|a| a.key()).collect();
+    if keys.is_empty() { return app.say(format!("{name} has no harnesses running"), theme::WARN) }
+    match app.find_session(&format!("={name}")) {
+        Some(id) => app.switch_session(id),
+        None => { let id = app.empty_session(&name); app.switch_session(id) }
+    }
+    for (m, a) in keys { if app.find_pane(&m, &a).is_none() { app.open_agent(&m, &a, Placement::Window) } }
+    // Its first window current, as a new session starts.
+    if let Some(first) = (0..app.tabs.len()).min_by_key(|w| app.win_num(*w)) { app.select_tab(first) }
+    app.save_sessions();
 }
 
 /// next-harness (C-b a): the next harness that needs you, in the order the harness list keeps —
@@ -1803,6 +1820,9 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
         PickerKind::Projects => {
             let Some(id) = id else { return keep(app, kind, picker) };
             let Some((machine, root)) = id.trim_start_matches("proj:").split_once('\t').map(|(m, r)| (m.to_string(), r.to_string())) else { return };
+            // C-t: the project's session — named for it, each of its harnesses in a window of its
+            // own (tmux's session per project), made or gone to.
+            if choice == Choice::Tab { return project_session(app, &machine, &root) }
             if choice == Choice::New {
                 if app.link(&machine).is_none() { picker.say("That machine is not connected"); return keep(app, kind, picker) }
                 load_dsh(app, machine.clone());
