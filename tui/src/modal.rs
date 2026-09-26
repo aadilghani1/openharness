@@ -197,6 +197,8 @@ fn span(text: impl Into<String>, style: Style) -> Span<'static> { Span::styled(t
 
 pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Option<&str>) -> Vec<Row> {
     let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
+    // The project in each row when the harnesses work in more than one.
+    let projects = { let mut p: Vec<&str> = app.fleet.agents.values().map(|a| a.project.as_str()).filter(|p| !p.is_empty()).collect(); p.sort(); p.dedup(); p.len() > 1 };
     let open: Vec<(String, String)> = app.panes.values().map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect();
     app.fleet.ranked().into_iter()
         .filter(|a| machine.map(|m| a.machine_id == m).unwrap_or(true))
@@ -234,12 +236,18 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
             let pr = a.pr.as_ref().map(|p| p.label()).unwrap_or_default();
             let _ = is_open;
             let narrow = ago(since);
-            let right = [pr, if many { app.fleet.machine_name(&a.machine_id) } else { String::new() }, ago(since)]
+            let right = [pr.clone(), if projects { a.project.clone() } else { String::new() }, if many { app.fleet.machine_name(&a.machine_id) } else { String::new() }, ago(since)]
                 .into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("  ");
             let live = !matches!(state, State::Paused | State::Offline);
+            // What a query finds it by besides its name: where it works, its engine, its pull
+            // request, and its state in words ('failed, 'done, 'waiting, 'working, 'idle).
+            let words = match state {
+                State::NeedsInput => "waiting needs-you", State::Failed => "failed", State::Done => "done finished", State::Working => "working",
+                State::Starting => "starting", State::Ready => "idle", State::Paused => "paused", State::Offline => "offline",
+            };
             Row::new(format!("{}:{}", a.machine_id, a.id), a.name.clone())
                 .boost(if state == State::NeedsInput { 60 } else if live { 30 } else { 0 })
-                .extra(format!("{} {} {} {} {} {}", a.project, a.branch, app.fleet.machine_name(&a.machine_id), a.engine, engine_label(&a.engine), a.dsh))
+                .extra(format!("{} {} {} {} {} {} {} {}", a.project, a.branch, app.fleet.machine_name(&a.machine_id), a.engine, engine_label(&a.engine), a.dsh, pr, words))
                 .group(group)
                 .lead(vec![span(dot, fg(color)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
                 .detail(detail)
