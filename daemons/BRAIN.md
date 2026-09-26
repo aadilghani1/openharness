@@ -206,6 +206,48 @@ restart is a baseline, not a return.
   unfillable slot falls back to a plain fact line, and one that leaves out a fact the mood must carry gets
   it appended. The cli's roster copy also carries lore, first words and family for the pair harness.
 
+## Learning (L1) as built
+
+Notice, propose, teach, revert; no borrowing yet. The full design, L2 included, is
+[LEARNING.md](LEARNING.md). Everything is in `pair/learn/`, runs in every harnessd for its own
+harnesses, and only while pairing is on.
+
+- **Notice** (`signals.ts`, no model): from the same session events the sensor reads — never replays,
+  sub-agents, terminals or the pair harness — three signals: the person's next prompt after a turn
+  corrects the agent (`no, …`, `don't …`, `stop, …`, `that's wrong`, `instead …`, `not like that`,
+  `revert …`; a prompt the daemon sent never counts); the same failing test or command on two engines or
+  harnesses in one project within 7 days; the same 3–5 command steps in three turns of one project. Each
+  carries provenance (engine, machine, agent, session, turn, the project hashed) and redacted evidence;
+  `ADAPTER_DATA_DIR/pair/learn/signals.json` keeps the week. Default: nothing.
+- **Distill** (`distill.ts`): queued, three at a time while nothing works (or after an hour), into at most
+  one lesson each — a skill (≤ 30-line body) or an AGENTS.md note (≤ 5 lines). Without `pair.jsonc`
+  `"model": true` only templates (a flaky test, a failing command, steps in order; a correction teaches
+  nothing); with it, one capped `runPairOneShot` whose expected answer is `{"lesson": null}`. Every lesson
+  passes `guard.ts`: refused for a pipe to a shell, a credential, a safety switched off, exfiltration or
+  injected instructions; emails and home paths redacted.
+- **Store** (`store.ts`): `HARNESS_LESSONS_DIR`, default `~/.harness/lessons/`, outside any repo:
+  `pending/<id>`, `skills/<name>`, `notes/<id>`, each an Agent Skills SKILL.md (or NOTE.md) with
+  `metadata.harness { learnedBy, from, approved, evidence }`. One commit per approval, `git revert` per
+  revert, no global git config, author `Harness`; without git a plain journal, and it says so.
+- **Propose** (`propose.ts`, `PairLearner`): `daemon_say { mood: 'ask', actions: [y teach, n skip, s show] }`,
+  e.g. `[y/n/s] teach your agents "run-migrations-safely"? you corrected codex.` At most one an hour,
+  never while a `need` shows, never about the focused pane (`PairBrain.isFocused`), never at `watch`,
+  only while you are here; in `daemon_state.asks` for ten minutes. The brain routes `lesson:` ids through
+  `joinProposals`; `s` answers with a `daemon_brief` whose one item is `kind: 'lesson'` with the text.
+  `DaemonAction.key` gains `s`. An approval journals `learned { daemon }` (`PairSensor.learned`, a new
+  `PairKind`) — the zoo's credit; bond xp is a TODO hook, the backend is unchanged.
+- **Teach** (`publish.ts`): skills through the Store runtime path — `prepareHarnessLaunch(…, lessons)` links
+  `<runtime>/lessons` to the store's `skills/` and indexes one line per skill in CONTEXT.md (a project's
+  skills only in its sessions; never fails a launch). Notes into a marked `<!-- harness:lessons -->`
+  block, one section per note, only in an existing plain AGENTS.md or CLAUDE.md; a new file only with
+  `--create`. Never an engine-private folder.
+- **Revert**: `harness pair lessons [list|show <id>|approve <id> [--create]|skip <id>|revert <id>]`, the
+  control interface's `lessons` verb (works with pairing off). `approve` shows the lesson and asks at a
+  terminal (none: `CONFIRM`); the pair harness's token gets `PERSON_ONLY`. `revert` is `git revert` of
+  the lesson's commit plus unpublishing its note.
+- **Limits**: plain coding sessions have no runtime, so only notes reach them until L2's export; signals
+  and lessons are per machine; the terminal check is not a secret.
+
 ## Risks
 
 - A late answer landing on the next dialog: fixed (the answer re-checks the dialog's id as it types).
@@ -218,3 +260,5 @@ restart is a baseline, not a return.
 - Reading panes with no window attached costs something: only open turns, only while pairing is on.
 - Two computers open means duplicate model spend.
 - No engine CLI for the one-shot: lines stay template-only.
+- A lesson distilled from untrusted text: guarded (refusals, redaction, injected instructions struck
+  out), only ever taught on the person's yes, and one `git revert` away.

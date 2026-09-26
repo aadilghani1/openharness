@@ -342,7 +342,8 @@ node --test daemons/tools/card.test.mjs
    you are at, plus a persistent pair harness that pauses when idle, over a Harness control interface
    (list, read, answer, send, start, pause). First jobs: triage what waits on you, and brief you when
    you come back.
-4. **Learning**: notice real signals, propose in one line, teach every agent with SKILL.md, only with
-   your yes. See the lookbook's LEARNING section.
+4. **Learning** ([LEARNING.md](LEARNING.md)): notice real signals, propose in one line, teach every
+   agent with SKILL.md, only with your yes. L1 (notice, propose, teach, revert) is built; L2 (borrow,
+   check, export) is designed. See also the lookbook's LEARNING section.
 5. **The rest of the zoo**: turn/week/marathon/night/history eggs, bond and versions (the server and
    harnessd: see "Earning eggs and growing"; the clients' side is still to do), logbooks, drops.

@@ -1855,6 +1855,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (isTerminalEngine(s.engine)) opts = { ...opts, device: false }
     if (!registry.terminalAvailable(s.agentId)) {
       pairSensor.removed(s.agentId)
+      lessonSignals.forget(s.agentId)
       backendRef?.send({ type: 'agent_deleted', payload: { agentId: s.agentId } })
       if (opts.device !== false) backendRef?.sendCommander({ type: 'agent_deleted', payload: { agentId: s.agentId } })
       return
