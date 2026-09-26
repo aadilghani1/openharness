@@ -8,6 +8,16 @@ terminal, the floating mic, Snapchat swipes (right = Find, left = New), voice fi
 the two open questions: the terminal ends at the bottom bar (the home-indicator strip stays plain),
 and the mic floats clear of the bar (centre ~96pt from the bottom).
 
+## Owner override (after Batch 1)
+No status bar. The owner rejected the tmux window list at the foot: it costs the terminal two rows
+all day and lists agents nobody needs listed. Agents are vim buffers — one on screen, the rest a
+search away (Find). In its place: the title at the top (agent name; `machine:folder` and branch;
+`N!` for agents elsewhere asking; `…`), shown at the end of the output and slid away while reading
+back. The foot is the terminal's; answer keys, the recording row and the echo are vim's last line,
+laid over the bottom rows only while they have something to say. The mic stays centred 4R above
+the home strip; prompt mode lifts the terminal 6R. Where the sections below say "the bar", read
+"the command line" for those three modes; the window list, flags and `esc` are gone.
+
 ## Units
 SF Mono 13pt; cell C ≈ 7.8pt, row R ≈ 15.6pt (line height 1.2, the terminal's). Column n at
 x = 10 + n·C; ~47 columns; nothing past the last whole cell. Gutter: col 0 = `▌` cursor, col 1 =
