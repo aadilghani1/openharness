@@ -146,7 +146,9 @@ pub enum Modal {
     /// tmux `clock-mode` (C-b t).
     Clock { pane: u64 },
     /// display-popup: a shell floating over the window; it goes when its program exits.
-    Popup { pane: u64, x: u16, y: u16, width: u16, height: u16, border: bool, title: String },
+    /// display-popup: its program's pane, where it is, its border (lines: tmux's box lines,
+    /// `none` for -B), title (a format drawn with its styles) and styles (-s, -S).
+    Popup { pane: u64, x: u16, y: u16, width: u16, height: u16, border: bool, title: String, look: PopupLook },
     /// copy-mode (C-b [): move a cursor over the pane's text and copy from it, vi-style.
     Copy { pane: u64 },
 }
@@ -194,6 +196,10 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
 
 
 fn span(text: impl Into<String>, style: Style) -> Span<'static> { Span::styled(text.into(), style) }
+
+/// A popup's look (popup.c): its box lines, its style and its border's style.
+#[derive(Clone, Debug, Default)]
+pub struct PopupLook { pub lines: String, pub style: String, pub border_style: String }
 
 pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Option<&str>) -> Vec<Row> {
     let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;

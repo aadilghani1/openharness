@@ -826,7 +826,7 @@ fn new_what(app: &mut App, machine: String) {
 /// tmux's split-window / new-window: a shell, now, on this pane's machine and in its folder
 /// (`-c` another), running `command` if one is given. Keys typed before it is up go into it.
 /// display-popup: a shell in a box over the window, running `command` then leaving (-E).
-pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cwd: Option<String>, command: Option<String>, title: String, close_on_exit: bool) {
+pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cwd: Option<String>, command: Option<String>, title: String, close_on_exit: bool, look: crate::modal::PopupLook) {
     let focused = focused_agent(app);
     let machine = focused.as_ref().map(|(m, _)| m.clone()).unwrap_or(app.fleet.local_id.clone());
     let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone());
@@ -852,7 +852,7 @@ pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cw
         let inner = if border { 2 } else { 0 };
         let (cols, rows) = crate::pane::stream_size(w.saturating_sub(inner), h.saturating_sub(inner));
         if let Some(p) = app.panes.get_mut(&pane) { p.cols = cols; p.rows = rows; p.queued.extend(typed) }
-        app.modal = Some(Modal::Popup { pane, x, y, width: w, height: h, border, title: title.clone() });
+        app.modal = Some(Modal::Popup { pane, x, y, width: w, height: h, border, title: title.clone(), look: look.clone() });
         app.open_stream(pane, true);
     });
 }
@@ -1046,12 +1046,12 @@ fn modal_key(app: &mut App, key: KeyEvent) {
             app.modal = Some(Modal::Menu(menu));
         }
         // Everything goes to the popup's program (the prefix still works, as in tmux).
-        Modal::Popup { pane, x, y, width, height, border, title } => {
+        Modal::Popup { pane, x, y, width, height, border, title, look } => {
             if let Some(bytes) = app.panes.get(&pane).and_then(|p| encode_key(&key, p.mode())) {
                 let live = app.panes.get(&pane).map(|p| p.stream.is_some()).unwrap_or(false);
                 if live { app.send_input(pane, &bytes) } else if let Some(p) = app.panes.get_mut(&pane) { p.queued.push(bytes) }
             }
-            app.modal = Some(Modal::Popup { pane, x, y, width, height, border, title });
+            app.modal = Some(Modal::Popup { pane, x, y, width, height, border, title, look });
         }
         Modal::Copy { pane } => { app.modal = Some(Modal::Copy { pane }); mode_key(app, pane, &keys::of(&key)); }
         Modal::Prompt(p) => prompt_key(app, key, p),

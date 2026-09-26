@@ -25,6 +25,19 @@ use crate::picker::Picker;
 use crate::theme::{self, bold, fg, engine_mark, state_mark};
 use crate::input::home_agents;
 
+/// screen_write_box_border_set: a box's corners, sides and its rule's joins, for tmux's box
+/// lines (single, double, heavy, simple, rounded, padded, none).
+fn box_set(lines: &str) -> (&'static str, &'static str, &'static str, &'static str, &'static str, &'static str, &'static str, &'static str) {
+    match lines {
+        "double" => ("╔", "╗", "╚", "╝", "═", "║", "╠", "╣"),
+        "heavy" => ("┏", "┓", "┗", "┛", "━", "┃", "┣", "┫"),
+        "simple" => ("+", "+", "+", "+", "-", "|", "+", "+"),
+        "rounded" => ("╭", "╮", "╰", "╯", "─", "│", "├", "┤"),
+        "padded" | "none" => (" ", " ", " ", " ", " ", " ", " ", " "),
+        _ => ("┌", "┐", "└", "┘", "─", "│", "├", "┤"),
+    }
+}
+
 pub fn draw(frame: &mut Frame, app: &mut App) {
     app.renumber();
     let (usstyle, links) = crate::term_out::outer_features(&app.options.array("terminal-features"));
@@ -62,24 +75,34 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if let Some(Modal::Picker { kind, picker }) = &app.modal {
         if let (_, Some(pbox), _) = fzf_split(fzf_frame(body, picker).inner, picker) { preview(buf, app, kind, picker, &pbox) }
     }
-    let popup = match &app.modal { Some(Modal::Popup { pane, x, y, width, height, border, title }) => Some((*pane, *x, *y, *width, *height, *border, title.clone())), _ => None };
-    if let Some((pane, px, py, width, height, border_on, title)) = popup {
-        // tmux's popup: a single-line box where display-popup placed it, the program inside.
+    let popup = match &app.modal { Some(Modal::Popup { pane, x, y, width, height, border, title, look }) => Some((*pane, *x, *y, *width, *height, *border, title.clone(), look.clone())), _ => None };
+    if let Some((pane, px, py, width, height, border_on, title, look)) = popup {
+        // popup.c: its box (popup-border-lines, -b) in popup-border-style (-S) where display-popup
+        // placed it, the title a format drawn over the top border from its third cell
+        // (screen_write_box), the program inside in popup-style (-s).
         let size = *buf.area();
         let (w, h) = (width.min(size.width), height.min(size.height));
         let area = Rect::new(px.min(size.width - w), py.min(size.height - h), w, h);
-        for y in area.y..area.y + h { for x in area.x..area.x + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
+        let style = crate::draw::style_over(if look.style.is_empty() { "default" } else { &look.style }, Style::default());
+        let border = crate::draw::style_over(if look.border_style.is_empty() { "default" } else { &look.border_style }, style);
+        for y in area.y..area.y + h { for x in area.x..area.x + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(style); } } }
+        let colours = (style.fg.filter(|c| *c != Color::Reset), style.bg.filter(|c| *c != Color::Reset));
         if !border_on {
-            if let Some(p) = app.panes.get_mut(&pane) { cursor = pane_body(buf, p, area, true, (None, None)); }
+            if let Some(p) = app.panes.get_mut(&pane) { cursor = pane_body(buf, p, area, true, colours); }
         } else {
-        let border = Style::default();
-        for x in area.x..area.x + w { buf.set_string(x, area.y, "─", border); buf.set_string(x, area.y + h - 1, "─", border) }
-        for y in area.y..area.y + h { buf.set_string(area.x, y, "│", border); buf.set_string(area.x + w - 1, y, "│", border) }
-        buf.set_string(area.x, area.y, "┌", border); buf.set_string(area.x + w - 1, area.y, "┐", border);
-        buf.set_string(area.x, area.y + h - 1, "└", border); buf.set_string(area.x + w - 1, area.y + h - 1, "┘", border);
-        if !title.is_empty() { buf.set_stringn(area.x + 2, area.y, format!(" {title} "), w.saturating_sub(4) as usize, border); }
-        let inner = Rect::new(area.x + 1, area.y + 1, w.saturating_sub(2), h.saturating_sub(2));
-        if let Some(p) = app.panes.get_mut(&pane) { cursor = pane_body(buf, p, inner, true, (None, None)); }
+            let (tl, tr, bl, br, hz, vt, _, _) = box_set(&look.lines);
+            let put = |buf: &mut Buffer, x: u16, y: u16, s: &str| { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(s); c.set_style(border); } };
+            let (x1, y1) = (area.x + w - 1, area.y + h - 1);
+            for x in area.x + 1..x1 { put(buf, x, area.y, hz); put(buf, x, y1, hz) }
+            for y in area.y + 1..y1 { put(buf, area.x, y, vt); put(buf, x1, y, vt) }
+            put(buf, area.x, area.y, tl); put(buf, x1, area.y, tr); put(buf, area.x, y1, bl); put(buf, x1, y1, br);
+            if !title.is_empty() && w > 4 {
+                for (i, cell) in crate::draw::format_draw_over(&title, border, w - 4).into_iter().enumerate() {
+                    if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((area.x + 2 + i as u16, area.y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
+                }
+            }
+            let inner = Rect::new(area.x + 1, area.y + 1, w.saturating_sub(2), h.saturating_sub(2));
+            if let Some(p) = app.panes.get_mut(&pane) { cursor = pane_body(buf, p, inner, true, colours); }
         }
     }
     if app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
@@ -104,15 +127,7 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
     let selected = crate::draw::style_over(&opt("menu-selected-style", "bg=yellow,fg=black"), base);
     let border = crate::draw::style_over(&opt("menu-border-style", "default"), style);
     let lines = opt("menu-border-lines", "single");
-    // screen_write_box_border_set: corners, sides, and the rule's joins.
-    let (tl, tr, bl, br, hz, vt, lj, rj) = match lines.as_str() {
-        "double" => ("╔", "╗", "╚", "╝", "═", "║", "╠", "╣"),
-        "heavy" => ("┏", "┓", "┗", "┛", "━", "┃", "┣", "┫"),
-        "simple" => ("+", "+", "+", "+", "-", "|", "+", "+"),
-        "rounded" => ("╭", "╮", "╰", "╯", "─", "│", "├", "┤"),
-        "padded" | "none" => (" ", " ", " ", " ", " ", " ", " ", " "),
-        _ => ("┌", "┐", "└", "┘", "─", "│", "├", "┤"),
-    };
+    let (tl, tr, bl, br, hz, vt, lj, rj) = box_set(&lines);
     let (w, h) = (m.width + 4, m.items.len() as u16 + 2);
     let (x0, y0) = (m.x, m.y);
     let put = |buf: &mut Buffer, x: u16, y: u16, s: &str, st: Style| { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(s); c.set_style(st); } };

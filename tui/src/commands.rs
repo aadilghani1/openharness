@@ -2320,7 +2320,16 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 match words[i].as_str() { "-w" | "-h" | "-d" | "-T" | "-x" | "-y" | "-t" | "-c" | "-b" | "-s" | "-S" | "-e" => i += 1, w if w.starts_with('-') && w.len() > 1 => {}, w => command = Some(w.to_string()) }
                 i += 1;
             }
-            input::popup(app, (x, y, w, h), !flag(words, "-B"), cwd, command, title, flag(words, "-E"));
+            // popup.c: -b the box's lines (else popup-border-lines), -s its style and -S its border's
+            // (else popup-style and popup-border-style).
+            let tab_id = app.tab().id.clone();
+            let option = |app: &App, name: &str| app.options.get(name, &tab_id, None).unwrap_or_default();
+            let look = crate::modal::PopupLook {
+                lines: opt(words, "-b").unwrap_or_else(|| option(app, "popup-border-lines")),
+                style: opt(words, "-s").unwrap_or_else(|| option(app, "popup-style")),
+                border_style: opt(words, "-S").unwrap_or_else(|| option(app, "popup-border-style")),
+            };
+            input::popup(app, (x, y, w, h), !flag(words, "-B") && look.lines != "none", cwd, command, title, flag(words, "-E"), look);
         }
         "tim" => { let l = crate::tim::line(app); app.say(l, theme::WARN) }
         // run-shell runs as a job (shell_job); nothing to run gets here.
