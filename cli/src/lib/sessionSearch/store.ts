@@ -16,7 +16,7 @@ import { chmodSync, existsSync, rmSync } from 'node:fs'
 import { builtinSqlite } from '../sqliteRead.js'
 import type { IndexedTurn } from './turns.js'
 
-const SCHEMA_VERSION = '2'
+const SCHEMA_VERSION = '3'
 
 /** The row that holds a session's name, title and folder: searchable beside its turns. */
 export const HEADER_TURN = -1
@@ -87,6 +87,19 @@ const RECENCY_HALF_LIFE_DAYS = 10
  */
 const OPENING_TURNS = 2
 const OPENING_BOOST = 1.2
+/** The start of what was asked, for a hit found by time alone. */
+function clipAsk(ask: string): string {
+  return ask.length > 160 ? ask.slice(0, 160).trimEnd() + '…' : ask
+}
+
+export interface SearchOptions {
+  limit?: number
+  /** Only sessions worked on in this window (epoch ms, inclusive). */
+  from?: number
+  to?: number
+  now?: number
+}
+
 /** Rows considered per query before grouping by session: bounds the work of a very common word. */
 const CANDIDATE_ROWS = 3_000
 /** Past this many matching turns a query is ranked by recency first (see search()). */
@@ -277,6 +290,7 @@ export class SessionSearchStore {
         tools TEXT NOT NULL DEFAULT ''
       );
       CREATE UNIQUE INDEX turns_by_session ON turns (session_id, turn);
+      CREATE INDEX turns_by_time ON turns (at);
       CREATE VIRTUAL TABLE turns_fts USING fts5 (
         name, ask, answer, tools,
         content = 'turns', content_rowid = 'id',
@@ -373,12 +387,22 @@ export class SessionSearchStore {
     return { sessions, turns }
   }
 
-  /** The best sessions for `query`, best first. `now` is for tests. */
-  search(query: string, options: { limit?: number; now?: number } = {}): SearchHit[] {
+  /**
+   * The best sessions for `query`, best first. With `from`/`to` (epoch ms), only sessions worked on
+   * in that window — any turn then, not necessarily the matching one: "the dial one from last week"
+   * is a session about the dial that was open last week. With a window and no words, those
+   * sessions by their latest turn in it. `now` is for tests.
+   */
+  search(query: string, options: SearchOptions = {}): SearchHit[] {
     const terms = queryTerms(query)
-    if (!terms.length) return []
     const limit = Math.max(1, Math.min(options.limit ?? 30, 100))
     const now = options.now ?? Date.now()
+    const window = options.from !== undefined && options.to !== undefined && options.from <= options.to
+      ? { from: options.from, to: options.to }
+      : null
+    if (!terms.length) return window ? this.workedOn(window, limit, now) : []
+    const inWindow = window ? this.sessionsWorkedOn(window) : null
+    if (inWindow && !inWindow.size) return []
 
     // 1. Sessions with one turn holding every word.
     const best = new Map<string, { id: number; turn: number; at: number | null; rank: number; together: boolean }>()
@@ -387,12 +411,18 @@ export class SessionSearchStore {
     // of all turns barely tell one turn from another, and sorting every match by BM25 is the slowest
     // thing a search can do — those take the most recent matches and let recency decide.
     const allWords = terms.join(' AND ')
-    const common = this.statement('SELECT count(*) AS n FROM turns_fts WHERE turns_fts MATCH ?').get(allWords)!.n as number > COMMON_MATCHES
-    const rows = this.statement(`
-      SELECT f.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at, f.rank AS rank
-      FROM (SELECT rowid AS id, bm25(turns_fts, ${WEIGHTS.join(', ')}) AS rank FROM turns_fts
-            WHERE turns_fts MATCH ? ORDER BY ${common ? 'rowid DESC' : 'rank'} LIMIT ${CANDIDATE_ROWS}) f
-      JOIN turns t ON t.id = f.id`).all(allWords)
+    const common = !inWindow && this.statement('SELECT count(*) AS n FROM turns_fts WHERE turns_fts MATCH ?').get(allWords)!.n as number > COMMON_MATCHES
+    const rows = inWindow
+      ? this.statement(`
+        SELECT t.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at, bm25(turns_fts, ${WEIGHTS.join(', ')}) AS rank
+        FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid
+        WHERE turns_fts MATCH ? AND t.session_id IN (SELECT value FROM json_each(?))
+        ORDER BY rank LIMIT ${CANDIDATE_ROWS}`).all(allWords, JSON.stringify([...inWindow]))
+      : this.statement(`
+        SELECT f.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at, f.rank AS rank
+        FROM (SELECT rowid AS id, bm25(turns_fts, ${WEIGHTS.join(', ')}) AS rank FROM turns_fts
+              WHERE turns_fts MATCH ? ORDER BY ${common ? 'rowid DESC' : 'rank'} LIMIT ${CANDIDATE_ROWS}) f
+        JOIN turns t ON t.id = f.id`).all(allWords)
     for (const row of rows) {
       const sid = row.sid as string
       const turn = row.turn as number
@@ -410,7 +440,7 @@ export class SessionSearchStore {
       for (let index = 1; index < perTerm.length; index++) {
         if (perTerm[index].size < perTerm[rarestIndex].size) rarestIndex = index
       }
-      const spread = new Set([...perTerm[rarestIndex]].filter((sid) => !best.has(sid) && perTerm.every((set) => set.has(sid))))
+      const spread = new Set([...perTerm[rarestIndex]].filter((sid) => !best.has(sid) && perTerm.every((set) => set.has(sid)) && (!inWindow || inWindow.has(sid))))
       // Each such session's best turn for any of the words, in one ranked pass: its rank, discounted
       // for being spread, and its snippet — from what was said rather than the name, which the row
       // already shows, unless the name is the only place.
@@ -499,6 +529,39 @@ export class SessionSearchStore {
         score: Math.round(score * 1000) / 1000,
       }
     })
+  }
+
+  /** Sessions with a turn in the window; a session whose turns carry no time, by its last activity. */
+  private sessionsWorkedOn(window: { from: number; to: number }): Set<string> {
+    return new Set(this.statement(`
+      SELECT DISTINCT session_id AS sid FROM turns WHERE turn >= 0 AND at BETWEEN ? AND ?
+      UNION SELECT session_id AS sid FROM sessions WHERE last_at BETWEEN ? AND ?
+        AND NOT EXISTS (SELECT 1 FROM turns u WHERE u.session_id = sessions.session_id AND u.turn >= 0 AND u.at IS NOT NULL)`)
+      .all(window.from, window.to, window.from, window.to).map((row) => row.sid as string))
+  }
+
+  /** No words, only a window: the sessions worked on then, by their latest turn in it. */
+  private workedOn(window: { from: number; to: number }, limit: number, now: number): SearchHit[] {
+    const sessions = this.sessionMeta()
+    const latest = this.statement(`
+      SELECT t.session_id AS sid, t.id AS id, t.turn AS turn, t.at AS at, t.ask AS ask
+      FROM turns t WHERE t.turn >= 0 AND t.at BETWEEN ? AND ?
+      AND t.at = (SELECT max(u.at) FROM turns u WHERE u.session_id = t.session_id AND u.turn >= 0 AND u.at BETWEEN ? AND ?)
+      ORDER BY t.at DESC LIMIT ?`).all(window.from, window.to, window.from, window.to, limit)
+    const hits: SearchHit[] = []
+    for (const row of latest) {
+      const session = sessions.get(row.sid as string)
+      if (!session) continue
+      const at = row.at as number
+      hits.push({
+        sessionId: row.sid as string, agentId: session.agentId, engine: session.engine,
+        turn: row.turn as number, at, lastAt: session.lastAt, field: 'ask',
+        snippet: clipAsk(String(row.ask ?? '')),
+        together: true,
+        score: Math.round(Math.pow(0.5, Math.max(0, now - at) / 86_400_000 / RECENCY_HALF_LIFE_DAYS) * 1000) / 1000,
+      })
+    }
+    return hits
   }
 
   close(): void {

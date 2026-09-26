@@ -156,6 +156,40 @@ describe('SessionSearchStore', () => {
     expect(store.search('phone stand', { now: NOW }).map((hit) => hit.sessionId)).toEqual(['started', 'hub'])
   })
 
+  it('narrows to sessions worked on in a window: any turn then, not only the matching one', () => {
+    const store = open()
+    const lastWeek = { from: NOW - 10 * DAY, to: NOW - 4 * DAY }
+    store.writeSession(session('then', 'A', NOW - 5 * DAY), 0, [turn(0, 'fix the dial scroll', '', '', NOW - 6 * DAY)])
+    store.writeSession(session('now', 'B', NOW - 1 * DAY), 0, [turn(0, 'dial firmware', '', '', NOW - 1 * DAY)])
+    // Mentioned the dial three weeks ago, and worked on again last week: still the dial one then.
+    store.writeSession(session('long', 'C', NOW - 5 * DAY), 0, [
+      turn(0, 'the dial keeps rebooting', '', '', NOW - 21 * DAY),
+      turn(1, 'ship it', '', '', NOW - 5 * DAY),
+    ])
+    // A database-backed session: no turn times, only when it was last worked on.
+    store.writeSession(session('untimed', 'D', NOW - 7 * DAY), 0, [turn(0, 'dial menu')])
+    expect(store.search('dial', { now: NOW, ...lastWeek }).map((hit) => hit.sessionId).sort()).toEqual(['long', 'then', 'untimed'])
+    expect(store.search('dial', { now: NOW }).map((hit) => hit.sessionId)).toContain('now')
+    expect(store.search('dial', { now: NOW, from: NOW - 2 * DAY, to: NOW })).toMatchObject([{ sessionId: 'now' }])
+    expect(store.search('keyboard', { now: NOW, ...lastWeek })).toEqual([])
+  })
+
+  it('lists what was worked on in a window when there are no words, latest first', () => {
+    const store = open()
+    store.writeSession(session('a', 'A', NOW - 2 * DAY), 0, [
+      turn(0, 'first thing', '', '', NOW - 3 * DAY),
+      turn(1, 'what I asked last in the window', '', '', NOW - 2 * DAY),
+    ])
+    store.writeSession(session('b', 'B', NOW - 1 * DAY), 0, [turn(0, 'yesterday work', '', '', NOW - 1 * DAY)])
+    store.writeSession(session('c', 'C', NOW - 9 * DAY), 0, [turn(0, 'long ago', '', '', NOW - 9 * DAY)])
+    const hits = store.search('', { now: NOW, from: NOW - 4 * DAY, to: NOW })
+    expect(hits.map((hit) => [hit.sessionId, hit.snippet, hit.field])).toEqual([
+      ['b', 'yesterday work', 'ask'],
+      ['a', 'what I asked last in the window', 'ask'],
+    ])
+    expect(store.search('', { now: NOW })).toEqual([])
+  })
+
   it('replaces turns from a point on, keeps earlier ones, and counts them', () => {
     const store = open()
     store.writeSession(session('s', 'S', NOW), 0, [turn(0, 'alpha'), turn(1, 'beta draft')])

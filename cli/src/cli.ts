@@ -2835,7 +2835,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return null
     }
   })()
-  backend.sessionSearchProvider = sessionSearch ? (query, limit) => sessionSearch.search(query, limit) : null
+  backend.sessionSearchProvider = sessionSearch ? (query, options) => sessionSearch.search(query, options) : null
 
   const runtimeController = new RuntimeProfileController({
     manager: runtimeProfiles,

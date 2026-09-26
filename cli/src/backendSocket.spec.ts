@@ -492,8 +492,8 @@ describe('BackendSocket outbound queue', () => {
   it('answers session_search from the index, sealed to the requester', async () => {
     const socket = new BackendSocket('token')
     const asked: Array<[string, number | undefined]> = []
-    socket.sessionSearchProvider = (query, limit) => {
-      asked.push([query, limit])
+    socket.sessionSearchProvider = (query, options) => {
+      asked.push([query, options.limit])
       return { hits: [], indexed: 3, pending: 0, tookMs: 1 }
     }
     socket.connect()

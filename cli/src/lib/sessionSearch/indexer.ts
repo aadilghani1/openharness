@@ -142,9 +142,9 @@ export class SessionSearchIndex {
     void this.drain()
   }
 
-  search(query: string, limit?: number): SessionSearchResult {
+  search(query: string, options: { limit?: number; from?: number; to?: number } = {}): SessionSearchResult {
     const started = performance.now()
-    const hits = this.opts.store.search(query, { limit })
+    const hits = this.opts.store.search(query, options)
     const indexed = this.opts.store.counts().sessions
     return { hits, indexed, pending: this.queue.size, tookMs: Math.round((performance.now() - started) * 10) / 10 }
   }

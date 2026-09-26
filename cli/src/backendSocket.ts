@@ -621,7 +621,7 @@ export class BackendSocket {
   recentAsksProvider: ((agentId: string, n: number) => string[]) | null = null
   /** Answers `session_search` from this machine's transcript index (lib/sessionSearch/). Null when
    *  this Node has no `node:sqlite`. */
-  sessionSearchProvider: ((query: string, limit?: number) => SessionSearchResult) | null = null
+  sessionSearchProvider: ((query: string, options: { limit?: number; from?: number; to?: number }) => SessionSearchResult) | null = null
   /** Runtime Model/Effort integration, wired by cli.ts for registered tmux sessions. */
   runtimeModelsProvider: ((sessionId?: string) => Promise<RuntimeModelOption[]>) | null = null
   /** Answers `usage_read` — this machine's own agent-account usage (lib/accountUsage.ts). A field
@@ -2742,8 +2742,10 @@ export class BackendSocket {
         case 'session_search': {
           if (!this.sessionSearchProvider) { reply(type, requestId, { error: 'SEARCH_UNAVAILABLE' }); return }
           const query = typeof payload.query === 'string' ? payload.query.slice(0, 500) : ''
-          const limit = typeof payload.limit === 'number' ? payload.limit : undefined
-          reply(type, requestId, { ...this.sessionSearchProvider(query, limit) })
+          const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined
+          // `from`/`to`: only sessions worked on in that window (epoch ms) — "the dial one from last
+          // week". The client reads the time words, so every machine searches the same window.
+          reply(type, requestId, { ...this.sessionSearchProvider(query, { limit: number(payload.limit), from: number(payload.from), to: number(payload.to) }) })
           return
         }
 
