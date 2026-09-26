@@ -116,7 +116,8 @@ the query and sends every machine the same window in this computer's time zone:
 
 - today, yesterday, this or last week or month;
 - N days or weeks ago, a few days ago (loosely: a day, or half a week, either side);
-- a weekday: "on monday", "last friday".
+- a weekday with "on" or "last": "on monday", "last friday". A bare weekday stays a word, so a
+  harness named "Friday deploy" is still found by name.
 
 Only sessions worked on in that window are searched: any turn then, not only the matching one. So
 "the dial one from last week" is a session about the dial that was open last week. The remaining
@@ -168,15 +169,17 @@ On 184 real harnesses:
 | Index | p50 | p95 | Max | Size |
 |---|---|---|---|---|
 | Real, 1.7k turns | 1.7 ms | 3.4 ms | 6 ms | 11 MB |
-| Synthetic, 102k turns (60× real) | 18 ms | — | 140 ms | 667 MB |
-| Same, with a time window | 30 ms typical | — | 185 ms | |
+| Synthetic, 102k turns (60× real) | 18 ms | — | 72 ms | 667 MB |
+| Same, with a time window | 15–70 ms | — | 200 ms | |
 
 Getting there:
 
 - Rank inside FTS5 before joining.
-- For a word in more than 30k turns, take every match unranked and let recency decide instead of
-  sorting by BM25. It barely discriminates there. Not the highest rowids: a backfill writes the
-  newest sessions first. The slowest queries left are these, about 140 ms at 100k turns.
+- For a word in more than 30k turns, skip the BM25 sort, which barely discriminates there. Take the
+  3,000 newest matching turns by turn time and let recency decide. Not the highest rowids: a
+  backfill writes the newest sessions first.
+- The slowest queries left are a time with no words over a wide window, and a very common word
+  inside a window: up to 200 ms at 100k turns.
 - A window's sessions are read once and kept while the window stays the same, keystroke to
   keystroke.
 - Build snippets from the stored turn: FTS5's `snippet()` re-read a common word's whole posting
