@@ -32,20 +32,20 @@ import 'agent_model_sheet.dart';
 import 'agents_page.dart' show openNewAgent;
 import 'delete_agent.dart';
 import 'held_height.dart';
-import 'phone_navigation.dart' show phoneRoute;
 import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'settings_page.dart';
 import 'status_pill.dart';
-import 'floating_glass.dart';
 import 'terminal_action_column.dart';
 import 'terminal_chrome_scroll.dart';
 import 'terminal_header.dart';
-import 'terminal_header_action.dart';
 import 'terminal_input_dock.dart';
 import 'terminal_search.dart';
+import 'tty.dart';
+import 'phone_navigation.dart';
+import 'agent_index.dart';
+import 'tmux_status_line.dart';
 import 'voice_input_controller.dart';
-import 'voice_mic_button.dart';
 
 /// One agent's terminal, filling the phone. The header says whose it is and whether it is live;
 /// everything below it is the same [TerminalPanel] a desktop tile draws, minus that tile's own
@@ -752,7 +752,7 @@ class _TerminalPageState extends State<TerminalPage>
 
   @override
   void dispose() {
-    _behind.dispose();
+    _scrollback.dispose();
     widget.notifier.removeListener(_onNotifier);
     _questionWatcher?.removeListener(_onQuestionPane);
     _questionWatcher?.dispose();
@@ -784,10 +784,45 @@ class _TerminalPageState extends State<TerminalPage>
     });
   }
 
-  /// Whether the reader is scrolled up and output has arrived below — see [_LatestChip].
-  final _behind = ValueNotifier<bool>(false);
+  /// The status line's windows: the agents used most recently, the one on screen among them —
+  /// three at most, tmux's window list for the two or three agents worked with on the go.
+  List<TmuxWindow> _statusWindows() {
+    final entries = visibleAgents(agentIndex(widget.notifier))
+      ..sort(compareMonitorOrder);
+    bool here(AgentEntry entry) =>
+        entry.machineId == widget.machineId && entry.agent.id == widget.agentId;
+    final shown = entries.take(3).toList();
+    final current = entries.where(here).firstOrNull;
+    if (current != null && !shown.contains(current)) {
+      shown
+        ..removeLast()
+        ..add(current);
+    }
+    var lastMarked = false;
+    return [
+      for (final entry in shown)
+        TmuxWindow(
+          label: _windowName(entry.agent.displayName),
+          current: here(entry),
+          last: !here(entry) && !lastMarked && (lastMarked = true),
+          onTap: () => openAgent(
+            context,
+            widget.notifier,
+            entry.machineId,
+            entry.agent.id,
+          ),
+        ),
+    ];
+  }
 
-  /// Bumped by the chip to take the terminal back to the end.
+  /// A window name the way tmux shortens one: the first dozen characters.
+  static String _windowName(String name) =>
+      name.length <= 12 ? name : name.substring(0, 12);
+
+  /// Where the reader is while scrolled up in the history — see [_CopyModePosition].
+  final _scrollback = ValueNotifier<({int above, int total})?>(null);
+
+  /// Bumped by the position's tap to take the terminal back to the end.
   int _jumpToEnd = 0;
 
   /// How far left a drag has gone, for the swipe that opens a new agent.
@@ -1625,9 +1660,9 @@ class _TerminalPageState extends State<TerminalPage>
                                                           ),
                                                         ),
                                                   showHeader: false,
-                                                  // The "Latest" chip under the
-                                                  // reader — see [_LatestChip].
-                                                  behind: _behind,
+                                                  // tmux's copy-mode position while
+                                                  // reading back — see [_CopyModePosition].
+                                                  scrollback: _scrollback,
                                                   jumpToEndRequest: _jumpToEnd,
                                                   // No composer, and so no grip above it: the
                                                   // page hands the pane its full height and the
@@ -1751,27 +1786,25 @@ class _TerminalPageState extends State<TerminalPage>
                         ],
                       ),
                     ),
-                    // "Latest": up in the history while output arrives below, one
-                    // tap back to the end. Over the orb, so the two never meet.
+                    // tmux's copy-mode position, top right, while reading back
+                    // through the history: `[42/1380]`. One tap is back at the end.
                     Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom:
-                          TerminalActionColumn.orbBottom +
-                          VoiceMicButton.extent +
-                          16,
-                      child: ValueListenableBuilder<bool>(
-                        valueListenable: _behind,
-                        builder: (context, behind, _) => behind && !_ownsInput
-                            ? Center(
-                                child: _LatestChip(
-                                  onTap: () {
-                                    _behind.value = false;
-                                    setState(() => _jumpToEnd++);
-                                  },
-                                ),
-                              )
-                            : const SizedBox.shrink(),
+                      // Under the status line, which stays up while reading back.
+                      top: TmuxStatusLine.height,
+                      right: 4,
+                      child: ValueListenableBuilder<({int above, int total})?>(
+                        valueListenable: _scrollback,
+                        builder: (context, position, _) =>
+                            position == null || _ownsInput
+                            ? const SizedBox.shrink()
+                            : _CopyModePosition(
+                                above: position.above,
+                                total: position.total,
+                                onTap: () {
+                                  _scrollback.value = null;
+                                  setState(() => _jumpToEnd++);
+                                },
+                              ),
                       ),
                     ),
                     // The mic: Siri's orb, low at the foot and centred, floating
@@ -1829,75 +1862,35 @@ class _TerminalPageState extends State<TerminalPage>
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              TerminalHeader(
-                                agent: agent,
-                                status: headerStatus,
-                                machineName: machine?.machine.displayName,
+                              // tmux's status line: `[M2] 0:hn* 1:api-` — see
+                              // [TmuxStatusLine]. The way out of read-only stays a
+                              // word on it ("take control", "reconnect"), unless the
+                              // band below already says the same.
+                              TmuxStatusLine(
+                                session:
+                                    machine?.machine.displayName ?? 'harness',
+                                windows: _statusWindows(),
                                 onFind: _openSearch,
-                                trailing: [
-                                  // Read-only is a state to get OUT of, so its way
-                                  // out is a labelled button in the header rather
-                                  // than a line in the actions sheet: the sheet is
-                                  // where you go having decided to do something,
-                                  // and this is the thing telling you that typing
-                                  // will go nowhere until you do.
-                                  // ⚠️ **Not while the band is up.** The band below
-                                  // carries the same words and the same button, a
-                                  // finger's width under this one, and two "Take
-                                  // control"s stacked read as two different offers.
-                                  // The band is the better of the two — it says WHY
-                                  // typing stopped, and by whom — so this one gives
-                                  // way to it.
-                                  //
-                                  // Kept for the states the band does not cover:
-                                  // "Reconnect", for a stream that died with nobody
-                                  // else involved. See [_ControlBanner]. Gone while
-                                  // that stream is already coming back — see
-                                  // `reconnecting` above.
-                                  if (reclaim != null &&
-                                      !blocked &&
-                                      _reclaiming == null)
-                                    _ReclaimButton(
-                                      action: reclaim,
-                                      // The same call the band's button makes — see
-                                      // [_takeControl].
-                                      onPressed: () =>
-                                          unawaited(_takeControl()),
-                                    ),
-                                  // ⚠️ **No tabs mark here.** The account's tabs
-                                  // are the first thing the floating Search button
-                                  // opens, above the thumb — see
-                                  // [TerminalSearchOverlay] — and a mark up here
-                                  // for the same panel was a second door to it.
-                                  // Null while the agent is not loaded: there is
-                                  // nothing to act on yet, and a menu of actions
-                                  // that all fail is worse than no menu.
-                                  if (agent != null)
-                                    TerminalHeaderAction(
-                                      // Stood up, not laid flat: three dots in a
-                                      // column is the narrower mark AND the one a
-                                      // phone means by "more actions", so it reads
-                                      // as a menu rather than as a truncation.
-                                      icon: LucideIcons.ellipsisVertical300,
-                                      size: 21,
-                                      tooltip: 'Harness actions',
-                                      // Last in the row, so its padding stops at
-                                      // the header's own right inset.
-                                      last: true,
-                                      onPressed: () => _showActions(
+                                state: headerStatus.tone == PhoneTone.good
+                                    ? null
+                                    : headerStatus.label.toLowerCase(),
+                                action:
+                                    reclaim != null &&
+                                        !blocked &&
+                                        _reclaiming == null
+                                    ? (
+                                        label: reclaim.label.toLowerCase(),
+                                        onTap: () => unawaited(_takeControl()),
+                                      )
+                                    : null,
+                                onActions: agent == null
+                                    ? null
+                                    : () => _showActions(
                                         machineName:
                                             machine?.machine.displayName ?? '',
                                         agent: agent,
                                         status: headerStatus,
                                       ),
-                                    ),
-                                ],
-                              ),
-                              // The hairline, carrying a sweep while the header
-                              // reads as a wait — Attaching, Resyncing,
-                              // Reconnecting. See [TerminalHeaderRule].
-                              TerminalHeaderRule(
-                                busy: headerStatus.tone == PhoneTone.busy,
                               ),
                               // ⚠️ Inside the header's own slide, not under it: the two are one bar as far
                               // as a scroll is concerned, and a band left behind while the header left
@@ -2184,41 +2177,6 @@ class _TerminalPageState extends State<TerminalPage>
   }
 }
 
-/// The header's way back into a session this device is not driving.
-///
-/// Re-selecting the agent is what reclaims it — the same call the desktop tile's
-/// status chip makes, so one gesture means one thing on both.
-class _ReclaimButton extends StatelessWidget {
-  const _ReclaimButton({required this.action, required this.onPressed});
-
-  final PhoneSummary action;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final color = phoneToneColor(action.tone);
-    return TextButton.icon(
-      onPressed: onPressed,
-      icon: Icon(
-        action.tone == PhoneTone.attention
-            ? LucideIcons.lock300
-            : LucideIcons.refreshCw300,
-        size: 15,
-      ),
-      label: Text(
-        action.label,
-        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-      ),
-      style: TextButton.styleFrom(
-        foregroundColor: color,
-        minimumSize: Size.zero,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      ),
-    );
-  }
-}
 
 /// What the terminal shows when the agent it opened on is not there any more.
 ///
@@ -3083,53 +3041,37 @@ String _clipTitle(String name) {
 /// for. Fixing that belongs in the shared button, where every screen's header
 /// would get it, not in a wrapper one page defines.
 
-/// "↓ Latest": the reader is up in the history and the agent has written more below. One tap is
-/// back at the end, following the stream again. Nothing while the reader is already there — output
-/// never moves a screen somebody is reading.
-class _LatestChip extends StatelessWidget {
-  const _LatestChip({required this.onTap});
+/// tmux's copy-mode position — `[42/1380]` on tmux's yellow, top right — while the reader is up in
+/// the history: 42 lines above the end, of 1380. The view holds still as output arrives, and the
+/// first number counts it. One tap is back at the end, following the stream.
+class _CopyModePosition extends StatelessWidget {
+  const _CopyModePosition({
+    required this.above,
+    required this.total,
+    required this.onTap,
+  });
 
+  final int above;
+  final int total;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    AppTheme.watch(context);
+    final tty = Tty.of(context);
     return Semantics(
       button: true,
-      label: 'Jump to the latest output',
+      label: '$above lines above the end. Back to the latest output',
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
         child: Padding(
-          // A full touch target around a small pill.
+          // A full touch target around a one-line tag.
           padding: const EdgeInsets.all(8),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: floatingButtonFill,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: floatingButtonRim),
-            ),
+          child: ColoredBox(
+            color: tty.yellow,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    LucideIcons.arrowDown,
-                    size: 14,
-                    color: AppPalette.textPrimary,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Latest',
-                    style: TextStyle(
-                      color: AppPalette.textPrimary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: TtyText('[$above/$total]', color: tty.theme.black),
             ),
           ),
         ),

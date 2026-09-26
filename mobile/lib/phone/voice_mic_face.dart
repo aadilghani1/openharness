@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'floating_glass.dart';
+import 'tty.dart';
 import 'voice_mic_mode.dart';
 
 /// What the mic says it will do when tapped.
@@ -69,15 +70,19 @@ enum _Fill {
 
 _Fill _fillFor(VoiceMicFace face, {required bool dead}) {
   if (dead) return _Fill.glass;
+  // ⚠️ **Flat at rest; filled only while it records.** Over a terminal the mic is a quiet outline
+  // in the terminal's own colours — a lit circle sitting on the agent's prompt all day was the
+  // loudest thing on the screen. It fills (the terminal's red, a recording light) while a take is
+  // live, and that is the one moment it should be loud.
   return switch (face) {
     VoiceMicFace.cancelling => _Fill.warn,
-    VoiceMicFace.busy || VoiceMicFace.off => _Fill.glass,
+    VoiceMicFace.listening || VoiceMicFace.starting => _Fill.accent,
+    VoiceMicFace.busy ||
+    VoiceMicFace.off ||
     VoiceMicFace.talk ||
-    VoiceMicFace.starting ||
-    VoiceMicFace.listening ||
     VoiceMicFace.sending ||
     VoiceMicFace.sent ||
-    VoiceMicFace.retry => _Fill.accent,
+    VoiceMicFace.retry => _Fill.glass,
   };
 }
 
@@ -126,7 +131,8 @@ class VoiceMicCore extends StatelessWidget {
   Widget build(BuildContext context) {
     final motion = !MediaQuery.disableAnimationsOf(context);
     final fill = _fillFor(face, dead: dead);
-    final ink = _inkFor(fill);
+    final tty = Tty.of(context);
+    final ink = _inkFor(fill, tty);
     final glyph = _glyphFor(face);
     return FloatingGlass(
       child: AnimatedContainer(
@@ -134,7 +140,7 @@ class VoiceMicCore extends StatelessWidget {
         curve: Curves.easeOutCubic,
         width: diameter,
         height: diameter,
-        decoration: _decoration(fill),
+        decoration: _decoration(fill, tty),
         child: Stack(
           alignment: Alignment.center,
           clipBehavior: Clip.none,
@@ -143,9 +149,7 @@ class VoiceMicCore extends StatelessWidget {
               duration: const Duration(milliseconds: 200),
               opacity: _spins(face) ? 1 : 0,
               child: _BusyArc(
-                color: fill == _Fill.accent
-                    ? Colors.white.withValues(alpha: 0.9)
-                    : AppPalette.accentOnSurface,
+                color: fill == _Fill.accent ? tty.theme.brightWhite : tty.text,
                 spin: motion && _spins(face),
               ),
             ),
@@ -176,17 +180,10 @@ class VoiceMicCore extends StatelessWidget {
     );
   }
 
-  Color _inkFor(_Fill fill) => switch (fill) {
-    _Fill.accent => Colors.white,
-    // White on the dark theme's bright amber is 2:1; dark ink there, white on
-    // the light theme's deep one.
-    _Fill.warn => AppTheme.pick(Colors.white, const Color(0xFF241800)),
-    _Fill.glass =>
-      face == VoiceMicFace.off
-          ? AppPalette.textFaint
-          : face == VoiceMicFace.busy
-          ? AppPalette.accentOnSurface
-          : AppPalette.textPrimary,
+  Color _inkFor(_Fill fill, Tty tty) => switch (fill) {
+    _Fill.accent => tty.theme.brightWhite,
+    _Fill.warn => tty.theme.black,
+    _Fill.glass => face == VoiceMicFace.off ? tty.dim : tty.text,
   };
 
   /// ⚠️ **Two different shadows for two different jobs, and the frosted one
@@ -194,37 +191,19 @@ class VoiceMicCore extends StatelessWidget {
   /// casts a plain drop shadow instead: it floats over streaming output rather
   /// than over a surface, and without one its edge disappears against every
   /// dark line it happens to sit on.
-  BoxDecoration _decoration(_Fill fill) {
+  /// Flat, the terminal's way: no gradient, no glow, no shadow — see [_fillFor].
+  BoxDecoration _decoration(_Fill fill, Tty tty) {
     if (fill == _Fill.glass) {
       return BoxDecoration(
         shape: BoxShape.circle,
-        color: floatingButtonFill,
-        border: Border.all(color: floatingButtonRim),
-        // ⚠️ Kept light: a box shadow paints under the WHOLE circle, and the
-        // fill is not opaque — a heavy one showed through as a dark disc.
-        boxShadow: floatingButtonShadow,
+        // The terminal's own ground, near-opaque, so the glyph reads over any line of output.
+        color: tty.ground.withValues(alpha: 0.94),
+        border: Border.all(color: tty.dim, width: 1.5),
       );
     }
-    final tint = fill == _Fill.warn ? AppPalette.warn : AppPalette.accent;
     return BoxDecoration(
       shape: BoxShape.circle,
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color.lerp(tint, Colors.white, 0.18)!, tint],
-      ),
-      border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
-      boxShadow: [
-        BoxShadow(color: tint.withValues(alpha: 0.4), blurRadius: 12),
-        // The lift, under the glow. The glow does not separate the circle from
-        // the text behind it: it is the same brightness as the accent the
-        // terminal itself uses.
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.35),
-          blurRadius: 10,
-          offset: const Offset(0, 3),
-        ),
-      ],
+      color: fill == _Fill.warn ? tty.yellow : tty.red,
     );
   }
 

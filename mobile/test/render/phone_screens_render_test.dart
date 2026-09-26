@@ -1,0 +1,292 @@
+import 'dart:io';
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/auth/auth_session.dart';
+import 'package:harness_mobile/core/config.dart';
+import 'package:harness_mobile/core/models.dart';
+import 'package:harness_mobile/phone/new_agent_page.dart';
+import 'package:harness_mobile/phone/terminal_page.dart';
+import 'package:harness_mobile/phone/voice_input_controller.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
+import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/terminal/terminal_session.dart';
+import 'package:harness_mobile/ws/ws_conn.dart';
+import 'package:xterm/xterm.dart';
+
+import '../voice_fakes.dart';
+
+/// Renders the phone's three screens — Focus, Find, New — at iPhone 14 size in
+/// the real system fonts, to PNGs a reviewer (or an agent without a phone) can
+/// look at.
+///
+/// Skipped unless PHONE_RENDER_DIR names a directory to write into:
+///
+///     PHONE_RENDER_DIR=/tmp/renders flutter test test/render/phone_screens_render_test.dart
+///
+/// macOS only: it loads SF Mono and SF Pro from /Library/Fonts.
+final _outDir = Platform.environment['PHONE_RENDER_DIR'];
+
+/// Claude Code, mid-turn, the way its TUI draws on a phone-width terminal.
+const _claudeOutput = [
+  '\x1b[1m⏺\x1b[0m I\'ll look at how Find ranks agents first.\r\n',
+  '\r\n',
+  '\x1b[32m⏺\x1b[0m \x1b[1mRead\x1b[0m(mobile/lib/phone/phone_search_rank.dart)\r\n',
+  '  ⎿  Read \x1b[1m262\x1b[0m lines\r\n',
+  '\r\n',
+  '\x1b[1m⏺\x1b[0m The empty-query branch sorts by this phone\'s\r\n',
+  '  visits first, then by activity. The desktop does\r\n',
+  '  the opposite, so the two lists disagree.\r\n',
+  '\r\n',
+  '\x1b[32m⏺\x1b[0m \x1b[1mUpdate\x1b[0m(mobile/lib/phone/phone_search_rank.dart)\r\n',
+  '  ⎿  Updated with \x1b[32m18\x1b[0m additions and \x1b[31m7\x1b[0m removals\r\n',
+  '     \x1b[2m183\x1b[0m \x1b[31m-    if (needle.isEmpty) {\x1b[0m\r\n',
+  '     \x1b[2m183\x1b[0m \x1b[32m+    if (byActivity || needle.isEmpty) {\x1b[0m\r\n',
+  '\r\n',
+  '\x1b[32m⏺\x1b[0m \x1b[1mBash\x1b[0m(flutter test test/phone_search_test.dart)\r\n',
+  '  ⎿  00:01 +42: All tests passed!\r\n',
+  '\r\n',
+  '\x1b[1m⏺\x1b[0m Find now orders by last use, the same order as\r\n',
+  '  the desktop\'s ⌘P. Typing filters without\r\n',
+  '  reordering, and return opens the first row.\r\n',
+  '\r\n',
+  '\x1b[38;5;208m✻\x1b[0m Committing… \x1b[2m(12s · ↓ 1.8k tokens)\x1b[0m\r\n',
+  '\r\n',
+  '\x1b[2m╭──────────────────────────────────────────╮\x1b[0m\r\n',
+  '\x1b[2m│\x1b[0m > \x1b[2m                                       │\x1b[0m\r\n',
+  '\x1b[2m╰──────────────────────────────────────────╯\x1b[0m\r\n',
+  '  \x1b[35m⏵⏵ auto mode on\x1b[0m \x1b[2m(shift+tab to cycle)\x1b[0m\r\n',
+];
+
+class _Conn extends WsConn {
+  _Conn()
+    : super(
+        wsBaseUrl: 'ws://fixture.invalid',
+        autonomousEnv: 'test',
+        machineId: 'm',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+      );
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async => {};
+}
+
+Future<void> _loadFont(String family, List<String> files) async {
+  final loader = FontLoader(family);
+  for (final file in files) {
+    final bytes = await File('/Library/Fonts/$file').readAsBytes();
+    loader.addFont(Future.value(ByteData.view(bytes.buffer)));
+  }
+  await loader.load();
+}
+
+Future<void> _loadFonts() async {
+  const mono = [
+    'SF-Mono-Regular.otf',
+    'SF-Mono-Medium.otf',
+    'SF-Mono-Semibold.otf',
+    'SF-Mono-Bold.otf',
+  ];
+  const sans = [
+    'SF-Pro-Text-Regular.otf',
+    'SF-Pro-Text-Medium.otf',
+    'SF-Pro-Text-Semibold.otf',
+    'SF-Pro-Text-Bold.otf',
+  ];
+  for (final family in ['.AppleSystemUIFontMonospaced', 'SF Mono']) {
+    await _loadFont(family, mono);
+  }
+  for (final family in ['.AppleSystemUIFont', 'SF Pro Text']) {
+    await _loadFont(family, sans);
+  }
+}
+
+Agent _agent(
+  String id,
+  String name, {
+  required String cwd,
+  required int minutesAgo,
+}) => Agent(
+  id: id,
+  name: name,
+  engine: 'claude',
+  sessionId: 'session-$id',
+  status: 'active',
+  project: AgentProject(name: cwd.split('/').last, cwd: cwd, branch: 'main'),
+  updatedAt: DateTime.now().subtract(Duration(minutes: minutesAgo)),
+  terminalAvailable: true,
+);
+
+void main() {
+  final skip = _outDir == null || !Platform.isMacOS;
+
+  late AppNotifier notifier;
+  late VoiceInputController voice;
+  late ValueNotifier<String> language;
+
+  setUp(() async {
+    if (skip) return;
+    notifier = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      connectionForTest: (_) => _Conn(),
+    );
+    const m2 = Machine(
+      machineId: 'm',
+      authMode: MachineAuthMode.remote,
+      name: 'M2',
+    );
+    const mini = Machine(
+      machineId: 'mini',
+      authMode: MachineAuthMode.remote,
+      name: 'mini',
+    );
+    notifier.machines = [m2, mini];
+    notifier.machineStates['m'] = MachineState(m2)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = [
+        _agent(
+          'a',
+          'hn',
+          cwd: '/Users/me/code/autonomous-harness',
+          minutesAgo: 3,
+        ),
+        _agent('b', 'docs-rewrite', cwd: '/Users/me/code/site', minutesAgo: 120),
+      ];
+    notifier.machineStates['mini'] = MachineState(mini)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = [
+        _agent('c', 'api-fix', cwd: '/Users/me/code/api', minutesAgo: 40),
+      ];
+    final session = TerminalSession(
+      machineId: 'm',
+      agentId: 'a',
+      agentName: 'hn',
+      engineId: 'claude',
+      send: (type, payload) async => true,
+      sendBinary: (_) async => true,
+    );
+    session.status = TerminalSessionStatus.controlling;
+    session.streamId = 's';
+    // A screen to show — kept from "last time", which is what a render needs: the live path waits
+    // for a keyframe this fixture has no machine to send.
+    final screen = Terminal(maxLines: 1000)..resize(44, 40);
+    for (var line = 0; line < 60; line++) {
+      screen.write('earlier output line $line\r\n');
+    }
+    for (final chunk in _claudeOutput) {
+      screen.write(chunk);
+    }
+    session.seedScreen(screen);
+    notifier.adoptSessionForTest(session);
+    await notifier.projectHistory.select('m', '/Users/me/code/autonomous-harness');
+    language = ValueNotifier('en');
+    voice = VoiceInputController(
+      transcriber: FakeTranscriber().call,
+      recorder: FakeVoiceRecorder(),
+      language: language,
+    );
+  });
+
+  tearDown(() {
+    if (skip) return;
+    voice.dispose();
+    language.dispose();
+    notifier.dispose();
+  });
+
+  Future<void> shoot(WidgetTester tester, GlobalKey key, String name) async {
+    await tester.runAsync(() async {
+      final boundary =
+          key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 3);
+      final png = await image.toByteData(format: ui.ImageByteFormat.png);
+      await File(
+        '$_outDir/$name.png',
+      ).writeAsBytes(png!.buffer.asUint8List());
+    });
+  }
+
+  Future<GlobalKey> pumpScreen(WidgetTester tester, Widget home) async {
+    await tester.runAsync(_loadFonts);
+    tester.view.physicalSize = const Size(1170, 2532);
+    tester.view.devicePixelRatio = 3;
+    tester.view.padding = const FakeViewPadding(top: 47 * 3, bottom: 34 * 3);
+    tester.view.viewPadding = const FakeViewPadding(
+      top: 47 * 3,
+      bottom: 34 * 3,
+    );
+    addTearDown(tester.view.reset);
+    final key = GlobalKey();
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: key,
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: home,
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 200));
+    return key;
+  }
+
+  TerminalPage focus() => TerminalPage(
+    notifier: notifier,
+    machineId: 'm',
+    agentId: 'a',
+    voice: voice,
+  );
+
+  testWidgets('focus', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, focus());
+    await shoot(tester, key, '1-focus');
+  });
+
+  testWidgets('focus, scrolled up while output arrives', skip: skip, (
+    tester,
+  ) async {
+    final key = await pumpScreen(tester, focus());
+    await tester.drag(find.byType(TerminalView), const Offset(0, 400));
+    await tester.pump(const Duration(milliseconds: 200));
+    final session = notifier.panes.first.session!;
+    session.outputTicks.value++;
+    session.terminal.write('more output\r\n');
+    await tester.pump(const Duration(milliseconds: 200));
+    await shoot(tester, key, '2-focus-scrolled');
+  });
+
+  testWidgets('find', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, focus());
+    await tester.tap(find.byKey(const ValueKey('terminal-find')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await shoot(tester, key, '3-find');
+  });
+
+  testWidgets('new', skip: skip, (tester) async {
+    final key = await pumpScreen(
+      tester,
+      NewAgentPage(notifier: notifier, machineId: 'm'),
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+    await shoot(tester, key, '4-new');
+  });
+}

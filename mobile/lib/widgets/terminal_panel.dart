@@ -93,11 +93,12 @@ class TerminalPanel extends StatefulWidget {
   final bool showHeader;
   final int focusRequest;
 
-  /// Set true while the reader is scrolled up in the history AND output has arrived below since —
-  /// the phone's "Latest" chip. Null for a host that draws no such chip.
-  final ValueNotifier<bool>? behind;
+  /// Where the reader is while scrolled up in the history — tmux's copy-mode position,
+  /// `[above/total]`: lines between the view and the end, and lines of history in all — or null at
+  /// the end, following the stream. Null for a host that draws no position.
+  final ValueNotifier<({int above, int total})?>? scrollback;
 
-  /// Bumped by the host to go back to the end and follow the stream again — the chip's tap.
+  /// Bumped by the host to go back to the end and follow the stream again — the position's tap.
   final int jumpToEndRequest;
 
   /// Takes over the tap that would raise the software keyboard. Null leaves it
@@ -144,7 +145,7 @@ class TerminalPanel extends StatefulWidget {
     this.compactHeader = false,
     this.showHeader = true,
     this.focusRequest = 0,
-    this.behind,
+    this.scrollback,
     this.jumpToEndRequest = 0,
     this.onInputTap,
     this.composerVisible = false,
@@ -307,10 +308,10 @@ class _TerminalPanelState extends State<TerminalPanel>
       widget.session.addListener(_onSessionChanged);
       widget.session.outputTicks.addListener(_onOutput);
       // A new agent starts at its end. Cleared after the frame: this is build.
-      final behind = widget.behind;
-      if (behind != null) {
+      final scrollback = widget.scrollback;
+      if (scrollback != null) {
         WidgetsBinding.instance.addPostFrameCallback(
-          (_) => behind.value = false,
+          (_) => scrollback.value = null,
         );
       }
       _composerFocusPending = false;
@@ -1231,22 +1232,57 @@ class _TerminalPanelState extends State<TerminalPanel>
     if (!_scrollController.hasClients) return;
     final position = _scrollController.position;
     _followTail = position.maxScrollExtent - position.pixels < 1;
-    if (_followTail) widget.behind?.value = false;
+    _publishScrollback(position);
   }
 
-  /// Output arrived. Below a reader scrolled up in the history, that is news — see [behind].
-  void _onOutput() {
-    if (!_followTail && widget.visible && _find == null) {
-      widget.behind?.value = true;
+  /// Tells the host where the reader is — see [TerminalPanel.scrollback].
+  void _publishScrollback(ScrollPosition position) {
+    final scrollback = widget.scrollback;
+    if (scrollback == null) return;
+    if (_followTail || _find != null) {
+      scrollback.value = null;
+      return;
     }
+    final line = _laidOutTerminalView()?.renderTerminal.lineHeight ?? 0;
+    if (line <= 0) return;
+    final terminal = widget.session.terminal;
+    final next = (
+      above: ((position.maxScrollExtent - position.pixels) / line).round(),
+      total: math.max(0, terminal.buffer.lines.length - terminal.viewHeight),
+    );
+    if (scrollback.value != next) scrollback.value = next;
   }
 
-  /// Back to the end, following the stream again — the host's "Latest".
+  bool _scrollbackPending = false;
+
+  /// Output arrived. Below a reader scrolled up in the history the view holds still, and the
+  /// position counts the new lines — once per frame, after the layout that placed them.
+  void _onOutput() {
+    if (_followTail || !widget.visible || widget.scrollback == null) return;
+    if (_scrollbackPending) return;
+    _scrollbackPending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollbackPending = false;
+      if (!mounted || !_scrollController.hasClients) return;
+      _publishScrollback(_scrollController.position);
+    });
+  }
+
+  /// Back to the end, following the stream again — the host's position tap.
   ///
-  /// Runs from `didUpdateWidget`, inside a build, so [behind] is left to the host that asked — it
-  /// clears it with the tap — and to the scroll that follows.
+  /// Runs from `didUpdateWidget`, inside a build, so [scrollback] is left to the host that asked —
+  /// it clears it with the tap — and to the scroll that follows.
   void _jumpToEnd() {
     _cancelDialInertia();
+    // A fling still coasting up through the history would carry on past the tap and take the view
+    // straight back off the end: stopped where it is, first.
+    //
+    // Jumped to the laid-out end, so the scroll it reports reads as "at the end"; the layout the
+    // render asks for below then settles it against any output since.
+    if (_scrollController.hasClients) {
+      final position = _scrollController.position;
+      position.jumpTo(position.maxScrollExtent);
+    }
     _followTail = true;
     _laidOutTerminalView()?.scrollToBottom();
   }

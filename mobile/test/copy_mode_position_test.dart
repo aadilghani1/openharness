@@ -11,7 +11,8 @@ import 'package:xterm/xterm.dart';
 import 'voice_fakes.dart';
 
 /// Reading back through the history while the agent keeps writing: output
-/// never moves the screen being read, and "Latest" is one tap back to the end.
+/// never moves the screen being read, tmux's copy-mode position says where the
+/// reader is, and one tap on it is back at the end.
 void main() {
   late AppNotifier notifier;
   late TerminalSession session;
@@ -78,33 +79,39 @@ void main() {
     session.terminal.write(text);
   }
 
-  testWidgets('output while at the end shows no chip', (tester) async {
+  Finder position() => find.textContaining(RegExp(r'^\[\d+/\d+\]$'));
+
+  testWidgets('at the end there is no position', (tester) async {
     await pumpPage(tester);
     output('more output\r\n');
     await tester.pump();
-    expect(find.text('Latest'), findsNothing);
+    expect(position(), findsNothing);
   });
 
-  testWidgets('scrolled up, new output brings Latest; a tap goes back', (
+  testWidgets('scrolled up, the position shows and counts; a tap goes back', (
     tester,
   ) async {
     await pumpPage(tester);
     await tester.drag(find.byType(TerminalView), const Offset(0, 300));
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('Latest'), findsNothing);
+    expect(position(), findsOneWidget);
+    final before = (tester.widget(position()) as Text).data!;
 
     output('newer output\r\n');
     await tester.pump();
-    expect(find.text('Latest'), findsOneWidget);
+    await tester.pump();
+    final after = (tester.widget(position()) as Text).data!;
+    expect(after, isNot(before), reason: 'new lines below count up');
 
-    await tester.tap(find.text('Latest'));
+    await tester.tap(position());
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('Latest'), findsNothing);
+    expect(position(), findsNothing);
 
     // Following again: more output keeps it gone.
     output('newest output\r\n');
     await tester.pump();
-    expect(find.text('Latest'), findsNothing);
+    await tester.pump();
+    expect(position(), findsNothing);
   });
 }
