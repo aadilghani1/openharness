@@ -29,7 +29,7 @@ pub fn text(app: &App, fmt: &str, window: Option<usize>) -> String {
 
 /// tmux's format_expand ([time]: format_expand_time) for a window and a pane.
 pub fn expand(app: &App, fmt: &str, window: usize, pane: Option<u64>, time: bool) -> String {
-    let mut es = Es { app, window, pane, time, nojobs: false, depth: 0, now: now_secs() };
+    let mut es = Es { app, window, pane, time, nojobs: false, depth: 0, now: now_secs(), session: None };
     expand1(&mut es, fmt)
 }
 
@@ -53,7 +53,7 @@ pub fn every(app: &App, window: usize, pane: Option<u64>) -> Vec<String> {
 
 /// A format as a config's %if reads it: no #() jobs run (tmux's FORMAT_NOJOBS).
 pub fn expand_nojobs(app: &App, fmt: &str) -> String {
-    let mut es = Es { app, window: app.active, pane: app.focused(), time: true, nojobs: true, depth: 0, now: now_secs() };
+    let mut es = Es { app, window: app.active, pane: app.focused(), time: true, nojobs: true, depth: 0, now: now_secs(), session: None };
     expand1(&mut es, fmt)
 }
 
@@ -70,11 +70,13 @@ struct Es<'a> {
     nojobs: bool,
     depth: u32,
     now: i64,
+    /// In a #{S:} loop: the session (another than the one in front) whose session_* these are.
+    session: Option<u32>,
 }
 
 impl<'a> Es<'a> {
     fn at(&self, window: usize, pane: Option<u64>) -> Es<'a> {
-        Es { app: self.app, window, pane, time: self.time, nojobs: self.nojobs, depth: self.depth, now: self.now }
+        Es { app: self.app, window, pane, time: self.time, nojobs: self.nojobs, depth: self.depth, now: self.now, session: self.session }
     }
 }
 
@@ -349,8 +351,19 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
     } else if f.colour {
         let n = expand1(es, copy);
         colour_hex(&n).unwrap_or_default()
-    } else if f.sessions || f.clients {
-        // One session, one client (this one).
+    } else if f.sessions {
+        // format_loop_sessions: each session by name, the one in front with the second choice.
+        let (all, active) = match choose(es, copy, false) { Some((a, b)) => (a, Some(b)), None => (copy.to_string(), None) };
+        let mut v = String::new();
+        for (id, _) in es.app.session_list() {
+            let use_ = if id == es.app.session_id { active.as_deref().unwrap_or(&all) } else { &all };
+            let mut next = es.at(es.app.active, None);
+            next.session = (id != es.app.session_id).then_some(id);
+            v.push_str(&expand1(&mut next, use_));
+        }
+        v
+    } else if f.clients {
+        // One client (this one).
         let mut next = es.at(es.app.active, None);
         let v = expand1(&mut next, copy);
         v
@@ -447,7 +460,8 @@ fn truthy(v: &str) -> bool { !v.is_empty() && v != "0" }
 fn find(es: &mut Es, key: &str, f: &Flags, time_format: Option<&str>) -> Option<String> {
     let app = es.app;
     let window_id = app.tabs.get(es.window).map(|t| t.id.clone()).unwrap_or_default();
-    let mut found = app.options.format_value(key, &window_id, es.pane);
+    let mut found = es.session.and_then(|id| app.stash_value(id, key));
+    if found.is_none() { found = app.options.format_value(key, &window_id, es.pane) }
     let mut t: i64 = 0;
     if found.is_none() {
         match table(app, key, es.window, es.pane) {
@@ -924,7 +938,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // format_cb_pane_in_mode: how many modes the pane is in.
         "pane_in_mode" => pane.map(|p| p.modes.len().to_string()).unwrap_or_else(|| "0".into()),
         "session_windows" => app.tabs.len().to_string(),
-        "session_attached" => "1".into(),
+        // The session in front is this client's; one a command reaches for a moment is not.
+        "session_attached" => if app.swap_back.is_some() { "0".into() } else { "1".into() },
         "client_width" => app.size.0.to_string(),
         "client_height" => app.size.1.to_string(),
         "window_width" => app.body().width.to_string(),
@@ -1038,16 +1053,19 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_agent_state" => tab.and_then(|_| app.window_state(window)).map(state_word).unwrap_or("").into(),
         "window_agent_icon" => tab.and_then(|_| app.window_state(window)).map(|s| crate::theme::state_mark(s, app.tick).0).unwrap_or("").into(),
         "pane_far" => pane.map(|p| p.machine_id != app.fleet.local_id).unwrap_or(false).then_some("1").unwrap_or("0").into(),
-        "session_id" => "$0".into(),
+        "session_id" => format!("${}", app.session_id),
         "session_path" => std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default(),
-        "session_group" | "client_last_session" | "pane_dead_status" | "pane_start_command" => String::new(),
+        // The session the client was in before this one.
+        "client_last_session" => app.last_session.and_then(|l| app.session_list().into_iter().find(|(i, _)| *i == l)).map(|(_, n)| n).unwrap_or_default(),
+        "session_group" | "pane_dead_status" | "pane_start_command" => String::new(),
         "pane_input_off" => pane.map(|p| p.input_off).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "window_activity_flag" => flags(app, window).contains('#').then_some("1").unwrap_or("0").into(),
         "window_silence_flag" => flags(app, window).contains('~').then_some("1").unwrap_or("0").into(),
         "session_grouped" | "session_many_attached" | "window_linked" | "window_bigger" | "window_offset_x" | "window_offset_y"
         | "client_readonly" => "0".into(),
         "pane_pipe" => pane.map(|p| app.pipes.contains_key(&p.id)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
-        "server_sessions" | "session_attached_list" | "client_utf8" => "1".into(),
+        "server_sessions" => app.session_list().len().to_string(),
+        "session_attached_list" | "client_utf8" => "1".into(),
         "window_start_flag" => (window == 0).then_some("1").unwrap_or("0").into(),
         "window_end_flag" => (window.checked_add(1) == Some(app.tabs.len())).then_some("1").unwrap_or("0").into(),
         "client_termname" => std::env::var("TERM").unwrap_or_default(),
@@ -1111,7 +1129,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_cell_width" | "window_cell_height" | "client_cell_width" | "client_cell_height" => "0".into(),
         "cursor_x" | "cursor_y" => pane.map(|p| { let c = p.term.grid().cursor.point; if name == "cursor_x" { c.column.0.to_string() } else { c.line.0.to_string() } }).unwrap_or_default(),
         // Times: when this client started, and when a window last had something happen.
-        "session_created" | "session_last_attached" | "client_created" | "start_time" => return Some(Val::Time(started(app))),
+        "session_created" => return Some(Val::Time(app.session_created)),
+        "session_last_attached" | "client_created" | "start_time" => return Some(Val::Time(started(app))),
         "session_activity" | "client_activity" => return Some(Val::Time(now_secs())),
         "window_activity" => {
             // The last output seen here, or the harness's own last activity when that is later

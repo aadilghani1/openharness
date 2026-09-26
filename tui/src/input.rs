@@ -824,7 +824,27 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
     app.modal = None;
     app.starting_shell = Some(command.map(|c| vec![format!("{c}\r").into_bytes()]).unwrap_or_default());
+    // The session it was asked for in (a command's `-t work:` puts another in front for a moment):
+    // where it goes when it comes, in front again for as long as that takes.
+    let session = app.session_id;
     app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(60)).await }, move |app, reply| {
+        if session != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|s| s.id == session) {
+            let back = app.session_id;
+            app.swap_back = Some(back);
+            app.swap_session(session);
+            shell_made(app, machine, placement, reply);
+            app.swap_back = None;
+            app.swap_session(back);
+            app.fit_panes();
+            app.save_sessions();
+            return;
+        }
+        shell_made(app, machine, placement, reply);
+    });
+}
+
+/// A shell the machine made (agent_create's reply): into its place.
+fn shell_made(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>) {
         let typed = app.starting_shell.take().unwrap_or_default();
         match reply {
             Ok(reply) => {
@@ -860,7 +880,6 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
                 app.say(format!("Could not start a shell: {e}"), theme::DANGER)
             }
         }
-    });
 }
 
 fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>) {

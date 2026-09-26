@@ -28,6 +28,13 @@ callback), starts the daemon, then opens — as `tmux new -A` does: your tabs if
 else window 0 is a shell on this computer, in the folder you ran `hn` in. `C-b s` finds every
 harness. Closing the last window ends `hn` (`[exited]`, as tmux says it); `C-b d` detaches.
 
+**Sessions** are tmux's: `hn new -A -s main` (in a shell's rc, or a terminal profile) starts or
+attaches, `hn attach -t work` goes back to one, and a plain `hn` returns to where you were.
+From inside, `new -d -s api -c ~/src/api`, `switch-client -t api`, `C-b (` `C-b )` `C-b L`,
+`C-b $`, `kill-session`, and any command's `-t work:2` reach every session, so
+tmux-sessionizer and tmuxinator-style scripts work. The first session is the desk's (named for
+this computer unless you name it); the others are this computer's, kept between clients.
+
 ## Keys
 
 tmux's. The prefix is `C-b`; `C-b s` then `C-v`, `C-x` or `C-t` puts any harness beside, below or in a new window; every default tmux binding does what it does in tmux, with a window

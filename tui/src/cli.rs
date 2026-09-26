@@ -78,10 +78,35 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
         "tim" => { println!("{}", crate::tim::cli_line()); Some(0) }
         // attach / a: the client itself, as `tmux attach` is.
         "attach" | "attach-session" | "a" | "at" => None,
+        // new-session: a client here, as `tmux new` from a shell is — unless it is -d (a session
+        // for the running client to keep) or comes from inside a client (one of its jobs), which
+        // asks that client.
+        c if crate::cmd::find(c).map(|e| e.name == "new-session").unwrap_or(false) => {
+            let detached = crate::cmd::find(c).ok().and_then(|e| crate::cmd::parse(e, args).ok()).map(|a| a.has('d') > 0).unwrap_or(false);
+            // $HN_SOCKET: what a client sets for what it runs, as tmux's $TMUX.
+            let inside = std::env::var("HN_SOCKET").map(|v| !v.is_empty()).unwrap_or(false);
+            if detached || inside { Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await) } else { None }
+        }
         // Any tmux command: run on the newest running client, its output printed here.
         // Any tmux command (by name, alias, or the start of one), or hn's: run by the client.
         c if crate::commands::is_command_name(c) || crate::cmd::find(c).is_ok() => Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await),
         c if !c.starts_with('-') => { eprintln!("{}", crate::cmd::find(c).err().unwrap_or_default()); Some(1) }
+        _ => None,
+    }
+}
+
+/// What `hn new …` or `hn attach …` asks of the client it starts: the session (-s, or attach's
+/// -t), made if it is new-session (-A: attached to if it is there), its first window's name (-n),
+/// folder (-c) and command.
+pub fn start_session(args: &[String]) -> Option<crate::app::StartSession> {
+    let entry = crate::cmd::find(args.first()?).ok()?;
+    let a = crate::cmd::parse(entry, args).ok()?;
+    match entry.name {
+        "new-session" => Some(crate::app::StartSession {
+            name: a.get('s').map(str::to_string), create: true, attach_existing: a.has('A') > 0, window: a.get('n').map(str::to_string),
+            cwd: a.get('c').map(str::to_string), command: (!a.values.is_empty()).then(|| a.values.join(" ")),
+        }),
+        "attach-session" => Some(crate::app::StartSession { name: a.get('t').map(|t| t.split(':').next().unwrap_or(t).to_string()).filter(|t| !t.is_empty()), cwd: a.get('c').map(str::to_string), ..Default::default() }),
         _ => None,
     }
 }

@@ -46,6 +46,38 @@ pub const SILENCE: u8 = 4;
 #[derive(Clone, Debug, PartialEq)]
 pub struct EnvVar { pub value: Option<String>, pub hidden: bool }
 
+/// A session not on screen (tmux's sessions): its windows and what a session keeps of them,
+/// swapped in whole when the client switches to it — or for a moment, while a command that names
+/// it (`-t work:2`) runs. The session on screen keeps the same in App's own fields.
+pub struct Stash {
+    pub id: u32,
+    /// Its name; None for the desk's session while it is named for this computer.
+    pub alias: Option<String>,
+    /// The desk's session: its windows are the desk's tabs, shared with every window on the account.
+    pub desk: bool,
+    pub tabs: Vec<Tab>,
+    pub active: usize,
+    pub lastw: Vec<String>,
+    pub nums: HashMap<String, usize>,
+    pub created: i64,
+    pub options: std::collections::BTreeMap<String, String>,
+    pub env: std::collections::BTreeMap<String, EnvVar>,
+}
+
+/// What `hn new` or `hn attach` asked for when it started this client.
+#[derive(Clone, Debug, Default)]
+pub struct StartSession { pub name: Option<String>, pub create: bool, pub attach_existing: bool, pub window: Option<String>, pub cwd: Option<String>, pub command: Option<String> }
+
+/// Seconds since the epoch.
+pub fn epoch_secs() -> i64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0) }
+
+/// session_check_name: a session's name as tmux keeps it — `:` and `.` (which targets read) as
+/// `_`; none for an empty one.
+pub fn session_check_name(name: &str) -> Option<String> {
+    if name.is_empty() { return None }
+    Some(name.chars().map(|c| if c == ':' || c == '.' { '_' } else { c }).collect())
+}
+
 /// Marks a printed text's last line as having no newline of its own (show-buffer's data).
 pub const BARE: char = '\u{2}';
 
@@ -266,6 +298,23 @@ pub struct App {
     pub print_new: Option<String>,
     /// rename-session: what this session is called here (else the machine's name).
     pub session_alias: Option<String>,
+    /// The other sessions (tmux's), each kept whole until the client switches to it.
+    pub sessions: Vec<Stash>,
+    /// This session's id (`$N`), whether its windows are the desk's, and when it was made.
+    pub session_id: u32,
+    pub session_desk: bool,
+    pub session_created: i64,
+    /// The session the client was in before this one (switch-client -l, C-b L).
+    pub last_session: Option<u32>,
+    pub next_session_id: u32,
+    /// While a command runs in another session (`-t work:2`): the session to come back to.
+    pub swap_back: Option<u32>,
+    /// The session asked for at start (`hn new -A -s main`, `hn attach -t work`).
+    pub start_session: Option<StartSession>,
+    /// Why the start asked for could not be done (`can't find session: work`).
+    pub start_failed: Option<String>,
+    /// kill-server: no session is kept for the next client.
+    pub forget_sessions: bool,
     /// select-pane -m: the marked pane (join-pane and swap-pane take it as their source).
     pub marked: Option<u64>,
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
@@ -372,6 +421,16 @@ impl App {
             capture: None,
             print_new: None,
             session_alias: None,
+            sessions: Vec::new(),
+            session_id: 0,
+            session_desk: true,
+            session_created: epoch_secs(),
+            last_session: None,
+            next_session_id: 1,
+            swap_back: None,
+            start_session: None,
+            start_failed: None,
+            forget_sessions: false,
             marked: None,
             return_to: None,
             held_reply: None,
@@ -1198,7 +1257,284 @@ impl App {
     /// tmux's #S: this computer's name, as the status line's `[…]` shows it.
     pub fn session_name(&self) -> String {
         if let Some(a) = &self.session_alias { return a.clone() }
+        self.machine_session_name()
+    }
+
+    /// The desk's session, named as this computer is.
+    fn machine_session_name(&self) -> String {
         self.fleet.machine(&self.fleet.local_id).map(|m| m.name.clone()).unwrap_or_else(hostname)
+    }
+
+    fn stash_name(&self, s: &Stash) -> String { s.alias.clone().unwrap_or_else(|| self.machine_session_name()) }
+
+    // ── sessions ────────────────────────────────────────────────────────────────
+
+    fn stash_current(&mut self) -> Stash {
+        Stash {
+            id: self.session_id, alias: self.session_alias.take(), desk: self.session_desk,
+            tabs: std::mem::take(&mut self.tabs), active: self.active, lastw: std::mem::take(&mut self.lastw), nums: std::mem::take(&mut self.nums),
+            created: self.session_created, options: std::mem::take(&mut self.options.session), env: std::mem::take(&mut self.session_env),
+        }
+    }
+
+    fn unstash(&mut self, s: Stash) {
+        self.session_id = s.id;
+        self.session_alias = s.alias;
+        self.session_desk = s.desk;
+        self.tabs = s.tabs;
+        if self.tabs.is_empty() { self.tabs.push(Tab::new("home")) }
+        self.active = s.active.min(self.tabs.len() - 1);
+        self.lastw = s.lastw;
+        self.nums = s.nums;
+        self.session_created = s.created;
+        self.options.session = s.options;
+        self.session_env = s.env;
+    }
+
+    /// Session [id] in front, as it is, with nothing else done (a command that names it runs
+    /// there); false if there is none.
+    pub fn swap_session(&mut self, id: u32) -> bool {
+        if id == self.session_id { return true }
+        let Some(i) = self.sessions.iter().position(|s| s.id == id) else { return false };
+        let next = self.sessions.remove(i);
+        let cur = self.stash_current();
+        self.sessions.push(cur);
+        self.unstash(next);
+        true
+    }
+
+    /// switch-client (server_client_set_session): the client shows session [id] at its current
+    /// window, whose alerts are seen; the one it leaves is its last session.
+    pub fn switch_session(&mut self, id: u32) {
+        if id == self.session_id { return }
+        let from = self.session_id;
+        if !self.swap_session(id) { return }
+        self.last_session = Some(from);
+        let a = self.active;
+        self.tabs[a].alerts = 0;
+        if let Some(f) = self.tabs[a].focus { self.seen(f) }
+        self.home_order.borrow_mut().clear();
+        self.fit_panes();
+        self.redraw_all = true;
+        self.save_sessions();
+    }
+
+    /// A session's own formats, for a session not in front (a #{S:} loop's).
+    pub fn stash_value(&self, id: u32, key: &str) -> Option<String> {
+        let s = self.sessions.iter().find(|s| s.id == id)?;
+        Some(match key {
+            "session_name" => self.stash_name(s),
+            "session_id" => format!("${}", s.id),
+            "session_windows" => s.tabs.len().to_string(),
+            "session_attached" | "session_many_attached" | "session_marked" | "session_alerts" => "0".into(),
+            "session_created" | "session_activity" | "session_last_attached" => s.created.to_string(),
+            "window_index" => s.tabs.get(s.active).and_then(|t| s.nums.get(&t.id)).map(|n| n.to_string()).unwrap_or_default(),
+            "window_name" => s.tabs.get(s.active).map(|t| t.name.clone()).unwrap_or_default(),
+            _ => return None,
+        })
+    }
+
+    /// Every session, (id, name), in tmux's order: by name.
+    pub fn session_list(&self) -> Vec<(u32, String)> {
+        let mut v: Vec<(u32, String)> = std::iter::once((self.session_id, self.session_name())).chain(self.sessions.iter().map(|s| (s.id, self.stash_name(s)))).collect();
+        v.sort_by(|a, b| a.1.cmp(&b.1));
+        v
+    }
+
+    /// cmd_find_get_session: `$id`, the exact name, the only name it starts, or the only name it
+    /// matches as a pattern (`=` first: the exact name only).
+    pub fn find_session(&self, target: &str) -> Option<u32> {
+        let (exact, t) = match target.strip_prefix('=') { Some(t) => (true, t), None => (false, target) };
+        let all = self.session_list();
+        if let Some(id) = t.strip_prefix('$') { return id.parse::<u32>().ok().filter(|id| all.iter().any(|(i, _)| i == id)) }
+        if let Some((id, _)) = all.iter().find(|(_, n)| n == t) { return Some(*id) }
+        if exact { return None }
+        let starts: Vec<u32> = all.iter().filter(|(_, n)| n.starts_with(t)).map(|(i, _)| *i).collect();
+        match starts.len() { 1 => return Some(starts[0]), 0 => {} _ => return None }
+        let matched: Vec<u32> = all.iter().filter(|(_, n)| crate::cmd::fnmatch(t, n)).map(|(i, _)| *i).collect();
+        if matched.len() == 1 { Some(matched[0]) } else { None }
+    }
+
+    /// session_next_session / session_previous_session: the one after (or before) this one by
+    /// name, round to the first (or last); none when this is the only one.
+    pub fn neighbour_session(&self, next: bool) -> Option<u32> {
+        let all = self.session_list();
+        let at = all.iter().position(|(i, _)| *i == self.session_id)?;
+        let to = if next { (at + 1) % all.len() } else { (at + all.len() - 1) % all.len() };
+        (to != at).then(|| all[to].0)
+    }
+
+    /// The session a pane (or a window, by its tab id) is in.
+    pub fn session_of_pane(&self, pane: u64) -> Option<u32> {
+        if self.tabs.iter().any(|t| t.panes().contains(&pane)) { return Some(self.session_id) }
+        self.sessions.iter().find(|s| s.tabs.iter().any(|t| t.panes().contains(&pane))).map(|s| s.id)
+    }
+
+    pub fn session_of_window(&self, wid: u64) -> Option<u32> {
+        if self.tabs.iter().any(|t| t.wid == wid) { return Some(self.session_id) }
+        self.sessions.iter().find(|s| s.tabs.iter().any(|t| t.wid == wid)).map(|s| s.id)
+    }
+
+    /// session_create: a session [name] (else its number) with one window — a shell (or
+    /// [command]) in [cwd], named [window] (automatic-rename off) — made in the background
+    /// ([detached]) or gone to.
+    pub fn new_session(&mut self, name: Option<&str>, window: Option<&str>, cwd: Option<String>, command: Option<String>, detached: bool) -> Result<u32, String> {
+        let name = match name {
+            Some(n) => session_check_name(n).ok_or_else(|| "invalid session: ".to_string())?,
+            None => { let mut n = self.next_session_id; while self.find_session(&format!("={n}")).is_some() { n += 1 } n.to_string() }
+        };
+        if self.find_session(&format!("={name}")).is_some() { return Err(format!("duplicate session: {name}")) }
+        let id = self.next_session_id;
+        self.next_session_id += 1;
+        // Named as tmux names a new window, for what it runs (the shell), until automatic-rename.
+        let shell = self.options.get("default-shell", "", None).filter(|s| !s.is_empty()).or_else(|| std::env::var("SHELL").ok()).unwrap_or_else(|| "sh".into());
+        let program = command.as_deref().and_then(|c| c.split_whitespace().next()).unwrap_or(&shell).rsplit('/').next().unwrap_or("sh").to_string();
+        let mut tab = Tab::new(window.unwrap_or(&program));
+        if window.is_some() {
+            tab.named = true;
+            self.options.windows.entry(tab.id.clone()).or_default().insert("automatic-rename".into(), "off".into());
+        }
+        let tab_id = tab.id.clone();
+        let base = self.base_index;
+        self.sessions.push(Stash { id, alias: Some(name), desk: false, tabs: vec![tab], active: 0, lastw: Vec::new(), nums: HashMap::from([(tab_id.clone(), base)]),
+            created: epoch_secs(), options: Default::default(), env: Default::default() });
+        // Its shell, on this computer, into its window wherever that is by then.
+        crate::input::new_shell_from(self, None, Placement::Fill(tab_id), cwd, command);
+        if !detached { self.switch_session(id) }
+        self.save_sessions();
+        Ok(id)
+    }
+
+    /// Where the sessions are kept between clients (`hn` again after C-b d, or after the last
+    /// window of the session in front went): one file per server name (-L).
+    fn sessions_path() -> std::path::PathBuf {
+        let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
+        std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui").join(format!("sessions-{name}.json"))
+    }
+
+    /// Every session but the desk's as its windows stand — each window's name, number, layout and
+    /// its panes' harnesses — and the desk's name, and which session is in front.
+    pub fn save_sessions(&self) {
+        if self.capture.is_some() && self.tabs.is_empty() { return }
+        let window = |app: &App, t: &Tab, nums: &HashMap<String, usize>| {
+            let panes: Vec<Value> = t.panes().iter().filter_map(|p| app.panes.get(p)).map(|p| json!([p.machine_id, p.agent_id])).collect();
+            let focus = t.focus.and_then(|f| t.panes().iter().position(|p| *p == f)).unwrap_or(0);
+            json!({ "name": t.name, "named": t.named, "num": nums.get(&t.id).copied(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus })
+        };
+        let mut rows = Vec::new();
+        let here = Stash { id: self.session_id, alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, options: Default::default(), env: Default::default() };
+        for (s, tabs, nums) in std::iter::once((&here, &self.tabs, &self.nums)).chain(self.sessions.iter().map(|s| (s, &s.tabs, &s.nums))) {
+            let windows: Vec<Value> = if s.desk { Vec::new() } else { tabs.iter().filter(|t| t.root.is_some()).map(|t| window(self, t, nums)).collect() };
+            if !s.desk && windows.is_empty() { continue }
+            rows.push(json!({ "name": s.alias, "desk": s.desk, "created": s.created, "active": s.active, "windows": windows }));
+        }
+        if self.forget_sessions { rows.clear() }
+        let doc = json!({ "current": self.session_alias.clone().filter(|_| !self.session_desk && !self.forget_sessions), "sessions": rows });
+        let path = Self::sessions_path();
+        if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+        let temp = path.with_extension("json.tmp");
+        if std::fs::write(&temp, doc.to_string()).is_ok() { let _ = std::fs::rename(temp, path); }
+    }
+
+    /// The sessions a client before this one left (save_sessions), back as they were: each
+    /// window's harnesses in their panes, laid out as they were. Then the one asked for at start
+    /// (`hn attach -t work`, `hn new -A -s main`), else the one that was in front.
+    pub fn load_sessions(&mut self) {
+        let doc: Value = std::fs::read_to_string(Self::sessions_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+        let (w, h) = (self.body().width, self.body().height);
+        for row in doc.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default() {
+            let name = row.get("name").and_then(Value::as_str).map(str::to_string);
+            if row.get("desk").and_then(Value::as_bool).unwrap_or(false) { if name.is_some() { self.session_alias = name } continue }
+            let Some(name) = name else { continue };
+            if self.find_session(&format!("={name}")).is_some() { continue }
+            let mut tabs = Vec::new();
+            let mut nums = HashMap::new();
+            for win in row.get("windows").and_then(Value::as_array).cloned().unwrap_or_default() {
+                let panes: Vec<(String, String)> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))).collect()).unwrap_or_default();
+                if panes.is_empty() { continue }
+                let ids: Vec<u64> = panes.iter().map(|(m, a)| self.new_pane(m, a)).collect();
+                let mut tab = Tab::new(win.get("name").and_then(Value::as_str).unwrap_or(""));
+                tab.named = win.get("named").and_then(Value::as_bool).unwrap_or(false);
+                let layout = win.get("layout").and_then(Value::as_str).unwrap_or("");
+                tab.root = Node::from_tmux(layout, &ids, w, h).or_else(|| layout::arrange(layout::Named::Tiled, &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")));
+                tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
+                if let Some(n) = win.get("num").and_then(Value::as_u64) { nums.insert(tab.id.clone(), n as usize); }
+                tabs.push(tab);
+            }
+            if tabs.is_empty() { continue }
+            let id = self.next_session_id;
+            self.next_session_id += 1;
+            let active = row.get("active").and_then(Value::as_u64).unwrap_or(0) as usize;
+            self.sessions.push(Stash { id, alias: Some(name), desk: false, active: active.min(tabs.len() - 1), tabs, lastw: Vec::new(), nums,
+                created: row.get("created").and_then(Value::as_i64).unwrap_or_else(epoch_secs), options: Default::default(), env: Default::default() });
+        }
+        let current = doc.get("current").and_then(Value::as_str).map(str::to_string);
+        let Some(start) = self.start_session.clone() else {
+            if let Some(id) = current.and_then(|c| self.find_session(&format!("={c}"))) { self.switch_session(id) }
+            return;
+        };
+        let found = start.name.as_deref().and_then(|n| self.find_session(&format!("={n}")));
+        match (found, start.create) {
+            // attach -t, new -A: there already.
+            (Some(id), false) => { self.switch_session(id); self.start_session = None }
+            (Some(id), true) if start.attach_existing => { self.switch_session(id); self.start_session = None }
+            (Some(_), true) => { self.start_error(format!("duplicate session: {}", start.name.clone().unwrap_or_default())) }
+            // A fresh start's first session is the desk's, named as asked; another is made once
+            // this computer is connected (maybe_start_shell).
+            (None, true) if self.sessions.is_empty() && self.session_alias.is_none() && start.window.is_none() => {
+                self.session_alias = start.name.as_deref().and_then(session_check_name);
+            }
+            (None, true) => {}
+            (None, false) => match &start.name {
+                Some(n) => self.start_error(format!("can't find session: {n}")),
+                None => { self.start_session = None; if let Some(id) = current.and_then(|c| self.find_session(&format!("={c}"))) { self.switch_session(id) } }
+            },
+        }
+    }
+
+    /// A start that can't be done (`hn attach -t nosuch`): said as tmux says it, and no client.
+    fn start_error(&mut self, e: String) {
+        self.start_session = None;
+        self.start_failed = Some(e);
+        self.quit = true;
+    }
+
+    /// server_destroy_session, for the session in front, whose last window has gone: another
+    /// session takes the client (detach-on-destroy off: the one it was in last, or the newest;
+    /// previous, next: by name), else the client exits (`[exited]`). The desk's session stays,
+    /// its window the home screen, for the desk's tabs to come back to.
+    fn session_gone(&mut self) {
+        let gone = self.session_id;
+        // A session a command ran in for a moment: gone, and nothing else changes.
+        if let Some(back) = self.swap_back.filter(|b| *b != gone) {
+            if self.session_desk { return }
+            self.swap_session(back);
+            self.sessions.retain(|s| s.id != gone);
+            self.save_sessions();
+            return;
+        }
+        let how = self.options.get("detach-on-destroy", "", None).unwrap_or_default();
+        let others: Vec<u32> = self.sessions.iter().map(|s| s.id).collect();
+        let next = match how.as_str() {
+            "off" | "no-detached" => self.last_session.filter(|l| others.contains(l)).or_else(|| self.sessions.iter().max_by_key(|s| s.created).map(|s| s.id)),
+            "previous" => self.neighbour_session(false),
+            "next" => self.neighbour_session(true),
+            _ => None,
+        };
+        let desk = self.session_desk;
+        match next {
+            Some(id) => {
+                self.switch_session(id);
+                self.last_session = None;
+                if !desk { self.sessions.retain(|s| s.id != gone) }
+            }
+            None => {
+                if !desk { if let Some(desk_id) = self.sessions.iter().find(|s| s.desk).map(|s| s.id) { self.swap_session(desk_id); self.sessions.retain(|s| s.id != gone) } }
+                self.quit = true;
+                self.exited = true;
+            }
+        }
+        self.save_sessions();
     }
 
     /// tmux's named layout (layout-set.c) on a window: main-pane-* and other-pane-* as set,
@@ -1470,6 +1806,20 @@ impl App {
 
     /// Put a harness on screen. Already showing somewhere: go there instead.
     pub fn open_agent(&mut self, machine_id: &str, agent_id: &str, placement: Placement) {
+        if let Placement::Fill(tab_id) = &placement {
+            let id = self.new_pane(machine_id, agent_id);
+            let (w, h) = (self.body().width, self.body().height);
+            let here = self.tabs.iter().position(|t| &t.id == tab_id);
+            let tab = match here { Some(i) => Some(&mut self.tabs[i]), None => self.sessions.iter_mut().flat_map(|s| s.tabs.iter_mut()).find(|t| &t.id == tab_id) };
+            match tab {
+                Some(t) if t.root.is_none() => { t.root = Some(Node::new(id, w, h)); t.focus = Some(id) }
+                _ => { self.drop_pane(id); return }
+            }
+            if here == Some(self.active) { self.open_stream(id, true) }
+            self.fit_panes();
+            self.save_sessions();
+            return;
+        }
         if placement != Placement::Replace {
             if let Some((tab, pane)) = self.find_pane(machine_id, agent_id) {
                 // One harness, one pane: say where it went rather than splitting a second copy.
@@ -1533,7 +1883,7 @@ impl App {
                 tab.focus = Some(id);
                 self.drop_pane(old);
             }
-            (Placement::At(_), _) => {}
+            (Placement::At(_), _) | (Placement::Fill(_), _) => {}
             (Placement::Split(dir), false) | (Placement::Auto(Some(dir)), false) => { if !self.split_focused(id, dir) { self.drop_pane(id); self.error("no space for new pane"); return } let t = self.active; self.layout_changed(t) }
             (Placement::Auto(None), false) => {
                 let dir = self.smart_dir();
@@ -1769,8 +2119,14 @@ impl App {
         self.lastw.retain(|id| *id != tab.id);
         for id in tab.panes() { self.end_shell(id); self.drop_pane(id) }
         if tab.on_desk { self.desk_op(json!({ "op": "tab.close", "id": tab.id })) }
-        // The last window gone: the session is over, and hn with it (tmux's `[exited]`).
-        if self.tabs.is_empty() { self.tabs.push(Tab::new("home")); self.quit = true; self.exited = true }
+        // The last window gone: the session is over (tmux's `[exited]` when it was the last).
+        if self.tabs.is_empty() {
+            self.tabs.push(Tab::new("home"));
+            self.active = 0;
+            self.session_gone();
+            self.fit_panes();
+            return;
+        }
         if index < self.active || self.active >= self.tabs.len() { self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1) }
         self.fit_panes();
     }
@@ -1787,6 +2143,7 @@ impl App {
         let client = !focus_events || self.terminal_focused;
         let mut now = HooksSeen {
             ready: true,
+            session_id: self.session_id,
             windows: self.tabs.iter().map(|t| (t.id.clone(), t.wid, t.name.clone(), t.focus, t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default())).collect(),
             current: self.tabs.get(self.active).map(|t| t.id.clone()),
             client,
@@ -1795,6 +2152,11 @@ impl App {
             focused: self.hooks_seen.focused.clone(),
         };
         let before = std::mem::replace(&mut self.hooks_seen, now.clone());
+        // Another session in front: client-session-changed, and its windows are not new.
+        if before.ready && before.session_id != now.session_id {
+            crate::commands::notify(self, "client-session-changed", Some(self.active), None);
+            return;
+        }
         if !before.ready {
             // The client attached (server_client_set_session): the current pane takes focus.
             if let Some(p) = self.focused() { self.update_focus(p, &mut now.focused, false) }
@@ -2321,11 +2683,22 @@ impl App {
     /// Until then (or if it never connects: not signed in) the window shows what it can.
     pub fn maybe_start_shell(&mut self) {
         if self.shell_asked || !self.desk_answered || self.capture.is_some() { return }
+        // `hn new -s work` (a session besides the desk's): made here, with its shell.
+        if self.start_session.as_ref().map(|s| s.create && self.session_alias.as_deref() != s.name.as_deref()).unwrap_or(false) {
+            if self.link(&self.fleet.local_id).is_none() { return }
+            let start = self.start_session.take().unwrap_or_default();
+            self.shell_asked = true;
+            if let Err(e) = self.new_session(start.name.as_deref(), start.window.as_deref(), start.cwd, start.command, false) { self.error(e) }
+            return;
+        }
         if !(self.tabs.len() == 1 && self.tabs[0].root.is_none()) { self.shell_asked = true; return }
         if self.link(&self.fleet.local_id).is_none() { return }
         self.shell_asked = true;
-        let cwd = std::env::current_dir().ok().map(|d| d.display().to_string());
-        crate::input::new_shell_from(self, None, Placement::Auto(None), cwd, None);
+        // The desk's first shell: where hn was started (-c: where it was asked to), running what
+        // `hn new` asked for.
+        let start = self.start_session.take().unwrap_or_default();
+        let cwd = start.cwd.or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string()));
+        crate::input::new_shell_from(self, None, Placement::Auto(None), cwd, start.command);
     }
 
     fn fetch_desk(&mut self) {
@@ -2341,6 +2714,16 @@ impl App {
     /// Reconcile tabs to the desk: new tabs appear, closed ones go, panes follow. What a window
     /// keeps for itself (active tab, focus, zoom, sizes) is left alone.
     fn apply_desk(&mut self, desk: &Value) {
+        // The desk is one session's windows: that session in front while they are reconciled.
+        if !self.session_desk {
+            let Some(id) = self.sessions.iter().find(|s| s.desk).map(|s| s.id) else { return };
+            let back = self.session_id;
+            self.swap_session(id);
+            self.apply_desk(desk);
+            self.swap_session(back);
+            self.fit_panes();
+            return;
+        }
         let revision = desk.get("revision").and_then(Value::as_i64).unwrap_or(0);
         if revision <= self.desk_revision { return }
         self.desk_revision = revision;
@@ -2425,7 +2808,7 @@ impl App {
     fn desk_pane_added(&mut self, tab_id: &str, machine_id: &str, agent_id: &str) {
         let Some(index) = self.tabs.iter().position(|t| t.id == tab_id) else { return };
         let mut ops = Vec::new();
-        if !self.tabs[index].on_desk && self.desk_mode == DeskMode::Sync {
+        if !self.tabs[index].on_desk && self.desk_mode == DeskMode::Sync && self.session_desk {
             self.tabs[index].on_desk = true;
             let tab = &self.tabs[index];
             let mut op = json!({ "op": "tab.create", "id": tab.id, "name": tab.name, "index": index });
@@ -2551,6 +2934,8 @@ pub enum Placement {
     Tab,
     Replace,
     At(At),
+    /// Into the empty window with this id, in whichever session it is (a new session's first).
+    Fill(String),
 }
 
 /// This client's terminal (tmux's client name): /dev/ttys003.
@@ -2583,7 +2968,7 @@ pub struct Pipe { out: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>, id: 
 /// and layout), the current window, the focused pane, the session's name, and which panes are
 /// in a mode.
 #[derive(Default, Clone)]
-pub struct HooksSeen { ready: bool, windows: Vec<(String, u64, String, Option<u64>, String)>, current: Option<String>, client: bool, session: String, modes: Vec<u64>, focused: Vec<u64> }
+pub struct HooksSeen { ready: bool, session_id: u32, windows: Vec<(String, u64, String, Option<u64>, String)>, current: Option<String>, client: bool, session: String, modes: Vec<u64>, focused: Vec<u64> }
 
 /// gethostname(3), as tmux's #{host} reads it (`mac.lan`, not `hostname -s`'s `mac`).
 pub fn full_hostname() -> String {

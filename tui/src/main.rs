@@ -161,6 +161,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     if let Some(code) = cli::run(&f.rest, explicit, f.socket.as_deref(), f.name.as_deref()).await { std::process::exit(code) }
     // -L name, starting a client: its socket's name.
     if let Some(n) = &f.name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } }
+    // hn new -s work / hn attach -t work: the session this client starts in.
+    let start = cli::start_session(&f.rest);
 
     if !io::IsTerminal::is_terminal(&io::stdout()) { eprintln!("open terminal failed: not a terminal"); std::process::exit(1) }
 
@@ -224,6 +226,9 @@ async fn run(config: config::Config) -> io::Result<()> {
     if let Some(problem) = config.problems.first() { app.say(problem.clone(), theme::DANGER) }
     else if let Some(path) = read.last() { if app.messages.is_empty() { app.say(format!("{} read — your prefix is {}", path.replace(&std::env::var("HOME").unwrap_or_default(), "~"), keys::name(&app.keymap.prefix)), theme::WARN) } }
     app.boot();
+    // The sessions a client left (C-b d), and the one asked for.
+    app.start_session = start;
+    app.load_sessions();
     // The client is attached: the hooks' first look, then client-attached.
     app.notify_changes();
     commands::notify(&mut app, "client-attached", None, None);
@@ -302,12 +307,15 @@ async fn run(config: config::Config) -> io::Result<()> {
         }
     }
     app.fleet.save_cache();
+    if app.start_failed.is_none() { app.save_sessions() }
     if let Some(path) = &socket { let _ = std::fs::remove_file(path); }
-    let host = app.fleet.machine(&app.fleet.local_id).map(|m| m.name.clone()).unwrap_or_else(app::hostname);
+    let session = app.session_name();
     drop(term);
     drop(restore);
+    // `hn attach -t nosuch`: tmux's error, and no client.
+    if let Some(e) = &app.start_failed { eprintln!("{e}"); std::process::exit(1) }
     // As tmux says it: the harnesses are still running, and `hn` comes back to them — or the
     // last window went, and the session with it.
-    if app.exited { println!("[exited]") } else { println!("[detached (from session {host})]") }
+    if app.exited { println!("[exited]") } else { println!("[detached (from session {session})]") }
     Ok(())
 }
