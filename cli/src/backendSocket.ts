@@ -647,7 +647,7 @@ export class BackendSocket {
    */
   pairService: PairService | null = null
   /** The owning machine's reads and writes for the pair (pair/owner.ts). Null: those answer UNSUPPORTED. */
-  pairOwner: { handle: (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>> } | null = null
+  pairOwner: { handle: (type: string, payload: Record<string, unknown>, from: { connId: string; label?: string | null }) => Promise<Record<string, unknown>> } | null = null
   /** The control interface (pair/control.ts) behind the loopback `pair` request: the verbs it answers. */
   pairControl: { verbs: ReadonlySet<string>; local: (payload: Record<string, unknown>, connId: string) => Promise<Record<string, unknown>> } | null = null
   /** The account's zoo changed (a `zoo_changed` from the backend) — cli.ts re-reads which daemon is paired. */
@@ -1494,6 +1494,10 @@ export class BackendSocket {
       detached(service.local(payload))
       return
     }
+    // The machine-to-machine requests come from ANOTHER machine, sealed. This computer's own processes use
+    // `pair` (a tool) or the window's daemon_* frames; a loopback `pair_*` would be a local process
+    // claiming to be a remote brain — and the owner treats a remote request as one (daemons/BRAIN.md).
+    if (local) { reply(type, requestId, { error: 'REMOTE_ONLY', detail: 'pair_* requests come from another machine.' }); return }
     if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
     if (!service.enabled()) { reply(type, requestId, { error: 'PAIR_OFF' }); return }
     if (type === 'pair_watch') {
@@ -1510,7 +1514,7 @@ export class BackendSocket {
     }
     // Detached: an answer keys a dialog and a pause saves a conversation, both seconds of work that must
     // not hold the watch's pushes behind them on this connection.
-    detached(owner.handle(type, payload))
+    detached(owner.handle(type, payload, { connId, label: this.e2ee.sessionLabel(connId) }))
   }
 
   /** One `pair_event` to one watcher: plaintext over loopback, sealed pairwise (`wrapTarget`) otherwise.

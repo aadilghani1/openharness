@@ -19,6 +19,7 @@ import { isAbsolute } from 'node:path'
 import type { PairSensor } from './sensor.js'
 import { answerFloor, untouchableDetail, type Autonomy, type Untouchable } from './floor.js'
 import { statusText, str, type PairActor, type PairHarness, type PairQuestion } from './protocol.js'
+import { RateLimit } from './limit.js'
 
 export interface OwnerSubject {
   agentId: string
@@ -56,6 +57,7 @@ export interface OwnerDeps {
   /** backend.onResumeAgent. */
   resume: (agentId: string) => Promise<{ ok: true } | { ok: false; error: string; detail?: string }>
   newId: () => string
+  now?: () => number
 }
 
 /** The sealed machine-to-machine requests this answers (lib/e2ee/applicationFrames.ts PAIR_REQUESTS). */
@@ -63,7 +65,11 @@ export const OWNER_REQUESTS = new Set(['pair_list', 'pair_read', 'pair_answer', 
 
 export const PROMPT_MAX = 8_000
 
-const ACTORS = new Set<PairActor>(['key', 'pair', 'rule'])
+/** Answers one other machine's connection may have keyed here: a minute's worth, and an hour's. */
+export const REMOTE_ANSWER_LIMITS = [{ windowMs: 60_000, max: 6 }, { windowMs: 60 * 60_000, max: 60 }]
+
+/** Where a sealed request came from: the relay connection, and the label its identity was paired under. */
+export interface RemoteOrigin { connId: string; label?: string | null }
 
 export interface OwnerRow {
   agentId: string
@@ -78,7 +84,11 @@ export interface OwnerRow {
 }
 
 export class PairOwner {
-  constructor(private readonly deps: OwnerDeps) {}
+  private readonly remoteAnswers: RateLimit
+
+  constructor(private readonly deps: OwnerDeps) {
+    this.remoteAnswers = new RateLimit(REMOTE_ANSWER_LIMITS, deps.now ?? Date.now)
+  }
 
   // ── reads ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -125,21 +135,27 @@ export class PairOwner {
     return { ok: true, subject }
   }
 
-  /** `why` names what decided it (a rule), for the journal. */
-  async answer(input: { agentId: string; requestId: string; choice: string }, by: PairActor, why?: string): Promise<OwnerResult> {
+  /**
+   * `why` names what decided it (a rule), for the journal. `origin` is where a `remote` answer came from:
+   * another machine may only answer an ALLOW-CLASS prompt here (its one-time yes, or its decline).
+   */
+  async answer(input: { agentId: string; requestId: string; choice: string }, by: PairActor, why?: string, origin?: string): Promise<OwnerResult> {
     const drivable = this.drivable(input.agentId)
     if (!drivable.ok) return drivable
     const question = this.deps.sensor.harness(input.agentId)?.question
     if (!question || !input.requestId || question.requestId !== input.requestId) {
       return { ok: false, error: 'STALE_QUESTION', detail: 'That question is no longer the one on screen.' }
     }
+    if (by === 'remote' && (!question.permission || !question.allow)) {
+      return { ok: false, error: 'REMOTE_ANSWERS_ONLY', detail: 'Another machine may only answer an allow-class prompt here.' }
+    }
     const floor = answerFloor(question, input.choice)
     if (!floor.ok) return floor
     const keyed = await this.deps.keyAnswer({ agentId: input.agentId, requestId: question.requestId, question: question.text, option: floor.option })
     if (!keyed.ok) return keyed
     this.deps.sensor.acted(drivable.subject, {
-      by, action: 'answer', requestId: question.requestId,
-      text: `answered "${statusText(floor.option, 60)}" to "${statusText(question.text, 120)}"${why ? ` (${statusText(why, 60)})` : ''}`,
+      by, action: 'answer', requestId: question.requestId, ...(origin ? { origin } : {}),
+      text: `answered "${statusText(floor.option, 60)}" to "${statusText(question.text, 120)}"${why ? ` (${statusText(why, 60)})` : ''}${origin ? ` (from ${statusText(origin, 60)})` : ''}`,
     })
     return { ok: true, option: floor.option }
   }
@@ -213,11 +229,14 @@ export class PairOwner {
   // ── another machine's brain (sealed pair_*) ───────────────────────────────────────────────────────
 
   /**
-   * One sealed request from another machine's brain. `by` says who asked there (a key, the pair, a rule);
-   * the floor and the journal are this machine's either way.
+   * One sealed request from another machine's brain. Who asked is decided HERE, from how it arrived: a
+   * `remote` request from that connection, whatever `by` it carries. Another machine may read, and may
+   * answer an allow-class prompt — rate-limited per connection and journaled with where it came from —
+   * and nothing else: a daemon never lets a process on one computer reach further than it already could.
    */
-  async handle(type: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const by: PairActor = ACTORS.has(payload.by as PairActor) ? payload.by as PairActor : 'pair'
+  async handle(type: string, payload: Record<string, unknown>, from: RemoteOrigin = { connId: 'unknown' }): Promise<Record<string, unknown>> {
+    const by: PairActor = 'remote'
+    const origin = from.label ? `${from.label} (${from.connId.slice(0, 12)})` : from.connId.slice(0, 40)
     const agentId = str(payload.agentId, 200)
     let result: OwnerResult
     switch (type) {
@@ -228,25 +247,14 @@ export class PairOwner {
         result = this.read(agentId)
         break
       case 'pair_answer':
+        if (!this.deps.sensor.enabled()) return { error: 'PAIR_OFF' }
+        if (!this.remoteAnswers.take(from.connId)) return { error: 'RATE_LIMITED', detail: 'Too many answers from that machine: try again in a minute.' }
         // `requestId` on the wire is the RPC's own correlation id; the question it answers rides as
         // `expectRequestId` (pair/brain.ts remoteAnswer).
-        result = await this.answer({ agentId, requestId: str(payload.expectRequestId, 120), choice: str(payload.choice, 300) }, by)
+        result = await this.answer({ agentId, requestId: str(payload.expectRequestId, 120), choice: str(payload.choice, 300) }, by, undefined, origin)
         break
-      case 'pair_send':
-        result = this.send({ agentId, text: str(payload.text, PROMPT_MAX + 1) }, by)
-        break
-      case 'pair_stop':
-        result = this.stop({ agentId }, by)
-        break
-      case 'pair_start':
-        result = await this.start({ engine: str(payload.engine, 40), cwd: str(payload.cwd, 1024), prompt: str(payload.prompt, PROMPT_MAX + 1) || null, name: str(payload.name, 80) || null }, by)
-        break
-      case 'pair_pause':
-        result = await this.pause({ agentId }, by)
-        break
-      case 'pair_resume':
-        result = await this.resume({ agentId }, by)
-        break
+      case 'pair_send': case 'pair_stop': case 'pair_start': case 'pair_pause': case 'pair_resume':
+        return { error: 'REMOTE_ANSWERS_ONLY', detail: 'Another machine may only answer an allow-class prompt here; the rest is done at this machine.' }
       default:
         return { error: 'UNSUPPORTED' }
     }

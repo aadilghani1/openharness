@@ -4432,6 +4432,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sendLocal: pairSendLocal,
     sendLocalTo: pairSendLocalTo,
     shown: pairShown,
+    // A key sent on to another machine is journaled here too, with the window it came from.
+    relayed: (fields) => { pairSensor.relayed(fields) },
     // A key pressed on a line about THIS machine's harness: the owner's floor, then the dialog's own
     // requestId, checked as the keys go in (STALE_QUESTION, nothing typed, when it changed).
     answer: (input) => pairOwner.answer(input, 'key'),

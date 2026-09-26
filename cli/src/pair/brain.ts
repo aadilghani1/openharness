@@ -28,6 +28,10 @@ import { composeBrief } from './brief.js'
 import { str, type DaemonAction, type PairJournalEntry } from './protocol.js'
 import type { Autonomy } from './floor.js'
 import type { ShownLines } from './shown.js'
+import { RateLimit } from './limit.js'
+
+/** Keys this brain relays to other machines: a minute's worth and an hour's (the owner limits them too). */
+export const RELAY_LIMITS = [{ windowMs: 60_000, max: 6 }, { windowMs: 60 * 60_000, max: 60 }]
 
 /** An absence this long is a return worth a brief (daemons/README.md: `back` after 15 minutes). */
 export const BRIEF_AWAY_MS = 15 * 60_000
@@ -74,6 +78,10 @@ export interface PairBrainDeps {
    * line and acknowledged it as displayed, ARM_MS before the key (`onKey`).
    */
   shown?: ShownLines
+  /** How many keys may be relayed to other machines, per window (RELAY_LIMITS unless a spec says). */
+  relayLimits?: Array<{ windowMs: number; max: number }>
+  /** Journal, on THIS machine, a key relayed to another one and the window it came from (PairSensor.relayed). */
+  relayed?: (fields: { target: string; agentId: string; name: string; engine: string; requestId: string; text: string; origin: string }) => void
   now: () => number
 }
 
@@ -107,8 +115,11 @@ export class PairBrain {
   /** Per desk: when it was last briefed — the cursor that stops a second client repeating the brief. */
   private readonly cursors = new Map<string, number>()
 
+  private readonly relayLimit: RateLimit
+
   constructor(private readonly deps: PairBrainDeps) {
     this.startedAt = deps.now()
+    this.relayLimit = new RateLimit(deps.relayLimits ?? RELAY_LIMITS, deps.now)
   }
 
   get isActive(): boolean { return this.active }
@@ -233,7 +244,7 @@ export class PairBrain {
     const watch = this.autonomy() === 'watch'
     const written = items.map(({ question, ...item }) => {
       if (item.kind !== 'waiting' || !question || !item.agentId) return item
-      const actions = actionsFor(question, null, { watch })
+      const actions = actionsFor(question, null, { watch, remote: !(this.deps.fleet.machines().find((m) => m.machineId === item.machineId)?.local ?? false) })
       const id = `brief:${item.machineId}:${question.requestId}:${now}`
       this.deps.voice.hold({ id, mood: 'need', line: item.line, actions, ttlMs: BRIEF_KEYS_MS,
         about: { machineId: item.machineId, agentId: item.agentId, requestId: question.requestId } })
@@ -332,6 +343,7 @@ export class PairBrain {
     const input: TriageInput = {
       daemonId, machineId: change.machineId, who: this.who({ local: change.local, machine: change.machine, harness }),
       engine: harness.engine, question, present: this.present(), count: Math.max(1, waiting.length), watch: this.autonomy() === 'watch',
+      remote: !change.local,
     }
     const template = this.deps.triage.template(input)
     const id = `need:${change.machineId}:${entry.epoch}:${entry.seq}`
@@ -387,12 +399,16 @@ export class PairBrain {
     })
   }
 
-  /** A rule, or the pair driving a harness it started, did something: reported afterwards. A key's is not. */
+  /**
+   * A rule, or the pair driving a harness it started, did something: reported afterwards. A key's is not.
+   * One another machine asked for (`remote`) is listed in daemon_state `acted`, not spoken.
+   */
   private actedEntry(change: FleetChange, entry: PairJournalEntry): void {
-    if (entry.by !== 'rule' && entry.by !== 'pair') return
+    if (entry.by !== 'rule' && entry.by !== 'pair' && entry.by !== 'remote') return
     const who = change.local ? entry.name : `${entry.name}@${change.machine}`
     this.acted = [{ machineId: change.machineId, machine: change.machine, agentId: entry.agentId, name: who, by: entry.by, action: entry.action ?? '', text: entry.text ?? '', at: entry.at },
       ...this.acted].slice(0, RECENT_MAX)
+    if (entry.by === 'remote') { this.scheduleState(); return }
     this.deps.voice.say({
       id: `auto:${change.machineId}:${entry.epoch}:${entry.seq}`, mood: 'auto', actions: [], ttlMs: DISPLAY_MS,
       line: autoLine({ who, by: entry.by, text: entry.text ?? entry.action ?? 'acted' }),
@@ -429,7 +445,7 @@ export class PairBrain {
    * that owns the harness, and only while the line is showing and the question on it is STILL the one the
    * line was about — a key pressed a moment late must not land on the next dialog. Always replies.
    */
-  async onAct(payload: Record<string, unknown>, send: (frame: Record<string, unknown>) => void, _origin: { connId: string } | null = null): Promise<void> {
+  async onAct(payload: Record<string, unknown>, send: (frame: Record<string, unknown>) => void, origin: { connId: string } | null = null): Promise<void> {
     const requestId = str(payload.requestId, 120)
     const id = str(payload.id, 200)
     const choice = str(payload.choice, 200)
@@ -466,6 +482,12 @@ export class PairBrain {
     // The floor, again, here: a deny-class prompt, or one that is not allow-class, is never approved
     // from a key, whatever a client sends. The owning machine checks once more.
     if (action.key === 'y' && (question.deny || !question.allow)) { reply({ ok: false, error: 'DENY_CLASS' }); return }
+    // Another machine takes only an answer to an allow-class prompt from here, a few a minute, and both
+    // machines journal it: a key on this computer never reaches further than that (BRAIN.md, Security).
+    if (!target.local) {
+      if (!question.permission || !question.allow || question.deny) { reply({ ok: false, error: 'REMOTE_ANSWERS_ONLY', detail: 'On another machine only an allow-class prompt is answered from here: open it.' }); return }
+      if (!this.relayLimit.take()) { reply({ ok: false, error: 'RATE_LIMITED', detail: 'Too many answers sent to other machines: try again in a minute.' }); return }
+    }
     let result: AnswerResult
     try {
       result = target.local
@@ -473,6 +495,13 @@ export class PairBrain {
         : await this.remoteAnswer(target, question.requestId, action.choice)
     } catch (err) {
       result = { ok: false, error: err instanceof Error ? err.message.slice(0, 60) : 'FAILED' }
+    }
+    if (!target.local) {
+      this.deps.relayed?.({
+        target: target.machineId, agentId: target.harness.agentId, name: target.harness.name, engine: target.harness.engine, requestId: question.requestId,
+        text: `relayed "${action.choice}" to ${target.harness.name}@${target.machine}: ${result.ok ? 'answered' : `refused ${result.error ?? 'FAILED'}`}`,
+        origin: origin?.connId ?? 'this daemon',
+      })
     }
     if (result.ok) this.deps.voice.unsay(id, 'answered')
     // The dialog on screen was not the one the line was about: nothing was typed, and the line's keys
@@ -482,8 +511,9 @@ export class PairBrain {
   }
 
   private async remoteAnswer(target: FleetHarness, requestId: string, choice: string): Promise<AnswerResult> {
+    // No `by`: the owning machine decides who asked from how the request reached it (a remote machine).
     const result = await this.deps.fleet.request(target.machineId, 'pair_answer', {
-      agentId: target.harness.agentId, requestId, expectRequestId: requestId, choice, by: 'key',
+      agentId: target.harness.agentId, requestId, expectRequestId: requestId, choice,
     })
     if (typeof result.error === 'string') return { ok: false, error: result.error, ...(typeof result.detail === 'string' ? { detail: result.detail } : {}) }
     return { ok: result.ok === true }

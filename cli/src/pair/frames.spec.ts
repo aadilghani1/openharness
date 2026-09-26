@@ -173,6 +173,26 @@ describe('the daemon answering another machine\'s brain', () => {
     await socket.stop()
   })
 
+  it('tells the owner where a request came from; a loopback pair_* is a local process posing as a machine, refused', async () => {
+    const { socket, dispatch } = harness()
+    const from: unknown[] = []
+    socket.pairOwner = { handle: async (_type, _payload, origin) => { from.push(origin); return { ok: true } } }
+    const { crypto, sent } = pairedPeer(socket, 'peer-1')
+    await dispatch(crypto.wrapOutgoing({ type: 'pair_answer', payload: { requestId: 'r1', agentId: 'a1', expectRequestId: 'q1', choice: 'Yes' } }), 'peer-1')
+    await vi.waitFor(() => expect(sent.length).toBe(1))
+    expect(from).toEqual([{ connId: 'peer-1', label: 'peer brain' }])
+    sent.length = 0
+    socket.registerLocalClient('local:script', { sendFrame: () => true, sendBinary: () => true })
+    for (const type of ['pair_answer', 'pair_send', 'pair_watch', 'pair_read']) {
+      await dispatch({ type, payload: { requestId: type, agentId: 'a1', expectRequestId: 'q1', choice: 'Yes', by: 'key' } }, 'local:script', 'local')
+    }
+    await vi.waitFor(() => expect(sent.length).toBe(4))
+    expect(sent.map((r) => [r.connId, (r.frame.payload as Frame).error])).toEqual([['local:script', 'REMOTE_ONLY'], ['local:script', 'REMOTE_ONLY'], ['local:script', 'REMOTE_ONLY'], ['local:script', 'REMOTE_ONLY']])
+    expect(from).toHaveLength(1)
+    await socket.unregisterLocalClient('local:script')
+    await socket.stop()
+  })
+
   it('pair_journal and pair_read answer sealed; the writes are UNSUPPORTED with no owner, like an older daemon', async () => {
     const { socket, dispatch } = harness()
     const { crypto, sent } = pairedPeer(socket, 'peer-1')

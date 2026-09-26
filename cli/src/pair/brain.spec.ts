@@ -67,7 +67,7 @@ function laptop() {
   return { sensor, open, answers, links, reply: (r: Frame) => { answerReply = r } }
 }
 
-function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>; linked?: boolean; model?: boolean; autonomy?: Autonomy } = {}) {
+function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>; linked?: boolean; model?: boolean; autonomy?: Autonomy; relayLimits?: Array<{ windowMs: number; max: number }> } = {}) {
   const local = sensorFor('machine-a')
   const remote = laptop()
   const frames: Frame[] = []
@@ -93,6 +93,8 @@ function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: str
     sendLocal,
     sendLocalTo: shown.senderTo((connId, frame) => { toClient.push({ connId, frame }); return true }),
     answer, autonomy: () => opts.autonomy ?? 'suggest', now: Date.now,
+    relayed: (fields) => { local.relayed(fields) },
+    ...(opts.relayLimits ? { relayLimits: opts.relayLimits } : {}),
   })
   const says = () => frames.filter((f) => f.type === 'daemon_say').map((f) => f.payload as DaemonSay)
   const unsays = () => frames.filter((f) => f.type === 'daemon_unsay').map((f) => f.payload as Frame)
@@ -262,6 +264,34 @@ describe('the brain', () => {
     expect(await w.act({ requestId: 'r1', id: w.says()[0].id, choice: 'y' })).toMatchObject({ ok: false, error: 'GONE' })
   })
 
+  it('another machine takes only an allow-class answer from here, a few a minute', async () => {
+    // Two an hour, so the lines' own two-minute spacing stays inside the window.
+    const w = world({ relayLimits: [{ windowMs: 60 * 60_000, max: 2 }] })
+    w.remote.reply({ ok: true })
+    w.brain.clientAttached('local:window')
+    await settle()
+    // Not allow-class there (a curl): no keys but [g] on its line, and a key sent anyway is not relayed.
+    w.remote.sensor.question('api', 'q_curl', ask('Approve Bash command: curl -s https://x'), { permission: true, dialog: 'Bash command\n\n  curl -s https://x\n\nDo you want to proceed?\n1. Yes\n2. No' })
+    await settle(200)
+    const curl = w.says()[0]
+    expect(curl.actions.map((a) => a.key)).toEqual(['g'])
+    w.remote.sensor.questionGone('api', 'q_curl')
+    await tick()
+    // Allow-class: answered there, until the minute's relays are spent.
+    const ids: string[] = []
+    for (let i = 0; i < 3; i++) {
+      w.remote.sensor.question('api', `q_${i}`, ask('Approve Bash command: npm test'), permit('npm test'))
+      await settle(200)
+      ids.push(w.says().at(-1)!.id)
+      const result = await w.act({ requestId: `r${i}`, id: ids[i], choice: i === 2 ? 'y' : 'n' })
+      if (i < 2) expect(result).toMatchObject({ ok: true, machineId: 'machine-b' })
+      else expect(result).toMatchObject({ ok: false, error: 'RATE_LIMITED' })
+      w.remote.sensor.questionGone('api', `q_${i}`)
+      await tick()
+    }
+    expect(w.remote.answers).toHaveLength(2)
+  })
+
   it('a key counts only from the window that was shown the line, a moment after it was shown', async () => {
     const w = world()
     w.brain.clientAttached('local:window')
@@ -404,7 +434,11 @@ describe('the brain', () => {
     await settle(200)
     const remoteSay = w.says()[0]
     expect(await w.act({ requestId: 'r1', id: remoteSay.id, choice: 'y' })).toEqual({ requestId: 'r1', id: remoteSay.id, ok: true, machineId: 'machine-b' })
-    expect(w.remote.answers).toEqual([expect.objectContaining({ agentId: 'api', requestId: 'q_remote', expectRequestId: 'q_remote', choice: 'Yes', by: 'key' })])
+    // No `by` on the wire: the owning machine decides who asked from how it arrived.
+    expect(w.remote.answers).toEqual([{ agentId: 'api', requestId: 'q_remote', expectRequestId: 'q_remote', choice: 'Yes' }])
+    // Journaled on this machine too, with the window it came from.
+    expect(w.local.journal({}).entries.filter((e) => e.kind === 'relayed')).toEqual([expect.objectContaining({
+      target: 'machine-b', origin: 'local:window', agentId: 'api', requestId: 'q_remote', text: 'relayed "Yes" to api@laptop: answered' })])
     expect(w.answer).not.toHaveBeenCalled()
     await tick()
     w.local.question('web', 'q_local', ask('Read src/auth.ts?'), { permission: true, dialog: 'Read file\n\n  /etc/hosts\n\nDo you want to proceed?\n1. Yes\n2. No' })
@@ -459,7 +493,8 @@ describe('the brain', () => {
     const remoteSay = w.says()[1]
     expect(await w.act({ requestId: 'r2', id: remoteSay.id, choice: 'y' }))
       .toEqual({ requestId: 'r2', id: remoteSay.id, ok: false, machineId: 'machine-b', error: 'STALE_QUESTION', detail: 'That question is no longer open.' })
-    expect(w.remote.answers[0]).toMatchObject({ expectRequestId: 'q_remote', by: 'key' })
+    expect(w.remote.answers[0]).toMatchObject({ expectRequestId: 'q_remote' })
+    expect(w.remote.answers[0]).not.toHaveProperty('by')
     // Nothing was typed, and those keys can never work again: both lines go, as stale.
     expect(w.unsays()).toEqual([{ id: localSay.id, reason: 'stale' }, { id: remoteSay.id, reason: 'stale' }])
   })

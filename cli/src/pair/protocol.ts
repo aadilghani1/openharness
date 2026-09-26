@@ -12,11 +12,17 @@
 
 /** What the journal records. `question`/`answered` pair up by requestId. `act` is something the daemon
  *  did to a harness (pair/owner.ts): who asked is `by`, what it did is `action`. `learned` is a lesson the
- *  person approved, credited to the daemon that found it (`daemon`; pair/learn, daemons/LEARNING.md). */
-export type PairKind = 'start' | 'done' | 'fail' | 'question' | 'answered' | 'recap' | 'act' | 'learned'
+ *  person approved, credited to the daemon that found it (`daemon`; pair/learn, daemons/LEARNING.md).
+ *  `relayed` is a key this machine's brain sent on to another machine (`target`) — that machine journals
+ *  the `act`; this one keeps which window (`origin`) it came from. */
+export type PairKind = 'start' | 'done' | 'fail' | 'question' | 'answered' | 'recap' | 'act' | 'learned' | 'relayed'
 
-/** Who made the daemon act: a key a person pressed, the pair harness's own tool call, a pair.jsonc rule. */
-export type PairActor = 'key' | 'pair' | 'rule'
+/**
+ * Who made the daemon act: a key a person pressed here, the pair harness's own tool call, a pair.jsonc
+ * rule, or `remote` — another machine's sealed request. The owning machine decides it from how the request
+ * reached it; a `by` a request carries is never believed.
+ */
+export type PairActor = 'key' | 'pair' | 'rule' | 'remote'
 export type PairAction = 'answer' | 'send' | 'stop' | 'start' | 'pause' | 'resume'
 
 export interface PairJournalEntry {
@@ -40,6 +46,10 @@ export interface PairJournalEntry {
   action?: PairAction
   /** On `learned`: the roster id of the daemon that found the lesson. */
   daemon?: string
+  /** On a `remote` act or a `relayed` key: the connection (and paired label) the request came from. */
+  origin?: string
+  /** On `relayed`: the machine the key was sent to. */
+  target?: string
 }
 
 export interface PairQuestion {

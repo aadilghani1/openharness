@@ -162,10 +162,11 @@ export class PairSensor implements PairService {
    * as gone.
    */
   acted(subject: { agentId: string; name: string; engine: string },
-    fields: { by: PairActor; action: PairAction; text: string; requestId?: string }): PairJournalEntry | null {
+    fields: { by: PairActor; action: PairAction; text: string; requestId?: string; origin?: string }): PairJournalEntry | null {
     if (!this.on || !subject.agentId) return null
     const text = statusText(fields.text, 300)
-    const entryFields = { kind: 'act' as const, by: fields.by, action: fields.action, text, ...(fields.requestId ? { requestId: fields.requestId } : {}) }
+    const entryFields = { kind: 'act' as const, by: fields.by, action: fields.action, text, ...(fields.requestId ? { requestId: fields.requestId } : {}),
+      ...(fields.origin ? { origin: statusText(fields.origin, 120) } : {}) }
     const h = this.harnesses.get(subject.agentId) ?? this.admit(subject.agentId)
     if (h) return this.change(h, entryFields)
     const entry = this.deps.journal.append({
@@ -185,6 +186,18 @@ export class PairSensor implements PairService {
     const name = statusText(fields.name, 80) || 'lesson'
     return this.deps.journal.append({
       at: this.now(), kind: 'learned', agentId: fields.agentId ?? '', name, engine: fields.engine ?? '', text: `learned "${name}"`, daemon: fields.daemon,
+    })
+  }
+
+  /**
+   * A key this machine's brain sent on to another machine (`target`), from the window `origin`: journaled
+   * here too — the owning machine journals the answer itself. Not a change to any harness here: not pushed.
+   */
+  relayed(fields: { target: string; agentId: string; name: string; engine: string; requestId: string; text: string; origin: string }): PairJournalEntry | null {
+    if (!this.on) return null
+    return this.deps.journal.append({
+      at: this.now(), kind: 'relayed', by: 'key', action: 'answer', agentId: fields.agentId, name: statusText(fields.name, 80), engine: fields.engine,
+      requestId: fields.requestId, text: statusText(fields.text, 300), target: statusText(fields.target, 120), origin: statusText(fields.origin, 120),
     })
   }
 

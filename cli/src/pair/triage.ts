@@ -43,6 +43,8 @@ export interface TriageInput {
   count?: number
   /** Autonomy `watch`: the daemon only watches — no answer keys, only [g]. */
   watch?: boolean
+  /** The harness is on another machine: a key there answers only an allow-class prompt (BRAIN.md Security). */
+  remote?: boolean
 }
 
 export interface TriageResult {
@@ -69,10 +71,12 @@ export interface TriageDeps {
 const GO: DaemonAction = { key: 'g', label: 'open', choice: 'open' }
 
 /** The keys for a question: [y] only a one-time yes on an allow-class prompt, [n] a decline, [g] always. */
-export function actionsFor(question: PairQuestion, recommend: string | null, opts: { watch?: boolean } = {}): DaemonAction[] {
+export function actionsFor(question: PairQuestion, recommend: string | null, opts: { watch?: boolean; remote?: boolean } = {}): DaemonAction[] {
   if (opts.watch) return [GO]
   // Only a permission prompt is ever answered for the person (pair/floor.ts): anything else is theirs to open.
   if (!question.permission) return [GO]
+  // On another machine, only an allow-class prompt is answered from here, its yes or its no.
+  if (opts.remote && (!question.allow || question.deny)) return [GO]
   const no = question.options.find(isDeclineOption) ?? null
   const decline: DaemonAction[] = no ? [{ key: 'n', label: statusText(bareOption(no), 40), choice: no }] : []
   // A recommendation that is not a one-time yes (a decline, or "don't ask again") earns no [y].
@@ -99,7 +103,7 @@ export class PairTriage {
 
   /** Tier 0, at once: the template line with its keys. */
   template(input: TriageInput, why?: TriageResult['why']): TriageResult {
-    const actions = actionsFor(input.question, null, { watch: input.watch })
+    const actions = actionsFor(input.question, null, { watch: input.watch, remote: input.remote })
     const line = needLine(input.daemonId, { who: input.who, question: input.question.text, count: input.count }, actions)
     return { line, recommend: null, actions, tier: 0, ...(why ? { why } : {}) }
   }
@@ -170,7 +174,7 @@ export class PairTriage {
     if (text === null) return { result: null, why }
     const parsed = parseTriage(text, input.question.options)
     if (parsed === 'bad-json' || parsed === 'off-list' || parsed === 'bad-line') return { result: null, why: parsed }
-    const actions = actionsFor(input.question, parsed.recommend)
+    const actions = actionsFor(input.question, parsed.recommend, { remote: input.remote })
     // Every line names the harness; a model that forgot gets it prefixed rather than trusted to imply it.
     const named = parsed.line.toLowerCase().includes(input.who.split('@')[0].toLowerCase()) ? parsed.line : `${input.who}: ${parsed.line}`
     const keys = (['y', 'n', 'g'] as const).filter((k) => actions.some((a) => a.key === k))

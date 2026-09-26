@@ -239,14 +239,40 @@ describe('the other writes', () => {
 })
 
 describe('another machine\'s brain', () => {
+  it('answers only an allow-class prompt for another machine, a few a minute per connection', async () => {
+    const w = world()
+    const from = { connId: 'relay-conn-2' }
+    w.sensor.question('api', 'q1', ask('Bash: curl -s https://x'), perm('curl -s https://x'))
+    // Not allow-class: not even its decline, from another machine.
+    expect(await w.owner.handle('pair_answer', { expectRequestId: 'q1', agentId: 'api', choice: 'No' }, from)).toMatchObject({ error: 'REMOTE_ANSWERS_ONLY' })
+    w.sensor.questionGone('api', 'q1')
+    // The refused attempt counted too: five more this minute.
+    for (let i = 0; i < 5; i++) {
+      w.sensor.question('api', `q${i + 2}`, ask('Bash: npm test'), perm('npm test'))
+      expect(await w.owner.handle('pair_answer', { expectRequestId: `q${i + 2}`, agentId: 'api', choice: 'No' }, from)).toEqual({ ok: true, option: '2. No' })
+      w.sensor.questionGone('api', `q${i + 2}`)
+    }
+    w.sensor.question('api', 'q9', ask('Bash: npm test'), perm('npm test'))
+    expect(await w.owner.handle('pair_answer', { expectRequestId: 'q9', agentId: 'api', choice: 'Yes' }, from)).toMatchObject({ error: 'RATE_LIMITED' })
+    // Another connection has its own minute.
+    expect(await w.owner.handle('pair_answer', { expectRequestId: 'q9', agentId: 'api', choice: 'Yes' }, { connId: 'relay-conn-3' })).toEqual({ ok: true, option: '1. Yes' })
+    expect(w.calls.keyAnswer).toHaveBeenCalledTimes(6)
+  })
+
   it('answers sealed pair_* through the same floor, reading the question id from expectRequestId', async () => {
     const w = world()
     w.sensor.question('api', 'q1', ask('Bash: npm test'), perm('npm test'))
-    expect(await w.owner.handle('pair_answer', { requestId: 'rpc-1', expectRequestId: 'q1', agentId: 'api', choice: 'Yes', by: 'key' })).toEqual({ ok: true, option: '1. Yes' })
-    expect(w.acts()[0]).toMatchObject({ by: 'key', action: 'answer' })
-    expect(await w.owner.handle('pair_send', { agentId: 'sh', text: 'ls' })).toMatchObject({ error: 'UNTOUCHABLE' })
-    expect(await w.owner.handle('pair_pause', { agentId: 'api', by: 'nobody' })).toEqual({ ok: true })
-    expect(w.acts()[1]).toMatchObject({ by: 'pair', action: 'pause' })
+    const from = { connId: 'relay-conn-1', label: 'laptop' }
+    // The `by` a request carries is the sender's claim: here it is `remote`, and where it came from is journaled.
+    expect(await w.owner.handle('pair_answer', { requestId: 'rpc-1', expectRequestId: 'q1', agentId: 'api', choice: 'Yes', by: 'key' }, from)).toEqual({ ok: true, option: '1. Yes' })
+    expect(w.acts()[0]).toMatchObject({ by: 'remote', action: 'answer', origin: 'laptop (relay-conn-1)', text: 'answered "1. Yes" to "Bash: npm test" (from laptop (relay-conn-1))' })
+    // Nothing but an answer, from another machine.
+    for (const type of ['pair_send', 'pair_stop', 'pair_start', 'pair_pause', 'pair_resume']) {
+      expect(await w.owner.handle(type, { agentId: 'api', text: 'ls', engine: 'codex', cwd: '/w', by: 'key' }, from)).toMatchObject({ error: 'REMOTE_ANSWERS_ONLY' })
+    }
+    expect(w.calls.message).not.toHaveBeenCalled()
+    expect(w.calls.stop).not.toHaveBeenCalled()
+    expect(w.acts()).toHaveLength(1)
     expect(await w.owner.handle('pair_list', {})).toMatchObject({ harnesses: expect.arrayContaining([expect.objectContaining({ agentId: 'old', status: 'stopped' })]) })
     expect(await w.owner.handle('pair_read', { agentId: 'api' })).toMatchObject({ ok: true, recaps: ['fixed the login test'], asks: ['fix the login test'] })
     expect(await w.owner.handle('pair_read', { agentId: 'sh' })).not.toHaveProperty('recaps')
