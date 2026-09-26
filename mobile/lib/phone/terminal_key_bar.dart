@@ -236,7 +236,14 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
       // for in sequence (`ctrl` then an arrow) crossed the whole strip. Side by
       // side and to the LEFT of the arrows, the row reads in the order it is
       // pressed.
-      _key(label: 'shift', armed: _shift, onTap: _toggleShift),
+      // The keyboard's own mark, so it fits a key at the size of the others.
+      _key(
+        label: '⇧',
+        semanticLabel: 'shift',
+        armed: _shift,
+        onTap: _toggleShift,
+      ),
+      // `ctrl` in words: `⌃` reads as an up arrow beside the arrows.
       _key(label: 'ctrl', armed: _ctrlLit, onTap: _toggleCtrl),
       _key(
         label: '←',
