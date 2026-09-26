@@ -10,8 +10,14 @@ export const DAEMON_ROSTER = {
     ],
     "shinyOneIn": 256,
     "pityPerMiss": 1,
+    "secretGuaranteeAt": 8,
+    "duplicateXp": 150,
+    "overflowXp": 50,
     "firstEgg": {
-      "need": 5,
+      "need": 3,
+      "require": [
+        "turn"
+      ],
       "habits": [
         "turn",
         "split",
@@ -23,13 +29,27 @@ export const DAEMON_ROSTER = {
         "days"
       ]
     },
+    "setupEgg": {
+      "need": 6
+    },
     "eggs": {
       "first": {
         "weights": {
           "common": 60,
           "rare": 27,
           "legendary": 12,
-          "secret": 1
+          "secret": 0
+        },
+        "boost": {
+          "tim": 4
+        }
+      },
+      "setup": {
+        "weights": {
+          "common": 60,
+          "rare": 27,
+          "legendary": 12,
+          "secret": 0
         }
       },
       "turn": {
@@ -37,7 +57,7 @@ export const DAEMON_ROSTER = {
           "common": 60,
           "rare": 27,
           "legendary": 12,
-          "secret": 1
+          "secret": 0
         }
       },
       "week": {
@@ -45,7 +65,7 @@ export const DAEMON_ROSTER = {
           "common": 45,
           "rare": 35,
           "legendary": 18,
-          "secret": 2
+          "secret": 0
         }
       },
       "marathon": {
@@ -53,7 +73,7 @@ export const DAEMON_ROSTER = {
           "common": 25,
           "rare": 40,
           "legendary": 32,
-          "secret": 3
+          "secret": 0
         }
       },
       "night": {
@@ -72,20 +92,20 @@ export const DAEMON_ROSTER = {
           "common": 60,
           "rare": 27,
           "legendary": 12,
-          "secret": 1
+          "secret": 0
         }
       },
       "easter": {
         "weights": {
           "common": 0,
           "rare": 0,
-          "legendary": 50,
-          "secret": 50
+          "legendary": 90,
+          "secret": 10
         }
       }
     },
-    "easterWords": [
-      "xyzzy"
+    "easterHashes": [
+      "184858a00fd7971f810848266ebcecee5e8b69972c5ffaed622f5ee078671aed"
     ],
     "versions": [
       "0.1",
@@ -111,7 +131,8 @@ export const DAEMON_ROSTER = {
     "earn": {
       "turn": {
         "every": 40,
-        "dailyCap": 20
+        "dailyCap": 20,
+        "minutesPerTurn": 10
       },
       "week": {
         "days": 3
@@ -122,8 +143,12 @@ export const DAEMON_ROSTER = {
       },
       "night": {
         "nights": 3,
-        "fromHour": 0,
-        "toHour": 4
+        "fromHour": 22,
+        "toHour": 6,
+        "awayMinutes": 30
+      },
+      "history": {
+        "days": 7
       }
     },
     "historyDates": {
@@ -133,7 +158,11 @@ export const DAEMON_ROSTER = {
     }
   },
   "drops": [
-    "unix"
+    {
+      "id": "unix",
+      "announce": "2026-09-12",
+      "release": "2026-09-26"
+    }
   ],
   "daemons": [
     {

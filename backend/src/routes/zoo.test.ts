@@ -74,14 +74,15 @@ describe('zoo routes', () => {
   })
 
   it('bumps the revision with a compare-and-set, and replays on a lost race', async () => {
+    // (No 'turn' among them: three habits with a finished turn would earn the first egg.)
     mocks.prisma.zoo.findUnique
-      .mockResolvedValueOnce({ revision: 3, state: withHabits(['turn']) })
-      .mockResolvedValueOnce({ revision: 4, state: withHabits(['turn', 'find']) })
+      .mockResolvedValueOnce({ revision: 3, state: withHabits(['split']) })
+      .mockResolvedValueOnce({ revision: 4, state: withHabits(['split', 'find']) })
     mocks.prisma.zoo.updateMany
       .mockResolvedValueOnce({ count: 0 })
       .mockResolvedValueOnce({ count: 1 })
     const res = await post([{ op: 'zoo.habit', key: 'store' }])
-    expect(res.json().data).toEqual({ revision: 5, zoo: withHabits(['turn', 'find', 'store']), hatched: [], grants: [], levelUps: [] })
+    expect(res.json().data).toEqual({ revision: 5, zoo: withHabits(['split', 'find', 'store']), hatched: [], grants: [], levelUps: [] })
     expect(mocks.prisma.zoo.create).not.toHaveBeenCalled()
     expect(mocks.changed).toHaveBeenCalledOnce()
   })

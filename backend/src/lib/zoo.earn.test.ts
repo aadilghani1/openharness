@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  applyZooOps, drawWeights, emptyProgress, emptyZoo, historyDaemon, isLocalDay, isoWeek, levelFor, parseZoo, versionFor,
-  zooOpSchema, zooOpsBodySchema, ZOO_BATCH_MEMORY, ZOO_MAX_EGGS, ZOO_MAX_HELD,
+  applyZooOps, drawWeights, emptyProgress, emptyZoo, historyDaemon, historyDatesOpen, isLocalDay, isoWeek, levelFor, nightOf, parseZoo, versionFor,
+  zooOpSchema, zooOpsBodySchema, ZOO_BATCH_MEMORY, ZOO_MAX_EGGS, ZOO_MAX_HELD, ZOO_TURN_MAX_MINUTES,
   type Grant, type LevelUp, type Rng, type Zoo, type ZooContext, type ZooDaemon, type ZooOp, type ZooProgress,
 } from './zoo.js'
 import { DAEMON_ROSTER } from './daemonRoster.g.js'
@@ -9,7 +9,7 @@ import { DAEMON_ROSTER } from './daemonRoster.g.js'
 /** Earning eggs from work and growing a daemon (daemons/README.md, "Earning eggs and growing"). */
 
 const RULES = DAEMON_ROSTER.rules
-const ALL = DAEMON_ROSTER.daemons.map((d) => d.id)
+const REGULARS = DAEMON_ROSTER.daemons.filter((d) => d.rarity !== 'secret').map((d) => d.id)
 
 function seeded(seed = 1): Rng {
   let a = seed >>> 0
@@ -23,8 +23,10 @@ function seeded(seed = 1): Rng {
 }
 
 let batchSeq = 0
-const turn = (day: string, n: number, hour = 12, machineId = 'm1', batchId = `b${++batchSeq}`): ZooOp =>
-  ({ op: 'zoo.turn', batchId, n, day, hour, machineId })
+/** What a batch says besides its count: agent-minutes, and turns that finished while the person was away. */
+type Extra = { minutes?: number; away?: number }
+const turn = (day: string, n: number, hour = 12, machineId = 'm1', batchId = `b${++batchSeq}`, extra: Extra = {}): ZooOp =>
+  ({ op: 'zoo.turn', batchId, n, day, hour, machineId, ...extra })
 /** Noon UTC of a day: the server's clock while that day is being worked. */
 const noonOf = (day: string) => new Date(`${day}T12:00:00.000Z`)
 const daemon = (id: string, extra: Partial<ZooDaemon> = {}): ZooDaemon =>
@@ -35,15 +37,15 @@ const zooOf = (patch: Partial<Zoo>, progress: Partial<ZooProgress> = {}): Zoo =>
   ({ ...emptyZoo(), ...patch, progress: { ...emptyProgress(), ...progress } })
 const paired = (extra: Partial<ZooDaemon> = {}) => zooOf({ daemons: [daemon('tim', extra)], pair: 'tim' })
 
-type Report = [day: string, n: number, hour?: number, machineId?: string]
+type Report = [day: string, n: number, hour?: number, machineId?: string, extra?: Extra]
 /** Report turns one batch at a time, each on its own day's clock; collect what came of them. */
 function play(start: Zoo, reports: Report[], ctx: ZooContext = {}) {
   let zoo = start
   const grants: Grant[] = []
   const levelUps: LevelUp[] = []
   const changed: boolean[] = []
-  for (const [i, [day, n, hour = 12, machineId = 'm1']] of reports.entries()) {
-    const r = applyZooOps(zoo, [turn(day, n, hour, machineId)], seeded(i + 1), noonOf(day), ctx)
+  for (const [i, [day, n, hour = 12, machineId = 'm1', extra = {}]] of reports.entries()) {
+    const r = applyZooOps(zoo, [turn(day, n, hour, machineId, undefined, extra)], seeded(i + 1), noonOf(day), ctx)
     zoo = r.zoo
     grants.push(...r.grants)
     levelUps.push(...r.levelUps)
@@ -61,12 +63,14 @@ function fullDays(from: string, days: number, hour = 12): Report[] {
 describe('the rules the server grants by', () => {
   it('are the ones the roster sets', () => {
     expect(RULES.earn).toEqual({
-      turn: { every: 40, dailyCap: 20 },
+      turn: { every: 40, dailyCap: 20, minutesPerTurn: 10 },
       week: { days: 3 },
       marathon: { turns: 500, machines: 2 },
-      night: { nights: 3, fromHour: 0, toHour: 4 },
+      night: { nights: 3, fromHour: 22, toHour: 6, awayMinutes: 30 },
+      history: { days: 7 },
     })
     expect(RULES.bond).toEqual({ xpPerTurn: 1, xpPerDay: 5, levels: [0, 50, 150, 300, 600] })
+    expect({ overflowXp: RULES.overflowXp, duplicateXp: RULES.duplicateXp }).toEqual({ overflowXp: 50, duplicateXp: 150 })
     expect(RULES.historyDates).toEqual({ '04-01': 'teapot', '09-09': 'moth', '10-31': 'zombie' })
     expect(Object.keys(RULES.eggs)).toEqual(expect.arrayContaining(['turn', 'week', 'marathon', 'night', 'history']))
   })
@@ -77,6 +81,8 @@ describe('zoo.turn — what the server accepts', () => {
 
   it('takes 1-50 turns, a real local day, an hour and id-safe batch and machine ids', () => {
     expect(parse({})).toBe(true)
+    expect(parse({ minutes: 0, away: 0 })).toBe(true)
+    expect(parse({ minutes: ZOO_TURN_MAX_MINUTES, away: 3 })).toBe(true)
     expect(parse({ n: 50, hour: 0, day: '2028-02-29', batchId: 'x'.repeat(64), machineId: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6' })).toBe(true)
     expect(parse({ hour: 23 })).toBe(true)
   })
@@ -84,6 +90,8 @@ describe('zoo.turn — what the server accepts', () => {
   it('refuses absurd values', () => {
     for (const n of [0, -1, 51, 1.5, '3', 1e9, Number.NaN]) expect(parse({ n }), `n=${n}`).toBe(false)
     for (const hour of [-1, 24, 12.5, '12']) expect(parse({ hour }), `hour=${hour}`).toBe(false)
+    for (const minutes of [-1, 1.5, '10', ZOO_TURN_MAX_MINUTES + 1]) expect(parse({ minutes }), `minutes=${minutes}`).toBe(false)
+    for (const away of [-1, 1.5, 4, 51, '1']) expect(parse({ away }), `away=${away}`).toBe(false)   // n is 3: away is at most n
     for (const day of ['2026-02-29', '2026-02-30', '2026-13-01', '2026-9-1', '26-09-01', '1999-12-31', '3000-01-01', '2026-09-26T00:00', '']) {
       expect(parse({ day }), `day=${day}`).toBe(false)
     }
@@ -127,6 +135,29 @@ describe('the daily cap', () => {
     const r = play(emptyZoo(), fullDays('2026-09-01', 30).map(([d]) => [d, 1] as Report))
     expect(Object.keys(r.zoo.progress.days).sort()).toEqual(fullDays('2026-09-17', 14).map(([d]) => d))
     expect(r.zoo.progress.turns).toBe(30)
+  })
+})
+
+describe('long turns', () => {
+  it('count once more for every 10 agent-minutes in the batch', () => {
+    const r = play(paired(), [['2026-09-26', 2, 12, 'm1', { minutes: 35 }]])        // 2 turns + 3
+    expect(r.zoo.progress).toMatchObject({ turns: 5, days: { '2026-09-26': 5 } })
+    expect(r.zoo.daemons[0].xp).toBe(5 + 5)
+    expect(play(paired(), [['2026-09-26', 1, 12, 'm1', { minutes: 9 }]]).zoo.progress.turns).toBe(1)
+    expect(play(paired(), [['2026-09-26', 1, 12, 'm1', { minutes: 0 }]]).zoo.progress.turns).toBe(1)
+  })
+
+  it('stay under the daily cap of 20', () => {
+    const r = play(paired(), [['2026-09-26', 10, 12, 'm1', { minutes: 200 }], ['2026-09-26', 1, 13, 'm1', { minutes: 600 }]])
+    expect(r.zoo.progress).toMatchObject({ turns: 20, days: { '2026-09-26': 20 } })
+    expect(r.changed).toEqual([true, false])
+    expect(r.zoo.daemons[0].xp).toBe(20 + 5)
+  })
+
+  it('earn turn eggs like any counted turn', () => {
+    const r = play(zooOf({}, { turns: 38 }), [['2026-09-26', 1, 12, 'm1', { minutes: 25 }]])
+    expect(kinds(r.grants)).toEqual(['turn'])
+    expect(r.zoo.progress.turns).toBe(41)
   })
 })
 
@@ -186,25 +217,40 @@ describe('week eggs', () => {
 })
 
 describe('night eggs', () => {
-  it('grants one after 3 distinct nights with a turn between 00:00 and 04:59, then counts again', () => {
+  const away = (n = 1): Extra => ({ away: n })
+  const nights = (grants: Grant[]) => kinds(grants).filter((k) => k === 'night')   // (three days also make a week)
+
+  it('names a night by the day it began: 22:00 to 06:59, across midnight and the year', () => {
+    expect([21, 22, 23].map((h) => nightOf('2026-09-21', h))).toEqual([null, '2026-09-21', '2026-09-21'])
+    expect([0, 3, 6, 7, 12].map((h) => nightOf('2026-09-22', h))).toEqual(['2026-09-21', '2026-09-21', '2026-09-21', null, null])
+    expect(nightOf('2027-01-01', 2)).toBe('2026-12-31')
+    expect(nightOf('2028-03-01', 1)).toBe('2028-02-29')
+  })
+
+  it('grants one after 3 distinct nights with a turn that finished while you were away, then counts again', () => {
     const r = play(emptyZoo(), [
-      ['2026-09-21', 1, 0], ['2026-09-21', 1, 4],                          // one night, twice
-      ['2026-09-22', 1, 5], ['2026-09-22', 1, 23],                         // 05:00 and 23:00 are not night
-      ['2026-09-23', 1, 3],
+      ['2026-09-21', 1, 23, 'm1', away()], ['2026-09-22', 1, 2, 'm1', away()],   // one night, twice
+      ['2026-09-22', 1, 7, 'm1', away()], ['2026-09-22', 1, 21, 'm1', away()],   // 07:00 and 21:00 are not night
+      ['2026-09-23', 1, 23],                                                      // at the keyboard: not away
+      ['2026-09-24', 1, 6, 'm1', away()],                                         // the night of the 23rd
     ])
-    const nights = (grants: Grant[]) => kinds(grants).filter((k) => k === 'night')   // (three days also make a week)
     expect(nights(r.grants)).toEqual([])
     expect(r.zoo.progress.nights).toEqual(['2026-09-21', '2026-09-23'])
-    const third = play(r.zoo, [['2026-09-25', 1, 2]])
+    const third = play(r.zoo, [['2026-09-25', 1, 22, 'm1', away()]])
     expect(nights(third.grants)).toEqual(['night'])
     expect(third.zoo.progress.nights).toEqual([])
-    const again = play(third.zoo, [['2026-09-26', 1, 1], ['2026-09-27', 1, 1]])
+    const again = play(third.zoo, [['2026-09-26', 1, 1, 'm1', away()], ['2026-09-27', 1, 1, 'm1', away()]])
     expect(nights(again.grants)).toEqual([])
-    expect(nights(play(again.zoo, [['2026-09-28', 1, 4]]).grants)).toEqual(['night'])
+    expect(nights(play(again.zoo, [['2026-09-28', 1, 4, 'm1', away()]]).grants)).toEqual(['night'])
+  })
+
+  it('never counts a night for turns you were there for, however late', () => {
+    const r = play(emptyZoo(), [['2026-09-21', 5, 23], ['2026-09-23', 5, 2], ['2026-09-24', 5, 3, 'm1', { away: 0 }], ['2026-09-26', 5, 0]])
+    expect(r.zoo.progress.nights).toEqual([])
   })
 
   it('needs the night turn to count', () => {
-    const capped = play(zooOf({}, { days: { '2026-09-26': 20 }, machines: ['m1'] }), [['2026-09-26', 3, 2]])
+    const capped = play(zooOf({}, { days: { '2026-09-26': 20 }, machines: ['m1'] }), [['2026-09-26', 3, 2, 'm1', away(3)]])
     expect(capped.changed).toEqual([false])
     expect(capped.zoo.progress.nights).toEqual([])
   })
@@ -223,15 +269,33 @@ describe('history eggs', () => {
     expect(nextYear.zoo.progress.history).toEqual(['2026-09-09', '2026-10-31', '2027-04-01', '2027-09-09'])
   })
 
+  it('stays open for a week from its date, and is still once per date per year', () => {
+    expect(historyDatesOpen('2026-09-08')).toEqual([])
+    expect(historyDatesOpen('2026-09-09')).toEqual(['2026-09-09'])
+    expect(historyDatesOpen('2026-09-15')).toEqual(['2026-09-09'])
+    expect(historyDatesOpen('2026-09-16')).toEqual([])
+    expect(historyDatesOpen('2026-11-06')).toEqual(['2026-10-31'])
+    expect(historyDatesOpen('2026-11-07')).toEqual([])
+    // Late in the week: the egg carries the date it remembers, not the day it was earned.
+    const late = play(emptyZoo(), [['2026-09-15', 1]])
+    expect(late.zoo.eggs).toEqual([expect.objectContaining({ kind: 'history', date: '2026-09-09' })])
+    const early = play(emptyZoo(), [['2026-09-08', 1], ['2026-09-16', 1]])
+    expect(kinds(early.grants)).toEqual([])
+    const twice = play(emptyZoo(), [['2026-09-10', 1], ['2026-09-12', 1], ['2026-09-14', 1]])
+    expect(kinds(twice.grants).filter((k) => k === 'history')).toEqual(['history'])
+    expect(kinds(play(twice.zoo, [['2027-09-13', 1]]).grants)).toEqual(['history'])
+  })
+
   it('draws from the usual pool while no drop holds that date\'s daemon', () => {
-    expect(ALL).not.toContain('moth')
+    expect(REGULARS).not.toContain('moth')
     const zoo = zooOf({ eggs: [{ ...egg('h', 'history'), date: '2026-09-09' }] })
     expect(historyDaemon(zoo, '2026-09-09')).toBeNull()
     expect(historyDaemon(zoo, '2026-09-26')).toBeNull()
     expect(historyDaemon(zoo, undefined)).toBeNull()
-    expect(drawWeights(zoo, 'history').filter((w) => w.weight > 0).map((w) => w.id)).toEqual(ALL)
+    // The usual pool of a history egg holds no secret (only night and easter eggs do).
+    expect(drawWeights(zoo, 'history', noonOf('2026-09-26')).filter((w) => w.weight > 0).map((w) => w.id)).toEqual(REGULARS)
     const r = applyZooOps(zoo, [{ op: 'zoo.hatch', eggId: 'h' }], seeded(), noonOf('2026-09-26'))
-    expect(ALL).toContain(r.hatched[0].daemonId)
+    expect(REGULARS).toContain(r.hatched[0].daemonId)
     expect(r.zoo.daemons[0].egg).toBe('history')
   })
 })
@@ -264,9 +328,9 @@ describe('marathon eggs', () => {
 
 describe('a full nest', () => {
   it('holds earned eggs back, keeps count, and lets them in as room appears, oldest first', () => {
-    // Fri 09-25 at 02:00 is the 40th turn and the third night; Sun 09-27 is the 80th and the third day of W39.
+    // Fri 09-25 at 02:00 is the 40th turn and, away, the third night; Sun 09-27 is the 80th and the third day of W39.
     const start = zooOf({ eggs: fullNest() }, { turns: 39, nights: ['2026-09-22', '2026-09-23'] })
-    const r = play(start, [['2026-09-25', 1, 2], ['2026-09-26', 20], ['2026-09-27', 20], ['2026-10-31', 1]])
+    const r = play(start, [['2026-09-25', 1, 2, 'm1', { away: 1 }], ['2026-09-26', 20], ['2026-09-27', 20], ['2026-10-31', 1]])
     expect(r.grants).toEqual([])
     expect(r.zoo.eggs).toHaveLength(ZOO_MAX_EGGS)
     expect(r.zoo.progress.held).toEqual([{ kind: 'turn' }, { kind: 'night' }, { kind: 'turn' }, { kind: 'week' }, { kind: 'history', date: '2026-10-31' }])
@@ -281,11 +345,26 @@ describe('a full nest', () => {
     expect(all.zoo.eggs.at(-1)).toMatchObject({ kind: 'history', date: '2026-10-31', grantedAt: '2026-11-01T12:00:00.000Z' })
   })
 
-  it('stops holding past 64', () => {
+  it('turns each egg earned past 64 held into 50 xp for the pair, answered as a grant', () => {
     const held = Array.from({ length: ZOO_MAX_HELD }, () => ({ kind: 'turn' }))
-    const r = play(zooOf({ eggs: fullNest() }, { turns: 39, held }), [['2026-09-26', 1]])
+    const start = zooOf({ daemons: [daemon('tim', { xp: 40 })], pair: 'tim', eggs: fullNest() }, { turns: 39, held })
+    const r = play(start, [['2026-09-26', 1]])
     expect(r.zoo.progress.held).toHaveLength(ZOO_MAX_HELD)
     expect(r.zoo.progress.turns).toBe(40)
+    expect(r.grants).toEqual([{ kind: 'turn', xp: 50 }])
+    expect(r.zoo.daemons[0].xp).toBe(40 + 50 + 1 + 5)                     // the egg's 50, then the turn's own xp
+    expect(r.levelUps).toEqual([{ id: 'tim', level: 1, version: '0.1' }])
+    // Two at once (a turn egg and a week egg) are two grants.
+    const two = play(zooOf({ daemons: [daemon('tim')], pair: 'tim', eggs: fullNest() }, { turns: 79, held, days: { '2026-09-21': 1, '2026-09-22': 1 } }), [['2026-09-23', 1]])
+    expect(two.grants).toEqual([{ kind: 'turn', xp: 50 }, { kind: 'week', xp: 50 }])
+    expect(two.zoo.daemons[0].xp).toBe(100 + 1 + 5)
+  })
+
+  it('has nobody to grow past 64 held while nothing has hatched', () => {
+    const held = Array.from({ length: ZOO_MAX_HELD }, () => ({ kind: 'turn' }))
+    const r = play(zooOf({ eggs: fullNest() }, { turns: 39, held }), [['2026-09-26', 1]])
+    expect(r.grants).toEqual([])
+    expect(r.zoo.progress.held).toHaveLength(ZOO_MAX_HELD)
   })
 
   it('lets a held egg in on any write once there is room', () => {
@@ -368,8 +447,9 @@ describe('batches', () => {
   })
 
   it('applies a request of several batches in order', () => {
-    const r = applyZooOps(paired(), [turn('2026-09-26', 1, 3), turn('2026-09-26', 2, 4), turn('2026-09-27', 1, 0)], seeded(), noonOf('2026-09-26'))
-    expect(r.zoo.progress).toMatchObject({ turns: 4, days: { '2026-09-26': 3, '2026-09-27': 1 }, nights: ['2026-09-26', '2026-09-27'] })
+    const away = { away: 1 }
+    const r = applyZooOps(paired(), [turn('2026-09-26', 1, 3, 'm1', undefined, away), turn('2026-09-26', 2, 4, 'm1', undefined, away), turn('2026-09-27', 1, 0, 'm1', undefined, away)], seeded(), noonOf('2026-09-26'))
+    expect(r.zoo.progress).toMatchObject({ turns: 4, days: { '2026-09-26': 3, '2026-09-27': 1 }, nights: ['2026-09-25', '2026-09-26'] })
     expect(r.zoo.daemons[0].xp).toBe(5 + 3 + 5 + 1)
   })
 

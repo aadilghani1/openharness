@@ -115,8 +115,14 @@ const daemonRosterJson = r'''
     ],
     "shinyOneIn": 256,
     "pityPerMiss": 1,
+    "secretGuaranteeAt": 8,
+    "duplicateXp": 150,
+    "overflowXp": 50,
     "firstEgg": {
-      "need": 5,
+      "need": 3,
+      "require": [
+        "turn"
+      ],
       "habits": [
         {
           "key": "turn",
@@ -152,6 +158,9 @@ const daemonRosterJson = r'''
         }
       ]
     },
+    "setupEgg": {
+      "need": 6
+    },
     "eggs": {
       "first": {
         "look": "\\_O_/",
@@ -159,7 +168,19 @@ const daemonRosterJson = r'''
           "common": 60,
           "rare": 27,
           "legendary": 12,
-          "secret": 1
+          "secret": 0
+        },
+        "boost": {
+          "tim": 4
+        }
+      },
+      "setup": {
+        "look": "\\_$_/",
+        "weights": {
+          "common": 60,
+          "rare": 27,
+          "legendary": 12,
+          "secret": 0
         }
       },
       "turn": {
@@ -168,7 +189,7 @@ const daemonRosterJson = r'''
           "common": 60,
           "rare": 27,
           "legendary": 12,
-          "secret": 1
+          "secret": 0
         }
       },
       "week": {
@@ -177,7 +198,7 @@ const daemonRosterJson = r'''
           "common": 45,
           "rare": 35,
           "legendary": 18,
-          "secret": 2
+          "secret": 0
         }
       },
       "marathon": {
@@ -186,7 +207,7 @@ const daemonRosterJson = r'''
           "common": 25,
           "rare": 40,
           "legendary": 32,
-          "secret": 3
+          "secret": 0
         }
       },
       "night": {
@@ -207,7 +228,7 @@ const daemonRosterJson = r'''
           "common": 60,
           "rare": 27,
           "legendary": 12,
-          "secret": 1
+          "secret": 0
         }
       },
       "easter": {
@@ -215,15 +236,16 @@ const daemonRosterJson = r'''
         "weights": {
           "common": 0,
           "rare": 0,
-          "legendary": 50,
-          "secret": 50
+          "legendary": 90,
+          "secret": 10
         }
       }
     },
     "earn": {
       "turn": {
         "every": 40,
-        "dailyCap": 20
+        "dailyCap": 20,
+        "minutesPerTurn": 10
       },
       "week": {
         "days": 3
@@ -234,8 +256,12 @@ const daemonRosterJson = r'''
       },
       "night": {
         "nights": 3,
-        "fromHour": 0,
-        "toHour": 4
+        "fromHour": 22,
+        "toHour": 6,
+        "awayMinutes": 30
+      },
+      "history": {
+        "days": 7
       }
     },
     "historyDates": {
@@ -243,8 +269,8 @@ const daemonRosterJson = r'''
       "09-09": "moth",
       "10-31": "zombie"
     },
-    "easterWords": [
-      "xyzzy"
+    "easterHashes": [
+      "184858a00fd7971f810848266ebcecee5e8b69972c5ffaed622f5ee078671aed"
     ],
     "nest": [
       "\\_O_/",
@@ -279,7 +305,9 @@ const daemonRosterJson = r'''
     {
       "id": "unix",
       "n": 1,
-      "name": "unix"
+      "name": "unix",
+      "announce": "2026-09-12",
+      "release": "2026-09-26"
     }
   ],
   "daemons": [
@@ -291,6 +319,10 @@ const daemonRosterJson = r'''
       "color": {
         "xterm": 71,
         "hex": "#5faf5f"
+      },
+      "shiny": {
+        "xterm": 49,
+        "hex": "#00ffaf"
       },
       "family": [
         [
@@ -421,6 +453,10 @@ const daemonRosterJson = r'''
         "xterm": 73,
         "hex": "#5fafaf"
       },
+      "shiny": {
+        "xterm": 214,
+        "hex": "#ffaf00"
+      },
       "family": [
         [
           "fish",
@@ -535,6 +571,10 @@ const daemonRosterJson = r'''
         "xterm": 221,
         "hex": "#ffd75f"
       },
+      "shiny": {
+        "xterm": 39,
+        "hex": "#00afff"
+      },
       "family": [
         [
           "ping",
@@ -634,6 +674,10 @@ const daemonRosterJson = r'''
       "color": {
         "xterm": 103,
         "hex": "#8787af"
+      },
+      "shiny": {
+        "xterm": 254,
+        "hex": "#e4e4e4"
       },
       "family": [
         [
@@ -735,6 +779,10 @@ const daemonRosterJson = r'''
       "color": {
         "xterm": 107,
         "hex": "#87af5f"
+      },
+      "shiny": {
+        "xterm": 226,
+        "hex": "#ffff00"
       },
       "family": [
         [
@@ -844,6 +892,10 @@ const daemonRosterJson = r'''
         "xterm": 173,
         "hex": "#d7875f"
       },
+      "shiny": {
+        "xterm": 134,
+        "hex": "#af5fd7"
+      },
       "family": [
         [
           "sh",
@@ -934,6 +986,10 @@ const daemonRosterJson = r'''
       "color": {
         "xterm": 180,
         "hex": "#d7af87"
+      },
+      "shiny": {
+        "xterm": 130,
+        "hex": "#af5f00"
       },
       "family": [
         [
@@ -1037,6 +1093,10 @@ const daemonRosterJson = r'''
         "xterm": 110,
         "hex": "#87afd7"
       },
+      "shiny": {
+        "xterm": 161,
+        "hex": "#d7005f"
+      },
       "family": [
         [
           "find",
@@ -1138,6 +1198,10 @@ const daemonRosterJson = r'''
         "xterm": 179,
         "hex": "#d7af5f"
       },
+      "shiny": {
+        "xterm": 118,
+        "hex": "#87ff00"
+      },
       "family": [
         [
           "man",
@@ -1218,6 +1282,10 @@ const daemonRosterJson = r'''
       "color": {
         "xterm": 246,
         "hex": "#949494"
+      },
+      "shiny": {
+        "xterm": 93,
+        "hex": "#8700ff"
       },
       "family": [
         [
