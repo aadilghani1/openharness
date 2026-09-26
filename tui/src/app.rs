@@ -326,6 +326,11 @@ pub struct App {
     pub forget_sessions: bool,
     /// Questions out to the daemons about harnesses (recaps, pull requests), at most a few at once.
     pub enriching: u32,
+    /// The key being handled (its tmux name), and the one whose binding's commands are running —
+    /// for the message log (`/dev/ttys003 key C-b: …`); the log starts once the config is read.
+    pub key_name: Option<String>,
+    pub key_run: Option<String>,
+    pub cfg_finished: bool,
     /// select-pane -m: the marked pane (join-pane and swap-pane take it as their source).
     pub marked: Option<u64>,
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
@@ -449,6 +454,9 @@ impl App {
             start_failed: None,
             forget_sessions: false,
             enriching: 0,
+            key_name: None,
+            key_run: None,
+            cfg_finished: false,
             marked: None,
             return_to: None,
             held_reply: None,
@@ -558,9 +566,15 @@ impl App {
         let text = match &self.origin { Some((file, line)) => format!("{file}:{line}: {text}"), None => text };
         // Run from a shell: a message is the command's error, printed there.
         if let Some(err) = self.capture_err.as_mut() { err.push(text); return }
-        self.messages.push((std::time::SystemTime::now(), text.clone()));
-        if self.messages.len() > 200 { self.messages.remove(0); }
+        self.add_message(format!("{} message: {text}", tty_name()));
         self.toast = Some((text, color, Instant::now()));
+    }
+
+    /// server_add_message: a line into the message log (C-b ~), at most message-limit of them.
+    pub fn add_message(&mut self, text: String) {
+        self.messages.push((std::time::SystemTime::now(), text));
+        let limit: usize = self.options.get("message-limit", "", None).and_then(|v| v.parse().ok()).unwrap_or(1000);
+        if self.messages.len() > limit { let over = self.messages.len() - limit; self.messages.drain(..over); }
     }
 
     /// A command's error (cmdq_error): to a shell that ran the command as it is, and on the status
@@ -2882,15 +2896,13 @@ impl App {
         });
     }
 
-    /// The outer terminal's title: the harness in front of you, so a terminal tab says what is in it.
-    pub fn window_title(&self) -> String {
-        let focused = self.focused().and_then(|id| self.panes.get(&id)).and_then(|p| self.fleet.agent(&p.machine_id, &p.agent_id));
-        let waiting = self.fleet.waiting();
-        let lead = if waiting > 0 { format!("?{waiting} ") } else { String::new() };
-        match focused {
-            Some(agent) => format!("{lead}{} — Harness", agent.name),
-            None => format!("{lead}Harness"),
-        }
+    /// The outer terminal's title, as set-titles and set-titles-string say (hn's: the harnesses
+    /// waiting on you and the one in front, so a terminal tab says what is in it); none with
+    /// set-titles off, as tmux leaves the terminal's own.
+    pub fn window_title(&self) -> Option<String> {
+        if self.options.get("set-titles", "", None).as_deref() != Some("on") { return None }
+        let fmt = self.options.get("set-titles-string", "", None).unwrap_or_default();
+        Some(crate::format::expand(self, &fmt, self.active, self.focused(), true))
     }
 
     // ── the loop's slow tick ─────────────────────────────────────────────────

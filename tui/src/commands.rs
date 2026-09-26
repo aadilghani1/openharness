@@ -444,7 +444,9 @@ pub fn execute_in(app: &mut App, line: &str, mouse: Option<crate::mouse::Event>)
 /// argument ends with `;` — `display a \; display b` is two commands.
 pub fn execute_bound(app: &mut App, line: &str) {
     let q = bound_queue(app, line);
+    let saved = std::mem::replace(&mut app.key_run, app.key_name.clone());
     run_queue(app, q);
+    app.key_run = saved;
 }
 
 fn bound_queue(app: &mut App, line: &str) -> Queue {
@@ -465,7 +467,24 @@ pub fn execute_mouse(app: &mut App, line: &str, m: crate::mouse::Event) {
 
 /// A command given as arguments (`hn <command> …` from a shell), split as tmux splits them.
 pub fn execute_args(app: &mut App, words: &[String]) {
-    let q: Queue = crate::cmdparse::from_arguments(words).into_iter().map(|words| Item { words, origin: None, mouse: None, hook: None }).collect();
+    // cmd_parse_from_arguments: each command's alias expanded (the alias's commands, the last
+    // taking this one's words).
+    let aliases = app.options.array("command-alias");
+    let mut q = Queue::new();
+    for words in crate::cmdparse::from_arguments(words) {
+        let alias = words.first().and_then(|n| aliases.iter().find_map(|a| a.split_once('=').filter(|(k, _)| k == n).map(|(_, v)| v.to_string())));
+        match alias.and_then(|a| crate::cmdparse::parse(&a, app, true).ok()) {
+            Some(cmds) if !cmds.is_empty() => {
+                let n = cmds.len();
+                for (i, c) in cmds.iter().enumerate() {
+                    let mut w = crate::cmdparse::words(c);
+                    if i + 1 == n { w.extend(words[1..].iter().cloned()) }
+                    q.push_back(Item { words: w, origin: None, mouse: None, hook: None });
+                }
+            }
+            _ => q.push_back(Item { words, origin: None, mouse: None, hook: None }),
+        }
+    }
     run_queue(app, q);
 }
 
@@ -483,12 +502,15 @@ pub type Queue = std::collections::VecDeque<Item>;
 /// A command string as the queue's commands, parsed by tmux's grammar (cmdparse); its error
 /// said, and nothing run, when it has one.
 fn queue_of(app: &mut App, line: &str) -> Queue {
-    match crate::cmdparse::parse(line, app, false) {
-        // Commands a command queues (if-shell's, a menu's) keep its mouse event, as tmux's
-        // inserted items keep their state.
-        Ok(cmds) => cmds.iter().map(|c| Item { words: crate::cmdparse::words(c), origin: None, mouse: app.mouse_ev.clone(), hook: app.hook_state.clone() }).collect(),
-        Err((_, e)) => { app.error(e); Queue::new() }
-    }
+    let cmds = match crate::cmdparse::parse(line, app, false) { Ok(c) => c, Err((_, e)) => { app.error(e); return Queue::new() } };
+    // cmd_parse_build_commands: aliases expanded (choose-window, splitp, your own), each command
+    // found and checked before any runs.
+    let aliases = app.options.array("command-alias");
+    let alias = |name: &str| aliases.iter().find_map(|a| a.split_once('=').filter(|(n, _)| *n == name).map(|(_, v)| v.to_string()));
+    let built = match crate::cmdparse::build(&cmds, app, None, false, &alias) { Ok(b) => b, Err((_, e)) => { app.error(e); return Queue::new() } };
+    // Commands a command queues (if-shell's, a menu's) keep its mouse event, as tmux's inserted
+    // items keep their state.
+    built.commands.iter().map(|c| Item { words: crate::cmdparse::words(c), origin: None, mouse: app.mouse_ev.clone(), hook: app.hook_state.clone() }).collect()
 }
 
 fn run_queue(app: &mut App, mut queue: Queue) {
@@ -496,6 +518,13 @@ fn run_queue(app: &mut App, mut queue: Queue) {
         app.origin = origin;
         let saved = std::mem::replace(&mut app.mouse_ev, mouse);
         let saved_hook = std::mem::replace(&mut app.hook_state, hook.clone());
+        // cmdq_add_message: each command once the config is read — the key that ran it, else
+        // the client (a shell's `hn …` has none).
+        if app.cfg_finished {
+            let text = words.iter().map(|w| crate::tmuxconf::quote_word(w)).collect::<Vec<_>>().join(" ");
+            let line = match (&app.key_run, app.capture.is_some()) { (Some(k), _) => format!("{} key {k}: {text}", crate::app::tty_name()), (None, true) => format!("command: {text}"), (None, false) => format!("{} command: {text}", crate::app::tty_name()) };
+            app.add_message(line);
+        }
         let job = match shell_job(app, &words) { Ok(j) => j, Err(e) => { app.error(e); app.origin = None; app.mouse_ev = saved; app.hook_state = saved_hook; continue } };
         let Some(Job { command, cwd, delay, background, done }) = job else {
             let errors = app.errors;
@@ -1351,6 +1380,11 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 (app.capture_err, app.origin) = (cap, origin);
             }
         }
+        // -T the terminals, -J the jobs, in place of the messages.
+        "show-messages" if flag(words, "-T") || flag(words, "-J") => {
+            let lines = if flag(words, "-T") { vec![format!("Terminal 0: {} for {}, flags=0x0:", std::env::var("TERM").unwrap_or_default(), crate::app::tty_name())] } else { Vec::new() };
+            app.print("show-messages", lines)
+        }
         "show-messages" => {
             // SHOW_MESSAGES_TEMPLATE, newest first: `#{t/p:message_time}: #{message_text}`.
             let off = crate::app::utc_offset();
@@ -1545,6 +1579,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
         }
         "bind-key" | "unbind-key" => {
             let mut settings = crate::tmuxconf::Settings::default();
+            settings.aliases = app.options.array("command-alias");
             let mut words = words.to_vec();
             words[0] = command.to_string();
             match crate::tmuxconf::directive(&words, &mut app.keymap, &mut settings) {

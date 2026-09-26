@@ -42,6 +42,7 @@ fn typing(app: &App) -> bool {
 
 fn on_key(app: &mut App, key: KeyEvent) {
     let chord = keys::of(&key);
+    app.key_name = Some(keys::name(&chord));
     // A message goes on the next key, as tmux's does; and tim notices you are back.
     app.toast = None;
     app.tim.touched = std::time::Instant::now();
@@ -164,12 +165,15 @@ pub fn send_to_pane(app: &mut App, focus: u64, bytes: Vec<u8>) {
         if !pane.opening { app.open_stream(focus, true) }
         return;
     }
-    // synchronize-panes: the same keys into every pane of the window that takes them.
+    // synchronize-panes (window_pane_key): the same keys into every other pane of the window that
+    // takes them — not one in a mode, nor one with its input off (select-pane -d), nor one a zoom
+    // hides (window_pane_visible).
     if app.tab().sync && app.tab().panes().contains(&focus) {
+        let zoomed = app.tab().zoomed;
         let others: Vec<u64> = app.tab().panes().into_iter().filter(|p| *p != focus).collect();
         for p in others {
-            let ok = app.panes.get(&p).map(|x| x.stream.is_some() && !x.read_only && matches!(x.phase, Phase::Live)).unwrap_or(false);
-            if ok { app.send_input(p, &bytes) }
+            let ok = app.panes.get(&p).map(|x| x.stream.is_some() && !x.read_only && matches!(x.phase, Phase::Live) && !x.in_mode() && !x.input_off).unwrap_or(false);
+            if ok && !zoomed { app.send_input(p, &bytes) }
         }
     }
     app.send_input(focus, &bytes);

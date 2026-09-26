@@ -62,6 +62,9 @@ pub struct Options {
 
 #[derive(Default, Clone, Debug)]
 pub struct Settings {
+    /// command-alias's items (`name=command …`): a bound command's first word, expanded as tmux
+    /// expands it when it parses the binding.
+    pub aliases: Vec<String>,
     pub options: Options,
     pub notes: Vec<String>,
     depth: u8,
@@ -112,6 +115,17 @@ pub fn colour_name(c: Color) -> String {
         Color::LightBlue => "brightblue".into(), Color::LightMagenta => "brightmagenta".into(), Color::LightCyan => "brightcyan".into(), Color::White => "brightwhite".into(),
         Color::Indexed(n) => format!("colour{n}"),
         Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+    }
+}
+
+/// cmd_parse_expand_alias: a command whose first word is an alias's name, as that alias's command
+/// with the rest of its words after it (`choose-window` → `choose-tree -w`).
+pub fn expand_alias(command: &str, aliases: &[String]) -> String {
+    let (name, rest) = match command.split_once(char::is_whitespace) { Some((n, r)) => (n, r.trim_start()), None => (command, "") };
+    match aliases.iter().find_map(|a| a.split_once('=').filter(|(n, _)| *n == name).map(|(_, v)| v.to_string())) {
+        Some(v) if rest.is_empty() => v,
+        Some(v) => format!("{v} {rest}"),
+        None => command.to_string(),
     }
 }
 
@@ -443,6 +457,7 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
             let rest = &words[i + 1..];
             let command = if rest.len() == 1 { rest[0].strip_prefix(BLOCK).unwrap_or(&rest[0]).trim().to_string() } else { rest.iter().map(|w| quote_word(w)).collect::<Vec<_>>().join(" ") };
             if command.is_empty() { return Err(format!("bind {key} without a command")) }
+            let command = expand_alias(&command, &s.aliases);
             match named {
                 Some(t) => {
                     let list = keymap.named.entry(t).or_default();

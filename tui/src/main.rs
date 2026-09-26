@@ -219,6 +219,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     // ~/.tmux.conf, read and run as tmux reads and runs it.
     app.update_environment();
     let read = commands::load_config(&mut app);
+    app.cfg_finished = true;
     app.config_files = read.clone();
     if config.prefix_set { app.keymap.prefix = config.prefix }
     for (chord, command) in &config.keys {
@@ -300,8 +301,7 @@ async fn run(config: config::Config) -> io::Result<()> {
             if !app.first_frame { app.first_frame = true; mark("first frame") }
             last_draw = Instant::now();
             need_draw = false;
-            let title = app.window_title();
-            if title != app.title {
+            if let Some(title) = app.window_title().filter(|t| *t != app.title) {
                 execute!(term.backend_mut(), terminal::SetTitle(&title))?;
                 app.title = title;
             }

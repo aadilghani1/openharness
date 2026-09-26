@@ -93,7 +93,8 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
         c if matches!(crate::cmd::find(c).map(|e| e.name), Ok("list-sessions" | "has-session" | "kill-session")) && !crate::ipc::alive(socket.as_deref(), name.as_deref()) => Some(offline(port, args, name.as_deref()).await),
         // Any tmux command: run on the newest running client, its output printed here.
         // Any tmux command (by name, alias, or the start of one), or hn's: run by the client.
-        c if crate::commands::is_command_name(c) || crate::cmd::find(c).is_ok() => Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await),
+        // (A name it does not know may be a command-alias: the running client knows.)
+        c if crate::commands::is_command_name(c) || crate::cmd::find(c).is_ok() || (!c.starts_with('-') && crate::ipc::alive(socket.as_deref(), name.as_deref())) => Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await),
         c if !c.starts_with('-') => { eprintln!("{}", crate::cmd::find(c).err().unwrap_or_default()); Some(1) }
         _ => None,
     }

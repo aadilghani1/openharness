@@ -54,7 +54,8 @@ pane numbers and the same active pane after each. Some defaults differ, and your
 overrides each: `pane-border-status top` (each pane's title row: its harness's state and name, and
 its project and branch where the pane has room), `allow-set-title off` (a pane's title is its
 harness's name, not what the program sets), `history-limit 10000` (agents print a lot; tmux keeps
-2000), `mouse on`, and the status line: each window's most urgent harness state before its name,
+2000), `mouse on`, `set-titles on` (the terminal's title: `?2 Fix flaky login test — Harness`, the
+harnesses waiting on you and the one in front; `set-titles-string` changes it), and the status line: each window's most urgent harness state before its name,
 and on the right the focused pane's machine (when it is another one), project and branch —
 `gpu-box:ml-lab git:(main)` — where tmux shows the pane's title.
 

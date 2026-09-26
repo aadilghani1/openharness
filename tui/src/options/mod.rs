@@ -79,6 +79,9 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         for name in ["window-status-format", "window-status-current-format"] {
             m.insert(name.into(), "#I:#{?window_agent_icon,#{window_agent_icon} ,}#{window_short_name}#{?window_flags,#{window_flags}, }".into());
         }
+        // The terminal's title: the harnesses waiting on you, and the one in front.
+        m.insert("set-titles".into(), "on".into());
+        m.insert("set-titles-string".into(), "#{?fleet_needs,?#{fleet_needs} ,}#{pane_title} — Harness".into());
         // A session is a machine, named as the machine is (tmux's are 0, 1, …): room for its name.
         m.insert("status-left-length".into(), "24".into());
         m.insert("status-right-length".into(), "60".into());
@@ -113,7 +116,7 @@ pub fn tmux_defaults() -> &'static BTreeMap<String, String> {
 }
 
 /// hn's look, where its defaults differ from tmux's: what `set -g @hn-look tmux` puts back.
-pub const LOOK: [&str; 8] = ["pane-border-status", "pane-border-format", "status-left", "status-right", "status-left-length", "status-right-length", "window-status-format", "window-status-current-format"];
+pub const LOOK: [&str; 10] = ["pane-border-status", "pane-border-format", "status-left", "status-right", "status-left-length", "status-right-length", "window-status-format", "window-status-current-format", "set-titles", "set-titles-string"];
 
 /// Where a `set` lands, as tmux's flags choose it.
 #[derive(Default, Clone, Debug)]
