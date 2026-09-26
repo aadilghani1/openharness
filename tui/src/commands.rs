@@ -1529,7 +1529,20 @@ fn run_words_in(app: &mut App, words: &[String]) {
             app.format_buffer = None;
             app.print("list-buffers", lines)
         }
-        "choose-buffer" => input::run(app, "choose-buffer"),
+        "choose-buffer" => {
+            // cmd-choose-tree.c for window-buffer.c: the pane into buffer mode — every paste buffer,
+            // -F the items' format, -K their keys', -f a filter, -O the sort (time, name, size), -r
+            // reversed, -N no preview, -Z zoomed while it lasts; the template run on the chosen
+            // buffer (paste-buffer -p -b '%%'). No buffers: nothing.
+            if app.paste.walk().next().is_none() { return }
+            let Some((w, p)) = target_pane(app, words) else { return };
+            let command = positional(words).first().cloned().filter(|c| !c.is_empty());
+            let a = crate::tree::Start {
+                buffer: true, session: false, window: false, format: opt(words, "-F"), key_format: opt(words, "-K"), command,
+                filter: opt(words, "-f"), sort: opt(words, "-O"), reversed: flag(words, "-r"), no_preview: flag(words, "-N"), zoom: flag(words, "-Z"),
+            };
+            crate::tree::enter(app, p, w, &a);
+        }
         "delete-buffer" => {
             let name = match opt(words, "-b") {
                 Some(b) => { if app.paste.get(&b).is_none() { return app.error(format!("unknown buffer: {b}")) } b }
@@ -1555,7 +1568,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 let Some((w, p)) = target_pane(app, words) else { return };
                 let command = positional(words).first().cloned().filter(|c| !c.is_empty());
                 let a = crate::tree::Start {
-                    session: flag(words, "-s"), window: flag(words, "-w"), format: opt(words, "-F"), key_format: opt(words, "-K"), command,
+                    buffer: false, session: flag(words, "-s"), window: flag(words, "-w"), format: opt(words, "-F"), key_format: opt(words, "-K"), command,
                     filter: opt(words, "-f"), sort: opt(words, "-O"), reversed: flag(words, "-r"), no_preview: flag(words, "-N"), zoom: flag(words, "-Z"),
                 };
                 crate::tree::enter(app, p, w, &a);

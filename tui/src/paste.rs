@@ -88,8 +88,19 @@ impl Paste {
 pub fn sample(b: &Buffer) -> String {
     let chars: Vec<char> = b.data.chars().collect();
     let head: String = chars.iter().take(200).collect();
+    let mut out = vis(&head);
+    if chars.len() > 200 || out.chars().count() > 200 {
+        out = out.chars().take(200).collect();
+        out.push_str("...");
+    }
+    out
+}
+
+/// utf8_strvis with VIS_OCTAL | VIS_CSTYLE | VIS_TAB (| VIS_NL): control characters as C escapes
+/// (`\n`, `\t`, `\a` …) or octal, a backslash doubled.
+pub fn vis(text: &str) -> String {
     let mut out = String::new();
-    let all: Vec<char> = head.chars().collect();
+    let all: Vec<char> = text.chars().collect();
     for (i, &c) in all.iter().enumerate() {
         match c {
             '\n' => out.push_str("\\n"),
@@ -104,10 +115,6 @@ pub fn sample(b: &Buffer) -> String {
             c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\{:03o}", c as u32)),
             c => out.push(c),
         }
-    }
-    if chars.len() > 200 || out.chars().count() > 200 {
-        out = out.chars().take(200).collect();
-        out.push_str("...");
     }
     out
 }
