@@ -82,7 +82,7 @@ void main() {
     await pumpFocus(tester);
     expect(find.byType(TerminalSearchOverlay), findsNothing);
 
-    await tester.drag(find.byType(TerminalView), const Offset(260, 0));
+    await tester.drag(find.byType(TerminalView), const Offset(400, 0));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 

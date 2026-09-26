@@ -15,10 +15,10 @@ import 'phone_search_field.dart';
 import 'phone_search_results.dart';
 import 'sheet_list.dart';
 
-/// Find: the one way to another agent. A drawer in from the left edge over Focus — Snapchat's way
-/// to its chats — pulled by a swipe right on the terminal, or a tap on the agent's name. The agents
-/// you were last in come first; a field runs across the top. A swipe left, or a tap on the strip of
-/// terminal still showing, sends it back.
+/// Find: the one way to another agent. A full-screen page in from the left edge over Focus —
+/// Snapchat's way to its chats — pulled by a swipe right on the terminal, or a tap on the agent's
+/// name. The agents you were last in come first; a field runs across the top. A swipe left sends it
+/// back.
 ///
 /// ```
 ///  ╭─────────────────────────────╮
@@ -87,12 +87,13 @@ class TerminalSearchOverlay extends StatefulWidget {
   /// `terminal_page.dart`.
   final double bottomInset;
 
-  /// How wide Find stands over a window [width] wide: most of it, so a strip of the dimmed terminal
-  /// stays showing on the right — what says it is a layer over Focus, and what a tap closes it on.
+  /// How wide Find stands over a window [width] wide: all of it. Find is a page of its own, the way
+  /// Snapchat's chats are — a strip of terminal left showing beside it read as a layer, and cost the
+  /// list width for long names. A swipe left takes it back.
   ///
   /// Public because the page's swipe right drives the slide under the finger, and a finger that
   /// moves one drawer-width has opened it all the way.
-  static double drawerWidth(double width) => math.min(width * 0.86, 420);
+  static double drawerWidth(double width) => width;
 
   @override
   State<TerminalSearchOverlay> createState() => _TerminalSearchOverlayState();
@@ -100,9 +101,6 @@ class TerminalSearchOverlay extends StatefulWidget {
 
 class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     with TickerProviderStateMixin {
-  /// The rounding on the drawer's open edge.
-  static const double _radius = 14;
-
   /// What the field says.
   static const String _hint = 'Find an agent';
 
@@ -397,20 +395,13 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     final media = MediaQuery.of(context);
     return Container(
       key: _sheetKey,
+      // The edge that leads the slide in and out; at rest it is off screen.
       foregroundDecoration: BoxDecoration(
         border: Border(right: BorderSide(color: AppGlass.hair)),
-        borderRadius: const BorderRadius.horizontal(
-          right: Radius.circular(_radius),
-        ),
       ),
       child: Material(
         // A step above the terminal it covers — see [sheetFill].
         color: sheetFill,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.horizontal(
-            right: Radius.circular(_radius),
-          ),
-        ),
         clipBehavior: Clip.antiAlias,
         child: MediaQuery(
           // The list runs down under the strip at the foot of the window and

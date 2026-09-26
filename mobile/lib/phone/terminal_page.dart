@@ -829,14 +829,15 @@ class _TerminalPageState extends State<TerminalPage>
     _searchOpen.value += dx / width;
   }
 
-  /// Let go: Find stays if it was flung or is mostly out, and goes back otherwise. A drag left
-  /// far enough, or flung, opens a new agent.
+  /// Let go: Find stays if it was flung or is a third of the way out, and goes back otherwise. A
+  /// third, not half: Find is the whole screen wide, and half of it is a long reach for a thumb.
+  /// A drag left far enough, or flung, opens a new agent.
   void _onSwipeEnd(DragEndDetails details) {
     final velocity = details.primaryVelocity ?? 0;
     if (_swipingFind) {
       _swipingFind = false;
       if (velocity >= _swipeFlick ||
-          (velocity > -_swipeFlick && _searchOpen.value > 0.4)) {
+          (velocity > -_swipeFlick && _searchOpen.value > 0.3)) {
         _searchOpen.forward();
       } else {
         _closeSearch();
