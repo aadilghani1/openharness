@@ -79,12 +79,10 @@ class TerminalActionColumn extends StatefulWidget {
   /// How far the column sits from the terminal's right and bottom edges.
   static const double inset = VoiceMicFab.inset;
 
-  /// How far the mic sits above the terminal's bottom edge, centred across it.
-  ///
-  /// ⚠️ **The lower middle is where a thumb rests** holding the phone in either hand — the camera's
-  /// shutter sits there for that reason. Not lower: the bottom edge is iOS's home swipe, and the
-  /// agent's own prompt and status line are the last rows, which the mic would cover.
-  static const double bottomInset = 116;
+  /// How far the orb's slot sits above the foot of the page. Low, Siri's way: the orb straddles
+  /// the home indicator's strip rather than floating up over the prompt, and the terminal runs full
+  /// screen under it. A tap there is the app's; only a swipe up from the very edge is the system's.
+  static const double orbBottom = 8;
 
   /// How far Search sits from the terminal's TOP edge while the keyboard is up
   /// — see [searchOnly].

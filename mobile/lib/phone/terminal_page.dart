@@ -1695,37 +1695,23 @@ class _TerminalPageState extends State<TerminalPage>
                                   // prompt being typed into, which is exactly
                                   // what the keyboard is for; up there it covers
                                   // the oldest rows on screen.
-                                  Positioned(
-                                    // Keyboard up: Find, top right. Down: the
-                                    // mic, centred across the foot — see
-                                    // [TerminalActionColumn.bottomInset].
-                                    left: _ownsInput ? null : 0,
-                                    right: _ownsInput
-                                        ? TerminalActionColumn.inset
-                                        : 0,
-                                    top: _ownsInput
-                                        ? TerminalActionColumn.topInset
-                                        : null,
-                                    bottom: _ownsInput
-                                        ? null
-                                        : TerminalActionColumn.bottomInset,
-                                    // Centred in the full width it is given,
-                                    // at its own size — the mic's slot must
-                                    // not stretch to the terminal's width.
-                                    child: Align(
-                                      alignment: Alignment.bottomCenter,
-                                      widthFactor: _ownsInput ? 1 : null,
-                                      heightFactor: 1,
+                                  // Keyboard up: Find, top right. With it
+                                  // down the mic is the orb in its own strip
+                                  // under the terminal — laid over the whole
+                                  // page further down, not in here.
+                                  if (_ownsInput)
+                                    Positioned(
+                                      right: TerminalActionColumn.inset,
+                                      top: TerminalActionColumn.topInset,
                                       child: TerminalActionColumn(
                                         voice: widget.voice,
                                         session: session,
                                         onSearch: _openSearch,
-                                        searchOnly: _ownsInput,
+                                        searchOnly: true,
                                         unread:
                                             widget.notifier.agentNotices.unread,
                                       ),
                                     ),
-                                  ),
                                 ],
                               ),
                             ),
@@ -1764,6 +1750,29 @@ class _TerminalPageState extends State<TerminalPage>
                         ],
                       ),
                     ),
+                    // The mic: Siri's orb, low at the foot and centred, floating
+                    // over the terminal — which stays full screen under it, the
+                    // way the home screen stays whole under Siri. Laid over the
+                    // whole page so its capsule, rising as it talks, still takes
+                    // taps.
+                    if (!_ownsInput)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: TerminalActionColumn.orbBottom,
+                        // Centred at its own size — the mic's slot must not
+                        // stretch to the page's width.
+                        child: Align(
+                          alignment: Alignment.bottomCenter,
+                          heightFactor: 1,
+                          child: TerminalActionColumn(
+                            voice: widget.voice,
+                            session: session,
+                            onSearch: _openSearch,
+                            unread: widget.notifier.agentNotices.unread,
+                          ),
+                        ),
+                      ),
                     // The header, laid OVER the terminal rather than above it in the
                     // column.
                     //
