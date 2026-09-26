@@ -646,3 +646,17 @@ model Zoo {
 
   @@map("zoos")
 }
+
+/// Serial numbers for hatched daemons: one counter per roster id, across every account. Each server
+/// hatch of a daemon the account did not own takes the next one with an atomic increment
+/// (routes/zoo.ts), and the daemon keeps it as `serial` in its zoo: the card's `#0042`. A duplicate
+/// merges into the daemon you have and takes none; a guest's daemons, hatched on a client, have none.
+/// Numbers are never given twice; a hatch whose write never landed leaves a gap.
+model DaemonMint {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  daemonId  String   @unique
+  count     Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@map("daemon_mints")
+}

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { Prisma } from '@prisma/client'
 const mocks = vi.hoisted(() => ({
-  prisma: { zoo: { findUnique: vi.fn(), updateMany: vi.fn(), create: vi.fn() }, machine: { findMany: vi.fn() } },
+  prisma: { zoo: { findUnique: vi.fn(), updateMany: vi.fn(), create: vi.fn() }, machine: { findMany: vi.fn() }, daemonMint: { upsert: vi.fn() } },
   changed: vi.fn(), auth: vi.fn(),
 }))
 vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma }))
@@ -87,15 +87,81 @@ describe('zoo routes', () => {
     expect(mocks.changed).toHaveBeenCalledOnce()
   })
 
-  it('hatches on the server and answers what came out', async () => {
+  it('hatches on the server and answers what came out, with its serial', async () => {
     mocks.prisma.zoo.findUnique.mockResolvedValue({ revision: 2, state: { ...emptyZoo(), eggs: [egg] } })
     mocks.prisma.zoo.updateMany.mockResolvedValue({ count: 1 })
+    mocks.prisma.daemonMint.upsert.mockResolvedValue({ count: 42 })
     const res = await post([{ op: 'zoo.hatch', eggId: 'e1' }])
     const data = res.json().data
     expect(data.revision).toBe(3)
-    expect(data.hatched).toEqual([{ eggId: 'e1', daemonId: expect.any(String), shiny: expect.any(Boolean) }])
-    expect(DAEMON_ROSTER.daemons.map((d) => d.id)).toContain(data.hatched[0].daemonId)
-    expect(data.zoo).toMatchObject({ eggs: [], pair: data.hatched[0].daemonId, daemons: [{ id: data.hatched[0].daemonId, egg: 'first', bond: 0, version: '0.1' }] })
+    expect(data.hatched).toEqual([{ eggId: 'e1', daemonId: expect.any(String), shiny: expect.any(Boolean), serial: 42 }])
+    const id = data.hatched[0].daemonId
+    expect(DAEMON_ROSTER.daemons.map((d) => d.id)).toContain(id)
+    expect(data.zoo).toMatchObject({ eggs: [], pair: id, daemons: [{ id, egg: 'first', bond: 0, version: '0.1', serial: 42 }] })
+    // One atomic increment of that daemon's counter, created at 1 the first time it hatches anywhere.
+    expect(mocks.prisma.daemonMint.upsert).toHaveBeenCalledExactlyOnceWith({
+      where: { daemonId: id }, create: { daemonId: id, count: 1 }, update: { count: { increment: 1 } }, select: { count: true },
+    })
+    expect(mocks.prisma.zoo.updateMany.mock.calls[0][0].data.state.daemons[0]).toMatchObject({ id, serial: 42 })
+  })
+
+  describe('serials', () => {
+    const regulars = DAEMON_ROSTER.daemons.filter((d) => d.rarity !== 'secret').map((d) => d.id)
+    const daemon = (id: string) => ({ id, hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 0, version: '0.1' })
+    const turnEgg = { id: 'e1', kind: 'turn', grantedAt: '2026-09-26T00:00:00.000Z' }
+    // Every regular but tim owned: a turn egg can only give tim, so every attempt draws the same.
+    const onlyTimLeft = () => ({ ...emptyZoo(), daemons: regulars.filter((id) => id !== 'tim').map(daemon), eggs: [turnEgg] })
+
+    it('mints none for a duplicate, which merges into the daemon you have', async () => {
+      mocks.prisma.zoo.findUnique.mockResolvedValue({ revision: 2, state: { ...emptyZoo(), daemons: regulars.map(daemon), eggs: [turnEgg] } })
+      mocks.prisma.zoo.updateMany.mockResolvedValue({ count: 1 })
+      const res = await post([{ op: 'zoo.hatch', eggId: 'e1' }])
+      const { hatched, zoo } = res.json().data
+      expect(hatched).toEqual([{ eggId: 'e1', daemonId: expect.any(String), shiny: expect.any(Boolean), duplicate: true, xp: 150 }])
+      expect(zoo.daemons).toHaveLength(regulars.length)
+      expect(zoo.daemons.find((d: { id: string }) => d.id === hatched[0].daemonId)).toMatchObject({ dupes: 1, xp: 150 })
+      expect(mocks.prisma.daemonMint.upsert).not.toHaveBeenCalled()
+    })
+
+    it('keeps a serial minted for a write that lost the race for the retry\'s hatch', async () => {
+      mocks.prisma.zoo.findUnique.mockResolvedValue({ revision: 4, state: onlyTimLeft() })
+      mocks.prisma.zoo.updateMany.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 })
+      mocks.prisma.daemonMint.upsert.mockResolvedValueOnce({ count: 7 }).mockResolvedValueOnce({ count: 8 })
+      const res = await post([{ op: 'zoo.hatch', eggId: 'e1' }])
+      expect(res.json().data.hatched).toEqual([{ eggId: 'e1', daemonId: 'tim', shiny: expect.any(Boolean), serial: 7 }])
+      expect(mocks.prisma.daemonMint.upsert).toHaveBeenCalledOnce()
+      expect(mocks.prisma.zoo.updateMany).toHaveBeenCalledTimes(2)
+      expect(mocks.prisma.zoo.updateMany.mock.calls[1][0].data.state.daemons.at(-1)).toMatchObject({ id: 'tim', serial: 7 })
+    })
+
+    it('increments when two first hatches of a daemon both tried to create its counter', async () => {
+      mocks.prisma.zoo.findUnique.mockResolvedValue({ revision: 4, state: onlyTimLeft() })
+      mocks.prisma.zoo.updateMany.mockResolvedValue({ count: 1 })
+      mocks.prisma.daemonMint.upsert
+        .mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 'test' }))
+        .mockResolvedValueOnce({ count: 2 })
+      const res = await post([{ op: 'zoo.hatch', eggId: 'e1' }])
+      expect(res.json().data.hatched[0]).toMatchObject({ daemonId: 'tim', serial: 2 })
+      expect(mocks.prisma.daemonMint.upsert).toHaveBeenCalledTimes(2)
+    })
+
+    it('writes nothing when minting fails for another reason', async () => {
+      mocks.prisma.zoo.findUnique.mockResolvedValue({ revision: 4, state: onlyTimLeft() })
+      mocks.prisma.daemonMint.upsert.mockRejectedValue(new Error('mongo down'))
+      const res = await post([{ op: 'zoo.hatch', eggId: 'e1' }])
+      expect(res.statusCode).toBe(500)
+      expect(mocks.prisma.zoo.updateMany).not.toHaveBeenCalled()
+      expect(mocks.changed).not.toHaveBeenCalled()
+    })
+
+    it('mints none for a guest\'s daemons: they arrive local, without a serial', async () => {
+      mocks.prisma.zoo.findUnique.mockResolvedValue(null)
+      mocks.prisma.zoo.updateMany.mockResolvedValue({ count: 0 })
+      mocks.prisma.zoo.create.mockResolvedValue({})
+      const res = await post([{ op: 'zoo.seed', zoo: { daemons: [{ ...daemon('fish'), serial: 3 }] } }])
+      expect(res.json().data.zoo.daemons).toEqual([{ ...daemon('fish'), origin: 'local' }])
+      expect(mocks.prisma.daemonMint.upsert).not.toHaveBeenCalled()
+    })
   })
 
   it('writes nothing, and says where the zoo is, when the ops change nothing', async () => {
