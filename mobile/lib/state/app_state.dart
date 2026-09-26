@@ -50,6 +50,7 @@ import 'session_preview.dart';
 import 'terminal_pane.dart';
 import 'desk_sync.dart';
 import 'phone_desk.dart';
+import '../daemons/daemon_habits.dart';
 import '../daemons/zoo_client.dart';
 import 'swarm.dart';
 import '../terminal/terminal_binary.dart';
@@ -578,6 +579,15 @@ class AppNotifier extends ChangeNotifier {
   late final ZooClient zoo = ZooClient(
     read: () => api.zoo(),
     write: (ops) => api.zooOps(ops),
+  );
+
+  /// The first egg's habits this phone can see for itself — see
+  /// `daemons/daemon_habits.dart` for which, and why the rest are left to the
+  /// computers. The days it was used are kept where the layout is: nowhere in
+  /// a test.
+  late final PhoneHabits daemonHabits = PhoneHabits(
+    zoo,
+    storage: _paneLayout?.storage,
   );
 
   /// The account's tabs, in the desk's order. Empty where the desk has nothing
@@ -5378,6 +5388,8 @@ class AppNotifier extends ChangeNotifier {
       return unconfirmed;
     }
     _agentResumes.remove(key);
+    // A paused harness came back from this phone: a first-egg habit.
+    daemonHabits.resumed();
     if (_disposed || machineStates[machine.machine.machineId] != machine) {
       return const RestartAgentResult();
     }
@@ -7375,6 +7387,7 @@ class AppNotifier extends ChangeNotifier {
     sessionPreviews.dispose();
     agentNotices.dispose();
     _desk.dispose();
+    daemonHabits.dispose();
     zoo.dispose();
     super.dispose();
   }
