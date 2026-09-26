@@ -118,3 +118,26 @@ These are tmux-shaped. A done session is already tmux's activity alert (`#`) and
 2. For "what it did": the agent's own last line (free, but sometimes vague), or a written recap (an LLM
    call per finished turn)?
 3. Should `C-b a` include finished sessions, not only questions?
+
+## Decided and built (26 September)
+
+The user asked for the call to be made for them, so:
+
+1. **Fleet counts on the status line: yes**, for the states that ask something of you: `?` needs you
+   (reversed, so it stands out on any theme), `✗` failed, `✓` done and unread, `⠹` working. Idle isn't
+   counted. It's the most common state and asks nothing.
+2. **What it did: the agent's own final message**, its first line. It's free and immediate, and a coding
+   agent's last message is already a summary. It needs no daemon change: every window already gets the
+   session events, including the text as it streams (`text_delta`) and each tool call with its input.
+   "Doing now" comes from those same events.
+3. **`C-b a` includes finished sessions: yes.** It walks the queue once in order, in one window.
+
+Changed along the way, from the first-hour review:
+- A turn that ends in a visible pane you aren't typing in counts as done and unread (it went grey at once).
+- `C-b a` was `next-window -a`, which lands on a window's last active pane and could put your answer in
+  the wrong agent. It's now `next-harness`.
+- The right side of the status line is width-aware. Below 110 columns it shows only the branch; below 100
+  columns, no tim.
+- The glyphs are readable on any theme: `?` is reversed, and idle is the finder's dim, not colour 8. tim
+  takes the status line's own colours, bold when it wants you.
+

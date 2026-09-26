@@ -200,15 +200,30 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
             let (dot, _, color) = state_mark(state, app.tick);
             let (mark, mark_color) = engine_mark(&a.engine);
             let group = match state {
-                State::NeedsInput => "Needs input", State::Working => "Working", State::Paused => "Paused", State::Offline => "Offline", _ => "Running",
+                State::NeedsInput => "Needs you", State::Failed => "Failed", State::Done => "Done", State::Working => "Working", State::Starting => "Starting",
+                State::Ready => "Idle", State::Paused => "Paused", State::Offline => "Offline",
             };
             let is_open = open.contains(&a.key());
-            let detail = if let Some(q) = &a.question { vec![span(format!("? {}", q.prompt), fg(theme::ATTENTION))] }
-                else {
-                    let where_ = [if a.project != a.name { a.project.clone() } else { String::new() }, a.branch.clone()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
-                    vec![span(where_, fg(theme::MUTED))]
-                };
-            let right = [if many { app.fleet.machine_name(&a.machine_id) } else { String::new() }, if is_open { "open".into() } else { String::new() }, ago(a.recency())]
+            // Its one line: the question it asks, what it is doing now, what its last turn came to,
+            // why it failed — the rest in the finder's dim.
+            let (line, loud) = match state {
+                State::NeedsInput => (a.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default(), true),
+                State::Working => (a.doing.clone().unwrap_or_else(|| "Working".into()), false),
+                State::Done => (a.did.clone().unwrap_or_else(|| "Finished".into()), false),
+                State::Failed => (a.did.clone().unwrap_or_else(|| "Failed to start".into()), true),
+                State::Starting => ("Starting".into(), false),
+                _ => (a.did.clone().unwrap_or_default(), false),
+            };
+            let quiet = matches!(state, State::Ready | State::Paused | State::Offline);
+            // An idle one's line is where it works (its last turn in the preview).
+            let line = if quiet && line.is_empty() { [a.project.clone(), a.branch.clone()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ") } else { line };
+            let detail = vec![span(line, if loud { fg(theme::ATTENTION) } else if quiet { fg(theme::MUTED) } else { Style::default() })];
+            // Where it works and how long it has been as it is (waiting on you since its question,
+            // working since its turn began, done since it ended).
+            let since = match &a.question { Some(q) => crate::fleet::now_ms().saturating_sub(q.since.elapsed().as_millis() as u64), None if a.since > 0 && !quiet => a.since, None => a.recency() };
+            // Right: the machine (when there are several) and how long — the name and its line
+            // come first; where it works is searchable and in the preview's title.
+            let right = [if many { app.fleet.machine_name(&a.machine_id) } else { String::new() }, if is_open { "open".into() } else { String::new() }, ago(since)]
                 .into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("  ");
             let live = !matches!(state, State::Paused | State::Offline);
             Row::new(format!("{}:{}", a.machine_id, a.id), a.name.clone())

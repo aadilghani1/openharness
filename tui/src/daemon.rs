@@ -106,9 +106,11 @@ impl Link {
                                 let ty = value.get("type").and_then(Value::as_str).unwrap_or("").to_string();
                                 let mut payload = value.get("payload").cloned().unwrap_or(Value::Null);
                                 // Agent events name their agent on the ENVELOPE (`agentId`, `dbSessionId`),
-                                // beside the payload — `commander_question` among them. Fold those in.
+                                // beside the payload — `commander_question` among them — and say there
+                                // whether a turn's end is a re-read (`replay`) or a sub-agent's
+                                // (`subagent`). Fold those in.
                                 if let Value::Object(map) = &mut payload {
-                                    for key in ["agentId", "dbSessionId"] {
+                                    for key in ["agentId", "dbSessionId", "replay", "subagent"] {
                                         if !map.contains_key(key) { if let Some(v) = value.get(key) { map.insert(key.into(), v.clone()); } }
                                     }
                                 }

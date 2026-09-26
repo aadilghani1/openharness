@@ -965,9 +965,36 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // Harness's own: the machine a pane is on, and how many harnesses wait on you.
         "machine" => pane.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default(),
         "waiting" => app.fleet.waiting().to_string(),
+        // The fleet in counts (shells aside): needs you, failed, done and unread, working, idle —
+        // and #{fleet}, the status line's: the ones that ask something of you, each with its
+        // symbol (the needs-you count reversed), a state with none left out.
+        "fleet_needs" => app.fleet.count(crate::fleet::State::NeedsInput).to_string(),
+        "fleet_failed" => app.fleet.count(crate::fleet::State::Failed).to_string(),
+        "fleet_done" => app.fleet.count(crate::fleet::State::Done).to_string(),
+        "fleet_working" => app.fleet.count(crate::fleet::State::Working).to_string(),
+        "fleet_idle" => app.fleet.count(crate::fleet::State::Ready).to_string(),
+        "fleet" => {
+            use crate::fleet::State::*;
+            let mut parts = Vec::new();
+            let n = app.fleet.count(NeedsInput);
+            if n > 0 { parts.push(format!("#[reverse]?{n}#[noreverse]")) }
+            for (state, glyph) in [(Failed, "✗"), (Done, "✓"), (Working, crate::theme::spinner(app.tick))] {
+                let n = app.fleet.count(state);
+                if n > 0 { parts.push(format!("{glyph}{n}")) }
+            }
+            parts.join(" ")
+        }
+        // The spinner's frame now, for a format of your own.
+        "spinner" => crate::theme::spinner(app.tick).to_string(),
         // tim's face, for a status-right of your own: "#{tim} %H:%M".
         // tim's face, in its own colour (a status-right of your own: "#{tim} %H:%M").
-        "tim" => crate::tim::face(app).map(|(f, st)| { let s = crate::draw::style_text(st); if s.is_empty() { f } else { format!("#[{s}]{f}#[default]") } }).unwrap_or_default(),
+        // tim, in the status line's own colours (a yellow or a green tim can't be read on tmux's
+        // green bar, nor on every theme): bold when it wants you, dim asleep.
+        "tim" => crate::tim::face(app).map(|(f, st)| {
+            let loud = matches!(st.fg, Some(ratatui::style::Color::Red | ratatui::style::Color::LightYellow));
+            let asleep = st.add_modifier.contains(ratatui::style::Modifier::DIM);
+            if loud { format!("#[bold]{f}#[nobold]") } else if asleep { format!("#[dim]{f}#[nodim]") } else { f }
+        }).unwrap_or_default(),
         "daemon_down" => app.daemon_down.then_some("1").unwrap_or("0").into(),
         // The pane is another window's to type in (this one watches), when it is the only one.
         "pane_watching" => (pane.map(|p| matches!(p.phase, crate::pane::Phase::Watching(_))).unwrap_or(false) && tab.map(|t| t.panes().len() < 2).unwrap_or(false)).then_some("1").unwrap_or("0").into(),

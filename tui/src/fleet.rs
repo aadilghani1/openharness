@@ -64,6 +64,16 @@ pub struct Agent {
     /// The runtime profile it runs (`runtime-v1:…:claude:opus@high`) — what ⌥I switches.
     pub model: String,
     pub project_root: String,
+    /// What it is doing now — its current tool, as a line (`Running npm test`), or what it is
+    /// thinking about — from the live events; none between turns.
+    pub doing: Option<String>,
+    /// What it has written since its last tool call this turn: its final message, once the turn
+    /// ends (the start of it is enough).
+    pub said: String,
+    /// What its last finished turn came to: the first line of its final message.
+    pub did: Option<String>,
+    /// When its state began (ms since the epoch): the turn it is on, or the turn it finished.
+    pub since: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -155,7 +165,49 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         dsh,
         model: s(row, "selectedModel"),
         project_root: { let r = s(&project, "root"); if r.is_empty() { s(&project, "cwd") } else { r } },
+        doing: previous.and_then(|p| p.doing.clone()),
+        said: previous.map(|p| p.said.clone()).unwrap_or_default(),
+        did: previous.and_then(|p| p.did.clone()),
+        since: previous.map(|p| p.since).unwrap_or(0),
     }
+}
+
+/// A tool call as the one line that says what an agent is doing (Claude Code's own words where
+/// it gives them: a Bash call's description).
+pub fn describe_tool(tool: &str, input: &Value) -> String {
+    let text = |k: &str| input.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+    let file = |k: &str| text(k).map(|p| p.rsplit('/').next().unwrap_or(&p).to_string());
+    let first = |v: String| v.lines().next().unwrap_or("").trim().to_string();
+    let command = || match input.get("command") {
+        Some(Value::Array(parts)) => parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" "),
+        Some(Value::String(c)) => c.clone(),
+        _ => String::new(),
+    };
+    let line = match tool {
+        "Bash" | "shell" | "exec_command" | "local_shell" => text("description").unwrap_or_else(|| format!("$ {}", first(command()))),
+        "Read" | "read_file" => format!("Reading {}", file("file_path").or_else(|| file("path")).unwrap_or_default()),
+        "Edit" | "MultiEdit" | "Write" | "NotebookEdit" | "apply_patch" | "edit_file" | "write_file" =>
+            match file("file_path").or_else(|| file("path")).or_else(|| file("notebook_path")) { Some(f) => format!("Editing {f}"), None => "Editing".into() },
+        "Grep" | "grep" => format!("Searching for {}", text("pattern").unwrap_or_default()),
+        "Glob" | "glob" => format!("Finding {}", text("pattern").unwrap_or_default()),
+        "WebSearch" | "web_search" => format!("Searching the web for {}", text("query").unwrap_or_default()),
+        "WebFetch" | "web_fetch" => format!("Reading {}", text("url").unwrap_or_default()),
+        "Task" | "Agent" => text("description").map(|d| format!("Agent: {d}")).unwrap_or_else(|| "Running an agent".into()),
+        "TodoWrite" => input.get("todos").and_then(Value::as_array)
+            .and_then(|todos| todos.iter().find(|t| t.get("status").and_then(Value::as_str) == Some("in_progress")))
+            .and_then(|t| t.get("activeForm").or_else(|| t.get("content")).and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_else(|| "Planning".into()),
+        t => match t.strip_prefix("mcp__").and_then(|r| r.split_once("__")) { Some((server, name)) => format!("{name} ({server})"), None => t.to_string() },
+    };
+    line.chars().take(160).collect()
+}
+
+/// The line a message comes to: its first line with words in it, markdown taken off.
+pub fn first_line(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|l| l.chars().any(char::is_alphanumeric))?;
+    let line = line.trim_start_matches(['#', '>', '-', '*', '•', ' ']).replace("**", "").replace('`', "");
+    let line = line.trim();
+    (!line.is_empty()).then(|| line.chars().take(160).collect())
 }
 
 pub fn question_from(payload: &Value, previous: Option<&Question>) -> Option<Question> {
@@ -229,14 +281,25 @@ impl Fleet {
     }
 
     /// Sorted the way ⌥O lists them: waiting on you, working, running by recency, paused, offline.
+    /// Every harness in the order it needs you: waiting on you, failed, done and unread, working,
+    /// starting, idle, paused, offline — within the first three and working, the one that has
+    /// waited (or run) longest first; the rest most recent first.
     pub fn ranked(&self) -> Vec<&Agent> {
         let mut all: Vec<&Agent> = self.agents.values().collect();
+        let bucket = |st: State| match st { State::NeedsInput => 0, State::Failed => 1, State::Done => 2, State::Working => 3, State::Starting => 4, State::Ready => 5, State::Paused => 6, State::Offline => 7 };
         all.sort_by(|a, b| {
             let (sa, sb) = (self.state_of(a), self.state_of(b));
-            let bucket = |st: State| match st { State::NeedsInput => 0, State::Working => 1, State::Done | State::Ready | State::Starting | State::Failed => 2, State::Paused => 3, State::Offline => 4 };
-            bucket(sa).cmp(&bucket(sb)).then(b.recency().cmp(&a.recency())).then(a.name.cmp(&b.name))
+            let by_age = |x: &Agent| match &x.question { Some(q) => now_ms().saturating_sub(q.since.elapsed().as_millis() as u64), None => x.since };
+            bucket(sa).cmp(&bucket(sb))
+                .then_with(|| if bucket(sa) <= 3 { by_age(a).cmp(&by_age(b)) } else { b.recency().cmp(&a.recency()) })
+                .then(a.name.cmp(&b.name))
         });
         all
+    }
+
+    /// How many harnesses (shells aside) are in each state: the status line's counts.
+    pub fn count(&self, state: State) -> usize {
+        self.agents.values().filter(|a| a.engine != "terminal" && self.state_of(a) == state).count()
     }
 
     pub fn waiting(&self) -> usize { self.agents.values().filter(|a| a.question.is_some() && a.status != "stopped").count() }

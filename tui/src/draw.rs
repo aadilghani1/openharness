@@ -110,25 +110,6 @@ fn style_parse(sy: &mut Sy, base: Style, spec: &str) -> bool {
     true
 }
 
-/// A look as `#[…]` writes it (fg=…,bg=…,bold …): for a format variable that carries its own.
-pub fn style_text(st: Style) -> String {
-    let name = |c: Color| -> String {
-        match c {
-            Color::Reset => "default".into(), Color::Black => "black".into(), Color::Red => "red".into(), Color::Green => "green".into(), Color::Yellow => "yellow".into(),
-            Color::Blue => "blue".into(), Color::Magenta => "magenta".into(), Color::Cyan => "cyan".into(), Color::Gray => "white".into(), Color::DarkGray => "brightblack".into(),
-            Color::LightRed => "brightred".into(), Color::LightGreen => "brightgreen".into(), Color::LightYellow => "brightyellow".into(), Color::LightBlue => "brightblue".into(),
-            Color::LightMagenta => "brightmagenta".into(), Color::LightCyan => "brightcyan".into(), Color::White => "brightwhite".into(),
-            Color::Indexed(n) => format!("colour{n}"), Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
-        }
-    };
-    let mut parts = Vec::new();
-    if let Some(c) = st.fg { parts.push(format!("fg={}", name(c))) }
-    if let Some(c) = st.bg { parts.push(format!("bg={}", name(c))) }
-    for (m, n) in [(Modifier::BOLD, "bold"), (Modifier::DIM, "dim"), (Modifier::ITALIC, "italics"), (Modifier::UNDERLINED, "underscore"), (Modifier::REVERSED, "reverse")] {
-        if st.add_modifier.contains(m) { parts.push(n.into()) }
-    }
-    parts.join(",")
-}
 
 /// Whether tmux's style_parse takes a style (set-option's check of a *-style option).
 /// A style option's value over a base (style_parse; one that does not parse leaves the base).

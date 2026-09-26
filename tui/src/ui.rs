@@ -280,7 +280,10 @@ fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) {
     let mut spans: Vec<Span> = vec![Span::styled(" ", style)];
     if let Some(state) = app.pane_state(id) {
         let (glyph, _, color) = theme::state_mark(state, app.tick);
-        spans.push(Span::styled(glyph, style.fg(color)));
+        // Needs you: reversed, as tmux marks what wants you (a yellow ? alone is faint on a light
+        // theme); idle and the rest in the finder's dim, not colour 8 (lost on Solarized).
+        let st = if state == crate::fleet::State::NeedsInput { style.patch(theme::fg(color)).add_modifier(Modifier::REVERSED | Modifier::BOLD) } else { style.patch(theme::fg(color)) };
+        spans.push(Span::styled(glyph, st));
         spans.push(Span::styled(" ", style));
     }
     spans.push(Span::styled(title, style));

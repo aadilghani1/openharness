@@ -193,6 +193,12 @@ pub struct App {
     pub mouse: bool,
     /// The harness focused before this one, anywhere (switch-client -l).
     pub last_harness: Option<(String, String)>,
+    /// The pane next-harness (C-b a) last showed a harness in: pressed again from there, the next
+    /// one takes its place, so going through the queue keeps to one window.
+    pub loop_pane: Option<u64>,
+    /// The harnesses this go down the queue has shown, so C-b a walks all of them once (an
+    /// unanswered one is not shown again until the rest have been).
+    pub loop_seen: Vec<(String, String)>,
     /// `agent_recent` answers (asks and recaps), for the preview window.
     pub recent: HashMap<(String, String), Value>,
     /// Seconds east of UTC (for the status line's clock).
@@ -409,6 +415,8 @@ impl App {
             redraw_all: false,
             status_top: false,
             mouse: true,
+            loop_seen: Vec::new(),
+            loop_pane: None,
             last_harness: None,
             history: Default::default(),
             recent: HashMap::new(),
@@ -677,30 +685,60 @@ impl App {
                 }
                 self.relist(machine_id);
             }
-            "turn_started" | "turn_heartbeat" | "tool_start" | "tool_end" => {
+            "turn_started" | "turn_heartbeat" | "tool_start" | "tool_end" | "text_delta" | "thinking_title" => {
                 if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
+                    let now = fleet::now_ms();
+                    // A turn begun (or found running): the state's clock starts, what it says anew.
+                    if ty == "turn_started" || !agent.working { agent.since = now; agent.doing = None; agent.said.clear() }
                     agent.working = true;
                     agent.last_beat = Some(Instant::now());
-                    agent.active_at = fleet::now_ms();
+                    agent.active_at = now;
                     if ty == "turn_started" { agent.unread = false }
+                    let text = |k: &str| payload.get(k).and_then(Value::as_str).unwrap_or("");
+                    // The main agent's own steps (a sub-agent's carry the tool call that spawned it).
+                    let own = payload.get("parentToolUseId").map(Value::is_null).unwrap_or(true);
+                    match ty {
+                        // What it does now; the text before a tool call is not its final message.
+                        "tool_start" if own => { agent.doing = Some(fleet::describe_tool(text("tool"), payload.get("input").unwrap_or(&Value::Null))); agent.said.clear() }
+                        "thinking_title" => { let t = text("title").trim(); if !t.is_empty() { agent.doing = Some(t.chars().take(160).collect()) } }
+                        "text_delta" if own && agent.said.len() < 2000 => agent.said.push_str(text("content")),
+                        _ => {}
+                    }
                 }
             }
             "turn_ended" => {
                 let visible = self.visible_agents();
+                let looking = self.focused().filter(|_| self.terminal_focused).and_then(|f| self.panes.get(&f)).map(|p| (p.machine_id.clone(), p.agent_id.clone()));
                 let opened: Vec<(String, String)> = self.panes.values().map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect();
+                let flag = |k: &str| payload.get(k).and_then(Value::as_bool).unwrap_or(false);
+                let (replay, subagent) = (flag("replay"), flag("subagent"));
+                let aborted = payload.get("aborted").and_then(Value::as_bool).unwrap_or(false);
                 if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
                     agent.working = false;
                     agent.active_at = fleet::now_ms();
-                    // Only harnesses you have on a tab: a hundred others finish turns all day.
+                    agent.since = agent.active_at;
+                    agent.doing = None;
+                    // What the turn came to: the first line of its final message.
+                    let said = std::mem::take(&mut agent.said);
+                    if aborted { agent.did = Some("Interrupted".into()) } else if let Some(line) = fleet::first_line(&said) { agent.did = Some(line) }
                     let name = agent.name.clone();
                     let mine = opened.contains(&agent.key());
                     // tim hatches on the first turn finished while you watch, and is pleased after each.
                     if mine { self.tim.turn_done() }
-                    if mine && !visible.contains(&agent.key()) {
+                    // Done and not yet read — any harness's turn (not a re-read, not a sub-agent's)
+                    // that ended where you were not looking: the focused pane, with the terminal
+                    // focused. A visible pane beside the one you type in is not being read.
+                    if !replay && !subagent && looking.as_ref() != Some(&agent.key()) {
                         agent.unread = true;
-                        self.say(format!("{name} finished"), theme::ONLINE);
+                        if mine && !visible.contains(&agent.key()) { self.say(format!("{name} finished"), theme::ONLINE) }
                     }
-                    if mine && !self.terminal_focused { crate::notify("Harness", &format!("{name} finished")) }
+                    if mine && !self.terminal_focused && !replay && !subagent { crate::notify("Harness", &format!("{name} finished")) }
+                }
+            }
+            "done" => {
+                // The turn's result, where the engine gives one: what it came to.
+                if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
+                    if let Some(line) = payload.get("result").and_then(Value::as_str).and_then(fleet::first_line) { agent.did = Some(line) }
                 }
             }
             "commander_question" => {
@@ -1836,6 +1874,13 @@ impl App {
             if app.pipes.get(&pane).map(|p| p.id == id).unwrap_or(false) { app.pipes.remove(&pane); }
         });
         self.pipes.insert(pane, Pipe { out, id });
+    }
+
+    /// Whatever pane you are in (the terminal focused) is read: its harness's finished turn is
+    /// no longer news — every way of getting there (a key, a click, a command, the dial).
+    pub fn mark_seen(&mut self) {
+        if !self.terminal_focused { return }
+        if let Some(f) = self.focused() { self.seen(f) }
     }
 
     /// cfg_show_causes: a config file's errors into the current pane's view mode, once there is

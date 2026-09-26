@@ -66,12 +66,13 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         }
         m.insert("pane-border-status".into(), "top".into());
         // The status line: tmux's, with what Harness adds — the name reversed while the prefix
-        // waits; on the right, harnesses waiting on you, the focused pane's machine (a far one, as
+        // waits; on the right, the fleet in counts (#{fleet}: ?2 ✗1 ✓5 ⠹41), the focused pane's machine (a far one, as
         // scp writes it: gpu-box:ml-lab), project and branch (as zsh's robbyrussell prompt writes
         // them) where tmux has the pane's title (in the pane's own title row here), tim, the clock;
-        // a space first, so a full window list never runs into it.
+        // a space first, so a full window list never runs into it. Narrower than 110 columns only
+        // the branch, narrower than 100 no tim: the window list keeps its room.
         m.insert("status-left".into(), "#{?client_prefix,#[reverse],}[#{session_name}]#{?client_prefix,#[noreverse],} ".into());
-        m.insert("status-right".into(), " #{?daemon_down,#[reverse]daemon down#[noreverse] ,}#{?#{>:#{waiting},0},#[reverse]#{waiting} waiting#[noreverse] ,}#{?pane_watching,[watching] ,}#{?pane_far,#{pane_machine}#{?pane_project,:, },}#{?pane_project,#{=/16/…:pane_project} ,}#{?pane_branch,git:(#{=/24/…:pane_branch}) ,}#{?#{tim},#{tim} ,}%H:%M".into());
+        m.insert("status-right".into(), " #{?daemon_down,#[reverse]daemon down#[noreverse] ,}#{?fleet,#{fleet} ,}#{?pane_watching,[watching] ,}#{?#{e|>=:#{client_width},110},#{?pane_far,#{pane_machine}#{?pane_project,:, },}#{?pane_project,#{=/16/…:pane_project} ,}#{?pane_branch,git:(#{=/24/…:pane_branch}) ,},#{?pane_branch,git:(#{=/16/…:pane_branch}) ,}}#{?#{e|>=:#{client_width},100},#{?#{tim},#{tim} ,},}%H:%M".into());
         // Each window's most urgent harness at a glance (the symbol its pane titles show) and its
         // name in a few whole words (#{window_short_name}): a harness is named for its task.
         for name in ["window-status-format", "window-status-current-format"] {

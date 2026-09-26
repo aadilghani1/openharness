@@ -72,7 +72,7 @@ Harness's own, only on keys tmux leaves unbound (every tmux key does what tmux d
 
 | | |
 |---|---|
-| `C-b a` / `C-b A` | next harness waiting on you / all of them (`M-1…9` answers from the list) |
+| `C-b a` / `C-b A` | the next harness that needs you (`next-harness`) / all those waiting on you (`M-1…9` answers from the list) |
 | `C-b N` `C-b T` | new harness (an agent) / new terminal |
 | `C-b I` `C-b @` `C-b S` | models, machines, the Harness Store |
 | `C-b g` `C-b B` | send a task (Harness picks the harness) / broadcast to the window |
@@ -96,9 +96,14 @@ Colours are the terminal's 16, as tmux's are, so hn reads on dark, light and Sol
 
 ## At a glance
 
+An agent already shows its own state in its pane: that it's working and for how long, each step, its
+sub-agents. hn repeats none of that. It shows what no single pane can: which of all your harnesses
+needs you, what each is doing or did, where, and for how long.
+
 Every harness's state is one symbol, the same in its pane's title row, the window list and `C-b s`
 (a plain shell has none). A window shows its most urgent pane's, and a window with a harness
-waiting on you is reversed, as tmux shows a bell.
+waiting on you is reversed, as tmux shows a bell. A turn that ends while you are typing in another
+pane counts as done and unread (`✓`) until you go to that pane.
 
 | | |
 |---|---|
@@ -109,10 +114,24 @@ waiting on you is reversed, as tmux shows a bell.
 | `✗` | failed |
 | `◌` `‖` `○` | starting, paused, offline |
 
-For your own formats: `#{pane_agent_icon}` and `#{pane_agent_state}` (needs, working, done, idle,
-starting, failed, paused, offline), `#{window_agent_icon}` and `#{window_agent_state}` (its most
-urgent pane's), `#{pane_project}`, `#{pane_branch}`, `#{pane_machine}`, `#{pane_far}` (another
-machine's), and `#{waiting}` (harnesses waiting on you).
+- **The status line** counts the whole fleet: `?2 ✗1 ✓5 ⠹41` means two need you (reversed), one
+  failed, five are done and unread, and 41 are working. Idle ones aren't counted, and a state with
+  none drops out. The right side also shows the focused pane's machine, project and branch (only the
+  branch below 110 columns), so the window list keeps its room at 80.
+- **`C-b s`** lists every harness, the most urgent nearest the prompt: needs you, failed, done and
+  unread, working, then the rest. Each row has one line: the question, what it is doing now
+  (`Run the unit tests`, from its tool calls), what its last turn came to (the first line of its
+  final message), or why it failed. Each row also says how long it has been that way.
+- **`C-b a`** (`next-harness`, `-p` the other way) goes to the next harness that needs you, in that
+  order, each once. It shows each in the same window, so a run through the queue doesn't pile up
+  windows. Going there reads it, and the counts go down.
+
+For your own formats: `#{fleet}` (the status line's counts, ready to drop into your theme) and
+`#{fleet_needs}` `#{fleet_failed}` `#{fleet_done}` `#{fleet_working}` `#{fleet_idle}`, `#{spinner}`,
+`#{pane_agent_icon}` and `#{pane_agent_state}` (needs, working, done, idle, starting, failed,
+paused, offline), `#{window_agent_icon}` and `#{window_agent_state}` (its most urgent pane's),
+`#{pane_project}`, `#{pane_branch}`, `#{pane_machine}`, `#{pane_far}` (another machine's), and
+`#{waiting}` (the harnesses waiting on you).
 
 ## From a shell
 

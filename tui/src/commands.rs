@@ -89,6 +89,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("send-task", "task", "Send a task — Harness picks the harness"),
     ("broadcast", "bcast", "Send one message to every harness in the window"),
     ("send-message", "msg", "Send a message (a turn) to this harness"),
+    ("next-harness", "nexth", "The next harness that needs you: waiting on you, failed, then done (-p: the one before)"),
 ];
 
 /// Split a command line the way tmux does: words, quotes, and `;` between commands.
@@ -2002,6 +2003,7 @@ fn run_words(app: &mut App, words: &[String]) {
         "send-task" => { let text = rest(words); if text.is_empty() { input::run(app, "send") } else { input::route_task(app, text) } }
         "broadcast" => { let text = rest(words); if text.is_empty() { input::run(app, "broadcast") } else { input::broadcast(app, &text) } }
         "send-message" => { let text = rest(words); input::message_focused(app, &text) }
+        "next-harness" => input::next_attention(app, flag(words, "-p")),
         // Harness-era command ids still work, for old configs and the palette.
         other if input::is_command(other) => input::run(app, other),
         other => app.error(format!("unknown command: {other}")),

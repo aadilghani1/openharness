@@ -146,7 +146,7 @@ impl Keymap {
         b(ch('N'), "new-harness", false, "New harness: agent, machine, folder, first message");
         b(ch('@'), "choose-tree -m", false, "Machines (then their harnesses)");
         b(ch('T'), "new-terminal", false, "New terminal (a shell) beside this pane");
-        b(ch('a'), "next-window -a", false, "Go to the next harness waiting on you");
+        b(ch('a'), "next-harness", false, "Go to the next harness that needs you");
         b(ch('A'), "choose-tree -a", false, "Harnesses waiting on you — answer from the list");
         b(ch('I'), "choose-tree -i", false, "Models: this harness's model and effort, local models");
         b(ch('S'), "choose-tree -S", false, "The Harness Store");

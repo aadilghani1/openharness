@@ -38,11 +38,33 @@ const agents = DEMO ? {
   [REMOTE]: [
     project(agent(randomUUID(), 'Train tokenizer on the new corpus', 'codex'), 'ml-lab', 'exp/tokenizer-v3'),
     project(agent(randomUUID(), 'gpu-box shell', 'terminal'), 'ml-lab', 'main'),
+    { ...project(agent(randomUUID(), 'Upgrade React to 19', 'claude'), 'webapp', 'react-19'), launch: { state: 'failed' } },
   ],
 } : {
   [LOCAL]: [agent(randomUUID(), 'Mock Claude', 'claude'), agent(randomUUID(), 'Mock Codex', 'codex'), agent(randomUUID(), 'Mock paused', 'claude', 'stopped')],
   [REMOTE]: [agent(randomUUID(), 'Remote shell', 'terminal')],
 }
+// MOCK_FLEET=N: N more harnesses across both machines, for a fleet the size people run — each
+// working, idle or finishing turns on its own clock.
+const FLEET = Number(process.env.MOCK_FLEET || 0)
+const TASKS = ['Fix the flaky checkout test', 'Add pagination to /orders', 'Upgrade to Node 22', 'Write the 2.5 release notes', 'Profile the image resizer',
+  'Port the CLI to Rust', 'Triage the crash reports', 'Refactor the auth middleware', 'Add dark mode to settings', 'Speed up the CI cache', 'Translate the docs to Spanish',
+  'Remove the legacy billing API', 'Harden the upload endpoint', 'Tune the search ranking', 'Migrate the queue to SQS', 'Fix the memory leak in workers']
+const PROJECTS = [['webapp', 'main'], ['api', 'develop'], ['billing', 'refactor/invoices'], ['ml-lab', 'exp/tokenizer-v3'], ['infra', 'ci-cache'], ['docs', 'i18n']]
+for (let i = 0; i < FLEET; i++) {
+  const [name, branch] = PROJECTS[i % PROJECTS.length]
+  const a = project(agent(randomUUID(), `${TASKS[i % TASKS.length]}${i >= TASKS.length ? ` (${Math.floor(i / TASKS.length) + 1})` : ''}`, i % 3 === 2 ? 'codex' : 'claude'), name, `${branch}${i >= PROJECTS.length ? `-${i}` : ''}`)
+  agents[i % 2 ? REMOTE : LOCAL].push(a)
+}
+// A turn's steps, as an agent's events carry them (tool_start with its tool and input).
+const STEPS = [
+  { tool: 'Read', input: { file_path: 'src/app/handler.ts' } },
+  { tool: 'Grep', input: { pattern: 'refreshToken' } },
+  { tool: 'Bash', input: { command: 'npm test -- --watch=false', description: 'Run the unit tests' } },
+  { tool: 'Edit', input: { file_path: 'src/app/session.ts' } },
+  { tool: 'TodoWrite', input: { todos: [{ content: 'Fix the race', activeForm: 'Fixing the race in the token refresh', status: 'in_progress' }] } },
+]
+const DID = ['Fixed the token-refresh race; all 42 tests pass.', 'Invoices now use Decimal; 3 tests added.', 'Pagination added to /orders, with tests.', 'Node 22 builds green; two deprecated calls replaced.']
 // What a demo pane shows: an agent mid-task, in colour.
 const demoScreen = (a) => a.engine === 'terminal'
   ? `\x1bc\x1b[32mdev@gpu-box\x1b[0m:\x1b[34m~/ml-lab\x1b[0m$ nvidia-smi --query-gpu=name,utilization.gpu --format=csv\r\nname, utilization.gpu [%]\r\nNVIDIA RTX 4090, 97 %\r\nNVIDIA RTX 4090, 95 %\r\n\x1b[32mdev@gpu-box\x1b[0m:\x1b[34m~/ml-lab\x1b[0m$ `
@@ -70,7 +92,7 @@ const server = http.createServer((req, res) => {
     { machineId: LOCAL, name: DEMO ? 'studio' : 'mock-local', status: 'running' },
     { machineId: REMOTE, name: DEMO ? 'gpu-box' : 'mock-remote', status: 'running' },
   ] })
-  if (req.url === '/test/dial' && req.method === 'GET') return json(res, dial)
+  if (req.url === '/test/dial' && req.method === 'GET') return json(res, { ...dial, agents: Object.values(agents).flat().map((a) => ({ id: a.id, name: a.name, sessionId: a.sessionId })) })
   if (req.url === '/test/dial' && req.method === 'POST') {
     let body = ''
     req.on('data', (c) => { body += c })
@@ -126,13 +148,30 @@ wss.on('connection', (ws) => {
       if (DEMO) {
         const asked = question(machine)
         if (asked) setTimeout(() => ws.send(JSON.stringify(asked)), 300)
-        let busy = agents[machine].filter((x) => x.status === 'active' && x.engine !== 'terminal' && !x.name.startsWith('Add rate'))
-        const beat = setInterval(() => busy.forEach((x) => send('turn_heartbeat', { agentId: x.id, sessionId: x.sessionId })), 2000)
+        const ev = (x, type, payload = {}) => ws.send(JSON.stringify({ type, agentId: x.id, dbSessionId: x.sessionId, payload: { agentId: x.id, sessionId: x.sessionId, ...payload } }))
+        // Of the fleet, about half work; the rest are idle. Each working one steps through a turn.
+        let busy = agents[machine].filter((x, i) => x.status === 'active' && x.engine !== 'terminal' && x.launch.state !== 'failed' && !x.name.startsWith('Add rate') && (i < 6 || i % 2 === 0))
+        let tick = 0
+        const beat = setInterval(() => {
+          tick++
+          busy.forEach((x, i) => { ev(x, 'turn_heartbeat'); if ((tick + i) % 2 === 0) ev(x, 'tool_start', { id: `t${tick}`, ...STEPS[(tick + i) % STEPS.length] }) })
+          // Every few seconds one of the fleet finishes its turn (its final message first).
+          if (FLEET && tick % 3 === 0 && busy.length > 6) {
+            const done = busy[6 + (tick % (busy.length - 6))]
+            busy = busy.filter((x) => x !== done)
+            ev(done, 'text_delta', { content: DID[tick % DID.length] + '\n\nDetails below.' })
+            ev(done, 'turn_ended')
+          }
+        }, 2000)
         // The billing refactor finishes its turn a few seconds in (done, until you look at it).
         const finished = busy.find((x) => x.name.startsWith('Refactor billing'))
-        const finish = finished && setTimeout(() => { busy = busy.filter((x) => x !== finished); send('turn_ended', { agentId: finished.id, sessionId: finished.sessionId }) }, 5000)
+        const finish = finished && setTimeout(() => {
+          busy = busy.filter((x) => x !== finished)
+          ev(finished, 'text_delta', { content: '**Invoices now use Decimal**; 3 tests added.\n\nThe rounding in `total()` was the bug.' })
+          ev(finished, 'turn_ended')
+        }, 5000)
         ws.on('close', () => { clearInterval(beat); clearTimeout(finish) })
-        setTimeout(() => busy.forEach((x) => send('turn_heartbeat', { agentId: x.id, sessionId: x.sessionId })), 200)
+        setTimeout(() => busy.forEach((x) => { ev(x, 'turn_started', { userMessage: x.name }); ev(x, 'tool_start', { id: 't0', ...STEPS[0] }) }), 200)
       }
       return
     }

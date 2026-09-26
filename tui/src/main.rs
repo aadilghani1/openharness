@@ -258,6 +258,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         app.notify_changes();
         commands::run_pending_hooks(&mut app);
         app.show_causes();
+        app.mark_seen();
         if app.quit { break }
         if std::mem::take(&mut app.mouse_changed) {
             if app.mouse { execute!(term.backend_mut(), EnableMouseCapture)?; } else { execute!(term.backend_mut(), DisableMouseCapture)?; }

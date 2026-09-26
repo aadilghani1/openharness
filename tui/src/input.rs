@@ -668,27 +668,8 @@ pub fn run(app: &mut App, command: &str) {
             let at = app.last_tab().and_then(|id| app.tabs.iter().position(|t| &t.id == id));
             match at { Some(index) => app.select_tab(index), None => app.error("no last window") }
         }
-        "next-waiting" => {
-            // Oldest question first; the one in front of you counts as handled, so repeated presses walk the queue.
-            let current = focused_agent(app);
-            let mut waiting: Vec<_> = app.fleet.agents.values().filter(|a| a.question.is_some() && a.status != "stopped").map(|a| (a.question.as_ref().unwrap().since, a.machine_id.clone(), a.id.clone())).collect();
-            waiting.sort();
-            let next = waiting.iter().find(|(_, m, a)| current.as_ref() != Some(&(m.clone(), a.clone()))).or(waiting.first());
-            match next {
-                Some((_, m, a)) => { let (m, a) = (m.clone(), a.clone()); app.open_agent(&m, &a, Placement::Tab) }
-                None => app.say("Nobody is waiting on you", theme::MUTED),
-            }
-        }
-        "prev-waiting" => {
-            let current = focused_agent(app);
-            let mut waiting: Vec<_> = app.fleet.agents.values().filter(|a| a.question.is_some() && a.status != "stopped").map(|a| (a.question.as_ref().unwrap().since, a.machine_id.clone(), a.id.clone())).collect();
-            waiting.sort();
-            waiting.reverse();
-            match waiting.iter().find(|(_, m, a)| current.as_ref() != Some(&(m.clone(), a.clone()))).or(waiting.first()) {
-                Some((_, m, a)) => { let (m, a) = (m.clone(), a.clone()); app.open_agent(&m, &a, Placement::Tab) }
-                None => app.say("no alert", theme::MUTED),
-            }
-        }
+        "next-waiting" => next_attention(app, false),
+        "prev-waiting" => next_attention(app, true),
         "resume-focused" => { if let Some(f) = app.focused() { app.resume(f) } }
         "last-harness" => {
             match app.last_harness.clone() {
@@ -804,6 +785,32 @@ pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cw
         app.modal = Some(Modal::Popup { pane, x, y, width: w, height: h, border, title: title.clone() });
         app.open_stream(pane, true);
     });
+}
+
+/// next-harness (C-b a): the next harness that needs you, in the order the harness list keeps —
+/// waiting on you, failed, then done and unread, the one waiting longest first — or with
+/// [back] the last of them. One already on screen is gone to; another is shown in the pane the
+/// last C-b a used (in a window of its own the first time), so going down the queue keeps to one
+/// window. Looking at it reads it: the counts on the status line go down.
+pub fn next_attention(app: &mut App, back: bool) {
+    use crate::fleet::State;
+    let current = focused_agent(app);
+    let mut queue: Vec<(String, String)> = app.fleet.ranked().into_iter()
+        .filter(|a| a.status != "stopped" && matches!(app.fleet.state_of(a), State::NeedsInput | State::Failed | State::Done))
+        .map(|a| a.key()).collect();
+    if back { queue.reverse() }
+    if queue.is_empty() { app.loop_seen.clear(); return app.say("Nothing needs you", theme::MUTED) }
+    // Each once, in order; round again when all of them have been shown.
+    if queue.iter().all(|k| app.loop_seen.contains(k) || current.as_ref() == Some(k)) { app.loop_seen.clear() }
+    let Some((m, a)) = queue.iter().find(|k| current.as_ref() != Some(*k) && !app.loop_seen.contains(k)).or(queue.first()).cloned() else { return };
+    app.loop_seen.push((m.clone(), a.clone()));
+    if app.find_pane(&m, &a).is_some() { return app.open_agent(&m, &a, Placement::Tab) }
+    // The loop's pane, wherever it is: gone to, and the next harness shown in it.
+    match app.loop_pane.and_then(|p| app.tabs.iter().position(|t| t.panes().contains(&p)).map(|w| (w, p))) {
+        Some((w, p)) => { app.focus_pane(w, p); app.open_agent(&m, &a, Placement::Replace) }
+        None => app.open_agent(&m, &a, Placement::Tab),
+    }
+    app.loop_pane = app.find_pane(&m, &a).map(|(_, p)| p);
 }
 
 /// The same, for the pane `from` (new-window reads it before the new window takes the focus).
