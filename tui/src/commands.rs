@@ -281,11 +281,22 @@ fn pane_alive(app: &App, p: u64) -> bool {
 }
 
 /// Restart the harness in a pane (respawn-pane, respawn-window).
-fn respawn(app: &mut App, p: u64) {
+fn respawn(app: &mut App, p: u64, command: Option<String>, cwd: Option<String>) {
     let Some((machine, agent)) = app.panes.get(&p).map(|x| (x.machine_id.clone(), x.agent_id.clone())) else { return };
     let Some(link) = app.link(&machine) else { return app.say("That machine is not connected", theme::WARN) };
-    app.spawn(async move { link.rpc("agent_restart", serde_json::json!({ "agentId": agent }), std::time::Duration::from_secs(120)).await }, move |app, reply| match reply {
-        Ok(_) => app.relist(&machine),
+    // A shell's new program (respawn-pane 'cmd', -c dir): typed into the new shell, as a new
+    // window's command is — a harness's own program is its own.
+    let shell = app.fleet.agent(&machine, &agent).map(|a| a.engine == "terminal").unwrap_or(false);
+    let quoted = |c: &str| format!("'{}'", c.replace('\'', "'\\''"));
+    let typed = (shell && (command.is_some() || cwd.is_some())).then(|| {
+        let cd = cwd.as_deref().map(|d| format!("cd {} && ", quoted(d))).unwrap_or_default();
+        match &command { Some(c) => format!(" {cd}clear; exec \"${{SHELL:-sh}}\" -c {}", quoted(c)), None => format!(" {cd}clear") }
+    });
+    app.spawn(async move { link.rpc("agent_restart", serde_json::json!({ "agentId": agent }), std::time::Duration::from_secs(120)).await.map(|r| (r, link, agent)) }, move |app, reply| match reply {
+        Ok((_, link, agent)) => {
+            if let Some(text) = typed { link.send("message", serde_json::json!({ "agentId": agent, "content": text })); }
+            app.relist(&machine)
+        }
         Err(e) => app.error(format!("respawn pane failed: {e}")),
     });
 }
@@ -2066,7 +2077,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let w = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(w) => w, None => return }, None => app.active };
             let panes = app.tabs[w].panes();
             if !flag(words, "-k") && panes.iter().any(|p| pane_alive(app, *p)) { return app.error(format!("respawn window failed: window {}:{} still active", app.session_name(), app.win_num(w))) }
-            for p in panes { respawn(app, p) }
+            let (command, cwd) = (shell_command(words), opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty()));
+            for p in panes { respawn(app, p, command.clone(), cwd.clone()) }
         }
         "set-buffer" => {
             // tmux's set-buffer [-aw] [-b buffer-name] [-n new-buffer-name] data: -n renames (the
@@ -2095,7 +2107,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // tmux's respawn-pane: a pane whose harness still runs needs -k.
             let Some((w, p)) = target_pane(app, words) else { return };
             if !flag(words, "-k") && pane_alive(app, p) { return app.error(format!("respawn pane failed: pane {} still active", pane_name(app, w, p))) }
-            respawn(app, p);
+            let (command, cwd) = (shell_command(words), opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty()));
+            respawn(app, p, command, cwd);
         }
         "suspend-client" => app.suspend = true,
         "rename-session" => {
