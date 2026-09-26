@@ -196,6 +196,27 @@ void main() {
     );
   });
 
+  test('an earlier answer vouches only for words its snippet shows', () async {
+    final search = SessionContentSearch(
+      machines: () => ['m'],
+      debounce: Duration.zero,
+      ask: (_, query) async => query == 'mob'
+          ? [
+              hit('a1', snippet: 'the ${_o}mobile$_c swipe feels slow'),
+              hit('a2', snippet: 'the ${_o}mobile$_c build broke'),
+            ]
+          : Completer<List<SessionContentHit>?>().future,
+    );
+    addTearDown(search.dispose);
+    search.search('mob');
+    await settle();
+    expect(search.hitsFor('mob').keys, hasLength(2));
+    search.search('mob swipe');
+    expect(search.hitsFor('mob swipe').keys, [agentDestinationId('m', 'a1')]);
+    expect(search.hitsFor('mob swi').keys, [agentDestinationId('m', 'a1')]);
+    expect(search.hitsFor('mob build keyboard'), isEmpty);
+  });
+
   group('ranking with what was said', () {
     SwarmDestination row(String id, String title, int hour) => SwarmDestination(
       id: agentDestinationId('m', id),

@@ -221,10 +221,18 @@ List<SearchTextRun> snippetRuns(String snippet) {
 }
 
 class SessionSnippetText extends StatelessWidget {
-  const SessionSnippetText(this.hit, {super.key, required this.style});
+  const SessionSnippetText(
+    this.hit, {
+    super.key,
+    required this.style,
+    this.maxLines = 1,
+  });
 
   final SessionContentHit hit;
   final TextStyle style;
+
+  /// One line in a result row; null lets the preview show all of it.
+  final int? maxLines;
 
   @override
   Widget build(BuildContext context) => Text.rich(
@@ -240,9 +248,9 @@ class SessionSnippetText extends StatelessWidget {
           ),
       ],
     ),
-    key: ValueKey('session-snippet:${hit.destinationId}'),
-    maxLines: 1,
-    overflow: TextOverflow.ellipsis,
+    key: key == null ? ValueKey('session-snippet:${hit.destinationId}') : null,
+    maxLines: maxLines,
+    overflow: maxLines == null ? null : TextOverflow.ellipsis,
     style: style,
   );
 }

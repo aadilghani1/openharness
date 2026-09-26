@@ -129,6 +129,38 @@ class SessionContentSearch extends ChangeNotifier {
   Map<String, SessionContentHit> _hits = const {};
   Map<String, SessionContentHit> get hits => _hits;
 
+  /// The hits that vouch for [query]. While its own answer is on the way, an
+  /// earlier answer's hit counts only if its snippet shows every word of it:
+  /// a hit found for "mob" says nothing about "mob swipe".
+  Map<String, SessionContentHit> hitsFor(String query) {
+    final wanted = query.trim();
+    if (_answered == null || _hits.isEmpty) return const {};
+    if (_answered == wanted) return _hits;
+    final words = wanted
+        .toLowerCase()
+        .split(RegExp(r'\s+'))
+        .where((word) => word.isNotEmpty)
+        .toList();
+    return {
+      for (final entry in _hits.entries)
+        if (_shows(entry.value.plainSnippet.toLowerCase(), words))
+          entry.key: entry.value,
+    };
+  }
+
+  static final _wordStart = RegExp(r'[^\p{L}\p{N}]', unicode: true);
+
+  static bool _shows(String text, List<String> words) => words.every((word) {
+    for (
+      var at = text.indexOf(word);
+      at >= 0;
+      at = text.indexOf(word, at + 1)
+    ) {
+      if (at == 0 || _wordStart.hasMatch(text[at - 1])) return true;
+    }
+    return false;
+  });
+
   /// The query the current [hits] answer, or null while none have arrived.
   String? get answered => _answered;
   String? _answered;

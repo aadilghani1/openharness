@@ -18,7 +18,7 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart';
 import 'engine_identity.dart';
-import 'search_result_text.dart' show snippetLead, snippetRuns;
+import 'search_result_text.dart' show SessionSnippetText;
 import 'swarm_preview_scroll.dart';
 
 typedef _PreviewAgent = ({MachineState machine, Agent agent});
@@ -516,21 +516,11 @@ class _AgentPreview extends StatelessWidget {
                   : muted.copyWith(fontWeight: FontWeight.w500),
             ),
             if (!terminal) const SizedBox(height: 7),
-            Text.rich(
-              TextSpan(
-                children: [
-                  TextSpan(text: snippetLead(found.field)),
-                  for (final run in snippetRuns(found.snippet))
-                    TextSpan(
-                      text: run.text,
-                      style: run.matched
-                          ? const TextStyle(fontWeight: FontWeight.w700)
-                          : null,
-                    ),
-                ],
-              ),
+            SessionSnippetText(
+              found,
               key: ValueKey('preview-found:${found.destinationId}'),
               style: body,
+              maxLines: null,
             ),
             SizedBox(height: terminal ? cell.height : 24),
           ],

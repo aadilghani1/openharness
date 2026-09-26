@@ -414,9 +414,7 @@ class SwarmSearchController extends ChangeNotifier {
   /// What a machine's session index found in this row's conversation for the
   /// current query, when that is how the row matched.
   SessionContentHit? contentHitFor(String rowId) =>
-      _contentQuery.isEmpty || _content?.answered == null
-      ? null
-      : _content!.hits[rowId];
+      _contentQuery.isEmpty ? null : _content?.hitsFor(_contentQuery)[rowId];
 
   /// The words sent to the session indexes: plain harness search only.
   String get _contentQuery =>
@@ -1152,7 +1150,9 @@ class SwarmSearchController extends ChangeNotifier {
             matchQuery,
             recent: recent,
             previews: app.sessionPreviews,
-            contentHits: _contentQuery.isEmpty ? null : _content?.hits,
+            contentHits: _contentQuery.isEmpty
+                ? null
+                : _content?.hitsFor(_contentQuery),
           )
         : rankSwarmDestinations(
             candidates,

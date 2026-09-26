@@ -82,10 +82,12 @@ void main() {
         ValueKey('preview-found:${agentDestinationId('m', 'a7')}'),
       );
       expect(found, findsOneWidget);
+      final foundText = find.descendant(of: found, matching: find.byType(Text));
       expect(
-        tester.widget<Text>(found).textSpan!.toPlainText(),
+        tester.widget<Text>(foundText).textSpan!.toPlainText(),
         '> compare retention by cohort',
       );
+      expect(tester.widget<Text>(foundText).maxLines, isNull);
       expect(find.text('Found in what you asked'), findsOneWidget);
       app.dispose();
       await tester.pumpWidget(const SizedBox());
