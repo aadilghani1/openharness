@@ -34,7 +34,9 @@ clients and the server build against.
 ## Art rules
 
 Printable 7-bit ASCII only (0x20–0x7e), so every terminal, font, phone and paste into Slack or GitHub
-shows the same thing. Turn off ligatures wherever a daemon is drawn (`->` and `==` merge in Fira Code).
+shows the same thing. Turn off ligatures wherever a daemon is drawn. Where that is impossible (a
+terminal's own font), the art itself is safe: no frame of any mood contains a pair that programming
+fonts merge (`==` `??` `!=` `::` `->` `=>` and the like), so the two eyes are never drawn side by side.
 
 - **Sprite**: one line, at most 8 cells, centred in the status line with one cell of gutter each side.
   Three versions: `0.1`, `1.0`, `2.0`.
@@ -44,7 +46,10 @@ shows the same thing. Turn off ligatures wherever a daemon is drawn (`->` and `=
 - **Placeholders** (see `render.mjs`): `{e}` an eye; `{<part>}` a moving part with a `rest` glyph and
   `work` frames; `{<moodPart>}` a value per mood (tim's mouth `{m}` and tmux window flag `{g}`, vim's
   mode line `{mode}`).
-- **Colour** is a filter over the drawing, never the only signal. Each daemon has one xterm-256 colour.
+- **Colour** is a filter over the drawing, never the only signal. Each daemon has one xterm-256 colour,
+  used only on the terminal background (panel, reveal, zoo, card), with a darker variant on light
+  themes. In the status line the daemon takes the status line's own text colour: daemon colours fail
+  contrast on tmux's green bar and on the yellow message line.
 
 ## Moods
 
@@ -59,7 +64,8 @@ Moods come from work, never from the clock. The face is decided in this order:
 4. A held reaction: `done` 3 s after a turn you started finishes (at most once per 20 s),
    `back` 1.3 s when you return after 15 minutes or more (it waves), `fail` 4.2 s when a turn fails.
 5. `work` while any agent works.
-6. `fail` while a harness you have open is offline or failed to start.
+6. `fail` while a harness you have open failed to start or its last turn failed. A machine that is
+   asleep or unreachable is not a failure: the panel says so calmly and the face stays as it was.
 7. `idle`.
 
 Imported history, reconnects and restored state are baselines, never fresh reactions. Several
@@ -69,8 +75,11 @@ finishes at once do not queue.
 
 Every motion is finite and ends at rest. There is no idle animation timer.
 
-- **Working**: the 2.0 sprite cycles its `work` frames (tim's arms turn like a twirling baton).
-  Younger versions borrow the baton `|/-\` after the sprite.
+- **Working**: the 2.0 sprite steps through its `work` frames, one step per real agent event (a tool
+  starting, output arriving), at most two steps a second (tim's arms turn like a twirling baton).
+  A baton that stops turning means an agent that stopped. Younger versions borrow the baton `|/-\`
+  after the sprite; the face never shifts, because the slot centres on the version's base sprite.
+  A Motion setting turns all of this off.
 - **Blinks answer something**:
   - `ack`, one blink 160 ms after something it watches changes (a harness needs you, a turn finishes, a test fails);
   - `look`, one blink when you look at it (hover, open its panel, return to the window), at most once per 2.5 s;
@@ -80,11 +89,20 @@ Every motion is finite and ends at rest. There is no idle animation timer.
 
 ## Voice
 
-One line at a time, lowercase, in the status line (it becomes tmux's yellow message line for 5.2 s).
-Every line carries information; the joke rides on the fact. Silent by default. It speaks for `need`,
-`done` (cooldown 20 s), `fail`, `back`, a boop and its first words. It never speaks while you are
-typing (it waits until 2 s after the last key) or while a dialog is open. Lines in `roster.json` are
-the voice for each mood until the pair brain writes real ones (see Build).
+One line at a time, in the status line. Every line carries information; the joke rides on the fact.
+Silent by default.
+
+- **Only what needs you takes over the status line** (it becomes tmux's yellow message line for
+  5.2 s): a harness waiting on you, and a failure. Finished turns become a small `+3` beside the
+  daemon, cleared when you look.
+- At most one line nobody asked for every two minutes. Nothing about the pane you are looking at.
+- It speaks after Enter, a pane switch, or 8 s without a key, never mid-thought, and never while a
+  dialog is open. A Quiet setting keeps it silent until you turn it off; a nap lasts 15 minutes.
+- Lines are templates in `roster.json` with slots: `{who}` the harness, `{q}` the question, `{recap}`
+  the turn's recap, `{n}` the count that matters, `{summary}` the brief's facts. A client fills them
+  from what it knows; a line whose slot cannot be filled is dropped, never shown with made-up facts.
+  `examples` holds each line filled with sample values for previews.
+- Answer keys come first in the line, and work only while the line is showing.
 
 ## The zoo (server contract)
 
