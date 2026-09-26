@@ -26,6 +26,19 @@ for (const d of roster.daemons) {
   if (!rules.rarities.includes(d.rarity)) fail(`${d.id}: unknown rarity ${d.rarity}`)
   if (!drops.has(d.drop)) fail(`${d.id}: unknown drop ${d.drop}`)
   if (!d.first || !printable(d.first)) fail(`${d.id}: first words missing or not ASCII`)
+  // Lines are templates: only known slots, and every template has an example with its slots filled.
+  if (rules.lineSlots) {
+    for (const mood of rules.moods) {
+      const line = d.lines?.[mood] ?? ''
+      for (const [, slot] of line.matchAll(/\{([a-zA-Z]+)\}/g)) {
+        if (!rules.lineSlots.includes(slot)) fail(`${d.id}: line for ${mood} uses unknown slot {${slot}}`)
+      }
+      const ex = d.examples?.[mood]
+      if (!ex) fail(`${d.id}: no example for ${mood}`)
+      else if (/\{[a-zA-Z]+\}/.test(ex)) fail(`${d.id}: example for ${mood} still has a slot`)
+      else if (!printable(ex)) fail(`${d.id}: example for ${mood} is not ASCII`)
+    }
+  }
   for (const mood of rules.moods) {
     if (!d.lines?.[mood]) fail(`${d.id}: no line for ${mood}`)
     else if (!printable(d.lines[mood])) fail(`${d.id}: line for ${mood} is not ASCII`)
