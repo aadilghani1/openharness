@@ -2325,7 +2325,34 @@ class _TerminalPageState extends State<TerminalPage>
   }
 
   /// What acts on this agent and can be taken back — the first card of its sheet.
+  /// Pastes the phone's clipboard into the terminal, the way a desktop's ⌘V does — the pane's raw
+  /// paste where the computer takes one, bracketed paste where it does not.
+  Future<void> _pasteClipboard() async {
+    final session = widget.notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    if (session == null || !session.acceptsInput) return;
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    if (!mounted) return;
+    if (text == null || text.isEmpty) {
+      _flash('the clipboard has no text', error: true);
+      return;
+    }
+    final machine = widget.notifier.stateOf(widget.machineId);
+    if (machine != null && machine.terminalPasteRawAvailable) {
+      await session.pasteText(text);
+    } else {
+      session.terminal.paste(text);
+    }
+    if (mounted) _flash('✓ pasted');
+  }
+
   List<PhoneSheetAction> _agentActions(Agent agent) => [
+    PhoneSheetAction(
+      icon: LucideIcons.clipboardPaste300,
+      label: 'Paste',
+      onTap: () => unawaited(_pasteClipboard()),
+    ),
     // Stop what it is doing — Esc, as in the terminal — only while it is doing something. First,
     // because when it is wanted it is wanted now.
     if (_agentWorking)

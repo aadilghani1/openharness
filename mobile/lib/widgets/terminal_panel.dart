@@ -1066,6 +1066,16 @@ class _TerminalPanelState extends State<TerminalPanel>
     _lastInertiaMicros = null;
   }
 
+  /// Copies what is selected and lets it go — the phone's Copy: a long press, then this.
+  Future<void> _copySelection() async {
+    final selection = _controller.selection;
+    if (selection == null) return;
+    final text = widget.session.terminal.buffer.getText(selection);
+    _controller.clearSelection();
+    await Clipboard.setData(ClipboardData(text: text));
+    HapticFeedback.lightImpact();
+  }
+
   Future<void> _copyOrPaste() async {
     final terminal = widget.session.terminal;
     final selection = _controller.selection;
@@ -1600,6 +1610,21 @@ class _TerminalPanelState extends State<TerminalPanel>
                       onCancelPreview: () => _previewCancellation?.cancel(),
                     ),
                   ),
+                  // A long press selects on a phone, and nothing else offered to copy what it
+                  // selected: `Copy` rides the selection, top right, until used or cleared.
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: ListenableBuilder(
+                      listenable: _controller,
+                      builder: (context, _) => _controller.selection == null
+                          ? const SizedBox.shrink()
+                          : _SelectionActions(
+                              onCopy: () => unawaited(_copySelection()),
+                              onClear: _controller.clearSelection,
+                            ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -1779,6 +1804,55 @@ class _TransferOverlay extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// `Copy  ×` over a selection — the phone has no right click and no ⌘C.
+class _SelectionActions extends StatelessWidget {
+  const _SelectionActions({required this.onCopy, required this.onClear});
+
+  final VoidCallback onCopy;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    Widget action(String label, VoidCallback onTap, {bool bold = false}) =>
+        Semantics(
+          button: true,
+          label: label == '×' ? 'Clear selection' : label,
+          excludeSemantics: true,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 40),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Center(
+                  widthFactor: 1,
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+    return Material(
+      color: theme.colorScheme.surfaceContainerHighest,
+      elevation: 2,
+      borderRadius: BorderRadius.circular(8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [action('Copy', onCopy, bold: true), action('×', onClear)],
       ),
     );
   }
