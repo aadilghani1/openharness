@@ -283,3 +283,25 @@ class DaemonRoster {
 
 /// The roster every surface draws from.
 final daemonRoster = DaemonRoster.parse(daemonRosterJson);
+
+/// The banner face a daemon's name is drawn in on the hatch reveal
+/// (`daemons/banner.json`): [rows] rows per glyph, [gap] columns between
+/// letters. See `renderBanner` in `render.dart`.
+class DaemonBanner {
+  DaemonBanner._(Map raw)
+    : rows = (raw['rows'] as num).toInt(),
+      gap = (raw['gap'] as num).toInt(),
+      glyphs = {
+        for (final e in (raw['glyphs'] as Map).entries)
+          e.key as String: [for (final r in e.value as List) r as String],
+      };
+
+  factory DaemonBanner.parse(String json) =>
+      DaemonBanner._(jsonDecode(json) as Map);
+
+  final int rows, gap;
+  final Map<String, List<String>> glyphs;
+}
+
+/// The banner face every surface draws names in.
+final daemonBanner = DaemonBanner.parse(daemonBannerJson);

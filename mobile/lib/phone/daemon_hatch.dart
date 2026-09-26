@@ -70,7 +70,8 @@ class HatchFrame {
 /// wobbles twice (and keeps wobbling while the server answers), cracks — with
 /// a tap of haptics — and its top pops; the 0.1 sprite appears as `#` in the
 /// faint colour for 850 ms, fills with its colour and blinks; its name types
-/// in as a small banner; the rarity stamp and first words appear; then the
+/// in, a row at a time, as a banner in the face from `daemons/banner.json`
+/// ([renderBanner]); the rarity stamp and first words appear; then the
 /// card, which copies as a fenced code block. A secret's reveal (a daemon that
 /// shows only in the dark) starts pitch black. Reduce Motion goes straight to
 /// the card. It can be closed at any moment; [onRevealed] runs once, when the
@@ -102,6 +103,13 @@ class DaemonHatchReveal extends StatefulWidget {
 }
 
 class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
+  /// The banner's type: 18pt cells fit the widest name in the roster (grue,
+  /// 25 columns, 270pt at a monospace face's 0.6em advance) inside the 280pt a
+  /// 320pt-wide screen leaves between the reveal's margins. A wider face or a
+  /// wider name is scaled down to fit, never wrapped.
+  static const _bannerSize = 18.0;
+  static const _bannerHeight = 1.15;
+
   HatchStage _stage = HatchStage.egg;
   late String _egg = eggFrame(widget.roster);
   String? _sprite;
@@ -237,7 +245,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       if (!await _wait(120)) return;
       _show(() => _sprite = sprite);
       if (!await _wait(220)) return;
-      final rows = bannerRows(def.id).length;
+      final rows = renderBanner(daemonBanner, def.id).length;
       for (var row = 1; row <= rows; row++) {
         _show(() {
           _stage = HatchStage.banner;
@@ -250,7 +258,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       _stage = HatchStage.card;
       _sprite = sprite;
       _faint = false;
-      _bannerRows = bannerRows(def.id).length;
+      _bannerRows = renderBanner(daemonBanner, def.id).length;
     });
     _markRevealed();
   }
@@ -369,6 +377,46 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         ),
       );
 
+  /// The name as a banner, [shown] rows of it typed in so far. The whole
+  /// banner is laid out from the first row, unseen, so the reveal neither
+  /// jumps nor rescales as the rest arrive.
+  Widget _banner(List<String> rows, int shown, String name) {
+    final style = DaemonInk.mono(
+      size: _bannerSize,
+      color: DaemonInk.bright,
+      height: _bannerHeight,
+    );
+    Widget text(String data, {Key? key}) => Text(
+      data,
+      key: key,
+      softWrap: false,
+      textScaler: TextScaler.noScaling,
+      style: style,
+    );
+    return Semantics(
+      label: name,
+      excludeSemantics: true,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Stack(
+          children: [
+            Visibility(
+              visible: false,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: text(rows.join('\n')),
+            ),
+            text(
+              rows.take(shown).join('\n'),
+              key: const ValueKey('daemon-hatch-banner'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   List<Widget> _children(bool pitch) {
     final def = _def;
     if (_stage == HatchStage.failed) {
@@ -407,7 +455,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       ];
     }
     final colour = def.color;
-    final rows = bannerRows(def.id);
+    final rows = renderBanner(daemonBanner, def.id);
     final card = _stage == HatchStage.card ? _card : null;
     final words =
         "fork() returned 0. it's a ${def.id}.\n"
@@ -439,12 +487,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         ),
       if (_bannerRows > 0) ...[
         const SizedBox(height: 18),
-        _art(
-          rows.take(_bannerRows).join('\n'),
-          DaemonInk.mono(size: 15, color: DaemonInk.bright, height: 1.1),
-          key: const ValueKey('daemon-hatch-banner'),
-          semantics: def.id,
-        ),
+        _banner(rows, _bannerRows, def.id),
       ],
       if (_stage == HatchStage.card) ...[
         const SizedBox(height: 18),

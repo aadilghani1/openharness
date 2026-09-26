@@ -1,7 +1,7 @@
 /// The Dart port of `daemons/tools/render.mjs`, the reference renderer, for
 /// the phone. Every frame it draws must match `daemons/frames.json` byte for
 /// byte (`test/daemons/render_frames_test.dart` checks all of them: sprites,
-/// portraits and status cells).
+/// portraits, status cells and banners).
 ///
 /// Placeholders in sprites and portraits:
 ///   `{e}`          an eye: the mood's eye, or the lid while blinking (never in noBlinkMoods)
@@ -9,9 +9,10 @@
 ///   `{<moodPart>}` a mood-driven part (d.moodParts): its value for the mood, else its idle value
 ///
 /// The rest of this file draws what the lookbook draws around a daemon while it
-/// hatches: the nest, the egg, the `#` silhouette and the banner name (the
-/// desktop's `render.dart` has the same helpers; this is a copy, not a
-/// dependency). Cards and shelves are in `card.dart`.
+/// hatches: the nest, the egg and the `#` silhouette (the desktop's
+/// `render.dart` has the same helpers; this is a copy, not a dependency), and
+/// the name as a banner ([renderBanner], checked against `frames.json` too).
+/// Cards and shelves are in `card.dart`.
 library;
 
 import 'roster.dart';
@@ -172,42 +173,27 @@ String eggPopFrame(DaemonRoster roster) => [
   _eggRows(roster).last,
 ].join('\n');
 
-// ── the banner: a small FIGlet-style face, ported from the lookbook ──────────
+// ── the banner ───────────────────────────────────────────────────────────────
 
-const _banner = <String, List<String>>{
-  'a': ['   ', ' _.', '(_|', '   '],
-  'b': ['|  ', '|_ ', '|_)', '   '],
-  'c': ['  ', ' _', '(_', '  '],
-  'd': ['  |', ' _|', '(_|', '   '],
-  'e': ['   ', ' _ ', '(/_', '   '],
-  'f': ['  _', '_|_', ' | ', '   '],
-  'g': ['   ', ' _ ', '(_|', ' _|'],
-  'h': ['|  ', '|_ ', '| |', '   '],
-  'i': [' ', '.', '|', ' '],
-  'k': ['|  ', '|/ ', r'|\ ', '   '],
-  'l': ['|', '|', '|', ' '],
-  'm': ['     ', ' _ _ ', '| | |', '     '],
-  'n': ['   ', ' _ ', '| |', '   '],
-  'o': ['   ', ' _ ', '(_)', '   '],
-  'p': ['   ', ' _ ', '|_)', '|  '],
-  'q': ['   ', ' _ ', '(_|', '  |'],
-  'r': ['  ', ' _', '| ', '  '],
-  's': ['  ', ' _', '_>', '  '],
-  't': ['   ', '_|_', ' |_', '   '],
-  'u': ['   ', '   ', '|_|', '   '],
-  'v': ['  ', '  ', r'\/', '  '],
-  'w': ['    ', '    ', r'\/\/', '    '],
-  'x': ['  ', '  ', '><', '  '],
-  'y': ['   ', '   ', r'\_|', ' _|'],
-  'z': ['  ', '_ ', '/_', '  '],
-};
+/// A daemon's name as a banner, in the face from `daemons/banner.json`: every
+/// glyph padded to its own widest row, `gap` columns between letters, blank
+/// rows dropped. A character the face does not have is drawn as a space.
+List<String> renderBanner(DaemonBanner banner, String word) {
+  final blank = banner.glyphs[' '] ?? const <String>[];
+  final glyphs = [
+    for (final rune in word.toLowerCase().runes)
+      _padGlyph(banner.glyphs[String.fromCharCode(rune)] ?? blank),
+  ];
+  return [
+    for (var r = 0; r < banner.rows; r++)
+      [for (final g in glyphs) r < g.length ? g[r] : '']
+          .join(' ' * banner.gap)
+          .trimRight(),
+  ].where((l) => l.trim().isNotEmpty).toList();
+}
 
-/// A name as the banner draws it, blank rows dropped. A character the face
-/// does not have is drawn as itself on the baseline row.
-List<String> bannerRows(String word) => [
-  for (var row = 0; row < 4; row++)
-    [
-      for (final ch in word.split(''))
-        (_banner[ch] ?? [' ', ' ', ch, ' '])[row],
-    ].join(' '),
-].where((line) => line.trim().isNotEmpty).toList();
+/// A glyph's rows, each padded to its widest.
+List<String> _padGlyph(List<String> rows) {
+  final width = rows.fold(0, (w, r) => r.length > w ? r.length : w);
+  return [for (final r in rows) r.padRight(width)];
+}

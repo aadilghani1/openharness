@@ -131,7 +131,11 @@ class DaemonSheet extends StatelessWidget {
         style: DaemonInk.mono(size: 12, color: DaemonInk.rarity(def.rarity)),
       ),
       const SizedBox(height: 12),
-      _Said(key: const ValueKey('daemon-line'), text: '${face.name}: $line'),
+      _Said(
+        key: const ValueKey('daemon-line'),
+        text: '${face.name}: $line',
+        alert: _Said.alerts(mood),
+      ),
       const SizedBox(height: 14),
       Text(def.lore, style: DaemonInk.sans(size: 14.5)),
       const SizedBox(height: 10),
@@ -293,24 +297,39 @@ class _Art extends StatelessWidget {
   );
 }
 
-/// The line it would say now, as tmux's yellow message line shows it.
+/// The line it would say now. Only what needs you takes tmux's yellow message
+/// line: a harness waiting on you, and a failure. Anything else — content,
+/// working, a boop — is dim text, the way the status line stays quiet
+/// (`daemons/README.md`, Voice).
 class _Said extends StatelessWidget {
-  const _Said({super.key, required this.text});
+  const _Said({super.key, required this.text, required this.alert});
 
   final String text;
+  final bool alert;
+
+  static bool alerts(DaemonMood mood) =>
+      mood == DaemonMood.need || mood == DaemonMood.fail;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-    decoration: BoxDecoration(
-      color: DaemonInk.yellow,
-      borderRadius: BorderRadius.circular(3),
-    ),
-    child: Text(
-      text,
-      style: DaemonInk.mono(size: 13, color: DaemonInk.pitch, height: 1.35),
-    ),
-  );
+  Widget build(BuildContext context) {
+    if (!alert) {
+      return Text(
+        text,
+        style: DaemonInk.mono(size: 13, color: DaemonInk.dim, height: 1.35),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: DaemonInk.yellow,
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text(
+        text,
+        style: DaemonInk.mono(size: 13, color: DaemonInk.pitch, height: 1.35),
+      ),
+    );
+  }
 }
 
 class _Caption extends StatelessWidget {

@@ -3,11 +3,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/daemons/daemon_face.dart';
+import 'package:harness_mobile/daemons/render.dart';
 import 'package:harness_mobile/daemons/roster.dart';
 import 'package:harness_mobile/daemons/zoo.dart';
 import 'package:harness_mobile/phone/daemon_chip.dart';
 import 'package:harness_mobile/phone/daemon_hatch.dart';
 import 'package:harness_mobile/phone/daemon_scope.dart';
+import 'package:harness_mobile/phone/daemon_style.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import '../agent_pager_fixture.dart';
@@ -167,6 +170,54 @@ void main() {
     expect(find.textContaining('screen -> tmux -> tim'), findsOneWidget);
     expect(find.textContaining('zoo: drop 1 unix  2/9'), findsOneWidget);
     expect(find.text('Hatch'), findsOneWidget);
+  });
+
+  testWidgets('only a need or a failure takes the yellow message line', (
+    tester,
+  ) async {
+    await _pump(tester, backend);
+    await _openSheet(tester);
+    final line = find.byKey(const ValueKey('daemon-line'));
+    bool alert() => find
+        .descendant(
+          of: line,
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w is Container &&
+                w.decoration is BoxDecoration &&
+                (w.decoration! as BoxDecoration).color == DaemonInk.yellow,
+          ),
+        )
+        .evaluate()
+        .isNotEmpty;
+    Color? colour() => tester
+        .widget<Text>(find.descendant(of: line, matching: find.byType(Text)))
+        .style
+        ?.color;
+
+    // Booped: it is talking about itself, which needs nobody.
+    expect(alert(), isFalse);
+    await tester.pump(const Duration(seconds: 1));
+    final face = tester.state<DaemonHostState>(find.byType(DaemonHost)).face;
+    for (final (watch, mood, loud) in [
+      (const DaemonWatch(), DaemonMood.idle, false),
+      (const DaemonWatch(working: {'m/a'}), DaemonMood.work, false),
+      (const DaemonWatch(needs: {'m/a#q'}), DaemonMood.need, true),
+      (const DaemonWatch(failing: {'m/a'}), DaemonMood.fail, true),
+      (const DaemonWatch(), DaemonMood.idle, false),
+    ]) {
+      face.sync(watch);
+      await tester.pump();
+      expect(face.mood, mood);
+      expect(alert(), loud, reason: mood.name);
+      // Content is dim text; an alert is dark on the yellow line.
+      expect(
+        colour(),
+        loud ? DaemonInk.pitch : DaemonInk.dim,
+        reason: mood.name,
+      );
+    }
+    await tester.pump(const Duration(seconds: 1));
   });
 
   testWidgets('the shelf pairs a daemon you own', (tester) async {
@@ -391,6 +442,85 @@ void main() {
       );
     });
   }
+
+  testWidgets('the name is a banner that fits a 320pt screen, never wrapped', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 568);
+    addTearDown(tester.view.reset);
+    final app = pagerApp(PagerConn());
+    addTearDown(app.dispose);
+    final banner = find.byKey(const ValueKey('daemon-hatch-banner'));
+    final box = find.ancestor(of: banner, matching: find.byType(FittedBox));
+
+    Future<void> still(String id, int rows, {double textScale = 1}) async {
+      final def = daemonRoster.byId(id)!;
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: TextScaler.linear(textScale)),
+            child: child!,
+          ),
+          home: DaemonHatchReveal(
+            // A still is read once: a new one for every frame.
+            key: ValueKey('$id $rows $textScale'),
+            roster: daemonRoster,
+            egg: const ZooEgg(id: 'e', kind: 'first', grantedAt: ''),
+            result: Future.value(
+              ZooHatch(eggId: 'e', daemonId: id, shiny: false),
+            ),
+            zoo: app.zoo,
+            still: HatchFrame(
+              stage: HatchStage.banner,
+              sprite: renderSprite(daemonRoster, def, 0, DaemonMood.idle),
+              bannerRows: rows,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: id);
+    }
+
+    for (final d in daemonRoster.daemons) {
+      final rows = renderBanner(daemonBanner, d.id);
+      await still(d.id, rows.length);
+      final text = tester.widget<Text>(banner);
+      expect(text.data, rows.join('\n'), reason: d.id);
+      expect(text.softWrap, isFalse);
+      expect(text.textScaler, TextScaler.noScaling);
+      expect(text.style!.height, 1.15);
+      expect(text.style!.fontSize, 18);
+      // One line per row: nothing wrapped, whatever the scale it is drawn at.
+      final unwrapped = TextPainter(
+        text: TextSpan(text: text.data, style: text.style),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      addTearDown(unwrapped.dispose);
+      expect(unwrapped.computeLineMetrics(), hasLength(rows.length));
+      expect(tester.getSize(banner), unwrapped.size, reason: d.id);
+      // Inside the reveal's 20pt margins: scaled down when it must be.
+      final drawn = tester.getRect(box);
+      expect(drawn.left, greaterThanOrEqualTo(20 - .01), reason: d.id);
+      expect(drawn.right, lessThanOrEqualTo(300 + .01), reason: d.id);
+      expect(tester.getSemantics(box).label, d.id);
+    }
+
+    // Typing in a row at a time never moves or rescales what is there.
+    final rows = renderBanner(daemonBanner, 'grue');
+    await still('grue', 1);
+    final first = tester.getRect(box);
+    expect(tester.widget<Text>(banner).data, rows.first);
+    await still('grue', rows.length);
+    expect(tester.getRect(box), first);
+
+    // Larger text does not grow art that would only be scaled back down (the
+    // words around it grow, and move it).
+    await still('grue', rows.length, textScale: 2);
+    expect(tester.getRect(box).size, first.size);
+  });
 
   testWidgets('a still of the reveal draws any moment', (tester) async {
     final app = pagerApp(PagerConn());

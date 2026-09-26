@@ -1,7 +1,7 @@
 // The phone's Dart renderer against the reference renderer's pinned frames
 // (daemons/frames.json, written by daemons/tools/generate.mjs): every sprite,
-// portrait, status cell and card, byte for byte, so the phone draws exactly
-// what hn, the desktop and the lookbook draw.
+// portrait, status cell, card and banner, byte for byte, so the phone draws
+// exactly what hn, the desktop and the lookbook draw.
 import 'dart:convert';
 import 'dart:io';
 
@@ -117,6 +117,43 @@ void main() {
     expect(cardNumber(roster, roster.byId('grue')!), '#S/09');
   });
 
+  test('the generated banner copy matches banner.json', () {
+    final source =
+        jsonDecode(File('../daemons/banner.json').readAsStringSync()) as Map;
+    expect(daemonBanner.rows, source['rows']);
+    expect(daemonBanner.gap, source['gap']);
+    expect(daemonBanner.glyphs, source['glyphs']);
+  });
+
+  test('every banner matches renderBanner in render.mjs', () {
+    final banners = frames['banners'] as List;
+    expect(banners, hasLength(roster.daemons.length));
+    for (final raw in banners) {
+      final f = raw as Map;
+      final out = renderBanner(daemonBanner, f['id'] as String);
+      expect(out, [
+        for (final l in f['out'] as List) l as String,
+      ], reason: f['id'] as String);
+      expect(out.every(printable.hasMatch), isTrue, reason: f['id'] as String);
+    }
+    expect(renderBanner(daemonBanner, 'tim'), [
+      ' _     _',
+      '| |_  (_)  _ __',
+      "|  _| | | | '  \\",
+      ' \\__| |_| |_|_|_|',
+    ]);
+    // Upper case draws as lower; a character the face lacks is a space.
+    expect(
+      renderBanner(daemonBanner, 'TIM'),
+      renderBanner(daemonBanner, 'tim'),
+    );
+    expect(
+      renderBanner(daemonBanner, 'i#i'),
+      renderBanner(daemonBanner, 'i i'),
+    );
+    expect(renderBanner(daemonBanner, ''), isEmpty);
+  });
+
   test('the shelf matches card.mjs shelfLines', () {
     expect(shelfLines(roster, ['tim', 'vim', 'grue']), [
       'zoo: drop 1 unix  2/9  +secret',
@@ -163,10 +200,6 @@ void main() {
       eggPopFrame(roster),
     ]) {
       expect(frame.split('\n').every((r) => r.length == 18), isTrue);
-    }
-    expect(bannerRows('tim'), ['_|_ .  _ _ ', ' |_ | | | |']);
-    for (final d in roster.daemons) {
-      expect(bannerRows(d.id), isNotEmpty);
     }
     expect(silhouette('[oo]'), '####');
     expect(silhouette('o   o'), '#   #');

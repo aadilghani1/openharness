@@ -1,7 +1,7 @@
 // Real-font review captures of the phone's daemon: the header chip in its
-// states, the sheet (with a daemon, before one, and on a small phone with
-// large text), and the hatch reveal's frames. Always checks that nothing
-// overflows; writes PNGs only when asked:
+// states, the header with large text, the sheet (with a daemon, before one,
+// and on a small phone with large text), and the hatch reveal's frames. Always
+// checks that nothing overflows; writes PNGs only when asked:
 //
 //   HARNESS_DAEMON_CAPTURE_DIR=/tmp/daemon-phone \
 //     flutter test test/daemons/daemon_capture_test.dart
@@ -33,14 +33,19 @@ import 'zoo_fixture.dart';
 final _output = Platform.environment['HARNESS_DAEMON_CAPTURE_DIR'];
 final _roster = daemonRoster;
 
+/// A real monospace face was found, so widths in cells mean what they will on
+/// a phone.
+var _realMono = false;
+
 Future<void> _fonts() async {
-  Future<void> load(List<String> families, List<String> paths) async {
+  Future<bool> load(List<String> families, List<String> paths) async {
     final path = paths.where((p) => File(p).existsSync()).firstOrNull;
-    if (path == null) return;
+    if (path == null) return false;
     final bytes = ByteData.sublistView(await File(path).readAsBytes());
     for (final family in families) {
       await (FontLoader(family)..addFont(Future.value(bytes))).load();
     }
+    return true;
   }
 
   await load(
@@ -65,7 +70,7 @@ Future<void> _fonts() async {
       // Not bundled in this build: the capture shows a box instead.
     }
   }
-  await load(
+  _realMono = await load(
     ['.AppleSystemUIFontMonospaced', 'SF Mono', 'Menlo', 'DejaVu Sans Mono'],
     [
       '/System/Library/Fonts/SFNSMono.ttf',
@@ -143,11 +148,7 @@ Future<void> _capture(
 }
 
 /// The terminal page's header with the chip in it, over a little terminal.
-///
-/// [plain] swaps the header for a bare row holding the chip: the terminal
-/// header's two lines of names do not fit its 40pt row at 1.5x text (true
-/// before the daemon, and not this capture's subject).
-Widget _screen(AppNotifier app, {bool body = true, bool plain = false}) =>
+Widget _screen(AppNotifier app, {bool body = true, bool chip = true}) =>
     DaemonHost(
       notifier: app,
       child: Scaffold(
@@ -156,37 +157,29 @@ Widget _screen(AppNotifier app, {bool body = true, bool plain = false}) =>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (plain)
-                const Padding(
-                  padding: EdgeInsets.all(14),
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: DaemonChip(),
-                  ),
-                )
-              else
-                TerminalHeader(
-                  agent: Agent.fromJson({
-                    'id': 'a',
-                    'engine': 'claude',
-                    'name': 'Fix login redirect',
-                    'project': {'name': 'harness', 'cwd': '/work/harness'},
-                  }),
-                  status: (label: 'Live', tone: PhoneTone.good),
-                  machineName: 'studio',
-                  trailing: [
+              TerminalHeader(
+                agent: Agent.fromJson({
+                  'id': 'a',
+                  'engine': 'claude',
+                  'name': 'Fix login redirect',
+                  'project': {'name': 'harness', 'cwd': '/work/harness'},
+                }),
+                status: (label: 'Live', tone: PhoneTone.good),
+                machineName: 'studio',
+                trailing: [
+                  if (chip)
                     const Padding(
                       padding: EdgeInsets.only(left: 8),
                       child: DaemonChip(),
                     ),
-                    TerminalHeaderAction(
-                      icon: LucideIcons.ellipsisVertical300,
-                      tooltip: 'Harness actions',
-                      last: true,
-                      onPressed: () {},
-                    ),
-                  ],
-                ),
+                  TerminalHeaderAction(
+                    icon: LucideIcons.ellipsisVertical300,
+                    tooltip: 'Harness actions',
+                    last: true,
+                    onPressed: () {},
+                  ),
+                ],
+              ),
               const TerminalHeaderRule(busy: false),
               if (body)
                 Expanded(
@@ -243,6 +236,33 @@ void main() {
           face.pulse();
           await tester.pump(const Duration(milliseconds: 400));
         },
+      );
+    }
+  });
+
+  testWidgets('header: large text grows the row, with and without the chip', (
+    tester,
+  ) async {
+    for (final (name, size, scale, chip) in [
+      ('header-320-large-text', const Size(320, 96), 1.5, true),
+      ('header-320-large-text-no-chip', const Size(320, 96), 1.5, false),
+      ('header-390-larger-text', const Size(390, 110), 2.0, true),
+    ]) {
+      final app = await _app({
+        'daemons': [_daemon('tim')],
+        'pair': 'tim',
+      });
+      await _capture(
+        tester,
+        name,
+        size,
+        _screen(app, body: false, chip: chip),
+        textScale: scale,
+      );
+      expect(
+        tester.getSize(find.byType(TerminalHeader)).height,
+        TerminalHeader.heightFor(TextScaler.linear(scale)) - 1,
+        reason: name,
       );
     }
   });
@@ -327,7 +347,7 @@ void main() {
       tester,
       'sheet-tim-320-large-text',
       const Size(320, 640),
-      _screen(app, plain: true),
+      _screen(app),
       textScale: 1.5,
       then: open,
     );
@@ -407,20 +427,26 @@ void main() {
         sprite: renderSprite(_roster, tim, 0, DaemonMood.idle, lid: '-'),
       ),
     );
+    final timRows = renderBanner(daemonBanner, 'tim').length;
     await reveal(
-      '6-banner',
+      '6-banner-typing',
       'tim',
       HatchFrame(stage: HatchStage.banner, sprite: sprite, bannerRows: 2),
     );
     await reveal(
+      '6-banner',
+      'tim',
+      HatchFrame(stage: HatchStage.banner, sprite: sprite, bannerRows: timRows),
+    );
+    await reveal(
       '7-card',
       'tim',
-      HatchFrame(stage: HatchStage.card, sprite: sprite, bannerRows: 2),
+      HatchFrame(stage: HatchStage.card, sprite: sprite, bannerRows: timRows),
     );
     await reveal(
       '7-card-320',
       'tim',
-      HatchFrame(stage: HatchStage.card, sprite: sprite, bannerRows: 2),
+      HatchFrame(stage: HatchStage.card, sprite: sprite, bannerRows: timRows),
       size: const Size(320, 568),
     );
     await reveal(
@@ -437,7 +463,7 @@ void main() {
       HatchFrame(
         stage: HatchStage.card,
         sprite: grueSprite,
-        bannerRows: bannerRows('grue').length,
+        bannerRows: renderBanner(daemonBanner, 'grue').length,
       ),
       kind: 'night',
     );
@@ -448,10 +474,48 @@ void main() {
       HatchFrame(
         stage: HatchStage.card,
         sprite: renderSprite(_roster, fzf, 0, DaemonMood.idle),
-        bannerRows: bannerRows('fzf').length,
+        bannerRows: renderBanner(daemonBanner, 'fzf').length,
       ),
       shiny: true,
       kind: 'marathon',
     );
+  });
+
+  testWidgets('reveal: every name fits a 320pt screen at full size', (
+    tester,
+  ) async {
+    if (!_realMono) {
+      markTestSkipped('no real monospace face on this machine');
+      return;
+    }
+    final app = await _app(const {'daemons': []});
+    final banner = find.byKey(const ValueKey('daemon-hatch-banner'));
+    for (final d in _roster.daemons) {
+      final rows = renderBanner(daemonBanner, d.id);
+      await _capture(
+        tester,
+        'banner-${d.id}-320',
+        const Size(320, 568),
+        DaemonHatchReveal(
+          key: ValueKey(d.id),
+          roster: _roster,
+          egg: const ZooEgg(id: 'e', kind: 'first', grantedAt: ''),
+          result: Future.value(
+            ZooHatch(eggId: 'e', daemonId: d.id, shiny: false),
+          ),
+          zoo: app.zoo,
+          still: HatchFrame(
+            stage: HatchStage.banner,
+            sprite: renderSprite(_roster, d, 0, DaemonMood.idle),
+            bannerRows: rows.length,
+          ),
+        ),
+      );
+      // Drawn at its own size: not scaled down, and inside the margins.
+      final drawn = tester.getRect(banner);
+      expect(drawn.width, closeTo(tester.getSize(banner).width, .01));
+      expect(drawn.left, greaterThanOrEqualTo(20));
+      expect(drawn.right, lessThanOrEqualTo(300));
+    }
   });
 }
