@@ -227,6 +227,15 @@ export interface RegisteredSession {
   updatedAt: number
   lastHookAt: number
   lastTranscriptAt: number
+  /**
+   * When an app last OPENED this agent (ms epoch) — a desktop window focusing its tab, the phone
+   * landing on it — on any computer. Stamped by `markOpened` with THIS daemon's clock, never a
+   * client's: the agent's owner is the one place every app reads from, so it is the one clock they
+   * can all agree on, and "last used" comes out in the same order on every screen. Absent until the
+   * first open; persisted, carried through a hook bind, a stop and a resume like any other fact
+   * about the agent. A client sorts by the later of this and the frame's `updatedAt`.
+   */
+  lastOpenedAt?: number
 }
 
 export interface RegisterInput {
@@ -314,6 +323,12 @@ function normalizedAgentName(value: unknown): string | null {
  *  engine (`permissionModeFlags`), and a name the engine lacks launches as `bypassPermission` says. */
 function permissionModeName(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z]{1,24}$/.test(value)
+}
+
+/** A persisted `lastOpenedAt`, or undefined for anything that is not a real moment (a row from before
+ *  the field, or a hand-edited one) — undefined rather than 0, so "never opened" stays absent. */
+function normalizedOpenedAt(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined
 }
 
 function normalizedAgentEngine(value: unknown): AgentEngine {
@@ -490,8 +505,12 @@ export function strictPersistedRow(value: unknown): RegisteredSession | null {
     || (row.processIdentity !== null && !validProcessIdentity(row.processIdentity))) return null
   const placements = runtimes.map(terminalPlacementKey)
   if (new Set(placements).size !== placements.length) return null
+  // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
+  // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
+  const { lastOpenedAt: rawOpenedAt, ...rest } = row
+  const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   return {
-    ...row,
+    ...rest,
     schemaVersion: 2,
     active,
     ...(launch ? { launch } : {}),
@@ -518,6 +537,7 @@ export function strictPersistedRow(value: unknown): RegisteredSession | null {
     updatedAt: typeof row.updatedAt === 'number' ? row.updatedAt : Date.now(),
     lastHookAt: typeof row.lastHookAt === 'number' ? row.lastHookAt : Date.now(),
     lastTranscriptAt: typeof row.lastTranscriptAt === 'number' ? row.lastTranscriptAt : Date.now(),
+    ...(lastOpenedAt !== undefined ? { lastOpenedAt } : {}),
   }
 }
 
@@ -944,6 +964,9 @@ class Registry {
           updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : now,
           lastHookAt: typeof raw.lastHookAt === 'number' ? raw.lastHookAt : (raw.updatedAt ?? now),
           lastTranscriptAt: typeof raw.lastTranscriptAt === 'number' ? raw.lastTranscriptAt : (raw.updatedAt ?? now),
+          // Rehydrated explicitly for the reason the ⚠️ above gives. A reboot keeps it: it is when a
+          // person last looked, which no reboot changes.
+          ...(normalizedOpenedAt(raw.lastOpenedAt) !== undefined ? { lastOpenedAt: normalizedOpenedAt(raw.lastOpenedAt) } : {}),
         }
         if (
           raw.engine !== engine
@@ -1479,6 +1502,10 @@ class Registry {
       updatedAt: now,
       lastHookAt: now,
       lastTranscriptAt: existing?.lastTranscriptAt ?? now,
+      // ⚠️ Carried forward, for the reason the ⚠️ on `subscriptionModel` gives: without this line
+      // the first hook after an open — the next prompt, a `/clear` — erases it from memory, the next
+      // save writes that to disk, and every app's "last used" order forgets the open ever happened.
+      ...(existing?.lastOpenedAt ? { lastOpenedAt: existing.lastOpenedAt } : {}),
     }
     entry.tmuxPane = tmuxProjection(entry.runtimes)
     entry.primaryRuntimeKey = selectedRuntimeKey(entry.runtimes, input.primaryRuntimeKey || existing?.primaryRuntimeKey)
@@ -1831,6 +1858,24 @@ class Registry {
     session.updatedAt = Date.now()
     this.save()
     return true
+  }
+
+  /**
+   * An app opened this agent: stamp `lastOpenedAt` with THIS daemon's clock. Never takes a time from
+   * the caller — a phone and a laptop whose clocks disagree would otherwise order the same agents
+   * differently, which is the one thing this field exists to prevent.
+   *
+   * `updatedAt` is left alone on purpose. That is the row's bookkeeping (the webui's "when" column,
+   * `session_get`'s timestamp), and looking at an agent changes nothing about the agent. The save
+   * still happens: a row is written whenever its bytes differ from the last write, whichever field
+   * moved.
+   */
+  markOpened(agentId: string): RegisteredSession | null {
+    const session = this.agents.get(agentId)
+    if (!session) return null
+    session.lastOpenedAt = Date.now()
+    this.save()
+    return session
   }
 
   touchTranscript(sessionId: string, at = Date.now()): boolean {
