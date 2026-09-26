@@ -11,11 +11,13 @@
  *           `choice` to answer with — one of the dialog's own options. The first rule that matches wins.
  *
  * A rule can never do what a key could not (pair/floor.ts, pair/classify.ts):
- *   - never on a deny-class prompt (push, force, rm -rf, sudo, deploy, publish, drop, merge …);
+ *   - only on an ALLOW-CLASS permission prompt (a read, test, build, formatter or in-project edit, read
+ *     over the whole dialog): never a deny-class prompt (push, force, rm -rf, sudo, deploy, publish,
+ *     drop, merge …), never a question the agent asks, never a plan to approve;
  *   - never an option that answers for more than this once ("don't ask again", "allow all …");
- *   - an APPROVAL of a permission prompt only when that prompt is allow-class (a read, test, build,
- *     formatter or in-project edit, read over the whole dialog); declining is always allowed;
  *   - never a terminal or the pair harness itself.
+ * And rules are what the person confirmed: a new or changed pair.jsonc takes effect only after they say
+ * yes to it at a window (pair/gate.ts); until then the rules confirmed before (or none) apply.
  * Everything a rule does is journaled on this machine (by `rule`) and reported afterwards by the brain.
  */
 import { readFileSync, statSync } from 'node:fs'
@@ -135,7 +137,9 @@ export interface RuleSubject { name: string; engine: string; cwd?: string | null
  * here and again by the owner (pair/owner.ts) before a key goes in.
  */
 export function matchRule(config: PairConfig, subject: RuleSubject, question: PairQuestion): { rule: PairRule; option: string } | null {
-  if (question.deny) return null
+  // Rules answer allow-class permission prompts only: never a deny-class one, never a question the agent
+  // asks (AskUserQuestion), never a plan to approve — not even to decline it.
+  if (question.deny || !question.permission || !question.allow || question.multi) return null
   for (const rule of config.rules) {
     if (rule.harness && !rule.harness.test(subject.name)) continue
     if (rule.engine && rule.engine !== subject.engine.toLowerCase()) continue
@@ -146,8 +150,8 @@ export function matchRule(config: PairConfig, subject: RuleSubject, question: Pa
     if (!rule.question.test(question.text)) continue
     const option = matchOption(question.options, rule.choice)
     if (!option || isPersistentOption(option)) continue
-    // Approving a permission prompt: only what a [y] key could approve. Declining is always allowed.
-    if (question.permission && !isDeclineOption(option) && (!question.allow || !isApproveOption(option))) continue
+    // Approving: only the one-time yes a [y] key could approve. Declining the allow-class prompt is allowed.
+    if (!isDeclineOption(option) && !isApproveOption(option)) continue
     return { rule, option }
   }
   return null

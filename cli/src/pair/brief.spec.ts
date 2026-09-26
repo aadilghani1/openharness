@@ -101,9 +101,9 @@ describe('brief on return', () => {
     w.brain.onPresence('local:window', { active: true, awayMs: 45 * MIN })
     await settle(10)
     expect(w.backs()).toEqual(['reattached. 2 done, 1 waiting 40m.'])
-    // Not a permission prompt, so no [y]: its decline and "open" are its keys, first in the line.
+    // Not a permission prompt, so nothing is answered for the person: "open" is its key, first in the line.
     expect(w.briefs()[0].items.map((i) => [i.kind, i.line])).toEqual([
-      ['waiting', '[n/g] api@laptop: Bash: npm run migrate (40m)'],
+      ['waiting', '[g] api@laptop: Bash: npm run migrate (40m)'],
       ['done', 'docs@laptop finished.'],
       ['done', 'web finished: Fixed the login redirect.'],
     ])
@@ -112,7 +112,8 @@ describe('brief on return', () => {
   it('a waiting item\'s keys work while the brief is up, on the machine that owns it', async () => {
     const w = world()
     await upAndAway(w)
-    w.local.question('api', 'q_1', ask('Read src/auth.ts?'))
+    // A permission prompt that is not allow-class (a read outside the project): its decline works.
+    w.local.question('api', 'q_1', ask('Read /etc/hosts?'), { permission: true, dialog: 'Read file\n\n  /etc/hosts\n\nDo you want to proceed?\n1. Yes\n2. No' })
     await settle(20 * MIN)
     w.brain.onPresence('local:window', { active: true, awayMs: 20 * MIN })
     await settle(10)

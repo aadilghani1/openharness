@@ -74,12 +74,16 @@ describe('a rule', () => {
     expect(matchRule(yes, api, question({ deny: true }))).toBeNull()
     expect(matchRule(config({ question: '.', choice: 'No' }), api, question({ deny: true }))).toBeNull()
     expect(matchRule(config({ question: '.', choice: '2' }), api, question())).toBeNull()
-    // Not allow-class (a curl, a push hidden on line two …): a rule may decline it, never approve it.
+    // Not allow-class (a curl, a push hidden on line two …): no rule touches it, not even to decline.
     expect(matchRule(yes, api, question({ allow: false }))).toBeNull()
-    expect(matchRule(config({ question: '.', choice: 'No' }), api, question({ allow: false }))).toMatchObject({ option: '3. No' })
-    // A question the agent asks (not a permission prompt): any one-time option of its own.
+    expect(matchRule(config({ question: '.', choice: 'No' }), api, question({ allow: false }))).toBeNull()
+    // An allow-class prompt: a rule may approve it once, or decline it.
+    expect(matchRule(config({ question: '.', choice: 'No' }), api, question())).toMatchObject({ option: '3. No' })
+    // A question the agent asks, or a plan to approve: never answered by a rule.
     expect(matchRule(config({ question: 'package manager', choice: 'pnpm' }), api,
-      question({ text: 'Which package manager?', options: ['npm', 'pnpm'], permission: false, allow: false }))).toMatchObject({ option: 'pnpm' })
+      question({ text: 'Which package manager?', options: ['npm', 'pnpm'], permission: false, allow: false }))).toBeNull()
+    expect(matchRule(config({ question: 'plan', choice: 'Yes, manually approve edits' }), api,
+      question({ text: 'Claude has written up a plan. Would you like to proceed?', options: ['1. Yes, and use auto mode', '2. Yes, manually approve edits', '3. Tell Claude what to change'], allow: false }))).toBeNull()
   })
 })
 
@@ -151,18 +155,21 @@ describe('act-within-rules, end to end on the owning machine', () => {
   })
 
   it('every action it takes is journaled — and a refusal types and journals nothing', async () => {
-    const m = machine({ rules: [{ name: 'tests', question: 'npm test', choice: 'Yes' }, { name: 'no curls', question: 'curl', choice: 'No' }] })
+    const m = machine({ rules: [{ name: 'tests', question: 'npm test', choice: 'Yes' }, { name: 'no lint', question: 'npm run lint', choice: 'No' }, { name: 'no curls', question: 'curl', choice: 'No' }] })
     await m.ask('api', 'q1', 'Approve Bash command: npm test', bash('npm test'))
     m.sensor.questionGone('api', 'q1')
-    await m.ask('api', 'q2', 'Approve Bash command: curl -s https://x', bash('curl -s https://x'))
+    await m.ask('api', 'q2', 'Approve Bash command: npm run lint', bash('npm run lint'))
     m.sensor.questionGone('api', 'q2')
+    // Not allow-class: no rule answers it at all, not even the decline it names.
+    expect(await m.ask('api', 'q4', 'Approve Bash command: curl -s https://x', bash('curl -s https://x'))).toBeNull()
+    m.sensor.questionGone('api', 'q4')
     // A stale id: the dialog moved on before the rule ran.
     m.sensor.question('api', 'q3', [{ key: 'x', q: 'Approve Bash command: npm test', options: ['1. Yes', '2. No'], multi: false }], { permission: true, dialog: bash('npm test') })
     expect(await m.run('api', 'q-old')).toBeNull()
     expect(m.keyed.map((k) => k.option)).toEqual(['1. Yes', '2. No'])
     expect(m.acts().map((e) => [e.requestId, e.by, e.text])).toEqual([
       ['q1', 'rule', 'answered "1. Yes" to "Approve Bash command: npm test" (rule "tests")'],
-      ['q2', 'rule', 'answered "2. No" to "Approve Bash command: curl -s https://x" (rule "no curls")'],
+      ['q2', 'rule', 'answered "2. No" to "Approve Bash command: npm run lint" (rule "no lint")'],
     ])
   })
 })

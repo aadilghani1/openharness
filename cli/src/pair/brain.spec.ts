@@ -133,10 +133,11 @@ describe('triage', () => {
 
   it('offers [y] only on an allow-class permission prompt; anything else gets [g] to open the pane', () => {
     expect(actionsFor({ ...question, allow: false }, null).map((a) => a.key)).toEqual(['n', 'g'])
-    expect(actionsFor({ ...question, permission: false }, null).map((a) => a.key)).toEqual(['n', 'g'])
+    // A question the agent asks, or a plan: nothing is answered for the person, not even a "no".
+    expect(actionsFor({ ...question, permission: false }, null).map((a) => a.key)).toEqual(['g'])
     expect(actionsFor({ ...question, deny: true }, '1. Yes').map((a) => a.key)).toEqual(['n', 'g'])
     expect(actionsFor({ ...question, multi: true }, null).map((a) => a.key)).toEqual(['n', 'g'])
-    expect(actionsFor({ ...question, options: ['Postgres', 'SQLite'] }, 'SQLite')).toEqual([{ key: 'g', label: 'open', choice: 'open' }])
+    expect(actionsFor({ ...question, options: ['Postgres', 'SQLite'], permission: false, allow: false }, 'SQLite')).toEqual([{ key: 'g', label: 'open', choice: 'open' }])
     expect(actionsFor(question, null, { watch: true })).toEqual([{ key: 'g', label: 'open', choice: 'open' }])
   })
 
@@ -364,7 +365,7 @@ describe('the brain', () => {
     expect(w.remote.answers).toEqual([expect.objectContaining({ agentId: 'api', requestId: 'q_remote', expectRequestId: 'q_remote', choice: 'Yes', by: 'key' })])
     expect(w.answer).not.toHaveBeenCalled()
     await tick()
-    w.local.question('web', 'q_local', ask('Read src/auth.ts?'))
+    w.local.question('web', 'q_local', ask('Read src/auth.ts?'), { permission: true, dialog: 'Read file\n\n  /etc/hosts\n\nDo you want to proceed?\n1. Yes\n2. No' })
     await settle(200)
     const localSay = w.says()[1]
     expect(await w.act({ requestId: 'r2', id: localSay.id, choice: 'n' })).toMatchObject({ ok: true, machineId: 'machine-a' })

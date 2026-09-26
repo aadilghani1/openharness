@@ -71,6 +71,8 @@ const GO: DaemonAction = { key: 'g', label: 'open', choice: 'open' }
 /** The keys for a question: [y] only a one-time yes on an allow-class prompt, [n] a decline, [g] always. */
 export function actionsFor(question: PairQuestion, recommend: string | null, opts: { watch?: boolean } = {}): DaemonAction[] {
   if (opts.watch) return [GO]
+  // Only a permission prompt is ever answered for the person (pair/floor.ts): anything else is theirs to open.
+  if (!question.permission) return [GO]
   const no = question.options.find(isDeclineOption) ?? null
   const decline: DaemonAction[] = no ? [{ key: 'n', label: statusText(bareOption(no), 40), choice: no }] : []
   // A recommendation that is not a one-time yes (a decline, or "don't ask again") earns no [y].

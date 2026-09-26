@@ -64,20 +64,42 @@ export function matchOption(options: readonly string[], choice: string): string 
     ?? null
 }
 
-export type FloorRefusal = 'NOT_OFFERED' | 'DENY_CLASS' | 'PERSISTENT'
+export type FloorRefusal = 'NOT_OFFERED' | 'DENY_CLASS' | 'PERSISTENT' | 'NOT_ALLOW_CLASS'
+
+/** What the floor reads of a question: the owning machine's sensor sets all of it (pair/sensor.ts). */
+export interface FloorQuestion {
+  options: readonly string[]
+  deny: boolean
+  /** A permission prompt a `[y]` may approve (pair/classify.ts). */
+  allow?: boolean
+  /** A permission prompt at all, not a question the agent asks (AskUserQuestion) or a plan to approve. */
+  permission?: boolean
+  multi?: boolean
+}
 
 /**
- * Whether `choice` may be keyed into this question by anything but the person's hands in the pane.
- * Answers the option to key (the dialog's own spelling), or why not.
+ * Whether `choice` may be keyed into this question by anything but the person's hands in the pane — a
+ * key on a daemon's line, the pair, a rule, another machine — whoever asked and whatever harness it is
+ * (one the pair started too). Answers the option to key (the dialog's own spelling), or why not:
+ *   - only the dialog's own options, and never one that answers for more than this once;
+ *   - only a PERMISSION prompt: never a question the agent asks, never a plan to approve;
+ *   - its decline, always; its one-time yes only when the prompt is allow-class (and never deny-class).
  */
-export function answerFloor(question: { options: readonly string[]; deny: boolean }, choice: string):
+export function answerFloor(question: FloorQuestion, choice: string):
   { ok: true; option: string } | { ok: false; error: FloorRefusal; detail: string } {
   const option = matchOption(question.options, choice)
   if (!option) return { ok: false, error: 'NOT_OFFERED', detail: 'That is not one of the question\'s own options.' }
   // Whoever asks — a key, the pair, a rule — the daemon answers only this once.
   if (isPersistentOption(option)) return { ok: false, error: 'PERSISTENT', detail: 'That option answers for more than this once: only you can choose it.' }
-  if (question.deny && !isDeclineOption(option)) {
+  if (question.permission !== true) {
+    return { ok: false, error: 'NOT_ALLOW_CLASS', detail: 'Only a permission prompt is answered for you: open the harness to answer this one.' }
+  }
+  if (isDeclineOption(option)) return { ok: true, option }
+  if (question.deny) {
     return { ok: false, error: 'DENY_CLASS', detail: 'This prompt pushes, deletes, deploys, publishes, drops or merges: only you can approve it.' }
+  }
+  if (question.allow !== true || question.multi === true || !isOneTimeYes(option)) {
+    return { ok: false, error: 'NOT_ALLOW_CLASS', detail: 'Only a one-time yes to a read, test, build, formatter or in-project edit is keyed for you: open the harness.' }
   }
   return { ok: true, option }
 }
