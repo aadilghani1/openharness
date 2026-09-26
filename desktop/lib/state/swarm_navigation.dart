@@ -13,6 +13,7 @@ import '../widgets/engine_identity.dart';
 import 'app_state.dart';
 import 'harness_placement.dart';
 import 'pane_arrangement.dart';
+import 'session_content_search.dart';
 import 'session_preview.dart';
 import 'swarm.dart';
 import 'swarm_catalog.dart';
@@ -713,12 +714,24 @@ List<SwarmDestination> rankSwarmDestinationsByActivity(
   String query, {
   List<String> recent = const [],
   SessionPreviewStore? previews,
+  Map<String, SessionContentHit>? contentHits,
 }) {
-  final matches = _matchSwarmDestinations(all, query, previews);
+  final matches = _matchSwarmDestinations(
+    all,
+    query,
+    previews,
+    contentHits: contentHits,
+  );
   final visits = {for (var i = 0; i < recent.length; i++) recent[i]: i};
   matches.sort((a, b) {
     final strength = a.strength.index.compareTo(b.strength.index);
     if (strength != 0) return strength;
+    // What was said is ranked by the index, which weighs how well it matched
+    // against how long ago; activity decides between equal answers.
+    if (a.strength.index >= SwarmMatchStrength.said.index) {
+      final said = b.said.compareTo(a.said);
+      if (said != 0) return said;
+    }
     final aTime = a.entry.lastActivityAt;
     final bTime = b.entry.lastActivityAt;
     final activity = aTime == null
@@ -1330,10 +1343,14 @@ enum SwarmMatchStrength {
   /// A fragment of the project, branch, folder or machine.
   fragment,
 
+  /// Every word in one turn of the conversation — asked, answered, or a file
+  /// or command it touched — as the machine's session index found it.
+  said,
+
   /// Scattered letters of the name or its context.
   scattered,
 
-  /// Only in what was asked or answered.
+  /// The words appear in the conversation, but not together.
   content;
 
   static SwarmMatchStrength ofScore(int score) => score <= 12
@@ -1349,17 +1366,27 @@ typedef _SwarmMatch = ({
   SwarmDestination entry,
   int score,
   SwarmMatchStrength strength,
+
+  /// The session index's own 0–1 score, when it found this row.
+  double said,
 });
 
 /// Each word may match a different field, in either order: "mini auth" and
 /// "auth mini" both find Auth on Mac mini. Existing preview text is the last
 /// resort, matched at word starts so "port" does not find every "support".
 /// Reading it never warms the cache or contacts a machine.
+///
+/// [contentHits] are what the machines' session indexes found for this query,
+/// by row id: everything ever said in each session, not only the recent
+/// excerpt the preview holds. A hit vouches for every word, so it admits a
+/// row the fields alone cannot, and lifts one that only scattered letters
+/// matched.
 List<_SwarmMatch> _matchSwarmDestinations(
   List<SwarmDestination> all,
   String query,
-  SessionPreviewStore? previews,
-) {
+  SessionPreviewStore? previews, {
+  Map<String, SessionContentHit>? contentHits,
+}) {
   final needle = query.trim().toLowerCase();
   final terms = swarmQueryTerms(query);
   final matches = <_SwarmMatch>[];
@@ -1370,9 +1397,16 @@ List<_SwarmMatch> _matchSwarmDestinations(
         entry: entry,
         score: -1,
         strength: SwarmMatchStrength.exact,
+        said: 0,
       ));
       continue;
     }
+    final hit = terms.isEmpty ? null : contentHits?[entry.id];
+    final hitStrength = hit == null
+        ? null
+        : hit.together
+        ? SwarmMatchStrength.said
+        : SwarmMatchStrength.content;
     var total = 0;
     var strength = SwarmMatchStrength.name;
     String? excerpt;
@@ -1409,8 +1443,18 @@ List<_SwarmMatch> _matchSwarmDestinations(
       if (termStrength.index > strength.index) strength = termStrength;
       total += best;
     }
+    if (hitStrength != null &&
+        (total < 0 || hitStrength.index < strength.index)) {
+      strength = hitStrength;
+      if (total < 0) total = 256 * terms.length;
+    }
     if (total >= 0) {
-      matches.add((entry: entry, score: total, strength: strength));
+      matches.add((
+        entry: entry,
+        score: total,
+        strength: strength,
+        said: hit?.score ?? 0,
+      ));
     }
   }
   return matches;
@@ -1434,7 +1478,8 @@ List<SwarmDestination> rankSwarmDestinations(
       ? 0
       : 1;
   bool content(_SwarmMatch match) =>
-      match.strength == SwarmMatchStrength.content;
+      match.strength == SwarmMatchStrength.content ||
+      match.strength == SwarmMatchStrength.said;
   ranked.sort((a, b) {
     var order = (content(a) ? 1 : 0).compareTo(content(b) ? 1 : 0);
     if (order == 0) order = a.score.compareTo(b.score);

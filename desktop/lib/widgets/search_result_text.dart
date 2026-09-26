@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../core/fuzzy_match.dart';
+import '../state/session_content_search.dart';
 import '../state/swarm_navigation.dart';
 
 typedef SearchFieldMatch = ({String field, String term, bool title});
@@ -188,4 +189,60 @@ class SearchResultText extends StatelessWidget {
       style: style,
     );
   }
+}
+
+/// Where a session index found the words: what was asked reads like a
+/// prompt, a command like a shell line, and the agent's answer plainly.
+String snippetLead(String field) => switch (field) {
+  'ask' => '> ',
+  'tools' => r'$ ',
+  _ => '',
+};
+
+/// A session index snippet with its matched words in bold, one line.
+List<SearchTextRun> snippetRuns(String snippet) {
+  final runs = <SearchTextRun>[];
+  var rest = snippet;
+  while (rest.isNotEmpty) {
+    final open = rest.indexOf(kSnippetMarkOpen);
+    if (open < 0) {
+      runs.add((text: rest, matched: false));
+      break;
+    }
+    if (open > 0) runs.add((text: rest.substring(0, open), matched: false));
+    final close = rest.indexOf(kSnippetMarkClose, open + 1);
+    final end = close < 0 ? rest.length : close;
+    if (end > open + 1) {
+      runs.add((text: rest.substring(open + 1, end), matched: true));
+    }
+    rest = close < 0 ? '' : rest.substring(close + 1);
+  }
+  return runs;
+}
+
+class SessionSnippetText extends StatelessWidget {
+  const SessionSnippetText(this.hit, {super.key, required this.style});
+
+  final SessionContentHit hit;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) => Text.rich(
+    TextSpan(
+      children: [
+        TextSpan(text: snippetLead(hit.field)),
+        for (final run in snippetRuns(hit.snippet))
+          TextSpan(
+            text: run.text,
+            style: run.matched
+                ? const TextStyle(fontWeight: FontWeight.w700)
+                : null,
+          ),
+      ],
+    ),
+    key: ValueKey('session-snippet:${hit.destinationId}'),
+    maxLines: 1,
+    overflow: TextOverflow.ellipsis,
+    style: style,
+  );
 }

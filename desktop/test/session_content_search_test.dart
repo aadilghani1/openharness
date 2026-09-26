@@ -1,0 +1,356 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/state/harness_placement.dart';
+import 'package:harness/state/session_content_search.dart';
+import 'package:harness/state/swarm_navigation.dart';
+import 'package:harness/state/swarm_search.dart';
+import 'package:harness/widgets/search_result_text.dart';
+import 'package:harness/ws/ws_conn.dart';
+
+import 'swarm_state_test.dart' show createApp;
+
+const _o = kSnippetMarkOpen;
+const _c = kSnippetMarkClose;
+
+SessionContentHit hit(
+  String agentId, {
+  String machineId = 'm',
+  bool together = true,
+  double score = .5,
+  String snippet = 'the ${_o}dial$_c scroll',
+  String field = 'ask',
+}) => SessionContentHit(
+  machineId: machineId,
+  agentId: agentId,
+  sessionId: 'session-$agentId',
+  field: field,
+  snippet: snippet,
+  together: together,
+  score: score,
+);
+
+/// A daemon that answers only `session_search`, from [answers] by query.
+class SearchConnection extends WsConn {
+  SearchConnection(this.answers)
+    : super(
+        wsBaseUrl: 'ws://fixture.invalid',
+        autonomousEnv: 'test',
+        machineId: 'm',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+      );
+
+  final Map<String, List<Map<String, dynamic>>> answers;
+  final asked = <String>[];
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type != 'session_search') return {'error': 'UNSUPPORTED'};
+    final query = payload['query'] as String;
+    asked.add(query);
+    return {'hits': answers[query] ?? const [], 'indexed': 3, 'pending': 0};
+  }
+}
+
+Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 30));
+
+/// Past Open Harness's pause-in-typing debounce and the reply.
+Future<void> answered() =>
+    Future<void>.delayed(const Duration(milliseconds: 250));
+
+void main() {
+  group('SessionContentHit', () {
+    test('reads a daemon reply and refuses what it cannot use', () {
+      final hits = SessionContentHit.listFromReply('m', {
+        'hits': [
+          {
+            'agentId': 'a1',
+            'sessionId': 's1',
+            'field': 'answer',
+            'snippet': 'halved the ${_o}scroll$_c delta',
+            'together': true,
+            'score': 1.7,
+            'turn': 4,
+            'at': 1790000000000,
+          },
+          {'sessionId': 's2'},
+          'junk',
+        ],
+      });
+      expect(hits, hasLength(1));
+      expect(hits.single.destinationId, agentDestinationId('m', 'a1'));
+      expect(hits.single.score, 1);
+      expect(hits.single.plainSnippet, 'halved the scroll delta');
+      expect(
+        hits.single.at,
+        DateTime.fromMillisecondsSinceEpoch(1790000000000),
+      );
+      expect(SessionContentHit.listFromReply('m', {'error': 'X'}), isEmpty);
+    });
+
+    test('snippet runs bold exactly the marked words', () {
+      expect(snippetRuns('a ${_o}dial$_c and ${_o}scroll$_c.'), [
+        (text: 'a ', matched: false),
+        (text: 'dial', matched: true),
+        (text: ' and ', matched: false),
+        (text: 'scroll', matched: true),
+        (text: '.', matched: false),
+      ]);
+      expect(snippetRuns('unclosed ${_o}mark'), [
+        (text: 'unclosed ', matched: false),
+        (text: 'mark', matched: true),
+      ]);
+      expect(snippetLead('ask'), '> ');
+      expect(snippetLead('tools'), r'$ ');
+      expect(snippetLead('answer'), '');
+    });
+
+    testWidgets('a snippet reads as one line with its words in bold', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SessionSnippetText(hit('a1'), style: const TextStyle()),
+        ),
+      );
+      final text = tester.widget<Text>(find.byType(Text));
+      expect(text.textSpan!.toPlainText(), '> the dial scroll');
+      expect(text.maxLines, 1);
+    });
+  });
+
+  group('SessionContentSearch', () {
+    test('asks every machine once per pause in typing and keeps the best hit per harness', () async {
+      final asked = <(String, String)>[];
+      final gate = Completer<void>();
+      final search = SessionContentSearch(
+        machines: () => ['m', 'n'],
+        debounce: const Duration(milliseconds: 5),
+        ask: (machine, query) async {
+          asked.add((machine, query));
+          if (machine == 'n') await gate.future;
+          return machine == 'm'
+              ? [
+                  hit('a1', together: false, score: .9),
+                  hit('a1', together: true, score: .2),
+                ]
+              : [hit('b1', machineId: 'n')];
+        },
+      );
+      addTearDown(search.dispose);
+      search.search('d');
+      search.search('di');
+      search.search('dia');
+      search.search('dial');
+      await settle();
+      expect(asked, [('m', 'dial'), ('n', 'dial')]);
+      // One harness, its best conversation: all words together beats spread.
+      expect(search.hits.keys, [agentDestinationId('m', 'a1')]);
+      expect(search.hits.values.single.together, isTrue);
+      expect(search.answered, 'dial');
+      gate.complete();
+      await settle();
+      expect(search.hits.keys, hasLength(2));
+    });
+
+    test(
+      'drops a late answer to an older question and clears for new words',
+      () async {
+        final answers = <String, Completer<List<SessionContentHit>?>>{};
+        final search = SessionContentSearch(
+          machines: () => ['m'],
+          debounce: Duration.zero,
+          ask: (_, query) => (answers[query] = Completer()).future,
+        );
+        addTearDown(search.dispose);
+        search.search('dial');
+        await settle();
+        search.search('dial scroll');
+        await settle();
+        answers['dial']!.complete([hit('old')]);
+        await settle();
+        expect(search.hits, isEmpty);
+        answers['dial scroll']!.complete([hit('new')]);
+        await settle();
+        expect(search.hits.keys, [agentDestinationId('m', 'new')]);
+        // Typing on keeps the answer on screen; different words clear it.
+        search.search('dial scroll f');
+        expect(search.hits, isNotEmpty);
+        search.search('keyboard');
+        expect(search.hits, isEmpty);
+        search.search('k');
+        await settle();
+        expect(answers.keys, isNot(contains('k')));
+      },
+    );
+  });
+
+  group('ranking with what was said', () {
+    SwarmDestination row(String id, String title, int hour) => SwarmDestination(
+      id: agentDestinationId('m', id),
+      title: title,
+      detail: '',
+      swarmId: null,
+      current: false,
+      agentId: id,
+      machineId: 'm',
+      lastActivityAt: DateTime.utc(2026, 9, 26, hour),
+    );
+
+    test(
+      'a turn holding every word ranks under names and above scattered letters',
+      () {
+        final rows = [
+          row('named', 'Dial scroll fix', 1),
+          row('scattered', 'Dig all logs', 12),
+          row('said', 'Claude harness 9-25 7:25', 3),
+          row('said better', 'Codex harness 9-24 1:20', 2),
+          row('spread', 'Keyboard', 11),
+          row('nothing', 'Mobile', 10),
+        ];
+        final hits = {
+          for (final found in [
+            hit('said', score: .4),
+            hit('said better', score: .8),
+            hit('spread', together: false, score: .99),
+          ])
+            found.destinationId: found,
+        };
+        expect(
+          rankSwarmDestinationsByActivity(
+            rows,
+            'dial',
+            contentHits: hits,
+          ).map((r) => r.agentId),
+          ['named', 'said better', 'said', 'scattered', 'spread'],
+        );
+        // Without the index the conversations are invisible.
+        expect(
+          rankSwarmDestinationsByActivity(rows, 'dial').map((r) => r.agentId),
+          ['named', 'scattered'],
+        );
+      },
+    );
+  });
+
+  group('Open Harness', () {
+    test(
+      'finds a harness by what was said in it, with the best match selected',
+      () async {
+        final connection = SearchConnection({
+          'retention cohorts': [
+            {
+              'agentId': 'a7',
+              'sessionId': 's7',
+              'field': 'answer',
+              'snippet': 'Day-7 ${_o}retention$_c by ${_o}cohort$_c is 35%',
+              'together': true,
+              'score': .9,
+            },
+            {
+              'agentId': 'a3',
+              'sessionId': 's3',
+              'field': 'ask',
+              'snippet': 'the ${_o}retention$_c chart',
+              'together': false,
+              'score': .5,
+            },
+            // A harness this app does not list is ignored.
+            {'agentId': 'gone', 'sessionId': 'sx', 'snippet': '', 'score': 1},
+          ],
+        });
+        final app = createApp(
+          connected: true,
+          connectionForTest: (_) => connection,
+        );
+        addTearDown(app.dispose);
+        final search = SwarmSearchController(
+          app,
+          const [],
+          adding: true,
+          offersCreate: true,
+          activityFirst: true,
+          placement: HarnessPlacement.newTab,
+        );
+        addTearDown(search.dispose);
+
+        search.setQuery('retention cohorts');
+        final found = search.rows.where((row) => !row.isCreate).toList();
+        expect(found, isEmpty);
+        await answered();
+        expect(connection.asked, ['retention cohorts']);
+        expect(
+          search.rows.where((row) => !row.isCreate).map((row) => row.agentId),
+          ['a7', 'a3'],
+        );
+        expect(search.selected!.agentId, 'a7');
+        expect(
+          search.contentHitFor(agentDestinationId('m', 'a7'))!.field,
+          'answer',
+        );
+
+        // Commands and scoped modes never go to the session index.
+        search.setQuery('>retention');
+        await answered();
+        expect(connection.asked, ['retention cohorts']);
+        expect(search.contentHitFor(agentDestinationId('m', 'a7')), isNull);
+      },
+    );
+
+    test(
+      'a hit arriving later does not take the row somebody moved to',
+      () async {
+        final connection = SearchConnection({
+          'agent 1': [
+            {
+              'agentId': 'a55',
+              'sessionId': 's',
+              'snippet': 'x',
+              'together': true,
+              'score': 1,
+            },
+          ],
+        });
+        final app = createApp(
+          connected: true,
+          connectionForTest: (_) => connection,
+        );
+        app.machineStates['m']!.agents = [
+          for (final (id, name) in [
+            ('a1', 'Agent 1'),
+            ('a10', 'Agent 10'),
+            ('a55', 'Other'),
+          ])
+            Agent(id: id, name: name, engine: 'codex', terminalAvailable: true),
+        ];
+        addTearDown(app.dispose);
+        final search = SwarmSearchController(
+          app,
+          const [],
+          adding: true,
+          offersCreate: true,
+          activityFirst: true,
+          placement: HarnessPlacement.newTab,
+        );
+        addTearDown(search.dispose);
+        search.setQuery('agent 1');
+        final first = search.selected!.agentId;
+        search.move(1);
+        final moved = search.selected!.id;
+        expect(search.selected!.agentId, isNot(first));
+        await answered();
+        expect(search.rows.map((row) => row.agentId), contains('a55'));
+        expect(search.selected!.id, moved);
+      },
+    );
+  });
+}

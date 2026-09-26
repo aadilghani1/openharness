@@ -14,6 +14,7 @@ import 'pane_arrangement.dart';
 import 'swarm_catalog.dart';
 import 'swarm_navigation.dart';
 import 'harness_sessions.dart';
+import 'session_content_search.dart';
 
 const kSwarmSearchHint = 'Search harnesses';
 const kHarnessPickerHint = kSwarmSearchHint;
@@ -71,6 +72,12 @@ class SwarmSearchController extends ChangeNotifier {
        _locations = locations ?? SwarmLocationCatalog(),
        targetId = app.activeSwarmId,
        targetName = app.activeSwarm.name {
+    if (activityFirst && history == null && !navigating) {
+      _content = SessionContentSearch(
+        machines: () => app.searchableMachineIds,
+        ask: app.searchSessions,
+      )..addListener(_contentChanged);
+    }
     _refresh();
     app.addListener(_refresh);
     projects?.addListener(_refresh);
@@ -395,6 +402,38 @@ class SwarmSearchController extends ChangeNotifier {
   }
 
   final bool commandsOnly;
+
+  /// Open Harness also asks every machine's session index what was said in
+  /// each conversation; its hits join the ranking as they arrive.
+  SessionContentSearch? _content;
+
+  /// Whether somebody moved through the results since the query changed:
+  /// until then, rows arriving from a machine keep the best one selected.
+  bool _chosen = false;
+
+  /// What a machine's session index found in this row's conversation for the
+  /// current query, when that is how the row matched.
+  SessionContentHit? contentHitFor(String rowId) =>
+      _contentQuery.isEmpty || _content?.answered == null
+      ? null
+      : _content!.hits[rowId];
+
+  /// The words sent to the session indexes: plain harness search only.
+  String get _contentQuery =>
+      isCommandMode || isHelpMode || isGroupMode || isModelMode || isStoreMode
+      ? ''
+      : matchQuery;
+
+  void _contentChanged() {
+    if (_disposed) return;
+    if (!_chosen) {
+      cursor = 0;
+      _selectedId = null;
+    }
+    _filter();
+    notifyListeners();
+  }
+
   SessionFilter sessionFilter = SessionFilter.all;
   SessionSort sessionSort = SessionSort.recent;
   final machineResources = <String, MachineResources>{};
@@ -1111,6 +1150,7 @@ class SwarmSearchController extends ChangeNotifier {
             matchQuery,
             recent: recent,
             previews: app.sessionPreviews,
+            contentHits: _contentQuery.isEmpty ? null : _content?.hits,
           )
         : rankSwarmDestinations(
             candidates,
@@ -1321,7 +1361,9 @@ class SwarmSearchController extends ChangeNotifier {
     if (isStoreMode) _refreshStore();
     cursor = 0;
     _selectedId = null;
+    _chosen = false;
     _filter();
+    _content?.search(_contentQuery);
     notifyListeners();
   }
 
@@ -1338,6 +1380,7 @@ class SwarmSearchController extends ChangeNotifier {
     if (rows.isEmpty) return;
     cursor = ((cursor < 0 && delta < 0 ? 0 : cursor) + delta) % rows.length;
     _selectedId = selected!.id;
+    _chosen = true;
     notifyListeners();
   }
 
@@ -1511,6 +1554,8 @@ class SwarmSearchController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _content?.removeListener(_contentChanged);
+    _content?.dispose();
     _modelUseTimer?.cancel();
     if (_modelUseWait?.isCompleted == false) _modelUseWait!.complete();
     app.removeListener(_refresh);
