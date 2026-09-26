@@ -21,6 +21,7 @@ class SessionContentHit {
     required this.snippet,
     required this.together,
     required this.score,
+    this.position = 0,
     this.turn = 0,
     this.at,
   });
@@ -38,7 +39,12 @@ class SessionContentHit {
   final bool together;
 
   /// 0–1, higher is better: relevance blended with recency by the daemon.
+  /// Relative to that machine's best hit, so not comparable across machines.
   final double score;
+
+  /// Where the machine ranked it, from 0. Hits from several machines merge
+  /// by this: each machine's first is as good as another's first.
+  final int position;
   final int turn;
 
   /// When the matching turn happened, when the transcript says.
@@ -51,7 +57,11 @@ class SessionContentHit {
       .replaceAll(kSnippetMarkOpen, '')
       .replaceAll(kSnippetMarkClose, '');
 
-  static SessionContentHit? fromJson(String machineId, Object? raw) {
+  static SessionContentHit? fromJson(
+    String machineId,
+    Object? raw, {
+    int position = 0,
+  }) {
     if (raw is! Map) return null;
     final agentId = raw['agentId'];
     final sessionId = raw['sessionId'];
@@ -74,6 +84,7 @@ class SessionContentHit {
           : '',
       together: raw['together'] == true,
       score: score is num ? score.toDouble().clamp(0, 1) : 0,
+      position: position,
       turn: turn is int ? turn : 0,
       at: at is int ? DateTime.fromMillisecondsSinceEpoch(at) : null,
     );
@@ -87,8 +98,8 @@ class SessionContentHit {
     final hits = reply['hits'];
     if (reply['error'] != null || hits is! List) return const [];
     return [
-      for (final raw in hits.take(100))
-        ?SessionContentHit.fromJson(machineId, raw),
+      for (final (position, raw) in hits.take(100).indexed)
+        ?SessionContentHit.fromJson(machineId, raw, position: position),
     ];
   }
 }
@@ -170,7 +181,8 @@ class SessionContentSearch extends ChangeNotifier {
             // One row per harness: its best conversation, earlier ones included.
             if (known == null ||
                 (hit.together && !known.together) ||
-                (hit.together == known.together && hit.score > known.score)) {
+                (hit.together == known.together &&
+                    hit.position < known.position)) {
               found[id] = hit;
             }
           }

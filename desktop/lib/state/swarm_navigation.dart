@@ -728,7 +728,8 @@ List<SwarmDestination> rankSwarmDestinationsByActivity(
     if (strength != 0) return strength;
     // What was said is ranked by the index, which weighs how well it matched
     // against how long ago; activity decides between equal answers.
-    if (a.strength.index >= SwarmMatchStrength.said.index) {
+    if (a.strength == SwarmMatchStrength.said ||
+        a.strength == SwarmMatchStrength.content) {
       final said = b.said.compareTo(a.said);
       if (said != 0) return said;
     }
@@ -1347,11 +1348,12 @@ enum SwarmMatchStrength {
   /// or command it touched — as the machine's session index found it.
   said,
 
-  /// Scattered letters of the name or its context.
-  scattered,
-
   /// The words appear in the conversation, but not together.
-  content;
+  content,
+
+  /// Scattered letters of the name or its context: real words anywhere in
+  /// the conversation are better evidence than letters strewn across a name.
+  scattered;
 
   static SwarmMatchStrength ofScore(int score) => score <= 12
       ? name
@@ -1367,7 +1369,8 @@ typedef _SwarmMatch = ({
   int score,
   SwarmMatchStrength strength,
 
-  /// The session index's own 0–1 score, when it found this row.
+  /// How the session index ranked this row among its machine's hits, as a
+  /// reciprocal rank (higher is better), when it found it.
   double said,
 });
 
@@ -1453,7 +1456,9 @@ List<_SwarmMatch> _matchSwarmDestinations(
         entry: entry,
         score: total,
         strength: strength,
-        said: hit?.score ?? 0,
+        // Reciprocal rank: each machine's session index ranks its own hits, and
+        // a machine's first is as good as another's first.
+        said: hit == null ? 0 : 1 / (1 + hit.position),
       ));
     }
   }

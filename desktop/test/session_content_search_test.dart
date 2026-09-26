@@ -20,6 +20,7 @@ SessionContentHit hit(
   String machineId = 'm',
   bool together = true,
   double score = .5,
+  int position = 0,
   String snippet = 'the ${_o}dial$_c scroll',
   String field = 'ask',
 }) => SessionContentHit(
@@ -30,6 +31,7 @@ SessionContentHit hit(
   snippet: snippet,
   together: together,
   score: score,
+  position: position,
 );
 
 /// A daemon that answers only `session_search`, from [answers] by query.
@@ -207,7 +209,7 @@ void main() {
     );
 
     test(
-      'a turn holding every word ranks under names and above scattered letters',
+      'what was said ranks under names, real words above scattered letters',
       () {
         final rows = [
           row('named', 'Dial scroll fix', 1),
@@ -219,9 +221,9 @@ void main() {
         ];
         final hits = {
           for (final found in [
-            hit('said', score: .4),
-            hit('said better', score: .8),
-            hit('spread', together: false, score: .99),
+            hit('said better', position: 0),
+            hit('said', position: 1),
+            hit('spread', together: false, position: 2),
           ])
             found.destinationId: found,
         };
@@ -231,7 +233,7 @@ void main() {
             'dial',
             contentHits: hits,
           ).map((r) => r.agentId),
-          ['named', 'said better', 'said', 'scattered', 'spread'],
+          ['named', 'said better', 'said', 'spread', 'scattered'],
         );
         // Without the index the conversations are invisible.
         expect(
@@ -240,6 +242,39 @@ void main() {
         );
       },
     );
+
+    test("each machine's first hit is as good as another's first", () {
+      SwarmDestination on(String machine, String id, int hour) =>
+          SwarmDestination(
+            id: agentDestinationId(machine, id),
+            title: 'Claude harness $id',
+            detail: '',
+            swarmId: null,
+            current: false,
+            agentId: id,
+            machineId: machine,
+            lastActivityAt: DateTime.utc(2026, 9, 26, hour),
+          );
+      final rows = [on('m', 'm1', 1), on('m', 'm2', 9), on('n', 'n1', 5)];
+      final hits = {
+        for (final found in [
+          // A remote machine's lone weak hit scores 1.0 against its own best,
+          // yet ranks with the other machine's first, not above everything.
+          hit('m1', score: .7),
+          hit('m2', score: .6, position: 1),
+          hit('n1', machineId: 'n', score: 1),
+        ])
+          found.destinationId: found,
+      };
+      expect(
+        rankSwarmDestinationsByActivity(
+          rows,
+          'retention',
+          contentHits: hits,
+        ).map((r) => r.agentId),
+        ['n1', 'm1', 'm2'],
+      );
+    });
   });
 
   group('Open Harness', () {
