@@ -45,6 +45,15 @@ describe('harness search', () => {
     expect(run(['swipe', '--limit', '1'], dir).out[0]).toBe('Mobile app  3d ago · agent-12')
   })
 
+  it('reads a time in the words as when the session was worked on', () => {
+    const dir = indexed()
+    // The turn was three days before NOW; the session was last worked on two hours before.
+    expect(run(['swipe', '3', 'days', 'ago'], dir).out[0]).toBe('Mobile app  3d ago · agent-12')
+    expect(run(['swipe', 'yesterday'], dir).out).toEqual(['Nothing on this computer mentions "swipe" yesterday.'])
+    expect(run(['3', 'days', 'ago'], dir).out[1]).toBe('  > swipe right should open Find')
+    expect(run(['yesterday'], dir).out).toEqual(['Nothing on this computer was worked on yesterday.'])
+  })
+
   it('never rewrites an index another version of the daemon owns', () => {
     const dir = indexed()
     const path = join(dir, SESSION_SEARCH_FILE)

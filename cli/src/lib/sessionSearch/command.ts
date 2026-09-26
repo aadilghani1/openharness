@@ -6,6 +6,7 @@
 import { join } from 'node:path'
 
 import { MARK_CLOSE, MARK_OPEN, SessionSearchStore } from './store.js'
+import { parseSearchWhen } from './when.js'
 
 export const SESSION_SEARCH_FILE = 'session-search.db'
 
@@ -19,7 +20,7 @@ export interface SearchCommandOptions {
   now?: number
 }
 
-const USAGE = 'usage: harness search <words> [--limit=N] [--json]'
+const USAGE = 'usage: harness search <words> [last week | yesterday | 3 days ago | on monday …] [--limit N] [--json]'
 
 function age(at: number | null, now: number): string {
   if (at === null) return ''
@@ -75,7 +76,9 @@ export function searchCommand(opts: SearchCommandOptions): number {
   }
   try {
     const now = opts.now ?? Date.now()
-    const hits = store.search(words.join(' '), { limit, now }).map((hit) => ({
+    // "dial last week": the same time phrases Cmd-P reads, as a window.
+    const { words: query, when } = parseSearchWhen(words.join(' '), new Date(now))
+    const hits = store.search(query, { limit, now, from: when?.from, to: when?.to }).map((hit) => ({
       ...hit,
       name: store.session(hit.sessionId)?.header.split(' · ')[0] ?? hit.sessionId,
     }))
@@ -86,7 +89,9 @@ export function searchCommand(opts: SearchCommandOptions): number {
       return 0
     }
     if (!hits.length) {
-      opts.output(`Nothing on this computer mentions ${JSON.stringify(words.join(' '))}.`)
+      opts.output(query
+        ? `Nothing on this computer mentions ${JSON.stringify(query)}${when ? ` ${when.phrase}` : ''}.`
+        : `Nothing on this computer was worked on ${when?.phrase ?? 'then'}.`)
       return 0
     }
     const bold = (text: string) => opts.color
