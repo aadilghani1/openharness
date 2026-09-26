@@ -292,7 +292,12 @@ class TtyField extends StatefulWidget {
     this.action = TextInputAction.done,
     this.maxLength,
     this.autofocus = false,
+    this.keyboardType,
+    this.autofillHints,
   });
+
+  final TextInputType? keyboardType;
+  final Iterable<String>? autofillHints;
 
   final TextEditingController controller;
   final FocusNode? focus;
@@ -369,7 +374,10 @@ class _TtyFieldState extends State<TtyField> {
                 maxLines: multi ? widget.lines : 1,
                 maxLength: widget.maxLength,
                 maxLengthEnforcement: MaxLengthEnforcement.enforced,
-                keyboardType: multi ? TextInputType.multiline : null,
+                keyboardType:
+                    widget.keyboardType ??
+                    (multi ? TextInputType.multiline : null),
+                autofillHints: widget.autofillHints,
                 textInputAction: widget.action,
                 // The keyboard's own composing, left on: Vietnamese Telex on iOS rides on
                 // autocorrection. See `ComposingKeyboard`.

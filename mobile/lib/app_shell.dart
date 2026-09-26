@@ -43,6 +43,10 @@ typedef AuthenticatedScreenBuilder = Widget Function(AppNotifier app);
 Future<void> startHarness({
   required AuthenticatedScreenBuilder authenticatedScreen,
 
+  /// The signed-out screen, when the platform has its own — the phone's welcome. Null keeps
+  /// [LoginScreen].
+  AuthenticatedScreenBuilder? signedOutScreen,
+
   /// A viewer build's second wire to each machine (see
   /// [TerminalTransportPlugin]); the desktop passes none.
   TerminalTransportPluginFactory? transportPlugins,
@@ -75,6 +79,7 @@ Future<void> startHarness({
       child: HarnessApp(
         keymap: keymap,
         authenticatedScreen: authenticatedScreen,
+        signedOutScreen: signedOutScreen,
       ),
     ),
   );
@@ -89,9 +94,15 @@ Future<void> startHarness({
 }
 
 class HarnessApp extends StatelessWidget {
-  const HarnessApp({super.key, this.keymap, required this.authenticatedScreen});
+  const HarnessApp({
+    super.key,
+    this.keymap,
+    required this.authenticatedScreen,
+    this.signedOutScreen,
+  });
   final AppKeymap? keymap;
   final AuthenticatedScreenBuilder authenticatedScreen;
+  final AuthenticatedScreenBuilder? signedOutScreen;
 
   @override
   Widget build(BuildContext context) {
@@ -173,7 +184,10 @@ class HarnessApp extends StatelessWidget {
         ),
       ),
       home: AnalyticsLifecycle(
-        child: RootShell(authenticatedScreen: authenticatedScreen),
+        child: RootShell(
+          authenticatedScreen: authenticatedScreen,
+          signedOutScreen: signedOutScreen,
+        ),
       ),
     );
   }
@@ -208,9 +222,14 @@ class _GridTokenScope extends StatelessWidget {
 const _appMenuChannel = MethodChannel('harness/app_menu');
 
 class RootShell extends ConsumerStatefulWidget {
-  const RootShell({super.key, required this.authenticatedScreen});
+  const RootShell({
+    super.key,
+    required this.authenticatedScreen,
+    this.signedOutScreen,
+  });
 
   final AuthenticatedScreenBuilder authenticatedScreen;
+  final AuthenticatedScreenBuilder? signedOutScreen;
 
   @override
   ConsumerState<RootShell> createState() => _RootShellState();
@@ -285,6 +304,9 @@ class _RootShellState extends ConsumerState<RootShell>
     }
   }
 
+  Widget _signedOut(AppNotifier app) =>
+      widget.signedOutScreen?.call(app) ?? LoginScreen(notifier: app);
+
   @override
   Widget build(BuildContext context) {
     final app = ref.watch(appStateProvider);
@@ -308,7 +330,7 @@ class _RootShellState extends ConsumerState<RootShell>
             // the user's own screen away twice per sign-in: once on the click
             // and again on success.
             screen = app.signingIn
-                ? LoginScreen(notifier: app)
+                ? _signedOut(app)
                 : BootstrappingScreen(statusMessage: app.bootStatusMessage);
           case AppStatus.checkingEnvironment:
             screen = EnvironmentPreflightScreen(
@@ -317,7 +339,7 @@ class _RootShellState extends ConsumerState<RootShell>
           case AppStatus.preparingEnvironment:
             screen = EnvironmentSetupScreen(notifier: app);
           case AppStatus.unauthenticated:
-            screen = LoginScreen(notifier: app);
+            screen = _signedOut(app);
           case AppStatus.authenticated:
             screen = widget.authenticatedScreen(app);
         }

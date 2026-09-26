@@ -15,6 +15,7 @@ import 'agent_swipe_list.dart';
 import 'agents_page.dart' show openNewAgent;
 import 'desk_groups.dart';
 import 'machines_tab.dart';
+import 'welcome/connect_computer.dart';
 import 'phone_fab.dart';
 import 'phone_header.dart';
 import 'phone_search_button.dart';
@@ -637,6 +638,12 @@ class _AgentHomeState extends State<AgentHome> {
         // The Machines TAB itself is untouched and still reachable by every other route; this just
         // borrows its body rather than growing a second, drifting copy of the same list.
         if (!_anyMachineReady()) {
+          // No computer at all: how to set one up, watching for it to appear. One that is there
+          // but locked or asleep: the machines list, with its password form.
+          if (widget.notifier.machines.isEmpty &&
+              !widget.notifier.machinesLoading) {
+            return ConnectComputerPage(notifier: widget.notifier);
+          }
           return MachinesTab(notifier: widget.notifier);
         }
         _openNewAgentAfterLastOneWent();

@@ -9,6 +9,8 @@ import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
+import 'package:harness_mobile/phone/welcome/connect_computer.dart';
+import 'package:harness_mobile/phone/welcome/phone_welcome.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/phone/terminal_page.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
@@ -295,6 +297,63 @@ void main() {
     agentId: 'a',
     voice: voice,
   );
+
+  testWidgets('welcome', skip: skip, (tester) async {
+    final key = await pumpScreen(
+      tester,
+      PhoneWelcome(notifier: notifier, onTrySample: (_) {}),
+    );
+    await shoot(tester, key, '0-welcome');
+  });
+
+  testWidgets('welcome, email then code', skip: skip, (tester) async {
+    final key = await pumpScreen(
+      tester,
+      PhoneWelcome(
+        notifier: notifier,
+        onTrySample: (_) {},
+        sendCode: (_) async {},
+        signIn: (_, _) async {},
+      ),
+    );
+    await tester.tap(find.text('Sign in'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.enterText(
+      find.byKey(const Key('welcome-email')).last,
+      'ada@example.com',
+    );
+    await tester.pump();
+    await shoot(tester, key, '0b-welcome-email');
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('welcome, code', skip: skip, (tester) async {
+    final key = await pumpScreen(
+      tester,
+      PhoneWelcome(
+        notifier: notifier,
+        onTrySample: (_) {},
+        sendCode: (_) async {},
+        signIn: (_, _) async {},
+      ),
+    );
+    await tester.tap(find.text('Sign in'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.enterText(find.byType(TextField), 'ada@example.com');
+    await tester.tap(find.text('Email me a code'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.enterText(find.byType(TextField), '42');
+    await tester.pump();
+    await shoot(tester, key, '0c-welcome-code');
+  });
+
+  testWidgets('set up your computer', skip: skip, (tester) async {
+    final key = await pumpScreen(
+      tester,
+      ConnectComputerPage(notifier: notifier, onTrySample: (_) {}),
+    );
+    await shoot(tester, key, '0d-connect-computer');
+  });
 
   testWidgets('focus', skip: skip, (tester) async {
     final key = await pumpScreen(tester, focus());
