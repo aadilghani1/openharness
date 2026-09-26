@@ -1488,6 +1488,12 @@ impl App {
         let used = std::mem::replace(&mut self.session_activity, epoch_secs());
         if !self.swap_session(id) { self.session_activity = used; return }
         self.last_session = Some(from);
+        // A session left with no window (the one a client started in, before its shell came):
+        // gone, as tmux has no session without a window.
+        if let Some(i) = self.sessions.iter().position(|s| s.id == from && !s.desk && s.tabs.iter().all(|t| t.root.is_none())) {
+            self.sessions.remove(i);
+            self.last_session = None;
+        }
         let a = self.active;
         self.tabs[a].alerts = 0;
         if let Some(f) = self.tabs[a].focus { self.seen(f) }
@@ -1866,15 +1872,11 @@ impl App {
             }
         }
         if self.start_failed.is_some() { return }
-        // desk=off: the session the client started in is tmux's first (named by its number); still
-        // empty when another is in front, it goes.
-        if !self.session_desk || self.sessions.iter().any(|s| s.id == 0 && !s.desk) {
-            if let Some(i) = self.sessions.iter().position(|s| s.id == 0 && !s.desk && s.tabs.iter().all(|t| t.root.is_none())) { self.sessions.remove(i); }
-            else if self.session_id == 0 && self.session_alias.is_none() {
-                let mut n = 0u32;
-                while self.find_session(&format!("={n}")).is_some() { n = self.alloc_session_id() }
-                self.session_alias = Some(n.to_string());
-            }
+        // desk=off: the session the client started in is tmux's first, named by its number.
+        if self.session_id == 0 && !self.session_desk && self.session_alias.is_none() {
+            let mut n = 0u32;
+            while self.find_session(&format!("={n}")).is_some() { n = self.alloc_session_id() }
+            self.session_alias = Some(n.to_string());
         }
         self.save_sessions();
     }
@@ -1890,7 +1892,7 @@ impl App {
     /// session takes the client (detach-on-destroy off: the one it was in last, or the newest;
     /// previous, next: by name), else the client exits (`[exited]`). The desk's session stays,
     /// its window the home screen, for the desk's tabs to come back to.
-    fn session_gone(&mut self) {
+    pub fn session_gone(&mut self) {
         let gone = self.session_id;
         // A session a command ran in for a moment: gone, and nothing else changes.
         if let Some(back) = self.swap_back.filter(|b| *b != gone) {
@@ -2413,6 +2415,64 @@ impl App {
         self.layout_changed(t);
         Ok(())
     }
+
+    /// A window taken out of the session in front (it moves to another session), its harnesses
+    /// still in its panes: its number freed, the current window kept; the desk told it closed.
+    pub fn take_tab(&mut self, index: usize) -> Tab {
+        let mut tab = self.tabs.remove(index);
+        self.nums.remove(&tab.id);
+        self.lastw.retain(|x| *x != tab.id);
+        if index < self.active { self.active -= 1 }
+        if self.tabs.is_empty() { self.tabs.push(Tab::new("home")) }
+        self.active = self.active.min(self.tabs.len() - 1);
+        if tab.on_desk && self.session_desk { self.desk_op(json!({ "op": "tab.close", "id": tab.id })) }
+        tab.on_desk = false;
+        tab
+    }
+
+    /// A window from another session, put in the one in front: at [index] numbered [num], else
+    /// last with a number past every other (for move-window to give it its own); the desk's
+    /// session tells the desk. Where it went.
+    pub fn put_tab(&mut self, tab: Tab, at: Option<(usize, usize)>) -> usize {
+        let (index, num) = at.unwrap_or((self.tabs.len(), usize::MAX / 2));
+        let index = index.min(self.tabs.len());
+        let id = tab.id.clone();
+        let panes: Vec<(String, String)> = tab.panes().iter().filter_map(|p| self.panes.get(p).map(|x| (x.machine_id.clone(), x.agent_id.clone()))).collect();
+        self.nums.insert(id.clone(), num);
+        self.tabs.insert(index, tab);
+        if index <= self.active && self.tabs.len() > 1 { self.active += 1 }
+        // The placeholder of a session that had none.
+        if let Some(home) = self.tabs.iter().position(|t| t.root.is_none() && t.id != id) { self.tabs.remove(home); if home < self.active { self.active -= 1 } }
+        for (m, a) in panes { self.desk_pane_added(&id, &m, &a) }
+        self.fit_panes();
+        self.tabs.iter().position(|t| t.id == id).unwrap_or(0)
+    }
+
+    /// A pane taken out of its window in the session in front (it moves to another session), its
+    /// harness still running: a window it leaves empty goes.
+    pub fn take_pane(&mut self, pane: u64) {
+        let Some(index) = self.tabs.iter().position(|t| t.panes().contains(&pane)) else { return };
+        let tab = &mut self.tabs[index];
+        tab.lose(pane);
+        tab.root = tab.root.take().and_then(|root| root.remove(pane));
+        tab.zoomed = false;
+        let tab_id = tab.id.clone();
+        if let Some(p) = self.panes.get(&pane) { let op = json!({ "op": "pane.remove", "tabId": tab_id, "machineId": p.machine_id, "agentId": p.agent_id }); self.desk_op(op) }
+        if self.tabs[index].root.is_none() { self.take_tab(index); } else { self.layout_changed(index); self.fit_panes() }
+    }
+
+    /// A window of one pane (a pane from another session), named [name], put last in the
+    /// session in front.
+    pub fn tab_of_pane(&mut self, pane: u64, name: &str) -> usize {
+        let mut tab = Tab::new(name);
+        tab.root = Some(Node::new(pane, self.size.0, self.size.1.saturating_sub(1)));
+        tab.order = vec![pane];
+        tab.focus = Some(pane);
+        self.put_tab(tab, None)
+    }
+
+    /// Whether the session in front has a window with a pane in it.
+    pub fn has_windows(&self) -> bool { self.tabs.iter().any(|t| t.root.is_some()) }
 
     /// tmux's break-pane: the pane becomes a window of its own (keeping its id), at the first
     /// free index or `num`; -d: not gone to.

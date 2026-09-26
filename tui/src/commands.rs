@@ -939,6 +939,7 @@ pub fn hn_owned(name: &str) -> bool {
 /// one on screen back after.
 fn run_words(app: &mut App, words: &[String]) {
     let words = &session_targets(app, words);
+    if cross_session(app, words) { return }
     match other_session(app, words) {
         Some(id) if app.swap_back.is_none() => {
             // Another client's session: the command runs in that client, its output here.
@@ -993,6 +994,99 @@ fn session_targets(app: &App, words: &[String]) -> Vec<String> {
         else if let Some(i) = out.iter().position(|w| *w == format!("{want}{t}")) { out[i] = format!("{want}{t}:") }
     }
     out
+}
+
+/// The session a target names, when it names one: `sess:…`, `$N`, a `%pane`'s or an `@window`'s.
+fn target_session(app: &App, t: &str) -> Option<u32> {
+    if let Some(p) = t.strip_prefix('%') { return crate::pane::from_tag(p.split(['.', ':']).next().unwrap_or("")).and_then(|p| app.session_of_pane(p)) }
+    if let Some(w) = t.strip_prefix('@') { return w.split(['.', ':']).next().and_then(|n| n.parse().ok()).and_then(|w| app.session_of_window(w)) }
+    if let Some((s, _)) = t.split_once(':') { return (!s.is_empty()).then(|| app.find_session(s)).flatten() }
+    if t.starts_with('$') { return app.find_session(t) }
+    None
+}
+
+/// move-window, swap-window, join-pane (move-pane) and break-pane whose -s and -t are in two
+/// sessions, as tmux's winlinks go anywhere: what -s names leaves its session for the target's,
+/// and the command runs there; a session it leaves with no window is gone. True when it was one.
+fn cross_session(app: &mut App, words: &[String]) -> bool {
+    let Some(entry) = words.first().and_then(|w| crate::cmd::find(w).ok()) else { return false };
+    if !matches!(entry.name, "move-window" | "swap-window" | "join-pane" | "move-pane" | "break-pane") || app.swap_back.is_some() { return false }
+    let Ok(args) = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)) else { return false };
+    let back = app.session_id;
+    let (src_t, dst_t) = (args.get('s').map(str::to_string), args.get('t').map(str::to_string));
+    let src = src_t.as_deref().and_then(|t| target_session(app, t)).unwrap_or(back);
+    let dst = dst_t.as_deref().and_then(|t| target_session(app, t)).unwrap_or(back);
+    if src == dst { return false }
+    let name_of = |app: &App, id: u32| app.session_list().into_iter().find(|(i, _)| *i == id).map(|(_, n)| n).unwrap_or_default();
+    for s in [src, dst] { if app.remote_owner(s).is_some() { app.error(format!("session {} is another client's", name_of(app, s))); return true } }
+    // A word's value replaced (-s: what moved, where it is now).
+    let with = |words: &[String], flag: &str, value: String| -> Vec<String> {
+        let mut w: Vec<String> = words.iter().filter(|x| !x.starts_with(flag) || x.as_str() == flag).cloned().collect();
+        match w.iter().position(|x| x == flag) { Some(i) if i + 1 < w.len() => w[i + 1] = value, _ => { w.push(flag.to_string()); w.push(value) } }
+        w
+    };
+    let detached = args.has('d') > 0;
+    app.swap_back = Some(back);
+    let result: Result<(), String> = (|| {
+        app.swap_session(src);
+        match entry.name {
+            "move-window" => {
+                let i = match src_t.as_deref() { Some(t) => window_target(app, t).ok_or_else(|| format!("can't find window: {t}"))?, None => app.active };
+                let tab = app.take_tab(i);
+                let wid = tab.wid;
+                app.swap_session(dst);
+                app.put_tab(tab, None);
+                run_words_in(app, &with(words, "-s", format!("@{wid}")));
+            }
+            "swap-window" => {
+                let i = match src_t.as_deref() { Some(t) => window_target(app, t).ok_or_else(|| format!("can't find window: {t}"))?, None => app.active };
+                let na = app.win_num(i);
+                let a = app.take_tab(i);
+                app.swap_session(dst);
+                let j = match dst_t.as_deref() { Some(t) => window_target(app, t).ok_or_else(|| format!("can't find window: {t}"))?, None => app.active };
+                let nb = app.win_num(j);
+                let b = app.take_tab(j);
+                // Each takes the other's number, and is its session's current window (-d: not).
+                let at = app.put_tab(a, Some((j, nb)));
+                if !detached { app.active = at }
+                app.swap_session(src);
+                let at = app.put_tab(b, Some((i, na)));
+                if !detached { app.active = at }
+            }
+            "join-pane" | "move-pane" => {
+                let (_, p) = match src_t.as_deref() { Some(t) => pane_target(app, t).ok_or_else(|| format!("can't find pane: {t}"))?, None => pane_target(app, "{marked}").or_else(|| app.current()).ok_or("can't find pane")? };
+                app.take_pane(p);
+                app.swap_session(dst);
+                app.tab_of_pane(p, "");
+                run_words_in(app, &with(words, "-s", crate::pane::tag(p)));
+            }
+            _ => {
+                // break-pane: a window of its own there, at -t's number or the first free one,
+                // named -n or for its harness.
+                let (_, p) = match src_t.as_deref() { Some(t) => pane_target(app, t).ok_or_else(|| format!("can't find pane: {t}"))?, None => app.current().ok_or("can't find pane")? };
+                let label = args.get('n').map(str::to_string).or_else(|| app.panes.get(&p).and_then(|x| app.fleet.agent(&x.machine_id, &x.agent_id)).map(|a| a.name.clone())).unwrap_or_else(|| "tab".into());
+                app.take_pane(p);
+                app.swap_session(dst);
+                let w = app.tab_of_pane(p, &label);
+                if args.get('n').is_some() { app.tabs[w].named = true }
+                let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: true, default_marked: false };
+                let idx = crate::cmd::resolve(app, dst_t.as_deref(), spec).ok().and_then(|f| f.idx);
+                app.move_window(w, idx, false, !detached)?;
+            }
+        }
+        Ok(())
+    })();
+    if let Err(e) = result { app.error(e) }
+    // The session it left, if that has no window now: gone (the client's own: detach-on-destroy).
+    if app.swap_session(src) && !app.has_windows() && !app.session_desk {
+        app.swap_back = (src != back).then_some(back);
+        app.session_gone();
+    }
+    if app.session_id != back && !app.quit { app.swap_session(back); }
+    app.swap_back = None;
+    app.fit_panes();
+    app.save_sessions();
+    true
 }
 
 /// The session (not the one in front) a command's -t or -s names: the part before `:`, the whole
