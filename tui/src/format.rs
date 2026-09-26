@@ -1041,7 +1041,9 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             let mut left = 1 + width(&pane_title(app, window, p.id)) + 1;
             if app.pane_state(p.id).is_some() { left += 2 }
             if let crate::pane::Phase::Watching(who) = &p.phase { left += width(" [watching]") + if who.is_empty() { 0 } else { width(&format!(" — {who} has it")) } }
-            [(!a.project.is_empty()).then(|| format!("{} git:({})", a.project, a.branch)), Some(format!("git:({})", a.branch)), Some(a.branch.clone())]
+            let pr = a.pr.as_ref().map(|p| format!(" {}", p.label())).unwrap_or_default();
+            [(!a.project.is_empty() && !pr.is_empty()).then(|| format!("{} git:({}){pr}", a.project, a.branch)), (!a.project.is_empty()).then(|| format!("{} git:({})", a.project, a.branch)),
+                (!pr.is_empty()).then(|| format!("git:({}){pr}", a.branch)), Some(format!("git:({})", a.branch)), Some(a.branch.clone())]
                 .into_iter().flatten().find(|c| room >= left + width(c) + 2 + 4)
         }).unwrap_or_default(),
         // A pane's harness at a glance, as its title shows it (empty for a plain shell), and what it
@@ -1049,6 +1051,16 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_agent_state" => pane.and_then(|p| app.pane_state(p.id)).map(state_word).unwrap_or("").into(),
         "pane_agent_icon" => pane.and_then(|p| app.pane_state(p.id)).map(|s| crate::theme::state_mark(s, app.tick).0).unwrap_or("").into(),
         "pane_project" => agent.map(|a| a.project.clone()).unwrap_or_default(),
+        // Its pull request (#123, its state and link), what it has cost (tokens, 1.2M) and changed
+        // (+340 −52), what it was last asked, and what its last turn came to.
+        "pane_pr" => agent.and_then(|a| a.pr.as_ref()).map(|p| format!("#{}", p.number)).unwrap_or_default(),
+        "pane_pr_state" => agent.and_then(|a| a.pr.as_ref()).map(|p| p.state.clone()).unwrap_or_default(),
+        "pane_pr_url" => agent.and_then(|a| a.pr.as_ref()).map(|p| p.url.clone()).unwrap_or_default(),
+        "pane_tokens" => agent.filter(|a| a.tokens > 0).map(|a| crate::fleet::compact(a.tokens)).unwrap_or_default(),
+        "pane_lines" => agent.filter(|a| a.added + a.removed > 0).map(|a| format!("+{} −{}", a.added, a.removed)).unwrap_or_default(),
+        "pane_asked" => agent.and_then(|a| a.asked.clone()).unwrap_or_default(),
+        "pane_did" => agent.and_then(|a| a.did.clone()).unwrap_or_default(),
+        "fleet_tokens" => { let t: u64 = app.fleet.agents.values().map(|a| a.tokens).sum(); if t > 0 { crate::fleet::compact(t) } else { String::new() } }
         "pane_branch" => agent.map(|a| a.branch.clone()).unwrap_or_default(),
         "window_agent_state" => tab.and_then(|_| app.window_state(window)).map(state_word).unwrap_or("").into(),
         "window_agent_icon" => tab.and_then(|_| app.window_state(window)).map(|s| crate::theme::state_mark(s, app.tick).0).unwrap_or("").into(),

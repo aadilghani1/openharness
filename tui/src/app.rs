@@ -68,6 +68,9 @@ pub struct Stash {
 #[derive(Clone, Debug, Default)]
 pub struct StartSession { pub name: Option<String>, pub create: bool, pub attach_existing: bool, pub window: Option<String>, pub cwd: Option<String>, pub command: Option<String> }
 
+/// The agent a reply is about (`agentId`).
+fn agent_id_of(reply: &Value) -> Option<String> { reply.get("agentId").and_then(Value::as_str).map(str::to_string) }
+
 /// Seconds since the epoch.
 pub fn epoch_secs() -> i64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0) }
 
@@ -315,6 +318,8 @@ pub struct App {
     pub start_failed: Option<String>,
     /// kill-server: no session is kept for the next client.
     pub forget_sessions: bool,
+    /// Questions out to the daemons about harnesses (recaps, pull requests), at most a few at once.
+    pub enriching: u32,
     /// select-pane -m: the marked pane (join-pane and swap-pane take it as their source).
     pub marked: Option<u64>,
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
@@ -437,6 +442,7 @@ impl App {
             start_session: None,
             start_failed: None,
             forget_sessions: false,
+            enriching: 0,
             marked: None,
             return_to: None,
             held_reply: None,
@@ -760,6 +766,8 @@ impl App {
                     agent.active_at = now;
                     if ty == "turn_started" { agent.unread = false }
                     let text = |k: &str| payload.get(k).and_then(Value::as_str).unwrap_or("");
+                    // What it was asked (the turn's message; not a replay of an old one).
+                    if ty == "turn_started" { if let Some(l) = fleet::first_line(text("userMessage")) { agent.asked = Some(l) } }
                     // The main agent's own steps (a sub-agent's carry the tool call that spawned it).
                     let own = payload.get("parentToolUseId").map(Value::is_null).unwrap_or(true);
                     match ty {
@@ -804,6 +812,25 @@ impl App {
                 // The turn's result, where the engine gives one: what it came to.
                 if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
                     if let Some(line) = payload.get("result").and_then(Value::as_str).and_then(fleet::first_line) { agent.did = Some(line) }
+                }
+            }
+            // What was typed to it (from any window): what it was asked.
+            "user_message" => {
+                if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
+                    if let Some(l) = payload.get("content").and_then(Value::as_str).and_then(fleet::first_line) { agent.asked = Some(l) }
+                }
+            }
+            // The daemon's recap of a finished turn ("recap\n\nbody"): what it came to, better said
+            // than its last message's first line.
+            "turn_summary" => {
+                if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
+                    if let Some(l) = payload.get("summary").and_then(Value::as_str).and_then(fleet::first_line) { agent.did = Some(l) }
+                }
+            }
+            // A failure the engine or the daemon reports (a message not delivered, an abort).
+            "error" => {
+                if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
+                    if let Some(l) = payload.get("message").and_then(Value::as_str).and_then(fleet::first_line) { agent.did = Some(format!("Error: {l}")) }
                 }
             }
             "commander_question" => {
@@ -2861,8 +2888,59 @@ impl App {
 
     // ── the loop's slow tick ─────────────────────────────────────────────────
 
+    /// What the daemons know of each harness beyond its row, asked a few at a time, the focused
+    /// pane's first, then in the order they need you: its last recap (agent_recent — so what it did
+    /// is there after hn starts again), and the pull request for its branch (git_pull_request, at
+    /// most every five minutes; none for main or master).
+    fn enrich(&mut self) {
+        const AT_ONCE: u32 = 4;
+        if self.enriching >= AT_ONCE { return }
+        let now = Instant::now();
+        let focused = self.focused().and_then(|f| self.panes.get(&f)).map(|p| (p.machine_id.clone(), p.agent_id.clone()));
+        let rest: Vec<(String, String)> = self.fleet.ranked().into_iter().map(|a| a.key()).filter(|k| Some(k) != focused.as_ref()).collect();
+        let order: Vec<(String, String)> = focused.into_iter().chain(rest).collect();
+        for (machine, agent_id) in order {
+            if self.enriching >= AT_ONCE { break }
+            let Some(link) = self.link(&machine) else { continue };
+            let Some(a) = self.fleet.agent(&machine, &agent_id) else { continue };
+            let live = !matches!(a.status.as_str(), "stopped" | "offline");
+            let recap = !a.recap_asked && a.did.is_none() && a.engine != "terminal";
+            let pr = live && !a.branch.is_empty() && !matches!(a.branch.as_str(), "main" | "master" | "trunk" | "develop") && a.pr_checked.map(|t| now.duration_since(t) > Duration::from_secs(300)).unwrap_or(true);
+            if recap {
+                if let Some(a) = self.fleet.agents.get_mut(&(machine.clone(), agent_id.clone())) { a.recap_asked = true }
+                self.enriching += 1;
+                let (m, id, link) = (machine.clone(), agent_id.clone(), link.clone());
+                self.spawn(async move { link.rpc("agent_recent", json!({ "agentId": id, "n": 1 }), Duration::from_secs(15)).await }, move |app, reply| {
+                    app.enriching = app.enriching.saturating_sub(1);
+                    let Ok(reply) = reply else { return };
+                    let Some(a) = app.fleet.agents.get_mut(&(m.clone(), agent_id_of(&reply).unwrap_or_default())) else { return };
+                    let recap = reply.pointer("/events/0").and_then(|e| e.get("recap").or_else(|| e.get("text")).and_then(Value::as_str)).and_then(fleet::first_line);
+                    if a.did.is_none() { a.did = recap }
+                    let ask = reply.pointer("/asks/0").and_then(|x| x.as_str().map(str::to_string).or_else(|| x.get("text").and_then(Value::as_str).map(str::to_string)));
+                    if a.asked.is_none() { a.asked = ask.as_deref().and_then(fleet::first_line) }
+                });
+            }
+            if pr && self.enriching < AT_ONCE {
+                if let Some(a) = self.fleet.agents.get_mut(&(machine.clone(), agent_id.clone())) { a.pr_checked = Some(now) }
+                self.enriching += 1;
+                let (m, id) = (machine.clone(), agent_id.clone());
+                self.spawn(async move { link.rpc("git_pull_request", json!({ "agentId": id }), Duration::from_secs(30)).await }, move |app, reply| {
+                    app.enriching = app.enriching.saturating_sub(1);
+                    let Ok(reply) = reply else { return };
+                    let Some(a) = app.fleet.agents.get_mut(&(m, agent_id.clone())) else { return };
+                    a.pr = match reply.get("status").and_then(Value::as_str) {
+                        Some("found") => Some(fleet::Pr { number: reply.get("number").and_then(Value::as_u64).unwrap_or(0), state: reply.get("state").and_then(Value::as_str).unwrap_or("").to_string(), url: reply.get("url").and_then(Value::as_str).unwrap_or("").to_string() }),
+                        Some("none") => None,
+                        _ => a.pr.take(),
+                    };
+                });
+            }
+        }
+    }
+
     pub fn on_tick(&mut self) {
         self.tick += 1;
+        self.enrich();
         self.maybe_start_shell();
         self.release_waiting();
         crate::dial::tick(self);

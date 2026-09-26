@@ -127,8 +127,11 @@ pane counts as done and unread (`✓`) until you go to that pane.
   branch below 110 columns), so the window list keeps its room at 80.
 - **`C-b s`** lists every harness, the most urgent nearest the prompt: needs you, failed, done and
   unread, working, then the rest. Each row has one line: the question, what it is doing now
-  (`Run the unit tests`, from its tool calls), what its last turn came to (the first line of its
-  final message), or why it failed. Each row also says how long it has been that way.
+  (`Run the unit tests`, from its tool calls), what its last turn came to (the daemon's recap, else
+  the first line of its final message), or why it failed (`The agent did not start within 60
+  seconds.`). Each row also has its pull request (`#4812`, `#4807 draft`, `#4790 merged`) and how
+  long it has been that way; the preview adds what it was last asked and what it has used
+  (`1.2M tokens · +340 −52 · 1 PR`).
 - **`C-b a`** (`next-harness`, `-p` the other way) goes to the next harness that needs you, in that
   order, each once. It shows each in the same window, so a run through the queue doesn't pile up
   windows. Going there reads it, and the counts go down.
@@ -144,7 +147,10 @@ For your own formats: `#{fleet}` (the status line's counts, ready to drop into y
 `#{pane_agent_icon}` and `#{pane_agent_state}` (needs, working, done, idle, starting, failed,
 paused, offline), `#{pane_agent_mark}` (the icon in its colour, as the title row draws it),
 `#{window_agent_icon}` and `#{window_agent_state}` (its most urgent pane's), `#{pane_project}`,
-`#{pane_branch}`, `#{pane_where}` (`project git:(branch)` as far as it fits beside the title),
+`#{pane_branch}`, `#{pane_where}` (`project git:(branch) #123` as far as it fits beside the title),
+`#{pane_pr}` `#{pane_pr_state}` `#{pane_pr_url}` (the pull request for its branch), `#{pane_tokens}`
+and `#{fleet_tokens}` (what it, and all of them, have used: `1.2M`), `#{pane_lines}` (`+340 −52`),
+`#{pane_asked}` and `#{pane_did}` (what it was last asked, and what its last turn came to),
 `#{pane_machine}`, `#{pane_far}` (another machine's), `#{pane_watched}` and `#{pane_watcher}`
 (another window has the pane to type in, and who), and `#{waiting}` (the harnesses waiting on
 you).

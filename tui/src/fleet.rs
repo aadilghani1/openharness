@@ -74,6 +74,42 @@ pub struct Agent {
     pub did: Option<String>,
     /// When its state began (ms since the epoch): the turn it is on, or the turn it finished.
     pub since: u64,
+    /// Its tokens so far (the daemon's tokenUsage), and the lines it changed and the pull requests
+    /// it made (outputStats).
+    pub tokens: u64,
+    pub added: u64,
+    pub removed: u64,
+    pub prs_made: u64,
+    /// Why its start failed, in the daemon's words (launch.detail, else its error code).
+    pub launch_error: String,
+    /// What it was last asked: the first line of the turn's message.
+    pub asked: Option<String>,
+    /// The pull request for its branch (git_pull_request), and when that was last asked.
+    pub pr: Option<Pr>,
+    pub pr_checked: Option<Instant>,
+    /// Its last recap was asked of the daemon (agent_recent), once.
+    pub recap_asked: bool,
+}
+
+/// A pull request for an agent's branch: its number, state (Open, Draft, Merged, Closed), link.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pr { pub number: u64, pub state: String, pub url: String }
+
+impl Pr {
+    /// As a list or a title says it: `#123`, `#123 draft`, `#123 merged`, `#123 closed`.
+    pub fn label(&self) -> String {
+        match self.state.as_str() { "Open" | "" => format!("#{}", self.number), s => format!("#{} {}", self.number, s.to_lowercase()) }
+    }
+}
+
+/// A count of tokens as a list says it: 950, 12k, 1.2M.
+pub fn compact(n: u64) -> String {
+    match n {
+        0..=999 => n.to_string(),
+        1_000..=99_999 => format!("{:.1}k", n as f64 / 1e3).replace(".0k", "k"),
+        100_000..=999_999 => format!("{}k", n / 1000),
+        _ => format!("{:.1}M", n as f64 / 1e6).replace(".0M", "M"),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -169,6 +205,19 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         said: previous.map(|p| p.said.clone()).unwrap_or_default(),
         did: previous.and_then(|p| p.did.clone()),
         since: previous.map(|p| p.since).unwrap_or(0),
+        tokens: row.pointer("/tokenUsage/totalTokens").and_then(Value::as_u64).or(previous.map(|p| p.tokens)).unwrap_or(0),
+        added: row.pointer("/outputStats/linesAdded").and_then(Value::as_u64).or(previous.map(|p| p.added)).unwrap_or(0),
+        removed: row.pointer("/outputStats/linesRemoved").and_then(Value::as_u64).or(previous.map(|p| p.removed)).unwrap_or(0),
+        prs_made: row.pointer("/outputStats/pullRequestsCreated").and_then(Value::as_u64).or(previous.map(|p| p.prs_made)).unwrap_or(0),
+        launch_error: {
+            let detail = s(&launch, "detail");
+            let code = s(&launch, "error");
+            match first_line(&detail) { Some(d) => d, None if !code.is_empty() => { let t = code.to_lowercase().replace('_', " "); let mut c = t.chars(); c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default() } None => String::new() }
+        },
+        asked: previous.and_then(|p| p.asked.clone()),
+        pr: previous.and_then(|p| p.pr.clone()),
+        pr_checked: previous.and_then(|p| p.pr_checked),
+        recap_asked: previous.map(|p| p.recap_asked).unwrap_or(false),
     }
 }
 

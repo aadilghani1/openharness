@@ -213,7 +213,7 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
                 State::NeedsInput => (a.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default(), true),
                 State::Working => (a.doing.clone().unwrap_or_else(|| "Working".into()), false),
                 State::Done => (a.did.clone().unwrap_or_else(|| "Finished".into()), false),
-                State::Failed => (a.did.clone().unwrap_or_else(|| "Failed to start".into()), true),
+                State::Failed => (Some(a.launch_error.clone()).filter(|e| !e.is_empty()).or_else(|| a.did.clone()).unwrap_or_else(|| "Failed to start".into()), true),
                 State::Starting => ("Starting".into(), false),
                 _ => (a.did.clone().unwrap_or_default(), false),
             };
@@ -226,7 +226,10 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
             let since = match &a.question { Some(q) => crate::fleet::now_ms().saturating_sub(q.since.elapsed().as_millis() as u64), None if a.since > 0 && !quiet => a.since, None => a.recency() };
             // Right: the machine (when there are several) and how long — the name and its line
             // come first; where it works is searchable and in the preview's title.
-            let right = [if many { app.fleet.machine_name(&a.machine_id) } else { String::new() }, if is_open { "open".into() } else { String::new() }, ago(since)]
+            // Its pull request, where it has one (what it cost is in the preview).
+            let pr = a.pr.as_ref().map(|p| p.label()).unwrap_or_default();
+            let _ = is_open;
+            let right = [pr, if many { app.fleet.machine_name(&a.machine_id) } else { String::new() }, ago(since)]
                 .into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("  ");
             let live = !matches!(state, State::Paused | State::Offline);
             Row::new(format!("{}:{}", a.machine_id, a.id), a.name.clone())

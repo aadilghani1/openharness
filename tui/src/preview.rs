@@ -49,6 +49,17 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     ];
     if !cwd.is_empty() { out.push(kv("folder", cwd)) }
     if !a.branch.is_empty() { out.push(kv("branch", a.branch.clone())) }
+    if let Some(pr) = &a.pr { out.push(Line::from(vec![dim(format!("{:<9}", "pr")), Span::raw(format!("#{} {}", pr.number, pr.state)), dim(format!("  {}", pr.url))])) }
+    if a.tokens > 0 || a.added + a.removed > 0 {
+        let mut used = Vec::new();
+        if a.tokens > 0 { used.push(format!("{} tokens", crate::fleet::compact(a.tokens))) }
+        if a.added + a.removed > 0 { used.push(format!("+{} −{}", a.added, a.removed)) }
+        if a.prs_made > 0 { used.push(format!("{} PR{}", a.prs_made, if a.prs_made == 1 { "" } else { "s" })) }
+        out.push(kv("used", used.join(" · ")));
+    }
+    if state == State::Failed && !a.launch_error.is_empty() { out.push(Line::raw("")); out.push(Line::from(vec![Span::styled("✗ ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)), Span::raw(a.launch_error.clone())])) }
+    if let Some(asked) = &a.asked { out.push(Line::raw("")); out.push(Line::from(vec![Span::styled("❯ ", Style::default().fg(theme::fzf().prompt)), Span::raw(asked.clone())])) }
+    if let Some(did) = a.did.as_ref().filter(|_| !matches!(state, State::Working | State::NeedsInput)) { out.push(Line::from(vec![dim("⏺ "), Span::raw(did.clone())])) }
     let model = a.model.rsplit(':').next().unwrap_or("").to_string();
     if !model.is_empty() { out.push(kv("model", model)) }
     if !a.dsh.is_empty() { out.push(kv("harness", a.dsh.clone())) }

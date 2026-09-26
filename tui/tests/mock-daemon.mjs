@@ -38,7 +38,7 @@ const agents = DEMO ? {
   [REMOTE]: [
     project(agent(randomUUID(), 'Train tokenizer on the new corpus', 'codex'), 'ml-lab', 'exp/tokenizer-v3'),
     project(agent(randomUUID(), 'gpu-box shell', 'terminal'), 'ml-lab', 'main'),
-    { ...project(agent(randomUUID(), 'Upgrade React to 19', 'claude'), 'webapp', 'react-19'), launch: { state: 'failed' } },
+    { ...project(agent(randomUUID(), 'Upgrade React to 19', 'claude'), 'webapp', 'react-19'), launch: { state: 'failed', error: 'START_TIMEOUT', detail: 'The agent did not start within 60 seconds.' } },
   ],
 } : {
   [LOCAL]: [agent(randomUUID(), 'Mock Claude', 'claude'), agent(randomUUID(), 'Mock Codex', 'codex'), agent(randomUUID(), 'Mock paused', 'claude', 'stopped')],
@@ -51,6 +51,16 @@ const TASKS = ['Fix the flaky checkout test', 'Add pagination to /orders', 'Upgr
   'Port the CLI to Rust', 'Triage the crash reports', 'Refactor the auth middleware', 'Add dark mode to settings', 'Speed up the CI cache', 'Translate the docs to Spanish',
   'Remove the legacy billing API', 'Harden the upload endpoint', 'Tune the search ranking', 'Migrate the queue to SQS', 'Fix the memory leak in workers']
 const PROJECTS = [['webapp', 'main'], ['api', 'develop'], ['billing', 'refactor/invoices'], ['ml-lab', 'exp/tokenizer-v3'], ['infra', 'ci-cache'], ['docs', 'i18n']]
+// What the daemon keeps of each: tokens, the lines it changed, the pull requests it made.
+if (DEMO) for (const [i, a] of Object.values(agents).flat().entries()) {
+  if (a.engine === 'terminal') continue
+  a.tokenUsage = { totalTokens: [1_240_000, 356_000, 88_400, 12_000, 2_900_000, 640_000, 45_000][i % 7], updatedAt: now }
+  a.outputStats = { linesAdded: [340, 12, 88, 0, 1200, 45, 3][i % 7], linesRemoved: [52, 3, 20, 0, 400, 9, 1][i % 7], pullRequestsCreated: i % 3 === 0 ? 1 : 0, updatedAt: now }
+}
+// The pull requests for their branches (git_pull_request), and each one's last recap and ask
+// (agent_recent), as the daemon keeps them.
+const PRS = { 'fix/login-flake': { number: 4812, state: 'Open' }, 'feat/rate-limit': { number: 4807, state: 'Draft' }, 'refactor/invoices': { number: 4790, state: 'Merged' } }
+const RECAPS = { 'Refactor billing service': ['Invoices use Decimal; 3 tests added', 'Move invoices off floats'], 'Train tokenizer on the new corpus': ['Tokenizer v3 trained to step 1200; loss 1.84', 'Train the v3 tokenizer on the new corpus'] }
 for (let i = 0; i < FLEET; i++) {
   const [name, branch] = PROJECTS[i % PROJECTS.length]
   const a = project(agent(randomUUID(), `${TASKS[i % TASKS.length]}${i >= TASKS.length ? ` (${Math.floor(i / TASKS.length) + 1})` : ''}`, i % 3 === 2 ? 'codex' : 'claude'), name, `${branch}${i >= PROJECTS.length ? `-${i}` : ''}`)
@@ -181,6 +191,16 @@ wss.on('connection', (ws) => {
       case 'agents_list': return reply({ agents: agents[machine].filter((a) => payload.includeStopped || a.status !== 'stopped') })
       case 'models_list': return reply({ models: [{ id: 'runtime-v1:x:claude:opus@high', displayName: 'Opus / High' }, { id: 'runtime-v1:x:claude:sonnet@high', displayName: 'Sonnet / High' }] })
       case 'dsh_list': return reply({ dsh: [] })
+      case 'git_pull_request': {
+        const a = agents[machine].find((x) => x.id === payload.agentId)
+        const pr = a && PRS[a.project.branch]
+        return reply(pr ? { status: 'found', number: pr.number, state: pr.state, url: `https://github.com/demo/${a.project.name}/pull/${pr.number}` } : { status: 'none' })
+      }
+      case 'agent_recent': {
+        const a = agents[machine].find((x) => x.id === payload.agentId)
+        const r = a && RECAPS[a.name]
+        return reply({ agentId: payload.agentId, events: r ? [{ kind: 'summary', recap: r[0], text: r[0] }] : [], asks: r ? [r[1]] : [] })
+      }
       case 'fs_list_dir': return reply({ path: '/home/demo', entries: [] })
       // What tmux says a pane runs and where (the real daemon asks its tmux; here, fixed).
       case 'terminal_info': return reply({ command: 'zsh', path: '/home/demo/src', pid: 4242, tty: '/dev/ttys042' })
