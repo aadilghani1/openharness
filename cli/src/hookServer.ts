@@ -691,6 +691,9 @@ export function startHookServer(
         await proxied(handlers.onZooRead); return
       }
       if (req.method === 'POST' && url === '/api/zoo/ops') {
+        // Any local process that sets the header can send an op here, `zoo.autonomy` and `zoo.consent`
+        // included: the account's dial is only a REQUEST to each daemon, which acts above `suggest` only
+        // after the person confirms it at a window (pair/gate.ts, daemons/BRAIN.md "Security").
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onZooOps) { json(503, { error: 'UNAVAILABLE' }); return }
         let body: unknown
