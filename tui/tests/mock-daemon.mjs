@@ -233,6 +233,13 @@ wss.on('connection', (ws) => {
         return
       case 'voice_route_reply': dial.replies.push(payload); return
       case 'message': dial.messages.push({ machine, ...payload }); return
+      // An answer: recorded, and the question closed, as the daemon closes it once it is keyed in.
+      case 'question_response': {
+        dial.answers = [...(dial.answers || []), payload]
+        const a = agents[machine].find((x) => x.id === payload.agentId)
+        send('commander_question_close', { requestId: payload.requestId, agentId: payload.agentId, dbSessionId: a?.sessionId })
+        return
+      }
       case 'terminal_open': {
         const target = agents[machine].find((a) => a.id === payload.agentId)
         if (!target || target.status !== 'active') return send('terminal_error', { requestId: payload.requestId, code: 'TERMINAL_AGENT_NOT_FOUND' })

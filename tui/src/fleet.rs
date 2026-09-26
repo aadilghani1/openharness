@@ -39,6 +39,8 @@ pub struct Question {
     pub answer_key: String,
     pub prompt: String,
     pub options: Vec<String>,
+    /// Several of its options may be chosen (the answer is them joined with ", ").
+    pub multi: bool,
     pub since: Instant,
 }
 
@@ -334,10 +336,23 @@ pub fn question_from(payload: &Value, previous: Option<&Question>) -> Option<Que
     Some(Question {
         answer_key: first.get("key").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| prompt.clone()),
         since: previous.filter(|p| p.request_id == request_id).map(|p| p.since).unwrap_or_else(Instant::now),
+        multi: first.get("multi").and_then(Value::as_bool).unwrap_or(false),
         request_id,
         prompt,
         options,
     })
+}
+
+/// An answer as typed: numbers (`2`, `1,3`) are those options (several joined with ", ", as the
+/// daemon keys a multi-choice answer); anything else is the answer in your own words.
+pub fn answer_text(q: &Question, typed: &str) -> Option<String> {
+    let typed = typed.trim();
+    if typed.is_empty() { return None }
+    let numbers: Option<Vec<usize>> = typed.split([',', ' ']).filter(|s| !s.is_empty()).map(|s| s.parse::<usize>().ok().filter(|n| *n >= 1 && *n <= q.options.len())).collect();
+    match numbers {
+        Some(ns) if !ns.is_empty() && (q.multi || ns.len() == 1) => Some(ns.iter().map(|n| q.options[n - 1].clone()).collect::<Vec<_>>().join(", ")),
+        _ => Some(typed.to_string()),
+    }
 }
 
 #[derive(Default)]
@@ -502,5 +517,23 @@ mod usage_tests {
         assert_eq!(compact(88_400), "88.4k");
         assert_eq!(compact(12_000), "12k");
         assert_eq!(compact(356_000), "356k");
+    }
+}
+
+#[cfg(test)]
+mod answer_tests {
+    use super::*;
+
+    #[test]
+    fn typed_answers() {
+        let q = |multi| Question { request_id: "r".into(), answer_key: "k".into(), prompt: "p".into(), options: vec!["Per API key".into(), "Per IP".into(), "Both".into()], multi, since: Instant::now() };
+        assert_eq!(answer_text(&q(false), "2").as_deref(), Some("Per IP"));
+        assert_eq!(answer_text(&q(true), "1,3").as_deref(), Some("Per API key, Both"));
+        assert_eq!(answer_text(&q(true), "1 3").as_deref(), Some("Per API key, Both"));
+        // Several numbers for a one-choice question, a number out of range, words: as typed.
+        assert_eq!(answer_text(&q(false), "1,3").as_deref(), Some("1,3"));
+        assert_eq!(answer_text(&q(false), "9").as_deref(), Some("9"));
+        assert_eq!(answer_text(&q(false), " per user, please ").as_deref(), Some("per user, please"));
+        assert_eq!(answer_text(&q(false), "  "), None);
     }
 }

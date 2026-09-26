@@ -66,6 +66,7 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
         out.push(Line::raw(""));
         out.push(Line::from(vec![Span::styled("? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), bold(q.prompt.clone())]));
         for (i, o) in q.options.iter().enumerate() { out.push(Line::from(vec![Span::styled(format!("  M-{} ", i + 1), Style::default().fg(theme::fzf().hl)), Span::raw(o.clone())])) }
+        out.push(dim(if q.multi { "  M-a several (1,3) or your own words" } else { "  M-a your own words" }).into());
     }
     if let Some(asked) = &a.asked { out.push(Line::raw("")); out.push(Line::from(vec![Span::styled("❯ ", Style::default().fg(theme::fzf().prompt)), Span::raw(asked.clone())])) }
     // Its plan (TodoWrite): done ✓, doing ▸, to do ·; and the sub-agents it has running.

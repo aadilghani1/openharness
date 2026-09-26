@@ -422,7 +422,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             if machine.is_none() && project.is_none() && *filter == Filter::All { rows.extend(modal::session_rows(app)) }
             picker.set_rows(rows);
             picker.status = modal::open_status(app, *filter);
-            picker.hints = vec![("enter", "open"), ("C-t", "window"), ("C-v", "beside"), ("C-x", "below"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause"), ("M-1..9", "answer")];
+            picker.hints = vec![("enter", "open"), ("C-t", "window"), ("C-v", "beside"), ("C-x", "below"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause"), ("M-1..9", "answer"), ("M-a", "type an answer")];
             picker.empty = if app.fleet.agents.is_empty() { "no harnesses yet — C-b C makes one".into() } else { String::new() };
         }
         PickerKind::Palette => { picker.set_rows(modal::palette_rows(app)); picker.hints = vec![("enter", "run"), ("C-b :", "type one")] }
@@ -448,7 +448,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
         PickerKind::Inbox => {
             picker.set_rows(modal::inbox_rows(app));
             picker.status = format!("{} waiting", app.fleet.waiting());
-            picker.hints = vec![("enter", "answer / go"), ("C-o", "open"), ("M-1..9", "answer")];
+            picker.hints = vec![("enter", "answer / go"), ("C-o", "open"), ("M-1..9", "answer"), ("M-a", "type an answer")];
             picker.empty = "Nobody is waiting on you.".into();
         }
         PickerKind::Machines => {
@@ -1438,6 +1438,16 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             // README binds it).
             KeyCode::Char('/') if alt => picker.toggle_wrap(),
             KeyCode::Char(c @ '1'..='9') if alt => { answer_from(app, &kind, &mut picker, c as usize - '1' as usize) }
+            // M-a: the question's answer typed — option numbers (several for a multi-choice one) or
+            // your own words.
+            KeyCode::Char('a') if alt && matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) => {
+                if let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) {
+                    if let Some(q) = app.fleet.agent(&machine, &agent).and_then(|a| a.question.clone()) {
+                        let hint = if q.multi { format!("1–{} (several: 1,3) or your own words", q.options.len()) } else if q.options.is_empty() { "your answer".to_string() } else { format!("1–{} or your own words", q.options.len()) };
+                        return prompt(app, PromptKind::Answer { machine, agent }, "Answer", &q.prompt, &hint, "", false);
+                    }
+                }
+            }
             KeyCode::Char('p') if alt => { choose(app, kind, picker, Choice::Pause); return }
             KeyCode::Enter if alt => { choose(app, kind, picker, Choice::Here); return }
             KeyCode::Enter => { choose(app, kind, picker, Choice::Enter); return }
@@ -1626,12 +1636,19 @@ fn answer_from(app: &mut App, kind: &PickerKind, picker: &mut Picker, option: us
 
 /// Answer an open question with its [option]th choice, from anywhere — no need to open the pane.
 fn answer(app: &mut App, machine: &str, agent: &str, option: usize) -> bool {
+    let Some(q) = app.fleet.agent(machine, agent).and_then(|a| a.question.clone()) else { return false };
+    let Some(choice) = q.options.get(option).cloned() else { return false };
+    answer_with(app, machine, agent, &choice)
+}
+
+/// question_response with [value]: an option's words, several joined with ", ", or free text
+/// (the daemon keys each into the agent's own dialog).
+fn answer_with(app: &mut App, machine: &str, agent: &str, value: &str) -> bool {
     let Some(a) = app.fleet.agent(machine, agent) else { return false };
     let Some(q) = a.question.clone() else { return false };
-    let Some(choice) = q.options.get(option).cloned() else { return false };
     let session = a.session_id.clone();
     let Some(link) = app.link(machine) else { return false };
-    link.send("question_response", json!({ "requestId": q.request_id, "agentId": agent, "sessionId": session, "answers": { q.answer_key: choice } }))
+    link.send("question_response", json!({ "requestId": q.request_id, "agentId": agent, "sessionId": session, "answers": { q.answer_key: value } }))
 }
 
 fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
@@ -1884,6 +1901,13 @@ fn submit_prompt(app: &mut App, p: Prompt) {
             commands::execute_template(app, template.as_deref().unwrap_or("%1"), &answers);
         }
         PromptKind::RenameTab => { if !value.is_empty() { app.rename_tab(&value) } }
+        PromptKind::Answer { machine, agent } => {
+            let text = app.fleet.agent(&machine, &agent).and_then(|a| a.question.clone()).and_then(|q| crate::fleet::answer_text(&q, &value));
+            match text {
+                Some(t) => { if answer_with(app, &machine, &agent, &t) { app.say(format!("Answered: {t}"), theme::ONLINE) } }
+                None => app.say("That question is no longer open", theme::WARN),
+            }
+        }
         PromptKind::RenameHarness { machine, agent } => {
             if value.is_empty() { return }
             if let Some(link) = app.link(&machine) {
