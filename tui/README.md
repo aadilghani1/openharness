@@ -132,7 +132,10 @@ pane counts as done and unread (`✓`) until you go to that pane.
   (`Run the unit tests`, from its tool calls), what its last turn came to (the daemon's recap, else
   the first line of its final message), or why it failed (`The agent did not start within 60
   seconds.`). Each row also has its pull request (`#4812`, `#4807 draft`, `#4790 merged`) and how
-  long it has been that way; the preview adds what it was last asked, its plan (its to-do list,
+  long it has been that way. From the list, without opening it: `M-m` marks it read (`M-M` every
+  row shown), `M-s` sends it a message, `M-r` restarts it, `M-1…9` / `M-a` answer it; `C-t` with
+  marked rows opens a window each. The list stays ranked while it is open. The preview adds its
+  final message whole, what it was last asked, its plan (its to-do list,
   `✓` done, `▸` doing), the sub-agents it has running, and what it has used (`1.2M tokens · +340
   −52 · 1 PR`).
 - **Back after a while** (the terminal's focus gone three minutes or more), hn says what changed:

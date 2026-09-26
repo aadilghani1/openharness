@@ -84,7 +84,12 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
         out.push(Line::from(vec![dim(format!("{:<9}", "agents")), Span::raw(format!("{} running", a.subagents.len()))]));
         for (_, what) in a.subagents.iter().take(8) { out.push(Line::from(vec![Span::raw(format!("  ⠿ {what}"))])) }
     }
+    // What its last turn came to: the recap, then its final message whole (to read it here).
     if let Some(did) = a.did.as_ref().filter(|_| !matches!(state, State::Working | State::NeedsInput)) { out.push(Line::from(vec![dim("⏺ "), Span::raw(did.clone())])) }
+    if !a.last_text.is_empty() && !matches!(state, State::Working) {
+        out.push(Line::raw(""));
+        for l in a.last_text.lines().take(40) { let mut spans = vec![dim("  ")]; spans.extend(markdown(l)); out.push(Line::from(spans)) }
+    }
     if let Some(recent) = app.recent.get(&(machine_id.to_string(), agent_id.to_string())) {
         let asks: Vec<String> = recent.get("asks").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(str::to_string).or_else(|| v.get("text").and_then(Value::as_str).map(str::to_string))).collect()).unwrap_or_default();
         let recaps: Vec<String> = recent.get("events").and_then(Value::as_array).map(|x| x.iter().filter_map(|e| e.pointer("/payload/recap").or_else(|| e.get("recap")).or_else(|| e.pointer("/payload/text")).and_then(Value::as_str).map(str::to_string)).collect()).unwrap_or_default();
@@ -154,6 +159,36 @@ fn store(app: &App, id: &str) -> Vec<Line<'static>> {
     if let Some(d) = row.get("description").and_then(Value::as_str) { for l in textwrap(d, 60) { out.push(Line::raw(l)) } }
     out.push(Line::raw(""));
     out.push(dim(if row.get("installed").and_then(Value::as_bool) == Some(false) { "M-i installs it" } else { "enter starts one" }).into());
+    out
+}
+
+/// A line of an agent's message as a terminal reads it: `**bold**`, `` `code` `` (in the match
+/// colour), a heading's #s taken off and the heading bold.
+fn markdown(line: &str) -> Vec<Span<'static>> {
+    let heading = line.trim_start().starts_with('#');
+    let text = if heading { line.trim_start().trim_start_matches('#').trim_start() } else { line };
+    let base = if heading { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
+    let (mut out, mut run, mut bold, mut code) = (Vec::new(), String::new(), false, false);
+    let chars: Vec<char> = text.chars().collect();
+    let style = |bold: bool, code: bool| { let s = if bold { base.add_modifier(Modifier::BOLD) } else { base }; if code { s.fg(theme::fzf().hl) } else { s } };
+    let mut i = 0;
+    while i < chars.len() {
+        if !code && chars[i] == '*' && chars.get(i + 1) == Some(&'*') {
+            if !run.is_empty() { out.push(Span::styled(std::mem::take(&mut run), style(bold, code))) }
+            bold = !bold;
+            i += 2;
+            continue;
+        }
+        if chars[i] == '`' {
+            if !run.is_empty() { out.push(Span::styled(std::mem::take(&mut run), style(bold, code))) }
+            code = !code;
+            i += 1;
+            continue;
+        }
+        run.push(chars[i]);
+        i += 1;
+    }
+    if !run.is_empty() { out.push(Span::styled(run, style(bold, code))) }
     out
 }
 

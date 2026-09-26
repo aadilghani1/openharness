@@ -873,6 +873,7 @@ impl App {
                     agent.doing = None;
                     // What the turn came to: the first line of its final message.
                     let said = std::mem::take(&mut agent.said);
+                    if !said.trim().is_empty() && !aborted { agent.last_text = said.trim().to_string() }
                     if aborted { agent.did = Some("Interrupted".into()) } else if agent.errored { } else if let Some(line) = fleet::first_line(&said) { agent.did = Some(line) }
                     let name = agent.name.clone();
                     let mine = opened.contains(&agent.key());
@@ -3077,6 +3078,8 @@ impl App {
                     let Some(a) = app.fleet.agents.get_mut(&(m.clone(), agent_id_of(&reply).unwrap_or_default())) else { return };
                     let recap = reply.pointer("/events/0").and_then(|e| e.get("recap").or_else(|| e.get("text")).and_then(Value::as_str)).and_then(fleet::first_line);
                     if a.did.is_none() { a.did = recap }
+                    let full = reply.pointer("/events/0").and_then(|e| e.get("fullText").or_else(|| e.get("text")).and_then(Value::as_str)).unwrap_or("");
+                    if a.last_text.is_empty() { a.last_text = full.trim().to_string() }
                     let ask = reply.pointer("/asks/0").and_then(|x| x.as_str().map(str::to_string).or_else(|| x.get("text").and_then(Value::as_str).map(str::to_string)));
                     if a.asked.is_none() { a.asked = ask.as_deref().and_then(fleet::first_line) }
                 });

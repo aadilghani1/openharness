@@ -434,7 +434,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             if machine.is_none() && project.is_none() && *filter == Filter::All { rows.extend(modal::session_rows(app)) }
             picker.set_rows(rows);
             picker.status = modal::open_status(app, *filter);
-            picker.hints = vec![("enter", "open"), ("M-1..9", "answer"), ("C-v", "beside"), ("C-x", "below"), ("C-t", "window"), ("M-a", "type an answer"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
+            picker.hints = vec![("enter", "open"), ("M-1..9", "answer"), ("M-m", "read"), ("C-v", "beside"), ("C-x", "below"), ("C-t", "window"), ("M-a", "type an answer"), ("M-s", "message"), ("M-r", "restart"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
             picker.empty = if app.fleet.agents.is_empty() { "no harnesses yet — C-b C makes one".into() } else { String::new() };
         }
         PickerKind::Palette => { picker.set_rows(modal::palette_rows(app)); picker.hints = vec![("enter", "run"), ("C-b :", "type one")] }
@@ -980,7 +980,8 @@ fn create_in(app: &mut App, machine: String, what: What, cwd: Option<String>, me
         Ok(reply) => {
             if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
                 app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
-                let placement = if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Auto(None) };
+                // A new harness is a new window (as C-b c's shell is), or the empty one here.
+                let placement = if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab };
                 app.open_agent(&machine, id, placement);
                 app.toast = None;
             } else { app.say("The machine created no harness", theme::DANGER) }
@@ -1462,6 +1463,34 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             // README binds it).
             KeyCode::Char('/') if alt => picker.toggle_wrap(),
             KeyCode::Char(c @ '1'..='9') if alt => { answer_from(app, &kind, &mut picker, c as usize - '1' as usize) }
+            // M-m: read (done ✓, or failed ✗ from an error) without opening it; M-M: every row shown.
+            KeyCode::Char('m' | 'M') if alt && matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) => {
+                let all = key.code == KeyCode::Char('M') || key.modifiers.contains(KeyModifiers::SHIFT);
+                let ids: Vec<String> = if all { picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect() } else { picker.current_id().into_iter().collect() };
+                let mut n = 0;
+                for id in ids { if let Some(key) = split_key(&id) { if mark_read(app, key) { n += 1 } } }
+                picker.say(match n { 0 => "Nothing to mark read".to_string(), 1 => "Marked read".to_string(), n => format!("{n} marked read") });
+            }
+            // M-r: restart it (a failed one, say); M-s: a message to it.
+            KeyCode::Char('r') if alt && matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) => {
+                if let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) {
+                    let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
+                    if let Some(link) = app.link(&machine) {
+                        picker.say(format!("Restarting {name}…"));
+                        let m = machine.clone();
+                        app.spawn(async move { link.rpc("agent_restart", json!({ "agentId": agent, "creationId": uuid::Uuid::new_v4().to_string() }), Duration::from_secs(120)).await }, move |app, reply| {
+                            if let Err(e) = reply { app.say(format!("Could not restart it: {e}"), theme::DANGER) }
+                            app.relist(&m);
+                        });
+                    }
+                }
+            }
+            KeyCode::Char('s') if alt && matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) => {
+                if let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) {
+                    let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
+                    return prompt(app, PromptKind::Message { machine, agent }, "Message", &name, &format!("to {name}"), "", false);
+                }
+            }
             // M-a: the question's answer typed — option numbers (several for a multi-choice one) or
             // your own words.
             KeyCode::Char('a') if alt && matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) => {
@@ -1673,6 +1702,17 @@ fn answer(app: &mut App, machine: &str, agent: &str, option: usize) -> bool {
     answer_with(app, machine, agent, &choice)
 }
 
+/// A harness read without opening it: its ✓ (or an error's ✗) gone, and seen now.
+fn mark_read(app: &mut App, key: (String, String)) -> bool {
+    let Some(a) = app.fleet.agents.get_mut(&key) else { return false };
+    let was = a.unread || a.errored;
+    a.unread = false;
+    a.errored = false;
+    app.mark_seen_key(key.clone());
+    if was { crate::dial::seen(app, &key.1) }
+    was
+}
+
 /// question_response with [value]: an option's words, several joined with ", ", or free text
 /// (the daemon keys each into the agent's own dialog).
 fn answer_with(app: &mut App, machine: &str, agent: &str, value: &str) -> bool {
@@ -1727,7 +1767,9 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             for (i, (machine, agent)) in targets.iter().enumerate() {
                 let state = app.fleet.agent(machine, agent).map(|a| app.fleet.state_of(a));
                 if state == Some(crate::fleet::State::Offline) { continue }
-                app.open_agent(machine, agent, if i == 0 { placement.clone() } else { Placement::Auto(None) });
+                // C-t with marks: a window each; otherwise the first where asked, the rest beside it.
+                let place = if i == 0 || choice == Choice::Tab { placement.clone() } else { Placement::Auto(None) };
+                app.open_agent(machine, agent, place);
                 if state == Some(crate::fleet::State::Paused) {
                     if let Some((_, pane)) = app.find_pane(machine, agent) { app.resume(pane) }
                 }
@@ -1936,6 +1978,14 @@ fn submit_prompt(app: &mut App, p: Prompt) {
             commands::execute_template(app, template.as_deref().unwrap_or("%1"), &answers);
         }
         PromptKind::RenameTab => { if !value.is_empty() { app.rename_tab(&value) } }
+        PromptKind::Message { machine, agent } => {
+            if value.trim().is_empty() { return }
+            if let Some(link) = app.link(&machine) {
+                link.send("message", json!({ "agentId": agent, "content": value }));
+                let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
+                app.say(format!("Sent to {name}"), theme::ONLINE);
+            }
+        }
         PromptKind::Answer { machine, agent } => {
             let text = app.fleet.agent(&machine, &agent).and_then(|a| a.question.clone()).and_then(|q| crate::fleet::answer_text(&q, &value));
             match text {

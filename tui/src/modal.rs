@@ -69,6 +69,8 @@ pub enum PromptKind {
     LinkPassword { machine: String },
     /// A question's answer, typed: option numbers or your own words.
     Answer { machine: String, agent: String },
+    /// A message to a harness (C-b s's M-s).
+    Message { machine: String, agent: String },
     /// tmux `command-prompt`: with a template, the answers fill it (`%1` `%2` …, `%%` the first
     /// not yet used, `%%%` quoted); without one, the typed text is the command. `more`: the
     /// prompts still to ask (label, initial text); `answers`: those given; `one`: -1, a single
