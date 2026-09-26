@@ -2196,9 +2196,7 @@ class _TerminalPageState extends State<TerminalPage>
                     if (_showEndCard)
                       Positioned.fill(
                         child: _SampleEndCard(
-                          started: _windowName(
-                            agent?.displayName ?? 'your harness',
-                          ),
+                          started: agent?.displayName ?? 'your harness',
                           onSetUp: () =>
                               SampleMode.maybeOf(context)
                                   ?.leave(SampleExit.setUp),
