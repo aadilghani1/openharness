@@ -2225,6 +2225,21 @@ class _TerminalPageState extends State<TerminalPage>
 
   /// What acts on this agent and can be taken back — the first card of its sheet.
   List<PhoneSheetAction> _agentActions(Agent agent) => [
+    // Stop what it is doing — Esc, as in the terminal — only while it is doing something. First,
+    // because when it is wanted it is wanted now.
+    if (_agentWorking)
+      PhoneSheetAction(
+        icon: LucideIcons.octagonPause300,
+        label: 'Interrupt',
+        value: 'esc',
+        onTap: () {
+          final session = widget.notifier
+              .paneOfAgent(widget.machineId, widget.agentId)
+              ?.session;
+          session?.terminal.keyInput(TerminalKey.escape);
+          _flash('✓ interrupted ${_windowName(agent.displayName)}');
+        },
+      ),
     // Where this agent runs, above the actions that act ON it: the desktop
     // keeps it in the pane header, and this sheet is the phone's pane header.
     //
