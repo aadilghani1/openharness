@@ -137,7 +137,7 @@ void main() {
       final search = SessionContentSearch(
         machines: () => ['m', 'n'],
         debounce: const Duration(milliseconds: 5),
-        ask: (machine, query) async {
+        ask: (machine, query, _) async {
           asked.add((machine, query));
           if (machine == 'n') await gate.future;
           return machine == 'm'
@@ -171,7 +171,7 @@ void main() {
         final search = SessionContentSearch(
           machines: () => ['m'],
           debounce: Duration.zero,
-          ask: (_, query) => (answers[query] = Completer()).future,
+          ask: (_, query, _) => (answers[query] = Completer()).future,
         );
         addTearDown(search.dispose);
         search.search('dial');
@@ -200,7 +200,7 @@ void main() {
     final search = SessionContentSearch(
       machines: () => ['m'],
       debounce: Duration.zero,
-      ask: (_, query) async => query == 'mob'
+      ask: (_, query, _) async => query == 'mob'
           ? [
               hit('a1', snippet: 'the ${_o}mobile$_c swipe feels slow'),
               hit('a2', snippet: 'the ${_o}mobile$_c build broke'),
@@ -216,6 +216,33 @@ void main() {
     expect(search.hitsFor('mob swi').keys, [agentDestinationId('m', 'a1')]);
     expect(search.hitsFor('mob build keyboard'), isEmpty);
   });
+
+  test(
+    'a time in the words goes to the machines as a window, not as words',
+    () async {
+      final asked = <(String, DateTime?, DateTime?)>[];
+      final search = SessionContentSearch(
+        machines: () => ['m'],
+        debounce: Duration.zero,
+        now: () => DateTime(2026, 9, 26, 14, 30),
+        ask: (_, words, when) async {
+          asked.add((words, when?.from, when?.to));
+          return [hit('a1', snippet: 'fix the ${_o}dial$_c')];
+        },
+      );
+      addTearDown(search.dispose);
+      search.search('dial last week');
+      await settle();
+      expect(asked, [('dial', DateTime(2026, 9, 14), DateTime(2026, 9, 21))]);
+      expect(search.hitsFor('dial last week'), hasLength(1));
+      // Another time: that answer says nothing about it.
+      expect(search.hitsFor('dial yesterday'), isEmpty);
+      // A time alone is a search: what was worked on then.
+      search.search('yesterday');
+      await settle();
+      expect(asked.last, ('', DateTime(2026, 9, 25), DateTime(2026, 9, 26)));
+    },
+  );
 
   group('ranking with what was said', () {
     SwarmDestination row(String id, String title, int hour) => SwarmDestination(
@@ -361,6 +388,72 @@ void main() {
         expect(search.contentHitFor(agentDestinationId('m', 'a7')), isNull);
       },
     );
+
+    test('a time narrows Open Harness to what was worked on then', () async {
+      final now = DateTime.now();
+      final connection = SearchConnection({
+        '': [
+          {
+            'agentId': 'vouched',
+            'sessionId': 's',
+            'field': 'ask',
+            'snippet': 'what I asked then',
+            'together': true,
+            'score': 1,
+          },
+        ],
+      });
+      final app = createApp(
+        connected: true,
+        connectionForTest: (_) => connection,
+      );
+      app.machineStates['m']!.agents = [
+        Agent(
+          id: 'then',
+          name: 'Then',
+          engine: 'codex',
+          terminalAvailable: true,
+          lastActivityAt: DateTime(now.year, now.month, now.day - 1, 12),
+        ),
+        Agent(
+          id: 'old',
+          name: 'Old',
+          engine: 'codex',
+          terminalAvailable: true,
+          lastActivityAt: now.subtract(const Duration(days: 20)),
+        ),
+        // Last active just now, but a machine saw it worked on in the window.
+        Agent(
+          id: 'vouched',
+          name: 'Vouched',
+          engine: 'codex',
+          terminalAvailable: true,
+          lastActivityAt: now,
+        ),
+      ];
+      addTearDown(app.dispose);
+      final search = SwarmSearchController(
+        app,
+        const [],
+        adding: true,
+        offersCreate: true,
+        activityFirst: true,
+        placement: HarnessPlacement.newTab,
+      );
+      addTearDown(search.dispose);
+      search.setQuery('yesterday');
+      expect(search.wordsQuery, '');
+      await answered();
+      expect(connection.asked, ['']);
+      expect(
+        search.rows.where((row) => !row.isCreate).map((row) => row.agentId),
+        ['vouched', 'then'],
+      );
+      expect(
+        search.contentHitFor(agentDestinationId('m', 'vouched'))!.snippet,
+        'what I asked then',
+      );
+    });
 
     test('a restored draft searches what was said too', () async {
       final connection = SearchConnection({

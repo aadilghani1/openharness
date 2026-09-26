@@ -1264,7 +1264,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
   /// What this row draws from the search: its words, and what a machine's
   /// session index found in its conversation, which can land after the words.
   (String, bool, SessionContentHit?) get _currentQuery => (
-    widget.search.matchQuery,
+    widget.search.wordsQuery,
     widget.search.isHelpMode,
     widget.search.contentHitFor(widget.row.id),
   );
@@ -1310,7 +1310,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
         hit != null &&
             hit.snippet.isNotEmpty &&
             hit.field != 'name' &&
-            matches.length < terms.take(12).toSet().length
+            (terms.isEmpty || matches.length < terms.take(12).toSet().length)
         ? hit
         : null;
     if (widget.bios) {

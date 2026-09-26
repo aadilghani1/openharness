@@ -14,6 +14,7 @@ import 'pane_arrangement.dart';
 import 'swarm_catalog.dart';
 import 'swarm_navigation.dart';
 import 'harness_sessions.dart';
+import 'search_when.dart';
 import 'session_content_search.dart';
 
 const kSwarmSearchHint = 'Search harnesses';
@@ -75,7 +76,8 @@ class SwarmSearchController extends ChangeNotifier {
     if (activityFirst && history == null && !navigating) {
       _content = SessionContentSearch(
         machines: () => app.searchableMachineIds,
-        ask: app.searchSessions,
+        ask: (machineId, words, when) =>
+            app.searchSessions(machineId, words, when: when),
       )..addListener(_contentChanged);
     }
     _refresh();
@@ -415,6 +417,19 @@ class SwarmSearchController extends ChangeNotifier {
   /// current query, when that is how the row matched.
   SessionContentHit? contentHitFor(String rowId) =>
       _contentQuery.isEmpty ? null : _content?.hitsFor(_contentQuery)[rowId];
+
+  /// When the query says to look ("dial last week"), and its words without
+  /// that: Open Harness only, where a time narrows to what was worked on then.
+  ({String words, SearchWhen? when}) get _read {
+    final content = _content;
+    final query = _contentQuery;
+    return content == null || query.isEmpty
+        ? (words: matchQuery, when: null)
+        : content.read(query);
+  }
+
+  /// The words matched against names and highlighted: the query less any time.
+  String get wordsQuery => _read.words;
 
   /// The words sent to the session indexes: plain harness search only.
   String get _contentQuery =>
@@ -938,6 +953,20 @@ class SwarmSearchController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// With a time in the query, the rows worked on then: last active in it, or
+  /// vouched for by a machine that saw a turn in it.
+  List<SwarmDestination> _within(List<SwarmDestination> rows) {
+    final when = _read.when;
+    if (when == null) return rows;
+    final hits = _content?.hitsFor(_contentQuery) ?? const {};
+    bool then(DateTime? at) =>
+        at != null && !at.isBefore(when.from) && !at.isAfter(when.to);
+    return [
+      for (final row in rows)
+        if (hits.containsKey(row.id) || then(row.lastActivityAt)) row,
+    ];
+  }
+
   void refreshCommands() {
     if (!isCommandMode) return;
     _filter();
@@ -1146,8 +1175,8 @@ class SwarmSearchController extends ChangeNotifier {
           )
         : byActivity
         ? rankSwarmDestinationsByActivity(
-            candidates,
-            matchQuery,
+            _within(candidates),
+            wordsQuery,
             recent: recent,
             previews: app.sessionPreviews,
             contentHits: _contentQuery.isEmpty

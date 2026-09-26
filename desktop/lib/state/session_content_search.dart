@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'search_when.dart';
 import 'swarm_navigation.dart' show agentDestinationId;
 
 /// Where a machine's daemon marks each matched word in a snippet.
@@ -104,9 +105,12 @@ class SessionContentHit {
   }
 }
 
+/// Asks one machine for [words], only in sessions worked on in [when] when
+/// there is one.
 typedef SessionSearchAsk = Future<List<SessionContentHit>?> Function(
   String machineId,
-  String query,
+  String words,
+  SearchWhen? when,
 );
 
 /// Asks every reachable machine what was said in its sessions, as the person
@@ -119,12 +123,18 @@ class SessionContentSearch extends ChangeNotifier {
     required this.machines,
     required this.ask,
     this.debounce = const Duration(milliseconds: 110),
-  });
+    DateTime Function()? now,
+  }) : _now = now ?? DateTime.now;
 
   /// The machines to ask right now.
   final Iterable<String> Function() machines;
   final SessionSearchAsk ask;
   final Duration debounce;
+  final DateTime Function() _now;
+
+  /// What [query] asks for: its words, and when, if it says.
+  ({String words, SearchWhen? when}) read(String query) =>
+      parseSearchWhen(query.trim(), _now());
 
   Map<String, SessionContentHit> _hits = const {};
   Map<String, SessionContentHit> get hits => _hits;
@@ -136,7 +146,12 @@ class SessionContentSearch extends ChangeNotifier {
     final wanted = query.trim();
     if (_answered == null || _hits.isEmpty) return const {};
     if (_answered == wanted) return _hits;
-    final words = wanted
+    // A hit found for another time says nothing about this one.
+    final now = read(wanted), then = read(_answered!);
+    if (now.when?.from != then.when?.from || now.when?.to != then.when?.to) {
+      return const {};
+    }
+    final words = now.words
         .toLowerCase()
         .split(RegExp(r'\s+'))
         .where((word) => word.isNotEmpty)
@@ -171,7 +186,11 @@ class SessionContentSearch extends ChangeNotifier {
   bool _disposed = false;
 
   /// Two letters at least: one matches too much of everything to mean anything.
-  static bool searchable(String query) => query.trim().runes.length >= 2;
+  /// A time on its own ("yesterday") is a search too: what was worked on then.
+  bool searchable(String query) {
+    final read = this.read(query);
+    return read.when != null || read.words.runes.length >= 2;
+  }
 
   void search(String query) {
     final next = query.trim();
@@ -192,15 +211,24 @@ class SessionContentSearch extends ChangeNotifier {
     }
     // Nothing to ask while every machine is offline: no timer, no work.
     if (!searchable(next) || machines().isEmpty) return;
-    _timer = Timer(debounce, () => _run(next, generation));
+    final read = this.read(next);
+    _timer = Timer(
+      debounce,
+      () => _run(next, read.words, read.when, generation),
+    );
   }
 
-  Future<void> _run(String query, int generation) async {
+  Future<void> _run(
+    String query,
+    String words,
+    SearchWhen? when,
+    int generation,
+  ) async {
     final found = <String, SessionContentHit>{};
     var first = true;
     await Future.wait([
       for (final machineId in machines())
-        ask(machineId, query).then((hits) {
+        ask(machineId, words, when).then((hits) {
           if (_disposed || generation != _generation) return;
           if (first) {
             // The first answer replaces what an earlier question found.

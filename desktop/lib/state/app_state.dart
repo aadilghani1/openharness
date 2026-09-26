@@ -69,6 +69,7 @@ import '../ws/ws_pool.dart';
 import 'pane_preset.dart';
 import 'pane_arrangement.dart';
 import 'pending_question.dart';
+import 'search_when.dart';
 import 'session_content_search.dart';
 import 'session_preview.dart';
 import '../usage/models_menu_controller.dart';
@@ -6993,13 +6994,21 @@ class AppNotifier extends ChangeNotifier {
   Future<List<SessionContentHit>?> searchSessions(
     String machineId,
     String query, {
+    SearchWhen? when,
     int limit = 30,
   }) async {
     if (!searchableMachineIds.contains(machineId)) return null;
     try {
       final reply = await _conn(machineId).request(
         'session_search',
-        payload: {'query': query, 'limit': limit},
+        payload: {
+          'query': query,
+          'limit': limit,
+          if (when != null) ...{
+            'from': when.from.millisecondsSinceEpoch,
+            'to': when.to.millisecondsSinceEpoch,
+          },
+        },
         timeout: const Duration(seconds: 4),
       );
       if (reply['error'] != null) return null;
