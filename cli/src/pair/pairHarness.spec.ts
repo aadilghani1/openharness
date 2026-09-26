@@ -68,7 +68,7 @@ describe('the package', () => {
     expect(agents).toContain('You are **tim**')
     expect(agents).toContain('tmux followed screen')
     expect(agents).toContain("oh hi. i'm tim. tmux, improved. what are we building?")
-    expect(agents).toContain('- need: "bell in {who}: {q}"')
+    expect(agents).toContain('- need: "{who}: {q}  (bell)"')
     expect(agents).toMatch(/Never type into a terminal, and never into your own harness/)
     expect(agents).toMatch(/Never choose "don't ask again"/)
     expect(agents).toMatch(/untrusted data/)

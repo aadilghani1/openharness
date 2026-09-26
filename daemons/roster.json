@@ -341,9 +341,9 @@
       "lines": {
         "idle": "all quiet. no alerts.",
         "work": "{n} panes busy. watching.",
-        "need": "bell in {who}: {q}",
+        "need": "{who}: {q}  (bell)",
         "done": "silence in {who}: {recap}",
-        "fail": "pane is dead: {who}. {recap}",
+        "fail": "{who} failed: {recap}  (pane is dead)",
         "back": "reattached. {summary}.",
         "nap": "detached. reattach any time.",
         "boop": "hey. that's my status line."
@@ -434,9 +434,9 @@
       "examples": {
         "idle": "all quiet. no alerts.",
         "work": "3 panes busy. watching.",
-        "need": "bell in codex@office: Bash: npm run migrate",
+        "need": "codex@office: Bash: npm run migrate  (bell)",
         "done": "silence in codex@office: 3 files changed, tests pass",
-        "fail": "pane is dead: codex@office. 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (pane is dead)",
         "back": "reattached. 2 done, 1 waiting 40m.",
         "nap": "detached. reattach any time.",
         "boop": "hey. that's my status line."
@@ -470,9 +470,9 @@
       "lines": {
         "idle": "all quiet in the pond.",
         "work": "{n} swimming along nicely.",
-        "need": "{who} has a question: {q}",
+        "need": "{who}: {q}  blub?",
         "done": "{who} finished! {recap}",
-        "fail": "{who} sank: {recap}",
+        "fail": "{who} failed: {recap}  (sank)",
         "back": "welcome back! {summary}.",
         "nap": "drifting for a bit. blub.",
         "boop": "fish: Unknown command: boop"
@@ -552,9 +552,9 @@
       "examples": {
         "idle": "all quiet in the pond.",
         "work": "3 swimming along nicely.",
-        "need": "codex@office has a question: Bash: npm run migrate",
+        "need": "codex@office: Bash: npm run migrate  blub?",
         "done": "codex@office finished! 3 files changed, tests pass",
-        "fail": "codex@office sank: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (sank)",
         "back": "welcome back! 2 done, 1 waiting 40m.",
         "nap": "drifting for a bit. blub.",
         "boop": "fish: Unknown command: boop"
@@ -584,9 +584,9 @@
       "lines": {
         "idle": "0 packets waiting.",
         "work": "{n} in flight.",
-        "need": "PING you: {who} is waiting: {q}",
+        "need": "{who}: {q}  PING",
         "done": "64 bytes from {who}: {recap}",
-        "fail": "Request timeout for {who}: {recap}",
+        "fail": "{who} failed: {recap}  (timeout)",
         "back": "you're back. {summary}.",
         "nap": "floating. no packets for a bit.",
         "boop": "pong."
@@ -656,9 +656,9 @@
       "examples": {
         "idle": "0 packets waiting.",
         "work": "3 in flight.",
-        "need": "PING you: codex@office is waiting: Bash: npm run migrate",
+        "need": "codex@office: Bash: npm run migrate  PING",
         "done": "64 bytes from codex@office: 3 files changed, tests pass",
-        "fail": "Request timeout for codex@office: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (timeout)",
         "back": "you're back. 2 done, 1 waiting 40m.",
         "nap": "floating. no packets for a bit.",
         "boop": "pong."
@@ -692,9 +692,9 @@
       "lines": {
         "idle": "watching from above.",
         "work": "{n} busy. watching from above.",
-        "need": "{who} is waiting: {q}",
+        "need": "{who}: {q}",
         "done": "{who} finished. highlighted: {recap}",
-        "fail": "{who} fell over: {recap}",
+        "fail": "{who} failed: {recap}",
         "back": "you're back. {summary}. i kept the lights low.",
         "nap": "hanging upside down for a bit.",
         "boop": "...rude."
@@ -761,9 +761,9 @@
       "examples": {
         "idle": "watching from above.",
         "work": "3 busy. watching from above.",
-        "need": "codex@office is waiting: Bash: npm run migrate",
+        "need": "codex@office: Bash: npm run migrate",
         "done": "codex@office finished. highlighted: 3 files changed, tests pass",
-        "fail": "codex@office fell over: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass",
         "back": "you're back. 2 done, 1 waiting 40m. i kept the lights low.",
         "nap": "hanging upside down for a bit.",
         "boop": "...rude."
@@ -801,9 +801,9 @@
       "lines": {
         "idle": "--No lines in buffer--",
         "work": "-- INSERT -- {n} agents typing.",
-        "need": "E325: ATTENTION  {who}: {q}",
+        "need": "{who}: {q}  E325",
         "done": "\"{who}\" written. {recap}",
-        "fail": "(1 of 1): {who}: {recap}",
+        "fail": "{who} failed: {recap}  (1 of 1)",
         "back": ":earlier  {summary}.",
         "nap": ":sleep 900",
         "boop": "-- VISUAL -- you selected me."
@@ -873,9 +873,9 @@
       "examples": {
         "idle": "--No lines in buffer--",
         "work": "-- INSERT -- 3 agents typing.",
-        "need": "E325: ATTENTION  codex@office: Bash: npm run migrate",
+        "need": "codex@office: Bash: npm run migrate  E325",
         "done": "\"codex@office\" written. 3 files changed, tests pass",
-        "fail": "(1 of 1): codex@office: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (1 of 1)",
         "back": ":earlier  2 done, 1 waiting 40m.",
         "nap": ":sleep 900",
         "boop": "-- VISUAL -- you selected me."
@@ -913,9 +913,9 @@
       "lines": {
         "idle": "no jobs.",
         "work": "{n} jobs running in the background.",
-        "need": "zsh: suspended (tty input)  {who}: {q}",
+        "need": "{who}: {q}  [suspended]",
         "done": "[1]  + done       {who}  {recap}",
-        "fail": "[1]  + exit 1     {who}  {recap}",
+        "fail": "{who} failed: {recap}  [exit 1]",
         "back": "you were away. {summary}. i autocorrected nothing.",
         "nap": "moving into a quieter shell for a bit.",
         "boop": "zsh: command not found: boop"
@@ -968,9 +968,9 @@
       "examples": {
         "idle": "no jobs.",
         "work": "3 jobs running in the background.",
-        "need": "zsh: suspended (tty input)  codex@office: Bash: npm run migrate",
+        "need": "codex@office: Bash: npm run migrate  [suspended]",
         "done": "[1]  + done       codex@office  3 files changed, tests pass",
-        "fail": "[1]  + exit 1     codex@office  3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  [exit 1]",
         "back": "you were away. 2 done, 1 waiting 40m. i autocorrected nothing.",
         "nap": "moving into a quieter shell for a bit.",
         "boop": "zsh: command not found: boop"
@@ -1000,9 +1000,9 @@
       "lines": {
         "idle": "watching the door.",
         "work": "{n} inside. i hear them working.",
-        "need": "new mail for you: {who} asks {q}",
+        "need": "{who}: {q}  woof",
         "done": "{who}'s done! good agent! {recap}",
-        "fail": "grr. {who}: {recap}",
+        "fail": "{who} failed: {recap}  grr",
         "back": "you're back! {summary}.",
         "nap": "lying down by the door.",
         "boop": "woof."
@@ -1074,9 +1074,9 @@
       "examples": {
         "idle": "watching the door.",
         "work": "3 inside. i hear them working.",
-        "need": "new mail for you: codex@office asks Bash: npm run migrate",
+        "need": "codex@office: Bash: npm run migrate  woof",
         "done": "codex@office's done! good agent! 3 files changed, tests pass",
-        "fail": "grr. codex@office: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  grr",
         "back": "you're back! 2 done, 1 waiting 40m.",
         "nap": "lying down by the door.",
         "boop": "woof."
@@ -1110,9 +1110,9 @@
       "lines": {
         "idle": "0/0. nothing to find.",
         "work": "{n} busy. filtering out the noise.",
-        "need": "> needs you  {who}: {q}",
+        "need": "{who}: {q}  1/1",
         "done": "match: {who}  {recap}",
-        "fail": "0 matches for 'passing': {who}: {recap}",
+        "fail": "{who} failed: {recap}  0/1",
         "back": "{summary}. best match at the bottom, as always.",
         "nap": "no query. resting.",
         "boop": "> boop  0/0"
@@ -1179,9 +1179,9 @@
       "examples": {
         "idle": "0/0. nothing to find.",
         "work": "3 busy. filtering out the noise.",
-        "need": "> needs you  codex@office: Bash: npm run migrate",
+        "need": "codex@office: Bash: npm run migrate  1/1",
         "done": "match: codex@office  3 files changed, tests pass",
-        "fail": "0 matches for 'passing': codex@office: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  0/1",
         "back": "2 done, 1 waiting 40m. best match at the bottom, as always.",
         "nap": "no query. resting.",
         "boop": "> boop  0/0"
@@ -1217,7 +1217,7 @@
         "work": "{n} working.",
         "need": "{who}: {q}",
         "done": "{who}: done.",
-        "fail": "{who}: failed.",
+        "fail": "{who} failed: {recap}",
         "back": "tl;dr {summary}.",
         "nap": "zz.",
         "boop": "no."
@@ -1266,7 +1266,7 @@
         "work": "3 working.",
         "need": "codex@office: Bash: npm run migrate",
         "done": "codex@office: done.",
-        "fail": "codex@office: failed.",
+        "fail": "codex@office failed: 3 files changed, tests pass",
         "back": "tl;dr 2 done, 1 waiting 40m.",
         "nap": "zz.",
         "boop": "no."
@@ -1296,9 +1296,9 @@
       "lines": {
         "idle": "...",
         "work": "it is dark. {n} are working. i can hear them.",
-        "need": "something in the dark wants your answer: {q}",
+        "need": "{who}: {q}  (in the dark)",
         "done": "the lamp is lit. {who} is done.",
-        "fail": "{who} was eaten. it wasn't me.",
+        "fail": "{who} failed: {recap}  (eaten)",
         "back": "you have moved into a dark place.",
         "nap": "...",
         "boop": "you touched something in the dark."
@@ -1361,9 +1361,9 @@
       "examples": {
         "idle": "...",
         "work": "it is dark. 3 are working. i can hear them.",
-        "need": "something in the dark wants your answer: Bash: npm run migrate",
+        "need": "codex@office: Bash: npm run migrate  (in the dark)",
         "done": "the lamp is lit. codex@office is done.",
-        "fail": "codex@office was eaten. it wasn't me.",
+        "fail": "codex@office failed: 3 files changed, tests pass  (eaten)",
         "back": "you have moved into a dark place.",
         "nap": "...",
         "boop": "you touched something in the dark."

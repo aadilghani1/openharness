@@ -129,7 +129,7 @@ describe('triage', () => {
   it('says the template at once, keys first; [y] is a ONE-TIME yes, never "don\'t ask again"', () => {
     const triage = new PairTriage({ oneshot: null, now: Date.now })
     expect(triage.template(input)).toEqual({
-      line: '[y/n/g] bell in api: Approve Bash command: npm test', recommend: null, tier: 0,
+      line: '[y/n/g] api: Approve Bash command: npm test  (bell)', recommend: null, tier: 0,
       actions: [{ key: 'y', label: 'Yes', choice: '1. Yes' }, { key: 'n', label: 'No, and tell Claude what to do', choice: '3. No, and tell Claude what to do' }, { key: 'g', label: 'open', choice: 'open' }],
     })
   })
@@ -181,7 +181,7 @@ describe('triage', () => {
     const hang = new PairTriage({ oneshot: () => new Promise(() => {}), modelEnabled: on, now: Date.now })
     const pending = hang.triage(input)
     await settle(2_500)
-    expect(await pending).toMatchObject({ tier: 0, why: 'timeout', recommend: null, line: '[y/n/g] bell in api: Approve Bash command: npm test' })
+    expect(await pending).toMatchObject({ tier: 0, why: 'timeout', recommend: null, line: '[y/n/g] api: Approve Bash command: npm test  (bell)' })
     for (const [reply, why] of [
       ['sure! api wants to run tests', 'bad-json'],
       ['{"line": "api wants to run the tests.", "recommend": "Yes, and always allow rm"}', 'off-list'],
@@ -208,11 +208,11 @@ describe('voice', () => {
   it('fills slots, keeps case, spacing and digits, and never shows a line with a slot it cannot fill', () => {
     expect(fillLine('bell in {who}: {q}', { who: 'api@office', q: 'Bash: npm test' })).toBe('bell in api@office: Bash: npm test')
     expect(fillLine('{who} finished! {recap}', { who: 'api' })).toBeNull()
-    expect(needLine('vim', { who: 'api', question: 'Bash: npm test' }, [{ key: 'n' }, { key: 'g' }])).toBe('[n/g] E325: ATTENTION  api: Bash: npm test')
-    expect(needLine('ping', { who: 'api', question: 'Bash: npm run 2' }, [])).toBe('PING you: api is waiting: Bash: npm run 2')
+    expect(needLine('vim', { who: 'api', question: 'Bash: npm test' }, [{ key: 'n' }, { key: 'g' }])).toBe('[n/g] api: Bash: npm test  E325')
+    expect(needLine('ping', { who: 'api', question: 'Bash: npm run 2' }, [])).toBe('api: Bash: npm run 2  PING')
     // grue's need has no {who}: the harness is appended rather than left out.
-    expect(needLine('grue', { who: 'api', question: 'Bash: ls' }, [{ key: 'g' }])).toBe('[g] something in the dark wants your answer: Bash: ls (api)')
-    expect(failLine('zsh', { who: 'api', reason: 'exit 1' })).toBe('[1]  + exit 1     api  exit 1')
+    expect(needLine('grue', { who: 'api', question: 'Bash: ls' }, [{ key: 'g' }])).toBe('[g] api: Bash: ls  (in the dark)')
+    expect(failLine('zsh', { who: 'api', reason: 'exit 1' })).toBe('api failed: exit 1  [exit 1]')
     expect(doneLine('fish', { who: 'web' })).toBe('web finished.')   // {recap} missing: the neutral fact
     expect(doneLine('fish', { who: 'web', recap: '3 tests fixed' })).toBe('web finished! 3 tests fixed')
   })
@@ -260,7 +260,7 @@ describe('the brain', () => {
     w.remote.sensor.question('api', 'q_1', ask('Approve Bash command: npm test'), permit('npm test'))
     await settle(200)
     expect(w.says()).toEqual([expect.objectContaining({
-      mood: 'need', line: '[y/n/g] bell in api@laptop: Approve Bash command: npm test', ttlMs: DISPLAY_MS,
+      mood: 'need', line: '[y/n/g] api@laptop: Approve Bash command: npm test  (bell)', ttlMs: DISPLAY_MS,
       about: { machineId: 'machine-b', agentId: 'api', requestId: 'q_1' },
       actions: [{ key: 'y', label: 'Yes', choice: 'Yes' }, { key: 'n', label: 'No', choice: 'No' }, { key: 'g', label: 'open', choice: 'open' }],
     })])
@@ -398,11 +398,11 @@ describe('the brain', () => {
     await settle()
     w.local.question('web', 'q_1', ask('Approve Bash command: npm test'), permit('npm test'))
     await settle(10)
-    expect(w.says()).toEqual([expect.objectContaining({ line: '[y/n/g] bell in web: Approve Bash command: npm test' })])
+    expect(w.says()).toEqual([expect.objectContaining({ line: '[y/n/g] web: Approve Bash command: npm test  (bell)' })])
     answer('{"line": "web wants to run the tests.", "recommend": null}')
     await settle(10)
     const replaced = w.frames.filter((f) => f.type === 'daemon_say').map((f) => f.payload as DaemonSay)
-    expect(replaced.map((s) => [s.id, s.line])).toEqual([[replaced[0].id, '[y/n/g] bell in web: Approve Bash command: npm test'], [replaced[0].id, '[y/n/g] web wants to run the tests.']])
+    expect(replaced.map((s) => [s.id, s.line])).toEqual([[replaced[0].id, '[y/n/g] web: Approve Bash command: npm test  (bell)'], [replaced[0].id, '[y/n/g] web wants to run the tests.']])
   })
 
   it('never speaks about the pane the person is looking at', async () => {
@@ -472,7 +472,7 @@ describe('the brain', () => {
     expect(w.brain.state().done).toEqual({ count: 0, last: [] })
     w.remote.sensor.failed('api', 'the engine exited')
     await settle(200)
-    expect(w.says().map((s) => [s.mood, s.line])).toEqual([['fail', '[g] pane is dead: api@laptop. the engine exited']])
+    expect(w.says().map((s) => [s.mood, s.line])).toEqual([['fail', '[g] api@laptop failed: the engine exited  (pane is dead)']])
     expect(w.brain.state().failing).toEqual([expect.objectContaining({ name: 'api', reason: 'the engine exited' })])
   })
 
@@ -522,7 +522,7 @@ describe('the brain', () => {
     await settle(200)
     const say = w.says()[0]
     expect(say.actions).toEqual([{ key: 'g', label: 'open', choice: 'open' }])
-    expect(say.line).toBe('[g] bell in web: Approve Bash command: npm test')
+    expect(say.line).toBe('[g] web: Approve Bash command: npm test  (bell)')
     expect(await w.act({ requestId: 'r1', id: say.id, choice: 'g' })).toMatchObject({ ok: true, open: { machineId: 'machine-a', agentId: 'web' } })
     expect(await w.act({ requestId: 'r2', id: say.id, choice: 'y' })).toMatchObject({ ok: false, error: 'NOT_OFFERED' })
     expect(w.answer).not.toHaveBeenCalled()

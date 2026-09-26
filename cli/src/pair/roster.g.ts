@@ -30,9 +30,9 @@ export const PAIR_ROSTER = {
       "lines": {
         "idle": "all quiet. no alerts.",
         "work": "{n} panes busy. watching.",
-        "need": "bell in {who}: {q}",
+        "need": "{who}: {q}  (bell)",
         "done": "silence in {who}: {recap}",
-        "fail": "pane is dead: {who}. {recap}",
+        "fail": "{who} failed: {recap}  (pane is dead)",
         "back": "reattached. {summary}.",
         "nap": "detached. reattach any time.",
         "boop": "hey. that's my status line."
@@ -55,9 +55,9 @@ export const PAIR_ROSTER = {
       "lines": {
         "idle": "all quiet in the pond.",
         "work": "{n} swimming along nicely.",
-        "need": "{who} has a question: {q}",
+        "need": "{who}: {q}  blub?",
         "done": "{who} finished! {recap}",
-        "fail": "{who} sank: {recap}",
+        "fail": "{who} failed: {recap}  (sank)",
         "back": "welcome back! {summary}.",
         "nap": "drifting for a bit. blub.",
         "boop": "fish: Unknown command: boop"
@@ -76,9 +76,9 @@ export const PAIR_ROSTER = {
       "lines": {
         "idle": "0 packets waiting.",
         "work": "{n} in flight.",
-        "need": "PING you: {who} is waiting: {q}",
+        "need": "{who}: {q}  PING",
         "done": "64 bytes from {who}: {recap}",
-        "fail": "Request timeout for {who}: {recap}",
+        "fail": "{who} failed: {recap}  (timeout)",
         "back": "you're back. {summary}.",
         "nap": "floating. no packets for a bit.",
         "boop": "pong."
@@ -101,9 +101,9 @@ export const PAIR_ROSTER = {
       "lines": {
         "idle": "watching from above.",
         "work": "{n} busy. watching from above.",
-        "need": "{who} is waiting: {q}",
+        "need": "{who}: {q}",
         "done": "{who} finished. highlighted: {recap}",
-        "fail": "{who} fell over: {recap}",
+        "fail": "{who} failed: {recap}",
         "back": "you're back. {summary}. i kept the lights low.",
         "nap": "hanging upside down for a bit.",
         "boop": "...rude."
@@ -130,9 +130,9 @@ export const PAIR_ROSTER = {
       "lines": {
         "idle": "--No lines in buffer--",
         "work": "-- INSERT -- {n} agents typing.",
-        "need": "E325: ATTENTION  {who}: {q}",
+        "need": "{who}: {q}  E325",
         "done": "\"{who}\" written. {recap}",
-        "fail": "(1 of 1): {who}: {recap}",
+        "fail": "{who} failed: {recap}  (1 of 1)",
         "back": ":earlier  {summary}.",
         "nap": ":sleep 900",
         "boop": "-- VISUAL -- you selected me."
@@ -159,9 +159,9 @@ export const PAIR_ROSTER = {
       "lines": {
         "idle": "no jobs.",
         "work": "{n} jobs running in the background.",
-        "need": "zsh: suspended (tty input)  {who}: {q}",
+        "need": "{who}: {q}  [suspended]",
         "done": "[1]  + done       {who}  {recap}",
-        "fail": "[1]  + exit 1     {who}  {recap}",
+        "fail": "{who} failed: {recap}  [exit 1]",
         "back": "you were away. {summary}. i autocorrected nothing.",
         "nap": "moving into a quieter shell for a bit.",
         "boop": "zsh: command not found: boop"
@@ -180,9 +180,9 @@ export const PAIR_ROSTER = {
       "lines": {
         "idle": "watching the door.",
         "work": "{n} inside. i hear them working.",
-        "need": "new mail for you: {who} asks {q}",
+        "need": "{who}: {q}  woof",
         "done": "{who}'s done! good agent! {recap}",
-        "fail": "grr. {who}: {recap}",
+        "fail": "{who} failed: {recap}  grr",
         "back": "you're back! {summary}.",
         "nap": "lying down by the door.",
         "boop": "woof."
@@ -205,9 +205,9 @@ export const PAIR_ROSTER = {
       "lines": {
         "idle": "0/0. nothing to find.",
         "work": "{n} busy. filtering out the noise.",
-        "need": "> needs you  {who}: {q}",
+        "need": "{who}: {q}  1/1",
         "done": "match: {who}  {recap}",
-        "fail": "0 matches for 'passing': {who}: {recap}",
+        "fail": "{who} failed: {recap}  0/1",
         "back": "{summary}. best match at the bottom, as always.",
         "nap": "no query. resting.",
         "boop": "> boop  0/0"
@@ -232,7 +232,7 @@ export const PAIR_ROSTER = {
         "work": "{n} working.",
         "need": "{who}: {q}",
         "done": "{who}: done.",
-        "fail": "{who}: failed.",
+        "fail": "{who} failed: {recap}",
         "back": "tl;dr {summary}.",
         "nap": "zz.",
         "boop": "no."
@@ -251,9 +251,9 @@ export const PAIR_ROSTER = {
       "lines": {
         "idle": "...",
         "work": "it is dark. {n} are working. i can hear them.",
-        "need": "something in the dark wants your answer: {q}",
+        "need": "{who}: {q}  (in the dark)",
         "done": "the lamp is lit. {who} is done.",
-        "fail": "{who} was eaten. it wasn't me.",
+        "fail": "{who} failed: {recap}  (eaten)",
         "back": "you have moved into a dark place.",
         "nap": "...",
         "boop": "you touched something in the dark."
