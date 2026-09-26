@@ -546,6 +546,8 @@ Run the real migration only after the user says yes.</pre>
   }
 
   const C = R.daemons;
+  // Lines are templates with slots ({who} {q} {recap} {n} {summary}); the page shows them filled with the roster's example.
+  const lineOf = (d, mood) => (d.examples && d.examples[mood]) || d.lines[mood];
   const byId = Object.fromEntries(C.map(d => [d.id, d]));
   const NUM = d => '#' + String(d.n).padStart(2, '0') + '/' + String(C.length).padStart(2, '0');
   const color = d => d.color.hex;
@@ -596,7 +598,7 @@ Run the real migration only after the user says yes.</pre>
     const hold = RULES.holdMs[ev];
     if (hold) hero.until = now + hold;
     if (ev === 'idle') hero.msgUntil = 0;
-    else say(hero.d.lines[ev], hero.d.suggest && hero.d.suggest[ev]);
+    else say(lineOf(hero.d, ev), hero.d.suggest && hero.d.suggest[ev]);
     if (ev === 'need' || ev === 'done' || ev === 'fail') blink('ack', 160);
     if (ev === 'back') blink('slow', (hold || 0) + 120);
     panes(); heroRender();
@@ -607,7 +609,7 @@ Run the real migration only after the user says yes.</pre>
       hero.mood = ['work', 'need', 'nap'].includes(hero.base) ? hero.base : 'idle';
     }
   };
-  buddyBtn.addEventListener('click', () => { hero.mood = 'boop'; hero.until = clock() + RULES.holdMs.boop; say(hero.d.lines.boop); heroRender(); });
+  buddyBtn.addEventListener('click', () => { hero.mood = 'boop'; hero.until = clock() + RULES.holdMs.boop; say(lineOf(hero.d, 'boop')); heroRender(); });
   const looked = () => { const now = clock(); if (now - hero.seenAt < 2500) return; hero.seenAt = now; blink('look'); };
   buddyBtn.addEventListener('mouseenter', looked);
   buddyBtn.addEventListener('focus', looked);
@@ -663,7 +665,7 @@ Run the real migration only after the user says yes.</pre>
     pre.setAttribute('aria-label', d.id + ' ' + rosterVer + ', ' + (LABEL[mood] || mood));
     el.querySelector('.stages').innerHTML = V.map((v, i) =>
       '<div><span>' + v + '</span>' + esc(sprite(d, i, mood, { t: now })).replace(/ /g, '&nbsp;') + '</div>').join('');
-    const line = mood === 'idle' ? d.first : d.lines[mood];
+    const line = mood === 'idle' ? d.first : lineOf(d, mood);
     el.querySelector('.voice').innerHTML = esc(d.id + ': ' + line) + (d.suggest && d.suggest[mood] ? '<span style="color:var(--faint)">' + esc(d.suggest[mood]) + '</span>' : '');
   }
   const renderCards = () => C.forEach(d => renderCard(d));
@@ -906,7 +908,7 @@ Run the real migration only after the user says yes.</pre>
   const tim = byId.tim || C[0];
   const mp = k => tim.moodParts ? Object.keys(tim.moodParts).map(p => tim.moodParts[p][k] ?? tim.moodParts[p].idle) : [];
   document.querySelector('#moodTable tbody').innerHTML = MOODS.map(([k, label]) =>
-    '<tr><td>' + label + '</td><td class="s" style="color:' + color(tim) + '">' + esc(sprite(tim, LAST, k, { motion: false })) + '</td><td>' + esc(eyeFor(tim, k) + ' ' + eyeFor(tim, k)) + '</td><td class="s" style="color:var(--ink)">' + esc(mp(k)[0] ?? '') + '</td><td>' + esc(mp(k)[1] != null ? tim.id + mp(k)[1] : '') + '</td><td class="p">' + esc(TRIG[k]) + '</td><td class="p">' + esc(tim.lines[k]) + '</td></tr>').join('');
+    '<tr><td>' + label + '</td><td class="s" style="color:' + color(tim) + '">' + esc(sprite(tim, LAST, k, { motion: false })) + '</td><td>' + esc(eyeFor(tim, k) + ' ' + eyeFor(tim, k)) + '</td><td class="s" style="color:var(--ink)">' + esc(mp(k)[0] ?? '') + '</td><td>' + esc(mp(k)[1] != null ? tim.id + mp(k)[1] : '') + '</td><td class="p">' + esc(TRIG[k]) + '</td><td class="p">' + esc(lineOf(tim, k)) + '</td></tr>').join('');
 
   // ---------- spinners ----------
   const SPINS = [
