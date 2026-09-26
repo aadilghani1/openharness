@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
-import 'package:harness_mobile/phone/find_handle.dart';
 import 'package:harness_mobile/phone/phone_search_field.dart';
 import 'package:harness_mobile/phone/phone_search_results.dart';
 import 'package:harness_mobile/phone/terminal_action_column.dart';
@@ -118,7 +117,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     resizes.clear();
 
-    await tester.tap(find.byType(FindHandle));
+    await tester.tap(find.byKey(const ValueKey('terminal-find')));
     await tester.pump();
     // The search field's keyboard slides up, and the page shrinks above it.
     tester.view.viewInsets = const FakeViewPadding(bottom: 900);
@@ -155,7 +154,7 @@ void main() {
       expect(find.byType(TerminalActionColumn), findsOneWidget);
     }
 
-    await tester.tap(find.byType(FindHandle));
+    await tester.tap(find.byKey(const ValueKey('terminal-find')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     // Find opens on the recent agents; a tap on its field is what starts a
@@ -186,13 +185,13 @@ void main() {
     // frame, through the fade AND after it, shows the terminal search opened
     // over; releasing it with the fade let the falling inset raise its key bar.
     //
-    // The sheet has no chevron: it is flung shut from its grip, the one close
-    // that leaves with the keyboard still up. The grip is the strip directly
-    // above the field.
+    // Find is flung shut to the left, the way it came in — the one close that
+    // leaves with the keyboard still up. From the list under the field: the
+    // field keeps a sideways drag for moving its caret.
     final field = tester.getRect(find.byType(SheetSearchField));
     await tester.flingFrom(
-      field.topCenter - const Offset(0, 8),
-      const Offset(0, 300),
+      field.bottomCenter + const Offset(0, 40),
+      const Offset(-300, 0),
       2000,
     );
     await tester.pump();

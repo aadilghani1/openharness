@@ -41,6 +41,7 @@ class TerminalHeader extends StatelessWidget {
     required this.status,
     this.machineName,
     this.trailing = const [],
+    this.onFind,
   });
 
   /// The agent this terminal belongs to. Null while it is still loading.
@@ -56,6 +57,11 @@ class TerminalHeader extends StatelessWidget {
   /// The page's controls, right of the names: `⋯`, and the reclaim button when
   /// the stream is read-only.
   final List<Widget> trailing;
+
+  /// A tap on the mark or the names: Find, the list of agents. The name then wears a `⌄`, which is
+  /// how iOS says a title opens a list — the visible door to what a swipe right also opens. Null
+  /// leaves the names inert.
+  final VoidCallback? onFind;
 
   /// The row's height, not counting its insets.
   ///
@@ -90,14 +96,33 @@ class TerminalHeader extends StatelessWidget {
         height: rowHeight,
         child: Row(
           children: [
-            BadgedEngineMark(
-              agent: agent,
-              status: status,
-              ring: AppPalette.windowBg,
-            ),
-            const SizedBox(width: 11),
             Expanded(
-              child: _Identity(agent: agent, machineName: machineName),
+              child: Semantics(
+                button: onFind != null,
+                label: onFind == null ? null : 'Find an agent',
+                child: GestureDetector(
+                  key: const ValueKey('terminal-find'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onFind,
+                  child: Row(
+                    children: [
+                      BadgedEngineMark(
+                        agent: agent,
+                        status: status,
+                        ring: AppPalette.windowBg,
+                      ),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: _Identity(
+                          agent: agent,
+                          machineName: machineName,
+                          opensFind: onFind != null,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
             ...trailing,
           ],
@@ -345,10 +370,17 @@ class _GlintPainter extends CustomPainter {
 /// and the branch [AgentProject.shownBranch]. See [TerminalPlaceLine] for how
 /// the three share the width.
 class _Identity extends StatelessWidget {
-  const _Identity({required this.agent, required this.machineName});
+  const _Identity({
+    required this.agent,
+    required this.machineName,
+    this.opensFind = false,
+  });
 
   final Agent? agent;
   final String? machineName;
+
+  /// Whether a tap here opens Find — the name then wears a `⌄`.
+  final bool opensFind;
 
   @override
   Widget build(BuildContext context) {
@@ -362,16 +394,31 @@ class _Identity extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          agent?.displayName ?? 'Harness',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: AppPalette.textPrimary,
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            height: 1.2,
-          ),
+        Row(
+          children: [
+            Flexible(
+              child: Text(
+                agent?.displayName ?? 'Harness',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: AppPalette.textPrimary,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  height: 1.2,
+                ),
+              ),
+            ),
+            if (opensFind)
+              Padding(
+                padding: const EdgeInsets.only(left: 3),
+                child: Icon(
+                  LucideIcons.chevronDown,
+                  size: 15,
+                  color: AppPalette.textSecondary,
+                ),
+              ),
+          ],
         ),
         if (hasPlace) ...[
           const SizedBox(height: 2),

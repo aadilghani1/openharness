@@ -15,18 +15,19 @@ import 'phone_search_field.dart';
 import 'phone_search_results.dart';
 import 'sheet_list.dart';
 
-/// Find: the one way to another agent. A sheet up from the bottom, over Focus, brought up by the
-/// handle at Focus's foot ([FindHandle]) — the agents you were last in first, a field across the top.
+/// Find: the one way to another agent. A drawer in from the left edge over Focus — Snapchat's way
+/// to its chats — pulled by a swipe right on the terminal, or a tap on the agent's name. The agents
+/// you were last in come first; a field runs across the top. A swipe left, or a tap on the strip of
+/// terminal still showing, sends it back.
 ///
 /// ```
-///  ╭──────────────────────────────────╮
-///  │               ━━━                │
-///  │  ┌────────────────────────┐      │
-///  │  │ ⌕ Find an agent        │  +   │  ← focused, the + gives way to Cancel
-///  │  └────────────────────────┘      │
-///  │  ╭────────────────────────────╮  │
-///  │  │ ▣  fix login test       ✓  │  │  ← the one on screen
-///  │  │ ▣  docs rewrite            │  │
+///  ╭─────────────────────────────╮
+///  │  ┌──────────────────┐       │░░░
+///  │  │ ⌕ Find an agent  │   +   │░░░  ← focused, the + gives way to Cancel
+///  │  └──────────────────┘       │░░░
+///  │  ╭───────────────────────╮  │░░░
+///  │  │ ▣  fix login test   ✓ │  │░░░  ← the one on screen
+///  │  │ ▣  docs rewrite       │  │░░░
 /// ```
 ///
 /// ⚠️ **One list, and it is the same list focused or not.** The sheet used to open on the account's
@@ -36,9 +37,8 @@ import 'sheet_list.dart';
 /// typing narrows the same rows. A leading `>` `#` `@` `?` is read as typed — the desktop's modes
 /// are off here ([PhoneSearchController.modes]).
 ///
-/// ⚠️ **Full height from the moment it opens.** Its top edge stands just under the status bar and
-/// stays there; a keyboard, when it comes, takes the sheet's foot onto its own top rather than
-/// covering the rows.
+/// ⚠️ **Full height, and a keyboard lifts only its foot.** It runs up under the status bar; a
+/// keyboard, when it comes, takes the drawer's foot onto its own top rather than covering the rows.
 ///
 /// ⚠️ **The field is not focused on the way in.** The recent agents are what the sheet is opened to
 /// read, and a keyboard would cover half of them.
@@ -87,15 +87,20 @@ class TerminalSearchOverlay extends StatefulWidget {
   /// `terminal_page.dart`.
   final double bottomInset;
 
+  /// How wide Find stands over a window [width] wide: most of it, so a strip of the dimmed terminal
+  /// stays showing on the right — what says it is a layer over Focus, and what a tap closes it on.
+  ///
+  /// Public because the page's swipe right drives the slide under the finger, and a finger that
+  /// moves one drawer-width has opened it all the way.
+  static double drawerWidth(double width) => math.min(width * 0.86, 420);
+
   @override
   State<TerminalSearchOverlay> createState() => _TerminalSearchOverlayState();
 }
 
 class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     with TickerProviderStateMixin {
-  /// The corner iOS gives a sheet — rounder than a card, far less round than
-  /// [BottomSheet]'s 28, whose curve made a sheet drawn like the system's
-  /// own read as Material wearing its clothes.
+  /// The rounding on the drawer's open edge.
   static const double _radius = 14;
 
   /// What the field says.
@@ -115,20 +120,9 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// to set the depth, which is why it can stay this far short of theirs.
   static const double _scrim = kSheetVeilOpacity;
 
-  /// A fling down faster than this closes the sheet however little it moved —
-  /// [BottomSheet]'s own figure, so this sheet lets go like the others do.
+  /// A fling left faster than this closes Find however little it moved — [BottomSheet]'s own figure,
+  /// so it lets go like the app's sheets do.
   static const double _flingSpeed = 700;
-
-  /// How close under the status bar the sheet's top edge stands: a strip of
-  /// the dimmed page left showing, which is what says it is a layer over the
-  /// terminal rather than a page of its own.
-  ///
-  /// ⚠️ **The sheet opens full height, up to here, and stays there.** It used
-  /// to rest at a share of the screen and climb to this edge only when a
-  /// keyboard pushed it; now it opens where the keyboard used to take it, so
-  /// the tabs get the whole screen to list in and focusing the field moves
-  /// only the sheet's foot, never its top.
-  static const double _topGap = 8;
 
   final _controller = TextEditingController();
   final _focus = FocusNode(debugLabel: 'Terminal search');
@@ -258,9 +252,10 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
 
   /// `+`: away first, then the new-agent form. Null while no machine can take one.
   VoidCallback? _newAgent() {
-    final command = phoneSearchCommands(context, widget.notifier)
-        .where((command) => command.id == 'agent.new')
-        .firstOrNull;
+    final command = phoneSearchCommands(
+      context,
+      widget.notifier,
+    ).where((command) => command.id == 'agent.new').firstOrNull;
     if (command == null) return null;
     return () {
       _close();
@@ -268,16 +263,17 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     };
   }
 
+  /// A drag left, anywhere over the page, pushes Find back the way it came. Measured against the
+  /// drawer's width, so the drawer stays under the finger.
   void _onPull(DragUpdateDetails details) {
-    final height = _sheetKey.currentContext?.size?.height ?? 0;
-    if (height <= 0) return;
-    _pull.value += details.primaryDelta! / height;
+    final width = _sheetKey.currentContext?.size?.width ?? 0;
+    if (width <= 0) return;
+    _pull.value -= details.primaryDelta! / width;
   }
 
-  /// Let go: closed on a fling down or past half its height — [BottomSheet]'s
-  /// own rule — and back up otherwise.
+  /// Let go: closed on a fling left or past half its width, and back otherwise.
   void _onRelease(DragEndDetails details) {
-    if ((details.primaryVelocity ?? 0) > _flingSpeed || _pull.value > 0.5) {
+    if ((details.primaryVelocity ?? 0) < -_flingSpeed || _pull.value > 0.5) {
       _close();
       return;
     }
@@ -300,23 +296,21 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     // building it again.
     final sheet = _sheet(context);
     return PopScope(
-      // Back steps out of the search and then closes the sheet — never leaves
-      // the agent: the terminal is still underneath, and this is what covers
-      // it.
+      // Back steps out of the search and then closes Find — never leaves the
+      // agent: the terminal is still underneath, and this is what covers it.
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _back();
       },
       // The terminal under the dimming is not what a screen reader should be
-      // walking while the sheet is up.
+      // walking while Find is up.
       child: BlockSemantics(
         child: GestureDetector(
-          // ⚠️ **A sideways drag anywhere over the page is claimed here and
-          // goes nowhere.** The pager under the terminal swipes on exactly
-          // that, and it would carry the sheet off with the page it belongs
-          // to. The tab pills scroll sideways too, and win it for themselves
-          // where they are.
-          onHorizontalDragStart: (_) {},
+          // A drag left anywhere — on the drawer or on the strip of terminal
+          // beside it — sends Find back. The list scrolls on the other axis.
+          onHorizontalDragUpdate: _onPull,
+          onHorizontalDragEnd: _onRelease,
+          onHorizontalDragCancel: _settle,
           child: LayoutBuilder(
             builder: (context, box) => _layOut(context, box.biggest, sheet),
           ),
@@ -327,43 +321,34 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
 
   Widget _layOut(BuildContext context, Size area, Widget sheet) {
     final screen = MediaQuery.sizeOf(context).height;
-    final ceiling = MediaQuery.paddingOf(context).top + _topGap;
+    final width = TerminalSearchOverlay.drawerWidth(area.width);
     return AnimatedBuilder(
       animation: Listenable.merge([widget.animation, _pull, _keyboard]),
       child: sheet,
       builder: (context, sheet) {
-        // ⚠️ **The sheet stands on the keyboard as measured, not on the
+        // ⚠️ **The drawer stands on the keyboard as measured, not on the
         // page's foot.** The page does not always end at the keyboard's top:
         // where it has been resized for the keys this is zero, and where it
         // has not it runs on under them and this is how far — so the foot
         // lands on the keys either way. Taken against the window's height,
-        // because this overlay starts at the window's top (see where
-        // `terminal_page.dart` places it, under the status bar).
-        //
-        // The sheet runs from the ceiling down to whatever is under it — the
-        // foot of the window, or the keyboard's top — so a keyboard shortens
-        // it from below and its top edge never moves.
+        // because this overlay starts at the window's top.
         //
         // ⚠️ **Read from the view HERE, not from the notifier's last value.**
         // [_keyboard] is written from metrics ticks and is what makes this
-        // rebuild, but the value it holds can be a frame behind the page: a
-        // tick that lands while the page has already grown back left the sheet
-        // lifted by a keyboard that was no longer there, floating at the top of
-        // the screen over a band of empty background — which is what opening
-        // search from a keyboard looked like.
+        // rebuild, but the value it holds can be a frame behind the page.
         final view = View.of(context);
         final keyboard = view.viewInsets.bottom / view.devicePixelRatio;
         final covered = math.min(
           area.height,
           math.max(0.0, area.height - (screen - keyboard)),
         );
-        final height = math.max(0.0, area.height - covered - ceiling);
+        final height = math.max(0.0, area.height - covered);
         final open = widget.animation.value;
         final pull = _pull.value;
-        // How much of the veil is up: all of it with the sheet, and less of it
-        // as a finger pulls the sheet back down — the blur and the tint clear
+        // How much of the veil is up: all of it with the drawer, and less of it
+        // as a finger pushes the drawer back — the blur and the tint clear
         // together, so a pull shows the terminal coming back into focus.
-        final veil = open * (1 - pull);
+        final veil = math.max(0.0, open * (1 - pull));
         final blur = kDialogVeilBlur * veil;
         return Stack(
           children: [
@@ -381,7 +366,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                   child: ClipRect(
                     child: BackdropFilter(
                       // Off while there is nothing to blur: the first frame of
-                      // the way up, the last of the way down.
+                      // the way in, the last of the way out.
                       enabled: blur > 0,
                       filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
                       child: ColoredBox(
@@ -394,11 +379,11 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
             ),
             Positioned(
               left: 0,
-              right: 0,
-              bottom: covered,
+              top: 0,
+              width: width,
               height: height,
               child: Transform.translate(
-                offset: Offset(0, (1 - open + pull) * height),
+                offset: Offset(-(1 - open + pull) * width, 0),
                 child: sheet,
               ),
             ),
@@ -410,59 +395,54 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
 
   Widget _sheet(BuildContext context) {
     final media = MediaQuery.of(context);
-    return GestureDetector(
+    return Container(
       key: _sheetKey,
-      // The whole sheet can be pulled down, as a route's sheet can. The lists
-      // in it scroll on the same drag and win it where they are.
-      onVerticalDragUpdate: _onPull,
-      onVerticalDragEnd: _onRelease,
-      onVerticalDragCancel: _settle,
-      child: CustomPaint(
-        foregroundPainter: _TopRim(color: AppGlass.hair),
-        child: Material(
-          // A step above the terminal it covers — see [sheetFill].
-          color: sheetFill,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(_radius)),
+      foregroundDecoration: BoxDecoration(
+        border: Border(right: BorderSide(color: AppGlass.hair)),
+        borderRadius: const BorderRadius.horizontal(
+          right: Radius.circular(_radius),
+        ),
+      ),
+      child: Material(
+        // A step above the terminal it covers — see [sheetFill].
+        color: sheetFill,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.horizontal(
+            right: Radius.circular(_radius),
           ),
-          clipBehavior: Clip.antiAlias,
-          child: MediaQuery(
-            // The lists run down under the strip at the foot of the window and
-            // pad their own last row clear of it. The top is the sheet's edge,
-            // nowhere near the status bar.
-            data: media.copyWith(
-              padding: media.padding.copyWith(
-                top: 0,
-                bottom: widget.bottomInset,
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const _Grip(),
-                ListenableBuilder(
-                  listenable: _search,
-                  builder: (context, _) => SheetSearchField(
-                    controller: _controller,
-                    focus: _focus,
-                    // Inside a project or a machine the box says which — the
-                    // one thing on the sheet that does, other than the caption.
-                    hintText: _search.canGoBack ? _search.hint : _hint,
-                    onChanged: _search.setQuery,
-                    onClear: () {
-                      _controller.clear();
-                      _search.setQuery('');
-                      // Clearing is a step back into browsing, not out of the
-                      // search — the caret stays where the next query will go.
-                      _focus.requestFocus();
-                    },
-                    onCancel: _searching ? _cancel : null,
-                    onNew: _newAgent(),
-                  ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: MediaQuery(
+          // The list runs down under the strip at the foot of the window and
+          // pads its own last row clear of it. The top is cleared by hand, just
+          // below: the drawer runs up under the status bar.
+          data: media.copyWith(
+            padding: media.padding.copyWith(top: 0, bottom: widget.bottomInset),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(height: media.padding.top + 8),
+              ListenableBuilder(
+                listenable: _search,
+                builder: (context, _) => SheetSearchField(
+                  controller: _controller,
+                  focus: _focus,
+                  hintText: _search.canGoBack ? _search.hint : _hint,
+                  onChanged: _search.setQuery,
+                  onClear: () {
+                    _controller.clear();
+                    _search.setQuery('');
+                    // Clearing is a step back into browsing, not out of the
+                    // search — the caret stays where the next query will go.
+                    _focus.requestFocus();
+                  },
+                  onCancel: _searching ? _cancel : null,
+                  onNew: _newAgent(),
                 ),
-                Expanded(child: _content()),
-              ],
-            ),
+              ),
+              Expanded(child: _content()),
+            ],
           ),
         ),
       ),
@@ -543,70 +523,4 @@ class _SearchHead extends StatelessWidget {
       );
     },
   );
-}
-
-/// The sheet's top edge, drawn: a hairline of light round its two corners and
-/// across, where the sheet meets the veil.
-///
-/// ⚠️ **The rim does what the fill cannot.** Two dark surfaces are parted by
-/// very little however their fills are chosen, and a veil darkens the page
-/// towards the sheet as much as away from it — the rim is the one thing on the
-/// edge brighter than both. It is the app's own recipe for anything floating
-/// over dark (see [AppMenu]): the fill lifts, the rim draws the edge.
-///
-/// ⚠️ **The top only.** The sheet runs the full width of the phone and down
-/// under the home indicator; a rim all the way round would be a line down
-/// each side of the screen.
-class _TopRim extends CustomPainter {
-  const _TopRim({required this.color});
-
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    const radius = _TerminalSearchOverlayState._radius;
-    // Half the stroke in from the edge, so the whole line lies on the sheet
-    // rather than half of it out over the veil.
-    const inset = 0.5;
-    const corner = Radius.circular(radius - inset);
-    final rim = Path()
-      ..moveTo(inset, radius)
-      ..arcToPoint(const Offset(radius, inset), radius: corner)
-      ..lineTo(size.width - radius, inset)
-      ..arcToPoint(Offset(size.width - inset, radius), radius: corner);
-    canvas.drawPath(
-      rim,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = color,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_TopRim old) => old.color != color;
-}
-
-/// The bar at the top of the sheet that says it can be pulled down: iOS's
-/// grabber, at its size — drawn by hand because this sheet is not a route's.
-class _Grip extends StatelessWidget {
-  const _Grip();
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return SizedBox(
-      height: 16,
-      child: Center(
-        child: Container(
-          width: 36,
-          height: 5,
-          decoration: BoxDecoration(
-            color: AppPalette.textFaint,
-            borderRadius: BorderRadius.circular(2.5),
-          ),
-        ),
-      ),
-    );
-  }
 }

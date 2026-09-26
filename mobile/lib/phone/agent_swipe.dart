@@ -416,6 +416,8 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
               voice: _voice,
               // Exactly one mounted page, by page number — see [_page].
               isActive: i == _page,
+              // The sideways axis is this pager's — see [TerminalPage.sideSwipes].
+              sideSwipes: false,
             ),
           );
         },
