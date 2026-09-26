@@ -150,4 +150,18 @@ for (const d of roster.daemons) {
   }
 }
 output('daemons/frames.json', JSON.stringify(frames) + '\n')
+
+// The lookbook draws from the roster itself, so art and odds never drift from what ships.
+const lookbookPath = resolve(root, 'daemons/lookbook.html')
+if (existsSync(lookbookPath)) {
+  const page = readFileSync(lookbookPath, 'utf8')
+  const start = '<!-- roster:start -->', end = '<!-- roster:end -->'
+  const a = page.indexOf(start), b = page.indexOf(end)
+  if (a < 0 || b < a) {
+    console.error('daemons/lookbook.html has no roster markers')
+    process.exit(1)
+  }
+  const data = JSON.stringify(roster).replace(/</g, '\\u003c')
+  output('daemons/lookbook.html', page.slice(0, a + start.length) + `\n<script type="application/json" id="roster-data">${data}</script>\n` + page.slice(b))
+}
 console.log(check ? 'daemons: roster and copies are current' : `daemons: ${roster.daemons.length} daemons checked, copies written`)
