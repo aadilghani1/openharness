@@ -736,9 +736,9 @@ List<SampleStep> sampleReply(SampleHarness harness, String text) {
   // Something new to build: a file named for it, wired in where the project's work lives.
   if (sampleSlug(text) case final slug?) {
     final ext = place.file.contains('.') ? place.file.split('.').last : 'ts';
-    final dir = place.file.contains('/')
-        ? place.file.substring(0, place.file.lastIndexOf('/'))
-        : 'src';
+    // At the project's top level (`src/`, `lib/`), not in whatever folder the project's usual
+    // work happens to live: a new feature is not a database file.
+    final dir = place.file.contains('/') ? place.file.split('/').first : 'src';
     final file = '$dir/$slug.$ext';
     final camel = slug
         .split('-')
