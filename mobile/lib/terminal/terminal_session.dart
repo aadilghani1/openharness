@@ -262,6 +262,32 @@ class TerminalSession extends ChangeNotifier {
   /// cleared by every reopen (see `_armInitialKeyframeWatchdog`, which treats
   /// the same null as "no keyframe arrived").
   bool get hasRenderedFrame => _expectedSeq != null;
+
+  /// Whether [terminal] is a screen KEPT from the last time this agent was open on this phone,
+  /// standing in until this attach's first keyframe replaces it. See [seedScreen].
+  bool get showingKeptScreen => _showingKeptScreen;
+  bool _showingKeptScreen = false;
+
+  /// Something to show: this attach's first frame, or a kept screen standing in for it.
+  bool get hasScreen => hasRenderedFrame || _showingKeptScreen;
+
+  /// Shows [kept] — the screen this agent had when the phone last left it — until the live stream's
+  /// first keyframe lands and replaces it.
+  ///
+  /// ⚠️ **What makes switching back to an agent instant.** An attach waits a network round trip for
+  /// its keyframe; until then the page showed a skeleton. The kept screen is what the reader last
+  /// saw of this agent — seconds or minutes stale, which the header's "Attaching…" says — and the
+  /// keyframe that follows replaces it whole.
+  ///
+  /// Rebound to this session: the kept terminal's callbacks still named the session it came from,
+  /// which is gone.
+  void seedScreen(Terminal kept) {
+    if (hasRenderedFrame || _disposed) return;
+    _bindTerminal(kept);
+    terminal = kept;
+    _showingKeptScreen = true;
+    notifyListeners();
+  }
   int _lastRenderedSeq = -1;
   int _framesSinceAck = 0;
   int _renderedSinceAckBytes = 0;
@@ -794,6 +820,7 @@ class TerminalSession extends ChangeNotifier {
               ..write(decoded.text);
             _bindTerminal(replacement);
             terminal = replacement;
+            _showingKeptScreen = false;
             cols = _clampCols(nextCols);
             rows = _clampRows(nextRows);
             _utf8Tail = decoded.tail;

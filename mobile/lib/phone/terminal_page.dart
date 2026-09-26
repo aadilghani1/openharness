@@ -1668,7 +1668,7 @@ class _TerminalPageState extends State<TerminalPage>
                                   // difference. The header says who has it and offers
                                   // "Take control"; the body is the terminal.
                                   if (session != null &&
-                                      !session.hasRenderedFrame)
+                                      !session.hasScreen)
                                     Positioned.fill(
                                       child: _Attaching(key: _skeletonKey),
                                     ),

@@ -3,6 +3,7 @@ import 'dart:io' show exit, pid;
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
+import 'package:xterm/xterm.dart' show Terminal;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -6201,6 +6202,9 @@ class AppNotifier extends ChangeNotifier {
       takeover: takeControl,
     );
     pane.session = terminal;
+    // Back to an agent read a moment ago: its last screen, at once, until the stream's arrives.
+    final kept = _keptScreens.remove('${pane.machineId}/${agent.id}');
+    if (kept != null) terminal.seedScreen(kept);
     terminal.addListener(notifyListeners);
     notifyListeners();
     // Wait for the pane's actual measured viewport before asking the daemon to open anything.
@@ -6221,6 +6225,16 @@ class AppNotifier extends ChangeNotifier {
     pane.session = null;
     if (terminal == null) return;
     terminal.removeListener(notifyListeners);
+    // The screen as the reader left it, for the next time this agent opens — see [_keptScreens].
+    final agentId = pane.agentId;
+    if (agentId != null && terminal.hasRenderedFrame) {
+      final key = '${pane.machineId}/$agentId';
+      _keptScreens.remove(key);
+      _keptScreens[key] = terminal.terminal;
+      while (_keptScreens.length > _keptScreenLimit) {
+        _keptScreens.remove(_keptScreens.keys.first);
+      }
+    }
     if (sendClose) await terminal.close();
     terminal.dispose();
   }
@@ -6588,7 +6602,15 @@ class AppNotifier extends ChangeNotifier {
     if (!allPanes.contains(pane)) await _detachSession(pane, sendClose: true);
   }
 
+  /// The last screens of agents this phone closed, oldest first — shown the instant one is opened
+  /// again, while its live stream attaches ([TerminalSession.seedScreen]). A few, not all: each holds
+  /// its scrollback, up to 10,000 lines.
+  final _keptScreens = <String, Terminal>{};
+  static const _keptScreenLimit = 3;
+
   Future<void> _closeAllPanes({bool persist = true}) async {
+    // Everything closing at once is a sign-out or a reset: nothing of it is kept.
+    _keptScreens.clear();
     final open = allPanes.toList();
     for (final swarm in swarms) {
       swarm.panes.clear();
