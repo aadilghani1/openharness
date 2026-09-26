@@ -45,7 +45,8 @@ class ConnectComputerPage extends StatefulWidget {
   /// Shown as `‹ Back` when set.
   final VoidCallback? onBack;
 
-  final void Function(BuildContext context)? onTrySample;
+  /// Opens the sample; see `PhoneWelcome.onTrySample`.
+  final Future<Object?> Function(BuildContext context)? onTrySample;
 
   @override
   State<ConnectComputerPage> createState() => _ConnectComputerPageState();
@@ -250,7 +251,8 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
                         label: widget.signedIn
                             ? 'Try a sample while you wait'
                             : 'Try a sample first',
-                        onPressed: () => widget.onTrySample!(context),
+                        onPressed: () =>
+                            unawaited(widget.onTrySample!(context)),
                       ),
                     ),
                   ],

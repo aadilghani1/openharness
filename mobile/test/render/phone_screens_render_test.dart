@@ -306,7 +306,7 @@ void main() {
   testWidgets('welcome', skip: skip, (tester) async {
     final key = await pumpScreen(
       tester,
-      PhoneWelcome(notifier: notifier, onTrySample: (_) {}),
+      PhoneWelcome(notifier: notifier, onTrySample: (_) async => null),
     );
     await shoot(tester, key, '0-welcome');
   });
@@ -316,7 +316,7 @@ void main() {
       tester,
       PhoneWelcome(
         notifier: notifier,
-        onTrySample: (_) {},
+        onTrySample: (_) async => null,
         sendCode: (_) async {},
         signIn: (_, _) async {},
       ),
@@ -337,7 +337,7 @@ void main() {
       tester,
       PhoneWelcome(
         notifier: notifier,
-        onTrySample: (_) {},
+        onTrySample: (_) async => null,
         sendCode: (_) async {},
         signIn: (_, _) async {},
       ),
@@ -355,7 +355,7 @@ void main() {
   testWidgets('set up your computer', skip: skip, (tester) async {
     final key = await pumpScreen(
       tester,
-      ConnectComputerPage(notifier: notifier, onTrySample: (_) {}),
+      ConnectComputerPage(notifier: notifier, onTrySample: (_) async => null),
     );
     await shoot(tester, key, '0d-connect-computer');
   });

@@ -768,6 +768,7 @@ class _TerminalPageState extends State<TerminalPage>
 
   @override
   void dispose() {
+    _endCardTimer?.cancel();
     // A take started here must not come back to a page that is gone.
     final session = widget.notifier
         .paneOfAgent(widget.machineId, widget.agentId)
@@ -820,6 +821,37 @@ class _TerminalPageState extends State<TerminalPage>
     if (asking.isEmpty) return null;
     if (asking.length > 1) return '${asking.length} asking';
     return '${_windowName(asking.single.agent.displayName)} asking';
+  }
+
+  /// In the sample, the one thing to try next — a guide that follows what has been done: go to the
+  /// harness that is asking, answer it, start one of your own. Null outside the sample, and once
+  /// the sample is done.
+  String? _sampleGuide() {
+    final sample = SampleMode.maybeOf(context);
+    if (sample == null || sample.endCardSeen) return null;
+    if (widget.agentId.startsWith('sample-new-')) {
+      _scheduleEndCard(sample);
+      return 'sample · your harness is working — watch it go';
+    }
+    if (_questionWatcher?.view != null) {
+      return 'sample · it’s asking — tap an answer, or say “yes”';
+    }
+    if (_askingElsewhere() case final asking?) {
+      return 'sample · $asking — swipe right →';
+    }
+    return 'sample · ← swipe left to start a harness of your own';
+  }
+
+  bool _showEndCard = false;
+  Timer? _endCardTimer;
+
+  void _scheduleEndCard(SampleSession sample) {
+    if (_endCardTimer != null || sample.endCardSeen) return;
+    _endCardTimer = Timer(const Duration(seconds: 9), () {
+      if (!mounted || sample.endCardSeen) return;
+      sample.endCardSeen = true;
+      setState(() => _showEndCard = true);
+    });
   }
 
   /// Back to the harness used before this one — holding the title's name.
@@ -1988,6 +2020,9 @@ class _TerminalPageState extends State<TerminalPage>
                                       status: headerStatus,
                                     ),
                             ),
+                            // The sample's guide: one line of what to try next.
+                            if (_sampleGuide() case final guide?)
+                              _SampleGuideLine(text: guide),
                             // Read-only: whose terminal it is and the way to take it
                             // back. See [_ControlBanner].
                             if (blocked || _reclaiming == _Reclaim.control)
@@ -2111,6 +2146,17 @@ class _TerminalPageState extends State<TerminalPage>
                             session.terminal.keyInput(TerminalKey.escape);
                             _flash('✓ esc');
                           },
+                        ),
+                      ),
+                    // The sample, done: what it was, and the way to the real thing. Once.
+                    if (_showEndCard)
+                      Positioned.fill(
+                        child: _SampleEndCard(
+                          onSetUp: () =>
+                              SampleMode.maybeOf(context)
+                                  ?.leave(SampleExit.setUp),
+                          onKeepPlaying: () =>
+                              setState(() => _showEndCard = false),
                         ),
                       ),
                     // The first time a terminal is up: what the swipes and the mic do. Once.
@@ -2259,7 +2305,7 @@ class _TerminalPageState extends State<TerminalPage>
               PhoneSheetAction(
                 icon: LucideIcons.logOut300,
                 label: 'Leave the sample',
-                onTap: sample.leave,
+                onTap: () => sample.leave(),
               ),
             PhoneSheetAction(
               icon: LucideIcons.settings300,
@@ -3341,6 +3387,70 @@ class _EscChip extends StatelessWidget {
                 weight: FontWeight.w600,
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The sample's guide, one line under the title: what to try next.
+class _SampleGuideLine extends StatelessWidget {
+  const _SampleGuideLine({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Container(
+      width: double.infinity,
+      color: Color.alphaBlend(tty.yellow.withValues(alpha: 0.14), tty.ground),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(Tty.origin, 7, Tty.origin, 7),
+        child: TtyText(text, size: TtySize.meta, color: tty.yellow),
+      ),
+    );
+  }
+}
+
+/// The sample's last word: what it was, and the way to the real thing.
+class _SampleEndCard extends StatelessWidget {
+  const _SampleEndCard({required this.onSetUp, required this.onKeepPlaying});
+
+  final VoidCallback onSetUp;
+  final VoidCallback onKeepPlaying;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Material(
+      color: tty.ground.withValues(alpha: 0.94),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Spacer(),
+              TtyText('That’s Harness.', size: 26, weight: FontWeight.w700),
+              const SizedBox(height: 14),
+              Text(
+                'You watched an agent work, answered it and started one of '
+                'your own — from a phone. The real ones run on your computer, '
+                'on your code.',
+                style: tty.style(size: TtySize.row, color: tty.faint),
+              ),
+              const Spacer(),
+              TtyPrimaryButton(label: 'Set up my computer', onPressed: onSetUp),
+              const SizedBox(height: 4),
+              Center(
+                child: TtyTextButton(
+                  label: 'Keep playing',
+                  onPressed: onKeepPlaying,
+                ),
+              ),
+            ],
           ),
         ),
       ),

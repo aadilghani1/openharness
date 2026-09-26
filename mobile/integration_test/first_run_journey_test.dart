@@ -86,12 +86,22 @@ void main() {
     await wait(4000);
     await shot('sample-new-harness-working');
 
-    // The menu, and the way out.
+    // The menu.
     await tester.tap(find.text('…').first);
     await wait(800);
     await shot('sample-menu');
-    await tester.tap(find.text('Leave the sample'));
-    await wait(1200);
+    await tester.tap(find.text('Cancel').last);
+    await wait(600);
+
+    // The end card, once the new harness has run a while — and the way to the real thing.
+    await waitFor(find.text('Set up my computer'), seconds: 20);
+    await wait(400);
+    await shot('sample-end-card');
+    await tester.tap(find.text('Set up my computer'));
+    await wait(1500);
+    await shot('set-up-after-sample');
+    await tester.tap(find.text('‹ Back'));
+    await wait(800);
     await shot('back-to-welcome');
 
     // The way in: email, then setting up a computer.

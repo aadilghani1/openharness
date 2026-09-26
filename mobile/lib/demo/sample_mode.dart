@@ -41,9 +41,11 @@ export 'sample_runtime.dart' show SampleConnection, SampleRuntime;
 /// A route of its own on the root navigator, so it is independent of the app under it — signed
 /// out or signed in — and leaving it (Settings → Leave sample, or the system back at its root)
 /// takes all of it away: the harnesses, their timers and its app state.
-Future<void> openSampleMode(BuildContext context) =>
-    Navigator.of(context, rootNavigator: true).push<void>(
-      MaterialPageRoute<void>(
+/// Opens the sample. Completes when it is left — with [SampleExit.setUp] when it was left to set up
+/// a real computer (the end card's green button), so the caller can go there next.
+Future<String?> openSampleMode(BuildContext context) =>
+    Navigator.of(context, rootNavigator: true).push<String>(
+      MaterialPageRoute<String>(
         // Full screen, and no edge swipe to leave by: a swipe right on a terminal is Find.
         fullscreenDialog: true,
         builder: (_) => const SampleModeScreen(),
@@ -51,12 +53,23 @@ Future<void> openSampleMode(BuildContext context) =>
     );
 
 /// What a screen inside sample mode can ask of it.
+/// How the sample was left.
+abstract final class SampleExit {
+  /// To set up a real computer.
+  static const setUp = 'set-up';
+}
+
 abstract interface class SampleSession {
   /// Leaves the sample: back to whatever it was opened over, with everything it ran disposed.
-  void leave();
+  /// [result] is what [openSampleMode] completes with — see [SampleExit].
+  void leave([String? result]);
 
   /// The sample's app state.
   AppNotifier get notifier;
+
+  /// Whether the end card ("That's Harness") has been shown this visit — it comes once.
+  bool get endCardSeen;
+  set endCardSeen(bool value);
 }
 
 /// Marks everything under it as sample mode — see [maybeOf].
@@ -103,6 +116,9 @@ class _SampleModeScreenState extends State<SampleModeScreen>
   bool _leaving = false;
 
   @override
+  bool endCardSeen = false;
+
+  @override
   AppNotifier get notifier => _runtime.notifier;
 
   @override
@@ -114,7 +130,7 @@ class _SampleModeScreenState extends State<SampleModeScreen>
   }
 
   @override
-  void leave() {
+  void leave([String? result]) {
     if (_leaving || !mounted) return;
     final route = ModalRoute.of(context);
     final navigator = route?.navigator;
@@ -123,7 +139,7 @@ class _SampleModeScreenState extends State<SampleModeScreen>
     // Anything the sample put over itself on the root navigator — a sheet, a chooser — goes
     // first, then the sample.
     navigator.popUntil((candidate) => candidate == route);
-    navigator.pop();
+    navigator.pop(result);
   }
 
   @override

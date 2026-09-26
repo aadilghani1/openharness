@@ -232,7 +232,7 @@ class _Body extends StatelessWidget {
         key: const ValueKey('settings-leave-sample'),
         title: 'Leave sample',
         detail: 'Mock computers and harnesses — nothing here is real',
-        onTap: sample.leave,
+        onTap: () => sample.leave(),
       );
     }
     return SettingsRow(

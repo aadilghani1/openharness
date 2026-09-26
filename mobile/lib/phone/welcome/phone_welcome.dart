@@ -51,8 +51,9 @@ class PhoneWelcome extends StatefulWidget {
   final Future<void> Function(String email)? sendCode;
   final Future<void> Function(String email, String code)? signIn;
 
-  /// Opens the offline sample. Null leaves the way out.
-  final void Function(BuildContext context)? onTrySample;
+  /// Opens the offline sample; completes when it is left, with `'set-up'` when it was left to set
+  /// up a real computer. Null leaves the way out.
+  final Future<Object?> Function(BuildContext context)? onTrySample;
 
   @override
   State<PhoneWelcome> createState() => _PhoneWelcomeState();
@@ -84,6 +85,26 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     _codeFocus.dispose();
     super.dispose();
   }
+
+  /// The sample, and — when it was left from its end card to set up a computer — the set-up page.
+  Future<void> _trySample() async {
+    final result = await widget.onTrySample!(context);
+    if (!mounted || result != 'set-up') return;
+    _openSetUp();
+  }
+
+  void _openSetUp() => unawaited(
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (route) => ConnectComputerPage(
+          notifier: widget.notifier,
+          signedIn: false,
+          onBack: () => Navigator.of(route).pop(),
+          onTrySample: widget.onTrySample,
+        ),
+      ),
+    ),
+  );
 
   void _go(_Step step) {
     setState(() {
@@ -176,19 +197,10 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
           child: switch (_step) {
             _Step.hello => _Hello(
               onSignIn: () => _go(_Step.email),
-              onNewHere: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (route) => ConnectComputerPage(
-                    notifier: widget.notifier,
-                    signedIn: false,
-                    onBack: () => Navigator.of(route).pop(),
-                    onTrySample: widget.onTrySample,
-                  ),
-                ),
-              ),
+              onNewHere: _openSetUp,
               onTrySample: widget.onTrySample == null
                   ? null
-                  : () => widget.onTrySample!(context),
+                  : () => unawaited(_trySample()),
             ),
             _Step.email => _Form(
               onBack: () => _go(_Step.hello),
