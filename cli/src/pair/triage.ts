@@ -104,6 +104,9 @@ export class PairTriage {
     return pending
   }
 
+  /** A model can be asked at all on this machine. */
+  hasModel(): boolean { return !!this.deps.oneshot }
+
   /** Model calls left this hour — shared with the brief (pair/brain.ts). False when there are none. */
   takeCall(): boolean {
     const now = this.deps.now()

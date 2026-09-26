@@ -10,6 +10,7 @@
  * Local frames only, and only through `sendLocal`/`sendLocalTo`:
  *   out  daemon_state { pair, needs[], working, failing[], machines[] }   (on change, and to a new client)
  *        daemon_say / daemon_unsay                                         (pair/voice.ts)
+ *        daemon_brief { desk, line, items[] }                              (on return, pair/brief.ts)
  *        daemon_act_result { requestId, id, ok, error? }                   (to the client that acted)
  *   in   daemon_act { requestId, id, choice }, daemon_presence { active, awayMs, pair?, desk? }
  *
@@ -18,13 +19,18 @@
  */
 import type { PairFleet, FleetChange, FleetHarness } from './fleet.js'
 import type { PairTriage, TriageResult } from './triage.js'
-import { doneLine, failLine, type PairVoice } from './voice.js'
+import { backLine, doneLine, failLine, type PairVoice } from './voice.js'
+import { briefNeedsModel, briefPrompt, composeBrief, parseBrief } from './brief.js'
 import { str, type DaemonAction, type PairJournalEntry } from './protocol.js'
 
 export const NEED_TTL_MS = 30 * 60_000
 export const SAY_TTL_MS = 30_000
 /** How long a finished turn waits for its recap before the line goes without it. */
 export const DONE_RECAP_WAIT_MS = 1_500
+/** An absence this long is a return worth a brief (daemons/README.md: `back` after 15 minutes). */
+export const BRIEF_AWAY_MS = 15 * 60_000
+/** Each machine's journal gets this long to answer before it is named as unreachable. */
+export const BRIEF_JOURNAL_MS = 3_000
 const STATE_DEBOUNCE_MS = 150
 
 export type AnswerResult = { ok: boolean; error?: string; detail?: string }
@@ -53,6 +59,9 @@ export interface PairBrainDeps {
 
 interface Presence { active: boolean; at: number }
 
+/** The desk a client that names none is at: this computer. */
+const LOCAL_DESK = 'local'
+
 export class PairBrain {
   private readonly clients = new Set<string>()
   private readonly presence = new Map<string, Presence>()
@@ -62,29 +71,102 @@ export class PairBrain {
   /** `${machineId}\0${requestId}` → the live need line about it, so the state can carry its keys. */
   private readonly needSays = new Map<string, { id: string; result: TriageResult }>()
   private readonly doneWaits = new Map<string, { timer: ReturnType<typeof setTimeout>; change: FleetChange; entry: PairJournalEntry }>()
+  /**
+   * When this daemon started. A restart is a baseline, not a return: an absence that began before it
+   * (a window reconnecting because the daemon restarted under it) is never briefed.
+   */
+  private readonly startedAt: number
+  /** Per desk: when the person was last seen leaving (presence went inactive, or the last client left). */
+  private readonly departed = new Map<string, number>()
+  /** Per desk: when it was last briefed — the cursor that stops a second client repeating the brief. */
+  private readonly cursors = new Map<string, number>()
 
-  constructor(private readonly deps: PairBrainDeps) {}
+  constructor(private readonly deps: PairBrainDeps) {
+    this.startedAt = deps.now()
+  }
 
   get isActive(): boolean { return this.active }
 
   // ── who is here ───────────────────────────────────────────────────────────────────────────────────
 
   clientAttached(connId: string): void {
+    const first = this.clients.size === 0
     this.clients.add(connId)
     this.refresh()
     if (this.active) this.deps.sendLocalTo(connId, { type: 'daemon_state', payload: this.state() })
+    // Nobody was here and now somebody is: a reconnect after long enough is a return.
+    const left = this.departed.get(LOCAL_DESK)
+    if (first && left !== undefined) {
+      this.departed.delete(LOCAL_DESK)
+      this.returned(LOCAL_DESK, this.deps.now() - left)
+    }
   }
 
   clientDetached(connId: string): void {
     this.clients.delete(connId)
     this.presence.delete(connId)
+    if (this.clients.size === 0 && !this.departed.has(LOCAL_DESK)) this.departed.set(LOCAL_DESK, this.deps.now())
     this.refresh()
   }
 
   /** `daemon_presence { active, awayMs, pair?, desk? }` from a window or `hn`. */
   onPresence(connId: string, payload: Record<string, unknown>): void {
     if ('pair' in payload) this.deps.onGuestPair?.(typeof payload.pair === 'string' ? payload.pair : null)
-    if (typeof payload.active === 'boolean') this.presence.set(connId, { active: payload.active, at: this.deps.now() })
+    if (typeof payload.active !== 'boolean') return
+    const now = this.deps.now()
+    this.presence.set(connId, { active: payload.active, at: now })
+    const desk = str(payload.desk, 64) || LOCAL_DESK
+    if (!payload.active) {
+      if (!this.departed.has(desk)) this.departed.set(desk, now)
+      return
+    }
+    // Back. The client's own measure of the absence counts (it knows about an idle keyboard this
+    // daemon never sees), and so does a departure this daemon watched happen; the longer wins.
+    const left = this.departed.get(desk)
+    this.departed.delete(desk)
+    const reported = typeof payload.awayMs === 'number' && Number.isFinite(payload.awayMs) ? Math.max(0, payload.awayMs) : 0
+    this.returned(desk, Math.max(reported, left !== undefined ? now - left : 0))
+  }
+
+  /** A return: brief it if it was long enough, began after this daemon did, and this desk was not just briefed. */
+  private returned(desk: string, awayMs: number): void {
+    const now = this.deps.now()
+    if (!this.active || awayMs < BRIEF_AWAY_MS) return
+    if (now - awayMs < this.startedAt) return
+    const cursor = this.cursors.get(desk) ?? this.startedAt
+    if (now - cursor < BRIEF_AWAY_MS) return
+    this.cursors.set(desk, now)
+    void this.brief(desk, Math.max(now - awayMs, cursor), awayMs)
+  }
+
+  /**
+   * Gather every machine's journal since the person left (3 s each), say the back line, then send the
+   * items — rewritten by one model call only when there are 3+, a failure or a question.
+   */
+  private async brief(desk: string, since: number, awayMs: number): Promise<void> {
+    const daemonId = this.deps.pairing.pairedDaemon()
+    if (!daemonId) return
+    const journals = await this.deps.fleet.journals(since, BRIEF_JOURNAL_MS)
+    if (!this.active) return
+    const now = this.deps.now()
+    const { facts, items } = composeBrief({
+      journals, harnesses: this.deps.fleet.harnesses(), machines: this.deps.fleet.machines(), awayMs, now,
+    })
+    const line = backLine(daemonId, facts)
+    this.deps.voice.say({
+      id: `back:${desk}:${now}`, mood: 'back', line, actions: [], ttlMs: SAY_TTL_MS,
+      about: { machineId: this.deps.fleet.machines()[0]?.machineId ?? '', agentId: '' },
+    })
+    if (!items.length) return
+    let written = items
+    const triage = this.deps.triage
+    if (briefNeedsModel(facts, items) && this.present() && triage.hasModel() && triage.takeCall()) {
+      const { text } = await triage.ask(briefPrompt(daemonId, line, items))
+      const lines = text ? parseBrief(text, items) : null
+      if (lines) written = items.map((item) => ({ ...item, line: lines.get(item.id) ?? item.line }))
+    }
+    if (!this.active) return
+    this.deps.sendLocal({ type: 'daemon_brief', payload: { desk, line, items: written } })
   }
 
   /** The person is at this computer: a client says so, or one is attached and has never said otherwise. */
