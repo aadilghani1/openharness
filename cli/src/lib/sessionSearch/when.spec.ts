@@ -28,13 +28,14 @@ describe('parseSearchWhen', () => {
 
   it('a weekday is its most recent one; "last" skips today', () => {
     expect(read('dial on monday')).toEqual({ words: 'dial', from: day(21), to: day(22) })
-    expect(read('friday')).toEqual({ words: '', from: day(25), to: day(26) })
-    expect(read('dial saturday')).toEqual({ words: 'dial', from: day(26), to: now.getTime() })
+    expect(read('on friday')).toEqual({ words: '', from: day(25), to: day(26) })
+    expect(read('dial on saturday')).toEqual({ words: 'dial', from: day(26), to: now.getTime() })
     expect(read('dial last saturday')).toEqual({ words: 'dial', from: day(19), to: day(20) })
   })
 
   it('leaves words alone that only look like time', () => {
-    for (const query of ['dial', 'todays menu', 'sundays', 'weekday parser', 'lastweek', 'sun mon', 'days ago']) {
+    expect(read('dial 0 days ago')).toEqual({ words: 'dial', from: day(25), to: now.getTime() })
+    for (const query of ['dial', 'todays menu', 'sundays', 'weekday parser', 'lastweek', 'sun mon', 'days ago', 'friday deploy']) {
       expect(parseSearchWhen(query, now)).toEqual({ words: query, when: null })
     }
   })

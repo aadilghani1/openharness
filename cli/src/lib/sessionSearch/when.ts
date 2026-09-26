@@ -28,7 +28,8 @@ const PHRASES = new RegExp(
   + '|(?<lastmonth>last month)'
   + '|(?<few>(?:a )?few days ago|(?:a )?couple(?: of)? days ago)'
   + '|(?<count>\\d{1,2}|a|an|one|two|three|four|five|six|seven|eight|nine|ten) (?<unit>days?|weeks?) ago'
-  + '|(?:(?<last>last|on) )?(?<weekday>monday|tuesday|wednesday|thursday|friday|saturday|sunday)'
+  // A weekday only with "on" or "last": "friday deploy" is a harness's name, "on friday" is a time.
+  + '|(?<last>last|on) (?<weekday>monday|tuesday|wednesday|thursday|friday|saturday|sunday)'
   + ')(?![\\p{L}\\p{N}])',
   'iu',
 )
@@ -51,7 +52,8 @@ export function parseSearchWhen(query: string, now: Date): { words: string; when
   else if (groups.lastmonth) [from, to] = [new Date(now.getFullYear(), now.getMonth() - 1).getTime(), new Date(now.getFullYear(), now.getMonth()).getTime()]
   else if (groups.few) [from, to] = [day(-6), day(-1)]
   else if (groups.count) {
-    const n = Number.parseInt(groups.count, 10) || NUMBERS[groups.count.toLowerCase()] || 1
+    const parsed = Number.parseInt(groups.count, 10)
+    const n = Number.isNaN(parsed) ? NUMBERS[groups.count.toLowerCase()] ?? 1 : parsed
     const weeks = groups.unit.toLowerCase().startsWith('week')
     const back = weeks ? n * 7 : n
     const slack = weeks ? 4 : 1
@@ -59,7 +61,7 @@ export function parseSearchWhen(query: string, now: Date): { words: string; when
   } else {
     const target = WEEKDAYS[groups.weekday.toLowerCase()]
     let back = (now.getDay() - target + 7) % 7
-    if (back === 0 && groups.last?.toLowerCase() === 'last') back = 7
+    if (back === 0 && groups.last.toLowerCase() === 'last') back = 7
     ;[from, to] = [day(-back), day(-back + 1)]
   }
   to = Math.min(to, now.getTime())

@@ -218,23 +218,27 @@ export class SessionSearchStore {
    * deleted. `outdated` when it was written by another schema version — the daemon of that version
    * owns it and rebuilds it on its next start.
    */
-  static openReader(path: string): SessionSearchStore | 'missing' | 'outdated' | null {
+  static openReader(path: string): SessionSearchStore | 'missing' | 'outdated' | 'busy' | 'unreadable' | null {
     const Constructor = builtinSqlite() as unknown as DatabaseConstructor | null
     if (!Constructor) return null
     if (!existsSync(path)) return 'missing'
-    const db = new Constructor(path, { readOnly: true })
+    let db: Database | null = null
     try {
-      db.exec('PRAGMA busy_timeout = 1000')
+      db = new Constructor(path, { readOnly: true })
+      db.exec('PRAGMA busy_timeout = 3000')
       const version = db.prepare("SELECT value FROM meta WHERE key = 'schema'").get()?.value
-      if (version !== SCHEMA_VERSION) {
-        db.close()
-        return 'outdated'
-      }
-    } catch {
+      if (version === SCHEMA_VERSION) return new SessionSearchStore(db)
       db.close()
       return 'outdated'
+    } catch (error) {
+      try { db?.close() } catch { /* already closed */ }
+      // SQLITE_BUSY (5) and SQLITE_LOCKED (6): the daemon is writing; a moment later will do.
+      const code = (error as { errcode?: number } | null)?.errcode
+      if (code === 5 || code === 6) return 'busy'
+      // A table missing is an index from before `meta` existed: another version's.
+      if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return 'outdated'
+      return 'unreadable'
     }
-    return new SessionSearchStore(db)
   }
 
   private static openOnce(path: string): SessionSearchStore | null {
@@ -418,12 +422,14 @@ export class SessionSearchStore {
     const allWords = terms.join(' AND ')
     const common = this.statement('SELECT count(*) AS n FROM turns_fts WHERE turns_fts MATCH ?').get(allWords)!.n as number > this.commonMatches
     // A word in a large share of all turns barely tells one from another, and sorting every match
-    // by BM25 is the slowest thing a search can do: those take every match unranked and let
-    // recency decide. (Not the highest rowids: a backfill writes the newest sessions first.)
+    // by BM25 is the slowest thing a search can do: those take the newest matching turns, unranked,
+    // and let recency decide. (By turn time, not the highest rowids: a backfill writes the newest
+    // sessions first.) Bounded like the ranked path, so the daemon never holds every match.
     let rows = common
       ? this.statement(`
         SELECT t.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at, -1 AS rank
-        FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid WHERE turns_fts MATCH ?`).all(allWords)
+        FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid WHERE turns_fts MATCH ?
+        ORDER BY t.at DESC LIMIT ${CANDIDATE_ROWS}`).all(allWords)
       : this.statement(`
         SELECT f.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at, f.rank AS rank
         FROM (SELECT rowid AS id, bm25(turns_fts, ${WEIGHTS.join(', ')}) AS rank FROM turns_fts
@@ -433,7 +439,7 @@ export class SessionSearchStore {
       // The ranked candidates, narrowed to the window — enough unless the list was cut short and
       // the window holds few of them; then rank within the window's sessions themselves.
       const within = rows.filter((row) => inWindow.has(row.sid as string))
-      rows = common || rows.length < CANDIDATE_ROWS || new Set(within.map((row) => row.sid)).size >= limit
+      rows = rows.length < CANDIDATE_ROWS || new Set(within.map((row) => row.sid)).size >= limit
         ? within
         : this.statement(`
           SELECT t.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at, bm25(turns_fts, ${WEIGHTS.join(', ')}) AS rank
@@ -569,21 +575,33 @@ export class SessionSearchStore {
       .all(window.from, window.to, window.from, window.to).map((row) => row.sid as string))
   }
 
-  /** No words, only a window: the sessions worked on then, by their latest turn in it. */
+  /**
+   * No words, only a window: the sessions worked on then, by their latest turn in it — or, for a
+   * session whose turns carry no time (a database-backed engine), by its last activity. One row
+   * per session.
+   */
   private workedOn(window: { from: number; to: number }, limit: number, now: number): SearchHit[] {
     const sessions = this.sessionMeta()
-    const latest = this.statement(`
-      SELECT t.session_id AS sid, t.id AS id, t.turn AS turn, t.at AS at, t.ask AS ask
-      FROM turns t WHERE t.turn >= 0 AND t.at BETWEEN ? AND ?
-      AND t.at = (SELECT max(u.at) FROM turns u WHERE u.session_id = t.session_id AND u.turn >= 0 AND u.at BETWEEN ? AND ?)
-      ORDER BY t.at DESC LIMIT ?`).all(window.from, window.to, window.from, window.to, limit)
+    const latest = new Map<string, number>()
+    for (const row of this.statement(`
+      SELECT session_id AS sid, max(at) AS at FROM turns
+      WHERE turn >= 0 AND at BETWEEN ? AND ? GROUP BY session_id`).all(window.from, window.to)) {
+      latest.set(row.sid as string, row.at as number)
+    }
+    for (const sid of this.sessionsWorkedOn(window)) {
+      if (!latest.has(sid)) latest.set(sid, sessions.get(sid)?.lastAt ?? window.to)
+    }
+    const timedTurn = this.statement(`
+      SELECT id, turn, at, ask FROM turns WHERE session_id = ? AND turn >= 0 AND at = ? ORDER BY turn DESC LIMIT 1`)
+    const lastTurn = this.statement(`
+      SELECT id, turn, at, ask FROM turns WHERE session_id = ? AND turn >= 0 ORDER BY turn DESC LIMIT 1`)
     const hits: SearchHit[] = []
-    for (const row of latest) {
-      const session = sessions.get(row.sid as string)
-      if (!session) continue
-      const at = row.at as number
+    for (const [sid, at] of [...latest].sort((a, b) => b[1] - a[1]).slice(0, limit)) {
+      const session = sessions.get(sid)
+      const row = timedTurn.get(sid, at) ?? lastTurn.get(sid)
+      if (!session || !row) continue
       hits.push({
-        sessionId: row.sid as string, agentId: session.agentId, engine: session.engine,
+        sessionId: sid, agentId: session.agentId, engine: session.engine,
         turn: row.turn as number, at, lastAt: session.lastAt, field: 'ask',
         snippet: clipAsk(String(row.ask ?? '')),
         together: true,

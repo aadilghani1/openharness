@@ -26,7 +26,11 @@ export interface SearchSource {
   transcriptPath: string | null
   /** What the session is called — name, title, folder — searchable beside what was said in it. */
   header: string
-  /** Last activity (epoch ms): the most recent sessions are indexed first. */
+  /**
+   * When the conversation last moved (epoch ms), from stamps that move only with it — never the
+   * registry's bookkeeping time. Newest sessions are indexed first, and a database-backed history
+   * is read again when this moves.
+   */
   updatedAt: number
   /**
    * The whole history, for an engine that keeps it in a database rather than a transcript file
@@ -243,14 +247,14 @@ export class SessionSearchIndex {
   }
 
   /**
-   * A database-backed session, read whole the first time and after each turn event (`touch`). Its
-   * registry update time is no guide: re-observing the process bumps it, and a sweep that believed
-   * it would re-read every such history every ten minutes. What it read is fingerprinted, so the
-   * session counts as worked on only when its conversation actually changed.
+   * A database-backed session, read whole the first time, after each turn event (`touch`), and when
+   * its activity stamp moved — which catches a turn whose event was lost to a restart. What it read
+   * is fingerprinted, so the session counts as worked on only when its conversation changed.
    */
   private async historyPass(source: SearchSource, existing: IndexedSession | undefined, dirty: boolean): Promise<void> {
     const store = this.opts.store
-    if (existing && !dirty) {
+    const stamp = source.updatedAt
+    if (existing && !dirty && existing.mtime === stamp) {
       if (existing.header !== source.header || existing.agentId !== source.agentId) {
         store.writeSession({ ...existing, header: source.header, agentId: source.agentId }, NO_TURN_DELETE, [])
       }
@@ -267,13 +271,14 @@ export class SessionSearchIndex {
     const turns = open ? [...closed, open] : closed
     // The size field holds the fingerprint: how much conversation there was when last read.
     const fingerprint = turns.reduce((sum, turn) => sum + turn.ask.length + turn.answer.length + turn.tools.length + 1, 0)
-    if (existing && existing.size === fingerprint && existing.header === source.header && existing.agentId === source.agentId) return
+    if (existing && existing.size === fingerprint && existing.mtime === stamp
+      && existing.header === source.header && existing.agentId === source.agentId) return
     const changed = !existing || existing.size !== fingerprint
     store.writeSession({
       sessionId: source.sessionId, agentId: source.agentId, engine: source.engine, path: '',
-      header: source.header, size: fingerprint, mtime: 0, resumeOffset: 0, resumeTurn: 0,
-      // First read: the registry's time is the best there is. After that, a change is news now.
-      lastAt: !existing ? source.updatedAt || null : changed ? Date.now() : existing.lastAt,
+      header: source.header, size: fingerprint, mtime: stamp, resumeOffset: 0, resumeTurn: 0,
+      // Its turns carry no time: the session's is its activity stamp, or now for a turn just seen.
+      lastAt: !changed ? existing!.lastAt : dirty ? Math.max(Date.now(), stamp) : stamp || null,
       turns: 0,
     }, 0, turns)
     if (!existing) this.opts.log?.(`[search] indexed ${source.sessionId.slice(0, 8)} · ${source.engine} · ${turns.length} turns`)

@@ -2821,7 +2821,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
             engine: s.engine,
             transcriptPath: s.transcriptPath || null,
             header: [projectDisplayName(s), s.title, folderWords(s.cwd)].filter(Boolean).join(' · '),
-            updatedAt: s.updatedAt ?? 0,
+            // Conversation stamps only (lib/agentFrame.ts lastActivityAt): the registry's own
+            // updatedAt moves on every discovery pass.
+            updatedAt: Math.max(s.lastTranscriptAt || 0, s.lastHookAt || 0) || s.boundAt || s.registeredAt || 0,
             readHistory,
           }]
         }),

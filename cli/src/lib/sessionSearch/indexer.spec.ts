@@ -127,12 +127,7 @@ describe('SessionSearchIndex', () => {
     await vi.waitFor(() => { expect(found('tag')).toEqual(['ses_1']) })
     expect(reads).toBe(2)
 
-    // Its registry time moving (the process re-observed) is not a reason to read it all again…
-    source = { ...source, updatedAt: 200 }
-    index.sweep()
-    await index.drain()
-    expect(reads).toBe(2)
-    // …and a turn event that changed nothing leaves it as it was worked on.
+    // A turn event that changed nothing leaves it as it was worked on.
     const before = store.session('ses_1')!.lastAt
     index.touch('ses_1')
     await vi.waitFor(() => { expect(reads).toBe(3) })
@@ -145,6 +140,19 @@ describe('SessionSearchIndex', () => {
     await vi.waitFor(() => { expect(found('changelog')).toEqual(['ses_1']) })
     expect(store.session('ses_1')!.turns).toBe(3)
     expect(store.session('ses_1')!.lastAt).toBeGreaterThanOrEqual(now)
+
+    // A turn whose event was lost (the daemon restarted first): its activity stamp moved, so the
+    // next sweep reads it, and dates it by that stamp.
+    history = [...history, { type: 'user_message', payload: { content: 'archive the old builds' } }]
+    source = { ...source, updatedAt: 5_000 }
+    const restarted = new SessionSearchIndex({ store, sources: () => [source] })
+    cleanups.push(() => restarted.stop())
+    restarted.sweep()
+    await vi.waitFor(() => { expect(restarted.search('archive').hits.map((hit) => hit.sessionId)).toEqual(['ses_1']) })
+    expect(store.session('ses_1')).toMatchObject({ turns: 4, lastAt: 5_000 })
+    restarted.sweep()
+    await restarted.drain()
+    expect(reads).toBe(5)
   })
 
   it('keeps an agent\'s sessions while the agent exists, even with nothing to read right now', async () => {

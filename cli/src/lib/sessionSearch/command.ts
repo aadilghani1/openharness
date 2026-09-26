@@ -70,6 +70,14 @@ export function searchCommand(opts: SearchCommandOptions): number {
     opts.error('The session index is from another version of Harness. Restart the daemon (`harness stop`, then `harness start`) to rebuild it.')
     return 1
   }
+  if (store === 'busy') {
+    opts.error('The session index is busy being written. Try again in a moment.')
+    return 1
+  }
+  if (store === 'unreadable') {
+    opts.error('The session index could not be read. The daemon rebuilds it on its next start (`harness stop`, then `harness start`).')
+    return 1
+  }
   if (!store) {
     opts.error('Session search needs node:sqlite (Node 22.13 or later).')
     return 1

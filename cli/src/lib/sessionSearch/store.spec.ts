@@ -198,6 +198,29 @@ describe('SessionSearchStore', () => {
       ['a', 'what I asked last in the window', 'ask'],
     ])
     expect(store.search('', { now: NOW })).toEqual([])
+
+    // A database-backed session (turns without times) worked on in the window is listed too, and
+    // a session whose last turns share a time is listed once.
+    store.writeSession(session('untimed', 'D', NOW - 2.5 * DAY), 0, [turn(0, 'from a database')])
+    store.writeSession(session('twice', 'E', NOW - 3 * DAY), 0, [
+      turn(0, 'first', '', '', NOW - 3 * DAY),
+      turn(1, 'second, same minute', '', '', NOW - 3 * DAY),
+    ])
+    expect(store.search('', { now: NOW, from: NOW - 4 * DAY, to: NOW }).map((hit) => [hit.sessionId, hit.snippet])).toEqual([
+      ['b', 'yesterday work'],
+      ['a', 'what I asked last in the window'],
+      ['untimed', 'from a database'],
+      ['twice', 'second, same minute'],
+    ])
+  })
+
+  it('tells a reader a file it cannot read from one written by another version', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-search-'))
+    dirs.push(dir)
+    const path = join(dir, 'index.db')
+    writeFileSync(path, 'this is not a database, it is a sentence long enough to be read as a header')
+    expect(SessionSearchStore.openReader(path)).toBe('unreadable')
+    expect(SessionSearchStore.openReader(join(dir, 'none.db'))).toBe('missing')
   })
 
   it('replaces turns from a point on, keeps earlier ones, and counts them', () => {
