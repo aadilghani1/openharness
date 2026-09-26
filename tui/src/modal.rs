@@ -63,7 +63,7 @@ pub enum PromptKind {
     RenameTab,
     RenameHarness { machine: String, agent: String },
     NewPath { machine: String, what: What },
-    NewMessage { machine: String, what: What, cwd: Option<String> },
+    NewMessage { machine: String, what: What, cwd: Option<String>, worktree: bool },
     Send,
     Broadcast,
     LinkPassword { machine: String },

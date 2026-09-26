@@ -208,6 +208,7 @@ wss.on('connection', (ws) => {
       case 'agent_delete': dial.deleted = [...(dial.deleted || []), payload.agentId]; return reply({ agent: agents[machine][0], deleted: true })
       case 'agent_update': case 'agent_resume': case 'agent_restart': return reply({ agent: agents[machine][0], deleted: true })
       case 'agent_create': {
+        dial.created = [...(dial.created || []), payload]
         const created = agent(randomUUID(), `Mock ${payload.engine}`, payload.engine)
         agents[machine].push(created)
         return reply({ agent: created })

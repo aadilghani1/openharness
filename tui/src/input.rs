@@ -478,7 +478,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
         PickerKind::NewFolder { machine, .. } => {
             picker.set_rows(modal::new_folder_rows(app, machine));
             picker.status = app.fleet.machine_name(machine);
-            picker.hints = vec![("enter", "choose")];
+            picker.hints = vec![("enter", "choose"), ("M-w", "in a new worktree")];
         }
         PickerKind::Route { .. } => {}
         PickerKind::Output { title, lines } => {
@@ -928,13 +928,23 @@ fn shell_made(app: &mut App, machine: String, placement: Placement, reply: Resul
         }
 }
 
-fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>) {
+fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>) { create_in(app, machine, what, cwd, message, false) }
+
+/// agent_create: a harness on [machine] in [cwd] (none: a new project; [worktree]: a new git
+/// worktree of it, on a branch of its own the daemon names), in the permission mode
+/// @hn-permission-mode says (auto unless you set it: acceptEdits, plan, ask, full …).
+fn create_in(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool) {
     let Some(link) = app.link(&machine) else { app.say("That machine is not connected", theme::DANGER); return };
     let terminal = what.engine == "terminal";
     let mut payload = json!({ "engine": what.engine, "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": !terminal });
     if let Some(dsh) = &what.dsh { payload["dsh"] = json!(dsh) }
-    match &cwd { Some(cwd) => payload["cwd"] = json!(cwd), None if !terminal => payload["projectSource"] = json!("new"), None => {} }
-    if !terminal { payload["permissionMode"] = json!("auto") }
+    match &cwd {
+        Some(cwd) if worktree => { payload["projectSource"] = json!("worktree"); payload["gitSource"] = json!(cwd) }
+        Some(cwd) => payload["cwd"] = json!(cwd),
+        None if !terminal => payload["projectSource"] = json!("new"),
+        None => {}
+    }
+    if !terminal { payload["permissionMode"] = json!(app.options.get("@hn-permission-mode", "", None).filter(|m| !m.is_empty()).unwrap_or_else(|| "auto".into())) }
     if let Some(message) = message.filter(|m| !m.trim().is_empty()) { payload["prompt"] = json!(message.trim()) }
     app.say(format!("Starting {} on {}…", what.label, app.fleet.machine_name(&machine)), theme::SOFT);
     app.modal = None;
@@ -1434,6 +1444,8 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             KeyCode::Char('o') if ctrl => { choose(app, kind, picker, Choice::Open); return }
             KeyCode::Char('l') if alt => { choose(app, kind, picker, Choice::Link); return }
             KeyCode::Char('n') if alt => { choose(app, kind, picker, Choice::New); return }
+            // A new harness's folder: M-w starts it in a new worktree of that repository instead.
+            KeyCode::Char('w') if alt && matches!(kind, PickerKind::NewFolder { .. }) => { choose(app, kind, picker, Choice::Worktree); return }
             KeyCode::Char('i') if alt => { if let PickerKind::Store = kind { return store_install(app, kind, picker) } }
             KeyCode::Char(c) if !ctrl && !alt => picker.type_char(c),
             _ => {}
@@ -1595,7 +1607,7 @@ fn fzf_key_name(key: &KeyEvent) -> String {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Choice { Enter, Tab, SplitRight, SplitDown, Here, Open, Pause, New, Link }
+enum Choice { Enter, Tab, SplitRight, SplitDown, Here, Open, Pause, New, Link, Worktree }
 
 fn split_key(id: &str) -> Option<(String, String)> {
     let (m, a) = id.split_once(':')?;
@@ -1793,7 +1805,7 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             if let Some(cwd) = preset {
                 let label = what.label.clone();
                 let hint = format!("on {name} in {cwd}");
-                return prompt(app, PromptKind::NewMessage { machine, what, cwd: Some(cwd) }, &format!("New {label} harness"), "First message (optional) — Enter to start", &hint, "", false);
+                return prompt(app, PromptKind::NewMessage { machine, what, cwd: Some(cwd), worktree: false }, &format!("New {label} harness"), "First message (optional) — Enter to start", &hint, "", false);
             }
             let mut next = Picker::new(format!("New {} · folder", what.label), "Search folders…");
             let kind = PickerKind::NewFolder { machine: machine.clone(), what };
@@ -1808,12 +1820,13 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
                 "__path" => prompt(app, PromptKind::NewPath { machine, what }, "Folder", &format!("A folder on {name}"), "~ is that machine's home", "~/", false),
                 "__new" => {
                     let label = what.label.clone();
-                    prompt(app, PromptKind::NewMessage { machine, what, cwd: None }, &format!("New {label} harness"), "First message (optional) — Enter to start", &format!("on {name}, in a new project"), "", false)
+                    prompt(app, PromptKind::NewMessage { machine, what, cwd: None, worktree: false }, &format!("New {label} harness"), "First message (optional) — Enter to start", &format!("on {name}, in a new project"), "", false)
                 }
                 cwd => {
                     let label = what.label.clone();
-                    let hint = format!("on {name} in {cwd}");
-                    prompt(app, PromptKind::NewMessage { machine, what, cwd: Some(cwd.to_string()) }, &format!("New {label} harness"), "First message (optional) — Enter to start", &hint, "", false)
+                    let worktree = choice == Choice::Worktree;
+                    let hint = if worktree { format!("on {name}: a new worktree of {cwd}, on a branch of its own") } else { format!("on {name} in {cwd}") };
+                    prompt(app, PromptKind::NewMessage { machine, what, cwd: Some(cwd.to_string()), worktree }, &format!("New {label} harness"), "First message (optional) — Enter to start", &hint, "", false)
                 }
             }
         }
@@ -1877,9 +1890,9 @@ fn submit_prompt(app: &mut App, p: Prompt) {
             let label = what.label.clone();
             let name = app.fleet.machine_name(&machine);
             let hint = format!("on {name} in {cwd}");
-            prompt(app, PromptKind::NewMessage { machine, what, cwd: Some(cwd) }, &format!("New {label} harness"), "First message (optional) — Enter to start", &hint, "", false);
+            prompt(app, PromptKind::NewMessage { machine, what, cwd: Some(cwd), worktree: false }, &format!("New {label} harness"), "First message (optional) — Enter to start", &hint, "", false);
         }
-        PromptKind::NewMessage { machine, what, cwd } => create(app, machine, what, cwd, Some(value)),
+        PromptKind::NewMessage { machine, what, cwd, worktree } => create_in(app, machine, what, cwd, Some(value), worktree),
         PromptKind::Send => {
             if value.is_empty() { return }
             let local = app.fleet.local_id.clone();

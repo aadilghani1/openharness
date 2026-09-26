@@ -81,7 +81,7 @@ Harness's own, only on keys tmux leaves unbound (every tmux key does what tmux d
 | | |
 |---|---|
 | `C-b a` / `C-b A` | the next harness that needs you (`next-harness`) / all those waiting on you (`M-1…9` answers from the list) |
-| `C-b N` `C-b T` | new harness (an agent) / new terminal |
+| `C-b N` `C-b T` | new harness (an agent: machine, agent, folder — `M-w` for a new git worktree of it, on a branch of its own — then its first message) / new terminal. Agents start in `@hn-permission-mode` (auto unless you `set -g @hn-permission-mode plan`, `acceptEdits`, `ask` …) |
 | `C-b I` `C-b @` `C-b S` | models, machines, the Harness Store |
 | `C-b g` `C-b B` | send a task (Harness picks the harness) / broadcast to the window |
 | `C-b R` `C-b P` `C-b K` | restart, pause, clone the harness |
