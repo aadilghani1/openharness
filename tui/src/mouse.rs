@@ -143,6 +143,7 @@ fn handle(app: &mut App, mut m: Event, double: bool) {
     let mut binding = app.keymap.lookup(&first, &chord);
     if from_client_table { app.prefix = false; app.key_table = None; app.repeat_until = None }
     if binding.is_none() && first != "root" { binding = app.keymap.lookup("root", &chord) }
+    if binding.is_some() || from_client_table { app.status_redraws += 1 }
     match binding {
         Some(b) => crate::commands::execute_mouse(app, &b.command, m),
         None => {

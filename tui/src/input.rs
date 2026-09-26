@@ -48,6 +48,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
     // A table of your own (switch-client -T): its key runs, and the client goes back to root
     // (a -r key keeps the table); the prefix, or a key it does not have, goes on as from root.
     if let Some(table) = app.key_table.take() {
+        app.status_redraws += 1;
         if chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2 { app.prefix = true; app.prefix_at = Some(std::time::Instant::now()); return }
         if let Some(b) = app.keymap.named.get(&table).and_then(|l| l.iter().rev().find(|b| b.chord == chord)).cloned() {
             if b.repeat { app.key_table = Some(table) }
@@ -58,6 +59,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
     // After the prefix: the prefix table.
     if app.prefix {
         app.prefix = false;
+        app.status_redraws += 1;
         if chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2 {
             // `send-prefix`: C-b C-b gives the prefix key to what has the keyboard.
             return send_prefix_key(app, key);
@@ -72,6 +74,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
     }
     // A repeatable key again, inside the repeat window: no prefix needed.
     if let Some(until) = app.repeat_until {
+        app.status_redraws += 1;
         if Instant::now() < until {
             if let Some(binding) = app.keymap.prefix_command(&chord).filter(|b| b.repeat).cloned() {
                 app.repeat_until = Some(Instant::now() + Duration::from_millis(app.keymap.repeat_ms));
@@ -85,6 +88,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
     // at the status line keeps it.
     let line_edit = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }));
     if !line_edit && (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) {
+        app.status_redraws += 1;
         app.prefix = true;
         app.prefix_at = Some(std::time::Instant::now());
         return;
@@ -92,20 +96,20 @@ fn on_key(app: &mut App, key: KeyEvent) {
     // A pane in copy mode or view mode: its mode's table first, then root; a key in neither does
     // nothing — it never reaches the pane's program (server_client_key_callback).
     if let Some(Modal::Copy { pane }) = app.modal {
-        if mode_key(app, pane, &chord) { return }
-        if let Some(binding) = app.keymap.root_command(&chord).cloned() { commands::execute_bound(app, &binding.command) }
+        if mode_key(app, pane, &chord) { app.status_redraws += 1; return }
+        if let Some(binding) = app.keymap.root_command(&chord).cloned() { app.status_redraws += 1; commands::execute_bound(app, &binding.command) }
         return;
     }
     // A pane in the tree (choose-tree): root's bindings first, then the tree's own keys
     // (window_tree_key) — never the pane's program.
     if app.modal.is_none() {
         if let Some(pane) = app.focused().filter(|f| app.panes.get(f).map(|p| p.tree_top()).unwrap_or(false)) {
-            if let Some(binding) = app.keymap.root_command(&chord).cloned() { commands::execute_bound(app, &binding.command); return }
+            if let Some(binding) = app.keymap.root_command(&chord).cloned() { app.status_redraws += 1; commands::execute_bound(app, &binding.command); return }
             return crate::tree::key(app, pane, chord, None, true);
         }
     }
     if !typing(app) {
-        if let Some(binding) = app.keymap.root_command(&chord).cloned() { commands::execute_bound(app, &binding.command); return }
+        if let Some(binding) = app.keymap.root_command(&chord).cloned() { app.status_redraws += 1; commands::execute_bound(app, &binding.command); return }
     }
     if app.modal.is_some() { modal_key(app, key); return }
     // A shell is on its way (split-window, new-window): what is typed meanwhile is its.

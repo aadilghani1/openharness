@@ -340,6 +340,9 @@ pub struct App {
     /// format_defaults' type while choose-tree expands an item's format (tree::FORMAT_*): what
     /// #{session_format}, #{window_format} and #{pane_format} say.
     pub format_type: Option<u8>,
+    /// How many times the status line has been drawn again for a key (server_status_client: a
+    /// key with a binding, the prefix, a table left) — a pane's tree is built again then.
+    pub status_redraws: u64,
     /// The paste buffer a format is expanded for (list-buffers -F).
     pub format_buffer: Option<String>,
     /// What the shell running the command piped in (load-buffer -, source-file -).
@@ -446,6 +449,7 @@ impl App {
             format_buffer: None,
             format_line: None,
             format_type: None,
+            status_redraws: 0,
             config_files: Vec::new(),
             format_command: None,
             cli_stdin: None,

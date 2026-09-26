@@ -139,6 +139,10 @@ pub struct Tree {
     /// Builds so far: each makes its items anew (tmux frees and allocates them), so the current
     /// item after one is another item, whose preview starts at no offset.
     builds: u64,
+    /// The size it was last built at.
+    size: (u32, u32),
+    /// What the status line was showing when it was last built (status_mark).
+    status_seen: (u64, u64, String),
 }
 
 const SESSION_TAG: u64 = 1;
@@ -190,6 +194,8 @@ impl Tree {
             end: 0,
             each: 0,
             builds: 0,
+            size: (0, 0),
+            status_seen: (u64::MAX, 0, String::new()),
         };
         // mode_tree_zoom: -Z zooms the pane (a window of one pane can't be), and the end of the
         // mode undoes it if it was not zoomed before.
@@ -239,6 +245,17 @@ impl Tree {
         self.width = sx;
         if self.preview { self.set_height(sy) } else { self.height = sy }
         self.check_selected();
+        self.size = (sx, sy);
+    }
+
+    /// Built again for what the windows are now, between the builds tmux makes (a key's, a
+    /// resize's, a change to the window's): the lines keep their place, as tmux's stay where they
+    /// were drawn — unless the lines, the current one's place or the size changed, when it is
+    /// tmux's build (the current line found again by its tag, the offset from it).
+    fn refresh(&mut self, app: &mut App, sx: u32, sy: u32) {
+        let (current, offset, n, size) = (self.current, self.offset, self.lines.len(), self.size);
+        self.build(app, sx, sy);
+        if self.current == current && self.lines.len() == n && self.size == size { self.offset = offset }
     }
 
     fn build_items(&mut self, app: &mut App, saved: &HashMap<u64, (bool, bool)>, tag: &mut u64, filter: Option<&str>) {
@@ -763,10 +780,28 @@ pub fn update(app: &mut App, pane: u64) {
     put(app, pane, t);
 }
 
-/// Draws [pane]'s tree into [area].
+/// When tmux draws the status line again (a key with a binding, a prompt or what is typed in it,
+/// a message coming or going, each status-interval): server_client_check_modes then builds a
+/// pane's tree again (window_tree_update) — the current line found by its tag, the offset from it.
+fn status_mark(app: &App) -> (u64, u64, String) {
+    let interval: u64 = app.options.get("status-interval", "", None).and_then(|v| v.parse().ok()).unwrap_or(15);
+    let ticks = if interval > 0 && app.status_lines() > 0 { app.started.elapsed().as_secs() / interval } else { 0 };
+    let message = app.toast.as_ref().filter(|(_, _, at)| at.elapsed() < std::time::Duration::from_millis(app.display_ms)).map(|(t, _, _)| t.as_str());
+    let line = match &app.modal {
+        Some(Modal::Prompt(p)) => format!("prompt {}\0{}\0{}", p.label, p.value, p.cursor),
+        Some(Modal::Confirm { prompt, .. }) => format!("confirm {prompt}"),
+        _ => message.map(|m| format!("message {m}")).unwrap_or_default(),
+    };
+    (app.status_redraws, ticks, line)
+}
+
+/// Draws [pane]'s tree into [area]: built again if the status line was (status_mark), else only
+/// brought up to date, its lines where they were.
 pub fn draw(app: &mut App, pane: u64, buf: &mut Buffer, area: Rect) {
     let Some(mut t) = take(app, pane) else { return };
-    t.build(app, area.width as u32, area.height as u32);
+    let (sx, sy) = (area.width as u32, area.height as u32);
+    let mark = status_mark(app);
+    if t.status_seen != mark { t.status_seen = mark; t.build(app, sx, sy) } else { t.refresh(app, sx, sy) }
     t.draw(app, buf, area);
     put(app, pane, t);
 }
@@ -783,7 +818,7 @@ fn is_meta(c: &Chord, ch: char) -> bool { *c == Chord::normal(KeyCode::Char(ch),
 pub fn key(app: &mut App, pane: u64, chord: Chord, m: Option<&crate::mouse::Event>, client: bool) {
     let Some(mut t) = take(app, pane) else { return };
     let (sx, sy) = crate::copy::screen_size(app, pane);
-    t.build(app, sx, sy);
+    t.refresh(app, sx, sy);
     let mut item = (t.builds, t.current_item());
     let mut key = Some(chord);
     let mut x = 0u32;
@@ -1046,7 +1081,7 @@ fn run_command(app: &mut App, target: Option<(String, u64)>, template: &str, nam
 pub fn answer(app: &mut App, pane: u64, ask: Ask, value: Option<&str>) {
     let Some(mut t) = take(app, pane) else { return };
     let (sx, sy) = crate::copy::screen_size(app, pane);
-    t.build(app, sx, sy);
+    t.refresh(app, sx, sy);
     match ask {
         Ask::Search => {
             t.search = value.filter(|s| !s.is_empty()).map(str::to_string);
