@@ -74,6 +74,17 @@ const daemonRosterJson = r'''
       "1.0": 2,
       "2.0": 4
     },
+    "bond": {
+      "xpPerTurn": 1,
+      "xpPerDay": 5,
+      "levels": [
+        0,
+        50,
+        150,
+        300,
+        600
+      ]
+    },
     "statusCells": 8,
     "portraitMaxCols": 28,
     "portraitMaxRows": 8,
@@ -171,6 +182,15 @@ const daemonRosterJson = r'''
           "bat": 4
         }
       },
+      "history": {
+        "look": "\\_47_/",
+        "weights": {
+          "common": 60,
+          "rare": 27,
+          "legendary": 12,
+          "secret": 1
+        }
+      },
       "easter": {
         "look": "\\_?_/",
         "weights": {
@@ -180,6 +200,29 @@ const daemonRosterJson = r'''
           "secret": 50
         }
       }
+    },
+    "earn": {
+      "turn": {
+        "every": 40,
+        "dailyCap": 20
+      },
+      "week": {
+        "days": 3
+      },
+      "marathon": {
+        "turns": 500,
+        "machines": 2
+      },
+      "night": {
+        "nights": 3,
+        "fromHour": 0,
+        "toHour": 4
+      }
+    },
+    "historyDates": {
+      "04-01": "teapot",
+      "09-09": "moth",
+      "10-31": "zombie"
     },
     "easterWords": [
       "xyzzy"

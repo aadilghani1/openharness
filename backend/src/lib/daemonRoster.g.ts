@@ -67,6 +67,14 @@ export const DAEMON_ROSTER = {
           "bat": 4
         }
       },
+      "history": {
+        "weights": {
+          "common": 60,
+          "rare": 27,
+          "legendary": 12,
+          "secret": 1
+        }
+      },
       "easter": {
         "weights": {
           "common": 0,
@@ -83,7 +91,46 @@ export const DAEMON_ROSTER = {
       "0.1",
       "1.0",
       "2.0"
-    ]
+    ],
+    "bondForVersion": {
+      "0.1": 0,
+      "1.0": 2,
+      "2.0": 4
+    },
+    "bond": {
+      "xpPerTurn": 1,
+      "xpPerDay": 5,
+      "levels": [
+        0,
+        50,
+        150,
+        300,
+        600
+      ]
+    },
+    "earn": {
+      "turn": {
+        "every": 40,
+        "dailyCap": 20
+      },
+      "week": {
+        "days": 3
+      },
+      "marathon": {
+        "turns": 500,
+        "machines": 2
+      },
+      "night": {
+        "nights": 3,
+        "fromHour": 0,
+        "toHour": 4
+      }
+    },
+    "historyDates": {
+      "04-01": "teapot",
+      "09-09": "moth",
+      "10-31": "zombie"
+    }
   },
   "drops": [
     "unix"

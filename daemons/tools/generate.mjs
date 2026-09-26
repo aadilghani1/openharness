@@ -61,6 +61,34 @@ for (const [kind, egg] of Object.entries(rules.eggs)) {
   for (const id of Object.keys(egg.boost || {})) if (!ids.has(id)) fail(`egg ${kind}: boosts unknown daemon ${id}`)
 }
 if (rules.firstEgg.need > rules.firstEgg.habits.length) fail('first egg needs more habits than exist')
+// Earning and growing (README, "Earning eggs and growing"): whole positive numbers, an egg rule for every
+// kind the server grants, levels that climb from 0, and a version for every level a daemon can reach.
+const whole = (v, min = 1) => Number.isInteger(v) && v >= min
+for (const kind of ['turn', 'week', 'marathon', 'night', 'history']) if (!rules.eggs[kind]) fail(`egg ${kind} is earned but has no egg rule`)
+const earn = rules.earn ?? {}
+for (const [path, v] of [['turn.every', earn.turn?.every], ['turn.dailyCap', earn.turn?.dailyCap], ['week.days', earn.week?.days],
+  ['marathon.turns', earn.marathon?.turns], ['marathon.machines', earn.marathon?.machines], ['night.nights', earn.night?.nights]]) {
+  if (!whole(v)) fail(`earn.${path} must be a whole number of at least 1`)
+}
+if (earn.week?.days > 7) fail('earn.week.days cannot be more than the 7 days of a week')
+if (!whole(earn.night?.fromHour, 0) || !whole(earn.night?.toHour, 0) || earn.night.fromHour > earn.night.toHour || earn.night.toHour > 23) {
+  fail('earn.night hours must be 0-23, fromHour <= toHour')
+}
+const levels = rules.bond?.levels ?? []
+if (levels[0] !== 0 || levels.some((x, i) => !whole(x, 0) || (i > 0 && x <= levels[i - 1]))) fail('bond.levels must start at 0 and climb')
+if (!whole(rules.bond?.xpPerTurn, 0) || !whole(rules.bond?.xpPerDay, 0)) fail('bond.xpPerTurn and bond.xpPerDay must be whole numbers')
+for (const v of rules.versions) {
+  const at = rules.bondForVersion[v]
+  if (!whole(at, 0) || at >= levels.length) fail(`bondForVersion.${v} must be a level from 0 to ${levels.length - 1}`)
+}
+if (rules.bondForVersion[rules.versions[0]] !== 0) fail('the first version must need bond level 0')
+// A history date may name a daemon no drop holds yet: its eggs draw from the usual pool until one does.
+for (const [date, id] of Object.entries(rules.historyDates ?? {})) {
+  const [m, d] = date.split('-').map(Number)
+  const real = /^\d\d-\d\d$/.test(date) && m >= 1 && m <= 12 && d >= 1 && new Date(Date.UTC(2024, m - 1, d)).getUTCDate() === d
+  if (!real) fail(`historyDates: ${date} is not a MM-DD calendar date`)
+  if (id !== null && !/^[a-z][a-z0-9-]{0,15}$/.test(id)) fail(`historyDates.${date}: ${id} is not a daemon id or null`)
+}
 if (text.includes("'''")) fail("roster.json may not contain ''' (the Dart copy is a raw string)")
 if (problems.length) {
   console.error(problems.map(p => '  ' + p).join('\n'))
@@ -84,7 +112,8 @@ function output(path, content) {
 const header = '// Generated from daemons/roster.json by daemons/tools/generate.mjs. Do not edit.\n'
 output('desktop/lib/daemons/roster.g.dart', `${header}// ignore_for_file: prefer_single_quotes\nconst daemonRosterJson = r'''\n${text}''';\n`)
 
-// The server needs only what decides a draw: who exists, how rare, and the egg rules. Art stays in the clients.
+// The server needs only what decides a draw, a grant or a level: who exists, how rare, the egg rules,
+// what earns an egg and how bond grows. Art stays in the clients.
 const server = {
   version: roster.version,
   rules: {
@@ -95,6 +124,10 @@ const server = {
     eggs: Object.fromEntries(Object.entries(rules.eggs).map(([k, e]) => [k, { weights: e.weights, ...(e.boost ? { boost: e.boost } : {}) }])),
     easterWords: rules.easterWords,
     versions: rules.versions,
+    bondForVersion: rules.bondForVersion,
+    bond: rules.bond,
+    earn: rules.earn,
+    historyDates: rules.historyDates,
   },
   drops: roster.drops.map(d => d.id),
   daemons: roster.daemons.map(d => ({ id: d.id, n: d.n, drop: d.drop, rarity: d.rarity })),
