@@ -9,6 +9,8 @@ import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
+import 'package:harness_mobile/phone/link_page.dart';
+import 'package:harness_mobile/phone/machines_tab.dart';
 import 'package:harness_mobile/phone/welcome/connect_computer.dart';
 import 'package:harness_mobile/phone/welcome/phone_welcome.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
@@ -353,6 +355,40 @@ void main() {
       ConnectComputerPage(notifier: notifier, onTrySample: (_) {}),
     );
     await shoot(tester, key, '0d-connect-computer');
+  });
+
+  void addOtherComputers() {
+    const studio = Machine(
+      machineId: 'studio',
+      authMode: MachineAuthMode.remote,
+      name: 'studio',
+    );
+    const laptop = Machine(
+      machineId: 'laptop',
+      authMode: MachineAuthMode.remote,
+      name: 'laptop',
+    );
+    notifier.machines = [...notifier.machines, studio, laptop];
+    notifier.machineStates['studio'] = MachineState(studio)
+      ..nodeOnline = true
+      ..needsLink = true
+      ..agentLoadStatus = AgentLoadStatus.needsLink;
+    notifier.machineStates['laptop'] = MachineState(laptop)..nodeOnline = false;
+  }
+
+  testWidgets('computers', skip: skip, (tester) async {
+    addOtherComputers();
+    final key = await pumpScreen(tester, MachinesTab(notifier: notifier));
+    await shoot(tester, key, '0e-computers');
+  });
+
+  testWidgets('unlock a computer', skip: skip, (tester) async {
+    addOtherComputers();
+    final key = await pumpScreen(
+      tester,
+      LinkPage(notifier: notifier, machineId: 'studio'),
+    );
+    await shoot(tester, key, '0f-unlock');
   });
 
   testWidgets('focus', skip: skip, (tester) async {
