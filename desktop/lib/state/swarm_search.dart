@@ -63,6 +63,7 @@ class SwarmSearchController extends ChangeNotifier {
     this.offersCreate = false,
     this.offersHarnessCreate = true,
     this.resultsFromBottom = false,
+    this.noteFor,
     this._placement,
     this._split,
     bool previewInitiallyVisible = true,
@@ -90,6 +91,10 @@ class SwarmSearchController extends ChangeNotifier {
 
   final AppNotifier app;
   final List<String> recent;
+
+  /// A line the box answers a query with, shown as the first row and never
+  /// taken by Return (the daemons' easter words: `xyzzy`).
+  final String? Function(String query)? noteFor;
   final SwarmProjectStore? projects;
   final ModelSearchCatalog? models;
   bool modelDownloadsVisible = false;
@@ -1326,6 +1331,21 @@ class SwarmSearchController extends ChangeNotifier {
             : order[a.id]!.compareTo(order[b.id]!);
       });
     }
+    if (!isCommandMode && !isHelpMode) {
+      if (noteFor?.call(query) case final note?) {
+        rows = [
+          SwarmDestination(
+            id: 'note:${query.trim().toLowerCase()}',
+            title: note,
+            detail: '',
+            swarmId: null,
+            current: false,
+            isNote: true,
+          ),
+          ...rows,
+        ];
+      }
+    }
     // The parent stays above its children visually, but Enter after a query
     // still targets the best match, including an agent nested under that parent.
     final preferred =
@@ -1368,7 +1388,9 @@ class SwarmSearchController extends ChangeNotifier {
     }
     _selectedId = selected?.id;
     matchCount = rows
-        .where((row) => !row.isCreate && !isModelDownloadsRow(row))
+        .where(
+          (row) => !row.isCreate && !row.isNote && !isModelDownloadsRow(row),
+        )
         .length;
   }
 
@@ -1505,7 +1527,8 @@ class SwarmSearchController extends ChangeNotifier {
   }
 
   bool canSubmit(SwarmDestination? row) =>
-      sessionUnavailable(row) != null ||
+      row?.isNote == true ||
+          sessionUnavailable(row) != null ||
           sessionFilter == SessionFilter.needsInput &&
               _unavailableAttentionIds.contains(row?.id)
       ? false
