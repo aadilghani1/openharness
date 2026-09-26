@@ -2825,6 +2825,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
             readHistory,
           }]
         }),
+        agents: () => [...registry.list(), ...stoppedAgents.list()].map((s) => s.agentId),
         log: (line) => console.log(line),
       })
       index.start()

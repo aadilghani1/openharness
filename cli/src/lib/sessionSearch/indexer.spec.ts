@@ -20,14 +20,14 @@ const at = (minute: number) => `2026-09-20T10:${String(minute).padStart(2, '0')}
 const prompt = (text: string, minute: number) => JSON.stringify({ type: 'user', timestamp: at(minute), message: { role: 'user', content: text } }) + '\n'
 const answer = (text: string, minute: number) => JSON.stringify({ type: 'assistant', timestamp: at(minute), message: { role: 'assistant', content: [{ type: 'text', text }], stop_reason: 'end_turn' } }) + '\n'
 
-function setup(initial: string) {
+function setup(initial: string, agents?: () => string[]) {
   const dir = mkdtempSync(join(tmpdir(), 'session-search-'))
   dirs.push(dir)
   const path = join(dir, 's1.jsonl')
   writeFileSync(path, initial)
   const store = SessionSearchStore.open(':memory:')!
   let sources: SearchSource[] = [{ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: path, header: 'Dial firmware · harness', updatedAt: 1 }]
-  const index = new SessionSearchIndex({ store, sources: () => sources, touchDelayMs: 5 })
+  const index = new SessionSearchIndex({ store, sources: () => sources, agents, touchDelayMs: 5 })
   cleanups.push(() => { index.stop(); store.close() })
   const found = (query: string) => index.search(query).hits.map((hit) => hit.sessionId)
   const settle = async () => {
@@ -127,11 +127,36 @@ describe('SessionSearchIndex', () => {
     await vi.waitFor(() => { expect(found('tag')).toEqual(['ses_1']) })
     expect(reads).toBe(2)
 
-    history = [...history, { type: 'user_message', payload: { content: 'publish the changelog' } }]
+    // Its registry time moving (the process re-observed) is not a reason to read it all again…
     source = { ...source, updatedAt: 200 }
     index.sweep()
+    await index.drain()
+    expect(reads).toBe(2)
+    // …and a turn event that changed nothing leaves it as it was worked on.
+    const before = store.session('ses_1')!.lastAt
+    index.touch('ses_1')
+    await vi.waitFor(() => { expect(reads).toBe(3) })
+    await index.drain()
+    expect(store.session('ses_1')!.lastAt).toBe(before)
+
+    const now = Date.now()
+    history = [...history, { type: 'user_message', payload: { content: 'publish the changelog' } }]
+    index.touch('ses_1')
     await vi.waitFor(() => { expect(found('changelog')).toEqual(['ses_1']) })
-    expect(store.session('ses_1')).toMatchObject({ turns: 3, lastAt: 200 })
+    expect(store.session('ses_1')!.turns).toBe(3)
+    expect(store.session('ses_1')!.lastAt).toBeGreaterThanOrEqual(now)
+  })
+
+  it('keeps an agent\'s sessions while the agent exists, even with nothing to read right now', async () => {
+    let agents = ['agent-1']
+    const { store, found, settle, setSources } = setup(prompt('the first conversation about tmux', 0), () => agents)
+    await settle()
+    setSources([])
+    await settle()
+    expect(found('tmux')).toEqual(['s1'])
+    agents = []
+    await settle()
+    expect(store.counts().sessions).toBe(0)
   })
 
   it('names folders the way a person would: the last two segments', () => {

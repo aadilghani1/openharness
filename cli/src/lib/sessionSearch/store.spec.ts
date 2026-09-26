@@ -60,6 +60,13 @@ describe('makeSnippet', () => {
     expect(makeSnippet('nothing here', words(['scroll']))).toBeNull()
   })
 
+  it('survives a match inside one long unbroken run', () => {
+    const run = '東'.repeat(700)
+    expect(() => makeSnippet(run, words(['東東']))).not.toThrow()
+    const token = `eyJ${'a'.repeat(900)} and more`
+    expect(makeSnippet(token, words(['eyj']))).toContain(MARK_OPEN)
+  })
+
   it('matches a word of parts as the index does, and keeps short text whole', () => {
     expect(plain(makeSnippet('edit desktop/lib/swarm_search.dart now', words(['swarm', 'search', 'dart']))!))
       .toBe('edit desktop/lib/[swarm_search.dart] now')
@@ -92,6 +99,19 @@ describe('SessionSearchStore', () => {
     store.writeSession(session('half', 'C', NOW), 0, [turn(0, 'port only')])
     const hits = store.search('windows port', { now: NOW })
     expect(hits.map((hit) => [hit.sessionId, hit.together])).toEqual([['together', true], ['spread', false]])
+  })
+
+  it('keeps a session with every word even when common words fill the ranked window', () => {
+    const store = open()
+    const filler = Array.from({ length: 3_100 }, (_, index) => turn(index, 'alpha beta'))
+    store.writeSession(session('filler', 'F', NOW), 0, filler)
+    store.writeSession(session('spread', 'S', NOW), 0, [
+      turn(0, `alpha ${'padding '.repeat(80)}`),
+      turn(1, `beta ${'padding '.repeat(80)}`),
+    ])
+    const hits = store.search('alpha beta', { now: NOW })
+    expect(hits.map((hit) => [hit.sessionId, hit.together])).toEqual([['filler', true], ['spread', false]])
+    expect(plain(hits[1].snippet)).toMatch(/\[(alpha|beta)\]/)
   })
 
   it('matches words split between the session name and what was said in it', () => {

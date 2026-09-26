@@ -3,7 +3,6 @@
  * said these words, and where. Reads the index the daemon keeps; never contacts it or a machine.
  */
 
-import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { MARK_CLOSE, MARK_OPEN, SessionSearchStore } from './store.js'
@@ -30,21 +29,46 @@ function age(at: number | null, now: number): string {
   return `${Math.round(minutes / 1440)}d ago`
 }
 
+function plainSnippet(marked: string): { snippet: string; matches: Array<[number, number]> } {
+  let snippet = ''
+  const matches: Array<[number, number]> = []
+  let open = -1
+  for (const char of marked) {
+    if (char === MARK_OPEN) open = snippet.length
+    else if (char === MARK_CLOSE) {
+      if (open >= 0) matches.push([open, snippet.length])
+      open = -1
+    } else snippet += char
+  }
+  return { snippet, matches }
+}
+
 export function searchCommand(opts: SearchCommandOptions): number {
-  const words = opts.argv.filter((arg) => !arg.startsWith('--'))
-  const json = opts.argv.includes('--json')
-  const limitFlag = opts.argv.find((arg) => arg.startsWith('--limit='))
-  const limit = limitFlag ? Number(limitFlag.slice('--limit='.length)) : 10
-  if (!words.length || !Number.isFinite(limit) || limit < 1) {
+  const words: string[] = []
+  let json = false
+  let limit = 10
+  for (let index = 0; index < opts.argv.length; index++) {
+    const arg = opts.argv[index]
+    if (arg === '--json') json = true
+    else if (arg.startsWith('--limit=')) limit = Number(arg.slice('--limit='.length))
+    else if (arg === '--limit') limit = Number(opts.argv[++index])
+    else if (arg.startsWith('--')) limit = Number.NaN
+    else words.push(arg)
+  }
+  if (!words.length || !Number.isInteger(limit) || limit < 1) {
     opts.error(USAGE)
     return 2
   }
-  const path = join(opts.dataDir, SESSION_SEARCH_FILE)
-  if (!existsSync(path)) {
+  // Read-only beside the daemon, which owns the index: this never migrates or deletes it.
+  const store = SessionSearchStore.openReader(join(opts.dataDir, SESSION_SEARCH_FILE))
+  if (store === 'missing') {
     opts.error('No session index yet. The daemon builds it in the background after `harness start`.')
     return 1
   }
-  const store = SessionSearchStore.open(path)
+  if (store === 'outdated') {
+    opts.error('The session index is from another version of Harness. Restart the daemon (`harness stop`, then `harness start`) to rebuild it.')
+    return 1
+  }
   if (!store) {
     opts.error('Session search needs node:sqlite (Node 22.13 or later).')
     return 1
@@ -56,7 +80,9 @@ export function searchCommand(opts: SearchCommandOptions): number {
       name: store.session(hit.sessionId)?.header.split(' · ')[0] ?? hit.sessionId,
     }))
     if (json) {
-      opts.output(JSON.stringify({ hits }, null, 2))
+      // Plain text for scripts, with the matched words as [start, end) ranges rather than the
+      // control characters the RPC marks them with.
+      opts.output(JSON.stringify({ hits: hits.map(({ snippet, ...hit }) => ({ ...hit, ...plainSnippet(snippet) })) }, null, 2))
       return 0
     }
     if (!hits.length) {

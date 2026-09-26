@@ -46,8 +46,15 @@ export interface SessionSearchResult {
 
 export interface SessionSearchIndexOptions {
   store: SessionSearchStore
-  /** Every session this machine knows: live agents and stopped ones. */
+  /** Every session this machine can index: live agents and stopped ones. */
   sources: () => SearchSource[]
+  /**
+   * Every agent this machine knows, indexable right now or not. An agent's sessions leave the index
+   * only when the agent does — never because its current session has no transcript for a moment
+   * (a `/clear` between sessions), since its earlier ones cannot be read back once dropped.
+   * Defaults to the agents of `sources`.
+   */
+  agents?: () => Iterable<string>
   log?: (line: string) => void
   /** Between full sweeps. */
   sweepEveryMs?: number
@@ -124,7 +131,7 @@ export class SessionSearchIndex {
   sweep(): void {
     if (this.stopped) return
     this.refreshSources(true)
-    const agents = new Set([...this.sources.values()].map((source) => source.agentId))
+    const agents = new Set(this.opts.agents?.() ?? [...this.sources.values()].map((source) => source.agentId))
     for (const sessionId of this.opts.store.sessionIds()) {
       // An agent's earlier sessions (before a /clear) stay findable while the agent exists.
       const indexed = this.opts.store.session(sessionId)
@@ -235,11 +242,15 @@ export class SessionSearchIndex {
     }
   }
 
-  /** A database-backed session, read whole when it changed; its update time stands in for a size. */
+  /**
+   * A database-backed session, read whole the first time and after each turn event (`touch`). Its
+   * registry update time is no guide: re-observing the process bumps it, and a sweep that believed
+   * it would re-read every such history every ten minutes. What it read is fingerprinted, so the
+   * session counts as worked on only when its conversation actually changed.
+   */
   private async historyPass(source: SearchSource, existing: IndexedSession | undefined, dirty: boolean): Promise<void> {
     const store = this.opts.store
-    const stamp = source.updatedAt
-    if (existing && existing.mtime === stamp && !dirty) {
+    if (existing && !dirty) {
       if (existing.header !== source.header || existing.agentId !== source.agentId) {
         store.writeSession({ ...existing, header: source.header, agentId: source.agentId }, NO_TURN_DELETE, [])
       }
@@ -253,12 +264,19 @@ export class SessionSearchIndex {
       await this.pace()
     }
     const { closed, open } = collector.finish()
+    const turns = open ? [...closed, open] : closed
+    // The size field holds the fingerprint: how much conversation there was when last read.
+    const fingerprint = turns.reduce((sum, turn) => sum + turn.ask.length + turn.answer.length + turn.tools.length + 1, 0)
+    if (existing && existing.size === fingerprint && existing.header === source.header && existing.agentId === source.agentId) return
+    const changed = !existing || existing.size !== fingerprint
     store.writeSession({
       sessionId: source.sessionId, agentId: source.agentId, engine: source.engine, path: '',
-      header: source.header, size: 0, mtime: stamp, resumeOffset: 0, resumeTurn: 0,
-      lastAt: stamp || existing?.lastAt || null, turns: 0,
-    }, 0, open ? [...closed, open] : closed)
-    if (!existing) this.opts.log?.(`[search] indexed ${source.sessionId.slice(0, 8)} · ${source.engine} · ${closed.length + (open ? 1 : 0)} turns`)
+      header: source.header, size: fingerprint, mtime: 0, resumeOffset: 0, resumeTurn: 0,
+      // First read: the registry's time is the best there is. After that, a change is news now.
+      lastAt: !existing ? source.updatedAt || null : changed ? Date.now() : existing.lastAt,
+      turns: 0,
+    }, 0, turns)
+    if (!existing) this.opts.log?.(`[search] indexed ${source.sessionId.slice(0, 8)} · ${source.engine} · ${turns.length} turns`)
   }
 
   private async pace(): Promise<void> {

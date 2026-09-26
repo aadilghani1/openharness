@@ -146,9 +146,11 @@ export function makeSnippet(text: string, patterns: RegExp[]): string | null {
   const regionEnd = Math.min(text.length, first + 600)
   const words = [...text.slice(regionStart, regionEnd).matchAll(/[\p{L}\p{N}]+/gu)]
     .map((word) => Object.assign(word, { index: word.index! + regionStart }))
-  // A word cut by the region's edge is not a word: drop it, unless the edge is the text's own.
-  if (regionStart > 0 && words.length && words[0].index === regionStart) words.shift()
-  if (regionEnd < text.length && words.length && words.at(-1)!.index! + words.at(-1)![0].length === regionEnd) words.pop()
+  // A word cut by the region's edge is not a word: drop it, unless the edge is the text's own —
+  // or it is the only word there, as in a long run of CJK text or an encoded token.
+  if (regionStart > 0 && words.length > 1 && words[0].index === regionStart) words.shift()
+  if (regionEnd < text.length && words.length > 1 && words.at(-1)!.index! + words.at(-1)![0].length === regionEnd) words.pop()
+  if (!words.length) return null
   let at = words.findIndex((word) => word.index! + word[0].length > first)
   if (at < 0) at = words.length - 1
   const from = Math.max(0, at - SNIPPET_BEFORE)
@@ -182,18 +184,44 @@ export class SessionSearchStore {
   }
 
   /**
-   * The index at `path`, created if missing; null on a Node without `node:sqlite`. The index is
-   * derived data — every row can be rebuilt from the transcripts — so a file that will not open is
-   * deleted and started again rather than leaving search broken until somebody notices.
+   * The index at `path`, created if missing, for its one writer: the daemon. Null on a Node without
+   * `node:sqlite`. The index is derived data — every row can be rebuilt from the transcripts — so a
+   * file SQLite says is not a database, or is corrupt, is deleted and started again rather than
+   * leaving search broken until somebody notices. Anything else (a lock held by another process)
+   * is thrown: deleting a file somebody has open loses their writes.
    */
   static open(path: string): SessionSearchStore | null {
     try {
       return SessionSearchStore.openOnce(path)
     } catch (error) {
-      if (path === ':memory:') throw error
+      if (path === ':memory:' || !isCorrupt(error)) throw error
       for (const suffix of ['', '-wal', '-shm']) rmSync(`${path}${suffix}`, { force: true })
       return SessionSearchStore.openOnce(path)
     }
+  }
+
+  /**
+   * The index for a reader beside the daemon (`harness search`): read-only, never migrated, never
+   * deleted. `outdated` when it was written by another schema version — the daemon of that version
+   * owns it and rebuilds it on its next start.
+   */
+  static openReader(path: string): SessionSearchStore | 'missing' | 'outdated' | null {
+    const Constructor = builtinSqlite() as unknown as DatabaseConstructor | null
+    if (!Constructor) return null
+    if (!existsSync(path)) return 'missing'
+    const db = new Constructor(path, { readOnly: true })
+    try {
+      db.exec('PRAGMA busy_timeout = 1000')
+      const version = db.prepare("SELECT value FROM meta WHERE key = 'schema'").get()?.value
+      if (version !== SCHEMA_VERSION) {
+        db.close()
+        return 'outdated'
+      }
+    } catch {
+      db.close()
+      return 'outdated'
+    }
+    return new SessionSearchStore(db)
   }
 
   private static openOnce(path: string): SessionSearchStore | null {
@@ -402,6 +430,23 @@ export class SessionSearchStore {
           if (!known || rank < known.rank) into.set(sid, { id: row.id as number, turn, at: row.at as number | null, rank, together: false })
         }
         for (const [sid, match] of header) if (!best.has(sid)) best.set(sid, match)
+        // Common words can fill that ranked window with other sessions' rows. A session that has
+        // every word must not vanish for it: look its best turn up directly, a bounded few at a time,
+        // and rank it last among its kind.
+        const missing = [...spread].filter((sid) => !best.has(sid)).slice(0, limit)
+        if (missing.length) {
+          // bm25 is negative and lower is better, so the weakest rank so far is the largest.
+          let weakest = Number.NEGATIVE_INFINITY
+          for (const match of best.values()) weakest = Math.max(weakest, match.rank)
+          const worst = Number.isFinite(weakest) ? weakest : -1
+          const bestTurn = this.statement(`
+            SELECT t.id AS id, t.turn AS turn, t.at AS at FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid
+            WHERE turns_fts MATCH ? AND t.session_id = ? ORDER BY (t.turn < 0), bm25(turns_fts, ${WEIGHTS.join(', ')}) LIMIT 1`)
+          for (const sid of missing) {
+            const row = bestTurn.get(terms[rarestIndex], sid)
+            if (row) best.set(sid, { id: row.id as number, turn: row.turn as number, at: row.at as number | null, rank: worst * 0.9, together: false })
+          }
+        }
       }
     }
     if (!best.size) return []
@@ -460,6 +505,13 @@ export class SessionSearchStore {
     this.statements.clear()
     this.db.close()
   }
+}
+
+/** SQLite's SQLITE_CORRUPT (11) and SQLITE_NOTADB (26), as node:sqlite reports them. */
+function isCorrupt(error: unknown): boolean {
+  const code = (error as { errcode?: number } | null)?.errcode
+  if (code === 11 || code === 26) return true
+  return /not a database|malformed/i.test(error instanceof Error ? error.message : String(error))
 }
 
 function toSession(row: Record<string, unknown>): IndexedSession {
