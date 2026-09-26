@@ -591,6 +591,51 @@ _Place _placeOf(SampleHarness harness) {
   return _places[project] ?? _anywhere;
 }
 
+/// A task's name as a harness would be named for it — `Add a dark mode toggle` → `dark-mode-toggle`:
+/// its first three words that say what, lowercased. Null when nothing is left.
+String? sampleSlug(String task) {
+  const skip = {
+    'a',
+    'an',
+    'the',
+    'to',
+    'and',
+    'of',
+    'for',
+    'in',
+    'on',
+    'with',
+    'my',
+    'our',
+    'this',
+    'that',
+    'please',
+    'add',
+    'make',
+    'create',
+    'build',
+    'write',
+    'implement',
+    'fix',
+    'update',
+    'change',
+    'find',
+    'run',
+    'explain',
+    'show',
+    'me',
+    'it',
+    'some',
+    'new',
+  };
+  final words = [
+    for (final word in task.toLowerCase().split(RegExp(r'[^a-z0-9]+')))
+      if (word.isNotEmpty && !skip.contains(word)) word,
+  ];
+  if (words.isEmpty) return null;
+  return words.take(3).join('-');
+}
+
 bool _mentions(String text, List<String> words) =>
     words.any((word) => RegExp('\\b$word\\b').hasMatch(text));
 
@@ -685,6 +730,35 @@ List<SampleStep> sampleReply(SampleHarness harness, String text) {
       tool('Bash', place.test, [place.passed], ms: 1800),
       ...finish(
         'Fixed the one failure, in `${place.file}` — ${place.passes} now.',
+      ),
+    ];
+  }
+  // Something new to build: a file named for it, wired in where the project's work lives.
+  if (sampleSlug(text) case final slug?) {
+    final ext = place.file.contains('.') ? place.file.split('.').last : 'ts';
+    final dir = place.file.contains('/')
+        ? place.file.substring(0, place.file.lastIndexOf('/'))
+        : 'src';
+    final file = '$dir/$slug.$ext';
+    final camel = slug
+        .split('-')
+        .indexed
+        .map(
+          (part) => part.$1 == 0
+              ? part.$2
+              : '${part.$2[0].toUpperCase()}${part.$2.substring(1)}',
+        )
+        .join();
+    return [
+      ...onIt,
+      tool('Read', place.file, ['Read 96 lines']),
+      tool('Write', file, ['Wrote 42 lines to $file']),
+      diff(place.file, [DiffLine(3, '+', "import { $camel } from './$slug';")]),
+      verb('Testing', 300),
+      tool('Bash', place.test, [place.passed], ms: 1700),
+      ...finish(
+        'Done — added `$file` and wired it into `${place.file}`; '
+        '${place.passes}.',
       ),
     ];
   }

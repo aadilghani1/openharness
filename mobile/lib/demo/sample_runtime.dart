@@ -401,13 +401,11 @@ class SampleRuntime implements SampleHarnessHost {
     final task = (payload['prompt'] as String?)?.trim();
     final agent = sampleAgentJson(
       id: 'sample-new-$number',
-      name: 'harness-${number + 5}',
+      // Named for its task the way the others are named — `dark-mode-toggle` — or numbered.
+      name: (task == null ? null : sampleSlug(task)) ?? 'harness-${number + 5}',
       engine: engine,
       project: project,
       branch: branch,
-      title: task == null || task.isEmpty
-          ? null
-          : (task.length <= 60 ? task : '${task.substring(0, 59)}…'),
       updatedAt: DateTime.now(),
     );
     (agent['project'] as Map)['cwd'] = cwd;
