@@ -13,7 +13,6 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:xterm/xterm.dart' show TerminalKey;
 
 import 'package:harness_mobile/core/models.dart' show Agent, AgentProject;
-import 'package:harness_mobile/notify/agent_notice.dart' show NoticeKind;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -50,7 +49,8 @@ import 'voice_bar_line.dart';
 import 'voice_mic_button.dart';
 import 'phone_navigation.dart';
 import 'agent_index.dart';
-import 'tmux_status_line.dart';
+import 'command_line.dart';
+import 'terminal_title.dart';
 import 'voice_input_controller.dart';
 
 /// One agent's terminal, filling the phone. The header says whose it is and whether it is live;
@@ -802,73 +802,29 @@ class _TerminalPageState extends State<TerminalPage>
     });
   }
 
-  /// The status line's windows: the agents used most recently, the one on screen among them —
-  /// three at most, tmux's window list for the two or three agents worked with on the go.
-  /// The status line's windows and what did not fit: the agent on screen, every agent asking (tmux
-  /// keeps a belled window in view), the one before, then the most recently used — four at most;
-  /// asking agents past that are counted into `+N!`.
-  ({List<TmuxWindow> windows, int askingOverflow}) _statusBar() {
-    final notifier = widget.notifier;
-    final entries = visibleAgents(agentIndex(notifier))
-      ..sort(compareMonitorOrder);
-    bool here(AgentEntry entry) =>
-        entry.machineId == widget.machineId && entry.agent.id == widget.agentId;
-    final current = entries.where(here).firstOrNull;
-    final asking = [
-      for (final entry in entries)
-        if (entry.isWaiting && !here(entry)) entry,
-    ];
-    final others = [
-      for (final entry in entries)
-        if (!here(entry) && !entry.isWaiting) entry,
-    ];
-    const room = 4;
-    final shown = <AgentEntry>[?current];
-    final pinned = asking.take(room - shown.length).toList();
-    shown.addAll(pinned);
-    final lastEntry = others.firstOrNull;
-    for (final entry in others) {
-      if (shown.length >= room) break;
-      shown.add(entry);
-    }
-    TmuxFlag flagOf(AgentEntry entry) {
-      if (entry.isWaiting) return TmuxFlag.asking;
-      if (entry.isWorking) return TmuxFlag.working;
-      final unread = notifier.agentNotices.unread.kindFor((
-        machineId: entry.machineId,
-        agentId: entry.agent.id,
-      ));
-      return unread == NoticeKind.done ? TmuxFlag.done : TmuxFlag.none;
-    }
+  /// Agents other than this one that are asking something — the title's `N!`.
+  int _askingElsewhere() => visibleAgents(agentIndex(widget.notifier))
+      .where(
+        (entry) =>
+            entry.isWaiting &&
+            !(entry.machineId == widget.machineId &&
+                entry.agent.id == widget.agentId),
+      )
+      .length;
 
-    return (
-      windows: [
-        for (final entry in shown)
-          TmuxWindow(
-            label: _windowName(entry.agent.displayName),
-            machine: entry.machineId == widget.machineId
-                ? null
-                : entry.machine.machine.displayName,
-            current: here(entry),
-            last: identical(entry, lastEntry),
-            flag: flagOf(entry),
-            onTap: () => openAgent(
-              context,
-              widget.notifier,
-              entry.machineId,
-              entry.agent.id,
-            ),
-          ),
-      ],
-      askingOverflow: asking.length - pinned.length,
-    );
+  /// `machine:folder` for the title — where the agent works.
+  static String? _placeOf(Agent? agent, MachineState? machine) {
+    final folder = agent?.project?.name;
+    final name = machine?.machine.displayName;
+    if (folder == null || folder.isEmpty) return name;
+    return name == null ? folder : '$name:$folder';
   }
 
-  /// tmux's message line on the status bar, for a moment — see [_flash].
+  /// vim's message line, for a moment — see [_flash].
   final _barMessage = ValueNotifier<({String text, bool error})?>(null);
   Timer? _barMessageTimer;
 
-  /// Says [text] on the status line for two seconds, the way tmux's `display-message` does.
+  /// Says [text] on the command line for two seconds, the way tmux's `display-message` does.
   void _flash(String text, {bool error = false}) {
     _barMessageTimer?.cancel();
     _barMessage.value = (text: text, error: error);
@@ -1744,7 +1700,7 @@ class _TerminalPageState extends State<TerminalPage>
                                           0,
                                           !_keyBarUp &&
                                                   _questionWatcher?.view != null
-                                              ? -4 * Tty.of(context).row
+                                              ? -6 * Tty.of(context).row
                                               : 0,
                                         ),
                                         // ⚠️ The chrome is driven from OUT HERE, not
@@ -1917,95 +1873,12 @@ class _TerminalPageState extends State<TerminalPage>
                               ),
                             ),
                           ),
-                          // tmux's status line, at the foot like tmux's default, above
-                          // the home-indicator strip — never hidden, never over the
-                          // pane, so the pane is sized once. Gone while the keyboard
-                          // is up: the key bar takes the foot then.
-                          if (!_keyBarUp) ...[
-                            ListenableBuilder(
-                              listenable: Listenable.merge([
-                                widget.voice,
-                                _barMessage,
-                              ]),
-                              builder: (context, _) {
-                                final strip = _windowBottomInset;
-                                final slop = math.min(strip, 13.0);
-                                final bar = _statusBar();
-                                final view = _questionWatcher?.view;
-                                final message = _barMessage.value;
-                                final prompt =
-                                    view == null ||
-                                        !view.answerable ||
-                                        view.multi
-                                    ? null
-                                    : _answerKeys(view);
-                                final promptNote =
-                                    view != null && prompt == null
-                                    ? 'answer on screen'
-                                    : null;
-                                return Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    if (VoiceBarLine.shows(widget.voice))
-                                      VoiceBarLine(
-                                        voice: widget.voice,
-                                        agentName: _windowName(
-                                          agent?.displayName ?? 'agent',
-                                        ),
-                                        slop: slop,
-                                      )
-                                    else
-                                      TmuxStatusLine(
-                                        session:
-                                            machine?.machine.displayName ??
-                                            'harness',
-                                        windows: bar.windows,
-                                        askingOverflow: bar.askingOverflow,
-                                        onFind: _openSearch,
-                                        onEsc: _agentWorking && session != null
-                                            ? () => session.terminal.keyInput(
-                                                TerminalKey.escape,
-                                              )
-                                            : null,
-                                        state:
-                                            headerStatus.tone == PhoneTone.good
-                                            ? null
-                                            : headerStatus.label.toLowerCase(),
-                                        action:
-                                            reclaim != null &&
-                                                !blocked &&
-                                                _reclaiming == null
-                                            ? (
-                                                label: reclaim.label
-                                                    .toLowerCase(),
-                                                onTap: () =>
-                                                    unawaited(_takeControl()),
-                                              )
-                                            : null,
-                                        onActions: agent == null
-                                            ? null
-                                            : () => _showActions(
-                                                machineName:
-                                                    machine
-                                                        ?.machine
-                                                        .displayName ??
-                                                    '',
-                                                agent: agent,
-                                                status: headerStatus,
-                                              ),
-                                        slop: slop,
-                                        prompt: prompt,
-                                        promptNote: promptNote,
-                                        message: message,
-                                      ),
-                                    // The home-indicator strip, plain — the bar's
-                                    // touch already reaches [slop] into it.
-                                    SizedBox(height: strip - slop),
-                                  ],
-                                );
-                              },
-                            ),
-                          ],
+                          // Nothing at the foot but the home-indicator strip: the
+                          // terminal is the screen. What vim would say on its last
+                          // line — an answer to give, a take, a message — is laid
+                          // over the terminal's bottom rows only while it has
+                          // something to say. See [CommandLine].
+                          if (!_keyBarUp) SizedBox(height: _windowBottomInset),
                           // The bottom of this page IS just above the keyboard:
                           // `PhoneShell`'s Scaffold has already resized for it —
                           // the same resize that empties this page's MediaQuery
@@ -2040,6 +1913,102 @@ class _TerminalPageState extends State<TerminalPage>
                         ],
                       ),
                     ),
+                    // The title — the agent, then machine:folder and branch — over the
+                    // terminal's top rows. It slides away while the history is read back
+                    // and returns at the end of the output. See [TerminalTitle].
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: _SlideAway(
+                        progress: _chrome.header,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            TerminalTitle(
+                              name:
+                                  agent?.displayName ?? _cachedAgentName ?? '',
+                              place: _placeOf(agent, machine),
+                              branch: agent?.project?.branch,
+                              asking: _askingElsewhere(),
+                              onFind: _openSearch,
+                              state: headerStatus.tone == PhoneTone.good
+                                  ? null
+                                  : headerStatus.label.toLowerCase(),
+                              action:
+                                  reclaim != null &&
+                                      !blocked &&
+                                      _reclaiming == null
+                                  ? (
+                                      label: reclaim.label.toLowerCase(),
+                                      onTap: () => unawaited(_takeControl()),
+                                    )
+                                  : null,
+                              onActions: agent == null
+                                  ? null
+                                  : () => _showActions(
+                                      machineName:
+                                          machine?.machine.displayName ?? '',
+                                      agent: agent,
+                                      status: headerStatus,
+                                    ),
+                            ),
+                            // Read-only: whose terminal it is and the way to take it
+                            // back. See [_ControlBanner].
+                            if (blocked || _reclaiming == _Reclaim.control)
+                              _ControlBanner(
+                                watching: session?.watching ?? false,
+                                busy: !blocked,
+                                takeoverNotice: takeoverNotice,
+                                holderName: holderName,
+                                onTakeControl: _takeControl,
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    // vim's last line, only while it has something to say: a take in
+                    // progress, an agent's question with its answers as keys, or a
+                    // two-second message. Its touch reaches into the home strip.
+                    if (!_keyBarUp)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom:
+                            _windowBottomInset -
+                            math.min(_windowBottomInset, 13.0),
+                        child: ListenableBuilder(
+                          listenable: Listenable.merge([
+                            widget.voice,
+                            _barMessage,
+                          ]),
+                          builder: (context, _) {
+                            final slop = math.min(_windowBottomInset, 13.0);
+                            if (VoiceBarLine.shows(widget.voice)) {
+                              return VoiceBarLine(
+                                voice: widget.voice,
+                                agentName: _windowName(
+                                  agent?.displayName ?? 'agent',
+                                ),
+                                slop: slop,
+                              );
+                            }
+                            final view = _questionWatcher?.view;
+                            final prompt =
+                                view == null || !view.answerable || view.multi
+                                ? null
+                                : _answerKeys(view);
+                            return CommandLine(
+                              slop: slop,
+                              message: _barMessage.value,
+                              prompt: prompt,
+                              promptNote: view != null && prompt == null
+                                  ? 'answer on screen'
+                                  : null,
+                            );
+                          },
+                        ),
+                      ),
                     // tmux's copy-mode position, top right, while reading back
                     // through the history: `[42/1380]`. One tap is back at the end.
                     Positioned(
@@ -2070,10 +2039,11 @@ class _TerminalPageState extends State<TerminalPage>
                       Positioned(
                         left: 0,
                         right: 0,
+                        // Centred four rows above the home strip — clear of the
+                        // command line's two, where a thumb rests.
                         bottom:
                             _windowBottomInset +
-                            TmuxStatusLine.heightOf(Tty.of(context)) +
-                            2 * Tty.of(context).row -
+                            4 * Tty.of(context).row -
                             VoiceMicButton.extent / 2,
                         // Centred at its own size — the mic's slot must not
                         // stretch to the page's width.
@@ -2087,21 +2057,6 @@ class _TerminalPageState extends State<TerminalPage>
                             unread: widget.notifier.agentNotices.unread,
                             working: _agentWorking,
                           ),
-                        ),
-                      ),
-                    // Read-only: whose terminal it is and the way to take it back, over the
-                    // pane's top rows. See [_ControlBanner].
-                    if (blocked || _reclaiming == _Reclaim.control)
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        child: _ControlBanner(
-                          watching: session?.watching ?? false,
-                          busy: !blocked,
-                          takeoverNotice: takeoverNotice,
-                          holderName: holderName,
-                          onTakeControl: _takeControl,
                         ),
                       ),
                   ],
@@ -3228,4 +3183,35 @@ class _CopyModePosition extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Slides the title off the top as [progress] runs 0 → 1, fading it as it goes.
+class _SlideAway extends StatelessWidget {
+  const _SlideAway({required this.progress, required this.child});
+
+  /// 0 fully shown, 1 fully gone.
+  final Animation<double> progress;
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: progress,
+    // ⚠️ Built ONCE and passed through. What changes on a frame of a scroll is where the title is
+    // painted, not anything in it.
+    child: child,
+    builder: (context, child) {
+      final value = progress.value;
+      return IgnorePointer(
+        ignoring: value > 0,
+        child: FractionalTranslation(
+          translation: Offset(0, -value),
+          child: Opacity(
+            opacity: (1 - value / 0.66).clamp(0.0, 1.0),
+            child: child,
+          ),
+        ),
+      );
+    },
+  );
 }

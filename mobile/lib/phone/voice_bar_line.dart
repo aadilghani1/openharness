@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'tmux_status_line.dart';
+import 'command_line.dart';
 import 'tty.dart';
 import 'voice_input_controller.dart';
 
@@ -89,7 +89,7 @@ class _VoiceBarLineState extends State<VoiceBarLine> {
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final voice = widget.voice;
-    final bar = TmuxStatusLine.heightOf(tty);
+    final bar = CommandLine.heightOf(tty);
     final List<InlineSpan> said;
     if (voice.notice case final notice?) {
       said = [
