@@ -53,6 +53,9 @@ import 'agent_index.dart';
 import 'command_line.dart';
 import 'terminal_title.dart';
 import 'welcome/focus_hints.dart';
+
+import 'package:harness_mobile/demo/sample_mode.dart';
+
 import 'voice_input_controller.dart';
 
 /// One agent's terminal, filling the phone. The header says whose it is and whether it is live;
@@ -2251,6 +2254,13 @@ class _TerminalPageState extends State<TerminalPage>
         // the computers are a row in Settings.
         PhoneSheetSection(
           actions: [
+            // In the sample: the way back out, where a person looks for "what else can I do".
+            if (SampleMode.maybeOf(context) case final sample?)
+              PhoneSheetAction(
+                icon: LucideIcons.logOut300,
+                label: 'Leave the sample',
+                onTap: sample.leave,
+              ),
             PhoneSheetAction(
               icon: LucideIcons.settings300,
               label: 'Settings',

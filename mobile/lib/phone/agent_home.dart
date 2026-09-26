@@ -16,6 +16,9 @@ import 'agents_page.dart' show openNewAgent;
 import 'desk_groups.dart';
 import 'machines_tab.dart';
 import 'welcome/connect_computer.dart';
+
+import 'package:harness_mobile/demo/sample_mode.dart';
+
 import 'phone_fab.dart';
 import 'phone_header.dart';
 import 'phone_search_button.dart';
@@ -642,7 +645,10 @@ class _AgentHomeState extends State<AgentHome> {
           // but locked or asleep: the machines list, with its password form.
           if (widget.notifier.machines.isEmpty &&
               !widget.notifier.machinesLoading) {
-            return ConnectComputerPage(notifier: widget.notifier);
+            return ConnectComputerPage(
+              notifier: widget.notifier,
+              onTrySample: openSampleMode,
+            );
           }
           return MachinesTab(notifier: widget.notifier);
         }

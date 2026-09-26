@@ -136,7 +136,12 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     // account reported down was never even dialled. Asked on the way in, not
     // awaited: what is already known draws immediately, and each machine adds
     // its agents as it answers.
-    unawaited(notifier.reachAllMachines());
+    //
+    // ⚠️ After the frame, not in it: reaching can notify synchronously, and a notify while this
+    // list is being mounted marks the page above it dirty mid-build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(notifier.reachAllMachines());
+    });
     notifier.sessionPreviews.warm([
       for (final entry in recentAgents(agentIndex(notifier)))
         notifier.previewKey(entry.machineId, entry.agent),

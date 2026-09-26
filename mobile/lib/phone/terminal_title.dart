@@ -171,21 +171,38 @@ class TerminalTitle extends StatelessWidget {
                 ),
               ),
             ),
-            if (asking case final asking?)
-              word(
-                asking,
-                color: tty.yellow,
-                size: TtySize.meta,
-                onTap: onFind,
-                semanticsLabel: '$asking — open Find',
+            // The words between the name and `…` give way first: clipped rather than pushing the
+            // row past the screen when a state, a way out and an asking harness all want a say.
+            Flexible(
+              child: ClipRect(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  reverse: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (asking case final asking?)
+                        word(
+                          asking,
+                          color: tty.yellow,
+                          size: TtySize.meta,
+                          onTap: onFind,
+                          semanticsLabel: '$asking — open Find',
+                        ),
+                      if (state case final state?)
+                        word(state, color: tty.faint),
+                      if (action case final action?)
+                        word(
+                          '[${action.label}]',
+                          weight: FontWeight.w700,
+                          onTap: action.onTap,
+                        ),
+                    ],
+                  ),
+                ),
               ),
-            if (state case final state?) word(state, color: tty.faint),
-            if (action case final action?)
-              word(
-                '[${action.label}]',
-                weight: FontWeight.w700,
-                onTap: action.onTap,
-              ),
+            ),
             if (onActions != null)
               word(
                 // SF Mono's own glyph — it has no ⋮, and a fallback face would break the grid.

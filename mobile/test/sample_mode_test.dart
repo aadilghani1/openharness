@@ -208,12 +208,12 @@ void main() {
     await tester.tap(find.text('project'));
     await settle(tester, const Duration(milliseconds: 500));
     await tester.tap(
-      find.textContaining('studio · ~/code/web', findRichText: true),
+      find.textContaining('studio:~/code/web', findRichText: true),
     );
     await settle(tester, const Duration(milliseconds: 500));
-    await tester.tap(
-      find.textContaining('harness new claude', findRichText: true),
-    );
+    // The first task, typed into New's task field, goes with Start.
+    await tester.enterText(find.byType(TextField), 'fix the flaky test');
+    await tester.tap(find.text('Start'));
     await settle(tester, const Duration(seconds: 3));
 
     final made = notifier

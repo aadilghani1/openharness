@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 import 'app_shell.dart';
 import 'p2p/phone_terminal_p2p.dart';
 import 'phone/phone_shell.dart';
+import 'demo/sample_mode.dart';
 import 'phone/welcome/phone_welcome.dart';
 
 /// Harness for iOS and Android: a viewer onto the machines this device has
@@ -31,7 +32,8 @@ Future<void> main() {
   _drawEdgeToEdgeOnEveryAndroid();
   return startHarness(
     authenticatedScreen: (app) => PhoneShell(notifier: app),
-    signedOutScreen: (app) => PhoneWelcome(notifier: app),
+    signedOutScreen: (app) =>
+        PhoneWelcome(notifier: app, onTrySample: openSampleMode),
     transportPlugins: phoneTerminalP2p.create,
   );
 }
