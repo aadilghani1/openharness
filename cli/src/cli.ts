@@ -62,6 +62,7 @@ import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from './lib/loginCallback.js'
 import { AuthSessionError, AuthSessionManager, clearAuthSession, readAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { LocalPresence, PAIR_HARNESS_DSH, ZooTurnCounter, ZooTurnReporter } from './lib/zooTurns.js'
+import { ZooLessonReporter } from './lib/zooLessons.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { ensureGridInstalled, type GridInstallResult } from './lib/gridInstall.js'
 import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
@@ -2982,6 +2983,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     signedIn: () => readAuthSession() !== null,
     machineId: () => backend.machineId,
   })
+  // Bond for a lesson the person approved (lib/zooLessons.ts, the learner's `credit`): `zoo.lesson` through the
+  // same signed-in path. A guest's approval is only journaled (`learned`).
+  const zooLessonReporter = new ZooLessonReporter({
+    post: (body) => proxyBackend('POST', '/api/zoo/ops', body),
+    signedIn: () => readAuthSession() !== null,
+  })
 
   emitSessionEvents = (sessionId: string, events: ReturnType<CursorNormalizer['ingest']>, opts?: { resumed?: boolean; replay?: boolean }): void => {
     if (!events.length || !registry.bySession(sessionId)?.active) return
@@ -4401,9 +4408,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     busy: () => pairSensor.snapshot().harnesses.some((h) => h.working),
     projects: () => [...new Set([...registry.advertised(), ...stoppedAgents.available(registry.advertised())].map((s) => s.cwd).filter((cwd): cwd is string => !!cwd))],
     learned: ({ daemon, lesson }) => { pairSensor.learned({ daemon, name: lesson.name, agentId: lesson.from[0]?.agentId, engine: lesson.from[0]?.engine }) },
-    // TODO(zoo): grant bond xp to `daemon` for an approved lesson once the backend has an op for it (the
-    // `learned` journal entry above is the record it can count from). Nothing is sent today.
-    credit: () => {},
+    // Bond for the daemon that found it: `zoo.lesson`, signed in only (a guest's is the journal entry above).
+    credit: (daemon, lesson) => { zooLessonReporter.credit(lesson.id, daemon) },
     machineId: () => backend.machineId,
     changed: () => pairBrain?.stateChanged(),
     home: homedir(),
@@ -6214,7 +6220,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     autonomousDeviceDirect?.stop()
     // The last minute's turns, best effort: an update restart should not lose them, nor wait on them.
     zooTurnReporter.stop()
-    await Promise.race([zooTurnReporter.flush(), new Promise((resolve) => setTimeout(resolve, 2000).unref())])
+    zooLessonReporter.stop()
+    await Promise.race([Promise.all([zooTurnReporter.flush(), zooLessonReporter.flush()]), new Promise((resolve) => setTimeout(resolve, 2000).unref())])
     await backend.stop()
     try { if (readPid() === process.pid) rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
     process.exit(0)

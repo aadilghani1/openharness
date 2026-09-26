@@ -168,6 +168,7 @@ zoo = {
     history:  ['YYYY-MM-DD'],      // history dates (with their year) whose egg was earned (last 16)
     held:     [{ kind, date? }],   // eggs earned while the nest was full, oldest first (up to 64)
     batches:  [batchId],           // the last 64 zoo.turn batches applied
+    lessons:  [lessonId],          // the last 256 zoo.lesson ids credited
   },
 }
 ```
@@ -184,6 +185,7 @@ Ops (every op is idempotent; an op on something missing is dropped, never an err
 | `zoo.easter { word }` | The server trims and lowercases the word and hashes it (sha256); a hash in `rules.easterHashes` grants one `easter` egg, once per word. |
 | `zoo.seed { zoo }` | A guest's local zoo on first sign-in. Applied only while the account zoo is empty. |
 | `zoo.turn { batchId, n, minutes?, away?, day, hour, machineId }` | Turns finished on one machine in one local hour (see "Earning eggs and growing"). harnessd sends it. |
+| `zoo.lesson { lessonId, daemonId }` | A lesson the person approved ([LEARNING.md](LEARNING.md)): `rules.lessonXp` (25) xp for `daemonId` when you own it, else for the paired daemon, level and version recomputed and answered in `levelUps`. Once per lesson id (the last 256 are remembered); with no daemon to grow nothing happens and the id is not remembered. harnessd sends it when a lesson is approved, signed in only; `lessonId` is 1–64 id-safe characters. |
 
 Limits: 12 eggs, 64 daemons (a duplicate merges, so it never needs a place). The server alone grants
 turn, week, marathon, night and history eggs from the turns reported to it; clients never send a draw
@@ -339,8 +341,8 @@ in `grants` as `{ kind, xp }`. (With nothing paired, nothing has hatched to grow
 **Stored daemons** from before xp read `xp` as the least xp their stored `bond` needs; `bond` and
 `version` are always read back from `xp`, so they never disagree.
 
-Not built: the lookbook's "first merged PR" marathon, and bond from suggestions you take or talking to
-the daemon (later, with the pair brain). What the client shows for a grant or a level-up (a new egg in
+Bond also comes from lessons you approve (`zoo.lesson`, 25 xp for the daemon that found it). Not built:
+the lookbook's "first merged PR" marathon, and bond from suggestions you take or talking to the daemon. What the client shows for a grant or a level-up (a new egg in
 the nest, a slow blink, the release's changelog) is the client's.
 
 ## First egg: habits

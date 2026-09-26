@@ -57,10 +57,7 @@ export interface LearnerDeps {
   projects: () => string[]
   /** The zoo's credit: a journal entry `learned` with the daemon's id (pair/sensor.ts learned). */
   learned?: (entry: { daemon: string; lesson: LessonRecord }) => void
-  /**
-   * TODO(zoo): bond xp for the daemon that found the lesson. The backend has no op for it yet; cli.ts
-   * leaves this a no-op hook, and the journal entry above is the record a later op can count from.
-   */
+  /** Bond for the daemon that found the lesson: `zoo.lesson` (lib/zooLessons.ts), signed in only. */
   credit?: (daemonId: string, lesson: LessonRecord) => void
   machineId: () => string
   /** daemon_state `asks` changed. */
