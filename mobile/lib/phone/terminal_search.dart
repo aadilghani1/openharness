@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/core/last_opened_agent.dart' show AgentRef;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -12,8 +13,9 @@ import 'package:harness_mobile/state/app_state.dart';
 
 import 'agents_page.dart' show openNewAgent;
 import 'find_models.dart';
-import 'fzf.dart';
 import 'tty.dart';
+import 'tty_controls.dart';
+import 'voice_input_controller.dart';
 import 'phone_search_actions.dart';
 import 'phone_search_controller.dart';
 import 'phone_search_results.dart';
@@ -65,7 +67,11 @@ class TerminalSearchOverlay extends StatefulWidget {
     required this.onClose,
     this.showing,
     this.bottomInset = 0,
+    this.voice,
   });
+
+  /// The field's mic: what is said becomes the query. Null leaves the mic out.
+  final VoiceInputController? voice;
 
   final AppNotifier notifier;
 
@@ -253,27 +259,36 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   }
 
   /// `+`: away first, then the new-agent form. Null while no machine can take one.
-  VoidCallback? _newAgent() {
-    // On the machine of the agent on screen, as a swipe left does; else the command's first ready
-    // machine.
+  /// `+ New Harness` — in the project the query matched when there is one; else on the machine of
+  /// the harness on screen, as a swipe left does; else the command's first ready machine.
+  void Function(({String machineId, String folder, String label})? place)?
+  _newAgent() {
     final showing = widget.showing;
     final here = showing == null
         ? null
         : widget.notifier.stateOf(showing.machineId);
-    if (here != null && here.nodeOnline != false && !here.needsLink) {
-      return () {
-        _close();
-        unawaited(openNewAgent(context, widget.notifier, showing!.machineId));
-      };
-    }
     final command = phoneSearchCommands(
       context,
       widget.notifier,
     ).where((command) => command.id == 'agent.new').firstOrNull;
-    if (command == null) return null;
-    return () {
+    final ready = here != null && here.nodeOnline != false && !here.needsLink;
+    if (!ready && command == null) return null;
+    return (place) {
       _close();
-      command.run();
+      if (place != null) {
+        unawaited(
+          openNewAgent(
+            context,
+            widget.notifier,
+            place.machineId,
+            folder: place.folder,
+          ),
+        );
+      } else if (ready) {
+        unawaited(openNewAgent(context, widget.notifier, showing!.machineId));
+      } else {
+        command!.run();
+      }
     };
   }
 
@@ -423,13 +438,54 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
             listenable: _search,
             builder: (context, _) {
               final newAgent = _newAgent();
+              final hasText = _controller.text.isNotEmpty;
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  SizedBox(height: media.padding.top),
+                  SizedBox(height: media.padding.top + 8),
+                  // The field at the top, like ⌘P: the list grows down from it. The keyboard stays
+                  // down until the field is tapped — the list is usually the answer.
+                  Padding(
+                    padding: const EdgeInsets.only(left: 16),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TtyField(
+                            controller: _controller,
+                            focus: _focus,
+                            hint: _search.canGoBack
+                                ? 'Search in ${_search.scopeName}'
+                                : _search.hint.replaceAll('…', ''),
+                            onChanged: _search.setQuery,
+                            onSubmitted: () =>
+                                _results.currentState?.openFirst(),
+                            action: TextInputAction.search,
+                            trailing: [
+                              if (hasText)
+                                _FieldClear(onTap: _clearField)
+                              else if (widget.voice case final voice?)
+                                ListenableBuilder(
+                                  listenable: voice,
+                                  builder: (context, _) => TtyFieldMic(
+                                    live:
+                                        voice.status ==
+                                            VoiceInputStatus.listening ||
+                                        voice.status ==
+                                            VoiceInputStatus.starting,
+                                    onTap: () => _talk(voice),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        TtyTextButton(label: 'Cancel', onPressed: _back),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 4),
                   Expanded(
                     child: switch ((_search.isModelMode, widget.showing)) {
-                      // `:` — the models the agent on screen can run on.
+                      // `:` — the models the harness on screen can run on.
                       (true, final showing?) => FindModels(
                         notifier: widget.notifier,
                         machineId: showing.machineId,
@@ -444,33 +500,11 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                         fzf: true,
                         showing: widget.showing,
                         onOpen: _close,
+                        onNewHarness: newAgent == null
+                            ? null
+                            : (place) => newAgent(place),
                       ),
                     },
-                  ),
-                  // fzf's --header sits right above the info line, next to the prompt it explains.
-                  _FindHeader(search: _search, onBack: _back),
-                  FzfInfoLine(
-                    label: _search.isModelMode ? 'models' : null,
-                    matched: _search.matchCount,
-                    total: _search.total,
-                    actions: [
-                      if (newAgent != null) (label: '+new', onTap: newAgent),
-                      (label: 'esc', onTap: _back),
-                    ],
-                  ),
-                  FzfPrompt(
-                    controller: _controller,
-                    focus: _focus,
-                    onChanged: _search.setQuery,
-                    // A mode names itself, as fzf's --prompt would; plain search says nothing.
-                    hint:
-                        _search.isCommandMode ||
-                            _search.isHelpMode ||
-                            _search.isGroupMode ||
-                            _search.canGoBack
-                        ? _search.hint
-                        : null,
-                    onSubmitted: () => _results.currentState?.openFirst(),
                   ),
                   // Over the home indicator while the keyboard is down; on the keys once it is up.
                   SizedBox(height: widget.bottomInset),
@@ -482,40 +516,57 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
       ),
     );
   }
+
+  void _clearField() {
+    _controller.clear();
+    _search.setQuery('');
+  }
+
+  /// The field's mic: talk, and what was said becomes the query.
+  void _talk(VoiceInputController voice) {
+    if (voice.status == VoiceInputStatus.listening) {
+      unawaited(
+        voice.submit((text) async {
+          if (!mounted) return false;
+          final query = text.trim().replaceAll(RegExp(r'[.!?]+$'), '');
+          _controller.value = TextEditingValue(
+            text: query,
+            selection: TextSelection.collapsed(offset: query.length),
+          );
+          _search.setQuery(query);
+          return true;
+        }),
+      );
+      return;
+    }
+    if (voice.status == VoiceInputStatus.idle) {
+      unawaited(voice.startListening());
+    }
+  }
 }
 
-/// The line above the list, fzf's `--header`: the modes the prompt takes, dim — or, inside a
-/// project or machine, its name and the way back out.
-class _FindHeader extends StatelessWidget {
-  const _FindHeader({required this.search, required this.onBack});
+/// The field's `✕`: empties it.
+class _FieldClear extends StatelessWidget {
+  const _FieldClear({required this.onTap});
 
-  final PhoneSearchController search;
-  final VoidCallback onBack;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    final scope = search.canGoBack ? search.scopeName : null;
-    return SizedBox(
-      height: 36,
-      child: scope != null
-          ? TtyTap(
-              onTap: onBack,
-              minHeight: 36,
-              child: Padding(
-                padding: const EdgeInsets.only(left: 24),
-                child: TtyText('< $scope', color: tty.cyan),
-              ),
-            )
-          : Padding(
-              padding: const EdgeInsets.only(left: 24, top: 10),
-              child: TtyText(
-                search.isCommandMode || search.isHelpMode || search.isGroupMode
-                    ? search.title.toLowerCase()
-                    : '> cmds # projects @ machines : models',
-                color: tty.cyan,
-              ),
-            ),
+    return Semantics(
+      button: true,
+      label: 'Clear',
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Icon(LucideIcons.x300, size: 18, color: tty.faint),
+        ),
+      ),
     );
   }
 }

@@ -4909,10 +4909,15 @@ class AppNotifier extends ChangeNotifier {
     String? swarmId,
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
+    String? prompt,
   }) {
     final creation = attempt ?? AgentCreationAttempt();
+    final task = prompt?.trim();
     final choices = <String, dynamic>{
       'engine': engine,
+      // The harness's first task — the machine types it into the agent once it is up. Only
+      // claude, codex and opencode take one (see `kFirstTaskEngines`); an empty one is left out.
+      if (task != null && task.isNotEmpty) 'prompt': task,
       if (projectFolder == null) 'cwd': folder,
       ...?projectFolder?.payload,
       'permissionMode': ?permissionMode,

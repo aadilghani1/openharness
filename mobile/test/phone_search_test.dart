@@ -19,6 +19,7 @@ import 'package:harness_mobile/phone/phone_search_page.dart';
 import 'package:harness_mobile/phone/phone_search_rank.dart';
 import 'package:harness_mobile/phone/resume_agent.dart';
 import 'package:harness_mobile/phone/terminal_search.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/pending_question.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
@@ -1250,7 +1251,7 @@ void main() {
   // ⚠️ **The sheet's own bar, not the page's.** No chevron in it: Cancel ends
   // the SEARCH and leaves the sheet up on its tabs, and Back steps out of the
   // search first and closes the sheet only after — never leaves the agent.
-  testWidgets('Find: esc ends the search, then Find; Back the same', (
+  testWidgets('Find: Cancel ends the search, then Find; Back the same', (
     tester,
   ) async {
     final app = _app([
@@ -1270,8 +1271,8 @@ void main() {
       ),
     );
     await tester.pump();
-    // fzf: a bare prompt, no search box.
-    expect(find.byType(FzfPrompt), findsOneWidget);
+    // The field at the top, with Cancel beside it.
+    expect(find.byType(TtyField), findsOneWidget);
     expect(find.byType(SheetSearchField), findsNothing);
 
     Future<void> search() async {
@@ -1286,17 +1287,17 @@ void main() {
       await tester.pump();
     }
 
-    // esc while searching ends the search and leaves Find up...
+    // Cancel while searching ends the search and leaves Find up...
     await search();
-    await tester.tap(find.text('esc'));
+    await tester.tap(find.text('Cancel'));
     await tester.pump();
     expect(
       tester.widget<TextField>(find.byType(TextField)).controller!.text,
       '',
     );
     expect(closed, 0);
-    // ...and esc again closes it.
-    await tester.tap(find.text('esc'));
+    // ...and Cancel again closes it.
+    await tester.tap(find.text('Cancel'));
     await tester.pump();
     expect(closed, 1);
 

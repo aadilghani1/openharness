@@ -2,18 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'tty.dart';
+import 'tty_controls.dart';
 
 /// Focus's title: whose terminal this is, as a pane title would say it — the agent, then where it
 /// works.
 ///
 /// ```
-///  hn                                        1!  …
+///  hn                                  1 asking  …
 ///  M2:autonomous-harness  main
 /// ```
 ///
 /// ⚠️ **A title, not a tab bar.** Agents are like vim's buffers: one on screen, the rest a search
 /// away (the name opens Find, as `:b` would). Nothing here lists other agents; the one exception
-/// is `N!` — agents elsewhere asking you something — since nothing else on the screen would say so.
+/// is `1 asking` — harnesses elsewhere asking you something — since nothing else on the screen
+/// would say so.
 ///
 /// It floats over the terminal's top rows and the page slides it away while you read back through
 /// the history; back at the end of the output, it returns (see `TerminalChromeScroll`).
@@ -64,6 +66,7 @@ class TerminalTitle extends StatelessWidget {
       Color? color,
       Color? background,
       FontWeight weight = FontWeight.w400,
+      double? size,
     }) {
       final drawn = Padding(
         padding: EdgeInsets.symmetric(horizontal: tty.cell / 2),
@@ -72,6 +75,7 @@ class TerminalTitle extends StatelessWidget {
           color: color ?? tty.text,
           background: background,
           weight: weight,
+          size: size,
         ),
       );
       if (onTap == null) return Center(child: drawn);
@@ -121,19 +125,29 @@ class TerminalTitle extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        TtyText(name, weight: FontWeight.w700),
+                        TtyText(
+                          name,
+                          weight: FontWeight.w700,
+                          size: TtySize.title,
+                        ),
                         Text.rich(
                           TextSpan(
                             children: [
                               if (place case final place?)
                                 TextSpan(
                                   text: place,
-                                  style: tty.style(color: tty.faint),
+                                  style: tty.style(
+                                    color: tty.faint,
+                                    size: TtySize.meta,
+                                  ),
                                 ),
                               if (branch case final branch?)
                                 TextSpan(
                                   text: '${place == null ? '' : '  '}$branch',
-                                  style: tty.style(color: tty.magenta),
+                                  style: tty.style(
+                                    color: tty.magenta,
+                                    size: TtySize.meta,
+                                  ),
                                 ),
                             ],
                           ),
@@ -149,11 +163,11 @@ class TerminalTitle extends StatelessWidget {
             ),
             if (asking > 0)
               word(
-                '$asking!',
-                color: tty.theme.black,
-                background: tty.yellow,
+                '$asking asking',
+                color: tty.yellow,
+                size: TtySize.meta,
                 onTap: onFind,
-                semanticsLabel: '$asking asking',
+                semanticsLabel: '$asking harnesses asking',
               ),
             if (state case final state?) word(state, color: tty.faint),
             if (action case final action?)

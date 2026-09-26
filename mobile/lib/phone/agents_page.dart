@@ -303,7 +303,11 @@ Future<void> showAgentActions(
 Future<void> openNewAgent(
   BuildContext context,
   AppNotifier notifier,
-  String machineId,
-) => Navigator.of(context).push(
-  phoneRoute((_) => NewAgentPage(notifier: notifier, machineId: machineId)),
+  String machineId, {
+  String? folder,
+}) => Navigator.of(context).push(
+  phoneRoute(
+    (_) =>
+        NewAgentPage(notifier: notifier, machineId: machineId, folder: folder),
+  ),
 );

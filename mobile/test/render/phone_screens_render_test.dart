@@ -15,6 +15,7 @@ import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/phone/voice_mic_face.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/state/pending_question.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
 import 'package:xterm/xterm.dart';
@@ -197,6 +198,18 @@ void main() {
       ..agents = [
         _agent('c', 'api-fix', cwd: '/Users/me/code/api', minutesAgo: 40),
       ];
+    // One asking, one working — Find's `needs you` and its state words.
+    notifier.machineStates['mini']!.blockedAgents['c'] = PendingQuestion(
+      machineId: 'mini',
+      agentId: 'c',
+      requestId: 'q1',
+      answerKey: '1',
+      prompt: 'Run the migration on the test db?',
+      options: const ['Yes', 'No'],
+      multi: false,
+      since: DateTime.now().subtract(const Duration(minutes: 2)),
+    );
+    notifier.machineStates['m']!.processingAgentIds.add('b');
     final session = TerminalSession(
       machineId: 'm',
       agentId: 'a',

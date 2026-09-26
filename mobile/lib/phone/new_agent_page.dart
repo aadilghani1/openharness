@@ -36,10 +36,15 @@ class NewAgentPage extends StatefulWidget {
     super.key,
     required this.notifier,
     required this.machineId,
+    this.folder,
   });
 
   final AppNotifier notifier;
   final String machineId;
+
+  /// A folder on [machineId] to start in — Find's `+ New Harness in api`. Null takes the last one
+  /// used there.
+  final String? folder;
 
   @override
   State<NewAgentPage> createState() => _NewAgentPageState();
@@ -714,7 +719,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
     if (_folder != null || _project != null || _projectDefaulted) return;
     final history = widget.notifier.projectHistory;
     final folder =
-        history.selected(_machineId) ?? history.recent(_machineId).firstOrNull;
+        widget.folder ??
+        history.selected(_machineId) ??
+        history.recent(_machineId).firstOrNull;
     if (folder == null) return;
     _projectDefaulted = true;
     _folder = folder;

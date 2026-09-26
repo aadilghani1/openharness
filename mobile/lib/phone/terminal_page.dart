@@ -2083,6 +2083,7 @@ class _TerminalPageState extends State<TerminalPage>
                 animation: _searchCurve,
                 bottomInset: _windowBottomInset,
                 onClose: _closeSearch,
+                voice: widget.voice,
               ),
             ),
         ],

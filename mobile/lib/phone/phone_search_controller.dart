@@ -329,6 +329,7 @@ class PhoneSearchController extends ChangeNotifier {
               if (row.isAgent) row,
           ];
     total = candidates.length;
+    _findExtras();
     rows = isCommandMode
         ? _recentFirst(rankPhoneDestinations(candidates, commandQuery))
         : rankPhoneDestinations(
@@ -355,6 +356,46 @@ class PhoneSearchController extends ChangeNotifier {
     }
     rows = [...open, ...shut];
     matchCount = rows.length;
+  }
+
+  /// With a plain query typed: the commands that match it, best first — Find's `commands` section
+  /// under the harnesses. Empty with nothing typed, in a mode, or inside a project or machine.
+  List<PhoneDestination> commandMatches = const [];
+
+  /// The project that best matches a plain query — Find's `+ New Harness in <project>`.
+  PhoneDestination? projectMatch;
+
+  void _findExtras() {
+    final plain =
+        _listsAgents && _groupScope == null && matchQuery.trim().isNotEmpty;
+    if (!plain) {
+      commandMatches = const [];
+      projectMatch = null;
+      return;
+    }
+    final available = [
+      for (final command in commands?.call() ?? const <PhoneCommand>[])
+        command.destination,
+    ];
+    _commandIds = {..._commandIds, for (final row in available) row.id};
+    // By name only: a command whose description merely mentions the letters ("ap" in Settings'
+    // "Appearance") is noise under the harnesses.
+    final needle = matchQuery.trim().toLowerCase();
+    commandMatches = rankPhoneDestinations(available, matchQuery)
+        .where(
+          (row) =>
+              row.title
+                  .toLowerCase()
+                  .split(RegExp(r'\s+'))
+                  .any((word) => word.startsWith(needle)) ||
+              row.title.toLowerCase().startsWith(needle),
+        )
+        .take(3)
+        .toList();
+    projectMatch = rankPhoneDestinations([
+      for (final row in _catalog)
+        if (row.isProject) row,
+    ], matchQuery).firstOrNull;
   }
 
   /// Whether [rows] are agents with nothing typed — the list that follows the

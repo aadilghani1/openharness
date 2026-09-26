@@ -6,21 +6,24 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/core/last_opened_agent.dart' show AgentRef;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/empty_state.dart';
+import 'package:harness_mobile/notify/agent_notice.dart' show NoticeKind;
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'agent_index.dart';
-import 'fzf.dart';
+import 'find_row.dart';
+import 'fzf.dart' show fzfAge;
 import 'phone_destination.dart';
 import 'phone_navigation.dart';
+import 'phone_search_catalog.dart' show phoneAgentId;
 import 'phone_search_commands.dart';
 import 'phone_search_controller.dart';
 import 'phone_search_rank.dart';
 import 'phone_search_row.dart';
-import 'phone_search_row_trailing.dart' show phoneSearchBadge;
 import 'resume_agent.dart';
 import 'sheet_list.dart';
 import 'sheet_search_row.dart';
 import 'tty.dart';
+import 'tty_controls.dart';
 
 /// What the query reaches, drawn.
 ///
@@ -48,9 +51,15 @@ class PhoneSearchResults extends StatefulWidget {
     this.grouped = false,
     this.fzf = false,
     this.showing,
+    this.onNewHarness,
   });
 
-  /// fzf's list: one-line rows, the best match at the BOTTOM next to the prompt — Find's look.
+  /// Find's `+ New Harness` row — with a project's machine and folder when the query matched one
+  /// (`+ New Harness in api`). Null leaves the row out.
+  final void Function(({String machineId, String folder, String label})? place)?
+  onNewHarness;
+
+  /// Find's list: two-line rows growing down from the field at the top — see [FindRow].
   final bool fzf;
 
   final AppNotifier notifier;
@@ -141,7 +150,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       AppTheme.watch(context);
       final search = widget.controller;
       final rows = search.rows;
-      if (widget.fzf) return _fzf(search, rows);
+      if (widget.fzf) return _find(search, rows);
       if (widget.grouped) return _grouped(search, rows);
       if (rows.isEmpty) return _empty(search);
       final terms = phoneSearchTerms(search.matchQuery);
@@ -179,77 +188,202 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     },
   );
 
-  /// The rows as the terminal sheet lists them — see [grouped].
-  /// fzf: reversed, so the first result sits on the prompt and the list grows up from it; a tap
-  /// opens, as Enter does in fzf. Nothing but text — see `fzf.dart`.
-  Widget _fzf(PhoneSearchController search, List<PhoneDestination> rows) {
+  /// Find's list: grows down from the field at the top. With nothing typed, `needs you` (newest
+  /// question first) then `recent`, the harness on screen last, `+ New Harness` at the end; typed,
+  /// the matches in their order, then the commands that match, then `+ New Harness in <project>`.
+  /// See docs/plans/2026-09-26-003-mobile-find-new-spec.md.
+  Widget _find(PhoneSearchController search, List<PhoneDestination> rows) {
     final terms = phoneSearchTerms(search.matchQuery);
     final showing = widget.showing;
     final now = DateTime.now();
     final tty = Tty.of(context);
-    if (rows.isEmpty) {
-      return Align(
-        alignment: Alignment.bottomLeft,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 12, 8),
+    final typed = search.matchQuery.trim().isNotEmpty;
+    final plain =
+        !search.isCommandMode &&
+        !search.isHelpMode &&
+        !search.isGroupMode &&
+        !search.isModelMode &&
+        !search.canGoBack;
+    bool asking(PhoneDestination row) => row.entry?.isWaiting ?? false;
+    DateTime since(PhoneDestination row) {
+      final entry = row.entry;
+      return entry?.machine.blockedAgents[entry.agent.id]?.since ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+    }
+
+    final List<PhoneDestination> needsYou;
+    final List<PhoneDestination> rest;
+    final PhoneDestination? current;
+    if (!typed && plain) {
+      current = showing == null
+          ? null
+          : rows.where((row) => _isShowing(row, showing)).firstOrNull;
+      needsYou = [
+        for (final row in rows)
+          if (asking(row) && row != current) row,
+      ]..sort((a, b) => since(b).compareTo(since(a)));
+      rest = [
+        for (final row in rows)
+          if (!asking(row) && row != current) row,
+      ];
+    } else {
+      current = null;
+      needsYou = const [];
+      rest = rows;
+    }
+    final ordered = [...needsYou, ...rest, ?current];
+    final selectedAt = typed ? ordered.indexWhere(search.canSubmit) : -1;
+    final newHarness = widget.onNewHarness;
+    final project = search.projectMatch;
+    final children = <Widget>[];
+    var index = 0;
+    Widget row(PhoneDestination row) =>
+        _findRow(row, terms, now, tty, selected: index++ == selectedAt);
+    if (needsYou.isNotEmpty) {
+      children.add(FindHeader('needs you', color: tty.yellow));
+      children.addAll(needsYou.map(row));
+      children.add(const FindHeader('recent'));
+    }
+    children.addAll(rest.map(row));
+    if (current != null) children.add(row(current));
+    if (ordered.isEmpty) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
           child: TtyText(
-            search.total == 0 && search.matchQuery.trim().isEmpty
-                ? 'no harnesses yet'
-                : 'no match',
+            search.total == 0 && !typed ? 'No harnesses running.' : 'No match.',
             color: tty.faint,
+            size: TtySize.row,
           ),
         ),
       );
     }
-    // With nothing typed, the agent already on screen is not what Enter should take: it moves to
-    // the far end, so the cursor row is the one before it — tmux's `C-b l`, back to the last.
-    final ordered = search.matchQuery.trim().isEmpty && showing != null
-        ? [
-            for (final row in rows)
-              if (!_isShowing(row, showing)) row,
-            for (final row in rows)
-              if (_isShowing(row, showing)) row,
-          ]
-        : rows;
-    final cursorAt = ordered.indexWhere(search.canSubmit);
-    return ListView.builder(
-      reverse: true,
+    if (search.commandMatches.isNotEmpty) {
+      children.add(const FindHeader('commands'));
+      for (final command in search.commandMatches) {
+        children.add(
+          FindRow(
+            title: command.title,
+            terms: terms,
+            state: command.shortcut,
+            onTap: () => _tap(command),
+          ),
+        );
+      }
+    }
+    if (newHarness != null && plain) {
+      final place = project == null ? null : _projectPlace(project);
+      children.add(const SizedBox(height: 8));
+      children.add(
+        FindAddRow(
+          label: place == null
+              ? 'New Harness'
+              : 'New Harness in ${project!.title}',
+          detail: place?.label,
+          onTap: () => newHarness(place),
+        ),
+      );
+    }
+    children.add(const SizedBox(height: 24));
+    return ListView(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: EdgeInsets.zero,
-      itemCount: ordered.length,
-      itemBuilder: (context, index) {
-        final row = ordered[index];
-        final entry = row.entry;
-        final openable = search.canSubmit(row);
-        final badge = phoneSearchBadge(row, openable: openable);
-        final onScreen =
-            showing != null &&
-            entry != null &&
-            entry.machineId == showing.machineId &&
-            entry.agent.id == showing.agentId;
-        return FzfRow(
-          title: row.title,
-          // An agent's place the way ssh and tmux name one — `M2:site` — and nothing else: the
-          // engine is the same word on every row, and the branch is in the agent's ⋮.
-          detail: entry == null
-              ? row.detail
-              : '${entry.machine.machine.displayName}:${entry.agent.project?.label ?? ''}',
-          terms: terms,
-          mark: onScreen ? '*' : null,
-          markColor: tty.green,
-          cursor: index == cursorAt,
-          enabled: openable || _resuming == row.id,
-          trailing: _resuming == row.id
-              ? 'resuming'
-              : badge?.toLowerCase() ??
-                    (entry == null
-                        ? null
-                        : fzfAge(entry.agent.lastUsedAt, now)),
-          trailingColor: badge == null ? null : tty.yellow,
-          onTap: _resuming != null ? null : () => _tap(row),
-        );
-      },
+      children: children,
     );
+  }
+
+  /// One harness (or command) as a Find row — see [FindRow].
+  Widget _findRow(
+    PhoneDestination row,
+    List<String> terms,
+    DateTime now,
+    Tty tty, {
+    required bool selected,
+  }) {
+    final entry = row.entry;
+    final openable = widget.controller.canSubmit(row);
+    final showing = widget.showing;
+    final onScreen = showing != null && _isShowing(row, showing);
+    if (entry == null) {
+      return FindRow(
+        title: row.title,
+        detail: row.detail,
+        terms: terms,
+        selected: selected,
+        enabled: openable,
+        onTap: () => _tap(row),
+      );
+    }
+    final question = entry.machine.blockedAgents[entry.agent.id]?.prompt.trim();
+    final state = _stateOf(entry, openable, tty, resuming: _resuming == row.id);
+    final place = [
+      '${entry.machineName}:${entry.agent.project?.label ?? entry.project?.name ?? ''}',
+      if (entry.agent.project?.branch case final branch? when branch.isNotEmpty)
+        branch,
+      if (onScreen) 'current' else fzfAge(entry.agent.lastUsedAt, now),
+    ].where((part) => part.isNotEmpty).join(' · ');
+    return FindRow(
+      title: row.title,
+      detail: question != null && question.isNotEmpty && entry.isWaiting
+          ? '"${question.split('\n').first}"'
+          : place,
+      detailColor: question != null && entry.isWaiting ? tty.text : null,
+      state: state.word,
+      stateColor: state.color,
+      terms: terms,
+      selected: selected,
+      enabled: openable || _resuming == row.id,
+      // The harness on screen is where Cancel goes: a tap on it is Cancel.
+      onTap: _resuming != null
+          ? null
+          : onScreen
+          ? widget.onOpen
+          : () => _tap(row),
+    );
+  }
+
+  ({String word, Color color}) _stateOf(
+    AgentEntry entry,
+    bool openable,
+    Tty tty, {
+    required bool resuming,
+  }) {
+    if (resuming) return (word: 'resuming', color: tty.faint);
+    if (entry.isWaiting) return (word: 'asking', color: tty.yellow);
+    if (entry.agent.isStopped) {
+      return (word: openable ? 'paused' : 'stopped', color: tty.faint);
+    }
+    if (!openable) return (word: 'exited', color: tty.red);
+    if (entry.isWorking) return (word: 'working', color: tty.green);
+    final unread = widget.notifier.agentNotices.unread.kindFor((
+      machineId: entry.machineId,
+      agentId: entry.agent.id,
+    ));
+    if (unread == NoticeKind.done) return (word: 'done', color: tty.faint);
+    return (word: 'idle', color: tty.faint);
+  }
+
+  /// Where a project lives, for `+ New Harness in <project>`: its machine and folder, read from the
+  /// first harness in it.
+  ({String machineId, String folder, String label})? _projectPlace(
+    PhoneDestination project,
+  ) {
+    for (final entry in agentIndex(widget.notifier)) {
+      if (!project.members.contains(
+        phoneAgentId(entry.machineId, entry.agent.id),
+      )) {
+        continue;
+      }
+      final cwd = entry.agent.project?.cwd ?? entry.project?.cwd;
+      if (cwd == null || cwd.isEmpty) continue;
+      return (
+        machineId: entry.machineId,
+        folder: cwd,
+        label:
+            '${entry.machineName}:${entry.agent.project?.label ?? project.title}',
+      );
+    }
+    return null;
   }
 
   static bool _isShowing(PhoneDestination row, AgentRef showing) =>

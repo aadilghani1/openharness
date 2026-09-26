@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/phone/fzf.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/phone/phone_search_results.dart';
 import 'package:harness_mobile/phone/terminal_action_column.dart';
 import 'package:harness_mobile/phone/terminal_header.dart';
@@ -161,7 +162,7 @@ void main() {
     // search and brings the keyboard.
     await tester.tap(
       find.descendant(
-        of: find.byType(FzfPrompt),
+        of: find.byType(TtyField),
         matching: find.byType(TextField),
       ),
     );
@@ -203,7 +204,7 @@ void main() {
     }
     await tester.pump(const Duration(seconds: 1));
     expect(find.byType(PhoneSearchResults), findsNothing);
-    expect(find.byType(FzfPrompt), findsNothing);
+    expect(find.byType(TtyField), findsNothing);
     expectUntouched();
     expect(resizes, isEmpty);
   });
