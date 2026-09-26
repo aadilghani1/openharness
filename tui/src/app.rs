@@ -68,6 +68,12 @@ pub struct Stash {
 #[derive(Clone, Debug, Default)]
 pub struct StartSession { pub name: Option<String>, pub create: bool, pub attach_existing: bool, pub window: Option<String>, pub cwd: Option<String>, pub command: Option<String> }
 
+/// Where a server name's (-L) sessions are kept between clients.
+pub fn sessions_path(name: Option<&str>) -> std::path::PathBuf {
+    let name = name.map(str::to_string).or_else(|| std::env::var("HN_SOCKET_NAME").ok()).filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
+    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui").join(format!("sessions-{name}.json"))
+}
+
 /// The agent a reply is about (`agentId`).
 fn agent_id_of(reply: &Value) -> Option<String> { reply.get("agentId").and_then(Value::as_str).map(str::to_string) }
 
@@ -1442,17 +1448,15 @@ impl App {
 
     /// Where the sessions are kept between clients (`hn` again after C-b d, or after the last
     /// window of the session in front went): one file per server name (-L).
-    fn sessions_path() -> std::path::PathBuf {
-        let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
-        std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui").join(format!("sessions-{name}.json"))
-    }
+    fn sessions_path() -> std::path::PathBuf { sessions_path(None) }
 
     /// Every session but the desk's as its windows stand — each window's name, number, layout and
     /// its panes' harnesses — and the desk's name, and which session is in front.
     pub fn save_sessions(&self) {
         if self.capture.is_some() && self.tabs.is_empty() { return }
         let window = |app: &App, t: &Tab, nums: &HashMap<String, usize>| {
-            let panes: Vec<Value> = t.panes().iter().filter_map(|p| app.panes.get(p)).map(|p| json!([p.machine_id, p.agent_id])).collect();
+            // A shell hn made is ended when its window is killed, by whichever client does it.
+            let panes: Vec<Value> = t.panes().iter().filter_map(|p| app.panes.get(p)).map(|p| json!([p.machine_id, p.agent_id, app.shells.contains(&(p.machine_id.clone(), p.agent_id.clone()))])).collect();
             let focus = t.focus.and_then(|f| t.panes().iter().position(|p| *p == f)).unwrap_or(0);
             json!({ "name": t.name, "named": t.named, "num": nums.get(&t.id).copied(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus })
         };
@@ -1487,6 +1491,9 @@ impl App {
             for win in row.get("windows").and_then(Value::as_array).cloned().unwrap_or_default() {
                 let panes: Vec<(String, String)> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))).collect()).unwrap_or_default();
                 if panes.is_empty() { continue }
+                for p in win.get("panes").and_then(Value::as_array).cloned().unwrap_or_default() {
+                    if p.get(2).and_then(Value::as_bool).unwrap_or(false) { if let (Some(m), Some(a)) = (p.get(0).and_then(Value::as_str), p.get(1).and_then(Value::as_str)) { self.shells.insert((m.to_string(), a.to_string())); } }
+                }
                 let ids: Vec<u64> = panes.iter().map(|(m, a)| self.new_pane(m, a)).collect();
                 let mut tab = Tab::new(win.get("name").and_then(Value::as_str).unwrap_or(""));
                 tab.named = win.get("named").and_then(Value::as_bool).unwrap_or(false);

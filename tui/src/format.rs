@@ -817,7 +817,10 @@ fn local_tm(t: i64) -> libc::tm {
 
 /// strftime(3) itself, over a whole format, as tmux runs it first (its 8192-byte buffer: a longer
 /// result, or an empty one, is nothing).
-fn strftime(_app: &App, fmt: &str, t: i64) -> String {
+fn strftime(_app: &App, fmt: &str, t: i64) -> String { strftime_at(fmt, t) }
+
+/// strftime(3) of a time in seconds, in local time.
+pub fn strftime_at(fmt: &str, t: i64) -> String {
     let tm = local_tm(t);
     let Ok(cfmt) = std::ffi::CString::new(fmt) else { return fmt.to_string() };
     let mut buf = vec![0u8; 8192];

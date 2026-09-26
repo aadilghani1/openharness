@@ -85,8 +85,12 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
             let detached = crate::cmd::find(c).ok().and_then(|e| crate::cmd::parse(e, args).ok()).map(|a| a.has('d') > 0).unwrap_or(false);
             // $HN_SOCKET: what a client sets for what it runs, as tmux's $TMUX.
             let inside = std::env::var("HN_SOCKET").map(|v| !v.is_empty()).unwrap_or(false);
+            if detached && !crate::ipc::alive(socket.as_deref(), name.as_deref()) { return Some(offline(port, args, name.as_deref()).await) }
             if detached || inside { Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await) } else { None }
         }
+        // No client running: what tmux's server would answer — the sessions a client left (and the
+        // desk's), from where they are kept.
+        c if matches!(crate::cmd::find(c).map(|e| e.name), Ok("list-sessions" | "has-session" | "kill-session")) && !crate::ipc::alive(socket.as_deref(), name.as_deref()) => Some(offline(port, args, name.as_deref()).await),
         // Any tmux command: run on the newest running client, its output printed here.
         // Any tmux command (by name, alias, or the start of one), or hn's: run by the client.
         c if crate::commands::is_command_name(c) || crate::cmd::find(c).is_ok() => Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await),
@@ -108,6 +112,106 @@ pub fn start_session(args: &[String]) -> Option<crate::app::StartSession> {
         }),
         "attach-session" => Some(crate::app::StartSession { name: a.get('t').map(|t| t.split(':').next().unwrap_or(t).to_string()).filter(|t| !t.is_empty()), cwd: a.get('c').map(str::to_string), ..Default::default() }),
         _ => None,
+    }
+}
+
+/// Sessions with no client running (tmux's server answering alone): listed, checked, killed, or
+/// made in the background (`new -d`: its shell started now, the session there for the next client).
+async fn offline(port: u16, args: &[String], name: Option<&str>) -> i32 {
+    let Ok(entry) = crate::cmd::find(&args[0]) else { return 1 };
+    let a = match crate::cmd::parse(entry, args) { Ok(a) => a, Err(e) => { eprintln!("{e}"); return 1 } };
+    let path = crate::app::sessions_path(name);
+    let mut doc: Value = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({ "sessions": [] }));
+    if !doc.get("sessions").map(Value::is_array).unwrap_or(false) { doc["sessions"] = json!([]) }
+    // The desk's session: named as it was, else for this computer; its windows the desk's tabs.
+    let (local, list) = machines(port).await.unwrap_or_default();
+    let machine_name = list.iter().find(|(id, _, _)| *id == local).map(|(_, n, _)| n.clone()).unwrap_or_else(crate::app::hostname);
+    let rows = doc["sessions"].as_array().cloned().unwrap_or_default();
+    let desk_row = rows.iter().find(|r| r.get("desk").and_then(Value::as_bool).unwrap_or(false));
+    let desk_name = desk_row.and_then(|r| r.get("name").and_then(Value::as_str)).map(str::to_string).unwrap_or(machine_name);
+    let desk = http_json(port, "GET", "/api/desk", None).await.unwrap_or(json!({}));
+    let desk_windows = desk.get("tabs").and_then(Value::as_array).map(|t| t.iter().filter(|t| t.get("panes").and_then(Value::as_array).map(|p| !p.is_empty()).unwrap_or(false)).count()).unwrap_or(0);
+    let now = crate::app::epoch_secs();
+    let mut sessions: Vec<(String, usize, i64, bool)> = vec![(desk_name.clone(), desk_windows, desk_row.and_then(|r| r.get("created").and_then(Value::as_i64)).unwrap_or(now), true)];
+    for r in rows.iter().filter(|r| !r.get("desk").and_then(Value::as_bool).unwrap_or(false)) {
+        let Some(n) = r.get("name").and_then(Value::as_str) else { continue };
+        sessions.push((n.to_string(), r.get("windows").and_then(Value::as_array).map(|w| w.len()).unwrap_or(0), r.get("created").and_then(Value::as_i64).unwrap_or(now), false));
+    }
+    sessions.sort_by(|x, y| x.0.cmp(&y.0));
+    // cmd_find_get_session: exact, the only one it starts, the only one it matches.
+    let find = |t: &str| -> Option<usize> {
+        let (exact, t) = match t.strip_prefix('=') { Some(t) => (true, t), None => (false, t) };
+        let t = t.split(':').next().unwrap_or(t);
+        if let Some(i) = sessions.iter().position(|s| s.0 == t) { return Some(i) }
+        if exact { return None }
+        let starts: Vec<usize> = (0..sessions.len()).filter(|i| sessions[*i].0.starts_with(t)).collect();
+        if starts.len() == 1 { return Some(starts[0]) }
+        if !starts.is_empty() { return None }
+        let matched: Vec<usize> = (0..sessions.len()).filter(|i| crate::cmd::fnmatch(t, &sessions[*i].0)).collect();
+        (matched.len() == 1).then(|| matched[0])
+    };
+    let save = |doc: &Value| { if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); } let _ = std::fs::write(&path, doc.to_string()); };
+    match entry.name {
+        "list-sessions" => {
+            let fmt = a.get('F').unwrap_or("#{session_name}: #{session_windows} windows (created #{t:session_created})");
+            for (n, w, c, _) in &sessions {
+                let line = fmt.replace("#{session_name}", n).replace("#S", n).replace("#{session_windows}", &w.to_string()).replace("#{t:session_created}", &crate::format::strftime_at("%a %b %e %H:%M:%S %Y", *c))
+                    .replace("#{session_created}", &c.to_string()).replace("#{session_attached}", "0").replace("#{?session_attached, (attached),}", "");
+                if !out(&format!("{line}\n")) { break }
+            }
+            0
+        }
+        "has-session" => {
+            let t = a.get('t').unwrap_or("");
+            if t.is_empty() || find(t).is_some() { 0 } else { eprintln!("can't find session: {t}"); 1 }
+        }
+        "kill-session" => {
+            let t = a.get('t').unwrap_or("");
+            let Some(i) = find(t) else { eprintln!("can't find session: {t}"); return 1 };
+            let (n, _, _, is_desk) = sessions[i].clone();
+            if is_desk { eprintln!("hn: the desk's session ({n}) is killed from a client: its windows are the account's tabs"); return 1 }
+            // Its shells end, as its windows' would.
+            let row = rows.iter().find(|r| r.get("name").and_then(Value::as_str) == Some(n.as_str())).cloned().unwrap_or(Value::Null);
+            for w in row.get("windows").and_then(Value::as_array).cloned().unwrap_or_default() {
+                for p in w.get("panes").and_then(Value::as_array).cloned().unwrap_or_default() {
+                    let (Some(m), Some(id), true) = (p.get(0).and_then(Value::as_str), p.get(1).and_then(Value::as_str), p.get(2).and_then(Value::as_bool).unwrap_or(false)) else { continue };
+                    let (tx, _rx) = mpsc::unbounded_channel();
+                    let link = Link::spawn(port, m, 0, tx);
+                    let _ = link.rpc("agent_delete", json!({ "agentId": id }), Duration::from_secs(15)).await;
+                }
+            }
+            let kept: Vec<Value> = rows.into_iter().filter(|r| r.get("name").and_then(Value::as_str) != Some(n.as_str())).collect();
+            doc["sessions"] = json!(kept);
+            if doc.get("current").and_then(Value::as_str) == Some(n.as_str()) { doc["current"] = Value::Null }
+            save(&doc);
+            0
+        }
+        "new-session" => {
+            let n = match a.get('s') { Some(s) => match crate::app::session_check_name(s) { Some(n) => n, None => { eprintln!("invalid session: {s}"); return 1 } }, None => { let mut k = 0; while sessions.iter().any(|s| s.0 == k.to_string()) { k += 1 } k.to_string() } };
+            if sessions.iter().any(|s| s.0 == n) {
+                if a.has('A') > 0 { return 0 }
+                eprintln!("duplicate session: {n}"); return 1
+            }
+            if local.is_empty() { eprintln!("hn: the daemon is not running (harness start)"); return 1 }
+            let cwd = a.get('c').map(str::to_string).or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string()));
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let link = Link::spawn(port, &local, 0, tx);
+            let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
+            if let Some(c) = &cwd { payload["cwd"] = json!(c) }
+            let reply = match link.rpc("agent_create", payload, Duration::from_secs(60)).await { Ok(r) => r, Err(e) => { eprintln!("create session failed: {e}"); return 1 } };
+            let Some(id) = reply.pointer("/agent/id").and_then(Value::as_str) else { eprintln!("create session failed: no shell"); return 1 };
+            let command = (!a.values.is_empty()).then(|| a.values.join(" "));
+            if let Some(c) = &command { link.send("message", json!({ "agentId": id, "content": c })); }
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".into());
+            let window = a.get('n').map(str::to_string).unwrap_or_else(|| command.as_deref().and_then(|c| c.split_whitespace().next()).unwrap_or(&shell).rsplit('/').next().unwrap_or("sh").to_string());
+            let mut kept = rows;
+            kept.push(json!({ "name": n, "desk": false, "created": now, "active": 0, "windows": [{ "name": window, "named": a.get('n').is_some(), "num": 0, "layout": "", "panes": [[local, id, true]], "focus": 0 }] }));
+            doc["sessions"] = json!(kept);
+            save(&doc);
+            if a.has('P') > 0 { out(&format!("{}\n", a.get('F').unwrap_or("#{session_name}:").replace("#{session_name}", &n))); }
+            0
+        }
+        _ => 1,
     }
 }
 

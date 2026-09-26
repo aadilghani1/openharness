@@ -152,6 +152,11 @@ fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
     newest()
 }
 
+/// Whether a client is running where a command would go (its socket answers).
+pub fn alive(socket: Option<&str>, name: Option<&str>) -> bool {
+    chosen(socket, name).map(|p| std::os::unix::net::UnixStream::connect(p).is_ok()).unwrap_or(false)
+}
+
 /// The newest running client's socket.
 fn newest() -> Option<PathBuf> {
     let mut socks: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(dir()).ok()?.filter_map(|e| e.ok()).map(|e| e.path())
