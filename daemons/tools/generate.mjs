@@ -4,7 +4,8 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { renderSprite, renderPortrait } from './render.mjs'
+import { renderSprite, renderPortrait, statusCell, baseWidth } from './render.mjs'
+import { cardLines } from './card.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const check = process.argv.includes('--check')
@@ -147,6 +148,26 @@ for (const d of roster.daemons) {
         frames.portraits.push({ id: d.id, v, mood, t, out: renderPortrait(roster, d, v, mood, { t }) })
       }
     }
+  }
+}
+// Status cells: the sprite placed in its slot, centred on the version's base width.
+frames.cells = []
+for (const d of roster.daemons) {
+  for (const [vi, v] of rules.versions.entries()) {
+    for (const mood of rules.moods) {
+      for (const t of [0, 300]) {
+        const s = renderSprite(roster, d, vi, mood, { t })
+        frames.cells.push({ id: d.id, v, mood, t, out: statusCell(roster, s, baseWidth(roster, d, vi)) })
+      }
+    }
+  }
+}
+// Cards every client draws the same way (daemons/tools/card.mjs).
+frames.cards = []
+for (const d of roster.daemons) {
+  for (const version of rules.versions) {
+    frames.cards.push({ id: d.id, version, out: cardLines(roster, d, { version }) })
+    frames.cards.push({ id: d.id, version, shiny: true, serial: 42, nickname: 'pip', hatched: '2026-09-26', egg: 'first', out: cardLines(roster, d, { version, shiny: true, serial: 42, nickname: 'pip', hatched: '2026-09-26', egg: 'first' }) })
   }
 }
 output('daemons/frames.json', JSON.stringify(frames) + '\n')

@@ -55,8 +55,18 @@ export function renderPortrait(roster, d, version, mood, { t = 0, lid = null, mo
   return portraitFor(roster, d, version).map(line => fill(line, roster, d, mood, { t, lid, motion }))
 }
 
-/** The status cell: the sprite centred in statusCells, with one cell of gutter each side. */
-export function statusCell(roster, sprite) {
-  const pad = roster.rules.statusCells - sprite.length
-  return ' ' + ' '.repeat(Math.max(0, Math.floor(pad / 2))) + sprite + ' '.repeat(Math.max(0, Math.ceil(pad / 2))) + ' '
+/**
+ * The status cell: statusCells wide plus one cell of gutter each side. The sprite is centred on its
+ * base width (the version's sprite, before a borrowed baton or a nap's `z` is added), so those
+ * additions grow to the right and the face never shifts a cell.
+ */
+export function statusCell(roster, sprite, baseWidth = sprite.length) {
+  const cells = roster.rules.statusCells
+  const left = Math.max(0, Math.floor((cells - Math.min(baseWidth, cells)) / 2))
+  return ' ' + ' '.repeat(left) + sprite + ' '.repeat(Math.max(0, cells - left - sprite.length)) + ' '
+}
+
+/** The base width statusCell centres on: the version's sprite in its idle mood. */
+export function baseWidth(roster, d, versionIndex) {
+  return renderSprite(roster, d, versionIndex, 'idle', { motion: false }).length
 }
