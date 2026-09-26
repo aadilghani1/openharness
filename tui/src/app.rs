@@ -1861,8 +1861,15 @@ impl App {
     /// (`hn attach -t work`, `hn new -A -s main`: another client's is given up by it), else the
     /// one in front when the last client left — unless another client has it.
     pub fn load_sessions(&mut self) {
-        let doc = read_sessions(&Self::sessions_path());
+        let mut doc = read_sessions(&Self::sessions_path());
         let me = crate::ipc::here().map(|p| p.display().to_string());
+        // A headless hn (tmux's server with no client) hands everything to the first client that
+        // attaches: one holder of the sessions again, as tmux has one server.
+        if !self.headless {
+            let held: HashSet<String> = doc["sessions"].as_array().map(|rows| rows.iter().filter(|r| r.get("headless").and_then(Value::as_bool).unwrap_or(false)).filter_map(live_owner).collect()).unwrap_or_default();
+            for owner in &held { let _ = crate::ipc::ask(std::path::Path::new(owner), &["hn-hand-over".into()]); }
+            if !held.is_empty() { doc = read_sessions(&Self::sessions_path()) }
+        }
         for row in doc["sessions"].as_array().cloned().unwrap_or_default() {
             let name = row.get("name").and_then(Value::as_str).map(str::to_string);
             if row.get("desk").and_then(Value::as_bool).unwrap_or(false) { if name.is_some() && self.session_desk { self.session_alias = name } continue }

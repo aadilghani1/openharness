@@ -2099,6 +2099,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
         }
         // kill-server, from another client of this name: this one's sessions go, and it exits.
         "hn-kill-client" => { app.sessions.clear(); app.session_alias = None; app.forget_sessions = true; app.quit = true }
+        // A client attached: a headless hn gives it every session, and goes.
+        "hn-hand-over" => { app.write_sessions(crate::app::Save::Leave); app.handed_over = true; app.quit = true }
         // Another client of this name takes a session this one has (it attached there).
         "hn-release-session" => {
             let Some(t) = opt(words, "-t") else { return app.error("missing -t") };
