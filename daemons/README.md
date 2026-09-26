@@ -296,7 +296,7 @@ While it incubates, the status line shows the nest: `\_O_/` `~\_O_/~` `\_.._/` `
 
 Crack, silhouette, name, card, in about 4 s (Reduce Motion: straight to the card):
 the egg wobbles twice, cracks, the top pops; the hatchling's 0.1 sprite appears as `#` in the faint
-colour, holds 850 ms, fills with its colour, blinks; its name types in as a small banner; the rarity
+colour, holds 850 ms, fills with its colour, blinks; its name types in as a banner in the face from `banner.json` (`renderBanner`); the rarity
 stamp and first words appear. A secret's reveal starts pitch black. The card copies as a fenced code
 block:
 

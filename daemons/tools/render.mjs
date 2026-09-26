@@ -70,3 +70,18 @@ export function statusCell(roster, sprite, baseWidth = sprite.length) {
 export function baseWidth(roster, d, versionIndex) {
   return renderSprite(roster, d, versionIndex, 'idle', { motion: false }).length
 }
+
+/**
+ * A daemon's name as a banner, in the face from daemons/banner.json: every glyph padded to its own
+ * widest row, `gap` columns between letters, blank rows dropped.
+ */
+export function renderBanner(banner, word) {
+  const blank = banner.glyphs[' ']
+  const glyphs = [...word.toLowerCase()].map(ch => {
+    const g = banner.glyphs[ch] ?? blank
+    const w = Math.max(...g.map(r => r.length))
+    return g.map(r => r.padEnd(w))
+  })
+  const rows = Array.from({ length: banner.rows }, (_, r) => glyphs.map(g => g[r]).join(' '.repeat(banner.gap)).trimEnd())
+  return rows.filter(l => l.trim())
+}

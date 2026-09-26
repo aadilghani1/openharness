@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { renderSprite, renderPortrait, statusCell, baseWidth } from './render.mjs'
+import { renderSprite, renderPortrait, statusCell, baseWidth, renderBanner } from './render.mjs'
 import { cardLines } from './card.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
@@ -120,6 +120,22 @@ for (const [date, id] of Object.entries(rules.historyDates ?? {})) {
   if (id !== null && !/^[a-z][a-z0-9-]{0,15}$/.test(id)) fail(`historyDates.${date}: ${id} is not a daemon id or null`)
 }
 if (text.includes("'''")) fail("roster.json may not contain ''' (the Dart copy is a raw string)")
+// The banner face: printable, one row count, every letter a daemon's name needs.
+const bannerText = readFileSync(resolve(root, 'daemons/banner.json'), 'utf8')
+const banner = JSON.parse(bannerText)
+for (const [ch, rows] of Object.entries(banner.glyphs)) {
+  if (rows.length !== banner.rows) fail(`banner ${JSON.stringify(ch)}: ${rows.length} rows, not ${banner.rows}`)
+  for (const r of rows) if (!printable(r)) fail(`banner ${JSON.stringify(ch)}: not printable ASCII`)
+}
+for (const d of roster.daemons) {
+  for (const ch of d.id) if (!banner.glyphs[ch]) fail(`banner has no glyph for ${JSON.stringify(ch)} (in ${d.id})`)
+  for (const line of renderBanner(banner, d.id)) {
+    for (const pair of ['->', '=>', '==', '-<', '>-', '<=', '>=', '!=', '??', '::']) {
+      if (line.includes(pair)) fail(`banner for ${d.id} draws ${pair}, which ligature fonts merge`)
+    }
+  }
+}
+if (bannerText.includes("'''")) fail("banner.json may not contain '''")
 if (problems.length) {
   console.error(problems.map(p => '  ' + p).join('\n'))
   console.error(`daemons/roster.json: ${problems.length} problem(s)`)
@@ -142,7 +158,7 @@ function output(path, content) {
 const header = '// Generated from daemons/roster.json by daemons/tools/generate.mjs. Do not edit.\n'
 // The Dart clients read the whole roster as a raw string: the desktop and the phone, each its own
 // package (the phone depends on nothing else in this repo), so each gets its own copy.
-const dartRoster = `${header}// ignore_for_file: prefer_single_quotes\nconst daemonRosterJson = r'''\n${text}''';\n`
+const dartRoster = `${header}// ignore_for_file: prefer_single_quotes\nconst daemonRosterJson = r'''\n${text}''';\nconst daemonBannerJson = r'''\n${bannerText}''';\n`
 output('desktop/lib/daemons/roster.g.dart', dartRoster)
 output('mobile/lib/daemons/roster.g.dart', dartRoster)
 
@@ -207,6 +223,7 @@ for (const d of roster.daemons) {
     frames.cards.push({ id: d.id, version, shiny: true, serial: 42, nickname: 'pip', hatched: '2026-09-26', egg: 'first', out: cardLines(roster, d, { version, shiny: true, serial: 42, nickname: 'pip', hatched: '2026-09-26', egg: 'first' }) })
   }
 }
+frames.banners = roster.daemons.map(d => ({ id: d.id, out: renderBanner(banner, d.id) }))
 output('daemons/frames.json', JSON.stringify(frames) + '\n')
 
 // The lookbook draws from the roster itself, so art and odds never drift from what ships.
@@ -219,7 +236,7 @@ if (existsSync(lookbookPath)) {
     console.error('daemons/lookbook.html has no roster markers')
     process.exit(1)
   }
-  const data = JSON.stringify(roster).replace(/</g, '\\u003c')
+  const data = JSON.stringify({ ...roster, banner }).replace(/</g, '\\u003c')
   output('daemons/lookbook.html', page.slice(0, a + start.length) + `\n<script type="application/json" id="roster-data">${data}</script>\n` + page.slice(b))
 }
 console.log(check ? 'daemons: roster and copies are current' : `daemons: ${roster.daemons.length} daemons checked, copies written`)
