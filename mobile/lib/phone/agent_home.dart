@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/logging/startup_trace.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/empty_state.dart';
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'agent_index.dart';
@@ -14,6 +15,7 @@ import 'agent_swipe.dart';
 import 'agent_swipe_list.dart';
 import 'agents_page.dart' show openNewAgent;
 import 'desk_groups.dart';
+import 'link_page.dart';
 import 'machines_tab.dart';
 import 'welcome/connect_computer.dart';
 
@@ -648,6 +650,22 @@ class _AgentHomeState extends State<AgentHome> {
             return ConnectComputerPage(
               notifier: widget.notifier,
               onTrySample: openSampleMode,
+            );
+          }
+          // The one computer there is, awake and waiting for its phone password: the unlock
+          // itself, not a list of one to tap through — the moment setup pays off.
+          final only = widget.notifier.machineStates.values
+              .where(
+                (state) => state.machine.authMode == MachineAuthMode.remote,
+              )
+              .toList();
+          if (only.length == 1 &&
+              only.single.needsLink &&
+              only.single.nodeOnline != false) {
+            return LinkPage(
+              notifier: widget.notifier,
+              machineId: only.single.machine.machineId,
+              embedded: true,
             );
           }
           return MachinesTab(notifier: widget.notifier);
