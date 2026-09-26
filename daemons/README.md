@@ -198,9 +198,10 @@ block:
    New Harness launch spinner).
 2. **One daemon everywhere**: this folder; the zoo on the server; the desktop replaces its local
    companion with the zoo (status line, nest, hatch, panel); `hn` replaces `~/.harness/tui/tim.json`.
-3. **The pair brain**: the paired daemon runs as an always-on harness with a Harness control
-   interface (list, read, send, start, pause). First jobs: triage what waits on you, and brief you
-   when you come back.
+3. **The pair brain** ([BRAIN.md](BRAIN.md)): always sensing on every machine, thinking on the one
+   you are at, plus a persistent pair harness that pauses when idle, over a Harness control interface
+   (list, read, answer, send, start, pause). First jobs: triage what waits on you, and brief you when
+   you come back.
 4. **Learning**: notice real signals, propose in one line, teach every agent with SKILL.md, only with
    your yes. See the lookbook's LEARNING section.
 5. **The rest of the zoo**: turn/week/marathon/night/history eggs, bond and versions, logbooks, drops.
