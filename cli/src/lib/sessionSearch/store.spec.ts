@@ -114,6 +114,16 @@ describe('SessionSearchStore', () => {
     expect(plain(hits[1].snippet)).toMatch(/\[(alpha|beta)\]/)
   })
 
+  it('ranks a word in nearly every turn by recency: the newest sessions that say it', () => {
+    const store = open()
+    store.commonMatches = 3
+    for (let index = 0; index < 6; index++) {
+      store.writeSession(session(`s${index}`, 'x', NOW - index * DAY), 0, [turn(0, `harness ${'word '.repeat(index * 5)}`, '', '', NOW - index * DAY)])
+    }
+    expect(store.search('harness', { now: NOW, limit: 3 }).map((hit) => hit.sessionId)).toEqual(['s0', 's1', 's2'])
+    expect(store.search('harness', { now: NOW, from: NOW - 4.5 * DAY, to: NOW - 2.5 * DAY }).map((hit) => hit.sessionId)).toEqual(['s3', 's4'])
+  })
+
   it('matches words split between the session name and what was said in it', () => {
     const store = open()
     store.writeSession(session('mobile', 'Mobile app build', NOW), 0, [turn(0, 'swipe right opens Find')])

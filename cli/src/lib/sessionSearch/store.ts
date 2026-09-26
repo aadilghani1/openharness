@@ -103,7 +103,7 @@ export interface SearchOptions {
 /** Rows considered per query before grouping by session: bounds the work of a very common word. */
 const CANDIDATE_ROWS = 3_000
 /** Past this many matching turns a query is ranked by recency first (see search()). */
-const COMMON_MATCHES = 30_000
+export const COMMON_MATCHES = 30_000
 
 /**
  * Query words as the index sees them: each split into its letter-and-digit parts, since the index
@@ -358,6 +358,7 @@ export class SessionSearchStore {
    */
   writeSession(session: IndexedSession, fromTurn: number, turns: readonly IndexedTurn[]): void {
     this.meta = null
+    this.windowSessions = null
     this.transaction(() => {
       this.statement('DELETE FROM turns WHERE session_id = ? AND (turn >= ? OR turn = ?)').run(session.sessionId, fromTurn, HEADER_TURN)
       const insert = this.statement('INSERT INTO turns (session_id, turn, at, name, ask, answer, tools) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -375,6 +376,7 @@ export class SessionSearchStore {
 
   removeSession(sessionId: string): void {
     this.meta = null
+    this.windowSessions = null
     this.transaction(() => {
       this.statement('DELETE FROM turns WHERE session_id = ?').run(sessionId)
       this.statement('DELETE FROM sessions WHERE session_id = ?').run(sessionId)
@@ -393,6 +395,9 @@ export class SessionSearchStore {
    * is a session about the dial that was open last week. With a window and no words, those
    * sessions by their latest turn in it. `now` is for tests.
    */
+  /** Where a query counts as matching too much to rank (tests lower it). */
+  commonMatches = COMMON_MATCHES
+
   search(query: string, options: SearchOptions = {}): SearchHit[] {
     const terms = queryTerms(query)
     const limit = Math.max(1, Math.min(options.limit ?? 30, 100))
@@ -411,18 +416,31 @@ export class SessionSearchStore {
     // of all turns barely tell one turn from another, and sorting every match by BM25 is the slowest
     // thing a search can do — those take the most recent matches and let recency decide.
     const allWords = terms.join(' AND ')
-    const common = !inWindow && this.statement('SELECT count(*) AS n FROM turns_fts WHERE turns_fts MATCH ?').get(allWords)!.n as number > COMMON_MATCHES
-    const rows = inWindow
+    const common = this.statement('SELECT count(*) AS n FROM turns_fts WHERE turns_fts MATCH ?').get(allWords)!.n as number > this.commonMatches
+    // A word in a large share of all turns barely tells one from another, and sorting every match
+    // by BM25 is the slowest thing a search can do: those take every match unranked and let
+    // recency decide. (Not the highest rowids: a backfill writes the newest sessions first.)
+    let rows = common
       ? this.statement(`
-        SELECT t.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at, bm25(turns_fts, ${WEIGHTS.join(', ')}) AS rank
-        FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid
-        WHERE turns_fts MATCH ? AND t.session_id IN (SELECT value FROM json_each(?))
-        ORDER BY rank LIMIT ${CANDIDATE_ROWS}`).all(allWords, JSON.stringify([...inWindow]))
+        SELECT t.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at, -1 AS rank
+        FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid WHERE turns_fts MATCH ?`).all(allWords)
       : this.statement(`
         SELECT f.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at, f.rank AS rank
         FROM (SELECT rowid AS id, bm25(turns_fts, ${WEIGHTS.join(', ')}) AS rank FROM turns_fts
-              WHERE turns_fts MATCH ? ORDER BY ${common ? 'rowid DESC' : 'rank'} LIMIT ${CANDIDATE_ROWS}) f
+              WHERE turns_fts MATCH ? ORDER BY rank LIMIT ${CANDIDATE_ROWS}) f
         JOIN turns t ON t.id = f.id`).all(allWords)
+    if (inWindow) {
+      // The ranked candidates, narrowed to the window — enough unless the list was cut short and
+      // the window holds few of them; then rank within the window's sessions themselves.
+      const within = rows.filter((row) => inWindow.has(row.sid as string))
+      rows = common || rows.length < CANDIDATE_ROWS || new Set(within.map((row) => row.sid)).size >= limit
+        ? within
+        : this.statement(`
+          SELECT t.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at, bm25(turns_fts, ${WEIGHTS.join(', ')}) AS rank
+          FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid
+          WHERE turns_fts MATCH ? AND t.session_id IN (SELECT value FROM json_each(?))
+          ORDER BY rank LIMIT ${CANDIDATE_ROWS}`).all(allWords, JSON.stringify([...inWindow]))
+    }
     for (const row of rows) {
       const sid = row.sid as string
       const turn = row.turn as number
@@ -531,8 +549,19 @@ export class SessionSearchStore {
     })
   }
 
+  /** The last window asked about, and its sessions: typing on, the window stays the same. */
+  private windowSessions: { from: number; to: number; sessions: Set<string> } | null = null
+
   /** Sessions with a turn in the window; a session whose turns carry no time, by its last activity. */
   private sessionsWorkedOn(window: { from: number; to: number }): Set<string> {
+    const cached = this.windowSessions
+    if (cached && cached.from === window.from && cached.to === window.to) return cached.sessions
+    const sessions = this.readSessionsWorkedOn(window)
+    this.windowSessions = { ...window, sessions }
+    return sessions
+  }
+
+  private readSessionsWorkedOn(window: { from: number; to: number }): Set<string> {
     return new Set(this.statement(`
       SELECT DISTINCT session_id AS sid FROM turns WHERE turn >= 0 AND at BETWEEN ? AND ?
       UNION SELECT session_id AS sid FROM sessions WHERE last_at BETWEEN ? AND ?
