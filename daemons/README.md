@@ -426,8 +426,11 @@ node --test daemons/tools/card.test.mjs
    (list, read, answer, send, start, pause). First jobs: triage what waits on you, and brief you when
    you come back.
 4. **Learning** ([LEARNING.md](LEARNING.md)): notice real signals, propose in one line, teach every
-   agent with SKILL.md, only with your yes. L1 (notice, propose, teach, revert) is built; L2 (borrow,
-   check, export) is designed. See also the lookbook's LEARNING section.
+   agent with SKILL.md, only with your yes. L1 (notice, propose, teach, revert) and L2 (borrow from Hermes,
+   Claude Code and Codex, opt-in; usage and a curator that marks stale at 30 days and archives at 90;
+   export to `~/.agents/skills` and `~/.claude/skills`, opt-in) are built, with person-only approval and
+   bond for each lesson (`zoo.lesson`). Across machines and "about your agents" are designed. See also the
+   lookbook's LEARNING section.
 5. **The rest of the zoo**: turn/week/marathon/night/history eggs, bond and versions, serials,
    duplicates and drop dates (the server and harnessd: see "Earning eggs and growing" and "Serials and
    duplicates"; the clients follow), logbooks, more drops.
