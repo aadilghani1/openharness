@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -37,7 +37,24 @@ describe('harness search', () => {
     expect(run(['swipe'], dir, true).out[1]).toBe('  > \x1b[1mswipe\x1b[22m right should open Find')
     expect(run(['nothing-here'], dir).out).toEqual(['Nothing on this computer mentions "nothing-here".'])
     const json = JSON.parse(run(['swipe', '--json'], dir).out[0])
-    expect(json.hits[0]).toMatchObject({ name: 'Mobile app', sessionId: 's1', field: 'ask' })
+    expect(json.hits[0]).toMatchObject({
+      name: 'Mobile app', sessionId: 's1', field: 'ask',
+      snippet: 'swipe right should open Find', matches: [[0, 5]],
+    })
+    // `--limit N` is a flag and its value, not a search word.
+    expect(run(['swipe', '--limit', '1'], dir).out[0]).toBe('Mobile app  3d ago · agent-12')
+  })
+
+  it('never rewrites an index another version of the daemon owns', () => {
+    const dir = indexed()
+    const path = join(dir, SESSION_SEARCH_FILE)
+    const raw = SessionSearchStore.open(path)!
+    ;(raw as unknown as { db: { exec(sql: string): void } }).db.exec("UPDATE meta SET value = 'future' WHERE key = 'schema'")
+    raw.close()
+    expect(run(['swipe'], dir)).toMatchObject({ code: 1, err: [expect.stringContaining('another version')] })
+    expect(statSync(path).size).toBeGreaterThan(0)
+    const after = SessionSearchStore.openReader(path)
+    expect(after).toBe('outdated')
   })
 
   it('explains a missing index and a bad invocation', () => {
