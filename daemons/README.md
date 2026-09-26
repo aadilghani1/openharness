@@ -364,7 +364,8 @@ pool (the same weights as a turn egg). Each client reports the ones it sees with
 The first egg leans toward tim (`eggs.first.boost` tim x4: about 42%, four times any other common), so
 most people meet tim first and get the joke. While it incubates, the status line shows the nest:
 `\_O_/` `~\_O_/~` `\_.._/` `\_o.o_/` as 0, 1, 2 and 3 habits count toward it; without a finished
-turn, at most 2 count. An egg never hatches on its own; clicking a ready egg hatches it.
+turn, at most 2 count (`render.mjs` `nestStage`, pinned in `frames.json` `nests`). An egg never
+hatches on its own; clicking a ready egg hatches it.
 
 ## Hatching
 

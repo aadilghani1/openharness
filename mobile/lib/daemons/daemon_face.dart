@@ -161,7 +161,7 @@ class DaemonFace extends ChangeNotifier {
       if (_revealing) return roster.rules.nest.last;
       final egg = zoo.readyEgg;
       if (egg != null) return eggLook(egg);
-      return nestFor(roster, zoo.habitsDone);
+      return nestFor(roster, zoo.habits);
     }
     return renderSprite(
       roster,

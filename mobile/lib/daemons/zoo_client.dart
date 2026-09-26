@@ -95,6 +95,7 @@ class ZooClient extends ChangeNotifier {
   /// The first egg waiting to be hatched.
   ZooEgg? get readyEgg => _zoo.eggs.firstOrNull;
   int get habitsDone => _zoo.habits.length;
+  List<String> get habits => _zoo.habits;
   int get habitsNeeded => roster.rules.firstEggNeed;
 
   // ── reading ────────────────────────────────────────────────────────────────

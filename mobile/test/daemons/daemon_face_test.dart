@@ -246,8 +246,9 @@ void main() {
         },
       );
       expect(face.def, isNull);
-      expect(face.glyph, r'~\_O_/~');
-      expect(face.semantics, contains('2 of 5 habits'));
+      // A turn and one more: two of the three the first egg needs.
+      expect(face.glyph, r'\_.._/');
+      expect(face.semantics, contains('2 of 3 habits'));
       doc = {
         'revision': 2,
         'zoo': {

@@ -176,18 +176,12 @@ void main() {
     expect(fencedCard(['a', 'b']), '```\na\nb\n```');
   });
 
-  test('nest stages follow habits done', () {
+  test('nest stages follow habits done, as render.mjs nestStage', () {
+    final nests = (frames['nests'] as List).cast<Map>();
+    expect(nests, isNotEmpty);
     expect(
-      [for (var h = 0; h <= 6; h++) nestFor(roster, h)],
-      [
-        r'\_O_/',
-        r'\_O_/',
-        r'~\_O_/~',
-        r'~\_O_/~',
-        r'\_.._/',
-        r'\_o.o_/',
-        r'\_o.o_/',
-      ],
+      [for (final n in nests) nestFor(roster, (n['habits'] as List).cast<String>())],
+      [for (final n in nests) n['out'] as String],
     );
   });
 

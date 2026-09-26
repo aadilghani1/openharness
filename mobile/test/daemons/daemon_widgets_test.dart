@@ -254,7 +254,8 @@ void main() {
   ) async {
     backend.zoo = _nest(habits: const ['turn', 'split', 'find']);
     await _pump(tester, backend);
-    expect(find.text(r' ~\_O_/~  '), findsOneWidget);
+    // A turn and two more: the egg is ready to arrive.
+    expect(find.text(r' \_o.o_/  '), findsOneWidget);
     await _openSheet(tester);
     expect(find.text('A daemon is incubating'), findsOneWidget);
     expect(find.text('[x]'), findsNWidgets(3));

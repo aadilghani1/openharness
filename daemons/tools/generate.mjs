@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { renderSprite, renderPortrait, statusCell, baseWidth, renderBanner } from './render.mjs'
+import { renderSprite, renderPortrait, statusCell, baseWidth, renderBanner, nestStage } from './render.mjs'
 import { cardLines } from './card.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
@@ -269,6 +269,11 @@ for (const c of frames.cells) {
   if (c.out.length !== rules.statusCells + 2) fail(`${c.id} ${c.v} ${c.mood}: status cell is ${c.out.length} wide, not ${rules.statusCells + 2}`)
   if (c.out.trimEnd().length > rules.statusCells + 2) fail(`${c.id} ${c.v} ${c.mood}: status cell content overflows`)
 }
+// Nest stages for habits done (every client shows the same egg for the same progress).
+const nestHabits = rules.firstEgg.habits.map(h => h.key)
+const nestCases = [[], ['turn'], ['split'], ['split', 'find'], ['split', 'find', 'store'], ['turn', 'split'],
+  ['turn', 'split', 'find'], nestHabits, ['turn', 'turn', 'bogus']]
+frames.nests = nestCases.map(habits => ({ habits, stage: nestStage(roster, habits), out: rules.nest[nestStage(roster, habits)] }))
 frames.banners = roster.daemons.map(d => ({ id: d.id, out: renderBanner(banner, d.id) }))
 output('daemons/frames.json', JSON.stringify(frames) + '\n')
 

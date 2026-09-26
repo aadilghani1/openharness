@@ -81,6 +81,10 @@ class DaemonRules {
       shinyOneIn = (raw['shinyOneIn'] as num).toInt(),
       pityPerMiss = raw['pityPerMiss'] as num,
       firstEggNeed = ((raw['firstEgg'] as Map)['need'] as num).toInt(),
+      firstEggRequire = [
+        for (final k in (raw['firstEgg'] as Map)['require'] as List? ?? const [])
+          k as String,
+      ],
       habits = [
         for (final h in (raw['firstEgg'] as Map)['habits'] as List)
           DaemonHabit((h as Map)['key'] as String, h['label'] as String),
@@ -127,6 +131,9 @@ class DaemonRules {
   final int shinyOneIn;
   final num pityPerMiss;
   final int firstEggNeed;
+
+  /// Habits the first egg cannot come without (a finished turn).
+  final List<String> firstEggRequire;
   final List<DaemonHabit> habits;
   final Map<String, DaemonEggKind> eggs;
   /// sha256 of each lowercased easter word: the words themselves never ship.

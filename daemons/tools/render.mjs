@@ -87,3 +87,18 @@ export function renderBanner(banner, word) {
   const rows = Array.from({ length: banner.rows }, (_, r) => glyphs.map(g => g[r]).join(' '.repeat(banner.gap)).trimEnd())
   return rows.filter(l => l.trim())
 }
+
+/**
+ * The nest while the first egg incubates: which of rules.nest to show for the habits done. Habits count
+ * up to firstEgg.need; until every required habit (a finished turn) is among them, at most need - 1
+ * count. With need 3 each habit moves the egg one stage; any need maps onto the four stages evenly.
+ */
+export function nestStage(roster, habitsDone) {
+  const { need, require = [] } = roster.rules.firstEgg
+  const known = new Set(roster.rules.firstEgg.habits.map(h => h.key))
+  const done = [...new Set(habitsDone)].filter(k => known.has(k))
+  const required = require.every(k => done.includes(k))
+  const counted = required ? Math.min(done.length, need) : Math.min(done.length, need - 1)
+  const last = roster.rules.nest.length - 1
+  return counted >= need ? last : Math.floor((counted * last) / need)
+}
