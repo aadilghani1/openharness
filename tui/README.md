@@ -126,12 +126,21 @@ pane counts as done and unread (`✓`) until you go to that pane.
   order, each once. It shows each in the same window, so a run through the queue doesn't pile up
   windows. Going there reads it, and the counts go down.
 
+All of this is in options, which `show -g`, `show -gw` and `C-b C` print as they are:
+`status-left`, `status-right`, the window formats and each pane's title row
+(`pane-border-format`). Set them in your `~/.tmux.conf` as you would for tmux; what you set
+replaces hn's. `set -g @hn-look tmux` puts back all of tmux's own: no title rows, tmux's status
+line and window list.
+
 For your own formats: `#{fleet}` (the status line's counts, ready to drop into your theme) and
 `#{fleet_needs}` `#{fleet_failed}` `#{fleet_done}` `#{fleet_working}` `#{fleet_idle}`, `#{spinner}`,
 `#{pane_agent_icon}` and `#{pane_agent_state}` (needs, working, done, idle, starting, failed,
-paused, offline), `#{window_agent_icon}` and `#{window_agent_state}` (its most urgent pane's),
-`#{pane_project}`, `#{pane_branch}`, `#{pane_machine}`, `#{pane_far}` (another machine's), and
-`#{waiting}` (the harnesses waiting on you).
+paused, offline), `#{pane_agent_mark}` (the icon in its colour, as the title row draws it),
+`#{window_agent_icon}` and `#{window_agent_state}` (its most urgent pane's), `#{pane_project}`,
+`#{pane_branch}`, `#{pane_where}` (`project git:(branch)` as far as it fits beside the title),
+`#{pane_machine}`, `#{pane_far}` (another machine's), `#{pane_watched}` and `#{pane_watcher}`
+(another window has the pane to type in, and who), and `#{waiting}` (the harnesses waiting on
+you).
 
 ## From a shell
 

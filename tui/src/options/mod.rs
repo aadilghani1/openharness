@@ -52,19 +52,20 @@ fn items(map: &BTreeMap<String, String>, base: &str) -> Vec<(usize, String)> {
     v
 }
 
-/// tmux's defaults, raw, by name (`name[i]` for an array's items). hn's own differ in one place,
-/// on purpose: a harness pane is named, so pane-border-status is `top`. mode-keys and status-keys
-/// follow $VISUAL or $EDITOR, as tmux's do: vi when it names a vi.
+/// The defaults, raw, by name (`name[i]` for an array's items): tmux's, with hn's look over them
+/// (LOOK: a title row over each pane, the status line and the window list with the harnesses in
+/// them) and a few behaviours (the mouse on, ten thousand lines of history, a pane's title its
+/// harness's name). mode-keys and status-keys follow $VISUAL or $EDITOR, as tmux's do: vi when
+/// it names a vi.
 pub fn defaults() -> &'static BTreeMap<String, String> {
     static D: OnceLock<BTreeMap<String, String>> = OnceLock::new();
     D.get_or_init(|| {
-        let mut m = BTreeMap::new();
-        for line in include_str!("../../tests/fixtures/tmux-3.5a-options.txt").lines() {
-            let mut it = line.splitn(3, ' ');
-            let (_, name, value) = (it.next(), it.next().unwrap_or(""), it.next().unwrap_or(""));
-            if !name.is_empty() { m.insert(name.to_string(), unescape(value)); }
-        }
+        let mut m = tmux_defaults().clone();
         m.insert("pane-border-status".into(), "top".into());
+        // Each pane's title row: the harness's symbol in its state's colour, the pane's title
+        // (the harness's name), [watching — who has it] when another window has the pane to type
+        // in, and at the far end, as far as there is room, its project and branch.
+        m.insert("pane-border-format".into(), " #{?pane_agent_icon,#{pane_agent_mark} ,}#{pane_title}#{?pane_watched, #[fg=yellow][watching#{?pane_watcher, — #{pane_watcher} has it,}]#[fg=default],} #[align=right]#{?pane_where,#[dim] #{pane_where} #[nodim],}".into());
         // The status line: tmux's, with what Harness adds — the name reversed while the prefix
         // waits; on the right, the fleet in counts (#{fleet}: ?2 ✗1 ✓5 ⠹41), the focused pane's machine (a far one, as
         // scp writes it: gpu-box:ml-lab), project and branch (as zsh's robbyrussell prompt writes
@@ -95,6 +96,24 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         m
     })
 }
+
+/// tmux 3.5a's own defaults, as `tmux show -g` prints them (mode-keys and status-keys following
+/// $VISUAL or $EDITOR in hn's).
+pub fn tmux_defaults() -> &'static BTreeMap<String, String> {
+    static D: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+    D.get_or_init(|| {
+        let mut m = BTreeMap::new();
+        for line in include_str!("../../tests/fixtures/tmux-3.5a-options.txt").lines() {
+            let mut it = line.splitn(3, ' ');
+            let (_, name, value) = (it.next(), it.next().unwrap_or(""), it.next().unwrap_or(""));
+            if !name.is_empty() { m.insert(name.to_string(), unescape(value)); }
+        }
+        m
+    })
+}
+
+/// hn's look, where its defaults differ from tmux's: what `set -g @hn-look tmux` puts back.
+pub const LOOK: [&str; 8] = ["pane-border-status", "pane-border-format", "status-left", "status-right", "status-left-length", "status-right-length", "window-status-format", "window-status-current-format"];
 
 /// Where a `set` lands, as tmux's flags choose it.
 #[derive(Default, Clone, Debug)]
@@ -157,6 +176,15 @@ impl Store {
         items(defaults(), name).into_iter().map(|(_, v)| v).collect()
     }
 
+    /// `@hn-look tmux`: tmux's own look in place of hn's (the status line, the window list, the
+    /// panes' title rows), where you have not set them yourself.
+    pub fn tmux_look(&self) -> bool { self.get("@hn-look", "", None).as_deref() == Some("tmux") }
+
+    /// The default for a name: hn's, or tmux's under `@hn-look tmux`.
+    fn default_of(&self, name: &str) -> Option<&'static String> {
+        if LOOK.contains(&name) && self.tmux_look() { tmux_defaults().get(name) } else { defaults().get(name) }
+    }
+
     pub fn get(&self, name: &str, window: &str, pane: Option<u64>) -> Option<String> {
         let layers: Vec<Option<&BTreeMap<String, String>>> = if name.starts_with('@') {
             vec![pane.and_then(|p| self.panes.get(&p)), self.windows.get(window), Some(&self.global_window), Some(&self.session), Some(&self.global_session), Some(&self.server)]
@@ -174,7 +202,7 @@ impl Store {
             index?;
             return match layers.into_iter().flatten().find(|m| holds(m, base)) { Some(m) => m.get(name).cloned(), None => defaults().get(name).cloned() };
         }
-        layers.into_iter().flatten().find_map(|m| m.get(name).cloned()).or_else(|| defaults().get(name).cloned())
+        layers.into_iter().flatten().find_map(|m| m.get(name).cloned()).or_else(|| self.default_of(name).cloned())
     }
 
     /// As tmux's formats read it (options_to_string, numeric): a flag is 1 or 0; an array its items
@@ -299,6 +327,7 @@ impl Store {
     fn global_rows(&self, scope: Scope) -> BTreeMap<String, String> {
         let in_scope = |o: &Opt| match scope { Scope::Server => o.scope == Scope::Server, Scope::Session => o.scope == Scope::Session, Scope::Window => matches!(o.scope, Scope::Window | Scope::Pane), Scope::Pane => false };
         let mut rows: BTreeMap<String, String> = defaults().iter().filter(|(k, _)| find(k).map(in_scope).unwrap_or(false)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        for n in LOOK { if rows.contains_key(n) { if let Some(v) = self.default_of(n) { rows.insert(n.to_string(), v.clone()); } } }
         for h in table::HOOKS.iter().filter(|o| in_scope(o)) { rows.insert(h.name.to_string(), String::new()); }
         if let Some(map) = self.map(scope, true, "", 0) { overlay(&mut rows, map) }
         rows

@@ -102,6 +102,19 @@ pub fn colour(text: &str) -> Option<Color> {
     })
 }
 
+/// A colour as tmux writes it (colour_tostring), so [colour] reads it back the same.
+pub fn colour_name(c: Color) -> String {
+    match c {
+        Color::Reset => "default".into(),
+        Color::Black => "black".into(), Color::Red => "red".into(), Color::Green => "green".into(), Color::Yellow => "yellow".into(),
+        Color::Blue => "blue".into(), Color::Magenta => "magenta".into(), Color::Cyan => "cyan".into(), Color::Gray => "white".into(),
+        Color::DarkGray => "brightblack".into(), Color::LightRed => "brightred".into(), Color::LightGreen => "brightgreen".into(), Color::LightYellow => "brightyellow".into(),
+        Color::LightBlue => "brightblue".into(), Color::LightMagenta => "brightmagenta".into(), Color::LightCyan => "brightcyan".into(), Color::White => "brightwhite".into(),
+        Color::Indexed(n) => format!("colour{n}"),
+        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+    }
+}
+
 /// `bg=colour235,fg=white,bold` → (fg, bg).
 fn style(text: &str) -> (Option<Color>, Option<Color>) {
     let (mut fg, mut bg) = (None, None);

@@ -289,54 +289,6 @@ fn respawn(app: &mut App, p: u64) {
     });
 }
 
-/// What tmux's list-* commands print.
-fn listing(app: &App, command: &str) -> Vec<String> {
-    let window = |i: usize| {
-        let tab = &app.tabs[i];
-        let flag = if i == app.active { "*" } else if app.last_tab() == Some(&tab.id) { "-" } else { "" };
-        format!("{}: {}{flag} ({} panes){}", app.win_num(i), tab.name, tab.panes().len(), if i == app.active { " (active)" } else { "" })
-    };
-    match command {
-        "list-windows" => (0..app.tabs.len()).map(window).collect(),
-        "list-panes" => app.tab().panes().iter().enumerate().map(|(i, id)| {
-            let p = app.panes.get(id);
-            let (c, r) = app.rects.iter().find(|(x, _)| x == id).map(|(_, r)| app.content_of(app.tab(), *r)).map(|r| (r.width, r.height)).or(p.map(|p| (p.cols, p.rows))).unwrap_or((0, 0));
-            let title = p.and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
-            let machine = p.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default();
-            format!("{}: [{c}x{r}] \"{title}\" {machine} {}{}", i + app.pane_base_index, crate::pane::tag(*id), if Some(*id) == app.focused() { " (active)" } else { "" })
-        }).collect(),
-        "list-sessions" => {
-            vec![format!("{}: {} windows (attached)", app.session_name(), app.tabs.len())]
-        }
-        "list-clients" => vec![format!("{}: {} [{}x{} {}] (utf8)", std::env::var("SSH_TTY").or_else(|_| std::env::var("TTY")).unwrap_or_else(|_| "tty".into()), app.session_name(), app.size.0, app.size.1, std::env::var("TERM").unwrap_or_default())],
-        _ => app.opts.user.iter().map(|(k, v)| format!("{k} \"{v}\"")).chain(vec![
-            format!("base-index {}", app.base_index),
-            format!("mode-keys {}", if app.mode_keys_emacs() { "emacs" } else { "vi" }),
-            format!("renumber-windows {}", if app.opts.renumber_windows == Some(true) { "on" } else { "off" }),
-            format!("status {}", if app.opts.status == Some(false) { "off" } else { "on" }),
-            format!("status-justify {}", app.opts.status_justify.clone().unwrap_or_else(|| "left".into())),
-            format!("pane-border-format {}", app.opts.pane_border_format.clone().map(|s| format!("\"{s}\"")).unwrap_or_else(|| "(hn's: index, title, state, machine)".into())),
-            format!("history-limit {}", crate::pane::HISTORY.load(std::sync::atomic::Ordering::Relaxed)),
-            format!("escape-time 0"),
-            format!("display-time {}", app.display_ms),
-            format!("status-left {}", app.opts.status_left.clone().map(|s| format!("\"{s}\"")).unwrap_or_else(|| "\"[#S] \"".into())),
-            format!("status-right {}", app.opts.status_right.clone().map(|s| format!("\"{s}\"")).unwrap_or_else(|| r##""#{=21:pane_title}" %H:%M %d-%b-%y"##.into())),
-            format!("synchronize-panes {}", if app.tab().sync { "on" } else { "off" }),
-            format!("pane-border-status {}", if app.opts.border_titles == Some(false) { "off" } else { "top" }),
-            format!("@hn-hint-time {}", if app.keymap.hint_ms == u64::MAX { 0 } else { app.keymap.hint_ms }),
-            format!("main-pane-width {}", app.opts.main_pane_width.map(|v| if v >= 1000 { format!("{}%", v - 1000) } else { v.to_string() }).unwrap_or_else(|| "80".into())),
-            format!("main-pane-height {}", app.opts.main_pane_height.map(|v| if v >= 1000 { format!("{}%", v - 1000) } else { v.to_string() }).unwrap_or_else(|| "24".into())),
-            format!("display-panes-time {}", app.display_panes_ms),
-            format!("display-time {}", app.display_ms),
-            format!("mouse {}", if app.mouse { "on" } else { "off" }),
-            format!("pane-base-index {}", app.pane_base_index),
-            format!("prefix {}", crate::keys::name(&app.keymap.prefix)),
-            format!("prefix2 {}", app.keymap.prefix2.map(|c| crate::keys::name(&c)).unwrap_or_else(|| "None".into())),
-            format!("repeat-time {}", app.keymap.repeat_ms),
-            format!("status-position {}", if app.status_top { "top" } else { "bottom" }),
-        ]).collect(),
-    }
-}
 
 /// A bound command as tmux prints it: canonical names, double quotes, `\;` between commands.
 fn canonical(command: &str) -> String { canonical_with(command, " \\; ") }
@@ -1975,9 +1927,15 @@ fn run_words(app: &mut App, words: &[String]) {
             app.wait_cli = app.capture.is_some();
         }
         "customize-mode" => {
-            // tmux's options-and-keys tree, read here as one list: the options as they are, then every key.
-            let mut lines = listing(app, "show-options");
-            lines.push(String::new());
+            // tmux's options-and-keys tree, read here as one list: the server's, the session's and
+            // the windows' options as they are, then every key.
+            let mut lines = Vec::new();
+            for (title, f) in [("Server Options", crate::options::SetFlags { server: true, ..Default::default() }), ("Session Options", crate::options::SetFlags { global: true, ..Default::default() }), ("Window & Pane Options", crate::options::SetFlags { global: true, window: true, ..Default::default() })] {
+                lines.push(title.to_string());
+                lines.extend(app.options.show(None, &f, false, false, crate::options::Which::Options, "", 0).unwrap_or_default().into_iter().map(|l| format!("  {l}")));
+                lines.push(String::new());
+            }
+            lines.push("Key Bindings".into());
             for b in &app.keymap.prefix_table { lines.push(format!("{} {:<9} {}", crate::keys::name(&app.keymap.prefix), crate::keys::name(&b.chord), b.command)) }
             app.print("customize-mode", lines);
         }

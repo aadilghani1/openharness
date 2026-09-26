@@ -259,60 +259,18 @@ fn border_style(app: &App, active: bool) -> Style {
     else { app.look.border.map(|c| Style::default().fg(c)).unwrap_or_default() }
 }
 
-/// A pane's status line text over its border characters: your pane-border-format, or hn's — the
-/// harness at a glance (its state's symbol, none for a plain shell) and its name, and where the
-/// pane is wide enough, its project and branch at the far end (the focused pane's are on the
-/// status line whatever the width).
+/// A pane's status line over its border characters: its pane-border-format (hn's: the harness's
+/// symbol, its name, and as far as the pane is wide, its project and branch), drawn as
+/// screen_redraw_make_pane_status draws it — format_draw over the border, so #[align=right],
+/// #[align=centre] and #[fill] place it as tmux does, the border showing wherever the format
+/// writes nothing.
 fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) {
     if area.width == 0 { return }
-    let Some(pane) = app.panes.get(&id) else { return };
-    // Your pane-border-format: format_draw over the border (screen_redraw_make_pane_status), so
-    // #[align=right], #[align=centre] and #[fill] place it as tmux does, the border showing
-    // wherever the format writes nothing.
-    if let Some(fmt) = &app.opts.pane_border_format {
-        let expanded = crate::format::expand(app, fmt, app.active, Some(id), true);
-        for (i, cell) in crate::draw::format_draw_over(&expanded, style, area.width).into_iter().enumerate() {
-            if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((area.x + i as u16, area.y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
-        }
-        return;
+    let Some(fmt) = app.options.get("pane-border-format", &app.tab().id, Some(id)) else { return };
+    let expanded = crate::format::expand(app, &fmt, app.active, Some(id), true);
+    for (i, cell) in crate::draw::format_draw_over(&expanded, style, area.width).into_iter().enumerate() {
+        if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((area.x + i as u16, area.y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
     }
-    let title = crate::format::pane_title(app, app.active, id);
-    let mut spans: Vec<Span> = vec![Span::styled(" ", style)];
-    if let Some(state) = app.pane_state(id) {
-        let (glyph, _, color) = theme::state_mark(state, app.tick);
-        // Needs you: reversed, as tmux marks what wants you (a yellow ? alone is faint on a light
-        // theme); idle and the rest in the finder's dim, not colour 8 (lost on Solarized).
-        let st = if state == crate::fleet::State::NeedsInput { style.patch(theme::fg(color)).add_modifier(Modifier::REVERSED | Modifier::BOLD) } else { style.patch(theme::fg(color)) };
-        spans.push(Span::styled(glyph, st));
-        spans.push(Span::styled(" ", style));
-    }
-    spans.push(Span::styled(title, style));
-    if let Some(word) = pane_state_word(app, pane) { spans.push(Span::styled(" ", style)); spans.push(word) }
-    spans.push(Span::styled(" ", style));
-    let (project, branch) = app.fleet.agent(&pane.machine_id, &pane.agent_id).filter(|a| a.engine != "terminal" || !a.branch.is_empty())
-        .map(|a| (a.project.clone(), a.branch.clone())).unwrap_or_default();
-    let line = clip_spans(spans, area.width as usize);
-    let used = line.width();
-    buf.set_line(area.x, area.y, &line, area.width);
-    // As the status line writes them (zsh's robbyrussell prompt), shorter as the pane narrows.
-    let choices = [
-        (!project.is_empty() && !branch.is_empty()).then(|| format!(" {project} git:({branch}) ")),
-        (!branch.is_empty()).then(|| format!(" git:({branch}) ")),
-        (!branch.is_empty()).then(|| format!(" {branch} ")),
-    ];
-    if let Some(right) = choices.into_iter().flatten().find(|r| area.width as usize >= used + r.width() + 4) {
-        buf.set_string(area.x + area.width - right.width() as u16, area.y, &right, style.add_modifier(Modifier::DIM));
-    }
-}
-
-/// What a harness is doing, in a word, when it is worth saying.
-fn pane_state_word(app: &App, pane: &Pane) -> Option<Span<'static>> {
-    if let Phase::Watching(who) = &pane.phase {
-        return Some(Span::styled(format!("[watching{}]", if who.is_empty() { String::new() } else { format!(" — {who} has it") }), Style::default().fg(Color::Yellow)));
-    }
-    // The marked pane: tmux reverses its border, nothing in its title.
-    let _ = app;
-    None
 }
 
 /// A window with no harness in it: the harnesses you were just with, one key away.
@@ -1962,18 +1920,6 @@ fn clip(text: &str, cols: usize) -> String {
     out
 }
 
-fn clip_spans(spans: Vec<Span<'static>>, cols: usize) -> Line<'static> {
-    let mut out = Vec::new();
-    let mut used = 0;
-    for s in spans {
-        if used >= cols { break }
-        let room = cols - used;
-        let text = if s.content.width() > room { clip(&s.content, room) } else { s.content.to_string() };
-        used += text.width();
-        out.push(Span::styled(text, s.style));
-    }
-    Line::from(out)
-}
 
 
 

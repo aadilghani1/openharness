@@ -837,6 +837,18 @@ fn tab_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect
 
 /// tmux's #{pane_title}: what select-pane -T set, or the program (OSC 0/2) when allow-set-title
 /// is on (hn's default is off: a harness's name is its title), else the harness's name.
+/// A harness state's symbol with its style, for a format: its colour (the terminal's own 16),
+/// dim for the quiet ones (idle, paused, offline), reversed and bold when it needs you; no colour
+/// under NO_COLOR.
+pub fn agent_mark(state: crate::fleet::State, tick: u64) -> String {
+    let (glyph, _, colour) = crate::theme::state_mark(state, tick);
+    let (mut on, mut off): (Vec<String>, Vec<&str>) = (Vec::new(), Vec::new());
+    if colour == crate::theme::MUTED { on.push("dim".into()); off.push("nodim") }
+    else if colour != ratatui::style::Color::Reset { on.push(format!("fg={}", crate::tmuxconf::colour_name(colour))); off.push("fg=default") }
+    if state == crate::fleet::State::NeedsInput { on.extend(["reverse".into(), "bold".into()]); off.extend(["noreverse", "nobold"]) }
+    if on.is_empty() { glyph.to_string() } else { format!("#[{}]{glyph}#[{}]", on.join(","), off.join(",")) }
+}
+
 pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
     let Some(p) = app.panes.get(&pane) else { return crate::app::hostname() };
     let tab_id = app.tabs.get(window).map(|t| t.id.clone()).unwrap_or_default();
@@ -998,7 +1010,25 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "daemon_down" => app.daemon_down.then_some("1").unwrap_or("0").into(),
         // The pane is another window's to type in (this one watches), when it is the only one.
         "pane_watching" => (pane.map(|p| matches!(p.phase, crate::pane::Phase::Watching(_))).unwrap_or(false) && tab.map(|t| t.panes().len() < 2).unwrap_or(false)).then_some("1").unwrap_or("0").into(),
+        // However many panes the window has: whether another window has the pane to type in, and who.
+        "pane_watched" => pane.map(|p| matches!(p.phase, crate::pane::Phase::Watching(_))).unwrap_or(false).then_some("1").unwrap_or("0").into(),
+        "pane_watcher" => pane.and_then(|p| match &p.phase { crate::pane::Phase::Watching(who) => Some(who.clone()), _ => None }).unwrap_or_default(),
         "pane_machine" => pane.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default(),
+        // The harness's symbol as its title draws it (#{pane_agent_icon}, styled): in its state's
+        // colour, needs you reversed and bold, idle dim.
+        "pane_agent_mark" => pane.and_then(|p| app.pane_state(p.id)).map(|s| agent_mark(s, app.tick)).unwrap_or_default(),
+        // Where the harness works, as zsh's robbyrussell prompt writes it: `project git:(branch)`,
+        // else `git:(branch)`, else the branch — the longest that fits beside the pane's title.
+        "pane_where" => pane.zip(agent).and_then(|(p, a)| {
+            if a.branch.is_empty() { return None }
+            let room = content_rect(app, window, p.id)?.width.saturating_sub(4) as usize;
+            let width = |s: &str| unicode_width::UnicodeWidthStr::width(s);
+            let mut left = 1 + width(&pane_title(app, window, p.id)) + 1;
+            if app.pane_state(p.id).is_some() { left += 2 }
+            if let crate::pane::Phase::Watching(who) = &p.phase { left += width(" [watching]") + if who.is_empty() { 0 } else { width(&format!(" — {who} has it")) } }
+            [(!a.project.is_empty()).then(|| format!("{} git:({})", a.project, a.branch)), Some(format!("git:({})", a.branch)), Some(a.branch.clone())]
+                .into_iter().flatten().find(|c| room >= left + width(c) + 2 + 4)
+        }).unwrap_or_default(),
         // A pane's harness at a glance, as its title shows it (empty for a plain shell), and what it
         // works on; a window's most urgent harness state, as the window list shows it.
         "pane_agent_state" => pane.and_then(|p| app.pane_state(p.id)).map(state_word).unwrap_or("").into(),
