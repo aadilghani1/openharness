@@ -106,9 +106,6 @@ export function isPairDaemonId(value: unknown): value is string {
   return typeof value === 'string' && /^[a-z][a-z0-9-]{0,15}$/.test(value)
 }
 
-/** The built-in pair harness (BRAIN.md P4). The sensor never watches it: it would be reporting on itself. */
-export const PAIR_HARNESS_DSH = 'autonomous/pair'
-
 // ── deny class ──────────────────────────────────────────────────────────────────────────────────────
 
 /**
