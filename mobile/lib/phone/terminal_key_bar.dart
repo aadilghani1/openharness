@@ -61,9 +61,17 @@ class TerminalKeyBar extends StatefulWidget {
     this.onTakePhoto,
     this.questionOpen = false,
     this.hints = const [],
+    this.ctrlArmed,
+    this.onArmCtrl,
   });
 
   final Terminal terminal;
+
+  /// `ctrl` as the SESSION holds it, so an armed `ctrl` is spent by the next letter typed on the
+  /// phone's own keyboard too (`TerminalSession.armControl`), not only by this row's keys. Null
+  /// keeps the modifier on the row alone.
+  final bool? ctrlArmed;
+  final ValueChanged<bool>? onArmCtrl;
 
   /// An agent's question dialog is on the pane: `/` gives its slot to `⏎` —
   /// see the class docblock.
@@ -158,7 +166,22 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
   bool _ctrl = false;
   bool _shift = false;
 
-  void _toggleCtrl() => setState(() => _ctrl = !_ctrl);
+  bool get _ctrlLit => widget.ctrlArmed ?? _ctrl;
+
+  void _toggleCtrl() {
+    if (widget.onArmCtrl case final arm?) {
+      arm(!_ctrlLit);
+      return;
+    }
+    setState(() => _ctrl = !_ctrl);
+  }
+
+  /// Puts both modifiers down — the session's `ctrl` too.
+  void _disarm() {
+    if (_ctrlLit) widget.onArmCtrl?.call(false);
+    if (_ctrl || _shift) setState(() => _ctrl = _shift = false);
+  }
+
   void _toggleShift() => setState(() => _shift = !_shift);
 
   /// Sends [key] with whatever is armed, and puts the modifiers down.
@@ -167,9 +190,10 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
   /// the bar takes, so an armed modifier can never survive a keystroke and land
   /// on the one after it.
   void _sendKey(TerminalKey key, {bool edits = false}) {
-    widget.terminal.keyInput(key, ctrl: _ctrl, shift: _shift);
+    final ctrl = _ctrlLit, shift = _shift;
+    _disarm();
+    widget.terminal.keyInput(key, ctrl: ctrl, shift: shift);
     if (edits) widget.onPromptEdited?.call();
-    if (_ctrl || _shift) setState(() => _ctrl = _shift = false);
   }
 
   /// Presses the chord a hint named, as the pane printed it — nothing else:
@@ -183,9 +207,9 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
   /// between a question and the prompt, and the buffer still holds words typed
   /// into the one just left.
   void _sendHint(KeyHint hint) {
+    _disarm();
     hint.chord.send(widget.terminal);
     widget.onPromptEdited?.call();
-    if (_ctrl || _shift) setState(() => _ctrl = _shift = false);
   }
 
   @override
@@ -195,6 +219,15 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     // history, move through a menu.
     final keys = <Widget>[
       _key(label: 'esc', onTap: () => _sendKey(TerminalKey.escape)),
+      // The other key a terminal person reaches for without looking: stop, now.
+      _key(
+        label: '^C',
+        semanticLabel: 'Control C',
+        onTap: () {
+          _disarm();
+          widget.terminal.keyInput(TerminalKey.keyC, ctrl: true);
+        },
+      ),
       // Completes a path or a command, and moves through Claude Code's menus.
       _key(label: 'tab', onTap: () => _sendKey(TerminalKey.tab, edits: true)),
       // ⚠️ **The two modifiers stand together, before the keys they modify.**
@@ -204,7 +237,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
       // side and to the LEFT of the arrows, the row reads in the order it is
       // pressed.
       _key(label: 'shift', armed: _shift, onTap: _toggleShift),
-      _key(label: 'ctrl', armed: _ctrl, onTap: _toggleCtrl),
+      _key(label: 'ctrl', armed: _ctrlLit, onTap: _toggleCtrl),
       _key(
         label: '←',
         semanticLabel: 'Left',
