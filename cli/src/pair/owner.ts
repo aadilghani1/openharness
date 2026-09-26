@@ -125,7 +125,8 @@ export class PairOwner {
     return { ok: true, subject }
   }
 
-  async answer(input: { agentId: string; requestId: string; choice: string }, by: PairActor): Promise<OwnerResult> {
+  /** `why` names what decided it (a rule), for the journal. */
+  async answer(input: { agentId: string; requestId: string; choice: string }, by: PairActor, why?: string): Promise<OwnerResult> {
     const drivable = this.drivable(input.agentId)
     if (!drivable.ok) return drivable
     const question = this.deps.sensor.harness(input.agentId)?.question
@@ -137,7 +138,8 @@ export class PairOwner {
     const keyed = await this.deps.keyAnswer({ agentId: input.agentId, requestId: question.requestId, question: question.text, option: floor.option })
     if (!keyed.ok) return keyed
     this.deps.sensor.acted(drivable.subject, {
-      by, action: 'answer', requestId: question.requestId, text: `answered "${statusText(floor.option, 60)}" to "${statusText(question.text, 120)}"`,
+      by, action: 'answer', requestId: question.requestId,
+      text: `answered "${statusText(floor.option, 60)}" to "${statusText(question.text, 120)}"${why ? ` (${statusText(why, 60)})` : ''}`,
     })
     return { ok: true, option: floor.option }
   }

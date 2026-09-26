@@ -86,9 +86,10 @@ import { PairToken } from './pair/token.js'
 import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClientDeps } from './pair/client.js'
 import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
+import { PairConfigFile, pairConfigPath, ruleRunner } from './pair/rules.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { ensureBuiltinPair } from './dsh/builtins.js'
-import { DEFAULT_AUTONOMY, type Autonomy } from './pair/floor.js'
+import { DEFAULT_AUTONOMY, isAutonomy, type Autonomy } from './pair/floor.js'
 import { randomUUID } from 'node:crypto'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './lib/engineLaunch.js'
@@ -1806,6 +1807,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairTalk: (text: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
   /** A turn started or ended on the pair harness: it is in use (its idle pause waits). Bound with it. */
   let pairHarnessActivity: (agentId: string) => void = () => {}
+  /** The person's pair.jsonc (pair/rules.ts): the model opt-in, and the rules act-within-rules runs here. */
+  const pairConfig = new PairConfigFile(pairConfigPath())
+  /** A question opened on this machine: answer it by rule if the dial and a rule say so. Bound with the owner. */
+  let pairRules: (agentId: string, requestId: string) => void = () => {}
   /** The pair harness is the daemon's own: its turns are nobody's news (no notification, no count). */
   const isPairHarnessSession = (sessionId: string): boolean => registry.bySession(sessionId)?.dsh === PAIR_HARNESS_DSH
   const pairSensor = new PairSensor({
@@ -2728,6 +2733,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       backend.sendLocal(asked)
       // With the WHOLE dialog: the pair's floor reads every line of the command, not the clipped title.
       pairSensor.question(agentIdFor(sessionId), requestId, shaped, detail)
+      pairRules(agentIdFor(sessionId), requestId)
       console.log(`[question] ${sid(sessionId)} asking the user · "${preview(shaped[0]?.q ?? '')}" · req=${requestId}`)
     },
     // Answered somewhere else — the app, or the pane by hand. Every client drawing it is told to stop
@@ -3626,16 +3632,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // every reconnect. Signed out there is no account zoo: a guest's window keeps its own and says which
   // daemon is paired in `daemon_presence` (pair/brain.ts), which is what `guestPair` holds. A backend that
   // cannot be reached keeps the last answer rather than switching pairing off on a blip.
-  let zooPair: { known: boolean; pair: string | null } = { known: false, pair: null }
+  let zooPair: { known: boolean; pair: string | null; autonomy: Autonomy } = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY }
   let guestPair: string | null = null
-  const applyPair = (): void => pairSensor.setPair(zooPair.known ? zooPair.pair : guestPair)
+  let guestAutonomy: Autonomy | null = null
+  // The autonomy dial rides with the pair: the account's zoo, or a guest window's own (daemon_presence).
+  const applyPair = (): void => {
+    pairAutonomyLevel = zooPair.known ? zooPair.autonomy : guestAutonomy ?? DEFAULT_AUTONOMY
+    pairSensor.setPair(zooPair.known ? zooPair.pair : guestPair)
+  }
   refreshPairFromZoo = () => {
     void proxyBackend('GET', '/api/zoo').then((result) => {
       if (result.status === 200) {
-        const pair = (result.body.data as { zoo?: { pair?: unknown } } | undefined)?.zoo?.pair
-        zooPair = { known: true, pair: isRosterDaemon(pair) ? pair : null }
+        const zoo = (result.body.data as { zoo?: { pair?: unknown; autonomy?: unknown } } | undefined)?.zoo
+        const pair = zoo?.pair
+        zooPair = { known: true, pair: isRosterDaemon(pair) ? pair : null, autonomy: isAutonomy(zoo?.autonomy) ? zoo.autonomy : DEFAULT_AUTONOMY }
       } else if (result.status === 401) {
-        zooPair = { known: false, pair: null }
+        zooPair = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY }
       }
       applyPair()
     }).catch(() => {})
@@ -4255,6 +4267,20 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     newId: () => randomUUID(),
   })
   backend.pairOwner = pairOwner
+  // AUTONOMY act-within-rules (pair/rules.ts): this machine's rules answer this machine's questions, through
+  // the same owner floor as a key — journaled by `rule`, reported afterwards by whichever brain is watching.
+  const runRules = ruleRunner({
+    active: () => pairSensor.enabled() && pairAutonomy() === 'act-within-rules',
+    config: () => pairConfig.get(),
+    question: (agentId) => pairSensor.harness(agentId)?.question ?? null,
+    subject: (agentId) => {
+      const s = registry.resolve(agentId)
+      return s ? { name: projectDisplayName(s), engine: s.engine, cwd: s.cwd ?? null } : null
+    },
+    answer: (input, by, why) => pairOwner.answer(input, by, why),
+    log: (line) => console.log(line),
+  })
+  pairRules = (agentId, requestId) => { void runRules(agentId, requestId).catch(() => {}) }
   const pairVoice = new PairVoice({ sendLocal: (frame) => backend.sendLocal(frame), now: Date.now })
   // THE CONTROL INTERFACE (pair/control.ts): the pair harness's tools, behind the loopback `pair` request —
   // `harness pair <verb>` and the harnessd MCP server. Writes need the pair harness's token and pass the
@@ -4331,7 +4357,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   pairBrain = new PairBrain({
     pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
     fleet: pairFleet,
-    triage: new PairTriage({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), now: Date.now }),
+    // A model's words only when the person opted in (pair.jsonc "model": true).
+    triage: new PairTriage({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairConfig.get().model, now: Date.now }),
     voice: pairVoice,
     proposals: pairControl,
     autonomy: () => pairAutonomy(),
@@ -4341,6 +4368,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // requestId, checked as the keys go in (STALE_QUESTION, nothing typed, when it changed).
     answer: (input) => pairOwner.answer(input, 'key'),
     onGuestPair: (daemonId) => { guestPair = isRosterDaemon(daemonId) ? daemonId : null; applyPair() },
+    onGuestAutonomy: (level) => { guestAutonomy = isAutonomy(level) ? level : null; applyPair() },
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
     now: Date.now,
   })
