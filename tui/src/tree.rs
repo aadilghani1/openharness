@@ -318,7 +318,10 @@ impl Tree {
             let r = match field { 0 => a.0.cmp(&b.0), 2 => b.2.cmp(&a.2).then_with(by_name), _ => by_name() };
             if reversed { r.reverse() } else { r }
         });
-        for (sid, ..) in order { in_session(app, sid, |app| self.build_session(app, saved, filter, sid)); }
+        for (sid, ..) in order {
+            // Another client's session: listed as its own row, as tmux's tree lists every session.
+            if in_session(app, sid, |app| self.build_session(app, saved, filter, sid)).is_none() { self.build_remote(app, saved, filter, sid) }
+        }
         let (fsid, ftab, fpane) = self.fs.clone();
         let fs_window = session_tabs(app, fsid).and_then(|(tabs, _)| tabs.iter().find(|t| t.id == ftab).map(|t| (t.wid, t.panes().len())));
         match self.kind {
@@ -327,6 +330,17 @@ impl Tree {
             Kind::Window => { if let Some((wid, _)) = fs_window { *tag = window_tag(fsid, wid) } }
             Kind::Pane => { if let Some((wid, n)) = fs_window { *tag = if n == 1 { window_tag(fsid, wid) } else { pane_tag(fpane) } } }
         }
+    }
+
+    /// A session another client of this name has: its row (its own formats), collapsed — its
+    /// windows are that client's. Left out by a filter, which is about panes.
+    fn build_remote(&mut self, app: &mut App, saved: &HashMap<u64, (bool, bool)>, filter: Option<&str>, sid: u32) {
+        if filter.is_some() { return }
+        let Some(name) = app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| n) else { return };
+        app.format_type = Some(FORMAT_SESSION);
+        let text = crate::format::expand_session(app, &self.format, sid);
+        app.format_type = None;
+        self.add(saved, None, What::Session(sid), session_tag(sid), name, Some(text), 0);
     }
 
     /// window_buffer_build: every paste buffer, sorted (by time the newest first, by size the
@@ -470,6 +484,13 @@ impl Tree {
             return keys::parse(&s).ok();
         }
         let ftype = match self.items[id].what { What::Session(_) => FORMAT_SESSION, What::Window(..) => FORMAT_WINDOW, _ => FORMAT_PANE };
+        // Another client's session: its key by its line alone.
+        if let What::Session(sid) = self.items[id].what { if app.remote_owner(sid).is_some() {
+            app.format_line = Some(line);
+            let s = crate::format::expand_session(app, &self.key_format, sid);
+            app.format_line = None;
+            return keys::parse(&s).ok();
+        } }
         let s = in_session(app, self.items[id].what.session(), |app| {
             let Pulled { window, pane } = self.pull(app, id)?;
             app.format_line = Some(line);
@@ -825,6 +846,8 @@ impl Tree {
     /// `=session:1.%3`, with its own session's name.
     fn target(&self, app: &mut App, id: usize) -> Option<String> {
         if let What::Buffer(name) = &self.items[id].what { return app.paste.get(name).map(|_| name.clone()) }
+        // Another client's session: by its name (switch-client takes it from that client).
+        if let What::Session(sid) = self.items[id].what { if app.remote_owner(sid).is_some() { return app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| format!("={n}:")) } }
         self.pulled(app, id, |app, Pulled { window, pane }| {
             let s = app.session_name();
             Some(match &self.items[id].what {
