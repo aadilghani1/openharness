@@ -39,7 +39,7 @@ function indexOf(zoo: Zoo, kind: string, id: string): number {
   throw new Error(`${id} cannot come out of ${kind}`)
 }
 const daemon = (id: string, extra: Partial<ZooDaemon> = {}): ZooDaemon =>
-  ({ id, hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, version: '0.1', ...extra })
+  ({ id, hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 0, version: '0.1', ...extra })
 const zooOf = (patch: Partial<Zoo>): Zoo => ({ ...emptyZoo(), ...patch })
 const egg = (id: string, kind = 'first') => ({ id, kind, grantedAt: '2026-09-02T00:00:00.000Z' })
 const apply = (zoo: Zoo, ops: ZooOp[], rng: Rng = seeded()) => applyZooOps(zoo, ops, rng, NOW)
@@ -95,7 +95,7 @@ describe('hatching', () => {
     const r = apply(zoo, [{ op: 'zoo.hatch', eggId: 'a' }], rng)
     expect(r.hatched).toEqual([{ eggId: 'a', daemonId: 'vim', shiny: false }])
     expect(r.zoo.eggs.map((e) => e.id)).toEqual(['b'])
-    expect(r.zoo.daemons).toEqual([{ id: 'vim', hatchedAt: NOW.toISOString(), egg: 'first', shiny: false, bond: 0, version: '0.1' }])
+    expect(r.zoo.daemons).toEqual([{ id: 'vim', hatchedAt: NOW.toISOString(), egg: 'first', shiny: false, bond: 0, xp: 0, version: '0.1' }])
     expect(r.zoo.pair).toBe('vim')
     const second = apply(r.zoo, [{ op: 'zoo.hatch', eggId: 'b' }], scripted([indexOf(r.zoo, 'turn', 'tim'), 9]))
     expect(second.zoo.daemons.map((d) => d.id)).toEqual(['vim', 'tim'])
@@ -293,7 +293,7 @@ describe('the document', () => {
     expect(once.changed).toBe(true)
     expect(once.hatched).toHaveLength(1)
     const twice = apply(once.zoo, ops)
-    expect(twice).toEqual({ changed: false, zoo: once.zoo, hatched: [] })
+    expect(twice).toEqual({ changed: false, zoo: once.zoo, hatched: [], grants: [], levelUps: [] })
   })
 
   it('never changes the zoo it was handed', () => {
