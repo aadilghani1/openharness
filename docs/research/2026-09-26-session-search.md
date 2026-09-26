@@ -204,8 +204,9 @@ ms.
   and the device must re-derive from the new `core.ts`.
 - A Node without `node:sqlite` answers `SEARCH_UNAVAILABLE`.
 
-`harness search <words> [--limit N] [--json]` reads the same index from a shell. It is read-only:
-it never migrates or deletes the index the daemon owns.
+`harness search <words> [--limit N] [--json]` reads the same index from a shell, and reads the same
+time phrases (`harness search dial last week`). It is read-only: it never migrates or deletes the
+index the daemon owns.
 
 ## Not yet
 
