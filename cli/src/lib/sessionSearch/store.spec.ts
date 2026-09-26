@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { MARK_CLOSE, MARK_OPEN, SessionSearchStore, queryTerms, type IndexedSession } from './store.js'
+import { MARK_CLOSE, MARK_OPEN, SessionSearchStore, makeSnippet, queryTerms, type IndexedSession } from './store.js'
 import type { IndexedTurn } from './turns.js'
 
 const DAY = 86_400_000
@@ -48,6 +48,22 @@ describe('queryTerms', () => {
     }
     expect(store.search('NEAR(dial', { now: NOW })).toEqual([])
     expect(store.search('dial"', { now: NOW }).map((hit) => hit.sessionId)).toEqual(['s1'])
+  })
+})
+
+describe('makeSnippet', () => {
+  const words = (...parts: string[][]) => parts.map((part) => new RegExp(`(?<![\\p{L}\\p{N}])${part.join('[^\\p{L}\\p{N}]+')}[\\p{L}\\p{N}]*`, 'giu'))
+
+  it('quotes the words around the first match and marks every match there', () => {
+    const text = `${'lorem '.repeat(40)}we halved the Scroll delta so scrolling feels right ${'ipsum '.repeat(40)}`
+    expect(plain(makeSnippet(text, words(['scroll']))!)).toBe('…lorem we halved the [Scroll] delta so [scrolling] feels right ipsum ipsum…')
+    expect(makeSnippet('nothing here', words(['scroll']))).toBeNull()
+  })
+
+  it('matches a word of parts as the index does, and keeps short text whole', () => {
+    expect(plain(makeSnippet('edit desktop/lib/swarm_search.dart now', words(['swarm', 'search', 'dart']))!))
+      .toBe('edit desktop/lib/[swarm_search.dart] now')
+    expect(plain(makeSnippet('research is not search', words(['search']))!)).toBe('research is not [search]')
   })
 })
 

@@ -16,7 +16,7 @@ import { chmodSync, existsSync } from 'node:fs'
 import { builtinSqlite } from '../sqliteRead.js'
 import type { IndexedTurn } from './turns.js'
 
-const SCHEMA_VERSION = '1'
+const SCHEMA_VERSION = '2'
 
 /** The row that holds a session's name, title and folder: searchable beside its turns. */
 export const HEADER_TURN = -1
@@ -89,21 +89,88 @@ const OPENING_TURNS = 2
 const OPENING_BOOST = 1.2
 /** Rows considered per query before grouping by session: bounds the work of a very common word. */
 const CANDIDATE_ROWS = 3_000
+/** Past this many matching turns a query is ranked by recency first (see search()). */
+const COMMON_MATCHES = 30_000
 
-/** Query words as FTS5 phrases. Each word matches as a prefix, so the list updates while typing. */
-export function queryTerms(query: string): string[] {
-  const words = query.toLowerCase().normalize('NFKC').split(/\s+/).filter(Boolean)
-  const terms: string[] = []
-  for (const word of words) {
-    // The index splits on everything that is not a letter or digit, so "swarm_search.dart" and
-    // "OH-14" become phrases of their parts, in order.
+/**
+ * Query words as the index sees them: each split into its letter-and-digit parts, since the index
+ * splits on everything else — "swarm_search.dart" and "OH-14" become phrases of their parts.
+ */
+function queryWords(query: string): string[][] {
+  const seen = new Set<string>()
+  const words: string[][] = []
+  for (const word of query.toLowerCase().normalize('NFKC').split(/\s+/).filter(Boolean)) {
     const parts = word.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
     if (!parts.length) continue
     // One letter matches too much of everything to mean anything on its own.
     if (parts.length === 1 && [...parts[0]].length < 2) continue
-    terms.push(`"${parts.join(' ')}"*`)
+    const key = parts.join(' ')
+    if (seen.has(key)) continue
+    seen.add(key)
+    words.push(parts)
   }
-  return [...new Set(terms)]
+  return words
+}
+
+/** Query words as FTS5 phrases. Each word matches as a prefix, so the list updates while typing. */
+export function queryTerms(query: string): string[] {
+  return queryWords(query).map((parts) => `"${parts.join(' ')}"*`)
+}
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Where a query word occurs in text the way the index matches it: at a word start, as a prefix. */
+function wordPattern(parts: string[]): RegExp {
+  const body = parts.map(escapeRegExp).join('[^\\p{L}\\p{N}]+')
+  return new RegExp(`(?<![\\p{L}\\p{N}])${body}[\\p{L}\\p{N}]*`, 'giu')
+}
+
+const SNIPPET_BEFORE = 4
+const SNIPPET_WORDS = 12
+
+/**
+ * The words around the first match in `text`, every match marked, or null when nothing matches.
+ * Built here rather than by FTS5's snippet(), which reads the whole posting list of a common word
+ * again for each hit: 30 hits of "harness" took a quarter of a second.
+ */
+export function makeSnippet(text: string, patterns: RegExp[]): string | null {
+  let first = -1
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0
+    const match = pattern.exec(text)
+    if (match && (first < 0 || match.index < first)) first = match.index
+  }
+  if (first < 0) return null
+  // Only the neighbourhood of the match is tokenized: an answer runs to 12 KB.
+  const regionStart = Math.max(0, first - 200)
+  const regionEnd = Math.min(text.length, first + 600)
+  const words = [...text.slice(regionStart, regionEnd).matchAll(/[\p{L}\p{N}]+/gu)]
+    .map((word) => Object.assign(word, { index: word.index! + regionStart }))
+  // A word cut by the region's edge is not a word: drop it, unless the edge is the text's own.
+  if (regionStart > 0 && words.length && words[0].index === regionStart) words.shift()
+  if (regionEnd < text.length && words.length && words.at(-1)!.index! + words.at(-1)![0].length === regionEnd) words.pop()
+  let at = words.findIndex((word) => word.index! + word[0].length > first)
+  if (at < 0) at = words.length - 1
+  const from = Math.max(0, at - SNIPPET_BEFORE)
+  const to = Math.min(words.length - 1, from + SNIPPET_WORDS - 1)
+  const start = from === 0 && regionStart === 0 ? 0 : words[from].index!
+  const end = to === words.length - 1 && regionEnd === text.length ? text.length : words[to].index! + words[to][0].length
+  const window = text.slice(start, end)
+  const marks: Array<[number, number]> = []
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0
+    for (const match of window.matchAll(pattern)) marks.push([match.index!, match.index! + match[0].length])
+  }
+  marks.sort((a, b) => a[0] - b[0])
+  let out = ''
+  let cursor = 0
+  for (const [markStart, markEnd] of marks) {
+    if (markStart < cursor) continue
+    out += `${window.slice(cursor, markStart)}${MARK_OPEN}${window.slice(markStart, markEnd)}${MARK_CLOSE}`
+    cursor = markEnd
+  }
+  out += window.slice(cursor)
+  return `${start > 0 ? '…' : ''}${out.trim()}${end < text.length ? '…' : ''}`
 }
 
 export class SessionSearchStore {
@@ -207,6 +274,19 @@ export class SessionSearchStore {
     }
   }
 
+  /** Who each session belongs to and when it was last worked on, read once per change. */
+  private meta: Map<string, { agentId: string; engine: string; lastAt: number | null }> | null = null
+
+  private sessionMeta(): Map<string, { agentId: string; engine: string; lastAt: number | null }> {
+    if (!this.meta) {
+      this.meta = new Map(this.statement('SELECT session_id, agent_id, engine, last_at FROM sessions').all().map((row) => [
+        row.session_id as string,
+        { agentId: row.agent_id as string, engine: row.engine as string, lastAt: (row.last_at as number | null) ?? null },
+      ]))
+    }
+    return this.meta
+  }
+
   session(sessionId: string): IndexedSession | undefined {
     const row = this.statement('SELECT * FROM sessions WHERE session_id = ?').get(sessionId)
     return row ? toSession(row) : undefined
@@ -221,6 +301,7 @@ export class SessionSearchStore {
    * starts, in one transaction: a reader never sees a half-written session.
    */
   writeSession(session: IndexedSession, fromTurn: number, turns: readonly IndexedTurn[]): void {
+    this.meta = null
     this.transaction(() => {
       this.statement('DELETE FROM turns WHERE session_id = ? AND (turn >= ? OR turn = ?)').run(session.sessionId, fromTurn, HEADER_TURN)
       const insert = this.statement('INSERT INTO turns (session_id, turn, at, name, ask, answer, tools) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -237,6 +318,7 @@ export class SessionSearchStore {
   }
 
   removeSession(sessionId: string): void {
+    this.meta = null
     this.transaction(() => {
       this.statement('DELETE FROM turns WHERE session_id = ?').run(sessionId)
       this.statement('DELETE FROM sessions WHERE session_id = ?').run(sessionId)
@@ -258,14 +340,23 @@ export class SessionSearchStore {
 
     // 1. Sessions with one turn holding every word.
     const best = new Map<string, { id: number; turn: number; at: number | null; rank: number; together: boolean }>()
+    // Ranked inside FTS5 first and joined after, so a word in every turn costs one sort rather than
+    // a join per match; the opening-turn boost is applied to those candidates. Words in a large share
+    // of all turns barely tell one turn from another, and sorting every match by BM25 is the slowest
+    // thing a search can do — those take the most recent matches and let recency decide.
+    const allWords = terms.join(' AND ')
+    const common = this.statement('SELECT count(*) AS n FROM turns_fts WHERE turns_fts MATCH ?').get(allWords)!.n as number > COMMON_MATCHES
     const rows = this.statement(`
-      SELECT t.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at,
-             bm25(turns_fts, ${WEIGHTS.join(', ')}) * (CASE WHEN t.turn BETWEEN 0 AND ${OPENING_TURNS - 1} THEN ${OPENING_BOOST} ELSE 1 END) AS rank
-      FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid
-      WHERE turns_fts MATCH ? ORDER BY rank LIMIT ${CANDIDATE_ROWS}`).all(terms.join(' AND '))
+      SELECT f.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at, f.rank AS rank
+      FROM (SELECT rowid AS id, bm25(turns_fts, ${WEIGHTS.join(', ')}) AS rank FROM turns_fts
+            WHERE turns_fts MATCH ? ORDER BY ${common ? 'rowid DESC' : 'rank'} LIMIT ${CANDIDATE_ROWS}) f
+      JOIN turns t ON t.id = f.id`).all(allWords)
     for (const row of rows) {
       const sid = row.sid as string
-      if (!best.has(sid)) best.set(sid, { id: row.id as number, turn: row.turn as number, at: row.at as number | null, rank: row.rank as number, together: true })
+      const turn = row.turn as number
+      const rank = (row.rank as number) * (turn >= 0 && turn < OPENING_TURNS ? OPENING_BOOST : 1)
+      const known = best.get(sid)
+      if (!known || rank < known.rank) best.set(sid, { id: row.id as number, turn, at: row.at as number | null, rank, together: true })
     }
 
     // 2. Sessions holding every word, but in different turns. Each word's sessions, intersected.
@@ -277,30 +368,35 @@ export class SessionSearchStore {
       for (let index = 1; index < perTerm.length; index++) {
         if (perTerm[index].size < perTerm[rarestIndex].size) rarestIndex = index
       }
-      const rarest = terms[rarestIndex]
-      const spread = [...perTerm[rarestIndex]].filter((sid) => !best.has(sid) && perTerm.every((set) => set.has(sid)))
-      // Each such session's best turn for the words: its rank, discounted for being spread, and its
-      // snippet — from what was said rather than the name, which the row already shows.
-      const anyTerm = terms.join(' OR ')
-      const bestTurn = this.statement(`
-        SELECT t.id AS id, t.turn AS turn, t.at AS at, bm25(turns_fts, ${WEIGHTS.join(', ')}) AS rank
-        FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid
-        WHERE turns_fts MATCH ? AND t.session_id = ? AND t.turn >= CAST(? AS INTEGER) ORDER BY rank LIMIT 1`)
-      for (const sid of spread) {
-        const row = bestTurn.get(anyTerm, sid, 0) ?? bestTurn.get(rarest, sid, HEADER_TURN)
-        if (row) best.set(sid, { id: row.id as number, turn: row.turn as number, at: row.at as number | null, rank: (row.rank as number) / 2, together: false })
+      const spread = new Set([...perTerm[rarestIndex]].filter((sid) => !best.has(sid) && perTerm.every((set) => set.has(sid))))
+      // Each such session's best turn for any of the words, in one ranked pass: its rank, discounted
+      // for being spread, and its snippet — from what was said rather than the name, which the row
+      // already shows, unless the name is the only place.
+      if (spread.size) {
+        const header = new Map<string, { id: number; turn: number; at: number | null; rank: number; together: boolean }>()
+        for (const row of this.statement(`
+          SELECT f.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at, f.rank AS rank
+          FROM (SELECT rowid AS id, bm25(turns_fts, ${WEIGHTS.join(', ')}) AS rank FROM turns_fts
+                WHERE turns_fts MATCH ? ORDER BY rank LIMIT ${CANDIDATE_ROWS}) f
+          JOIN turns t ON t.id = f.id`).all(terms.join(' OR '))) {
+          const sid = row.sid as string
+          if (!spread.has(sid)) continue
+          const turn = row.turn as number
+          const rank = (row.rank as number) * (turn >= 0 && turn < OPENING_TURNS ? OPENING_BOOST : 1) / 2
+          const into = turn === HEADER_TURN ? header : best
+          const known = into.get(sid)
+          if (!known || rank < known.rank) into.set(sid, { id: row.id as number, turn, at: row.at as number | null, rank, together: false })
+        }
+        for (const [sid, match] of header) if (!best.has(sid)) best.set(sid, match)
       }
     }
     if (!best.size) return []
 
     // 3. Relevance (bm25 is negative; lower is better) relative to the best match, blended with how
     // recently the session was worked on — "the one from last week" usually means the recent one.
-    const sessions = new Map<string, IndexedSession>()
-    for (const sid of best.keys()) {
-      const session = this.session(sid)
-      if (session) sessions.set(sid, session)
-    }
-    const top = Math.min(...[...best.values()].map((match) => match.rank))
+    const sessions = this.sessionMeta()
+    let top = 0
+    for (const match of best.values()) top = Math.min(top, match.rank)
     const ranked = [...best.entries()]
       .filter(([sid]) => sessions.has(sid))
       .map(([sid, match]) => {
@@ -315,17 +411,22 @@ export class SessionSearchStore {
       .sort((a, b) => Number(b.match.together) - Number(a.match.together) || b.score - a.score)
       .slice(0, limit)
 
-    // 4. Snippets for the hits only: which field matched, and the words around it. node:sqlite binds a
-    // JS number as REAL, and FTS5 quietly ignores a REAL rowid constraint beside MATCH — every row
-    // came back — hence the CAST.
-    const snippetQuery = terms.join(' OR ')
+    // 4. For the hits only: which field matched, and the words around it — what the person asked
+    // says the most about a session, then its name, then the answer, then the tools.
+    const patterns = queryWords(query).map(wordPattern)
+    const text = this.statement('SELECT name, ask, answer, tools FROM turns WHERE id = CAST(? AS INTEGER)')
     return ranked.map(({ sid, match, session, score }) => {
-      const row = this.statement(`
-        SELECT ${FIELDS.map((_, column) => `snippet(turns_fts, ${column}, '${MARK_OPEN}', '${MARK_CLOSE}', '…', 12) AS s${column}`).join(', ')}
-        FROM turns_fts WHERE turns_fts MATCH ? AND rowid = CAST(? AS INTEGER)`).get(snippetQuery, match.id)
-      // What the person asked says the most about a session, then its name, then the answer.
-      const order = [1, 0, 2, 3]
-      const column = order.find((index) => String(row?.[`s${index}`] ?? '').includes(MARK_OPEN)) ?? 1
+      const row = text.get(match.id)
+      let field: (typeof FIELDS)[number] = 'ask'
+      let snippet = ''
+      for (const candidate of ['ask', 'name', 'answer', 'tools'] as const) {
+        const found = makeSnippet(String(row?.[candidate] ?? ''), patterns)
+        if (found) {
+          field = candidate
+          snippet = found
+          break
+        }
+      }
       return {
         sessionId: sid,
         agentId: session.agentId,
@@ -333,8 +434,8 @@ export class SessionSearchStore {
         turn: match.turn,
         at: match.at,
         lastAt: session.lastAt,
-        field: FIELDS[column],
-        snippet: String(row?.[`s${column}`] ?? ''),
+        field,
+        snippet,
         together: match.together,
         score: Math.round(score * 1000) / 1000,
       }
