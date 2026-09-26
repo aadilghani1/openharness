@@ -107,7 +107,8 @@ import {
   type TerminalBinaryClear,
 } from './lib/terminalBinary.js'
 import { b64d, fingerprint, isWrapped } from './lib/e2ee/core.js'
-import { encryptRpcResult } from './lib/e2ee/applicationFrames.js'
+import { encryptRpcResult, PAIR_REQUESTS } from './lib/e2ee/applicationFrames.js'
+import type { PairEvent, PairService } from './pair/protocol.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from './lib/deviceRecentTrim.js'
 import { shouldReplayCommander } from './lib/commanderReplay.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from './lib/runtimeProfileController.js'
@@ -632,6 +633,13 @@ export class BackendSocket {
   /** Receives `theme_set` — the desktop's pane colours, to become this machine's tmux
    *  `window-style` (lib/hostTheme.ts). Wired by cli.ts; null answers with UNSUPPORTED. */
   hostThemeSink: ((theme: HostTheme) => void) | null = null
+  /**
+   * The pair brain's sensor (pair/sensor.ts): answers the sealed `pair_*` RPCs another machine's brain
+   * sends, and the loopback-only `pair` request. Null answers UNSUPPORTED, like an older daemon.
+   */
+  pairService: PairService | null = null
+  /** The account's zoo changed (a `zoo_changed` from the backend) — cli.ts re-reads which daemon is paired. */
+  onZooChanged: ((revision: number) => void) | null = null
   runtimeProfileProvider: ((session: RegisteredSession) => string | null) | null = null
   onRuntimeProfileUpdate: ((sessionId: string, selectedModel: string) => Promise<void>) | null = null
   /** Web↔adapter E2EE: group-encrypts user events, runs the CPace pairing, holds per-conn sessions. */
@@ -1174,6 +1182,7 @@ export class BackendSocket {
     if (!this.localClients.delete(connId)) return
     this.rowStateWindows.delete(connId)
     this.viewerForwarder.closeConnection(connId)
+    this.pairService?.unwatch(connId)
     // The window left before any link could hear it attach: nothing happened, as far as the backend
     // is concerned, and a later link must not be told otherwise.
     if (this.localClients.size === 0) this.appOpenOwed = false
@@ -1385,7 +1394,7 @@ export class BackendSocket {
     const resultType = `${type}_result`
     if (connId && deviceDump.enabled && this.e2ee.sessionRole(connId) === 'device') deviceDump.record('out', 'legacy', connId, { type: resultType, payload: { requestId, ...payload } })
     // Before the E2EE wrap: an RPC reply is only readable here.
-    if (env.LOG_FRAMES && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type)) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
+    if (env.LOG_FRAMES && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
       return
@@ -1424,6 +1433,50 @@ export class BackendSocket {
       return
     }
     this.send({ type: resultType, payload: { requestId, ...payload } })
+  }
+
+  /**
+   * `pair_watch` / `pair_journal` / `pair_read` from another machine's brain, and the local `pair`.
+   *
+   * `pair_answer` and `pair_pause` are contract only for now: answering waits on the stale-answer guard
+   * (a late answer must never land on the NEXT dialog), and pausing on the pair harness's control layer.
+   * Both answer UNSUPPORTED, which is exactly what an older daemon says, so a brain already handles it.
+   */
+  private handlePair(connId: string, type: string, payload: Record<string, unknown>, local: boolean,
+    reply: (t: string, rid: unknown, p: Record<string, unknown>) => void): void {
+    const requestId = payload.requestId
+    const service = this.pairService
+    if (type === 'pair') {
+      if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Ask the pair brain on this computer.' }); return }
+      if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+      void service.local(payload)
+        .then((result) => reply(type, requestId, result))
+        .catch(() => reply(type, requestId, { error: 'PAIR_FAILED' }))
+      return
+    }
+    if (type === 'pair_answer' || type === 'pair_pause' || !service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+    if (!service.enabled()) { reply(type, requestId, { error: 'PAIR_OFF' }); return }
+    if (type === 'pair_watch') {
+      if (payload.off === true) { service.unwatch(connId); reply(type, requestId, { ok: true }); return }
+      const snapshot = service.watch(connId, (event) => this.sendPairEvent(connId, event))
+      reply(type, requestId, { snapshot })
+      return
+    }
+    reply(type, requestId, type === 'pair_journal' ? { ...service.journal(payload) } : service.read(payload))
+  }
+
+  /** One `pair_event` to one watcher: plaintext over loopback, sealed pairwise (`wrapTarget`) otherwise.
+   *  Through the same ordered queue as the watch's reply, and only while the link is up — a push for a
+   *  connection the backend has forgotten is dropped there anyway. False = stop pushing to it. */
+  private sendPairEvent(connId: string, event: PairEvent): boolean {
+    const payload = event as unknown as Record<string, unknown>
+    const local = this.localClients.get(connId)
+    if (local) return local.sendFrame({ type: 'pair_event', payload })
+    if (!this.isConnected()) return false
+    const frame = this.e2ee.wrapTarget(connId, 'pair_event', payload)
+    if (!frame) return false
+    this.sendTo(connId, frame)
+    return true
   }
 
   private async dispatchDown(frame: Frame, connId: string, transport: DownTransport = 'relay'): Promise<void> {
@@ -1512,7 +1565,7 @@ export class BackendSocket {
     // than as an opaque __e2e envelope.
     // Terminal frames contain raw keystrokes, paste text and screen bytes after
     // unwrap. Never pass them to the frame logger, even in diagnostic mode.
-    if (env.LOG_FRAMES && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'orchestrator' && !SHARE_REQUEST_TYPES.has(type)) {
+    if (env.LOG_FRAMES && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'orchestrator' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => this.emitReply(connId, t, rid, p)
@@ -1553,6 +1606,7 @@ export class BackendSocket {
       this.autonomousDeviceRelay?.drop(connId)
       this.e2ee.dropSession(connId)
       this.viewerForwarder.closeConnection(connId)
+      this.pairService?.unwatch(connId)
       await this.terminalP2p.closeConnection(connId, 'client_disconnected', false)
       this.p2pPendingOpens.delete(connId)
       this.p2pStreams.delete(connId)
@@ -1585,6 +1639,7 @@ export class BackendSocket {
     if (type === 'zoo_changed') {
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
       this.sendLocal({ type: 'zoo_changed', payload: { revision: typeof revision === 'number' ? revision : 0 } })
+      this.onZooChanged?.(typeof revision === 'number' ? revision : 0)
       return
     }
 
@@ -1644,6 +1699,13 @@ export class BackendSocket {
       void orchestratorRequest(this.orchestration(), payload)
         .then(result => reply(type, requestId, result))
         .catch(() => reply(type, requestId, { error: 'ORCHESTRATOR_FAILED' }))
+      return
+    }
+
+    // The pair brain (daemons/BRAIN.md). `pair_*` come from another machine's brain and reach here only
+    // sealed — the default-deny above already refused them in the clear. `pair` is this computer's own.
+    if (PAIR_REQUESTS.has(type) || type === 'pair') {
+      this.handlePair(connId, type, payload, local, reply)
       return
     }
 
