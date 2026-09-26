@@ -84,7 +84,9 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
     let cmd = args.first()?.as_str();
     match cmd {
         // Every harness on every machine (hn's; `ls` is tmux's list-sessions).
-        "list-harnesses" | "lsh" => Some(ls(port).await),
+        // The running client knows each one's state (what it asks, does, did); with none, the
+        // daemons' rosters.
+        "list-harnesses" | "lsh" => if crate::ipc::alive(socket.as_deref(), name.as_deref()) { Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await) } else { Some(ls(port).await) },
         "send-message" => Some(send(port, &args[1..]).await),
         "tim" => { println!("{}", crate::tim::cli_line()); Some(0) }
         // attach / a: the client itself, as `tmux attach` is.

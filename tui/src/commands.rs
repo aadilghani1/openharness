@@ -42,6 +42,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("list-windows", "lsw", "The windows (-F a format)"),
     ("list-panes", "lsp", "The panes (-a/-s every window, -t one, -F a format)"),
     ("list-sessions", "ls", "The session (this computer) and its windows"),
+    ("list-harnesses", "lsh", "Every harness on every machine, the most urgent first (-F format: #{harness_state} #{harness_line} …, -f filter)"),
     ("list-clients", "lsc", "This client"),
     ("show-options", "show", "Options as they are now"),
     ("set-option", "set", "Set an option: set -g mouse on"),
@@ -1981,6 +1982,21 @@ fn run_words_in(app: &mut App, words: &[String]) {
             if let Err(e) = app.options.set(&name, value.as_deref(), &f, &tab_id, pane) { app.error(e) }
         }
         "wait-for" | "wait" => {}
+        // Every harness on every machine, as C-b s ranks them (the ones that need you first), each
+        // a line of -F (#{harness_*}), those -f keeps.
+        "list-harnesses" => {
+            let template = opt(words, "-F").unwrap_or_else(|| "#{harness_machine}: #{harness_name} (#{harness_engine}) #{harness_state}#{?harness_line,  #{harness_line},}".into());
+            let filter = opt(words, "-f");
+            let keys: Vec<(String, String)> = app.fleet.ranked().into_iter().map(|a| a.key()).collect();
+            let mut lines = Vec::new();
+            for key in keys {
+                app.format_agent = Some(key);
+                let keep = filter.as_ref().map(|f| { let v = expand(app, f); !v.is_empty() && v != "0" }).unwrap_or(true);
+                if keep { lines.push(expand(app, &template)) }
+            }
+            app.format_agent = None;
+            app.print("list-harnesses", lines);
+        }
         // The server is this client (or a headless one): running already.
         "start-server" => {}
         // tmux locks the terminal with lock-command; hn leaves that to the terminal's own.

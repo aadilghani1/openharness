@@ -909,6 +909,10 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             _ => {}
         }
     }
+    // A harness's own (list-harnesses -F), in a pane or not.
+    if let Some((m, a)) = &app.format_agent {
+        if let Some(v) = name.strip_prefix("harness_").and_then(|k| harness_value(app, m, a, k)) { return Some(v) }
+    }
     // No window (a target tmux could not find): its window and pane have nothing to say.
     if tab.is_none() && (name.starts_with("window_") || name.starts_with("pane_")) { return Some(Val::Str(String::new())) }
     let focus = pane_id.or_else(|| tab.and_then(|t| t.focus));
@@ -1194,17 +1198,77 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
 pub fn short_name(name: &str, max: usize) -> String {
     let width = |s: &str| s.chars().map(|c| c.width().unwrap_or(0)).sum::<usize>();
     if width(name) <= max { return name.to_string() }
+    // A last word that tells it from its namesakes — `(2)`, `v2`, `#4812` — stays, after the
+    // ellipsis: three windows read `Fix the flaky… (2)`, `(3)`, `(4)`, not `Fix the flaky…` thrice.
+    let tail = name.rsplit(' ').next().filter(|w| *w != name && w.chars().count() <= 6 && w.chars().any(|c| c.is_ascii_digit())).unwrap_or("");
+    let head = name[..name.len() - tail.len()].trim_end();
+    let room = if tail.is_empty() { max } else { max.saturating_sub(width(tail) + 2) };
     let mut out = String::new();
-    for word in name.split(' ') {
+    for word in head.split(' ') {
         let next = if out.is_empty() { word.to_string() } else { format!("{out} {word}") };
-        if width(&next) > max { break }
+        if width(&next) > room { break }
         out = next;
     }
     if out.is_empty() {
         let mut used = 0;
-        out = name.chars().take_while(|c| { used += c.width().unwrap_or(0); used <= max }).collect();
+        out = head.chars().take_while(|c| { used += c.width().unwrap_or(0); used <= room }).collect();
     }
-    format!("{}…", out.trim_end())
+    if tail.is_empty() { format!("{}…", out.trim_end()) } else { format!("{}… {tail}", out.trim_end()) }
+}
+
+#[cfg(test)]
+mod short_name_tests {
+    use super::short_name;
+    #[test]
+    fn keeps_what_tells_namesakes_apart() {
+        assert_eq!(short_name("Fix the flaky checkout test (2)", 20), "Fix the flaky… (2)");
+        assert_eq!(short_name("Fix the flaky checkout test", 20), "Fix the flaky…");
+        assert_eq!(short_name("Refactor billing service", 20), "Refactor billing…");
+        assert_eq!(short_name("Short (2)", 20), "Short (2)");
+        assert_eq!(short_name("Upgrade React to 19", 20), "Upgrade React to 19");
+        assert_eq!(short_name("Review the pull request #4812", 20), "Review the… #4812");
+    }
+}
+
+/// #{harness_*}: a harness's name, id, engine, machine, project, branch, cwd, state (a word),
+/// line (what C-b s shows: its question, what it is doing, what it did, why it failed), question,
+/// doing, did, error, pr, pr_state, pr_url, tokens, since (when its state began), age (how long
+/// ago), open (in a pane of this client).
+fn harness_value(app: &App, machine: &str, id: &str, key: &str) -> Option<Val> {
+    let a = app.fleet.agent(machine, id)?;
+    let state = app.fleet.state_of(a);
+    let question = a.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default();
+    Some(Val::Str(match key {
+        "name" => a.name.clone(),
+        "id" => a.id.clone(),
+        "engine" => a.engine.clone(),
+        "machine" => app.fleet.machine_name(&a.machine_id),
+        "project" => a.project.clone(),
+        "branch" => a.branch.clone(),
+        "cwd" => a.cwd.clone(),
+        "state" => state_word(state).into(),
+        "line" => {
+            use crate::fleet::State::*;
+            match state {
+                NeedsInput => question,
+                Working => a.doing.clone().unwrap_or_default(),
+                Failed => Some(a.launch_error.clone()).filter(|e| !e.is_empty()).or_else(|| a.did.clone()).unwrap_or_default(),
+                _ => a.did.clone().unwrap_or_default(),
+            }
+        }
+        "question" => question,
+        "doing" => a.doing.clone().unwrap_or_default(),
+        "did" => a.did.clone().unwrap_or_default(),
+        "error" => a.launch_error.clone(),
+        "pr" => a.pr.as_ref().map(|p| format!("#{}", p.number)).unwrap_or_default(),
+        "pr_state" => a.pr.as_ref().map(|p| p.state.to_lowercase()).unwrap_or_default(),
+        "pr_url" => a.pr.as_ref().map(|p| p.url.clone()).unwrap_or_default(),
+        "tokens" => if a.tokens > 0 { crate::fleet::compact(a.tokens) } else { String::new() },
+        "since" => return Some(Val::Time((a.state_since(state) / 1000) as i64)),
+        "age" => crate::fleet::ago(a.state_since(state)),
+        "open" => (app.find_pane(machine, id).is_some() as u8).to_string(),
+        _ => return None,
+    }))
 }
 
 /// A harness state as one word (#{pane_agent_state}): needs, working, done, idle, starting,

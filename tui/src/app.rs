@@ -425,6 +425,8 @@ pub struct App {
     pub status_redraws: u64,
     /// The paste buffer a format is expanded for (list-buffers -F).
     pub format_buffer: Option<String>,
+    /// The harness a format is about (list-harnesses -F): its #{harness_*} values.
+    pub format_agent: Option<(String, String)>,
     /// What the shell running the command piped in (load-buffer -, source-file -).
     pub cli_stdin: Option<String>,
     /// The file and line the running command was read from (a config's): its errors say so.
@@ -545,6 +547,7 @@ impl App {
             cli_cwd: None,
             origin: None,
             format_buffer: None,
+            format_agent: None,
             format_line: None,
             format_type: None,
             status_redraws: 0,
