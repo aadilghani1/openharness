@@ -177,31 +177,35 @@ class TerminalTitle extends StatelessWidget {
             // row past the screen when a state, a way out and an asking harness all want a say.
             Flexible(
               flex: 2,
-              child: ClipRect(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  reverse: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (asking case final asking?)
-                        word(
-                          asking,
-                          color: tty.yellow,
-                          size: TtySize.meta,
-                          onTap: onFind,
-                          semanticsLabel: '$asking — open Find',
-                        ),
-                      if (state case final state?)
-                        word(state, color: tty.faint),
-                      if (action case final action?)
-                        word(
-                          '[${action.label}]',
-                          weight: FontWeight.w700,
-                          onTap: action.onTap,
-                        ),
-                    ],
+              fit: FlexFit.tight,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: ClipRect(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    reverse: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (asking case final asking?)
+                          word(
+                            asking,
+                            color: tty.yellow,
+                            size: TtySize.meta,
+                            onTap: onFind,
+                            semanticsLabel: '$asking — open Find',
+                          ),
+                        if (state case final state?)
+                          word(state, color: tty.faint),
+                        if (action case final action?)
+                          word(
+                            '[${action.label}]',
+                            weight: FontWeight.w700,
+                            onTap: action.onTap,
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),

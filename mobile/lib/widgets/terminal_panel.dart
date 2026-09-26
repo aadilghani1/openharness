@@ -22,6 +22,7 @@ import '../terminal/terminal_link_opener.dart';
 import '../terminal/remote_media_download.dart';
 import '../terminal/terminal_links.dart';
 import '../terminal/terminal_prompt_zone.dart';
+import '../phone/tty.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
@@ -1612,8 +1613,9 @@ class _TerminalPanelState extends State<TerminalPanel>
                   ),
                   // A long press selects on a phone, and nothing else offered to copy what it
                   // selected: `Copy` rides the selection, top right, until used or cleared.
+                  // Under the phone's title (three rows, laid over the pane's top), not behind it.
                   Positioned(
-                    top: 8,
+                    top: 60,
                     right: 8,
                     child: ListenableBuilder(
                       listenable: _controller,
@@ -1818,7 +1820,7 @@ class _SelectionActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final tty = Tty.of(context);
     Widget action(String label, VoidCallback onTap, {bool bold = false}) =>
         Semantics(
           button: true,
@@ -1835,10 +1837,9 @@ class _SelectionActions extends StatelessWidget {
                   widthFactor: 1,
                   child: Text(
                     label,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-                      color: theme.colorScheme.onSurface,
+                    style: tty.style(
+                      size: 15,
+                      weight: bold ? FontWeight.w700 : FontWeight.w400,
                     ),
                   ),
                 ),
@@ -1847,9 +1848,9 @@ class _SelectionActions extends StatelessWidget {
           ),
         );
     return Material(
-      color: theme.colorScheme.surfaceContainerHighest,
+      color: Color.alphaBlend(tty.text.withValues(alpha: 0.12), tty.ground),
       elevation: 2,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(6),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [action('Copy', onCopy, bold: true), action('×', onClear)],

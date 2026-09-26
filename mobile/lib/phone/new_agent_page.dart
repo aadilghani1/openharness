@@ -784,6 +784,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                         TtyFormRow(
                           label: 'approvals',
                           value: mode?.label ?? 'Auto-approve',
+                          detail: mode?.detail,
                           valueColor: (mode?.risky ?? false) ? tty.red : null,
                           onTap: _creating
                               ? null
@@ -828,7 +829,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                       const SizedBox(height: 6),
                       // A first harness has nothing to go on: three first tasks to tap, the kind
                       // that shows what an agent does in a minute.
-                      if (nothingRunning && _task.text.trim().isEmpty)
+                      if (_task.text.trim().isEmpty && !_creating)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: Wrap(

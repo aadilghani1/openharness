@@ -206,7 +206,7 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
               onBack: () => _go(_Step.hello),
               title: 'Your email',
               lines: const [
-                'We’ll send you a 4-digit code. Use the same email as Harness on your computer.',
+                'We’ll send you a 4-digit code. You’ll sign in with this email on your computer too.',
               ],
               field: TtyField(
                 key: const Key('welcome-email'),

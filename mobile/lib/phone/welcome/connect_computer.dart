@@ -57,8 +57,9 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
   String? _copied;
   Timer? _copiedTimer;
 
-  /// Which way the steps are shown: the Mac app, or the terminal.
-  bool _terminal = false;
+  /// Which way the steps are shown: the terminal first — who this is for lives in one — or the
+  /// Mac app.
+  bool _terminal = true;
 
   /// The steps, sent to [email] through the phone's own Mail — there is no server doing it, and a
   /// message in your own inbox is where the computer will find it.
@@ -156,6 +157,11 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
                     style: tty.style(size: TtySize.row, color: tty.faint),
                   ),
                   const SizedBox(height: 24),
+                  // Signed in: say so — and that the page is watching — where it is read first.
+                  if (widget.signedIn) ...[
+                    _Watching(account: email),
+                    const SizedBox(height: 16),
+                  ],
                   // Most people meet this page on the phone, away from the computer: the one thing
                   // to do from here is send the steps to where they will be read.
                   TtyPrimaryButton(
@@ -178,10 +184,10 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
                   ),
                   const SizedBox(height: 12),
                   _Choice(
-                    options: const ['Mac app', 'Terminal'],
-                    selected: _terminal ? 1 : 0,
+                    options: const ['Terminal', 'Mac app'],
+                    selected: _terminal ? 0 : 1,
                     onSelected: (index) =>
-                        setState(() => _terminal = index == 1),
+                        setState(() => _terminal = index == 0),
                   ),
                   const SizedBox(height: 14),
                   if (!_terminal) ...[
@@ -192,9 +198,9 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      'Download it, sign in with $account, then open Machines → '
-                      'this computer → Set password. That is your phone '
-                      'password.',
+                      'Download it, sign in with $account, then open Machines '
+                      '(your computers) → this Mac → Set password. That is '
+                      'the phone password you type here next.',
                       style: tty.style(size: TtySize.meta, color: tty.faint),
                     ),
                   ] else ...[
@@ -237,7 +243,6 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
                     ),
                   ],
                   const SizedBox(height: 32),
-                  if (widget.signedIn) const _Watching(),
                   Center(
                     child: TtyTextButton(
                       label: 'How Harness works',
@@ -249,8 +254,8 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
                     Center(
                       child: TtyTextButton(
                         label: widget.signedIn
-                            ? 'Try a sample while you wait'
-                            : 'Try a sample first',
+                            ? 'Try the sample while you wait'
+                            : 'Try the sample',
                         onPressed: () =>
                             unawaited(widget.onTrySample!(context)),
                       ),
@@ -420,7 +425,10 @@ class _CommandBlock extends StatelessWidget {
 
 /// `Looking for your computer…` with a terminal spinner — the page is watching.
 class _Watching extends StatefulWidget {
-  const _Watching();
+  const _Watching({this.account});
+
+  /// Whose computer it is waiting for.
+  final String? account;
 
   @override
   State<_Watching> createState() => _WatchingState();
@@ -449,17 +457,27 @@ class _WatchingState extends State<_Watching> {
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        TtyText(_frames[_frame], color: tty.green, size: TtySize.row),
-        const SizedBox(width: 10),
-        TtyText(
-          'Looking for your computer…',
-          color: tty.faint,
-          size: TtySize.row,
-        ),
-      ],
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: ttyRaised(tty),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        children: [
+          TtyText(_frames[_frame], color: tty.green, size: TtySize.row),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              widget.account == null
+                  ? 'Waiting for your computer…'
+                  : 'Signed in as ${widget.account}. Waiting for your '
+                        'computer…',
+              style: tty.style(size: TtySize.meta, color: tty.text),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

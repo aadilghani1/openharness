@@ -49,6 +49,7 @@ import 'question_keys.dart';
 import 'voice_bar_line.dart';
 import 'voice_mic_button.dart';
 import 'phone_navigation.dart';
+import 'phone_search_catalog.dart' show phoneAgentId;
 import 'agent_index.dart';
 import 'command_line.dart';
 import 'terminal_title.dart';
@@ -854,22 +855,33 @@ class _TerminalPageState extends State<TerminalPage>
     });
   }
 
-  /// Back to the harness used before this one — holding the title's name.
+  /// Back to the harness used before this one ON THIS PHONE — holding the title's name, vim's
+  /// `:b#`. This phone's own visits first (the order its landings are remembered in); the
+  /// account's last-used order only when it has none yet.
   void _openLastHarness() {
-    final entries = visibleAgents(agentIndex(widget.notifier))
-      ..sort(compareMonitorOrder);
-    final last = entries
-        .where(
-          (entry) =>
-              !(entry.machineId == widget.machineId &&
-                  entry.agent.id == widget.agentId) &&
-              entry.isOpenable,
-        )
+    final entries = visibleAgents(agentIndex(widget.notifier));
+    bool here(AgentEntry entry) =>
+        entry.machineId == widget.machineId && entry.agent.id == widget.agentId;
+    final byId = {
+      for (final entry in entries)
+        phoneAgentId(entry.machineId, entry.agent.id): entry,
+    };
+    AgentEntry? last;
+    for (final id in widget.notifier.searchHistory.recent) {
+      final entry = byId[id];
+      if (entry != null && !here(entry) && entry.isOpenable) {
+        last = entry;
+        break;
+      }
+    }
+    last ??= (entries..sort(compareMonitorOrder))
+        .where((entry) => !here(entry) && entry.isOpenable)
         .firstOrNull;
     if (last == null) {
       _flash('no other harness yet', error: true);
       return;
     }
+    _flash('← ${_windowName(last.agent.displayName)}');
     openAgent(context, widget.notifier, last.machineId, last.agent.id);
   }
 
@@ -1996,7 +2008,10 @@ class _TerminalPageState extends State<TerminalPage>
                                   agent?.displayName ?? _cachedAgentName ?? '',
                               place: _placeOf(agent, machine),
                               branch: agent?.project?.branch,
-                              asking: _askingElsewhere(),
+                              // In the sample the guide line says it, once is enough.
+                              asking: SampleMode.maybeOf(context) != null
+                                  ? null
+                                  : _askingElsewhere(),
                               onHoldName: _openLastHarness,
                               onFind: _openSearch,
                               state: headerStatus.tone == PhoneTone.good
@@ -2120,13 +2135,27 @@ class _TerminalPageState extends State<TerminalPage>
                         child: Align(
                           alignment: Alignment.bottomCenter,
                           heightFactor: 1,
-                          child: TerminalActionColumn(
-                            voice: widget.voice,
-                            session: session,
-                            onSearch: _openSearch,
-                            unread: widget.notifier.agentNotices.unread,
-                            working: _agentWorking,
-                          ),
+                          // Faded while the history is read back: it sits on the rows being read, and
+                          // is not what reading needs. Still there, still tappable.
+                          child:
+                              ValueListenableBuilder<({int above, int total})?>(
+                                valueListenable: _scrollback,
+                                builder: (context, position, mic) =>
+                                    AnimatedOpacity(
+                                      duration: const Duration(
+                                        milliseconds: 150,
+                                      ),
+                                      opacity: position == null ? 1 : 0.25,
+                                      child: mic,
+                                    ),
+                                child: TerminalActionColumn(
+                                  voice: widget.voice,
+                                  session: session,
+                                  onSearch: _openSearch,
+                                  unread: widget.notifier.agentNotices.unread,
+                                  working: _agentWorking,
+                                ),
+                              ),
                         ),
                       ),
                     // `esc`, one tap, beside the mic while the agent is working or asking — the key a
@@ -3435,7 +3464,12 @@ class _SampleGuideLine extends StatelessWidget {
       color: Color.alphaBlend(tty.yellow.withValues(alpha: 0.14), tty.ground),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(Tty.origin, 7, Tty.origin, 7),
-        child: TtyText(text, size: TtySize.meta, color: tty.yellow),
+        child: Text(
+          text,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: tty.style(size: TtySize.meta, color: tty.yellow),
+        ),
       ),
     );
   }
@@ -3452,7 +3486,7 @@ class _SampleEndCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     return Material(
-      color: tty.ground.withValues(alpha: 0.94),
+      color: tty.ground.withValues(alpha: 0.98),
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
