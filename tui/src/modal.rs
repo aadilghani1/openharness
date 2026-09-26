@@ -243,6 +243,18 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
         .collect()
 }
 
+/// The sessions, when there is more than one: `work: 2 windows`, the one on screen `(attached)`.
+pub fn session_rows(app: &App) -> Vec<Row> {
+    let all = app.session_list();
+    if all.len() < 2 { return Vec::new() }
+    all.into_iter().map(|(id, name)| {
+        let windows = if id == app.session_id { app.tabs.iter().filter(|t| t.root.is_some()).count() } else { app.sessions.iter().find(|s| s.id == id).map(|s| s.tabs.len()).unwrap_or(0) };
+        Row::new(format!("session:{id}"), format!("{name}: {windows} windows")).group("Sessions")
+            .lead(vec![span("§ ", fg(theme::MUTED))])
+            .right(if id == app.session_id { "attached".to_string() } else { String::new() })
+    }).collect()
+}
+
 /// Only says something when a filter is on — the count beside the prompt already says the rest.
 pub fn open_status(_app: &App, filter: Filter) -> String {
     if filter == Filter::All { String::new() } else { format!("{} · tab ↹", filter.label().to_lowercase()) }

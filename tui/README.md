@@ -31,7 +31,8 @@ harness. Closing the last window ends `hn` (`[exited]`, as tmux says it); `C-b d
 **Sessions** are tmux's: `hn new -A -s main` (in a shell's rc, or a terminal profile) starts or
 attaches, `hn attach -t work` goes back to one, and a plain `hn` returns to where you were.
 From inside, `new -d -s api -c ~/src/api`, `switch-client -t api`, `C-b (` `C-b )` `C-b L`,
-`C-b $`, `kill-session`, and any command's `-t work:2` reach every session, so
+`C-b $`, `kill-session`, and any command's `-t work:2` reach every session (`C-b w` shows them all
+as tmux's tree does; `C-b s` lists them after the harnesses, so typing a session's name finds it), so
 tmux-sessionizer and tmuxinator-style scripts work. The first session is the desk's (named for
 this computer unless you name it); the others are this computer's, kept between clients.
 

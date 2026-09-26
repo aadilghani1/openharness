@@ -416,7 +416,11 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
     picker.busy = busy.then(|| "loading".to_string());
     match kind {
         PickerKind::Open { filter, machine, project } => {
-            picker.set_rows(modal::agent_rows(app, *filter, machine.as_deref(), project.as_deref()));
+            let mut rows = modal::agent_rows(app, *filter, machine.as_deref(), project.as_deref());
+            // With more than one session, they are in the list too (Enter goes to one), after the
+            // harnesses: tmux's C-b s is its sessions.
+            if machine.is_none() && project.is_none() && *filter == Filter::All { rows.extend(modal::session_rows(app)) }
+            picker.set_rows(rows);
             picker.status = modal::open_status(app, *filter);
             picker.hints = vec![("enter", "open"), ("C-t", "window"), ("C-v", "beside"), ("C-x", "below"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause"), ("M-1..9", "answer")];
             picker.empty = if app.fleet.agents.is_empty() { "no harnesses yet — C-b C makes one".into() } else { String::new() };
@@ -1636,6 +1640,11 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
     if id.is_none() && picker.visible.is_empty() && choice == Choice::Enter { SPLIT.with(|s| s.set(None)); return }
     let keep = |app: &mut App, kind: PickerKind, picker: Picker| app.modal = Some(Modal::Picker { kind, picker });
     match kind.clone() {
+        PickerKind::Open { .. } if id.as_deref().map(|i| i.starts_with("session:")).unwrap_or(false) => {
+            let sid = id.as_deref().and_then(|i| i.strip_prefix("session:")).and_then(|n| n.parse().ok()).unwrap_or(app.session_id);
+            SPLIT.with(|s| s.set(None));
+            app.switch_session(sid);
+        }
         PickerKind::Open { .. } => {
             let Some((machine, agent)) = id.as_deref().and_then(split_key) else { return keep(app, kind, picker) };
             let state = app.fleet.agent(&machine, &agent).map(|a| app.fleet.state_of(a));

@@ -16,6 +16,7 @@ fn kv(k: &str, v: impl Into<String>) -> Line<'static> { Line::from(vec![dim(form
 
 pub fn lines(app: &App, kind: &PickerKind, id: &str) -> Vec<Line<'static>> {
     match kind {
+        PickerKind::Open { .. } if id.starts_with("session:") => session(app, id),
         PickerKind::Open { .. } | PickerKind::Inbox | PickerKind::Route { .. } => {
             let key = id.split('#').next().unwrap_or(id);
             match key.split_once(':') { Some((m, a)) => harness(app, m, a), None => vec![] }
@@ -77,6 +78,22 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     }
     out.push(Line::raw(""));
     out.push(dim(if app.find_pane(machine_id, agent_id).is_some() { "on screen — enter goes to it" } else { "enter opens it here · C-t window · C-v beside · C-x below" }).into());
+    out
+}
+
+/// A session: its windows, as tmux's tree lists them.
+fn session(app: &App, id: &str) -> Vec<Line<'static>> {
+    let Some(sid) = id.strip_prefix("session:").and_then(|n| n.parse::<u32>().ok()) else { return vec![] };
+    let name = app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| n).unwrap_or_default();
+    let mut out = vec![Line::from(vec![bold(name), dim(if sid == app.session_id { "  attached" } else { "" })]), Line::raw("")];
+    let windows: Vec<(usize, String, usize)> = if sid == app.session_id {
+        app.tabs.iter().enumerate().map(|(i, t)| (app.win_num(i), t.name.clone(), t.panes().len())).collect()
+    } else {
+        app.sessions.iter().find(|s| s.id == sid).map(|s| s.tabs.iter().map(|t| (s.nums.get(&t.id).copied().unwrap_or(0), t.name.clone(), t.panes().len())).collect()).unwrap_or_default()
+    };
+    for (n, name, panes) in windows { out.push(Line::from(vec![Span::raw(format!("  {n}: {name}")), dim(format!("  ({panes} panes)"))])) }
+    out.push(Line::raw(""));
+    out.push(dim("enter goes to it").into());
     out
 }
 
