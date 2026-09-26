@@ -44,6 +44,7 @@ import 'terminal_header.dart';
 import 'terminal_input_dock.dart';
 import 'terminal_search.dart';
 import 'tty.dart';
+import 'tty_controls.dart';
 import 'question_keys.dart';
 import 'voice_bar_line.dart';
 import 'voice_mic_button.dart';
@@ -803,15 +804,39 @@ class _TerminalPageState extends State<TerminalPage>
     });
   }
 
-  /// Agents other than this one that are asking something — the title's `N!`.
-  int _askingElsewhere() => visibleAgents(agentIndex(widget.notifier))
-      .where(
-        (entry) =>
-            entry.isWaiting &&
+  /// Harnesses other than this one that are asking something — the title's `api-fix asking`,
+  /// or `2 asking` when there are several. Null when none are.
+  String? _askingElsewhere() {
+    final asking = [
+      for (final entry in visibleAgents(agentIndex(widget.notifier)))
+        if (entry.isWaiting &&
             !(entry.machineId == widget.machineId &&
-                entry.agent.id == widget.agentId),
-      )
-      .length;
+                entry.agent.id == widget.agentId))
+          entry,
+    ];
+    if (asking.isEmpty) return null;
+    if (asking.length > 1) return '${asking.length} asking';
+    return '${_windowName(asking.single.agent.displayName)} asking';
+  }
+
+  /// Back to the harness used before this one — holding the title's name.
+  void _openLastHarness() {
+    final entries = visibleAgents(agentIndex(widget.notifier))
+      ..sort(compareMonitorOrder);
+    final last = entries
+        .where(
+          (entry) =>
+              !(entry.machineId == widget.machineId &&
+                  entry.agent.id == widget.agentId) &&
+              entry.isOpenable,
+        )
+        .firstOrNull;
+    if (last == null) {
+      _flash('no other harness yet', error: true);
+      return;
+    }
+    openAgent(context, widget.notifier, last.machineId, last.agent.id);
+  }
 
   /// `machine:folder` for the title — where the agent works.
   static String? _placeOf(Agent? agent, MachineState? machine) {
@@ -1937,6 +1962,7 @@ class _TerminalPageState extends State<TerminalPage>
                               place: _placeOf(agent, machine),
                               branch: agent?.project?.branch,
                               asking: _askingElsewhere(),
+                              onHoldName: _openLastHarness,
                               onFind: _openSearch,
                               state: headerStatus.tone == PhoneTone.good
                                   ? null
@@ -2063,6 +2089,25 @@ class _TerminalPageState extends State<TerminalPage>
                             unread: widget.notifier.agentNotices.unread,
                             working: _agentWorking,
                           ),
+                        ),
+                      ),
+                    // `esc`, one tap, beside the mic while the agent is working or asking — the key a
+                    // terminal person reaches for most, and the one a phone keyboard does not have.
+                    if (!_ownsInput &&
+                        session != null &&
+                        (_agentWorking || _questionWatcher?.view != null))
+                      Positioned(
+                        right:
+                            MediaQuery.sizeOf(context).width / 2 +
+                            VoiceMicButton.extent / 2 +
+                            8,
+                        bottom:
+                            _windowBottomInset + 4 * Tty.of(context).row - 22,
+                        child: _EscChip(
+                          onTap: () {
+                            session.terminal.keyInput(TerminalKey.escape);
+                            _flash('✓ esc');
+                          },
                         ),
                       ),
                     // The first time a terminal is up: what the swipes and the mic do. Once.
@@ -3248,4 +3293,47 @@ class _SlideAway extends StatelessWidget {
       );
     },
   );
+}
+
+/// `esc`, as a key you can reach with a thumb: a small raised chip, 44pt of touch.
+class _EscChip extends StatelessWidget {
+  const _EscChip({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      label: 'Escape — interrupt the agent',
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          HapticFeedback.mediumImpact();
+          onTap();
+        },
+        child: SizedBox(
+          width: 56,
+          height: 44,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: tty.ground,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: tty.dim),
+              ),
+              child: TtyText(
+                'esc',
+                size: TtySize.meta,
+                weight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

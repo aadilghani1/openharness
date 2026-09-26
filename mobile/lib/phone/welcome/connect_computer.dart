@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -54,6 +55,44 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
   Timer? _watch;
   String? _copied;
   Timer? _copiedTimer;
+
+  /// Which way the steps are shown: the Mac app, or the terminal.
+  bool _terminal = false;
+
+  /// The steps, sent to [email] through the phone's own Mail — there is no server doing it, and a
+  /// message in your own inbox is where the computer will find it.
+  Future<void> _emailSteps(String? email) async {
+    final body = [
+      'Set up Harness on your computer:',
+      '',
+      'Mac app: $kDesktopAppUrl',
+      '  Sign in${email == null ? '' : ' with $email'}, then Machines → this computer → Set password.',
+      '',
+      'Or, in a terminal:',
+      for (final line in kSetUpCommands) '  $line',
+      '',
+      'Then open Harness on your phone — it finds the computer by itself.',
+    ].join('\n');
+    final uri = Uri(
+      scheme: 'mailto',
+      path: email ?? '',
+      query: _mailQuery({
+        'subject': 'Set up Harness on your computer',
+        'body': body,
+      }),
+    );
+    try {
+      final opened = await launchUrl(uri);
+      if (!opened && mounted) _copy('commands', body);
+    } on Exception {
+      if (mounted) _copy('commands', body);
+    }
+  }
+
+  /// `mailto:` wants `%20`, not `+`, between words.
+  static String _mailQuery(Map<String, String> fields) => fields.entries
+      .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
+      .join('&');
 
   @override
   void initState() {
@@ -111,65 +150,91 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'Harness runs Claude Code and Codex on your own computer. '
-                    'This phone connects to it — so it starts there.',
+                    'Your agents run on your computer — this phone is the '
+                    'remote. It takes about two minutes, once.',
                     style: tty.style(size: TtySize.row, color: tty.faint),
                   ),
-                  const SizedBox(height: 28),
-                  _Step(
-                    number: '1',
-                    title: 'On a Mac, get the Harness app',
-                    children: [
-                      _CopyLine(
-                        text: 'harness.autonomous.ai/desktop',
-                        copied: _copied == 'link',
-                        onCopy: () => _copy('link', kDesktopAppUrl),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Sign in with $account, then open Machines → '
-                        'this computer → Set password.',
-                        style: tty.style(size: TtySize.meta, color: tty.faint),
-                      ),
-                    ],
-                  ),
                   const SizedBox(height: 24),
-                  _Step(
-                    number: '2',
-                    title: 'Or, in any terminal',
-                    children: [
-                      _CommandBlock(
-                        lines: kSetUpCommands,
-                        copied: _copied == 'commands',
-                        onCopy: () =>
-                            _copy('commands', kSetUpCommands.join('\n')),
-                      ),
-                      const SizedBox(height: 8),
-                      Text.rich(
-                        TextSpan(
-                          style: tty.style(
-                            size: TtySize.meta,
-                            color: tty.faint,
-                          ),
-                          children: [
-                            TextSpan(
-                              text: 'harness login',
-                              style: tty.style(
-                                size: TtySize.meta,
-                                color: tty.green,
-                              ),
-                            ),
-                            TextSpan(
-                              text:
-                                  ' signs the computer in to $account. The '
-                                  'password you set is what this phone unlocks '
-                                  'it with — it never leaves your devices.',
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                  // Most people meet this page on the phone, away from the computer: the one thing
+                  // to do from here is send the steps to where they will be read.
+                  TtyPrimaryButton(
+                    label: 'Email me the setup link',
+                    onPressed: () => unawaited(_emailSteps(email)),
                   ),
+                  const SizedBox(height: 6),
+                  Center(
+                    child: TtyText(
+                      'Open it on your Mac or Linux computer.',
+                      size: TtySize.meta,
+                      color: tty.faint,
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+                  TtyText(
+                    'Already at your computer?',
+                    size: TtySize.row,
+                    weight: FontWeight.w600,
+                  ),
+                  const SizedBox(height: 12),
+                  _Choice(
+                    options: const ['Mac app', 'Terminal'],
+                    selected: _terminal ? 1 : 0,
+                    onSelected: (index) =>
+                        setState(() => _terminal = index == 1),
+                  ),
+                  const SizedBox(height: 14),
+                  if (!_terminal) ...[
+                    _CopyLine(
+                      text: 'harness.autonomous.ai/desktop',
+                      copied: _copied == 'link',
+                      onCopy: () => _copy('link', kDesktopAppUrl),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Download it, sign in with $account, then open Machines → '
+                      'this computer → Set password. That is your phone '
+                      'password.',
+                      style: tty.style(size: TtySize.meta, color: tty.faint),
+                    ),
+                  ] else ...[
+                    _CommandBlock(
+                      lines: kSetUpCommands,
+                      copied: _copied == 'commands',
+                      onCopy: () =>
+                          _copy('commands', kSetUpCommands.join('\n')),
+                    ),
+                    const SizedBox(height: 10),
+                    Text.rich(
+                      TextSpan(
+                        style: tty.style(size: TtySize.meta, color: tty.faint),
+                        children: [
+                          TextSpan(
+                            text: 'harness login',
+                            style: tty.style(
+                              size: TtySize.meta,
+                              color: tty.green,
+                            ),
+                          ),
+                          TextSpan(
+                            text: ' signs the computer in to $account. ',
+                          ),
+                          TextSpan(
+                            text: 'remote-password',
+                            style: tty.style(
+                              size: TtySize.meta,
+                              color: tty.green,
+                            ),
+                          ),
+                          const TextSpan(
+                            text:
+                                ' sets your phone password — what this '
+                                'phone unlocks it with. It never leaves your '
+                                'devices.',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 32),
                   if (widget.signedIn) const _Watching(),
                   Center(
@@ -199,47 +264,61 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
   }
 }
 
-/// A numbered step: `1  Title`, and what to do under it.
-class _Step extends StatelessWidget {
-  const _Step({
-    required this.number,
-    required this.title,
-    required this.children,
+/// Two or three ways to do one thing, one chosen — iOS's segmented control, drawn flat.
+class _Choice extends StatelessWidget {
+  const _Choice({
+    required this.options,
+    required this.selected,
+    required this.onSelected,
   });
 
-  final String number;
-  final String title;
-  final List<Widget> children;
+  final List<String> options;
+  final int selected;
+  final ValueChanged<int> onSelected;
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 28,
-          child: TtyText(
-            number,
-            color: tty.green,
-            size: TtySize.row,
-            weight: FontWeight.w700,
-          ),
-        ),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                title,
-                style: tty.style(size: TtySize.row, weight: FontWeight.w600),
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: ttyRaised(tty),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          for (var i = 0; i < options.length; i++)
+            Expanded(
+              child: Semantics(
+                button: true,
+                selected: i == selected,
+                label: options[i],
+                excludeSemantics: true,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    onSelected(i);
+                  },
+                  child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: i == selected ? tty.ground : Colors.transparent,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: TtyText(
+                      options[i],
+                      size: TtySize.meta,
+                      weight: i == selected ? FontWeight.w700 : FontWeight.w400,
+                      color: i == selected ? tty.text : tty.faint,
+                    ),
+                  ),
+                ),
               ),
-              const SizedBox(height: 10),
-              ...children,
-            ],
-          ),
-        ),
-      ],
+            ),
+        ],
+      ),
     );
   }
 }

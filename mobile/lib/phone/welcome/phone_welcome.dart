@@ -192,9 +192,9 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
             ),
             _Step.email => _Form(
               onBack: () => _go(_Step.hello),
-              title: 'Sign in',
+              title: 'Your email',
               lines: const [
-                'Use the email of your Autonomous account — the one you sign in with in Harness on your computer.',
+                'We’ll send you a 4-digit code. Use the same email as Harness on your computer.',
               ],
               field: TtyField(
                 key: const Key('welcome-email'),
@@ -208,7 +208,7 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
               ),
               error: _error,
               button: TtyPrimaryButton(
-                label: 'Email me a code',
+                label: 'Send code',
                 busy: _busy,
                 busyLabel: 'Sending…',
                 onPressed: _sendCode,
@@ -310,30 +310,30 @@ class _Hello extends StatelessWidget {
                   const SizedBox(height: 28),
                   Text(
                     'Claude Code and Codex keep working on your computer. '
-                    'Watch them, answer them and start new ones — from here.',
+                    'Watch them, answer them and start new ones — by voice, '
+                    'from anywhere.',
                     style: tty.style(size: TtySize.row, color: tty.faint),
                   ),
                   const Spacer(),
                   const SizedBox(height: 24),
-                  TtyPrimaryButton(label: 'Sign in', onPressed: onSignIn),
+                  TtyPrimaryButton(
+                    label: 'Continue with email',
+                    onPressed: onSignIn,
+                  ),
                   const SizedBox(height: 4),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Flexible(
-                        child: TtyTextButton(
-                          label: 'New here?',
-                          onPressed: onNewHere,
-                        ),
+                  if (onTrySample != null)
+                    Center(
+                      child: TtyTextButton(
+                        label: 'Try it now — no computer needed',
+                        onPressed: onTrySample,
                       ),
-                      if (onTrySample != null)
-                        Flexible(
-                          child: TtyTextButton(
-                            label: 'Try a sample',
-                            onPressed: onTrySample,
-                          ),
-                        ),
-                    ],
+                    ),
+                  Center(
+                    child: TtyTextButton(
+                      label: 'Set up my computer',
+                      color: tty.faint,
+                      onPressed: onNewHere,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Row(

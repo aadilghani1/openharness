@@ -141,71 +141,76 @@ class _FocusHintsState extends State<FocusHints> {
             TtyText(small, size: TtySize.meta, color: tty.text),
           ],
         );
-    return Semantics(
-      label: 'Tips. Tap anywhere to close.',
-      button: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: _dismiss,
-        onHorizontalDragStart: (_) => _dismiss(),
-        onVerticalDragStart: (_) => _dismiss(),
-        child: Material(
-          color: tty.ground.withValues(alpha: 0.9),
-          child: Stack(
-            children: [
-              Positioned(
-                left: 16,
-                top: 64,
-                child: hint('tap the name', 'to switch harness'),
-              ),
-              Positioned(
-                left: 16,
-                right: 16,
-                top: 0,
-                bottom: 0,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: hint('→ swipe right', 'all your harnesses'),
-                    ),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerRight,
-                        child: hint(
-                          'swipe left ←',
-                          'start a new one',
-                          align: TextAlign.right,
+    // ⚠️ **The touch goes THROUGH.** A hint that swallowed the swipe it teaches ("swipe right")
+    // made the first swipe do nothing. The listener only notices the finger going down — the hints
+    // go — and the terminal under it gets the same touch and does what was taught.
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => _dismiss(),
+      child: IgnorePointer(
+        child: Semantics(
+          label:
+              'Tips: swipe right for all your harnesses, swipe left to start '
+              'one, tap the name to switch, the mic to talk.',
+          child: Material(
+            color: tty.ground.withValues(alpha: 0.92),
+            child: Stack(
+              children: [
+                // Under the title, never on it: the title is three rows tall.
+                Positioned(
+                  left: 16,
+                  top: 3 * tty.row + 14,
+                  child: hint('↑ tap the name', 'to switch harness'),
+                ),
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  top: 0,
+                  bottom: 0,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: hint('→ swipe right', 'all your harnesses'),
+                      ),
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: hint(
+                            'swipe left ←',
+                            'start a new one',
+                            align: TextAlign.right,
+                          ),
                         ),
                       ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: widget.micBottom + 44,
+                  child: Center(
+                    child: hint(
+                      'talk to it ↓',
+                      'tap the mic, speak, tap again to send',
+                      align: TextAlign.center,
                     ),
-                  ],
-                ),
-              ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: widget.micBottom + 44,
-                child: Center(
-                  child: hint(
-                    'talk to it',
-                    'tap the mic, speak, tap again to send',
-                    align: TextAlign.center,
                   ),
                 ),
-              ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 12,
-                child: Center(
-                  child: TtyText(
-                    'tap anywhere to start',
-                    size: TtySize.meta,
-                    color: tty.faint,
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 12,
+                  child: Center(
+                    child: TtyText(
+                      'touch anywhere to start',
+                      size: TtySize.meta,
+                      color: tty.faint,
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

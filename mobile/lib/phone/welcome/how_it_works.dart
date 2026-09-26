@@ -42,6 +42,8 @@ class HowItWorksPage extends StatelessWidget {
     ('swipe right', 'all your harnesses'),
     ('swipe left', 'start a new harness'),
     ('tap the name', 'switch harness'),
+    ('hold the name', 'back to the last harness'),
+    ('esc', 'stop what it is doing'),
     ('the mic', 'talk to the harness on screen'),
     ('…', 'rename, restart or stop it'),
   ];
@@ -104,7 +106,7 @@ class HowItWorksPage extends StatelessWidget {
                             child: TtyText(
                               gesture,
                               size: TtySize.meta,
-                              color: tty.cyan,
+                              color: tty.green,
                             ),
                           ),
                           Expanded(

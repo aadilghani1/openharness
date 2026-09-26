@@ -26,7 +26,8 @@ class TerminalTitle extends StatelessWidget {
     required this.onFind,
     this.place,
     this.branch,
-    this.asking = 0,
+    this.asking,
+    this.onHoldName,
     this.state,
     this.action,
     this.onActions,
@@ -39,8 +40,11 @@ class TerminalTitle extends StatelessWidget {
 
   final String? branch;
 
-  /// Agents elsewhere asking — drawn `2!` on yellow; a tap opens Find.
-  final int asking;
+  /// Harnesses elsewhere asking — `api-fix asking`, or `2 asking` — in yellow; a tap opens Find.
+  final String? asking;
+
+  /// Holding the name: back to the last harness (tmux's `prefix L`, vim's `:b#`).
+  final VoidCallback? onHoldName;
 
   /// A word for a connection state that is not plain live — `attaching`, `reconnecting` — or null.
   final String? state;
@@ -119,6 +123,12 @@ class TerminalTitle extends StatelessWidget {
                     HapticFeedback.selectionClick();
                     onFind();
                   },
+                  onLongPress: onHoldName == null
+                      ? null
+                      : () {
+                          HapticFeedback.mediumImpact();
+                          onHoldName!();
+                        },
                   child: Padding(
                     padding: const EdgeInsets.only(left: Tty.origin),
                     child: Column(
@@ -161,13 +171,13 @@ class TerminalTitle extends StatelessWidget {
                 ),
               ),
             ),
-            if (asking > 0)
+            if (asking case final asking?)
               word(
-                '$asking asking',
+                asking,
                 color: tty.yellow,
                 size: TtySize.meta,
                 onTap: onFind,
-                semanticsLabel: '$asking harnesses asking',
+                semanticsLabel: '$asking — open Find',
               ),
             if (state case final state?) word(state, color: tty.faint),
             if (action case final action?)

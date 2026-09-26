@@ -321,7 +321,7 @@ void main() {
         signIn: (_, _) async {},
       ),
     );
-    await tester.tap(find.text('Sign in'));
+    await tester.tap(find.text('Continue with email'));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.enterText(
       find.byKey(const Key('welcome-email')).last,
@@ -342,10 +342,10 @@ void main() {
         signIn: (_, _) async {},
       ),
     );
-    await tester.tap(find.text('Sign in'));
+    await tester.tap(find.text('Continue with email'));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.enterText(find.byType(TextField), 'ada@example.com');
-    await tester.tap(find.text('Email me a code'));
+    await tester.tap(find.text('Send code'));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.enterText(find.byType(TextField), '42');
     await tester.pump();
