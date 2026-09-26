@@ -390,6 +390,6 @@ async fn run(config: config::Config) -> io::Result<()> {
     if let Some(e) = &app.start_failed { eprintln!("{e}"); std::process::exit(1) }
     // As tmux says it: the harnesses are still running, and `hn` comes back to them — or the
     // last window went, and the session with it.
-    if app.exited { println!("[exited]") } else { println!("[detached (from session {session})]") }
+    if app.exited { println!("[exited]") } else if app.forget_sessions { println!("[server exited]") } else { println!("[detached (from session {session})]") }
     Ok(())
 }

@@ -156,8 +156,11 @@ pub fn client_port(socket: Option<&str>, name: Option<&str>) -> Option<u16> {
 /// what it runs, as tmux's $TMUX: a job's `hn …` reaches the client that ran it), else the newest.
 /// A name's first client, else another of its clients still running.
 fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
-    if let Some(p) = socket.map(str::to_string).or_else(|| std::env::var("HN_SOCKET").ok().filter(|s| !s.is_empty())) { return Some(PathBuf::from(p)) }
-    let name = name.map(str::to_string).or_else(|| std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()));
+    // -S and -L say which, before $HN_SOCKET (a job's `tmux -L other ls` asks the other).
+    if let Some(p) = socket { return Some(PathBuf::from(p)) }
+    if let Some(n) = name { return Some(clients_of(n).into_iter().next().unwrap_or_else(|| dir().join(format!("{n}.sock")))) }
+    if let Some(p) = std::env::var("HN_SOCKET").ok().filter(|s| !s.is_empty()) { return Some(PathBuf::from(p)) }
+    let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty());
     if let Some(n) = name { return Some(clients_of(&n).into_iter().next().unwrap_or_else(|| dir().join(format!("{n}.sock")))) }
     if let Some(p) = clients_of("default").into_iter().next() { return Some(p) }
     newest()
@@ -229,16 +232,21 @@ pub async fn call(words: &[String], socket: Option<&str>, name: Option<&str>) ->
     let mut tried = 0;
     let pinned = socket.is_some() || name.is_some() || std::env::var("HN_SOCKET").map(|s| !s.is_empty()).unwrap_or(false);
     loop {
-        let Some(path) = chosen(socket, name) else { eprintln!("no client running (start one with: hn)"); return 1 };
+        let Some(path) = chosen(socket, name) else { eprintln!("{}", no_server(&dir().join("default.sock"))); return 1 };
         match call_at(&path, words).await {
             Some(code) => return code,
             // A socket left by a client that died: gone, try the next.
             None => {
-                if pinned { eprintln!("no client at {}", path.display()); return 1 }
-                let _ = std::fs::remove_file(&path); tried += 1; if tried > 8 { eprintln!("no client running (start one with: hn)"); return 1 }
+                if pinned || tried > 8 { eprintln!("{}", no_server(&path)); return 1 }
+                let _ = std::fs::remove_file(&path); tried += 1;
             }
         }
     }
+}
+
+/// tmux's words for no server at [path]: none there (ENOENT), or one that is gone (ECONNREFUSED).
+pub fn no_server(path: &std::path::Path) -> String {
+    if path.exists() { format!("no server running on {}", path.display()) } else { format!("error connecting to {} (No such file or directory)", path.display()) }
 }
 
 /// A command run by the client at [path], its output printed here; None when nothing answers.

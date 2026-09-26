@@ -92,6 +92,8 @@ pub struct Pane {
     pub last_alive: Instant,
     pub dirty: bool,
     pub bell: bool,
+    /// What the program copied (OSC 52), not yet passed on.
+    pub copied: Vec<String>,
     /// A key that arrived while a watcher was being promoted to controller.
     pub queued: Vec<Vec<u8>>,
     /// The folder the shell says it is in (OSC 7), for #{pane_current_path} and new splits.
@@ -196,7 +198,7 @@ impl Pane {
             read_only: false,
             last_alive: Instant::now(),
             dirty: true,
-            bell: false,
+            bell: false, copied: Vec::new(),
             queued: Vec::new(),
             cwd: None,
             fg_command: None,
@@ -281,7 +283,8 @@ impl Pane {
                 AlacEvent::Title(title) => self.osc_title = title,
                 AlacEvent::ResetTitle => self.osc_title.clear(),
                 AlacEvent::Bell => self.bell = true,
-                AlacEvent::ClipboardStore(_, text) => crate::clipboard::store(&text),
+                // OSC 52: for the app to pass on as set-clipboard says.
+                AlacEvent::ClipboardStore(_, text) => self.copied.push(text),
                 _ => {}
             }
         }

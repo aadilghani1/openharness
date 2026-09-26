@@ -232,7 +232,7 @@ async fn offline(port: u16, args: &[String], name: Option<&str>) -> i32 {
     // No session anywhere: tmux's words for no server.
     if sessions.is_empty() && matches!(entry.name, "list-sessions" | "has-session" | "kill-session") {
         let sock = crate::ipc::dir().join(format!("{}.sock", name.unwrap_or("default")));
-        eprintln!("no server running on {}", sock.display());
+        eprintln!("{}", crate::ipc::no_server(&sock));
         return 1;
     }
     // cmd_find_get_session: exact, the only one it starts, the only one it matches.

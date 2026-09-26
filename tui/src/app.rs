@@ -1051,7 +1051,16 @@ impl App {
             pane.feed(&bytes);
             pane.settle_predictions();
             let belled = std::mem::replace(&mut pane.bell, false);
+            let copied = std::mem::take(&mut pane.copied);
             let id = pane.id;
+            // set-clipboard (input.c's OSC 52): external passes it to the terminal's clipboard,
+            // on a paste buffer too, off neither.
+            for text in copied {
+                let how = self.options.get("set-clipboard", "", None).unwrap_or_default();
+                if how == "off" { continue }
+                crate::clipboard::store(&text);
+                if how == "on" { let limit = self.buffer_limit(); self.paste.add(text, limit) }
+            }
             // alerts.c: output is activity; a BEL is a bell.
             if let Some(t) = self.tabs.iter().position(|t| t.panes().contains(&id)) {
                 self.tabs[t].touch();
@@ -1781,7 +1790,7 @@ impl App {
             // A shell hn made is ended when its window is killed, by whichever client does it.
             let panes: Vec<Value> = t.panes().iter().filter_map(|p| app.panes.get(p)).map(|p| json!([p.machine_id, p.agent_id, app.shells.contains(&(p.machine_id.clone(), p.agent_id.clone()))])).collect();
             let focus = t.focus.and_then(|f| t.panes().iter().position(|p| *p == f)).unwrap_or(0);
-            json!({ "name": t.name, "named": t.named, "num": nums.get(&t.id).copied(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus })
+            json!({ "name": t.name, "named": t.named, "num": nums.get(&t.id).copied(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus, "zoomed": t.zoomed && panes.len() > 1 })
         };
         let me = crate::ipc::here().map(|p| p.display().to_string());
         let path = Self::sessions_path();
@@ -1848,6 +1857,7 @@ impl App {
             let layout = win.get("layout").and_then(Value::as_str).unwrap_or("");
             tab.root = Node::from_tmux(layout, &ids, w, h).or_else(|| layout::arrange(layout::Named::Tiled, &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")));
             tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
+            tab.zoomed = win.get("zoomed").and_then(Value::as_bool).unwrap_or(false) && ids.len() > 1;
             if let Some(n) = win.get("num").and_then(Value::as_u64) { nums.insert(tab.id.clone(), n as usize); }
             tabs.push(tab);
         }

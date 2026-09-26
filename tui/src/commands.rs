@@ -999,6 +999,9 @@ fn run_words(app: &mut App, words: &[String]) {
             app.swap_back = Some(back);
             app.swap_session(id);
             run_words_in(app, words);
+            // Its windows numbered as that session's options say (renumber-windows) before it
+            // goes back aside.
+            app.renumber();
             app.swap_back = None;
             if app.session_id != back { app.swap_session(back); }
             app.fit_panes();

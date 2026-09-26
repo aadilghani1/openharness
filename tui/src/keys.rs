@@ -436,7 +436,9 @@ pub fn parse(text: &str) -> Result<Chord, String> {
     let raw = text.trim();
     // A lone quote IS the key (`unbind '"'` arrives here as `"`).
     if raw.chars().count() == 1 { return Ok(Chord::normal(KeyCode::Char(raw.chars().next().unwrap()), KeyModifiers::NONE)) }
-    let t = raw.trim_matches('"').trim_matches('\'');
+    // A quoted key ('"', "'") loses its quotes; M-' and M-" keep theirs.
+    let quoted = raw.len() >= 3 && ((raw.starts_with('"') && raw.ends_with('"')) || (raw.starts_with('\'') && raw.ends_with('\'')));
+    let t = if quoted { &raw[1..raw.len() - 1] } else { raw };
     let t = t.strip_prefix('\\').unwrap_or(t);
     // `ctrl+a`, `alt+shift+x`: a person's spelling (tmux's `C-+` and `KP+` are not).
     let words_first = t.split('+').next().map(|w| w.len() > 1 && w.chars().all(|c| c.is_ascii_alphabetic())).unwrap_or(false);
@@ -495,6 +497,8 @@ mod tests {
         assert_eq!(parse("M-Left").unwrap(), Chord::normal(KeyCode::Left, KeyModifiers::ALT));
         assert_eq!(parse("\\;").unwrap(), Chord::normal(KeyCode::Char(';'), KeyModifiers::NONE));
         assert_eq!(parse("'\"'").unwrap(), Chord::normal(KeyCode::Char('"'), KeyModifiers::NONE));
+        assert_eq!(parse("M-'").unwrap(), Chord::normal(KeyCode::Char('\''), KeyModifiers::ALT));
+        assert_eq!(parse("M-\"").unwrap(), Chord::normal(KeyCode::Char('"'), KeyModifiers::ALT));
         assert_eq!(parse("|").unwrap().code, KeyCode::Char('|'));
         assert_eq!(parse("ctrl+a").unwrap(), parse("C-a").unwrap());
         assert_eq!(name(&parse("C-b").unwrap()), "C-b");
