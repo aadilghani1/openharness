@@ -426,6 +426,8 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
     picker.busy = busy.then(|| "loading".to_string());
     match kind {
         PickerKind::Open { filter, machine, project } => {
+            picker.live = true;
+            harness_preview(picker);
             let mut rows = modal::agent_rows(app, *filter, machine.as_deref(), project.as_deref());
             // With more than one session, they are in the list too (Enter goes to one), after the
             // harnesses: tmux's C-b s is its sessions.
@@ -456,6 +458,8 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.status = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
         }
         PickerKind::Inbox => {
+            picker.live = true;
+            harness_preview(picker);
             picker.set_rows(modal::inbox_rows(app));
             picker.status = format!("{} waiting", app.fleet.waiting());
             picker.hints = vec![("M-1..9", "answer"), ("M-a", "type an answer"), ("enter", "go"), ("C-o", "open")];
@@ -792,6 +796,16 @@ fn load_dsh(app: &mut App, machine: String) {
         if let Ok(home) = home { if let Some(path) = home.get("path").and_then(|v| v.as_str()) { app.homes.insert(id.clone(), path.to_string()); } }
         refill(app);
     });
+}
+
+/// The harness lists' preview, unless your --preview-window says otherwise: beside the list, and
+/// below it under 180 columns (fzf's `right,50%,<90(down,40%)`), so each harness's one line keeps
+/// its room.
+fn harness_preview(picker: &mut Picker) {
+    if picker.preview_window.is_some() || theme::fzf_opts().preview_window_set { return }
+    let mut pw = theme::fzf_opts().preview_window.clone();
+    theme::parse_preview_window(&mut pw, "right,50%,<90(down,40%)");
+    picker.preview_window = Some(pw);
 }
 
 /// Rebuild the open overlay's rows (the fleet or a catalog moved under it).

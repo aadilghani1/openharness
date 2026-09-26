@@ -137,6 +137,10 @@ pub struct Picker {
     /// change-preview-window and toggle-preview-wrap: the preview window as they left it (and
     /// which of change-preview-window's alternatives is next); toggle-sort: sorting turned over.
     pub preview_window: Option<crate::theme::PreviewWindow>,
+    /// A list ranked by what changes under it (the harnesses, by urgency): a refresh re-ranks it,
+    /// the cursor staying on its row (fzf's --track), and a query matches the rows' names (with
+    /// their keywords), not the lines that change every few seconds.
+    pub live: bool,
     /// Whether the --preview-window's <N(…) alternative is the one in use (the last draw's), which
     /// toggle-preview then shows or hides.
     pub preview_alt: std::cell::Cell<bool>,
@@ -191,6 +195,7 @@ impl Picker {
             border_drag: false,
             preview_cells: None,
             preview_window: None,
+            live: false,
             preview_alt: Default::default(),
             pw_next: 0,
             sort_flipped: false,
@@ -215,7 +220,7 @@ impl Picker {
     pub fn set_rows(&mut self, mut rows: Vec<Row>) {
         // fzf's list stands still while you are in it: a refresh keeps the rows where they were
         // and adds new ones after them.
-        if !self.rows.is_empty() {
+        if !self.rows.is_empty() && !self.live {
             let old: HashMap<&str, usize> = self.rows.iter().enumerate().map(|(i, r)| (r.id.as_str(), i)).collect();
             rows.sort_by_key(|r| old.get(r.id.as_str()).copied().unwrap_or(usize::MAX));
         }
@@ -260,7 +265,7 @@ impl Picker {
                 if row.disabled { continue }
                 let keywords = format!("{} {}", row.label, row.extra);
                 if negated.iter().any(|(w, s)| w.chars().count() >= 3 && names_word(&keywords, w, *s)) { continue }
-                let chars: Vec<char> = line(row).chars().collect();
+                let chars: Vec<char> = if self.live { row.label.chars().collect() } else { line(row).chars().collect() };
                 // (A keyword hit still has to keep out of what the query excludes from the line.)
                 let seen = if negated.is_empty() { String::new() } else { line(row) };
                 let clear = |w: &str, sensitive: bool| if sensitive { !seen.contains(w) } else { !seen.to_lowercase().contains(w) };
