@@ -28,19 +28,16 @@ same email (not as a guest), running and awake, with a remote password set.
 After that the app is **11 screens, 19 sheets and dialogs, ~120 controls, 13 gestures and ~30
 concepts** (harness, agent, engine, machine, link, remote password, desk tab, worktree, approvals,
 take control, Live/Attaching/Resyncing…, `>` `#` `@` `?` search modes, usage windows…). Most of it
-is the desktop carried onto a phone. The one question a phone is for — *what needs me?* — has no
-screen: the tab bar that counted waiting agents is hidden (`phone_shell.dart:28`), and the
-terminal header's dot shows connection state, not "needs you".
+is the desktop carried onto a phone. What works on the go — watching one agent's live stream and
+talking to it — is buried under it, and moving between agents means a hidden swipe inside a desk tab,
+or three taps through tab pills to reach another tab.
 
 ## The target
 
-A phone is a **remote for the agents on your computer**. It does three things:
-
-1. Shows what needs you.
-2. Lets you answer — voice first.
-3. Starts a new one.
-
-Everything else stays on the computer.
+A phone is where you **watch and talk to the one to three agents you picked**, on the go — in the
+car, walking. Agents mostly run on their own now (auto-approve), so the phone is not a triage inbox:
+you choose the few you want to work with out of five to ten (or a hundred at a desk), then watch their
+live stream and talk to them. Everything else stays on the computer.
 
 ### First launch: one screen, one action
 
@@ -60,28 +57,43 @@ Everything else stays on the computer.
 └─────────────────────────────┘
 ```
 
-Scan → "Connected to your MacBook" → the inbox. No email, no code, no password, no machine list.
+Scan → "Connected to your MacBook" → your most recent agent. No email, no code, no password, no machine list.
 "Get it →" opens the share sheet with the download link, so it can be sent to the computer.
 
 The computer side is one button: **Phone** in the desktop app (and a step in desktop onboarding)
 shows a QR code. The same QR is a universal link: a camera that scans it without the app installed
 lands on the App Store page.
 
-### After: three screens
+### After: one agent on screen, and Find
 
-- **Inbox** (home). Every agent as a row, **needs you** on top, in words: *Needs you · Working ·
-  Done*. One tap opens it. A mic button answers the top one.
-- **Agent.** The agent's output, a big mic, a keyboard button. Approve/deny when it asks. That is
-  the whole control surface; `esc`/`tab`/arrows only appear while the agent is asking a question.
-- **New.** One field: *"What should it do?"* Starts Claude Code in the folder you used last, with
-  the current auto-approve default. "Other folder" is the only visible option.
+```
+┌──────────────────────────────┐
+│ fix login test · MacBook  🔍 │
+│                              │
+│   live terminal stream       │
+│                              │
+│                         (🎤) │
+└──────────────────────────────┘
+```
 
-Settings is a sheet off the inbox with four rows: your computers (with *Add a computer*, which scans
-again), voice language, sign out, version.
+- **Agent** (home). The live terminal, full screen, and the mic. It opens on the agent you last
+  worked with, on any device. `esc`/`tab`/arrows appear only while the agent is asking a question.
+- **Find** (🔍) is the only way to move. It opens with your **recent agents first**, as full-width,
+  two-line rows, so long names fit and switching among the two or three you are working with is two
+  taps with nothing to type. Type or say a few words to narrow: it matches name, project, computer,
+  what the agent is doing and what it said. No `>` `#` `@` `?` modes, no tab pills.
+- **New** is the first row of Find: say what it should do; it starts Claude Code in the folder you
+  used last. "Other folder" is the only visible option.
+- **Settings** is the last row of Find: your computers (with *Add a computer*, which scans again),
+  voice language, sign out, version.
 
-**Words:** *computer* (never "machine"), the agent's own name for the thing working ("Claude Code ·
-fix the login bug"), *needs you*. No "link", "remote password", "desk", "tab", "worktree",
-"engine", "take control", or connection states unless something is actually broken.
+**No swipe between agents.** A swipe is hidden — nothing says it is there or what comes next — and it
+fires by accident while scrolling or typing. **No bar of agents** either: names are long and the screen
+is small.
+
+**Words:** *computer* (never "machine") and the agent's own name for the work ("fix the login bug").
+No "link", "remote password", "desk", "tab", "worktree", "engine", "take control", or connection
+states unless something is actually broken.
 
 ## The plan
 
@@ -116,14 +128,14 @@ the desktop arm the code so the daemon answers the intent without polling. **Rem
 password from the phone path entirely.** Estimate: 1–1.5 weeks.
 
 Until B2 lands, the QR also carries the account email: the phone pre-fills it and sends the code
-itself, so first run is *scan → type 4 digits (autofilled from Mail) → inbox*.
+itself, so first run is *scan → type 4 digits (autofilled from Mail) → your agent*.
 
 **B2. The QR signs the phone in too.** The backend issues no tokens of its own today — every route
 checks an Autonomous token (`backend/src/routes/auth.ts:47`, `backend/src/lib/ssoAuth.ts`). Add a
 phone handoff: the signed-in desktop asks the backend for a single-use code (2-minute TTL, modelled
 on `backend/src/lib/deviceAuth.ts`), puts it in the QR, and the phone redeems it for a phone-scoped
 token that the relay, the REST middleware and refresh all accept, revocable per phone from the
-desktop. First run becomes *scan → inbox*. Estimate: 2 weeks plus a security review; it touches every
+desktop. First run becomes *scan → your agent*. Estimate: 2 weeks plus a security review; it touches every
 auth path.
 
 A cheaper route to B2 exists if auth.autonomous.ai offers a token exchange or device grant — check
@@ -134,30 +146,35 @@ to them, so a person with two Macs scans once. New protocol; after B1/B2, only i
 
 ### C. Rebuild the signed-in app — phone only, 2–3 weeks, parallel with B
 
-- Build Inbox, Agent, New and the Settings sheet as above, on the existing state, WS, E2EE and
-  terminal code (`lib/state`, `lib/ws`, `lib/e2ee`, `lib/terminal` stay).
-- "Needs you" comes from the attention/unread signals the app already computes
-  (`phone/agent_index.dart`), promoted to the home screen and the notification.
+- Keep what works on the go: the terminal page and the voice input (`phone/terminal_page.dart`,
+  `phone/voice_*`), on the existing state, WS, E2EE and terminal code (`lib/state`, `lib/ws`,
+  `lib/e2ee`, `lib/terminal` stay).
+- Build Find as above: one search, recents first, matching on the fields the desktop's content index
+  already has (`phone/phone_search_*`), voice as an input to it.
+- New becomes one voice/text field; Settings shrinks to four rows.
 - Take control happens implicitly on the first keystroke or voice send; no band, no button.
-- **Delete from the phone:** desk tabs and their panel/strip/sheets; the `>` `#` `@` `?` command
-  palette and two of the three searches (keep one plain filter on the inbox once there are more than
-  ~8 agents); branch/worktree/engine/profile/approval pickers and the remote folder browser; Usage
-  and Stats; terminal font/size/colors and palette; Rename (long-press); machine administration
-  beyond "Add a computer" and "Remove"; the hidden tab shell, `AgentsPage`, `MachineSwipeHost`, the
-  Model sheet and hold-to-talk. Most of `lib/phone/` (94 files, ~25k lines) goes.
+- An agent that finished or is asking puts a dot on 🔍, and its row rises in Find. No inbox.
+- **Delete from the phone:** the swipe pager (`phone/agent_swipe.dart`) and the look-ahead attach;
+  desk tabs and their panel/strip/sheets; the `>` `#` `@` `?` command palette and two of the three
+  searches; branch/worktree/engine/profile/approval pickers and the remote folder browser; Usage and
+  Stats; terminal font/size/colors and palette; Rename; machine administration beyond "Add a
+  computer" and "Remove"; the hidden tab shell, `AgentsPage`, `MachineSwipeHost`, the Model sheet and
+  hold-to-talk. Most of `lib/phone/` (94 files, ~25k lines) goes.
 
 ### Targets
 
 | | Today | Target |
 |---|---|---|
-| Steps from install to inbox | sign in + code + find machine + password + link | **scan** |
+| Steps from install to a live agent | sign in + code + find machine + password + link | **scan** |
 | Things to type | email, code, password | nothing |
-| Screens / sheets | 11 / 19 | 3 / 1 |
-| Concepts named | ~30 | 3: computer, agent, needs you |
-| Taps to answer the agent that needs you | 2–5, after finding it | 1 (tap the row, or the mic on the inbox) |
+| Screens / sheets | 11 / 19 | 2 (Agent, Find) / 1 (Settings) |
+| Concepts named | ~30 | 2: computer, agent |
+| Switch to another agent | swipe within a tab; 3 taps across tabs | 2 taps (🔍 → row), across every computer |
+| Hidden gestures | 13 | 0 |
 
 **The test:** hand the phone to someone who has Harness on their Mac and has never seen the app. They
-reach a working agent and answer it without asking anything. Run it before each TestFlight build.
+reach a working agent, talk to it, and switch to another without asking anything. Run it before each
+TestFlight build.
 
 ## Decisions for you
 
