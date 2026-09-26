@@ -202,7 +202,7 @@ async fn offline(port: u16, args: &[String], name: Option<&str>) -> i32 {
             let reply = match link.rpc("agent_create", payload, Duration::from_secs(60)).await { Ok(r) => r, Err(e) => { eprintln!("create session failed: {e}"); return 1 } };
             let Some(id) = reply.pointer("/agent/id").and_then(Value::as_str) else { eprintln!("create session failed: no shell"); return 1 };
             let command = (!a.values.is_empty()).then(|| a.values.join(" "));
-            if let Some(c) = &command { link.send("message", json!({ "agentId": id, "content": c })); }
+            if let Some(c) = &command { link.send("message", json!({ "agentId": id, "content": format!(" clear; exec \"${{SHELL:-sh}}\" -c '{}'", c.replace('\'', "'\\''")) })); }
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".into());
             let window = a.get('n').map(str::to_string).unwrap_or_else(|| command.as_deref().and_then(|c| c.split_whitespace().next()).unwrap_or(&shell).rsplit('/').next().unwrap_or("sh").to_string());
             let mut kept = rows;

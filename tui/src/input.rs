@@ -865,7 +865,11 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
     app.modal = None;
-    app.starting_shell = Some(command.map(|c| vec![format!("{c}\r").into_bytes()]).unwrap_or_default());
+    // A command runs as tmux runs a window's (default-shell -c): in place of the shell, so the pane
+    // goes when it ends (it was typed into the shell, which stayed, and into its history — the
+    // leading blank keeps it out of a history that ignores those).
+    let quoted = |c: &str| format!("'{}'", c.replace('\'', "'\\''"));
+    app.starting_shell = Some(command.map(|c| vec![format!(" clear; exec \"${{SHELL:-sh}}\" -c {}\r", quoted(&c)).into_bytes()]).unwrap_or_default());
     // The session it was asked for in (a command's `-t work:` puts another in front for a moment):
     // where it goes when it comes, in front again for as long as that takes.
     let session = app.session_id;
