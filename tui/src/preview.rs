@@ -50,6 +50,9 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     ];
     if !cwd.is_empty() { out.push(kv("folder", cwd)) }
     if !a.branch.is_empty() { out.push(kv("branch", a.branch.clone())) }
+    let model = a.model.rsplit(':').next().unwrap_or("").to_string();
+    if !model.is_empty() { out.push(kv("model", model)) }
+    if !a.dsh.is_empty() { out.push(kv("harness", a.dsh.clone())) }
     if let Some(pr) = &a.pr { out.push(Line::from(vec![dim(format!("{:<9}", "pr")), Span::raw(format!("#{} {}", pr.number, pr.state)), dim(format!("  {}", pr.url))])) }
     if a.tokens > 0 || a.added + a.removed > 0 {
         let mut used = Vec::new();
@@ -59,16 +62,28 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
         out.push(kv("used", used.join(" · ")));
     }
     if state == State::Failed && !a.launch_error.is_empty() { out.push(Line::raw("")); out.push(Line::from(vec![Span::styled("✗ ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)), Span::raw(a.launch_error.clone())])) }
-    if let Some(asked) = &a.asked { out.push(Line::raw("")); out.push(Line::from(vec![Span::styled("❯ ", Style::default().fg(theme::fzf().prompt)), Span::raw(asked.clone())])) }
-    if let Some(did) = a.did.as_ref().filter(|_| !matches!(state, State::Working | State::NeedsInput)) { out.push(Line::from(vec![dim("⏺ "), Span::raw(did.clone())])) }
-    let model = a.model.rsplit(':').next().unwrap_or("").to_string();
-    if !model.is_empty() { out.push(kv("model", model)) }
-    if !a.dsh.is_empty() { out.push(kv("harness", a.dsh.clone())) }
     if let Some(q) = &a.question {
         out.push(Line::raw(""));
         out.push(Line::from(vec![Span::styled("? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), bold(q.prompt.clone())]));
         for (i, o) in q.options.iter().enumerate() { out.push(Line::from(vec![Span::styled(format!("  M-{} ", i + 1), Style::default().fg(theme::fzf().hl)), Span::raw(o.clone())])) }
     }
+    if let Some(asked) = &a.asked { out.push(Line::raw("")); out.push(Line::from(vec![Span::styled("❯ ", Style::default().fg(theme::fzf().prompt)), Span::raw(asked.clone())])) }
+    // Its plan (TodoWrite): done ✓, doing ▸, to do ·; and the sub-agents it has running.
+    if !a.todos.is_empty() {
+        let done = a.todos.iter().filter(|(_, s)| s == "completed").count();
+        out.push(Line::raw(""));
+        out.push(Line::from(vec![dim(format!("{:<9}", "plan")), Span::raw(format!("{done}/{} done", a.todos.len()))]));
+        for (words, status) in a.todos.iter().take(12) {
+            let (mark, style) = match status.as_str() { "completed" => ("✓ ", Style::default().add_modifier(Modifier::DIM)), "in_progress" => ("▸ ", Style::default().add_modifier(Modifier::BOLD)), _ => ("· ", Style::default()) };
+            out.push(Line::from(vec![Span::styled(format!("  {mark}"), style), Span::styled(words.clone(), style)]));
+        }
+    }
+    if !a.subagents.is_empty() {
+        out.push(Line::raw(""));
+        out.push(Line::from(vec![dim(format!("{:<9}", "agents")), Span::raw(format!("{} running", a.subagents.len()))]));
+        for (_, what) in a.subagents.iter().take(8) { out.push(Line::from(vec![Span::raw(format!("  ⠿ {what}"))])) }
+    }
+    if let Some(did) = a.did.as_ref().filter(|_| !matches!(state, State::Working | State::NeedsInput)) { out.push(Line::from(vec![dim("⏺ "), Span::raw(did.clone())])) }
     if let Some(recent) = app.recent.get(&(machine_id.to_string(), agent_id.to_string())) {
         let asks: Vec<String> = recent.get("asks").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(str::to_string).or_else(|| v.get("text").and_then(Value::as_str).map(str::to_string))).collect()).unwrap_or_default();
         let recaps: Vec<String> = recent.get("events").and_then(Value::as_array).map(|x| x.iter().filter_map(|e| e.pointer("/payload/recap").or_else(|| e.get("recap")).or_else(|| e.pointer("/payload/text")).and_then(Value::as_str).map(str::to_string)).collect()).unwrap_or_default();

@@ -132,8 +132,9 @@ pane counts as done and unread (`✓`) until you go to that pane.
   (`Run the unit tests`, from its tool calls), what its last turn came to (the daemon's recap, else
   the first line of its final message), or why it failed (`The agent did not start within 60
   seconds.`). Each row also has its pull request (`#4812`, `#4807 draft`, `#4790 merged`) and how
-  long it has been that way; the preview adds what it was last asked and what it has used
-  (`1.2M tokens · +340 −52 · 1 PR`).
+  long it has been that way; the preview adds what it was last asked, its plan (its to-do list,
+  `✓` done, `▸` doing), the sub-agents it has running, and what it has used (`1.2M tokens · +340
+  −52 · 1 PR`).
 - **`C-b a`** (`next-harness`, `-p` the other way) goes to the next harness that needs you, in that
   order, each once. It shows each in the same window, so a run through the queue doesn't pile up
   windows. Going there reads it, and the counts go down.
@@ -153,6 +154,7 @@ paused, offline), `#{pane_agent_mark}` (the icon in its colour, as the title row
 `#{pane_pr}` `#{pane_pr_state}` `#{pane_pr_url}` (the pull request for its branch), `#{pane_tokens}`
 and `#{fleet_tokens}` (what it, and all of them, have used: `1.2M`), `#{pane_lines}` (`+340 −52`),
 `#{pane_asked}` and `#{pane_did}` (what it was last asked, and what its last turn came to),
+`#{pane_todos}` (its plan's progress, `3/7`) and `#{pane_subagents}` (how many it has running),
 `#{pane_machine}`, `#{pane_far}` (another machine's), `#{pane_watched}` and `#{pane_watcher}`
 (another window has the pane to type in, and who), and `#{waiting}` (the harnesses waiting on
 you).

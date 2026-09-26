@@ -89,6 +89,11 @@ pub struct Agent {
     pub pr_checked: Option<Instant>,
     /// Its last recap was asked of the daemon (agent_recent), once.
     pub recap_asked: bool,
+    /// Its to-do list as it last wrote it (TodoWrite): each item's words and its state (pending,
+    /// in_progress, completed).
+    pub todos: Vec<(String, String)>,
+    /// The sub-agents it has running (a Task's tool call, until its end): id and what each does.
+    pub subagents: Vec<(String, String)>,
 }
 
 /// A pull request for an agent's branch: its number, state (Open, Draft, Merged, Closed), link.
@@ -218,7 +223,18 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         pr: previous.and_then(|p| p.pr.clone()),
         pr_checked: previous.and_then(|p| p.pr_checked),
         recap_asked: previous.map(|p| p.recap_asked).unwrap_or(false),
+        todos: previous.map(|p| p.todos.clone()).unwrap_or_default(),
+        subagents: previous.map(|p| p.subagents.clone()).unwrap_or_default(),
     }
+}
+
+/// TodoWrite's list: each item's words (its present-tense form while it is in progress) and state.
+pub fn todos_of(input: &Value) -> Vec<(String, String)> {
+    input.get("todos").and_then(Value::as_array).map(|todos| todos.iter().filter_map(|t| {
+        let status = t.get("status").and_then(Value::as_str).unwrap_or("pending").to_string();
+        let words = if status == "in_progress" { t.get("activeForm").or_else(|| t.get("content")) } else { t.get("content") }.and_then(Value::as_str)?;
+        Some((words.to_string(), status))
+    }).collect()).unwrap_or_default()
 }
 
 /// A tool call as the one line that says what an agent is doing (Claude Code's own words where

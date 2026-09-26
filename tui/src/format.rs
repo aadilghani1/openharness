@@ -1062,6 +1062,9 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_tokens" => agent.filter(|a| a.tokens > 0).map(|a| crate::fleet::compact(a.tokens)).unwrap_or_default(),
         "pane_lines" => agent.filter(|a| a.added + a.removed > 0).map(|a| format!("+{} −{}", a.added, a.removed)).unwrap_or_default(),
         "pane_asked" => agent.and_then(|a| a.asked.clone()).unwrap_or_default(),
+        // Its plan's progress (3/7) and how many sub-agents it has running.
+        "pane_todos" => agent.filter(|a| !a.todos.is_empty()).map(|a| format!("{}/{}", a.todos.iter().filter(|(_, s)| s == "completed").count(), a.todos.len())).unwrap_or_default(),
+        "pane_subagents" => agent.map(|a| a.subagents.len().to_string()).unwrap_or_else(|| "0".into()),
         "pane_did" => agent.and_then(|a| a.did.clone()).unwrap_or_default(),
         "fleet_tokens" => { let t: u64 = app.fleet.agents.values().map(|a| a.tokens).sum(); if t > 0 { crate::fleet::compact(t) } else { String::new() } }
         "pane_branch" => agent.map(|a| a.branch.clone()).unwrap_or_default(),

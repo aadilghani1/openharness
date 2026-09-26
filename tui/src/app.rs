@@ -796,9 +796,17 @@ impl App {
                     if ty == "turn_started" { if let Some(l) = fleet::first_line(text("userMessage")) { agent.asked = Some(l) } }
                     // The main agent's own steps (a sub-agent's carry the tool call that spawned it).
                     let own = payload.get("parentToolUseId").map(Value::is_null).unwrap_or(true);
+                    let input = payload.get("input").unwrap_or(&Value::Null);
+                    // Its plan, and the sub-agents it starts and that end.
+                    if ty == "tool_start" && own && text("tool") == "TodoWrite" { agent.todos = fleet::todos_of(input) }
+                    if ty == "tool_start" && own && matches!(text("tool"), "Task" | "Agent") {
+                        let what = input.get("description").and_then(Value::as_str).unwrap_or("an agent").to_string();
+                        agent.subagents.push((text("id").to_string(), what));
+                    }
+                    if ty == "tool_end" { let id = text("id").to_string(); agent.subagents.retain(|(s, _)| *s != id) }
                     match ty {
                         // What it does now; the text before a tool call is not its final message.
-                        "tool_start" if own => { agent.doing = Some(fleet::describe_tool(text("tool"), payload.get("input").unwrap_or(&Value::Null))); agent.said.clear() }
+                        "tool_start" if own => { agent.doing = Some(fleet::describe_tool(text("tool"), input)); agent.said.clear() }
                         "thinking_title" => { let t = text("title").trim(); if !t.is_empty() { agent.doing = Some(t.chars().take(160).collect()) } }
                         "text_delta" if own && agent.said.len() < 2000 => agent.said.push_str(text("content")),
                         _ => {}
@@ -814,6 +822,7 @@ impl App {
                 let aborted = payload.get("aborted").and_then(Value::as_bool).unwrap_or(false);
                 if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
                     agent.working = false;
+                    if !subagent { agent.subagents.clear() }
                     agent.active_at = fleet::now_ms();
                     agent.since = agent.active_at;
                     agent.doing = None;

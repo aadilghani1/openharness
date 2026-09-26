@@ -72,7 +72,8 @@ const STEPS = [
   { tool: 'Grep', input: { pattern: 'refreshToken' } },
   { tool: 'Bash', input: { command: 'npm test -- --watch=false', description: 'Run the unit tests' } },
   { tool: 'Edit', input: { file_path: 'src/app/session.ts' } },
-  { tool: 'TodoWrite', input: { todos: [{ content: 'Fix the race', activeForm: 'Fixing the race in the token refresh', status: 'in_progress' }] } },
+  { tool: 'TodoWrite', input: { todos: [{ content: 'Reproduce the flake', status: 'completed' }, { content: 'Fix the race', activeForm: 'Fixing the race in the token refresh', status: 'in_progress' }, { content: 'Add a regression test', status: 'pending' }] } },
+  { tool: 'Task', input: { description: 'Explore the auth module', subagent_type: 'Explore' } },
 ]
 const DID = ['Fixed the token-refresh race; all 42 tests pass.', 'Invoices now use Decimal; 3 tests added.', 'Pagination added to /orders, with tests.', 'Node 22 builds green; two deprecated calls replaced.']
 // What a demo pane shows: an agent mid-task, in colour.
