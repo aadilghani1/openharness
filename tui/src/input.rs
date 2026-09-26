@@ -26,8 +26,8 @@ pub fn handle(app: &mut App, event: CEvent) {
         CEvent::Mouse(mouse) => { if app.mouse { on_mouse(app, mouse) } }
         CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.fit_panes(); crate::commands::notify(app, "client-resized", None, None) }
         // The terminal in front: the dial follows its pane again (and hears it is in front).
-        CEvent::FocusGained => { app.terminal_focused = true; crate::dial::announce(app, false); app.announce_focus(); crate::commands::notify(app, "client-focus-in", None, None) }
-        CEvent::FocusLost => { app.terminal_focused = false; crate::dial::announce(app, false); crate::commands::notify(app, "client-focus-out", None, None) }
+        CEvent::FocusGained => { app.terminal_focused = true; app.welcome_back(); crate::dial::announce(app, false); app.announce_focus(); crate::commands::notify(app, "client-focus-in", None, None) }
+        CEvent::FocusLost => { app.terminal_focused = false; app.away = Some((Instant::now(), app.fleet_counts())); crate::dial::announce(app, false); crate::commands::notify(app, "client-focus-out", None, None) }
         _ => {}
     }
     app.sync_copy_modal();
@@ -1934,6 +1934,20 @@ fn submit_prompt(app: &mut App, p: Prompt) {
             let text = value.clone();
             app.spawn(async move { link.request("route_task", json!({ "text": text }), Duration::from_secs(60)).await }, move |app, reply| match reply {
                 Ok((_, reply)) => {
+                    // The router sure of one (confidence 0.85 or more, as the desktop's boss mode
+                    // takes it): sent to it at once, and said where.
+                    let sure = reply.get("confidence").and_then(serde_json::Value::as_f64).unwrap_or(0.0) >= 0.85;
+                    let pick = reply.get("agentId").and_then(serde_json::Value::as_str).zip(reply.get("machineId").and_then(serde_json::Value::as_str)).map(|(a, m)| (m.to_string(), a.to_string()));
+                    if let Some((machine, agent)) = pick.filter(|(m, a)| sure && app.fleet.agent(m, a).is_some()) {
+                        if let Some(link) = app.link(&machine) {
+                            link.send("message", json!({ "agentId": agent, "content": value }));
+                            let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
+                            let why = reply.get("reason").and_then(serde_json::Value::as_str).map(|r| format!(" — {r}")).unwrap_or_default();
+                            app.toast = None;
+                            app.say(format!("Sent to {name}{why}"), theme::ONLINE);
+                            return;
+                        }
+                    }
                     let rows = modal::route_rows(&reply);
                     if rows.is_empty() { app.say(reply.get("reason").and_then(|v| v.as_str()).unwrap_or("No harness fits that").to_string(), theme::MUTED); return }
                     let mut picker = Picker::new(format!("Send: {}", value.chars().take(48).collect::<String>()), "Filter…");

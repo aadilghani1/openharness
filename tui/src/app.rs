@@ -339,6 +339,8 @@ pub struct App {
     pub key_name: Option<String>,
     pub key_run: Option<String>,
     pub cfg_finished: bool,
+    /// When the terminal lost focus, and the fleet's counts then (needs you, failed, done).
+    pub away: Option<(Instant, (usize, usize, usize))>,
     /// select-pane -m: the marked pane (join-pane and swap-pane take it as their source).
     pub marked: Option<u64>,
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
@@ -468,6 +470,7 @@ impl App {
             key_name: None,
             key_run: None,
             cfg_finished: false,
+            away: None,
             marked: None,
             return_to: None,
             held_reply: None,
@@ -579,6 +582,30 @@ impl App {
         if let Some(err) = self.capture_err.as_mut() { err.push(text); return }
         self.add_message(format!("{} message: {text}", tty_name()));
         self.toast = Some((text, color, Instant::now()));
+    }
+
+    /// The fleet in counts: needs you, failed, done and unread.
+    pub fn fleet_counts(&self) -> (usize, usize, usize) {
+        use crate::fleet::State::*;
+        (self.fleet.count(NeedsInput), self.fleet.count(Failed), self.fleet.count(Done))
+    }
+
+    /// Back after a while away (the terminal's focus gone three minutes or more): what changed
+    /// meanwhile, and the key that goes through it — when something did.
+    pub fn welcome_back(&mut self) {
+        let Some((at, (needs0, failed0, done0))) = self.away.take() else { return };
+        let gone = at.elapsed();
+        if gone < Duration::from_secs(180) { return }
+        let (needs, failed, done) = self.fleet_counts();
+        let mut parts = Vec::new();
+        if done > done0 { parts.push(format!("✓{} finished", done - done0)) }
+        if needs > needs0 { parts.push(format!("?{} need you", needs - needs0)) }
+        if failed > failed0 { parts.push(format!("✗{} failed", failed - failed0)) }
+        if parts.is_empty() { return }
+        let mins = gone.as_secs() / 60;
+        let away = if mins >= 60 { format!("{}h{:02}m", mins / 60, mins % 60) } else { format!("{mins}m") };
+        let key = self.keymap.key_for_name("next-harness").unwrap_or_else(|| "C-b a".into());
+        self.say(format!("While you were away ({away}): {} — {key} goes through them", parts.join(" · ")), crate::theme::ATTENTION);
     }
 
     /// server_add_message: a line into the message log (C-b ~), at most message-limit of them.

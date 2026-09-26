@@ -135,6 +135,10 @@ pane counts as done and unread (`✓`) until you go to that pane.
   long it has been that way; the preview adds what it was last asked, its plan (its to-do list,
   `✓` done, `▸` doing), the sub-agents it has running, and what it has used (`1.2M tokens · +340
   −52 · 1 PR`).
+- **Back after a while** (the terminal's focus gone three minutes or more), hn says what changed:
+  `While you were away (12m): ✓5 finished · ?2 need you · ✗1 failed — C-b a goes through them`.
+- **`C-b g`** sends a task to the harness it fits: at once when the router is sure (as the desktop
+  does, 85% or more), else it lists the likely ones.
 - **`C-b a`** (`next-harness`, `-p` the other way) goes to the next harness that needs you, in that
   order, each once. It shows each in the same window, so a run through the queue doesn't pile up
   windows. Going there reads it, and the counts go down.
