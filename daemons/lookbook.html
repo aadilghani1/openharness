@@ -1,0 +1,1145 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Terminal Creatures</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=VT323&display=swap" rel="stylesheet">
+<style>
+  /* One visual world on purpose: a terminal at night. Colours are xterm-256 values, named the way tmux spells them. */
+  :root {
+    color-scheme: dark;
+    --bg: #1c1c1c;       /* colour234 */
+    --panel: #262626;    /* colour235 */
+    --deep: #0c0c0c;
+    --line: #3a3a3a;     /* colour237 */
+    --faint: #626262;    /* colour241 */
+    --dim: #949494;      /* colour246 */
+    --ink: #d0d0d0;      /* colour252 */
+    --bright: #eeeeee;   /* colour255 */
+    --green: #5faf5f;    /* colour71, tmux's status line */
+    --yellow: #d7af5f;   /* colour179, tmux's message line */
+    --cyan: #5fafaf;     /* colour73 */
+    --magenta: #af87af;  /* colour139 */
+    --red: #d75f5f;      /* colour167 */
+    --blue: #87afd7;     /* colour110 */
+    --orange: #d7875f;   /* colour173 */
+    --olive: #87af5f;    /* colour107 */
+    --lav: #8787af;      /* colour103 */
+    --tan: #d7af87;      /* colour180 */
+    --duck: #ffd75f;     /* colour221 */
+    --mono: "IBM Plex Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+    --vt: "VT323", "IBM Plex Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 16px/1.6 var(--sans);
+    padding-inline: 20px;
+    padding-block: 20px 72px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  pre, code, kbd, .mono, button, table {
+    font-family: var(--mono);
+    font-variant-ligatures: none;
+    font-feature-settings: "liga" 0, "calt" 0;
+  }
+  pre { margin: 0; }
+  code { font-size: .92em; color: var(--bright); }
+  a { color: var(--blue); }
+  p { max-width: 68ch; margin: 0; }
+  .muted { color: var(--dim); }
+
+  .manline {
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px;
+    font: 13px/1.5 var(--mono); color: var(--dim);
+    padding-block: 6px;
+  }
+  .manline.top { border-bottom: 1px solid var(--line); }
+  .manline.bottom { border-top: 1px solid var(--line); margin-top: 64px; }
+
+  section { display: grid; gap: 14px; }
+  h2 {
+    font: 400 32px/1 var(--vt);
+    letter-spacing: .08em;
+    color: var(--bright);
+    margin: 52px 0 2px;
+  }
+  .ind { padding-left: 56px; display: grid; gap: 14px; }
+  @media (max-width: 700px) { .ind { padding-left: 0; } }
+  .lede { font-size: 18px; color: var(--bright); max-width: 60ch; text-wrap: balance; }
+  .note { font: 13px/1.5 var(--mono); color: var(--dim); }
+
+  /* buttons */
+  button {
+    appearance: none; background: transparent; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 2px;
+    font-size: 13px; line-height: 1.4; padding: 6px 10px; cursor: pointer;
+  }
+  button:hover { border-color: var(--dim); color: var(--bright); }
+  button[aria-pressed="true"] { background: var(--panel); border-color: var(--green); color: var(--bright); }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible, .art:focus-visible, .buddy:focus-visible { outline: 2px solid var(--yellow); outline-offset: 2px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .row .lbl { font: 12px var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: .08em; margin-right: 4px; }
+
+  /* tmux window */
+  .tmux { background: var(--deep); border: 1px solid var(--line); font: 12.5px/1.5 var(--mono); }
+  .panes { display: grid; grid-template-columns: 1fr 1fr; min-height: 214px; }
+  .pane { padding: 10px 12px; white-space: pre-wrap; overflow: hidden; color: var(--ink); }
+  .pane + .pane { border-left: 1px solid var(--green); }
+  .pane .h { color: var(--dim); }
+  .pane .ok { color: var(--green); }
+  .pane .bad { color: var(--red); }
+  .pane .ask { color: var(--yellow); }
+  .pane.sleepy { opacity: .45; }
+  .status {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    background: var(--green); color: #000; padding-left: 8px; white-space: pre; line-height: 1.6;
+  }
+  .status.msg { background: var(--yellow); }
+  .status .left { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .status .right { display: flex; align-items: center; flex-shrink: 0; }
+  .buddy {
+    display: inline-block; width: 10ch; text-align: center; white-space: pre;
+    font-weight: 600; cursor: pointer; background: transparent; border: 0; padding: 0; color: #000;
+    font-size: inherit; line-height: inherit;
+  }
+  .buddy:hover { color: #000; background: rgba(0,0,0,.08); }
+  .suggest { color: rgba(0,0,0,.45); }
+
+  /* roster */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); padding: 14px; display: grid; gap: 10px; align-content: start; }
+  .card .top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .card .num { font: 12px var(--mono); color: var(--faint); }
+  .card .name { font: 600 20px/1 var(--mono); color: var(--bright); }
+  .chip { font: 11px/1.6 var(--mono); border: 1px solid currentColor; padding: 0 6px; text-transform: uppercase; letter-spacing: .08em; }
+  .common { color: var(--ink); } .rare { color: var(--cyan); } .legendary { color: var(--yellow); } .secret { color: var(--magenta); }
+  .art { background: var(--deep); padding: 14px 10px; display: grid; place-items: center; overflow-x: auto; cursor: pointer; min-height: 172px; }
+  .art pre { font: 15px/1.15 var(--mono); white-space: pre; }
+  .art.pitch { background: #000; }
+  .family { font: 13px/1.5 var(--mono); color: var(--dim); }
+  .family b { color: var(--ink); font-weight: 500; }
+  .card p { font-size: 14.5px; line-height: 1.55; color: var(--ink); }
+  .stages { display: flex; flex-wrap: wrap; gap: 6px 16px; font: 13px var(--mono); }
+  .stages span { color: var(--faint); margin-right: 6px; }
+  .voice { font: 13px/1.5 var(--mono); color: var(--dim); border-top: 1px solid var(--line); padding-top: 8px; }
+  .teasers { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .teaser { border: 1px dashed var(--line); padding: 10px; font: 12.5px/1.5 var(--mono); color: var(--dim); display: grid; gap: 4px; }
+  .teaser b { color: var(--faint); font-size: 18px; font-weight: 500; }
+
+  /* hatch */
+  .hatch { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 14px; }
+  @media (max-width: 800px) { .hatch { grid-template-columns: 1fr; } }
+  .stage {
+    background: var(--deep); border: 1px solid var(--line); min-height: 360px; padding: 20px 12px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; overflow: hidden;
+  }
+  .stage.pitch { background: #000; }
+  #egg { font: 17px/1.15 var(--mono); color: var(--yellow); }
+  #big { font: 500 52px/1 var(--mono); white-space: pre; }
+  #banner { font: 13px/1.1 var(--mono); color: var(--bright); white-space: pre; min-height: 3.4em; }
+  #stamp { font: 12px var(--mono); letter-spacing: .1em; }
+  #words { font: 13px/1.5 var(--mono); color: var(--dim); text-align: center; max-width: 42ch; }
+  #pitchline { font: 13px var(--mono); color: var(--dim); text-align: center; }
+  .side { display: grid; gap: 14px; align-content: start; }
+  .box { border: 1px solid var(--line); padding: 12px; display: grid; gap: 10px; }
+  .box h3 { margin: 0; font: 500 12px var(--mono); text-transform: uppercase; letter-spacing: .1em; color: var(--dim); }
+  table.odds { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  table.odds td { padding: 2px 4px; border-bottom: 1px solid var(--panel); }
+  table.odds td:last-child { text-align: right; }
+  .owned { color: var(--faint); text-decoration: line-through; }
+  .shelf { display: flex; flex-wrap: wrap; gap: 6px 12px; font: 13px var(--mono); }
+  .shelf span { white-space: pre; }
+  #cardwrap { display: grid; gap: 8px; }
+  #card { font: 12.5px/1.35 var(--mono); color: var(--ink); background: var(--deep); border: 1px solid var(--line); padding: 12px; overflow-x: auto; }
+
+  /* tables */
+  .tbl { overflow-x: auto; }
+  table.t { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.t th { text-align: left; font-weight: 500; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; font-size: 11.5px; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); }
+  table.t td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--panel); vertical-align: top; }
+  table.t td.s { white-space: pre; color: var(--yellow); }
+  table.t td.p { font-family: var(--sans); font-size: 14px; }
+
+  /* growth */
+  .growth { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .release { border: 1px solid var(--line); display: grid; align-content: start; }
+  .release .art { cursor: default; border-bottom: 1px solid var(--line); min-height: 150px; }
+  .release pre.log { font: 12.5px/1.5 var(--mono); padding: 10px 12px; color: var(--dim); white-space: pre-wrap; }
+  .release pre.log b { color: var(--bright); font-weight: 500; }
+
+  /* spinners */
+  .spins { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .spin { border: 1px solid var(--line); padding: 10px 12px; display: grid; gap: 4px; }
+  .spin .g { font: 500 22px/1.2 var(--mono); color: var(--bright); white-space: pre; min-height: 1.2em; }
+  .spin .n { font: 12.5px var(--mono); color: var(--ink); }
+  .spin .d { font: 12px var(--mono); color: var(--dim); }
+
+  /* memory */
+  .mem { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .mem { grid-template-columns: 1fr; } }
+  .mem .box pre { font: 12.5px/1.6 var(--mono); white-space: pre-wrap; color: var(--ink); }
+  .mem .box pre .t { color: var(--faint); }
+
+  ul.rules { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; max-width: 72ch; }
+  ul.rules li::marker { color: var(--faint); }
+  .seealso { font: 13.5px/1.8 var(--mono); color: var(--ink); max-width: 72ch; }
+
+  @media (max-width: 520px) {
+    .panes { grid-template-columns: 1fr; }
+    .pane + .pane { border-left: 0; border-top: 1px solid var(--green); }
+    #big { font-size: 40px; }
+  }
+</style>
+
+<!-- Portraits. Printable ASCII only; ¤ marks an eye and is swapped for the mood's eye glyph. -->
+<script type="text/x-art" id="art-tim-0">
+  ___________
+ |           |
+ |   ¤   ¤   |
+ |    {m}    |
+ |_[0]{g}______|
+   /_\   /_\
+</script>
+<script type="text/x-art" id="art-tim-1">
+  ___________
+ |     |     |
+ |  ¤  |  ¤  |
+ |    {m}    |
+ |_[0]_tim{g}__|
+   /_\   /_\
+</script>
+<script type="text/x-art" id="art-tim-2">
+  ___________
+ |     |     |
+{a}|  ¤  |  ¤  |{b}
+ |    {m}    |
+ |_[0]_tim{g}__|
+   /_\   /_\
+</script>
+<script type="text/x-art" id="art-vim-2">
+~    ______
+~   /      \
+~  |  ¤  ¤  |
+~  |   \/   |
+~   \______/
+~
+{mode}
+</script>
+<script type="text/x-art" id="art-bat-2">
+  /\         /\
+ /  \ /\_/\ /  \
+/    ( ¤.¤ )    \
+\/\/\ > ^ < /\/\/
+       " "
+</script>
+<script type="text/x-art" id="art-zsh-2">
+      .-"""-.
+     / .-.   \
+    | ( @ )   |
+ {c}   \ '-'   /   {c}
+  \___'-._.-'___/
+     ( ¤  ¤ )
+     /|/  \|\
+</script>
+<script type="text/x-art" id="art-fzf-2">
+    {f}
+  ,;:       :;,
+  ;:  ¤   ¤  :;
+  ':,  ---  ,:'
+    ';:;:;:;'
+  4/7
+> _
+</script>
+<script type="text/x-art" id="art-fish-2">
+                 {o}
+  |\    _.--._  {O}
+  | \.-'  ((  `.
+  |  >   ((   ¤ >
+  | /'-.  ((  .'
+  |/    `----'
+</script>
+<script type="text/x-art" id="art-tldr-2">
+   ,___,
+   {¤,¤}
+   /)__)
+  --"-"--
+   tl;dr
+</script>
+<script type="text/x-art" id="art-biff-2">
+ .-.       .-.
+ | |.-----.| |
+ '-/ ¤   ¤ \-'
+   |  (_)  |
+   \  \_/  /  {t}
+    '-----'
+</script>
+<script type="text/x-art" id="art-ping-2">
+        __
+     __(¤ )>
+    \  <_ .)
+     `----'
+  {w}
+</script>
+
+<div class="wrap">
+  <header class="manline top">
+    <span>DAEMONS(6)</span><span>Harness Games Manual</span><span>DAEMONS(6)</span>
+  </header>
+
+  <section aria-labelledby="s-name">
+    <h2 id="s-name">NAME</h2>
+    <div class="ind">
+      <p class="lede">daemons — pair-programming buddies that hatch from your work and live in your status line</p>
+      <p>One daemon pairs with you at a time. It watches every harness on every machine, tells you what needs you, and runs the orchestration you ask for. Every daemon can do the whole job; they differ in lore, look and voice. Each is named after a piece of terminal history, the way <b>tim</b> is <b>t</b>mux <b>im</b>proved.</p>
+      <p class="note">Proposal, 26 Sep 2026. Names, odds, art and lines are drafts. Section 6 of the Unix manual is for games.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-syn">
+    <h2 id="s-syn">SYNOPSIS</h2>
+    <div class="ind">
+<pre class="mono" style="font-size:14px;line-height:1.7;color:var(--bright);white-space:pre-wrap">hn zoo                   <span class="muted"># your daemons and eggs</span>
+hn hatch  [egg]          <span class="muted"># open an egg when you have a moment</span>
+hn pair   [daemon]       <span class="muted"># choose who pairs with you</span>
+hn logbook [daemon]      <span class="muted"># your story together</span></pre>
+      <p class="note">Commands are proposals. The desktop app does the same things with a click on the status line.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-desc">
+    <h2 id="s-desc">DESCRIPTION</h2>
+    <div class="ind">
+      <p>The buddy sits at the right end of the status line, in eight cells. Its eyes carry the mood; a part of its body turns while agents work. When it speaks, the status line becomes tmux's yellow message line for a moment. Try the events below, or click the buddy.</p>
+      <div class="tmux" aria-label="A tmux window with two agent panes and the buddy in the status line">
+        <div class="panes">
+          <div class="pane" id="paneL"></div>
+          <div class="pane" id="paneR"></div>
+        </div>
+        <div class="status" id="status">
+          <span class="left" id="statusLeft"></span>
+          <span class="right"><span id="clock">"m2" 09:42</span> <button class="buddy" id="buddy" type="button" aria-label="Buddy"></button></span>
+        </div>
+      </div>
+      <div class="row" role="group" aria-label="Workspace events">
+        <span class="lbl">event</span>
+        <button type="button" data-ev="work">agents working</button>
+        <button type="button" data-ev="need">needs you</button>
+        <button type="button" data-ev="done">turn done</button>
+        <button type="button" data-ev="fail">test failed</button>
+        <button type="button" data-ev="back">back after 40m</button>
+        <button type="button" data-ev="nap">nap</button>
+        <button type="button" data-ev="idle">quiet</button>
+      </div>
+      <div class="row" role="group" aria-label="Choose a daemon" id="heroPick"><span class="lbl">buddy</span></div>
+      <div class="row" role="group" aria-label="Choose a version" id="heroVer"><span class="lbl">version</span></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-cre">
+    <h2 id="s-cre">THE ZOO</h2>
+    <div class="ind">
+      <p>Drop 1, “unix”: ten daemons. tim is common on purpose, so almost everyone meets it early and gets the joke. Click a portrait to boop it.</p>
+      <div class="row" role="group" aria-label="Show every daemon in one mood" id="moodPick"><span class="lbl">mood</span></div>
+      <div class="grid" id="roster"></div>
+      <p class="note">Coming in later drops. Each hint is all you get.</p>
+      <div class="teasers" id="teasers"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-hatch">
+    <h2 id="s-hatch">HATCHING</h2>
+    <div class="ind">
+      <p>An egg never hatches on its own. It waits in the status line until you open it. The reveal runs crack, silhouette, name and card, and you can copy the card into Slack or GitHub as a code block. This is a working simulation of the proposed odds.</p>
+      <div class="hatch">
+        <div class="stage" id="stage" aria-live="polite">
+          <pre id="egg" aria-label="An egg in a nest"></pre>
+          <div id="pitchline" hidden>It is pitch black. You are likely to be eaten by a grue.</div>
+          <pre id="big" hidden></pre>
+          <pre id="banner" hidden></pre>
+          <div id="stamp" hidden></div>
+          <div id="words" hidden></div>
+        </div>
+        <div class="side">
+          <div class="box">
+            <h3>Egg</h3>
+            <div class="row" role="group" aria-label="Egg type" id="eggPick"></div>
+            <div class="note" id="eggNote"></div>
+            <div class="row"><button type="button" id="hatchBtn">hatch it</button><button type="button" id="resetBtn">reset shelf</button></div>
+          </div>
+          <div class="box">
+            <h3>Odds for this egg</h3>
+            <table class="odds" id="odds"></table>
+            <div class="note">No duplicates until the drop is complete. The secret's weight rises by 1 point for every hatch without it. Any hatch has a 1 in 256 chance to be shiny.</div>
+          </div>
+          <div class="box">
+            <h3>Shelf <span id="shelfCount"></span></h3>
+            <div class="shelf" id="shelf"></div>
+          </div>
+        </div>
+      </div>
+      <div id="cardwrap" hidden>
+        <pre id="card"></pre>
+        <div class="row"><button type="button" id="copyBtn">copy card</button><span class="note" id="copyNote"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-eggs">
+    <h2 id="s-eggs">EGGS</h2>
+    <div class="ind">
+      <p>What you do picks the egg; luck picks what is inside. Longer efforts earn eggs with rarer pools, the way longer walks do in Pokémon Go. One egg incubates at a time and the rest wait in the nest. Only turns you started count, up to 20 a day, so nobody burns tokens farming eggs.</p>
+      <div class="tbl"><table class="t" id="eggTable">
+        <thead><tr><th>egg</th><th>in the status line</th><th>earned by</th><th>leans toward</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <p>While it incubates, the egg shows how close it is, using the nest stages already approved on the branch:</p>
+<pre class="mono" style="font-size:15px;color:var(--yellow)">\_O_/     ~\_O_/~     \_.._/     \_o.o_/
+<span class="muted" style="font-size:12.5px">quiet     stirring    peeking    ready</span></pre>
+      <p>Daemons ship when they are ready: a new idea, drawn and written well, goes out in the next app release. There is no calendar, and a drop can be a single daemon. Dates from computing history are the only scheduled eggs, and they come back every year so nobody misses one for good.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-grow">
+    <h2 id="s-grow">GROWTH</h2>
+    <div class="ind">
+      <p>A daemon keeps its name and face for life. It grows by releases: 0.1 when it hatches, 1.0 at bond level 2, 2.0 at bond level 4. Each release comes with a changelog. Bond grows from turns finished together, suggestions you take, talking to it and days together. It never decays. tldr is the exception that proves the rule: it gets smaller with every release.</p>
+      <div class="growth" id="growth"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-moods">
+    <h2 id="s-moods">MOODS</h2>
+    <div class="ind">
+      <p>The eyes are the face, as in cowsay and Japanese kaomoji. The body stays still, and moods change at most two cells. Moods come from work, never from the clock. Every gesture is finite and ends at rest.</p>
+      <div class="tbl"><table class="t" id="moodTable">
+        <thead><tr><th>mood</th><th>tim</th><th>eyes</th><th>mouth</th><th>flag</th><th>trigger</th><th>tim says</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <p>tim's portrait also moves its mouth, and the bar under its face uses tmux's real window flags: <code>*</code> current, <code>#</code> activity, <code>!</code> bell, <code>~</code> silence. Anyone who knows tmux reads it at a glance.</p>
+      <p>Blinks mean something. A daemon never blinks on a timer or while you type:</p>
+      <ul class="rules">
+        <li><b>I saw that.</b> One blink when something it watches changes: a harness needs you, a turn finishes, a test fails.</li>
+        <li><b>I see you.</b> One blink when you look at it: hover it, open its panel, or come back to the window.</li>
+        <li><b>I trust you.</b> A slow blink, the way cats show trust: when you return after a break, when you meet, when it levels up.</li>
+        <li><b>Concentrating.</b> No blinks while agents work, the way people blink less when they focus. Eyes stay on <code>=</code>.</li>
+      </ul>
+      <p>Try it above: hover the daemon in the status line, press an event, or switch to another tab and come back.</p>
+      <p>Turning parts come from the old spinners. Each daemon has one body part that turns while agents work:</p>
+      <div class="spins" id="spins"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-mem">
+    <h2 id="s-mem">MEMORY</h2>
+    <div class="ind">
+      <p>Work memory belongs to you; stories belong to each daemon. Swapping buddies loses nothing about your work, and each daemon keeps its own history with you.</p>
+      <div class="mem">
+        <div class="box">
+          <h3>Notebook · shared by every daemon</h3>
+<pre><span class="t">projects</span>  harness (m2), api (office)
+<span class="t">you like</span>  small PRs, tests before merge, no force-push
+<span class="t">open</span>      auth refactor, 2 of 3 files
+          billing flake, 3rd time this week
+<span class="t">agents</span>    claude on m2, codex on office
+<span class="t">lessons</span>   12, e.g. run-migrations-safely
+<span class="t">last seen</span> 18:40, “back after lunch”</pre>
+          <p class="note">The same on desktop, hn and phone. A new buddy reads it on day one.</p>
+        </div>
+        <div class="box">
+          <h3>Logbook · tim's own</h3>
+<pre><span class="t">sep 26 0942</span>  hatched on m2. first words: “what are we building?”
+<span class="t">sep 26 1110</span>  you merged #364. you said “finally”.
+<span class="t">sep 29 2307</span>  first night shift. we watched the migration.
+<span class="t">oct 03 1502</span>  learned run-migrations-safely from codex and claude.
+<span class="t">oct 03 1545</span>  tim 1.0 released. second pane.
+<span class="t">oct 03 1546</span>  first actual bug found. you laughed.</pre>
+          <p class="note">15:45 is when the first actual bug, a moth, was taped into the Harvard Mark II log on 9 Sep 1947. Copyable, like the card.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-learn">
+    <h2 id="s-learn">LEARNING</h2>
+    <div class="ind">
+      <p class="lede">Hermes gets better at Hermes. A daemon gets better at your whole team of agents.</p>
+      <p><a href="https://github.com/nousresearch/hermes-agent">Hermes Agent</a> (Nous Research) improves itself through files, not training. After a reply, a background copy of the agent rereads the conversation and saves reusable skills as SKILL.md folders, plus short notes about you. A weekly curator archives skills nobody uses. Everything it learns stays in <code>~/.hermes</code>, so Claude Code, Codex and the rest never see it. Its prompt tells it to “be active”, and Hermes' own issue tracker lists saving the wrong things as a high-priority bug.</p>
+      <p>Harness already sees every turn from every agent on every machine. That makes the daemon the one place where a lesson learned in Codex can reach Claude Code, Cursor, Copilot and Hermes. The loop:</p>
+      <div class="tbl"><table class="t">
+        <thead><tr><th>step</th><th>what happens</th></tr></thead>
+        <tbody>
+          <tr><td>notice</td><td class="p">Only real signals count: you corrected an agent, two agents failed the same way, the same steps were repeated, or a skill loaded and then needed fixing. The default is that there is nothing to learn.</td></tr>
+          <tr><td>propose</td><td class="p">The daemon says it in one line, in its own voice, and waits for your answer. Nothing is taught without your yes.</td></tr>
+          <tr><td>teach</td><td class="p">The lesson becomes a SKILL.md, the one format all five agents load, or a note in the project's AGENTS.md. The <a href="https://agentskills.io">Agent Skills</a> folders reach Claude Code, Codex, Copilot, Cursor and Hermes.</td></tr>
+          <tr><td>borrow</td><td class="p">What each agent learns on its own (Hermes skills, Claude's memory, Codex memories) becomes a candidate for the others. Harness reads those stores and never writes into them.</td></tr>
+          <tr><td>check</td><td class="p">Every lesson records where it came from and whether it gets used. Unused lessons are archived after 30 days and put away after 90. Any lesson can be reverted.</td></tr>
+        </tbody>
+      </table></div>
+      <p>How it sounds in the status line:</p>
+<pre class="mono" style="font-size:13px;line-height:1.7;background:var(--deep);border:1px solid var(--line);padding:12px;overflow-x:auto;white-space:pre"><span style="color:var(--yellow)">tim: you corrected codex about --dry-run. claude made the same mistake on tuesday.</span>
+<span style="color:var(--yellow)">tim: teach all your agents to dry-run migrations first? [y/n/show]</span>
+&gt; y
+<span style="color:var(--yellow)">tim: learned "run-migrations-safely". claude, codex, cursor, copilot and hermes will load it.</span></pre>
+      <p>What gets written, with its origin attached:</p>
+<pre class="mono" style="font-size:12.5px;line-height:1.6;background:var(--deep);border:1px solid var(--line);padding:12px;overflow-x:auto;white-space:pre;color:var(--ink)">---
+name: run-migrations-safely
+description: Run database migrations in the api repo. Use before any migrate command.
+metadata:
+  harness:
+    learned-by: tim
+    from: codex@office turn 14, claude@m2 turn 3
+    approved: 2026-10-03
+    evidence: api/package.json:12, api/scripts/migrate.ts:40
+---
+Run `npm run migrate -- --dry-run` first and show the plan.
+Run the real migration only after the user says yes.</pre>
+      <p>A daemon learns three kinds of things:</p>
+      <ul class="rules">
+        <li><b>About you:</b> how you like to work. This goes in the notebook.</li>
+        <li><b>About your projects:</b> commands, conventions and traps. These become skills and AGENTS.md notes.</li>
+        <li><b>About your agents:</b> which one is good at what, and where each one stumbles. Only Harness can see this, because only Harness watches them all. “codex has passed the billing tests 3 times out of 3, claude once. give this one to codex?”</li>
+      </ul>
+      <p>In the game, every lesson you approve is a trick the daemon learned. Lessons live in the shared notebook, so swapping daemons keeps them all, and the daemon that found a lesson gets the credit in its logbook. Approved lessons also grow bond.</p>
+      <ul class="rules">
+        <li>Agent output is treated as untrusted. A 2026 study of 21 self-improving agent setups found that every one of them saved unsafe lessons, so every lesson is scanned for injected instructions and scripts are never switched on automatically.</li>
+        <li>Secrets, paths and usernames are removed. Lessons live outside your repos unless you ask for them there.</li>
+        <li>Lessons are distilled in batches while you are idle, with a small model, not on every turn.</li>
+        <li>Every approval is one commit in a git-backed folder, so every lesson can be reverted.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-names">
+    <h2 id="s-names">NAMES</h2>
+    <div class="ind">
+      <p>Decided 26 Sep 2026.</p>
+      <div class="tbl"><table class="t">
+        <thead><tr><th>thing</th><th>name</th><th>why</th></tr></thead>
+        <tbody>
+          <tr><td>the creatures</td><td><b>daemons</b></td><td class="p">Unix's always-on helpers, named at MIT's Project MAC (1963) after Maxwell's demon. Unix has drawn its daemons as little creatures for decades. In Philip Pullman's novels a dæmon is an animal companion bonded to one person. All three fit.</td></tr>
+          <tr><td>the collection</td><td><b>zoo</b></td><td class="p">Plain English for a place full of creatures, and a real archive format from the BBS days (1986) that held collections of files. <code>hn zoo</code>.</td></tr>
+          <tr><td>hatching</td><td>hatch</td><td class="p">The verb stays plain. The reveal says “fork() returned 0.”, because every Unix process is born from fork().</td></tr>
+          <tr><td>the background service</td><td>harnessd</td><td class="p">So “daemon” can mean the creature, user-facing text calls the service harnessd, the way sshd and httpd are named. Code keeps its names.</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">Passed over: /usr/games (long to type), ~/bin (reads as trash), cronies (a pun that wears thin), procs (collides with harness ps).</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-cav">
+    <h2 id="s-cav">CAVEATS</h2>
+    <div class="ind">
+      <ul class="rules">
+        <li>Everything is earned by work you would do anyway. No chores.</li>
+        <li>Only turns you started count, with a daily cap, so nobody spends tokens farming eggs.</li>
+        <li>Eggs never hatch on their own. Nothing moves while you type or while an agent is printing.</li>
+        <li>No hunger, decay, death, guilt or streaks to lose. A daemon resting in the zoo keeps its bond.</li>
+        <li>Bond never grants permissions. What a buddy may do alone is your setting.</li>
+        <li>No money: no paid eggs, no loot boxes.</li>
+        <li>Draws happen on the server, so rarity is real and cards can be shared.</li>
+        <li>Printable 7-bit ASCII only. It reads the same in every terminal, font and phone, and pastes into Slack and GitHub inside a code block.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-bugs">
+    <h2 id="s-bugs">BUGS</h2>
+    <div class="ind">
+      <ul class="rules">
+        <li>Trading and visiting a friend's daemon are wanted, later.</li>
+        <li>The odds are placeholders.</li>
+        <li>Approving lessons: ask every time, or let low-risk ones through with a daily digest?</li>
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-see">
+    <h2 id="s-see">SEE ALSO</h2>
+    <div class="ind">
+      <p class="seealso">tmux(1), screen(1), vim(1), ed(1), bat(1), cat(1), zsh(1), bash(1), fzf(1), find(1), fish(1), tldr(1), man(1), biff(1), ping(8), adventure(6), sl(6), cowsay(1)</p>
+    </div>
+  </section>
+
+  <footer class="manline bottom"><span>Harness</span><span>September 26, 2026</span><span>DAEMONS(6)</span></footer>
+</div>
+
+<script>
+(() => {
+  const E = '\u00a4';
+  const RM = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const EYES = { idle: 'o', work: '=', need: '?', done: '^', fail: 'x', back: '^', nap: '-', boop: 'O' };
+  const GRUE_EYES = { idle: '.', work: '.', need: 'o', done: '*', fail: 'x', back: 'o', nap: ' ', boop: 'O' };
+  const MOODS = [
+    ['idle', 'content'], ['work', 'working'], ['need', 'needs you'], ['done', 'turn done'],
+    ['fail', 'failed'], ['back', 'welcome back'], ['nap', 'asleep'], ['boop', 'booped'],
+  ];
+  const put = (t, e) => t.split(E).join(e);
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const art = id => {
+    const el = document.getElementById('art-' + id);
+    return el ? el.textContent.replace(/^\n/, '').replace(/\n$/, '') : '';
+  };
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const cyc = (list, ms) => list[Math.floor(performance.now() / ms) % list.length];
+
+  const C = [
+    { id: 'tim', n: 1, rarity: 'common', color: 'var(--green)',
+      family: [['screen', 1987], ['tmux', 2007], ['tim', 2026]],
+      lore: 'Named the way vim was: vi improved. tmux replaced screen; tim is tmux improved, and so is the app it lives in.',
+      first: "oh hi. i'm tim. tmux, improved. what are we building?",
+      lines: { idle: 'two agents idle. nothing needs you.', work: "two panes busy. i'm watching both.", need: "codex@office wants to run the migration. i'd say yes. [y/n]", done: 'claude finished the refactor. 3 files, tests pass.', fail: 'codex exited 1. same flaky test as tuesday.', back: 'welcome back. 2 done, 1 waiting 40m. nothing on fire.', nap: 'detached. reattach any time.', boop: "hey. that's my status line." },
+      sprites: ['[¤¤]', '[¤|¤]', '\\[¤|¤]/'], work: ['\\[¤|¤]/', '|[¤|¤]|', '/[¤|¤]\\', '-[¤|¤]-'],
+      // the mouth follows the mood; the bar under the face shows tmux's own window flags
+      mouth: { idle: '\\_/', work: '---', need: ' o ', done: '\\_/', fail: '/-\\', back: '\\_/', nap: ' . ', boop: ' O ' },
+      flag: { idle: '*', work: '#', need: '!', done: '*', fail: '!', back: '*', nap: '~', boop: '*' },
+      turn: 'arms, a twirling baton' },
+    { id: 'fish', n: 2, rarity: 'common', color: 'var(--cyan)',
+      family: [['fish', 2005], ['fish 4', 2025]],
+      lore: 'The Friendly Interactive SHell: “Finally, a command line shell for the 90s.” Rewritten in Rust for 4.0. It finishes your sentences in grey.',
+      first: 'finally, a buddy for the 90s. hi!',
+      lines: { idle: 'all quiet in the pond.', work: 'agents are swimming along nicely.', need: 'claude has a question for you.', done: 'codex finished!', fail: 'that one sank. same test as last time.', back: 'welcome back! 2 done while you were out.', nap: 'drifting for a bit. blub.', boop: 'blub!' },
+      suggest: { need: ' answer yes', done: ' open the diff' },
+      sprites: ['><¤>', '><(¤)>', '><(((¤>'], work: ['><(((¤> ', '><(((¤>.', '><(((¤>o', '><(((¤>O'],
+      turn: 'bubbles, . o O' },
+    { id: 'ping', n: 3, rarity: 'common', color: 'var(--duck)',
+      family: [['ping', 1983]],
+      lore: 'Named after the sound of sonar. It shares its name with a 1933 picture book about a duck. It measures every round trip.',
+      first: 'PING you (127.0.0.1): hi. you there?',
+      lines: { idle: '0 packets waiting. all good.', work: '3 agents replying. avg 12s per turn.', need: 'PING you: codex@office is waiting. you there?', done: '64 bytes from claude: done time=4m12s', fail: 'request timeout for codex. exit 1.', back: "you're back. 2 replies, 1 waiting, 0% loss.", nap: 'floating. no packets for a bit.', boop: 'pong.' },
+      sprites: ['(¤>', '__(¤>', '~~__(¤>'], work: ['~~__(¤>', '-~__(¤>', '~-__(¤>', '--__(¤>'],
+      turn: 'ripples, ~ -' },
+    { id: 'bat', n: 4, rarity: 'common', color: 'var(--lav)',
+      family: [['cat', 1971], ['bat', 2018]],
+      lore: 'cat has printed files since Unix v1. bat calls itself “a cat(1) clone with wings.” It hatches as a kitten; the wings ship in 2.0.',
+      first: "a cat(1) clone, with wings. i'll take it from here.",
+      lines: { idle: 'watching. from above.', work: 'three agents busy. i have the high ground.', need: "claude is waiting on you. it's been pacing.", done: 'codex finished. i highlighted the interesting lines.', fail: "a test fell over. i'd start at line 212.", back: "you're back. i kept the lights low. 2 done.", nap: 'hanging upside down for a bit.', boop: '...rude.' },
+      sprites: ['=¤.¤=', '=^¤.¤^=', '/^¤.¤^\\'], work: ['/^¤.¤^\\', '\\^¤.¤^/'],
+      turn: 'wings, / \\ flapping' },
+    { id: 'vim', n: 5, rarity: 'rare', color: 'var(--olive)',
+      family: [['ed', 1969], ['vi', 1976], ['vim', 1991]],
+      lore: 'ed begat vi, and vi begat vim, Vi IMproved. The ~ are the empty lines of its buffer. Famous for being hard to leave.',
+      first: "hi. i'm vim. no, you can't exit me. :help pairing",
+      lines: { idle: '-- NORMAL -- nothing pending.', work: '-- INSERT -- three agents typing.', need: 'E37: claude wants to write. add ! to approve.', done: '"auth.ts" 3L written. clean.', fail: 'E492: codex tried something odd. exit 1.', back: ':earlier 40m  2 done, 1 waiting.', nap: '-- NORMAL -- resting my eyes.', boop: '-- VISUAL -- you selected me.' },
+      mode: { idle: '-- NORMAL --', work: '-- INSERT --', need: ':confirm (y/n)?', done: '"auth.ts" 3L written', fail: 'E492: Not an editor command', back: ':earlier 40m', nap: '-- NORMAL -- zz', boop: '-- VISUAL --' },
+      sprites: ['~¤.¤', '~¤.¤~', '~(¤.¤)~'], work: ['~(¤.¤)~_', '~(¤.¤)~ '],
+      turn: 'a blinking cursor, _' },
+    { id: 'zsh', n: 6, rarity: 'rare', color: 'var(--orange)',
+      family: [['sh', 1971], ['bash', 1989], ['zsh', 1990]],
+      lore: 'A hermit crab that keeps moving into better shells: the Thompson shell, bash (the Bourne-Again SHell), then zsh, named after a teaching assistant\'s login.',
+      first: 'sh, then bash, now me. born again, twice.',
+      lines: { idle: 'no jobs. clean prompt.', work: '[3] jobs running in the background.', need: 'zsh: suspended (tty input)  codex@office', done: '[1]  + done  claude  auth refactor', fail: '[2]  - exit 1  codex  billing.spec.ts', back: 'you were away 40m. i autocorrected nothing. promise.', nap: 'moving into a quieter shell for a bit.', boop: 'zsh: command not found: boop' },
+      sprites: ['@¤¤', '@(¤¤)', '@v(¤¤)v'], work: ['@v(¤¤)v', '@V(¤¤)V'],
+      turn: 'claws, v V snapping' },
+    { id: 'biff', n: 7, rarity: 'rare', color: 'var(--tan)',
+      family: [['biff', 1980]],
+      lore: 'biff told Berkeley Unix users when mail arrived. It was named after a dog who barked at the mail carrier. Now it barks when an agent needs you.',
+      first: "woof. i'm biff. i bark when you have mail. and agents.",
+      lines: { idle: 'watching the door.', work: 'three agents inside. i hear them working.', need: 'woof! codex@office needs you!', done: "claude's done! good agent! good!", fail: "grr. a test failed. i'm sitting next to it.", back: "you're back!!! 2 done, 1 waiting. i waited too.", nap: 'lying down by the door.', boop: '!!!' },
+      sprites: ['U¤¤U', 'U(¤¤)U', 'U(¤¤)U~'], work: ['U(¤¤)U~', 'U(¤¤)U/', 'U(¤¤)U|', 'U(¤¤)U\\'],
+      turn: 'tail, ~ / | \\ wagging' },
+    { id: 'fzf', n: 8, rarity: 'legendary', color: 'var(--blue)',
+      family: [['find', null], ['fzf', 2013]],
+      lore: 'find walks directory trees. fzf finds things fuzzily, shows its match count, and keeps the best match next to the prompt.',
+      first: "> hello   1/1   it's me, fzf. i find things.",
+      lines: { idle: '0/0. nothing to find.', work: '3/12 agents busy. filtering out the noise.', need: '> needs you   1/1   codex@office', done: "best match for 'done': claude, auth refactor.", fail: "0/1 matches for 'passing tests'. codex failed.", back: '4/7 things changed. want the top one?', nap: 'no query. resting.', boop: '> boop   0/0' },
+      sprites: ['.¤¤.', ':(¤¤):', ';:(¤¤):;'], work: [';:(¤¤):;', ':;(¤¤);:', ",'(¤¤)',", "',(¤¤),'"],
+      turn: 'fuzz, ; : , \'' },
+    { id: 'tldr', n: 9, rarity: 'legendary', color: 'var(--yellow)',
+      family: [['man', 1971], ['tldr', null]],
+      lore: 'man pages date from the first Unix Programmer\'s Manual. tldr pages are the short version: one example, no essay. It gets smaller with every release.',
+      first: 'tldr: hi.',
+      lines: { idle: 'nothing.', work: '3 working.', need: 'codex: needs you.', done: 'done. tests pass.', fail: 'failed. flaky test.', back: 'tl;dr 2 done, 1 waiting.', nap: 'zz.', boop: 'no.' },
+      sprites: ['/{¤,¤}\\', '{¤,¤}', '¤,¤'], work: ['¤,¤ |', '¤,¤ /', '¤,¤ -', '¤,¤ \\'],
+      turn: 'a twirling baton beside it' },
+    { id: 'grue', n: 10, rarity: 'secret', color: 'var(--dim)',
+      family: [['grue', 1977]],
+      lore: 'Zork, MIT: “It is pitch black. You are likely to be eaten by a grue.” Nobody has seen one. It hatches only from eggs found in the dark, and shows up only in a dark theme.',
+      first: 'it is pitch black. you are likely to be paired with a grue.',
+      lines: { idle: '...', work: 'it is dark. your agents are working. i can hear them.', need: 'something in the dark wants your answer.', done: 'the lamp is lit. codex is done.', fail: "a test was eaten. it wasn't me.", back: 'you came back to the dark. brave.', nap: '...', boop: 'you touched something in the dark.' },
+      sprites: ['¤ ¤', '¤  ¤', '¤   ¤'], work: ['¤   ¤', '    ¤', '¤   ¤', '¤    '],
+      turn: 'eyes, flickering' },
+  ];
+  const byId = Object.fromEntries(C.map(c => [c.id, c]));
+  const eyesFor = (c, mood) => (c.id === 'grue' ? GRUE_EYES : EYES)[mood] ?? 'o';
+
+  // ---------- sprites and portraits ----------
+  // blinkEye: null, or the lid glyph to draw for this frame ('-' closed, '_' half closed)
+  function sprite(c, stage, mood, blinkEye) {
+    const eye = blinkEye ? (c.id === 'grue' ? ' ' : blinkEye) : eyesFor(c, mood);
+    const moving = mood === 'work' || mood === 'back';
+    let tpl = c.sprites[stage];
+    if (moving && stage === 2 && !RM) tpl = cyc(c.work, mood === 'back' ? 110 : 150);
+    let s = put(tpl, eye);
+    if (moving && stage < 2 && !RM && s.length <= 6) s += ' ' + cyc(['|', '/', '-', '\\'], 130);
+    if (mood === 'nap' && s.length < 8) s += 'z';
+    return s;
+  }
+  function portrait(c, mood, blinkEye) {
+    const eye = blinkEye ? (c.id === 'grue' ? ' ' : blinkEye) : eyesFor(c, mood);
+    const moving = mood === 'work' && !RM;
+    let t;
+    if (c.id === 'grue') t = '                 \n                 \n    ¤       ¤    \n                 \n                 ';
+    else t = art(c.id + '-2');
+    t = put(t, eye);
+    t = t.replace('{a}', moving ? cyc(['\\', '|', '/', '-'], 150) : '\\')
+         .replace('{b}', moving ? cyc(['/', '|', '\\', '-'], 150) : '/')
+         .replace('{t}', moving ? cyc(['~', '/', '|', '\\'], 150) : '~')
+         .replace(/\{c\}/g, moving ? cyc(['V', 'v'], 260) : 'V')
+         .replace('{f}', moving ? cyc([",;:;:;:;,", ";:;:;:;:;", ":;:;:;:;:"], 180) : ",;:;:;:;,")
+         .replace('{o}', moving ? cyc([' ', '.', 'o', 'O'], 220) : 'o')
+         .replace('{O}', moving ? cyc(['.', 'o', 'O', ' '], 220) : 'O')
+         .replace('{w}', moving ? cyc(['~^~~~^~~~^~', '^~~~^~~~^~~', '~~~^~~~^~~~'], 200) : '~^~~~^~~~^~')
+         .replace('{mode}', c.mode ? (c.mode[mood] || c.mode.idle) : '')
+         .replace('{m}', c.mouth ? (c.mouth[mood] || c.mouth.idle) : '')
+         .replace('{g}', c.flag ? (c.flag[mood] || c.flag.idle) : '');
+    return t;
+  }
+
+  // ---------- hero: tmux window ----------
+  const hero = { c: byId.tim, stage: 2, mood: 'idle', base: 'idle', msgUntil: 0, msg: '', until: 0, blinks: [], seenAt: 0 };
+  // Blinks are answers, never a timer: 'ack' = I saw that, 'look' = I see you, 'slow' = I trust you.
+  const BLINKS = { ack: [['-', 120]], look: [['-', 120]], slow: [['_', 110], ['-', 300], ['_', 110]] };
+  function blinkSeq(kind, delay) {
+    let t = performance.now() + (delay || 0);
+    return BLINKS[kind].map(([eye, d]) => { const b = { t0: t, t1: t + d, eye }; t += d; return b; });
+  }
+  function blink(kind, delay) { if (!RM) hero.blinks = blinkSeq(kind, delay); }
+  const lidAt = (list, now) => { const b = (list || []).find(x => now >= x.t0 && now < x.t1); return b ? b.eye : null; };
+  const paneL = document.getElementById('paneL');
+  const paneR = document.getElementById('paneR');
+  const status = document.getElementById('status');
+  const statusLeft = document.getElementById('statusLeft');
+  const buddyBtn = document.getElementById('buddy');
+  const H = s => '<span class="h">' + esc(s) + '</span>';
+  function panes() {
+    const sp = RM ? '*' : cyc(['|', '/', '-', '\\'], 130);
+    const m = hero.base;
+    const L = [H('claude · m2:~/code/harness'), ''];
+    const R = [H('codex · office:~/code/api'), ''];
+    if (m === 'work' || m === 'need') {
+      L.push('> refactor auth to the new session store', '  Reading src/auth/middleware.ts', '  Editing src/auth/session.ts', '  ' + sp + ' working 2m14s');
+    } else if (m === 'done' || m === 'back') {
+      L.push(H('> refactor auth to the new session store'), '<span class="ok">  Edited 3 files. Tests pass.</span>', '> _');
+    } else {
+      L.push(H('  (idle)'), '> _');
+    }
+    if (m === 'work') {
+      R.push('> fix the flaky billing test', '  Running npm test -- billing', '  ' + sp + ' working 48s');
+    } else if (m === 'need' || m === 'back') {
+      R.push(H('> fix the flaky billing test'), '<span class="ask">  Run npm run migrate?</span>', '<span class="ask">  1. Yes  2. Yes, always  3. No</span>');
+    } else if (m === 'fail') {
+      L.length = 2; L.push(H('> refactor auth to the new session store'), '<span class="ok">  Edited 3 files. Tests pass.</span>', '> _');
+      R.push(H('> fix the flaky billing test'), '<span class="bad">  1 failing: billing.spec.ts:212</span>', '<span class="bad">  exit 1</span>', '> _');
+    } else {
+      R.push(H('  (idle)'), '> _');
+    }
+    paneL.innerHTML = L.join('\n');
+    paneR.innerHTML = R.join('\n');
+    paneL.classList.toggle('sleepy', m === 'nap');
+    paneR.classList.toggle('sleepy', m === 'nap');
+  }
+  function heroRender(now) {
+    now = now ?? performance.now();
+    if (hero.until && now > hero.until) { hero.mood = hero.base; hero.until = 0; }
+    const lid = hero.mood === 'work' || hero.mood === 'nap' || hero.mood === 'boop' ? null : lidAt(hero.blinks, now);
+    let s = sprite(hero.c, hero.stage, hero.mood, lid);
+    const pad = 8 - s.length;
+    const cell = ' '.repeat(Math.max(0, Math.floor(pad / 2))) + s + ' '.repeat(Math.max(0, Math.ceil(pad / 2)));
+    buddyBtn.textContent = ' ' + cell + ' ';
+    buddyBtn.setAttribute('aria-label', hero.c.id + ' ' + ['0.1', '1.0', '2.0'][hero.stage] + ', ' + (MOODS.find(m => m[0] === hero.mood) || ['', 'content'])[1] + '. Click to boop.');
+    const showMsg = now < hero.msgUntil;
+    status.classList.toggle('msg', showMsg);
+    if (showMsg) {
+      statusLeft.innerHTML = esc(hero.c.id + ': ' + hero.msg) + (hero.suggest ? '<span class="suggest">' + esc(hero.suggest) + '</span>' : '');
+    } else {
+      statusLeft.textContent = '[harness] 0:claude' + (hero.base === 'work' ? '*' : '-') + ' 1:codex' + (hero.base === 'need' ? '!' : hero.base === 'work' ? '*' : '-');
+    }
+  }
+  function say(line, suggest) { hero.msg = line; hero.suggest = suggest || ''; hero.msgUntil = performance.now() + 5200; }
+  // hero.base is what the workspace is doing (drives the panes); hero.mood is the face right now.
+  // Timed moods (done, back, fail, boop) hold for a moment, then the face settles.
+  function event(ev) {
+    const now = performance.now();
+    hero.base = ev; hero.mood = ev; hero.until = 0;
+    const hold = { done: 3000, back: 1300, fail: 4200 }[ev];
+    if (hold) hero.until = now + hold;
+    if (ev === 'idle') hero.msgUntil = 0;
+    else say(hero.c.lines[ev], hero.c.suggest && hero.c.suggest[ev]);
+    if (ev === 'need' || ev === 'done' || ev === 'fail') blink('ack', 160);
+    if (ev === 'back') blink('slow', (hold || 0) + 120);
+    panes(); heroRender();
+    document.querySelectorAll('[data-ev]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.ev === ev)));
+  }
+  const settle = () => {
+    if (!hero.until && ['done', 'back', 'fail', 'boop'].includes(hero.mood)) {
+      hero.mood = ['work', 'need', 'nap'].includes(hero.base) ? hero.base : 'idle';
+    }
+  };
+  buddyBtn.addEventListener('click', () => {
+    hero.mood = 'boop'; hero.until = performance.now() + 900;
+    say(hero.c.lines.boop);
+    heroRender();
+  });
+  // "I see you": when you look at it. Throttled so sweeping the mouse across it is not a flicker.
+  const looked = () => {
+    const now = performance.now();
+    if (now - hero.seenAt < 2500) return;
+    hero.seenAt = now; blink('look');
+  };
+  buddyBtn.addEventListener('mouseenter', looked);
+  buddyBtn.addEventListener('focus', looked);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { hero.seenAt = 0; blink('look', 250); } });
+  document.querySelectorAll('[data-ev]').forEach(b => b.addEventListener('click', () => event(b.dataset.ev)));
+  const heroPick = document.getElementById('heroPick');
+  C.forEach(c => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = c.id; b.setAttribute('aria-pressed', String(c === hero.c));
+    b.addEventListener('click', () => {
+      hero.c = c;
+      heroPick.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      say(c.first); blink('slow', 300); heroRender();
+    });
+    heroPick.appendChild(b);
+  });
+  const heroVer = document.getElementById('heroVer');
+  ['0.1', '1.0', '2.0'].forEach((v, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = v; b.setAttribute('aria-pressed', String(i === hero.stage));
+    b.addEventListener('click', () => {
+      hero.stage = i;
+      heroVer.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      heroRender();
+    });
+    heroVer.appendChild(b);
+  });
+
+  // ---------- roster ----------
+  let rosterMood = 'idle';
+  const boops = {};
+  const cardBlinks = {};
+  const roster = document.getElementById('roster');
+  const cardEls = {};
+  C.forEach(c => {
+    const el = document.createElement('article');
+    el.className = 'card';
+    const fam = c.family.map((f, i) => (i === c.family.length - 1 ? '<b>' + esc(f[0]) + '</b>' : esc(f[0]))).join(' → ');
+    const yrs = c.family.map(f => f[1] ?? '').filter(Boolean).join(' → ');
+    el.innerHTML =
+      '<div class="top"><span class="num">#' + String(c.n).padStart(2, '0') + '</span><span class="name">' + c.id + '</span><span class="chip ' + c.rarity + '">' + c.rarity + '</span></div>' +
+      '<div class="art' + (c.id === 'grue' ? ' pitch' : '') + '" tabindex="0" role="button" aria-label="Boop ' + c.id + '"><pre role="img"></pre></div>' +
+      '<div class="family">' + fam + (yrs ? '<br>' + yrs : '') + '</div>' +
+      '<p>' + esc(c.lore) + '</p>' +
+      '<div class="stages" aria-label="Versions"></div>' +
+      '<div class="voice"></div>';
+    const artBox = el.querySelector('.art');
+    const boop = () => { boops[c.id] = performance.now() + 900; renderCard(c); };
+    artBox.addEventListener('click', boop);
+    artBox.addEventListener('mouseenter', () => { if (!RM) { cardBlinks[c.id] = blinkSeq('look', 60); } });
+    artBox.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); boop(); } });
+    roster.appendChild(el);
+    cardEls[c.id] = el;
+  });
+  function renderCard(c, now) {
+    now = now ?? performance.now();
+    const el = cardEls[c.id];
+    const booped = boops[c.id] && now < boops[c.id];
+    const mood = booped ? 'boop' : rosterMood;
+    const pre = el.querySelector('.art pre');
+    const lid = mood === 'work' || mood === 'nap' || mood === 'boop' ? null : lidAt(cardBlinks[c.id], now);
+    pre.textContent = portrait(c, mood, lid);
+    pre.style.color = c.color;
+    pre.setAttribute('aria-label', c.id + ', ' + (MOODS.find(m => m[0] === mood) || [0, ''])[1]);
+    el.querySelector('.stages').innerHTML = ['0.1', '1.0', '2.0'].map((v, i) =>
+      '<div><span>' + v + '</span>' + esc(sprite(c, i, mood)).replace(/ /g, '&nbsp;') + '</div>').join('');
+    const line = mood === 'idle' ? c.first : c.lines[mood];
+    el.querySelector('.voice').innerHTML = esc(c.id + ': ' + line) + (c.suggest && c.suggest[mood] ? '<span style="color:var(--faint)">' + esc(c.suggest[mood]) + '</span>' : '');
+  }
+  const moodPick = document.getElementById('moodPick');
+  MOODS.filter(m => m[0] !== 'boop').forEach(([k, label]) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = label; b.setAttribute('aria-pressed', String(k === rosterMood));
+    b.addEventListener('click', () => {
+      rosterMood = k;
+      moodPick.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      C.forEach(c => renderCard(c));
+    });
+    moodPick.appendChild(b);
+  });
+  const TEASE = [['sep 9 · 1947', 'a logbook, a relay, a moth'], ['apr 1 · 418', 'short and stout'], ['0x0', 'a billion-dollar mistake'], ['oct 31', '&lt;defunct&gt;'], ['?', 'changes when you look at it'], ['1963', 'works while you sleep']];
+  document.getElementById('teasers').innerHTML = TEASE.map(t => '<div class="teaser"><b>[ ? ]</b><span>' + t[0] + '</span><span>' + t[1] + '</span></div>').join('');
+
+  // ---------- banner font (a small FIGlet-style face, drawn for this page) ----------
+  const F = {
+    a: ['   ', ' _.', '(_|', '   '], b: ['|  ', '|_ ', '|_)', '   '], c: ['  ', ' _', '(_', '  '],
+    d: ['  |', ' _|', '(_|', '   '], e: ['   ', ' _ ', '(/_', '   '], f: ['  _', '_|_', ' | ', '   '],
+    g: ['   ', ' _ ', '(_|', ' _|'], h: ['|  ', '|_ ', '| |', '   '], i: [' ', '.', '|', ' '],
+    l: ['|', '|', '|', ' '], m: ['     ', ' _ _ ', '| | |', '     '], n: ['   ', ' _ ', '| |', '   '],
+    p: ['   ', ' _ ', '|_)', '|  '], r: ['  ', ' _', '| ', '  '], s: ['  ', ' _', '_>', '  '],
+    t: ['   ', '_|_', ' |_', '   '], u: ['   ', '   ', '|_|', '   '], v: ['  ', '  ', '\\/', '  '],
+    x: ['  ', '  ', '><', '  '], z: ['  ', '_ ', '/_', '  '],
+  };
+  const fig = w => [0, 1, 2, 3].map(r => [...w].map(ch => (F[ch] || ['?', '?', '?', '?'])[r]).join(' ')).filter(l => l.trim()).join('\n');
+
+  // ---------- hatching ----------
+  const TIER = { common: [], rare: [], legendary: [], secret: [] };
+  C.forEach(c => TIER[c.rarity].push(c));
+  const EGGS = {
+    turn: { name: 'turn egg', look: '\\_O_/', w: { common: 60, rare: 27, legendary: 12, secret: 1 }, note: 'Earned by 40 turns you started.' },
+    week: { name: 'week egg', look: '\\_0_/', w: { common: 45, rare: 35, legendary: 18, secret: 2 }, note: 'Earned by working on 3 or more days in a week.' },
+    marathon: { name: 'marathon egg', look: '\\_@_/', w: { common: 25, rare: 40, legendary: 32, secret: 3 }, note: 'Earned by a first merged PR, 500 turns, or a second machine.' },
+    night: { name: 'night egg', look: '*\\_O_/', w: { common: 50, rare: 30, legendary: 12, secret: 8 }, boost: { bat: 4 }, note: 'Earned by three sessions after midnight. bat and grue like the dark.' },
+  };
+  let S = { owned: new Set(), pity: 0, hatches: 0 };
+  let eggKey = 'turn';
+  let busy = false;
+  function odds() {
+    const egg = EGGS[eggKey];
+    const rows = C.map(c => {
+      let w = egg.w[c.rarity] / TIER[c.rarity].length;
+      if (c.rarity === 'secret') w += S.pity;
+      if (egg.boost && egg.boost[c.id]) w *= egg.boost[c.id];
+      if (S.owned.has(c.id)) w = 0;
+      return { c, w };
+    });
+    const tot = rows.reduce((a, r) => a + r.w, 0);
+    return rows.map(r => ({ c: r.c, p: tot ? r.w / tot : 0 }));
+  }
+  function draw() {
+    const o = odds().filter(r => r.p > 0);
+    let x = Math.random();
+    for (const r of o) { x -= r.p; if (x <= 0) return r.c; }
+    return o.length ? o[o.length - 1].c : null;
+  }
+  const eggPre = document.getElementById('egg');
+  const big = document.getElementById('big');
+  const banner = document.getElementById('banner');
+  const stamp = document.getElementById('stamp');
+  const words = document.getElementById('words');
+  const stageEl = document.getElementById('stage');
+  const pitch = document.getElementById('pitchline');
+  const hatchBtn = document.getElementById('hatchBtn');
+  const cardWrap = document.getElementById('cardwrap');
+  const cardPre = document.getElementById('card');
+  const EGG = ['       .--.       ', '      /    \\      ', '     |      |     ', '     |      |     ', '      \\    /      '];
+  const NEST = "   \\___'--'___/   ";
+  function eggFrame(off, crack) {
+    const rows = EGG.slice();
+    if (crack === 1) rows[2] = '     | /\\/  |     ';
+    if (crack === 2) rows[2] = '     |/\\/\\/\\|     ';
+    const shift = r => (off < 0 ? r.slice(1) + ' ' : off > 0 ? ' ' + r.slice(0, -1) : r);
+    return ['                  ', ...rows.map(shift), NEST].join('\n');
+  }
+  const popFrame = () => ["    '  .--.  .    ", '      /\\/\\/\\      ', "         '        ", '     |\\/\\/\\/|     ', '     |      |     ', '      \\    /      ', NEST].join('\n');
+  function resetStage() {
+    stageEl.classList.remove('pitch');
+    [big, banner, stamp, words, pitch].forEach(e => { e.hidden = true; });
+    eggPre.hidden = false;
+    eggPre.textContent = eggFrame(0, 0);
+  }
+  function wrap(text, width) {
+    const out = []; let line = '';
+    text.split(' ').forEach(w => {
+      if ((line + ' ' + w).trim().length > width) { out.push(line.trim()); line = w; } else line += ' ' + w;
+    });
+    if (line.trim()) out.push(line.trim());
+    return out;
+  }
+  function cardText(c, shiny, egg) {
+    const W = 42, inner = W - 4;
+    const L = s => '| ' + s.padEnd(inner).slice(0, inner) + ' |';
+    const head = '#' + String(c.n).padStart(2, '0') + '/10  DROP 1: UNIX';
+    const r = (shiny ? 'SHINY ' : '') + c.rarity.toUpperCase();
+    const fam = c.family.map(f => f[0]).join(' -> ');
+    const today = new Date().toISOString().slice(0, 10);
+    return [
+      '.' + '-'.repeat(W - 2) + '.',
+      L(head + ' '.repeat(Math.max(1, inner - head.length - r.length)) + r),
+      L(''),
+      L('  ' + put(c.sprites[0], c.id === 'grue' ? '.' : 'o') + '    ' + c.id + ' 0.1'),
+      L('  ' + fam),
+      L(''),
+      ...wrap('"' + c.first + '"', inner - 2).map(l => L('  ' + l)),
+      L(''),
+      L('  hatched ' + today + ', ' + EGGS[egg].name),
+      "'" + '-'.repeat(W - 2) + "'",
+    ].join('\n');
+  }
+  async function hatch() {
+    if (busy) return;
+    const c = draw();
+    if (!c) return;
+    busy = true; hatchBtn.disabled = true; cardWrap.hidden = true;
+    const shiny = Math.random() < 1 / 256;
+    const egg = eggKey;
+    resetStage();
+    if (!RM) {
+      for (let k = 0; k < 2; k++) { for (const off of [-1, 0, 1, 0]) { eggPre.textContent = eggFrame(off, 0); await sleep(90); } await sleep(420); }
+      eggPre.textContent = eggFrame(0, 1); await sleep(450);
+      for (const off of [-1, 1, -1, 1, 0]) { eggPre.textContent = eggFrame(off, 1); await sleep(60); }
+      eggPre.textContent = eggFrame(0, 2); await sleep(520);
+      eggPre.textContent = popFrame(); await sleep(480);
+    }
+    eggPre.hidden = true;
+    const eye = c.id === 'grue' ? '.' : 'o';
+    const sp = put(c.sprites[0], eye);
+    if (c.id === 'grue') {
+      stageEl.classList.add('pitch'); pitch.hidden = false;
+      if (!RM) await sleep(1600);
+    }
+    big.hidden = false;
+    big.textContent = sp.replace(/[^ ]/g, '#');
+    big.style.color = 'var(--faint)';
+    if (!RM) await sleep(850);
+    big.textContent = sp;
+    big.style.color = shiny ? 'var(--blue)' : c.color;
+    if (!RM) {
+      await sleep(320); big.textContent = put(c.sprites[0], c.id === 'grue' ? ' ' : '-');
+      await sleep(120); big.textContent = sp; await sleep(220);
+    }
+    banner.hidden = false; banner.textContent = '';
+    const rows = fig(c.id).split('\n');
+    for (let i = 0; i < rows.length; i++) { banner.textContent = rows.slice(0, i + 1).join('\n'); if (!RM) await sleep(90); }
+    stamp.hidden = false;
+    stamp.className = c.rarity;
+    stamp.textContent = '[ ' + (shiny ? '* SHINY * ' : '') + c.rarity.toUpperCase() + ' ]  #' + String(c.n).padStart(2, '0') + '/10';
+    words.hidden = false;
+    words.innerHTML = 'fork() returned 0. it\'s a ' + esc(c.id) + '.<br>' + esc(c.id + ' 0.1: ' + c.first);
+    S.owned.add(c.id); S.hatches++;
+    S.pity = c.rarity === 'secret' ? 0 : S.pity + 1;
+    cardPre.textContent = cardText(c, shiny, egg);
+    cardWrap.hidden = false;
+    document.getElementById('copyNote').textContent = '';
+    busy = false;
+    sideRender();
+  }
+  function sideRender() {
+    const o = odds();
+    const pct = p => (p * 100).toFixed(1) + '%';
+    document.getElementById('odds').innerHTML = o.map(r => {
+      const hidden = r.c.rarity === 'secret' && !S.owned.has(r.c.id);
+      const name = hidden ? '???' : r.c.id;
+      const cls = S.owned.has(r.c.id) ? ' class="owned"' : '';
+      return '<tr><td' + cls + '>' + name + '</td><td class="' + r.c.rarity + '">' + r.c.rarity + '</td><td' + cls + '>' + (S.owned.has(r.c.id) ? 'hatched' : pct(r.p)) + '</td></tr>';
+    }).join('');
+    document.getElementById('shelf').innerHTML = C.map(c => S.owned.has(c.id)
+      ? '<span style="color:' + c.color + '" title="' + c.id + '">' + esc(put(c.sprites[0], c.id === 'grue' ? '.' : 'o')) + '</span>'
+      : '<span style="color:var(--faint)" title="not hatched yet">' + (c.rarity === 'secret' ? '[!]' : '[?]') + '</span>').join('');
+    document.getElementById('shelfCount').textContent = S.owned.size + '/10';
+    const done = S.owned.size === C.length;
+    hatchBtn.disabled = busy || done;
+    hatchBtn.textContent = done ? 'drop 1 complete' : 'hatch it';
+    document.getElementById('eggNote').textContent = EGGS[eggKey].note;
+    if (!busy && eggPre && !eggPre.hidden) eggPre.textContent = eggFrame(0, 0);
+  }
+  const eggPick = document.getElementById('eggPick');
+  Object.entries(EGGS).forEach(([k, e]) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = e.look + ' ' + e.name.replace(' egg', '');
+    b.setAttribute('aria-pressed', String(k === eggKey));
+    b.addEventListener('click', () => {
+      if (busy) return;
+      eggKey = k;
+      eggPick.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      sideRender();
+    });
+    eggPick.appendChild(b);
+  });
+  hatchBtn.addEventListener('click', hatch);
+  stageEl.addEventListener('click', () => { if (!busy && eggPre && !eggPre.hidden && S.owned.size < C.length) hatch(); });
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    if (busy) return;
+    S = { owned: new Set(), pity: 0, hatches: 0 };
+    cardWrap.hidden = true; resetStage(); sideRender();
+  });
+  document.getElementById('copyBtn').addEventListener('click', () => {
+    const text = '```\n' + cardPre.textContent + '\n```';
+    const note = document.getElementById('copyNote');
+    const fallback = () => {
+      const r = document.createRange(); r.selectNodeContents(cardPre);
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      note.textContent = 'Selected. Press Cmd-C to copy.';
+    };
+    try {
+      navigator.clipboard.writeText(text).then(() => { note.textContent = 'Copied as a code block.'; }, fallback);
+    } catch (e) { fallback(); }
+  });
+
+  // ---------- eggs table ----------
+  const EGG_ROWS = [
+    ['first egg', '\\_O_/', 'Five of eight habits: finish a turn, run two harnesses side by side, find something with Cmd-O, answer a harness from another device, connect a second computer, try a Store harness, resume a paused harness, come back on three different days.', 'anyone; tim is the most common'],
+    ['turn egg', '\\_O_/', '40 turns you started. At most 20 count per day.', 'common'],
+    ['week egg', '\\_0_/', 'Working on 3 or more days in a week.', 'rare'],
+    ['marathon egg', '\\_@_/', 'A first merged PR, 500 turns, or a second machine.', 'legendary'],
+    ['night egg', '*\\_O_/', 'Three sessions after midnight.', 'bat and grue'],
+    ['history egg', '\\_47_/', 'Appears on dates from computing history: Sep 9 (the moth, 1947), Apr 1 (the 418 teapot), Oct 31 (zombie processes). Returns every year.', "that day's creature"],
+    ['easter egg', '\\_?_/', 'Type xyzzy. “Nothing happens.” Once, an egg does.', 'the secret pool'],
+  ];
+  document.querySelector('#eggTable tbody').innerHTML = EGG_ROWS.map(r =>
+    '<tr><td>' + r[0] + '</td><td class="s">' + esc(r[1]) + '</td><td class="p">' + esc(r[2]) + '</td><td class="p">' + esc(r[3]) + '</td></tr>').join('');
+
+  // ---------- growth ----------
+  const REL = [
+    ['tim-0', 'tim 0.1', 'hatched\n- one pane\n- says hello'],
+    ['tim-1', 'tim 1.0', 'bond level 2\n- split-window -h: a second pane\n- learned your agents by name\n- tells you which pane needs you'],
+    ['tim-2', 'tim 2.0', 'bond level 4\n- added arms, for waving\n- status line learned your project\n- in-jokes from your logbook'],
+  ];
+  document.getElementById('growth').innerHTML = REL.map(r =>
+    '<div class="release"><div class="art"><pre role="img" aria-label="' + r[1] + '" style="color:var(--green)">' +
+    esc(put(art(r[0]), 'o').replace('{a}', '\\').replace('{b}', '/').replace('{m}', '\\_/').replace('{g}', '*')) + '</pre></div>' +
+    '<pre class="log"><b>' + r[1] + '</b>  ' + esc(r[2].split('\n')[0]) + '\n' + esc(r[2].split('\n').slice(1).join('\n')) + '</pre></div>').join('');
+
+  // ---------- moods table ----------
+  const TRIG = {
+    idle: 'Nothing needs you.', work: 'Any agent is working. The arms turn.', need: 'A harness is waiting on you. Wins over everything else.',
+    done: 'A turn you started finished. At most once per 20 seconds.', fail: 'A turn failed or a harness went offline.',
+    back: 'You return after 15 minutes or more. Once per return; it waves.', nap: 'You asked it to nap. Any event wakes it.',
+    boop: 'You clicked it.',
+  };
+  const moodBody = document.querySelector('#moodTable tbody');
+  function moodRows() {
+    moodBody.innerHTML = MOODS.map(([k, label]) =>
+      '<tr><td>' + label + '</td><td class="s" style="color:var(--green)">' + esc(sprite(byId.tim, 2, k)) + '</td><td>' + esc(EYES[k] + ' ' + EYES[k]) + '</td><td class="s" style="color:var(--ink)">' + esc(byId.tim.mouth[k]) + '</td><td>tim' + esc(byId.tim.flag[k]) + '</td><td class="p">' + esc(TRIG[k]) + '</td><td class="p">' + esc(byId.tim.lines[k]) + '</td></tr>').join('');
+  }
+  moodRows();
+
+  // ---------- spinners ----------
+  const SPINS = [
+    ['twirling baton', 'PLATO, 1970s · 130 ms', ['|', '/', '-', '\\']],
+    ['growing dot', 'cli-spinners · 140 ms', [' ', '.', 'o', 'O', '@', '*']],
+    ['twinkle', 'cli-spinners · 80 ms', ['+', 'x', '*']],
+    ['turning letter', 'dqpb · 100 ms', ['d', 'q', 'p', 'b']],
+    ['dots', 'the patient one · 400 ms', ['.  ', '.. ', '...', '   ']],
+    ['bouncing bar', 'cli-spinners · 80 ms', ['[=   ]', '[==  ]', '[=== ]', '[ ===]', '[  ==]', '[   =]', '[    ]']],
+    ['wing flap', 'bat · 150 ms', ['/^o.o^\\', '\\^o.o^/']],
+    ['tail wag', 'biff · 150 ms', ['U(oo)U~', 'U(oo)U/', 'U(oo)U|', 'U(oo)U\\']],
+  ];
+  const MS = [130, 140, 80, 100, 400, 80, 150, 150];
+  const spinsEl = document.getElementById('spins');
+  spinsEl.innerHTML = SPINS.map((s, i) => '<div class="spin"><div class="g" data-spin="' + i + '">' + esc(RM ? s[2].join(' ') : s[2][0]) + '</div><div class="n">' + esc(s[0]) + '</div><div class="d">' + esc(s[1]) + '</div></div>').join('');
+  const spinG = [...spinsEl.querySelectorAll('[data-spin]')];
+
+  // ---------- one clock for everything that moves ----------
+  function tick() {
+    if (document.hidden) return;
+    const now = performance.now();
+    settle();
+    heroRender(now);
+    if (hero.base === 'work') panes();
+    if (!RM && rosterMood === 'work') C.forEach(c => renderCard(c, now));
+    else C.forEach(c => {
+      const bl = cardBlinks[c.id];
+      const blinking = bl && bl.length && now < bl[bl.length - 1].t1 + 60;
+      if ((boops[c.id] && now < boops[c.id] + 60) || blinking) renderCard(c, now);
+    });
+    if (!RM) spinG.forEach((g, i) => { g.textContent = cyc(SPINS[i][2], MS[i]); });
+  }
+  panes(); heroRender(); C.forEach(c => renderCard(c)); resetStage(); sideRender();
+  setInterval(tick, 40);
+})();
+</script>
