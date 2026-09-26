@@ -92,7 +92,7 @@ import { LessonDistiller } from './pair/learn/distill.js'
 import { LessonStore } from './pair/learn/store.js'
 import { PairLearner, joinProposals } from './pair/learn/propose.js'
 import { ShownLines } from './pair/shown.js'
-import { PairGate } from './pair/gate.js'
+import { PairGate, pairingFrom } from './pair/gate.js'
 import { runtimeLessons } from './pair/learn/publish.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { ensureBuiltinPair } from './dsh/builtins.js'
@@ -3674,23 +3674,27 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // every reconnect. Signed out there is no account zoo: a guest's window keeps its own and says which
   // daemon is paired in `daemon_presence` (pair/brain.ts), which is what `guestPair` holds. A backend that
   // cannot be reached keeps the last answer rather than switching pairing off on a blip.
-  let zooPair: { known: boolean; pair: string | null; autonomy: Autonomy } = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY }
+  let zooPair: { known: boolean; pair: string | null; autonomy: Autonomy; consent: boolean } = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY, consent: false }
   let guestPair: string | null = null
   let guestAutonomy: Autonomy | null = null
+  let guestConsent = false
   // The autonomy dial rides with the pair: the account's zoo, or a guest window's own (daemon_presence).
+  // Nothing is watched until the person said yes on the first-day consent screen (zoo `consent.watching`,
+  // or a guest window's `consent`): until then the sensor stays off and the dial stays at watch.
   const applyPair = (): void => {
+    const pairing = pairingFrom(zooPair, { pair: guestPair, autonomy: guestAutonomy, consent: guestConsent }, DEFAULT_AUTONOMY)
     // A request: a step above `suggest` waits for the person's yes at a window (pair/gate.ts).
-    pairGate.setRequested(zooPair.known ? zooPair.autonomy : guestAutonomy ?? DEFAULT_AUTONOMY)
-    pairSensor.setPair(zooPair.known ? zooPair.pair : guestPair)
+    pairGate.setRequested(pairing.autonomy)
+    pairSensor.setPair(pairing.pair)
   }
   refreshPairFromZoo = () => {
     void proxyBackend('GET', '/api/zoo').then((result) => {
       if (result.status === 200) {
-        const zoo = (result.body.data as { zoo?: { pair?: unknown; autonomy?: unknown } } | undefined)?.zoo
+        const zoo = (result.body.data as { zoo?: { pair?: unknown; autonomy?: unknown; consent?: { watching?: unknown } | null } } | undefined)?.zoo
         const pair = zoo?.pair
-        zooPair = { known: true, pair: isRosterDaemon(pair) ? pair : null, autonomy: isAutonomy(zoo?.autonomy) ? zoo.autonomy : DEFAULT_AUTONOMY }
+        zooPair = { known: true, pair: isRosterDaemon(pair) ? pair : null, autonomy: isAutonomy(zoo?.autonomy) ? zoo.autonomy : DEFAULT_AUTONOMY, consent: zoo?.consent?.watching === true }
       } else if (result.status === 401) {
-        zooPair = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY }
+        zooPair = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY, consent: false }
       }
       applyPair()
     }).catch(() => {})
@@ -4447,6 +4451,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     answer: (input) => pairOwner.answer(input, 'key'),
     onGuestPair: (daemonId) => { guestPair = isRosterDaemon(daemonId) ? daemonId : null; applyPair() },
     onGuestAutonomy: (level) => { guestAutonomy = isAutonomy(level) ? level : null; applyPair() },
+    onGuestConsent: (watching) => { guestConsent = watching; applyPair() },
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
     talk: (text) => pairTalk(text),
     now: Date.now,

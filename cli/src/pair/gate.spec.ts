@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PairGate, type GateEvent } from './gate.js'
+import { PairGate, pairingFrom, type GateEvent } from './gate.js'
 import { PairConfigFile } from './rules.js'
 import { PairBrain } from './brain.js'
 import { PairVoice } from './voice.js'
@@ -164,15 +164,31 @@ describe('a guest window\'s dial', () => {
   it('counts only from a window bound to this machine, and is a request like the zoo\'s', () => {
     const guest: Array<string | null> = []
     const pairs: Array<string | null> = []
+    const consent: boolean[] = []
     const fleet = { start: () => {}, stop: () => {}, machines: () => [], harnesses: () => [], find: () => null } as unknown as PairFleet
     const brain = new PairBrain({
       pairing: { enabled: () => false, pairedDaemon: () => null }, fleet, triage: {} as PairTriage, voice: new PairVoice({ sendLocal: () => {}, now: Date.now }),
       sendLocal: () => {}, sendLocalTo: () => true, answer: async () => ({ ok: true }), now: Date.now,
-      onGuestAutonomy: (level) => guest.push(level), onGuestPair: (id) => pairs.push(id),
+      onGuestAutonomy: (level) => guest.push(level), onGuestPair: (id) => pairs.push(id), onGuestConsent: (watching) => consent.push(watching),
     })
-    brain.onPresence('local:relayed', { active: true, pair: 'tim', autonomy: 'act-within-rules' }, { ui: false })
-    expect([guest, pairs]).toEqual([[], []])
-    brain.onPresence('local:window', { active: true, pair: 'tim', autonomy: 'act-within-rules' }, { ui: true })
-    expect([guest, pairs]).toEqual([['act-within-rules'], ['tim']])
+    brain.onPresence('local:relayed', { active: true, pair: 'tim', autonomy: 'act-within-rules', consent: true }, { ui: false })
+    expect([guest, pairs, consent]).toEqual([[], [], []])
+    brain.onPresence('local:window', { active: true, pair: 'tim', autonomy: 'act-within-rules', consent: true }, { ui: true })
+    expect([guest, pairs, consent]).toEqual([['act-within-rules'], ['tim'], [true]])
+    brain.onPresence('local:window', { consent: 'yes' }, { ui: true })
+    expect(consent).toEqual([true, false])
+  })
+})
+
+describe('first-day consent', () => {
+  it('nothing is paired (the sensor stays off) and the dial asks for watch until the person said yes', () => {
+    const guest = { pair: 'tim', autonomy: 'suggest' as const, consent: false }
+    expect(pairingFrom({ known: true, pair: 'tim', autonomy: 'act-on-key', consent: false }, guest, 'watch')).toEqual({ pair: null, autonomy: 'watch' })
+    expect(pairingFrom({ known: true, pair: 'tim', autonomy: 'act-on-key', consent: true }, guest, 'watch')).toEqual({ pair: 'tim', autonomy: 'act-on-key' })
+    // Signed out: the guest window's own answer, pair and dial.
+    const unknown = { known: false, pair: null, autonomy: 'watch' as const, consent: false }
+    expect(pairingFrom(unknown, guest, 'watch')).toEqual({ pair: null, autonomy: 'watch' })
+    expect(pairingFrom(unknown, { ...guest, consent: true }, 'watch')).toEqual({ pair: 'tim', autonomy: 'suggest' })
+    expect(pairingFrom(unknown, { pair: 'tim', autonomy: null, consent: true }, 'watch')).toEqual({ pair: 'tim', autonomy: 'watch' })
   })
 })

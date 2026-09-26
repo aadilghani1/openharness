@@ -67,6 +67,18 @@ const CONFIRM_ACTIONS: DaemonAction[] = [{ key: 'y', label: 'confirm', choice: '
 
 export const hashConfig = (text: string): string => createHash('sha256').update(text).digest('hex')
 
+/**
+ * Which daemon is paired, and the level asked for, from the account's zoo (when it is known) or a guest
+ * window's presence. Nothing is watched until the person said yes on the first-day consent screen: until
+ * then there is no pair (the sensor stays off) and the dial asks for `watch`.
+ */
+export function pairingFrom(zoo: { known: boolean; pair: string | null; autonomy: Autonomy; consent: boolean },
+  guest: { pair: string | null; autonomy: Autonomy | null; consent: boolean }, fallback: Autonomy): { pair: string | null; autonomy: Autonomy } {
+  const consented = zoo.known ? zoo.consent : guest.consent
+  if (!consented) return { pair: null, autonomy: 'watch' }
+  return zoo.known ? { pair: zoo.pair, autonomy: zoo.autonomy } : { pair: guest.pair, autonomy: guest.autonomy ?? fallback }
+}
+
 interface Saved { autonomy: Autonomy | null; rules: string | null }
 
 export class PairGate {
