@@ -89,7 +89,7 @@ impl Keymap {
         b(ch(']'), "paste-buffer -p", false, "Paste the most recent paste buffer");
         b(ch('c'), "new-window", false, "Create a new window (and choose its harness)");
         b(ch('d'), "detach-client", false, "Detach — everything keeps running");
-        b(ch('f'), "command-prompt { find-window -Z \"%%\" }", false, "Search for a pane (every harness on every machine)");
+        b(ch('f'), "command-prompt { find-window -Z \"%%\" }", false, "Search for a pane");
         b(ch('i'), "display-message", false, "Display window information");
         b(ch('l'), "last-window", false, "Select the previously current window");
         b(ch('m'), "select-pane -m", false, "Toggle the marked pane");

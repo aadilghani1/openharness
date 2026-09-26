@@ -1575,7 +1575,32 @@ fn run_words_in(app: &mut App, words: &[String]) {
             }
         }
         "choose-client" => input::run(app, "tree"),
-        "find-window" => { input::launch(app, "", Filter::All); let q = rest(words); if !q.is_empty() { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { for c in q.chars() { picker.type_char(c) } } } }
+        "find-window" => {
+            // cmd-find-window.c: the tree of every session (window-tree mode), filtered to the
+            // panes whose contents (-C), window name (-N) or title (-T) match — all three unless
+            // some are given; -r a regular expression, -i ignoring case; -Z zoomed.
+            let s = positional(words).first().cloned().unwrap_or_default();
+            let (mut c, mut n, mut t) = (flag(words, "-C"), flag(words, "-N"), flag(words, "-T"));
+            if !c && !n && !t { (c, n, t) = (true, true, true) }
+            let (r, i) = (flag(words, "-r"), flag(words, "-i"));
+            let star = if r { "" } else { "*" };
+            let suffix = match (r, i) { (true, true) => "/ri", (true, false) => "/r", (false, true) => "/i", _ => "" };
+            let content = format!("#{{C{suffix}:{s}}}");
+            let name = format!("#{{m{suffix}:{star}{s}{star},#{{window_name}}}}");
+            let title = format!("#{{m{suffix}:{star}{s}{star},#{{pane_title}}}}");
+            let filter = match (c, n, t) {
+                (true, true, true) => format!("#{{||:{content},#{{||:{name},{title}}}}}"),
+                (true, true, false) => format!("#{{||:{content},{name}}}"),
+                (true, false, true) => format!("#{{||:{content},{title}}}"),
+                (false, true, true) => format!("#{{||:{name},{title}}}"),
+                (true, false, false) => content,
+                (false, true, false) => name,
+                _ => title,
+            };
+            let Some((w, p)) = target_pane(app, words) else { return };
+            let a = crate::tree::Start { buffer: false, session: false, window: false, format: None, key_format: None, command: None, filter: Some(filter), sort: None, reversed: false, no_preview: false, zoom: flag(words, "-Z") };
+            crate::tree::enter(app, p, w, &a);
+        }
         "display-message" => {
             // tmux's display-message [-lp] [-F format] [-t target-pane] [message]: the format
             // (-l: as it is) against the target pane — one tmux can't find leaves it none.
