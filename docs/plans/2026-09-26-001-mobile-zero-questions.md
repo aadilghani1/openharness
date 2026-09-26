@@ -64,39 +64,34 @@ The computer side is one button: **Phone** in the desktop app (and a step in des
 shows a QR code. The same QR is a universal link: a camera that scans it without the app installed
 lands on the App Store page.
 
-### After: Focus, and Find over it
+### After: Focus, with Find and New a swipe either side (Snapchat's layout)
 
 ```
-Focus                           Find (pulled up)
-┌────────────────────────┐      ┌────────────────────────┐
-│ fix login test · Mac   │      │ ░ fix login test (dim) │
-│                        │      ├────────────────────────┤
-│  live terminal stream  │  ↑   │ 🔎 type or say…        │
-│                        │      │ fix login test · Mac   │
-│                   (🎤) │      │ docs rewrite · Mini    │
-│ ─────── Find ───────   │      │ payments bug · Linux   │
-└────────────────────────┘      └────────────────────────┘
+   Find  ← swipe right ─   Focus   ─ swipe left →  New
+┌──────────────┐░░   ┌────────────────────────┐   ┌──────────────┐
+│ ⌕ Find…   +  │░░   │ fix login test ⌄ · Mac │   │ What should  │
+│ fix login ✓  │░░   │                        │   │ it do?       │
+│ docs rewrite │░░   │  live terminal, full   │   │              │
+│ payments bug │░░   │  screen to the bottom  │   │              │
+└──────────────┘░░   │                   (🎤) │   └──────────────┘
+                     └────────────────────────┘
 ```
 
-- **Focus** (home). One agent's live terminal, full screen, and the mic. It opens on the agent you
-  last worked with, on any device. `esc`/`tab`/arrows appear only while the agent is asking a
-  question.
-- **Find** is a sheet over Focus and the only way to move. Swipe up on the **Find** handle at the
-  bottom of Focus, or tap it; tap a row and the sheet drops back onto that agent in Focus; swipe it
-  down to close. The swipe starts on the handle only — the terminal scrolls vertically, and the
-  screen's bottom edge is iOS's own home gesture. The current search sheet already moves this way
-  (`phone/terminal_search.dart`). Find opens with your **recent agents first**, as full-width,
-  two-line rows, so long names fit and switching among the two or three you are working with is two
-  taps with nothing to type. Type or say a few words to narrow: it matches name, project, computer,
-  what the agent is doing and what it said. No `>` `#` `@` `?` modes, no tab pills.
-- **New** is the first row of Find: say what it should do; it starts Claude Code in the folder you
-  used last. "Other folder" is the only visible option.
-- **Settings** is the last row of Find: your computers (with *Add a computer*, which scans again),
-  voice language, sign out, version.
+- **Focus** (home) is Snapchat's camera: one agent's live terminal, full screen, and the mic. It
+  opens on the agent you last worked with, on any device.
+- **Swipe right → Find**, a drawer in from the left edge that follows the finger: your **recent
+  agents first**, full-width two-line rows so long names fit. Type or say a few words to narrow — it
+  matches name, project, computer, what the agent is doing and what it said; no `>` `#` `@` `?` modes.
+  Tap a row and you are back in Focus on that agent; swipe left or tap the terminal beside it to
+  close. **Tapping the agent's name** (it wears a `⌄`) opens Find too, so the swipe is never the only
+  way in.
+- **Swipe left → New**: a new agent on the same computer; the form slides in from the right. Find
+  has a `+` for it as well.
+- **Settings** stays in the `⋮` menu.
 
-**No sideways swipe between agents.** A swipe is hidden — nothing says it is there or what comes next — and it
-fires by accident while scrolling or typing. **No bar of agents** either: names are long and the screen
-is small.
+The places never move, so the thumb learns them — what makes Snapchat fast once learned. The swipes
+live on the terminal only; the terminal scrolls vertically and the key bar keeps its own sideways
+scroll. **No bar** at the foot (it cost full screen) and **no swipe between agents**.
 
 **Words:** *computer* (never "machine") and the agent's own name for the work ("fix the login bug").
 No "link", "remote password", "desk", "tab", "worktree", "engine", "take control", or connection
@@ -160,8 +155,8 @@ to them, so a person with two Macs scans once. New protocol; after B1/B2, only i
   already has (`phone/phone_search_*`), voice as an input to it.
 - New becomes one voice/text field; Settings shrinks to four rows.
 - Take control happens implicitly on the first keystroke or voice send; no band, no button.
-- An agent that finished or is asking puts a dot on the Find handle, and its row rises in Find. No
-  inbox.
+- An agent that finished or is asking puts a dot beside the name's `⌄`, and its row rises in Find.
+  No inbox.
 - **Delete from the phone:** the swipe pager (`phone/agent_swipe.dart`) and the look-ahead attach;
   desk tabs and their panel/strip/sheets; the `>` `#` `@` `?` command palette and two of the three
   searches; branch/worktree/engine/profile/approval pickers and the remote folder browser; Usage and
@@ -175,10 +170,10 @@ to them, so a person with two Macs scans once. New protocol; after B1/B2, only i
 |---|---|---|
 | Steps from install to a live agent | sign in + code + find machine + password + link | **scan** |
 | Things to type | email, code, password | nothing |
-| Screens / sheets | 11 / 19 | 1 (Focus) / 2 (Find, Settings) |
+| Screens / sheets | 11 / 19 | 2 (Focus, New) / 1 (Find) |
 | Concepts named | ~30 | 2: computer, agent |
 | Switch to another agent | swipe within a tab; 3 taps across tabs | Find → row, across every computer |
-| Hidden gestures | 13 | 0 (the one swipe starts on a labelled handle that also taps) |
+| Gestures to learn | 13 | 2: swipe right (Find), swipe left (New) — each also a tap |
 
 **The test:** hand the phone to someone who has Harness on their Mac and has never seen the app. They
 reach a working agent, talk to it, and switch to another without asking anything. Run it before each
