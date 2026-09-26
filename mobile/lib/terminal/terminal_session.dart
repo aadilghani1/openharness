@@ -938,7 +938,13 @@ class TerminalSession extends ChangeNotifier {
     _applyCursorVisibility();
   }
 
+  /// Bumped once per chunk of output written — what a reader scrolled up in the history watches to
+  /// know there is something newer below. Its own notifier, not this session's: output is the most
+  /// frequent event there is, and nothing else here should rebuild for it.
+  final ValueNotifier<int> outputTicks = ValueNotifier(0);
+
   void _writeTerminalText(String text) {
+    outputTicks.value++;
     terminal.setCursorVisibleMode(_remoteCursorVisible);
     terminal.write(text);
     _remoteCursorVisible = terminal.cursorVisibleMode;
@@ -1695,6 +1701,7 @@ class TerminalSession extends ChangeNotifier {
     _disposed = true;
     _generation++;
     _cancelTimers();
+    outputTicks.dispose();
     super.dispose();
   }
 }

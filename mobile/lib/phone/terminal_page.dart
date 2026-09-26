@@ -39,6 +39,7 @@ import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'settings_page.dart';
 import 'status_pill.dart';
+import 'floating_glass.dart';
 import 'terminal_action_column.dart';
 import 'terminal_chrome_scroll.dart';
 import 'terminal_header.dart';
@@ -46,6 +47,7 @@ import 'terminal_header_action.dart';
 import 'terminal_input_dock.dart';
 import 'terminal_search.dart';
 import 'voice_input_controller.dart';
+import 'voice_mic_button.dart';
 
 /// One agent's terminal, filling the phone. The header says whose it is and whether it is live;
 /// everything below it is the same [TerminalPanel] a desktop tile draws, minus that tile's own
@@ -752,6 +754,7 @@ class _TerminalPageState extends State<TerminalPage>
 
   @override
   void dispose() {
+    _behind.dispose();
     widget.notifier.removeListener(_onNotifier);
     _questionWatcher?.removeListener(_onQuestionPane);
     _questionWatcher?.dispose();
@@ -792,6 +795,12 @@ class _TerminalPageState extends State<TerminalPage>
         .push(phoneRoute((_) => AgentsListPage(notifier: widget.notifier)));
     if (mounted) setState(() {});
   }
+
+  /// Whether the reader is scrolled up and output has arrived below — see [_LatestChip].
+  final _behind = ValueNotifier<bool>(false);
+
+  /// Bumped by the chip to take the terminal back to the end.
+  int _jumpToEnd = 0;
 
   /// How far left a drag has gone, for the swipe that opens a new agent.
   double _swipedLeft = 0;
@@ -1628,6 +1637,10 @@ class _TerminalPageState extends State<TerminalPage>
                                                           ),
                                                         ),
                                                   showHeader: false,
+                                                  // The "Latest" chip under the
+                                                  // reader — see [_LatestChip].
+                                                  behind: _behind,
+                                                  jumpToEndRequest: _jumpToEnd,
                                                   // No composer, and so no grip above it: the
                                                   // page hands the pane its full height and the
                                                   // software keyboard drives the terminal
@@ -1748,6 +1761,29 @@ class _TerminalPageState extends State<TerminalPage>
                                   : null,
                             ),
                         ],
+                      ),
+                    ),
+                    // "Latest": up in the history while output arrives below, one
+                    // tap back to the end. Over the orb, so the two never meet.
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom:
+                          TerminalActionColumn.orbBottom +
+                          VoiceMicButton.extent +
+                          16,
+                      child: ValueListenableBuilder<bool>(
+                        valueListenable: _behind,
+                        builder: (context, behind, _) => behind && !_ownsInput
+                            ? Center(
+                                child: _LatestChip(
+                                  onTap: () {
+                                    _behind.value = false;
+                                    setState(() => _jumpToEnd++);
+                                  },
+                                ),
+                              )
+                            : const SizedBox.shrink(),
                       ),
                     ),
                     // The mic: Siri's orb, low at the foot and centred, floating
@@ -2324,7 +2360,8 @@ class _ControlBanner extends StatelessWidget {
 
   String get _title {
     if (busy) return 'Taking control…';
-    if (watching) return '${holderName ?? 'Another app'} is using this terminal';
+    if (watching)
+      return '${holderName ?? 'Another app'} is using this terminal';
     return takeoverNotice ?? 'Another app took control of this terminal';
   }
 
@@ -3077,3 +3114,58 @@ String _clipTitle(String name) {
 /// dead space either side and the three stay 24px each — under the 44 iOS asks
 /// for. Fixing that belongs in the shared button, where every screen's header
 /// would get it, not in a wrapper one page defines.
+
+/// "↓ Latest": the reader is up in the history and the agent has written more below. One tap is
+/// back at the end, following the stream again. Nothing while the reader is already there — output
+/// never moves a screen somebody is reading.
+class _LatestChip extends StatelessWidget {
+  const _LatestChip({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Semantics(
+      button: true,
+      label: 'Jump to the latest output',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Padding(
+          // A full touch target around a small pill.
+          padding: const EdgeInsets.all(8),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: floatingButtonFill,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: floatingButtonRim),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    LucideIcons.arrowDown,
+                    size: 14,
+                    color: AppPalette.textPrimary,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Latest',
+                    style: TextStyle(
+                      color: AppPalette.textPrimary,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

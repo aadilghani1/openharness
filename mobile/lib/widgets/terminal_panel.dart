@@ -93,6 +93,13 @@ class TerminalPanel extends StatefulWidget {
   final bool showHeader;
   final int focusRequest;
 
+  /// Set true while the reader is scrolled up in the history AND output has arrived below since —
+  /// the phone's "Latest" chip. Null for a host that draws no such chip.
+  final ValueNotifier<bool>? behind;
+
+  /// Bumped by the host to go back to the end and follow the stream again — the chip's tap.
+  final int jumpToEndRequest;
+
   /// Takes over the tap that would raise the software keyboard. Null leaves it
   /// to xterm, which is what every desktop tile does.
   ///
@@ -137,6 +144,8 @@ class TerminalPanel extends StatefulWidget {
     this.compactHeader = false,
     this.showHeader = true,
     this.focusRequest = 0,
+    this.behind,
+    this.jumpToEndRequest = 0,
     this.onInputTap,
     this.composerVisible = false,
     this.readOnly = false,
@@ -240,6 +249,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     WidgetsBinding.instance.addObserver(this);
     widget.session.attachViewport(this);
     widget.session.addListener(_onSessionChanged);
+    widget.session.outputTicks.addListener(_onOutput);
     terminalFontStore.addListener(_onFontChanged);
     // Colours repaint the view in place — no relayout, no resize frame — but
     // they still need a rebuild to reach it, and this widget reads the store
@@ -282,6 +292,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   @override
   void didUpdateWidget(TerminalPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.jumpToEndRequest != widget.jumpToEndRequest) _jumpToEnd();
     if (!identical(oldWidget.session, widget.session)) {
       _closeFind(restore: false, focus: false, rebuild: false);
       _clearLastFind();
@@ -290,9 +301,18 @@ class _TerminalPanelState extends State<TerminalPanel>
       _previewProgress.value = null;
       oldWidget.session.setCursorBlinkPhase(true);
       oldWidget.session.removeListener(_onSessionChanged);
+      oldWidget.session.outputTicks.removeListener(_onOutput);
       oldWidget.session.detachViewport(this);
       widget.session.attachViewport(this);
       widget.session.addListener(_onSessionChanged);
+      widget.session.outputTicks.addListener(_onOutput);
+      // A new agent starts at its end. Cleared after the frame: this is build.
+      final behind = widget.behind;
+      if (behind != null) {
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => behind.value = false,
+        );
+      }
       _composerFocusPending = false;
       _cancelDialInertia();
       _controller.clearSelection();
@@ -363,6 +383,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     _observeLinkModifiers(false);
     widget.session.setCursorBlinkPhase(true);
     widget.session.removeListener(_onSessionChanged);
+    widget.session.outputTicks.removeListener(_onOutput);
     widget.session.detachViewport(this);
     terminalFontStore.removeListener(_onFontChanged);
     terminalThemeStore.removeListener(_onFontChanged);
@@ -1210,6 +1231,24 @@ class _TerminalPanelState extends State<TerminalPanel>
     if (!_scrollController.hasClients) return;
     final position = _scrollController.position;
     _followTail = position.maxScrollExtent - position.pixels < 1;
+    if (_followTail) widget.behind?.value = false;
+  }
+
+  /// Output arrived. Below a reader scrolled up in the history, that is news — see [behind].
+  void _onOutput() {
+    if (!_followTail && widget.visible && _find == null) {
+      widget.behind?.value = true;
+    }
+  }
+
+  /// Back to the end, following the stream again — the host's "Latest".
+  ///
+  /// Runs from `didUpdateWidget`, inside a build, so [behind] is left to the host that asked — it
+  /// clears it with the tap — and to the scroll that follows.
+  void _jumpToEnd() {
+    _cancelDialInertia();
+    _followTail = true;
+    _laidOutTerminalView()?.scrollToBottom();
   }
 
   void _onScrollChanged() {
