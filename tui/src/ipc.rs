@@ -141,9 +141,11 @@ pub fn client_port(socket: Option<&str>, name: Option<&str>) -> Option<u16> {
     std::fs::read_to_string(path.with_extension("port")).ok()?.trim().parse().ok()
 }
 
-/// Which client to ask: -S path, -L name, $HN_SOCKET, else the newest.
+/// Which client to ask: -S path, -L name, $HN_SOCKET, $HN_SOCKET_NAME (what a client sets for
+/// what it runs, as tmux's $TMUX: a job's `hn …` reaches the client that ran it), else the newest.
 fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
     if let Some(p) = socket.map(str::to_string).or_else(|| std::env::var("HN_SOCKET").ok().filter(|s| !s.is_empty())) { return Some(PathBuf::from(p)) }
+    let name = name.map(str::to_string).or_else(|| std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()));
     if let Some(n) = name { return Some(dir().join(format!("{n}.sock"))) }
     let default = dir().join("default.sock");
     if default.exists() { return Some(default) }

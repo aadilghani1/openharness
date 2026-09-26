@@ -366,7 +366,7 @@ pub fn inbox_rows(app: &App) -> Vec<Row> {
         let head = format!("{} · {}", a.name, app.fleet.machine_name(&a.machine_id));
         let (mark, mark_color) = engine_mark(&a.engine);
         rows.push(Row::new(format!("{}:{}#", a.machine_id, a.id), q.prompt.clone()).extra(head.clone()).group(head.clone())
-            .lead(vec![span("◆ ", fg(theme::ATTENTION)), span(mark, fg(mark_color)), span(" ", Style::default())])
+            .lead(vec![span("? ", fg(theme::ATTENTION).add_modifier(ratatui::style::Modifier::REVERSED)), span(mark, fg(mark_color)), span(" ", Style::default())])
             .right(format!("{}s", q.since.elapsed().as_secs())));
         for (index, option) in q.options.iter().enumerate() {
             rows.push(Row::new(format!("{}:{}#{index}", a.machine_id, a.id), option.clone()).extra(head.clone()).group(head.clone())

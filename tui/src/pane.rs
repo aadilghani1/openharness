@@ -17,8 +17,10 @@ use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle, Processor};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use uuid::Uuid;
 
-pub const MIN_COLS: u16 = 40;
-pub const MIN_ROWS: u16 = 12;
+// A pane's program gets the pane's size, however small, as tmux gives it (a floor cropped a narrow
+// pane's lines: a 39-column pane at 80×24 lost a character from each).
+pub const MIN_COLS: u16 = 1;
+pub const MIN_ROWS: u16 = 1;
 pub const MAX_COLS: u16 = 300;
 pub const MAX_ROWS: u16 = 120;
 

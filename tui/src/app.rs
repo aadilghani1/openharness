@@ -2427,7 +2427,7 @@ impl App {
     pub fn window_title(&self) -> String {
         let focused = self.focused().and_then(|id| self.panes.get(&id)).and_then(|p| self.fleet.agent(&p.machine_id, &p.agent_id));
         let waiting = self.fleet.waiting();
-        let lead = if waiting > 0 { format!("◆{waiting} ") } else { String::new() };
+        let lead = if waiting > 0 { format!("?{waiting} ") } else { String::new() };
         match focused {
             Some(agent) => format!("{lead}{} — Harness", agent.name),
             None => format!("{lead}Harness"),
