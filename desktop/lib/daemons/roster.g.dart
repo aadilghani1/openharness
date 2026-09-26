@@ -118,6 +118,7 @@ const daemonRosterJson = r'''
     "secretGuaranteeAt": 8,
     "duplicateXp": 150,
     "overflowXp": 50,
+    "lessonXp": 25,
     "firstEgg": {
       "need": 3,
       "require": [

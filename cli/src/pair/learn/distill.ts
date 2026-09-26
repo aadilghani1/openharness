@@ -3,10 +3,11 @@
  * one-line description, a body of at most 30 lines) or a project note (at most 5 lines for AGENTS.md) —
  * and most signals become nothing.
  *
- *   model off (the default)  Template lessons only, and only for what needs no judgment: a test that
- *                            failed for two agents ("the failing test is flaky: <name>"), a command that
- *                            did, and steps repeated in order ("run X before Y"). A correction needs a
- *                            reader, so without one it teaches nothing.
+ *   model off (the default)  Template lessons only, and only for what needs no judgment: the same steps
+ *                            repeated in order, at least three times across at least two sessions ("run X
+ *                            before Y"). A failure or a correction needs a reader — a template that told
+ *                            agents a failing test was flaky taught them to rerun real failures — so
+ *                            without one they teach nothing.
  *   model on                 pair.jsonc `"model": true`: ONE small one-shot per signal (runRouterOneShot, via
  *                            the pair's PairOneShot), capped per hour, whose DEFAULT answer is "nothing worth
  *                            saving" — never "be active", which is how self-improving agents fill up with
@@ -20,7 +21,7 @@
  */
 import type { PairOneShot } from '../triage.js'
 import { isDenyClass } from '../classify.js'
-import { redact, refusal, untrusted, type Refusal } from './guard.js'
+import { codeSpan, inert, redact, refusal, untrusted, type Refusal } from './guard.js'
 import type { Lesson, Provenance, Signal } from './types.js'
 
 export const SKILL_BODY_MAX_LINES = 30
@@ -34,9 +35,11 @@ const HOUR_MS = 60 * 60_000
 export type DistillWhy = 'nothing' | 'no-template' | 'refused' | 'bad-json' | 'too-long' | 'bad-name' | 'empty'
   | 'timeout' | 'failed' | 'no-model' | 'cap'
 
+export type DistillSource = 'template' | 'model' | 'borrowed'
+
 export type Distilled =
-  | { lesson: Lesson; source: 'template' | 'model' }
-  | { lesson: null; why: DistillWhy; refusal?: Refusal; source?: 'template' | 'model' }
+  | { lesson: Lesson; source: DistillSource }
+  | { lesson: null; why: DistillWhy; refusal?: Refusal; source?: DistillSource }
 
 export interface DistillDeps {
   oneshot?: PairOneShot | null
@@ -108,40 +111,36 @@ export function slug(text: string, max = 64): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, max).replace(/-$/, '')
 }
 
-/** The lesson a signal holds without a model: only for a failure seen twice and for steps in order. */
+/** The repeats and the sessions a template lesson needs: what an agent does by habit, not by accident. */
+export const TEMPLATE_MIN_REPEATS = 3
+export const TEMPLATE_MIN_SESSIONS = 2
+
+/**
+ * The lesson a signal holds without a model: only steps repeated in order, three times or more across two
+ * sessions or more. Every step goes in as an inert code span (codeSpan): no backticks, no newlines, capped.
+ */
 export function templateLesson(signal: Signal): Lesson | null {
-  const project = signal.projectName ?? 'this project'
-  switch (signal.kind) {
-    case 'correction': return null
-    case 'repeat-failure': {
-      const failure = signal.failure
-      if (!failure?.name) return null
-      const who = whoHit(signal.from)
-      return failure.what === 'test'
-        ? { kind: 'note', lines: [`The failing test is flaky: \`${failure.name}\` failed for ${who} this week. Rerun it alone once before changing code for it.`] }
-        : { kind: 'note', lines: [`\`${failure.name}\` failed for ${who} this week. Read its error and fix the cause before running it again.`] }
-    }
-    case 'repeat-steps': {
-      const steps = signal.steps ?? []
-      if (steps.length < 3 || steps.some((step) => isDenyClass(step))) return null
-      const first = steps[0]!
-      const last = steps[steps.length - 1]!
-      const turns = new Set(signal.from.map((f) => `${f.agentId}:${f.session}:${f.turn}`)).size
-      return {
-        kind: 'skill',
-        name: slug(`run-${slug(first, 24)}-before-${slug(last, 24)}`),
-        description: `The steps agents repeat in ${project}, in order: ${steps.join(', then ')}. Use before running ${last} in ${project}.`,
-        body: [
-          `In ${project}, agents ran these steps in this order in ${turns} separate turns:`,
-          '',
-          ...steps.map((step, i) => `${i + 1}. \`${step}\``),
-          '',
-          `Run \`${first}\` before \`${steps[1]}\`, and \`${steps[steps.length - 2]}\` before \`${last}\`.`,
-          'If the project\'s own docs say otherwise, follow them.',
-        ].join('\n'),
-      }
-    }
-    default: return null
+  if (signal.kind !== 'repeat-steps') return null
+  const project = inert(signal.projectName ?? 'this project', 40) || 'this project'
+  const steps = (signal.steps ?? []).map((step) => inert(step, 80)).filter(Boolean)
+  if (steps.length < 3 || steps.some((step) => isDenyClass(step))) return null
+  const turns = new Set(signal.from.map((f) => `${f.agentId}:${f.session}:${f.turn}`)).size
+  const sessions = new Set(signal.from.map((f) => `${f.agentId}:${f.session}`)).size
+  if (turns < TEMPLATE_MIN_REPEATS || sessions < TEMPLATE_MIN_SESSIONS) return null
+  const first = steps[0]!
+  const last = steps[steps.length - 1]!
+  return {
+    kind: 'skill',
+    name: slug(`run-${slug(first, 24)}-before-${slug(last, 24)}`),
+    description: `The steps agents repeat in ${project}, in order: ${steps.join(', then ')}. Use before running ${last} in ${project}.`,
+    body: [
+      `In ${project}, agents ran these steps in this order in ${turns} separate turns:`,
+      '',
+      ...steps.map((step, i) => `${i + 1}. ${codeSpan(step)}`),
+      '',
+      `Run ${codeSpan(first)} before ${codeSpan(steps[1]!)}, and ${codeSpan(steps[steps.length - 2]!)} before ${codeSpan(last)}.`,
+      'If the project\'s own docs say otherwise, follow them.',
+    ].join('\n'),
   }
 }
 
@@ -151,6 +150,8 @@ const WHAT: Record<Signal['kind'], (signal: Signal) => string> = {
   'correction': () => 'The person corrected one of their coding agents right after its turn. Their words, and what the agent had just done, are below.',
   'repeat-failure': (signal) => `The same ${signal.failure?.what ?? 'check'} failed for two different agents in this project within a week: ${untrusted(signal.failure?.name ?? '', 160)}.`,
   'repeat-steps': (signal) => `Agents ran the same steps, in this order, in ${signal.from.length} separate turns in this project: ${(signal.steps ?? []).map((s) => untrusted(s, 60)).join(' > ')}.`,
+  // Borrowed lessons are guarded and proposed as they are (borrow.ts), never distilled; this is for completeness.
+  'borrowed': (signal) => `One agent (${untrusted(signal.borrowed?.engine ?? 'another engine', 20)}) saved this on its own.`,
 }
 
 /**
@@ -158,6 +159,11 @@ const WHAT: Record<Signal['kind'], (signal: Signal) => string> = {
  * that there is nothing worth saving.
  */
 export function distillPrompt(signal: Signal, opts: { home?: string | null } = {}): string {
+  // Everything that goes to a model is redacted once more, whole: secrets, emails and home folders out.
+  return redact(buildPrompt(signal, opts), { home: opts.home ?? null })
+}
+
+function buildPrompt(signal: Signal, opts: { home?: string | null }): string {
   const agents = signal.from.slice(0, 4).map((f) => `${f.engine} on ${untrusted(f.machine, 40)} (turn ${f.turn})`).join(', ')
   const evidence = signal.evidence.slice(0, 8).map((line) => `- ${untrusted(line, 300, { home: opts.home ?? null })}`).join('\n')
   return (
@@ -216,7 +222,7 @@ function printable(text: string, multiline: boolean): string {
 }
 
 /** Shape, size and safety, checked; emails and home paths redacted. What is saved is only ever this. */
-export function guardLesson(lesson: Lesson, source: 'template' | 'model', opts: { home?: string | null } = {}): Distilled {
+export function guardLesson(lesson: Lesson, source: DistillSource, opts: { home?: string | null; maxBodyLines?: number } = {}): Distilled {
   const refuse = (why: DistillWhy): Distilled => ({ lesson: null, why, source })
   let clean: Lesson
   if (lesson.kind === 'skill') {
@@ -226,7 +232,7 @@ export function guardLesson(lesson: Lesson, source: 'template' | 'model', opts: 
     const body = printable(lesson.body, true).replace(/\n{3,}/g, '\n\n').trim()
     if (!description || !body) return refuse('empty')
     const lines = body.split('\n')
-    if (description.length > DESCRIPTION_MAX || lines.length > SKILL_BODY_MAX_LINES || lines.some((line) => line.length > LINE_MAX)) return refuse('too-long')
+    if (description.length > DESCRIPTION_MAX || lines.length > (opts.maxBodyLines ?? SKILL_BODY_MAX_LINES) || lines.some((line) => line.length > LINE_MAX)) return refuse('too-long')
     clean = { kind: 'skill', name, description, body }
   } else {
     const lines = lesson.lines.map((line) => printable(line, false).trim().replace(/^[-*]\s+/, '')).filter(Boolean)

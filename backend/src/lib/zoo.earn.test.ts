@@ -70,7 +70,7 @@ describe('the rules the server grants by', () => {
       history: { days: 7 },
     })
     expect(RULES.bond).toEqual({ xpPerTurn: 1, xpPerDay: 5, levels: [0, 50, 150, 300, 600] })
-    expect({ overflowXp: RULES.overflowXp, duplicateXp: RULES.duplicateXp }).toEqual({ overflowXp: 50, duplicateXp: 150 })
+    expect({ overflowXp: RULES.overflowXp, duplicateXp: RULES.duplicateXp, lessonXp: RULES.lessonXp }).toEqual({ overflowXp: 50, duplicateXp: 150, lessonXp: 25 })
     expect(RULES.historyDates).toEqual({ '04-01': 'teapot', '09-09': 'moth', '10-31': 'zombie' })
     expect(Object.keys(RULES.eggs)).toEqual(expect.arrayContaining(['turn', 'week', 'marathon', 'night', 'history']))
   })
@@ -495,6 +495,7 @@ describe('stored and seeded progress', () => {
       history: ['2026-09-09'],
       held: [{ kind: 'turn' }, { kind: 'history', date: '2026-09-09' }, { kind: 'week' }],
       batches: [],
+      lessons: [],
     })
     expect(parseZoo({}).progress).toEqual(emptyProgress())
   })

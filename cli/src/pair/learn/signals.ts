@@ -19,7 +19,7 @@
  */
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { untrusted } from './guard.js'
+import { redactDeep, untrusted } from './guard.js'
 import { contentHash, projectHash, projectName, type Provenance, type Signal } from './types.js'
 
 export const FAILURE_WINDOW_MS = 7 * 24 * 60 * 60_000
@@ -469,7 +469,7 @@ export class LessonSignals {
     try {
       mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
       const tmp = `${file}.tmp`
-      writeFileSync(tmp, JSON.stringify(this.state), { mode: 0o600 })
+      writeFileSync(tmp, JSON.stringify(redactDeep(this.state, { home: this.deps.home ?? null })), { mode: 0o600 })
       chmodSync(tmp, 0o600)
       renameSync(tmp, file)
     } catch (err) {

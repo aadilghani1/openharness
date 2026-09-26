@@ -11,12 +11,13 @@ import { join } from 'node:path'
 import { LessonDistiller } from './distill.js'
 import { LessonStore, type LessonRecord } from './store.js'
 import { PairLearner, joinProposals, LESSON_ASK_TTL_MS, LESSON_PROPOSAL_GAP_MS, LESSON_REPROPOSE_MS, DISTILL_EVERY_MS, SIGNAL_MAX_WAIT_MS } from './propose.js'
-import { LESSONS_BEGIN } from './publish.js'
+import { LESSONS_BEGIN, notesPath } from './publish.js'
 import { projectHash, type Signal } from './types.js'
 import { PairVoice, DISPLAY_MS } from '../voice.js'
 import { PairBrain } from '../brain.js'
 import { PairControl, type ControlDeps } from '../control.js'
 import { PairToken } from '../token.js'
+import { ApprovalNonces, type CallerVerdict } from './approval.js'
 import { pairCommand, parsePairArgs, PairUsageError, type PairSocket } from '../client.js'
 import type { PairFleet } from '../fleet.js'
 import type { PairTriage } from '../triage.js'
@@ -40,7 +41,7 @@ function stepsSignal(agentId = 'a1', steps = ['npm run db:reset', 'npm run migra
   const project = projectHash(ws)
   return {
     kind: 'repeat-steps', key: `steps:${project}:${steps.join('>')}:${++signalSeq}`, project, projectName: 'api', at: Date.now(), steps,
-    from: [1, 2, 3].map((turn) => ({ engine: turn === 2 ? 'codex' : 'claude', machine: 'desk', agentId, session: 's', turn, project, at: Date.now() })),
+    from: [1, 2, 3].map((turn) => ({ engine: turn === 2 ? 'codex' : 'claude', machine: 'desk', agentId, session: `s${turn}`, turn, project, at: Date.now() })),
     evidence: [steps.join(' ; ')],
   }
 }
@@ -53,7 +54,7 @@ function failureSignal(agentId = 'b1'): Signal {
   }
 }
 
-function world(opts: { autonomy?: Autonomy; present?: boolean } = {}) {
+function world(opts: { autonomy?: Autonomy; present?: boolean; agentsMd?: boolean } = {}) {
   let autonomy: Autonomy = opts.autonomy ?? 'suggest'
   let present = opts.present !== false
   let busy = false
@@ -68,7 +69,8 @@ function world(opts: { autonomy?: Autonomy; present?: boolean } = {}) {
   const learner = new PairLearner({
     store, distiller: new LessonDistiller({ now: Date.now }), pairedDaemon: () => 'tim', autonomy: () => autonomy,
     voice, sendLocal: (f) => frames.push(f), present: () => present, focused: (agentId) => focused.has(agentId), busy: () => busy,
-    projects: () => [join(dir, 'code', 'web'), ws], learned, credit, machineId: () => 'machine-a', changed, home: join(dir, 'home'), now: Date.now,
+    projects: () => [join(dir, 'code', 'web'), ws], agentsMd: () => opts.agentsMd === true,
+    learned, credit, machineId: () => 'machine-a', changed, home: join(dir, 'home'), now: Date.now,
   })
   const says = () => frames.filter((f) => f.type === 'daemon_say').map((f) => f.payload as DaemonSay)
   const add = async (signal: Signal): Promise<LessonRecord> => {
@@ -79,8 +81,15 @@ function world(opts: { autonomy?: Autonomy; present?: boolean } = {}) {
     if (!record) throw new Error('not pending')
     return record
   }
+  /** A note, as only a model distills one now (a failure has no template), then a tick to propose it. */
+  const addNote = async (lines = ['Run the billing tests alone before changing code for them.']): Promise<LessonRecord> => {
+    const added = store.add({ lesson: { kind: 'note', lines }, signal: failureSignal(), learnedBy: 'tim', source: 'model' })
+    if (!added.ok) throw new Error(added.error)
+    await learner.tick()
+    return added.record
+  }
   return {
-    learner, store, voice, frames, says, learned, credit, changed, focused, add,
+    learner, store, voice, frames, says, learned, credit, changed, focused, add, addNote,
     set: (patch: { autonomy?: Autonomy; present?: boolean; busy?: boolean }) => {
       if (patch.autonomy) autonomy = patch.autonomy
       if (patch.present !== undefined) present = patch.present
@@ -121,6 +130,8 @@ describe('propose: one line, when every rule allows it', () => {
     expect(say).toMatchObject({ mood: 'ask', ttlMs: DISPLAY_MS, about: { machineId: 'machine-a', agentId: 'a1' } })
     expect(say!.line).toBe('[y/n/s] teach your agents "run-npm-run-db-reset-before-npm-test"? the same steps, 3 times in api.')
     expect(say!.actions.map((a) => [a.key, a.label])).toEqual([['y', 'teach'], ['n', 'skip'], ['s', 'show']])
+    // The line's id is its one-time nonce: unguessable, and never the same twice.
+    expect(say!.id).toMatch(new RegExp(`^lesson:${record.id}:[0-9a-f]{32}$`))
     expect(w.learner.pending()).toEqual([{ id: say!.id, line: say!.line, actions: say!.actions }])
     expect(w.store.proposedAt(record.id)).toBe(Date.now())
     expect(w.changed).toHaveBeenCalled()
@@ -130,12 +141,12 @@ describe('propose: one line, when every rule allows it', () => {
     const w = world()
     await w.add(stepsSignal())
     await w.learner.act(w.says()[0]!.id, 'n')
-    await w.add(failureSignal())
+    await w.addNote()
     expect(w.says()).toHaveLength(1)
     vi.advanceTimersByTime(LESSON_PROPOSAL_GAP_MS)
     await w.learner.tick()
     expect(w.says()).toHaveLength(2)
-    expect(w.says()[1]!.line).toBe('[y/n/s] add a note to api\'s AGENTS.md? claude and codex hit the same failure.')
+    expect(w.says()[1]!.line).toBe('[y/n/s] add a note for api? claude and codex hit the same failure.')
   })
 
   it('never while a need is showing, never about the focused pane, never at watch, never with nobody here', async () => {
@@ -227,23 +238,37 @@ describe('the keys', () => {
   })
 })
 
-describe('teaching a note: only into an AGENTS.md or CLAUDE.md that is there', () => {
-  it('approved without one: kept, nothing written, and the way to ask for a new file named', async () => {
+describe('teaching a note: untracked unless the project is opted in to AGENTS.md', () => {
+  it('by default: into .harness/lessons.md, never AGENTS.md, and --create is refused', async () => {
+    writeFileSync(join(ws, 'AGENTS.md'), '# API\n')
     const w = world()
-    const record = await w.add(failureSignal())
+    const record = await w.addNote()
+    const result = await w.learner.act(w.says()[0]!.id, 'y')
+    expect(result).toMatchObject({ ok: true, kind: 'note', published: { ok: true, file: notesPath(ws), untracked: true, created: true } })
+    expect(result.line).toBe('noted in api\'s .harness/lessons.md.')
+    expect(readFileSync(join(ws, 'AGENTS.md'), 'utf8')).toBe('# API\n')
+    expect(readFileSync(notesPath(ws), 'utf8')).toContain(`<!-- lesson:${record.id} -->`)
+    expect(await w.learner.local({ action: 'approve', id: record.id, create: true, confirmed: true })).toMatchObject({ ok: true, published: { ok: false, error: 'NOT_OPTED_IN' } })
+    expect(await w.learner.local({ action: 'revert', id: record.id })).toMatchObject({ ok: true, unpublished: { file: notesPath(ws) } })
+    expect(existsSync(notesPath(ws))).toBe(false)
+  })
+
+  it('opted in, without an AGENTS.md: kept, nothing written, and the way to ask for a new file named', async () => {
+    const w = world({ agentsMd: true })
+    const record = await w.addNote()
     const result = await w.learner.act(w.says()[0]!.id, 'y')
     expect(result).toMatchObject({ ok: true, kind: 'note', published: { ok: false, error: 'NO_INSTRUCTION_FILE' } })
     expect(result.line).toBe(`kept "note-${record.id}". api has no AGENTS.md: harness pair lessons approve ${record.id} --create writes one.`)
     expect(existsSync(join(ws, 'AGENTS.md'))).toBe(false)
     // The person asks for exactly that, at their terminal.
     expect(await w.learner.local({ action: 'approve', id: record.id, create: true, confirmed: true })).toMatchObject({ ok: true, published: { ok: true, file: join(ws, 'AGENTS.md').replace(join(dir, 'home'), '~'), created: true } })
-    expect(readFileSync(join(ws, 'AGENTS.md'), 'utf8')).toContain('The failing test is flaky: `src/billing.spec.ts > rounds cents`')
+    expect(readFileSync(join(ws, 'AGENTS.md'), 'utf8')).toContain('Run the billing tests alone')
   })
 
-  it('approved with one: written into its block; reverted: taken back out and git-reverted', async () => {
+  it('opted in, with one: written into its block; reverted: taken back out and git-reverted', async () => {
     writeFileSync(join(ws, 'AGENTS.md'), '# API\n')
-    const w = world()
-    const record = await w.add(failureSignal())
+    const w = world({ agentsMd: true })
+    const record = await w.addNote()
     expect(await w.learner.act(w.says()[0]!.id, 'y')).toMatchObject({ ok: true, published: { ok: true, file: join(ws, 'AGENTS.md') } })
     expect(readFileSync(join(ws, 'AGENTS.md'), 'utf8')).toContain(LESSONS_BEGIN)
     const reverted = await w.learner.local({ action: 'revert', id: record.id })
@@ -268,29 +293,61 @@ describe('harness pair lessons', () => {
     expect(await w.learner.local({ action: 'revert', id: record.id })).toMatchObject({ ok: false, error: 'NOT_APPROVED' })
   })
 
-  it('the control interface routes the verb with pairing off, and never lets the pair harness approve', async () => {
-    const w = world()
+  it('the control interface routes the verb with pairing off, and approval is the person\'s alone', async () => {
+    const w = world({ present: false })
+    const record = await w.add(stepsSignal())
     const token = new PairToken(join(dir, 'token'))
     const secret = token.rotate()
     const lessons = vi.fn((payload: Frame) => w.learner.local(payload))
-    const control = new PairControl({
+    // Who is asking, by connection: the terminal (pid 500), an agent in a harness pane, a caller it cannot see.
+    const callers: Record<string, CallerVerdict> = {
+      term: { ok: true, pid: 500 },
+      term2: { ok: true, pid: 501 },
+      agent: { ok: false, error: 'INSIDE_HARNESS', detail: 'inside a harness' },
+      unix: { ok: false, error: 'UNVERIFIED', detail: 'cannot see' },
+    }
+    const base = {
       owner: {} as ControlDeps['owner'], fleet: { isRunning: false } as unknown as ControlDeps['fleet'],
       local: { machineId: () => 'machine-a', name: () => 'desk', journal: () => ({ epoch: 'e', seq: 0, entries: [] }), harnesses: () => [] },
-      pairing: { enabled: () => false, pairedDaemon: () => null }, autonomy: () => 'suggest', tokenMatches: (c) => token.matches(c),
+      pairing: { enabled: () => false, pairedDaemon: () => null }, autonomy: () => 'suggest' as Autonomy, tokenMatches: (c: string) => token.matches(c),
       voice: { say: () => true, unsay: () => true }, present: () => true, started: { has: () => false, add: () => {} } as unknown as ControlDeps['started'],
       lessons, now: Date.now, newId: () => 'x',
-    })
+    }
+    const control = new PairControl({ ...base, person: { verify: async (connId) => callers[connId] ?? callers.unix!, nonces: new ApprovalNonces(Date.now) } })
     expect(control.verbs.has('lessons')).toBe(true)
-    expect(await control.local({ verb: 'lessons', action: 'list' })).toMatchObject({ ok: true, lessons: [] })
-    expect(await control.local({ verb: 'lessons', action: 'approve', id: 'beef01', confirmed: true, token: secret })).toMatchObject({ ok: false, error: 'PERSON_ONLY' })
-    expect(await control.local({ verb: 'lessons', action: 'show', id: 'beef01', token: secret })).toMatchObject({ ok: false, error: 'NOT_FOUND' })
-    expect(lessons.mock.calls.every(([payload]) => !('token' in payload))).toBe(true)
+    expect(await control.local({ verb: 'lessons', action: 'list' })).toMatchObject({ ok: true, lessons: [expect.objectContaining({ id: record.id })] })
+    // The pair harness's token, a bare `confirmed`, a caller inside a harness or one it cannot see: never.
+    expect(await control.local({ verb: 'lessons', action: 'approve', id: record.id, confirmed: true, token: secret }, 'term')).toMatchObject({ ok: false, error: 'PERSON_ONLY' })
+    expect(await control.local({ verb: 'lessons', action: 'challenge', for: 'approve', id: record.id, token: 'anything' }, 'term')).toMatchObject({ ok: false, error: 'PERSON_ONLY' })
+    expect(await control.local({ verb: 'lessons', action: 'approve', id: record.id, confirmed: true }, 'term')).toMatchObject({ ok: false, error: 'NONCE_REQUIRED' })
+    expect(await control.local({ verb: 'lessons', action: 'challenge', for: 'approve', id: record.id }, 'agent')).toMatchObject({ ok: false, error: 'INSIDE_HARNESS' })
+    expect(await control.local({ verb: 'lessons', action: 'challenge', for: 'approve', id: record.id }, 'unix')).toMatchObject({ ok: false, error: 'UNVERIFIED' })
+    expect(await control.local({ verb: 'lessons', action: 'challenge', for: 'teach', id: record.id }, 'term')).toMatchObject({ ok: false, error: 'BAD_REQUEST' })
+    // The person's terminal: a challenge shows the lesson and hands out a nonce bound to that process.
+    const challenge = await control.local({ verb: 'lessons', action: 'challenge', for: 'approve', id: record.id }, 'term')
+    expect(challenge).toMatchObject({ ok: true, text: expect.stringContaining(`name: ${record.name}`), nonce: expect.stringMatching(/^[0-9a-f]{32}$/) })
+    expect(await control.local({ verb: 'lessons', action: 'approve', id: record.id, nonce: challenge.nonce }, 'term2')).toMatchObject({ ok: false, error: 'NONCE_REQUIRED' })
+    const again = await control.local({ verb: 'lessons', action: 'challenge', for: 'approve', id: record.id }, 'term')
+    expect(await control.local({ verb: 'lessons', action: 'approve', id: record.id, nonce: again.nonce }, 'agent')).toMatchObject({ ok: false, error: 'INSIDE_HARNESS' })
+    const third = await control.local({ verb: 'lessons', action: 'challenge', for: 'approve', id: record.id }, 'term')
+    expect(await control.local({ verb: 'lessons', action: 'approve', id: record.id, nonce: third.nonce }, 'term')).toMatchObject({ ok: true, learned: record.name })
+    expect(await control.local({ verb: 'lessons', action: 'approve', id: record.id, nonce: third.nonce }, 'term')).toMatchObject({ ok: false, error: 'NONCE_REQUIRED' })
+    // The learner never saw a caller's own `confirmed`, token or nonce.
+    expect(lessons.mock.calls.every(([payload]) => !('token' in payload) && !('nonce' in payload))).toBe(true)
+    expect(lessons.mock.calls.filter(([payload]) => payload.confirmed === true)).toHaveLength(1)
+    // A daemon that cannot tell who is asking approves nothing through this door.
+    const blind = new PairControl(base)
+    expect(await blind.local({ verb: 'lessons', action: 'challenge', for: 'approve', id: record.id }, 'term')).toMatchObject({ ok: false, error: 'PERSON_ONLY' })
+    expect(await blind.local({ verb: 'lessons', action: 'show', id: record.id, token: secret })).toMatchObject({ ok: true })
   })
 
-  it('the CLI parses the verbs, shows the lesson and asks before it approves', async () => {
+  it('the CLI parses the verbs; approve is refused inside a harness, else challenged, shown and asked', async () => {
     expect(parsePairArgs('lessons', []).payload).toEqual({ verb: 'lessons', action: 'list' })
     expect(parsePairArgs('lessons', ['approve', 'beef01', '--create', '--json'])).toEqual({ payload: { verb: 'lessons', action: 'approve', id: 'beef01', create: true }, json: true })
+    expect(parsePairArgs('lessons', ['export', '--dry-run']).payload).toEqual({ verb: 'lessons', action: 'export', dryRun: true })
+    expect(parsePairArgs('lessons', ['restore', 'beef01']).payload).toEqual({ verb: 'lessons', action: 'restore', id: 'beef01' })
     expect(() => parsePairArgs('lessons', ['revert'])).toThrow(PairUsageError)
+    expect(() => parsePairArgs('lessons', ['restore'])).toThrow(PairUsageError)
     expect(() => parsePairArgs('lessons', ['teach', 'x'])).toThrow(PairUsageError)
     const sent: Frame[] = []
     const connect = (): PairSocket => {
@@ -302,7 +359,7 @@ describe('harness pair lessons', () => {
           if (frame.type === 'machine_select') message({ type: 'connected', payload: {} })
           if (frame.type === 'pair') {
             sent.push(frame.payload)
-            const reply = frame.payload.action === 'show' ? { ok: true, text: '---\nname: x\n---\nDo it.\n' } : { ok: true, learned: 'x' }
+            const reply = frame.payload.action === 'challenge' ? { ok: true, text: '---\nname: x\n---\nDo it.\n', nonce: 'ab'.repeat(16), expiresInMs: 1 } : { ok: true, learned: 'x' }
             message({ type: 'pair_result', payload: { requestId: frame.payload.requestId, ...reply } })
           }
         },
@@ -316,18 +373,27 @@ describe('harness pair lessons', () => {
     vi.useRealTimers()
     expect(await pairCommand(['lessons', 'approve', 'beef01', '--json'], base)).toBe(1)
     expect(out.pop()).toContain('"error":"CONFIRM"')
+    // Inside a harness pane: refused before anything is asked of the daemon.
+    const yes = async () => true
+    expect(await pairCommand(['lessons', 'approve', 'beef01', '--json'], { ...base, confirm: yes, env: { HARNESS_CONTEXT_FILE: '/x/CONTEXT.md' } })).toBe(1)
+    expect(out.pop()).toContain('"error":"INSIDE_HARNESS"')
+    expect(await pairCommand(['lessons', 'approve', 'beef01', '--json'], { ...base, confirm: yes, paneSession: async () => 'harness-claude-17' })).toBe(1)
+    expect(out.pop()).toContain('"error":"INSIDE_HARNESS"')
     expect(sent).toEqual([])
     expect(await pairCommand(['lessons', 'approve', 'beef01', '--json'], { ...base, confirm: async () => false })).toBe(1)
     expect(out.pop()).toBe('{"ok":false,"error":"DECLINED"}')
     const asked: string[] = []
-    expect(await pairCommand(['lessons', 'approve', 'beef01', '--json'], { ...base, confirm: async (q) => { asked.push(q); return true } })).toBe(0)
+    expect(await pairCommand(['lessons', 'approve', 'beef01', '--json'], { ...base, paneSession: async () => 'work', confirm: async (q) => { asked.push(q); return true } })).toBe(0)
     expect(asked).toEqual(['Teach lesson beef01 to your agents? [y/N] '])
     expect(errors).toContain('---\nname: x\n---\nDo it.\n')
     expect(sent.map(({ requestId: _r, ...p }) => p)).toEqual([
-      { verb: 'lessons', action: 'show', id: 'beef01' },
-      { verb: 'lessons', action: 'show', id: 'beef01' },
-      { verb: 'lessons', action: 'approve', id: 'beef01', confirmed: true },
+      { verb: 'lessons', action: 'challenge', for: 'approve', id: 'beef01' },
+      { verb: 'lessons', action: 'challenge', for: 'approve', id: 'beef01' },
+      { verb: 'lessons', action: 'approve', id: 'beef01', nonce: 'ab'.repeat(16) },
     ])
+    sent.length = 0
+    expect(await pairCommand(['lessons', 'export', '--dry-run', '--json'], base)).toBe(0)
+    expect(sent.map(({ requestId: _r, ...p }) => p)).toEqual([{ verb: 'lessons', action: 'export', dryRun: true }])
   })
 })
 

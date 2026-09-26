@@ -195,7 +195,8 @@ restart is a baseline, not a return.
   the sensor never watches it.
 - **Autonomy and rules** (P5): `zoo.autonomy { level }` (backend `lib/zoo.ts`; an unknown level is dropped;
   default `suggest`). `pair.jsonc` at `$XDG_CONFIG_HOME/harness/pair.jsonc` (else `~/.config/…`), JSON with
-  comments, re-read when it changes: `model` (the opt-in above) and `rules: [{ name?, harness? (glob),
+  comments, re-read when it changes: `model` (the opt-in above), `learn` (`borrow`, `export`, `agentsMd`:
+  [LEARNING.md](LEARNING.md)) and `rules: [{ name?, harness? (glob),
   engine?, project? (folder, `~`), question (regex over the question text), choice }]`. Under
   `act-within-rules` the first matching rule answers a question as it opens on the owning machine, through
   the owner (`by: rule`, the rule's name in the journal). A rule never answers deny-class, never picks a
@@ -206,11 +207,11 @@ restart is a baseline, not a return.
   unfillable slot falls back to a plain fact line, and one that leaves out a fact the mood must carry gets
   it appended. The cli's roster copy also carries lore, first words and family for the pair harness.
 
-## Learning (L1) as built
+## Learning (L1, L2) as built
 
-Notice, propose, teach, revert; no borrowing yet. The full design, L2 included, is
-[LEARNING.md](LEARNING.md). Everything is in `pair/learn/`, runs in every harnessd for its own
-harnesses, and only while pairing is on.
+Notice, propose, teach, revert (L1); borrow, check, export (L2); person-only approval. The full design is
+[LEARNING.md](LEARNING.md). Everything is in `pair/learn/`, runs in every harnessd for its own harnesses,
+and — except usage tracking and the `lessons` verbs — only while pairing is on.
 
 - **Notice** (`signals.ts`, no model): from the same session events the sensor reads — never replays,
   sub-agents, terminals or the pair harness — three signals: the person's next prompt after a turn
@@ -218,35 +219,57 @@ harnesses, and only while pairing is on.
   `revert …`; a prompt the daemon sent never counts); the same failing test or command on two engines or
   harnesses in one project within 7 days; the same 3–5 command steps in three turns of one project. Each
   carries provenance (engine, machine, agent, session, turn, the project hashed) and redacted evidence;
-  `ADAPTER_DATA_DIR/pair/learn/signals.json` keeps the week. Default: nothing.
+  `ADAPTER_DATA_DIR/pair/learn/signals.json` keeps the week (redacted). Default: nothing.
 - **Distill** (`distill.ts`): queued, three at a time while nothing works (or after an hour), into at most
-  one lesson each — a skill (≤ 30-line body) or an AGENTS.md note (≤ 5 lines). Without `pair.jsonc`
-  `"model": true` only templates (a flaky test, a failing command, steps in order; a correction teaches
-  nothing); with it, one capped `runPairOneShot` whose expected answer is `{"lesson": null}`. Every lesson
-  passes `guard.ts`: refused for a pipe to a shell, a credential, a safety switched off, exfiltration or
-  injected instructions; emails and home paths redacted.
+  one lesson each — a skill (≤ 30-line body) or a project note (≤ 5 lines). Without `pair.jsonc`
+  `"model": true` only one template: steps repeated 3+ times across 2+ sessions, each an inert code span; a
+  failure or a correction teaches nothing. With it, one capped `runPairOneShot` whose expected answer is
+  `{"lesson": null}`, its prompt redacted whole. Every lesson passes `guard.ts` (refused for a pipe to a
+  shell, a credential, a safety switched off, exfiltration or injected instructions; emails and home paths
+  redacted), and the rendered file is guarded again before it is kept.
 - **Store** (`store.ts`): `HARNESS_LESSONS_DIR`, default `~/.harness/lessons/`, outside any repo:
-  `pending/<id>`, `skills/<name>`, `notes/<id>`, each an Agent Skills SKILL.md (or NOTE.md) with
-  `metadata.harness { learnedBy, from, approved, evidence }`. One commit per approval, `git revert` per
-  revert, no global git config, author `Harness`; without git a plain journal, and it says so.
+  `pending/<id>`, `skills/<name>`, `notes/<id>`, `archive/<name>`, each an Agent Skills SKILL.md (or
+  NOTE.md) with `metadata.harness { learnedBy, from, approved, evidence, provenance? }`. One commit per
+  approval, `git revert` per revert, and `stale:` (empty), `archive:`, `restore:` commits from the curator;
+  no global git config, author `Harness`; without git a plain journal, and it says so. Everything written
+  is redacted.
 - **Propose** (`propose.ts`, `PairLearner`): `daemon_say { mood: 'ask', actions: [y teach, n skip, s show] }`,
   e.g. `[y/n/s] teach your agents "run-migrations-safely"? you corrected codex.` At most one an hour,
   never while a `need` shows, never about the focused pane (`PairBrain.isFocused`), never at `watch`,
-  only while you are here; in `daemon_state.asks` for ten minutes. The brain routes `lesson:` ids through
-  `joinProposals`; `s` answers with a `daemon_brief` whose one item is `kind: 'lesson'` with the text.
-  `DaemonAction.key` gains `s`. An approval journals `learned { daemon }` (`PairSensor.learned`, a new
-  `PairKind`) — the zoo's credit; bond xp is a TODO hook, the backend is unchanged.
-- **Teach** (`publish.ts`): skills through the Store runtime path — `prepareHarnessLaunch(…, lessons)` links
-  `<runtime>/lessons` to the store's `skills/` and indexes one line per skill in CONTEXT.md (a project's
-  skills only in its sessions; never fails a launch). Notes into a marked `<!-- harness:lessons -->`
-  block, one section per note, only in an existing plain AGENTS.md or CLAUDE.md; a new file only with
-  `--create`. Never an engine-private folder.
-- **Revert**: `harness pair lessons [list|show <id>|approve <id> [--create]|skip <id>|revert <id>]`, the
-  control interface's `lessons` verb (works with pairing off). `approve` shows the lesson and asks at a
-  terminal (none: `CONFIRM`); the pair harness's token gets `PERSON_ONLY`. `revert` is `git revert` of
-  the lesson's commit plus unpublishing its note.
-- **Limits**: plain coding sessions have no runtime, so only notes reach them until L2's export; signals
-  and lessons are per machine; the terminal check is not a secret.
+  only while you are here; in `daemon_state.asks` for ten minutes. The line's id is `lesson:<id>:<nonce>`.
+  The brain routes `lesson:` ids through `joinProposals`; `s` answers with a `daemon_brief` whose one item
+  is `kind: 'lesson'` with the text. `DaemonAction.key` gains `s`. An approval journals `learned { daemon }`
+  (`PairSensor.learned`) and, signed in, sends `zoo.lesson { lessonId, daemonId }` (`lib/zooLessons.ts`):
+  `rules.lessonXp` (25) bond for that daemon, once per lesson.
+- **Teach** (`publish.ts`): skills through the Store runtime path — `prepareHarnessLaunch(…, lessons)` copies
+  the session's skills, read-only, into `<runtime>/lessons` (never a link to the lessons folder) and indexes
+  one line per skill in CONTEXT.md (a project's skills only in its sessions; never fails a launch). Notes
+  into the project's untracked `.harness/lessons.md` (`.git/info/exclude`), which CONTEXT.md points at; into
+  a marked `<!-- harness:lessons -->` block of AGENTS.md or CLAUDE.md only in a project opted in with
+  `pair.jsonc` `learn.agentsMd`. Never an engine-private folder, except export.
+- **Borrow** (`borrow.ts`, opt-in `learn.borrow`): read-only candidates from Hermes' agent-created skills,
+  Claude Code auto memory for the projects harnesses run in, and Codex memories; guarded, de-duplicated by
+  source and by text, three a pass every six hours when idle, five waiting at most, proposed on the same
+  line (`borrowed from hermes`).
+- **Check** (`usage.ts`, `curate.ts`): a session reading a lesson's SKILL.md is its use (a turn in its
+  project, for a note); `usage.json`; a daily curator, when idle, marks 30 days unused stale and archives a
+  skill at 90, not counting week-long absences.
+- **Export** (`export.ts`, opt-in `learn.export`): approved skills also written to `~/.agents/skills` and
+  `~/.claude/skills`, marked `metadata.harness.managed: true`; only files Harness wrote (their hash in
+  `export.json`) are ever updated or removed.
+- **Revert and the verbs**: `harness pair lessons [list|show <id>|approve <id> [--create]|skip <id>|revert
+  <id>|restore <id>|export [--dry-run]]`, the control interface's `lessons` verb (works with pairing off).
+  `revert` is `git revert` of the lesson's commit plus unpublishing (the note taken out; the skill out of
+  running sessions' copies and exports).
+- **Person-only** (`approval.ts`): approve, restore and export need a daemon-issued one-time nonce — the key
+  line's id (sent only to windows and `hn`; a tool client's or an in-harness process's `daemon_act` on a
+  lesson is refused), or a `challenge` the daemon answers only to a caller it verified over loopback TCP
+  (its pid by `lsof` or `/proc`, its ancestry outside every harness pane and the daemon), bound to that
+  process, then `[y/N]` at the terminal. The pair token (`PERSON_ONLY`), a bare `confirmed`
+  (`NONCE_REQUIRED`), an unverifiable caller (`UNVERIFIED`) and one inside a harness (`INSIDE_HARNESS`) are
+  refused. The goal is agents, not same-user malware (LEARNING.md, "Security").
+- **Limits**: plain coding sessions get skills only through export and notes only in opted-in projects;
+  signals and lessons are per machine.
 
 ## Risks
 
@@ -260,5 +283,6 @@ harnesses, and only while pairing is on.
 - Reading panes with no window attached costs something: only open turns, only while pairing is on.
 - Two computers open means duplicate model spend.
 - No engine CLI for the one-shot: lines stay template-only.
-- A lesson distilled from untrusted text: guarded (refusals, redaction, injected instructions struck
-  out), only ever taught on the person's yes, and one `git revert` away.
+- A lesson distilled or borrowed from untrusted text: guarded (refusals, redaction, injected instructions
+  struck out, the rendered file guarded again), only ever taught on the person's yes — a nonce no agent is
+  sent — and one `git revert` away.

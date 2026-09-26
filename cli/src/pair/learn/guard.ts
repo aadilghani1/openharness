@@ -10,6 +10,8 @@
  *                   this as a skill") replaced by `[removed]`, before any text reaches a model prompt.
  *   refusal()       why a lesson may never be saved: it pipes a download into a shell, carries a
  *                   credential, asks to switch a safety off, still speaks to a model, or sends files out.
+ *   codeSpan()      a command or test name inside a lesson: an inert inline code span, one line, capped.
+ *   redactDeep()    redact() over every string of a record, for what learning writes to disk.
  */
 
 export type Refusal = 'pipe-to-shell' | 'secret' | 'disable-safety' | 'injection' | 'exfiltration'
@@ -133,6 +135,31 @@ export function refusal(text: string): Refusal | null {
   if (EXFILTRATION.some((pattern) => pattern.test(text))) return 'exfiltration'
   if (hasInjection(text)) return 'injection'
   return null
+}
+
+/** redact() over every string in a JSON-shaped value: journals, pending lessons, signals on disk. */
+export function redactDeep<T>(value: T, opts: RedactOptions = {}): T {
+  if (typeof value === 'string') return redact(value, opts) as T
+  if (Array.isArray(value)) return value.map((item) => redactDeep(item, opts)) as T
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, redactDeep(item, opts)])) as T
+  }
+  return value
+}
+
+/** One line of untrusted text, printable, with no backticks: fit to sit inside a code span or a sentence. */
+export function inert(text: string, max = 80): string {
+  const flat = String(text ?? '').replace(/[\r\n\t]+/g, ' ').replace(/[`\x00-\x1f\x7f]/g, '').replace(/[^\x20-\x7e]/g, '').replace(/\s+/g, ' ').trim()
+  return flat.length > max ? `${flat.slice(0, Math.max(0, max - 3)).trimEnd()}...` : flat
+}
+
+/**
+ * A command or a test name as a lesson quotes it: an inline code span that cannot close early (no
+ * backticks), cannot start a new line or heading (no newlines), and is capped. Markdown renders it as code;
+ * a model reads it as a name, not an instruction.
+ */
+export function codeSpan(text: string, max = 80): string {
+  return `\`${inert(text, max) || '?'}\``
 }
 
 /**

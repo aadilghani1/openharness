@@ -1203,6 +1203,9 @@ export class BackendSocket {
     return true
   }
 
+  /** A loopback client that said it is a tool (`harness pair`, the MCP server), not a window. */
+  isToolClient(connId: string): boolean { return this.toolClients.has(connId) }
+
   /** The windows attached right now — for a listener that arrives after some of them did. */
   localClientIds(): string[] { return [...this.localClients.keys()].filter((connId) => !this.toolClients.has(connId)) }
 

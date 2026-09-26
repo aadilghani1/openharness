@@ -8,11 +8,17 @@
  *   propose.ts  says one line for a pending lesson and acts on the person's key; the `lessons` verbs.
  *   publish.ts  teaches an approved lesson: skills through the Store runtime path, notes into an existing
  *               AGENTS.md/CLAUDE.md block.
+ *
+ * L2 (pair.jsonc `learn`, off by default except usage):
+ *   borrow.ts   reads what Hermes, Claude Code and Codex learned on their own, read-only, as candidates.
+ *   usage.ts    notices a session reading a lesson's SKILL.md: when each was last used.
+ *   curate.ts   once a day, when idle: unused for 30 days is stale, for 90 archived (restore brings it back).
+ *   export.ts   approved skills also written to ~/.agents/skills and ~/.claude/skills, marked as Harness's.
  */
 import { createHash } from 'node:crypto'
 import { basename, resolve } from 'node:path'
 
-export type SignalKind = 'correction' | 'repeat-failure' | 'repeat-steps'
+export type SignalKind = 'correction' | 'repeat-failure' | 'repeat-steps' | 'borrowed'
 
 /** Where a signal came from. The project is a hash: the store never keeps a folder path. */
 export interface Provenance {
@@ -44,6 +50,8 @@ export interface Signal {
   steps?: string[]
   /** correction: the person's words, and what the agent did just before. */
   correction?: { said: string; before: string[] }
+  /** borrowed: the engine whose own store it came from, and where in it (relative, never a home path). */
+  borrowed?: { engine: string; source: string }
 }
 
 export type Lesson =

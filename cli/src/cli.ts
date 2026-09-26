@@ -25,9 +25,9 @@ import { AutonomousDeviceDirect } from './lib/autonomous-device/direct.js'
 
 import 'dotenv/config'
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
-import { join, resolve } from 'path'
+import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
-import { spawn } from 'child_process'
+import { execFile as execFileCb, spawn } from 'child_process'
 import { createServer, type Server } from 'http'
 import { createInterface, emitKeypressEvents } from 'readline'
 import { homedir, hostname } from 'os'
@@ -62,6 +62,7 @@ import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from './lib/loginCallback.js'
 import { AuthSessionError, AuthSessionManager, clearAuthSession, readAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { LocalPresence, PAIR_HARNESS_DSH, ZooTurnCounter, ZooTurnReporter } from './lib/zooTurns.js'
+import { ZooLessonReporter } from './lib/zooLessons.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { ensureGridInstalled, type GridInstallResult } from './lib/gridInstall.js'
 import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
@@ -86,12 +87,17 @@ import { PairToken } from './pair/token.js'
 import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClientDeps } from './pair/client.js'
 import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
-import { PairConfigFile, pairConfigPath, ruleRunner } from './pair/rules.js'
+import { inProjects, PairConfigFile, pairConfigPath, ruleRunner } from './pair/rules.js'
 import { LessonSignals } from './pair/learn/signals.js'
 import { LessonDistiller } from './pair/learn/distill.js'
 import { LessonStore } from './pair/learn/store.js'
 import { PairLearner, joinProposals } from './pair/learn/propose.js'
 import { runtimeLessons } from './pair/learn/publish.js'
+import { ApprovalNonces, lessonKeyVerdict, loopbackPeerPid, verifyPerson } from './pair/learn/approval.js'
+import { LessonBorrower } from './pair/learn/borrow.js'
+import { LessonCurator } from './pair/learn/curate.js'
+import { LessonExporter } from './pair/learn/export.js'
+import { LessonUsage } from './pair/learn/usage.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { ensureBuiltinPair } from './dsh/builtins.js'
 import { DEFAULT_AUTONOMY, isAutonomy, type Autonomy } from './pair/floor.js'
@@ -1837,6 +1843,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // harnesses' events while pairing is on. The learner that distills and proposes is bound with the brain.
   const lessonStore = new LessonStore({ root: env.HARNESS_LESSONS_DIR, now: Date.now })
   let pairLearner: PairLearner | null = null
+  // When each lesson was last read by a session (pair/learn/usage.ts): always on, it only reads events.
+  const lessonUsage = new LessonUsage({ store: lessonStore, now: Date.now })
   const lessonSignals = new LessonSignals({
     now: Date.now,
     machine: () => terminalHintMachineName(),
@@ -2982,6 +2990,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     signedIn: () => readAuthSession() !== null,
     machineId: () => backend.machineId,
   })
+  // Bond for a lesson the person approved (lib/zooLessons.ts, the learner's `credit`): `zoo.lesson` through the
+  // same signed-in path. A guest's approval is only journaled (`learned`).
+  const zooLessonReporter = new ZooLessonReporter({
+    post: (body) => proxyBackend('POST', '/api/zoo/ops', body),
+    signedIn: () => readAuthSession() !== null,
+  })
 
   emitSessionEvents = (sessionId: string, events: ReturnType<CursorNormalizer['ingest']>, opts?: { resumed?: boolean; replay?: boolean }): void => {
     if (!events.length || !registry.bySession(sessionId)?.active) return
@@ -3064,6 +3078,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (learnFrom && pairSensor.enabled() && !isTerminalEngine(learnFrom.engine) && !isSubagentSession(sessionId) && !isPairHarnessSession(sessionId)) {
       lessonSignals.ingest({ agentId: learnFrom.agentId, sessionId, engine: learnFrom.engine, cwd: learnFrom.cwd ?? null }, events,
         { replay: !!(opts?.resumed || opts?.replay) })
+    }
+    // A session reading a lesson is its use (the curator's clock), pairing or not; never a replay or a terminal.
+    if (learnFrom && !isTerminalEngine(learnFrom.engine)) {
+      lessonUsage.ingest({ cwd: learnFrom.cwd ?? null }, events, { replay: !!(opts?.resumed || opts?.replay) })
     }
     mirror.ingest(events, sessionId)
     // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
@@ -4317,6 +4335,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // THE CONTROL INTERFACE (pair/control.ts): the pair harness's tools, behind the loopback `pair` request —
   // `harness pair <verb>` and the harnessd MCP server. Writes need the pair harness's token and pass the
   // autonomy dial; then this machine's PairOwner, or another machine's over the fleet's sealed link.
+  // PERSON-ONLY lesson actions (pair/learn/approval.ts): the process asking, found by its loopback port, must
+  // not descend from a harness pane (or from this daemon); a verified caller gets a one-time nonce.
+  const lessonNonces = new ApprovalNonces(Date.now)
+  const verifyLessonCaller = (connId: string) => verifyPerson(connId, {
+    peerPort: (id) => localWsServer.peerPort(id),
+    localPort: () => hookPort,
+    peerPid: (peer, local) => loopbackPeerPid(peer, local),
+    processes: () => processRows(),
+    harnessPanePids: async () => { const inventory = await listTmuxPanes(); return inventory.ok ? inventory.panes.map((pane) => pane.rootPid) : null },
+  })
   const pairControl = new PairControl({
     owner: pairOwner,
     fleet: pairFleet,
@@ -4335,6 +4363,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     talk: (text) => pairTalk(text),
     changed: () => pairBrain?.stateChanged(),
     lessons: async (payload) => pairLearner ? pairLearner.local(payload) : { ok: false, error: 'UNSUPPORTED' },
+    person: { verify: verifyLessonCaller, nonces: lessonNonces },
     now: Date.now,
     newId: () => randomUUID(),
   })
@@ -4389,6 +4418,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   pairHarnessActivity = (agentId) => pairHarness.activity(agentId)
   // THE LEARNER (pair/learn/propose.ts): distills what this machine noticed while nothing is working — a model
   // only with pair.jsonc "model": true — and, when you are at this computer, proposes one lesson at a time.
+  const lessonProjects = (): string[] =>
+    [...new Set([...registry.advertised(), ...stoppedAgents.available(registry.advertised())].map((s) => s.cwd).filter((cwd): cwd is string => !!cwd))]
   pairLearner = new PairLearner({
     store: lessonStore,
     distiller: new LessonDistiller({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairConfig.get().model, now: Date.now, home: homedir() }),
@@ -4399,11 +4430,37 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     present: () => !!pairBrain?.isActive && pairBrain.present(),
     focused: (agentId) => pairBrain?.isFocused(backend.machineId, agentId) ?? false,
     busy: () => pairSensor.snapshot().harnesses.some((h) => h.working),
-    projects: () => [...new Set([...registry.advertised(), ...stoppedAgents.available(registry.advertised())].map((s) => s.cwd).filter((cwd): cwd is string => !!cwd))],
+    projects: lessonProjects,
+    // Notes into AGENTS.md only for a project the person opted in; every other project's go to .harness/lessons.md.
+    agentsMd: (dir) => inProjects(dir, pairConfig.get().learn.agentsMd),
     learned: ({ daemon, lesson }) => { pairSensor.learned({ daemon, name: lesson.name, agentId: lesson.from[0]?.agentId, engine: lesson.from[0]?.engine }) },
-    // TODO(zoo): grant bond xp to `daemon` for an approved lesson once the backend has an op for it (the
-    // `learned` journal entry above is the record it can count from). Nothing is sent today.
-    credit: () => {},
+    // Bond for the daemon that found it: `zoo.lesson`, signed in only (a guest's is the journal entry above).
+    credit: (daemon, lesson) => { zooLessonReporter.credit(lesson.id, daemon) },
+    // L2 (daemons/LEARNING.md). Borrow: opt-in, read-only, from the engines' own stores.
+    borrowEnabled: () => pairConfig.get().learn.borrow,
+    borrower: new LessonBorrower({
+      store: lessonStore,
+      sources: { hermesHome: env.HERMES_HOME, claudeProjectsDir: env.CLAUDE_PROJECTS_DIR, codexHome: env.CODEX_HOME },
+      projects: lessonProjects, machine: () => terminalHintMachineName(), now: Date.now, home: homedir(), log: (line) => console.log(line),
+    }),
+    // Check: usage, and the daily curator (stale at 30 days unused, archived at 90).
+    usage: lessonUsage,
+    curator: new LessonCurator({
+      store: lessonStore, usage: lessonUsage, now: Date.now,
+      busy: () => pairSensor.snapshot().harnesses.some((h) => h.working),
+      archived: (record) => { pairLearner?.withdrawn(record) },
+      log: (line) => console.log(line),
+    }),
+    // Export: opt-in, only files Harness wrote are ever touched.
+    exportTo: () => pairConfig.get().learn.export,
+    exporter: new LessonExporter({
+      store: lessonStore,
+      dirs: {
+        agents: join(homedir(), '.agents', 'skills'),
+        claude: join(process.env.CLAUDE_CONFIG_DIR || dirname(env.CLAUDE_PROJECTS_DIR), 'skills'),
+      },
+      destinations: () => pairConfig.get().learn.export,
+    }),
     machineId: () => backend.machineId,
     changed: () => pairBrain?.stateChanged(),
     home: homedir(),
@@ -4664,7 +4721,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return sent
     },
     onVoiceRouteReply: (voiceId, reply) => windowRouter.reply(voiceId, reply),
-    onDaemonAct: (_connId, payload, reply) => { void pairBrain?.onAct(payload, (frame) => { reply(frame) }) },
+    onDaemonAct: (connId, payload, reply) => {
+      const id = typeof payload.id === 'string' ? payload.id : ''
+      if (!id.startsWith('lesson:')) { void pairBrain?.onAct(payload, (frame) => { reply(frame) }); return }
+      // A lesson is the person's (pair/learn/approval.ts): never a tool client's key, never a process the
+      // daemon can see inside a harness pane. The line's id is itself the one-time nonce.
+      const refuse = (error: string, detail?: string): void => {
+        reply({ type: 'daemon_act_result', payload: { requestId: payload.requestId, id, ok: false, error, ...(detail ? { detail } : {}) } })
+      }
+      void lessonKeyVerdict(connId, { isTool: (id) => backend.isToolClient(id), verify: verifyLessonCaller }).then((verdict) => {
+        if (!verdict.ok) { refuse(verdict.error, verdict.detail); return }
+        void pairBrain?.onAct(payload, (frame) => { reply(frame) })
+      })
+    },
     // The person talking to their daemon: forwarded to the pair harness, which starts or wakes for it.
     onDaemonTalk: (_connId, payload, reply) => {
       const requestId = typeof payload.requestId === 'string' ? payload.requestId.slice(0, 120) : ''
@@ -6214,7 +6283,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     autonomousDeviceDirect?.stop()
     // The last minute's turns, best effort: an update restart should not lose them, nor wait on them.
     zooTurnReporter.stop()
-    await Promise.race([zooTurnReporter.flush(), new Promise((resolve) => setTimeout(resolve, 2000).unref())])
+    zooLessonReporter.stop()
+    await Promise.race([Promise.all([zooTurnReporter.flush(), zooLessonReporter.flush()]), new Promise((resolve) => setTimeout(resolve, 2000).unref())])
     await backend.stop()
     try { if (readPid() === process.pid) rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
     process.exit(0)
@@ -7535,7 +7605,15 @@ switch (cmd) {
         rl.question(question, (answer) => { rl.close(); resolve(/^y(es)?$/i.test(answer.trim())) })
       })
       : null
-    pairControlCommand(rest, { ...pairClient, confirm, output: (line) => process.stdout.write(`${line}\n`), error: (line) => console.error(line) })
+    // Which tmux session this shell is in: a harness pane never approves a lesson (the daemon checks again).
+    const paneSession = (): Promise<string | null> => {
+      const pane = process.env.TMUX_PANE
+      if (!pane || !process.env.TMUX) return Promise.resolve(null)
+      return new Promise((resolve) => {
+        execFileCb('tmux', ['display-message', '-p', '-t', pane, '#{session_name}'], { timeout: 2_000 }, (err, stdout) => resolve(err ? null : String(stdout).trim() || null))
+      })
+    }
+    pairControlCommand(rest, { ...pairClient, confirm, paneSession, output: (line) => process.stdout.write(`${line}\n`), error: (line) => console.error(line) })
       .then((code) => { process.exitCode = code }).catch(onError)
     break
   }
