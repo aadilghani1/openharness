@@ -43,14 +43,13 @@ class AgentEntry {
   /// of them to the bottom of every list and made them untappable — which,
   /// before the app asked for them at all, was invisible. It is visible now.
   bool get isOpenable =>
-      agent.terminalAvailable ||
-      (agent.isStopped && agent.canPauseAndResume);
+      agent.terminalAvailable || (agent.isStopped && agent.canPauseAndResume);
 
   /// When its conversation last moved: the machine's own [Agent.updatedAt], or
   /// a turn this app saw since ([MachineState.agentActivityAt]) — whichever is
   /// later. Null when neither is known.
   DateTime? get lastActiveAt {
-    final reported = agent.updatedAt;
+    final reported = agent.lastUsedAt;
     final seen = machine.agentActivityAt[agent.id];
     if (reported == null || seen == null) return seen ?? reported;
     return seen.isAfter(reported) ? seen : reported;
@@ -132,8 +131,10 @@ List<AgentEntry> recentAgents(List<AgentEntry> entries) => _stableSorted(
 /// Then the desktop's tie-breaks: its own focus history (which a phone does not have, so it is
 /// skipped), the name as drawn in natural order, and finally the id so two rows never swap.
 int compareMonitorOrder(AgentEntry a, AgentEntry b) {
-  final activity = (b.agent.updatedAt?.millisecondsSinceEpoch ?? 0).compareTo(
-    a.agent.updatedAt?.millisecondsSinceEpoch ?? 0,
+  // Last USED, not last active: an agent opened on any app a moment ago comes
+  // first here and in every desktop's ⌘P alike — see [Agent.lastUsedAt].
+  final activity = (b.agent.lastUsedAt?.millisecondsSinceEpoch ?? 0).compareTo(
+    a.agent.lastUsedAt?.millisecondsSinceEpoch ?? 0,
   );
   if (activity != 0) return activity;
   final name = compareNatural(

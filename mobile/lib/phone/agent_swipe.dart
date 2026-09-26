@@ -200,9 +200,15 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   /// meant the history stayed nearly empty no matter how much the app was used,
   /// and the box kept falling through to its last-resort ordering. A swipe
   /// between agents is this app's focus change; this is where it belongs.
-  void _rememberVisit(AgentRef agent) => widget.notifier.searchHistory.remember(
-    phoneAgentId(agent.machineId, agent.agentId),
-  );
+  ///
+  /// And the machine that owns it is told too (`touchAgent`), so the visit is the ACCOUNT'S, not
+  /// only this phone's: every desktop's ⌘P and this phone's Find sort by the same last use.
+  void _rememberVisit(AgentRef agent) {
+    widget.notifier.searchHistory.remember(
+      phoneAgentId(agent.machineId, agent.agentId),
+    );
+    widget.notifier.touchAgent(agent.machineId, agent.agentId);
+  }
 
   @override
   void initState() {

@@ -635,43 +635,28 @@ class _NewAgentPageState extends State<NewAgentPage> {
                       SettingsGroup(
                         children: [
                           SettingsRow(
+                            // Plain rows, the desktop box's: a label and its
+                            // value on one line, no marks. The chooser behind
+                            // each row carries the detail.
                             title: 'Agent',
                             value: _engineLabel,
                             detail: _engine == null
                                 ? null
                                 : _engineNote(_engine!),
-                            leading: _engine == null
-                                ? Icon(
-                                    LucideIcons.cpu300,
-                                    size: 18,
-                                    color: AppPalette.textSecondary,
-                                  )
-                                : EngineMark(engine: _engine!, size: 18),
                             onTap: () => unawaited(_chooseAgent()),
                           ),
                           SettingsRow(
                             title: 'Project',
                             value: _projectValue,
-                            detail: _projectPlace,
-                            leading: Icon(
-                              LucideIcons.folder300,
-                              size: 18,
-                              color: AppPalette.textSecondary,
-                            ),
                             onTap: () => unawaited(_chooseProject()),
                           ),
                           SettingsRow(
                             title: 'Options',
-                            leading: Icon(
-                              LucideIcons.slidersHorizontal300,
-                              size: 18,
-                              color: AppPalette.textSecondary,
-                            ),
                             trailing: Icon(
                               _optionsOpen
-                                  ? LucideIcons.minus300
-                                  : LucideIcons.plus300,
-                              size: 18,
+                                  ? LucideIcons.chevronUp300
+                                  : LucideIcons.chevronDown300,
+                              size: 20,
                               color: AppPalette.textFaint,
                             ),
                             onTap: () =>
@@ -748,24 +733,21 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// Whether Options is open: Approvals, Profile, Branch and Worktree.
   bool _optionsOpen = false;
 
+  /// The project on one line: its folder's name, and the machine in front of it only when there is
+  /// more than one to tell apart. The full path is in the chooser.
   String get _projectValue {
-    if (_folder case final folder?) return _basename(folder);
-    if (_project?.repository case final repository?) return repository.name;
-    if (_project != null) return 'New folder';
-    return 'Choose project';
-  }
-
-  /// Where the project is: the machine, then the path — the desktop's `machine:~/path`.
-  String? get _projectPlace {
-    final name = _machine?.machine.displayName;
+    final String name;
     if (_folder case final folder?) {
-      return name == null ? folder : '$name · $folder';
+      name = _basename(folder);
+    } else if (_project?.repository case final repository?) {
+      name = repository.name;
+    } else if (_project != null) {
+      name = 'New folder';
+    } else {
+      return 'Choose project';
     }
-    if (_project?.repository != null) {
-      return name == null ? 'Clone' : '$name · clone';
-    }
-    if (_project != null) return name;
-    return null;
+    final machine = _machine?.machine.displayName;
+    return machine == null || _machines.length < 2 ? name : '$machine · $name';
   }
 
   /// The button: a missing choice opens its chooser and says why, the desktop's `requiredChoice`.

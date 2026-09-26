@@ -15,8 +15,7 @@ import 'phone_search_rank.dart';
 /// The desktop's `kSwarmSearchHint`, word for word. It searches four kinds of
 /// thing, and a hint that named only one of them ("Search agents") was most of
 /// why nobody on the phone knew the other three existed.
-const kPhoneSearchHint =
-    'Search harnesses   > commands   # projects   @ machines   ? help';
+const kPhoneSearchHint = 'Search harnesses';
 
 /// One search session, shared by the field and its results.
 ///
@@ -197,10 +196,12 @@ class PhoneSearchController extends ChangeNotifier {
     PhoneDestinationKind.agent => row.entry?.isOpenable ?? false,
     // A locked machine opens its password form, which is the thing to do about
     // it; a switched-off one has nothing to take a password.
-    PhoneDestinationKind.machine =>
-      _catalog.any((entry) => entry.id == row.id && entry.isMachine),
-    PhoneDestinationKind.project =>
-      _catalog.any((entry) => entry.id == row.id && entry.isProject),
+    PhoneDestinationKind.machine => _catalog.any(
+      (entry) => entry.id == row.id && entry.isMachine,
+    ),
+    PhoneDestinationKind.project => _catalog.any(
+      (entry) => entry.id == row.id && entry.isProject,
+    ),
     PhoneDestinationKind.command => _commandIds.contains(row.id),
     PhoneDestinationKind.mode => true,
   };
@@ -272,8 +273,7 @@ class PhoneSearchController extends ChangeNotifier {
     }
     final available = isCommandMode
         ? [
-            for (final command
-                in commands?.call() ?? const <PhoneCommand>[])
+            for (final command in commands?.call() ?? const <PhoneCommand>[])
               command.destination,
           ]
         : const <PhoneDestination>[];
@@ -288,9 +288,15 @@ class PhoneSearchController extends ChangeNotifier {
     final candidates = isCommandMode
         ? available
         : isProjectMode
-        ? [for (final row in _catalog) if (row.isProject) row]
+        ? [
+            for (final row in _catalog)
+              if (row.isProject) row,
+          ]
         : isMachineMode
-        ? [for (final row in _catalog) if (row.isMachine) row]
+        ? [
+            for (final row in _catalog)
+              if (row.isMachine) row,
+          ]
         : scoped != null
         ? [
             for (final row in _catalog)
@@ -315,13 +321,16 @@ class PhoneSearchController extends ChangeNotifier {
             matchQuery,
             recent: history?.recent ?? const <String>[],
             previews: notifier.sessionPreviews,
+            byActivity: _listsAgents,
           );
     matchCount = rows.length;
     // ⚠️ **Not with nothing typed.** That list is the desktop's Harness Monitor
     // order ([rankPhoneDestinations]), where paused work sits among the rest by
     // when it last moved — moving it to the bottom here is the phone's list
     // disagreeing with the laptop's again.
-    if (_listsMonitorOrder) return;
+    // A list of agents keeps its last-use order whole, the desktop ⌘P's rule — a row that cannot be
+    // opened stays where it is, dimmed, rather than sinking. See [rankPhoneDestinations].
+    if (_listsAgents) return;
     // Keep the match order, but put rows a tap can open first. An agent whose
     // terminal has gone must not bury the ones that answer.
     final open = <PhoneDestination>[];
@@ -335,11 +344,10 @@ class PhoneSearchController extends ChangeNotifier {
 
   /// Whether [rows] are agents with nothing typed — the list that follows the
   /// desktop's monitor.
-  bool get _listsMonitorOrder =>
-      !isCommandMode &&
-      !isProjectMode &&
-      !isMachineMode &&
-      matchQuery.trim().isEmpty;
+  /// Whether the rows are agents — the plain list, or one project's or machine's — rather than
+  /// commands, projects or machines.
+  bool get _listsAgents =>
+      !isCommandMode && !isHelpMode && !isProjectMode && !isMachineMode;
 
   /// With nothing typed, the commands run lately lead, newest first; the rest
   /// keep their order. Once something is typed, the match decides.

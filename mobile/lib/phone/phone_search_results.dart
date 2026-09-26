@@ -68,10 +68,20 @@ class PhoneSearchResults extends StatefulWidget {
   final AgentRef? showing;
 
   @override
-  State<PhoneSearchResults> createState() => _PhoneSearchResultsState();
+  State<PhoneSearchResults> createState() => PhoneSearchResultsState();
 }
 
-class _PhoneSearchResultsState extends State<PhoneSearchResults> {
+class PhoneSearchResultsState extends State<PhoneSearchResults> {
+  /// Opens the first row a tap could open — Enter in the desktop's ⌘P, the return key here.
+  void openFirst() {
+    for (final row in widget.controller.rows) {
+      if (widget.controller.canSubmit(row)) {
+        _tap(row);
+        return;
+      }
+    }
+  }
+
   /// The row whose agent is being brought back, if any — see [_open].
   ///
   /// One at a time: the resume is a round trip to the machine, and a list that
@@ -253,9 +263,8 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
     if (!mounted) return;
     setState(() => _resuming = null);
     if (error != null) {
-      ScaffoldMessenger.maybeOf(
-        context,
-      )?.showSnackBar(SnackBar(content: Text(error)));
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text(error)));
       return;
     }
     // ⚠️ Re-read from the catalog rather than reusing `entry`. The resume
@@ -284,8 +293,8 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
   void _run(PhoneDestination row) {
     final id = row.commandId;
     if (id == null) return;
-    for (final command in widget.controller.commands?.call() ??
-        const <PhoneCommand>[]) {
+    for (final command
+        in widget.controller.commands?.call() ?? const <PhoneCommand>[]) {
       if (command.id != id) continue;
       unawaited(Future.sync(command.run));
       return;

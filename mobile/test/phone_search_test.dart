@@ -29,6 +29,7 @@ Agent _agent(
   String? title,
   String cwd = '/srv/work',
   int? minutesAgo,
+  int? openedMinutesAgo,
   bool terminal = true,
   bool stopped = false,
   // Stopped work that a resume can reopen has a saved conversation; `resumable: false` is the
@@ -51,6 +52,9 @@ Agent _agent(
   updatedAt: minutesAgo == null
       ? null
       : _now.subtract(Duration(minutes: minutesAgo)),
+  lastOpenedAt: openedMinutesAgo == null
+      ? null
+      : _now.subtract(Duration(minutes: openedMinutesAgo)),
   terminalAvailable: stopped ? false : terminal,
 );
 
@@ -945,7 +949,7 @@ void main() {
       expect(_agentIds(_rank(app, '', cache: cache)), ['idle', 'busy']);
     });
 
-    test('with nothing typed, the agents you were last in lead, then the monitor\'s order', () {
+    test('with nothing typed, last use leads — on any app — and visits only break ties', () {
       final app = _app([
         _machine('box', [
           _agent('alpha', minutesAgo: 90),
@@ -954,15 +958,12 @@ void main() {
         ]),
       ]);
       addTearDown(app.dispose);
-      // Nothing visited yet: the freshest conversation leads, as it does in the
-      // Harness Monitor.
+      // The freshest conversation leads, as it does in the desktop's ⌘P.
       expect(_agentIds(_rank(app, '')), ['delta', 'bravo', 'alpha']);
 
-      // ⚠️ **Visits lead now, and that reverses an earlier rule on purpose.**
-      // Find opens on this list (see `docs/plans/2026-09-26-001-mobile-zero-
-      // questions.md`): on the go the person works with two or three agents, and
-      // those have to be the top rows whatever else moved since. The rest keep
-      // the monitor's order under them.
+      // ⚠️ **This phone's own visits do not reorder the list.** Last use is
+      // the account's: the desktop's ⌘P reads the same order, and a visit here
+      // reaches it through the daemon's `lastOpenedAt`, not this history.
       expect(
         _agentIds(
           _rank(
@@ -971,8 +972,19 @@ void main() {
             recent: ['agent:box\u0000alpha', 'agent:box\u0000bravo'],
           ),
         ),
-        ['alpha', 'bravo', 'delta'],
+        ['delta', 'bravo', 'alpha'],
       );
+    });
+
+    test('an agent opened on another app a moment ago comes first', () {
+      final app = _app([
+        _machine('box', [
+          _agent('alpha', minutesAgo: 90, openedMinutesAgo: 0),
+          _agent('delta', minutesAgo: 1),
+        ]),
+      ]);
+      addTearDown(app.dispose);
+      expect(_agentIds(_rank(app, '')), ['alpha', 'delta']);
     });
 
     test('paused work keeps its place by when it last moved', () {
@@ -990,10 +1002,11 @@ void main() {
       // `blank` cannot be opened, and still sits where the monitor has it.
       expect(_agentIds(search.rows), ['paused', 'blank', 'live']);
 
-      // Once something is typed the match decides, and what a tap cannot open
-      // goes last, as it always has.
+      // Typing filters the same order, the desktop ⌘P's rule: every row here
+      // matches, and what a tap cannot open stays where it is, dimmed, rather
+      // than sinking.
       search.setQuery('work');
-      expect(_agentIds(search.rows).last, 'blank');
+      expect(_agentIds(search.rows), ['paused', 'blank', 'live']);
     });
 
     test('an agent is named as the desktop names it, and found by either', () {
@@ -1025,11 +1038,10 @@ void main() {
       ]);
       addTearDown(app.dispose);
 
-      expect([for (final row in _rank(app, '')) row.title], [
-        'Logo update',
-        kUntitledPane,
-        'api-server',
-      ]);
+      expect(
+        [for (final row in _rank(app, '')) row.title],
+        ['Logo update', kUntitledPane, 'api-server'],
+      );
       // The CLI's name is what the terminal's title bar shows, so it still
       // finds the row.
       expect(_agentIds(_rank(app, 'Terminal harness')).first, 'bare');

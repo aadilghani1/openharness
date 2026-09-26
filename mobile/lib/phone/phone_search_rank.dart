@@ -118,6 +118,7 @@ List<PhoneDestination> rankPhoneDestinations(
   String query, {
   List<String> recent = const [],
   SessionPreviewStore? previews,
+  bool byActivity = false,
 }) {
   final needle = query.trim().toLowerCase();
   final terms = phoneSearchTerms(query);
@@ -173,26 +174,27 @@ List<PhoneDestination> rankPhoneDestinations(
   // Matching the desktop means matching what it does, not what it says. And the
   // agent you came from is the most recently active one anyway, so the order it
   // falls into is the one the catalog already wanted.
-  int tier(PhoneDestination e) => !e.isAgent
-      ? 3
-      : recency.containsKey(e.id)
-      ? 0
-      : 1;
   ranked.sort((a, b) {
-    // ⚠️ **With nothing typed, the agents you were last in come first.** Find opens on this list,
-    // and on the go the person works with two or three agents: those have to be the top rows, so
-    // switching among them is a tap with nothing to type. The rest keep the monitor's order.
-    if (needle.isEmpty) {
-      final visited = (recency[a.entry.id] ?? 1 << 20).compareTo(
-        recency[b.entry.id] ?? 1 << 20,
-      );
-      return visited != 0 ? visited : _monitorOrder(a, b);
+    // ⚠️ **A list of agents is ordered by LAST USE, typed or not — the desktop ⌘P's rule.** Last use
+    // is the account's, not this phone's ([Agent.lastUsedAt]: the latest activity or the latest
+    // open, on any app), so Find and every desktop's ⌘P read one order. This phone's own visits
+    // only break ties, and so does how well a row matched: a query FILTERS the list, it does not
+    // reorder it.
+    if (byActivity || needle.isEmpty) {
+      var order = _lastUsedFirst(a.entry, b.entry);
+      if (order == 0) {
+        order = (recency[a.entry.id] ?? 1 << 20).compareTo(
+          recency[b.entry.id] ?? 1 << 20,
+        );
+      }
+      if (order == 0 && needle.isNotEmpty) {
+        order = (a.content ? 1 : 0).compareTo(b.content ? 1 : 0);
+        if (order == 0) order = a.score.compareTo(b.score);
+      }
+      return order != 0 ? order : _monitorOrder(a, b);
     }
     var order = (a.content ? 1 : 0).compareTo(b.content ? 1 : 0);
     if (order == 0) order = a.score.compareTo(b.score);
-    if (order == 0 && needle.isEmpty) {
-      order = tier(a.entry).compareTo(tier(b.entry));
-    }
     if (order == 0) {
       order = (recency[a.entry.id] ?? 999).compareTo(
         recency[b.entry.id] ?? 999,
@@ -202,6 +204,13 @@ List<PhoneDestination> rankPhoneDestinations(
     return order == 0 ? a.entry.id.compareTo(b.entry.id) : order;
   });
   return [for (final row in ranked) row.entry];
+}
+
+/// Newest last use first; an agent never dated, and anything that is not an agent, after.
+int _lastUsedFirst(PhoneDestination a, PhoneDestination b) {
+  final left = a.entry?.agent.lastUsedAt?.millisecondsSinceEpoch ?? 0;
+  final right = b.entry?.agent.lastUsedAt?.millisecondsSinceEpoch ?? 0;
+  return right.compareTo(left);
 }
 
 /// With nothing typed, the list the field opens on: the agents in the desktop's Harness Monitor

@@ -34,10 +34,11 @@ import 'sheet_list.dart';
 ///
 /// ⚠️ **One list, and it is the same list focused or not.** The sheet used to open on the account's
 /// desk tabs and trade them for results on focus; a phone has no tabs now (see
-/// `docs/plans/2026-09-26-001-mobile-zero-questions.md`). With nothing typed the rows are the
-/// agents you were last in, so switching among the two or three you work with on the go is a tap;
-/// typing narrows the same rows. A leading `>` `#` `@` `?` is read as typed — the desktop's modes
-/// are off here ([PhoneSearchController.modes]).
+/// `docs/plans/2026-09-26-001-mobile-zero-questions.md`). The rows are the account's harnesses by
+/// last use — the desktop ⌘P's order, and the same moment on every app ([Agent.lastUsedAt]) — so
+/// the two or three you work with on the go are the top rows; typing filters them, and return
+/// opens the first. The desktop's modes work here too: `>` commands, `#` projects, `@` machines,
+/// `?` help.
 ///
 /// ⚠️ **Full height, and a keyboard lifts only its foot.** It runs up under the status bar; a
 /// keyboard, when it comes, takes the drawer's foot onto its own top rather than covering the rows.
@@ -104,7 +105,7 @@ class TerminalSearchOverlay extends StatefulWidget {
 class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     with TickerProviderStateMixin {
   /// What the field says.
-  static const String _hint = 'Find an agent';
+  static const String _hint = kPhoneSearchHint;
 
   /// How dark the page goes behind the sheet — a step past Material's
   /// `black54`, with the page blurred under it as well. The phone sheets stand
@@ -129,8 +130,11 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   late final PhoneSearchController _search = PhoneSearchController(
     notifier: widget.notifier,
     history: widget.notifier.searchHistory,
-    modes: false,
+    commands: () => phoneSearchCommands(context, widget.notifier),
   );
+
+  /// The results, for the return key to open the top row of.
+  final _results = GlobalKey<PhoneSearchResultsState>();
 
   /// The sheet's own box, measured to turn a drag's pixels into a share of its
   /// height.
@@ -433,7 +437,15 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                 builder: (context, _) => SheetSearchField(
                   controller: _controller,
                   focus: _focus,
-                  hintText: _search.canGoBack ? _search.hint : _hint,
+                  // A mode names itself in the box, as the desktop's does.
+                  hintText:
+                      _search.isCommandMode ||
+                          _search.isHelpMode ||
+                          _search.isGroupMode ||
+                          _search.canGoBack
+                      ? _search.hint
+                      : _hint,
+                  onSubmitted: () => _results.currentState?.openFirst(),
                   onChanged: _search.setQuery,
                   onClear: () {
                     _controller.clear();
@@ -460,6 +472,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
       _SearchHead(search: _search, onBack: _back),
       Expanded(
         child: PhoneSearchResults(
+          key: _results,
           notifier: widget.notifier,
           controller: _search,
           grouped: true,

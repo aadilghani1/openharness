@@ -151,7 +151,11 @@ class SheetSearchField extends StatelessWidget {
     required this.hintText,
     this.onCancel,
     this.onNew,
+    this.onSubmitted,
   });
+
+  /// The return key: Find opens the top row, as Enter does in the desktop's ⌘P.
+  final VoidCallback? onSubmitted;
 
   final TextEditingController controller;
   final FocusNode focus;
@@ -212,10 +216,11 @@ class SheetSearchField extends StatelessWidget {
                         controller: controller,
                         focus: focus,
                         onChanged: onChanged,
-                        // The sheet is opened to read its tabs, and focus is
-                        // what trades them for the results.
+                        // Opened to read the recent agents; focus is what
+                        // brings the keyboard.
                         autofocus: false,
                         hintText: hintText,
+                        onSubmitted: onSubmitted,
                         // The query's own size, and ink a step under it: the
                         // hint is one short phrase here, and iOS draws its
                         // placeholder bright enough to be read at a glance.
@@ -379,11 +384,15 @@ class _QueryInput extends StatelessWidget {
     required this.autofocus,
     required this.hintText,
     required this.hintStyle,
+    this.onSubmitted,
   });
 
   final TextEditingController controller;
   final FocusNode focus;
   final ValueChanged<String> onChanged;
+
+  /// The keyboard's return key. Null puts the keyboard away and nothing more.
+  final VoidCallback? onSubmitted;
   final bool autofocus;
   final String hintText;
 
@@ -404,7 +413,10 @@ class _QueryInput extends StatelessWidget {
       // nothing left for the return key to submit, so it stays a plain "done"
       // that drops the keyboard and leaves the results up.
       textInputAction: TextInputAction.search,
-      onSubmitted: (_) => focus.unfocus(),
+      onSubmitted: (_) {
+        focus.unfocus();
+        onSubmitted?.call();
+      },
       // Composing stays on — or Telex types `thoi tiet` for `thời tiết`. See
       // [ComposingKeyboard]; with autocorrect on, iOS would also start curling
       // quotes and joining dashes, which a query means literally.

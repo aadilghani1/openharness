@@ -3362,6 +3362,7 @@ class AppNotifier extends ChangeNotifier {
           // the phone sorting and searching by the list it had an hour ago.
           prev.title != agent.title ||
           prev.updatedAt != agent.updatedAt ||
+          prev.lastOpenedAt != agent.lastOpenedAt ||
           prev.gridModel != agent.gridModel ||
           prev.selectedModel != agent.selectedModel ||
           prev.dshName != agent.dshName ||
@@ -5211,6 +5212,36 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
     return null;
   }
+
+  /// Tells the machine that owns an agent it was just opened here, so it can stamp
+  /// `lastOpenedAt` and every app — this phone, each desktop — sorts by the same
+  /// last use. Fire and forget: a daemon too old to keep the stamp answers
+  /// `MISSING_UPDATE`, and nothing here depends on the answer.
+  ///
+  /// Coalesced per agent: opening the same one again within [_touchEvery] says
+  /// nothing new.
+  void touchAgent(String machineId, String agentId) {
+    final machine = machineStates[machineId];
+    if (machine == null || machine.needsLink) return;
+    final key = '$machineId/$agentId';
+    final now = DateTime.now();
+    final last = _touchedAt[key];
+    if (last != null && now.difference(last) < _touchEvery) return;
+    _touchedAt[key] = now;
+    unawaited(() async {
+      try {
+        await _conn(machineId).request(
+          'agent_update',
+          payload: {'agentId': agentId, 'opened': true},
+        );
+      } catch (_) {
+        // Recency is a nicety: a machine that cannot hear it keeps its order.
+      }
+    }());
+  }
+
+  static const _touchEvery = Duration(seconds: 3);
+  final _touchedAt = <String, DateTime>{};
 
   /// Deletes an agent via `agent_delete`. Returns null on success, or an error message to show
   /// inline in the caller's dialog.
