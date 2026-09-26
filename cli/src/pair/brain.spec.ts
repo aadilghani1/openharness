@@ -67,7 +67,7 @@ function laptop() {
   return { sensor, open, answers, links, reply: (r: Frame) => { answerReply = r } }
 }
 
-function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>; linked?: boolean; model?: boolean; autonomy?: Autonomy; relayLimits?: Array<{ windowMs: number; max: number }>; talk?: (text: string) => Promise<Frame> } = {}) {
+function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>; linked?: boolean; model?: boolean; autonomy?: Autonomy; relayLimits?: Array<{ windowMs: number; max: number }>; talk?: (text: string) => Promise<Frame>; proposals?: ConstructorParameters<typeof PairBrain>[0]['proposals']; lessonKey?: ConstructorParameters<typeof PairBrain>[0]['lessonKey'] } = {}) {
   const local = sensorFor('machine-a')
   const remote = laptop()
   const frames: Frame[] = []
@@ -96,6 +96,8 @@ function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: str
     relayed: (fields) => { local.relayed(fields) },
     ...(opts.relayLimits ? { relayLimits: opts.relayLimits } : {}),
     ...(opts.talk ? { talk: opts.talk } : {}),
+    ...(opts.proposals ? { proposals: opts.proposals } : {}),
+    ...(opts.lessonKey ? { lessonKey: opts.lessonKey } : {}),
   })
   const says = () => frames.filter((f) => f.type === 'daemon_say').map((f) => f.payload as DaemonSay)
   const unsays = () => frames.filter((f) => f.type === 'daemon_unsay').map((f) => f.payload as Frame)
@@ -107,7 +109,7 @@ function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: str
     await brain!.onKey(conn, payload, (f) => replies.push(f))
     return replies[0].payload as Frame
   }
-  return { local, remote, brain, fleet, frames, toClient, says, unsays, act, answer, triage }
+  return { local, remote, brain, fleet, frames, toClient, says, unsays, act, answer, triage, voice }
 }
 
 const settle = async (ms = 1): Promise<void> => { await vi.advanceTimersByTimeAsync(ms) }
@@ -350,6 +352,43 @@ describe('the brain', () => {
     // A window that went away takes its acknowledgements with it.
     w.brain.clientDetached('local:window')
     expect(await w.act({ requestId: 'r6', id, choice: 'n' }, { shown: false })).toMatchObject({ ok: false, error: 'UI_ONLY' })
+  })
+
+  it('a lesson key needs both: its line shown here ARM_MS before, and the person (the nonce is the line id)', async () => {
+    const nonce = 'a'.repeat(32)
+    const id = `lesson:L1:${nonce}`
+    const act = vi.fn(async (key: string) => key === id ? { ok: true, learned: 'run-tests-first' } : { ok: false, error: 'GONE' })
+    let person: { ok: true } | { ok: false; error: string; detail: string } = { ok: false, error: 'INSIDE_HARNESS', detail: 'a process inside a harness never approves a lesson' }
+    const w = world({ proposals: { owns: (key) => key.startsWith('lesson:'), act, pending: () => [] }, lessonKey: async () => person })
+    w.brain.clientAttached('local:window')
+    await settle()
+    w.voice.say({ id, about: { machineId: 'machine-a', agentId: '' }, mood: 'ask', line: '[y/n/s] teach your agents "run-tests-first"?', actions: [], ttlMs: DISPLAY_MS, detail: 'the lesson' })
+    // Not drawn on this window, or keyed in the same breath: nothing reaches the learner.
+    expect(await w.act({ requestId: 'r1', id, choice: 'y' }, { shown: false })).toMatchObject({ ok: false, error: 'NOT_SHOWN' })
+    w.brain.onShown('local:window', { id })
+    const replies: Frame[] = []
+    await w.brain.onKey('local:window', { requestId: 'r2', id, choice: 'y' }, (f) => replies.push(f))
+    expect(replies[0].payload).toMatchObject({ ok: false, error: 'TOO_SOON' })
+    await settle(ARM_MS)
+    // Shown, armed, but not the person: refused.
+    expect(await w.act({ requestId: 'r3', id, choice: 'y' }, { shown: false })).toMatchObject({ ok: false, error: 'INSIDE_HARNESS' })
+    // A guessed nonce was never sent to this window, so it was never shown on it.
+    person = { ok: true }
+    const guessed = `lesson:L1:${'b'.repeat(32)}`
+    w.brain.onShown('local:window', { id: guessed })
+    await settle(ARM_MS)
+    expect(await w.act({ requestId: 'r4', id: guessed, choice: 'y' }, { shown: false })).toMatchObject({ ok: false, error: 'NOT_SHOWN' })
+    expect(act).not.toHaveBeenCalled()
+    // Both hold: the learner gets the key, and checks the nonce is its live line's.
+    expect(await w.act({ requestId: 'r5', id, choice: 'y' }, { shown: false })).toMatchObject({ ok: true, learned: 'run-tests-first' })
+    expect(act).toHaveBeenCalledWith(id, 'y')
+    // A daemon that cannot tell who pressed it teaches nothing.
+    const bare = world({ proposals: { owns: (key) => key.startsWith('lesson:'), act, pending: () => [] } })
+    bare.brain.clientAttached('local:window')
+    await settle()
+    bare.voice.say({ id, about: { machineId: 'machine-a', agentId: '' }, mood: 'ask', line: 'teach?', actions: [], ttlMs: DISPLAY_MS })
+    expect(await bare.act({ requestId: 'r6', id, choice: 'y' })).toMatchObject({ ok: false, error: 'PERSON_ONLY' })
+    expect(act).toHaveBeenCalledTimes(1)
   })
 
   it('replaces the template in place when an opted-in model answers in time — never waits for it', async () => {

@@ -1824,7 +1824,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairTalk: (text: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
   /** A turn started or ended on the pair harness: it is in use (its idle pause waits). Bound with it. */
   let pairHarnessActivity: (agentId: string) => void = () => {}
-  /** The person's pair.jsonc (pair/rules.ts): the model opt-in, and the rules act-within-rules runs here. */
+  /** The person's pair.jsonc (pair/rules.ts): the model opt-in, learning's opt-ins, and the rules act-within-rules runs here. */
   const pairConfig = new PairConfigFile(pairConfigPath())
   /** pair.jsonc as the person confirmed it (pair/gate.ts): a new or changed file waits for their yes. */
   const pairRulesConfig = (): PairConfig => pairGate.rules(pairConfig.load())
@@ -4453,12 +4453,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     busy: () => pairSensor.snapshot().harnesses.some((h) => h.working),
     projects: lessonProjects,
     // Notes into AGENTS.md only for a project the person opted in; every other project's go to .harness/lessons.md.
-    agentsMd: (dir) => inProjects(dir, pairConfig.get().learn.agentsMd),
+    agentsMd: (dir) => inProjects(dir, pairRulesConfig().learn.agentsMd),
     learned: ({ daemon, lesson }) => { pairSensor.learned({ daemon, name: lesson.name, agentId: lesson.from[0]?.agentId, engine: lesson.from[0]?.engine }) },
     // Bond for the daemon that found it: `zoo.lesson`, signed in only (a guest's is the journal entry above).
     credit: (daemon, lesson) => { zooLessonReporter.credit(lesson.id, daemon) },
     // L2 (daemons/LEARNING.md). Borrow: opt-in, read-only, from the engines' own stores.
-    borrowEnabled: () => pairConfig.get().learn.borrow,
+    borrowEnabled: () => pairRulesConfig().learn.borrow,
     borrower: new LessonBorrower({
       store: lessonStore,
       sources: { hermesHome: env.HERMES_HOME, claudeProjectsDir: env.CLAUDE_PROJECTS_DIR, codexHome: env.CODEX_HOME },
@@ -4473,14 +4473,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       log: (line) => console.log(line),
     }),
     // Export: opt-in, only files Harness wrote are ever touched.
-    exportTo: () => pairConfig.get().learn.export,
+    exportTo: () => pairRulesConfig().learn.export,
     exporter: new LessonExporter({
       store: lessonStore,
       dirs: {
         agents: join(homedir(), '.agents', 'skills'),
         claude: join(process.env.CLAUDE_CONFIG_DIR || dirname(env.CLAUDE_PROJECTS_DIR), 'skills'),
       },
-      destinations: () => pairConfig.get().learn.export,
+      destinations: () => pairRulesConfig().learn.export,
     }),
     machineId: () => backend.machineId,
     changed: () => pairBrain?.stateChanged(),
@@ -4503,6 +4503,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     gate: pairGate,
     // A key sent on to another machine is journaled here too, with the window it came from.
     relayed: (fields) => { pairSensor.relayed(fields) },
+    // A lesson's key (pair/learn/approval.ts): never a tool client, never a process inside a harness pane.
+    lessonKey: (connId) => lessonKeyVerdict(connId, { isTool: (conn) => backend.isToolClient(conn), verify: verifyLessonCaller }),
     // A key pressed on a line about THIS machine's harness: the owner's floor, then the dialog's own
     // requestId, checked as the keys go in (STALE_QUESTION, nothing typed, when it changed).
     answer: (input) => pairOwner.answer(input, 'key'),
@@ -4751,22 +4753,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return sent
     },
     onVoiceRouteReply: (voiceId, reply) => windowRouter.reply(voiceId, reply),
-    // A key from a window: it counts only if this window was shown the line (pair/shown.ts, BRAIN.md Security).
-    // A lesson's key must also be the person's (pair/learn/approval.ts): its line id carries the one-time
-    // nonce only windows and `hn` were sent, and a process the daemon can see inside a harness pane never
-    // presses it. Both hold, or nothing is taught.
+    // A key from a window: it counts only if this window was shown the line (pair/shown.ts, BRAIN.md Security),
+    // and a lesson's only if it is the person's too (the brain's `lessonKey`).
     onDaemonAct: (connId, payload, reply) => {
-      const id = typeof payload.id === 'string' ? payload.id : ''
-      if (!pairBrain) { reply({ type: 'daemon_act_result', payload: { requestId: payload.requestId, id, ok: false, error: 'UNSUPPORTED' } }); return }
-      const brain = pairBrain
-      if (!id.startsWith('lesson:')) { void brain.onKey(connId, payload, (frame) => { reply(frame) }); return }
-      void lessonKeyVerdict(connId, { isTool: (conn) => backend.isToolClient(conn), verify: verifyLessonCaller }).then((verdict) => {
-        if (!verdict.ok) {
-          reply({ type: 'daemon_act_result', payload: { requestId: payload.requestId, id, ok: false, error: verdict.error, detail: verdict.detail } })
-          return
-        }
-        void brain.onKey(connId, payload, (frame) => { reply(frame) })
-      })
+      if (!pairBrain) { reply({ type: 'daemon_act_result', payload: { requestId: payload.requestId, id: payload.id, ok: false, error: 'UNSUPPORTED' } }); return }
+      void pairBrain.onKey(connId, payload, (frame) => { reply(frame) })
     },
     onDaemonShown: (connId, payload) => pairBrain?.onShown(connId, payload),
     // The person's yes (or no) to a setting the gate holds back, from a window that showed it.

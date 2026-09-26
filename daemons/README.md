@@ -187,17 +187,17 @@ Ops (every op is idempotent; an op on something missing is dropped, never an err
 | `zoo.easter { word }` | The server trims and lowercases the word and hashes it (sha256); a hash in `rules.easterHashes` grants one `easter` egg, once per word. |
 | `zoo.seed { zoo }` | A guest's local zoo on first sign-in. Applied only while the account zoo is empty. Brings only regular daemon ids, first and turn eggs, and habits (see Details). |
 | `zoo.turn { batchId, n, minutes?, away?, day, hour, machineId }` | Turns finished on one machine in one local hour (see "Earning eggs and growing"). harnessd sends it. Self-reported (see below). |
-| `zoo.lesson { lessonId, daemonId }` | A lesson the person approved ([LEARNING.md](LEARNING.md)): `rules.lessonXp` (25) xp for `daemonId` when you own it, else for the paired daemon, level and version recomputed and answered in `levelUps`. Once per lesson id (the last 256 are remembered); with no daemon to grow nothing happens and the id is not remembered. harnessd sends it when a lesson is approved, signed in only; `lessonId` is 1–64 id-safe characters. |
+| `zoo.lesson { lessonId, daemonId }` | A lesson the person approved ([LEARNING.md](LEARNING.md)): `rules.lessonXp` (25) xp for `daemonId` when you own it, else for the paired daemon, level and version recomputed and answered in `levelUps`. Once per lesson id (the last 256 are remembered); with no daemon to grow nothing happens and the id is not remembered. harnessd sends it when a lesson is approved, signed in only; `lessonId` is 1–64 id-safe characters. Self-reported, like `zoo.turn`. |
 
 Limits: 12 eggs, 64 daemons (a duplicate merges, so it never needs a place). The server alone grants
 turn, week, marathon, night and history eggs from the turns reported to it; clients never send a draw
 result or an egg.
 
-**Self-reported.** `zoo.turn` (and the presence behind its `away`) is what a harnessd says happened;
-anything holding the account's token can say it. A person can only ever cheat their own zoo, and the
+**Self-reported.** `zoo.turn` (and the presence behind its `away`) and `zoo.lesson` are what a harnessd says
+happened; anything holding the account's token can say it. A person can only ever cheat their own zoo, and the
 daily cap bounds even that. Nothing in a zoo is proof to anyone else: a card's serial and rarity are not
-verified (a later verify endpoint will be), and a guest's seeded daemons and eggs are marked
-`origin: 'local'`.
+verified (a later verify endpoint will be), and a guest's seeded daemons and eggs are marked `origin:
+'local'`.
 
 **Drops.** Each drop in `roster.drops` has `announce` and `release` (UTC `YYYY-MM-DD`, announced 14
 days before release). Only released drops are drawn from; a drop announced but not yet released shows
@@ -280,7 +280,10 @@ no (or never answering) leaves every harnessd sensing nothing. [BRAIN.md](BRAIN.
 - a question an agent is waiting on: the whole dialog on its pane — the command, the edit's preview,
   the options — and the agent's open tool call from its transcript, to read it exactly;
 - the short recap of each finished turn;
-- `~/.config/harness/pair.jsonc`, your rules (they run only after you confirm them at a window).
+- to notice a lesson (LEARNING.md): your next prompt after a turn (is it a correction?), and the commands
+  and failures in its turns; with `learn.borrow` on, what Hermes, Claude Code and Codex learned on their own;
+- `~/.config/harness/pair.jsonc`, your rules and learning opt-ins (they apply only after you confirm them at
+  a window).
 
 It never reads a terminal (a shell is not an agent), an Orchestrator's sub-agents, or its own harness.
 
@@ -290,14 +293,17 @@ It never reads a terminal (a shell is not an agent), an Orchestrator's sub-agent
   it did and who asked (a key, the pair, a rule, another of your machines). Keys, tokens, passwords,
   emails and your home folder are taken out before a line is written;
 - what you confirmed (`pair/confirmed.json`), the harnesses the pair started, the pair harness's token and
-  workspace, and — only on your yes — lessons in `~/.harness/lessons` (LEARNING.md).
+  workspace, the week's lesson signals (redacted), and — only on your yes — lessons in `~/.harness/lessons`
+  (LEARNING.md): an approved note in the project's untracked `.harness/lessons.md` (its AGENTS.md only for
+  a project you opted in), and with `learn.export` a copy of each approved skill in `~/.agents/skills` or
+  `~/.claude/skills`.
 
 **Where it goes.** The journal stays on the machine. Another of YOUR machines' daemons can read it over
 the end-to-end sealed link, redacted; the Harness backend never can (it holds no keys). The account zoo
-holds only which daemon is paired, the dial, this consent and when, habits, eggs and turn counts — no
-questions, commands or recaps. A model sees any of it only if you opt in (`"model": true`: one small
-call per new question, redacted) or when you talk to the pair harness (it reads through its tools,
-redacted), each a turn of your own engine.
+holds only which daemon is paired, the dial, this consent and when, habits, eggs, turn counts and the
+ids of lessons credited — no questions, commands, recaps or lesson text. A model sees any of it only if you
+opt in (`"model": true`: one small call per new question, and one to distill a lesson, redacted) or when
+you talk to the pair harness (it reads through its tools, redacted), each a turn of your own engine.
 
 **What it does.** At `watch` (where it starts) nothing but tell you. Above that, only what the dial you
 chose — and confirmed at a window — allows, and never: delete, restart, fork or bypass anything; type

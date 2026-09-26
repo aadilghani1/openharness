@@ -132,7 +132,8 @@ describe('propose: one line, when every rule allows it', () => {
     expect(say!.actions.map((a) => [a.key, a.label])).toEqual([['y', 'teach'], ['n', 'skip'], ['s', 'show']])
     // The line's id is its one-time nonce: unguessable, and never the same twice.
     expect(say!.id).toMatch(new RegExp(`^lesson:${record.id}:[0-9a-f]{32}$`))
-    expect(w.learner.pending()).toEqual([{ id: say!.id, line: say!.line, actions: say!.actions }])
+    expect(w.learner.pending()).toEqual([{ id: say!.id, line: say!.line, actions: say!.actions, detail: say!.detail }])
+    expect(say!.detail).toContain(w.store.text(w.store.pending()[0]!))
     expect(w.store.proposedAt(record.id)).toBe(Date.now())
     expect(w.changed).toHaveBeenCalled()
   })

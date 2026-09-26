@@ -336,6 +336,8 @@ export const zooOpSchema = z.discriminatedUnion('op', [
     machineId: key,
   }).strict().refine((op) => (op.away ?? 0) <= op.n, 'away counts turns, so it is at most n'),
   // A lesson the person approved (daemons/LEARNING.md): bond for the daemon that found it. harnessd sends it.
+  // SELF-REPORTED like `zoo.turn`: the approval happened on a machine the server cannot see, so a person can
+  // only ever grow their own daemons with it (a retry of one lesson id grows nothing).
   z.object({ op: z.literal('zoo.lesson'), lessonId: key, daemonId }).strict(),
 ])
 export type ZooOp = z.infer<typeof zooOpSchema>

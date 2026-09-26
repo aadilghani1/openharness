@@ -8,12 +8,14 @@
  * answer on the machine that owns the harness.
  *
  * Local frames only, and only through `sendLocal`/`sendLocalTo`:
- *   out  daemon_state { pair, needs[], working, failing[], machines[], done, asks[], acted[] }
- *                                          (on change, and to a new client)
+ *   out  daemon_state { pair, needs[], working, failing[], machines[], done, asks[], acted[], autonomy,
+ *                        autonomyRequested?, confirms[] }   (on change, and to a new client)
  *        daemon_say / daemon_unsay         (pair/voice.ts)
- *        daemon_brief { desk, line, items[] }   (on return, pair/brief.ts)
+ *        daemon_brief { desk, line, items[] }   (on return, pair/brief.ts; a lesson's [s], pair/learn)
  *        daemon_act_result { requestId, id, ok, error? }   (to the client that acted)
- *   in   daemon_act { requestId, id, choice },
+ *        daemon_confirm_result, daemon_talk_result         (likewise)
+ *   in   daemon_shown { id }, daemon_act { requestId, id, choice }, daemon_confirm { requestId, kind, nonce, accept },
+ *        daemon_talk { requestId, text },
  *        daemon_presence { active, awayMs, pair?, desk?, focusAgentId?, focusMachineId?, doneSeen?, autonomy?, consent? }
  *
  * Baselines are never news: a snapshot from a machine (re)connecting, a replay, a question already open
@@ -99,6 +101,12 @@ export interface PairBrainDeps {
   }
   /** Journal, on THIS machine, a key relayed to another one and the window it came from (PairSensor.relayed). */
   relayed?: (fields: { target: string; agentId: string; name: string; engine: string; requestId: string; text: string; origin: string }) => void
+  /**
+   * A key on a lesson's line (`lesson:<id>:<nonce>`) is the person's alone (pair/learn/approval.ts
+   * `lessonKeyVerdict`): never a tool, never a process the daemon can see inside a harness pane. Asked after
+   * the line was shown here; the nonce in the id is checked by the learner. Absent: a lesson key is refused.
+   */
+  lessonKey?: (connId: string) => Promise<{ ok: true } | { ok: false; error: string; detail: string }>
   now: () => number
 }
 
@@ -504,8 +512,9 @@ export class PairBrain {
 
   /**
    * A key from a window (`daemon_act` over the daemon's socket): it counts only from a window attached here
-   * (never a tool), that received this line and acknowledged it as displayed at least ARM_MS ago. Then
-   * `onAct`, which checks the line is still live and the question on it is still the one on screen.
+   * (never a tool), that received this line and acknowledged it as displayed at least ARM_MS ago. A lesson's
+   * key must also be the person's (`lessonKey`). Then `onAct`, which checks the line is still live and the
+   * question on it is still the one on screen — for a lesson, that the id is the live line's one-time nonce.
    */
   async onKey(connId: string, payload: Record<string, unknown>, send: (frame: Record<string, unknown>) => void): Promise<void> {
     const requestId = str(payload.requestId, 120)
@@ -515,6 +524,12 @@ export class PairBrain {
     const shown = this.deps.shown ? this.deps.shown.check(connId, id) : 'NOT_SHOWN'
     if (shown === 'NOT_SHOWN') { refuse('NOT_SHOWN', 'That line was never shown on this window (daemon_shown).'); return }
     if (shown === 'TOO_SOON') { refuse('TOO_SOON', 'A key counts a moment after its line is shown.'); return }
+    if (id.startsWith('lesson:')) {
+      const verdict = this.deps.lessonKey
+        ? await this.deps.lessonKey(connId).catch(() => ({ ok: false as const, error: 'UNVERIFIED', detail: 'The daemon could not tell who pressed it.' }))
+        : { ok: false as const, error: 'PERSON_ONLY', detail: 'This daemon cannot tell who pressed it: approve it at a terminal.' }
+      if (!verdict.ok) { refuse(verdict.error, verdict.detail); return }
+    }
     await this.onAct(payload, send, { connId })
   }
 

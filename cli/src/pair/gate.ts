@@ -8,9 +8,10 @@
  *   autonomy  a level above `suggest` (act-on-key, act-within-rules) that was not confirmed before waits
  *             for `daemon_confirm { kind: 'autonomy', nonce }` from a window that displayed the request;
  *             until then the daemon stays at the level it had. Lowering, and watch -> suggest, apply at once.
- *   rules     a pair.jsonc with rules or `"model": true` whose exact text was not confirmed before waits
- *             for `daemon_confirm { kind: 'rules', nonce }`; until then the rules confirmed before apply
- *             (none, the first time). A file with nothing in it (or a broken one) applies at once.
+ *   rules     a pair.jsonc with rules, `"model": true` or anything in `learn` turned on (borrow, export,
+ *             agentsMd: daemons/LEARNING.md) whose exact text was not confirmed before waits for
+ *             `daemon_confirm { kind: 'rules', nonce }`; until then the file confirmed before applies
+ *             (nothing, the first time). A file with nothing in it (or a broken one) applies at once.
  *
  * Every change is announced (`onEvent`, spoken as a daemon_say). What was confirmed is kept in
  * `ADAPTER_DATA_DIR/pair/confirmed.json` (0600) so a daemon restart does not ask again. A same-user process
@@ -66,6 +67,20 @@ const WHAT: Record<Autonomy, string> = {
 const CONFIRM_ACTIONS: DaemonAction[] = [{ key: 'y', label: 'confirm', choice: 'y' }, { key: 'n', label: 'keep it as it is', choice: 'n' }]
 
 export const hashConfig = (text: string): string => createHash('sha256').update(text).digest('hex')
+
+/** Whether pair.jsonc turns on anything the daemon would not do without it. */
+const asksForMore = (c: PairConfig): boolean =>
+  c.rules.length > 0 || c.model || !!c.learn && (c.learn.borrow || c.learn.export.length > 0 || c.learn.agentsMd.length > 0)
+
+/** What a pair.jsonc turns on, in a few words: `2 rules, model on, learn borrow + export claude`. */
+export function configSummary(c: PairConfig): string {
+  const learn = c.learn ? [
+    ...(c.learn.borrow ? ['borrow'] : []),
+    ...(c.learn.export.length ? [`export ${c.learn.export.join('+')}`] : []),
+    ...(c.learn.agentsMd.length ? [`AGENTS.md in ${c.learn.agentsMd.length} project${c.learn.agentsMd.length === 1 ? '' : 's'}`] : []),
+  ] : []
+  return [`${c.rules.length} rule${c.rules.length === 1 ? '' : 's'}`, `model ${c.model ? 'on' : 'off'}`, ...(learn.length ? [`learn ${learn.join(' + ')}`] : [])].join(', ')
+}
 
 /**
  * Which daemon is paired, and the level asked for, from the account's zoo (when it is known) or a guest
@@ -161,7 +176,7 @@ export class PairGate {
     if (hash === this.seenHash) return this.active
     this.seenHash = hash
     const config = loaded.config
-    const nothing = !!config.error || (!config.rules.length && !config.model)
+    const nothing = !!config.error || !asksForMore(config)
     if (nothing || hash === this.saved.rules) {
       if (this.pending.has('rules')) this.drop('rules', 'replaced')
       this.useRules(config, hash)
@@ -172,8 +187,8 @@ export class PairGate {
     const nonce = this.newNonce()
     const request = {
       id: `confirm:rules:${nonce}`, kind: 'rules' as const, nonce, at: this.now(), actions: CONFIRM_ACTIONS, config, hash,
-      line: `[y/n] use pair.jsonc as it is now? ${config.rules.length} rule${config.rules.length === 1 ? '' : 's'}${config.model ? ', model on' : ''}; until you say yes, ${this.active.rules.length ? 'the rules you confirmed before' : 'no rules'}`,
-      detail: `pair.jsonc (${config.rules.length} rule${config.rules.length === 1 ? '' : 's'}, model ${config.model ? 'on' : 'off'}):\n${loaded.text ?? ''}`,
+      line: `[y/n] use pair.jsonc as it is now? ${configSummary(config)}; until you say yes, ${asksForMore(this.active) ? 'what you confirmed before' : 'none of it'}`,
+      detail: `pair.jsonc (${configSummary(config)}):\n${loaded.text ?? ''}`,
     }
     this.pending.set('rules', request)
     const { config: _c, hash: _h, ...shown } = request
@@ -186,8 +201,8 @@ export class PairGate {
     const had = this.active
     this.active = config
     this.activeHash = hash
-    if (!had.rules.length && !had.model && !config.rules.length && !config.model) return
-    this.deps.onEvent({ type: 'changed', kind: 'rules', line: `pair.jsonc: ${config.rules.length} rule${config.rules.length === 1 ? '' : 's'} now apply here, model ${config.model ? 'on' : 'off'}.` })
+    if (!asksForMore(had) && !asksForMore(config)) return
+    this.deps.onEvent({ type: 'changed', kind: 'rules', line: `pair.jsonc now applies here: ${configSummary(config)}.` })
   }
 
   // ── the person's answer ──────────────────────────────────────────────────────────────────────────

@@ -23,7 +23,7 @@
  */
 import type { Autonomy } from '../floor.js'
 import { DISPLAY_MS, keysPrefix } from '../voice.js'
-import { statusText, str, type DaemonAction, type DaemonMood, type DaemonSay } from '../protocol.js'
+import { DIALOG_MAX, statusText, str, type DaemonAction, type DaemonMood, type DaemonSay } from '../protocol.js'
 import { lessonLineId } from './approval.js'
 import { BORROW_EVERY_MS, type BorrowPass } from './borrow.js'
 import type { CuratorPass } from './curate.js'
@@ -209,9 +209,11 @@ export class PairLearner {
     if (!lesson) return false
     // The line's id carries a one-time nonce: only windows and `hn` are ever sent it (approval.ts).
     const id = lessonLineId(lesson.id)
+    // What [y] would teach, in full (daemons/BRAIN.md, "Security"): the window shows it before it
+    // acknowledges the line (`daemon_shown`), and a key counts only after that.
     const said = this.deps.voice.say({
       id, about: { machineId: this.deps.machineId(), agentId: lesson.from[0]?.agentId ?? '' }, mood: 'ask',
-      line: this.line(lesson), actions: [TEACH, SKIP, SHOW], ttlMs: DISPLAY_MS,
+      line: this.line(lesson), actions: [TEACH, SKIP, SHOW], ttlMs: DISPLAY_MS, detail: this.detail(lesson),
     })
     if (!said) return false
     this.deps.store.markProposed(lesson.id, now)
@@ -243,11 +245,17 @@ export class PairLearner {
 
   owns(id: string): boolean { return id.startsWith('lesson:') }
 
-  /** For daemon_state `asks`: the one lesson waiting for a key, while it waits. */
-  pending(): Array<{ id: string; line: string; actions: DaemonAction[] }> {
+  /** For daemon_state `asks`: the one lesson waiting for a key, while it waits, its text in full. */
+  pending(): Array<{ id: string; line: string; actions: DaemonAction[]; detail: string }> {
     const live = this.current()
     const lesson = live ? this.deps.store.pending().find((r) => r.id === live.lessonId) : null
-    return live && lesson ? [{ id: live.id, line: this.line(lesson), actions: [TEACH, SKIP, SHOW] }] : []
+    return live && lesson ? [{ id: live.id, line: this.line(lesson), actions: [TEACH, SKIP, SHOW], detail: this.detail(lesson) }] : []
+  }
+
+  /** A lesson's whole text, as approving it would write it, bounded like a dialog. */
+  private detail(lesson: LessonRecord): string {
+    const text = this.deps.store.text(lesson)
+    return text.length > DIALOG_MAX ? `${text.slice(0, DIALOG_MAX)}\n… (cut: harness pair lessons show ${lesson.id})` : text
   }
 
   /** A key on the line (daemon_act): y teach, n skip, s show. Always answers. The id is the nonce. */

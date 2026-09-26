@@ -107,7 +107,19 @@ describe('pair.jsonc', () => {
     expect(g.rules(file.load()).rules).toEqual([])
     expect(g.requests()).toEqual([])
     expect(events.filter((e) => e.type === 'changed').map((e) => e.type === 'changed' && e.line)).toEqual([
-      'pair.jsonc: 1 rule now apply here, model off.', 'pair.jsonc: 0 rules now apply here, model off.'])
+      'pair.jsonc now applies here: 1 rule, model off.', 'pair.jsonc now applies here: 0 rules, model off.'])
+  })
+
+  it('learning\'s opt-ins (borrow, export, agentsMd) wait for the same yes', () => {
+    const path = join(dir, 'pair.jsonc')
+    const file = new PairConfigFile(path)
+    const { g } = gate()
+    writeFileSync(path, '{ "learn": { "borrow": true, "export": ["claude"] } }')
+    expect(g.rules(file.load()).learn).toEqual({ borrow: false, export: [], agentsMd: [] })
+    const [request] = g.requests()
+    expect(request).toMatchObject({ kind: 'rules', line: expect.stringContaining('learn borrow + export claude') })
+    g.confirm('rules', request!.nonce, true)
+    expect(g.rules(file.load()).learn).toEqual({ borrow: true, export: ['claude'], agentsMd: [] })
   })
 
   it('a confirmed file needs no yes after a restart', () => {

@@ -152,7 +152,10 @@ for the oldest pending lesson, mood `ask`, keys first:
 [y/n/s] teach your agents "deploy-api"? borrowed from hermes.
 ```
 
-The line's id is `lesson:<id>:<nonce>`, 128 random bits, sent only to windows and `hn` (see Security). At
+The line's id is `lesson:<id>:<nonce>`, 128 random bits, sent only to windows and `hn` (see Security), and
+it carries the lesson's whole SKILL.md or NOTE.md as `detail` — what `y` would teach — which a window shows
+before it acknowledges the line (`daemon_shown`); a key counts 400 ms after that ([BRAIN.md](BRAIN.md),
+"Security" 1). `daemon_state.asks` lists it as `{ id, line, actions, detail }`. At
 most one lesson proposal an hour (kept in `state.json`, so a restart does not reset it); never while
 a `need` line is showing (or a brief holds its keys); never about the pane you are looking at (a lesson
 from that harness waits); never at autonomy `watch`; never with nobody here. The line shows for 5.2 s
@@ -248,8 +251,9 @@ never approve, restore or export (Security).
   office machine are not matched, and a lesson is proposed on the machine that noticed it, when you are
   at it. The signal queue lives in memory.
 - Approval is guarded against agents, not against same-user malware (Security).
-- Clients: `s` and the `lesson` brief item are new; a client that does not know them still sees the line
-  and `y`/`n`.
+- Clients: `s`, the `lesson` brief item and the line's `detail` are new; a client that does not know them
+  still sees the line, but its `y`/`n` count only once it sends `daemon_shown` for the line (as for every
+  keyed line).
 
 ## L2 as built
 
@@ -337,22 +341,29 @@ runtime linked the global store into every project, and that templates and journ
 too freely. What is built:
 
 - **Person-only approval** (`approval.ts`). Approving puts words in front of every agent; restoring and
-  exporting are the same class. Each needs a daemon-issued one-time **nonce** (128 bits, two minutes, one
-  use, even a wrong try spends it), handed out only where the person is:
+  exporting are the same class. Each needs a daemon-issued one-time **nonce** (128 bits, one use), handed
+  out only where the person is:
   - a **key**: the lesson line's id is `lesson:<id>:<nonce>`, sent only in local `daemon_*` frames to
-    windows and `hn` (never to a tool client); a `daemon_act` on a lesson from a tool client is refused
-    (`PERSON_ONLY`), and so is one from a process the daemon can see inside a harness pane;
+    windows and `hn` (never to a tool client). A `daemon_act` on it counts only when BOTH hold: the key
+    rules every line has ([BRAIN.md](BRAIN.md), "Security" 1 — the daemon's Unix socket, a window bound to
+    this machine, the line received on THIS connection and acknowledged with `daemon_shown` at least
+    400 ms before, while it lives), and the person's (`PairBrain.onKey` → `lessonKeyVerdict`): its id is
+    the live line's nonce (spent by `y` or `n`; `GONE` otherwise), never from a tool client (`PERSON_ONLY`)
+    or a process the daemon can see inside a harness pane (`INSIDE_HARNESS`). Over the Unix socket the
+    daemon cannot see which process holds the other end, so there the key rests on the socket, the
+    acknowledgement and the nonce;
   - the **CLI**: `harness pair lessons approve|restore|export` first refuses by itself when its environment
-    says it runs in a harness pane (`HARNESS_CONTEXT_FILE`, `HARNESS_DSH`, `HARNESSD_PAIR_TOKEN(_FILE)` …,
-    or a tmux session named `harness-…`), then asks the daemon for a **challenge**. The daemon answers
-    only a caller it has verified: connected over loopback TCP, found by its port (`lsof`, or `/proc` on
-    Linux), whose process ancestry reaches neither a harness-managed tmux pane nor the daemon itself. The
-    nonce is bound to that process; the approve that spends it is verified again. Then the lesson (or the
-    export plan) is shown and `[y/N]` asked at the terminal.
-  - Refused outright: any request carrying the pair token (`PERSON_ONLY`), one that only claims
-    `confirmed` (`NONCE_REQUIRED`: the control interface strips it; only it sets it, after a nonce), one the
-    daemon cannot verify (`UNVERIFIED`: the Unix socket, no process found, no process table) and one from
-    inside a harness (`INSIDE_HARNESS`).
+    says it runs in a harness pane (`HARNESS_CONTEXT_FILE`, `HARNESS_DSH`, `HARNESSD_PAIR_TOKEN(_FILE)` …, or
+    a tmux session named `harness-…`), then asks the daemon for a **challenge**. The daemon answers only a
+    caller it has verified: connected over loopback TCP, found by its port (`lsof`, or `/proc` on Linux),
+    whose process ancestry reaches neither a harness-managed tmux pane nor the daemon itself. The nonce lives
+    two minutes, is bound to that process and that action and lesson (a mismatched try spends it), and the
+    approve that spends it is verified again. Then the lesson (or the export plan) is shown and `[y/N]` asked
+    at the terminal.
+  - Refused outright, on the `lessons` verb: any request carrying the pair token (`PERSON_ONLY`), one that
+    only claims `confirmed` (`NONCE_REQUIRED`: the control interface strips it; only it sets it, after a
+    nonce), one the daemon cannot verify (`UNVERIFIED`: the Unix socket, no process found, no process table)
+    and one from inside a harness (`INSIDE_HARNESS`).
 - **No tracked file by default.** Notes go to the untracked `.harness/lessons.md` (`.git/info/exclude`);
   AGENTS.md/CLAUDE.md only for projects in `learn.agentsMd`.
 - **Copies, read-only.** A session's lessons are copied into its runtime with every file a-w; the global
@@ -360,17 +371,24 @@ too freely. What is built:
 - **Inert templates, a higher bar.** Only repeated steps (3+ times, 2+ sessions) make a template lesson;
   each step is an inert code span. The rendered file is guarded again before it is kept.
 - **Redaction everywhere learning writes**: the journal, pending lessons, `signals.json`, and every model
-  prompt, whole.
+  prompt, whole. The pair's own redaction (`pair/redact.ts`: the journal, a journal page leaving for
+  another machine, the triage prompt, every read tool's answer) is this same `guard.redact`.
+- **Opt-ins confirmed at a window.** `learn.borrow`, `learn.export` and `learn.agentsMd` are part of
+  pair.jsonc, which applies only once the person confirmed that exact text at a window (`pair/gate.ts`,
+  [BRAIN.md](BRAIN.md) "Security" 4); until then the file confirmed before applies (nothing, the first
+  time).
+- **Consent first.** Nothing is noticed, distilled, borrowed or proposed until the person agreed to be
+  watched (`zoo.consent`), and no lesson is proposed at autonomy `watch` (the default).
 
 **Threat model and what is out of scope.** The goal is to keep agents — every harness, the pair harness
 included — from teaching themselves or each other. It is not to defeat malware running as the same user:
 such a process can already drive tmux, type into the person's own terminal, or read the pair token file.
-Out of scope, knowingly: a process that impersonates a window (connects without `tool: true` and so is
-sent `daemon_*` frames); one that escapes its ancestry (double-forks to be re-parented to init) or runs
-under a non-tmux backend the daemon does not list; a window on the daemon's Unix socket (the daemon cannot
-see who it is, and lets its key through because it holds the nonce); edits to `pair.jsonc` (which can turn
-borrowing or export on — though nothing is taught without the person's yes); and the person approving a
-bad lesson (the guard, `s`, one-commit revert and the curator are the answer there).
+Out of scope, knowingly: a same-user process that impersonates a window on the daemon's Unix socket
+(connects without `tool: true`, is sent `daemon_*` frames, acknowledges a line and keys it 400 ms later —
+the daemon cannot see who it is); one that escapes its ancestry (double-forks to be re-parented to init) or
+runs under a non-tmux backend the daemon does not list; one that writes `pair.jsonc` and the confirmation
+file both; and the person approving a bad lesson (the guard, `detail`, `s`, one-commit revert and the
+curator are the answer there).
 
 ## Still designed (not built)
 
