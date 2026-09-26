@@ -98,7 +98,12 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
         for recap in recaps.iter().take(2) { for (i, l) in recap.lines().take(6).enumerate() { out.push(Line::from(vec![dim(if i == 0 { "⏺ " } else { "  " }), Span::raw(l.to_string())])) } }
     }
     out.push(Line::raw(""));
-    out.push(dim(if app.find_pane(machine_id, agent_id).is_some() { "on screen — enter goes to it" } else { "enter opens it in a window · C-v beside · C-x below · M-enter here" }).into());
+    // Where it is open, if it is: the window (another session's by name), Enter going there.
+    let place = app.find_pane_anywhere(machine_id, agent_id).map(|(sid, n, _)| if sid == app.session_id { format!("in window {n} — enter goes to it") } else {
+        let name = app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| n).unwrap_or_default();
+        format!("in {name}:{n} — enter goes to it")
+    });
+    out.push(dim(place.unwrap_or_else(|| "enter opens it in a window · C-v beside · C-x below · M-enter here".into())).into());
     out
 }
 

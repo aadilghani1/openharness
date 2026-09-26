@@ -857,7 +857,7 @@ pub fn update(app: &mut App, pane: u64) {
 fn status_mark(app: &App) -> (u64, u64, String) {
     let interval: u64 = app.options.get("status-interval", "", None).and_then(|v| v.parse().ok()).unwrap_or(15);
     let ticks = if interval > 0 && app.status_lines() > 0 { app.started.elapsed().as_secs() / interval } else { 0 };
-    let message = app.toast.as_ref().filter(|(_, _, at)| at.elapsed() < std::time::Duration::from_millis(app.display_ms)).map(|(t, _, _)| t.as_str());
+    let message = app.toast.as_ref().filter(|(_, _, at)| at.elapsed() < std::time::Duration::from_millis(app.toast_ms())).map(|(t, _, _)| t.as_str());
     let line = match &app.modal {
         Some(Modal::Prompt(p)) => format!("prompt {}\0{}\0{}", p.label, p.value, p.cursor),
         Some(Modal::Confirm { prompt, .. }) => format!("confirm {prompt}"),

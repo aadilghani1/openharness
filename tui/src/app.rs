@@ -247,6 +247,9 @@ pub struct App {
     next_pane: u64,
     pub modal: Option<Modal>,
     pub toast: Option<(String, Color, Instant)>,
+    /// How long hn's own notice stays (a harness waiting on you: longer than display-time's
+    /// 750 ms, which is for tmux's messages); none for any other message.
+    pub toast_hold: Option<u64>,
     /// tmux `display-time`: how long a message holds the status line.
     pub display_ms: u64,
     pub display_panes_ms: u64,
@@ -501,6 +504,7 @@ impl App {
             modal: None,
             toast: None,
             display_ms: 750,
+            toast_hold: None,
             display_panes_ms: 1000,
             base_index: 0,
             nums: HashMap::new(),
@@ -649,7 +653,11 @@ impl App {
         if let Some(err) = self.capture_err.as_mut() { err.push(text); return }
         self.add_message(format!("{} message: {text}", tty_name()));
         self.toast = Some((text, color, Instant::now()));
+        self.toast_hold = None;
     }
+
+    /// How long the message on the status line stays: display-time, or longer for hn's notice.
+    pub fn toast_ms(&self) -> u64 { self.toast_hold.unwrap_or(0).max(self.display_ms) }
 
     /// The fleet in counts: needs you, failed, done and unread.
     pub fn fleet_counts(&self) -> (usize, usize, usize) {
@@ -980,7 +988,7 @@ impl App {
                     let name = agent.name.clone();
                     let prompt = agent.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default();
                     if fresh && !visible.contains(&agent.key()) {
-                        { let k = self.keymap.hint("choose-tree -a").unwrap_or_default(); self.say(format!("{name} is waiting on you — {k}"), theme::ATTENTION); }
+                        { let k = self.keymap.hint("choose-tree -a").unwrap_or_default(); self.say(format!("{name} is waiting on you — {k}"), theme::ATTENTION); self.toast_hold = Some(4000) }
                         crate::bell();
                     }
                     if fresh && !self.terminal_focused { crate::notify(&format!("{name} needs input"), &prompt) }
@@ -2220,6 +2228,14 @@ impl App {
         None
     }
 
+    /// Where a harness is open in any of this client's sessions: the session, its window (by its
+    /// number) and the pane.
+    pub fn find_pane_anywhere(&self, machine_id: &str, agent_id: &str) -> Option<(u32, usize, u64)> {
+        if let Some((w, p)) = self.find_pane(machine_id, agent_id) { return Some((self.session_id, self.win_num(w), p)) }
+        let shows = |id: &u64| self.panes.get(id).map(|p| p.machine_id == machine_id && p.agent_id == agent_id).unwrap_or(false);
+        self.sessions.iter().find_map(|s| s.tabs.iter().find_map(|t| t.panes().into_iter().find(|p| shows(p)).map(|p| (s.id, s.nums.get(&t.id).copied().unwrap_or(0), p))))
+    }
+
     pub fn find_pane(&self, machine_id: &str, agent_id: &str) -> Option<(usize, u64)> {
         for (index, tab) in self.tabs.iter().enumerate() {
             for id in tab.panes() {
@@ -2332,6 +2348,10 @@ impl App {
             return;
         }
         if placement != Placement::Replace {
+            // Open in another session of this client: that session, as tmux's chooser goes there.
+            if self.find_pane(machine_id, agent_id).is_none() {
+                if let Some((sid, _, _)) = self.find_pane_anywhere(machine_id, agent_id) { self.switch_session(sid) }
+            }
             if let Some((tab, pane)) = self.find_pane(machine_id, agent_id) {
                 // One harness, one pane: say where it went rather than splitting a second copy.
                 if tab != self.active && matches!(placement, Placement::Split(_)) {

@@ -85,7 +85,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
     let hidden = app.status_lines() == 0;
-    let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.display_ms)).unwrap_or(false);
+    let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false);
     if !hidden || speaking { if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) } }
     // A menu is tmux's overlay: over the status line too, where it is kept on the screen.
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
@@ -420,7 +420,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
         return None;
     }
     if let Some((text, _, at)) = &app.toast {
-        if at.elapsed() < Duration::from_millis(app.display_ms) {
+        if at.elapsed() < Duration::from_millis(app.toast_ms()) {
             buf.set_style(rect, yellow);
             buf.set_stringn(rect.x, rect.y, clip(text, rect.width as usize), rect.width as usize, yellow);
             return None;
