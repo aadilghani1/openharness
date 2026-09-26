@@ -1688,6 +1688,12 @@ impl App {
         self.remote_rows().into_iter().find(|r| r.id == id).map(|r| r.windows).unwrap_or_default()
     }
 
+    /// The harnesses open in a session's windows (this client's sessions), as fleet keys.
+    pub fn session_harnesses(&self, id: u32) -> Vec<(String, String)> {
+        let tabs: &[Tab] = if id == self.session_id { &self.tabs } else { match self.sessions.iter().find(|s| s.id == id) { Some(s) => &s.tabs, None => return Vec::new() } };
+        tabs.iter().flat_map(|t| t.panes()).filter_map(|p| self.panes.get(&p).map(|x| (x.machine_id.clone(), x.agent_id.clone()))).collect()
+    }
+
     /// Every session, (id, name), in tmux's order: by name — this client's and the others'.
     pub fn session_list(&self) -> Vec<(u32, String)> {
         let mut v: Vec<(u32, String)> = std::iter::once((self.session_id, self.session_name())).chain(self.sessions.iter().map(|s| (s.id, self.stash_name(s))))

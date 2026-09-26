@@ -1056,7 +1056,11 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             if app.pane_state(p.id).is_some() { left += 2 }
             if let crate::pane::Phase::Watching(who) = &p.phase { left += width(" [watching]") + if who.is_empty() { 0 } else { width(&format!(" — {who} has it")) } }
             let pr = a.pr.as_ref().map(|p| format!(" {}", p.label())).unwrap_or_default();
-            [(!a.project.is_empty() && !pr.is_empty()).then(|| format!("{} git:({}){pr}", a.project, a.branch)), (!a.project.is_empty()).then(|| format!("{} git:({})", a.project, a.branch)),
+            // A pane on another machine says which (scp's way, as the status line: gpu-box:ml-lab).
+            let far = (p.machine_id != app.fleet.local_id && !a.project.is_empty()).then(|| format!("{}:", app.fleet.machine_name(&p.machine_id))).filter(|m| m.len() > 1);
+            let far_project = far.as_ref().map(|m| format!("{m}{}", a.project));
+            [far_project.as_ref().filter(|_| !pr.is_empty()).map(|fp| format!("{fp} git:({}){pr}", a.branch)), far_project.as_ref().map(|fp| format!("{fp} git:({})", a.branch)),
+                (!a.project.is_empty() && !pr.is_empty()).then(|| format!("{} git:({}){pr}", a.project, a.branch)), (!a.project.is_empty()).then(|| format!("{} git:({})", a.project, a.branch)),
                 (!pr.is_empty()).then(|| format!("git:({}){pr}", a.branch)), Some(format!("git:({})", a.branch)), Some(a.branch.clone())]
                 .into_iter().flatten().find(|c| room >= left + width(c) + 2 + 4)
         }).unwrap_or_default(),

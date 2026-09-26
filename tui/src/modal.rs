@@ -271,9 +271,13 @@ pub fn session_rows(app: &App) -> Vec<Row> {
         let windows = app.session_windows(id).len();
         // Attached: this client's, or shown by another client.
         let attached = id == app.session_id || app.stash_value(id, "session_attached").as_deref() == Some("1");
+        // The harnesses in its windows, in counts (this client's sessions: another's are its).
+        let keys = app.session_harnesses(id);
+        let counts = state_counts(app, app.fleet.agents.values().filter(|a| keys.contains(&a.key())));
+        let right = [counts, if attached { "attached".to_string() } else { String::new() }].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("  ");
         Row::new(format!("session:{id}"), format!("{name}: {windows} windows")).group("Sessions")
             .lead(vec![span("§ ", fg(theme::MUTED))])
-            .right(if attached { "attached".to_string() } else { String::new() })
+            .right(right)
     }).collect()
 }
 
@@ -316,6 +320,17 @@ pub fn launcher_title(app: &App, kind: &PickerKind) -> (String, String) {
 }
 
 /// `#`: every project folder with harnesses in it, grouped per machine.
+/// A set of harnesses in counts, as the status line's (`?1 ✗1 ✓2 ⠹3`): the states that ask
+/// something of you and the working ones; none is nothing.
+pub fn state_counts<'a>(app: &App, agents: impl Iterator<Item = &'a crate::fleet::Agent>) -> String {
+    let mut n = [0usize; 4];
+    for a in agents.filter(|a| a.engine != "terminal") {
+        match app.fleet.state_of(a) { State::NeedsInput => n[0] += 1, State::Failed => n[1] += 1, State::Done => n[2] += 1, State::Working => n[3] += 1, _ => {} }
+    }
+    let glyphs = ["?", "✗", "✓", crate::theme::spinner(app.tick)];
+    (0..4).filter(|i| n[*i] > 0).map(|i| format!("{}{}", glyphs[i], n[i])).collect::<Vec<_>>().join(" ")
+}
+
 pub fn project_rows(app: &App) -> Vec<Row> {
     let mut groups: std::collections::BTreeMap<(String, String), (usize, usize, u64)> = std::collections::BTreeMap::new();
     for a in app.fleet.agents.values() {
@@ -330,7 +345,9 @@ pub fn project_rows(app: &App) -> Vec<Row> {
         let name = root.rsplit('/').next().unwrap_or(&root).to_string();
         let home = app.homes.get(&machine).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
         let short = if !home.is_empty() && root.starts_with(&home) { format!("~{}", &root[home.len()..]) } else { root.clone() };
-        let right = format!("{}{} harness{}{}", if many { format!("{}  ", app.fleet.machine_name(&machine)) } else { String::new() }, all, if all == 1 { "" } else { "es" }, if live > 0 { format!(" · {live} live") } else { String::new() });
+        // Its harnesses in counts (who needs you there), then how many.
+        let counts = state_counts(app, app.fleet.agents.values().filter(|a| a.machine_id == machine && a.project_root == root));
+        let right = format!("{}{}{} harness{}{}", if many { format!("{}  ", app.fleet.machine_name(&machine)) } else { String::new() }, if counts.is_empty() { String::new() } else { format!("{counts}  ") }, all, if all == 1 { "" } else { "es" }, if live > 0 { format!(" · {live} live") } else { String::new() });
         (recent, Row::new(format!("proj:{machine}\t{root}"), name).extra(format!("{short} {}", app.fleet.machine_name(&machine)))
             .lead(vec![span(if live > 0 { "● " } else { "○ " }, fg(if live > 0 { theme::ONLINE } else { theme::MUTED }))])
             .detail(vec![span(short, fg(theme::MUTED))]).right(right).boost(if live > 0 { 30 } else { 0 }))
