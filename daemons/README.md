@@ -133,6 +133,20 @@ Limits: 12 eggs, 64 daemons. The server alone grants turn, week, marathon, night
    weight to nothing (it is not redistributed).
 3. Shiny: 1 in `shinyOneIn`, independent of who hatched.
 4. `pity` resets on a secret and grows by one otherwise.
+5. An egg with nothing new to give (an easter egg once every legendary and secret is owned) draws
+   from every released daemon, as if you owned them all.
+
+**Details** (as built in `backend/src/lib/zoo.ts`; a guest client follows the same rules):
+
+- A daemon's `egg` is the kind of egg it came from (the card's "first egg"). Egg ids come from the server.
+- Duplicates share their roster id; `pair` and `zoo.nickname` address the first one hatched.
+- A name the server does not know (a habit key, an easter word, an egg id, a daemon you do not own)
+  drops that op. A malformed op, such as a 25-character nickname, refuses the whole request. Nicknames
+  are trimmed.
+- A full nest does not lose anything: the first egg arrives with the next habit report, and an easter
+  word stays unspent.
+- `zoo.seed` keeps only what the roster knows, gives each egg a server id, and pairs the first daemon
+  if the guest's pair did not survive.
 
 **Guests** (no Harness account) keep a local zoo with the same shape and rules, drawn on the client.
 On first sign-in it is sent once with `zoo.seed`.

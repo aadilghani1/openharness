@@ -4025,6 +4025,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // route and hears about everyone else's edits as `desk_changed` (backendSocket.ts).
     onDeskRead: () => proxyBackend('GET', '/api/desk'),
     onDeskOps: (body) => proxyBackend('POST', '/api/desk/ops', body),
+    // The account's zoo — see backend routes/zoo.ts. Same shape as the desk: read and ops proxied,
+    // everyone else's changes heard as `zoo_changed`. Signed out, proxyBackend answers 401 NOT_SIGNED_IN
+    // and a guest keeps its zoo locally until it seeds this one.
+    onZooRead: () => proxyBackend('GET', '/api/zoo'),
+    onZooOps: (body) => proxyBackend('POST', '/api/zoo/ops', body),
     onStore: (method, path, body) => proxyBackend(method, path, body),
   }, { socketPath: localSocketPath(env.ADAPTER_DATA_DIR, env.PORT) })
   // Claim the pid file for OURSELVES, and only now that the control port is bound. It used to be
