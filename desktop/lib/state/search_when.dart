@@ -24,22 +24,12 @@ const _numbers = {
 
 const _weekdays = {
   'monday': DateTime.monday,
-  'mon': DateTime.monday,
   'tuesday': DateTime.tuesday,
-  'tue': DateTime.tuesday,
-  'tues': DateTime.tuesday,
   'wednesday': DateTime.wednesday,
-  'wed': DateTime.wednesday,
   'thursday': DateTime.thursday,
-  'thu': DateTime.thursday,
-  'thur': DateTime.thursday,
-  'thurs': DateTime.thursday,
   'friday': DateTime.friday,
-  'fri': DateTime.friday,
   'saturday': DateTime.saturday,
-  'sat': DateTime.saturday,
   'sunday': DateTime.sunday,
-  'sun': DateTime.sunday,
 };
 
 final _phrases = RegExp(
@@ -52,7 +42,9 @@ final _phrases = RegExp(
   r'|(?<lastmonth>last month)'
   r'|(?<few>(?:a )?few days ago|(?:a )?couple(?: of)? days ago)'
   r'|(?<count>\d{1,2}|a|an|one|two|three|four|five|six|seven|eight|nine|ten) (?<unit>days?|weeks?) ago'
-  r'|(?:(?<last>last|on) )?(?<weekday>monday|tuesday|wednesday|thursday|friday|saturday|sunday)'
+  // A weekday only with "on" or "last": "friday deploy" is a harness's name,
+  // "on friday" is a time.
+  r'|(?<last>last|on) (?<weekday>monday|tuesday|wednesday|thursday|friday|saturday|sunday)'
   r')(?![\p{L}\p{N}])',
   caseSensitive: false,
   unicode: true,
@@ -93,7 +85,7 @@ final _phrases = RegExp(
     (from, to) = (day(-back - slack), day(-back + slack + 1));
   } else {
     final weekday = _weekdays[match.namedGroup('weekday')!.toLowerCase()]!;
-    final strictlyBefore = match.namedGroup('last')?.toLowerCase() == 'last';
+    final strictlyBefore = match.namedGroup('last')!.toLowerCase() == 'last';
     var back = (now.weekday - weekday) % 7;
     if (back == 0 && strictlyBefore) back = 7;
     (from, to) = (day(-back), day(-back + 1));

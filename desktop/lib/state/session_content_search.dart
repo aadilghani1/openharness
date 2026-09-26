@@ -146,9 +146,30 @@ class SessionContentSearch extends ChangeNotifier {
     final wanted = query.trim();
     if (_answered == null || _hits.isEmpty) return const {};
     if (_answered == wanted) return _hits;
-    // A hit found for another time says nothing about this one.
+    // Read on every row's build: worked out once per query and answer.
+    final cached = _vouched;
+    if (cached != null &&
+        cached.query == wanted &&
+        identical(cached.hits, _hits)) {
+      return cached.vouched;
+    }
+    final vouched = _vouch(wanted);
+    _vouched = (query: wanted, hits: _hits, vouched: vouched);
+    return vouched;
+  }
+
+  ({
+    String query,
+    Map<String, SessionContentHit> hits,
+    Map<String, SessionContentHit> vouched,
+  })?
+  _vouched;
+
+  Map<String, SessionContentHit> _vouch(String wanted) {
+    // A hit found for another time says nothing about this one. Compared by
+    // the phrase: "today" ends now, and now moves on every read.
     final now = read(wanted), then = read(_answered!);
-    if (now.when?.from != then.when?.from || now.when?.to != then.when?.to) {
+    if (now.when?.phrase.toLowerCase() != then.when?.phrase.toLowerCase()) {
       return const {};
     }
     final words = now.words

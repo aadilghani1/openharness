@@ -244,6 +244,34 @@ void main() {
     },
   );
 
+  test(
+    '"today" is the same window keystroke to keystroke, though now moves',
+    () async {
+      var clock = DateTime(2026, 9, 26, 14, 30);
+      final search = SessionContentSearch(
+        machines: () => ['m'],
+        debounce: Duration.zero,
+        now: () => clock = clock.add(const Duration(milliseconds: 7)),
+        ask: (_, words, when) async => words == 'dia'
+            ? [hit('a1', snippet: 'the ${_o}dial$_c scroll')]
+            : Completer<List<SessionContentHit>?>().future,
+      );
+      addTearDown(search.dispose);
+      search.search('today dia');
+      await settle();
+      search.search('today dial');
+      expect(search.hitsFor('today dial').keys, [
+        agentDestinationId('m', 'a1'),
+      ]);
+      // Read once per query and answer, however many rows ask.
+      expect(
+        identical(search.hitsFor('today dial'), search.hitsFor('today dial')),
+        isTrue,
+      );
+      expect(search.hitsFor('yesterday dial'), isEmpty);
+    },
+  );
+
   group('ranking with what was said', () {
     SwarmDestination row(String id, String title, int hour) => SwarmDestination(
       id: agentDestinationId('m', id),

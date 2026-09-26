@@ -56,13 +56,17 @@ void main() {
   test('a weekday is its most recent one; "last" skips today', () {
     // 26 September 2026 is a Saturday.
     expect(read('dial on monday'), (words: 'dial', from: day(21), to: day(22)));
-    expect(read('friday'), (words: '', from: day(25), to: day(26)));
-    expect(read('dial saturday'), (words: 'dial', from: day(26), to: now));
+    expect(read('on friday'), (words: '', from: day(25), to: day(26)));
+    expect(read('dial on saturday'), (words: 'dial', from: day(26), to: now));
     expect(read('dial last saturday'), (
       words: 'dial',
       from: day(19),
       to: day(20),
     ));
+  });
+
+  test('"0 days ago" is today, as the CLI reads it', () {
+    expect(read('dial 0 days ago'), (words: 'dial', from: day(25), to: now));
   });
 
   test('leaves words alone that only look like time', () {
@@ -74,6 +78,7 @@ void main() {
       'lastweek',
       'sun mon',
       'days ago',
+      'friday deploy',
     ]) {
       expect(parseSearchWhen(query, now).when, isNull, reason: query);
       expect(parseSearchWhen(query, now).words, query);
