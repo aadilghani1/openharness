@@ -22,6 +22,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' show max;
 
 import 'package:flutter/foundation.dart';
 
@@ -48,6 +49,14 @@ class ZooDaemonGrew extends ZooEvent {
   final bool versionChanged;
 }
 
+/// An egg earned with 64 already held became xp for the paired daemon (a
+/// grant of the `{kind, xp}` form). Only the client whose request earned it
+/// hears this; every other one just sees the xp.
+class ZooXpGranted extends ZooEvent {
+  const ZooXpGranted(this.grant);
+  final ZooGrant grant;
+}
+
 typedef ZooRead = Future<Map<String, dynamic>?> Function();
 typedef ZooWrite = Future<Map<String, dynamic>?> Function(
   List<Map<String, dynamic>> ops,
@@ -72,6 +81,7 @@ class ZooClient extends ChangeNotifier {
   Future<void> _queue = Future.value();
   final _unsent = <Map<String, dynamic>>[];
   String? _hatchingEgg;
+  final _xpGrants = <ZooGrant>[];
   final _events = StreamController<ZooEvent>.broadcast(sync: true);
 
   /// Bumped by [reset]: whatever is in flight drops its answer if it moved.
@@ -89,6 +99,16 @@ class ZooClient extends ChangeNotifier {
   /// The egg being opened right now, if any.
   String? get hatchingEgg => _hatchingEgg;
 
+  /// Eggs that became xp in an answer to this phone, not yet seen: the sheet
+  /// shows them as `+50 xp` and forgets them when it closes ([seenXp]).
+  List<ZooGrant> get xpGrants => List.unmodifiable(_xpGrants);
+
+  void seenXp() {
+    if (_xpGrants.isEmpty || _disposed) return;
+    _xpGrants.clear();
+    notifyListeners();
+  }
+
   ZooDaemon? get paired => _zoo.paired;
   DaemonDef? get pairedDef => roster.byId(paired?.id);
 
@@ -97,6 +117,9 @@ class ZooClient extends ChangeNotifier {
   int get habitsDone => _zoo.habits.length;
   List<String> get habits => _zoo.habits;
   int get habitsNeeded => roster.rules.firstEggNeed;
+
+  /// Habits that bring the setup egg, or null on a roster without one.
+  int? get setupHabitsNeeded => roster.rules.setupEggNeed;
 
   // ── reading ────────────────────────────────────────────────────────────────
 
@@ -142,6 +165,24 @@ class ZooClient extends ChangeNotifier {
   }
 
   bool _current(int generation) => !_disposed && generation == _generation;
+
+  /// An answer to this phone's own write: the zoo, and the grants only the
+  /// sender hears. An egg granted shows by being in the zoo; an egg that
+  /// became xp is kept for the sheet, never shown as an egg.
+  void _adoptAnswer(Map<String, dynamic> answer) {
+    _adopt(answer);
+    final grants = [
+      for (final g in answer['grants'] as List? ?? const [])
+        ?ZooGrant.fromJson(g),
+    ];
+    final xp = grants.where((g) => g.isXp).toList();
+    if (xp.isEmpty || _disposed) return;
+    _xpGrants.addAll(xp);
+    notifyListeners();
+    for (final grant in xp) {
+      _events.add(ZooXpGranted(grant));
+    }
+  }
 
   /// Take the server's answer when it is not older than what is shown.
   void _adopt(Map<String, dynamic> raw, {bool baseline = false}) {
@@ -205,6 +246,7 @@ class ZooClient extends ChangeNotifier {
     _reading = null;
     _unsent.clear();
     _hatchingEgg = null;
+    _xpGrants.clear();
     if (!_disposed) notifyListeners();
   }
 
@@ -230,7 +272,8 @@ class ZooClient extends ChangeNotifier {
   }
 
   /// Open an egg. The draw happens on the server; null when the egg is gone or
-  /// the backend cannot be reached — the egg then stays in the nest.
+  /// the backend cannot be reached — the egg then stays in the nest. A
+  /// duplicate answers what it merged into: the count, the shine, the level.
   Future<ZooHatch?> hatch(String eggId) async {
     if (!_loaded || _hatchingEgg != null) return null;
     if (!_zoo.eggs.any((e) => e.id == eggId)) return null;
@@ -252,11 +295,31 @@ class ZooClient extends ChangeNotifier {
     try {
       final answer = await done.future;
       if (!_current(generation) || answer == null) return null;
-      _adopt(answer);
-      return [
+      final before = _zoo;
+      _adoptAnswer(answer);
+      final hatch = [
         for (final h in answer['hatched'] as List? ?? const [])
           ?ZooHatch.fromJson(h),
       ].where((h) => h.eggId == eggId).firstOrNull;
+      if (hatch == null) return null;
+      final had = before.daemon(hatch.daemonId);
+      final has = _zoo.daemon(hatch.daemonId);
+      final levelUp = [
+        for (final l in answer['levelUps'] as List? ?? const [])
+          ?ZooLevelUp.fromJson(l),
+      ].where((l) => l.id == hatch.daemonId).lastOrNull;
+      // A duplicate is one more of it; an answer older than what is shown
+      // (a later read got here first) still counts it once.
+      final count = hatch.duplicate
+          ? max(has?.count ?? 0, (had?.count ?? 0) + 1)
+          : 1;
+      return hatch.learned(
+        count: count,
+        becameShiny: hatch.duplicate && hatch.shiny && had?.shiny != true,
+        serial: hatch.duplicate ? null : has?.serial,
+        levelUp: levelUp,
+        versionBefore: had?.version,
+      );
     } catch (error) {
       debugPrint('zoo: hatch failed: $error');
       return null;
@@ -293,7 +356,7 @@ class ZooClient extends ChangeNotifier {
       }
       if (!_current(generation)) return;
       _unsent.removeRange(0, batch.length.clamp(0, _unsent.length));
-      if (answer != null) _adopt(answer);
+      if (answer != null) _adoptAnswer(answer);
     });
   }
 

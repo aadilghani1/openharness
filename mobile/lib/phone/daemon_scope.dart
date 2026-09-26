@@ -80,17 +80,25 @@ import 'agent_index.dart';
 /// The daemon for everything under the signed-in shell: one face, shared by
 /// every chip (a pager builds one header per page), fed from the app.
 class DaemonHost extends StatefulWidget {
-  const DaemonHost({super.key, required this.notifier, required this.child});
+  const DaemonHost({
+    super.key,
+    required this.notifier,
+    required this.child,
+    this.now,
+  });
 
   final AppNotifier notifier;
   final Widget child;
+
+  /// The clock (tests: a day before a drop's release).
+  final DateTime Function()? now;
 
   @override
   State<DaemonHost> createState() => DaemonHostState();
 }
 
 class DaemonHostState extends State<DaemonHost> with WidgetsBindingObserver {
-  late final DaemonFace face = DaemonFace(widget.notifier.zoo);
+  late final DaemonFace face = DaemonFace(widget.notifier.zoo, now: widget.now);
   DaemonFacts _facts = const DaemonFacts();
   final _onScreen = <Object, ({String key, String who, String q})>{};
   bool _foreground = true;

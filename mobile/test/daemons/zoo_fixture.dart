@@ -1,11 +1,52 @@
 // The backend's zoo routes, answered in memory, for the phone's daemon tests.
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:harness_mobile/api/api_client.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
+import 'package:harness_mobile/daemons/roster.dart';
 
-/// `routes/zoo.ts`, answered in memory. Hatches always give [nextDaemon].
+/// The real roster plus a made-up second drop, `bsd`, announced 2026-10-01
+/// and released 2026-10-15: three regulars drawn as tim, fish and vim, and a
+/// secret drawn as the grue. Only the shelves' drop dates are under test;
+/// no such drop exists.
+DaemonRoster rosterWithDropTwo() {
+  final raw = jsonDecode(
+    File('../daemons/roster.json').readAsStringSync(),
+  ) as Map<String, dynamic>;
+  final daemons = raw['daemons'] as List;
+  Map<String, dynamic> copy(String from, String id, int n) => {
+    ...daemons.firstWhere((d) => (d as Map)['id'] == from) as Map,
+    'id': id,
+    'n': n,
+    'drop': 'bsd',
+  };
+  raw['drops'] = [
+    ...raw['drops'] as List,
+    {
+      'id': 'bsd',
+      'n': 2,
+      'name': 'bsd',
+      'announce': '2026-10-01',
+      'release': '2026-10-15',
+    },
+  ];
+  raw['daemons'] = [
+    ...daemons,
+    copy('tim', 'jail', 11),
+    copy('fish', 'kqueue', 12),
+    copy('vim', 'pf', 13),
+    copy('grue', 'beastie', 14),
+  ];
+  return DaemonRoster.parse(jsonEncode(raw));
+}
+
+/// `routes/zoo.ts`, answered in memory. Hatches always give [nextDaemon],
+/// shiny when [nextShiny]: a daemon you do not own takes [nextSerial] (when
+/// set), one you own merges in as a duplicate (`lib/zoo.ts`), with the same
+/// xp and levels. Every answer carries [grants] too.
 class FakeZooBackend {
   int revision = 3;
   Map<String, dynamic> zoo = {
@@ -31,6 +72,11 @@ class FakeZooBackend {
     'firstEgg': true,
   };
   String nextDaemon = 'fzf';
+  bool nextShiny = true;
+  int? nextSerial;
+  List<Map<String, dynamic>> grants = [];
+  static const _levels = [0, 50, 150, 300, 600];
+  static const _duplicateXp = 150;
   int reads = 0;
   final written = <Map<String, dynamic>>[];
   bool failWrites = false;
@@ -48,6 +94,8 @@ class FakeZooBackend {
     if (failWrites) throw Exception('offline');
     written.addAll(ops);
     final hatched = <Map<String, dynamic>>[];
+    final levelUps = <Map<String, dynamic>>[];
+    int level(int xp) => _levels.lastIndexWhere((at) => xp >= at);
     for (final op in ops) {
       switch (op['op']) {
         case 'zoo.habit':
@@ -59,23 +107,54 @@ class FakeZooBackend {
             for (final e in zoo['eggs'] as List)
               if ((e as Map)['id'] != op['eggId']) e,
           ];
+          final daemons = [
+            for (final d in zoo['daemons'] as List? ?? const [])
+              Map<String, dynamic>.from(d as Map),
+          ];
+          final had = daemons.where((d) => d['id'] == nextDaemon).firstOrNull;
+          if (had != null) {
+            final before = (had['xp'] as int?) ?? 0;
+            had['xp'] = before + _duplicateXp;
+            had['dupes'] = ((had['dupes'] as int?) ?? 0) + 1;
+            if (nextShiny) had['shiny'] = true;
+            if (level(had['xp'] as int) > level(before)) {
+              final at = level(had['xp'] as int);
+              levelUps.add({
+                'id': nextDaemon,
+                'level': at,
+                'version': at >= 4 ? '2.0' : (at >= 2 ? '1.0' : '0.1'),
+              });
+            }
+            zoo['daemons'] = daemons;
+            hatched.add({
+              'eggId': op['eggId'],
+              'daemonId': nextDaemon,
+              'shiny': nextShiny,
+              'duplicate': true,
+              'xp': _duplicateXp,
+            });
+            break;
+          }
           zoo['daemons'] = [
-            ...zoo['daemons'] as List,
+            ...daemons,
             {
               'id': nextDaemon,
               'hatchedAt': '2026-09-28T10:00:00Z',
               'egg': 'turn',
+              'shiny': nextShiny,
+              'serial': ?nextSerial,
             },
           ];
           hatched.add({
             'eggId': op['eggId'],
             'daemonId': nextDaemon,
-            'shiny': true,
+            'shiny': nextShiny,
+            'serial': ?nextSerial,
           });
       }
     }
     revision++;
-    return {...doc, 'hatched': hatched, 'grants': [], 'levelUps': []};
+    return {...doc, 'hatched': hatched, 'grants': grants, 'levelUps': levelUps};
   }
 }
 

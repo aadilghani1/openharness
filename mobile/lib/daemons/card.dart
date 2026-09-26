@@ -7,6 +7,7 @@ library;
 
 import 'render.dart';
 import 'roster.dart';
+import 'zoo.dart';
 
 const cardWidth = 42;
 const _inner = cardWidth - 4;
@@ -86,72 +87,184 @@ List<String> cardLines(
   ];
 }
 
+/// The card of a daemon you own: its version, shine, serial, nickname, the
+/// day it hatched and its egg. A guest's daemon (`origin: 'local'`) has no
+/// serial: only the server mints.
+List<String> ownedCardLines(DaemonRoster roster, DaemonDef d, ZooDaemon mine) =>
+    cardLines(
+      roster,
+      d,
+      version: mine.version,
+      shiny: mine.shiny,
+      serial: mine.origin == 'local' ? null : mine.serial,
+      nickname: mine.nickname,
+      hatched: mine.hatchedDay,
+      egg: mine.egg,
+    );
+
+/// The rows of [cardLines] that hold the portrait, `[from, to)`: the rows a
+/// card colours with the daemon's colour (card.mjs `cardSvg`). Row 1 is the
+/// head, coloured by rarity.
+({int from, int to}) cardPortraitRows(
+  DaemonRoster roster,
+  DaemonDef d,
+  String version,
+) => (
+  from: 3,
+  to:
+      3 +
+      renderPortrait(roster, d, version, DaemonMood.idle, motion: false).length,
+);
+
+/// `#0042`: a serial as the card writes it.
+String serialLabel(int serial) => '#${serial.toString().padLeft(4, '0')}';
+
 /// The card as it is shared: inside a fenced code block, so it keeps its
 /// columns in Slack, GitHub and a chat app.
 String fencedCard(List<String> lines) => '```\n${lines.join('\n')}\n```';
 
-/// One slot on a shelf: an owned daemon's sprite, or `[ ? ]` for a numbered
-/// slot still empty, `[ ! ]` for a secret not found yet.
-class ShelfCell {
-  const ShelfCell({required this.top, required this.label, this.daemon});
+/// A daemon on a shelf (card.mjs's `{ id, shiny, dupes }`): whether it is
+/// shiny, and how many duplicates merged into it.
+class ShelfEntry {
+  const ShelfEntry(this.id, {this.shiny = false, this.dupes = 0});
+  ShelfEntry.of(ZooDaemon d) : this(d.id, shiny: d.shiny, dupes: d.dupes);
+  final String id;
+  final bool shiny;
+  final int dupes;
+}
 
-  /// The sprite, or `[ ? ]`/`[ ! ]`.
+/// Plain ids, none shiny, none doubled.
+List<ShelfEntry> shelfEntries(Iterable<String> ids) => [
+  for (final id in ids) ShelfEntry(id),
+];
+
+/// The drops a shelf shows at [now], in roster order: released ones, and
+/// announced ones as silhouettes. One not yet announced shows nowhere.
+List<DaemonDrop> shelfDrops(DaemonRoster roster, DateTime now) => [
+  for (final drop in roster.drops)
+    if (drop.stateAt(now) != DropState.hidden) drop,
+];
+
+/// One slot on a shelf: an owned daemon's sprite, `[ ? ]` for a numbered slot
+/// still empty, `[ ! ]` for a secret not found yet, or, in a drop announced
+/// but not released, the `#` silhouette of a regular's 0.1 sprite.
+class ShelfCell {
+  const ShelfCell({
+    required this.top,
+    required this.label,
+    required this.slot,
+    this.daemon,
+    this.shiny = false,
+    this.count = 1,
+    this.silhouette = false,
+  });
+
+  /// The sprite, a silhouette, or `[ ? ]`/`[ ! ]`.
   final String top;
 
-  /// The daemon's id, its number (`#03`), or `secret`.
+  /// The daemon's id (`tim x2` with a duplicate merged in), its number
+  /// (`#03`), or `secret`.
   final String label;
+
+  /// The roster daemon this slot is for, owned or not.
+  final DaemonDef slot;
 
   /// The owned daemon, for its colour; null for an empty slot.
   final DaemonDef? daemon;
 
+  /// An owned one that is shiny: it wears its shiny colour.
+  final bool shiny;
+
+  /// How many of it you have had (`x2`).
+  final int count;
+
+  /// A regular of a drop announced but not released yet.
+  final bool silhouette;
+
   bool get owned => daemon != null;
 }
 
-/// The shelf's slots for a drop, in roster order.
+Map<String, ShelfEntry> _byId(Iterable<ShelfEntry> owned) => {
+  for (final e in owned) e.id: e,
+};
+
+/// The shelf's slots for a drop at [now], in roster order; none for a drop not
+/// announced yet.
 List<ShelfCell> shelfCells(
   DaemonRoster roster,
-  Iterable<String> ownedIds, {
+  Iterable<ShelfEntry> owned, {
   String? drop,
+  DateTime? now,
 }) {
-  final owned = ownedIds.toSet();
+  final have = _byId(owned);
   final id = drop ?? roster.drops.first.id;
+  final state =
+      roster.drop(id)?.stateAt(now ?? DateTime.now()) ?? DropState.released;
+  if (state == DropState.hidden) return const [];
   return [
     for (final d in roster.daemons.where((d) => d.drop == id))
-      if (!owned.contains(d.id))
-        ShelfCell(
-          top: d.secret ? '[ ! ]' : '[ ? ]',
-          label: d.secret ? 'secret' : cardNumber(roster, d).substring(0, 3),
-        )
-      else
-        ShelfCell(
-          top: renderSprite(
-            roster,
-            d,
-            roster.rules.versions.length - 1,
-            DaemonMood.idle,
-            motion: false,
-          ),
-          label: d.id,
-          daemon: d,
-        ),
+      _cell(roster, d, state == DropState.released ? have[d.id] : null, state),
   ];
 }
 
-/// `zoo: drop 1 unix  3/9  +secret`
+ShelfCell _cell(
+  DaemonRoster roster,
+  DaemonDef d,
+  ShelfEntry? mine,
+  DropState state,
+) {
+  final number = d.secret ? 'secret' : cardNumber(roster, d).substring(0, 3);
+  if (state == DropState.announced) {
+    return ShelfCell(
+      top: d.secret
+          ? '[ ! ]'
+          : silhouette(
+              renderSprite(roster, d, 0, DaemonMood.idle, motion: false),
+            ),
+      label: number,
+      slot: d,
+      silhouette: !d.secret,
+    );
+  }
+  if (mine == null) {
+    return ShelfCell(top: d.secret ? '[ ! ]' : '[ ? ]', label: number, slot: d);
+  }
+  return ShelfCell(
+    top: renderSprite(
+      roster,
+      d,
+      roster.rules.versions.length - 1,
+      DaemonMood.idle,
+      motion: false,
+    ),
+    label: mine.dupes > 0 ? '${d.id} x${mine.dupes + 1}' : d.id,
+    slot: d,
+    daemon: d,
+    shiny: mine.shiny,
+    count: mine.dupes + 1,
+  );
+}
+
+/// `zoo: drop 1 unix  3/9  +secret`, or for a drop announced but not
+/// released, `zoo: drop 2 bsd  out 2026-10-15`.
 String shelfTitle(
   DaemonRoster roster,
-  Iterable<String> ownedIds, {
+  Iterable<ShelfEntry> owned, {
   String? drop,
+  DateTime? now,
 }) {
-  final owned = ownedIds.toSet();
+  final have = _byId(owned);
   final id = drop ?? roster.drops.first.id;
   final set = roster.daemons.where((d) => d.drop == id).toList();
   final info = roster.drop(id);
-  final have = set.where((d) => owned.contains(d.id) && !d.secret).length;
+  final head = 'zoo: drop ${info?.n ?? 1} ${info?.name ?? id}  ';
+  if (info?.stateAt(now ?? DateTime.now()) == DropState.announced) {
+    return '${head}out ${info!.release}';
+  }
+  final count = set.where((d) => have.containsKey(d.id) && !d.secret).length;
   final of = set.where((d) => !d.secret).length;
-  final secret = set.any((d) => d.secret && owned.contains(d.id));
-  return 'zoo: drop ${info?.n ?? 1} ${info?.name ?? id}  $have/$of'
-      '${secret ? '  +secret' : ''}';
+  final secret = set.any((d) => d.secret && have.containsKey(d.id));
+  return '$head$count/$of${secret ? '  +secret' : ''}';
 }
 
 /// The shelf as text, five slots to a row, ten columns each: card.mjs's
@@ -159,10 +272,13 @@ String shelfTitle(
 /// the screen instead.
 List<String> shelfLines(
   DaemonRoster roster,
-  Iterable<String> ownedIds, {
+  Iterable<ShelfEntry> owned, {
   String? drop,
+  DateTime? now,
 }) {
-  final cells = shelfCells(roster, ownedIds, drop: drop);
+  final at = now ?? DateTime.now();
+  final cells = shelfCells(roster, owned, drop: drop, now: at);
+  if (cells.isEmpty) return const [];
   final rows = <String>[];
   for (var i = 0; i < cells.length; i += 5) {
     final slice = cells.sublist(i, i + 5 > cells.length ? cells.length : i + 5);
@@ -170,7 +286,7 @@ List<String> shelfLines(
     rows.add(slice.map((c) => c.label.padRight(10)).join().trimRight());
     rows.add('');
   }
-  final all = [shelfTitle(roster, ownedIds, drop: drop), '', ...rows];
+  final all = [shelfTitle(roster, owned, drop: drop, now: at), '', ...rows];
   return all.sublist(0, all.length - 1);
 }
 
