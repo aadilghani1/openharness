@@ -186,7 +186,7 @@ export function parseTriage(text: string, options: string[]): { line: string; re
   if (!value || typeof value !== 'object') return 'bad-json'
   const { line, recommend } = value as { line?: unknown; recommend?: unknown }
   if (typeof line !== 'string') return 'bad-json'
-  const clean = statusText(line, 120).toLowerCase()
+  const clean = statusText(line, 120)
   if (!clean || clean.length > 110) return 'bad-line'
   if (recommend === null || recommend === undefined || recommend === '') return { line: clean, recommend: null }
   if (typeof recommend !== 'string') return 'bad-json'

@@ -130,7 +130,7 @@ describe('triage', () => {
     const triage = new PairTriage({ oneshot: () => new Promise(() => {}), now: Date.now })
     const pending = triage.triage(input)
     await settle(2_500)
-    expect(await pending).toMatchObject({ tier: 0, why: 'timeout', recommend: null, line: 'api needs you. bash: npm test [y/n]' })
+    expect(await pending).toMatchObject({ tier: 0, why: 'timeout', recommend: null, line: 'api needs you. Bash: npm test [y/n]' })
   })
 
   it.each([
@@ -141,7 +141,7 @@ describe('triage', () => {
     const triage = new PairTriage({ oneshot: async () => reply, now: Date.now })
     const result = await triage.triage(input)
     expect(result).toMatchObject({ tier: 0, why, recommend: null })
-    expect(result.line).toBe('api needs you. bash: npm test [y/n]')
+    expect(result.line).toBe('api needs you. Bash: npm test [y/n]')
   })
 
   it('never sends a deny-class prompt to the model, never recommends it, and never offers [y]', async () => {
@@ -205,7 +205,7 @@ describe('the brain', () => {
     w.remote.sensor.question('api', 'q_1', ask('Bash: npm test'))
     await settle(200)
     expect(w.says()).toEqual([expect.objectContaining({
-      mood: 'need', line: 'api@laptop needs you. bash: npm test [y/n]',
+      mood: 'need', line: 'api@laptop needs you. Bash: npm test [y/n]',
       about: { machineId: 'machine-b', agentId: 'api', requestId: 'q_1' },
       actions: [{ key: 'y', label: 'Yes', choice: 'Yes' }, { key: 'n', label: 'No', choice: 'No' }],
     })])
@@ -259,7 +259,7 @@ describe('the brain', () => {
     w.remote.sensor.failed('api', 'the engine exited')
     await settle(2_000)
     expect(w.says().map((s) => [s.mood, s.line])).toEqual([
-      ['done', 'web finished. fixed the login redirect.'],
+      ['done', 'web finished. Fixed the login redirect.'],
       ['fail', 'api@laptop failed. the engine exited'],
     ])
   })
@@ -327,6 +327,19 @@ describe('the brain', () => {
     await settle()
     expect(open).not.toHaveBeenCalled()
     expect(unlinked.fleet.machines()[1].status).toBe('unlinked')
+
+    // One the account already lists as offline (a sleeping laptop) is named unreachable without a dial.
+    const dial = vi.fn(async () => { throw new Error('unused') })
+    const asleep = new PairFleet({
+      local: { machineId: () => 'a', name: () => 'desk', snapshot: () => ({ machineId: 'a', epoch: 'e', seq: 0, rev: 0, harnesses: [] }), subscribe: () => () => {}, journal: () => ({ epoch: 'e', seq: 0, entries: [] }) },
+      machines: () => [{ machineId: 'b', name: 'laptop', linked: true, online: false }],
+      open: dial, onChange: () => {},
+    })
+    asleep.start()
+    await settle()
+    expect(dial).not.toHaveBeenCalled()
+    expect(asleep.machines()[1].status).toBe('unreachable')
+    asleep.stop()
 
     let fleetStatus = ''
     const old = new PairFleet({

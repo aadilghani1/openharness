@@ -37,9 +37,13 @@ export interface LineFacts {
   who: string
 }
 
-/** Swap the example harness for the real one; null when anything else in the line would be invented. */
+/**
+ * Swap the example harness for the real one; null when anything else in the line would be invented.
+ * The daemon's own words are lowercased (that is its voice); the facts put into them — a harness name,
+ * a question, a recap, a path — are never touched, because a person may have to read them exactly.
+ */
 function voiced(line: string, who: string, strip: RegExp[] = []): { text: string; hasWho: boolean } | null {
-  let text = line
+  let text = line.toLowerCase()
   for (const pattern of strip) text = text.replace(pattern, ' ')
   const hasWho = WHO.test(text)
   text = text.replace(WHO, '\u0000')
@@ -63,19 +67,19 @@ export function needLine(daemonId: string, facts: LineFacts & { question: string
   const base = line ? line.text.replace('\u0001', `${facts.index ?? 1}/${facts.count ?? 1}`) : `${facts.who} needs you.`
   const joined = (head: string): string => /[.!?]$/.test(head) ? `${head} ${q}` : `${head}: ${q}`
   const told = line && !line.hasWho ? joined(`${base} ${facts.who}`) : joined(base)
-  return statusText(`${lower(told)}${keys(actions)}`, 140)
+  return statusText(`${told}${keys(actions)}`, 140)
 }
 
 export function doneLine(daemonId: string, facts: LineFacts & { recap?: string | null }): string {
   const line = voiced(rosterLine(daemonId, 'done') ?? '', facts.who)
   const base = line?.hasWho ? line.text : `${facts.who} finished.`
-  return statusText(lower(facts.recap ? `${base} ${facts.recap}` : base), 140)
+  return statusText(facts.recap ? `${base} ${facts.recap}` : base, 140)
 }
 
 export function failLine(daemonId: string, facts: LineFacts & { reason: string }): string {
   const line = voiced(rosterLine(daemonId, 'fail') ?? '', facts.who)
   const base = line?.hasWho ? line.text : `${facts.who} failed.`
-  return statusText(lower(`${base} ${facts.reason}`), 140)
+  return statusText(`${base} ${facts.reason}`, 140)
 }
 
 export interface BackFacts {
@@ -103,7 +107,7 @@ export interface BackFacts {
 export function backLine(daemonId: string, facts: BackFacts): string {
   const slots = { done: false, waiting: false, fire: false, loss: false }
   const waited = facts.waiting && facts.oldestWaitMs != null ? ` ${ago(facts.oldestWaitMs)}` : ''
-  let line = rosterLine(daemonId, 'back') ?? 'welcome back.'
+  let line = (rosterLine(daemonId, 'back') ?? 'welcome back.').toLowerCase()
   line = line.replace(/\b\d+ done\b/, () => { slots.done = true; return `${facts.done} done` })
   line = line.replace(/\b\d+ replies\b/, () => { slots.done = true; return `${facts.done} ${facts.done === 1 ? 'reply' : 'replies'}` })
   line = line.replace(/\b\d+ waiting( \d+[smhd])?/, () => { slots.waiting = true; return `${facts.waiting} waiting${waited}` })
@@ -123,7 +127,7 @@ export function backLine(daemonId: string, facts: BackFacts): string {
   if (!slots.waiting && facts.waiting) extra.push(`${facts.waiting} waiting${waited}`)
   let out = extra.length ? `${line} ${extra.join(', ')}.` : line
   if (!slots.fire && fire) out = `${out} ${fire}`
-  return statusText(lower(out), 160)
+  return statusText(out, 160)
 }
 
 export function ago(ms: number): string {
@@ -132,11 +136,6 @@ export function ago(ms: number): string {
   if (minutes < 120) return `${minutes}m`
   const hours = Math.round(minutes / 60)
   return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`
-}
-
-/** Lowercase, except text the person has to type or read exactly: backticks and quotes are kept. */
-function lower(line: string): string {
-  return line.replace(/(`[^`]*`|"[^"]*")|[^`"]+/g, (part, kept: string | undefined) => kept ?? part.toLowerCase())
 }
 
 // ── when it may speak ───────────────────────────────────────────────────────────────────────────────

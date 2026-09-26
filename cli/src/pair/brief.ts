@@ -137,7 +137,7 @@ export function parseBrief(text: string, items: BriefItem[]): Map<string, string
   for (const row of rows) {
     const { id, line } = (row ?? {}) as { id?: unknown; line?: unknown }
     if (typeof id !== 'string' || !known.has(id) || typeof line !== 'string') return null
-    const clean = statusText(line, 120).toLowerCase()
+    const clean = statusText(line, 120)
     if (!clean || clean.length > 110) return null
     lines.set(id, clean)
   }

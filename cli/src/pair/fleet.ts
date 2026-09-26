@@ -20,6 +20,8 @@ export interface FleetMachineInfo {
   name: string
   /** A pinned peer key exists (`harness link connect`). Without one nothing can be read. */
   linked: boolean
+  /** False when the account's list already says it is offline: named unreachable, not dialled. */
+  online?: boolean
 }
 
 /** One relay session to one machine, speaking sealed `pair_*`. */
@@ -153,6 +155,7 @@ export class PairFleet {
       remote.name = info.name || remote.name
       if (!info.linked) { this.setStatus(remote, 'unlinked'); continue }
       if (remote.link || remote.status === 'old') continue
+      if (info.online === false) { this.setStatus(remote, 'unreachable'); continue }
       if (remote.status === 'unreachable' && this.now() < remote.retryAt) continue
       if (remote.connecting) continue
       const connecting = this.connect(remote).finally(() => { if (remote.connecting === connecting) remote.connecting = null })

@@ -4162,7 +4162,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     machines: () => machineListCache.list().machines
       .filter((m) => !m.local)
-      .map((m) => ({ machineId: m.machineId, name: m.name, linked: relayPeers.get(m.machineId) !== null })),
+      .map((m) => ({ machineId: m.machineId, name: m.name, linked: relayPeers.get(m.machineId) !== null, online: m.state !== 'offline' })),
     open: relayPairLinkOpener({
       acquire: (machineId, sink, onClosed) => relayPool.acquireIsolated(machineId, readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV,
         { type: 'machine_select', payload: { machineId } }, sink, onClosed),
