@@ -21,21 +21,17 @@ void main() {
     ..framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.benchmarkLive;
   final options = PerfOptions.fromEnvironment();
 
-  testWidgets(
-    'phone performance baseline',
-    (tester) async {
-      final suite = PerfSuite(tester, binding, options);
-      try {
-        await suite.run();
-      } finally {
-        // Unmounted first: the pages still listen to what is being disposed.
-        await tester.pumpWidget(const SizedBox.shrink());
-        suite.fixture.dispose();
-      }
-      if (suite.failures.isNotEmpty) {
-        fail('Scenarios failed: ${suite.failures.keys.join(', ')}');
-      }
-    },
-    timeout: const Timeout(Duration(minutes: 20)),
-  );
+  testWidgets('phone performance baseline', (tester) async {
+    final suite = PerfSuite(tester, binding, options);
+    try {
+      await suite.run();
+    } finally {
+      // Unmounted first: the pages still listen to what is being disposed.
+      await tester.pumpWidget(const SizedBox.shrink());
+      suite.fixture.dispose();
+    }
+    if (suite.failures.isNotEmpty) {
+      fail('Scenarios failed: ${suite.failures.keys.join(', ')}');
+    }
+  }, timeout: const Timeout(Duration(minutes: 20)));
 }

@@ -17,7 +17,8 @@ import 'dart:math' as math;
 /// by synchronized-output mode 2026 the way current versions do. Everything is
 /// seeded, so two runs stream the same bytes.
 class ClaudeOutput {
-  ClaudeOutput({required this.cols, int seed = 26}) : _random = math.Random(seed);
+  ClaudeOutput({required this.cols, int seed = 26})
+    : _random = math.Random(seed);
 
   final int cols;
   final math.Random _random;
@@ -48,14 +49,66 @@ class ClaudeOutput {
   ];
 
   static const _words = [
-    'the', 'test', 'login', 'flaky', 'because', 'session', 'token', 'expires',
-    'before', 'the', 'assertion', 'runs', 'so', 'I', 'will', 'wait', 'for',
-    'response', 'instead', 'of', 'checking', 'status', 'immediately', 'and',
-    'the', 'fixture', 'now', 'resets', 'clock', 'between', 'cases', 'which',
-    'keeps', 'retry', 'logic', 'honest', 'while', 'CI', 'stays', 'green',
-    'refresh', 'handler', 'races', 'with', 'teardown', 'when', 'suite',
-    'shares', 'a', 'server', 'across', 'files', 'that', 'was', 'hiding', 'real',
-    'bug', 'in', 'middleware', 'order',
+    'the',
+    'test',
+    'login',
+    'flaky',
+    'because',
+    'session',
+    'token',
+    'expires',
+    'before',
+    'the',
+    'assertion',
+    'runs',
+    'so',
+    'I',
+    'will',
+    'wait',
+    'for',
+    'response',
+    'instead',
+    'of',
+    'checking',
+    'status',
+    'immediately',
+    'and',
+    'the',
+    'fixture',
+    'now',
+    'resets',
+    'clock',
+    'between',
+    'cases',
+    'which',
+    'keeps',
+    'retry',
+    'logic',
+    'honest',
+    'while',
+    'CI',
+    'stays',
+    'green',
+    'refresh',
+    'handler',
+    'races',
+    'with',
+    'teardown',
+    'when',
+    'suite',
+    'shares',
+    'a',
+    'server',
+    'across',
+    'files',
+    'that',
+    'was',
+    'hiding',
+    'real',
+    'bug',
+    'in',
+    'middleware',
+    'order',
   ];
 
   static const _files = [

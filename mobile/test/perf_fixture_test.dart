@@ -1,6 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness_mobile/phone/sheet_search_row.dart';
+import 'package:harness_mobile/phone/find_row.dart';
 import 'package:harness_mobile/phone/terminal_page.dart';
 import 'package:harness_mobile/phone/terminal_search.dart';
 
@@ -58,29 +58,30 @@ void main() {
     fixture.dispose();
   });
 
-  testWidgets('the redraw load holds the screen still; the append load grows it', (
-    tester,
-  ) async {
-    final fixture = PerfFixture.create();
-    final a = fixture.terminals['agent-a']!;
-    final output = ClaudeOutput(cols: 40);
-    await a.keyframe(output.keyframe(200), cols: 40, rows: 49);
-    final buffer = a.session.terminal.buffer;
-    final lines = buffer.lines.length;
-    final cursor = buffer.cursorY;
-    for (var tick = 1; tick <= 50; tick++) {
-      await a.output(FixtureTerminal.encode(output.redrawBurst(tick)));
-    }
-    // Ink's in-place redraw: an 8-row region rewritten, nothing added.
-    expect(buffer.lines.length, lines);
-    expect(buffer.cursorY, cursor);
-    for (var tick = 1; tick <= 20; tick++) {
-      await a.output(FixtureTerminal.encode(output.appendBurst(tick)));
-    }
-    // Three long lines a burst, each wrapping several times at 40 columns.
-    expect(buffer.lines.length, greaterThan(lines + 20 * 3 * 3));
-    fixture.dispose();
-  });
+  testWidgets(
+    'the redraw load holds the screen still; the append load grows it',
+    (tester) async {
+      final fixture = PerfFixture.create();
+      final a = fixture.terminals['agent-a']!;
+      final output = ClaudeOutput(cols: 40);
+      await a.keyframe(output.keyframe(200), cols: 40, rows: 49);
+      final buffer = a.session.terminal.buffer;
+      final lines = buffer.lines.length;
+      final cursor = buffer.cursorY;
+      for (var tick = 1; tick <= 50; tick++) {
+        await a.output(FixtureTerminal.encode(output.redrawBurst(tick)));
+      }
+      // Ink's in-place redraw: an 8-row region rewritten, nothing added.
+      expect(buffer.lines.length, lines);
+      expect(buffer.cursorY, cursor);
+      for (var tick = 1; tick <= 20; tick++) {
+        await a.output(FixtureTerminal.encode(output.appendBurst(tick)));
+      }
+      // Three long lines a burst, each wrapping several times at 40 columns.
+      expect(buffer.lines.length, greaterThan(lines + 20 * 3 * 3));
+      fixture.dispose();
+    },
+  );
 
   testWidgets('Find lists the other agent, and opening it switches the page', (
     tester,
@@ -89,7 +90,9 @@ void main() {
     final fixture = PerfFixture.create();
     final host = GlobalKey<FocusHostState>();
     await tester.pumpWidget(
-      perfApp(FocusHost(key: host, fixture: fixture, initialAgentId: 'agent-a')),
+      perfApp(
+        FocusHost(key: host, fixture: fixture, initialAgentId: 'agent-a'),
+      ),
     );
     for (final id in ['agent-a', 'agent-b']) {
       await fixture.terminals[id]!.keyframe(
@@ -105,14 +108,16 @@ void main() {
     expect(find.byType(TerminalSearchOverlay), findsOneWidget);
 
     final row = find.byWidgetPredicate(
-      (w) => w is SheetSearchRow && w.row.entry?.agent.id == 'agent-b',
+      (w) => w is FindRow && w.title == 'tighten rate limiter',
     );
     expect(row, findsOneWidget);
     await tester.tap(row);
     await tester.pump();
     expect(host.currentState!.agentId, 'agent-b');
     expect(
-      find.byWidgetPredicate((w) => w is TerminalPage && w.agentId == 'agent-b'),
+      find.byWidgetPredicate(
+        (w) => w is TerminalPage && w.agentId == 'agent-b',
+      ),
       findsOneWidget,
     );
 

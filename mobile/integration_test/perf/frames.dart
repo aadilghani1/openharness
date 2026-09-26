@@ -120,7 +120,9 @@ Map<String, Object?> frameStats(
   List<ui.FrameTiming> frames, {
   required int windowMicros,
 }) {
-  List<int> pick(int Function(ui.FrameTiming) f) => [for (final t in frames) f(t)];
+  List<int> pick(int Function(ui.FrameTiming) f) => [
+    for (final t in frames) f(t),
+  ];
   final build = pick((t) => t.buildDuration.inMicroseconds);
   final raster = pick((t) => t.rasterDuration.inMicroseconds);
   final vsync = pick((t) => t.vsyncOverhead.inMicroseconds);
@@ -141,14 +143,18 @@ Map<String, Object?> frameStats(
       'raster': over(raster),
       'totalSpan': over(total),
     },
-    'uiBusyShare':
-        build.fold<int>(0, (a, b) => a + b) / windowMicros,
-    'rasterBusyShare':
-        raster.fold<int>(0, (a, b) => a + b) / windowMicros,
+    'uiBusyShare': build.fold<int>(0, (a, b) => a + b) / windowMicros,
+    'rasterBusyShare': raster.fold<int>(0, (a, b) => a + b) / windowMicros,
     // Every frame, so runs can be pooled observation by observation rather
     // than by averaging percentiles: [frame number, build, raster, vsync
     // overhead, total span] in microseconds.
-    'rawColumns': ['frame', 'buildUs', 'rasterUs', 'vsyncOverheadUs', 'totalSpanUs'],
+    'rawColumns': [
+      'frame',
+      'buildUs',
+      'rasterUs',
+      'vsyncOverheadUs',
+      'totalSpanUs',
+    ],
     'raw': [
       for (final t in frames)
         [

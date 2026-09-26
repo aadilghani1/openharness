@@ -79,7 +79,7 @@ flutter drive --profile --no-dds --keep-app-running \
 
 If the redesign renames what the benchmark taps or waits for — the
 `terminal-find` key, `TerminalSearchOverlay`, `VoiceMicButton`'s face,
-`NewAgentPage`, `SheetSearchRow` — update `perf/scenarios.dart` in the same
+`NewAgentPage`, `FindRow` — update `perf/scenarios.dart` in the same
 change and say so in the report: the boundary of each scenario must stay the
 same for the numbers to compare. `test/perf_fixture_test.dart` runs the
 fixture's assumptions on every `flutter test`, so a rename shows up there

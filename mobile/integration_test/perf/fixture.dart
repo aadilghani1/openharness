@@ -19,7 +19,6 @@ import 'package:harness_mobile/terminal/terminal_binary.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
 
-
 /// The machine every fixture agent lives on.
 const perfMachineId = 'perf-machine';
 
@@ -168,23 +167,26 @@ class PerfFixture {
     final terminals = <String, FixtureTerminal>{};
     for (final (id, name) in perfAgents.take(2)) {
       late FixtureTerminal terminal;
-      final session = TerminalSession(
-        machineId: perfMachineId,
-        agentId: id,
-        agentName: name,
-        engineId: 'claude',
-        send: (type, payload) async {
-          if (type == 'terminal_resize') {
-            terminal.resizes++;
-            terminal.lastResize = (
-              payload['cols'] as int,
-              payload['rows'] as int,
-            );
-          }
-          return true;
-        },
-        sendBinary: (_) async => true,
-      )..streamId = '00000000-0000-4000-8000-00000000000${terminals.length + 1}';
+      final session =
+          TerminalSession(
+              machineId: perfMachineId,
+              agentId: id,
+              agentName: name,
+              engineId: 'claude',
+              send: (type, payload) async {
+                if (type == 'terminal_resize') {
+                  terminal.resizes++;
+                  terminal.lastResize = (
+                    payload['cols'] as int,
+                    payload['rows'] as int,
+                  );
+                }
+                return true;
+              },
+              sendBinary: (_) async => true,
+            )
+            ..streamId =
+                '00000000-0000-4000-8000-00000000000${terminals.length + 1}';
       terminal = FixtureTerminal._(session, id);
       terminals[id] = terminal;
       // ignore: invalid_use_of_visible_for_testing_member
@@ -220,9 +222,8 @@ Widget perfApp(Widget home, {List<NavigatorObserver> observers = const []}) {
     debugShowCheckedModeBanner: false,
     theme: grid.buildAppTheme(brightness: Brightness.dark),
     navigatorObservers: observers,
-    builder: (context, child) => grid.BrightnessScope(
-      child: child ?? const SizedBox.shrink(),
-    ),
+    builder: (context, child) =>
+        grid.BrightnessScope(child: child ?? const SizedBox.shrink()),
     home: home,
   );
 }
@@ -239,7 +240,11 @@ Widget perfApp(Widget home, {List<NavigatorObserver> observers = const []}) {
 /// `selectAgent`'s attach — both agents' terminals are already attached and
 /// rendered here, so a switch never waits on a keyframe.
 class FocusHost extends StatefulWidget {
-  const FocusHost({super.key, required this.fixture, required this.initialAgentId});
+  const FocusHost({
+    super.key,
+    required this.fixture,
+    required this.initialAgentId,
+  });
 
   final PerfFixture fixture;
   final String initialAgentId;

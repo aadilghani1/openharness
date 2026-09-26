@@ -7,7 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness_mobile/phone/new_agent_page.dart';
-import 'package:harness_mobile/phone/sheet_search_row.dart';
+import 'package:harness_mobile/phone/find_row.dart';
 import 'package:harness_mobile/phone/terminal_search.dart';
 import 'package:harness_mobile/phone/voice_mic_button.dart';
 import 'package:harness_mobile/phone/voice_mic_face.dart';
@@ -37,10 +37,15 @@ class PerfOptions {
   factory PerfOptions.fromEnvironment() {
     const only = String.fromEnvironment('PERF_SCENARIOS');
     return PerfOptions(
-      scenarios: only.isEmpty ? null : only.split(',').map((s) => s.trim()).toSet(),
+      scenarios: only.isEmpty
+          ? null
+          : only.split(',').map((s) => s.trim()).toSet(),
       samples: const int.fromEnvironment('PERF_SAMPLES', defaultValue: 35),
       warmups: const int.fromEnvironment('PERF_WARMUPS', defaultValue: 5),
-      streamSeconds: const int.fromEnvironment('PERF_STREAM_SECONDS', defaultValue: 10),
+      streamSeconds: const int.fromEnvironment(
+        'PERF_STREAM_SECONDS',
+        defaultValue: 10,
+      ),
       trace: const bool.fromEnvironment('PERF_TRACE', defaultValue: true),
     );
   }
@@ -156,8 +161,14 @@ class PerfSuite {
     await _mountFocus();
     await _seed();
     await _step('idle', _idle);
-    await _step('stream_redraw', () => _stream('stream_redraw', StreamLoad.redraw));
-    await _step('stream_append', () => _stream('stream_append', StreamLoad.append));
+    await _step(
+      'stream_redraw',
+      () => _stream('stream_redraw', StreamLoad.redraw),
+    );
+    await _step(
+      'stream_append',
+      () => _stream('stream_append', StreamLoad.append),
+    );
     await _step('scroll_read', _scroll);
     await _step('find_open_tap', () => _findOpenTap(idle: true));
     await _step('find_open_tap_streaming', () => _findOpenTap(idle: false));
@@ -168,8 +179,14 @@ class PerfSuite {
     await _step('find_switch', _findSwitch);
     if (options.trace) {
       await _step('trace_idle', _traceIdle);
-      await _step('trace_stream_redraw', () => _traceStream('stream_redraw', StreamLoad.redraw));
-      await _step('trace_stream_append', () => _traceStream('stream_append', StreamLoad.append));
+      await _step(
+        'trace_stream_redraw',
+        () => _traceStream('stream_redraw', StreamLoad.redraw),
+      );
+      await _step(
+        'trace_stream_append',
+        () => _traceStream('stream_append', StreamLoad.append),
+      );
       await _step('trace_find_open_tap', _traceFindOpen);
     }
     await _step('control_panel_redraw', _controlPanel);
@@ -328,7 +345,8 @@ class PerfSuite {
     while (true) {
       final frame = await nextFrame();
       if (done()) return frame;
-      if (watch.elapsed > limit) throw StateError('Timed out waiting for $what');
+      if (watch.elapsed > limit)
+        throw StateError('Timed out waiting for $what');
     }
   }
 
@@ -344,7 +362,10 @@ class PerfSuite {
       'description':
           'Focus on a rendered terminal, nothing streaming, no input: what the '
           'app draws on its own.',
-      'frames': frameStats(clock.between(start, end), windowMicros: end - start),
+      'frames': frameStats(
+        clock.between(start, end),
+        windowMicros: end - start,
+      ),
     };
   }
 
@@ -363,7 +384,10 @@ class PerfSuite {
                   'erased and redrawn in place at 20 Hz.'
             : 'Terminal at the bottom while ~60 long lines/s of prose append '
                   'above the live region (3 lines per burst at 20 Hz).',
-        'frames': frameStats(clock.between(start, end), windowMicros: end - start),
+        'frames': frameStats(
+          clock.between(start, end),
+          windowMicros: end - start,
+        ),
         'output': pump.window(start, end),
         'sessionTakeShare':
             pump.takes
@@ -394,7 +418,8 @@ class PerfSuite {
   }
 
   Future<void> _scroll() async {
-    final pump = OutputPump(_terminalA, _outputs[_a]!, StreamLoad.redraw)..start();
+    final pump = OutputPump(_terminalA, _outputs[_a]!, StreamLoad.redraw)
+      ..start();
     try {
       await Future<void>.delayed(const Duration(seconds: 1));
       final scrollable = _terminalScrollable();
@@ -409,8 +434,11 @@ class PerfSuite {
       var flingsForward = 0;
       // Back through the scrollback: flicks the way a thumb reads upward — a
       // flick every quarter second, each carrying the last one's momentum.
-      while (flingsBack < 30 && position.pixels > position.minScrollExtent + 1) {
-        final finger = touches.down(origin + Offset(box.size.width / 2, box.size.height * 0.3));
+      while (flingsBack < 30 &&
+          position.pixels > position.minScrollExtent + 1) {
+        final finger = touches.down(
+          origin + Offset(box.size.width / 2, box.size.height * 0.3),
+        );
         await glide(finger, const Offset(0, 360), steps: 8);
         finger.up();
         flingsBack++;
@@ -422,15 +450,25 @@ class PerfSuite {
       final reachedTop = position.pixels <= position.minScrollExtent + 1;
       // Then a slow read forward: drags that follow the finger.
       for (var i = 0; i < 6; i++) {
-        final finger = touches.down(origin + Offset(box.size.width / 2, box.size.height * 0.7));
-        await glide(finger, const Offset(0, -300), steps: 30, interval: const Duration(milliseconds: 16));
+        final finger = touches.down(
+          origin + Offset(box.size.width / 2, box.size.height * 0.7),
+        );
+        await glide(
+          finger,
+          const Offset(0, -300),
+          steps: 30,
+          interval: const Duration(milliseconds: 16),
+        );
         await Future<void>.delayed(const Duration(milliseconds: 60));
         finger.up();
         await Future<void>.delayed(const Duration(milliseconds: 150));
       }
       // And back to the bottom, flicking.
-      while (flingsForward < 30 && position.pixels < position.maxScrollExtent - 1) {
-        final finger = touches.down(origin + Offset(box.size.width / 2, box.size.height * 0.7));
+      while (flingsForward < 30 &&
+          position.pixels < position.maxScrollExtent - 1) {
+        final finger = touches.down(
+          origin + Offset(box.size.width / 2, box.size.height * 0.7),
+        );
         await glide(finger, const Offset(0, -360), steps: 8);
         finger.up();
         flingsForward++;
@@ -445,7 +483,10 @@ class PerfSuite {
             'Flicks back through the whole scrollback, six slow drags forward, '
             'and flicks back to the bottom, while the live region redraws at '
             '20 Hz.',
-        'frames': frameStats(clock.between(start, end), windowMicros: end - start),
+        'frames': frameStats(
+          clock.between(start, end),
+          windowMicros: end - start,
+        ),
         'output': pump.window(start, end),
         'scroll': {
           'startPixels': startPixels,
@@ -456,7 +497,8 @@ class PerfSuite {
           'flicksForward': flingsForward,
           'endPixels': position.pixels,
           'maxScrollExtent': position.maxScrollExtent,
-          'retainedPhysicalRows': _terminalA.session.terminal.buffer.lines.length,
+          'retainedPhysicalRows':
+              _terminalA.session.terminal.buffer.lines.length,
         },
       };
     } finally {
@@ -485,7 +527,11 @@ class PerfSuite {
       rows.add(await sample(i >= 0));
     }
     await clock.waitFor([
-      for (final row in rows) ...[row.previousFrame, row.firstFrame, row.readyFrame],
+      for (final row in rows) ...[
+        row.previousFrame,
+        row.firstFrame,
+        row.readyFrame,
+      ],
     ]);
     for (final row in rows) {
       final readyBegan = row.extra['readyBeganWallMicros'] as int?;
@@ -569,7 +615,9 @@ class PerfSuite {
             (w) => w.key == const ValueKey('terminal-find'),
             'terminal-find',
           );
-          final (previous, began, dispatched) = await _tap(touches.centerOf(name));
+          final (previous, began, dispatched) = await _tap(
+            touches.centerOf(name),
+          );
           final first = await _untilFrame(_overlayUp, what: 'Find to appear');
           final ready = await _untilOverlayOpen();
           await _closeFind();
@@ -604,7 +652,9 @@ class PerfSuite {
         await _settle(frames: 2, pause: const Duration(milliseconds: 150));
         final view = _find((w) => w is TerminalView, 'terminal');
         final box = view.renderObject! as RenderBox;
-        final point = box.localToGlobal(Offset(box.size.width * 0.2, box.size.height * 0.5));
+        final point = box.localToGlobal(
+          Offset(box.size.width * 0.2, box.size.height * 0.5),
+        );
         final finger = touches.down(point);
         await nextFrame();
         // Past touch slop: the drag is accepted here, and with the default
@@ -614,7 +664,10 @@ class PerfSuite {
         final previous = await nextFrame();
         final began = finger.moveBy(const Offset(20, 0));
         final dispatched = wallMicros();
-        final first = await _untilFrame(_overlayUp, what: 'Find under the finger');
+        final first = await _untilFrame(
+          _overlayUp,
+          what: 'Find under the finger',
+        );
         await glide(finger, const Offset(220, 0), steps: 11);
         final released = finger.up();
         if (measured) dragWindows.add((began, released));
@@ -637,8 +690,11 @@ class PerfSuite {
       for (final (start, end) in dragWindows) ...clock.between(start, end),
     ];
     final dragMicros = dragWindows.fold<int>(0, (a, w) => a + w.$2 - w.$1);
-    (scenarios['find_open_swipe']! as Map<String, Object?>)['framesWhileDragging'] =
-        frameStats(frames, windowMicros: dragMicros);
+    (scenarios['find_open_swipe']!
+        as Map<String, Object?>)['framesWhileDragging'] = frameStats(
+      frames,
+      windowMicros: dragMicros,
+    );
   }
 
   Element _mic() =>
@@ -659,16 +715,15 @@ class PerfSuite {
         (measured) async {
           await _settle(frames: 2, pause: const Duration(milliseconds: 200));
           final mic = _mic();
-          final (previous, began, dispatched) = await _tap(touches.centerOf(mic));
+          final (previous, began, dispatched) = await _tap(
+            touches.centerOf(mic),
+          );
           bool listening() => findElements((w) => w is VoiceMicButton).any(
             (e) => (e.widget as VoiceMicButton).face == VoiceMicFace.listening,
           );
           final first = await _untilFrame(listening, what: 'the mic to listen');
           fixture.voice.clear();
-          await _untilFrame(
-            () => !listening(),
-            what: 'the mic to rest',
-          );
+          await _untilFrame(() => !listening(), what: 'the mic to rest');
           await _settle(frames: 2, pause: const Duration(milliseconds: 250));
           return _Observation(
             operation: 'mic_tap',
@@ -699,7 +754,9 @@ class PerfSuite {
         await _settle(frames: 2, pause: const Duration(milliseconds: 150));
         final view = _find((w) => w is TerminalView, 'terminal');
         final box = view.renderObject! as RenderBox;
-        final point = box.localToGlobal(Offset(box.size.width * 0.8, box.size.height * 0.5));
+        final point = box.localToGlobal(
+          Offset(box.size.width * 0.8, box.size.height * 0.5),
+        );
         final finger = touches.down(point);
         await nextFrame();
         finger.moveBy(const Offset(-30, 0));
@@ -753,7 +810,9 @@ class PerfSuite {
         await _untilOverlayOpen();
         await _settle(frames: 2, pause: const Duration(milliseconds: 150));
         final row = _find(
-          (w) => w is SheetSearchRow && w.row.entry?.agent.id == to,
+          (w) =>
+              w is FindRow &&
+              w.title == perfAgents.firstWhere((agent) => agent.$1 == to).$2,
           'row for $to',
         );
         final (previous, began, dispatched) = await _tap(touches.centerOf(row));
@@ -761,7 +820,9 @@ class PerfSuite {
         bool switched() =>
             _host.currentState!.agentId == to &&
             findElement(
-                  (w) => w is TerminalView && identical(w.terminal, target.terminal),
+                  (w) =>
+                      w is TerminalView &&
+                      identical(w.terminal, target.terminal),
                 ) !=
                 null;
         final first = await _untilFrame(switched, what: 'the switch to $to');
@@ -826,7 +887,9 @@ class PerfSuite {
         'description':
             '3 s of $name with per-widget build, layout and paint events on '
             '(which cost time themselves — these are rankings, not timings).',
-        ...await _traced(() => Future<void>.delayed(const Duration(seconds: 3))),
+        ...await _traced(
+          () => Future<void>.delayed(const Duration(seconds: 3)),
+        ),
       };
     } finally {
       await pump.stop();
@@ -875,7 +938,8 @@ class PerfSuite {
     );
     await _settle(frames: 6, pause: const Duration(milliseconds: 500));
     await _stream('control_panel_redraw', StreamLoad.redraw);
-    (scenarios['control_panel_redraw']! as Map<String, Object?>)['description'] =
+    (scenarios['control_panel_redraw']!
+            as Map<String, Object?>)['description'] =
         'Control: stream_redraw\'s load on a bare TerminalPanel in a Scaffold '
         '(no TerminalPage chrome: header, mic orb and its blur, swipe layer).';
     await tester.pumpWidget(const SizedBox.shrink());

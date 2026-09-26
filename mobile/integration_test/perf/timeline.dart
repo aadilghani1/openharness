@@ -45,13 +45,14 @@ Map<String, Object?> summarizeTimeline(
   final complete = <Object?, List<({String name, int ts, int dur})>>{};
   // By time, and by position among equal times: List.sort is not stable, and a
   // begin and an end stamped alike must keep their order.
-  final indexed = [
-    for (final (index, event) in events.indexed)
-      if (event['ts'] is num) (index: index, event: event),
-  ]..sort((a, b) {
-      final byTime = (a.event['ts'] as num).compareTo(b.event['ts'] as num);
-      return byTime != 0 ? byTime : a.index.compareTo(b.index);
-    });
+  final indexed =
+      [
+        for (final (index, event) in events.indexed)
+          if (event['ts'] is num) (index: index, event: event),
+      ]..sort((a, b) {
+        final byTime = (a.event['ts'] as num).compareTo(b.event['ts'] as num);
+        return byTime != 0 ? byTime : a.index.compareTo(b.index);
+      });
   for (final (index: _, :event) in indexed) {
     final ph = event['ph'];
     final tid = event['tid'];
@@ -69,12 +70,19 @@ Map<String, Object?> summarizeTimeline(
         if (stack == null || stack.isEmpty) continue;
         final frame = stack.removeLast();
         final dur = math.max(0, ts - frame.ts);
-        charge(threadOf(tid), frame.name, dur, math.max(0, dur - frame.child[0]));
+        charge(
+          threadOf(tid),
+          frame.name,
+          dur,
+          math.max(0, dur - frame.child[0]),
+        );
         if (stack.isNotEmpty) stack.last.child[0] += dur;
     }
   }
   for (final MapEntry(key: tid, value: list) in complete.entries) {
-    list.sort((a, b) => a.ts != b.ts ? a.ts.compareTo(b.ts) : b.dur.compareTo(a.dur));
+    list.sort(
+      (a, b) => a.ts != b.ts ? a.ts.compareTo(b.ts) : b.dur.compareTo(a.dur),
+    );
     final stack = <({int end, List<int> child})>[];
     final selfOf = List<int>.filled(list.length, 0);
     final parents = <int>[];
@@ -95,7 +103,8 @@ Map<String, Object?> summarizeTimeline(
   }
 
   List<Map<String, Object?>> rank(int Function(_Tally) by) {
-    final sorted = totals.values.toList()..sort((a, b) => by(b).compareTo(by(a)));
+    final sorted = totals.values.toList()
+      ..sort((a, b) => by(b).compareTo(by(a)));
     return [for (final tally in sorted.take(top)) tally.toJson()];
   }
 

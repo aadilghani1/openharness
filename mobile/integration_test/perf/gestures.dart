@@ -60,8 +60,13 @@ class Touches {
     final box = element.renderObject! as RenderBox;
     final point = box.localToGlobal(box.size.center(Offset.zero)) + shift;
     final result = HitTestResult();
-    binding.hitTestInView(result, point, binding.platformDispatcher.implicitView!.viewId);
-    final hit = result.path.any((entry) => entry.target == box) ||
+    binding.hitTestInView(
+      result,
+      point,
+      binding.platformDispatcher.implicitView!.viewId,
+    );
+    final hit =
+        result.path.any((entry) => entry.target == box) ||
         result.path.any(
           (entry) =>
               entry.target is RenderObject &&
