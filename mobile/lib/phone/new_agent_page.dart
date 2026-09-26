@@ -14,12 +14,11 @@ import 'package:harness_mobile/widgets/remote_folder_picker.dart';
 
 import 'agent_index.dart';
 import 'branch_picker_sheet.dart';
-import 'phone_header.dart';
 import 'phone_navigation.dart';
 import 'new_agent_draft.dart';
 import 'phone_status.dart';
 import 'new_agent_chooser.dart';
-import 'settings_row.dart';
+import 'tty.dart';
 
 /// Starting an agent from the phone: a folder on that machine, and an engine to
 /// run there.
@@ -331,8 +330,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
     );
   }
 
-  String get _engineLabel =>
-      _engine == null ? 'Choose an agent' : _engineName(_engine!);
 
   /// What this form calls an engine.
   ///
@@ -607,10 +604,10 @@ class _NewAgentPageState extends State<NewAgentPage> {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: widget.notifier,
     builder: (context, _) {
-      AppTheme.watch(context);
+      final tty = Tty.of(context);
       _applyDefaultProject();
       return Scaffold(
-        backgroundColor: AppPalette.windowBg,
+        backgroundColor: tty.ground,
         body: SafeArea(
           // ⚠️ **A swipe right ANYWHERE goes back to Focus.** New is a swipe left from the terminal
           // (Snapchat's layout), and the way home is the same swipe the other way — not only the
@@ -625,81 +622,46 @@ class _NewAgentPageState extends State<NewAgentPage> {
                 unawaited(Navigator.of(context).maybePop());
               }
             },
+            // A shell, not a form: each row is a word to change, and the command at the foot is
+            // what they add up to — the same `harness new` the CLI takes. A tap on it runs it.
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const PhoneHeader(title: 'New Harness'),
-                Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                    children: [
-                      SettingsGroup(
-                        children: [
-                          SettingsRow(
-                            // Plain rows, the desktop box's: a label and its
-                            // value on one line, no marks. The chooser behind
-                            // each row carries the detail.
-                            title: 'Agent',
-                            value: _engineLabel,
-                            detail: _engine == null
-                                ? null
-                                : _engineNote(_engine!),
-                            onTap: () => unawaited(_chooseAgent()),
-                          ),
-                          SettingsRow(
-                            title: 'Project',
-                            value: _projectValue,
-                            onTap: () => unawaited(_chooseProject()),
-                          ),
-                          SettingsRow(
-                            title: 'Options',
-                            trailing: Icon(
-                              _optionsOpen
-                                  ? LucideIcons.chevronUp300
-                                  : LucideIcons.chevronDown300,
-                              size: 20,
-                              color: AppPalette.textFaint,
-                            ),
-                            onTap: () =>
-                                setState(() => _optionsOpen = !_optionsOpen),
-                          ),
-                          if (_optionsOpen) ..._optionRows(),
-                        ],
-                      ),
-                    ],
-                  ),
+                _TitleLine(onEsc: () => Navigator.of(context).maybePop()),
+                const SizedBox(height: 8),
+                _Field(
+                  label: 'agent',
+                  value: _engine == null ? 'choose' : _engineName(_engine!),
+                  note: _engine == null ? null : _engineNote(_engine!),
+                  onTap: () => unawaited(_chooseAgent()),
                 ),
+                _Field(
+                  label: 'project',
+                  value: _projectValue,
+                  onTap: () => unawaited(_chooseProject()),
+                ),
+                _Field(
+                  label: 'options',
+                  value: _optionsOpen ? '' : _optionsSummary,
+                  arrow: _optionsOpen ? '▾' : '▸',
+                  onTap: () => setState(() => _optionsOpen = !_optionsOpen),
+                ),
+                if (_optionsOpen) ..._optionRows(),
+                const Spacer(),
                 if (_error != null)
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                     child: Text(
-                      _error!,
-                      style: TextStyle(color: AppPalette.offline, fontSize: 13),
+                      'error: ${_error!}',
+                      style: tty.style(color: tty.red),
                     ),
                   ),
-                // The one button, at the foot under the thumb: with the defaults filled in, New →
-                // this is the whole of starting a harness, as ⌘N → Enter is on the desktop.
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(AppCard.radius),
-                        ),
-                      ),
-                      onPressed: _creating ? null : () => unawaited(_start()),
-                      child: Text(
-                        _creating ? 'Starting…' : 'New Harness',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
+                _CommandLine(
+                  command: _command,
+                  running: _creating,
+                  onRun: _creating ? null : () => unawaited(_start()),
                 ),
+                const SizedBox(height: 8),
               ],
             ),
           ),
@@ -707,6 +669,41 @@ class _NewAgentPageState extends State<NewAgentPage> {
       );
     },
   );
+
+  /// The command these choices add up to — what the CLI would be given for the same harness.
+  String get _command {
+    final parts = <String>['harness', 'new'];
+    if (_engine case final engine?) parts.add(engine);
+    final machine = _machine?.machine.displayName;
+    if (machine != null) parts.add('@${machine.replaceAll(' ', '-')}');
+    if (_folder case final folder?) {
+      parts.add(_tilde(folder));
+    } else if (_project?.repository case final repository?) {
+      parts.add(repository.url);
+    } else if (_project != null) {
+      parts.add('--new');
+    }
+    final mode = _permissionModeChoice;
+    if (mode != null && mode.id != kDefaultPermissionMode) {
+      parts.add('--mode ${mode.id}');
+    }
+    return parts.join(' ');
+  }
+
+  /// A home folder written the way a shell prints it.
+  static String _tilde(String path) =>
+      path.replaceFirst(RegExp(r'^/(Users|home)/[^/]+'), '~');
+
+  /// What Options holds, folded: the approvals mode and the branch.
+  String get _optionsSummary {
+    final parts = <String>[
+      if (_permissionModes.isNotEmpty)
+        (_permissionModeChoice?.label ?? 'Auto-approve').toLowerCase(),
+      if (_repository != null)
+        _worktree ? '$_branchTitle, worktree' : _branchTitle,
+    ];
+    return parts.join(' · ');
+  }
 
   /// How far the current drag has gone right — see the swipe back in [build].
   double _swipedBack = 0;
@@ -747,7 +744,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       return 'Choose project';
     }
     final machine = _machine?.machine.displayName;
-    return machine == null || _machines.length < 2 ? name : '$machine · $name';
+    return machine == null || _machines.length < 2 ? name : '$machine:$name';
   }
 
   /// The button: a missing choice opens its chooser and says why, the desktop's `requiredChoice`.
@@ -934,54 +931,46 @@ class _NewAgentPageState extends State<NewAgentPage> {
     setState(() => _codexProfile = picked);
   }
 
-  /// Options, open: Approvals, Profile (Codex with profiles), Branch and Worktree.
+  /// Options, open: approvals, profile (Codex with profiles), branch and worktree — indented under
+  /// the options row, the way a nested setting reads in a config file.
   List<Widget> _optionRows() {
     final info = _repository;
     final mode = _permissionModeChoice;
     return [
       if (_permissionModes.isNotEmpty)
-        SettingsRow(
-          title: 'Approvals',
-          value: mode?.label ?? 'Auto-approve',
+        _Field(
+          label: 'approvals',
+          value: (mode?.label ?? 'Auto-approve').toLowerCase(),
           nested: true,
-          destructive: mode?.risky ?? false,
+          warn: mode?.risky ?? false,
           onTap: () => unawaited(_chooseApprovals()),
         ),
       if (_showsCodexProfile)
-        SettingsRow(
-          title: 'Profile',
-          value: _codexProfile?.label ?? 'Default',
+        _Field(
+          label: 'profile',
+          value: _codexProfile?.label ?? 'default',
           nested: true,
           onTap: () => unawaited(_chooseProfile()),
         ),
-      SettingsRow(
-        title: 'Branch',
+      _Field(
+        label: 'branch',
         value: _gitLoading
-            ? 'Reading…'
+            ? 'reading…'
             : info == null
-            ? (_gitFailed ? 'No answer' : 'Not a Git repository')
+            ? (_gitFailed ? 'no answer' : 'not a git repo')
             : _branchTitle,
-        detail: info == null ? null : _branchNote,
+        note: info == null ? null : _branchNote,
         nested: true,
         onTap: info == null || _gitLoading
             ? null
             : () => unawaited(_pickBranch(info)),
       ),
       if (info != null)
-        SettingsRow(
-          title: 'Worktree',
-          detail: _worktree
-              ? 'A checkout of its own, beside the folder'
-              : 'Work in the folder itself',
+        _Field(
+          label: 'worktree',
+          value: _worktree ? 'on' : 'off',
+          arrow: '',
           nested: true,
-          trailing: Switch.adaptive(
-            value: _worktree,
-            onChanged: (value) => setState(() {
-              _worktree = value;
-              _branchRef = defaultBranchRef(info, worktree: value);
-              _error = null;
-            }),
-          ),
           onTap: () => setState(() {
             _worktree = !_worktree;
             _branchRef = defaultBranchRef(info, worktree: _worktree);
@@ -1193,4 +1182,163 @@ class _ProjectChoice {
   final _ProjectChoiceKind kind;
   final String? machineId;
   final String? folder;
+}
+
+/// The title line: `new harness` dim at the left, `esc` at the right — the way back.
+class _TitleLine extends StatelessWidget {
+  const _TitleLine({required this.onEsc});
+
+  final VoidCallback onEsc;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return SizedBox(
+      height: 44,
+      child: Row(
+        children: [
+          const SizedBox(width: 16),
+          Expanded(child: TtyText('new harness', color: tty.dim)),
+          TtyTap(
+            onTap: onEsc,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: TtyText('esc', color: tty.cyan),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One setting: its name in a fixed column, dim, then its value, then `▸` — a line of a config
+/// file you can tap.
+class _Field extends StatelessWidget {
+  const _Field({
+    required this.label,
+    required this.value,
+    this.note,
+    this.onTap,
+    this.nested = false,
+    this.warn = false,
+    this.arrow = '▸',
+  });
+
+  final String label;
+  final String value;
+  final String? note;
+  final VoidCallback? onTap;
+  final bool nested;
+  final bool warn;
+  final String arrow;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return TtyTap(
+      onTap: onTap,
+      minHeight: 46,
+      child: Padding(
+        padding: EdgeInsets.only(left: nested ? 32 : 16, right: 16),
+        child: Row(
+          children: [
+            SizedBox(
+              width: nested ? 96 : 88,
+              child: TtyText(label, color: tty.dim),
+            ),
+            Expanded(
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: value,
+                      style: tty.style(
+                        color: onTap == null
+                            ? tty.dim
+                            : warn
+                            ? tty.yellow
+                            : tty.text,
+                      ),
+                    ),
+                    if (note case final note?)
+                      TextSpan(
+                        text: '  $note',
+                        style: tty.style(color: tty.dim),
+                      ),
+                  ],
+                ),
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.clip,
+              ),
+            ),
+            if (onTap != null && arrow.isNotEmpty)
+              TtyText(arrow, color: tty.dim),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The command these choices make, as a shell prints it: `$ harness new claude @M2 ~/code/app`.
+/// A tap runs it — the one button, at the foot under the thumb, and it reads as what it does.
+class _CommandLine extends StatelessWidget {
+  const _CommandLine({
+    required this.command,
+    required this.running,
+    this.onRun,
+  });
+
+  final String command;
+  final bool running;
+  final VoidCallback? onRun;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return TtyTap(
+      onTap: onRun,
+      semanticsLabel: 'New harness: $command',
+      minHeight: 56,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        decoration: BoxDecoration(
+          border: Border(
+            top: BorderSide(color: tty.dim.withValues(alpha: 0.6)),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: r'$ ',
+                    style: tty.style(color: tty.green, weight: FontWeight.w700),
+                  ),
+                  TextSpan(text: command, style: tty.style()),
+                  // The cursor at the end of a typed command: it says "press enter". Still, not
+                  // blinking — nothing on this screen draws at rest.
+                  TextSpan(
+                    text: running ? '' : ' █',
+                    style: tty.style(color: tty.text),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            TtyText(
+              running ? 'starting…' : '⏎ tap to run',
+              color: running ? tty.yellow : tty.dim,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

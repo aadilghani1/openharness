@@ -79,16 +79,18 @@ void main() {
       );
       await tester.pumpAndSettle();
       // The desktop's default: the project last started on this machine.
-      expect(find.text('app'), findsOneWidget);
+      expect(find.text('app', findRichText: true), findsOneWidget);
 
-      await tester.tap(find.text('Project'));
+      await tester.tap(find.text('project'));
       await tester.pumpAndSettle();
 
-      Finder inChooser(Finder finder) =>
-          find.descendant(of: find.byType(BottomSheet), matching: finder);
-      expect(inChooser(find.text('Studio · /code/app')), findsOneWidget);
+      // The chooser is fzf: one line per `machine · folder` pair.
       expect(
-        find.textContaining('Laptop'),
+        find.textContaining('Studio · /code/app', findRichText: true),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Laptop', findRichText: true),
         findsNothing,
         reason: 'an offline machine cannot host a new agent',
       );
@@ -116,7 +118,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(NewAgentPage), findsOneWidget);
 
-    await tester.drag(find.text('Options'), const Offset(200, 0));
+    await tester.drag(find.text('options'), const Offset(200, 0));
     await tester.pumpAndSettle();
 
     expect(find.byType(NewAgentPage), findsNothing);

@@ -97,8 +97,11 @@ void main() {
 
       // The desktop's ⌘N defaults: the project last started here and the engine
       // the form starts on are already chosen, so the button is the whole flow.
-      expect(find.text('grid'), findsOneWidget);
-      await tester.tap(find.text('New Harness').last);
+      expect(find.text('grid', findRichText: true), findsOneWidget);
+      // The command line is the button: `$ harness new claude @… /src/grid`.
+      await tester.tap(
+        find.textContaining('harness new claude', findRichText: true),
+      );
       // The create resolves on a microtask, then the route it pushes has to slide in — and only once
       // that transition ends does the form's own route come off the stack.
       await tester.pump();
