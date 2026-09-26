@@ -12,10 +12,12 @@ import 'daemon_style.dart';
 /// a computer. Before any daemon it is the nest at its stage, or the egg ready
 /// to hatch.
 ///
-/// A tap boops it and opens its sheet. A dot on its corner says eggs are
-/// waiting. Nothing at all is drawn outside the signed-in shell or before the
-/// zoo has answered — a boot never flashes an empty nest at somebody who owns
-/// six daemons.
+/// A shiny daemon wears its shiny colour and a `*` before its slot (outside
+/// the ten cells, so the mark never reads as part of the art: a 2.0 sprite
+/// fills the slot to its gutter). A tap boops it and opens its sheet. A dot
+/// on its corner says eggs are waiting. Nothing at all is drawn outside the
+/// signed-in shell or before the zoo has answered — a boot never flashes an
+/// empty nest at somebody who owns six daemons.
 ///
 /// ⚠️ **Art is not scaled with the text.** The sprite is ten cells of ASCII in
 /// a 26pt header slot; larger text would push the names beside it off the
@@ -37,7 +39,8 @@ class DaemonChip extends StatelessWidget {
         if (!face.visible) return const SizedBox.shrink();
         final def = face.def;
         final colour =
-            def?.color ?? (face.eggReady ? DaemonInk.yellow : DaemonInk.dim);
+            def?.colorFor(shiny: face.shiny) ??
+            (face.eggReady ? DaemonInk.yellow : DaemonInk.dim);
         final eggs = host.zoo.zoo.eggs.length;
         return Semantics(
           key: const ValueKey('daemon-chip'),
@@ -64,20 +67,39 @@ class DaemonChip extends StatelessWidget {
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(color: DaemonInk.line),
                     ),
-                    // As wide as its ten cells, wherever it is put.
+                    // As wide as its ten cells (and a shiny one's mark),
+                    // wherever it is put.
                     child: Align(
                       widthFactor: 1,
-                      child: Text(
-                        face.cell,
-                        maxLines: 1,
-                        softWrap: false,
-                        textScaler: TextScaler.noScaling,
-                        style: DaemonInk.mono(
-                          size: 12.5,
-                          color: colour,
-                          weight: FontWeight.w600,
-                          height: 1,
-                        ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (def != null && face.shiny)
+                            Text(
+                              '*',
+                              key: const ValueKey('daemon-chip-shiny'),
+                              maxLines: 1,
+                              textScaler: TextScaler.noScaling,
+                              style: DaemonInk.mono(
+                                size: 12.5,
+                                color: colour,
+                                weight: FontWeight.w600,
+                                height: 1,
+                              ),
+                            ),
+                          Text(
+                            face.cell,
+                            maxLines: 1,
+                            softWrap: false,
+                            textScaler: TextScaler.noScaling,
+                            style: DaemonInk.mono(
+                              size: 12.5,
+                              color: colour,
+                              weight: FontWeight.w600,
+                              height: 1,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),

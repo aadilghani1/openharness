@@ -9,7 +9,9 @@
  */
 import { randomUUID } from 'node:crypto'
 import { CONTROL_TOOLS } from './control.js'
+import { harnessPaneEnv } from './learn/approval.js'
 import { presentedToken } from './token.js'
+import { HARNESS_SESSION_PREFIX } from '../lib/harnessSessionLabel.js'
 
 export interface PairSocket {
   send(data: string): void
@@ -69,7 +71,9 @@ export async function pairRequest(deps: PairClientDeps, payload: Record<string, 
 
 /** `talk` is not one: the person talks to their daemon from a window (`daemon_talk`), never from a tool. */
 export const PAIR_CLI_VERBS = new Set([...CONTROL_TOOLS.map((tool) => tool.name), 'status', 'journal', 'mcp', 'lessons'])
-export const LESSON_ACTIONS = ['list', 'show', 'approve', 'skip', 'revert'] as const
+export const LESSON_ACTIONS = ['list', 'show', 'approve', 'skip', 'revert', 'restore', 'export'] as const
+/** Lesson actions that need the person: a challenge, the daemon's one-time nonce, a yes at the terminal. */
+const PERSON_LESSON_ACTIONS = new Set(['approve', 'restore', 'export'])
 
 /** `list-harnesses` and `list_harnesses` are the same verb. */
 export function pairVerb(word: string | undefined): string | null {
@@ -101,9 +105,12 @@ export const PAIR_USAGE = [
   '  Lessons (daemons/LEARNING.md; the lessons folder, ~/.harness/lessons):',
   '    lessons [list]                         every lesson: pending, approved, reverted, skipped',
   '    lessons show <id>                      its SKILL.md or note, with where it came from',
-  '    lessons approve <id> [--create]        teach it (asks you first; --create writes a new AGENTS.md for a note)',
+  '    lessons approve <id> [--create]        teach it (asks you at a terminal outside Harness; --create writes a new',
+  '                                           AGENTS.md for a note, in a project opted in with learn.agentsMd)',
   '    lessons skip <id>                      drop a pending lesson; it is never proposed again',
   '    lessons revert <id>                    git revert of its commit, and unpublished',
+  '    lessons restore <id>                   bring back a skill the curator archived (asks you first)',
+  '    lessons export [--dry-run]             write approved skills where pair.jsonc learn.export says (asks you first)',
   '  mcp [--token-file <path>]                a stdio MCP server named harnessd with the same tools',
   '',
   '  --json   one JSON line (the default prints it indented)',
@@ -122,6 +129,7 @@ export function parsePairArgs(verb: string, argv: string[]): { payload: Record<s
     if (word === '--') { tail = argv.slice(i + 1); break }
     if (word === '--json') { json = true; continue }
     if (word === '--create' && verb === 'lessons') { options.create = 'true'; continue }
+    if (word === '--dry-run' && verb === 'lessons') { options.dryRun = 'true'; continue }
     const flag = /^--(machine|since|name|prompt|token-file)(?:=(.*))?$/.exec(word)
     if (flag) {
       const value = flag[2] ?? argv[++i]
@@ -163,8 +171,12 @@ export function parsePairArgs(verb: string, argv: string[]): { payload: Record<s
     case 'lessons': {
       const action = words[0] ?? 'list'
       if (!(LESSON_ACTIONS as readonly string[]).includes(action)) throw new PairUsageError(`lessons has no "${action}" (${LESSON_ACTIONS.join(', ')}).`)
-      if (action !== 'list' && !words[1]) throw new PairUsageError(`lessons ${action} needs a lesson id (harness pair lessons list).`)
-      payload = { verb, action, ...(words[1] ? { id: words[1] } : {}), ...(options.create && action === 'approve' ? { create: true } : {}) }
+      if (action !== 'list' && action !== 'export' && !words[1]) throw new PairUsageError(`lessons ${action} needs a lesson id (harness pair lessons list).`)
+      payload = {
+        verb, action, ...(words[1] && action !== 'export' ? { id: words[1] } : {}),
+        ...(options.create && action === 'approve' ? { create: true } : {}),
+        ...(options.dryRun && action === 'export' ? { dryRun: true } : {}),
+      }
       break
     }
     case 'say': {
@@ -187,23 +199,47 @@ export interface PairCommandDeps extends PairClientDeps {
    * `lessons approve` refuses: nothing is taught without the person's yes.
    */
   confirm?: ((question: string) => Promise<boolean>) | null
+  /** The tmux session this process runs in, when it runs in one (a harness pane is `harness-…`). */
+  paneSession?: () => Promise<string | null>
 }
 
-/** `lessons approve <id>`: show the lesson, ask at the terminal, then approve it with `confirmed`. */
-async function approveLesson(deps: PairCommandDeps, payload: Record<string, unknown>, json: boolean): Promise<number> {
+/** Why this process is inside a harness, or null. The daemon checks again, and its answer is the one that counts. */
+async function insideHarness(deps: PairCommandDeps): Promise<string | null> {
+  const marker = harnessPaneEnv(deps.env)
+  if (marker) return `${marker} is set: this shell runs inside a harness`
+  const session = await deps.paneSession?.().catch(() => null)
+  return session?.startsWith(HARNESS_SESSION_PREFIX) ? `this shell runs in the harness pane ${session}` : null
+}
+
+/**
+ * `lessons approve <id>`, `restore <id>`, `export`: the person's alone (pair/learn/approval.ts). Refused inside
+ * a harness; otherwise a challenge (the daemon verifies this process and hands it a one-time nonce with the
+ * lesson, or the export plan), shown here, a yes at the terminal, and the action with that nonce.
+ */
+async function personLessonAction(deps: PairCommandDeps, payload: Record<string, unknown>, json: boolean): Promise<number> {
   const print = (reply: Record<string, unknown>): void => deps.output(json ? JSON.stringify(reply) : JSON.stringify(reply, null, 2))
-  if (!deps.confirm) {
-    print({ ok: false, error: 'CONFIRM', detail: 'approve asks you at a terminal; run it in one, or press [y] on the daemon\'s line' })
+  const action = String(payload.action)
+  const inside = await insideHarness(deps)
+  if (inside) {
+    print({ ok: false, error: 'INSIDE_HARNESS', detail: `${inside}. ${action} is the person's: press [y] on the daemon's line, or run it in a terminal outside Harness` })
     return 1
   }
-  const shown = await pairRequest(deps, { verb: 'lessons', action: 'show', id: payload.id })
-  if (typeof shown.error === 'string') { print(shown); return 1 }
+  if (!deps.confirm) {
+    print({ ok: false, error: 'CONFIRM', detail: `${action} asks you at a terminal; run it in one, or press [y] on the daemon's line` })
+    return 1
+  }
+  const challenge = await pairRequest(deps, { verb: 'lessons', action: 'challenge', for: action, ...(payload.id ? { id: payload.id } : {}) })
+  if (typeof challenge.error === 'string' || typeof challenge.nonce !== 'string') { print(challenge); return 1 }
+  const { nonce, expiresInMs: _expires, ...shown } = challenge
   deps.error(typeof shown.text === 'string' ? shown.text : JSON.stringify(shown, null, 2))
-  if (!(await deps.confirm(`Teach lesson ${String(payload.id)} to your agents? [y/N] `))) {
+  const question = action === 'approve' ? `Teach lesson ${String(payload.id)} to your agents? [y/N] `
+    : action === 'restore' ? `Restore lesson ${String(payload.id)}? [y/N] `
+      : 'Export as shown? [y/N] '
+  if (!(await deps.confirm(question))) {
     print({ ok: false, error: 'DECLINED' })
     return 1
   }
-  const reply = await pairRequest(deps, { ...payload, confirmed: true })
+  const reply = await pairRequest(deps, { ...payload, nonce })
   print(reply)
   return typeof reply.error === 'string' ? 1 : 0
 }
@@ -225,7 +261,7 @@ export async function pairCommand(argv: string[], deps: PairCommandDeps): Promis
   }
   const { tokenFile, ...payload } = parsed.payload
   try {
-    if (verb === 'lessons' && payload.action === 'approve') return await approveLesson(deps, payload, parsed.json)
+    if (verb === 'lessons' && PERSON_LESSON_ACTIONS.has(String(payload.action)) && payload.dryRun !== true) return await personLessonAction(deps, payload, parsed.json)
     const reply = await pairRequest({ ...deps, tokenFile: typeof tokenFile === 'string' ? tokenFile : deps.tokenFile }, payload)
     deps.output(parsed.json ? JSON.stringify(reply) : JSON.stringify(reply, null, 2))
     return typeof reply.error === 'string' ? 1 : 0

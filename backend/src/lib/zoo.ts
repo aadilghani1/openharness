@@ -27,6 +27,9 @@ export const ZOO_MAX_PITY = 1_000_000
 export const ZOO_MAX_HELD = 64
 /** How many `zoo.turn` batch ids are remembered to drop a replay. A reporter retries within minutes. */
 export const ZOO_BATCH_MEMORY = 64
+/** How many `zoo.lesson` ids are remembered, so a lesson credits its daemon once. A harnessd retries
+ *  within minutes; 256 is months of lessons at one proposal an hour. */
+export const ZOO_LESSON_MEMORY = 256
 /** The most turns one `zoo.turn` may report (a reporter batches a minute; the daily cap is far lower). */
 export const ZOO_TURN_MAX_N = 50
 /** The most agent-minutes one `zoo.turn` may report: a day for each of its turns (harnessd counts at most
@@ -244,6 +247,8 @@ export interface ZooProgress {
   held: ZooHeld[]
   /** The last `zoo.turn` batch ids applied. */
   batches: string[]
+  /** The last `zoo.lesson` ids credited: a lesson grows its daemon once, however often it is reported. */
+  lessons: string[]
 }
 /**
  * How much the paired daemon may do on its own (daemons/BRAIN.md, "Autonomy dial"), read by every
@@ -296,7 +301,7 @@ export interface Grant { kind: string; eggId?: string; xp?: number }
 export interface LevelUp { id: string; level: number; version: string }
 
 export const emptyProgress = (): ZooProgress =>
-  ({ turns: 0, days: {}, weeks: [], nights: [], machines: [], marathon: [], history: [], held: [], batches: [] })
+  ({ turns: 0, days: {}, weeks: [], nights: [], machines: [], marathon: [], history: [], held: [], batches: [], lessons: [] })
 export const emptyZoo = (): Zoo =>
   ({ daemons: [], eggs: [], pair: null, autonomy: ZOO_DEFAULT_AUTONOMY, consent: null, habits: [], firstEgg: false, setupEgg: false, pity: 0, easter: [], progress: emptyProgress() })
 
@@ -330,6 +335,8 @@ export const zooOpSchema = z.discriminatedUnion('op', [
     hour: z.number().int().min(0).max(23),
     machineId: key,
   }).strict().refine((op) => (op.away ?? 0) <= op.n, 'away counts turns, so it is at most n'),
+  // A lesson the person approved (daemons/LEARNING.md): bond for the daemon that found it. harnessd sends it.
+  z.object({ op: z.literal('zoo.lesson'), lessonId: key, daemonId }).strict(),
 ])
 export type ZooOp = z.infer<typeof zooOpSchema>
 
@@ -396,6 +403,7 @@ function parseProgress(raw: unknown, strict: boolean): ZooProgress {
     history: lastStrings(src.history, isLocalDay, HISTORY_MEMORY),
     held,
     batches: lastStrings(src.batches, () => true, ZOO_BATCH_MEMORY),
+    lessons: lastStrings(src.lessons, () => true, ZOO_LESSON_MEMORY),
   }
 }
 
@@ -733,6 +741,24 @@ function applyTurn(zoo: Zoo, op: TurnOp, now: Date, out: Outcome, ctx: ZooContex
   return changed
 }
 
+type LessonOp = Extract<ZooOp, { op: 'zoo.lesson' }>
+
+/**
+ * A lesson the person approved (daemons/LEARNING.md, "The zoo"): `rules.lessonXp` for the daemon that
+ * found it when you own it, else for the paired one (the finder may be a guest's daemon that never came
+ * along to this account). Once per lesson id: a retry of a report that landed grows nothing. With neither daemon,
+ * nothing grows and the id is not remembered.
+ */
+function applyLesson(zoo: Zoo, op: LessonOp, out: Outcome): boolean {
+  const p = zoo.progress
+  if (p.lessons.includes(op.lessonId)) return false
+  const d = zoo.daemons.find((x) => x.id === op.daemonId) ?? pairedDaemon(zoo)
+  if (!d) return false
+  grow(d, RULES.lessonXp, out)
+  p.lessons = [...p.lessons, op.lessonId].slice(-ZOO_LESSON_MEMORY)
+  return true
+}
+
 const isEmpty = (zoo: Zoo): boolean => zoo.daemons.length === 0 && zoo.eggs.length === 0 && zoo.habits.length === 0
 
 /** The only eggs a guest's seed brings: the first egg and turn eggs, neither of which can hold a secret. */
@@ -748,6 +774,7 @@ const cloneProgress = (p: ZooProgress): ZooProgress => ({
   history: [...p.history],
   held: p.held.map((h) => ({ ...h })),
   batches: [...p.batches],
+  lessons: [...p.lessons],
 })
 
 const clone = (zoo: Zoo): Zoo => ({
@@ -861,6 +888,8 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
     }
     case 'zoo.turn':
       return applyTurn(zoo, op, now, out, ctx)
+    case 'zoo.lesson':
+      return applyLesson(zoo, op, out)
   }
 }
 

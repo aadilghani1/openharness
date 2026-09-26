@@ -1,10 +1,20 @@
 /// The zoo as the phone reads it: your daemons and eggs, account state the same
 /// on every client (`daemons/README.md`, "The zoo"). The server is the
 /// authority (`backend/src/lib/zoo.ts`); the phone is always signed in, so it
-/// never draws, grants or levels anything itself. This is the wire shape, read
-/// the way the desktop's `lib/daemons/zoo.dart` reads it: anything this roster
-/// does not know is dropped, never an error.
+/// never draws, grants or levels anything itself.
+///
+/// ⚠️ **No guest zoo on the phone.** The README's guests ("a local zoo with
+/// the same shape and rules, drawn on the client", sent once with `zoo.seed`)
+/// are clients that run without a Harness account. The phone has no such
+/// mode: it shows nothing before sign-in, so it never draws, never seeds, and
+/// has no local rules to keep in step. It only reads what a guest seeded: a
+/// daemon marked `origin: 'local'`, which has no serial.
+///
+/// This is the wire shape, read the way the desktop's `lib/daemons/zoo.dart`
+/// reads it: anything this roster does not know is dropped, never an error.
 library;
+
+import 'package:flutter/foundation.dart' show immutable;
 
 import 'roster.dart';
 
@@ -45,6 +55,9 @@ class ZooDaemon {
     this.bond = 0,
     this.xp = 0,
     this.version = '0.1',
+    this.dupes = 0,
+    this.serial,
+    this.origin,
   });
   final String id;
   final String hatchedAt;
@@ -55,6 +68,19 @@ class ZooDaemon {
   final String? nickname;
   final int bond, xp;
   final String version;
+
+  /// Duplicates merged into it: the shelf's `x2` is one.
+  final int dupes;
+
+  /// Its mint number, the nth of its kind the server hatched (`#0042` on the
+  /// card). Null on a guest's daemon and on one hatched before serials.
+  final int? serial;
+
+  /// `local`: hatched in a guest's zoo and brought in by `zoo.seed`.
+  final String? origin;
+
+  /// How many of it you have had: the shelf's `xN`.
+  int get count => dupes + 1;
 
   /// `2026-09-26`, or null when the server sent no usable date.
   String? get hatchedDay {
@@ -79,6 +105,8 @@ class ZooDaemon {
         ? raw['xp'] as int
         : levels[storedBond.clamp(0, levels.length - 1)];
     final bond = levelFor(roster, xp);
+    final dupes = raw['dupes'], serial = raw['serial'], origin = raw['origin'];
+    final local = origin == 'local';
     return ZooDaemon(
       id: id,
       hatchedAt: raw['hatchedAt'] is String ? raw['hatchedAt'] as String : '',
@@ -90,8 +118,29 @@ class ZooDaemon {
       bond: bond,
       xp: xp,
       version: versionFor(roster, bond),
+      dupes: dupes is int && dupes > 0 ? dupes : 0,
+      // Only the server mints, and never for a guest's daemon.
+      serial: !local && serial is int && serial > 0 ? serial : null,
+      origin: local ? 'local' : null,
     );
   }
+
+  /// A second record of one id (a zoo from before duplicates merged) folded
+  /// into this one, as the server reads it: counted in [dupes], shiny if
+  /// either was, no xp.
+  ZooDaemon fold(ZooDaemon other) => ZooDaemon(
+    id: id,
+    hatchedAt: hatchedAt,
+    egg: egg,
+    shiny: shiny || other.shiny,
+    nickname: nickname,
+    bond: bond,
+    xp: xp,
+    version: version,
+    dupes: dupes + 1 + other.dupes,
+    serial: serial,
+    origin: origin,
+  );
 }
 
 class ZooEgg {
@@ -127,6 +176,7 @@ class Zoo {
     this.pair,
     this.habits = const [],
     this.firstEgg = false,
+    this.setupEgg = false,
   });
   static const empty = Zoo();
   static const maxEggs = 12, maxDaemons = 64;
@@ -141,15 +191,19 @@ class Zoo {
   /// The first egg has been granted.
   final bool firstEgg;
 
+  /// The setup egg (the second habit egg) has been granted.
+  final bool setupEgg;
+
   bool owns(String id) => daemons.any((d) => d.id == id);
 
-  /// The daemon on the phone's chip: the pair (the first hatched with that
-  /// id), else, defensively, the first.
-  ZooDaemon? get paired =>
-      daemons.where((d) => d.id == pair).firstOrNull ?? daemons.firstOrNull;
+  /// The one record of a roster id you own, or null.
+  ZooDaemon? daemon(String? id) => daemons.where((d) => d.id == id).firstOrNull;
+
+  /// The daemon on the phone's chip: the pair, else, defensively, the first.
+  ZooDaemon? get paired => daemon(pair) ?? daemons.firstOrNull;
 
   /// Each roster id once, first hatched first: what the shelf shows.
-  List<String> get ownedIds => {for (final d in daemons) d.id}.toList();
+  List<String> get ownedIds => [for (final d in daemons) d.id];
 
   Zoo copyWith({List<String>? habits, String? pair}) => Zoo(
     daemons: daemons,
@@ -157,14 +211,24 @@ class Zoo {
     pair: pair ?? this.pair,
     habits: habits ?? this.habits,
     firstEgg: firstEgg,
+    setupEgg: setupEgg,
   );
 
   static Zoo fromJson(Object? raw, DaemonRoster roster) {
     if (raw is! Map) return empty;
-    final daemons = [
-      for (final d in raw['daemons'] as List? ?? const [])
-        ?ZooDaemon.fromJson(d, roster),
-    ].take(maxDaemons).toList();
+    // One record per roster id: a zoo stored before duplicates merged reads
+    // as one, the first, with the others counted in its dupes.
+    final daemons = <ZooDaemon>[];
+    for (final d in raw['daemons'] as List? ?? const []) {
+      final daemon = ZooDaemon.fromJson(d, roster);
+      if (daemon == null) continue;
+      final at = daemons.indexWhere((x) => x.id == daemon.id);
+      if (at >= 0) {
+        daemons[at] = daemons[at].fold(daemon);
+      } else if (daemons.length < maxDaemons) {
+        daemons.add(daemon);
+      }
+    }
     final eggs = <ZooEgg>[];
     for (final e in raw['eggs'] as List? ?? const []) {
       final egg = ZooEgg.fromJson(e, roster);
@@ -181,28 +245,128 @@ class Zoo {
           if (h is String && habitKeys.contains(h)) h,
       }.toList(),
       firstEgg: raw['firstEgg'] == true,
+      setupEgg: raw['setupEgg'] == true,
     );
   }
 }
 
-/// One egg opened by `zoo.hatch`: who came out, drawn on the server.
+/// A daemon whose bond reached a new level in one request (`levelUps`).
+@immutable
+class ZooLevelUp {
+  const ZooLevelUp({
+    required this.id,
+    required this.level,
+    required this.version,
+  });
+  final String id;
+  final int level;
+  final String version;
+
+  static ZooLevelUp? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final id = raw['id'], level = raw['level'], version = raw['version'];
+    if (id is! String || level is! int || version is! String) return null;
+    return ZooLevelUp(id: id, level: level, version: version);
+  }
+}
+
+/// Something that arrived during one request (`grants`): an egg in the nest
+/// (`{kind, eggId}`), or, earned with 64 eggs already held, xp for the paired
+/// daemon instead (`{kind, xp}`) — never an egg.
+@immutable
+class ZooGrant {
+  const ZooGrant({required this.kind, this.eggId, this.xp});
+  final String kind;
+  final String? eggId;
+  final int? xp;
+
+  /// The overflow form: xp, not an egg.
+  bool get isXp => eggId == null && xp != null;
+
+  static ZooGrant? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final kind = raw['kind'], eggId = raw['eggId'], xp = raw['xp'];
+    if (kind is! String) return null;
+    if (eggId is String && eggId.isNotEmpty) {
+      return ZooGrant(kind: kind, eggId: eggId);
+    }
+    if (xp is int && xp > 0) return ZooGrant(kind: kind, xp: xp);
+    return null;
+  }
+}
+
+/// One egg opened by `zoo.hatch`: who came out, drawn on the server. A
+/// [duplicate] merged into the one you have and gave it [xp]; a new daemon
+/// may carry its [serial].
+///
+/// The rest is what the phone learned from the same answer: how many of it
+/// you now have ([count]), whether a shiny duplicate made yours shiny
+/// ([becameShiny]), and the level it reached ([levelUp]).
+@immutable
 class ZooHatch {
   const ZooHatch({
     required this.eggId,
     required this.daemonId,
     required this.shiny,
+    this.duplicate = false,
+    this.xp = 0,
+    this.serial,
+    this.count = 1,
+    this.becameShiny = false,
+    this.levelUp,
+    this.versionBefore,
   });
   final String eggId, daemonId;
+
+  /// This hatch's own roll.
   final bool shiny;
+  final bool duplicate;
+  final int xp;
+  final int? serial;
+  final int count;
+  final bool becameShiny;
+  final ZooLevelUp? levelUp;
+
+  /// The version it was before a [levelUp], to tell a new version.
+  final String? versionBefore;
+
+  bool get grewVersion =>
+      levelUp != null &&
+      versionBefore != null &&
+      levelUp!.version != versionBefore;
 
   static ZooHatch? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final eggId = raw['eggId'], daemonId = raw['daemonId'];
     if (eggId is! String || daemonId is! String) return null;
+    final xp = raw['xp'], serial = raw['serial'];
     return ZooHatch(
       eggId: eggId,
       daemonId: daemonId,
       shiny: raw['shiny'] == true,
+      duplicate: raw['duplicate'] == true,
+      xp: xp is int && xp > 0 ? xp : 0,
+      serial: serial is int && serial > 0 ? serial : null,
     );
   }
+
+  /// This hatch with what the rest of its answer said.
+  ZooHatch learned({
+    required int count,
+    required bool becameShiny,
+    int? serial,
+    ZooLevelUp? levelUp,
+    String? versionBefore,
+  }) => ZooHatch(
+    eggId: eggId,
+    daemonId: daemonId,
+    shiny: shiny,
+    duplicate: duplicate,
+    xp: xp,
+    serial: this.serial ?? serial,
+    count: count,
+    becameShiny: becameShiny,
+    levelUp: levelUp,
+    versionBefore: versionBefore,
+  );
 }

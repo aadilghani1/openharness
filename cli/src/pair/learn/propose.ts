@@ -4,24 +4,35 @@
  * regardless), and when you are at this computer says ONE line for a pending lesson:
  *
  *   [y/n/s] teach your agents "run-migrations-safely"? you corrected codex.
+ *   [y/n/s] teach your agents "deploy-api"? borrowed from hermes.
  *
- *   y  approve: the lesson moves to skills/ (or notes/) with one commit, is published (publish.ts), the
- *      daemon gets the credit in the journal (`learned`), and it says so.
+ *   y  approve: the lesson moves to skills/ (or notes/) with one commit, is published (publish.ts) and
+ *      exported where the person asked (export.ts), the daemon is credited (`learned` in the journal, and
+ *      `zoo.lesson` bond when signed in), and it says so.
  *   n  skip: gone, and its hash and signal are remembered so it is never proposed again.
  *   s  show: the lesson's text in a `daemon_brief` frame, with [y/n] still working for a minute.
  *
  * When it may speak: at most ONE lesson proposal an hour; never while a `need` line is showing; never
  * about the pane you are looking at; never at autonomy `watch`; only while you are here. An unanswered
  * proposal stays in daemon_state `asks` for ten minutes and comes back after a day. Nothing is taught
- * without a yes: a key on the line, or `harness pair lessons approve <id>` confirmed at a terminal.
+ * without the person (approval.ts): a key on the line, whose id carries a one-time nonce only windows and
+ * `hn` are sent, or `harness pair lessons approve <id>` at a terminal outside every harness.
+ *
+ * L2 rides the same tick: borrowing (borrow.ts, opt-in) adds candidates to the same queue of proposals, the
+ * curator (curate.ts) marks and archives what goes unused, and export (export.ts, opt-in) follows every change.
  */
 import type { Autonomy } from '../floor.js'
 import { DISPLAY_MS, keysPrefix } from '../voice.js'
 import { statusText, str, type DaemonAction, type DaemonMood, type DaemonSay } from '../protocol.js'
+import { lessonLineId } from './approval.js'
+import { BORROW_EVERY_MS, type BorrowPass } from './borrow.js'
+import type { CuratorPass } from './curate.js'
 import type { Distilled } from './distill.js'
-import { findProject, publishNote, unpublishNote } from './publish.js'
+import type { ExportStep } from './export.js'
+import { findProject, publishNote, unpublishNote, withdrawSkill } from './publish.js'
 import { NO_GIT_NOTE, type LessonRecord, type LessonStore } from './store.js'
 import type { Signal } from './types.js'
+import type { LessonUsage } from './usage.js'
 
 export const LESSON_PROPOSAL_GAP_MS = 60 * 60_000
 export const LESSON_REPROPOSE_MS = 24 * 60 * 60_000
@@ -38,6 +49,7 @@ const fail = (error: string, detail?: string): Result => ({ ok: false, error, ..
 const TEACH: DaemonAction = { key: 'y', label: 'teach', choice: 'y' }
 const SKIP: DaemonAction = { key: 'n', label: 'skip', choice: 'n' }
 const SHOW: DaemonAction = { key: 's', label: 'show', choice: 's' }
+const PERSON = 'asks you at a terminal outside Harness, or press [y] on the daemon\'s line'
 
 export interface LearnerDeps {
   store: LessonStore
@@ -55,13 +67,21 @@ export interface LearnerDeps {
   busy?: () => boolean
   /** The folders harnesses run in: a note's project is found among them by its hash. */
   projects: () => string[]
+  /** Whether the person opted this project in to notes in its AGENTS.md (pair.jsonc `learn.agentsMd`). */
+  agentsMd?: (projectDir: string) => boolean
   /** The zoo's credit: a journal entry `learned` with the daemon's id (pair/sensor.ts learned). */
   learned?: (entry: { daemon: string; lesson: LessonRecord }) => void
-  /**
-   * TODO(zoo): bond xp for the daemon that found the lesson. The backend has no op for it yet; cli.ts
-   * leaves this a no-op hook, and the journal entry above is the record a later op can count from.
-   */
+  /** Bond for the daemon that found the lesson: `zoo.lesson` (lib/zooLessons.ts), signed in only. */
   credit?: (daemonId: string, lesson: LessonRecord) => void
+  /** L2, borrow: pair.jsonc `learn.borrow` and the reader (borrow.ts). */
+  borrowEnabled?: () => boolean
+  borrower?: { pass: (learnedBy: string) => BorrowPass }
+  /** L2, check: when lessons were used (usage.ts) and the daily curator (curate.ts). */
+  usage?: LessonUsage
+  curator?: { maybeRun: () => CuratorPass | null }
+  /** L2, export: pair.jsonc `learn.export` and the writer (export.ts). */
+  exportTo?: () => string[]
+  exporter?: { sync: (opts?: { dryRun?: boolean }) => { steps: ExportStep[]; dryRun: boolean }; active: () => boolean }
   machineId: () => string
   /** daemon_state `asks` changed. */
   changed?: () => void
@@ -77,6 +97,8 @@ export class PairLearner {
   private readonly queue: Signal[] = []
   private live: Live | null = null
   private lastDistill = -Infinity
+  private lastBorrow = -Infinity
+  private exportKey: string | null = null
   private ticking = false
   private seq = 0
 
@@ -94,13 +116,16 @@ export class PairLearner {
 
   get queued(): number { return this.queue.length }
 
-  /** Distill a batch when it is quiet, then maybe propose. Called on a timer; safe to call any time. */
+  /** Distill, borrow, maybe propose, curate, export. Called on a timer; safe to call any time. */
   async tick(): Promise<void> {
     if (this.ticking) return
     this.ticking = true
     try {
       await this.distillBatch()
+      this.borrow()
       this.propose()
+      this.curate()
+      this.exportWhenChanged()
     } finally {
       this.ticking = false
     }
@@ -121,6 +146,51 @@ export class PairLearner {
     }
   }
 
+  /** L2 borrow: every few hours, when quiet, a few new candidates from the other engines' own stores. */
+  private borrow(): void {
+    const daemon = this.deps.pairedDaemon()
+    const now = this.deps.now()
+    if (!daemon || !this.deps.borrower || this.deps.borrowEnabled?.() !== true) return
+    if (now - this.lastBorrow < BORROW_EVERY_MS || this.deps.busy?.()) return
+    this.lastBorrow = now
+    try {
+      const pass = this.deps.borrower.pass(daemon)
+      if (pass.added.length) this.deps.log?.(`[learn] borrowed ${pass.added.length} of ${pass.considered}`)
+    } catch (err) {
+      this.deps.log?.(`[learn] borrow failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  /** L2 check: the daily curator, while pairing is on. */
+  private curate(): void {
+    if (!this.deps.pairedDaemon() || !this.deps.curator) return
+    try { this.deps.curator.maybeRun() } catch (err) {
+      this.deps.log?.(`[learn] curator failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  /** L2 export: when pair.jsonc's destinations change (or at start), bring the engines' folders in line. */
+  private exportWhenChanged(): void {
+    const key = JSON.stringify(this.deps.exportTo?.() ?? [])
+    if (key === this.exportKey) return
+    this.exportKey = key
+    this.exportSync()
+  }
+
+  private exportSync(): ExportStep[] {
+    const exporter = this.deps.exporter
+    if (!exporter || !exporter.active()) return []
+    try {
+      const { steps } = exporter.sync()
+      const moved = steps.filter((s) => s.action !== 'keep')
+      if (moved.length) this.deps.log?.(`[learn] export · ${moved.map((s) => `${s.action} ${s.dest}/${s.name}${s.why ? ` (${s.why})` : ''}`).join(', ')}`)
+      return steps
+    } catch (err) {
+      this.deps.log?.(`[learn] export failed: ${err instanceof Error ? err.message : String(err)}`)
+      return []
+    }
+  }
+
   // ── propose ───────────────────────────────────────────────────────────────────────────────────────
 
   /** Say one line for a pending lesson, if every rule allows it now. True when it went out. */
@@ -134,10 +204,11 @@ export class PairLearner {
     if (this.deps.voice.showing('need')) return false
     const lesson = this.deps.store.pending().find((r) => {
       const at = this.deps.store.proposedAt(r.id)
-      return (at === null || now - at >= LESSON_REPROPOSE_MS) && !r.from.some((f) => this.deps.focused(f.agentId))
+      return (at === null || now - at >= LESSON_REPROPOSE_MS) && !r.from.some((f) => f.agentId && this.deps.focused(f.agentId))
     })
     if (!lesson) return false
-    const id = `lesson:${lesson.id}:${++this.seq}`
+    // The line's id carries a one-time nonce: only windows and `hn` are ever sent it (approval.ts).
+    const id = lessonLineId(lesson.id)
     const said = this.deps.voice.say({
       id, about: { machineId: this.deps.machineId(), agentId: lesson.from[0]?.agentId ?? '' }, mood: 'ask',
       line: this.line(lesson), actions: [TEACH, SKIP, SHOW], ttlMs: DISPLAY_MS,
@@ -156,8 +227,9 @@ export class PairLearner {
     const where = lesson.projectName ?? 'this project'
     const why = lesson.signal.kind === 'correction' ? `you corrected ${who}.`
       : lesson.signal.kind === 'repeat-failure' ? `${who} hit the same failure.`
-        : `the same steps, ${new Set(lesson.from.map((f) => `${f.agentId}:${f.session}:${f.turn}`)).size} times in ${where}.`
-    const what = lesson.kind === 'skill' ? `teach your agents "${lesson.name}"?` : `add a note to ${where}'s AGENTS.md?`
+        : lesson.signal.kind === 'borrowed' ? `borrowed from ${who}.`
+          : `the same steps, ${new Set(lesson.from.map((f) => `${f.agentId}:${f.session}:${f.turn}`)).size} times in ${where}.`
+    const what = lesson.kind === 'skill' ? `teach your agents "${lesson.name}"?` : `add a note for ${where}?`
     return statusText(`${keysPrefix([TEACH, SKIP, SHOW])}${what} ${why}`, 140)
   }
 
@@ -178,7 +250,7 @@ export class PairLearner {
     return live && lesson ? [{ id: live.id, line: this.line(lesson), actions: [TEACH, SKIP, SHOW] }] : []
   }
 
-  /** A key on the line (daemon_act): y teach, n skip, s show. Always answers. */
+  /** A key on the line (daemon_act): y teach, n skip, s show. Always answers. The id is the nonce. */
   async act(id: string, choice: string): Promise<Result> {
     const live = this.current()
     if (!live || live.id !== id) return fail('GONE')
@@ -210,7 +282,7 @@ export class PairLearner {
 
   /**
    * Approve a pending lesson (or, for an approved note, publish it again — `create` makes an AGENTS.md when
-   * the project has none, because the person asked for exactly that). Credits the daemon that found it.
+   * the project is opted in and has none, because the person asked for exactly that). Credits the daemon.
    */
   approve(id: string, by: 'key' | 'cli', opts: { create?: boolean } = {}): Result {
     const already = this.deps.store.approved().find((r) => r.id === id)
@@ -228,19 +300,23 @@ export class PairLearner {
       note = approved.note
       this.deps.learned?.({ daemon: record.learnedBy, lesson: record })
       this.deps.credit?.(record.learnedBy, record)
+      this.deps.usage?.changed()
       if (this.live?.lessonId === id) { this.deps.voice.unsay(this.live.id, 'answered'); this.live = null; this.deps.changed?.() }
     }
     const published = this.publish(record, opts)
+    const exported = record.kind === 'skill' ? this.exportSync() : []
     const where = record.projectName ?? 'the project'
     const said = record.kind === 'skill' ? `learned "${record.name}". harness sessions on every engine will load it.`
-      : published.ok ? `noted in ${where}'s ${String(published.file).split('/').pop()}.`
-        : `kept "${record.name}". ${where} has no AGENTS.md: harness pair lessons approve ${record.id} --create writes one.`
+      : published.ok ? `noted in ${where}'s ${published.untracked ? '.harness/lessons.md' : String(published.file).split('/').pop()}.`
+        : published.error === 'NO_INSTRUCTION_FILE' ? `kept "${record.name}". ${where} has no AGENTS.md: harness pair lessons approve ${record.id} --create writes one.`
+          : `kept "${record.name}". it could not be written for ${where}: ${String(published.detail ?? published.error)}`
     if (by === 'key' || this.deps.present()) {
       this.deps.voice.say({ id: `learned:${record.id}:${++this.seq}`, about: { machineId: this.deps.machineId(), agentId: '' }, mood: 'say', line: statusText(said, 140), actions: [], ttlMs: DISPLAY_MS })
     }
     return {
       ok: true, id: record.id, learned: record.name, kind: record.kind, commit, line: said,
       published: record.kind === 'skill' ? { via: 'runtime', dir: this.tilde(this.deps.store.skillsDir) } : published,
+      ...(exported.some((s) => s.action === 'write' || s.action === 'update') ? { exported: this.exportSummary(exported) } : {}),
       ...(note ? { note } : {}),
     }
   }
@@ -249,8 +325,10 @@ export class PairLearner {
     if (record.kind !== 'note') return { ok: true, via: 'runtime' }
     const project = findProject(record.project, this.deps.projects())
     if (!project) return fail('PROJECT_UNKNOWN', 'no harness here runs in that project now; approve it again from one that does')
-    const result = publishNote(project, record, opts)
-    return result.ok ? { ok: true, file: this.tilde(result.file), ...(result.created ? { created: true } : {}) } : { ...result }
+    const agentsMd = this.deps.agentsMd?.(project) === true
+    if (opts.create && !agentsMd) return fail('NOT_OPTED_IN', 'notes go in AGENTS.md only for a project in pair.jsonc "learn": { "agentsMd": [...] }')
+    const result = publishNote(project, record, { agentsMd, create: opts.create })
+    return result.ok ? { ok: true, file: this.tilde(result.file), ...(result.created ? { created: true } : {}), ...(result.untracked ? { untracked: true } : {}) } : { ...result }
   }
 
   skip(id: string): Result {
@@ -260,7 +338,7 @@ export class PairLearner {
     return { ok: true, id, skipped: skipped.record.name }
   }
 
-  /** `git revert` of the lesson's commit, and unpublished: its note taken out of the project's block. */
+  /** `git revert` of the lesson's commit, and unpublished: its note taken out, its skill out of runtimes and exports. */
   revert(id: string): Result {
     const reverted = this.deps.store.revert(id)
     if (!reverted.ok) return reverted
@@ -269,12 +347,42 @@ export class PairLearner {
       const project = findProject(reverted.record.project, this.deps.projects())
       const result = project ? unpublishNote(project, id) : { ok: true as const, file: null }
       unpublished = result.ok ? { file: result.file ? this.tilde(result.file) : null } : { ...result }
-    }
+    } else unpublished = { via: 'runtime', withdrawn: this.withdrawn(reverted.record) }
     return { ok: true, id, reverted: reverted.record.name, commit: reverted.commit, unpublished, ...(reverted.note ? { note: reverted.note } : {}) }
   }
 
-  // ── `harness pair lessons [list|show|approve|skip|revert]` ────────────────────────────────────────
+  /**
+   * A skill that left skills/ (reverted, archived): out of the copies in running sessions, and out of the
+   * engine folders it was exported to. Answers how many session copies went.
+   */
+  withdrawn(record: LessonRecord): number {
+    this.deps.usage?.changed()
+    if (record.kind !== 'skill') return 0
+    const removed = withdrawSkill(record.name, this.deps.projects())
+    this.exportSync()
+    return removed.length
+  }
 
+  /** An archived skill back in skills/ (one commit), its unused clock started again, exported again. */
+  restore(id: string): Result {
+    const restored = this.deps.store.restore(id)
+    if (!restored.ok) return restored
+    this.deps.usage?.restored(id)
+    this.deps.usage?.changed()
+    this.exportSync()
+    return { ok: true, id, restored: restored.record.name, commit: restored.commit, ...(restored.note ? { note: restored.note } : {}) }
+  }
+
+  private exportSummary(steps: ExportStep[]): Result[] {
+    return steps.map((s) => ({ dest: s.dest, name: s.name, action: s.action, path: this.tilde(s.path), ...(s.why ? { why: s.why } : {}) }))
+  }
+
+  // ── `harness pair lessons [list|show|approve|skip|revert|restore|export]` ─────────────────────────
+
+  /**
+   * The verbs. `approve`, `restore` and `export` (not a dry run) need `confirmed`, which only the control
+   * interface sets — after the person's one-time nonce checked out (pair/control.ts, approval.ts).
+   */
   async local(payload: Record<string, unknown>): Promise<Result> {
     const action = str(payload.action, 20) || 'list'
     const id = str(payload.id, 40)
@@ -285,6 +393,12 @@ export class PairLearner {
         lessons: store.list().map((r) => this.summary(r)),
       }
     }
+    if (action === 'export') {
+      if (!this.deps.exporter) return fail('UNSUPPORTED')
+      if (payload.dryRun !== true && payload.confirmed !== true) return fail('CONFIRM', `export ${PERSON}`)
+      const { steps, dryRun } = payload.dryRun === true ? this.deps.exporter.sync({ dryRun: true }) : { steps: this.exportSync(), dryRun: false }
+      return { ok: true, dryRun, destinations: this.deps.exportTo?.() ?? [], steps: this.exportSummary(steps) }
+    }
     if (!id) return fail('MISSING_ID', `lessons ${action} needs a lesson id (harness pair lessons list)`)
     switch (action) {
       case 'show': {
@@ -292,21 +406,32 @@ export class PairLearner {
         return record ? { ok: true, lesson: this.summary(record), text: store.text(record) } : fail('NOT_FOUND', `no lesson ${id}`)
       }
       case 'approve':
-        // The CLI asks at a terminal and says so; a caller that did not is not the person saying yes.
-        if (payload.confirmed !== true) return fail('CONFIRM', 'approve asks you at a terminal, or press [y] on the daemon\'s line')
+        // The control interface sets this after the person's nonce; a caller that only claims it never gets here.
+        if (payload.confirmed !== true) return fail('CONFIRM', `approve ${PERSON}`)
         return this.approve(id, 'cli', { create: payload.create === true })
+      case 'restore':
+        if (payload.confirmed !== true) return fail('CONFIRM', `restore ${PERSON}`)
+        return this.restore(id)
       case 'skip': return this.skip(id)
       case 'revert': return this.revert(id)
-      default: return fail('UNKNOWN_ACTION', `lessons has no "${action}" (list, show, approve, skip, revert)`)
+      default: return fail('UNKNOWN_ACTION', `lessons has no "${action}" (list, show, approve, skip, revert, restore, export)`)
     }
   }
 
   private summary(r: LessonRecord): Result {
+    const usage = this.deps.usage
+    const entry = usage?.entry(r.id) ?? null
     return {
       id: r.id, kind: r.kind, name: r.name, status: r.status, description: r.description, learnedBy: r.learnedBy,
       signal: r.signal.kind, project: r.projectName, source: r.source, created: new Date(r.created).toISOString(),
+      ...(r.provenance ? { provenance: r.provenance } : {}),
       ...(r.approved ? { approved: r.approved } : {}), ...(r.commit ? { commit: r.commit } : {}),
-      from: r.from.map((f) => `${f.engine}@${f.machine} turn ${f.turn}`),
+      ...(r.status === 'approved' && usage ? {
+        lastUsed: entry?.lastUsed ? new Date(entry.lastUsed).toISOString() : null,
+        unusedDays: usage.unusedDays(r),
+        ...(entry?.stale ? { stale: true } : {}),
+      } : {}),
+      from: r.from.map((f) => (r.source === 'borrowed' ? `${f.engine}@${f.machine} ${f.session}` : `${f.engine}@${f.machine} turn ${f.turn}`)),
     }
   }
 

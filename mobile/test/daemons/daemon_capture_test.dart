@@ -1,7 +1,9 @@
 // Real-font review captures of the phone's daemon: the header chip in its
 // states, the header with large text, the sheet (with a daemon, before one,
-// and on a small phone with large text), and the hatch reveal's frames. Always
-// checks that nothing overflows; writes PNGs only when asked:
+// and on a small phone with large text), the hatch reveal's frames, and
+// economy v2 (`v2-*`: a duplicate's reveal, serial and shiny cards, the setup
+// egg and its habits, a drop announced but not released). Always checks that
+// nothing overflows; writes PNGs only when asked:
 //
 //   HARNESS_DAEMON_CAPTURE_DIR=/tmp/daemon-phone \
 //     flutter test test/daemons/daemon_capture_test.dart
@@ -15,12 +17,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/daemons/daemon_face.dart';
+import 'package:harness_mobile/daemons/daemon_lines.dart';
 import 'package:harness_mobile/daemons/render.dart';
 import 'package:harness_mobile/daemons/roster.dart';
 import 'package:harness_mobile/daemons/zoo.dart';
+import 'package:harness_mobile/daemons/zoo_client.dart';
 import 'package:harness_mobile/phone/daemon_chip.dart';
 import 'package:harness_mobile/phone/daemon_hatch.dart';
 import 'package:harness_mobile/phone/daemon_scope.dart';
+import 'package:harness_mobile/phone/daemon_sheet.dart';
+import 'package:harness_mobile/phone/daemon_style.dart';
 import 'package:harness_mobile/phone/phone_status.dart';
 import 'package:harness_mobile/phone/terminal_header.dart';
 import 'package:harness_mobile/phone/terminal_header_action.dart';
@@ -79,12 +85,20 @@ Future<void> _fonts() async {
   );
 }
 
-Map<String, dynamic> _daemon(String id, {int xp = 600, bool shiny = false}) => {
+Map<String, dynamic> _daemon(
+  String id, {
+  int xp = 600,
+  bool shiny = false,
+  int? serial,
+  int? dupes,
+}) => {
   'id': id,
   'hatchedAt': '2026-09-26T09:42:00Z',
   'egg': 'first',
   'xp': xp,
   'shiny': shiny,
+  'serial': ?serial,
+  'dupes': ?dupes,
 };
 
 /// A signed-in app whose zoo is [zoo], and a host for it.
@@ -517,5 +531,249 @@ void main() {
       expect(drawn.left, greaterThanOrEqualTo(20));
       expect(drawn.right, lessThanOrEqualTo(300));
     }
+  });
+
+  // ── economy v2 ─────────────────────────────────────────────────────────────
+
+  Finder sheetScroll() => find
+      .descendant(
+        of: find.byKey(const ValueKey('daemon-sheet')),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+
+  Future<void> openSheet(WidgetTester tester) async {
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('daemon-chip')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1200));
+  }
+
+  /// Scroll the sheet until [key] is on screen, then [past] points more.
+  Future<void> scrollTo(
+    WidgetTester tester,
+    String key, {
+    double past = 0,
+  }) async {
+    await tester.scrollUntilVisible(
+      find.byKey(ValueKey(key)),
+      120,
+      scrollable: sheetScroll(),
+    );
+    if (past != 0) {
+      await tester.drag(
+        find.byKey(const ValueKey('daemon-sheet')),
+        Offset(0, -past),
+      );
+    }
+    await tester.pump(const Duration(milliseconds: 600));
+  }
+
+  testWidgets('v2 reveal: a duplicate, a serial card, a shiny card', (
+    tester,
+  ) async {
+    final app = await _app({
+      'daemons': [_daemon('tim', xp: 150, dupes: 1, shiny: true)],
+      'pair': 'tim',
+    });
+    Future<void> reveal(
+      String name,
+      String id,
+      ZooHatch hatch, {
+      String kind = 'turn',
+      int? bannerRows,
+    }) => _capture(
+      tester,
+      name,
+      phone,
+      DaemonHatchReveal(
+        key: ValueKey(name),
+        roster: _roster,
+        egg: ZooEgg(id: 'e', kind: kind, grantedAt: ''),
+        result: Future.value(hatch),
+        zoo: app.zoo,
+        still: HatchFrame(
+          stage: HatchStage.card,
+          sprite: renderSprite(_roster, _roster.byId(id)!, 0, DaemonMood.idle),
+          bannerRows: bannerRows ?? renderBanner(daemonBanner, id).length,
+        ),
+      ),
+      then: () async {
+        await tester.pump();
+        await tester.pump();
+      },
+    );
+
+    await reveal(
+      'v2-reveal-duplicate-now-shiny-level-up',
+      'tim',
+      const ZooHatch(
+        eggId: 'e',
+        daemonId: 'tim',
+        shiny: true,
+        duplicate: true,
+        xp: 150,
+        count: 2,
+        becameShiny: true,
+        levelUp: ZooLevelUp(id: 'tim', level: 2, version: '1.0'),
+        versionBefore: '0.1',
+      ),
+      bannerRows: 0,
+    );
+    expect(find.text('tim x2 · +150 xp · now shiny'), findsOneWidget);
+    await reveal(
+      'v2-reveal-duplicate-plain',
+      'tim',
+      const ZooHatch(
+        eggId: 'e',
+        daemonId: 'tim',
+        shiny: false,
+        duplicate: true,
+        xp: 150,
+        count: 3,
+      ),
+      bannerRows: 0,
+    );
+    await reveal(
+      'v2-reveal-serial-card',
+      'vim',
+      const ZooHatch(eggId: 'e', daemonId: 'vim', shiny: false, serial: 42),
+    );
+    await reveal(
+      'v2-reveal-shiny-serial-card',
+      'fzf',
+      const ZooHatch(eggId: 'e', daemonId: 'fzf', shiny: true, serial: 7),
+      kind: 'marathon',
+    );
+  });
+
+  testWidgets('v2 sheet: shiny chip, serial, shelf, card, setup egg', (
+    tester,
+  ) async {
+    final app = await _app({
+      'daemons': [
+        _daemon('tim', shiny: true, serial: 42, dupes: 1),
+        _daemon('vim', xp: 150, serial: 1203),
+        _daemon('fzf', xp: 0, dupes: 3),
+        _daemon('grue', xp: 0),
+      ],
+      'eggs': [
+        {'id': 's', 'kind': 'setup', 'grantedAt': ''},
+        {'id': 'w', 'kind': 'week', 'grantedAt': ''},
+      ],
+      'pair': 'tim',
+      'habits': const ['turn', 'split', 'find', 'machine'],
+      'firstEgg': true,
+    });
+    await _capture(tester, 'v2-chip-shiny', header, _screen(app, body: false));
+    expect(find.byKey(const ValueKey('daemon-chip-shiny')), findsOneWidget);
+    await _capture(
+      tester,
+      'v2-sheet-shiny-serial',
+      phone,
+      _screen(app),
+      then: () => openSheet(tester),
+    );
+    await _capture(
+      tester,
+      'v2-sheet-setup-egg-and-shelf',
+      phone,
+      _screen(app),
+      then: () async {
+        await openSheet(tester);
+        await scrollTo(tester, 'daemon-hatch-setup', past: -140);
+      },
+    );
+    await _capture(
+      tester,
+      'v2-sheet-habits-setup',
+      phone,
+      _screen(app),
+      then: () async {
+        await openSheet(tester);
+        await scrollTo(tester, 'daemon-habits-intro', past: 120);
+      },
+    );
+    await _capture(
+      tester,
+      'v2-sheet-card-shiny-serial',
+      phone,
+      _screen(app),
+      then: () async {
+        await openSheet(tester);
+        await scrollTo(tester, 'daemon-card-share', past: 200);
+      },
+    );
+  });
+
+  testWidgets('v2 sheet: the nest names the required habit', (tester) async {
+    final app = await _app({
+      'daemons': const [],
+      'eggs': const [],
+      'habits': const ['split', 'find'],
+    });
+    await _capture(
+      tester,
+      'v2-sheet-nest-habits',
+      phone,
+      _screen(app),
+      then: () => openSheet(tester),
+    );
+  });
+
+  testWidgets('v2 sheet: a drop announced but not released', (tester) async {
+    final roster = rosterWithDropTwo();
+    final backend = FakeZooBackend()
+      ..zoo = {
+        'daemons': [
+          _daemon('tim', serial: 42),
+          _daemon('vim', xp: 150),
+          _daemon('fzf', xp: 0, dupes: 1),
+        ],
+        'pair': 'tim',
+        'firstEgg': true,
+        'setupEgg': true,
+      };
+    final zoo = ZooClient(
+      read: backend.read,
+      write: backend.write,
+      roster: roster,
+    );
+    // A day inside the made-up drop 2's announcement (see rosterWithDropTwo).
+    final face = DaemonFace(zoo, now: () => DateTime.utc(2026, 10, 5));
+    addTearDown(() {
+      face.dispose();
+      zoo.dispose();
+    });
+    zoo.ensure();
+    await _capture(
+      tester,
+      'v2-sheet-announced-drop',
+      phone,
+      Scaffold(
+        backgroundColor: DaemonInk.ground,
+        body: SafeArea(
+          child: DaemonSheet(
+            face: face,
+            facts: () => const DaemonFacts(),
+            onHatch: (_) {},
+          ),
+        ),
+      ),
+      then: () async {
+        await tester.pump();
+        await tester.scrollUntilVisible(
+          find.byKey(const ValueKey('daemon-shelf-drop-bsd')),
+          120,
+          scrollable: sheetScroll(),
+        );
+        await tester.drag(
+          find.byKey(const ValueKey('daemon-sheet')),
+          const Offset(0, -220),
+        );
+        await tester.pump(const Duration(milliseconds: 600));
+      },
+    );
+    expect(find.text('zoo: drop 2 bsd  out 2026-10-15'), findsOneWidget);
   });
 }

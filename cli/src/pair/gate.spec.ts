@@ -89,7 +89,7 @@ describe('pair.jsonc', () => {
     const path = join(dir, 'pair.jsonc')
     const file = new PairConfigFile(path)
     const { g, events } = gate()
-    expect(g.rules(file.load())).toEqual({ model: false, rules: [] })
+    expect(g.rules(file.load())).toEqual({ model: false, rules: [], learn: { borrow: false, export: [], agentsMd: [] } })
     writeFileSync(path, RULES)
     expect(g.rules(file.load()).rules).toEqual([])
     const [request] = g.requests()

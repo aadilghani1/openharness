@@ -109,6 +109,14 @@ class DaemonFace extends ChangeNotifier {
 
   /// The nickname when it has one, else its id.
   String get name => daemon?.nickname ?? def?.id ?? '';
+
+  /// The paired daemon is shiny: it wears its shiny colour, and the chip
+  /// marks it `*`.
+  bool get shiny => daemon?.shiny == true;
+
+  /// Today, for what depends on the date (a drop's release).
+  DateTime now() => _now();
+
   int get versionIndex => roster.versionIndex(daemon?.version);
 
   /// An egg is waiting and no daemon has hatched yet.
@@ -216,7 +224,8 @@ class DaemonFace extends ChangeNotifier {
     final d = def;
     if (d != null) {
       final eggs = zoo.zoo.eggs.length;
-      return '$name, ${d.id} ${daemon!.version}, ${moodWords[mood]}'
+      return '$name, ${d.id} ${daemon!.version}${shiny ? ', shiny' : ''}, '
+          '${moodWords[mood]}'
           '${eggs == 0 ? '' : ', $eggs ${eggs == 1 ? 'egg' : 'eggs'} waiting'}';
     }
     if (eggReady) return 'An egg, ready to hatch';
@@ -342,7 +351,7 @@ class DaemonFace extends ChangeNotifier {
   void _zooEvent(ZooEvent event) {
     if (_disposed || def == null) return;
     switch (event) {
-      case ZooEggArrived():
+      case ZooEggArrived() || ZooXpGranted():
         _blink('ack', delay: ackAfter);
       case ZooDaemonGrew(:final daemon):
         // "I trust you": a slow blink when the pair grows.

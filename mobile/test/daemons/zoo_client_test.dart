@@ -1,10 +1,13 @@
 // The phone's zoo client against an in-memory backend: the first read is a
 // baseline, `zoo_changed` only fetches news, the phone's own writes show at
-// once and survive a failed send, a hatch answers who came out, and a sign-out
-// drops everything in flight.
+// once and survive a failed send, a hatch answers who came out (a duplicate:
+// what it merged into), an egg that became xp is xp, and a sign-out drops
+// everything in flight.
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/daemons/roster.dart';
+import 'package:harness_mobile/daemons/zoo.dart';
 import 'package:harness_mobile/daemons/zoo_client.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
@@ -187,5 +190,134 @@ void main() {
     app.handleAppResumed();
     await pumpEventQueue();
     expect(app.zoo.paired!.id, 'tim');
+  });
+
+  test('the zoo reads economy v2: serials, duplicates, the setup egg', () {
+    final zoo = Zoo.fromJson({
+      'daemons': [
+        {
+          'id': 'tim',
+          'hatchedAt': '2026-09-26T09:42:00Z',
+          'egg': 'first',
+          'xp': 60,
+          'serial': 42,
+          'dupes': 2,
+        },
+        // A guest's daemon, seeded: never a serial, whatever it claims.
+        {
+          'id': 'vim',
+          'hatchedAt': '2026-09-26T09:42:00Z',
+          'egg': 'turn',
+          'serial': 7,
+          'origin': 'local',
+        },
+        // A zoo from before duplicates merged: one record per id, the others
+        // counted in its dupes, shiny if either was, no xp for them.
+        {
+          'id': 'fzf',
+          'hatchedAt': '2026-09-26T09:42:00Z',
+          'egg': 'turn',
+          'xp': 10,
+        },
+        {
+          'id': 'fzf',
+          'hatchedAt': '2026-09-27T09:42:00Z',
+          'egg': 'week',
+          'xp': 500,
+          'shiny': true,
+          'dupes': 1,
+        },
+      ],
+      'eggs': [
+        {'id': 's', 'kind': 'setup', 'grantedAt': ''},
+      ],
+      'firstEgg': true,
+      'setupEgg': true,
+    }, daemonRoster);
+    final tim = zoo.daemon('tim')!, vim = zoo.daemon('vim')!;
+    final fzf = zoo.daemon('fzf')!;
+    expect(tim.serial, 42);
+    expect(tim.dupes, 2);
+    expect(tim.count, 3);
+    expect(vim.serial, isNull);
+    expect(vim.origin, 'local');
+    expect(zoo.ownedIds, ['tim', 'vim', 'fzf']);
+    expect(fzf.dupes, 2);
+    expect(fzf.shiny, isTrue);
+    expect(fzf.xp, 10);
+    expect(fzf.egg, 'turn');
+    // The setup egg is an egg like any other.
+    expect(zoo.eggs.single.kind, 'setup');
+    expect(zoo.setupEgg, isTrue);
+  });
+
+  test('a duplicate answers what it merged into, and the level', () async {
+    backend.nextDaemon = 'tim';
+    await join();
+    final hatch = (await client.hatch('e1'))!;
+    expect(hatch.daemonId, 'tim');
+    expect(hatch.duplicate, isTrue);
+    expect(hatch.xp, daemonRoster.rules.duplicateXp);
+    // x2 on the shelf, as the lookbook says it.
+    expect(hatch.count, 2);
+    expect(hatch.becameShiny, isTrue);
+    expect(hatch.serial, isNull);
+    // 0 xp + 150: bond 2, the 1.0 release.
+    expect(hatch.levelUp!.level, 2);
+    expect(hatch.grewVersion, isTrue);
+    expect(client.zoo.daemons, hasLength(2));
+    expect(client.zoo.daemon('tim')!.dupes, 1);
+    expect(client.zoo.daemon('tim')!.version, '1.0');
+    // A duplicate never pairs, never takes a place, and grows the one you have.
+    expect(client.paired!.id, 'tim');
+    expect(events.whereType<ZooDaemonGrew>().single.versionChanged, isTrue);
+    expect(events.whereType<ZooEggArrived>(), isEmpty);
+
+    // Not shiny this time, and yours already is: nothing becomes shiny.
+    backend.zoo['eggs'] = [
+      {'id': 'e2', 'kind': 'turn', 'grantedAt': ''},
+    ];
+    backend.revision++;
+    await client.refresh();
+    backend.nextShiny = false;
+    final again = (await client.hatch('e2'))!;
+    expect(again.count, 3);
+    expect(again.becameShiny, isFalse);
+    expect(again.shiny, isFalse);
+    expect(client.zoo.daemon('tim')!.shiny, isTrue);
+    // 300 xp: bond 3, still 1.0.
+    expect(again.levelUp!.level, 3);
+    expect(again.grewVersion, isFalse);
+  });
+
+  test('a new daemon carries its serial', () async {
+    backend.nextSerial = 42;
+    await join();
+    final hatch = (await client.hatch('e1'))!;
+    expect(hatch.duplicate, isFalse);
+    expect(hatch.serial, 42);
+    expect(hatch.count, 1);
+    expect(client.zoo.daemon('fzf')!.serial, 42);
+  });
+
+  test('an egg that became xp is xp, never an egg', () async {
+    await join();
+    final eggs = client.zoo.eggs.length;
+    backend.grants = [
+      {'kind': 'turn', 'xp': 50},
+    ];
+    client.habit('find');
+    await client.settle();
+    expect(client.zoo.eggs, hasLength(eggs));
+    expect(events.whereType<ZooEggArrived>(), isEmpty);
+    final grant = events.whereType<ZooXpGranted>().single.grant;
+    expect(grant.isXp, isTrue);
+    expect(grant.xp, 50);
+    expect(client.xpGrants.single.kind, 'turn');
+    client.seenXp();
+    expect(client.xpGrants, isEmpty);
+    // The egg form is an egg: it shows by being in the zoo, not as xp.
+    expect(ZooGrant.fromJson({'kind': 'turn', 'eggId': 'x'})!.isXp, isFalse);
+    expect(ZooGrant.fromJson({'kind': 'turn'}), isNull);
   });
 }

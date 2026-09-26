@@ -134,7 +134,7 @@ if (!whole(earn.night?.fromHour, 0) || !whole(earn.night?.toHour, 0) || earn.nig
   fail('earn.night hours must be 0-23 and leave some hours of the day outside the night')
 }
 if (earn.history?.days > 28) fail('earn.history.days must be at most 28 (a history egg is once per date per year)')
-for (const [path, v] of [['secretGuaranteeAt', rules.secretGuaranteeAt], ['duplicateXp', rules.duplicateXp], ['overflowXp', rules.overflowXp]]) {
+for (const [path, v] of [['secretGuaranteeAt', rules.secretGuaranteeAt], ['duplicateXp', rules.duplicateXp], ['overflowXp', rules.overflowXp], ['lessonXp', rules.lessonXp]]) {
   if (!whole(v)) fail(`rules.${path} must be a whole number of at least 1`)
 }
 // Easter words are never shipped in the clear: the roster holds the sha256 of each lowercased word.
@@ -209,6 +209,7 @@ const server = {
     secretGuaranteeAt: rules.secretGuaranteeAt,
     duplicateXp: rules.duplicateXp,
     overflowXp: rules.overflowXp,
+    lessonXp: rules.lessonXp,
     firstEgg: { need: rules.firstEgg.need, require: rules.firstEgg.require ?? [], habits: habitKeys },
     setupEgg: rules.setupEgg,
     eggs: Object.fromEntries(Object.entries(rules.eggs).map(([k, e]) => [k, { weights: e.weights, ...(e.boost ? { boost: e.boost } : {}) }])),

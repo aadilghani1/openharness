@@ -69,13 +69,20 @@ class HatchFrame {
 /// The hatch reveal, full screen (`daemons/README.md`, Hatching): the egg
 /// wobbles twice (and keeps wobbling while the server answers), cracks — with
 /// a tap of haptics — and its top pops; the 0.1 sprite appears as `#` in the
-/// faint colour for 850 ms, fills with its colour and blinks; its name types
-/// in, a row at a time, as a banner in the face from `daemons/banner.json`
-/// ([renderBanner]); the rarity stamp and first words appear; then the
-/// card, which copies as a fenced code block. A secret's reveal (a daemon that
+/// faint colour for 850 ms, fills with its colour (its shiny colour when the
+/// hatch is shiny) and blinks; its name types in, a row at a time, as a
+/// banner in the face from `daemons/banner.json` ([renderBanner]); the rarity
+/// stamp and first words appear; then the card, which copies as a fenced code
+/// block and carries the new daemon's serial. A secret's reveal (a daemon that
 /// shows only in the dark) starts pitch black. Reduce Motion goes straight to
-/// the card. It can be closed at any moment; [onRevealed] runs once, when the
-/// daemon may be named elsewhere.
+/// the card.
+///
+/// A duplicate has no name to reveal and no card of its own: after the
+/// colour it says what it merged into (`tim x2 · +150 xp`, and `now shiny`
+/// when a shiny one made yours shiny), then any level it reached.
+///
+/// It can be closed at any moment; [onRevealed] runs once, when the daemon
+/// may be named elsewhere.
 class DaemonHatchReveal extends StatefulWidget {
   const DaemonHatchReveal({
     super.key,
@@ -245,7 +252,9 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       if (!await _wait(120)) return;
       _show(() => _sprite = sprite);
       if (!await _wait(220)) return;
-      final rows = renderBanner(daemonBanner, def.id).length;
+      final rows = hatch.duplicate
+          ? 0
+          : renderBanner(daemonBanner, def.id).length;
       for (var row = 1; row <= rows; row++) {
         _show(() {
           _stage = HatchStage.banner;
@@ -258,7 +267,9 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       _stage = HatchStage.card;
       _sprite = sprite;
       _faint = false;
-      _bannerRows = renderBanner(daemonBanner, def.id).length;
+      _bannerRows = hatch!.duplicate
+          ? 0
+          : renderBanner(daemonBanner, def.id).length;
     });
     _markRevealed();
   }
@@ -276,10 +287,15 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     Navigator.of(context).maybePop();
   }
 
+  /// The new daemon's serial, from the hatch or the zoo it answered.
+  int? get _serial =>
+      _hatch?.serial ?? widget.zoo.zoo.daemon(_hatch?.daemonId)?.serial;
+
+  /// The new daemon's card: never a duplicate's, which has no card of its own.
   List<String>? get _card {
     final def = _def, hatch = _hatch;
-    if (def == null || hatch == null) return null;
-    final born = widget.zoo.zoo.daemons.where((d) => d.id == def.id).lastOrNull;
+    if (def == null || hatch == null || hatch.duplicate) return null;
+    final born = widget.zoo.zoo.daemon(def.id);
     final now = DateTime.now();
     final today =
         '${now.year.toString().padLeft(4, '0')}-'
@@ -290,9 +306,26 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       def,
       version: roster.rules.versions.first,
       shiny: hatch.shiny,
+      serial: _serial,
       hatched: born?.hatchedDay ?? today,
       egg: widget.egg.kind,
     );
+  }
+
+  /// What a duplicate merged into: `tim x2 · +150 xp · now shiny`.
+  String _merged(DaemonDef def, ZooHatch hatch) {
+    final name = widget.zoo.zoo.daemon(def.id)?.nickname ?? def.id;
+    return '$name x${hatch.count} · +${hatch.xp} xp'
+        '${hatch.becameShiny ? ' · now shiny' : ''}';
+  }
+
+  /// The level it reached: `level up · bond 2/4 · now tim 1.0`.
+  String? _levelled(DaemonDef def, ZooHatch hatch) {
+    final up = hatch.levelUp;
+    if (up == null) return null;
+    final last = roster.rules.bondLevels.length - 1;
+    return 'level up · bond ${up.level}/$last'
+        '${hatch.grewVersion ? ' · now ${def.id} ${up.version}' : ''}';
   }
 
   Future<void> _share() async {
@@ -454,12 +487,15 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         ),
       ];
     }
-    final colour = def.color;
+    final hatch = _hatch!;
+    final colour = def.colorFor(shiny: hatch.shiny);
     final rows = renderBanner(daemonBanner, def.id);
     final card = _stage == HatchStage.card ? _card : null;
-    final words =
-        "fork() returned 0. it's a ${def.id}.\n"
-        '${def.id} ${roster.rules.versions.first}: ${def.first}';
+    final words = hatch.duplicate
+        ? 'fork() returned 0. another ${def.id}.'
+        : "fork() returned 0. it's a ${def.id}.\n"
+              '${def.id} ${roster.rules.versions.first}: ${def.first}';
+    final levelled = _levelled(def, hatch);
     return [
       if (pitch)
         Padding(
@@ -492,7 +528,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       if (_stage == HatchStage.card) ...[
         const SizedBox(height: 18),
         Text(
-          rarityStamp(roster, def, shiny: _hatch?.shiny == true),
+          rarityStamp(roster, def, shiny: hatch.shiny),
           key: const ValueKey('daemon-hatch-stamp'),
           textAlign: TextAlign.center,
           style: DaemonInk.mono(
@@ -514,22 +550,51 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
             ),
           ),
         ),
+        if (hatch.duplicate) ...[
+          const SizedBox(height: 14),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              _merged(def, hatch),
+              key: const ValueKey('daemon-hatch-merged'),
+              textAlign: TextAlign.center,
+              style: DaemonInk.mono(
+                size: 15,
+                color: def.colorFor(shiny: hatch.shiny || hatch.becameShiny),
+                weight: FontWeight.w600,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+        if (levelled != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            levelled,
+            key: const ValueKey('daemon-hatch-level'),
+            textAlign: TextAlign.center,
+            style: DaemonInk.mono(
+              size: 13.5,
+              color: DaemonInk.ink,
+              height: 1.4,
+            ),
+          ),
+        ],
+        if (hatch.duplicate) ...[
+          const SizedBox(height: 20),
+          _button('Done', _close, key: const ValueKey('daemon-hatch-done')),
+        ],
         if (card != null) ...[
           const SizedBox(height: 20),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: pitch ? const Color(0xFF0C0C0C) : DaemonInk.ground,
-              border: Border.all(color: DaemonInk.line),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: _art(
-              card.join('\n'),
-              DaemonInk.mono(size: 12.5, color: DaemonInk.ink, height: 1.2),
-              key: const ValueKey('daemon-hatch-card'),
-              semantics: 'The card: ${def.id}, ${def.rarity}',
-            ),
+          DaemonCardView(
+            key: const ValueKey('daemon-hatch-card'),
+            roster: roster,
+            def: def,
+            lines: card,
+            version: roster.rules.versions.first,
+            shiny: hatch.shiny,
+            serial: _serial,
+            ground: pitch ? const Color(0xFF0C0C0C) : DaemonInk.ground,
           ),
           const SizedBox(height: 16),
           Wrap(
@@ -595,4 +660,83 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       ),
     ),
   );
+}
+
+/// A card as it is drawn on the phone: its lines in their columns, scaled to
+/// fit and never wrapped, the head in its rarity's colour and the portrait in
+/// the daemon's (its shiny one when it is shiny), as card.mjs's `cardSvg`
+/// colours them. The words stay ink.
+class DaemonCardView extends StatelessWidget {
+  const DaemonCardView({
+    super.key,
+    required this.roster,
+    required this.def,
+    required this.lines,
+    required this.version,
+    required this.shiny,
+    this.serial,
+    this.ground = DaemonInk.ground,
+  });
+
+  final DaemonRoster roster;
+  final DaemonDef def;
+  final List<String> lines;
+  final String version;
+  final bool shiny;
+
+  /// Its mint number, for a screen reader; the lines already carry it.
+  final int? serial;
+  final Color ground;
+
+  /// The card's text, for tests and the clipboard.
+  String get text => lines.join('\n');
+
+  @override
+  Widget build(BuildContext context) {
+    final portrait = cardPortraitRows(roster, def, version);
+    final colour = def.colorFor(shiny: shiny);
+    Color? rowColour(int i) => i == 1
+        ? DaemonInk.rarity(def.rarity)
+        : i >= portrait.from && i < portrait.to
+        ? colour
+        : null;
+    return Semantics(
+      label:
+          'The card: ${def.id}, ${shiny ? 'shiny ' : ''}${def.rarity}'
+          '${serial == null ? '' : ', ${serialLabel(serial!)}'}',
+      excludeSemantics: true,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: ground,
+          border: Border.all(color: DaemonInk.line),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text.rich(
+            TextSpan(
+              children: [
+                for (var i = 0; i < lines.length; i++)
+                  TextSpan(
+                    text: i == lines.length - 1 ? lines[i] : '${lines[i]}\n',
+                    style: rowColour(i) == null
+                        ? null
+                        : TextStyle(color: rowColour(i)),
+                  ),
+              ],
+            ),
+            softWrap: false,
+            textScaler: TextScaler.noScaling,
+            style: DaemonInk.mono(
+              size: 12.5,
+              color: DaemonInk.ink,
+              height: 1.2,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

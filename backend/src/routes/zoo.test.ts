@@ -205,6 +205,26 @@ describe('zoo routes', () => {
     }
   })
 
+  it('credits an approved lesson once, to the daemon that found it, and answers its level', async () => {
+    const tim = { id: 'tim', hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 40, version: '0.1' }
+    mocks.prisma.zoo.findUnique.mockResolvedValue({ revision: 3, state: { ...emptyZoo(), daemons: [tim], pair: 'tim' } })
+    mocks.prisma.zoo.updateMany.mockResolvedValue({ count: 1 })
+    const res = await post([{ op: 'zoo.lesson', lessonId: '3f2a9c1b', daemonId: 'tim' }])
+    expect(res.statusCode).toBe(200)
+    const data = res.json().data
+    expect(data.levelUps).toEqual([{ id: 'tim', level: 1, version: '0.1' }])      // 40 + 25
+    expect(data.zoo.daemons[0]).toMatchObject({ xp: 65, bond: 1 })
+    expect(data.zoo.progress.lessons).toEqual(['3f2a9c1b'])
+    expect(mocks.prisma.machine.findMany).not.toHaveBeenCalled()
+    // The same lesson again (a retry whose answer was lost) writes nothing.
+    mocks.prisma.zoo.findUnique.mockResolvedValue({ revision: 4, state: data.zoo })
+    mocks.prisma.zoo.updateMany.mockClear()
+    const again = await post([{ op: 'zoo.lesson', lessonId: '3f2a9c1b', daemonId: 'tim' }])
+    expect(again.json().data).toMatchObject({ revision: 4, levelUps: [] })
+    expect(mocks.prisma.zoo.updateMany).not.toHaveBeenCalled()
+    expect((await post([{ op: 'zoo.lesson', lessonId: 'has space', daemonId: 'tim' }])).statusCode).toBe(400)
+  })
+
   it('never asks about machines when no turn is reported, and refuses an absurd report', async () => {
     mocks.prisma.zoo.findUnique.mockResolvedValue(null)
     mocks.prisma.zoo.updateMany.mockResolvedValue({ count: 0 })

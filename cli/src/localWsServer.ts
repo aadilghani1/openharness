@@ -168,6 +168,11 @@ export interface RouteAnswer {
 
 export interface LocalWsServer {
   close: () => Promise<void>
+  /**
+   * The caller's end of a loopback TCP connection: its port, so the daemon can find the process asking
+   * (pair/learn/approval.ts). Null over the daemon's Unix socket, or once the connection is gone.
+   */
+  peerPort: (connId: string) => number | null
 }
 
 function isLoopback(address: string | undefined): boolean {
@@ -289,10 +294,13 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   const servers = [server, ...(options.localSocketServer ? [options.localSocketServer] : [])]
   for (const each of servers) each.on('upgrade', onUpgrade)
 
+  const peers = new Map<string, number | null>()
   wss.on('connection', (ws, req: http.IncomingMessage) => {
     const connId = `local:${randomUUID()}`
     // Over the daemon's own Unix socket (0600, in a 0700 folder): this user's process, not any user's.
     const trusted = isTrustedLocal(req)
+    // The caller's loopback TCP port, so the daemon can find the process asking (pair/learn/approval.ts).
+    peers.set(connId, trusted ? null : req.socket.remotePort ?? null)
     /** Introduced itself as a tool (`machine_select { tool: true }`): `harness pair`, the MCP server. */
     let tool = false
     let selected = false
@@ -639,6 +647,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     })
 
     const cleanup = (): void => {
+      peers.delete(connId)
       heartbeat.stop()
       if (boundMachineId) options.onAppFocusState?.(boundMachineId, null, connId)
       // A window that went away has no tiles open. Left standing, the roster
@@ -655,6 +664,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   })
 
   return {
+    peerPort: (connId) => peers.get(connId) ?? null,
     close: async () => {
       for (const each of servers) each.off('upgrade', onUpgrade)
       for (const client of wss.clients) client.close(1001, 'server shutting down')

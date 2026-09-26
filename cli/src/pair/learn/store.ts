@@ -5,13 +5,15 @@
  *   pending/<id>/SKILL.md | NOTE.md   proposed, waiting for your key (not committed)
  *   skills/<name>/SKILL.md           approved skills: the folder the Store runtime publishes (publish.ts)
  *   notes/<id>/NOTE.md               approved project notes (written into that project's AGENTS.md block)
+ *   archive/<name>/SKILL.md          skills the curator put away, unused for 90 days (restore brings one back)
  *   lesson.json                      beside each: the record the daemon reads back
  *   journal.jsonl, state.json        what happened, and what not to propose again (not committed)
+ *   usage.json, export.json          when each lesson was last used; what was exported where (not committed)
  *
  * SKILL.md is an Agent Skills file (agentskills.io): `name` (the folder's name), `description`, and a
  * `metadata.harness` map — learnedBy (the daemon), from (provenance), approved (the date), evidence.
  *
- * ONE commit per approval and ONE per revert, made with git in this folder and nowhere else, with no
+ * ONE commit per approval, per revert, per archive and per restore (and an empty one when a lesson goes stale), made with git in this folder and nowhere else, with no
  * global or system git config (no hooks, no signing, a fixed author: never the person's name or email).
  * A revert is `git revert` of the lesson's own commit. Without git the same moves happen with a plain
  * journal, and every answer says so.
@@ -20,9 +22,11 @@ import { execFileSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { redactDeep, refusal } from './guard.js'
 import { contentHash, type Lesson, type Provenance, type Signal, type SignalKind } from './types.js'
 
-export type LessonStatus = 'pending' | 'approved' | 'reverted' | 'skipped'
+export type LessonStatus = 'pending' | 'approved' | 'reverted' | 'skipped' | 'archived'
+export type LessonSource = 'template' | 'model' | 'borrowed'
 
 export interface LessonRecord {
   id: string
@@ -40,7 +44,9 @@ export interface LessonRecord {
   learnedBy: string
   from: Provenance[]
   evidence: string[]
-  source: 'template' | 'model'
+  source: LessonSource
+  /** Where a borrowed lesson came from, in words: `borrowed from hermes`. */
+  provenance?: string | null
   created: number
   status: LessonStatus
   /** The day it was approved (YYYY-MM-DD). */
@@ -62,9 +68,9 @@ export interface LessonStoreOptions {
 
 export const NO_GIT_NOTE = 'git is not installed: lessons are kept with a plain journal, not commits'
 const SKIPPED_MAX = 2_000
-const IGNORED = ['pending/', 'reverted/', 'state.json', 'journal.jsonl', '*.tmp']
+const IGNORED = ['pending/', 'reverted/', 'state.json', 'journal.jsonl', 'usage.json', 'export.json', '*.tmp']
 
-interface StoreState { v: 1; skipped: string[]; proposed: Record<string, number>; lastProposedAt: number | null }
+interface StoreState { v: 1; skipped: string[]; proposed: Record<string, number>; lastProposedAt: number | null; curatedAt: number | null }
 
 export class LessonStore {
   readonly root: string
@@ -83,6 +89,8 @@ export class LessonStore {
   }
 
   get skillsDir(): string { return join(this.root, 'skills') }
+  /** Whether the folder exists yet: nothing is ever made before the first lesson. */
+  get exists(): boolean { return existsSync(this.root) }
 
   /** Git is here and runs. Asked once. */
   get git(): boolean {
@@ -109,9 +117,14 @@ export class LessonStore {
       .sort(byCreated)
   }
 
-  /** Every lesson: pending, approved, and the ones reverted or skipped (from the journal). */
+  /** Skills the curator put away (archive/). `restore` brings one back. */
+  archived(): LessonRecord[] {
+    return this.readDir('archive').sort(byCreated)
+  }
+
+  /** Every lesson: pending, approved, archived, and the ones reverted or skipped (from the journal). */
   list(): LessonRecord[] {
-    const live = [...this.pending(), ...this.approved()]
+    const live = [...this.pending(), ...this.approved(), ...this.archived()]
     const seen = new Set(live.map((r) => r.id))
     const gone = new Map<string, LessonRecord>()
     for (const entry of this.journal()) {
@@ -137,12 +150,12 @@ export class LessonStore {
    * A distilled lesson, pending your key. Refused when you skipped or reverted it (or its signal) before,
    * or when the same lesson is already here.
    */
-  add(input: { lesson: Lesson; signal: Signal; learnedBy: string; source: 'template' | 'model' }): StoreResult<{ record: LessonRecord }> {
+  add(input: { lesson: Lesson; signal: Signal; learnedBy: string; source: LessonSource; provenance?: string | null }): StoreResult<{ record: LessonRecord }> {
     const { lesson, signal } = input
     const hash = contentHash(lesson.kind === 'skill' ? ['skill', lesson.name, lesson.body] : ['note', signal.project, lesson.lines])
     const state = this.state()
     if (state.skipped.includes(hash) || state.skipped.includes(signal.key)) return { ok: false, error: 'SKIPPED' }
-    const known = [...this.pending(), ...this.approved()]
+    const known = [...this.pending(), ...this.approved(), ...this.archived()]
     if (known.some((r) => r.hash === hash || (r.status === 'pending' && r.signal.key === signal.key))) return { ok: false, error: 'KNOWN' }
     const id = this.newId()
     const record: LessonRecord = {
@@ -153,8 +166,12 @@ export class LessonStore {
       ...(lesson.kind === 'note' ? { lines: lesson.lines } : {}),
       hash, signal: { kind: signal.kind, key: signal.key }, project: signal.project, projectName: signal.projectName,
       learnedBy: input.learnedBy, from: signal.from.slice(0, 8), evidence: signal.evidence.slice(0, 8), source: input.source,
+      ...(input.provenance ? { provenance: input.provenance } : {}),
       created: this.now(), status: 'pending', approved: null,
     }
+    // The guard once more, over the file an agent would read — front matter, provenance and evidence too.
+    const why = refusal(this.text(record))
+    if (why) return { ok: false, error: 'REFUSED', detail: why }
     this.ensure()
     this.writeLesson(join(this.root, 'pending', id), record)
     this.log({ op: 'added', id, kind: record.kind, name: record.name })
@@ -236,6 +253,70 @@ export class LessonStore {
     return { ok: true, record: reverted, commit, ...(this.git ? {} : { note: NO_GIT_NOTE }) }
   }
 
+  // ── the curator (curate.ts) ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * An approved skill → archive/, out of every session's index, one commit (`archive: <name>`). A note is
+   * never archived: it lives in its project's AGENTS.md, where the person sees it.
+   */
+  archive(id: string, why = 'unused for 90 days'): StoreResult<{ record: LessonRecord; commit: string | null; note?: string }> {
+    const record = this.approved().find((r) => r.id === id)
+    if (!record) return this.missing(id, 'approved')
+    if (record.kind !== 'skill') return { ok: false, error: 'NOT_A_SKILL', detail: 'only skills are archived; a note stays in its project\'s AGENTS.md' }
+    const from = join('skills', record.name)
+    const to = existsSync(join(this.root, 'archive', record.name)) ? join('archive', `${record.name}-${id}`) : join('archive', record.name)
+    mkdirSync(join(this.root, 'archive'), { recursive: true, mode: 0o700 })
+    renameSync(join(this.root, from), join(this.root, to))
+    const moved = this.commitMove(from, to, `archive: ${record.name}\n\n${why}.\nLesson-Id: ${id}`)
+    if (!moved.ok) { renameSync(join(this.root, to), join(this.root, from)); return moved }
+    const archived: LessonRecord = { ...record, status: 'archived' }
+    this.log({ op: 'archived', id, kind: record.kind, name: record.name, commit: moved.commit, why, record: archived })
+    return { ok: true, record: archived, commit: moved.commit, ...(this.git ? {} : { note: NO_GIT_NOTE }) }
+  }
+
+  /** An archived skill back into skills/, one commit (`restore: <name>`). Refused when its name is taken. */
+  restore(id: string): StoreResult<{ record: LessonRecord; commit: string | null; note?: string }> {
+    const folder = this.folderOf('archive', id)
+    const record = folder ? this.archived().find((r) => r.id === id) : null
+    if (!folder || !record) return this.missing(id, 'archived')
+    const to = join('skills', record.name)
+    if (existsSync(join(this.root, to))) return { ok: false, error: 'NAME_TAKEN', detail: `another skill is called ${record.name}; revert it first` }
+    const from = join('archive', folder)
+    mkdirSync(join(this.root, 'skills'), { recursive: true, mode: 0o700 })
+    renameSync(join(this.root, from), join(this.root, to))
+    const moved = this.commitMove(from, to, `restore: ${record.name}\n\nLesson-Id: ${id}`)
+    if (!moved.ok) { renameSync(join(this.root, to), join(this.root, from)); return moved }
+    const restored: LessonRecord = { ...record, status: 'approved' }
+    this.log({ op: 'restored', id, kind: record.kind, name: record.name, commit: moved.commit, record: restored })
+    return { ok: true, record: restored, commit: moved.commit, ...(this.git ? {} : { note: NO_GIT_NOTE }) }
+  }
+
+  /**
+   * A lesson unused for 30 days: an empty commit (`stale: <name>`) and a journal entry. Nothing in its folder
+   * changes, so its `learn:` commit still reverts cleanly.
+   */
+  markStale(id: string, why = 'unused for 30 days'): StoreResult<{ record: LessonRecord; commit: string | null }> {
+    const record = this.approved().find((r) => r.id === id)
+    if (!record) return this.missing(id, 'approved')
+    let commit: string | null = null
+    if (this.git && existsSync(join(this.root, '.git'))) {
+      try {
+        this.run(['commit', '-q', '--allow-empty', '-m', `stale: ${record.name}\n\n${why}.\nLesson-Id: ${id}`])
+        commit = this.run(['rev-parse', 'HEAD']).trim()
+      } catch (err) { return { ok: false, error: 'COMMIT_FAILED', detail: gitError(err) } }
+    }
+    this.log({ op: 'stale', id, kind: record.kind, name: record.name, commit, why })
+    return { ok: true, record, commit }
+  }
+
+  curatedAt(): number | null { return this.state().curatedAt }
+
+  markCurated(at: number): void {
+    const state = this.state()
+    state.curatedAt = at
+    this.saveState(state)
+  }
+
   // ── proposals ───────────────────────────────────────────────────────────────────────────────────────
 
   lastProposedAt(): number | null { return this.state().lastProposedAt }
@@ -251,6 +332,33 @@ export class LessonStore {
   }
 
   // ── internals ───────────────────────────────────────────────────────────────────────────────────────
+
+  /** One commit for a folder that moved: the new path added, the old one gone from the index. */
+  private commitMove(from: string, to: string, message: string): StoreResult<{ commit: string | null }> {
+    if (!this.git || !existsSync(join(this.root, '.git'))) return { ok: true, commit: null }
+    try {
+      this.run(['add', '-A', '--', to])
+      this.run(['rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', from])
+      this.run(['commit', '-q', '-m', message])
+      return { ok: true, commit: this.run(['rev-parse', 'HEAD']).trim() }
+    } catch (err) {
+      try { this.run(['reset', '-q', 'HEAD', '--', from, to]) } catch { /* nothing staged */ }
+      return { ok: false, error: 'COMMIT_FAILED', detail: gitError(err) }
+    }
+  }
+
+  /** The folder a lesson is kept in under `dir`, by its lesson.json. */
+  private folderOf(dir: 'archive', id: string): string | null {
+    let names: string[]
+    try { names = readdirSync(join(this.root, dir)) } catch { return null }
+    for (const name of names) {
+      try {
+        const record = JSON.parse(readFileSync(join(this.root, dir, name, 'lesson.json'), 'utf8')) as { id?: unknown }
+        if (record?.id === id) return name
+      } catch { /* not a lesson */ }
+    }
+    return null
+  }
 
   /** The commit that approved this lesson: its `Lesson-Id` trailer, found by git itself. */
   private commitOf(id: string): string | null {
@@ -278,10 +386,26 @@ export class LessonStore {
     mkdirSync(this.root, { recursive: true, mode: 0o700 })
     const ignore = join(this.root, '.gitignore')
     if (!existsSync(ignore)) writeFileSync(ignore, `${IGNORED.join('\n')}\n`, { mode: 0o600 })
+    else this.ignoreMore(ignore)
     if (!this.git || existsSync(join(this.root, '.git'))) return
     this.run(['init', '-q'])
     this.run(['add', '--', '.gitignore'])
     this.run(['commit', '-q', '-m', 'lessons: start\n\nLessons your daemons learned, one commit per approval and per revert.'])
+  }
+
+  /** A folder made by an older version: the files it did not know to ignore, added in one commit. */
+  private ignoreMore(ignore: string): void {
+    let text: string
+    try { text = readFileSync(ignore, 'utf8') } catch { return }
+    const lines = text.split('\n').map((line) => line.trim())
+    const missing = IGNORED.filter((rule) => !lines.includes(rule))
+    if (!missing.length) return
+    writeFileSync(ignore, `${text}${text.endsWith('\n') || !text ? '' : '\n'}${missing.join('\n')}\n`, { mode: 0o600 })
+    if (!this.git || !existsSync(join(this.root, '.git'))) return
+    try {
+      this.run(['add', '--', '.gitignore'])
+      this.run(['commit', '-q', '-m', 'lessons: ignore usage and export records', '--', '.gitignore'])
+    } catch { /* the next write tries again */ }
   }
 
   private gitEnv(): NodeJS.ProcessEnv {
@@ -300,7 +424,7 @@ export class LessonStore {
       { cwd: this.root, env: this.gitEnv(), stdio: 'pipe', encoding: 'utf8' })
   }
 
-  private readDir(folder: 'pending' | 'skills' | 'notes'): LessonRecord[] {
+  private readDir(folder: 'pending' | 'skills' | 'notes' | 'archive'): LessonRecord[] {
     const dir = join(this.root, folder)
     let names: string[]
     try { names = readdirSync(dir) } catch { return [] }
@@ -309,13 +433,14 @@ export class LessonStore {
       try {
         const record = JSON.parse(readFileSync(join(dir, name, 'lesson.json'), 'utf8')) as LessonRecord
         if (typeof record?.id !== 'string' || (record.kind !== 'skill' && record.kind !== 'note') || typeof record.name !== 'string') continue
-        records.push({ ...record, status: folder === 'pending' ? 'pending' : 'approved' })
+        records.push({ ...record, status: folder === 'pending' ? 'pending' : folder === 'archive' ? 'archived' : 'approved' })
       } catch { /* not a lesson, or a hand-made folder */ }
     }
     return records
   }
 
-  private writeLesson(dir: string, record: LessonRecord): void {
+  private writeLesson(dir: string, raw: LessonRecord): void {
+    const record = redactDeep(raw)
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     writeFileSync(join(dir, record.kind === 'skill' ? 'SKILL.md' : 'NOTE.md'), this.text(record), { mode: 0o600 })
     // The record as kept: where it is says its status, and git (or the journal) says its commit.
@@ -337,7 +462,7 @@ export class LessonStore {
   private log(entry: Record<string, unknown>): void {
     const file = join(this.root, 'journal.jsonl')
     const fresh = !existsSync(file)
-    appendFileSync(file, `${JSON.stringify({ at: this.now(), ...entry, ...(this.git ? {} : { git: false }) })}\n`, { mode: 0o600 })
+    appendFileSync(file, `${JSON.stringify(redactDeep({ at: this.now(), ...entry, ...(this.git ? {} : { git: false }) }))}\n`, { mode: 0o600 })
     if (fresh) chmodSync(file, 0o600)
   }
 
@@ -349,8 +474,9 @@ export class LessonStore {
         skipped: Array.isArray(parsed.skipped) ? parsed.skipped.filter((h): h is string => typeof h === 'string') : [],
         proposed: parsed.proposed && typeof parsed.proposed === 'object' ? parsed.proposed : {},
         lastProposedAt: typeof parsed.lastProposedAt === 'number' ? parsed.lastProposedAt : null,
+        curatedAt: typeof parsed.curatedAt === 'number' ? parsed.curatedAt : null,
       }
-    } catch { return { v: 1, skipped: [], proposed: {}, lastProposedAt: null } }
+    } catch { return { v: 1, skipped: [], proposed: {}, lastProposedAt: null, curatedAt: null } }
   }
 
   private saveState(state: StoreState): void {
@@ -389,6 +515,7 @@ function frontmatter(record: LessonRecord): string {
     `    signal: ${q(record.signal.kind)}`,
     `    project: ${q(record.project)}`,
     `    source: ${q(record.source)}`,
+    ...(record.provenance ? [`    provenance: ${q(record.provenance)}`] : []),
     `    approved: ${q(record.approved ?? null)}`,
     '    from:',
     ...(record.from.length ? record.from.map((f) => `      - ${JSON.stringify({ engine: f.engine, machine: f.machine, session: f.session, turn: f.turn, project: f.project })}`) : ['      []']),

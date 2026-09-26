@@ -12,7 +12,7 @@ import { installedDsh, type InstalledDsh } from './installed.js'
 import { dshAccountEnv, dshLaunch, type DshAccount, type DshLaunch } from './launch.js'
 import { compatibleHarnessEngines } from './compatibility.js'
 import { skillDirsIn } from './materialize.js'
-import type { RuntimeLessons } from '../pair/learn/publish.js'
+import { installLessons, type RuntimeLessons } from '../pair/learn/publish.js'
 
 const Snapshot = z.object({
   version: z.literal(1),
@@ -95,38 +95,6 @@ export function migrateHarnessInstructions(workspace: string, current: Installed
   }
 }
 
-/** A lesson's name as the lessons folder writes one (agentskills.io): nothing that could leave the folder. */
-const LESSON_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/
-
-/**
- * Link `<runtime>/lessons` to the lessons folder and answer CONTEXT.md's index lines for it; with no
- * lessons, take a stale link away. A problem here costs the lessons, never the launch.
- */
-function linkLessons(dir: string, lessons: RuntimeLessons | null | undefined): string[] {
-  const link = join(dir, 'lessons')
-  const skills = (lessons?.skills ?? []).filter(skill => LESSON_NAME.test(skill.name))
-  try {
-    if (!lessons || !skills.length) {
-      if (isLink(link)) unlinkSync(link)
-      return []
-    }
-    if (isLink(link)) {
-      if (readlinkSync(link) !== lessons.dir) { unlinkSync(link); symlinkSync(lessons.dir, link) }
-    } else if (existsSync(link)) throw new Error(`Harness lessons path is already occupied: ${link}`)
-    else symlinkSync(lessons.dir, link)
-  } catch (error) {
-    console.warn(`[dsh] lessons not linked · ${error instanceof Error ? error.message : error}`)
-    return []
-  }
-  const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim().slice(0, 300)
-  return [
-    '## Lessons',
-    'Approved by the person in Harness, from what their agents did. Read one when its description fits the task.',
-    ...skills.map(skill => `- ${skill.name}: ${oneLine(skill.description)} ${JSON.stringify(join(link, skill.name, 'SKILL.md'))}`),
-    '',
-  ]
-}
-
 function installBootstrap(workspace: string, engine: AgentEngine): void {
   const adapter = harnessAdapter(engine)
   const file = adapter.instructionFiles.find(name => existsSync(join(workspace, name)))
@@ -202,7 +170,7 @@ export function harnessLaunchOrRefusal(prepare: () => DshLaunch):
 
 /**
  * `lessons`: the approved lesson skills this session loads (pair/learn/publish.ts runtimeLessons). They are
- * linked at `<runtime>/lessons` and indexed in CONTEXT.md, one line each — the Store runtime path is how a
+ * copied, read-only, to `<runtime>/lessons` and indexed in CONTEXT.md, one line each — the Store runtime path is how a
  * lesson reaches every engine without a byte in an engine's own folders. Never fails a launch.
  */
 export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engine: AgentEngine,
@@ -244,7 +212,7 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
   }
   migrateHarnessInstructions(ws, dsh)
   installBootstrap(ws, engine)
-  const lessonIndex = linkLessons(dir, lessons)
+  const lessonIndex = installLessons(dir, lessons)
   const env: Record<string, string> = { ...data.env, ...dshAccountEnv(account), HARNESS_CONTEXT_FILE: join(dir, 'CONTEXT.md'), HARNESS_SKILLS_DIR: skillsDir }
   // Spec-1 packages used their default engine's discovery paths in env. Translate the path, not
   // arbitrary engine names or source paths inside an upstream installation.
