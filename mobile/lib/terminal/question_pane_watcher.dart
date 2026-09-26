@@ -124,10 +124,9 @@ class QuestionPaneWatcher extends ChangeNotifier {
           ? parseQueuedQuestions(lines)
           : null,
     );
-    // Codex only: every hint offered is one of its own (see `parseKeyHints`).
-    final keys = _readHints(
-      engine == QuestionEngine.codex ? parseKeyHints(lines) : const <KeyHint>[],
-    );
+    // Every hint offered is one of the engines' own (see `parseKeyHints`): Codex's, and Claude
+    // Code's `shift+tab to cycle`.
+    final keys = _readHints(parseKeyHints(lines));
     if (dialog.again || queue.again || keys.again) {
       // ⚠️ **Ask for the next read rather than waiting for one.** Reads are
       // driven by terminal output, and the engine may print NOTHING after the
