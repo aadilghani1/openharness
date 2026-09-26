@@ -368,7 +368,7 @@ fn pane_in_window(app: &App, w: usize, pane: &str, f: &mut Found) -> bool {
         }
     }
     if let Ok(idx) = pane.parse::<usize>() {
-        if let Some(p) = idx.checked_sub(app.pane_base_index).and_then(|i| ids.get(i)) { f.pane = Some(*p); return true }
+        if let Some(p) = idx.checked_sub(app.pane_base(w)).and_then(|i| ids.get(i)) { f.pane = Some(*p); return true }
     }
     // window_find_string: the pane at that spot of the window.
     let body = app.body();

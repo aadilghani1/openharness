@@ -92,14 +92,13 @@ pub struct Prompt {
     pub history_at: Option<usize>,
     /// status-keys vi: Esc leaves insert for normal mode; an operator (d, c, r) waits for its motion.
     pub vi_normal: bool,
-    pub vi_pending: Option<char>,
     /// What C-w last cut (prompt_saved): C-y puts it back before the newest paste buffer.
     pub saved: Option<String>,
 }
 
 impl Prompt {
     pub fn status(kind: PromptKind, label: &str, initial: &str) -> Prompt {
-        Prompt { kind, title: String::new(), label: label.to_string(), hint: String::new(), value: initial.to_string(), secret: false, cursor: initial.chars().count(), history_at: None, vi_normal: false, vi_pending: None, saved: None }
+        Prompt { kind, title: String::new(), label: label.to_string(), hint: String::new(), value: initial.to_string(), secret: false, cursor: initial.chars().count(), history_at: None, vi_normal: false, saved: None }
     }
 }
 

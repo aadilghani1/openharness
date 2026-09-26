@@ -906,7 +906,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_panes" => tab.map(|t| t.panes().len().to_string()).unwrap_or_default(),
         "window_bell_flag" => flags(app, window).contains('!').then_some("1").unwrap_or("0").into(),
         "pane_active" => (focus == tab.and_then(|t| t.focus)).then_some("1").unwrap_or("0").into(),
-        "pane_index" => focus.and_then(|f| tab.and_then(|t| t.panes().iter().position(|p| *p == f))).map(|i| (i + app.pane_base_index).to_string()).unwrap_or_default(),
+        "pane_index" => focus.and_then(|f| tab.and_then(|t| t.panes().iter().position(|p| *p == f))).map(|i| (i + app.pane_base(window)).to_string()).unwrap_or_default(),
         "pane_title" => focus.map(|f| pane_title(app, window, f)).unwrap_or_else(|| host.clone()),
         "pane_id" => focus.map(crate::pane::tag).unwrap_or_default(),
         // What tmux on the pane's machine says (terminal_info), then what the shell said (OSC 7),

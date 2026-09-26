@@ -37,7 +37,16 @@ impl Chord {
         }
     }
 
-    pub fn of(key: &KeyEvent) -> Chord { Chord::normal(key.code, key.modifiers) }
+    /// A key from the terminal, as tmux names what it sent: 0x1c–0x1f (crossterm's C-4 … C-7)
+    /// are C-\ C-] C-^ C-_, and BTab has no S- (crossterm's reads S-BTab).
+    pub fn of(key: &KeyEvent) -> Chord {
+        let code = match key.code {
+            KeyCode::Char(c @ '4'..='7') if key.modifiers.contains(KeyModifiers::CONTROL) => KeyCode::Char(['\\', ']', '^', '_'][(c as u8 - b'4') as usize]),
+            code => code,
+        };
+        let mods = if code == KeyCode::BackTab { key.modifiers - KeyModifiers::SHIFT } else { key.modifiers };
+        Chord::normal(code, mods)
+    }
 
     pub fn parse(text: &str) -> Result<Chord, String> {
         let text = text.trim().to_lowercase();
@@ -129,5 +138,19 @@ mod tests {
         assert_eq!(Chord::parse("super+enter").unwrap().code, KeyCode::Enter);
         assert_eq!(Chord::parse("alt++").unwrap().code, KeyCode::Char('+'));
         assert!(Chord::parse("hyper+x").is_err());
+    }
+
+    #[test]
+    fn keys_from_the_terminal_as_tmux_names_them() {
+        let key = |code, mods| crate::keys::name(&Chord::of(&KeyEvent::new(code, mods)));
+        // 0x1c–0x1f, which crossterm reads as C-4 … C-7.
+        assert_eq!(key(KeyCode::Char('4'), KeyModifiers::CONTROL), "C-\\");
+        assert_eq!(key(KeyCode::Char('5'), KeyModifiers::CONTROL), "C-]");
+        assert_eq!(key(KeyCode::Char('6'), KeyModifiers::CONTROL), "C-^");
+        assert_eq!(key(KeyCode::Char('7'), KeyModifiers::CONTROL), "C-_");
+        assert_eq!(key(KeyCode::BackTab, KeyModifiers::SHIFT), "BTab");
+        assert_eq!(Chord::of(&KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)), crate::keys::parse("BTab").unwrap());
+        assert_eq!(Chord::of(&KeyEvent::new(KeyCode::Char('4'), KeyModifiers::CONTROL)), crate::keys::parse("C-\\").unwrap());
+        assert_eq!(key(KeyCode::Char('4'), KeyModifiers::ALT), "M-4");
     }
 }

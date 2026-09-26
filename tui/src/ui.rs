@@ -194,13 +194,15 @@ fn app_preview_placeholder() -> String { String::new() }
 fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
     let focus = app.focused();
     let rects = app.rects.clone();
-    let many = rects.len() > 1;
     let mut cursor = None;
     for (id, rect) in rects.iter() {
         let active = Some(*id) == focus;
         let content = app.content_of(app.tab(), *rect);
         // tmux's window-style / window-active-style: the default colours a pane's cells fall back to.
-        let window = if active && many { (app.look.active_window_fg, app.look.active_window_bg) } else if many { (app.look.window_fg, app.look.window_bg) } else { (app.look.active_window_fg.or(app.look.window_fg), app.look.active_window_bg.or(app.look.window_bg)) };
+        // tty_default_colours: the active pane's window-active-style where it sets a colour, else
+        // window-style (both the pane's own, its window's or the global ones).
+        let (a, w) = (app.style_of("window-active-style", app.active, Some(*id)), app.style_of("window-style", app.active, Some(*id)));
+        let window = if active { (a.fg.or(w.fg), a.bg.or(w.bg)) } else { (w.fg, w.bg) };
         if app.panes.get(id).map(|p| p.in_mode()).unwrap_or(false) {
             let (styles, ctx) = (crate::copy::styles(app, *id), crate::copy::ctx(app, *id));
             if let Some(m) = app.panes.get(id).and_then(|p| p.modes.last()) {
@@ -233,7 +235,7 @@ fn borders(buf: &mut Buffer, app: &App, body: Rect) {
     let get = |name: &str| app.options.get(name, &tab.id, None).unwrap_or_default();
     let frame = crate::borders::Frame {
         sx: body.width as u32, sy: body.height as u32, all: &all, visible: &visible, active: app.focused(), marked: app.marked,
-        status, lines: crate::borders::Lines::of(&get("pane-border-lines")), indicators: crate::borders::Indicators::of(&get("pane-border-indicators")), base: app.pane_base_index,
+        status, lines: crate::borders::Lines::of(&get("pane-border-lines")), indicators: crate::borders::Indicators::of(&get("pane-border-indicators")), base: app.pane_base(app.active),
     };
     for c in frame.cells() {
         let style = border_style(app, c.paint == crate::borders::Paint::Active);
@@ -248,15 +250,11 @@ fn borders(buf: &mut Buffer, app: &App, body: Rect) {
     }
 }
 
+/// pane-border-style, or for the active pane pane-active-border-style (tmux's: yellow while the
+/// pane is in copy mode, red while the window's panes are synchronized, else green), as the
+/// window has them: colours, background and attributes, a format in them expanded for the pane.
 fn border_style(app: &App, active: bool) -> Style {
-    // tmux's pane-active-border-style: yellow while the pane is in copy mode, red while the
-    // window's panes are synchronized, else green (or your tmux.conf's colour).
-    if active {
-        let in_mode = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.in_mode()).unwrap_or(false);
-        let colour = if app.look.active_border.is_some() { app.look.active_border.unwrap() } else if in_mode { Color::Yellow } else if app.tab().sync { Color::Red } else { theme::TMUX_ACTIVE_BORDER };
-        Style::default().fg(colour)
-    }
-    else { app.look.border.map(|c| Style::default().fg(c)).unwrap_or_default() }
+    app.style_of(if active { "pane-active-border-style" } else { "pane-border-style" }, app.active, app.focused())
 }
 
 /// A pane's status line over its border characters: its pane-border-format (hn's: the harness's
@@ -362,8 +360,7 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
 /// tmux's status line — or, while there is one, the prompt, question or message that takes it.
 fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> {
     // NO_COLOR (and no colours of your own): reverse video carries the status line and messages.
-    let plain = theme::no_color() && app.look.status_bg.is_none() && app.look.message_bg.is_none();
-    let yellow = if plain { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default().bg(app.look.message_bg.unwrap_or(theme::TMUX_MESSAGE_BG)).fg(app.look.message_fg.unwrap_or(theme::TMUX_MESSAGE_FG)) };
+    let yellow = app.message_style();
     let prompt_like: Option<(String, String, usize, String, bool)> = match &app.modal {
         Some(Modal::Prompt(p)) => {
             let shown: String = if p.secret { "*".repeat(p.value.chars().count()) } else { p.value.clone() };
@@ -378,9 +375,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
         // after it at the end; scrolled to keep the cursor in view. The terminal's own cursor is
         // hidden, as tmux hides it.
         if !label.ends_with(' ') && label != ":" { label.push(' ') }
-        let tab_id = app.tab().id.clone();
-        let command_style = app.options.get("message-command-style", &tab_id, None).unwrap_or_else(|| "bg=black,fg=yellow".into());
-        let gc = if command_mode && !plain { crate::draw::style_over(&command_style, Style::default()) } else { yellow };
+        let gc = if command_mode && !app.plain_status() { app.style_of("message-command-style", app.active, None) } else { yellow };
         let cursorgc = if gc.add_modifier.contains(Modifier::REVERSED) { gc.remove_modifier(Modifier::REVERSED) } else { gc.add_modifier(Modifier::REVERSED) };
         for x in rect.x..rect.x + rect.width { if let Some(c) = buf.cell_mut((x, rect.y)) { c.reset(); c.set_symbol(" "); c.set_style(gc); } }
         let sx = rect.width as usize;
@@ -422,7 +417,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
             return None;
         }
     }
-    let base = if plain { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default().bg(app.look.status_bg.unwrap_or(theme::TMUX_STATUS_BG)).fg(app.look.status_fg.unwrap_or(theme::TMUX_STATUS_FG)) };
+    let base = app.status_style();
     buf.set_style(rect, base);
     // Each line is its status-format, expanded and drawn as tmux's format_draw draws it: the
     // left, the window list (cut around the current window, `<` `>` where it was cut) and the
@@ -1791,7 +1786,7 @@ fn tree(buf: &mut Buffer, app: &App, body: Rect, cursor: usize, collapsed: &[Str
                 let at = panes.iter().position(|x| *x == p).unwrap_or(0);
                 let rail = if rows.iter().skip(i + 1).any(|r| r.pane.is_none()) { "│" } else { " " };
                 let branch = if at + 1 == panes.len() { "└─>" } else { "├─>" };
-                format!("({n}) {rail}   {branch} {}: {}", at + app.pane_base_index, pane_title(p))
+                format!("({n}) {rail}   {branch} {}: {}", at + app.pane_base(row.window), pane_title(p))
             }
         };
         let style = if i == cursor { mode } else { Style::default() };
@@ -1864,7 +1859,7 @@ fn display_panes(buf: &mut Buffer, app: &App) {
     let (normal, active) = (colour("display-panes-colour", theme::TMUX_DISPLAY_PANES), colour("display-panes-active-colour", theme::TMUX_DISPLAY_PANES_ACTIVE));
     for (id, rect) in &app.rects {
         if !app.panes.contains_key(id) { continue }
-        let pane = ids.iter().position(|p| p == id).unwrap_or(0) + app.pane_base_index;
+        let pane = ids.iter().position(|p| p == id).unwrap_or(0) + app.pane_base(app.active);
         let c = app.content_of(app.tab(), *rect);
         let (xoff, yoff, sx, sy) = (c.x as i32, c.y as i32, c.width as i32, c.height as i32);
         let num = pane.to_string();

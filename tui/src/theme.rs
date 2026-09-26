@@ -829,12 +829,7 @@ fn shell_words(line: &str) -> Option<Vec<String>> {
     Some(args)
 }
 
-// tmux's default colours.
-pub const TMUX_STATUS_BG: Color = Color::Green;
-pub const TMUX_STATUS_FG: Color = Color::Black;
-pub const TMUX_MESSAGE_BG: Color = Color::Yellow;
-pub const TMUX_MESSAGE_FG: Color = Color::Black;
-pub const TMUX_ACTIVE_BORDER: Color = Color::Green;
+// tmux's default colours (the status line's, messages' and borders' are its options' defaults).
 pub const TMUX_DISPLAY_PANES: Color = Color::Blue;
 pub const TMUX_DISPLAY_PANES_ACTIVE: Color = Color::Red;
 

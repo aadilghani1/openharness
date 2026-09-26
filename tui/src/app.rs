@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
@@ -175,7 +175,6 @@ pub struct App {
     pub display_panes_ms: u64,
     /// tmux `base-index` / `pane-base-index`.
     pub base_index: usize,
-    pub pane_base_index: usize,
     /// Everything said in the status line, for `show-messages` (C-b ~).
     pub messages: Vec<(std::time::SystemTime, String)>,
     /// Paste buffers, newest first (copy mode's `y`, and `paste-buffer`).
@@ -406,7 +405,6 @@ impl App {
             prefix_at: None,
             home_order: Default::default(),
             mouse_changed: false,
-            pane_base_index: 0,
             messages: Vec::new(),
             paste: Default::default(),
             keymap: crate::keys::Keymap::tmux_defaults(),
@@ -1155,7 +1153,6 @@ impl App {
     /// What a tmux.conf (or `set`, `source-file`) said, over what is set now.
     pub fn apply_settings(&mut self, s: &crate::tmuxconf::Settings) {
         if let Some(n) = s.base_index { self.base_index = n }
-        if let Some(n) = s.pane_base_index { self.pane_base_index = n }
         if let Some(m) = s.mouse { self.mouse = m; self.mouse_changed = true }
         if let Some(t) = s.status_top { self.status_top = t; self.fit_panes() }
         if let Some(ms) = s.display_ms { self.display_ms = ms.max(300) }
@@ -1234,7 +1231,7 @@ impl App {
         let ids: HashSet<String> = self.tabs.iter().map(|t| t.id.clone()).collect();
         self.nums.retain(|id, _| ids.contains(id));
         // renumber-windows on: no gaps, in order.
-        if self.opts.renumber_windows == Some(true) {
+        if self.options.get("renumber-windows", "", None).as_deref() == Some("on") {
             for (i, t) in self.tabs.iter().enumerate() { self.nums.insert(t.id.clone(), i + self.base_index); }
             return;
         }
@@ -1317,7 +1314,6 @@ impl App {
 
     /// tmux's status option: how many status lines (off, on, 2 … 5).
     pub fn status_lines(&self) -> u16 {
-        if self.opts.status == Some(false) { return 0 }
         match self.options.get("status", "", None).as_deref() { Some("off") => 0, Some("2") => 2, Some("3") => 3, Some("4") => 4, Some("5") => 5, _ => 1 }
     }
 
@@ -1338,6 +1334,45 @@ impl App {
     pub fn buffer_limit(&self) -> usize { self.options.get("buffer-limit", "", None).and_then(|v| v.parse().ok()).unwrap_or(50) }
 
 
+    /// pane-base-index for a window: the number its first pane has.
+    pub fn pane_base(&self, window: usize) -> usize {
+        let id = self.tabs.get(window).map(|t| t.id.as_str()).unwrap_or("");
+        self.options.get("pane-base-index", id, None).and_then(|v| v.parse().ok()).unwrap_or(0)
+    }
+
+    /// A *-style option as tmux's style_add reads it for a window (and a pane): the value in force
+    /// there, a format in it expanded first (options_string_to_style), parsed over no colours —
+    /// its attributes and background included.
+    pub fn style_of(&self, name: &str, window: usize, pane: Option<u64>) -> Style {
+        let id = self.tabs.get(window).map(|t| t.id.as_str()).unwrap_or("");
+        let raw = self.options.get(name, id, pane).unwrap_or_default();
+        let spec = if raw.contains("#{") { crate::format::expand(self, &raw, window, pane, false) } else { raw };
+        crate::draw::style_over(&spec, Style::default())
+    }
+
+    /// The status line's colours (status_redraw): status-style, then status-fg and status-bg
+    /// where they are not `default`; under NO_COLOR with tmux's own, reverse video.
+    pub fn status_style(&self) -> Style {
+        if self.plain_status() { return Style::default().add_modifier(Modifier::REVERSED) }
+        let mut s = self.style_of("status-style", self.active, None);
+        for (name, fg) in [("status-fg", true), ("status-bg", false)] {
+            let c = self.options.get(name, "", None).and_then(|v| crate::tmuxconf::colour(&v)).filter(|c| *c != Color::Reset);
+            if let Some(c) = c { s = if fg { s.fg(c) } else { s.bg(c) } }
+        }
+        s
+    }
+
+    /// message-style (tmux's yellow), for messages and prompts; reverse video under NO_COLOR.
+    pub fn message_style(&self) -> Style {
+        if self.plain_status() { return Style::default().add_modifier(Modifier::REVERSED) }
+        self.style_of("message-style", self.active, None)
+    }
+
+    /// NO_COLOR, with tmux's own status and message colours: those carry no colour.
+    pub fn plain_status(&self) -> bool {
+        crate::theme::no_color() && ["status-style", "status-fg", "status-bg", "message-style"].iter().all(|n| self.options.get(n, "", None).as_ref() == crate::options::tmux_defaults().get(*n))
+    }
+
     /// mode-keys as it stands (tmux's default: emacs, unless $VISUAL or $EDITOR is a vi).
     pub fn mode_keys_emacs(&self) -> bool {
         let tab = self.tabs.get(self.active).map(|t| t.id.clone()).unwrap_or_default();
@@ -1347,7 +1382,6 @@ impl App {
     /// A window's pane-border-status as it shows: hn's default (top) where it has several panes;
     /// once you set it yourself, as tmux has it — on a lone pane too, and bottom or off.
     pub fn pane_status(&self, tab: &Tab) -> layout::Status {
-        if self.opts.border_titles == Some(false) { return layout::Status::Off }
         // As tmux draws it: over a lone pane too.
         layout::Status::of(&self.options.get("pane-border-status", &tab.id, None).unwrap_or_default())
     }

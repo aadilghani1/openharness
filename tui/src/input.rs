@@ -682,7 +682,7 @@ pub fn run(app: &mut App, command: &str) {
             // tmux `display-message` with its default format, harness-flavoured.
             let text = match focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| (x.clone(), app.fleet.machine_name(&m)))) {
                 Some((a, machine)) => format!("[{}] {}:{}, current pane {} - ({}) \"{}\" {} {}{}", app.session_name(), app.win_num(app.active), app.tab().name,
-                    app.focused().and_then(|f| app.tab().panes().iter().position(|x| *x == f)).unwrap_or(0) + app.pane_base_index,
+                    app.focused().and_then(|f| app.tab().panes().iter().position(|x| *x == f)).unwrap_or(0) + app.pane_base(app.active),
                     a.engine, a.name, machine, if a.cwd.is_empty() { String::new() } else { a.cwd.replace(&std::env::var("HOME").unwrap_or_default(), "~") }, if a.branch.is_empty() { String::new() } else { format!(" ({})", a.branch) }),
                 None => format!("[{}] {}:{} — empty window", app.session_name(), app.win_num(app.active), app.tab().name),
             };
@@ -896,7 +896,7 @@ fn modal_key(app: &mut App, key: KeyEvent) {
         Modal::DisplayPanes { .. } => {
             if let KeyCode::Char(c @ '0'..='9') = key.code {
                 let n = (c as usize) - ('0' as usize);
-                app.select_pane_index(n.saturating_sub(app.pane_base_index));
+                app.select_pane_index(n.saturating_sub(app.pane_base(app.active)));
             }
         }
         Modal::Clock { .. } => {}
@@ -964,8 +964,8 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
     // command-prompt -k: the key itself is the answer, by its tmux name (C-b / then x → "x").
     if let PromptKind::Key { template } = &p.kind {
         let name = keys::name(&keys::of(&key));
-        let command = if template.contains("%%") { template.replace("%%", &name) } else { format!("{template} {}", quote(&name)) };
-        commands::execute(app, &command);
+        let template = template.clone();
+        commands::execute_template(app, &template, &[name]);
         return;
     }
     // command-prompt -N: digits go in; any other key ends it (the number to the template), and
@@ -982,7 +982,19 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
     // status-keys vi (tmux's default when $EDITOR names vi): Esc leaves insert for normal mode.
     let vi = app.options.get("status-keys", "", None).as_deref() == Some("vi");
     if vi && p.vi_normal { prompt_vi_normal(app, key, p); return }
-    if vi && key.code == KeyCode::Esc && !ctrl && !alt { p.vi_normal = true; p.vi_pending = None; app.modal = Some(Modal::Prompt(p)); return }
+    if vi && key.code == KeyCode::Esc && !ctrl && !alt { p.vi_normal = true; app.modal = Some(Modal::Prompt(p)); return }
+    // Entry mode (status_prompt_translate_key): these keys do what emacs's do, a character is
+    // typed, and any other key (C-b, C-f, M-f …) does nothing.
+    if vi {
+        let listed = match key.code {
+            KeyCode::Char(c) if ctrl && !alt => matches!(c, 'a' | 'c' | 'e' | 'g' | 'h' | 'k' | 'n' | 'p' | 't' | 'u' | 'v' | 'w' | 'y'),
+            KeyCode::Char(_) => !alt,
+            KeyCode::Tab | KeyCode::Enter | KeyCode::Backspace | KeyCode::Delete | KeyCode::Down | KeyCode::End | KeyCode::Home | KeyCode::Up => !alt && !ctrl,
+            KeyCode::Left | KeyCode::Right => !alt,
+            _ => false,
+        };
+        if !listed { app.modal = Some(Modal::Prompt(p)); return }
+    }
     let ws = app.options.get("word-separators", "", None).unwrap_or_default();
     let chars: Vec<char> = p.value.chars().collect();
     let size = chars.len();
@@ -1102,9 +1114,9 @@ pub fn prompt_changed(app: &mut App, p: &Prompt, prefix: char) {
     let text = format!("{prefix}{}", p.value);
     let mut all = answers.clone();
     all.push(text);
-    let command = all.iter().enumerate().fold(t.clone(), |cmd, (i, a)| crate::commands::template_replace(&cmd, a, i + 1));
+    let t = t.clone();
     let was = app.modal.take();
-    commands::execute(app, &command);
+    commands::execute_template(app, &t, &all);
     app.modal = was;
 }
 
@@ -1173,62 +1185,95 @@ fn prompt_history(app: &App, p: &mut Prompt, up: bool) -> bool {
     true
 }
 
-/// tmux's status-keys vi, normal mode: h l 0 ^ $ w b e move; i a I A insert; x X D C S dd dw
-/// cw c$ r delete or change; k j the history; Enter runs it; Esc (again) cancels.
+/// status_prompt_translate_key in command mode (status-keys vi, after Esc): each key stands for
+/// an emacs key and runs as it — `$` End (past the last character), `0` `^` Home, `x` `s` Delete,
+/// `X` BSpace, `D` `C` C-k, `d` C-u, `p` C-y, `q` C-c, `h` `j` `k` `l` the arrows, BSpace Left;
+/// `w` `W` `e` `E` `b` `B` the words. `i` and Esc go back to entry; so do `a` `A` `I` `C` `s`
+/// `S`, after what they do. Any other key does nothing.
 fn prompt_vi_normal(app: &mut App, key: KeyEvent, mut p: Prompt) {
+    use KeyCode::*;
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let plain = |code: KeyCode| KeyEvent::new(code, KeyModifiers::NONE);
+    let with = |c: char, m: KeyModifiers| KeyEvent::new(Char(c), m);
+    // The first switch: back to entry mode, with nothing more (i, Esc) or after it (the rest).
+    let entry = match key.code {
+        Char('i') | Esc if !ctrl => { p.vi_normal = false; app.modal = Some(Modal::Prompt(p)); return }
+        Char('S') if !ctrl => { p.vi_normal = false; return prompt_key(app, with('u', KeyModifiers::CONTROL), p) }
+        Char('A' | 'I' | 'C' | 's' | 'a') if !ctrl => true,
+        _ => false,
+    };
+    // The words (M-b, and the vi ones, KEYC_VI): moved here, as tmux's status_prompt_key moves them.
+    let ws = app.options.get("word-separators", "", None).unwrap_or_default();
     let chars: Vec<char> = p.value.chars().collect();
-    let n = chars.len();
-    let at = p.cursor.min(n);
-    let set = |p: &mut Prompt, v: Vec<char>, c: usize| { p.value = v.into_iter().collect(); p.cursor = c; };
-    let word_left = |from: usize| { let mut i = from; while i > 0 && chars[i - 1] == ' ' { i -= 1 } while i > 0 && chars[i - 1] != ' ' { i -= 1 } i };
-    let word_right = |from: usize| { let mut i = from; while i < n && chars[i] != ' ' { i += 1 } while i < n && chars[i] == ' ' { i += 1 } i };
-    let word_end = |from: usize| { let mut i = (from + 1).min(n); while i < n && chars[i] == ' ' { i += 1 } while i + 1 < n && chars[i + 1] != ' ' { i += 1 } i.min(n.saturating_sub(1)) };
-    let insert = |p: &mut Prompt| p.vi_normal = false;
-    let pending = p.vi_pending.take();
-    match (pending, key.code) {
-        // An operator and its motion.
-        (Some('d'), KeyCode::Char('d')) => set(&mut p, Vec::new(), 0),
-        (Some('c'), KeyCode::Char('c')) => { set(&mut p, Vec::new(), 0); insert(&mut p) }
-        (Some(op @ ('d' | 'c')), KeyCode::Char(m @ ('w' | 'b' | '$' | '0' | 'e' | 'h' | 'l'))) => {
-            let (from, to) = match m { 'w' => (at, word_right(at)), 'b' => (word_left(at), at), '$' => (at, n), '0' => (0, at), 'e' => (at, (word_end(at) + 1).min(n)), 'h' => (at.saturating_sub(1), at), _ => (at, (at + 1).min(n)) };
-            let mut v = chars.clone(); v.drain(from..to); set(&mut p, v, from);
-            if op == 'c' { insert(&mut p) }
-        }
-        (Some('r'), KeyCode::Char(c)) if !ctrl => { if at < n { let mut v = chars.clone(); v[at] = c; set(&mut p, v, at) } }
-        (Some(_), _) => {}
-        (None, KeyCode::Esc) => return,
-        (None, KeyCode::Char('c' | 'g')) if ctrl => return,
-        (None, KeyCode::Enter) => {
-            let ptype = match &p.kind { PromptKind::Command { ptype, .. } => *ptype, _ => 0 };
-            if !p.value.is_empty() && matches!(p.kind, PromptKind::Command { .. }) { add_history(app, ptype, &p.value) }
-            submit_prompt(app, p);
-            return;
-        }
-        (None, KeyCode::Char('i')) => insert(&mut p),
-        (None, KeyCode::Char('a')) => { p.cursor = (at + 1).min(n); insert(&mut p) }
-        (None, KeyCode::Char('I')) => { p.cursor = 0; insert(&mut p) }
-        (None, KeyCode::Char('A')) => { p.cursor = n; insert(&mut p) }
-        (None, KeyCode::Char('h')) | (None, KeyCode::Left) => p.cursor = at.saturating_sub(1),
-        (None, KeyCode::Char('l')) | (None, KeyCode::Right) => p.cursor = (at + 1).min(n.saturating_sub(1)),
-        (None, KeyCode::Char('0')) | (None, KeyCode::Home) => p.cursor = 0,
-        (None, KeyCode::Char('^')) => p.cursor = chars.iter().position(|c| *c != ' ').unwrap_or(0),
-        (None, KeyCode::Char('$')) | (None, KeyCode::End) => p.cursor = n.saturating_sub(1),
-        (None, KeyCode::Char('w')) => p.cursor = word_right(at).min(n.saturating_sub(1)),
-        (None, KeyCode::Char('b')) => p.cursor = word_left(at),
-        (None, KeyCode::Char('e')) => p.cursor = word_end(at),
-        (None, KeyCode::Char('x')) => { if at < n { let mut v = chars.clone(); v.remove(at); let l = v.len(); set(&mut p, v, at.min(l.saturating_sub(1))) } }
-        (None, KeyCode::Char('X')) => { if at > 0 { let mut v = chars.clone(); v.remove(at - 1); set(&mut p, v, at - 1) } }
-        (None, KeyCode::Char('D')) => { let v = chars[..at].to_vec(); set(&mut p, v, at.saturating_sub(1)) }
-        (None, KeyCode::Char('C')) => { let v = chars[..at].to_vec(); set(&mut p, v, at); insert(&mut p) }
-        (None, KeyCode::Char('S')) => { set(&mut p, Vec::new(), 0); insert(&mut p) }
-        (None, KeyCode::Char(op @ ('d' | 'c' | 'r'))) => p.vi_pending = Some(op),
-        (None, KeyCode::Char('k')) | (None, KeyCode::Up) => { prompt_history(app, &mut p, true); }
-        (None, KeyCode::Char('j')) | (None, KeyCode::Down) => { prompt_history(app, &mut p, false); }
-        (None, KeyCode::Char('p')) => { if let Some(b) = app.paste.top().map(|b| b.data.clone()) { let mut v = chars.clone(); let ins: Vec<char> = b.chars().filter(|c| *c != '\n').collect(); let k = ins.len(); for (i, c) in ins.into_iter().enumerate() { v.insert((at + 1 + i).min(v.len()), c) } set(&mut p, v, at + k) } }
-        _ => {}
+    let at = p.cursor.min(chars.len());
+    let word = match key.code {
+        Char('w') if !ctrl => Some(forward_word_vi(&chars, at, &ws)),
+        Char('W') if !ctrl => Some(forward_word_vi(&chars, at, "")),
+        Char('e') if !ctrl => Some(end_word(&chars, at, &ws)),
+        Char('E') if !ctrl => Some(end_word(&chars, at, "")),
+        Char('b') if !ctrl => Some(backward_word(&chars, at, &ws)),
+        Char('B') if !ctrl => Some(backward_word(&chars, at, "")),
+        _ => None,
+    };
+    if let Some(to) = word {
+        p.cursor = to;
+        if matches!(p.kind, PromptKind::Command { incremental: true, .. }) { prompt_changed(app, &p, '=') }
+        app.modal = Some(Modal::Prompt(p));
+        return;
     }
-    app.modal = Some(Modal::Prompt(p));
+    let translated = match key.code {
+        Backspace => plain(Left),
+        Char('A' | '$') if !ctrl => plain(End),
+        Char('I' | '0' | '^') if !ctrl => plain(Home),
+        Char('C' | 'D') if !ctrl => with('k', KeyModifiers::CONTROL),
+        Char('X') if !ctrl => plain(Backspace),
+        Char('d') if !ctrl => with('u', KeyModifiers::CONTROL),
+        Char('p') if !ctrl => with('y', KeyModifiers::CONTROL),
+        Char('q') if !ctrl => with('c', KeyModifiers::CONTROL),
+        Char('s' | 'x') if !ctrl => plain(Delete),
+        Delete => plain(Delete),
+        Down | Char('j') if !ctrl => plain(Down),
+        Left | Char('h') if !ctrl => plain(Left),
+        Right | Char('a' | 'l') if !ctrl => plain(Right),
+        Up | Char('k') if !ctrl => plain(Up),
+        Char('h' | 'c') if ctrl => key,
+        Enter => key,
+        _ => { app.modal = Some(Modal::Prompt(p)); return }
+    };
+    p.vi_normal = false;
+    let ends = translated.code == Enter || (translated.code == Char('c') && translated.modifiers.contains(KeyModifiers::CONTROL));
+    prompt_key(app, translated, p);
+    // Still in command mode after it (not a key that went back to entry, nor one that ended it).
+    if !entry && !ends { if let Some(Modal::Prompt(q)) = app.modal.as_mut() { q.vi_normal = true } }
+}
+
+/// status_prompt_forward_word in vi mode: over the word, then over the blanks after it.
+fn forward_word_vi(chars: &[char], at: usize, ws: &str) -> usize {
+    let size = chars.len();
+    let space = |i: usize| chars.get(i) == Some(&' ');
+    let in_list = |i: usize| chars.get(i).map(|c| ws.contains(*c)).unwrap_or(false);
+    let mut idx = at;
+    if idx == size { return idx }
+    let word_is_separators = in_list(idx) && !space(idx);
+    loop {
+        idx += 1;
+        if space(idx) { while idx != size && space(idx) { idx += 1 } break }
+        if !(idx != size && word_is_separators == in_list(idx)) { break }
+    }
+    idx
+}
+
+/// status_prompt_end_word: to the last character of this word or the next.
+fn end_word(chars: &[char], at: usize, ws: &str) -> usize {
+    let size = chars.len();
+    let space = |i: usize| chars.get(i) == Some(&' ');
+    let in_list = |i: usize| chars.get(i).map(|c| ws.contains(*c)).unwrap_or(false);
+    let mut idx = at;
+    if idx == size { return idx }
+    loop { idx += 1; if idx == size { return idx } if !space(idx) { break } }
+    let word_is_separators = in_list(idx);
+    loop { idx += 1; if idx == size || space(idx) || word_is_separators != in_list(idx) { break } }
+    idx - 1
 }
 
 /// fzf's keys: ↑ C-k C-p away from the prompt, ↓ C-j C-n toward it (the list reads bottom-up);
@@ -1394,7 +1439,7 @@ fn tree_key(app: &mut App, key: KeyEvent, mut cursor: usize, mut collapsed: Vec<
         KeyCode::Char('x') => {
             if let Some(r) = rows.get(cursor) {
                 app.modal = Some(match r.pane {
-                    Some(p) => { let idx = app.tabs[r.window].panes().iter().position(|x| *x == p).unwrap_or(0) + app.pane_base_index; app.focus_pane(r.window, p); Modal::Confirm { prompt: format!("kill-pane {idx}? (y/n)"), command: "kill-pane".into(), key: 'y', enter_yes: false } }
+                    Some(p) => { let idx = app.tabs[r.window].panes().iter().position(|x| *x == p).unwrap_or(0) + app.pane_base(r.window); app.focus_pane(r.window, p); Modal::Confirm { prompt: format!("kill-pane {idx}? (y/n)"), command: "kill-pane".into(), key: 'y', enter_yes: false } }
                     None => { app.select_tab(r.window); Modal::Confirm { prompt: format!("kill-window {}? (y/n)", app.tabs[r.window].name), command: "kill-window".into(), key: 'y', enter_yes: false } }
                 });
                 return;
@@ -1757,12 +1802,9 @@ fn submit_prompt(app: &mut App, p: Prompt) {
                 app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template, more, answers, one, digits, incremental, ptype, last }, &label, &initial)));
                 return;
             }
-            // args_make_commands: each answer into the template (cmd_template_replace).
-            let command = match template {
-                Some(t) => answers.iter().enumerate().fold(t, |cmd, (i, a)| crate::commands::template_replace(&cmd, a, i + 1)),
-                None => answers.first().cloned().unwrap_or_default(),
-            };
-            if !command.trim().is_empty() { commands::execute(app, &command) }
+            // args_make_commands: each answer into the template (tmux's default, `%1`, the
+            // answer itself as a command).
+            commands::execute_template(app, template.as_deref().unwrap_or("%1"), &answers);
         }
         PromptKind::RenameTab => { if !value.is_empty() { app.rename_tab(&value) } }
         PromptKind::RenameHarness { machine, agent } => {
@@ -1846,7 +1888,6 @@ fn submit_prompt(app: &mut App, p: Prompt) {
 // ── what the command layer calls ─────────────────────────────────────────────
 
 /// Quote a typed value so it survives the command-line split as one word.
-fn quote(value: &str) -> String { format!("'{}'", value.replace('\'', "'\\''")) }
 
 /// Command ids that `run` knows (so `:open` and old configs still work).
 pub fn is_command(id: &str) -> bool {
@@ -2071,4 +2112,25 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
     if chosen { return menu_chosen(app, menu) }
     menu.choice = Some((m.y - (py + 1)) as usize);
     app.modal = Some(Modal::Menu(menu));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_words_as_tmuxs() {
+        // Checked against tmux 3.5a's vi prompt: `display a-b.c d`, then 0 w w e E B b.
+        let ws = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~";
+        let c: Vec<char> = "display a-b.c d".chars().collect();
+        assert_eq!(forward_word_vi(&c, 0, ws), 8);
+        assert_eq!(forward_word_vi(&c, 8, ws), 9);
+        assert_eq!(end_word(&c, 9, ws), 10);
+        assert_eq!(end_word(&c, 10, ""), 12);
+        assert_eq!(backward_word(&c, 12, ""), 8);
+        assert_eq!(backward_word(&c, 8, ws), 0);
+        // At the end, nowhere to go.
+        assert_eq!(forward_word_vi(&c, c.len(), ws), c.len());
+        assert_eq!(end_word(&c, c.len(), ws), c.len());
+    }
 }

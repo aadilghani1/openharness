@@ -484,6 +484,37 @@ mod tests {
     }
 
     #[test]
+    fn a_windows_own_value_stays_that_windows() {
+        let mut s = Store::default();
+        let w = SetFlags { window: true, ..Default::default() };
+        s.set("pane-border-status", Some("off"), &w, "@1", 0).unwrap();
+        s.set("mode-keys", Some("vi"), &w, "@1", 0).unwrap();
+        assert_eq!(s.get("pane-border-status", "@1", None).as_deref(), Some("off"));
+        assert_eq!(s.get("pane-border-status", "@0", None).as_deref(), Some("top"));
+        assert_eq!(s.get("mode-keys", "@0", None), defaults().get("mode-keys").cloned());
+        let p = SetFlags { pane: true, ..Default::default() };
+        s.set("pane-border-format", Some(" custom "), &p, "@1", 3).unwrap();
+        assert_eq!(s.get("pane-border-format", "@1", Some(3)).as_deref(), Some(" custom "));
+        assert_eq!(s.get("pane-border-format", "@1", Some(4)), defaults().get("pane-border-format").cloned());
+    }
+
+    #[test]
+    fn hn_look_tmux_is_tmuxs_own() {
+        let mut s = Store::default();
+        let g = SetFlags { global: true, ..Default::default() };
+        assert_eq!(s.get("pane-border-status", "", None).as_deref(), Some("top"));
+        s.set("@hn-look", Some("tmux"), &g, "", 0).unwrap();
+        for n in LOOK { assert_eq!(s.get(n, "", None), tmux_defaults().get(n).cloned(), "{n}") }
+        assert_eq!(s.show(Some("status-right"), &g, false, true, Which::Options, "", 0).unwrap(), vec![tmux_defaults()["status-right"].clone()]);
+        // What you set yourself stays; the rest of hn's defaults (the mouse) are not the look.
+        s.set("status-left", Some("mine"), &g, "", 0).unwrap();
+        assert_eq!(s.get("status-left", "", None).as_deref(), Some("mine"));
+        assert_eq!(s.get("mouse", "", None).as_deref(), Some("on"));
+        s.set("@hn-look", None, &SetFlags { global: true, unset: true, ..Default::default() }, "", 0).unwrap();
+        assert_eq!(s.get("pane-border-status", "", None).as_deref(), Some("top"));
+    }
+
+    #[test]
     fn every_default_is_in_the_table() {
         for name in defaults().keys() { assert!(find(name).is_some(), "{name}") }
         // tmux's own default, in the fixture; hn's status-left adds the prefix's reverse.

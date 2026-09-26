@@ -270,7 +270,7 @@ fn target_pane(app: &App, words: &Words) -> Option<(usize, u64)> {
 
 /// `session:window.pane` — how tmux names a pane in its errors.
 fn pane_name(app: &App, w: usize, p: u64) -> String {
-    let index = app.tabs.get(w).and_then(|t| t.panes().iter().position(|x| *x == p)).unwrap_or(0) + app.pane_base_index;
+    let index = app.tabs.get(w).and_then(|t| t.panes().iter().position(|x| *x == p)).unwrap_or(0) + app.pane_base(w);
     format!("{}:{}.{index}", app.session_name(), app.win_num(w))
 }
 
@@ -710,6 +710,22 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
     }
 }
 
+/// args_make_commands: answers into a template, run. A `{ }` block was parsed when it was bound,
+/// so each answer goes into its parsed arguments as they stand (cmd_list_copy) and is never read
+/// as tmux syntax again — `\[ERROR\]`, `a"b` and `~/src` stay as typed; a string template is
+/// filled, then parsed, as tmux parses it.
+pub fn execute_template(app: &mut App, template: &str, answers: &[String]) {
+    let fill = |s: &str| answers.iter().enumerate().fold(s.to_string(), |cmd, (i, a)| template_replace(&cmd, a, i + 1));
+    match template.strip_prefix(crate::tmuxconf::BLOCK) {
+        Some(block) => {
+            let cmds = match crate::cmdparse::parse(block, app, false) { Ok(c) => c, Err((_, e)) => return app.error(e) };
+            let q: Queue = cmds.iter().map(|c| Item { words: crate::cmdparse::words(c).iter().map(|w| fill(w)).collect(), origin: None, mouse: app.mouse_ev.clone(), hook: app.hook_state.clone() }).collect();
+            run_queue(app, q);
+        }
+        None => { let command = fill(template); if !command.trim().is_empty() { execute(app, &command) } }
+    }
+}
+
 /// cmd_template_replace: the answer for `%idx` — and for the first `%%` not yet used — into a
 /// template (`%%%` and `%N%`… quoted: " \ $ ; ~ escaped).
 pub fn template_replace(template: &str, s: &str, idx: usize) -> String {
@@ -891,8 +907,10 @@ pub fn hn_owned(name: &str) -> bool {
 
 fn run_words(app: &mut App, words: &[String]) {
     let Some(first) = words.first() else { return };
-    // Blocks are plain arguments to every command but bind (which writes them back as blocks).
-    let list = if resolve(first) == "bind-key" || crate::cmd::find(first).map(|e| e.name == "bind-key").unwrap_or(false) { words.to_vec() } else { crate::tmuxconf::unblock(words) };
+    // Blocks are plain arguments to every command but bind (which writes them back as blocks) and
+    // command-prompt (which fills a block's parsed arguments, where it parses a string again).
+    let keeps = |n: &str| n == "bind-key" || n == "command-prompt";
+    let list = if keeps(resolve(first)) || crate::cmd::find(first).map(|e| keeps(e.name)).unwrap_or(false) { words.to_vec() } else { crate::tmuxconf::unblock(words) };
     // tmux's commands: found as cmd.c finds them (alias, name, or its unique start), read as
     // args_parse reads them, their -t and -s found as cmd-find.c finds them — or tmux's error,
     // and nothing is done.
@@ -1444,10 +1462,15 @@ fn run_words(app: &mut App, words: &[String]) {
             // An array is read where it is used (command-alias, update-environment …): nothing of
             // hn's own follows it, and setting it again with its last item would replace it.
             if crate::options::find(&name).map(|o| o.array).unwrap_or(false) { return }
+            // What hn keeps outside the options (the prefix, the mouse, the history limit …)
+            // follows a global value; the options themselves are in the store already, where the
+            // flags put them — a window's own stays that window's.
+            let scope = crate::options::find(&name).map(|o| o.scope);
+            if !f.global && matches!(scope, Some(crate::options::Scope::Window | crate::options::Scope::Pane)) { app.redraw_all = true; return }
             let mut settings = crate::tmuxconf::Settings::default();
             let words = vec!["set".to_string(), "-g".to_string(), name, now.unwrap_or_default()];
             match crate::tmuxconf::directive(&words, &mut app.keymap, &mut settings) {
-                Ok(()) => app.apply_settings(&settings),
+                Ok(()) => { settings.options.store = Default::default(); app.apply_settings(&settings) }
                 Err(e) => app.error(e),
             }
         }
@@ -1848,13 +1871,17 @@ fn run_words(app: &mut App, words: &[String]) {
             // formats), the answers filling the template's %1 %2 … (%% the first, %%% quoted);
             // no -p: `(command)` from the template, else `:`. -1 one key, -N numbers, -k a key's
             // name, -F the template expanded first.
-            // The template is command text (a block's, or the string as it is).
-            let template = positional(words).first().map(|w| w.strip_prefix(crate::tmuxconf::BLOCK).unwrap_or(w).to_string()).unwrap_or_default();
-            let template = if flag(words, "-F") { expand(app, &template) } else { template };
-            let name = crate::cmdparse::parse(&template, app, true).ok().and_then(|c| c.first().and_then(|c| c.args.first().cloned())).and_then(|a| match a { crate::cmdparse::Arg::Str(s) => Some(s), _ => None });
+            // The template: a block (kept marked, filled as parsed), or a string (-F: expanded
+            // first), filled then parsed.
+            let first = positional(words).first().cloned().unwrap_or_default();
+            let block = first.starts_with(crate::tmuxconf::BLOCK);
+            let text = first.strip_prefix(crate::tmuxconf::BLOCK).unwrap_or(&first).to_string();
+            let text = if flag(words, "-F") && !block { expand(app, &text) } else { text };
+            let name = crate::cmdparse::parse(&text, app, true).ok().and_then(|c| c.first().and_then(|c| c.args.first().cloned())).and_then(|a| match a { crate::cmdparse::Arg::Str(s) => Some(s), _ => None });
+            let template = if block { first.clone() } else { text.clone() };
             let (labels, spaced): (Vec<String>, bool) = match opt(words, "-p") {
                 Some(p) => (p.split(',').map(|l| expand(app, l)).collect(), true),
-                None if !template.is_empty() => (vec![format!("({})", name.unwrap_or_default())], true),
+                None if !text.is_empty() => (vec![format!("({})", name.unwrap_or_default())], true),
                 None => (vec![":".into()], false),
             };
             let inputs: Vec<String> = opt(words, "-I").map(|i| i.split(',').map(|v| expand(app, v)).collect()).unwrap_or_default();
@@ -1873,7 +1900,7 @@ fn run_words(app: &mut App, words: &[String]) {
             // -i: the input is what C-r and C-s bring back; the line starts empty, and the template
             // runs at once with `=`.
             let (initial, last) = if incremental { (String::new(), initial) } else { (initial, String::new()) };
-            let kind = PromptKind::Command { template: (!template.is_empty()).then_some(template), more: prompts, answers: Vec::new(), one, digits, incremental, ptype, last };
+            let kind = PromptKind::Command { template: (!text.is_empty()).then_some(template), more: prompts, answers: Vec::new(), one, digits, incremental, ptype, last };
             let p = Prompt::status(kind, &label, &initial);
             if incremental { input::prompt_changed(app, &p, '=') }
             app.modal = Some(Modal::Prompt(p));
