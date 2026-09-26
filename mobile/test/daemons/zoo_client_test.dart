@@ -1,8 +1,9 @@
 // The phone's zoo client against an in-memory backend: the first read is a
 // baseline, `zoo_changed` only fetches news, the phone's own writes show at
 // once and survive a failed send, a hatch answers who came out (a duplicate:
-// what it merged into), an egg that became xp is xp, and a sign-out drops
-// everything in flight.
+// what it merged into), an egg that became xp is xp, a sign-out drops
+// everything in flight, and the first-day consent answer goes out once while
+// the dial is only read.
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -319,5 +320,100 @@ void main() {
     // The egg form is an egg: it shows by being in the zoo, not as xp.
     expect(ZooGrant.fromJson({'kind': 'turn', 'eggId': 'x'})!.isXp, isFalse);
     expect(ZooGrant.fromJson({'kind': 'turn'}), isNull);
+  });
+
+  test('the zoo reads the dial and the first-day answer', () {
+    Zoo read(Map<String, dynamic> extra) =>
+        Zoo.fromJson({'daemons': const [], ...extra}, daemonRoster);
+
+    // Never asked: the default dial, no answer.
+    final fresh = read(const {});
+    expect(fresh.autonomy, 'watch');
+    expect(fresh.consent, isNull);
+    expect(fresh.watching, isFalse);
+
+    final said = read(const {
+      'autonomy': 'act-on-key',
+      'consent': {'watching': true, 'at': '2026-09-28T12:00:00Z'},
+    });
+    expect(said.autonomy, 'act-on-key');
+    expect(said.watching, isTrue);
+    expect(said.consent!.day, '2026-09-28');
+
+    final no = read(const {
+      'consent': {'watching': false, 'at': '2026-09-28T12:00:00Z'},
+    });
+    expect(no.consent!.watching, isFalse);
+    expect(no.watching, isFalse);
+
+    // A level this phone does not know reads as the default; half an answer
+    // is no answer.
+    expect(read(const {'autonomy': 'yolo'}).autonomy, 'watch');
+    for (final consent in [
+      {'watching': true},
+      {'watching': 'yes', 'at': '2026-09-28T12:00:00Z'},
+      {'watching': true, 'at': 'yesterday'},
+      'yes',
+    ]) {
+      expect(read({'consent': consent}).consent, isNull, reason: '$consent');
+    }
+  });
+
+  test(
+    'a consent answer shows at once, is sent once, a yes starts at watch',
+    () async {
+      backend.zoo['autonomy'] = 'suggest';
+      await join();
+      expect(client.zoo.autonomy, 'suggest');
+      expect(client.zoo.consent, isNull);
+
+      client.consent(watching: true);
+      // Shown before the server answers: yes, and the dial back at watch.
+      expect(client.zoo.watching, isTrue);
+      expect(client.zoo.autonomy, 'watch');
+      await client.settle();
+      expect(backend.written, [
+        {'op': 'zoo.consent', 'watching': true},
+      ]);
+      // The server's time, once it answered.
+      expect(client.zoo.consent!.at, backend.consentAt);
+
+      // The same answer again sends nothing.
+      client.consent(watching: true);
+      await client.settle();
+      expect(backend.written, hasLength(1));
+
+      // Withdrawn: sent, shown, and the dial left where it was.
+      backend.zoo['autonomy'] = 'suggest';
+      client.consent(watching: false);
+      expect(client.zoo.watching, isFalse);
+      await client.settle();
+      expect(backend.written.last, {'op': 'zoo.consent', 'watching': false});
+      expect(client.zoo.consent!.watching, isFalse);
+      expect(client.zoo.autonomy, 'suggest');
+    },
+  );
+
+  test('a consent answer that could not be sent is kept and shown', () async {
+    await join();
+    backend.failWrites = true;
+    client.consent(watching: true);
+    await client.settle();
+    expect(backend.written, isEmpty);
+    // A read in between does not undo it.
+    backend.failWrites = false;
+    await client.refresh();
+    expect(client.zoo.watching, isTrue);
+    await client.settle();
+    expect(backend.written, [
+      {'op': 'zoo.consent', 'watching': true},
+    ]);
+    expect(client.zoo.watching, isTrue);
+  });
+
+  test('nothing is answered before the zoo has been read', () async {
+    client.consent(watching: true);
+    await client.settle();
+    expect(backend.written, isEmpty);
   });
 }

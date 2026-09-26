@@ -1,5 +1,7 @@
 // The daemon where a phone meets it: the chip in the header, its sheet, and
-// the full-screen hatch reveal — on a 320pt phone and with large text too.
+// the full-screen hatch reveal — on a 320pt phone and with large text too —
+// and, round 4, the first-day consent after the first hatch, the sheet's
+// consent and dial, and a level-up's morph.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -345,7 +347,11 @@ void main() {
       findsOneWidget,
     );
 
+    // The account's first daemon: Done asks whether it may watch.
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('daemon-consent')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('daemon-hatch-close')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('daemon-hatch')), findsNothing);
     await tester.pump(const Duration(seconds: 2));
@@ -994,5 +1000,329 @@ void main() {
     await tester.tapAt(const Offset(10, 10));
     await tester.pumpAndSettle();
     expect(app.zoo.xpGrants, isEmpty);
+  });
+
+  // ── round 4: consent, the dial, the level-up morph ─────────────────────────
+
+  /// Open the only egg and walk the reveal to its card.
+  Future<void> hatchToCard(WidgetTester tester) async {
+    await _openSheet(tester);
+    await tester.tap(find.text('Hatch'));
+    await tester.pump();
+    await _toCard(tester);
+    await tester.pumpAndSettle();
+  }
+
+  List<Map<String, dynamic>> consentOps() => [
+    for (final op in backend.written)
+      if (op['op'] == 'zoo.consent') op,
+  ];
+
+  testWidgets('the first hatch asks, after its card, whether it may watch', (
+    tester,
+  ) async {
+    backend.zoo = _nest(egg: true);
+    backend.nextDaemon = 'tim';
+    final app = await _pump(tester, backend, reduceMotion: true);
+    await hatchToCard(tester);
+    expect(find.byKey(const ValueKey('daemon-consent')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
+    await tester.pump();
+    // The same full screen, now asking.
+    expect(find.byKey(const ValueKey('daemon-hatch')), findsOneWidget);
+    expect(find.byKey(const ValueKey('daemon-consent')), findsOneWidget);
+    expect(find.text('What tim sees'), findsOneWidget);
+    expect(
+      find.text('Nothing here happens until you say yes.'),
+      findsOneWidget,
+    );
+    for (final heading in [
+      'WHAT IT READS',
+      'WHAT IT WRITES',
+      'WHERE IT RUNS',
+    ]) {
+      expect(find.text(heading), findsOneWidget);
+    }
+    expect(
+      find.text('Nothing until you allow it. Then, on that computer:'),
+      findsOneWidget,
+    );
+    expect(find.text('lessons, only with your yes'), findsOneWidget);
+    expect(consentOps(), isEmpty);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('daemon-consent-watch')),
+    );
+    await tester.tap(find.byKey(const ValueKey('daemon-consent-watch')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('daemon-hatch')), findsNothing);
+    await app.zoo.settle();
+    expect(consentOps(), [
+      {'op': 'zoo.consent', 'watching': true},
+    ]);
+    expect(app.zoo.zoo.watching, isTrue);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('"Not now" sends nothing, and the question stays open', (
+    tester,
+  ) async {
+    backend.zoo = _nest(egg: true);
+    backend.nextDaemon = 'tim';
+    final app = await _pump(tester, backend, reduceMotion: true);
+    await hatchToCard(tester);
+    await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
+    await tester.pump();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('daemon-consent-not-now')),
+    );
+    await tester.tap(find.byKey(const ValueKey('daemon-consent-not-now')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('daemon-hatch')), findsNothing);
+    await app.zoo.settle();
+    expect(consentOps(), isEmpty);
+    expect(app.zoo.zoo.consent, isNull);
+    // The sheet can let it later.
+    await _openSheet(tester);
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('daemon-consent-give')),
+      120,
+      scrollable: _sheetScroll,
+    );
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('daemon-watching'))).data,
+      'tim watches nothing until you say yes.',
+    );
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('no question when it was already given', (tester) async {
+    // Given on a computer before this phone's first hatch.
+    backend.zoo = {
+      ..._nest(egg: true),
+      'consent': {'watching': true, 'at': '2026-09-28T12:00:00Z'},
+    };
+    backend.nextDaemon = 'tim';
+    await _pump(tester, backend, reduceMotion: true);
+    await hatchToCard(tester);
+    await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('daemon-hatch')), findsNothing);
+    expect(find.byKey(const ValueKey('daemon-consent')), findsNothing);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('a later hatch never asks', (tester) async {
+    backend.nextSerial = 9;
+    await _pump(tester, backend, reduceMotion: true);
+    await hatchToCard(tester);
+    await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('daemon-hatch')), findsNothing);
+    expect(find.byKey(const ValueKey('daemon-consent')), findsNothing);
+    expect(consentOps(), isEmpty);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('the sheet gives and withdraws consent, and reads the dial', (
+    tester,
+  ) async {
+    backend.zoo = {
+      ...backend.zoo,
+      'autonomy': 'suggest',
+      'consent': {'watching': true, 'at': '2026-09-28T12:00:00Z'},
+    };
+    backend.consentAt = '2026-09-29T12:00:00Z';
+    final app = await _pump(tester, backend);
+    await _openSheet(tester);
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('daemon-autonomy-where')),
+      120,
+      scrollable: _sheetScroll,
+    );
+    Text text(String key) => tester.widget<Text>(find.byKey(ValueKey(key)));
+    expect(
+      text('daemon-watching').data,
+      'tim watches the coding agents on your computers, since 2026-09-28.',
+    );
+    // The dial, read only: its level, the floor, and where it turns.
+    expect(
+      text('daemon-autonomy').textSpan!.toPlainText(),
+      'suggest  2/4  It recommends; every action waits for your key.',
+    );
+    expect(
+      text('daemon-autonomy-floor').data,
+      'At every level tim never pushes, deletes, force-pushes or bypasses '
+      'permissions.',
+    );
+    expect(
+      text('daemon-autonomy-where').data,
+      'Change it at a computer, where each step up waits for your yes.',
+    );
+    expect(
+      find.bySemanticsLabel(
+        'Autonomy: suggest, 2 of 4. '
+        'It recommends; every action waits for your key.',
+      ),
+      findsOneWidget,
+    );
+
+    // Withdrawn with one tap.
+    await tester.tap(find.byKey(const ValueKey('daemon-consent-stop')));
+    await tester.pump();
+    // Shown at once.
+    expect(find.byKey(const ValueKey('daemon-consent-give')), findsOneWidget);
+    await app.zoo.settle();
+    await tester.pump();
+    expect(consentOps(), [
+      {'op': 'zoo.consent', 'watching': false},
+    ]);
+    expect(
+      text('daemon-watching').data,
+      'tim watches nothing: you said no on 2026-09-29.',
+    );
+    // Its dial is the account's: a no leaves it where it was.
+    expect(
+      text('daemon-autonomy').textSpan!.toPlainText(),
+      startsWith('suggest'),
+    );
+
+    // Given again: the consent screen first, over the sheet.
+    await tester.tap(find.byKey(const ValueKey('daemon-consent-give')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('daemon-consent-page')), findsOneWidget);
+    expect(find.text('What tim sees'), findsOneWidget);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('daemon-consent-watch')),
+    );
+    await tester.tap(find.byKey(const ValueKey('daemon-consent-watch')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('daemon-consent-page')), findsNothing);
+    await app.zoo.settle();
+    await tester.pump();
+    expect(consentOps().last, {'op': 'zoo.consent', 'watching': true});
+    // A yes starts the dial at watch.
+    expect(
+      text('daemon-autonomy').textSpan!.toPlainText(),
+      'watch  1/4  It reads and tells you. Nothing else.',
+    );
+    expect(find.byKey(const ValueKey('daemon-consent-stop')), findsOneWidget);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('the sheet\'s line for a need is facts first, then the tag', (
+    tester,
+  ) async {
+    await _pump(tester, backend);
+    await _openSheet(tester);
+    await tester.pump(const Duration(seconds: 1));
+    final face = tester.state<DaemonHostState>(find.byType(DaemonHost)).face;
+    face.sync(const DaemonWatch(needs: {'m/a#q'}));
+    await tester.pump();
+    // Nothing on this phone says who asked: the phone's facts, tim's tag.
+    expect(find.text('tim: a harness needs you.  (bell)'), findsOneWidget);
+    face.sync(const DaemonWatch(failing: {'m/a'}));
+    await tester.pump();
+    expect(find.text('tim: something failed.  (pane is dead)'), findsOneWidget);
+  });
+
+  /// The reveal's sprite as drawn now, and whether it is faint.
+  (String, bool) revealSprite(WidgetTester tester) {
+    final text = tester.widget<Text>(
+      find.byKey(const ValueKey('daemon-hatch-sprite')),
+    );
+    return (text.data!, (text.style!.color!.a) < 1);
+  }
+
+  Map<String, dynamic> duplicateZoo({int xp = 0}) => {
+    'daemons': [daemon('tim', xp: xp)],
+    'eggs': [
+      {'id': 'e1', 'kind': 'turn', 'grantedAt': ''},
+    ],
+    'pair': 'tim',
+    'firstEgg': true,
+    'setupEgg': true,
+    'consent': {'watching': true, 'at': '2026-09-28T12:00:00Z'},
+  };
+
+  testWidgets('a level-up morphs the sprite to its new version', (
+    tester,
+  ) async {
+    backend.zoo = duplicateZoo();
+    backend.nextDaemon = 'tim';
+    await _pump(tester, backend);
+    await _openSheet(tester);
+    await tester.tap(find.text('Hatch'));
+    final seen = <(String, bool)>[];
+    for (var i = 0; i < 500; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+      if (find.byKey(const ValueKey('daemon-hatch-level')).evaluate().isEmpty) {
+        continue;
+      }
+      final now = revealSprite(tester);
+      if (seen.isEmpty || seen.last != now) seen.add(now);
+      if (now.$1 == '[o|o]') break;
+    }
+    // The 0.1 it was, its shape, the 1.0 shape, then 1.0: three quick frames.
+    expect(seen, [
+      ('[o o]', false),
+      ('## ##', true),
+      ('#####', true),
+      ('[o|o]', false),
+    ]);
+    expect(find.bySemanticsLabel('tim 1.0'), findsOneWidget);
+    // It stays grown.
+    await tester.pump(const Duration(seconds: 1));
+    expect(revealSprite(tester), ('[o|o]', false));
+    // A duplicate is never asked about, even though it is a card's Done.
+    await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('daemon-hatch')), findsNothing);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('Reduce Motion shows the new version straight away', (
+    tester,
+  ) async {
+    backend.zoo = duplicateZoo();
+    backend.nextDaemon = 'tim';
+    await _pump(tester, backend, reduceMotion: true);
+    await _openSheet(tester);
+    await tester.tap(find.text('Hatch'));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.byKey(const ValueKey('daemon-hatch-level')), findsOneWidget);
+    expect(revealSprite(tester), ('[o|o]', false));
+    await tester.pump(const Duration(seconds: 2));
+    expect(revealSprite(tester), ('[o|o]', false));
+  });
+
+  testWidgets('a duplicate is drawn at its version; no new one, no morph', (
+    tester,
+  ) async {
+    // 150 xp is 1.0 at bond 2; 150 more is bond 3, still 1.0.
+    backend.zoo = duplicateZoo(xp: 150);
+    backend.nextDaemon = 'tim';
+    await _pump(tester, backend);
+    await _openSheet(tester);
+    await tester.tap(find.text('Hatch'));
+    final seen = <String>{};
+    for (var i = 0; i < 200; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+      if (find
+          .byKey(const ValueKey('daemon-hatch-level'))
+          .evaluate()
+          .isNotEmpty) {
+        seen.add(revealSprite(tester).$1);
+      }
+    }
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('daemon-hatch-level')))
+          .data,
+      'level up · bond 3/4',
+    );
+    expect(seen, {'[o|o]'});
   });
 }

@@ -16,9 +16,11 @@
 /// next time the app comes to the front, or the sheet opening.
 ///
 /// The server decides everything that is drawn or earned. The phone's own
-/// writes are a pair switch, a habit it saw, and opening an egg; the first two
-/// show at once and are laid back over every answer until one acknowledges
-/// them, the way the desktop's `ZooController` does.
+/// writes are a pair switch, a habit it saw, the first-day consent answer, and
+/// opening an egg; all but the egg show at once and are laid back over every
+/// answer until one acknowledges them, the way the desktop's `ZooController`
+/// does. The autonomy dial is read here, never written: it turns at a
+/// computer, where each step up waits for the person's yes.
 library;
 
 import 'dart:async';
@@ -231,9 +233,25 @@ class ZooClient extends ChangeNotifier {
         case 'zoo.pair':
           final id = op['id'] as String;
           if (next.owns(id)) next = next.copyWith(pair: id);
+        case 'zoo.consent':
+          next = _consented(next, op['watching'] as bool);
       }
     }
     return next;
+  }
+
+  /// [zoo] with the answer [watching], as the server applies `zoo.consent`:
+  /// the time is this phone's until the server's answer brings its own, and a
+  /// yes starts the dial at `watch`.
+  static Zoo _consented(Zoo zoo, bool watching) {
+    if (zoo.consent?.watching == watching) return zoo;
+    return zoo.copyWith(
+      consent: ZooConsent(
+        watching: watching,
+        at: DateTime.now().toUtc().toIso8601String(),
+      ),
+      autonomy: watching ? Zoo.defaultAutonomy : null,
+    );
   }
 
   /// Signed out, or another account: everything goes, writes never sent
@@ -269,6 +287,16 @@ class ZooClient extends ChangeNotifier {
     if (!_loaded || !_zoo.owns(id) || _zoo.pair == id) return;
     _send({'op': 'zoo.pair', 'id': id});
     _show(_zoo.copyWith(pair: id));
+  }
+
+  /// The first-day answer: may the daemon watch at all (`zoo.consent`). A yes
+  /// starts the dial at `watch`; a no (or withdrawing it) leaves every
+  /// computer sensing nothing. Sent once per change.
+  void consent({required bool watching}) {
+    // What is shown already carries any answer not yet acknowledged.
+    if (!_loaded || _zoo.consent?.watching == watching) return;
+    _send({'op': 'zoo.consent', 'watching': watching});
+    _show(_consented(_zoo, watching));
   }
 
   /// Open an egg. The draw happens on the server; null when the egg is gone or

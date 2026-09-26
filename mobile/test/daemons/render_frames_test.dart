@@ -359,4 +359,11 @@ void main() {
       '[ * SHINY * RARE ]  #05/09',
     );
   });
+
+  test('a new version morphs in three quick frames', () {
+    final tim = roster.byId('tim')!;
+    String at(int v) => renderSprite(roster, tim, v, DaemonMood.idle);
+    expect(versionMorph(at(0), at(1)), ['## ##', '#####', '[o|o]']);
+    expect(versionMorph(at(1), at(2)), ['#####', '#######', r'\[o|o]/']);
+  });
 }

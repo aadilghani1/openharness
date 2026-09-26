@@ -80,6 +80,9 @@ class FakeZooBackend {
   int reads = 0;
   final written = <Map<String, dynamic>>[];
   bool failWrites = false;
+
+  /// When the server says a `zoo.consent` was answered.
+  String consentAt = '2026-09-28T10:05:00Z';
   Completer<void>? holdWrites;
 
   Map<String, dynamic> get doc => {'revision': revision, 'zoo': zoo};
@@ -102,6 +105,12 @@ class FakeZooBackend {
           zoo['habits'] = [...zoo['habits'] as List, op['key']];
         case 'zoo.pair':
           zoo['pair'] = op['id'];
+        case 'zoo.consent':
+          final consent = zoo['consent'] as Map?;
+          if (consent?['watching'] == op['watching']) break;
+          // A yes starts the dial at watch.
+          if (op['watching'] == true) zoo['autonomy'] = 'watch';
+          zoo['consent'] = {'watching': op['watching'], 'at': consentAt};
         case 'zoo.hatch':
           zoo['eggs'] = [
             for (final e in zoo['eggs'] as List)

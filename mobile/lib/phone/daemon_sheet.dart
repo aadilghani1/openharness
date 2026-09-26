@@ -11,6 +11,7 @@ import 'package:harness_mobile/daemons/zoo.dart';
 import 'package:harness_mobile/daemons/zoo_client.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' show AppFont;
 
+import 'daemon_consent.dart';
 import 'daemon_hatch.dart';
 import 'daemon_scope.dart';
 import 'daemon_style.dart';
@@ -44,9 +45,11 @@ Future<void> showDaemonSheet(BuildContext context, DaemonHostState host) {
 
 /// The daemon's sheet: its portrait at its version and mood (in its shiny
 /// colour when it is shiny), its names and serial, the line it would say
-/// now, its lore and lineage, its bond, the eggs waiting, the habits still to
-/// bring an egg, the zoo as shelves (tap one to pair it) and its card. Before
-/// any daemon: the nest, and the habits that bring the first egg.
+/// now, its lore and lineage, its bond, the eggs waiting, the zoo as shelves
+/// (tap one to pair it), the habits still to bring an egg, whether it may
+/// watch (and a way to give or withdraw that), the dial as the account has it
+/// (read here, turned at a computer) and its card. Before any daemon: the
+/// nest, and the habits that bring the first egg.
 class DaemonSheet extends StatelessWidget {
   const DaemonSheet({
     super.key,
@@ -175,6 +178,20 @@ class DaemonSheet extends StatelessWidget {
         const SizedBox(height: 8),
         ..._habitRows(),
       ],
+      const _Caption('WATCHING'),
+      _Watching(
+        name: face.name,
+        consent: zoo.zoo.consent,
+        onGive: () => unawaited(
+          showDaemonConsent(Navigator.of(context, rootNavigator: true), face),
+        ),
+        onWithdraw: () {
+          HapticFeedback.selectionClick();
+          zoo.consent(watching: false);
+        },
+      ),
+      const _Caption('AUTONOMY'),
+      _Autonomy(name: face.name, level: zoo.zoo.autonomy),
       const _Caption('CARD'),
       _ShareCard(
         roster: roster,
@@ -306,6 +323,139 @@ class DaemonSheet extends StatelessWidget {
         onHatch: () => onHatch(egg),
       ),
   ];
+}
+
+/// Whether it may watch, as the account says: since when, or that it watches
+/// nothing; and the one thing to do about it. Giving opens the consent screen
+/// first, so a yes is always a yes to what it reads; withdrawing is one tap.
+class _Watching extends StatelessWidget {
+  const _Watching({
+    required this.name,
+    required this.consent,
+    required this.onGive,
+    required this.onWithdraw,
+  });
+
+  final String name;
+  final ZooConsent? consent;
+  final VoidCallback onGive, onWithdraw;
+
+  @override
+  Widget build(BuildContext context) {
+    final answer = consent, day = answer?.day;
+    final watching = answer?.watching == true;
+    final String state;
+    if (watching) {
+      state =
+          '$name watches the coding agents on your computers'
+          '${day == null ? '.' : ', since $day.'}';
+    } else if (answer != null) {
+      state =
+          '$name watches nothing: you said no'
+          '${day == null ? '.' : ' on $day.'}';
+    } else {
+      state = '$name watches nothing until you say yes.';
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          state,
+          key: const ValueKey('daemon-watching'),
+          style: DaemonInk.sans(
+            size: 14.5,
+            color: watching ? DaemonInk.ink : DaemonInk.dim,
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (watching)
+          DaemonButton(
+            'Stop watching',
+            onWithdraw,
+            key: const ValueKey('daemon-consent-stop'),
+            hint: 'It senses nothing until you say yes again',
+          )
+        else
+          DaemonButton(
+            'Let $name watch',
+            onGive,
+            key: const ValueKey('daemon-consent-give'),
+            hint: 'Shows what it sees before you say yes',
+            filled: true,
+          ),
+      ],
+    );
+  }
+}
+
+/// The account's dial, read only: the level and what it allows, the floor
+/// that holds at every level, and where it is changed.
+class _Autonomy extends StatelessWidget {
+  const _Autonomy({required this.name, required this.level});
+
+  final String name;
+  final String level;
+
+  /// What each level allows (daemons/BRAIN.md, "Autonomy dial").
+  static const meaning = {
+    'watch': 'It reads and tells you. Nothing else.',
+    'suggest': 'It recommends; every action waits for your key.',
+    'act-on-key':
+        'It may drive harnesses it started; anything else waits for your key.',
+    'act-within-rules':
+        'As act-on-key, and it runs your pair.jsonc rules, then reports.',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final at = Zoo.autonomyLevels.indexOf(level) + 1;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Semantics(
+          container: true,
+          label:
+              'Autonomy: $level, $at of ${Zoo.autonomyLevels.length}. '
+              '${meaning[level] ?? ''}',
+          excludeSemantics: true,
+          child: Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: level,
+                  style: DaemonInk.mono(
+                    size: 14,
+                    color: DaemonInk.bright,
+                    weight: FontWeight.w600,
+                  ),
+                ),
+                TextSpan(
+                  text: '  $at/${Zoo.autonomyLevels.length}  ',
+                  style: DaemonInk.mono(size: 12, color: DaemonInk.faint),
+                ),
+                TextSpan(text: meaning[level] ?? ''),
+              ],
+            ),
+            key: const ValueKey('daemon-autonomy'),
+            style: DaemonInk.sans(size: 14.5),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'At every level $name never pushes, deletes, force-pushes or '
+          'bypasses permissions.',
+          key: const ValueKey('daemon-autonomy-floor'),
+          style: DaemonInk.sans(size: 14.5),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Change it at a computer, where each step up waits for your yes.',
+          key: const ValueKey('daemon-autonomy-where'),
+          style: DaemonInk.sans(size: 13.5, color: DaemonInk.dim),
+        ),
+      ],
+    );
+  }
 }
 
 class _Handle extends StatelessWidget {

@@ -9,13 +9,14 @@ import 'package:harness_mobile/daemons/render.dart';
 import 'package:harness_mobile/daemons/roster.dart';
 import 'package:harness_mobile/daemons/zoo.dart';
 import 'package:harness_mobile/daemons/zoo_client.dart';
-import 'package:harness_mobile/shared/theme/app_theme.dart' show AppFont;
 
+import 'daemon_consent.dart';
 import 'daemon_style.dart';
 
 /// Open [egg] on the server and show the reveal over everything. The chip
 /// keeps the egg until the reveal has named the hatchling (or was closed),
-/// and the daemon then arrives with a slow blink.
+/// and the daemon then arrives with a slow blink. The account's first daemon
+/// then asks whether it may watch.
 Future<void> hatchEgg(
   NavigatorState navigator,
   DaemonFace face,
@@ -24,6 +25,7 @@ Future<void> hatchEgg(
   final zoo = face.zoo;
   if (zoo.hatchingEgg != null) return;
   face.beginReveal();
+  final first = zoo.zoo.daemons.isEmpty;
   final result = zoo.hatch(egg.id);
   try {
     await navigator.push(
@@ -40,6 +42,7 @@ Future<void> hatchEgg(
           result: result,
           zoo: zoo,
           onRevealed: face.endReveal,
+          askConsent: first,
         ),
       ),
     );
@@ -50,7 +53,16 @@ Future<void> hatchEgg(
 
 /// Where the reveal is. Exposed so tests and review captures can draw any
 /// moment of it.
-enum HatchStage { egg, pitch, silhouette, colour, banner, card, failed }
+enum HatchStage {
+  egg,
+  pitch,
+  silhouette,
+  colour,
+  banner,
+  card,
+  consent,
+  failed,
+}
 
 /// A still of the reveal, for review captures.
 @immutable
@@ -60,10 +72,15 @@ class HatchFrame {
     this.egg,
     this.sprite,
     this.bannerRows = 0,
+    this.faint,
   });
   final HatchStage stage;
   final String? egg, sprite;
   final int bannerRows;
+
+  /// The sprite in the faint colour: a silhouette's, or a level-up morph's
+  /// first two frames. Defaults to the silhouette stage.
+  final bool? faint;
 }
 
 /// The hatch reveal, full screen (`daemons/README.md`, Hatching): the egg
@@ -77,9 +94,17 @@ class HatchFrame {
 /// shows only in the dark) starts pitch black. Reduce Motion goes straight to
 /// the card.
 ///
-/// A duplicate has no name to reveal and no card of its own: after the
-/// colour it says what it merged into (`tim x2 · +150 xp`, and `now shiny`
-/// when a shiny one made yours shiny), then any level it reached.
+/// A duplicate has no name to reveal and no card of its own: it is a fork of
+/// the one you have, drawn at its version, and after the colour it says what
+/// it merged into (`tim x2 · +150 xp`, and `now shiny` when a shiny one made
+/// yours shiny), then any level it reached. A level that reached a new
+/// version morphs the sprite into it in three quick frames ([versionMorph]);
+/// Reduce Motion shows the new one straight away.
+///
+/// The account's first daemon ([askConsent]) is followed, after its card's
+/// Done, by the consent screen ([DaemonConsent]) unless the person already
+/// said yes: "Let it watch" sends `zoo.consent { watching: true }`, "Not now"
+/// sends nothing.
 ///
 /// It can be closed at any moment; [onRevealed] runs once, when the daemon
 /// may be named elsewhere.
@@ -92,6 +117,7 @@ class DaemonHatchReveal extends StatefulWidget {
     required this.zoo,
     this.onRevealed,
     this.still,
+    this.askConsent = false,
   });
 
   final DaemonRoster roster;
@@ -105,6 +131,10 @@ class DaemonHatchReveal extends StatefulWidget {
   /// Draw one fixed moment instead of running (tests and captures only).
   final HatchFrame? still;
 
+  /// This is the account's first daemon: after its card, ask whether it may
+  /// watch.
+  final bool askConsent;
+
   @override
   State<DaemonHatchReveal> createState() => _DaemonHatchRevealState();
 }
@@ -117,9 +147,18 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
   static const _bannerSize = 18.0;
   static const _bannerHeight = 1.15;
 
+  /// A level-up waits this long, for its line to be read, then morphs.
+  static const morphAfter = Duration(milliseconds: 600);
+
+  /// Each of the morph's three quick frames.
+  static const morphFrame = Duration(milliseconds: 110);
+
   HatchStage _stage = HatchStage.egg;
   late String _egg = eggFrame(widget.roster);
   String? _sprite;
+
+  /// The version [_sprite] is drawn at, for a screen reader.
+  int _version = 0;
   bool _faint = false;
   int _bannerRows = 0;
   ZooHatch? _hatch;
@@ -139,11 +178,16 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     _stage = still.stage;
     _egg = still.egg ?? _egg;
     _sprite = still.sprite;
-    _faint = still.stage == HatchStage.silhouette;
+    _faint = still.faint ?? still.stage == HatchStage.silhouette;
     _bannerRows = still.bannerRows;
     unawaited(
       widget.result.then((hatch) {
-        if (mounted) setState(() => _hatch = hatch);
+        if (mounted) {
+          setState(() {
+            _hatch = hatch;
+            _version = _from(hatch);
+          });
+        }
       }),
     );
   }
@@ -169,6 +213,12 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     await Future<void>.delayed(Duration(milliseconds: ms));
     return !_closed && mounted;
   }
+
+  /// The version a hatchling is drawn at: 0.1, or for a duplicate the version
+  /// the one it forked from had.
+  int _from(ZooHatch? hatch) => hatch != null && hatch.duplicate
+      ? roster.versionIndex(hatch.versionBefore)
+      : 0;
 
   void _show(VoidCallback change) {
     if (_closed || !mounted) return;
@@ -222,7 +272,13 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       if (!await _wait(480)) return;
     }
     final def = _def!;
-    final sprite = renderSprite(roster, def, 0, DaemonMood.idle);
+    final from = _from(hatch);
+    final sprite = renderSprite(roster, def, from, DaemonMood.idle);
+    // A level-up that reached a new version: the sprite it grows into.
+    final grows = hatch.duplicate && hatch.grewVersion;
+    final to = grows ? roster.versionIndex(hatch.levelUp!.version) : from;
+    final grown = renderSprite(roster, def, to, DaemonMood.idle);
+    _version = from;
     if (!_reduceMotion) {
       if (def.darkOnly) {
         _show(() => _stage = HatchStage.pitch);
@@ -244,7 +300,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         () => _sprite = renderSprite(
           roster,
           def,
-          0,
+          from,
           DaemonMood.idle,
           lid: def.lid ?? '-',
         ),
@@ -265,13 +321,28 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     }
     _show(() {
       _stage = HatchStage.card;
-      _sprite = sprite;
+      // Reduce Motion: straight to the version it grew into.
+      _sprite = _reduceMotion ? grown : sprite;
+      _version = _reduceMotion ? to : from;
       _faint = false;
       _bannerRows = hatch!.duplicate
           ? 0
           : renderBanner(daemonBanner, def.id).length;
     });
     _markRevealed();
+    if (!grows || _reduceMotion) return;
+    // The level-up, once its line has been read: three quick frames.
+    if (!await _wait(morphAfter.inMilliseconds)) return;
+    final frames = versionMorph(sprite, grown);
+    for (final (i, frame) in frames.indexed) {
+      if (i > 0 && !await _wait(morphFrame.inMilliseconds)) return;
+      final last = i == frames.length - 1;
+      _show(() {
+        _sprite = frame;
+        _faint = !last;
+        if (last) _version = to;
+      });
+    }
   }
 
   void _markRevealed() {
@@ -285,6 +356,27 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     _closed = true;
     _markRevealed();
     Navigator.of(context).maybePop();
+  }
+
+  /// Done on the card: the first daemon asks whether it may watch, unless the
+  /// person already said yes (on any device).
+  void _done() {
+    final hatch = _hatch;
+    if (widget.askConsent &&
+        _stage == HatchStage.card &&
+        hatch != null &&
+        !hatch.duplicate &&
+        !widget.zoo.zoo.watching) {
+      setState(() => _stage = HatchStage.consent);
+      return;
+    }
+    _close();
+  }
+
+  /// The hatchling's name: its nickname, else its id.
+  String get _name {
+    final id = _hatch?.daemonId ?? '';
+    return widget.zoo.zoo.daemon(id)?.nickname ?? id;
   }
 
   /// The new daemon's serial, from the hatch or the zoo it answered.
@@ -489,6 +581,20 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     }
     final hatch = _hatch!;
     final colour = def.colorFor(shiny: hatch.shiny);
+    if (_stage == HatchStage.consent) {
+      return [
+        DaemonConsent(
+          name: _name,
+          sprite: _sprite,
+          colour: colour,
+          onWatch: () {
+            widget.zoo.consent(watching: true);
+            _close();
+          },
+          onNotNow: _close,
+        ),
+      ];
+    }
     final rows = renderBanner(daemonBanner, def.id);
     final card = _stage == HatchStage.card ? _card : null;
     final words = hatch.duplicate
@@ -519,7 +625,9 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
           key: const ValueKey('daemon-hatch-sprite'),
           semantics: _stage == HatchStage.silhouette
               ? 'A silhouette'
-              : '${def.id} ${roster.rules.versions.first}',
+              : _faint
+              ? '${def.id}, growing'
+              : '${def.id} ${roster.rules.versions[_version]}',
         ),
       if (_bannerRows > 0) ...[
         const SizedBox(height: 18),
@@ -582,7 +690,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         ],
         if (hatch.duplicate) ...[
           const SizedBox(height: 20),
-          _button('Done', _close, key: const ValueKey('daemon-hatch-done')),
+          _button('Done', _done, key: const ValueKey('daemon-hatch-done')),
         ],
         if (card != null) ...[
           const SizedBox(height: 20),
@@ -609,7 +717,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
                 hint: 'Copies the card as a code block',
                 filled: true,
               ),
-              _button('Done', _close, key: const ValueKey('daemon-hatch-done')),
+              _button('Done', _done, key: const ValueKey('daemon-hatch-done')),
             ],
           ),
           const SizedBox(height: 10),
@@ -633,33 +741,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     Key? key,
     String? hint,
     bool filled = false,
-  }) => Semantics(
-    hint: hint,
-    child: TextButton(
-      key: key,
-      onPressed: onPressed,
-      style: TextButton.styleFrom(
-        minimumSize: const Size(96, 44),
-        padding: const EdgeInsets.symmetric(horizontal: 18),
-        foregroundColor: filled ? DaemonInk.pitch : DaemonInk.ink,
-        backgroundColor: filled ? DaemonInk.yellow : Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-          side: filled
-              ? BorderSide.none
-              : const BorderSide(color: DaemonInk.line),
-        ),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontFamily: AppFont.sans,
-          fontSize: 15,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    ),
-  );
+  }) => DaemonButton(label, onPressed, key: key, hint: hint, filled: filled);
 }
 
 /// A card as it is drawn on the phone: its lines in their columns, scaled to

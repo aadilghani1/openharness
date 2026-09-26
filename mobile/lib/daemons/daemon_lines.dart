@@ -7,6 +7,12 @@
 /// drops the clause around a slot it cannot fill; a line with nothing left
 /// becomes a neutral line of plain facts. A literal `{who}` is never shown.
 ///
+/// Voice v3: the lines that need you (`need`, `fail`) are facts first, the
+/// daemon's joke a short tag at the end after two spaces — `codex: run the
+/// migration?  (bell)`. When the phone cannot fill the facts (a question with
+/// no words, a failure it has no recap for) it says its own plain facts and
+/// keeps the tag: `docs failed to start.  (pane is dead)`.
+///
 /// Before the roster has slots its lines are written-out examples ("codex
 /// finished the refactor. 3 files, tests pass.") that would read as facts, so
 /// the phone speaks the neutral line instead — except for a boop, which is
@@ -129,6 +135,20 @@ Map<String, String?> slotsFor(DaemonMood mood, DaemonFacts facts) {
   };
 }
 
+final _tagged = RegExp(r'^(.*\S)\s{2,}(\S.*)$');
+
+/// The short tag a voice v3 need or fail [template] ends with — `(bell)` in
+/// `{who}: {q}  (bell)` — or null. A tag is the daemon's own words after the
+/// facts: two spaces, then no slot.
+String? lineTag(DaemonMood mood, String template) {
+  if (mood != DaemonMood.need && mood != DaemonMood.fail) return null;
+  final match = _tagged.firstMatch(template);
+  if (match == null) return null;
+  final facts = match[1]!, tag = match[2]!;
+  if (!_slot.hasMatch(facts) || _slot.hasMatch(tag)) return null;
+  return tag;
+}
+
 /// The daemon's line for [mood], true to [facts].
 String daemonLine(
   DaemonRoster roster,
@@ -143,5 +163,10 @@ String daemonLine(
     return neutralLine(mood, facts);
   }
   if (template.isEmpty) return neutralLine(mood, facts);
-  return fillLine(template, slotsFor(mood, facts)) ?? neutralLine(mood, facts);
+  final filled = fillLine(template, slotsFor(mood, facts));
+  if (filled != null) return filled;
+  // Facts the phone cannot fill: its own, first, and the daemon's tag after.
+  final tag = lineTag(mood, template);
+  final neutral = neutralLine(mood, facts);
+  return tag == null ? neutral : '$neutral  $tag';
 }

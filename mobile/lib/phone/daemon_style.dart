@@ -1,4 +1,4 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
@@ -69,5 +69,50 @@ abstract final class DaemonInk {
     height: height,
     color: color,
     fontWeight: weight,
+  );
+}
+
+/// A button on the night ground: [filled] is the one thing to do (dark on
+/// tmux's yellow), the rest are outlined. 44pt tall, whatever the label.
+class DaemonButton extends StatelessWidget {
+  const DaemonButton(
+    this.label,
+    this.onPressed, {
+    super.key,
+    this.hint,
+    this.filled = false,
+  });
+
+  final String label;
+  final VoidCallback onPressed;
+  final String? hint;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    hint: hint,
+    child: TextButton(
+      onPressed: onPressed,
+      style: TextButton.styleFrom(
+        minimumSize: const Size(96, 44),
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        foregroundColor: filled ? DaemonInk.pitch : DaemonInk.ink,
+        backgroundColor: filled ? DaemonInk.yellow : Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: filled
+              ? BorderSide.none
+              : const BorderSide(color: DaemonInk.line),
+        ),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontFamily: AppFont.sans,
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    ),
   );
 }

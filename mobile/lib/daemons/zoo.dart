@@ -169,11 +169,45 @@ class ZooEgg {
   }
 }
 
+/// The first-day answer (`zoo.consent`): may the daemon watch at all, and
+/// when that was said. Until [watching] is true no computer senses anything
+/// (`daemons/README.md`, "What your daemon sees").
+@immutable
+class ZooConsent {
+  const ZooConsent({required this.watching, required this.at});
+  final bool watching;
+
+  /// When it was said, as the server wrote it (ISO 8601).
+  final String at;
+
+  /// `2026-09-26`, the local day it was said, or null when [at] is unreadable.
+  String? get day {
+    final when = DateTime.tryParse(at);
+    if (when == null) return null;
+    final local = when.toLocal();
+    return '${local.year.toString().padLeft(4, '0')}-'
+        '${local.month.toString().padLeft(2, '0')}-'
+        '${local.day.toString().padLeft(2, '0')}';
+  }
+
+  /// Null unless it is a whole answer: a bool and a readable time.
+  static ZooConsent? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final watching = raw['watching'], at = raw['at'];
+    if (watching is! bool || at is! String || DateTime.tryParse(at) == null) {
+      return null;
+    }
+    return ZooConsent(watching: watching, at: at);
+  }
+}
+
 class Zoo {
   const Zoo({
     this.daemons = const [],
     this.eggs = const [],
     this.pair,
+    this.autonomy = defaultAutonomy,
+    this.consent,
     this.habits = const [],
     this.firstEgg = false,
     this.setupEgg = false,
@@ -181,9 +215,28 @@ class Zoo {
   static const empty = Zoo();
   static const maxEggs = 12, maxDaemons = 64;
 
+  /// The pair's dial, lowest first (`ZOO_AUTONOMY_LEVELS`, daemons/BRAIN.md
+  /// "Autonomy dial"). The phone only reads it: the dial turns at a computer.
+  static const autonomyLevels = [
+    'watch',
+    'suggest',
+    'act-on-key',
+    'act-within-rules',
+  ];
+  static const defaultAutonomy = 'watch';
+
   final List<ZooDaemon> daemons;
   final List<ZooEgg> eggs;
   final String? pair;
+
+  /// How much the paired daemon may do on its own: one of [autonomyLevels].
+  final String autonomy;
+
+  /// The first-day answer, or null when nobody has asked yet.
+  final ZooConsent? consent;
+
+  /// The person said yes to being watched.
+  bool get watching => consent?.watching == true;
 
   /// First-egg habits done (`rules.firstEgg.habits`).
   final List<String> habits;
@@ -205,10 +258,17 @@ class Zoo {
   /// Each roster id once, first hatched first: what the shelf shows.
   List<String> get ownedIds => [for (final d in daemons) d.id];
 
-  Zoo copyWith({List<String>? habits, String? pair}) => Zoo(
+  Zoo copyWith({
+    List<String>? habits,
+    String? pair,
+    String? autonomy,
+    ZooConsent? consent,
+  }) => Zoo(
     daemons: daemons,
     eggs: eggs,
     pair: pair ?? this.pair,
+    autonomy: autonomy ?? this.autonomy,
+    consent: consent ?? this.consent,
     habits: habits ?? this.habits,
     firstEgg: firstEgg,
     setupEgg: setupEgg,
@@ -235,11 +295,17 @@ class Zoo {
       if (egg != null && !eggs.any((x) => x.id == egg.id)) eggs.add(egg);
     }
     final habitKeys = roster.rules.habits.map((h) => h.key).toSet();
-    final pair = raw['pair'];
+    final pair = raw['pair'], autonomy = raw['autonomy'];
     return Zoo(
       daemons: daemons,
       eggs: eggs.take(maxEggs).toList(),
       pair: pair is String && daemons.any((d) => d.id == pair) ? pair : null,
+      // A level this phone does not know reads as the default, as the
+      // server reads one.
+      autonomy: autonomy is String && autonomyLevels.contains(autonomy)
+          ? autonomy
+          : defaultAutonomy,
+      consent: ZooConsent.fromJson(raw['consent']),
       habits: <String>{
         for (final h in raw['habits'] as List? ?? const [])
           if (h is String && habitKeys.contains(h)) h,

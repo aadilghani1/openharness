@@ -110,4 +110,75 @@ void main() {
       '1 harness idle. nothing needs you.',
     );
   });
+
+  group('voice v3: what needs you is facts first, the tag at the end', () {
+    test('a question the phone can read fills the line', () {
+      final tim = daemonRoster.byId('tim')!;
+      expect(
+        daemonLine(daemonRoster, tim, DaemonMood.need, facts),
+        'codex: run the migration?  (bell)',
+      );
+      // Every daemon says who and what first.
+      for (final d in daemonRoster.daemons) {
+        final line = daemonLine(daemonRoster, d, DaemonMood.need, facts);
+        expect(line, startsWith('codex: run the migration?'), reason: d.id);
+      }
+    });
+
+    test('facts the phone cannot fill are its own, and the tag stays', () {
+      final tim = daemonRoster.byId('tim')!;
+      // A question with no words the phone can show.
+      expect(
+        daemonLine(
+          daemonRoster,
+          tim,
+          DaemonMood.need,
+          const DaemonFacts(waiting: [(who: 'codex', q: null)]),
+        ),
+        'codex needs you.  (bell)',
+      );
+      // The phone has no recap for a failure: it says what it knows.
+      expect(
+        daemonLine(daemonRoster, tim, DaemonMood.fail, facts),
+        'docs failed to start.  (pane is dead)',
+      );
+      expect(
+        daemonLine(
+          daemonRoster,
+          daemonRoster.byId('vim')!,
+          DaemonMood.fail,
+          facts,
+        ),
+        'docs failed to start.  (1 of 1)',
+      );
+      // A daemon with no tag says the facts alone.
+      expect(
+        daemonLine(
+          daemonRoster,
+          daemonRoster.byId('bat')!,
+          DaemonMood.fail,
+          facts,
+        ),
+        'docs failed to start.',
+      );
+      for (final d in daemonRoster.daemons) {
+        final line = daemonLine(daemonRoster, d, DaemonMood.fail, facts);
+        expect(line, startsWith('docs failed to start.'), reason: d.id);
+        expect(line, isNot(contains('{')), reason: d.id);
+      }
+    });
+
+    test('only a need or a fail line has a tag, and never a slot in it', () {
+      expect(lineTag(DaemonMood.need, '{who}: {q}  (bell)'), '(bell)');
+      expect(lineTag(DaemonMood.fail, '{who} failed: {recap}  0/1'), '0/1');
+      expect(lineTag(DaemonMood.fail, '{who} failed: {recap}'), isNull);
+      // Laid out on purpose, not a tag: zsh's job line, fzf's match.
+      expect(
+        lineTag(DaemonMood.done, '[1]  + done       {who}  {recap}'),
+        isNull,
+      );
+      expect(lineTag(DaemonMood.need, 'match: {who}  {recap}'), isNull);
+      expect(lineTag(DaemonMood.boop, '> boop  0/0'), isNull);
+    });
+  });
 }

@@ -2,8 +2,10 @@
 // states, the header with large text, the sheet (with a daemon, before one,
 // and on a small phone with large text), the hatch reveal's frames, and
 // economy v2 (`v2-*`: a duplicate's reveal, serial and shiny cards, the setup
-// egg and its habits, a drop announced but not released). Always checks that
-// nothing overflows; writes PNGs only when asked:
+// egg and its habits, a drop announced but not released), and round 4
+// (`r4-*`: the consent screen, the sheet's consent and dial, a need line in
+// voice v3, a level-up's morph). Always checks that nothing overflows; writes
+// PNGs only when asked:
 //
 //   HARNESS_DAEMON_CAPTURE_DIR=/tmp/daemon-phone \
 //     flutter test test/daemons/daemon_capture_test.dart
@@ -23,6 +25,7 @@ import 'package:harness_mobile/daemons/roster.dart';
 import 'package:harness_mobile/daemons/zoo.dart';
 import 'package:harness_mobile/daemons/zoo_client.dart';
 import 'package:harness_mobile/phone/daemon_chip.dart';
+import 'package:harness_mobile/phone/daemon_consent.dart';
 import 'package:harness_mobile/phone/daemon_hatch.dart';
 import 'package:harness_mobile/phone/daemon_scope.dart';
 import 'package:harness_mobile/phone/daemon_sheet.dart';
@@ -775,5 +778,204 @@ void main() {
       },
     );
     expect(find.text('zoo: drop 2 bsd  out 2026-10-15'), findsOneWidget);
+  });
+
+  // ── round 4 ────────────────────────────────────────────────────────────────
+
+  testWidgets('r4 consent: after the first hatch, and on its own page', (
+    tester,
+  ) async {
+    final app = await _app(const {'daemons': []});
+    final tim = _roster.byId('tim')!;
+    Widget reveal() => DaemonHatchReveal(
+      roster: _roster,
+      egg: const ZooEgg(id: 'e', kind: 'first', grantedAt: ''),
+      result: Future.value(
+        const ZooHatch(eggId: 'e', daemonId: 'tim', shiny: false),
+      ),
+      zoo: app.zoo,
+      askConsent: true,
+      still: HatchFrame(
+        stage: HatchStage.consent,
+        sprite: renderSprite(_roster, tim, 0, DaemonMood.idle),
+      ),
+    );
+    Future<void> settle() async {
+      await tester.pump();
+      await tester.pump();
+    }
+
+    await _capture(tester, 'r4-consent', phone, reveal(), then: settle);
+    expect(find.text('What tim sees'), findsOneWidget);
+    // Short: its answer fits a phone's screen without a scroll.
+    if (_realMono) {
+      expect(
+        tester
+            .getRect(find.byKey(const ValueKey('daemon-consent-watch')))
+            .bottom,
+        lessThanOrEqualTo(phone.height),
+      );
+    }
+    await _capture(
+      tester,
+      'r4-consent-small-phone',
+      const Size(375, 667),
+      reveal(),
+      then: () async {
+        await settle();
+        await tester.drag(
+          find.byKey(const ValueKey('daemon-hatch')),
+          const Offset(0, -400),
+        );
+        await tester.pump(const Duration(milliseconds: 600));
+      },
+    );
+    await _capture(
+      tester,
+      'r4-consent-320-large-text',
+      const Size(320, 568),
+      reveal(),
+      textScale: 1.5,
+      then: settle,
+    );
+    // The sheet's way to give it: its own page (the grue, in the dark).
+    final grue = _roster.byId('grue')!;
+    await _capture(
+      tester,
+      'r4-consent-page-grue',
+      phone,
+      DaemonConsentPage(
+        zoo: app.zoo,
+        name: 'grue',
+        sprite: renderSprite(_roster, grue, 2, DaemonMood.idle),
+        colour: grue.colorFor(shiny: false),
+        pitch: true,
+      ),
+    );
+  });
+
+  testWidgets('r4 sheet: watching and the dial, not watching, a need line', (
+    tester,
+  ) async {
+    Future<AppNotifier> app({
+      Map<String, dynamic>? consent,
+      String autonomy = 'watch',
+    }) => _app({
+      'daemons': [_daemon('tim', serial: 42), _daemon('vim', xp: 150)],
+      'pair': 'tim',
+      'habits': const ['turn', 'split', 'find', 'machine', 'store', 'resume'],
+      'firstEgg': true,
+      'setupEgg': true,
+      'autonomy': autonomy,
+      'consent': consent,
+    });
+
+    await _capture(
+      tester,
+      'r4-sheet-watching-autonomy',
+      phone,
+      _screen(
+        await app(
+          consent: {'watching': true, 'at': '2026-09-26T12:00:00Z'},
+          autonomy: 'suggest',
+        ),
+      ),
+      then: () async {
+        await openSheet(tester);
+        await scrollTo(tester, 'daemon-autonomy-where', past: 260);
+      },
+    );
+    expect(find.byKey(const ValueKey('daemon-consent-stop')), findsOneWidget);
+    await _capture(
+      tester,
+      'r4-sheet-not-watching',
+      phone,
+      _screen(await app()),
+      then: () async {
+        await openSheet(tester);
+        await scrollTo(tester, 'daemon-autonomy-where', past: 260);
+      },
+    );
+    expect(find.byKey(const ValueKey('daemon-consent-give')), findsOneWidget);
+    await _capture(
+      tester,
+      'r4-sheet-said-no-320-large-text',
+      const Size(320, 640),
+      _screen(
+        await app(
+          consent: {'watching': false, 'at': '2026-09-26T12:00:00Z'},
+          autonomy: 'act-within-rules',
+        ),
+      ),
+      textScale: 1.5,
+      then: () async {
+        await openSheet(tester);
+        await scrollTo(tester, 'daemon-watching', past: 20);
+      },
+    );
+    await _capture(
+      tester,
+      'r4-sheet-need-line',
+      phone,
+      _screen(await app()),
+      then: () async {
+        await openSheet(tester);
+        _host(tester).face.sync(const DaemonWatch(needs: {'m/a#q'}));
+        await tester.pump(const Duration(milliseconds: 400));
+      },
+    );
+    expect(find.text('tim: a harness needs you.  (bell)'), findsOneWidget);
+  });
+
+  testWidgets('r4 reveal: a level-up morphs to the new version', (
+    tester,
+  ) async {
+    final app = await _app({
+      'daemons': [_daemon('tim', xp: 450, dupes: 1)],
+      'pair': 'tim',
+    });
+    final tim = _roster.byId('tim')!;
+    final from = renderSprite(_roster, tim, 1, DaemonMood.idle);
+    final to = renderSprite(_roster, tim, 2, DaemonMood.idle);
+    final morph = versionMorph(from, to);
+    final frames = [
+      (from, false),
+      for (final (i, frame) in morph.indexed) (frame, i < morph.length - 1),
+    ];
+    for (final (i, (sprite, faint)) in frames.indexed) {
+      await _capture(
+        tester,
+        'r4-morph-$i',
+        phone,
+        DaemonHatchReveal(
+          key: ValueKey('morph-$i'),
+          roster: _roster,
+          egg: const ZooEgg(id: 'e', kind: 'turn', grantedAt: ''),
+          result: Future.value(
+            const ZooHatch(
+              eggId: 'e',
+              daemonId: 'tim',
+              shiny: false,
+              duplicate: true,
+              xp: 150,
+              count: 2,
+              levelUp: ZooLevelUp(id: 'tim', level: 4, version: '2.0'),
+              versionBefore: '1.0',
+            ),
+          ),
+          zoo: app.zoo,
+          still: HatchFrame(
+            stage: HatchStage.card,
+            sprite: sprite,
+            faint: faint,
+          ),
+        ),
+        then: () async {
+          await tester.pump();
+          await tester.pump();
+        },
+      );
+    }
+    expect(find.text('level up · bond 4/4 · now tim 2.0'), findsOneWidget);
   });
 }

@@ -131,6 +131,15 @@ int baseWidth(DaemonRoster roster, DaemonDef d, int versionIndex) =>
 /// The hatchling before it has colour: every drawn cell becomes `#`.
 String silhouette(String sprite) => sprite.replaceAll(RegExp(r'[^ ]'), '#');
 
+/// A level-up that reached a new version, in three quick frames: the old
+/// sprite's shape as a `#` silhouette, the new one's, then the new sprite —
+/// the hatch's own silhouette-then-colour, for a daemon that grows.
+List<String> versionMorph(String from, String to) => [
+  silhouette(from),
+  silhouette(to),
+  to,
+];
+
 /// Which nest stage the first egg shows for the habits done (render.mjs
 /// nestStage): habits count up to the egg's need, and until every required
 /// habit is done at most need - 1 count; the count maps evenly onto the stages.
