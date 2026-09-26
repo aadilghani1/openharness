@@ -12,6 +12,45 @@ use ratatui::style::{Color, Modifier};
 
 pub struct TmuxBackend<W: Write> { inner: CrosstermBackend<W> }
 
+/// What a pane's cell carries that ratatui's cell cannot: its underline's style (2 double, 3
+/// curly, 4 dotted, 5 dashed — tmux's 4:N) and its link (OSC 8). Kept by position for the frame
+/// being drawn (ui's pane_body), and written with the cell when the outer terminal reads them.
+#[derive(Clone, PartialEq, Default, Debug)]
+pub struct Extra { pub underline: u8, pub link: Option<std::sync::Arc<str>> }
+
+struct Frame { extras: std::collections::HashMap<(u16, u16), Extra>, usstyle: bool, links: bool }
+static FRAME: std::sync::Mutex<Option<Frame>> = std::sync::Mutex::new(None);
+
+/// A frame begins: no cell's extras yet, and what the outer terminal reads — styled and coloured
+/// underlines (tmux's usstyle feature), links (hyperlinks).
+pub fn begin_frame(usstyle: bool, links: bool) {
+    if let Ok(mut f) = FRAME.lock() { *f = Some(Frame { extras: Default::default(), usstyle, links }) }
+}
+
+pub fn set_extra(x: u16, y: u16, extra: Extra) {
+    if let Ok(mut f) = FRAME.lock() { if let Some(f) = f.as_mut() { f.extras.insert((x, y), extra); } }
+}
+
+/// Whether the outer terminal reads styled underlines with their colour (usstyle) and links
+/// (hyperlinks): terminal-features for this TERM (as tmux's), else the terminals known to.
+pub fn outer_features(features: &[String]) -> (bool, bool) {
+    static KNOWN: std::sync::OnceLock<(String, bool)> = std::sync::OnceLock::new();
+    let (term, known) = KNOWN.get_or_init(|| {
+        let term = std::env::var("TERM").unwrap_or_default();
+        let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+        let known = matches!(program.as_str(), "iTerm.app" | "WezTerm" | "ghostty" | "vscode" | "tmux")
+            || ["xterm-kitty", "xterm-ghostty", "wezterm", "alacritty", "foot", "tmux", "contour", "rio"].iter().any(|t| term.starts_with(t));
+        (term, known)
+    });
+    let (mut us, mut links) = (*known, *known);
+    for f in features {
+        let (pattern, rest) = f.split_once(':').unwrap_or((f.as_str(), ""));
+        if !crate::cmd::fnmatch(pattern, term) { continue }
+        for x in rest.split(':') { match x { "usstyle" => us = true, "hyperlinks" => links = true, _ => {} } }
+    }
+    (us, links)
+}
+
 impl<W: Write> TmuxBackend<W> {
     pub fn new(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer) } }
 }
@@ -64,27 +103,44 @@ impl<W: Write> Backend for TmuxBackend<W> {
     {
         // CrosstermBackend writes through to its writer.
         let w = &mut self.inner;
+        let frame = FRAME.lock().ok();
+        let frame = frame.as_ref().and_then(|f| f.as_ref());
+        let (usstyle, links) = frame.map(|f| (f.usstyle, f.links)).unwrap_or((false, false));
         let (mut fg, mut bg, mut ul, mut modifier) = (Color::Reset, Color::Reset, Color::Reset, Modifier::empty());
+        // The underline's style as written (0 none, 1 plain, 2… tmux's 4:N), and the open link.
+        let (mut style, mut link): (u8, Option<std::sync::Arc<str>>) = (0, None);
         let mut last: Option<(u16, u16)> = None;
         for (x, y, cell) in content {
             // The cursor moves only where the cells do not follow on.
             if !matches!(last, Some((lx, ly)) if x == lx + 1 && y == ly) { write!(w, "\x1b[{};{}H", y + 1, x + 1)?; }
             last = Some((x, y));
+            let extra = frame.and_then(|f| f.extras.get(&(x, y)));
             if cell.modifier != modifier {
                 // tmux's tty_attributes: an attribute taken away resets everything, then what is
                 // wanted is set again.
                 if !(modifier - cell.modifier).is_empty() {
                     w.write_all(b"\x1b[0m")?;
-                    (fg, bg, ul, modifier) = (Color::Reset, Color::Reset, Color::Reset, Modifier::empty());
+                    (fg, bg, ul, modifier, style) = (Color::Reset, Color::Reset, Color::Reset, Modifier::empty(), 0);
                 }
-                for (flag, code) in ATTRS { if cell.modifier.contains(flag) && !modifier.contains(flag) { write!(w, "\x1b[{code}m")?; } }
+                for (flag, code) in ATTRS { if cell.modifier.contains(flag) && !modifier.contains(flag) { write!(w, "\x1b[{code}m")?; if code == 4 { style = 1 } } }
                 modifier = cell.modifier;
             }
+            // tty_attributes' Smulx: a curly (double, dotted, dashed) underline where the
+            // terminal reads one, else a plain one.
+            let want = if !cell.modifier.contains(Modifier::UNDERLINED) { 0 } else if usstyle { extra.map(|e| e.underline).filter(|u| *u >= 2).unwrap_or(1) } else { 1 };
+            if want != style && want > 0 { if want == 1 { w.write_all(b"\x1b[4:1m")? } else { write!(w, "\x1b[4:{want}m")? } style = want }
             if cell.fg != fg { write!(w, "\x1b[{}m", sgr(cell.fg, 30))?; fg = cell.fg; }
             if cell.bg != bg { write!(w, "\x1b[{}m", sgr(cell.bg, 40))?; bg = cell.bg; }
-            if cell.underline_color != ul { write!(w, "\x1b[{}m", sgr_underline(cell.underline_color))?; ul = cell.underline_color; }
+            if usstyle && cell.underline_color != ul { write!(w, "\x1b[{}m", sgr_underline(cell.underline_color))?; ul = cell.underline_color; }
+            // A link (OSC 8) opened where it starts and closed where it ends.
+            let want_link = if links { extra.and_then(|e| e.link.clone()) } else { None };
+            if want_link != link {
+                match &want_link { Some(uri) => write!(w, "\x1b]8;;{uri}\x1b\\")?, None => w.write_all(b"\x1b]8;;\x1b\\")? }
+                link = want_link;
+            }
             w.write_all(cell.symbol().as_bytes())?;
         }
+        if link.is_some() { w.write_all(b"\x1b]8;;\x1b\\")? }
         w.write_all(b"\x1b[39m\x1b[49m\x1b[59m\x1b[0m")
     }
 

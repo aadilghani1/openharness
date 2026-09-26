@@ -27,6 +27,8 @@ use crate::input::home_agents;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     app.renumber();
+    let (usstyle, links) = crate::term_out::outer_features(&app.options.array("terminal-features"));
+    crate::term_out::begin_frame(usstyle, links);
     let area = frame.area();
     if area.width == 0 || area.height == 0 { return }
     // The status lines (tmux's status: off, on, 2 … 5), at the bottom or (status-position) the top.
@@ -1923,6 +1925,13 @@ fn _unused(_: &keys::Keymap, _: PromptKind) {}
 fn _ago(ms: u64) -> String { ago(ms) }
 
 
+/// One of the sixteen colours by its name.
+fn named16(n: u8) -> Color {
+    const ALL: [Color; 16] = [Color::Black, Color::Red, Color::Green, Color::Yellow, Color::Blue, Color::Magenta, Color::Cyan, Color::Gray,
+        Color::DarkGray, Color::LightRed, Color::LightGreen, Color::LightYellow, Color::LightBlue, Color::LightMagenta, Color::LightCyan, Color::White];
+    ALL[(n & 15) as usize]
+}
+
 pub(crate) fn map_color(color: AColor, colors: &alacritty_terminal::term::color::Colors, fg_side: bool) -> (Color, bool) {
     match color {
         AColor::Spec(rgb) => (Color::Rgb(rgb.r, rgb.g, rgb.b), false),
@@ -1933,8 +1942,10 @@ pub(crate) fn map_color(color: AColor, colors: &alacritty_terminal::term::color:
             match named {
                 NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::Background | NamedColor::Cursor => (Color::Reset, false),
                 NamedColor::DimForeground => (Color::Reset, fg_side),
-                n if (n as usize) < 16 => (Color::Indexed(n as u8), false),
-                n if (n as usize) >= NamedColor::DimBlack as usize && (n as usize) <= NamedColor::DimWhite as usize => (Color::Indexed((n as usize - NamedColor::DimBlack as usize) as u8), true),
+                // The sixteen by name, as the program wrote them (30–37, 90–97, as tmux writes
+                // them — not 38;5;N, which an eight-colour terminal does not read).
+                n if (n as usize) < 16 => (named16(n as u8), false),
+                n if (n as usize) >= NamedColor::DimBlack as usize && (n as usize) <= NamedColor::DimWhite as usize => (named16((n as usize - NamedColor::DimBlack as usize) as u8), true),
                 _ => (Color::Reset, false),
             }
         }
@@ -1990,12 +2001,21 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
         // theme or dark.
         if cell.flags.contains(Flags::INVERSE) { mods |= Modifier::REVERSED }
         style = style.fg(fg_color).bg(bg_color).add_modifier(mods);
+        // The underline's own colour (58), and its style and the cell's link, written as tmux
+        // writes them where the terminal reads them.
+        if let Some(uc) = cell.underline_color() { style = style.underline_color(map_color(uc, colors, true).0) }
+        let underline = if cell.flags.contains(Flags::DOUBLE_UNDERLINE) { 2 } else if cell.flags.contains(Flags::UNDERCURL) { 3 } else if cell.flags.contains(Flags::DOTTED_UNDERLINE) { 4 } else if cell.flags.contains(Flags::DASHED_UNDERLINE) { 5 } else { 0 };
+        let link = cell.hyperlink().map(|h| std::sync::Arc::<str>::from(h.uri()));
+        if underline != 0 || link.is_some() { crate::term_out::set_extra(area.x + col, area.y + row as u16, crate::term_out::Extra { underline, link }) }
         let target = buf.cell_mut((area.x + col, area.y + row as u16));
         let Some(target) = target else { continue };
-        if cell.flags.contains(Flags::HIDDEN) || cell.c == '\0' {
+        if cell.c == '\0' {
             target.set_symbol(" ").set_style(style);
             continue;
         }
+        // Concealed text stays text (SGR 8, as tmux writes it): the terminal hides it, and a
+        // selection in the terminal still copies it.
+        if cell.flags.contains(Flags::HIDDEN) { style = style.add_modifier(Modifier::HIDDEN) }
         match cell.zerowidth() {
             Some(extra) if !extra.is_empty() => {
                 let mut s = String::with_capacity(8);
