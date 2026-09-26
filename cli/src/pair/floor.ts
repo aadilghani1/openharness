@@ -18,8 +18,11 @@
 
 export const AUTONOMY_LEVELS = ['watch', 'suggest', 'act-on-key', 'act-within-rules'] as const
 export type Autonomy = typeof AUTONOMY_LEVELS[number]
-/** What a zoo that never set it means (backend/src/lib/zoo.ts reads the same default). */
-export const DEFAULT_AUTONOMY: Autonomy = 'suggest'
+/**
+ * What a zoo that never set it means (backend/src/lib/zoo.ts reads the same default): `watch`. The person
+ * opts into `suggest` and above; a level above `suggest` also waits for their yes at a window (pair/gate.ts).
+ */
+export const DEFAULT_AUTONOMY: Autonomy = 'watch'
 
 export function isAutonomy(value: unknown): value is Autonomy {
   return typeof value === 'string' && (AUTONOMY_LEVELS as readonly string[]).includes(value)

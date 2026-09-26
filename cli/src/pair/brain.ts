@@ -29,6 +29,7 @@ import { str, type DaemonAction, type PairJournalEntry } from './protocol.js'
 import type { Autonomy } from './floor.js'
 import type { ShownLines } from './shown.js'
 import { RateLimit } from './limit.js'
+import type { ConfirmRequest, GateEvent } from './gate.js'
 
 /** Keys this brain relays to other machines: a minute's worth and an hour's (the owner limits them too). */
 export const RELAY_LIMITS = [{ windowMs: 60_000, max: 6 }, { windowMs: 60 * 60_000, max: 60 }]
@@ -80,6 +81,15 @@ export interface PairBrainDeps {
   shown?: ShownLines
   /** How many keys may be relayed to other machines, per window (RELAY_LIMITS unless a spec says). */
   relayLimits?: Array<{ windowMs: number; max: number }>
+  /**
+   * What waits for the person's yes (pair/gate.ts): listed in daemon_state `confirms`, answered with
+   * `daemon_confirm` from a window that displayed it (`onConfirm`).
+   */
+  gate?: {
+    requests: () => ConfirmRequest[]
+    requestedAutonomy: () => Autonomy
+    confirm: (kind: string, nonce: string, accept: boolean) => { ok: true; kind: string } | { ok: false; error: string; detail?: string }
+  }
   /** Journal, on THIS machine, a key relayed to another one and the window it came from (PairSensor.relayed). */
   relayed?: (fields: { target: string; agentId: string; name: string; engine: string; requestId: string; text: string; origin: string }) => void
   now: () => number
@@ -116,6 +126,7 @@ export class PairBrain {
   private readonly cursors = new Map<string, number>()
 
   private readonly relayLimit: RateLimit
+  private setSeq = 0
 
   constructor(private readonly deps: PairBrainDeps) {
     this.startedAt = deps.now()
@@ -127,7 +138,7 @@ export class PairBrain {
   /** The windows (and `hn`) attached right now: whom a local frame reaches. */
   clientIds(): string[] { return [...this.clients] }
 
-  private autonomy(): Autonomy { return this.deps.autonomy?.() ?? 'suggest' }
+  private autonomy(): Autonomy { return this.deps.autonomy?.() ?? 'watch' }
 
   // ── who is here ───────────────────────────────────────────────────────────────────────────────────
 
@@ -418,6 +429,43 @@ export class PairBrain {
 
   // ── one key ───────────────────────────────────────────────────────────────────────────────────────
 
+  /**
+   * A change to what the daemon may do (pair/gate.ts), said whatever the voice's limits: a request for the
+   * person's yes (its keys, its detail), a change that took effect, or a request that went away.
+   */
+  onGate(event: GateEvent): void {
+    const about = { machineId: this.deps.fleet.machines().find((m) => m.local)?.machineId ?? '', agentId: '' }
+    if (event.type === 'asked') {
+      const r = event.request
+      this.deps.voice.say({ id: r.id, about, mood: 'ask', from: 'daemon', line: r.line, actions: r.actions, ttlMs: DISPLAY_MS,
+        detail: r.detail, confirm: { kind: r.kind, nonce: r.nonce } }, { always: true })
+    } else if (event.type === 'dropped') {
+      this.deps.voice.unsay(event.request.id, event.reason)
+    } else {
+      this.deps.voice.say({ id: `set:${event.kind}:${this.deps.now()}:${++this.setSeq}`, about, mood: 'say', from: 'daemon', line: event.line, actions: [], ttlMs: DISPLAY_MS }, { always: true })
+    }
+    this.scheduleState(true)
+  }
+
+  /**
+   * `daemon_confirm { requestId, kind, nonce, accept }`: the person's answer to a setting, from a window
+   * attached here that was shown the request at least ARM_MS ago. Always replies (`daemon_confirm_result`).
+   */
+  onConfirm(connId: string, payload: Record<string, unknown>, send: (frame: Record<string, unknown>) => void): void {
+    const requestId = str(payload.requestId, 120)
+    const kind = str(payload.kind, 20)
+    const nonce = str(payload.nonce, 64)
+    const reply = (fields: Record<string, unknown>): void => { send({ type: 'daemon_confirm_result', payload: { requestId, kind, nonce, ...fields } }) }
+    if (!this.clients.has(connId)) { reply({ ok: false, error: 'UI_ONLY' }); return }
+    const gate = this.deps.gate
+    if (!gate) { reply({ ok: false, error: 'UNSUPPORTED' }); return }
+    const id = `confirm:${kind}:${nonce}`
+    const shown = this.deps.shown ? this.deps.shown.check(connId, id) : 'NOT_SHOWN'
+    if (shown) { reply({ ok: false, error: shown }); return }
+    const result = gate.confirm(kind, nonce, payload.accept !== false)
+    reply(result.ok ? { ok: true, accepted: payload.accept !== false } : { ok: false, error: result.error, ...(result.detail ? { detail: result.detail } : {}) })
+  }
+
   /** `daemon_shown { id }`: this window has drawn that line (its keys, and its detail in full). */
   onShown(connId: string, payload: Record<string, unknown>): void {
     const id = str(payload.id, 200)
@@ -523,7 +571,14 @@ export class PairBrain {
 
   state(): Record<string, unknown> {
     const daemonId = this.deps.pairing.pairedDaemon()
-    if (!this.active || !daemonId) return { pair: null, needs: [], working: 0, failing: [], machines: [], done: { count: 0, last: [] }, asks: [], acted: [] }
+    // The dial as it is now (a client shows it as a badge), and what waits for the person's yes.
+    const requested = this.deps.gate?.requestedAutonomy()
+    const dial = {
+      autonomy: this.autonomy(),
+      ...(requested && requested !== this.autonomy() ? { autonomyRequested: requested } : {}),
+      confirms: (this.deps.gate?.requests() ?? []).map((r) => ({ id: r.id, kind: r.kind, nonce: r.nonce, line: r.line, detail: r.detail, actions: r.actions, at: r.at, ...(r.level ? { level: r.level } : {}) })),
+    }
+    if (!this.active || !daemonId) return { pair: null, needs: [], working: 0, failing: [], machines: [], done: { count: 0, last: [] }, asks: [], acted: [], ...dial }
     const harnesses = this.deps.fleet.harnesses()
     const needs = harnesses
       .filter((h) => h.harness.question)
@@ -552,10 +607,13 @@ export class PairBrain {
       done: { count: this.doneCount, last: this.doneLast },
       asks: this.deps.proposals?.pending() ?? [],
       acted: this.acted,
+      ...dial,
     }
   }
 
-  private scheduleState(): void {
+  private scheduleState(evenIdle = false): void {
+    // Idle (pairing off, nobody attached): a change to the dial still reaches a window that is here.
+    if (!this.active && evenIdle) { if (this.clients.size) this.sendState(true); return }
     if (this.stateTimer) return
     this.stateTimer = setTimeout(() => { this.stateTimer = null; this.sendState() }, STATE_DEBOUNCE_MS)
   }

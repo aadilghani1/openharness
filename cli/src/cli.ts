@@ -86,12 +86,13 @@ import { PairToken } from './pair/token.js'
 import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClientDeps } from './pair/client.js'
 import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
-import { PairConfigFile, pairConfigPath, ruleRunner } from './pair/rules.js'
+import { PairConfigFile, pairConfigPath, ruleRunner, type PairConfig } from './pair/rules.js'
 import { LessonSignals } from './pair/learn/signals.js'
 import { LessonDistiller } from './pair/learn/distill.js'
 import { LessonStore } from './pair/learn/store.js'
 import { PairLearner, joinProposals } from './pair/learn/propose.js'
 import { ShownLines } from './pair/shown.js'
+import { PairGate } from './pair/gate.js'
 import { runtimeLessons } from './pair/learn/publish.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { ensureBuiltinPair } from './dsh/builtins.js'
@@ -1804,9 +1805,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let refreshPairFromZoo: () => void = () => {}
   /** The thinking half (pair/brain.ts), built once the relay pool exists. */
   let pairBrain: PairBrain | null = null
-  /** How much the daemon may do on its own (zoo `autonomy`, pair/floor.ts). Read with the paired daemon. */
-  let pairAutonomyLevel: Autonomy = DEFAULT_AUTONOMY
-  const pairAutonomy = (): Autonomy => pairAutonomyLevel
+  /**
+   * What the person confirmed at a window (pair/gate.ts, daemons/BRAIN.md "Security"): the zoo's autonomy
+   * and pair.jsonc are requests; a level above `suggest`, and rules, take effect only after their yes.
+   */
+  const pairGate = new PairGate({ file: join(env.ADAPTER_DATA_DIR, 'pair', 'confirmed.json'), onEvent: (event) => pairBrain?.onGate(event) }, DEFAULT_AUTONOMY)
+  /** How much the daemon may do on its own right now (pair/floor.ts): the level the gate let through. */
+  const pairAutonomy = (): Autonomy => pairGate.autonomy()
   /** HARNESSD_PAIR_TOKEN (pair/token.ts): rotated at every launch of the pair harness. */
   const pairToken = new PairToken(join(env.ADAPTER_DATA_DIR, 'pair', 'token'))
   /** `talk` / `daemon_talk`: the person's words to the pair harness — bound once it can be started. */
@@ -1815,6 +1820,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let pairHarnessActivity: (agentId: string) => void = () => {}
   /** The person's pair.jsonc (pair/rules.ts): the model opt-in, and the rules act-within-rules runs here. */
   const pairConfig = new PairConfigFile(pairConfigPath())
+  /** pair.jsonc as the person confirmed it (pair/gate.ts): a new or changed file waits for their yes. */
+  const pairRulesConfig = (): PairConfig => pairGate.rules(pairConfig.load())
   /** A question opened on this machine: answer it by rule if the dial and a rule say so. Bound with the owner. */
   let pairRules: (agentId: string, requestId: string) => void = () => {}
   /** The pair harness is the daemon's own: its turns are nobody's news (no notification, no count). */
@@ -3672,7 +3679,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let guestAutonomy: Autonomy | null = null
   // The autonomy dial rides with the pair: the account's zoo, or a guest window's own (daemon_presence).
   const applyPair = (): void => {
-    pairAutonomyLevel = zooPair.known ? zooPair.autonomy : guestAutonomy ?? DEFAULT_AUTONOMY
+    // A request: a step above `suggest` waits for the person's yes at a window (pair/gate.ts).
+    pairGate.setRequested(zooPair.known ? zooPair.autonomy : guestAutonomy ?? DEFAULT_AUTONOMY)
     pairSensor.setPair(zooPair.known ? zooPair.pair : guestPair)
   }
   refreshPairFromZoo = () => {
@@ -4308,7 +4316,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // the same owner floor as a key — journaled by `rule`, reported afterwards by whichever brain is watching.
   const runRules = ruleRunner({
     active: () => pairSensor.enabled() && pairAutonomy() === 'act-within-rules',
-    config: () => pairConfig.get(),
+    config: () => pairRulesConfig(),
     question: (agentId) => pairSensor.harness(agentId)?.question ?? null,
     subject: (agentId) => {
       const s = registry.resolve(agentId)
@@ -4401,7 +4409,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // only with pair.jsonc "model": true — and, when you are at this computer, proposes one lesson at a time.
   pairLearner = new PairLearner({
     store: lessonStore,
-    distiller: new LessonDistiller({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairConfig.get().model, now: Date.now, home: homedir() }),
+    distiller: new LessonDistiller({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairRulesConfig().model, now: Date.now, home: homedir() }),
     pairedDaemon: () => pairSensor.pairedDaemon(),
     autonomy: () => pairAutonomy(),
     voice: pairVoice,
@@ -4425,13 +4433,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
     fleet: pairFleet,
     // A model's words only when the person opted in (pair.jsonc "model": true).
-    triage: new PairTriage({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairConfig.get().model, now: Date.now }),
+    triage: new PairTriage({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairRulesConfig().model, now: Date.now }),
     voice: pairVoice,
     proposals: joinProposals(pairControl, pairLearner),
     autonomy: () => pairAutonomy(),
     sendLocal: pairSendLocal,
     sendLocalTo: pairSendLocalTo,
     shown: pairShown,
+    gate: pairGate,
     // A key sent on to another machine is journaled here too, with the window it came from.
     relayed: (fields) => { pairSensor.relayed(fields) },
     // A key pressed on a line about THIS machine's harness: the owner's floor, then the dialog's own
@@ -4442,6 +4451,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
     now: Date.now,
   })
+  // pair.jsonc is read when something needs it, and on this tick: a change asks for the person's yes soon.
+  pairRulesConfig()
+  setInterval(() => { pairRulesConfig() }, 30_000).unref()
   backend.onLocalClient = (connId, attached) => {
     if (attached) { zooPresence.attached(connId); pairBrain?.clientAttached(connId) }
     else { zooPresence.detached(connId); pairBrain?.clientDetached(connId) }
@@ -4683,6 +4695,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       void pairBrain.onKey(connId, payload, (frame) => { reply(frame) })
     },
     onDaemonShown: (connId, payload) => pairBrain?.onShown(connId, payload),
+    // The person's yes (or no) to a setting the gate holds back, from a window that showed it.
+    onDaemonConfirm: (connId, payload, reply) => {
+      if (!pairBrain) { reply({ type: 'daemon_confirm_result', payload: { requestId: payload.requestId, kind: payload.kind, nonce: payload.nonce, ok: false, error: 'UNSUPPORTED' } }); return }
+      pairBrain.onConfirm(connId, payload, (frame) => { reply(frame) })
+    },
     // The person talking to their daemon: forwarded to the pair harness, which starts or wakes for it.
     onDaemonTalk: (_connId, payload, reply) => {
       const requestId = typeof payload.requestId === 'string' ? payload.requestId.slice(0, 120) : ''

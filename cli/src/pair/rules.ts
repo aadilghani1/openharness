@@ -187,33 +187,43 @@ export function ruleRunner(deps: RuleRunnerDeps): (agentId: string, requestId: s
   }
 }
 
-/** The settings file, re-read whenever it changes on disk. A missing file is no rules and no model. */
+/**
+ * The settings file, re-read whenever it changes on disk. A missing file is no rules and no model. What it
+ * says is only a request: the daemon runs a file's rules once the person confirmed that exact text at a
+ * window (pair/gate.ts `rules(load())`); `get()` is the file as written, confirmed or not.
+ */
 export class PairConfigFile {
   private cached: PairConfig = EMPTY_PAIR_CONFIG
+  private text: string | null = null
   private stamp = ''
   private warned = ''
 
   constructor(readonly path: string, private readonly home = homedir()) {}
 
-  get(): PairConfig {
+  get(): PairConfig { return this.load().config }
+
+  /** The file as it is now: its settings, and its exact text (null when there is no file). */
+  load(): { config: PairConfig; text: string | null } {
     let stamp = ''
     try {
       const stat = statSync(this.path)
       stamp = `${stat.mtimeMs}:${stat.size}`
     } catch { stamp = 'missing' }
-    if (stamp === this.stamp) return this.cached
+    if (stamp === this.stamp) return { config: this.cached, text: this.text }
     this.stamp = stamp
-    if (stamp === 'missing') { this.cached = EMPTY_PAIR_CONFIG; return this.cached }
+    if (stamp === 'missing') { this.cached = EMPTY_PAIR_CONFIG; this.text = null; return { config: this.cached, text: null } }
     try {
-      this.cached = parsePairConfig(readFileSync(this.path, 'utf8'), this.home)
+      this.text = readFileSync(this.path, 'utf8')
+      this.cached = parsePairConfig(this.text, this.home)
     } catch (err) {
+      this.text = null
       this.cached = { ...EMPTY_PAIR_CONFIG, error: err instanceof Error ? err.message : String(err) }
     }
     if (this.cached.error && this.cached.error !== this.warned) {
       this.warned = this.cached.error
       console.warn(`[pair] ${this.path}: ${this.cached.error} — no rules until it is fixed`)
     }
-    return this.cached
+    return { config: this.cached, text: this.text }
   }
 }
 

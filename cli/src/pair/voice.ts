@@ -201,16 +201,19 @@ export class PairVoice {
 
   constructor(private readonly deps: PairVoiceDeps) {}
 
-  /** Say it, unless it was said already or the voice is over its limits. True when it went out. */
-  say(say: DaemonSay): boolean {
+  /**
+   * Say it, unless it was said already or the voice is over its limits. True when it went out. `always`:
+   * a change to what the daemon may do (pair/gate.ts) — it is said whatever the limits, once.
+   */
+  say(say: DaemonSay, opts: { always?: boolean } = {}): boolean {
     const now = this.deps.now()
     this.sweep(now)
     if (this.spoken.has(say.id)) return false
-    const unsolicited = UNSOLICITED.has(say.mood)
+    const unsolicited = UNSOLICITED.has(say.mood) && !opts.always
     if (unsolicited && now - this.lastUnsolicited < UNSOLICITED_GAP_MS) return false
     while (this.recent.length && now - this.recent[0] >= SAY_WINDOW_MS) this.recent.shift()
     // A proposal is the one thing worth saying over the per-minute window: nothing happens until it is heard.
-    if (this.recent.length >= SAY_WINDOW_MAX && say.mood !== 'ask') return false
+    if (this.recent.length >= SAY_WINDOW_MAX && say.mood !== 'ask' && !opts.always) return false
     this.recent.push(now)
     if (unsolicited) this.lastUnsolicited = now
     this.remember(say.id)

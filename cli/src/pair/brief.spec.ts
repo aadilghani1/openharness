@@ -64,7 +64,8 @@ function world(opts: { oneshot?: PairOneShot; laptopHangs?: boolean; localDir?: 
     triage: new PairTriage({ oneshot, modelEnabled: () => true, now: Date.now }),
     voice: new PairVoice({ sendLocal: (f) => frames.push(f), now: Date.now }),
     sendLocal: (f) => frames.push(f), sendLocalTo: () => true,
-    answer: async () => ({ ok: true }), now: Date.now,
+    // The person chose `suggest` (the default is `watch`: nothing but [g]).
+    answer: async () => ({ ok: true }), autonomy: () => 'suggest', now: Date.now,
   })
   const backs = () => frames.filter((f) => f.type === 'daemon_say' && (f.payload as DaemonSay).mood === 'back').map((f) => (f.payload as DaemonSay).line)
   const briefs = () => frames.filter((f) => f.type === 'daemon_brief').map((f) => f.payload as { line: string; items: Array<{ id: string; kind: string; line: string; actions?: Array<{ key: string; choice: string }> }> })
