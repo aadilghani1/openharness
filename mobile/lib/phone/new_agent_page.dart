@@ -803,30 +803,10 @@ class _NewAgentPageState extends State<NewAgentPage> {
                 ),
                 // The dock: the task, then Start. It rides the keyboard.
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                  padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TtyText(
-                              'task (optional)',
-                              color: tty.faint,
-                              size: TtySize.meta,
-                            ),
-                          ),
-                          if (count > 1800)
-                            TtyText(
-                              '$count/$kFirstTaskMaxLength',
-                              color: count > kFirstTaskMaxLength
-                                  ? tty.red
-                                  : tty.faint,
-                              size: TtySize.meta,
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
                       // A first harness has nothing to go on: three first tasks to tap, the kind
                       // that shows what an agent does in a minute.
                       if (_task.text.trim().isEmpty && !_creating)
@@ -855,6 +835,26 @@ class _NewAgentPageState extends State<NewAgentPage> {
                             ],
                           ),
                         ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TtyText(
+                              'task (optional)',
+                              color: tty.faint,
+                              size: TtySize.meta,
+                            ),
+                          ),
+                          if (count > 1800)
+                            TtyText(
+                              '$count/$kFirstTaskMaxLength',
+                              color: count > kFirstTaskMaxLength
+                                  ? tty.red
+                                  : tty.faint,
+                              size: TtySize.meta,
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
                       TtyField(
                         controller: _task,
                         hint: 'What should it do?',

@@ -155,7 +155,7 @@ class TerminalTitle extends StatelessWidget {
                                 ),
                               if (branch case final branch?)
                                 TextSpan(
-                                  text: '${place == null ? '' : '  '}$branch',
+                                  text: '${place == null ? '' : ' · '}$branch',
                                   style: tty.style(
                                     color: tty.magenta,
                                     size: TtySize.meta,

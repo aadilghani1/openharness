@@ -260,7 +260,13 @@ class TtyFormRow extends StatelessWidget {
                   ),
                   if (detail case final detail? when detail.isNotEmpty) ...[
                     const SizedBox(height: 2),
-                    TtyText(detail, color: tty.faint, size: TtySize.meta),
+                    // Two lines, then an ellipsis: a note like approvals' meaning is a sentence.
+                    Text(
+                      detail,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: tty.style(color: tty.faint, size: TtySize.meta),
+                    ),
                   ],
                 ],
               ),
@@ -344,47 +350,55 @@ class _TtyFieldState extends State<TtyField> {
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final multi = widget.lines > 1;
-    final field = TextField(
-      controller: widget.controller,
-      focusNode: _focus,
-      autofocus: widget.autofocus,
-      onChanged: widget.onChanged,
-      onSubmitted: (_) => widget.onSubmitted?.call(),
-      minLines: multi ? 3 : 1,
-      maxLines: multi ? widget.lines : 1,
-      maxLength: widget.maxLength,
-      maxLengthEnforcement: MaxLengthEnforcement.enforced,
-      keyboardType:
-          widget.keyboardType ?? (multi ? TextInputType.multiline : null),
-      autofillHints: widget.autofillHints,
-      textInputAction: widget.action,
-      // The keyboard's own composing, left on: Vietnamese Telex on iOS rides on
-      // autocorrection. See `ComposingKeyboard`.
-      autocorrect: ComposingKeyboard.autocorrect,
-      enableSuggestions: ComposingKeyboard.enableSuggestions,
-      smartDashesType: SmartDashesType.disabled,
-      smartQuotesType: SmartQuotesType.disabled,
-      textCapitalization: multi
-          ? TextCapitalization.sentences
-          : TextCapitalization.none,
-      cursorColor: tty.green,
-      cursorWidth: 2,
-      style: tty.style(size: multi ? TtySize.row : TtySize.title),
-      decoration: InputDecoration(
-        isCollapsed: true,
-        constraints: const BoxConstraints(),
-        filled: false,
-        border: InputBorder.none,
-        enabledBorder: InputBorder.none,
-        focusedBorder: InputBorder.none,
-        disabledBorder: InputBorder.none,
-        contentPadding: EdgeInsets.zero,
-        counterText: '',
-        hintText: widget.hint,
-        hintMaxLines: multi ? 3 : 1,
-        hintStyle: tty.style(
-          color: tty.faint,
-          size: multi ? TtySize.row : TtySize.title,
+    final field = TextSelectionTheme(
+      // The terminal's green for the cursor, the handles and the selection — not Material blue.
+      data: TextSelectionThemeData(
+        cursorColor: tty.green,
+        selectionColor: tty.green.withValues(alpha: 0.3),
+        selectionHandleColor: tty.green,
+      ),
+      child: TextField(
+        controller: widget.controller,
+        focusNode: _focus,
+        autofocus: widget.autofocus,
+        onChanged: widget.onChanged,
+        onSubmitted: (_) => widget.onSubmitted?.call(),
+        minLines: multi ? 3 : 1,
+        maxLines: multi ? widget.lines : 1,
+        maxLength: widget.maxLength,
+        maxLengthEnforcement: MaxLengthEnforcement.enforced,
+        keyboardType:
+            widget.keyboardType ?? (multi ? TextInputType.multiline : null),
+        autofillHints: widget.autofillHints,
+        textInputAction: widget.action,
+        // The keyboard's own composing, left on: Vietnamese Telex on iOS rides on
+        // autocorrection. See `ComposingKeyboard`.
+        autocorrect: ComposingKeyboard.autocorrect,
+        enableSuggestions: ComposingKeyboard.enableSuggestions,
+        smartDashesType: SmartDashesType.disabled,
+        smartQuotesType: SmartQuotesType.disabled,
+        textCapitalization: multi
+            ? TextCapitalization.sentences
+            : TextCapitalization.none,
+        cursorColor: tty.green,
+        cursorWidth: 2,
+        style: tty.style(size: multi ? TtySize.row : TtySize.title),
+        decoration: InputDecoration(
+          isCollapsed: true,
+          constraints: const BoxConstraints(),
+          filled: false,
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          disabledBorder: InputBorder.none,
+          contentPadding: EdgeInsets.zero,
+          counterText: '',
+          hintText: widget.hint,
+          hintMaxLines: multi ? 3 : 1,
+          hintStyle: tty.style(
+            color: tty.faint,
+            size: multi ? TtySize.row : TtySize.title,
+          ),
         ),
       ),
     );
