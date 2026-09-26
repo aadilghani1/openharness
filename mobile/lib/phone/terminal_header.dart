@@ -67,11 +67,15 @@ class TerminalHeader extends StatelessWidget {
   ///
   /// Two lines of type: 15pt name over 12.5pt folder, with the engine mark
   /// centred against the pair.
-  static const double rowHeight = 40;
+  ///
+  /// ONE line now — the agent's name — where it was two with the machine, folder and branch under
+  /// it. The header floats over the terminal's top rows, so every point it gives up is text; where
+  /// the agent runs is in the ⋮ sheet and on its row in Find.
+  static const double rowHeight = 28;
 
   static const double sideInset = 14;
-  static const double topInset = 6;
-  static const double bottomInset = 8;
+  static const double topInset = 4;
+  static const double bottomInset = 6;
 
   /// The whole header, insets and divider included — what floats over the
   /// terminal's top rows while it is shown.
@@ -79,7 +83,7 @@ class TerminalHeader extends StatelessWidget {
 
   /// The engine mark's size. Big enough to carry the status dot on its corner
   /// without the dot hiding it.
-  static const double markSize = 28;
+  static const double markSize = 20;
 
   @override
   Widget build(BuildContext context) {
@@ -386,47 +390,43 @@ class _Identity extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final agent = this.agent;
-    final project = agent?.project;
+    // The name alone, and the machine after it only in the faint face — one line. The folder and
+    // branch are in the ⋮ sheet.
     final machineName = this.machineName;
-    final hasPlace =
-        project != null || (machineName != null && machineName.isNotEmpty);
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
       children: [
-        Row(
-          children: [
-            Flexible(
-              child: Text(
-                agent?.displayName ?? 'Harness',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: AppPalette.textPrimary,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  height: 1.2,
-                ),
-              ),
+        Flexible(
+          child: Text(
+            agent?.displayName ?? 'Harness',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: AppPalette.textPrimary,
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
             ),
-            if (opensFind)
-              Padding(
-                padding: const EdgeInsets.only(left: 3),
-                child: Icon(
-                  LucideIcons.chevronDown,
-                  size: 15,
-                  color: AppPalette.textSecondary,
-                ),
-              ),
-          ],
+          ),
         ),
-        if (hasPlace) ...[
-          const SizedBox(height: 2),
-          TerminalPlaceLine(
-            machine: machineName,
-            folder: project?.label,
-            branch: project?.shownBranch,
-            style: _placeStyle,
+        if (opensFind)
+          Padding(
+            padding: const EdgeInsets.only(left: 3),
+            child: Icon(
+              LucideIcons.chevronDown,
+              size: 15,
+              color: AppPalette.textSecondary,
+            ),
+          ),
+        if (machineName != null && machineName.isNotEmpty) ...[
+          const SizedBox(width: 8),
+          Flexible(
+            flex: 0,
+            child: Text(
+              machineName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: _placeStyle,
+            ),
           ),
         ],
       ],

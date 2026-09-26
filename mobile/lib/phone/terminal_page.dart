@@ -2327,8 +2327,9 @@ class _ControlBanner extends StatelessWidget {
 
   String get _title {
     if (busy) return 'Taking control…';
-    if (watching)
+    if (watching) {
       return '${holderName ?? 'Another app'} is using this terminal';
+    }
     return takeoverNotice ?? 'Another app took control of this terminal';
   }
 
