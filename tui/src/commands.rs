@@ -1247,7 +1247,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             } else {
                 match target_pane(app, words) { Some((_, p)) => p, None => return }
             };
-            if flag(words, "-q") { crate::copy::exit_all(app, pane); return app.sync_copy_modal() }
+            if flag(words, "-q") { crate::copy::exit_all(app, pane); crate::tree::exit(app, pane); return app.sync_copy_modal() }
             let source = match opt(words, "-s") {
                 Some(s) => match pane_target(app, &s) { Some((_, p)) => p, None => return app.say(format!("can't find pane: {s}"), theme::WARN) },
                 None => pane,
@@ -1309,7 +1309,19 @@ fn run_words_in(app: &mut App, words: &[String]) {
             else if flag(words, "-a") { input::run(app, "inbox") }
             else if flag(words, "-i") { input::launch(app, ":", Filter::All) }
             else if flag(words, "-S") { input::launch(app, "*", Filter::All) }
-            else { input::run(app, "tree") }
+            else {
+                // cmd-choose-tree.c: the pane into tree mode (window-tree.c) — -w starting on its
+                // window, collapsed; -F the items' format, -K their keys', -f a filter, -O the
+                // sort, -r reversed, -N no preview, -Z zoomed while it lasts; the template run on
+                // the chosen item (switch-client -Zt '%%').
+                let Some((w, p)) = target_pane(app, words) else { return };
+                let command = positional(words).first().cloned().filter(|c| !c.is_empty());
+                let a = crate::tree::Start {
+                    session: false, window: flag(words, "-w"), format: opt(words, "-F"), key_format: opt(words, "-K"), command,
+                    filter: opt(words, "-f"), sort: opt(words, "-O"), reversed: flag(words, "-r"), no_preview: flag(words, "-N"), zoom: flag(words, "-Z"),
+                };
+                crate::tree::enter(app, p, w, &a);
+            }
         }
         "choose-client" => input::run(app, "tree"),
         "find-window" => { input::launch(app, "", Filter::All); let q = rest(words); if !q.is_empty() { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { for c in q.chars() { picker.type_char(c) } } } }
@@ -1906,6 +1918,11 @@ fn run_words_in(app: &mut App, words: &[String]) {
             if flag(words, "-M") {
                 let m = app.mouse_ev.clone().filter(|m| m.valid);
                 let Some((m, (_, pane))) = m.and_then(|m| crate::mouse::mouse_pane(app, &m).map(|t| (m, t))) else { return app.error("no mouse target") };
+                // A pane in the tree: its mode has the event (window_tree_key).
+                if app.panes.get(&pane).map(|p| p.tree_top()).unwrap_or(false) {
+                    if let Some(k) = m.key { crate::tree::key(app, pane, k, Some(&m), true) }
+                    return;
+                }
                 if app.panes.get(&pane).map(|p| p.in_mode()).unwrap_or(false) || m.wp != Some(pane) { return }
                 return crate::mouse::input_key_mouse(app, pane, &m);
             }
@@ -2065,7 +2082,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 let from = (starting as usize).min(n - 1);
                 (0..n).map(|k| (from + k) % n).find(|k| !items[*k].disabled && !items[*k].separator)
             };
-            app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice, x, y, width, stay_open: args.has('O') > 0, no_mouse, mouse: app.mouse_ev.clone() }));
+            app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice, x, y, width, stay_open: args.has('O') > 0, no_mouse, mouse: app.mouse_ev.clone(), tree: None }));
             app.wait_cli = app.capture.is_some();
         }
         "customize-mode" => {

@@ -64,7 +64,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
         }
         if let Some(binding) = app.keymap.prefix_command(&chord).cloned() {
             // A list or view on screen gives way to the command, as tmux's choose modes do.
-            if matches!(app.modal, Some(Modal::Clock { .. }) | Some(Modal::DisplayPanes { .. }) | Some(Modal::Picker { .. }) | Some(Modal::Tree { .. })) { app.modal = None }
+            if matches!(app.modal, Some(Modal::Clock { .. }) | Some(Modal::DisplayPanes { .. }) | Some(Modal::Picker { .. })) { app.modal = None }
             app.repeat_until = binding.repeat.then(|| Instant::now() + Duration::from_millis(app.keymap.repeat_ms));
             commands::execute_bound(app, &binding.command);
         }
@@ -95,6 +95,14 @@ fn on_key(app: &mut App, key: KeyEvent) {
         if mode_key(app, pane, &chord) { return }
         if let Some(binding) = app.keymap.root_command(&chord).cloned() { commands::execute_bound(app, &binding.command) }
         return;
+    }
+    // A pane in the tree (choose-tree): root's bindings first, then the tree's own keys
+    // (window_tree_key) — never the pane's program.
+    if app.modal.is_none() {
+        if let Some(pane) = app.focused().filter(|f| app.panes.get(f).map(|p| p.tree_top()).unwrap_or(false)) {
+            if let Some(binding) = app.keymap.root_command(&chord).cloned() { commands::execute_bound(app, &binding.command); return }
+            return crate::tree::key(app, pane, chord, None, true);
+        }
     }
     if !typing(app) {
         if let Some(binding) = app.keymap.root_command(&chord).cloned() { commands::execute_bound(app, &binding.command); return }
@@ -297,7 +305,7 @@ pub fn scroll_by(app: &mut App, lines: i32) {
 /// (incremental).
 pub fn search_prompt(app: &mut App, up: bool) {
     let Some(pane) = app.focused() else { return };
-    if !app.panes.get(&pane).map(|p| p.in_mode()).unwrap_or(false) { return }
+    if !app.panes.get(&pane).map(|p| p.copy_top()).unwrap_or(false) { return }
     let (label, cmd) = if up { ("(search up)", "search-backward") } else { ("(search down)", "search-forward") };
     let command = if crate::copy::ctx(app, pane).vi { format!("command-prompt -T search -p \"{label}\" {{ send-keys -X {cmd} \"%%\" }}") }
         else { format!("command-prompt -i -I \"#{{pane_search_string}}\" -T search -p \"{label}\" {{ send-keys -X {cmd}-incremental \"%%\" }}") };
@@ -677,7 +685,7 @@ pub fn run(app: &mut App, command: &str) {
                 None => app.say("no last harness", theme::WARN),
             }
         }
-        "tree" => app.modal = Some(Modal::Tree { cursor: tree_cursor_now(app), collapsed: Vec::new() }),
+        "tree" => commands::execute(app, "choose-tree -Zw"),
         "info" => {
             // tmux `display-message` with its default format, harness-flavoured.
             let text = match focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| (x.clone(), app.fleet.machine_name(&m)))) {
@@ -968,7 +976,6 @@ fn modal_key(app: &mut App, key: KeyEvent) {
             }
             app.modal = Some(Modal::Popup { pane, x, y, width, height, border, title });
         }
-        Modal::Tree { cursor, collapsed } => tree_key(app, key, cursor, collapsed),
         Modal::Copy { pane } => { app.modal = Some(Modal::Copy { pane }); mode_key(app, pane, &keys::of(&key)); }
         Modal::Prompt(p) => prompt_key(app, key, p),
         Modal::Picker { kind, picker } => picker_key(app, key, kind, picker),
@@ -997,7 +1004,14 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
             return on_key(app, key);
         }
     }
-    let (single, incremental, ptype) = match &p.kind { PromptKind::Command { one, incremental, ptype, .. } => (*one, *incremental, *ptype), _ => (false, false, 0) };
+    // choose-tree's prompts: a kill's answer is one character (PROMPT_SINGLE); cancelled, a
+    // search or filter is cleared, as their callbacks are given nothing.
+    if let PromptKind::Tree { pane, ask } = p.kind {
+        let vi = app.options.get("status-keys", "", None).as_deref() == Some("vi");
+        if ask.single() { if let KeyCode::Char(c) = key.code { if !ctrl && !alt { return crate::tree::answer(app, pane, ask, Some(&c.to_string())) } } }
+        if (key.code == KeyCode::Esc && !vi) || (ctrl && matches!(key.code, KeyCode::Char('c' | 'g'))) { return crate::tree::answer(app, pane, ask, None) }
+    }
+    let (single, incremental, ptype) = match &p.kind { PromptKind::Command { one, incremental, ptype, .. } => (*one, *incremental, *ptype), PromptKind::Tree { ask, .. } => (false, false, ask.ptype()), _ => (false, false, 0) };
     // status-keys vi (tmux's default when $EDITOR names vi): Esc leaves insert for normal mode.
     let vi = app.options.get("status-keys", "", None).as_deref() == Some("vi");
     if vi && p.vi_normal { prompt_vi_normal(app, key, p); return }
@@ -1026,7 +1040,7 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
         KeyCode::Esc => return,
         KeyCode::Char('c' | 'g') if ctrl => return,
         KeyCode::Enter => {
-            if !p.value.is_empty() && matches!(p.kind, PromptKind::Command { .. }) { add_history(app, ptype, &p.value) }
+            if !p.value.is_empty() && matches!(p.kind, PromptKind::Command { .. } | PromptKind::Tree { .. }) { add_history(app, ptype, &p.value) }
             // An incremental prompt has done its work as it went.
             if incremental { return }
             submit_prompt(app, p);
@@ -1184,7 +1198,7 @@ fn add_history(app: &mut App, ptype: usize, line: &str) {
 /// status_prompt_up_history / _down_history: the prompt's type's history a step back or on
 /// (the step past the newest is an empty line). False when there is nowhere to go.
 fn prompt_history(app: &App, p: &mut Prompt, up: bool) -> bool {
-    let ptype = match &p.kind { PromptKind::Command { ptype, .. } => *ptype, _ => 0 };
+    let ptype = match &p.kind { PromptKind::Command { ptype, .. } => *ptype, PromptKind::Tree { ask, .. } => ask.ptype(), _ => 0 };
     let h = &app.history[ptype.min(3)];
     let n = h.len();
     let idx = p.history_at.unwrap_or(0);
@@ -1430,47 +1444,6 @@ pub fn pipe_to(cmd: &str, text: &str) {
         if let Some(mut stdin) = child.stdin.take() { let _ = stdin.write_all(text.as_bytes()); }
         std::thread::spawn(move || { let _ = child.wait(); });
     }
-}
-
-/// choose-tree -w: j/k (or ↑/↓) move, Enter/l choose, h/← collapse, → expand, x kill, q/Esc leave.
-fn tree_key(app: &mut App, key: KeyEvent, mut cursor: usize, mut collapsed: Vec<String>) {
-    let rows = crate::ui::tree_rows(app, &collapsed);
-    let n = rows.len().max(1);
-    match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => return,
-        KeyCode::Char('c' | 'g') if key.modifiers.contains(KeyModifiers::CONTROL) => return,
-        KeyCode::Char('j') | KeyCode::Down => cursor = (cursor + 1) % n,
-        KeyCode::Char('k') | KeyCode::Up => cursor = (cursor + n - 1) % n,
-        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => cursor = (cursor + 1) % n,
-        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => cursor = (cursor + n - 1) % n,
-        KeyCode::Char('g') | KeyCode::Home => cursor = 0,
-        KeyCode::Char('G') | KeyCode::End => cursor = n - 1,
-        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('-') => {
-            if let Some(r) = rows.get(cursor) { let id = app.tabs[r.window].id.clone(); if !collapsed.contains(&id) { collapsed.push(id) } cursor = rows.iter().position(|x| x.window == r.window && x.pane.is_none()).unwrap_or(cursor) }
-        }
-        KeyCode::Right | KeyCode::Char('+') => { if let Some(r) = rows.get(cursor) { let id = app.tabs[r.window].id.clone(); collapsed.retain(|c| *c != id) } }
-        KeyCode::Enter | KeyCode::Char('l') => {
-            if let Some(r) = rows.get(cursor) {
-                match r.pane { Some(p) => app.focus_pane(r.window, p), None => app.select_tab(r.window) }
-            }
-            return;
-        }
-        KeyCode::Char('x') => {
-            if let Some(r) = rows.get(cursor) {
-                app.modal = Some(match r.pane {
-                    Some(p) => { let idx = app.tabs[r.window].panes().iter().position(|x| *x == p).unwrap_or(0) + app.pane_base(r.window); app.focus_pane(r.window, p); Modal::Confirm { prompt: format!("kill-pane {idx}? (y/n)"), command: "kill-pane".into(), key: 'y', enter_yes: false } }
-                    None => { app.select_tab(r.window); Modal::Confirm { prompt: format!("kill-window {}? (y/n)", app.tabs[r.window].name), command: "kill-window".into(), key: 'y', enter_yes: false } }
-                });
-                return;
-            }
-        }
-        // The number in brackets chooses that row, as tmux's tree does ((0) is the session).
-        KeyCode::Char(c @ '1'..='9') => {
-            if let Some(r) = rows.get(c as usize - '1' as usize) { match r.pane { Some(p) => app.focus_pane(r.window, p), None => app.select_tab(r.window) } return }
-        }
-        _ => {}
-    }
-    app.modal = Some(Modal::Tree { cursor: cursor.min(n - 1), collapsed });
 }
 
 /// What a bound action chain leaves the list to do.
@@ -1813,6 +1786,7 @@ fn submit_prompt(app: &mut App, p: Prompt) {
     match p.kind {
         // Answered by a key press in prompt_key; nothing to submit.
         PromptKind::Key { .. } => {}
+        PromptKind::Tree { pane, ask } => crate::tree::answer(app, pane, ask, Some(&p.value)),
         PromptKind::Command { template, mut more, mut answers, one, digits, incremental, ptype, last } => {
             // The answer as typed (tmux keeps its spaces); the next prompt, if there is one.
             answers.push(p.value.clone());
@@ -1951,7 +1925,11 @@ pub fn paste_into(app: &mut App, pane: u64, text: &str, sep: &str, bracket: bool
 /// over the pane (what fzf in the pane would get: C-b is backward-char, C-a beginning-of-line), to
 /// copy mode through its table (C-b is page-up in copy-mode-vi), else to the pane's program.
 pub fn send_prefix_key(app: &mut App, key: KeyEvent) {
-    if matches!(app.modal, Some(Modal::Picker { .. }) | Some(Modal::Tree { .. }) | Some(Modal::Copy { .. })) { return modal_key(app, key) }
+    if matches!(app.modal, Some(Modal::Picker { .. }) | Some(Modal::Copy { .. })) { return modal_key(app, key) }
+    // The tree over the pane: it has the key (C-b is page-up there).
+    if let Some(pane) = app.focused().filter(|f| app.panes.get(f).map(|p| p.tree_top()).unwrap_or(false)) {
+        return crate::tree::key(app, pane, keys::of(&key), None, true);
+    }
     if let Some(bytes) = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| encode_key(&key, p.mode())) { send_to_focused(app, bytes) }
 }
 
@@ -1966,7 +1944,9 @@ pub fn send_chord(app: &mut App, pane: u64, chord: keys::Chord) {
 /// lot that many times; -X a copy-mode command, which the pane must be in copy mode for; a pane
 /// in copy mode takes the keys as its key table has them.
 pub fn send_keys(app: &mut App, pane: u64, args: &crate::cmd::Args) {
-    let in_mode = app.panes.get(&pane).map(|p| p.in_mode()).unwrap_or(false);
+    // The tree takes keys itself (window_tree_key); copy and view mode through their table.
+    let tree = app.panes.get(&pane).map(|p| p.tree_top()).unwrap_or(false);
+    let in_mode = app.panes.get(&pane).map(|p| p.copy_top()).unwrap_or(false);
     let mut np: u32 = 1;
     if let Some(n) = args.get('N') {
         // args_strtonum_and_expand: a format.
@@ -1983,7 +1963,7 @@ pub fn send_keys(app: &mut App, pane: u64, args: &crate::cmd::Args) {
         }
     }
     if args.has('X') > 0 {
-        if !in_mode { return app.say("not in a mode", theme::WARN) }
+        if !in_mode { return app.error("not in a mode") }
         let mouse = app.mouse_ev.clone().filter(|m| m.valid);
         return crate::copy::command(app, pane, &args.values, args.has('F') > 0, mouse.as_ref());
     }
@@ -1995,15 +1975,17 @@ pub fn send_keys(app: &mut App, pane: u64, args: &crate::cmd::Args) {
         for word in &args.values {
             if args.has('H') > 0 {
                 // A byte by its hex value (none sent for one that isn't).
-                if let Ok(n) = u8::from_str_radix(word, 16) { if !word.is_empty() && !word.starts_with('+') { if in_mode { inject_mode_key(app, pane, keys::Chord::normal(KeyCode::Char(n as char), KeyModifiers::NONE)) } else { bytes.push(n) } } }
+                if let Ok(n) = u8::from_str_radix(word, 16) { if !word.is_empty() && !word.starts_with('+') { if tree { crate::tree::key(app, pane, keys::Chord::normal(KeyCode::Char(n as char), KeyModifiers::NONE), None, false) } else if in_mode { inject_mode_key(app, pane, keys::Chord::normal(KeyCode::Char(n as char), KeyModifiers::NONE)) } else { bytes.push(n) } } }
                 continue;
             }
             match (!literal).then(|| keys::parse(word).ok()).flatten() {
                 // A key by its name: in a mode, what the mode's table binds it to; a mouse key's
                 // name is nothing to a program (there is no event with it).
+                Some(chord) if tree => crate::tree::key(app, pane, chord, None, false),
                 Some(chord) if in_mode => inject_mode_key(app, pane, chord),
                 Some(chord) if keys::is_mouse(&chord.code) => {}
                 Some(chord) => { if let Some(b) = encode_key(&KeyEvent::new(chord.code, chord.mods), mode) { bytes.extend(b) } }
+                None if tree => { for c in word.chars() { crate::tree::key(app, pane, keys::Chord::normal(KeyCode::Char(c), KeyModifiers::NONE), None, false) } }
                 None if in_mode => { for c in word.chars() { inject_mode_key(app, pane, keys::Chord::normal(KeyCode::Char(c), KeyModifiers::NONE)) } }
                 None => bytes.extend(word.as_bytes()),
             }
@@ -2072,12 +2054,6 @@ pub fn ensure_recent(app: &mut App, id: &str) {
 }
 
 /// Where choose-tree's cursor starts: on the active pane's row.
-fn tree_cursor_now(app: &App) -> usize {
-    let rows = crate::ui::tree_rows(app, &[]);
-    // The focused pane's row, or (a lone pane has none) its window's.
-    rows.iter().position(|r| r.window == app.active && r.pane.is_some() && r.pane == app.focused())
-        .or_else(|| rows.iter().position(|r| r.window == app.active && r.pane.is_none())).unwrap_or(0)
-}
 
 /// menu_key_cb's PPage / C-b: five items up (to the first when fewer).
 fn page_up(menu: &crate::modal::Menu, choice: i64) -> i64 {
@@ -2101,6 +2077,7 @@ fn menu_chosen(app: &mut App, menu: crate::modal::Menu) {
         if menu.stay_open { app.modal = Some(Modal::Menu(menu)) }
         return;
     }
+    if let Some((pane, line)) = menu.tree { return crate::tree::menu_chosen(app, pane, line, &it.key) }
     let command = it.command.clone();
     commands::execute_in(app, &command, menu.mouse.clone());
 }

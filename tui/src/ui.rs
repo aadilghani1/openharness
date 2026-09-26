@@ -17,7 +17,7 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
-use crate::fleet::{ago, State};
+use crate::fleet::ago;
 use crate::keys;
 use crate::modal::{Modal, PickerKind, PromptKind};
 use crate::pane::{Pane, Phase};
@@ -36,7 +36,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let buf = frame.buffer_mut();
     let mut cursor: Option<Position> = None;
     // A list takes the window (with --height, only its bottom rows: the panes stay in view).
-    let full_screen = matches!(app.modal, Some(Modal::Tree { .. })) || matches!(app.modal, Some(Modal::Picker { .. }) if theme::fzf_opts().height.is_none());
+    let full_screen = matches!(app.modal, Some(Modal::Picker { .. }) if theme::fzf_opts().height.is_none());
     if !full_screen {
         if app.tab().root.is_none() { empty_window(buf, app, body) }
         else { cursor = window(buf, app, body) }
@@ -60,7 +60,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if let Some(Modal::Picker { kind, picker }) = &app.modal {
         if let (_, Some(pbox), _) = fzf_split(fzf_frame(body, picker).inner, picker) { preview(buf, app, kind, picker, &pbox) }
     }
-    if let Some(Modal::Tree { cursor: at, collapsed }) = &app.modal { tree(buf, app, body, *at, collapsed) }
     let popup = match &app.modal { Some(Modal::Popup { pane, x, y, width, height, border, title }) => Some((*pane, *x, *y, *width, *height, *border, title.clone())), _ => None };
     if let Some((pane, px, py, width, height, border_on, title)) = popup {
         // tmux's popup: a single-line box where display-popup placed it, the program inside.
@@ -81,12 +80,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         if let Some(p) = app.panes.get_mut(&pane) { cursor = pane_body(buf, p, inner, true, (None, None)); }
         }
     }
-    if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
     if app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
     let hidden = app.status_lines() == 0;
     let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.display_ms)).unwrap_or(false);
     if !hidden || speaking { if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) } }
+    // A menu is tmux's overlay: over the status line too, where it is kept on the screen.
+    if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
 }
 
@@ -203,7 +203,14 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
         // window-style (both the pane's own, its window's or the global ones).
         let (a, w) = (app.style_of("window-active-style", app.active, Some(*id)), app.style_of("window-style", app.active, Some(*id)));
         let window = if active { (a.fg.or(w.fg), a.bg.or(w.bg)) } else { (w.fg, w.bg) };
-        if app.panes.get(id).map(|p| p.in_mode()).unwrap_or(false) {
+        // choose-tree's tree, over the pane.
+        if app.panes.get(id).map(|p| p.tree_top()).unwrap_or(false) {
+            if let Some(bg) = window.1 { buf.set_style(content, Style::default().bg(bg)) }
+            crate::tree::draw(app, *id, buf, content);
+            if let Some(pane) = app.panes.get_mut(id) { pane.dirty = false }
+            continue;
+        }
+        if app.panes.get(id).map(|p| p.copy_top()).unwrap_or(false) {
             let (styles, ctx) = (crate::copy::styles(app, *id), crate::copy::ctx(app, *id));
             if let Some(m) = app.panes.get(id).and_then(|p| p.modes.last()) {
                 if let Some(bg) = window.1 { buf.set_style(content, Style::default().bg(bg)) }
@@ -1731,88 +1738,55 @@ fn preview_grid(buf: &mut Buffer, pane: &Pane, area: Rect, scroll: u16) {
 
 // ── tmux modes ───────────────────────────────────────────────────────────────
 
-/// A row of choose-tree: a window, or one of its panes.
-pub struct TreeRow { pub window: usize, pub pane: Option<u64> }
-
-pub fn tree_rows(app: &App, collapsed: &[String]) -> Vec<TreeRow> {
-    let mut rows = Vec::new();
-    for (w, tab) in app.tabs.iter().enumerate() {
-        rows.push(TreeRow { window: w, pane: None });
-        if collapsed.contains(&tab.id) { continue }
-        // A lone pane's title is on its window's row, as tmux's tree has it.
-        let panes = tab.panes();
-        if panes.len() > 1 { for id in panes { rows.push(TreeRow { window: w, pane: Some(id) }) } }
-    }
-    rows
-}
-
-/// choose-tree -w: tmux's format — `(0) + 0: name* (2 panes)`, `(1) ├─> 0: "title"` — the chosen
-/// row in mode-style (yellow), and the window it names previewed below.
-fn tree(buf: &mut Buffer, app: &App, body: Rect, cursor: usize, collapsed: &[String]) {
-    for y in body.y..body.y + body.height { for x in body.x..body.x + body.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
-    let rows = tree_rows(app, collapsed);
-    let list_h = (body.height / 2).max(3).min(rows.len() as u16 + 1).min(body.height);
-    let mode = Style::default().bg(Color::Yellow).fg(Color::Black);
-    // tmux's tree: the session first, then its windows, then (expanded) their panes.
-    let session = format!("(0)  - {}: {} windows (attached)", app.session_name(), app.tabs.len());
-    buf.set_stringn(body.x, body.y, &session, body.width as usize, Style::default());
-    let room = list_h.saturating_sub(1) as usize;
-    let start = cursor.saturating_sub(room.saturating_sub(1));
-    let pane_title = |p: u64| {
-        let pane = app.panes.get(&p);
-        let name = pane.and_then(|pn| app.fleet.agent(&pn.machine_id, &pn.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
-        let machine = pane.filter(|pn| pn.machine_id != app.fleet.local_id).map(|pn| format!(" {}", app.fleet.machine_name(&pn.machine_id))).unwrap_or_default();
-        let state = pane.and_then(|pn| app.fleet.agent(&pn.machine_id, &pn.agent_id)).map(|a| match app.fleet.state_of(a) { State::NeedsInput => " [waiting]", State::Working => " [working]", State::Paused => " [paused]", State::Offline => " [offline]", _ => "" }).unwrap_or("");
-        format!("\"{name}\"{machine}{state}")
+/// screen_write_preview: [pane]'s screen into [nx] × [ny] cells at (x, y) — around its cursor
+/// when the cursor is shown (a third of the way in, held to the screen), else from the top left,
+/// the cursor's cell reversed.
+pub fn screen_preview(buf: &mut Buffer, pane: &Pane, x: u16, y: u16, nx: u16, ny: u16) {
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::index::{Column, Line};
+    let grid = pane.term.grid();
+    let (sx, sy) = (grid.columns() as u16, grid.screen_lines() as u16);
+    let shown = pane.term.mode().contains(TermMode::SHOW_CURSOR);
+    let cur = grid.cursor.point;
+    let (cx, cy) = (cur.column.0 as u16, cur.line.0.max(0) as u16);
+    let (px, py) = if shown {
+        let mut px = if cx < nx / 3 { 0 } else { cx - nx / 3 };
+        if px + nx > sx { px = if nx > sx { 0 } else { sx - nx } }
+        let mut py = if cy < ny / 3 { 0 } else { cy - ny / 3 };
+        if py + ny > sy { py = if ny > sy { 0 } else { sy - ny } }
+        (px, py)
+    } else { (0, 0) };
+    let colors = pane.term.colors();
+    let style_of = |cell: &alacritty_terminal::term::cell::Cell| {
+        let (fg, dim) = map_color(cell.fg, colors, true);
+        let (bg, _) = map_color(cell.bg, colors, false);
+        let mut st = Style::default().fg(fg).bg(bg);
+        if cell.flags.contains(Flags::BOLD) { st = st.add_modifier(Modifier::BOLD) }
+        if cell.flags.contains(Flags::DIM) || dim { st = st.add_modifier(Modifier::DIM) }
+        if cell.flags.contains(Flags::INVERSE) { st = st.add_modifier(Modifier::REVERSED) }
+        if cell.flags.contains(Flags::ITALIC) { st = st.add_modifier(Modifier::ITALIC) }
+        if cell.flags.intersects(Flags::ALL_UNDERLINES) { st = st.add_modifier(Modifier::UNDERLINED) }
+        if cell.flags.contains(Flags::STRIKEOUT) { st = st.add_modifier(Modifier::CROSSED_OUT) }
+        st
     };
-    let last_window = rows.iter().rposition(|r| r.pane.is_none()).unwrap_or(0);
-    for (i, row) in rows.iter().enumerate().skip(start).take(room) {
-        let y = body.y + 1 + (i - start) as u16;
-        let tab = &app.tabs[row.window];
-        let n = i + 1;
-        let text = match row.pane {
-            None => {
-                let panes = tab.panes();
-                let branch = if i == last_window { "└─>" } else { "├─>" };
-                let fold = if panes.len() < 2 { " " } else if collapsed.contains(&tab.id) { "+" } else { "-" };
-                let mut flags = String::new();
-                if row.window == app.active { flags.push('*') } else if app.last_tab() == Some(&tab.id) { flags.push('-') }
-                if tab.zoomed { flags.push('Z') }
-                let tail = match panes.as_slice() { [only] => format!(": {}", pane_title(*only)), [] => String::new(), _ => format!(" ({} panes)", panes.len()) };
-                format!("({n}) {branch} {fold} {}: {}{flags}{tail}", app.win_num(row.window), tab.name)
-            }
-            Some(p) => {
-                let panes = tab.panes();
-                let at = panes.iter().position(|x| *x == p).unwrap_or(0);
-                let rail = if rows.iter().skip(i + 1).any(|r| r.pane.is_none()) { "│" } else { " " };
-                let branch = if at + 1 == panes.len() { "└─>" } else { "├─>" };
-                format!("({n}) {rail}   {branch} {}: {}", at + app.pane_base(row.window), pane_title(p))
-            }
-        };
-        let style = if i == cursor { mode } else { Style::default() };
-        if i == cursor { buf.set_style(Rect::new(body.x, y, body.width, 1), mode) }
-        buf.set_stringn(body.x, y, &clip(&text, body.width as usize), body.width as usize, style);
-    }
-    // The preview: the chosen window's (or pane's) terminal, in a box below.
-    let top = body.y + list_h;
-    if body.height <= list_h + 3 { return }
-    let area = Rect::new(body.x, top, body.width, body.height - list_h);
-    let border = Style::default();
-    for x in area.x..area.x + area.width { buf.set_string(x, area.y, "─", border); buf.set_string(x, area.y + area.height - 1, "─", border); }
-    for y in area.y..area.y + area.height { buf.set_string(area.x, y, "│", border); buf.set_string(area.x + area.width - 1, y, "│", border); }
-    buf.set_string(area.x, area.y, "┌", border); buf.set_string(area.x + area.width - 1, area.y, "┐", border);
-    buf.set_string(area.x, area.y + area.height - 1, "└", border); buf.set_string(area.x + area.width - 1, area.y + area.height - 1, "┘", border);
-    let Some(row) = rows.get(cursor) else { return };
-    let pane_id = row.pane.or(app.tabs[row.window].focus);
-    let inner = Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
-    match pane_id.and_then(|p| app.panes.get(&p)) {
-        Some(pane) if matches!(pane.phase, Phase::Live | Phase::Watching(_)) => {
-            let label = format!(" {}: {} ", app.win_num(row.window), app.tabs[row.window].name);
-            buf.set_stringn(area.x + 2, area.y, &clip(&label, area.width.saturating_sub(4) as usize), area.width.saturating_sub(4) as usize, Style::default());
-            preview_grid(buf, pane, inner, 0)
+    // screen_write_fast_copy: each line's cells, a wide one that would cross the edge left out.
+    for j in 0..ny {
+        let yy = py + j;
+        if yy >= sy { break }
+        let row = &grid[Line(yy as i32)];
+        let mut out = 0u16;
+        for xx in px..(px + nx).min(sx) {
+            let cell = &row[Column(xx as usize)];
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) { out += 1; continue }
+            let w = if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+            if xx + w > px + nx { break }
+            if let Some(t) = buf.cell_mut((x + out, y + j)) { t.set_char(if cell.c == '\0' { ' ' } else { cell.c }).set_style(style_of(cell)); }
+            out += 1;
         }
-        Some(_) => { buf.set_string(inner.x + 1, inner.y, "(not streaming yet — open it to see it)", Style::default().add_modifier(Modifier::DIM)); }
-        None => { buf.set_string(inner.x + 1, inner.y, "(empty window)", Style::default().add_modifier(Modifier::DIM)); }
+    }
+    if shown && cx >= px && cy >= py && cx < px + nx && cy < py + ny && cx < sx && cy < sy {
+        let cell = &grid[Line(cy as i32)][Column(cx as usize)];
+        if let Some(t) = buf.cell_mut((x + cx - px, y + cy - py)) { t.set_char(if cell.c == '\0' { ' ' } else { cell.c }).set_style(style_of(cell).add_modifier(Modifier::REVERSED)); }
     }
 }
 

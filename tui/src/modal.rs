@@ -76,6 +76,9 @@ pub enum PromptKind {
     Command { template: Option<String>, more: Vec<(String, String)>, answers: Vec<String>, one: bool, digits: bool, incremental: bool, ptype: usize, last: String },
     /// command-prompt -k: the next key pressed, by its tmux name, fills the template.
     Key { template: String },
+    /// A prompt of choose-tree's for the tree in [pane]: search, filter, kill (one key), a
+    /// command for the tagged items.
+    Tree { pane: u64, ask: crate::tree::Ask },
 }
 
 /// A line typed in the status line, tmux-style: `(rename-window) name`, `:split-window -h`.
@@ -109,7 +112,9 @@ pub struct MenuItem { pub label: String, pub key: String, pub command: String, p
 
 /// tmux's display-menu (menu.c): its items, where its box is (x, y: the top-left corner; the box
 /// is width + 4 by the items + 2), which item is chosen (none yet when the mouse opened it), -O,
-/// and the mouse event of the command that opened it (its items' commands run with it).
+/// and the mouse event of the command that opened it (its items' commands run with it). A
+/// choose-tree's menu (a right click in it) gives its item's key to the tree in that pane, the
+/// line clicked made current, in place of a command.
 #[derive(Clone, Debug)]
 pub struct Menu {
     pub title: String,
@@ -121,6 +126,7 @@ pub struct Menu {
     pub stay_open: bool,
     pub no_mouse: bool,
     pub mouse: Option<crate::mouse::Event>,
+    pub tree: Option<(u64, usize)>,
 }
 
 pub enum Modal {
@@ -135,8 +141,6 @@ pub enum Modal {
     DisplayPanes { until: std::time::Instant },
     /// tmux `clock-mode` (C-b t).
     Clock { pane: u64 },
-    /// tmux `choose-tree -w` (C-b w): windows and their panes, with a preview.
-    Tree { cursor: usize, collapsed: Vec<String> },
     /// display-popup: a shell floating over the window; it goes when its program exits.
     Popup { pane: u64, x: u16, y: u16, width: u16, height: u16, border: bool, title: String },
     /// copy-mode (C-b [): move a cursor over the pane's text and copy from it, vi-style.

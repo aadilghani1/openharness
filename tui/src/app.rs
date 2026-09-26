@@ -337,6 +337,9 @@ pub struct App {
     pub config_files: Vec<String>,
     /// #{line}: the row a list-* command is printing.
     pub format_line: Option<usize>,
+    /// format_defaults' type while choose-tree expands an item's format (tree::FORMAT_*): what
+    /// #{session_format}, #{window_format} and #{pane_format} say.
+    pub format_type: Option<u8>,
     /// The paste buffer a format is expanded for (list-buffers -F).
     pub format_buffer: Option<String>,
     /// What the shell running the command piped in (load-buffer -, source-file -).
@@ -442,6 +445,7 @@ impl App {
             origin: None,
             format_buffer: None,
             format_line: None,
+            format_type: None,
             config_files: Vec::new(),
             format_command: None,
             cli_stdin: None,
@@ -1094,7 +1098,7 @@ impl App {
         for (id, rect) in visible {
             let content = self.content_of(self.tab(), rect);
             let content = (content.width, content.height);
-            if self.panes.get(&id).map(|p| p.in_mode()).unwrap_or(false) { crate::copy::fit(self, id, content.0 as u32, content.1 as u32) }
+            if self.panes.get(&id).map(|p| !p.modes.is_empty()).unwrap_or(false) { crate::copy::fit(self, id, content.0 as u32, content.1 as u32) }
             let Some(pane) = self.panes.get_mut(&id) else { continue };
             pane.dirty = true;
             let want = pane::stream_size(content.0, content.1);
@@ -2453,7 +2457,7 @@ impl App {
     /// when it is not (whatever other pane is in copy mode).
     pub fn sync_copy_modal(&mut self) {
         if !matches!(self.modal, None | Some(Modal::Copy { .. })) { return }
-        let pane = self.focused().filter(|f| self.panes.get(f).map(|p| p.in_mode()).unwrap_or(false));
+        let pane = self.focused().filter(|f| self.panes.get(f).map(|p| p.copy_top()).unwrap_or(false));
         self.modal = pane.map(|pane| Modal::Copy { pane });
     }
 

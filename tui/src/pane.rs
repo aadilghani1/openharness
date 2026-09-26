@@ -113,6 +113,10 @@ pub struct Pane {
     pub open_token: u64,
     /// The pane's modes, the one in front last: copy mode and view mode (tmux's wp->modes).
     pub modes: Vec<Box<crate::copy::Copy>>,
+    /// choose-tree's tree mode, if the pane is in it, and where it stands among the modes: over
+    /// the copy and view modes below that many (a copy mode entered later is over it).
+    pub tree: Option<Box<crate::tree::Tree>>,
+    pub tree_at: usize,
     /// The last search in copy mode (wp->searchstr): the next copy mode starts with it.
     pub search: crate::copy::PaneSearch,
     /// Output arrived while in a mode (#{pane_unseen_changes}).
@@ -206,6 +210,8 @@ impl Pane {
             predictions: Vec::new(),
             open_token: 0,
             modes: Vec::new(),
+            tree: None,
+            tree_at: 0,
             search: Default::default(),
             unseen: false,
             times: Default::default(),
@@ -384,8 +390,17 @@ impl Pane {
     /// tmux's clear-history: this window's copy of the scrollback, gone.
     pub fn clear_history(&mut self) { self.term.grid_mut().clear_history(); self.times.clear(); self.dirty = true }
 
-    /// Whether the pane is in copy mode or view mode.
-    pub fn in_mode(&self) -> bool { !self.modes.is_empty() }
+    /// Whether the pane is in a mode: copy mode, view mode or tree mode (#{pane_in_mode}).
+    pub fn in_mode(&self) -> bool { !self.modes.is_empty() || self.tree.is_some() }
+
+    /// Whether the mode in front is the tree (choose-tree).
+    pub fn tree_top(&self) -> bool { self.tree.is_some() && self.modes.len() <= self.tree_at }
+
+    /// Whether the mode in front is copy mode or view mode.
+    pub fn copy_top(&self) -> bool { !self.modes.is_empty() && !self.tree_top() }
+
+    /// How many modes the pane is in (#{pane_in_mode}).
+    pub fn mode_count(&self) -> usize { self.modes.len() + self.tree.is_some() as usize }
 
     /// capture-pane -S/-E: rows from `start` to `end` (0 the top of the screen, negative into
     /// the history, `-` the ends), every row kept.

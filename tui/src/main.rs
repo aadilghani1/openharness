@@ -4,6 +4,7 @@
 
 mod app;
 mod capture;
+mod tree;
 mod borders;
 mod cli;
 mod clipboard;

@@ -936,7 +936,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             match name { "pane_width" => r.width, "pane_height" => r.height, "pane_left" => r.x, "pane_top" => r.y, "pane_right" => r.x + r.width.saturating_sub(1), _ => (r.y + r.height).saturating_sub(1) }.to_string()
         }
         // format_cb_pane_in_mode: how many modes the pane is in.
-        "pane_in_mode" => pane.map(|p| p.modes.len().to_string()).unwrap_or_else(|| "0".into()),
+        "pane_in_mode" => pane.map(|p| p.mode_count().to_string()).unwrap_or_else(|| "0".into()),
         "session_windows" => app.tabs.len().to_string(),
         // The session in front is this client's; one a command reaches for a moment is not.
         "session_attached" => if app.swap_back.is_some() { "0".into() } else { "1".into() },
@@ -976,7 +976,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "socket_path" => crate::ipc::here().map(|p| p.display().to_string()).unwrap_or_default(),
         "client_session" => app.session_name(),
         "client_name" | "client_tty" => crate::app::tty_name(),
-        "pane_mode" => pane.and_then(|p| p.modes.last()).map(|m| if m.view { "view-mode" } else { "copy-mode" }).unwrap_or("").into(),
+        "pane_mode" => pane.and_then(|p| if p.tree_top() { Some(crate::tree::MODE_NAME) } else { p.modes.last().map(|m| if m.view { "view-mode" } else { "copy-mode" }) }).unwrap_or("").into(),
         // window_copy_formats: a pane in copy or view mode has them (some only with a selection
         // or a search); others none.
         "scroll_position" | "rectangle_toggle" | "copy_cursor_x" | "copy_cursor_y" | "selection_start_x" | "selection_start_y" | "selection_end_x" | "selection_end_y"
@@ -1106,8 +1106,11 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_marked_flag" => tab.map(|t| app.marked.map(|m| t.panes().contains(&m)).unwrap_or(false)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "pane_fg" | "pane_bg" => pane.map(|_| "default".to_string()).unwrap_or_default(),
         "pane_path" => pane.and_then(|p| p.cwd.clone()).unwrap_or_default(),
-        "pane_format" => (pane_id.is_some() || focus.is_some()).then_some("1").unwrap_or("0").into(),
-        "window_format" | "session_format" | "session_marked" => "0".into(),
+        // format_defaults' type: a pane's format, a window's or a session's (choose-tree's items).
+        "pane_format" => match app.format_type { Some(t) => (t == crate::tree::FORMAT_PANE).then_some("1").unwrap_or("0").into(), None => (pane_id.is_some() || focus.is_some()).then_some("1").unwrap_or("0").into() },
+        "window_format" => (app.format_type == Some(crate::tree::FORMAT_WINDOW)).then_some("1").unwrap_or("0").into(),
+        "session_format" => (app.format_type == Some(crate::tree::FORMAT_SESSION)).then_some("1").unwrap_or("0").into(),
+        "session_marked" => "0".into(),
         "active_window_index" => app.win_num(app.active).to_string(),
         "last_window_index" => (0..app.tabs.len()).map(|i| app.win_num(i)).max().map(|n| n.to_string()).unwrap_or_default(),
         "next_session_id" => "$1".into(),

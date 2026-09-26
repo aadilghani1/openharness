@@ -131,6 +131,7 @@ wss.on('connection', (ws) => {
       if (!stream) return
       // Echo: what was typed comes back as output, Enter as a new prompt line.
       const text = bytes.subarray(36).toString('utf8').replace(/\r/g, '\r\n$ ')
+      stream.screen += text
       ws.send(frame(2, streamId, stream.seq++, Buffer.from(text)))
       return
     }
@@ -209,18 +210,21 @@ wss.on('connection', (ws) => {
         const target = agents[machine].find((a) => a.id === payload.agentId)
         if (!target || target.status !== 'active') return send('terminal_error', { requestId: payload.requestId, code: 'TERMINAL_AGENT_NOT_FOUND' })
         const streamId = randomUUID()
-        streams.set(streamId, { seq: 1, agent: target })
-        send('terminal_ready', { requestId: payload.requestId, streamId, agentId: target.id, readOnly: false })
         // MOCK_BANNER: bytes a terminal prints before its prompt (a test's colours, say).
         const banner = (process.env.MOCK_BANNER || '').replace(/\\e/g, '\x1b').replace(/\\r\\n/g, '\r\n')
-        ws.send(frame(3, streamId, 0, Buffer.from(DEMO ? demoScreen(target) : `\x1bc${target.name} (mock)\r\n${banner}$ `), [payload.cols, payload.rows]))
+        // MOCK_PLAIN: a terminal that is only its prompt.
+        const screen = DEMO ? demoScreen(target) : process.env.MOCK_PLAIN ? '\x1bc$ ' : `\x1bc${target.name} (mock)\r\n${banner}$ `
+        streams.set(streamId, { seq: 1, agent: target, screen })
+        send('terminal_ready', { requestId: payload.requestId, streamId, agentId: target.id, readOnly: false })
+        ws.send(frame(3, streamId, 0, Buffer.from(screen), [payload.cols, payload.rows]))
         return
       }
       case 'terminal_close': streams.delete(payload.streamId); return
       case 'terminal_resize': {
-        // A demo pane redraws at its new size, as the agent in it would: a keyframe of that size.
+        // A pane redraws at its new size, as the daemon's keyframe after a resize shows it: a demo
+        // agent its screen, a terminal what it has printed, wrapped at the new width.
         const stream = streams.get(payload.streamId)
-        if (DEMO && stream) ws.send(frame(3, payload.streamId, stream.seq++, Buffer.from(demoScreen(stream.agent)), [payload.cols, payload.rows]))
+        if (stream) ws.send(frame(3, payload.streamId, stream.seq++, Buffer.from(DEMO ? demoScreen(stream.agent) : stream.screen), [payload.cols, payload.rows]))
         return
       }
       default: return // acks, alive, resize, focus: nothing to do

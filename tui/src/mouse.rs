@@ -132,7 +132,7 @@ fn handle(app: &mut App, mut m: Event, double: bool) {
     app.toast = None;
     // cmd_find_from_mouse: the pane the key is for, else the current one.
     let pane = mouse_pane(app, &m).map(|(_, p)| p).or_else(|| app.focused());
-    let in_copy = pane.and_then(|p| app.panes.get(&p)).map(|p| p.in_mode()).unwrap_or(false);
+    let in_copy = pane.and_then(|p| app.panes.get(&p)).map(|p| p.copy_top()).unwrap_or(false);
     // The table: the prefix's after the prefix, a table of your own (switch-client -T); over a
     // pane in copy mode its table; else root — and root again when that one has nothing.
     let first = if app.prefix { "prefix".to_string() }
@@ -149,6 +149,8 @@ fn handle(app: &mut App, mut m: Event, double: bool) {
             // window_pane_key: nothing for a pane in copy mode; else its program, if the event
             // was over it.
             let Some(pane) = pane else { return };
+            // A pane in the tree: its mode has the event.
+            if app.panes.get(&pane).map(|p| p.tree_top()).unwrap_or(false) { return crate::tree::key(app, pane, chord, Some(&m), true) }
             if in_copy || m.wp != Some(pane) { return }
             input_key_mouse(app, pane, &m);
         }
