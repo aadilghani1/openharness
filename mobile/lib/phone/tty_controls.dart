@@ -83,13 +83,14 @@ class _TtyPrimaryButtonState extends State<TtyPrimaryButton> {
               }
             : null,
         child: Container(
-          height: TtyPrimaryButton.height,
+          // At least this tall, and taller when the text is larger — never clipped.
+          constraints: const BoxConstraints(minHeight: TtyPrimaryButton.height),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
             color: fill,
             borderRadius: BorderRadius.circular(6),
           ),
           alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
           child: TtyText(
             widget.busy ? (widget.busyLabel ?? widget.label) : widget.label,
             color: ink,

@@ -112,28 +112,12 @@ class CommandLine extends StatelessWidget {
                       child: Semantics(
                         button: true,
                         label: 'Answer ${keys[i].label}',
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () {
-                            HapticFeedback.selectionClick();
-                            keys[i].onTap();
-                          },
-                          child: SizedBox(
-                            height: bar + slop,
-                            child: Align(
-                              alignment: Alignment.topCenter,
-                              child: SizedBox(
-                                height: bar,
-                                child: Center(
-                                  child: TtyText(
-                                    keys[i].label,
-                                    color: ink,
-                                    weight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
+                        child: _AnswerKey(
+                          label: keys[i].label,
+                          ink: ink,
+                          bar: bar,
+                          slop: slop,
+                          onTap: keys[i].onTap,
                         ),
                       ),
                     ),
@@ -146,4 +130,61 @@ class CommandLine extends StatelessWidget {
     }
     return const SizedBox.shrink();
   }
+}
+
+/// One answer on the prompt bar. It darkens under the finger on the way DOWN, the way a key does,
+/// so the answer reads as taken before the dialog has even closed.
+class _AnswerKey extends StatefulWidget {
+  const _AnswerKey({
+    required this.label,
+    required this.ink,
+    required this.bar,
+    required this.slop,
+    required this.onTap,
+  });
+
+  final String label;
+  final Color ink;
+  final double bar;
+  final double slop;
+  final VoidCallback onTap;
+
+  @override
+  State<_AnswerKey> createState() => _AnswerKeyState();
+}
+
+class _AnswerKeyState extends State<_AnswerKey> {
+  bool _down = false;
+
+  void _set(bool down) {
+    if (_down != down) setState(() => _down = down);
+  }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTapDown: (_) => _set(true),
+    onTapCancel: () => _set(false),
+    onTapUp: (_) => _set(false),
+    onTap: () {
+      HapticFeedback.selectionClick();
+      widget.onTap();
+    },
+    child: SizedBox(
+      height: widget.bar + widget.slop,
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Container(
+          height: widget.bar,
+          color: _down ? Colors.black.withValues(alpha: 0.18) : null,
+          alignment: Alignment.center,
+          child: TtyText(
+            widget.label,
+            color: widget.ink,
+            weight: FontWeight.w700,
+          ),
+        ),
+      ),
+    ),
+  );
 }

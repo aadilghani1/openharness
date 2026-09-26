@@ -96,7 +96,9 @@ class _UnlockComputerState extends State<UnlockComputer> {
     });
     if (error == null) {
       _password.clear();
-      HapticFeedback.lightImpact();
+      HapticFeedback.mediumImpact();
+    } else {
+      HapticFeedback.heavyImpact();
     }
   }
 
