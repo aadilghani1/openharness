@@ -51,7 +51,7 @@ flags are accepted (hn already works that way) and `-c` runs a command in your s
 
 ## Keys
 
-tmux's. The prefix is `C-b`; `C-b s` then `C-v`, `C-x` or `C-t` puts any harness beside, below or in a new window; every default tmux binding does what it does in tmux, with a window
+tmux's. The prefix is `C-b`; `C-b s` then Enter goes to any harness (its window, or a window of its own), `C-v` or `C-x` puts it beside or below; every default tmux binding does what it does in tmux, with a window
 being a tab and a pane being a harness. If you have a `~/.tmux.conf`, it is read: your prefix and
 binds (copy-mode-vi's and vim-tmux-navigator's too), `source-file`, `if-shell`, `base-index`,
 `renumber-windows`, `mouse`, `mode-keys`, `status-left`/`status-right` and the window formats
@@ -144,10 +144,13 @@ pane counts as done and unread (`✓`) until you go to that pane.
   unread, working, then the rest. Each row has one line: the question, what it is doing now
   (`Run the unit tests`, from its tool calls), what its last turn came to (the daemon's recap, else
   the first line of its final message), or why it failed (`The agent did not start within 60
-  seconds.`). Each row also has its pull request (`#4812`, `#4807 draft`, `#4790 merged`) and how
-  long it has been that way. From the list, without opening it: `M-m` marks it read (`M-M` every
-  row shown), `M-s` sends it a message, `M-r` restarts it, `M-1…9` / `M-a` answer it; `C-t` with
-  marked rows opens a window each. The list stays ranked while it is open. The preview adds its
+  seconds.`). Each row also has its pull request (`#4812`, `#4807 draft`, `#4790 merged`), its
+  project when there are several, and how long it has been that way. Enter goes to it: its window,
+  or a window of its own (`C-v` / `C-x` beside or below, `M-Enter` in place of this pane). Typing
+  filters as fzf does, by name, project, branch, machine, pull request (`'4812`) or state
+  (`'waiting`, `'failed`, `'done`, `'working`, `'idle`). From the list, without opening it: `M-m`
+  marks it read (`M-M` every row shown), `M-s` sends it a message, `M-r` restarts it, `M-1…9` /
+  `M-a` answer it; marked rows open a window each. The list stays ranked while it is open. The preview adds its
   final message whole, what it was last asked, its plan (its to-do list,
   `✓` done, `▸` doing), the sub-agents it has running, and what it has used (`1.2M tokens · +340
   −52 · 1 PR`).
@@ -191,7 +194,8 @@ hn display -p '#{pane_current_path}'
 hn send-keys -t 1 'make test' Enter
 hn capture-pane -p -t 0 | tail
 hn list-panes -F '#{pane_index} #{pane_title}'
-hn list-harnesses            # every harness on every machine (hn ls is list-sessions, as in tmux)
+hn list-harnesses            # every harness on every machine and its state (hn ls is list-sessions, as in tmux)
+hn lsh -f '#{==:#{harness_state},needs}' -F '#{harness_name}: #{harness_question}'   # who is waiting, and on what
 hn send-message -t api 'run the tests'   # a message to a harness, as a turn (hn send is send-keys, as in tmux)
 ```
 
