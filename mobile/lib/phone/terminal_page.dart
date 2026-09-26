@@ -29,11 +29,9 @@ import 'package:harness_mobile/widgets/terminal_panel.dart';
 
 import 'agent_model_sections.dart';
 import 'agent_model_sheet.dart';
-import 'agents_list_page.dart';
 import 'agents_page.dart' show openNewAgent;
 import 'delete_agent.dart';
 import 'held_height.dart';
-import 'machines_tab.dart';
 import 'phone_navigation.dart' show phoneRoute;
 import 'phone_sheet.dart';
 import 'phone_status.dart';
@@ -784,16 +782,6 @@ class _TerminalPageState extends State<TerminalPage>
       if (!mounted || next == null) return;
       _actionsStatus.value = next;
     });
-  }
-
-  /// Opens the account-wide agent list.
-  ///
-  /// Awaited: the list is backed out of as often as it is tapped through, and
-  /// this page gets no rebuild when it lands back on top.
-  Future<void> _openAgentList() async {
-    await Navigator.of(context)
-        .push(phoneRoute((_) => AgentsListPage(notifier: widget.notifier)));
-    if (mounted) setState(() {});
   }
 
   /// Whether the reader is scrolled up and output has arrived below — see [_LatestChip].
@@ -2050,31 +2038,10 @@ class _TerminalPageState extends State<TerminalPage>
       // chevron is what tells a door from an action.
       sections: [
         PhoneSheetSection(actions: _agentActions(agent)),
+        // Harnesses and Machines went: Find (a swipe right) is every agent on every computer, and
+        // the computers are a row in Settings.
         PhoneSheetSection(
-          caption: 'App',
           actions: [
-            // Every agent on the account, not just this machine's: the sheet is opened from inside
-            // one agent, and the thing somebody wants from here is another agent — which is as
-            // often on the other laptop as on this one.
-            //
-            // [AgentsListPage] draws them, with the magnifier in its header for when the list is
-            // longer than a screenful.
-            PhoneSheetAction(
-              icon: LucideIcons.squareTerminal300,
-              label: 'Harnesses',
-              chevron: true,
-              onTap: () => unawaited(_openAgentList()),
-            ),
-            PhoneSheetAction(
-              icon: LucideIcons.laptopMinimal300,
-              label: 'Machines',
-              chevron: true,
-              onTap: () => Navigator.of(context).push(
-                phoneRoute(
-                  (_) => MachinesTab(notifier: widget.notifier, large: false),
-                ),
-              ),
-            ),
             PhoneSheetAction(
               icon: LucideIcons.settings300,
               label: 'Settings',

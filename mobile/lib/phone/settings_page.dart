@@ -14,7 +14,9 @@ import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
+import 'machines_tab.dart';
 import 'phone_header.dart';
+import 'phone_navigation.dart' show phoneRoute;
 import 'phone_name_store.dart';
 import 'phone_sheet.dart';
 import 'settings_row.dart';
@@ -114,6 +116,14 @@ class _Body extends StatelessWidget {
             title: notifier.currentUser?.displayName ?? 'Signed in',
             detail: notifier.currentUser?.email,
             onTap: () => _showAccountSheet(context, notifier),
+          ),
+          // The computers this phone reaches — here rather than a menu of their own: linking one is
+          // a once-a-while errand, and Find already reaches every agent on them.
+          SettingsRow(
+            title: 'Computers',
+            onTap: () => Navigator.of(context).push(
+              phoneRoute((_) => MachinesTab(notifier: notifier, large: false)),
+            ),
           ),
         ],
       ),
