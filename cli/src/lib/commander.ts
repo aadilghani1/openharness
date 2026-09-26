@@ -75,7 +75,10 @@ export interface CommanderMirrorOpts {
   subagentActive?: (sessionId: string, agentId: string) => boolean
   dataDir: string
   recapForce?: boolean
-  alwaysGenerate?: boolean
+  /** A function when it can change while the daemon runs — the pair brain switches it on with pairing. */
+  alwaysGenerate?: boolean | (() => boolean)
+  /** Every recap that is stored, as it is stored — the pair sensor journals it (pair/sensor.ts). */
+  onSummary?: (sessionId: string, summary: { recap: string; body: string }) => void
 }
 
 interface SessionState {
@@ -625,7 +628,8 @@ export class CommanderMirror {
     //     because replayAll() only re-emits stored recaps and never regenerates a past turn.
     // Cost: with SUMMARY_MODE=model this is one engine one-shot per turn, per agent, forever — the very
     // cost the device gate used to avoid. SUMMARY_MODE=local makes it free (no model, same-tick excerpt).
-    if (!device && !this.opts.recapForce && !this.opts.alwaysGenerate) {
+    const alwaysGenerate = typeof this.opts.alwaysGenerate === 'function' ? this.opts.alwaysGenerate() : this.opts.alwaysGenerate
+    if (!device && !this.opts.recapForce && !alwaysGenerate) {
       // Console-only: no device and generation is off, so there is no recap flow to watch.
       console.log(`[recap] ${sid} turn-end · SKIP (no device connected) · textLen=${fallbackText.length}`)
       return
@@ -716,6 +720,7 @@ export class CommanderMirror {
           this.rememberFullText(sessionId, text)
           this.saveSoon()
           const { recap, body } = splitSummary(summary)
+          try { this.opts.onSummary?.(sessionId, { recap, body }) } catch { /* an observer never costs the recap */ }
           this.trace(sessionId, `${sid} done in ${ms}ms · recap="${recap}" · bodyLen=${body.length}`)
           this.emit(sessionId, { kind: 'done', text: 'done' })
           this.emit(sessionId, { kind: 'summary', text: body || recap, recap })

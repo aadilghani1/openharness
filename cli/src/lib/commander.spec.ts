@@ -371,6 +371,33 @@ describe('CommanderMirror recap events', () => {
     expect(mirror.recent('session-off', 1)).toHaveLength(0)
   })
 
+  it('alwaysGenerate may be a switch read per turn (the pair brain), and onSummary sees each stored recap', async () => {
+    let pairing = false
+    const summaries: Array<[string, { recap: string; body: string }]> = []
+    const mirror = new CommanderMirror({
+      send: () => {}, sendWeb: () => {},
+      hasDevice: () => false,
+      alwaysGenerate: () => pairing,
+      onSummary: (sessionId, summary) => summaries.push([sessionId, summary]),
+      summarize: async () => 'Fixed the flaky test\n\nPinned the clock in billing.spec.ts.',
+      dataDir,
+    })
+    const turn = [
+      { type: 'turn_started', payload: { userMessage: 'fix it' } },
+      { type: 'text_delta', payload: { content: 'done' } },
+      { type: 'turn_ended', payload: {} },
+    ] as LiveEvent[]
+    mirror.ingest(turn, 'session-pair')
+    await vi.runAllTimersAsync()
+    await Promise.resolve()
+    expect(summaries).toHaveLength(0)
+    pairing = true
+    mirror.ingest(turn, 'session-pair')
+    await vi.runAllTimersAsync()
+    await Promise.resolve()
+    expect(summaries).toEqual([['session-pair', { recap: 'Fixed the flaky test', body: 'Pinned the clock in billing.spec.ts.' }]])
+  })
+
   it('runs the recap once when a turn closes twice (Stop hook + watcher race)', async () => {
     const deviceFrames: CommanderFrame[] = []
     let summarizeCalls = 0

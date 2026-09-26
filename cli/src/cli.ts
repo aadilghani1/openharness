@@ -74,6 +74,9 @@ import { forgetGridModels, gridAnnotation, keystrokePrewarm, observeMachineList,
 import { gridAvailable } from './lib/gridExec.js'
 import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOverride } from './lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from './engines/types.js'
+import { PairJournal } from './pair/journal.js'
+import { PairSensor } from './pair/sensor.js'
+import { PAIR_HARNESS_DSH, isPairDaemonId } from './pair/protocol.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './lib/engineLaunch.js'
 import { workspaceMissing } from './lib/workspaceCheck.js'
@@ -1771,16 +1774,38 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // NB: hooks are installed AFTER the hook server binds (below), with the port it actually got — the
   // server may fall back to a free port if env.PORT is taken, and the hooks must point at the real one.
 
+  // THE PAIR SENSOR (pair/sensor.ts, daemons/BRAIN.md). Every daemon runs one for its own harnesses:
+  // no model, just turns, questions and recaps, journaled for whichever computer you sit down at. Off
+  // until the account's zoo has a paired daemon — see refreshPairFromZoo, bound once the backend proxy
+  // exists. `onPairToggled` is bound the same way, to things declared further down.
+  let onPairToggled: (on: boolean) => void = () => {}
+  let refreshPairFromZoo: () => void = () => {}
+  const pairSensor = new PairSensor({
+    machineId: () => backendRef?.machineId ?? session?.machineId ?? computerId(),
+    journal: new PairJournal({ dir: join(env.ADAPTER_DATA_DIR, 'pair') }),
+    describe: (agentId) => {
+      const s = registry.resolve(agentId)
+      if (!s) return null
+      return {
+        name: projectDisplayName(s),
+        engine: s.engine,
+        excluded: isTerminalEngine(s.engine) ? 'terminal' : s.dsh === PAIR_HARNESS_DSH ? 'pair' : null,
+      }
+    },
+    onEnabledChanged: (on) => onPairToggled(on),
+  })
   const syncSession = (s: RegisteredSession, opts: { device?: boolean } = {}): void => {
     // A terminal is not the dial's business (see `deviceAgentRow`): it is never upserted there, and
     // the one time it must be REMOVED from there — the engine it adopted has exited — the caller
     // sends that `agent_deleted` itself, because this row is still very much alive for the app.
     if (isTerminalEngine(s.engine)) opts = { ...opts, device: false }
     if (!registry.terminalAvailable(s.agentId)) {
+      pairSensor.removed(s.agentId)
       backendRef?.send({ type: 'agent_deleted', payload: { agentId: s.agentId } })
       if (opts.device !== false) backendRef?.sendCommander({ type: 'agent_deleted', payload: { agentId: s.agentId } })
       return
     }
+    if (s.launch?.state === 'failed') pairSensor.failed(s.agentId, s.launch.detail ?? s.launch.error)
     void projectFrame(s, runtimeProfiles.selectedModel(s))
       .then((project) => {
         const frame = { type: 'agent_synced', payload: { agent: project } }
@@ -2020,7 +2045,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // While an attempt is running AND within its ceiling, the RPCs that need the grid name wait
   // briefly on it; otherwise they read the name directly.
   backend.gridReadyProbe = () => gridAttach.probe()
-  onBackendConnected = () => gridAttach.run()
+  // Re-read the zoo on every reconnect as well: a `zoo_changed` sent while the link was down is lost.
+  onBackendConnected = () => { gridAttach.run(); refreshPairFromZoo() }
   gridAttach.run()
 
   /**
@@ -2057,7 +2083,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal() || backend.autonomousDeviceConnected()
   /** Anyone who can DRAW a question: a device, a cabled dial, or a desktop window on this computer. */
-  const someoneCanAnswer = (): boolean => deviceIsWatching() || backend.hasLocalClient()
+  // ...or the pair brain, while pairing is on: it watches every harness on every machine, so a question
+  // on a computer nobody is sitting at must still be read for the computer somebody is.
+  const someoneCanAnswer = (): boolean => deviceIsWatching() || backend.hasLocalClient() || pairSensor.enabled()
   const terminalStreams = new TerminalStreamManager({
     terminals,
     resolveAgent: (agentId) => registry.resolve(agentId),
@@ -2667,6 +2695,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // today: a remote machine's watcher is gated on ITS OWN audience, which a window attached over
       // here is not part of either way.
       backend.sendLocal(asked)
+      pairSensor.question(agentIdFor(sessionId), requestId, shaped)
       console.log(`[question] ${sid(sessionId)} asking the user · "${preview(shaped[0]?.q ?? '')}" · req=${requestId}`)
     },
     // Answered somewhere else — the app, or the pane by hand. Every client drawing it is told to stop
@@ -2685,6 +2714,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // one already answered. This is the mechanism behind "answer anywhere": the dial is cabled to
       // this very computer, so the dial and this window are always the same machine's audience.
       backend.sendLocal(closed)
+      pairSensor.questionGone(agentIdFor(sessionId), requestId)
       console.log(`[question] ${sid(sessionId)} answered elsewhere · closing on every client · req=${requestId}`)
     },
   })
@@ -2776,7 +2806,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     dataDir: env.ADAPTER_DATA_DIR,
     recapForce: env.RECAP_FORCE,
-    alwaysGenerate: env.RECAP_WITHOUT_DEVICE,
+    // Pairing needs a recap per turn for the brief, device or not (SUMMARY_MODE=local makes it free).
+    alwaysGenerate: () => env.RECAP_WITHOUT_DEVICE || pairSensor.enabled(),
+    onSummary: (sessionId, summary) => pairSensor.recap(registry.bySession(sessionId)?.agentId ?? sessionId, summary.recap),
   })
   // Recaps are STORED under the engine session id — that is what lets `--resume` bring the last recap
   // back under a brand-new agent — but they are ASKED FOR by agent id, which is the only id the device
@@ -2915,6 +2947,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         if (isSubagentSession(sessionId)) frame.subagent = true
       }
       backend.send(frame)
+      // The pair sensor reads the same two flags the apps do: a replay is a baseline, a sub-agent is nobody's news.
+      if (event.type === 'turn_started') {
+        pairSensor.turnStarted(agentId, { replay: !!(opts?.resumed || opts?.replay), subagent: isSubagentSession(sessionId) })
+      } else if (event.type === 'turn_ended') {
+        pairSensor.turnEnded(agentId, { replay: frame.replay === true, subagent: frame.subagent === true, aborted: event.payload.aborted === true })
+      }
       if (event.type === 'turn_started') {
         zooTurnCounter.started(sessionId, { replay: !!(opts?.resumed || opts?.replay) })
         turnStartedAt.set(sessionId, Date.now())
@@ -3547,6 +3585,32 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const json = await res.json().catch(() => ({})) as Record<string, unknown>
     return { status: res.status, body: json }
   }
+
+  // PAIRING IS ON only while the account's zoo has a paired daemon (daemons/README.md, "The zoo"). The zoo
+  // is account state, read through the same proxy the window uses and re-read on `zoo_changed` and on
+  // every reconnect. Signed out there is no account zoo: a guest's window keeps its own and says which
+  // daemon is paired in `daemon_presence` (pair/brain.ts), which is what `guestPair` holds. A backend that
+  // cannot be reached keeps the last answer rather than switching pairing off on a blip.
+  let zooPair: { known: boolean; pair: string | null } = { known: false, pair: null }
+  let guestPair: string | null = null
+  const applyPair = (): void => pairSensor.setPair(zooPair.known ? zooPair.pair : guestPair)
+  refreshPairFromZoo = () => {
+    void proxyBackend('GET', '/api/zoo').then((result) => {
+      if (result.status === 200) {
+        const pair = (result.body.data as { zoo?: { pair?: unknown } } | undefined)?.zoo?.pair
+        zooPair = { known: true, pair: typeof pair === 'string' && isPairDaemonId(pair) ? pair : null }
+      } else if (result.status === 401) {
+        zooPair = { known: false, pair: null }
+      }
+      applyPair()
+    }).catch(() => {})
+  }
+  backend.onZooChanged = () => refreshPairFromZoo()
+  backend.pairService = pairSensor
+  // An open question the watcher already announced before pairing came on is announced again, so the
+  // sensor hears it too (clients dedupe a repeated push by requestId).
+  onPairToggled = (on) => { if (on) questionWatcher.reset() }
+  refreshPairFromZoo()
 
   // Built HERE rather than beside the cable stack that also uses it (further down), because the hook
   // server starts long before that point and agent restore can sit between the two. A cache bound late
