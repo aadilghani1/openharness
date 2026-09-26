@@ -105,6 +105,21 @@ describe('SessionSearchStore', () => {
     expect(store.search('retention', { now: NOW }).map((hit) => hit.sessionId)).toEqual(['new', 'old', 'mention'])
   })
 
+  it('ranks the session started for something above one that mentions it on the way', () => {
+    const store = open()
+    store.writeSession(session('started', 'Claude harness 9-25 7:25', NOW - 2 * DAY), 0, [
+      turn(0, 'build a phone stand at 60 degrees with a cable slot'),
+      turn(1, 'make the base heavier'),
+      turn(2, 'export the STL'),
+    ])
+    store.writeSession(session('hub', 'Harness list', NOW - 2 * DAY), 0, [
+      turn(0, 'what harnesses are running'),
+      turn(1, 'tidy the list'),
+      turn(2, 'the phone stand harness and the cup engraving harness'),
+    ])
+    expect(store.search('phone stand', { now: NOW }).map((hit) => hit.sessionId)).toEqual(['started', 'hub'])
+  })
+
   it('replaces turns from a point on, keeps earlier ones, and counts them', () => {
     const store = open()
     store.writeSession(session('s', 'S', NOW), 0, [turn(0, 'alpha'), turn(1, 'beta draft')])

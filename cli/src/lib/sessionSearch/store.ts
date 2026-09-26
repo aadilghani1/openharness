@@ -76,8 +76,17 @@ const FIELDS = ['name', 'ask', 'answer', 'tools'] as const
 export const MARK_OPEN = '\u0002'
 export const MARK_CLOSE = '\u0003'
 /** How much recency counts against relevance, and how fast it fades. */
-const RECENCY_WEIGHT = 0.3
+const RECENCY_WEIGHT = 0.2
 const RECENCY_HALF_LIFE_DAYS = 10
+/**
+ * The turns that say what a session was started for, and how much more they count. A session named
+ * "Claude harness 9-25 7:25" is found by its opening ask or not at all, and a session that merely
+ * lists other sessions by name must not outrank the one that set out to do the thing. Tuned on real
+ * sessions (see the research note): +10 points top-1 for one-word queries, +15 for topic queries,
+ * −2 for four-letter prefixes.
+ */
+const OPENING_TURNS = 2
+const OPENING_BOOST = 1.2
 /** Rows considered per query before grouping by session: bounds the work of a very common word. */
 const CANDIDATE_ROWS = 3_000
 
@@ -251,7 +260,7 @@ export class SessionSearchStore {
     const best = new Map<string, { id: number; turn: number; at: number | null; rank: number; together: boolean }>()
     const rows = this.statement(`
       SELECT t.id AS id, t.session_id AS sid, t.turn AS turn, t.at AS at,
-             bm25(turns_fts, ${WEIGHTS.join(', ')}) AS rank
+             bm25(turns_fts, ${WEIGHTS.join(', ')}) * (CASE WHEN t.turn BETWEEN 0 AND ${OPENING_TURNS - 1} THEN ${OPENING_BOOST} ELSE 1 END) AS rank
       FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid
       WHERE turns_fts MATCH ? ORDER BY rank LIMIT ${CANDIDATE_ROWS}`).all(terms.join(' AND '))
     for (const row of rows) {
