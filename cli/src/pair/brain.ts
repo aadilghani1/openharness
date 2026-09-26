@@ -163,6 +163,11 @@ export class PairBrain {
     this.returned(desk, Math.max(reported, left !== undefined ? now - left : 0))
   }
 
+  /** The person is looking at this harness right now (a lesson is never proposed about it). */
+  isFocused(machineId: string, agentId: string): boolean {
+    return this.focused(machineId, agentId)
+  }
+
   /** True when a client says the person is looking at this harness right now. */
   private focused(machineId: string, agentId: string): boolean {
     const local = this.deps.fleet.machines().find((m) => m.local)?.machineId
@@ -398,7 +403,11 @@ export class PairBrain {
     if (proposals?.owns(id)) {
       const result = await proposals.act(id, choice).catch((err): Record<string, unknown> => ({ ok: false, error: err instanceof Error ? err.message.slice(0, 60) : 'FAILED' }))
       reply({ ok: result.ok === true, ...(typeof result.error === 'string' ? { error: result.error } : {}), ...(typeof result.detail === 'string' ? { detail: result.detail } : {}),
-        ...(Array.isArray(result.results) ? { results: result.results } : {}) })
+        ...(Array.isArray(result.results) ? { results: result.results } : {}),
+        // A lesson's answer (pair/learn/propose.ts): what was learned or skipped, or its text for [s].
+        ...(typeof result.learned === 'string' ? { learned: result.learned } : {}),
+        ...(typeof result.skipped === 'string' ? { skipped: result.skipped } : {}),
+        ...(typeof result.lesson === 'string' ? { lesson: result.lesson } : {}) })
       this.scheduleState()
       return
     }

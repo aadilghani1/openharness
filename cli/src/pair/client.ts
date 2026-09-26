@@ -67,7 +67,8 @@ export async function pairRequest(deps: PairClientDeps, payload: Record<string, 
 
 // ── `harness pair <verb>` ─────────────────────────────────────────────────────────────────────────────
 
-export const PAIR_CLI_VERBS = new Set([...CONTROL_TOOLS.map((tool) => tool.name), 'talk', 'status', 'journal', 'mcp'])
+export const PAIR_CLI_VERBS = new Set([...CONTROL_TOOLS.map((tool) => tool.name), 'talk', 'status', 'journal', 'mcp', 'lessons'])
+export const LESSON_ACTIONS = ['list', 'show', 'approve', 'skip', 'revert'] as const
 
 /** `list-harnesses` and `list_harnesses` are the same verb. */
 export function pairVerb(word: string | undefined): string | null {
@@ -95,6 +96,13 @@ export const PAIR_USAGE = [
   '    say <line…>                            one line in the status line (rate-limited)',
   '',
   '  talk <words…>                            talk to your daemon: starts or wakes the pair harness',
+  '',
+  '  Lessons (daemons/LEARNING.md; the lessons folder, ~/.harness/lessons):',
+  '    lessons [list]                         every lesson: pending, approved, reverted, skipped',
+  '    lessons show <id>                      its SKILL.md or note, with where it came from',
+  '    lessons approve <id> [--create]        teach it (asks you first; --create writes a new AGENTS.md for a note)',
+  '    lessons skip <id>                      drop a pending lesson; it is never proposed again',
+  '    lessons revert <id>                    git revert of its commit, and unpublished',
   '  mcp [--token-file <path>]                a stdio MCP server named harnessd with the same tools',
   '',
   '  --json   one JSON line (the default prints it indented)',
@@ -112,6 +120,7 @@ export function parsePairArgs(verb: string, argv: string[]): { payload: Record<s
     const word = argv[i]!
     if (word === '--') { tail = argv.slice(i + 1); break }
     if (word === '--json') { json = true; continue }
+    if (word === '--create' && verb === 'lessons') { options.create = 'true'; continue }
     const flag = /^--(machine|since|name|prompt|token-file)(?:=(.*))?$/.exec(word)
     if (flag) {
       const value = flag[2] ?? argv[++i]
@@ -150,6 +159,13 @@ export function parsePairArgs(verb: string, argv: string[]): { payload: Record<s
       payload = { verb, engine: words[0], cwd: words[1], ...(options.name ? { name: options.name } : {}), ...machine }
       if (rest(2) || options.prompt) payload.prompt = options.prompt ?? rest(2)
       break
+    case 'lessons': {
+      const action = words[0] ?? 'list'
+      if (!(LESSON_ACTIONS as readonly string[]).includes(action)) throw new PairUsageError(`lessons has no "${action}" (${LESSON_ACTIONS.join(', ')}).`)
+      if (action !== 'list' && !words[1]) throw new PairUsageError(`lessons ${action} needs a lesson id (harness pair lessons list).`)
+      payload = { verb, action, ...(words[1] ? { id: words[1] } : {}), ...(options.create && action === 'approve' ? { create: true } : {}) }
+      break
+    }
     case 'say': case 'talk': {
       const text = rest(0)
       if (!text) throw new PairUsageError(`${verb} needs words.`)
@@ -162,7 +178,36 @@ export function parsePairArgs(verb: string, argv: string[]): { payload: Record<s
   return { payload, json }
 }
 
-export async function pairCommand(argv: string[], deps: PairClientDeps & { output: (line: string) => void; error: (line: string) => void }): Promise<number> {
+export interface PairCommandDeps extends PairClientDeps {
+  output: (line: string) => void
+  error: (line: string) => void
+  /**
+   * Ask the person at this terminal (y/N). Absent — no terminal, or an agent's shell tool — and
+   * `lessons approve` refuses: nothing is taught without the person's yes.
+   */
+  confirm?: ((question: string) => Promise<boolean>) | null
+}
+
+/** `lessons approve <id>`: show the lesson, ask at the terminal, then approve it with `confirmed`. */
+async function approveLesson(deps: PairCommandDeps, payload: Record<string, unknown>, json: boolean): Promise<number> {
+  const print = (reply: Record<string, unknown>): void => deps.output(json ? JSON.stringify(reply) : JSON.stringify(reply, null, 2))
+  if (!deps.confirm) {
+    print({ ok: false, error: 'CONFIRM', detail: 'approve asks you at a terminal; run it in one, or press [y] on the daemon\'s line' })
+    return 1
+  }
+  const shown = await pairRequest(deps, { verb: 'lessons', action: 'show', id: payload.id })
+  if (typeof shown.error === 'string') { print(shown); return 1 }
+  deps.error(typeof shown.text === 'string' ? shown.text : JSON.stringify(shown, null, 2))
+  if (!(await deps.confirm(`Teach lesson ${String(payload.id)} to your agents? [y/N] `))) {
+    print({ ok: false, error: 'DECLINED' })
+    return 1
+  }
+  const reply = await pairRequest(deps, { ...payload, confirmed: true })
+  print(reply)
+  return typeof reply.error === 'string' ? 1 : 0
+}
+
+export async function pairCommand(argv: string[], deps: PairCommandDeps): Promise<number> {
   const verb = pairVerb(argv[0])
   if (!verb || argv.includes('--help') || argv.includes('-h')) {
     deps.output(PAIR_USAGE)
@@ -179,6 +224,7 @@ export async function pairCommand(argv: string[], deps: PairClientDeps & { outpu
   }
   const { tokenFile, ...payload } = parsed.payload
   try {
+    if (verb === 'lessons' && payload.action === 'approve') return await approveLesson(deps, payload, parsed.json)
     const reply = await pairRequest({ ...deps, tokenFile: typeof tokenFile === 'string' ? tokenFile : deps.tokenFile }, payload)
     deps.output(parsed.json ? JSON.stringify(reply) : JSON.stringify(reply, null, 2))
     return typeof reply.error === 'string' ? 1 : 0

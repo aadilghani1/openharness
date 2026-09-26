@@ -61,7 +61,7 @@ export const CONTROL_TOOLS: readonly ControlTool[] = [
 
 const TOOL_BY_NAME = new Map(CONTROL_TOOLS.map((tool) => [tool.name, tool]))
 /** Verbs the `pair` request hands to the control interface (the sensor keeps status/list/journal/read). */
-export const CONTROL_VERBS: ReadonlySet<string> = new Set([...TOOL_BY_NAME.keys(), 'talk'])
+export const CONTROL_VERBS: ReadonlySet<string> = new Set([...TOOL_BY_NAME.keys(), 'talk', 'lessons'])
 
 type Result = Record<string, unknown>
 const fail = (error: string, detail?: string): Result => ({ ok: false, error, ...(detail ? { detail } : {}) })
@@ -128,6 +128,8 @@ export interface ControlDeps {
   talk?: (text: string) => Promise<Result>
   /** What is waiting for a key changed: daemon_state's `asks` should be sent again. */
   changed?: () => void
+  /** `lessons { action, id?, confirmed?, create? }`: the learner's verbs (pair/learn/propose.ts). */
+  lessons?: (payload: Record<string, unknown>) => Promise<Result>
   now: () => number
   newId: () => string
 }
@@ -153,6 +155,7 @@ export class PairControl {
       if (!text) return fail('EMPTY')
       return this.deps.talk(text)
     }
+    if (verb === 'lessons') return this.lessons(payload)
     const tool = TOOL_BY_NAME.get(verb)
     if (!tool) return fail('UNKNOWN_VERB', `pair has no verb "${verb}"`)
     if (!this.deps.pairing.enabled()) return fail('PAIR_OFF', 'Nothing is paired: hatch or pair a daemon first.')
@@ -164,6 +167,21 @@ export class PairControl {
     } catch (err) {
       return fail('FAILED', err instanceof Error ? err.message.slice(0, 200) : undefined)
     }
+  }
+
+  /**
+   * The person's lessons, from a shell (`harness pair lessons …`). Work with pairing off: the lessons folder is
+   * the person's, not the daemon's. The pair harness is an agent: it may list and show them, never approve
+   * one (a lesson it approved would be an agent teaching itself).
+   */
+  private async lessons(payload: Record<string, unknown>): Promise<Result> {
+    if (!this.deps.lessons) return fail('UNSUPPORTED')
+    const token = str(payload.token, 200)
+    if (str(payload.action, 20) === 'approve' && token && this.deps.tokenMatches(token)) {
+      return fail('PERSON_ONLY', 'Only the person approves a lesson: a key on the daemon\'s line, or the CLI at their terminal.')
+    }
+    const { token: _token, ...rest } = payload
+    try { return await this.deps.lessons(rest) } catch (err) { return fail('FAILED', err instanceof Error ? err.message.slice(0, 200) : undefined) }
   }
 
   // ── reads ────────────────────────────────────────────────────────────────────────────────────────

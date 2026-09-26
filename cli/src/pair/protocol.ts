@@ -11,8 +11,9 @@
  */
 
 /** What the journal records. `question`/`answered` pair up by requestId. `act` is something the daemon
- *  did to a harness (pair/owner.ts): who asked is `by`, what it did is `action`. */
-export type PairKind = 'start' | 'done' | 'fail' | 'question' | 'answered' | 'recap' | 'act'
+ *  did to a harness (pair/owner.ts): who asked is `by`, what it did is `action`. `learned` is a lesson the
+ *  person approved, credited to the daemon that found it (`daemon`; pair/learn, daemons/LEARNING.md). */
+export type PairKind = 'start' | 'done' | 'fail' | 'question' | 'answered' | 'recap' | 'act' | 'learned'
 
 /** Who made the daemon act: a key a person pressed, the pair harness's own tool call, a pair.jsonc rule. */
 export type PairActor = 'key' | 'pair' | 'rule'
@@ -37,6 +38,8 @@ export interface PairJournalEntry {
   /** On an `act`: who asked for it, and what was done. */
   by?: PairActor
   action?: PairAction
+  /** On `learned`: the roster id of the daemon that found the lesson. */
+  daemon?: string
 }
 
 export interface PairQuestion {
@@ -139,9 +142,10 @@ export type DaemonMood = 'need' | 'done' | 'fail' | 'back' | 'auto' | 'say' | 'a
 export interface DaemonAction {
   /**
    * The key a client binds: `y` a ONE-TIME yes (only on an allow-class prompt, pair/classify.ts), `n` the
-   * dialog's decline, `g` go to the pane (the client opens the harness; nothing is answered).
+   * dialog's decline, `g` go to the pane (the client opens the harness; nothing is answered). On a lesson
+   * proposal (pair/learn/propose.ts): `y` teach, `n` skip, `s` show its text.
    */
-  key: 'y' | 'n' | 'g'
+  key: 'y' | 'n' | 's' | 'g'
   label: string
   /** The option label the answer keys in. */
   choice: string
