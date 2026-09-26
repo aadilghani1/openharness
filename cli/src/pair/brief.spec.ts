@@ -13,7 +13,7 @@ import { PairFleet, type PairLinkOpener } from './fleet.js'
 import { PairTriage, type PairOneShot } from './triage.js'
 import { PairVoice, backLine } from './voice.js'
 import { PairBrain } from './brain.js'
-import { composeBrief, parseBrief } from './brief.js'
+import { composeBrief, BRIEF_ITEMS_MAX } from './brief.js'
 import type { DaemonSay } from './protocol.js'
 
 type Frame = Record<string, unknown>
@@ -37,7 +37,7 @@ function sensorAt(machineId: string, dir = journalDir()): PairSensor {
   return sensor
 }
 
-function world(opts: { oneshot?: PairOneShot; laptopHangs?: boolean; localDir?: string; remote?: PairSensor } = {}) {
+function world(opts: { oneshot?: PairOneShot; laptopHangs?: boolean; localDir?: string; remote?: PairSensor; laptopAsleep?: boolean } = {}) {
   const local = sensorAt('machine-a', opts.localDir)
   const remote = opts.remote ?? sensorAt('machine-b')
   const open: PairLinkOpener = async (_machineId, on) => {
@@ -55,19 +55,19 @@ function world(opts: { oneshot?: PairOneShot; laptopHangs?: boolean; localDir?: 
   let brain: PairBrain | null = null
   const fleet = new PairFleet({
     local: { machineId: () => 'machine-a', name: () => 'desk', snapshot: () => local.snapshot(), subscribe: (l) => local.subscribe(l), journal: (p) => local.journal(p) },
-    machines: () => [{ machineId: 'machine-b', name: 'laptop', linked: true }],
+    machines: () => [{ machineId: 'machine-b', name: 'laptop', linked: true, ...(opts.laptopAsleep ? { online: false } : {}) }],
     open, onChange: (c) => brain?.onFleetChange(c), now: Date.now,
   })
   const oneshot = opts.oneshot ? vi.fn(opts.oneshot) : null
   brain = new PairBrain({
     pairing: { enabled: () => true, pairedDaemon: () => 'tim' }, fleet,
-    triage: new PairTriage({ oneshot, now: Date.now }),
+    triage: new PairTriage({ oneshot, modelEnabled: () => true, now: Date.now }),
     voice: new PairVoice({ sendLocal: (f) => frames.push(f), now: Date.now }),
     sendLocal: (f) => frames.push(f), sendLocalTo: () => true,
-    answer: async () => ({ ok: false, error: 'UNSUPPORTED' }), now: Date.now,
+    answer: async () => ({ ok: true }), now: Date.now,
   })
   const backs = () => frames.filter((f) => f.type === 'daemon_say' && (f.payload as DaemonSay).mood === 'back').map((f) => (f.payload as DaemonSay).line)
-  const briefs = () => frames.filter((f) => f.type === 'daemon_brief').map((f) => f.payload as { line: string; items: Array<{ id: string; kind: string; line: string }> })
+  const briefs = () => frames.filter((f) => f.type === 'daemon_brief').map((f) => f.payload as { line: string; items: Array<{ id: string; kind: string; line: string; actions?: Array<{ key: string; choice: string }> }> })
   return { local, remote, brain, fleet, frames, backs, briefs, oneshot }
 }
 
@@ -89,7 +89,7 @@ async function upAndAway(w: ReturnType<typeof world>): Promise<void> {
 }
 
 describe('brief on return', () => {
-  it('says the back line in the paired daemon\'s words: done, waiting and how long, nothing on fire', async () => {
+  it('says the back line in the paired daemon\'s words, its {summary} filled: done, waiting and how long', async () => {
     const w = world()
     await upAndAway(w)
     w.local.turnStarted('web'); w.local.turnEnded('web'); w.local.recap('web', 'Fixed the login redirect.')
@@ -100,15 +100,57 @@ describe('brief on return', () => {
     await settle(40 * MIN)
     w.brain.onPresence('local:window', { active: true, awayMs: 45 * MIN })
     await settle(10)
-    expect(w.backs()).toEqual(['welcome back. 2 done, 1 waiting 40m. nothing on fire.'])
+    expect(w.backs()).toEqual(['reattached. 2 done, 1 waiting 40m.'])
+    // Not a permission prompt, so no [y]: its decline and "open" are its keys, first in the line.
     expect(w.briefs()[0].items.map((i) => [i.kind, i.line])).toEqual([
-      ['waiting', 'api@laptop asks: Bash: npm run migrate (40m)'],
+      ['waiting', '[n/g] api@laptop: Bash: npm run migrate (40m)'],
       ['done', 'docs@laptop finished.'],
       ['done', 'web finished: Fixed the login redirect.'],
     ])
   })
 
-  it('names a machine whose journal does not answer in 3 s, in place of "nothing on fire"', async () => {
+  it('a waiting item\'s keys work while the brief is up, on the machine that owns it', async () => {
+    const w = world()
+    await upAndAway(w)
+    w.local.question('api', 'q_1', ask('Read src/auth.ts?'))
+    await settle(20 * MIN)
+    w.brain.onPresence('local:window', { active: true, awayMs: 20 * MIN })
+    await settle(10)
+    const item = w.briefs()[0].items[0]
+    expect(item.actions?.map((a) => a.key)).toEqual(['n', 'g'])
+    const replies: Frame[] = []
+    await w.brain.onAct({ requestId: 'r1', id: item.id, choice: 'n' }, (f) => replies.push(f))
+    expect(replies[0].payload).toMatchObject({ ok: true, machineId: 'machine-a' })
+  })
+
+  it('shows at most five items, what needs you first', async () => {
+    const w = world()
+    await upAndAway(w)
+    for (const id of ['api', 'web', 'docs']) { w.local.turnStarted(id); w.local.turnEnded(id) }
+    for (const id of ['api', 'web', 'docs']) { w.remote.turnStarted(id); w.remote.turnEnded(id) }
+    w.local.question('api', 'q_1', ask('Read src/auth.ts?'))
+    await settle(20 * MIN)
+    w.brain.onPresence('local:window', { active: true, awayMs: 20 * MIN })
+    await settle(10)
+    const items = w.briefs()[0].items
+    expect(items).toHaveLength(BRIEF_ITEMS_MAX)
+    expect(items[0].kind).toBe('waiting')
+  })
+
+  it('names a sleeping machine calmly, as asleep — never as unreachable or a failure', async () => {
+    const w = world({ laptopAsleep: true })
+    await upAndAway(w)
+    w.local.turnStarted('web'); w.local.turnEnded('web')
+    await settle(20 * MIN)
+    w.brain.onPresence('local:window', { active: true, awayMs: 20 * MIN })
+    await settle(10)
+    expect(w.backs()).toEqual(['reattached. 1 done, laptop asleep.'])
+    expect(w.briefs()[0].items.map((i) => [i.kind, i.line])).toEqual([['asleep', 'laptop is asleep.'], ['done', 'web finished.']])
+    expect((w.brain.state().machines as Array<{ name: string; status: string }>).find((m) => m.name === 'laptop')?.status).toBe('asleep')
+    expect(w.brain.state().failing).toEqual([])
+  })
+
+  it('names a machine whose journal does not answer in 3 s', async () => {
     const w = world({ laptopHangs: true })
     await upAndAway(w)
     w.local.turnStarted('web'); w.local.turnEnded('web')
@@ -117,7 +159,7 @@ describe('brief on return', () => {
     await settle(2_999)
     expect(w.backs()).toEqual([])
     await settle(2)
-    expect(w.backs()).toEqual(['welcome back. 1 done, 0 waiting. laptop unreachable.'])
+    expect(w.backs()).toEqual(['reattached. 1 done, laptop unreachable.'])
     expect(w.briefs()[0].items.map((i) => i.kind)).toEqual(['unreachable', 'done'])
   })
 
@@ -168,39 +210,21 @@ describe('brief on return', () => {
     await settle(16 * MIN)
     w.brain.clientAttached('local:window')
     await settle(4_000)
-    expect(w.backs()).toEqual(['welcome back. 1 done, 0 waiting. nothing on fire.'])
+    expect(w.backs()).toEqual(['reattached. 1 done.'])
   })
 
-  it('asks the model once for 3+ items, a failure or a question — and uses the template if its answer is off', async () => {
-    const quiet = world({ oneshot: async () => '{"items": []}' })
-    await upAndAway(quiet)
-    quiet.local.turnStarted('web'); quiet.local.turnEnded('web')
+  it('never asks a model: a brief is the template facts, whatever it holds', async () => {
+    const w = world({ oneshot: async () => '{"items": []}' })
+    await upAndAway(w)
+    w.local.failed('web', 'the engine exited')
+    w.local.turnStarted('api'); w.local.turnEnded('api')
+    w.local.turnStarted('docs'); w.local.turnEnded('docs')
     await settle(20 * MIN)
-    quiet.brain.onPresence('local:window', { active: true, awayMs: 20 * MIN })
+    w.brain.onPresence('local:window', { active: true, awayMs: 20 * MIN })
     await settle(4_000)
-    expect(quiet.oneshot).not.toHaveBeenCalled()                 // one item, nothing wrong: no call
-    expect(quiet.briefs()[0].items).toEqual([expect.objectContaining({ kind: 'done', line: 'web finished.' })])
-
-    const failing = world({ oneshot: async (prompt) => {
-      const ids = [...prompt.matchAll(/^(\S+:\S+) \|/gm)].map((m) => m[1])
-      return JSON.stringify({ items: ids.map((id) => ({ id, line: `rewritten ${id.split(':')[0]}` })) })
-    } })
-    await upAndAway(failing)
-    failing.local.failed('web', 'the engine exited')
-    await settle(20 * MIN)
-    failing.brain.onPresence('local:window', { active: true, awayMs: 20 * MIN })
-    await settle(4_000)
-    expect(failing.oneshot).toHaveBeenCalledTimes(1)
-    expect(failing.backs()).toEqual(['welcome back. 0 done, 0 waiting. web failed.'])
-    expect(failing.briefs()[0].items.map((i) => i.line)).toEqual(['rewritten failed'])
-
-    const garbled = world({ oneshot: async () => '{"items": [{"id": "made-up", "line": "all good"}]}' })
-    await upAndAway(garbled)
-    garbled.local.failed('web', 'the engine exited')
-    await settle(20 * MIN)
-    garbled.brain.onPresence('local:window', { active: true, awayMs: 20 * MIN })
-    await settle(4_000)
-    expect(garbled.briefs()[0].items.map((i) => i.line)).toEqual(['web failed: the engine exited'])
+    expect(w.oneshot).not.toHaveBeenCalled()
+    expect(w.backs()).toEqual(['reattached. 2 done, web failed.'])
+    expect(w.briefs()[0].items.map((i) => i.line)).toEqual(['web failed: the engine exited', 'api finished.', 'docs finished.'])
   })
 })
 
@@ -219,12 +243,15 @@ describe('brief wording', () => {
       harnesses: [], machines: [{ machineId: 'a', name: 'desk', status: 'ok', local: true }, { machineId: 'b', name: 'laptop', status: 'ok', local: false }],
       awayMs: 45 * MIN, now,
     })
-    expect(facts).toMatchObject({ done: 1, waiting: 0, failed: [], unreachable: ['laptop'], machines: 2 })
+    expect(facts).toMatchObject({ done: 1, waiting: 0, failed: [], unreachable: ['laptop'], asleep: [], machines: 2 })
     expect(items.map((i) => i.line)).toEqual(['laptop did not answer.', 'web finished 2 turns.'])
-    expect(backLine('ping', facts)).toBe('you\'re back. 1 reply, 0 waiting, 50% loss.')
-    expect(backLine('vim', facts)).toBe(':earlier 45m 1 done, 0 waiting. laptop unreachable.')
-    expect(backLine('grue', facts)).toBe('you came back to the dark. brave. 1 done. laptop unreachable.')
-    expect(parseBrief('{"items":[{"id":"x","line":"ok"}]}', [{ id: 'x', kind: 'done', machineId: 'a', machine: 'desk', line: 't' }])).toEqual(new Map([['x', 'ok']]))
-    expect(parseBrief('not json', [])).toBeNull()
+    // Every daemon fills its own {summary}, keeping its own case and spacing.
+    expect(backLine('tim', facts)).toBe('reattached. 1 done, laptop unreachable.')
+    expect(backLine('ping', facts)).toBe("you're back. 1 done, laptop unreachable.")
+    expect(backLine('vim', facts)).toBe(':earlier  1 done, laptop unreachable.')
+    expect(backLine('tldr', facts)).toBe('tl;dr 1 done, laptop unreachable.')
+    // A back line with no {summary} slot still carries the facts.
+    expect(backLine('grue', facts)).toBe('you have moved into a dark place. 1 done, laptop unreachable.')
+    expect(backLine('nobody', { ...facts, done: 0, unreachable: [] })).toBe('welcome back. nothing new.')
   })
 })

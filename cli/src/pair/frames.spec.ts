@@ -35,7 +35,7 @@ function pairedPeer(socket: BackendSocket, connId: string) {
 const SNAPSHOT: PairSnapshot = {
   machineId: 'machine-a', epoch: 'e1', seq: 3, rev: 7,
   harnesses: [{ agentId: 'a1', name: 'api', engine: 'claude', working: true, failing: null, lastDoneAt: null, recap: null,
-    question: { requestId: 'q_1', text: 'Run the migration?', options: ['Yes', 'No'], multi: false, deny: false, since: 1 } }],
+    question: { requestId: 'q_1', text: 'Run the migration?', options: ['Yes', 'No'], multi: false, deny: false, allow: false, permission: false, since: 1 } }],
 }
 
 function fakeService(overrides: Partial<PairService> = {}): PairService & { pushes: Map<string, (e: PairEvent) => boolean> } {

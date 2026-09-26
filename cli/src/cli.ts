@@ -1811,6 +1811,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         name: projectDisplayName(s),
         engine: s.engine,
         excluded: isTerminalEngine(s.engine) ? 'terminal' : s.dsh === PAIR_HARNESS_DSH ? 'pair' : null,
+        cwd: s.cwd ?? null,
       }
     },
     onEnabledChanged: (on) => onPairToggled(on),
@@ -2695,7 +2696,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     capture: captureTerminal,
     hasDevice: () => someoneCanAnswer(),
     isDriving: (sessionId) => questions.isDriving(sessionId),
-    onQuestion: (sessionId, requestId, shaped) => {
+    onQuestion: (sessionId, requestId, shaped, detail) => {
       deviceInput.setUserAction(agentIdFor(sessionId), true)
       questions.remember(requestId, sessionId)
       showAwaitingAnswer(sessionId)
@@ -2718,7 +2719,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // today: a remote machine's watcher is gated on ITS OWN audience, which a window attached over
       // here is not part of either way.
       backend.sendLocal(asked)
-      pairSensor.question(agentIdFor(sessionId), requestId, shaped)
+      // With the WHOLE dialog: the pair's floor reads every line of the command, not the clipped title.
+      pairSensor.question(agentIdFor(sessionId), requestId, shaped, detail)
       console.log(`[question] ${sid(sessionId)} asking the user · "${preview(shaped[0]?.q ?? '')}" · req=${requestId}`)
     },
     // Answered somewhere else — the app, or the pane by hand. Every client drawing it is told to stop
@@ -4263,6 +4265,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     present: () => !!pairBrain?.isActive && pairBrain.present(),
     started: new StartedHarnesses(join(env.ADAPTER_DATA_DIR, 'pair', 'started.json')),
     talk: (text) => pairTalk(text),
+    changed: () => pairBrain?.stateChanged(),
     now: Date.now,
     newId: () => randomUUID(),
   })
@@ -4273,6 +4276,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     triage: new PairTriage({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), now: Date.now }),
     voice: pairVoice,
     proposals: pairControl,
+    autonomy: () => pairAutonomy(),
     sendLocal: (frame) => backend.sendLocal(frame),
     sendLocalTo: (connId, frame) => backend.sendLocalTo(connId, frame),
     // A key pressed on a line about THIS machine's harness: the owner's floor, then the dialog's own

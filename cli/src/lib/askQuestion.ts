@@ -77,6 +77,13 @@ export interface QuestionView {
   multi: boolean
   /** The "Type something." row, when the dialog offers free text. */
   typeRow: QuestionRow | null
+  /**
+   * A permission prompt's WHOLE dialog, every line as painted (ANSI stripped), from its frame to its last
+   * row. `question` is one line clipped for a device's screen; a command that wraps — `npm test &&` on one
+   * line, `git push` on the next — is only whole here. What the pair brain's floor reads (pair/classify.ts),
+   * and part of the dialog's fingerprint, so two prompts that differ below their first line are two ids.
+   */
+  dialog?: string
 }
 
 export interface ReviewView {
@@ -468,9 +475,19 @@ export function parsePermissionPane(lines: string[]): { view: QuestionView; inde
   // Single-select, and no free-text row: every option here is a choice to be TAPPED. Verified on live
   // panes for claude, codex, devin and grok \u2014 one digit selects and submits, exactly as `rowKeys` assumes.
   return {
-    view: { kind: 'question', permission: true, question: permissionTitle(lines, start), rows, multi: false, typeRow: null },
+    view: { kind: 'question', permission: true, question: permissionTitle(lines, start), rows, multi: false, typeRow: null, dialog: permissionDialog(lines, start, end) },
     index: start,
   }
+}
+
+/** Every line of the dialog, untruncated: from its opening rule (or, with no frame, up to 12 lines above
+ *  the rows, stopping at a blank-separated block that is not the dialog's) to its last row. */
+function permissionDialog(lines: string[], start: number, end: number): string {
+  let top = Math.max(0, start - 12)
+  for (let i = start - 1; i >= 0 && start - i <= 25; i--) {
+    if (FRAME_RULE_RE.test(lines[i])) { top = i + 1; break }
+  }
+  return lines.slice(top, end + 1).map((line) => line.trimEnd()).filter((line) => !ANY_RULE_RE.test(line)).join('\n').trim()
 }
 
 export function parseQuestionPane(capture: string): PaneView {
@@ -554,7 +571,36 @@ export function parseQuestionPane(capture: string): PaneView {
     rows: answerable,
     multi: checkbox,
     typeRow: rows.find((r) => TYPE_ROW.test(r.label)) ?? null,
+    dialog: dialogAbove(lines, start, footer),
   }
+}
+
+/**
+ * A footer-anchored dialog, whole: up to 12 lines above its rows — stopping at a rule, a tab bar, or the
+ * agent's own output (a `•`/`⏺` bullet) — down to its last row. Codex puts the command it asks about
+ * here (`$ …`, wrapped over as many lines as it takes), with its reason and environment.
+ */
+function dialogAbove(lines: string[], start: number, footer: number): string {
+  let top = start
+  for (let i = start - 1; i >= 0 && start - i <= 12; i--) {
+    const line = lines[i].trim()
+    if (/^[•⏺●]/.test(line) || /[←→]/.test(line) || /^[─━═-]{6,}$/.test(line)) break
+    top = i
+  }
+  return lines.slice(top, footer).map((line) => line.trimEnd()).join('\n').trim()
+}
+
+/**
+ * A dialog that asks to RUN or CHANGE something (an approval), whichever parser read it: a framed
+ * permission prompt, or a footer dialog whose first row approves, whose rows include a rejection, and
+ * which names a command (`$ …`) or asks "would you like to run / make …". What the pair's floor treats as
+ * a permission prompt (pair/classify.ts); nothing else reads it.
+ */
+export function isApprovalDialog(view: QuestionView): boolean {
+  if (view.permission) return true
+  if (!view.rows.length || !APPROVE_RE.test(view.rows[0].label) || !view.rows.some((row) => REJECT_RE.test(row.label))) return false
+  const text = view.dialog ?? view.question
+  return /(^|\n)\s*\$ /.test(text) || /would you like to (run|make|apply|execute|edit|write)/i.test(text)
 }
 
 /** Match an answer to a row. The device stores option labels in an 80-byte buffer, so a long label comes
@@ -862,7 +908,7 @@ export interface QuestionWatcherDeps {
   /** Skip the capture entirely when no device is listening — nothing would consume the question. */
   hasDevice: () => boolean
   /** A dialog is open on screen. Fires ONCE per distinct question (until it changes or closes). */
-  onQuestion: (sessionId: string, requestId: string, questions: ShapedQuestion[]) => void
+  onQuestion: (sessionId: string, requestId: string, questions: ShapedQuestion[], detail?: { permission: boolean; dialog: string }) => void
   /**
    * An announced dialog LEFT the screen — answered somewhere else, or abandoned.
    *
@@ -1072,14 +1118,15 @@ export class QuestionWatcher {
       q: view.question,
       options: view.rows.map((r) => r.label),
       multi: view.multi,
-    }])
+    }], { permission: isApprovalDialog(view), dialog: view.dialog ?? view.question })
 
   }
 }
 
 /** What makes two captures the SAME dialog: its words, its options, its arity. */
 function fingerprintOf(view: QuestionView): string {
-  return `${view.question}|${view.rows.map((r) => r.label).join('|')}|${view.multi}`
+  // The whole dialog when there is one: a command that differs only on its second line is another prompt.
+  return `${view.dialog ?? view.question}|${view.rows.map((r) => r.label).join('|')}|${view.multi}`
 }
 
 function hash(value: string): string {

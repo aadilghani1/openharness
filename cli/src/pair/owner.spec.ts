@@ -62,8 +62,12 @@ describe('the floor', () => {
     expect(matchOption(q.options, '3. no, and tell claude what to do')).toBe('3. No, and tell Claude what to do')
     expect(answerFloor(q, 'rm -rf /')).toMatchObject({ ok: false, error: 'NOT_OFFERED' })
     expect(answerFloor({ ...q, deny: true }, 'Yes')).toMatchObject({ ok: false, error: 'DENY_CLASS' })
-    expect(answerFloor({ ...q, deny: true }, "Yes, and don't ask again")).toMatchObject({ ok: false, error: 'DENY_CLASS' })
+    expect(answerFloor({ ...q, deny: true }, "Yes, and don't ask again")).toMatchObject({ ok: false })
     expect(answerFloor({ ...q, deny: true }, 'No, and tell Claude what to do')).toEqual({ ok: true, option: '3. No, and tell Claude what to do' })
+    // "Don't ask again" is never keyed, by anyone, on any prompt.
+    expect(answerFloor(q, "Yes, and don't ask again")).toMatchObject({ ok: false, error: 'PERSISTENT' })
+    expect(answerFloor({ options: ['1. Yes', '2. Yes, allow all edits during this session (shift+tab)', '3. No'], deny: false }, '2')).toMatchObject({ error: 'NOT_OFFERED' })
+    expect(answerFloor({ options: ['1. Yes', '2. Yes, allow all edits during this session (shift+tab)', '3. No'], deny: false }, 'Yes, allow all edits during this session (shift+tab)')).toMatchObject({ error: 'PERSISTENT' })
   })
 })
 

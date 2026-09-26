@@ -177,7 +177,7 @@ describe('the autonomy matrix', () => {
     const proposed = await w.call('send_prompt', write)
     expect(proposed).toMatchObject({ ok: true, proposed: true })
     expect(w.owner.send).not.toHaveBeenCalled()
-    expect(w.said).toEqual([expect.objectContaining({ id: proposed.id, mood: 'ask', line: 'tell api: "run the tests"? [y/n]',
+    expect(w.said).toEqual([expect.objectContaining({ id: proposed.id, mood: 'ask', line: '[y/n] tell api: "run the tests"?',
       actions: [{ key: 'y', label: 'do it', choice: 'y' }, { key: 'n', label: 'skip', choice: 'n' }] })])
     expect(w.control.owns(String(proposed.id))).toBe(true)
     expect(await w.control.act(String(proposed.id), 'y')).toMatchObject({ ok: true, results: [expect.objectContaining({ ok: true, verb: 'send_prompt' })] })
@@ -212,7 +212,9 @@ describe('the autonomy matrix', () => {
     const two = await w.call('pause_harness', { agentId: 'web', machineId: 'machine-b' })
     expect([one.batch, two.batch]).toEqual([1, 2])
     const line = w.said.at(-1)!
-    expect(line.line).toBe("2 things to do: stop api's turn; pause web@machine-b. [y/n]")
+    expect(line.line).toBe("[y/n] 2 things to do: stop api's turn; pause web@machine-b.")
+    // The line shows for its moment; the batch stays in daemon_state `asks` with its keys.
+    expect(w.control.pending()).toEqual([{ id: line.id, line: line.line, actions: expect.arrayContaining([expect.objectContaining({ key: 'y' })]) }])
     expect(w.unsaid.at(-1)).toMatchObject({ reason: 'replaced' })
     expect(await w.control.act(line.id, 'y')).toMatchObject({ ok: true, results: [expect.objectContaining({ verb: 'stop_turn' }), expect.objectContaining({ verb: 'pause_harness' })] })
     expect(w.owner.stop).toHaveBeenCalledWith({ agentId: 'api' }, 'key')

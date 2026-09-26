@@ -18,6 +18,7 @@
  */
 import type { ShapedQuestion } from '../lib/askQuestion.js'
 import type { PairJournal } from './journal.js'
+import { isAllowClass } from './classify.js'
 import {
   isDenyClass, statusText, str,
   type PairAction, type PairActor, type PairEvent, type PairHarness, type PairJournalEntry, type PairJournalPage,
@@ -29,6 +30,8 @@ export interface PairSubject {
   engine: string
   /** Why this agent is not watched, if it is not. */
   excluded?: 'terminal' | 'pair' | 'subagent' | null
+  /** Its folder: an edit or read inside it is in the project (pair/classify.ts inProject). */
+  cwd?: string | null
 }
 
 export interface PairSensorDeps {
@@ -100,7 +103,11 @@ export class PairSensor implements PairService {
     this.change(h, opts.replay ? null : { kind: 'done', ...(opts.aborted ? { text: 'interrupted' } : {}) }, opts.replay)
   }
 
-  question(agentId: string, requestId: string, shaped: ShapedQuestion[]): void {
+  /**
+   * A dialog opened. `detail.dialog` is the WHOLE dialog as painted (askQuestion.ts `dialog`): deny-class
+   * and allow-class are read over all of it, here on the owning machine, never over the clipped title.
+   */
+  question(agentId: string, requestId: string, shaped: ShapedQuestion[], detail?: { permission: boolean; dialog: string }): void {
     const h = this.admit(agentId)
     if (!h || !requestId) return
     // The watcher re-announces an open question to a device that (re)joins: same id, not a new ask.
@@ -108,8 +115,11 @@ export class PairSensor implements PairService {
     const first = shaped[0]
     const text = statusText(first?.q ?? '', 500)
     const options = (first?.options ?? []).map((option) => statusText(option, 120)).slice(0, 12)
-    const deny = isDenyClass(first?.q ?? '', first?.options ?? [])
-    h.question = { requestId, text, options, multi: first?.multi === true, deny, since: this.now() }
+    const dialog = [detail?.dialog ?? '', first?.q ?? ''].join('\n')
+    const deny = isDenyClass(dialog, first?.options ?? [])
+    const permission = detail?.permission === true
+    const allow = !deny && isAllowClass(detail?.dialog ?? first?.q ?? '', { permission, cwd: this.deps.describe(agentId)?.cwd ?? null })
+    h.question = { requestId, text, options, multi: first?.multi === true, deny, allow, permission, since: this.now() }
     const baseline = this.carried.delete(requestId)
     this.change(h, baseline ? null : { kind: 'question', requestId, text, options, deny }, baseline)
   }

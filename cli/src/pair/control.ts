@@ -25,7 +25,7 @@ import { dirname } from 'node:path'
 import type { FleetHarness, MachineStatus, PairFleet } from './fleet.js'
 import type { PairOwner } from './owner.js'
 import { composeBrief } from './brief.js'
-import { backLine } from './voice.js'
+import { backLine, DISPLAY_MS, keysPrefix } from './voice.js'
 import { statusText, str, type DaemonSay, type PairHarness, type PairJournalPage } from './protocol.js'
 import type { Autonomy } from './floor.js'
 
@@ -126,6 +126,8 @@ export interface ControlDeps {
   started: StartedHarnesses
   /** `talk`: forward the person's words to the pair harness (pair/pairHarness.ts). */
   talk?: (text: string) => Promise<Result>
+  /** What is waiting for a key changed: daemon_state's `asks` should be sent again. */
+  changed?: () => void
   now: () => number
   newId: () => string
 }
@@ -348,8 +350,11 @@ export class PairControl {
     const proposal: Proposal = { id, verb, machineId, args, line, at: this.deps.now() }
     this.proposals.set(id, proposal)
     const actions = [{ key: 'y' as const, label: 'do it', choice: 'y' }, { key: 'n' as const, label: 'skip', choice: 'n' }]
+    // The line shows for DISPLAY_MS like any other; the proposal stays in daemon_state `asks`, where a
+    // client lists it with its keys, until it is answered or PROPOSAL_TTL_MS passes.
     if (autonomy === 'suggest') {
-      this.deps.voice.say({ id, about: { machineId, agentId: str(args.agentId, 200) }, mood: 'ask', line: statusText(`${line}? [y/n]`, 140), actions, ttlMs: PROPOSAL_TTL_MS })
+      this.deps.voice.say({ id, about: { machineId, agentId: str(args.agentId, 200) }, mood: 'ask', line: statusText(`[y/n] ${line}?`, 140), actions, ttlMs: DISPLAY_MS })
+      this.deps.changed?.()
       return { ok: true, proposed: true, id, waiting: 'the person\'s key; the outcome is journaled (brief, read_harness)' }
     }
     // act-on-key: one line for everything waiting, replaced as the batch grows; one key approves it all.
@@ -357,9 +362,23 @@ export class PairControl {
     if (this.batch) this.deps.voice.unsay(this.batch.sayId, 'replaced')
     const sayId = `ask:batch:${this.deps.newId()}`
     this.batch = { sayId, ids }
-    const text = ids.length === 1 ? `${line}? [y/n]` : `${ids.length} things to do: ${ids.map((i) => this.proposals.get(i)?.line).filter(Boolean).join('; ')}. [y/n]`
-    this.deps.voice.say({ id: sayId, about: { machineId, agentId: '' }, mood: 'ask', line: statusText(text, 140), actions, ttlMs: PROPOSAL_TTL_MS })
+    this.deps.voice.say({ id: sayId, about: { machineId, agentId: '' }, mood: 'ask', line: this.batchLine(), actions, ttlMs: DISPLAY_MS })
+    this.deps.changed?.()
     return { ok: true, proposed: true, id, batch: ids.length, waiting: 'one key from the person approves the batch' }
+  }
+
+  private batchLine(): string {
+    const ids = this.batch?.ids ?? []
+    const lines = ids.map((i) => this.proposals.get(i)?.line).filter(Boolean)
+    return statusText(ids.length === 1 ? `[y/n] ${lines[0]}?` : `[y/n] ${ids.length} things to do: ${lines.join('; ')}.`, 140)
+  }
+
+  /** What waits for a key, for daemon_state `asks`: one row per proposal, or the one batch. */
+  pending(): Array<{ id: string; line: string; actions: Array<{ key: 'y' | 'n'; label: string; choice: string }> }> {
+    this.sweep()
+    const actions = [{ key: 'y' as const, label: 'do it', choice: 'y' }, { key: 'n' as const, label: 'skip', choice: 'n' }]
+    if (this.batch) return [{ id: this.batch.sayId, line: this.batchLine(), actions }]
+    return [...this.proposals.values()].map((p) => ({ id: p.id, line: statusText(`${keysPrefix(actions)}${p.line}?`, 140), actions }))
   }
 
   private sweep(): void {
@@ -389,6 +408,7 @@ export class PairControl {
     this.deps.voice.unsay(id, yes ? 'answered' : 'declined')
     const proposals = ids.map((i) => this.proposals.get(i)).filter((p): p is Proposal => !!p)
     for (const p of proposals) this.proposals.delete(p.id)
+    this.deps.changed?.()
     if (!yes) return { ok: true, declined: proposals.length }
     if (this.deps.autonomy() === 'watch') return fail('AUTONOMY_WATCH')
     const results: Result[] = []

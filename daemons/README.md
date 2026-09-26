@@ -19,7 +19,7 @@ clients and the server build against.
 | `frames.json` | Generated. Frames every port must reproduce, byte for byte. |
 | `desktop/lib/daemons/roster.g.dart` | Generated. The roster as a Dart raw string. |
 | `backend/src/lib/daemonRoster.g.ts` | Generated. Only what decides a draw, a grant or a level: ids, rarities, drops, egg, earn and bond rules. |
-| `cli/src/pair/roster.g.ts` | Generated. Ids and lines: the pair brain's template voice ([BRAIN.md](BRAIN.md)). |
+| `cli/src/pair/roster.g.ts` | Generated. Ids, line templates, lore, first words and family: the pair brain's voice and the pair harness's persona ([BRAIN.md](BRAIN.md)). |
 
 `hn` (the Rust terminal client) reads `roster.json` with `include_str!` and tests against `frames.json`.
 

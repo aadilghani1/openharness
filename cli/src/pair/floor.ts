@@ -9,7 +9,8 @@
  *     `isDenyClass`) is never approved: the only answer anything but the person's own hands may key into
  *     it is the dialog's own decline.
  *   - An answer is always one of the dialog's own options, never free text typed into its "Type
- *     something" row.
+ *     something" row — and never one that answers for more than this once ("don't ask again", "allow
+ *     all edits during this session").
  *
  * Decided here, and checked AGAIN on the machine that owns the harness (pair/owner.ts): question text is
  * untrusted, a remote brain may be older or wrong, and a model's tool call is only a request.
@@ -40,6 +41,18 @@ export function isDeclineOption(option: string): boolean {
   return NO.test(bareOption(option))
 }
 
+const PERSISTENT = /don['’]?t ask again|do not ask again|\balways\b|allow all|for (the rest of )?(this|the) session|during this session|\bremember\b|every time|from now on|auto-?accept|shift\+tab|\(p\)\s*$/i
+
+/** An option that answers for more than this one prompt: "don't ask again", "allow all … this session". */
+export function isPersistentOption(option: string): boolean {
+  return PERSISTENT.test(option)
+}
+
+/** A yes that is only ever this once: the only kind of yes the daemon may key. */
+export function isOneTimeYes(option: string): boolean {
+  return isApproveOption(option) && !isPersistentOption(option)
+}
+
 const norm = (value: string): string => value.replace(/\s+/g, ' ').trim().toLowerCase()
 
 /** The dialog's own option `choice` names (exactly, or without its number), or null. */
@@ -51,7 +64,7 @@ export function matchOption(options: readonly string[], choice: string): string 
     ?? null
 }
 
-export type FloorRefusal = 'NOT_OFFERED' | 'DENY_CLASS'
+export type FloorRefusal = 'NOT_OFFERED' | 'DENY_CLASS' | 'PERSISTENT'
 
 /**
  * Whether `choice` may be keyed into this question by anything but the person's hands in the pane.
@@ -61,6 +74,8 @@ export function answerFloor(question: { options: readonly string[]; deny: boolea
   { ok: true; option: string } | { ok: false; error: FloorRefusal; detail: string } {
   const option = matchOption(question.options, choice)
   if (!option) return { ok: false, error: 'NOT_OFFERED', detail: 'That is not one of the question\'s own options.' }
+  // Whoever asks — a key, the pair, a rule — the daemon answers only this once.
+  if (isPersistentOption(option)) return { ok: false, error: 'PERSISTENT', detail: 'That option answers for more than this once: only you can choose it.' }
   if (question.deny && !isDeclineOption(option)) {
     return { ok: false, error: 'DENY_CLASS', detail: 'This prompt pushes, deletes, deploys, publishes, drops or merges: only you can approve it.' }
   }
