@@ -6375,6 +6375,10 @@ function clearAdapterState(): void {
       'summaries.json',
       'summary-scratch',
       'e2e',
+      // The session search index (lib/sessionSearch/): rebuilt from the transcripts on the next start.
+      SESSION_SEARCH_FILE,
+      `${SESSION_SEARCH_FILE}-wal`,
+      `${SESSION_SEARCH_FILE}-shm`,
     ]) {
       rmSync(join(dir, name), { recursive: true, force: true })
     }

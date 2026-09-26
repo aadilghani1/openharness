@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -148,6 +148,16 @@ describe('SessionSearchStore', () => {
     store.removeSession('s')
     expect(store.counts()).toEqual({ sessions: 0, turns: 0 })
     expect(store.search('alpha', { now: NOW })).toEqual([])
+  })
+
+  it('starts over from a file that is not a database', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-search-'))
+    dirs.push(dir)
+    const path = join(dir, 'index.db')
+    writeFileSync(path, 'this is not a database, it is a sentence long enough to be read as a header')
+    const store = open(path)
+    store.writeSession(session('s', 'S', NOW), 0, [turn(0, 'alpha')])
+    expect(store.search('alpha', { now: NOW })).toHaveLength(1)
   })
 
   it('rebuilds an index written by another schema version', () => {

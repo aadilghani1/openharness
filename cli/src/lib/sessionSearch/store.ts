@@ -11,7 +11,7 @@
  * the better match and ranks first.
  */
 
-import { chmodSync, existsSync } from 'node:fs'
+import { chmodSync, existsSync, rmSync } from 'node:fs'
 
 import { builtinSqlite } from '../sqliteRead.js'
 import type { IndexedTurn } from './turns.js'
@@ -181,8 +181,22 @@ export class SessionSearchStore {
     this.db = db
   }
 
-  /** The index at `path`, created if missing; null on a Node without `node:sqlite`. */
+  /**
+   * The index at `path`, created if missing; null on a Node without `node:sqlite`. The index is
+   * derived data — every row can be rebuilt from the transcripts — so a file that will not open is
+   * deleted and started again rather than leaving search broken until somebody notices.
+   */
   static open(path: string): SessionSearchStore | null {
+    try {
+      return SessionSearchStore.openOnce(path)
+    } catch (error) {
+      if (path === ':memory:') throw error
+      for (const suffix of ['', '-wal', '-shm']) rmSync(`${path}${suffix}`, { force: true })
+      return SessionSearchStore.openOnce(path)
+    }
+  }
+
+  private static openOnce(path: string): SessionSearchStore | null {
     const Constructor = builtinSqlite() as unknown as DatabaseConstructor | null
     if (!Constructor) return null
     const fresh = path !== ':memory:' && !existsSync(path)
