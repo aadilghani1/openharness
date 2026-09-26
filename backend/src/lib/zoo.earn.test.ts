@@ -499,17 +499,18 @@ describe('stored and seeded progress', () => {
     expect(parseZoo({}).progress).toEqual(emptyProgress())
   })
 
-  it('seeds a guest\'s progress, but not its machines or batches', () => {
+  it('never seeds a guest\'s progress: turns, nights and held eggs are self-reported, the account keeps its own', () => {
     const guest = { daemons: [daemon('fish')], progress: { turns: 30, days: { '2026-09-26': 10 }, nights: ['2026-09-26'], machines: ['guest-computer'], batches: ['g1'], held: [{ kind: 'comet' }, { kind: 'week' }] } }
     const r = applyZooOps(emptyZoo(), [{ op: 'zoo.seed', zoo: guest }], seeded(), noonOf('2026-09-26'))
-    expect(r.zoo.progress).toMatchObject({ turns: 30, days: { '2026-09-26': 10 }, nights: ['2026-09-26'], machines: [], batches: [], held: [] })
-    expect(kinds(r.grants)).toEqual(['week'])                               // a held egg lands as soon as it can
-    // Turns a signed-in harnessd already reported are the account's; the guest's do not replace them.
+    expect(r.zoo.daemons.map((d) => d.id)).toEqual(['fish'])
+    expect(r.zoo.progress).toEqual(emptyZoo().progress)
+    expect(r.grants).toEqual([])
+    // Turns a signed-in harnessd already reported are the account's, and stay.
     const reported = play(emptyZoo(), [['2026-09-26', 3]]).zoo
     const seededLate = applyZooOps(reported, [{ op: 'zoo.seed', zoo: guest }], seeded(), noonOf('2026-09-26'))
     expect(seededLate.zoo.daemons.map((d) => d.id)).toEqual(['fish'])
     expect(seededLate.zoo.progress).toMatchObject({ turns: 3, machines: ['m1'] })
-    // A guest with only progress still seeds.
-    expect(applyZooOps(emptyZoo(), [{ op: 'zoo.seed', zoo: { progress: { turns: 7 } } }], seeded()).zoo.progress.turns).toBe(7)
+    // A guest with only progress seeds nothing.
+    expect(applyZooOps(emptyZoo(), [{ op: 'zoo.seed', zoo: { progress: { turns: 7 } } }], seeded()).changed).toBe(false)
   })
 })

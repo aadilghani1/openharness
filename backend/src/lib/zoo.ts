@@ -208,7 +208,11 @@ export const zooDaemonSchema = z.object({
 }).strict()
 /** `date` is the history date a history egg remembers (`YYYY-MM-DD`, the year its week began); its MM-DD
  *  picks the daemon it leans toward. */
-export const zooEggSchema = z.object({ id: key, kind: key, grantedAt: isoTime, date: localDay.optional() }).strict()
+export const zooEggSchema = z.object({
+  id: key, kind: key, grantedAt: isoTime, date: localDay.optional(),
+  /** `local`: an egg a guest's zoo earned on a client, brought in by `zoo.seed` (self-reported). */
+  origin: z.literal('local').optional(),
+}).strict()
 
 export type ZooDaemon = Omit<z.infer<typeof zooDaemonSchema>, 'xp'> & { xp: number }
 export type ZooEgg = z.infer<typeof zooEggSchema>
@@ -243,13 +247,21 @@ export interface ZooProgress {
 }
 /**
  * How much the paired daemon may do on its own (daemons/BRAIN.md, "Autonomy dial"), read by every
- * harnessd's pair brain: `watch` only reads and tells; `suggest` (the default) proposes, and every action
- * waits for a key; `act-on-key` drives harnesses it started and batches the rest behind one key;
- * `act-within-rules` also runs the person's `pair.jsonc` rules on the machine that owns a harness.
+ * harnessd's pair brain: `watch` (the default) only reads and tells; `suggest` proposes, and every action
+ * waits for a key; `act-on-key` drives harnesses it started, each other action behind its own key;
+ * `act-within-rules` also runs the person's `pair.jsonc` rules on the machine that owns a harness. The
+ * zoo's level is a request: each harnessd acts above `suggest` only after the person confirms it there.
  */
 export const ZOO_AUTONOMY_LEVELS = ['watch', 'suggest', 'act-on-key', 'act-within-rules'] as const
 export type ZooAutonomy = typeof ZOO_AUTONOMY_LEVELS[number]
-export const ZOO_DEFAULT_AUTONOMY: ZooAutonomy = 'suggest'
+export const ZOO_DEFAULT_AUTONOMY: ZooAutonomy = 'watch'
+
+/**
+ * The person's first-day consent to their daemon watching (daemons/README.md, "What your daemon sees"):
+ * until `watching` is true no harnessd senses anything. Set only by `zoo.consent`, from a window's consent
+ * screen; never seeded.
+ */
+export interface ZooConsent { watching: boolean; at: string }
 const isAutonomy = (value: unknown): value is ZooAutonomy =>
   typeof value === 'string' && (ZOO_AUTONOMY_LEVELS as readonly string[]).includes(value)
 
@@ -259,6 +271,8 @@ export interface Zoo {
   pair: string | null
   /** The autonomy dial. Account state like the pair, so every machine's brain reads the same level. */
   autonomy: ZooAutonomy
+  /** Whether the person agreed to their daemon watching, and when (null: never asked yet). */
+  consent: ZooConsent | null
   habits: string[]
   firstEgg: boolean
   /** The setup egg (the second habit egg, at `rules.setupEgg.need` habits) has been granted. */
@@ -284,7 +298,7 @@ export interface LevelUp { id: string; level: number; version: string }
 export const emptyProgress = (): ZooProgress =>
   ({ turns: 0, days: {}, weeks: [], nights: [], machines: [], marathon: [], history: [], held: [], batches: [] })
 export const emptyZoo = (): Zoo =>
-  ({ daemons: [], eggs: [], pair: null, autonomy: ZOO_DEFAULT_AUTONOMY, habits: [], firstEgg: false, setupEgg: false, pity: 0, easter: [], progress: emptyProgress() })
+  ({ daemons: [], eggs: [], pair: null, autonomy: ZOO_DEFAULT_AUTONOMY, consent: null, habits: [], firstEgg: false, setupEgg: false, pity: 0, easter: [], progress: emptyProgress() })
 
 // Names in ops are plain strings rather than roster enums on purpose: a newer client naming a habit or
 // a word this server does not know yet gets that op dropped, not the whole batch refused.
@@ -295,12 +309,17 @@ export const zooOpSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('zoo.nickname'), id: daemonId, nickname: zooNicknameSchema.nullable() }).strict(),
   // A level this server does not know (a newer client's) is dropped, not refused, like any unknown name.
   z.object({ op: z.literal('zoo.autonomy'), level: z.string().min(1).max(32) }).strict(),
+  // The first-day consent screen's answer: whether the daemon may watch at all.
+  z.object({ op: z.literal('zoo.consent'), watching: z.boolean() }).strict(),
   z.object({ op: z.literal('zoo.easter'), word: z.string().min(1).max(64) }).strict(),
   // A guest's local zoo, read entry by entry like a stored one (a bad entry is dropped, not the seed).
   z.object({ op: z.literal('zoo.seed'), zoo: z.record(z.string(), z.unknown()) }).strict(),
   // Turns that finished on one machine, all in one local hour of one local day. harnessd sends it.
   // `minutes`: the agent-minutes those turns ran; `away`: how many of them finished while the person was
   // away from this computer. Absent means 0 (a harnessd from before either existed).
+  // SELF-REPORTED, like presence (`away`): anything holding the account's token can send it, so a person can
+  // only ever cheat their own zoo — the daily cap bounds even that. Nothing here is proof to anyone else:
+  // a card's serial and rarity are not verified until a later verify endpoint exists.
   z.object({
     op: z.literal('zoo.turn'),
     batchId: key,
@@ -444,11 +463,14 @@ export function parseZoo(raw: unknown, opts: { roster?: boolean } = {}): Zoo {
   }
   const pair = typeof src.pair === 'string' && daemons.some((d) => d.id === src.pair) ? src.pair : null
   const pity = typeof src.pity === 'number' && Number.isInteger(src.pity) && src.pity >= 0 ? Math.min(src.pity, ZOO_MAX_PITY) : 0
+  const consent = record(src.consent)
   return {
     daemons,
     eggs,
     pair,
     autonomy: isAutonomy(src.autonomy) ? src.autonomy : ZOO_DEFAULT_AUTONOMY,
+    consent: typeof consent.watching === 'boolean' && typeof consent.at === 'string' && isoTime.safeParse(consent.at).success
+      ? { watching: consent.watching, at: consent.at } : null,
     habits: uniqueStrings(src.habits, (h) => !strict || HABIT_KEYS.has(h), 64),
     firstEgg: src.firstEgg === true,
     setupEgg: src.setupEgg === true,
@@ -713,6 +735,9 @@ function applyTurn(zoo: Zoo, op: TurnOp, now: Date, out: Outcome, ctx: ZooContex
 
 const isEmpty = (zoo: Zoo): boolean => zoo.daemons.length === 0 && zoo.eggs.length === 0 && zoo.habits.length === 0
 
+/** The only eggs a guest's seed brings: the first egg and turn eggs, neither of which can hold a secret. */
+const SEEDED_EGGS: ReadonlySet<string> = new Set(['first', 'turn'])
+
 const cloneProgress = (p: ZooProgress): ZooProgress => ({
   turns: p.turns,
   days: { ...p.days },
@@ -730,6 +755,7 @@ const clone = (zoo: Zoo): Zoo => ({
   eggs: zoo.eggs.map((e) => ({ ...e })),
   pair: zoo.pair,
   autonomy: zoo.autonomy,
+  consent: zoo.consent ? { ...zoo.consent } : null,
   habits: [...zoo.habits],
   firstEgg: zoo.firstEgg,
   setupEgg: zoo.setupEgg,
@@ -789,6 +815,13 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
       zoo.autonomy = op.level
       return true
     }
+    case 'zoo.consent': {
+      if (zoo.consent?.watching === op.watching) return false
+      // Agreeing to be watched starts at `watch`: the person opts into `suggest` and above afterwards.
+      if (op.watching) zoo.autonomy = 'watch'
+      zoo.consent = { watching: op.watching, at: now.toISOString() }
+      return true
+    }
     case 'zoo.nickname': {
       const d = zoo.daemons.find((x) => x.id === op.id)
       if (!d || (d.nickname ?? null) === op.nickname) return false
@@ -807,19 +840,23 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
     case 'zoo.seed': {
       if (!isEmpty(zoo)) return false
       const seed = parseZoo(op.zoo, { roster: true })
-      if (isEmpty(seed) && !seed.firstEgg && seed.easter.length === 0 && seed.pity === 0 && seed.progress.turns === 0) return false
+      // A guest's zoo lived on a client: everything in it is self-reported. What comes in is only what a
+      // client could not have made valuable — regular daemon ids, fresh at 0.1 (no shiny, no xp, no bond,
+      // no duplicates, no serial), the first and turn eggs, and the habits — all marked `local`. Pity,
+      // secrets, the eggs that can hold one (night, easter), easter words, progress, the dial and consent
+      // stay the account's own.
+      const regular = new Set(ROSTER_DAEMONS.filter((d) => d.rarity !== 'secret').map((d) => d.id))
+      const daemons = seed.daemons.filter((d) => regular.has(d.id)).map((d): ZooDaemon => ({
+        id: d.id, hatchedAt: d.hatchedAt, egg: d.egg, shiny: false, bond: 0, xp: 0, version: FIRST_VERSION,
+        ...(d.nickname ? { nickname: d.nickname } : {}), origin: 'local',
+      }))
+      const kept = seed.eggs.filter((e) => SEEDED_EGGS.has(e.kind))
+      if (!daemons.length && !kept.length && !seed.habits.length) return false
       // Egg ids are the server's to give: a seeded egg is renamed on the way in.
       const eggs: ZooEgg[] = []
-      for (const egg of seed.eggs) eggs.push({ ...egg, id: newEggId({ eggs }, rng) })
-      // The guest's progress counts, but not its machine ids (a guest's are not the account's machines)
-      // or batch ids. Turns this account already reported from a signed-in harnessd are kept instead.
-      const fresh = zoo.progress.turns === 0 && zoo.progress.batches.length === 0
-      const progress = fresh ? { ...seed.progress, machines: [], batches: [] } : zoo.progress
-      // The guest's dial comes along when it set one; otherwise the account keeps its own.
-      const autonomy = isAutonomy((op.zoo as { autonomy?: unknown }).autonomy) ? seed.autonomy : zoo.autonomy
-      // A guest's daemons hatched on a client: marked local, and never with a serial (only the server mints).
-      const daemons = seed.daemons.map(({ serial: _serial, ...d }): ZooDaemon => ({ ...d, origin: 'local' }))
-      Object.assign(zoo, seed, { daemons, eggs, pair: seed.pair ?? seed.daemons[0]?.id ?? null, progress, autonomy })
+      for (const egg of kept) eggs.push({ id: newEggId({ eggs }, rng), kind: egg.kind, grantedAt: egg.grantedAt, origin: 'local' })
+      const pair = seed.pair && daemons.some((d) => d.id === seed.pair) ? seed.pair : daemons[0]?.id ?? null
+      Object.assign(zoo, { daemons, eggs, pair, habits: seed.habits, firstEgg: seed.firstEgg, setupEgg: seed.setupEgg, pity: 0, easter: [] })
       return true
     }
     case 'zoo.turn':

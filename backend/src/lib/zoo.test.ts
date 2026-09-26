@@ -379,16 +379,16 @@ describe('easter words are not in the clear', () => {
 })
 
 describe('autonomy — the pair brain\'s dial', () => {
-  it('defaults to suggest, and a stored zoo without one reads as suggest', () => {
-    expect(emptyZoo().autonomy).toBe('suggest')
-    expect(parseZoo({ daemons: [daemon('tim')], pair: 'tim' }).autonomy).toBe('suggest')
+  it('defaults to watch, and a stored zoo without one reads as watch', () => {
+    expect(emptyZoo().autonomy).toBe('watch')
+    expect(parseZoo({ daemons: [daemon('tim')], pair: 'tim' }).autonomy).toBe('watch')
     expect(parseZoo({ autonomy: 'act-on-key' }).autonomy).toBe('act-on-key')
-    expect(parseZoo({ autonomy: 'yolo' }).autonomy).toBe('suggest')
+    expect(parseZoo({ autonomy: 'yolo' }).autonomy).toBe('watch')
   })
 
   it('sets each level, is a no-op when unchanged, and drops a level it does not know without refusing the batch', () => {
     let zoo = emptyZoo()
-    for (const level of ['watch', 'act-on-key', 'act-within-rules', 'suggest'] as const) {
+    for (const level of ['watch', 'act-on-key', 'act-within-rules', 'suggest'].slice(1).concat(['watch', 'suggest']) as Array<'watch' | 'suggest' | 'act-on-key' | 'act-within-rules'>) {
       const r = apply(zoo, [{ op: 'zoo.autonomy', level }])
       expect(r.changed).toBe(true)
       expect(r.zoo.autonomy).toBe(level)
@@ -402,10 +402,32 @@ describe('autonomy — the pair brain\'s dial', () => {
     expect(zooOpSchema.safeParse({ op: 'zoo.autonomy', level: 'watch', extra: 1 }).success).toBe(false)
   })
 
-  it('a guest seed brings its dial when it set one, and keeps the account\'s otherwise', () => {
-    const account = apply(emptyZoo(), [{ op: 'zoo.autonomy', level: 'watch' }]).zoo
-    expect(apply(account, [{ op: 'zoo.seed', zoo: { daemons: [daemon('tim')] } }]).zoo.autonomy).toBe('watch')
-    expect(apply(account, [{ op: 'zoo.seed', zoo: { daemons: [daemon('tim')], autonomy: 'act-on-key' } }]).zoo.autonomy).toBe('act-on-key')
+  it('a guest seed never brings its dial: the account keeps its own', () => {
+    const account = apply(emptyZoo(), [{ op: 'zoo.autonomy', level: 'suggest' }]).zoo
+    expect(apply(account, [{ op: 'zoo.seed', zoo: { daemons: [daemon('tim')] } }]).zoo.autonomy).toBe('suggest')
+    expect(apply(account, [{ op: 'zoo.seed', zoo: { daemons: [daemon('tim')], autonomy: 'act-within-rules' } }]).zoo.autonomy).toBe('suggest')
+  })
+})
+
+describe('consent — the first-day question', () => {
+  it('starts unasked; agreeing sets it with its time and drops the dial to watch; a repeat is a no-op', () => {
+    expect(emptyZoo().consent).toBeNull()
+    const account = apply(emptyZoo(), [{ op: 'zoo.autonomy', level: 'act-within-rules' }]).zoo
+    const yes = apply(account, [{ op: 'zoo.consent', watching: true }])
+    expect(yes.changed).toBe(true)
+    expect(yes.zoo).toMatchObject({ consent: { watching: true, at: NOW.toISOString() }, autonomy: 'watch' })
+    expect(apply(yes.zoo, [{ op: 'zoo.consent', watching: true }]).changed).toBe(false)
+    // The person opts into more afterwards; saying no again keeps it off, and keeps the level they chose.
+    const later = apply(yes.zoo, [{ op: 'zoo.autonomy', level: 'suggest' }, { op: 'zoo.consent', watching: false }]).zoo
+    expect(later).toMatchObject({ consent: { watching: false }, autonomy: 'suggest' })
+    expect(parseZoo(JSON.parse(JSON.stringify(later))).consent).toEqual(later.consent)
+    expect(parseZoo({ consent: { watching: 'yes', at: 'x' } }).consent).toBeNull()
+    expect(zooOpSchema.safeParse({ op: 'zoo.consent', watching: 'true' }).success).toBe(false)
+  })
+
+  it('is never seeded from a guest\'s zoo', () => {
+    const r = apply(emptyZoo(), [{ op: 'zoo.seed', zoo: { daemons: [daemon('tim')], consent: { watching: true, at: NOW.toISOString() } } }])
+    expect(r.zoo.consent).toBeNull()
   })
 })
 
@@ -420,19 +442,34 @@ describe('seed — a guest zoo on first sign-in', () => {
     easter: ['xyzzy', 'plugh'],
   }
 
-  it('takes what the roster knows, renames the eggs, and pairs a daemon it kept', () => {
+  it('takes what the roster knows, renames the eggs, marks them local, and pairs a daemon it kept', () => {
     const r = apply(emptyZoo(), [{ op: 'zoo.seed', zoo: guest }])
     expect(r.changed).toBe(true)
     expect(r.zoo.daemons.map((d) => d.id)).toEqual(['fish', 'bat'])
-    expect(r.zoo.daemons[0]).toMatchObject({ nickname: 'wanda', shiny: true })
-    expect(r.zoo.eggs).toEqual([{ id: expect.stringMatching(/^[a-z2-9]{10}$/), kind: 'first', grantedAt: '2026-09-02T00:00:00.000Z' }])
-    expect(r.zoo).toMatchObject({ pair: 'fish', habits: ['turn', 'split'], firstEgg: true, setupEgg: false, pity: 2, easter: [XYZZY] })
+    // Self-reported: no shiny comes along; the nickname does.
+    expect(r.zoo.daemons[0]).toEqual({ ...daemon('fish'), nickname: 'wanda', origin: 'local' })
+    expect(r.zoo.eggs).toEqual([{ id: expect.stringMatching(/^[a-z2-9]{10}$/), kind: 'first', grantedAt: '2026-09-02T00:00:00.000Z', origin: 'local' }])
+    // No pity, no easter words: those are the server's to count.
+    expect(r.zoo).toMatchObject({ pair: 'fish', habits: ['turn', 'split'], firstEgg: true, setupEgg: false, pity: 0, easter: [] })
   })
 
   it('marks a guest\'s daemons local, with no serial (only the server mints)', () => {
     const r = apply(emptyZoo(), [{ op: 'zoo.seed', zoo: { daemons: [daemon('tim', { serial: 7 } as Partial<ZooDaemon>), daemon('vim')], setupEgg: true } }])
     expect(r.zoo.daemons).toEqual([{ ...daemon('tim'), origin: 'local' }, { ...daemon('vim'), origin: 'local' }])
     expect(r.zoo.setupEgg).toBe(true)
+  })
+
+  it('brings only what a client could not have made valuable: no secret, no egg that can hold one, no xp, no level', () => {
+    const r = apply(emptyZoo(), [{ op: 'zoo.seed', zoo: {
+      daemons: [daemon('grue', { egg: 'easter' }), daemon('fzf', { xp: 900, bond: 4, version: '2.0', shiny: true, dupes: 3 })],
+      eggs: [egg('n', 'night'), egg('e', 'easter'), egg('w', 'week'), egg('t', 'turn'), egg('f', 'first')],
+      pity: 7, easter: ['xyzzy'], habits: ['turn'], pair: 'grue',
+    } }])
+    expect(r.zoo.daemons).toEqual([{ ...daemon('fzf'), origin: 'local' }])
+    expect(r.zoo.eggs.map((e) => [e.kind, e.origin])).toEqual([['turn', 'local'], ['first', 'local']])
+    expect(r.zoo).toMatchObject({ pair: 'fzf', pity: 0, easter: [] })
+    // A secret alone is nothing to seed.
+    expect(apply(emptyZoo(), [{ op: 'zoo.seed', zoo: { daemons: [daemon('grue')], eggs: [egg('n', 'night')] } }]).changed).toBe(false)
   })
 
   it('applies only while the account zoo is empty', () => {
@@ -452,7 +489,7 @@ describe('seed — a guest zoo on first sign-in', () => {
       eggs: Array.from({ length: ZOO_MAX_EGGS + 6 }, (_, i) => egg(`g${i}`)),
     }
     const r = apply(emptyZoo(), [{ op: 'zoo.seed', zoo: big }])
-    expect(r.zoo.daemons).toEqual([{ ...daemon('tim'), shiny: true, dupes: ZOO_MAX_DAEMONS + 6, origin: 'local' }])
+    expect(r.zoo.daemons).toEqual([{ ...daemon('tim'), origin: 'local' }])
     expect(r.zoo.eggs).toHaveLength(ZOO_MAX_EGGS)
     expect(new Set(r.zoo.eggs.map((e) => e.id)).size).toBe(ZOO_MAX_EGGS)
   })
