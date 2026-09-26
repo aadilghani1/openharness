@@ -2069,6 +2069,10 @@ class _TerminalPageState extends State<TerminalPage>
                     if (session != null && widget.isActive && !_keyBarUp)
                       Positioned.fill(
                         child: FocusHints(
+                          onDone: () => unawaited(
+                            widget.notifier.agentNotices.system
+                                .requestPermission(),
+                          ),
                           micBottom:
                               _windowBottomInset + 4 * Tty.of(context).row,
                         ),

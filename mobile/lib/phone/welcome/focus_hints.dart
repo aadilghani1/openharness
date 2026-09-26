@@ -64,7 +64,16 @@ class FocusHintsSeen {
 ///                    ( mic )
 /// ```
 class FocusHints extends StatefulWidget {
-  const FocusHints({super.key, required this.micBottom, this.store});
+  const FocusHints({
+    super.key,
+    required this.micBottom,
+    this.store,
+    this.onDone,
+  });
+
+  /// Called once, as the hints go — the moment to ask for what the next step needs (the
+  /// notification permission: a harness asking you something is what a notice is for).
+  final VoidCallback? onDone;
 
   /// Where the mic's centre sits, measured up from the bottom of this box.
   final double micBottom;
@@ -96,6 +105,7 @@ class _FocusHintsState extends State<FocusHints> {
     HapticFeedback.selectionClick();
     setState(() => _show = false);
     unawaited(_store.markSeen());
+    widget.onDone?.call();
   }
 
   @override
