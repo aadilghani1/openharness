@@ -268,7 +268,7 @@ block:
 
 ```
 .----------------------------------------.
-| #01/10  DROP 1: UNIX            COMMON |
+| #01/09  DROP 1: UNIX            COMMON |
 |                                        |
 |  [oo]    tim 0.1                       |
 |  screen -> tmux -> tim                 |
@@ -278,6 +278,24 @@ block:
 |                                        |
 |  hatched 2026-09-26, first egg         |
 '----------------------------------------'
+```
+
+## Cards and shelves
+
+`daemons/tools/card.mjs` draws what people share. A card is the daemon's portrait at its version, its
+number, rarity, name, lineage and first words, 42 columns of printable ASCII, copied as a fenced code
+block. The same lines render as SVG for places a code block does not travel (X, previews, a GitHub
+profile README), in monospace system fonts. A shelf is the zoo as a box back: owned sprites in their
+colours, `[ ? ]` for a numbered slot still empty, `[ ! ]` for a secret. Cards and shelves never show a
+live mood, so they never reveal whether you are working.
+
+Secrets sit outside the numbered set: drop 1 is `#01/09` to `#09/09`, and grue is `#S/09`.
+
+```
+node daemons/tools/card.mjs tim --version 2.0 --serial 42          # a card as text
+node daemons/tools/card.mjs tim --version 2.0 --svg > tim.svg      # the same card as SVG
+node daemons/tools/card.mjs --shelf tim,vim,grue --svg > zoo.svg   # a shelf
+node --test daemons/tools/card.test.mjs
 ```
 
 ## Build

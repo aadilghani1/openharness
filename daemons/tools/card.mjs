@@ -1,0 +1,148 @@
+#!/usr/bin/env node
+// Shareable daemon cards and zoo shelves, as text (for a fenced code block) and as SVG (for X, Slack
+// previews and a GitHub profile README, where a code block does not travel). Never shows a live mood:
+// a card is a portrait, not a presence indicator.
+//
+//   node daemons/tools/card.mjs tim [--version 1.0] [--shiny] [--serial 42] [--nickname pip] [--svg]
+//   node daemons/tools/card.mjs --shelf tim,vim,grue [--svg]
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { renderPortrait, renderSprite } from './render.mjs'
+
+const W = 42
+const INNER = W - 4
+
+const regulars = roster => roster.daemons.filter(d => d.rarity !== 'secret')
+/** `#03/09`, or `#S/09` for a secret: secrets sit outside the numbered set. */
+export function cardNumber(roster, d) {
+  const set = regulars(roster).filter(x => x.drop === d.drop)
+  const of = String(set.length).padStart(2, '0')
+  if (d.rarity === 'secret') return `#S/${of}`
+  return `#${String(set.indexOf(d) + 1).padStart(2, '0')}/${of}`
+}
+
+function wrap(text, width) {
+  const out = []
+  let line = ''
+  for (const word of text.split(' ')) {
+    if ((line + ' ' + word).trim().length > width) { out.push(line.trim()); line = word } else line += ' ' + word
+  }
+  if (line.trim()) out.push(line.trim())
+  return out
+}
+
+/** The card as lines of printable ASCII, 42 columns wide. */
+export function cardLines(roster, d, { version = roster.rules.versions[0], shiny = false, serial = null, nickname = null, hatched = null, egg = null } = {}) {
+  const drop = roster.drops.find(x => x.id === d.drop) ?? { n: 1, name: d.drop }
+  const L = s => '| ' + s.padEnd(INNER).slice(0, INNER) + ' |'
+  const head = `${cardNumber(roster, d)}  DROP ${drop.n}: ${drop.name.toUpperCase()}`
+  const rarity = (shiny ? 'SHINY ' : '') + d.rarity.toUpperCase()
+  const name = `${nickname ? `${nickname} the ` : ''}${d.id} ${version}${serial != null ? `  #${String(serial).padStart(4, '0')}` : ''}`
+  const portrait = renderPortrait(roster, d, version, 'idle', { motion: false })
+  const width = Math.max(...portrait.map(l => l.length))
+  const pad = Math.max(0, Math.floor((INNER - width) / 2))
+  return [
+    '.' + '-'.repeat(W - 2) + '.',
+    L(head + ' '.repeat(Math.max(1, INNER - head.length - rarity.length)) + rarity),
+    L(''),
+    ...portrait.map(l => L(' '.repeat(pad) + l)),
+    L(''),
+    L('  ' + name),
+    L('  ' + d.family.map(f => f[0]).join(' -> ')),
+    L(''),
+    ...wrap(`"${d.first}"`, INNER - 2).map(l => L('  ' + l)),
+    ...(hatched || egg ? [L(''), L(`  hatched ${hatched ?? ''}${egg ? `, ${egg} egg` : ''}`.replace(/\s+,/, ','))] : []),
+    "'" + '-'.repeat(W - 2) + "'",
+  ]
+}
+
+/** A shelf: the zoo's sprites in order, `[ ? ]` for missing regulars, `[ ! ]` for a missing secret. */
+export function shelfLines(roster, ownedIds, { drop = roster.drops[0].id } = {}) {
+  const owned = new Set(ownedIds)
+  const set = roster.daemons.filter(d => d.drop === drop)
+  const cells = set.map(d => {
+    if (!owned.has(d.id)) return { top: d.rarity === 'secret' ? '[ ! ]' : '[ ? ]', label: d.rarity === 'secret' ? 'secret' : cardNumber(roster, d).slice(0, 3) }
+    return { top: renderSprite(roster, d, roster.rules.versions.length - 1, 'idle', { motion: false }), label: d.id }
+  })
+  const rows = []
+  for (let i = 0; i < cells.length; i += 5) {
+    const slice = cells.slice(i, i + 5)
+    rows.push(slice.map(c => c.top.padEnd(10)).join('').trimEnd())
+    rows.push(slice.map(c => c.label.padEnd(10)).join('').trimEnd())
+    rows.push('')
+  }
+  const drop1 = roster.drops.find(x => x.id === drop)
+  const have = set.filter(d => owned.has(d.id) && d.rarity !== 'secret').length
+  const of = set.filter(d => d.rarity !== 'secret').length
+  return [`zoo: drop ${drop1?.n ?? 1} ${drop1?.name ?? drop}  ${have}/${of}${set.some(d => d.rarity === 'secret' && owned.has(d.id)) ? '  +secret' : ''}`, '', ...rows].slice(0, -1)
+}
+
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/**
+ * Lines of text as an SVG terminal. `colors` maps a line index to a colour (the portrait gets the
+ * daemon's colour, the rest the ink). Monospace system fonts only, so it renders on GitHub.
+ */
+export function svgFor(lines, { colors = {}, ink = '#d0d0d0', bg = '#121212', border = '#3a3a3a', title = 'daemon' } = {}) {
+  const cw = 8.4, lh = 17, padX = 18, padY = 22
+  const cols = Math.max(...lines.map(l => l.length))
+  const w = Math.ceil(cols * cw + padX * 2)
+  const h = Math.ceil(lines.length * lh + padY * 2 - 4)
+  const text = lines.map((l, i) =>
+    `<text x="${padX}" y="${padY + i * lh + 12}" fill="${colors[i] ?? ink}" xml:space="preserve">${esc(l)}</text>`).join('\n  ')
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(title)}">
+  <rect x="0.5" y="0.5" width="${w - 1}" height="${h - 1}" rx="6" fill="${bg}" stroke="${border}"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-variant-ligatures="none">
+  ${text}
+  </g>
+</svg>
+`
+}
+
+export function cardSvg(roster, d, opts = {}) {
+  const lines = cardLines(roster, d, opts)
+  const portraitRows = renderPortrait(roster, d, opts.version ?? roster.rules.versions[0], 'idle', { motion: false }).length
+  const color = opts.shiny && d.shiny ? d.shiny.hex : d.color.hex
+  const colors = {}
+  for (let i = 3; i < 3 + portraitRows; i++) colors[i] = color
+  colors[1] = { common: '#d0d0d0', rare: '#5fafaf', legendary: '#d7af5f', secret: '#af87af' }[d.rarity]
+  return svgFor(lines, { colors, title: `${d.id}, a ${d.rarity} daemon` })
+}
+
+/** The shelf as SVG, each owned daemon in its own colour and the empty slots faint. */
+export function shelfSvg(roster, ownedIds, opts = {}) {
+  const owned = new Set(ownedIds)
+  const set = roster.daemons.filter(d => d.drop === (opts.drop ?? roster.drops[0].id))
+  const lines = shelfLines(roster, ownedIds, opts)
+  const svg = svgFor(lines, { title: 'daemon zoo' })
+  // Colour the sprite rows cell by cell: rows 2, 5, 8… hold sprites, ten columns per cell.
+  return svg.replace(/<text x="(\d+)" y="(\d+)" fill="[^"]+" xml:space="preserve">([^<]*)<\/text>/g, (whole, x, y, body) => {
+    const row = lines.findIndex(l => esc(l) === body)
+    if (row < 2 || (row - 2) % 3 !== 0) return whole
+    const first = ((row - 2) / 3) * 5
+    const spans = set.slice(first, first + 5).map((d, i) => {
+      const cell = lines[row].slice(i * 10, i * 10 + 10)
+      const color = owned.has(d.id) ? d.color.hex : '#626262'
+      return `<tspan fill="${color}">${esc(cell)}</tspan>`
+    }).join('')
+    return `<text x="${x}" y="${y}" xml:space="preserve">${spans}</text>`
+  })
+}
+
+// ---------- command line ----------
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const roster = JSON.parse(readFileSync(new URL('../roster.json', import.meta.url), 'utf8'))
+  const args = process.argv.slice(2)
+  const flag = name => { const i = args.indexOf(name); return i >= 0 ? (args[i + 1] ?? true) : null }
+  const svg = args.includes('--svg')
+  const shelf = flag('--shelf')
+  if (shelf) {
+    const ids = String(shelf).split(',').filter(Boolean)
+    process.stdout.write(svg ? shelfSvg(roster, ids) : shelfLines(roster, ids).join('\n') + '\n')
+  } else {
+    const d = roster.daemons.find(x => x.id === args[0])
+    if (!d) { console.error(`usage: card.mjs <${roster.daemons.map(x => x.id).join('|')}> [--version v] [--shiny] [--serial n] [--nickname s] [--svg]`); process.exit(2) }
+    const opts = { version: flag('--version') ?? undefined, shiny: args.includes('--shiny'), serial: flag('--serial'), nickname: flag('--nickname') }
+    process.stdout.write(svg ? cardSvg(roster, d, opts) : cardLines(roster, d, opts).join('\n') + '\n')
+  }
+}
