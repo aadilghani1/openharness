@@ -109,6 +109,20 @@ they were found and when. Requests are
 debounced 110 ms and stale answers dropped. The best row stays selected as hits arrive, unless you
 have moved. A machine that cannot answer, because it is offline or runs an older CLI, adds nothing.
 
+### When: "dial last week"
+
+People remember a session by roughly when as often as by what. The app reads a time phrase out of
+the query and sends every machine the same window in this computer's time zone:
+
+- today, yesterday, this or last week or month;
+- N days or weeks ago, a few days ago (loosely: a day, or half a week, either side);
+- a weekday: "on monday", "last friday".
+
+Only sessions worked on in that window are searched: any turn then, not only the matching one. So
+"the dial one from last week" is a session about the dial that was open last week. The remaining
+words are matched as usual. A time alone ("yesterday") lists what was worked on then, each row
+showing what was asked.
+
 ## Measured
 
 ### Accuracy on real sessions
@@ -154,12 +168,17 @@ On 184 real harnesses:
 | Index | p50 | p95 | Max | Size |
 |---|---|---|---|---|
 | Real, 1.7k turns | 1.7 ms | 3.4 ms | 6 ms | 11 MB |
-| Synthetic, 102k turns (60× real) | 16 ms | — | 45 ms | 665 MB |
+| Synthetic, 102k turns (60× real) | 18 ms | — | 140 ms | 667 MB |
+| Same, with a time window | 30 ms typical | — | 185 ms | |
 
 Getting there:
 
 - Rank inside FTS5 before joining.
-- For a word in more than 30k turns, take its most recent matches instead of sorting every one.
+- For a word in more than 30k turns, take every match unranked and let recency decide instead of
+  sorting by BM25. It barely discriminates there. Not the highest rowids: a backfill writes the
+  newest sessions first. The slowest queries left are these, about 140 ms at 100k turns.
+- A window's sessions are read once and kept while the window stays the same, keystroke to
+  keystroke.
 - Build snippets from the stored turn: FTS5's `snippet()` re-read a common word's whole posting
   list for every hit, 250 ms for 30 hits.
 - Prefix indexes for 2–4 letters: dropping to 2 letters saves 25% of the size but makes `the*`
@@ -171,11 +190,13 @@ Two gotchas:
   beside `MATCH`. Every row came back, so every hit had the same snippet. The fix is
   `CAST(? AS INTEGER)`.
 - FTS5 refuses `bm25()` inside an aggregate, even in a subquery that gets flattened.
+- `rowid IN (…)` beside `MATCH` runs a posting-list lookup per value: 3,000 ids took 72 seconds.
 
 ## Protocol
 
-`session_search { query, limit }` → `{ hits: [{ agentId, sessionId, engine, turn, at, lastAt, field,
-snippet, together, score }], indexed, pending, tookMs }`.
+`session_search { query, limit, from?, to? }` → `{ hits: [{ agentId, sessionId, engine, turn, at,
+lastAt, field, snippet, together, score }], indexed, pending, tookMs }`. `from` and `to` are epoch
+ms.
 
 - Matched words in the snippet are wrapped in `\u0002 … \u0003`.
 - `session_search` and `session_search_result` are in the E2EE type sets (`cli/src/lib/e2ee/core.ts`,
@@ -183,7 +204,8 @@ snippet, together, score }], indexed, pending, tookMs }`.
   and the device must re-derive from the new `core.ts`.
 - A Node without `node:sqlite` answers `SEARCH_UNAVAILABLE`.
 
-`harness search <words> [--limit=N] [--json]` reads the same index from a shell.
+`harness search <words> [--limit N] [--json]` reads the same index from a shell. It is read-only:
+it never migrates or deletes the index the daemon owns.
 
 ## Not yet
 
