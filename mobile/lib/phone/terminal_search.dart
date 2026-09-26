@@ -9,62 +9,50 @@ import 'package:harness_mobile/shared/widgets/app_dialog.dart'
     show kDialogVeilBlur, kSheetVeilOpacity;
 import 'package:harness_mobile/state/app_state.dart';
 
-import 'agent_index.dart';
-import 'desk_groups.dart';
-import 'desk_tabs_panel.dart';
 import 'phone_search_actions.dart';
 import 'phone_search_controller.dart';
 import 'phone_search_field.dart';
 import 'phone_search_results.dart';
 import 'sheet_list.dart';
 
-/// The terminal's way to another agent: a sheet up from the bottom, over the
-/// terminal, holding the account's tabs with a search field across its top.
+/// Find: the one way to another agent. A sheet up from the bottom, over Focus, brought up by the
+/// handle at Focus's foot ([FindHandle]) — the agents you were last in first, a field across the top.
 ///
 /// ```
 ///  ╭──────────────────────────────────╮
 ///  │               ━━━                │
-///  │  ┌────────────────────┐          │
-///  │  │ ⌕ Search harnesses │  Cancel  │  ← focused, it grows a Cancel
-///  │  └────────────────────┘          │
-///  │  (▓Desktop▓) ( Docker )  (+)     │  ← until then, the tabs —
-///  │    DESKTOP                    2  │    [DeskTabsPanel]
+///  │  ┌────────────────────────┐      │
+///  │  │ ⌕ Find an agent        │  +   │  ← focused, the + gives way to Cancel
+///  │  └────────────────────────┘      │
 ///  │  ╭────────────────────────────╮  │
-///  │  │ ▣  api-3              ◌  › │  │
+///  │  │ ▣  fix login test       ✓  │  │  ← the one on screen
+///  │  │ ▣  docs rewrite            │  │
 /// ```
 ///
-/// Drawn the way iOS draws its own sheets — a filled search bar, pills, an
-/// inset-grouped list — and the same way in both states: the results are the
-/// rows the tabs are ([SheetRow]), so the field taking focus changes what is
-/// listed and nothing about how.
+/// ⚠️ **One list, and it is the same list focused or not.** The sheet used to open on the account's
+/// desk tabs and trade them for results on focus; a phone has no tabs now (see
+/// `docs/plans/2026-09-26-001-mobile-zero-questions.md`). With nothing typed the rows are the
+/// agents you were last in, so switching among the two or three you work with on the go is a tap;
+/// typing narrows the same rows. A leading `>` `#` `@` `?` is read as typed — the desktop's modes
+/// are off here ([PhoneSearchController.modes]).
 ///
-/// ⚠️ **Two ways to the same place, one sheet.** An agent is found by where it
-/// is — its tab — or by what it is called, and those were two doors: a grid
-/// mark in the header for the tabs, and the floating Search button for a search
-/// that covered the screen. The button opens both now. The sheet reads the tabs
-/// until the field is focused; then the results take their place, and Cancel
-/// puts the tabs back.
+/// ⚠️ **Full height from the moment it opens.** Its top edge stands just under the status bar and
+/// stays there; a keyboard, when it comes, takes the sheet's foot onto its own top rather than
+/// covering the rows.
 ///
-/// ⚠️ **Full height from the moment it opens.** Its top edge stands just under
-/// the status bar and stays there; the results take the tabs' place, and a
-/// keyboard, when it comes, takes the sheet's foot onto its own top rather
-/// than covering the rows — pinned to the window's foot, the sheet let the
-/// keys cover all but two rows of results.
+/// ⚠️ **The field is not focused on the way in.** The recent agents are what the sheet is opened to
+/// read, and a keyboard would cover half of them.
 ///
-/// ⚠️ **The field is not focused on the way in.** The tabs are what the sheet
-/// is opened to read, and focus is what trades them for the results.
+/// ⚠️ **Not a route.** Pushed, the sheet would sit in a navigator above the shell, and an agent
+/// opened from it would be pushed over the shell rather than take the home screen (see
+/// [openAgent]). Worse, the terminal beneath would still be the current route of ITS navigator: it
+/// would read the field's keyboard as its own and claim the input back, and the query would be typed
+/// into the shell. In place, the page holds its terminal still for as long as this is up — see
+/// `_heldForSearch` in `terminal_page.dart`.
 ///
-/// ⚠️ **Not a route.** Pushed, the sheet would sit in a navigator above the
-/// shell, and an agent opened from it would be pushed over the shell rather
-/// than take the home screen (see [openAgent]). Worse, the terminal beneath
-/// would still be the current route of ITS navigator: it would read the
-/// field's keyboard as its own and claim the input back, and the query would
-/// be typed into the shell. In place, the page holds its terminal still for as
-/// long as this is up — see `_heldForSearch` in `terminal_page.dart`.
-///
-/// ⚠️ **It must stay mounted only while it is up.** The field inside keeps the
-/// keyboard once tapped, so a copy left built behind the terminal would keep it
-/// and eat every keystroke the terminal is owed.
+/// ⚠️ **It must stay mounted only while it is up.** The field inside keeps the keyboard once tapped,
+/// so a copy left built behind the terminal would keep it and eat every keystroke the terminal is
+/// owed.
 class TerminalSearchOverlay extends StatefulWidget {
   const TerminalSearchOverlay({
     super.key,
@@ -87,8 +75,7 @@ class TerminalSearchOverlay extends StatefulWidget {
 
   final VoidCallback onClose;
 
-  /// The agent on screen: the tab the sheet opens on, and the row wearing the
-  /// check — in the tabs and in the results. See [DeskTabsPanel.showing].
+  /// The agent on screen: the row wearing the check.
   final AgentRef? showing;
 
   /// The strip at the foot of the window the sheet runs down over — the home
@@ -111,9 +98,8 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// own read as Material wearing its clothes.
   static const double _radius = 14;
 
-  /// What the field says while it reads the tabs. The modes it also takes
-  /// (`>`, `#`, `@`, `?`) are typed — see [_SearchHead].
-  static const String _hint = 'Search harnesses';
+  /// What the field says.
+  static const String _hint = 'Find an agent';
 
   /// How dark the page goes behind the sheet — a step past Material's
   /// `black54`, with the page blurred under it as well. The phone sheets stand
@@ -149,47 +135,19 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   late final PhoneSearchController _search = PhoneSearchController(
     notifier: widget.notifier,
     history: widget.notifier.searchHistory,
-    commands: () => phoneSearchCommands(context, widget.notifier),
+    modes: false,
   );
 
   /// The sheet's own box, measured to turn a drag's pixels into a share of its
   /// height.
   final _sheetKey = GlobalKey(debugLabel: 'Terminal search sheet');
 
-  /// Whether the sheet is searching: results where the tabs were, Cancel
-  /// beside the field.
+  /// Whether the field has been tapped: Cancel beside it instead of `+`.
   ///
-  /// ⚠️ **Entered on focus, left on Cancel — not tied to focus both ways.** The
-  /// keyboard goes away for reasons that are not "stop searching" — the return
-  /// key puts it away on purpose. The results stay up through that, the way a
-  /// search does anywhere on a phone; only Cancel, or Back, ends it. (A drag
-  /// on the results keeps it: see [PhoneSearchResults].)
+  /// ⚠️ **Entered on focus, left on Cancel — not tied to focus both ways.** The keyboard goes away
+  /// for reasons that are not "stop searching" — the return key puts it away on purpose. The query
+  /// stays through that, the way a search does anywhere on a phone; only Cancel, or Back, ends it.
   bool _searching = false;
-
-  /// Whether the results are BUILT — from the focus that started the search to
-  /// the last frame of their fade after Cancel. Not [_searching]: they have to
-  /// stay on screen to be seen going.
-  bool _resultsUp = false;
-
-  /// The tabs and the results trading places, in the same spot.
-  late final AnimationController _swap = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 250),
-    reverseDuration: const Duration(milliseconds: 200),
-  )..addStatusListener(_onSwap);
-
-  /// The tabs out over the first half of the swap and the results in over the
-  /// later part, so the two are never both at full strength — one list printed
-  /// over another reads as neither.
-  late final CurvedAnimation _tabsGoing = CurvedAnimation(
-    parent: _swap,
-    curve: const Interval(0, 0.5, curve: Curves.easeIn),
-  );
-  late final Animation<double> _tabsShown = ReverseAnimation(_tabsGoing);
-  late final CurvedAnimation _resultsShown = CurvedAnimation(
-    parent: _swap,
-    curve: const Interval(0.35, 1, curve: Curves.easeOut),
-  );
 
   /// How far a finger has pulled the sheet down, as a share of its height.
   late final AnimationController _pull = AnimationController(vsync: this);
@@ -240,9 +198,6 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     _controller.dispose();
     _focus.dispose();
     _search.dispose();
-    _tabsGoing.dispose();
-    _resultsShown.dispose();
-    _swap.dispose();
     _pull.dispose();
     super.dispose();
   }
@@ -250,37 +205,16 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// A tap on the field is what starts a search — see [_searching].
   void _onFocus() {
     if (!_focus.hasFocus || _searching) return;
-    // A search cancelled a moment ago can still be fading out with its query
-    // in it: see [_cancel]. The empty field is the truth.
-    if (_controller.text.isEmpty) _search.reset();
-    setState(() {
-      _searching = true;
-      _resultsUp = true;
-    });
-    _swap.forward();
+    setState(() => _searching = true);
   }
 
-  /// Cancel: the search is over and the sheet goes back to the tabs, leaving
-  /// the query behind with it — the next tap on the field starts from an empty
-  /// box, as a search cancelled anywhere else does.
-  ///
-  /// ⚠️ The field is emptied now and the search itself only once the results
-  /// have faded ([_onSwap]). Emptied at once, the fading list would swap to
-  /// the empty query's rows on its way out — a different list for a blink.
+  /// Cancel: the query goes, and the list is the recent agents again.
   void _cancel() {
     if (!_searching) return;
     _focus.unfocus();
     _controller.clear();
-    setState(() => _searching = false);
-    _swap.reverse();
-  }
-
-  void _onSwap(AnimationStatus status) {
-    if (status != AnimationStatus.dismissed || _searching || !_resultsUp) {
-      return;
-    }
     _search.reset();
-    setState(() => _resultsUp = false);
+    setState(() => _searching = false);
   }
 
   /// Puts the query in the field when it moved without a keystroke — a chip,
@@ -322,22 +256,16 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     widget.onClose();
   }
 
-  /// A row in the tabs: away first, then the agent — see [openDeskAgent].
-  void _open(DeskGroup group, AgentEntry entry) {
-    final notifier = widget.notifier;
-    final showing = widget.showing;
-    _close();
-    // ⚠️ **The agent already on screen, in the tab the phone is already in,
-    // opens nothing.** The tap asks to stay where it is. Sent on, it would —
-    // on a page reached by a swipe — rebuild the pager around the page it is
-    // on (see [AgentHome]) and load that terminal again for nothing.
-    if (showing != null &&
-        entry.machineId == showing.machineId &&
-        entry.agent.id == showing.agentId) {
-      final groups = deskGroups(notifier, visibleAgents(agentIndex(notifier)));
-      if (activeDeskGroup(notifier, groups, showing).id == group.id) return;
-    }
-    openDeskAgent(context, notifier, group, entry);
+  /// `+`: away first, then the new-agent form. Null while no machine can take one.
+  VoidCallback? _newAgent() {
+    final command = phoneSearchCommands(context, widget.notifier)
+        .where((command) => command.id == 'agent.new')
+        .firstOrNull;
+    if (command == null) return null;
+    return () {
+      _close();
+      command.run();
+    };
   }
 
   void _onPull(DragUpdateDetails details) {
@@ -529,6 +457,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                       _focus.requestFocus();
                     },
                     onCancel: _searching ? _cancel : null,
+                    onNew: _newAgent(),
                   ),
                 ),
                 Expanded(child: _content()),
@@ -540,65 +469,23 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     );
   }
 
-  Widget _content() => Stack(
-    fit: StackFit.expand,
+  Widget _content() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      // ⚠️ **The tabs stay built under the results**, faded out and deaf to
-      // touch, rather than coming down with the search. The tab being read is
-      // their own state, and Cancel has to land back on it — not on the tab
-      // the sheet happened to open on.
-      IgnorePointer(
-        ignoring: _searching,
-        child: ExcludeSemantics(
-          excluding: _searching,
-          child: FadeTransition(
-            opacity: _tabsShown,
-            child: DeskTabsPanel(
-              notifier: widget.notifier,
-              showing: widget.showing,
-              onOpen: _open,
-              onClose: _close,
-            ),
-          ),
+      _SearchHead(search: _search, onBack: _back),
+      Expanded(
+        child: PhoneSearchResults(
+          notifier: widget.notifier,
+          controller: _search,
+          grouped: true,
+          showing: widget.showing,
+          onOpen: _close,
         ),
       ),
-      if (_resultsUp)
-        IgnorePointer(
-          ignoring: !_searching,
-          child: FadeTransition(
-            opacity: _resultsShown,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _SearchHead(search: _search, onBack: _back),
-                // ⚠️ Handed the query and nothing else. Ranking lives inside
-                // it, so this sheet and [PhoneSearchPage] cannot drift into
-                // returning different rows for the same words.
-                Expanded(
-                  child: PhoneSearchResults(
-                    notifier: widget.notifier,
-                    controller: _search,
-                    // The rows the tabs under them are drawn with.
-                    grouped: true,
-                    showing: widget.showing,
-                    // ⚠️ Nothing pops this sheet — opening an agent swaps the
-                    // terminal underneath it instead — so tapping a row has to
-                    // close it by hand. Without this the keyboard would still
-                    // be up over an agent nobody asked to type into.
-                    onOpen: _close,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
     ],
   );
 }
 
-/// Calls [onChange] whenever the window's metrics move — a keyboard rising or
-/// falling among them. Its own object, so the sheet's state does not have to
-/// be a [WidgetsBindingObserver] for the one callback it needs.
 class _MetricsWatch extends WidgetsBindingObserver {
   _MetricsWatch(this.onChange);
 
@@ -646,7 +533,7 @@ class _SearchHead extends StatelessWidget {
             ? search.scopeName ?? ''
             : search.isCommandMode || search.isHelpMode || search.isGroupMode
             ? search.title
-            : 'Harnesses',
+            : 'Agents',
         // Only once the query has actually excluded something: `14/14` over
         // an untouched list is noise dressed as information.
         count: search.matchCount == search.total

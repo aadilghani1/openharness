@@ -37,6 +37,7 @@ class PhoneSearchController extends ChangeNotifier {
     required this.notifier,
     this.history,
     this.commands,
+    this.modes = true,
   }) {
     _catalog = _cache.read(notifier);
     _filter();
@@ -54,6 +55,12 @@ class PhoneSearchController extends ChangeNotifier {
   /// commands are available follows the app: there is no "Change model" while
   /// no agent is open.
   final List<PhoneCommand> Function()? commands;
+
+  /// Whether a leading `>` `#` `@` `?` switches the box into commands, projects, machines or help.
+  ///
+  /// Off in Find (`TerminalSearchOverlay`): a phone searches its agents, and a query is read as
+  /// typed. The modes were the desktop's command palette carried over.
+  final bool modes;
 
   final _cache = PhoneSearchCatalogCache();
   List<PhoneDestination> _catalog = const [];
@@ -73,10 +80,10 @@ class PhoneSearchController extends ChangeNotifier {
   static final _commandPrefix = RegExp(r'^>\s*');
   static final _helpPrefix = RegExp(r'^\?\s*');
 
-  bool get isCommandMode => query.trimLeft().startsWith('>');
-  bool get isHelpMode => query.trimLeft().startsWith('?');
-  bool get isProjectMode => query.trimLeft().startsWith('#');
-  bool get isMachineMode => query.trimLeft().startsWith('@');
+  bool get isCommandMode => modes && query.trimLeft().startsWith('>');
+  bool get isHelpMode => modes && query.trimLeft().startsWith('?');
+  bool get isProjectMode => modes && query.trimLeft().startsWith('#');
+  bool get isMachineMode => modes && query.trimLeft().startsWith('@');
   bool get isGroupMode => isProjectMode || isMachineMode;
 
   String get commandQuery => query.trimLeft().replaceFirst(_commandPrefix, '');
@@ -126,7 +133,9 @@ class PhoneSearchController extends ChangeNotifier {
     if (query == value) return;
     // Typing a mode character leaves whatever group was chosen: `@` means "pick
     // a machine", which is not a thing to do inside one.
-    if (_quickAccessPrefix.hasMatch(value.trimLeft())) _groupScope = null;
+    if (modes && _quickAccessPrefix.hasMatch(value.trimLeft())) {
+      _groupScope = null;
+    }
     query = value;
     _filter();
     notifyListeners();

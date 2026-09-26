@@ -945,7 +945,7 @@ void main() {
       expect(_agentIds(_rank(app, '', cache: cache)), ['idle', 'busy']);
     });
 
-    test('with nothing typed, the desktop monitor\'s order — visits do not move it', () {
+    test('with nothing typed, the agents you were last in lead, then the monitor\'s order', () {
       final app = _app([
         _machine('box', [
           _agent('alpha', minutesAgo: 90),
@@ -954,17 +954,25 @@ void main() {
         ]),
       ]);
       addTearDown(app.dispose);
-      // The freshest conversation leads, as it does in the Harness Monitor.
+      // Nothing visited yet: the freshest conversation leads, as it does in the
+      // Harness Monitor.
       expect(_agentIds(_rank(app, '')), ['delta', 'bravo', 'alpha']);
 
-      // ⚠️ This phone's own visits used to outrank that, so the field opened on
-      // a list the laptop beside it did not show. The monitor has no idea what
-      // the phone visited; neither does its order.
-      expect(_agentIds(_rank(app, '', recent: ['agent:box\u0000alpha'])), [
-        'delta',
-        'bravo',
-        'alpha',
-      ]);
+      // ⚠️ **Visits lead now, and that reverses an earlier rule on purpose.**
+      // Find opens on this list (see `docs/plans/2026-09-26-001-mobile-zero-
+      // questions.md`): on the go the person works with two or three agents, and
+      // those have to be the top rows whatever else moved since. The rest keep
+      // the monitor's order under them.
+      expect(
+        _agentIds(
+          _rank(
+            app,
+            '',
+            recent: ['agent:box\u0000alpha', 'agent:box\u0000bravo'],
+          ),
+        ),
+        ['alpha', 'bravo', 'delta'],
+      );
     });
 
     test('paused work keeps its place by when it last moved', () {

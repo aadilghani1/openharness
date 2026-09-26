@@ -179,7 +179,15 @@ List<PhoneDestination> rankPhoneDestinations(
       ? 0
       : 1;
   ranked.sort((a, b) {
-    if (needle.isEmpty) return _monitorOrder(a, b);
+    // ⚠️ **With nothing typed, the agents you were last in come first.** Find opens on this list,
+    // and on the go the person works with two or three agents: those have to be the top rows, so
+    // switching among them is a tap with nothing to type. The rest keep the monitor's order.
+    if (needle.isEmpty) {
+      final visited = (recency[a.entry.id] ?? 1 << 20).compareTo(
+        recency[b.entry.id] ?? 1 << 20,
+      );
+      return visited != 0 ? visited : _monitorOrder(a, b);
+    }
     var order = (a.content ? 1 : 0).compareTo(b.content ? 1 : 0);
     if (order == 0) order = a.score.compareTo(b.score);
     if (order == 0 && needle.isEmpty) {

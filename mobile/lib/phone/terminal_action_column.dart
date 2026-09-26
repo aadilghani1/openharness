@@ -93,18 +93,6 @@ class TerminalActionColumn extends StatefulWidget {
   /// That is the whole reason it moves rather than staying where it was.
   static const double topInset = TerminalHeader.height + 8;
 
-  /// The DRAWN gap between one circle and the next, the same all the way down.
-  ///
-  /// ⚠️ No smaller than the mic's overhang plus a button's, less the slack
-  /// between the mic's slot and its drawn face — any closer and the mic's
-  /// target would swallow the top of Search's.
-  static const double _gap = 22;
-
-  /// The mic's slot is larger than its drawn circle, so the gap under the slot
-  /// is [_gap] less that slack.
-  static const double _underMic =
-      _gap - (VoiceMicButton.extent - VoiceMicCore.diameter) / 2;
-
   /// How far the capsule's right end sits in from the mic's slot: the slack
   /// between the slot and the circle, so the circle closes the capsule exactly.
   static const double _capsuleInset =
@@ -159,18 +147,20 @@ class _TerminalActionColumnState extends State<TerminalActionColumn> {
         else
           // Still attaching: the mic in its place, dimmed and dead.
           const VoiceMicButton(face: VoiceMicFace.talk, onPressed: null),
-        if (!widget.searchOnly)
-          const SizedBox(height: TerminalActionColumn._underMic),
-        _centred(
-          _withUnread(
-            TerminalRoundAction(
-              key: const ValueKey('terminal-search'),
-              icon: LucideIcons.search300,
-              label: 'Search harnesses and machines',
-              onTap: widget.onSearch,
+        // ⚠️ **Search floats here only while the keyboard is up.** With it down, Find is the handle
+        // at the foot of Focus (`FindHandle`) and a round button beside the mic was a second door
+        // to the same sheet; with the keyboard up the key bar has the foot, so Find rides up here.
+        if (widget.searchOnly)
+          _centred(
+            _withUnread(
+              TerminalRoundAction(
+                key: const ValueKey('terminal-search'),
+                icon: LucideIcons.search300,
+                label: 'Find an agent',
+                onTap: widget.onSearch,
+              ),
             ),
           ),
-        ),
       ],
     );
   }

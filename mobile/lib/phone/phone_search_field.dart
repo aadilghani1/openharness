@@ -150,6 +150,7 @@ class SheetSearchField extends StatelessWidget {
     required this.onClear,
     required this.hintText,
     this.onCancel,
+    this.onNew,
   });
 
   final TextEditingController controller;
@@ -157,6 +158,10 @@ class SheetSearchField extends StatelessWidget {
   final ValueChanged<String> onChanged;
   final VoidCallback onClear;
   final String hintText;
+
+  /// A `+` beside the box, for a new agent. Null leaves it out — and it IS null while [onCancel] is
+  /// set, so the two never stand side by side.
+  final VoidCallback? onNew;
 
   /// "Cancel", beside the box. Null leaves it out.
   ///
@@ -227,7 +232,43 @@ class SheetSearchField extends StatelessWidget {
             ),
           ),
           _CancelButton(onTap: onCancel),
+          if (onNew != null && onCancel == null) _NewButton(onTap: onNew!),
         ],
+      ),
+    );
+  }
+}
+
+/// `+`, for a new agent — see [SheetSearchField.onNew].
+class _NewButton extends StatelessWidget {
+  const _NewButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Semantics(
+      button: true,
+      label: 'New agent',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Padding(
+          // Padding, not a gap: the space between the box and the mark is part of the target.
+          padding: const EdgeInsets.only(left: 12),
+          child: SizedBox(
+            width: 32,
+            height: 44,
+            child: Center(
+              child: Icon(
+                LucideIcons.plus,
+                size: 24,
+                color: AppPalette.accentOnSurface,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

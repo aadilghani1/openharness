@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 // `defaultTargetPlatform` — the navigation bar this page keeps clear of is
 // Android's alone; see [_TerminalPageState._navigationBar].
@@ -43,6 +44,7 @@ import 'terminal_chrome_scroll.dart';
 import 'terminal_header.dart';
 import 'terminal_header_action.dart';
 import 'terminal_input_dock.dart';
+import 'find_handle.dart';
 import 'terminal_search.dart';
 import 'voice_input_controller.dart';
 
@@ -1633,6 +1635,25 @@ class _TerminalPageState extends State<TerminalPage>
                                       _sendImage(session, ImageSource.camera),
                                     )
                                   : null,
+                            ),
+                          // Find, at the foot of Focus — the one way to another
+                          // agent now that there is no sideways swipe. See
+                          // [FindHandle].
+                          //
+                          // Gone while the keyboard is up: the key bar has the
+                          // foot then, and Find rides at the top of the pane
+                          // instead (see [TerminalActionColumn.searchOnly]). The
+                          // bar carries the home indicator's strip itself, since
+                          // the body does not reserve it — less whatever
+                          // `navigationBar` already padded the page by.
+                          if (!_keyBarUp)
+                            FindHandle(
+                              onOpen: _openSearch,
+                              unread: widget.notifier.agentNotices.unread,
+                              bottomInset: math.max(
+                                0.0,
+                                _windowBottomInset - navigationBar,
+                              ),
                             ),
                         ],
                       ),

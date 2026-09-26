@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
+import 'package:harness_mobile/phone/find_handle.dart';
 import 'package:harness_mobile/phone/phone_search_field.dart';
 import 'package:harness_mobile/phone/phone_search_results.dart';
 import 'package:harness_mobile/phone/terminal_action_column.dart';
@@ -117,7 +118,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     resizes.clear();
 
-    await tester.tap(find.byKey(const ValueKey('terminal-search')));
+    await tester.tap(find.byType(FindHandle));
     await tester.pump();
     // The search field's keyboard slides up, and the page shrinks above it.
     tester.view.viewInsets = const FakeViewPadding(bottom: 900);
@@ -154,11 +155,11 @@ void main() {
       expect(find.byType(TerminalActionColumn), findsOneWidget);
     }
 
-    await tester.tap(find.byKey(const ValueKey('terminal-search')));
+    await tester.tap(find.byType(FindHandle));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    // The sheet opens on its tabs; a tap on its field is what starts a search
-    // and brings the keyboard.
+    // Find opens on the recent agents; a tap on its field is what starts a
+    // search and brings the keyboard.
     await tester.tap(
       find.descendant(
         of: find.byType(SheetSearchField),
