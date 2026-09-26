@@ -289,7 +289,7 @@ hn logbook [daemon]      <span class="muted"># your story together</span></pre>
           <div class="box">
             <h3>Odds for this egg</h3>
             <table class="odds" id="odds"></table>
-            <div class="note">No duplicates until the drop is complete. The secret's weight rises by 1 point for every hatch without it. Any hatch has a 1 in 256 chance to be shiny.</div>
+            <div class="note" id="oddsNote"></div>
           </div>
           <div class="box">
             <h3>Shelf <span id="shelfCount"></span></h3>
@@ -307,7 +307,7 @@ hn logbook [daemon]      <span class="muted"># your story together</span></pre>
   <section aria-labelledby="s-eggs">
     <h2 id="s-eggs">EGGS</h2>
     <div class="ind">
-      <p>What you do picks the egg; luck picks what is inside. Longer efforts earn eggs with rarer pools, the way longer walks do in Pokémon Go. Eggs wait in the nest until you open them; when it is full, new ones wait their turn. A turn counts when it finishes in a harness you work in (never a replay, a sub-agent or a plain terminal), and at most 20 count a day across all your machines, so nobody burns tokens farming eggs.</p>
+      <p id="eggsLede">What you do picks the egg; luck picks what is inside. Longer efforts earn eggs with rarer pools, the way longer walks do in Pokémon Go. Eggs wait in the nest until you open them; when it is full, new ones wait their turn. A turn counts when it finishes in a harness you work in (never a replay, a sub-agent or a plain terminal), and at most 20 count a day across all your machines, so nobody burns tokens farming eggs.</p>
       <div class="tbl"><table class="t" id="eggTable">
         <thead><tr><th>egg</th><th>in the status line</th><th>earned by</th><th>leans toward</th></tr></thead>
         <tbody></tbody>
@@ -322,7 +322,7 @@ hn logbook [daemon]      <span class="muted"># your story together</span></pre>
   <section aria-labelledby="s-grow">
     <h2 id="s-grow">GROWTH</h2>
     <div class="ind">
-      <p>A daemon keeps its name and face for life. It grows by releases: 0.1 when it hatches, 1.0 at bond level 2, 2.0 at bond level 4. Bond comes from pairing: every turn you finish together, and the first turn of each day. It never decays. tldr is the exception that proves the rule: it gets smaller with every release.</p>
+      <p>A daemon keeps its name and face for life. It grows by releases: 0.1 when it hatches, 1.0 at bond level 2, 2.0 at bond level 4. Bond comes from pairing: every turn you finish together, and the first turn of each day. Hatching one you already have grows yours too. It never decays. tldr is the exception that proves the rule: it gets smaller with every release.</p>
       <div class="row" role="group" aria-label="Choose a daemon" id="growPick"><span class="lbl">daemon</span></div>
       <div class="growth" id="growth"></div>
     </div>
@@ -549,8 +549,14 @@ Run the real migration only after the user says yes.</pre>
   // Lines are templates with slots ({who} {q} {recap} {n} {summary}); the page shows them filled with the roster's example.
   const lineOf = (d, mood) => (d.examples && d.examples[mood]) || d.lines[mood];
   const byId = Object.fromEntries(C.map(d => [d.id, d]));
-  const NUM = d => '#' + String(d.n).padStart(2, '0') + '/' + String(C.length).padStart(2, '0');
+  // Secrets sit outside the numbered set, as on a card (daemons/tools/card.mjs): #01/09 to #09/09, and #S/09.
+  const NUM = d => {
+    const set = C.filter(x => x.drop === d.drop && x.rarity !== 'secret');
+    const of = String(set.length).padStart(2, '0');
+    return d.rarity === 'secret' ? '#S/' + of : '#' + String(set.indexOf(d) + 1).padStart(2, '0') + '/' + of;
+  };
   const color = d => d.color.hex;
+  const shinyColor = d => (d.shiny && d.shiny.hex) || 'var(--blue)';
   const hiddenMoods = new Set(['work', 'nap', 'boop']);
 
   // ---------- hero: tmux window ----------
@@ -688,40 +694,61 @@ Run the real migration only after the user says yes.</pre>
   const fig = w => [0, 1, 2, 3].map(r => [...w].map(ch => (F[ch] || [' ', ' ', ch, ' '])[r]).join(' ')).filter(l => l.trim()).join('\n');
 
   // ---------- hatching (the server's draw, run here for the demo) ----------
-  const EGG_NAMES = { first: 'first egg', turn: 'turn egg', week: 'week egg', marathon: 'marathon egg', night: 'night egg', easter: 'easter egg' };
+  // The same rules as backend/src/lib/zoo.ts: released drops only; no duplicate of a regular until every
+  // released regular is owned; a secret sits outside that set and comes only from an egg with a secret
+  // weight (night, easter), certainly on the 8th such hatch without one; a duplicate merges into the one
+  // you have (+xp, shiny if it was shiny).
+  const EGG_NAMES = { first: 'first egg', setup: 'setup egg', turn: 'turn egg', week: 'week egg', marathon: 'marathon egg', night: 'night egg', easter: 'easter egg' };
   const ord = n => n + (n === 2 ? 'nd' : n === 3 ? 'rd' : 'th');
   const E = RULES.earn || {};
+  const hh = h => String(h).padStart(2, '0');
+  const FE = RULES.firstEgg;
   const EGG_NOTE = {
-    first: 'Earned by ' + RULES.firstEgg.need + ' of ' + RULES.firstEgg.habits.length + ' habits: ' + RULES.firstEgg.habits.map(h => h.label.toLowerCase()).join(', ') + '.',
-    turn: E.turn ? 'Earned every ' + E.turn.every + ' turns you finish. At most ' + E.turn.dailyCap + ' count per day.' : '',
+    first: 'Earned by any ' + FE.need + ' of these ' + FE.habits.length + ' habits, as long as one is ' + (FE.require || []).map(k => k === 'turn' ? 'a finished turn' : (FE.habits.find(h => h.key === k) || { label: k }).label.toLowerCase()).join(' and ') + ': ' + FE.habits.map(h => h.label.toLowerCase()).join(', ') + '. Leans toward tim.',
+    setup: RULES.setupEgg ? 'The second egg, at ' + RULES.setupEgg.need + ' habits. Once.' : '',
+    turn: E.turn ? 'Earned every ' + E.turn.every + ' turns you finish. A long turn counts once more for every ' + E.turn.minutesPerTurn + ' minutes the agent works. At most ' + E.turn.dailyCap + ' count per day.' : '',
     week: E.week ? 'Earned by working on ' + E.week.days + ' days in one week.' : '',
     marathon: E.marathon ? 'Earned at ' + E.marathon.turns + ' turns, and again for a ' + ord(E.marathon.machines) + ' machine.' : '',
-    night: E.night ? 'Earned by ' + E.night.nights + ' nights with a turn between ' + String(E.night.fromHour).padStart(2, '0') + ':00 and ' + String(E.night.toHour).padStart(2, '0') + ':59. bat likes the dark.' : '',
-    easter: 'Type ' + RULES.easterWords[0] + '. Nothing happens. Once, an egg does.',
+    night: E.night ? 'Earned on ' + E.night.nights + ' nights when a turn you started finished while you were away (no window or hn for ' + E.night.awayMinutes + ' minutes), between ' + hh(E.night.fromHour) + ':00 and ' + hh(E.night.toHour) + ':59. bat likes the dark. So does something else.' : '',
+    // The words ship only as hashes; this one classic is written out, as a client may.
+    easter: 'Type xyzzy. Nothing happens. Once, an egg does.',
   };
   const eggKinds = Object.keys(RULES.eggs).filter(k => EGG_NAMES[k]);
-  let S = { owned: new Set(), pity: 0 };
+  const released = drop => { const d = R.drops.find(x => x.id === drop); return !d || !d.release || Date.parse(d.release + 'T00:00:00Z') <= Date.now(); };
+  const POOL = C.filter(d => released(d.drop));
+  const REG = POOL.filter(d => d.rarity !== 'secret');
+  const secretIn = k => (RULES.eggs[k].weights.secret || 0) > 0;
+  const DUP_XP = RULES.duplicateXp || 0;
+  const GUARANTEE = RULES.secretGuaranteeAt || Infinity;
+  const fresh = () => ({ owned: new Map(), pity: 0 });   // id -> { dupes, shiny, xp }
+  let S = fresh();
   let eggKey = eggKinds.includes('first') ? 'first' : eggKinds[0];
   let busy = false;
-  function weights(owned) {
+  const complete = () => REG.every(d => S.owned.has(d.id));
+  function weigh(pool) {
     const egg = RULES.eggs[eggKey];
-    const eligible = C.filter(d => !owned.has(d.id));
     const per = {};
-    eligible.forEach(d => { per[d.rarity] = (per[d.rarity] || 0) + 1; });
-    return C.map(d => {
-      if (owned.has(d.id)) return { d, w: 0 };
+    pool.forEach(d => { per[d.rarity] = (per[d.rarity] || 0) + 1; });
+    return pool.map(d => {
       let w = (egg.weights[d.rarity] || 0) / per[d.rarity];
-      if (d.rarity === 'secret') w += S.pity * RULES.pityPerMiss;
+      if (d.rarity === 'secret' && secretIn(eggKey)) w += S.pity * RULES.pityPerMiss;
       if (egg.boost && egg.boost[d.id]) w *= egg.boost[d.id];
       return { d, w };
     });
   }
   function odds() {
-    const all = S.owned.size === C.length;
-    let rows = weights(all ? new Set() : S.owned);
-    if (rows.reduce((a, r) => a + r.w, 0) === 0) rows = weights(new Set());
+    const newRegs = REG.filter(d => !S.owned.has(d.id));
+    const secrets = secretIn(eggKey) ? POOL.filter(d => d.rarity === 'secret' && !S.owned.has(d.id)) : [];
+    let rows;
+    if (secrets.length && S.pity + 1 >= GUARANTEE) rows = weigh(secrets);
+    else {
+      const eligible = new Set([...(newRegs.length ? newRegs : REG), ...secrets]);
+      rows = weigh(POOL.filter(d => eligible.has(d)));
+      if (rows.reduce((a, r) => a + r.w, 0) === 0) rows = weigh(POOL);
+    }
     const tot = rows.reduce((a, r) => a + r.w, 0);
-    return rows.map(r => ({ d: r.d, p: tot ? r.w / tot : 0 }));
+    const byId = new Map(rows.map(r => [r.d.id, tot ? r.w / tot : 0]));
+    return POOL.map(d => ({ d, p: byId.get(d.id) || 0 }));
   }
   function draw() {
     const o = odds().filter(r => r.p > 0);
@@ -788,6 +815,7 @@ Run the real migration only after the user says yes.</pre>
     busy = true; hatchBtn.disabled = true; cardWrap.hidden = true;
     const shiny = Math.random() < 1 / RULES.shinyOneIn;
     const egg = eggKey;
+    const had = S.owned.get(d.id);
     resetStage();
     if (!RM) {
       for (let k = 0; k < 2; k++) { for (const off of [-1, 0, 1, 0]) { eggPre.textContent = eggFrame(off, 0); await sleep(90); } await sleep(420); }
@@ -804,7 +832,7 @@ Run the real migration only after the user says yes.</pre>
     big.style.color = 'var(--faint)';
     if (!RM) await sleep(850);
     big.textContent = sp;
-    big.style.color = shiny ? 'var(--blue)' : color(d);
+    big.style.color = shiny ? shinyColor(d) : color(d);
     if (!RM) {
       await sleep(320); big.textContent = sprite(d, 0, 'idle', { lid: '-', motion: false });
       await sleep(120); big.textContent = sp; await sleep(220);
@@ -816,10 +844,17 @@ Run the real migration only after the user says yes.</pre>
     stamp.className = d.rarity;
     stamp.textContent = '[ ' + (shiny ? '* SHINY * ' : '') + d.rarity.toUpperCase() + ' ]  ' + NUM(d);
     words.hidden = false;
-    words.innerHTML = 'fork() returned 0. it\'s a ' + esc(d.id) + '.<br>' + esc(d.id + ' ' + V[0] + ': ' + d.first);
-    S.owned.add(d.id);
-    S.pity = d.rarity === 'secret' ? 0 : S.pity + 1;
-    cardPre.textContent = cardText(d, shiny, egg);
+    if (had) {
+      // A duplicate grows the one you have: xp, a level maybe, and a shine if this one was shiny.
+      had.dupes += 1; had.xp += DUP_XP; if (shiny) had.shiny = true;
+      words.innerHTML = 'fork() returned 0. another ' + esc(d.id) + '.<br>' + esc('it merges into yours: +' + DUP_XP + ' xp' + (shiny ? ', and now yours is shiny' : '') + '. x' + (had.dupes + 1) + ' on the shelf.');
+    } else {
+      S.owned.set(d.id, { dupes: 0, shiny, xp: 0 });
+      words.innerHTML = 'fork() returned 0. it\'s a ' + esc(d.id) + '.<br>' + esc(d.id + ' ' + V[0] + ': ' + d.first);
+    }
+    // The pity counts only eggs that can hold a secret.
+    if (d.rarity === 'secret') S.pity = 0; else if (secretIn(egg)) S.pity += 1;
+    cardPre.textContent = cardText(d, shiny || !!(had && had.shiny), egg);
     cardWrap.hidden = false;
     document.getElementById('copyNote').textContent = '';
     busy = false;
@@ -827,19 +862,27 @@ Run the real migration only after the user says yes.</pre>
   }
   function sideRender() {
     const o = odds();
+    const done = complete();
     document.getElementById('odds').innerHTML = o.map(r => {
       const owned = S.owned.has(r.d.id);
       const name = r.d.rarity === 'secret' && !owned ? '???' : r.d.id;
-      const cls = owned ? ' class="owned"' : '';
-      return '<tr><td' + cls + '>' + esc(name) + '</td><td class="' + r.d.rarity + '">' + r.d.rarity + '</td><td' + cls + '>' + (owned && S.owned.size < C.length ? 'hatched' : (r.p * 100).toFixed(1) + '%') + '</td></tr>';
+      const cls = owned && r.p === 0 ? ' class="owned"' : '';
+      return '<tr><td' + cls + '>' + esc(name) + '</td><td class="' + r.d.rarity + '">' + r.d.rarity + '</td><td' + cls + '>' + (owned && r.p === 0 ? 'hatched' : (r.p * 100).toFixed(1) + '%') + '</td></tr>';
     }).join('');
-    document.getElementById('shelf').innerHTML = C.map(d => S.owned.has(d.id)
-      ? '<span style="color:' + color(d) + '" title="' + esc(d.id) + '">' + esc(sprite(d, 0, 'idle', { motion: false })) + '</span>'
-      : '<span style="color:var(--faint)" title="not hatched yet">' + (d.rarity === 'secret' ? '[!]' : '[?]') + '</span>').join('');
-    document.getElementById('shelfCount').textContent = S.owned.size + '/' + C.length;
+    document.getElementById('shelf').innerHTML = POOL.map(d => {
+      const mine = S.owned.get(d.id);
+      if (!mine) return '<span style="color:var(--faint)" title="not hatched yet">' + (d.rarity === 'secret' ? '[!]' : '[?]') + '</span>';
+      return '<span style="color:' + (mine.shiny ? shinyColor(d) : color(d)) + '" title="' + esc(d.id + (mine.shiny ? ', shiny' : '') + (mine.xp ? ', +' + mine.xp + ' xp' : '')) + '">' + esc(sprite(d, 0, 'idle', { motion: false })) + (mine.dupes ? ' x' + (mine.dupes + 1) : '') + '</span>';
+    }).join('');
+    const have = REG.filter(d => S.owned.has(d.id)).length;
+    document.getElementById('shelfCount').textContent = have + '/' + REG.length + (POOL.some(d => d.rarity === 'secret' && S.owned.has(d.id)) ? ' +secret' : '');
     hatchBtn.disabled = busy;
-    hatchBtn.textContent = S.owned.size === C.length ? 'hatch a duplicate' : 'hatch it';
+    hatchBtn.textContent = done && !o.some(r => r.p > 0 && !S.owned.has(r.d.id)) ? 'hatch a duplicate' : 'hatch it';
     document.getElementById('eggNote').textContent = EGG_NOTE[eggKey] || '';
+    document.getElementById('oddsNote').textContent =
+      'No duplicates until you have all ' + REG.length + ' regulars. A secret is not one of them: it hatches only from night and easter eggs, and the ' + ord(GUARANTEE) + ' of those without one is it. ' +
+      'A duplicate merges into the one you have: +' + DUP_XP + ' xp, and a shiny duplicate makes yours shiny. Any hatch has a 1 in ' + RULES.shinyOneIn + ' chance to be shiny.' +
+      (secretIn(eggKey) ? ' Hatches of this kind without a secret: ' + S.pity + '.' : '');
     if (!busy && !eggPre.hidden) eggPre.textContent = eggFrame(0, 0);
   }
   pickRow(document.getElementById('eggPick'), eggKinds.map(k => [k, RULES.eggs[k].look + ' ' + EGG_NAMES[k].replace(' egg', '')]), eggKey, k => { if (busy) return; eggKey = k; sideRender(); });
@@ -847,7 +890,7 @@ Run the real migration only after the user says yes.</pre>
   stageEl.addEventListener('click', () => { if (!busy && !eggPre.hidden) hatch(); });
   document.getElementById('resetBtn').addEventListener('click', () => {
     if (busy) return;
-    S = { owned: new Set(), pity: 0 };
+    S = fresh();
     cardWrap.hidden = true; resetStage(); sideRender();
   });
   document.getElementById('copyBtn').addEventListener('click', () => {
@@ -867,10 +910,14 @@ Run the real migration only after the user says yes.</pre>
     const w = RULES.eggs[k].weights;
     const top = Object.entries(w).sort((a, b) => b[1] - a[1])[0][0];
     const boost = RULES.eggs[k].boost ? ' · ' + Object.keys(RULES.eggs[k].boost).join(', ') + ' boosted' : '';
-    return 'mostly ' + top + ' · secret ' + w.secret + '%' + boost;
+    return 'mostly ' + top + (w.secret > 0 ? ' · secret ' + w.secret + '%' : ' · never a secret') + boost;
   }
   const hist = Object.entries(RULES.historyDates || {}).map(([md, id]) => md + (id ? ' (' + id + ')' : '')).join(', ');
-  if (hist) eggRows.push(['history egg', '\\_47_/', 'Appears on dates from computing history: ' + hist + '. Once per date, every year.', "that day's daemon, once it has been drawn"]);
+  const histDays = (E.history && E.history.days) || 1;
+  if (hist) eggRows.push(['history egg', '\\_47_/', 'Opens on dates from computing history: ' + hist + ', for ' + (histDays === 7 ? 'a week' : histDays + ' days') + ' from the date. Once per date, every year.', "that day's daemon, once it has been drawn · never a secret"]);
+  document.getElementById('eggsLede').textContent = 'What you do picks the egg; luck picks what is inside. Longer efforts earn eggs with rarer pools, the way longer walks do in Pokémon Go. ' +
+    'Eggs wait in the nest until you open them; when it is full, new ones wait their turn, and past 64 waiting each new one is ' + RULES.overflowXp + ' xp for your daemon instead. ' +
+    'A turn counts when it finishes in a harness you work in (never a replay, a sub-agent or a plain terminal), a long one counts once more for every ' + E.turn.minutesPerTurn + ' minutes, and at most ' + E.turn.dailyCap + ' count a day across all your machines, so nobody burns tokens farming eggs.';
   document.querySelector('#eggTable tbody').innerHTML = eggRows.map(r =>
     '<tr><td>' + esc(r[0]) + '</td><td class="s">' + esc(r[1]) + '</td><td class="p">' + esc(r[2]) + '</td><td class="p">' + esc(r[3]) + '</td></tr>').join('');
   const nestEl = document.getElementById('nestRow');
