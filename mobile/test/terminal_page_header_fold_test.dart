@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
-import 'package:harness_mobile/phone/phone_search_field.dart';
+import 'package:harness_mobile/phone/fzf.dart';
 import 'package:harness_mobile/phone/phone_search_results.dart';
 import 'package:harness_mobile/phone/terminal_action_column.dart';
 import 'package:harness_mobile/phone/terminal_header.dart';
@@ -161,7 +161,7 @@ void main() {
     // search and brings the keyboard.
     await tester.tap(
       find.descendant(
-        of: find.byType(SheetSearchField),
+        of: find.byType(FzfPrompt),
         matching: find.byType(TextField),
       ),
     );
@@ -186,11 +186,10 @@ void main() {
     // over; releasing it with the fade let the falling inset raise its key bar.
     //
     // Find is flung shut to the left, the way it came in — the one close that
-    // leaves with the keyboard still up. From the list under the field: the
-    // field keeps a sideways drag for moving its caret.
-    final field = tester.getRect(find.byType(SheetSearchField));
+    // leaves with the keyboard still up. From the list: the prompt keeps a
+    // sideways drag for moving its caret.
     await tester.flingFrom(
-      field.bottomCenter + const Offset(0, 40),
+      tester.getCenter(find.byType(PhoneSearchResults)),
       const Offset(-300, 0),
       2000,
     );
@@ -204,7 +203,7 @@ void main() {
     }
     await tester.pump(const Duration(seconds: 1));
     expect(find.byType(PhoneSearchResults), findsNothing);
-    expect(find.byType(SheetSearchField), findsNothing);
+    expect(find.byType(FzfPrompt), findsNothing);
     expectUntouched();
     expect(resizes, isEmpty);
   });

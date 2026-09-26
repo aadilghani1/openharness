@@ -11,11 +11,11 @@ import 'package:harness_mobile/shared/widgets/app_dialog.dart'
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'agents_page.dart' show openNewAgent;
+import 'fzf.dart';
+import 'tty.dart';
 import 'phone_search_actions.dart';
 import 'phone_search_controller.dart';
-import 'phone_search_field.dart';
 import 'phone_search_results.dart';
-import 'sheet_list.dart';
 
 /// Find: the one way to another agent. A full-screen page in from the left edge over Focus —
 /// Snapchat's way to its chats — pulled by a swipe right on the terminal, or a tap on the agent's
@@ -104,9 +104,6 @@ class TerminalSearchOverlay extends StatefulWidget {
 
 class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     with TickerProviderStateMixin {
-  /// What the field says.
-  static const String _hint = kPhoneSearchHint;
-
   /// How dark the page goes behind the sheet — a step past Material's
   /// `black54`, with the page blurred under it as well. The phone sheets stand
   /// on the same veil ([kSheetVeilOpacity]), so every sheet over a terminal
@@ -411,77 +408,107 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
 
   Widget _sheet(BuildContext context) {
     final media = MediaQuery.of(context);
+    final tty = Tty.of(context);
     return Container(
       key: _sheetKey,
+      color: tty.ground,
       // The edge that leads the slide in and out; at rest it is off screen.
       foregroundDecoration: BoxDecoration(
-        border: Border(right: BorderSide(color: AppGlass.hair)),
+        border: Border(right: BorderSide(color: tty.dim)),
       ),
-      child: Material(
-        // A step above the terminal it covers — see [sheetFill].
-        color: sheetFill,
-        clipBehavior: Clip.antiAlias,
-        child: MediaQuery(
-          // The list runs down under the strip at the foot of the window and
-          // pads its own last row clear of it. The top is cleared by hand, just
-          // below: the drawer runs up under the status bar.
-          data: media.copyWith(
-            padding: media.padding.copyWith(top: 0, bottom: widget.bottomInset),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SizedBox(height: media.padding.top + 8),
-              ListenableBuilder(
-                listenable: _search,
-                builder: (context, _) => SheetSearchField(
-                  controller: _controller,
-                  focus: _focus,
-                  // A mode names itself in the box, as the desktop's does.
-                  hintText:
-                      _search.isCommandMode ||
-                          _search.isHelpMode ||
-                          _search.isGroupMode ||
-                          _search.canGoBack
-                      ? _search.hint
-                      : _hint,
-                  onSubmitted: () => _results.currentState?.openFirst(),
-                  onChanged: _search.setQuery,
-                  onClear: () {
-                    _controller.clear();
-                    _search.setQuery('');
-                    // Clearing is a step back into browsing, not out of the
-                    // search — the caret stays where the next query will go.
-                    _focus.requestFocus();
-                  },
-                  onCancel: _searching ? _cancel : null,
-                  onNew: _newAgent(),
-                ),
-              ),
-              Expanded(child: _content()),
-            ],
+      child: MediaQuery(
+        data: media.copyWith(
+          padding: media.padding.copyWith(top: 0, bottom: 0),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: ListenableBuilder(
+            listenable: _search,
+            builder: (context, _) {
+              final newAgent = _newAgent();
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(height: media.padding.top),
+                  _FindHeader(search: _search, onBack: _back),
+                  Expanded(
+                    child: PhoneSearchResults(
+                      key: _results,
+                      notifier: widget.notifier,
+                      controller: _search,
+                      fzf: true,
+                      showing: widget.showing,
+                      onOpen: _close,
+                    ),
+                  ),
+                  FzfInfoLine(
+                    matched: _search.matchCount,
+                    total: _search.total,
+                    actions: [
+                      if (newAgent != null) (label: '+new', onTap: newAgent),
+                      (label: 'esc', onTap: _back),
+                    ],
+                  ),
+                  FzfPrompt(
+                    controller: _controller,
+                    focus: _focus,
+                    onChanged: _search.setQuery,
+                    // A mode names itself, as fzf's --prompt would; plain search says nothing.
+                    hint:
+                        _search.isCommandMode ||
+                            _search.isHelpMode ||
+                            _search.isGroupMode ||
+                            _search.canGoBack
+                        ? _search.hint
+                        : null,
+                    onSubmitted: () => _results.currentState?.openFirst(),
+                  ),
+                  // Over the home indicator while the keyboard is down; on the keys once it is up.
+                  SizedBox(height: widget.bottomInset),
+                ],
+              );
+            },
           ),
         ),
       ),
     );
   }
+}
 
-  Widget _content() => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      _SearchHead(search: _search, onBack: _back),
-      Expanded(
-        child: PhoneSearchResults(
-          key: _results,
-          notifier: widget.notifier,
-          controller: _search,
-          grouped: true,
-          showing: widget.showing,
-          onOpen: _close,
-        ),
-      ),
-    ],
-  );
+/// The line above the list, fzf's `--header`: the modes the prompt takes, dim — or, inside a
+/// project or machine, its name and the way back out.
+class _FindHeader extends StatelessWidget {
+  const _FindHeader({required this.search, required this.onBack});
+
+  final PhoneSearchController search;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final scope = search.canGoBack ? search.scopeName : null;
+    return SizedBox(
+      height: 36,
+      child: scope != null
+          ? TtyTap(
+              onTap: onBack,
+              minHeight: 36,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 24),
+                child: TtyText('< $scope', color: tty.cyan),
+              ),
+            )
+          : Padding(
+              padding: const EdgeInsets.only(left: 24, top: 10),
+              child: TtyText(
+                search.isCommandMode || search.isHelpMode || search.isGroupMode
+                    ? search.title.toLowerCase()
+                    : '> cmds  # projects  @ machines  ? help',
+                color: tty.dim,
+              ),
+            ),
+    );
+  }
 }
 
 class _MetricsWatch extends WidgetsBindingObserver {
@@ -491,54 +518,4 @@ class _MetricsWatch extends WidgetsBindingObserver {
 
   @override
   void didChangeMetrics() => onChange();
-}
-
-/// What sits over the results once there is a query: a caption naming what is
-/// listed and how much of it. Nothing while the field is empty.
-///
-/// ```
-///    HARNESSES                                4/14   ← a query
-///  ‹ MACBOOK PRO                                 9   ← inside a machine
-/// ```
-///
-/// ⚠️ **No row of mode chips over an empty field.** `> Commands`, `# Projects`,
-/// `@ Machines` and `? Help` stood here while nothing was typed, and cost the
-/// results a row on a sheet the keyboard already shortens. The modes are still
-/// one character away — `?` lists all four.
-///
-/// ⚠️ **No caption over an untouched list.** "Recent" over the rows the
-/// search opens on would cost a row of a sheet the keyboard has already
-/// halved, and say nothing the order of the rows does not.
-class _SearchHead extends StatelessWidget {
-  const _SearchHead({required this.search, required this.onBack});
-
-  final PhoneSearchController search;
-
-  /// The caption's chevron, inside a project or a machine.
-  final VoidCallback onBack;
-
-  @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: search,
-    builder: (context, _) {
-      AppTheme.watch(context);
-      final scoped = search.canGoBack;
-      if (!scoped && search.query.trim().isEmpty) {
-        return const SizedBox.shrink();
-      }
-      return SheetCaption(
-        label: scoped
-            ? search.scopeName ?? ''
-            : search.isCommandMode || search.isHelpMode || search.isGroupMode
-            ? search.title
-            : 'Agents',
-        // Only once the query has actually excluded something: `14/14` over
-        // an untouched list is noise dressed as information.
-        count: search.matchCount == search.total
-            ? '${search.total}'
-            : '${search.matchCount}/${search.total}',
-        onBack: scoped ? onBack : null,
-      );
-    },
-  );
 }

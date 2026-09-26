@@ -9,15 +9,18 @@ import 'package:harness_mobile/shared/widgets/empty_state.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'agent_index.dart';
+import 'fzf.dart';
 import 'phone_destination.dart';
 import 'phone_navigation.dart';
 import 'phone_search_commands.dart';
 import 'phone_search_controller.dart';
 import 'phone_search_rank.dart';
 import 'phone_search_row.dart';
+import 'phone_search_row_trailing.dart' show phoneSearchBadge;
 import 'resume_agent.dart';
 import 'sheet_list.dart';
 import 'sheet_search_row.dart';
+import 'tty.dart';
 
 /// What the query reaches, drawn.
 ///
@@ -43,8 +46,12 @@ class PhoneSearchResults extends StatefulWidget {
     required this.controller,
     this.onOpen,
     this.grouped = false,
+    this.fzf = false,
     this.showing,
   });
+
+  /// fzf's list: one-line rows, the best match at the BOTTOM next to the prompt — Find's look.
+  final bool fzf;
 
   final AppNotifier notifier;
   final PhoneSearchController controller;
@@ -126,6 +133,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       AppTheme.watch(context);
       final search = widget.controller;
       final rows = search.rows;
+      if (widget.fzf) return _fzf(search, rows);
       if (widget.grouped) return _grouped(search, rows);
       if (rows.isEmpty) return _empty(search);
       final terms = phoneSearchTerms(search.matchQuery);
@@ -164,6 +172,66 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
   );
 
   /// The rows as the terminal sheet lists them — see [grouped].
+  /// fzf: reversed, so the first result sits on the prompt and the list grows up from it; a tap
+  /// opens, as Enter does in fzf. Nothing but text — see `fzf.dart`.
+  Widget _fzf(PhoneSearchController search, List<PhoneDestination> rows) {
+    final terms = phoneSearchTerms(search.matchQuery);
+    final showing = widget.showing;
+    final now = DateTime.now();
+    final tty = Tty.of(context);
+    if (rows.isEmpty) {
+      return Align(
+        alignment: Alignment.bottomLeft,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 12, 8),
+          child: TtyText(
+            search.total == 0 && search.matchQuery.trim().isEmpty
+                ? 'no harnesses yet'
+                : 'no match',
+            color: tty.dim,
+          ),
+        ),
+      );
+    }
+    return ListView.builder(
+      reverse: true,
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: EdgeInsets.zero,
+      itemCount: rows.length,
+      itemBuilder: (context, index) {
+        final row = rows[index];
+        final entry = row.entry;
+        final openable = search.canSubmit(row);
+        final badge = phoneSearchBadge(row, openable: openable);
+        final onScreen =
+            showing != null &&
+            entry != null &&
+            entry.machineId == showing.machineId &&
+            entry.agent.id == showing.agentId;
+        return FzfRow(
+          title: row.title,
+          // An agent's place the way ssh and tmux name one — `M2:site` — and nothing else: the
+          // engine is the same word on every row, and the branch is in the agent's ⋮.
+          detail: entry == null
+              ? row.detail
+              : '${entry.machine.machine.displayName}:${entry.agent.project?.label ?? ''}',
+          terms: terms,
+          mark: onScreen ? '*' : null,
+          markColor: tty.green,
+          enabled: openable || _resuming == row.id,
+          trailing: _resuming == row.id
+              ? 'resuming'
+              : badge?.toLowerCase() ??
+                    (entry == null
+                        ? null
+                        : fzfAge(entry.agent.lastUsedAt, now)),
+          trailingColor: badge == null ? null : tty.yellow,
+          onTap: _resuming != null ? null : () => _tap(row),
+        );
+      },
+    );
+  }
+
   Widget _grouped(PhoneSearchController search, List<PhoneDestination> rows) {
     final bottom = MediaQuery.paddingOf(context).bottom + 16;
     if (rows.isEmpty) {

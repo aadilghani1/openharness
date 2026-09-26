@@ -12,6 +12,7 @@ import 'package:harness_mobile/phone/phone_destination.dart';
 import 'package:harness_mobile/phone/phone_search_catalog.dart';
 import 'package:harness_mobile/phone/phone_search_commands.dart';
 import 'package:harness_mobile/phone/phone_search_controller.dart';
+import 'package:harness_mobile/phone/fzf.dart';
 import 'package:harness_mobile/phone/phone_search_field.dart';
 import 'package:harness_mobile/phone/phone_search_groups.dart';
 import 'package:harness_mobile/phone/phone_search_page.dart';
@@ -1249,7 +1250,7 @@ void main() {
   // ⚠️ **The sheet's own bar, not the page's.** No chevron in it: Cancel ends
   // the SEARCH and leaves the sheet up on its tabs, and Back steps out of the
   // search first and closes the sheet only after — never leaves the agent.
-  testWidgets('terminal search: Cancel ends the search, Back then the sheet', (
+  testWidgets('Find: esc ends the search, then Find; Back the same', (
     tester,
   ) async {
     final app = _app([
@@ -1269,40 +1270,43 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byType(SheetSearchField), findsOneWidget);
-    expect(find.byType(PhoneSearchField), findsNothing);
-    expect(find.text('Cancel'), findsNothing);
+    // fzf: a bare prompt, no search box.
+    expect(find.byType(FzfPrompt), findsOneWidget);
+    expect(find.byType(SheetSearchField), findsNothing);
 
-    // A tap on the field starts a search; Cancel slides in over 250ms.
     Future<void> search() async {
       await tester.tap(find.byType(TextField));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      expect(find.text('Cancel'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), '31');
+      await tester.pump();
     }
 
     Future<void> back() async {
       await tester.binding.handlePopRoute();
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
     }
 
+    // esc while searching ends the search and leaves Find up...
     await search();
-    await tester.tap(find.text('Cancel'));
+    await tester.tap(find.text('esc'));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
-    expect(find.text('Cancel'), findsNothing);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      '',
+    );
     expect(closed, 0);
+    // ...and esc again closes it.
+    await tester.tap(find.text('esc'));
+    await tester.pump();
+    expect(closed, 1);
 
+    // Back takes the same two steps.
     await search();
-    await back();
-    expect(find.text('Cancel'), findsNothing);
-    expect(closed, 0);
-
     await back();
     expect(closed, 1);
+    await back();
+    expect(closed, 2);
   });
-
   testWidgets('one bar: no Cancel beside it, and its chevron closes search', (
     tester,
   ) async {
