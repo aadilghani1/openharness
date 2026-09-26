@@ -18,7 +18,7 @@
  */
 import type { ShapedQuestion } from '../lib/askQuestion.js'
 import type { PairJournal } from './journal.js'
-import { isAllowClass } from './classify.js'
+import { isAllowClass, type ToolCall } from './classify.js'
 import {
   isDenyClass, statusText, str,
   type PairAction, type PairActor, type PairEvent, type PairHarness, type PairJournalEntry, type PairJournalPage,
@@ -106,8 +106,10 @@ export class PairSensor implements PairService {
   /**
    * A dialog opened. `detail.dialog` is the WHOLE dialog as painted (askQuestion.ts `dialog`): deny-class
    * and allow-class are read over all of it, here on the owning machine, never over the clipped title.
+   * `detail.tools` are the harness's open tool calls from its transcript: the one the dialog paints, when
+   * exactly one does, is what allow-class is read from (pair/classify.ts).
    */
-  question(agentId: string, requestId: string, shaped: ShapedQuestion[], detail?: { permission: boolean; dialog: string }): void {
+  question(agentId: string, requestId: string, shaped: ShapedQuestion[], detail?: { permission: boolean; dialog: string; tools?: readonly ToolCall[] }): void {
     const h = this.admit(agentId)
     if (!h || !requestId) return
     // The watcher re-announces an open question to a device that (re)joins: same id, not a new ask.
@@ -118,7 +120,7 @@ export class PairSensor implements PairService {
     const dialog = [detail?.dialog ?? '', first?.q ?? ''].join('\n')
     const deny = isDenyClass(dialog, first?.options ?? [])
     const permission = detail?.permission === true
-    const allow = !deny && isAllowClass(detail?.dialog ?? first?.q ?? '', { permission, cwd: this.deps.describe(agentId)?.cwd ?? null })
+    const allow = !deny && isAllowClass(detail?.dialog ?? first?.q ?? '', { permission, cwd: this.deps.describe(agentId)?.cwd ?? null, tools: detail?.tools })
     h.question = { requestId, text, options, multi: first?.multi === true, deny, allow, permission, since: this.now() }
     const baseline = this.carried.delete(requestId)
     this.change(h, baseline ? null : { kind: 'question', requestId, text, options, deny }, baseline)

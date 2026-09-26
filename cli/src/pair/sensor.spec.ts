@@ -155,6 +155,19 @@ describe('PairSensor', () => {
     expect(byId).toEqual({ api: true, web: false })
   })
 
+  it('reads allow-class from the transcript\'s tool call when the painted block is not certain', () => {
+    const { s } = sensor()
+    SUBJECTS.cwd = { name: 'cwd', engine: 'claude', cwd: dir }
+    const painted = 'Bash command\n\n  npm test\n  Run the test suite\n\n Do you want to proceed?\n ❯ 1. Yes\n   3. No'
+    s.question('cwd', 'q_1', ask('Approve Bash command: npm test'), { permission: true, dialog: painted })
+    expect(s.harness('cwd')?.question?.allow).toBe(false)
+    s.questionGone('cwd', 'q_1')
+    s.question('cwd', 'q_2', ask('Approve Bash command: npm test'), { permission: true, dialog: painted,
+      tools: [{ name: 'Bash', input: { command: 'npm test', description: 'Run the test suite' } }] })
+    expect(s.harness('cwd')?.question?.allow).toBe(true)
+    delete SUBJECTS.cwd
+  })
+
   it('pushes to a remote watcher until its push says it is gone', () => {
     const { s } = sensor()
     const got: PairEvent[] = []

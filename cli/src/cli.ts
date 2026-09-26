@@ -2724,6 +2724,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // before its answer arrived — as `question_response_result`.
     return questions.answer(payload)
   }
+  /** The transcript's open tool calls for a session (CommanderMirror.openTools), bound once the mirror exists. */
+  let openToolsOf: (sessionId: string) => Array<{ name: string; input: unknown }> = () => []
   const questionWatcher = new QuestionWatcher({
     getSession: (id) => registry.resolve(id),
     capture: captureTerminal,
@@ -2752,8 +2754,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // today: a remote machine's watcher is gated on ITS OWN audience, which a window attached over
       // here is not part of either way.
       backend.sendLocal(asked)
-      // With the WHOLE dialog: the pair's floor reads every line of the command, not the clipped title.
-      pairSensor.question(agentIdFor(sessionId), requestId, shaped, detail)
+      // With the WHOLE dialog: the pair's floor reads every line of the command, not the clipped title —
+      // and the transcript's open tool calls, so it reads the exact command rather than its wrapped paint.
+      pairSensor.question(agentIdFor(sessionId), requestId, shaped, detail ? { ...detail, tools: openToolsOf(sessionId) } : detail)
       pairRules(agentIdFor(sessionId), requestId)
       console.log(`[question] ${sid(sessionId)} asking the user · "${preview(shaped[0]?.q ?? '')}" · req=${requestId}`)
     },
@@ -2870,6 +2873,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     alwaysGenerate: () => env.RECAP_WITHOUT_DEVICE || pairSensor.enabled(),
     onSummary: (sessionId, summary) => pairSensor.recap(registry.bySession(sessionId)?.agentId ?? sessionId, summary.recap),
   })
+  openToolsOf = (sessionId) => mirror.openTools(sessionId)
   // Recaps are STORED under the engine session id — that is what lets `--resume` bring the last recap
   // back under a brand-new agent — but they are ASKED FOR by agent id, which is the only id the device
   // and the voice router know. Resolve across the two, or every tile restores empty.

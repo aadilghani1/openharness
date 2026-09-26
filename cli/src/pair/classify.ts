@@ -8,11 +8,24 @@
  *               positive costs a key, a false negative approves a push.
  *   ALLOW-CLASS What a `[y]` key may approve at all: a permission prompt for a read, a test, a build, a
  *               linter or formatter, or an edit to a file in the project. Everything else — including every
- *               question that is not a permission prompt — gets `[g]` (open the pane) and no `[y]`.
+ *               question that is not a permission prompt, and every prompt this file cannot read with
+ *               CERTAINTY — gets `[g]` (open the pane) and no `[y]`. It leans narrow.
  *   PERSISTENT  An option that answers more than this once ("don't ask again", "allow all edits during
  *               this session", "always"). The daemon never picks one, for any caller: `y` is a one-time yes.
+ *
+ * How a command is read (pair/shell.ts): one line only; split on `;`, `&`, `&&`, `||`, `|`; refused on any
+ * expansion (`$`, backticks, `<(`, `>(`), heredoc, subshell, brace or comment; an environment prefix
+ * (`X=1 cmd`) is not allow-class; a redirection may only fold descriptors (`2>&1`) or write to /dev/null.
+ * Each simple command must be on the allow-list below, with none of its write- or exec-capable forms, and
+ * every path it names must resolve (symlinks and all) inside the project.
+ *
+ * The structured tool call, when the engine's transcript has it (Claude Code's `tool_use`, Codex's
+ * `function_call`), is preferred over the painted dialog: it has the exact command, not a wrapped one.
  */
-import { isAbsolute, normalize, relative } from 'node:path'
+import { lstatSync, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
+import { parseShell, type ShellCommand, type ShellWord } from './shell.js'
 
 const DENY_PATTERNS: RegExp[] = [
   /\bpush(ed|es|ing)?\b/i,                                               // git push in any form
@@ -43,94 +56,422 @@ export function isDenyClass(dialog: string, options: readonly string[] = []): bo
 /** Options that answer for more than this once, and the one-time yes (pair/floor.ts, where the floor uses them). */
 export { isOneTimeYes, isPersistentOption } from './floor.js'
 
-// ── allow-class ─────────────────────────────────────────────────────────────────────────────────────
+// ── paths ───────────────────────────────────────────────────────────────────────────────────────────
 
-/** Commands a `[y]` may approve: reads, tests, builds, linters and formatters. Anchored at a segment. */
-const ALLOW_COMMANDS: RegExp[] = [
-  /^(ls|pwd|cat|head|tail|wc|grep|egrep|fgrep|rg|ag|tree|file|stat|du|df|which|type|echo|printf|sort|uniq|cut|tr|jq|yq|diff|cmp|basename|dirname|realpath|date|true|nl|column|less|more)(\s|$)/,
-  /^find(\s|$)(?!.*\s-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b)/,
-  /^sed\s+-n(\s|$)(?!.*\s-i)/,
-  /^git\s+(status|diff|log|show|rev-parse|ls-files|ls-tree|blame|describe|shortlog|grep|reflog|stash\s+list|remote(\s+-v)?)(\s|$)/,
-  /^git\s+branch(\s+(-a|-r|-v|-vv|--all|--remotes|--list|--show-current))*$/,
-  /^cd(\s+[^\s]+)?$/,
-  /^(npm|pnpm|yarn|bun)\s+(run\s+)?(test|tests|check|lint|typecheck|type-check|tsc|build|format|fmt|prettier)(:[\w:-]+)?(\s|$)/,
-  /^(npx|bunx|pnpm\s+exec|pnpm\s+dlx|yarn)\s+(vitest|jest|mocha|ava|tsc|eslint|prettier|biome|playwright\s+test|stylelint)(\s|$)/,
-  /^(vitest|jest|mocha|tsc|eslint|prettier|biome|stylelint)(\s|$)/,
-  /^(pytest|mypy|ruff|black|isort|flake8|pylint|pyright)(\s|$)/,
-  /^python3?\s+-m\s+(pytest|unittest|mypy|ruff|black|isort|compileall)(\s|$)/,
-  /^go\s+(test|build|vet|fmt)(\s|$)/,
-  /^gofmt(\s|$)/,
-  /^cargo\s+(test|build|check|clippy|fmt|doc)(\s|$)/,
-  /^make(\s+(test|tests|check|build|lint|fmt|format|all))?$/,
-  /^(flutter|dart)\s+(test|analyze|format|build)(\s|$)/,
-  /^(\.\/)?gradlew?\s+(test|build|check|assemble\w*)(\s|$)/,
-  /^mvn\s+(test|compile|verify|package)(\s|$)/,
-  /^swift\s+(test|build)(\s|$)/,
-  /^(rspec|ctest)(\s|$)/,
-  /^mix\s+(test|format|compile)(\s|$)/,
-  /^(bundle\s+exec\s+)?(rspec|rubocop|rake\s+(test|spec))(\s|$)/,
-]
-
-/** A redirection that writes somewhere (anything but stderr folding and /dev/null), or a substitution. */
-const WRITES = /(^|[^0-9&>])>{1,2}(?!>|\s*(&1\b|\/dev\/null\b))|\$\(|`|<\(|>\(/
-
-/** One command line is allowed when EVERY segment of it is an allowed command. */
-export function isAllowedCommand(command: string): boolean {
-  const text = command.replace(/\s+/g, ' ').trim()
-  if (!text || WRITES.test(text) || isDenyClass(text)) return false
-  const segments = text.split(/&&|\|\||;|\|/).map((segment) => segment.trim()).filter(Boolean)
-  if (!segments.length) return false
-  return segments.every((segment) => {
-    const bare = segment.replace(/^([A-Z_][A-Z0-9_]*=\S*\s+)+/, '')   // FOO=1 npm test
-    return ALLOW_COMMANDS.some((pattern) => pattern.test(bare))
-  })
+export interface PathContext {
+  /** The harness's folder: the project. Without it nothing resolves, and nothing is in the project. */
+  cwd?: string | null
+  /** This computer's home folder (os.homedir() when absent): `~`, and the dotfiles nothing may touch. */
+  home?: string | null
 }
 
-/** A path in the project: relative without `..`, or absolute under the harness's folder. */
-export function inProject(path: string, cwd?: string | null): boolean {
-  const p = path.trim().replace(/^["'`]|["'`]$/g, '').replace(/[?.,:]$/, '')
-  if (!p || p.startsWith('~')) return false
-  if (!isAbsolute(p)) return !normalize(p).split(/[\\/]/).includes('..')
-  if (!cwd || !isAbsolute(cwd)) return false
-  const rel = relative(cwd, p)
-  return !!rel && !rel.startsWith('..') && !isAbsolute(rel)
+/** Folders no daemon key ever approves a read or an edit in, wherever they sit: the daemon's own data, git's
+ *  internals (hooks, config) and the engines' settings (their hooks run commands). */
+const PROTECTED_SEGMENTS = new Set(['.harness', '.git', '.claude', '.codex'])
+
+/** `path` with every symlink resolved: the longest part of it that exists through realpath, the rest appended. */
+function realResolve(path: string): string | null {
+  let head = path
+  const tail: string[] = []
+  for (;;) {
+    try {
+      return join(realpathSync(head), ...[...tail].reverse())
+    } catch {
+      const parent = dirname(head)
+      if (parent === head) return null
+      tail.push(basename(head))
+      head = parent
+    }
+  }
 }
+
+/**
+ * Whether `path` is in the project, for a key to approve reading or editing it: resolved against the
+ * harness's folder, every symlink along it (the target and every parent) resolved, and still inside that
+ * folder afterwards — and not under `.git/`, `.harness/`, `.claude/`, `.codex/`, not a dotfile or dot-folder
+ * of the home folder, not a file with a second hard link. Anything it cannot resolve is not in the project.
+ */
+export function inProject(path: string, cwd?: string | null, opts: { home?: string | null } = {}): boolean {
+  const p = path.trim()
+  if (!p || !cwd || !isAbsolute(cwd)) return false
+  const home = opts.home === undefined ? homedir() : opts.home
+  let target: string
+  if (p === '~' || p.startsWith('~/')) {
+    if (!home) return false
+    target = join(home, p.slice(1))
+  } else if (p.startsWith('~')) {
+    return false                                                  // ~someone
+  } else {
+    target = resolve(cwd, p)
+  }
+  const realCwd = realResolve(resolve(cwd))
+  const realTarget = realResolve(normalize(target))
+  if (!realCwd || !realTarget) return false
+  const rel = relative(realCwd, realTarget)
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false
+  if (rel.split(sep).some((segment) => PROTECTED_SEGMENTS.has(segment))) return false
+  const realHome = home ? realResolve(home) : null
+  if (realHome) {
+    const fromHome = relative(realHome, realTarget)
+    if (fromHome && fromHome !== '..' && !fromHome.startsWith(`..${sep}`) && !isAbsolute(fromHome) && fromHome.split(sep)[0]!.startsWith('.')) return false
+  }
+  // A second hard link: an edit here lands in another file too (a link to ~/.bashrc, say).
+  try {
+    const stat = lstatSync(realTarget)
+    if (stat.isFile() && stat.nlink > 1) return false
+  } catch { /* a file to be created */ }
+  return true
+}
+
+/** A path as a dialog paints it: quotes around it, and a question's own punctuation after it. */
+function paintedPath(text: string): string {
+  const p = text.trim().replace(/^["'`]|["'`]$/g, '').replace(/[?,:]$/, '')
+  return p.endsWith('.') && !p.endsWith('..') && p !== '.' ? p.slice(0, -1) : p
+}
+
+// ── allow-class commands ────────────────────────────────────────────────────────────────────────────
+
+interface Ctx { cwd: string | null; home: string | null }
+
+/** Reads with no option that writes or runs anything. Every argument that is a path must be in the project. */
+const READS = new Set(['ls', 'pwd', 'cat', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'stat', 'du', 'df', 'cut', 'tr', 'jq',
+  'diff', 'cmp', 'basename', 'dirname', 'realpath', 'nl', 'column'])
+/** Words, not paths: nothing they print is a file. */
+const TEXT = new Set(['echo', 'printf', 'true', 'which', 'type'])
+/** Their first operand is a pattern or a program, not a path. */
+const PATTERN_FIRST = new Set(['grep', 'egrep', 'fgrep', 'jq'])
+
+const TEST_TOOLS = new Set(['vitest', 'jest', 'mocha', 'tsc', 'eslint', 'prettier', 'biome', 'stylelint'])
+const PY_TOOLS = new Set(['pytest', 'mypy', 'ruff', 'black', 'isort', 'flake8', 'pylint', 'pyright'])
+const PY_MODULES = new Set(['pytest', 'unittest', 'mypy', 'ruff', 'black', 'isort', 'compileall'])
+const SCRIPT = /^(test|tests|check|lint|typecheck|type-check|tsc|build|format|fmt|prettier)(:[\w:-]+)?$/
+const MAKE_TARGETS = new Set(['test', 'tests', 'check', 'build', 'lint', 'fmt', 'format', 'all'])
+const GIT_READS = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'ls-tree', 'blame', 'describe', 'shortlog', 'grep'])
+const GIT_BRANCH_LIST = new Set(['-a', '-r', '-v', '-vv', '--all', '--remotes', '--list', '--show-current'])
+/** git options that write a file, run a pager or a driver, or point git somewhere else. */
+const GIT_REFUSED = /^(--output|--open-files-in-pager|--ext-diff|--exec-path|--git-dir|--work-tree|--config-env|--upload-pack|--receive-pack)(=|$)|^-O/
+const FIND_ACTIONS = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'])
+const FIND_VALUE_ARGS = new Set(['-name', '-iname', '-path', '-ipath', '-regex', '-iregex', '-wholename', '-iwholename', '-type',
+  '-maxdepth', '-mindepth', '-size', '-mtime', '-mmin', '-newermt', '-perm', '-user', '-group'])
+/** `sed -n 10,20p`, `sed -n '/a/,/b/p'`: printing lines — never `w`, `e`, `r`, `-i`, `-e` or `-f`. */
+const SED_PRINT = /^((\d+|\$|\/[^/\\]*\/)(,(\d+|\$|\/[^/\\]*\/))?)?p$/
+
+const isFlag = (w: ShellWord): boolean => w.text.startsWith('-') && w.text !== '-'
+/** A short-option cluster (`-uo`) that carries one of `letters`, or one of the long options (with or without `=`). */
+const hasOption = (words: ShellWord[], letters: string, longs: string[] = []): boolean => words.some((w) =>
+  (/^-[A-Za-z0-9]+$/.test(w.text) && [...letters].some((l) => w.text.slice(1).includes(l)))
+  || longs.some((long) => w.text === long || w.text.startsWith(`${long}=`)))
+
+/** A path-like argument (or the value of a `--flag=value`) must resolve inside the project. */
+function pathOk(w: ShellWord, ctx: Ctx): boolean {
+  // `.*` (and `.?`) can match `..` in some shells: a glob that starts a segment with a dot is not certain.
+  if (w.glob && w.text.split('/').some((segment) => segment.startsWith('.') && /[*?[]/.test(segment))) return false
+  let text = w.text
+  if (isFlag(w)) {
+    const eq = text.indexOf('=')
+    if (eq < 0) return true
+    text = text.slice(eq + 1)
+    if (!(text.startsWith('/') || text.startsWith('~') || text.split('/').includes('..'))) return true
+  }
+  if (!w.tilde && text.startsWith('~')) return false            // a quoted `~`: a folder named `~`, or not — refused
+  return inProject(text, ctx.cwd, { home: ctx.home })
+}
+
+/** Every argument that is not a flag names a path in the project, after `skipOperands` leading operands. */
+function argsInProject(words: ShellWord[], ctx: Ctx, skipOperands = 0): boolean {
+  let skipped = 0
+  for (const w of words) {
+    if (!isFlag(w) && skipped < skipOperands) { skipped++; continue }
+    if (!pathOk(w, ctx)) return false
+  }
+  return true
+}
+
+/** `npx vitest …`: a test tool named first, no launcher flag (`-y`, `-p` install and run a package). */
+function allowedTool(argv: string[], words: ShellWord[], ctx: Ctx): boolean {
+  const [tool, ...rest] = argv
+  if (!tool) return false
+  if (tool === 'playwright') return rest[0] === 'test' && argsInProject(words.slice(2), ctx)
+  return TEST_TOOLS.has(tool) && argsInProject(words.slice(1), ctx)
+}
+
+/** One simple command, already free of expansions: is it a read, a test, a build, a linter or a formatter? */
+function allowedSimple(cmd: ShellCommand, ctx: Ctx): boolean {
+  const [head, ...args] = cmd.words
+  // `X=1 npm test`: an environment prefix changes what the command does (NODE_OPTIONS, GIT_*, LD_*).
+  if (!head || head.assignment) return false
+  const name = head.text
+  if (head.quoted || head.glob || head.tilde || (name.includes('/') && name !== './gradlew')) return false
+  const argv = args.map((w) => w.text)
+  const noGlobs = !args.some((w) => w.glob)
+  const patternFirst = (words: ShellWord[]): number => hasOption(words, 'ef', ['--regexp', '--file']) ? 0 : 1
+
+  if (TEXT.has(name)) return true
+  if (READS.has(name)) return argsInProject(args, ctx, PATTERN_FIRST.has(name) ? patternFirst(args) : 0)
+  switch (name) {
+    case 'date':
+      return !hasOption(args, 's', ['--set'])
+    case 'sort':
+      return noGlobs && !hasOption(args, 'oT', ['--output', '--compress-program', '--temporary-directory']) && argsInProject(args, ctx)
+    case 'uniq':
+      return noGlobs && args.filter((w) => !isFlag(w)).length <= 1 && argsInProject(args, ctx)
+    case 'tree':
+      return noGlobs && !hasOption(args, 'oR', ['--output']) && argsInProject(args.filter((_w, i) => !['-I', '-P'].includes(args[i - 1]?.text ?? '')), ctx)
+    case 'file':
+      return !hasOption(args, 'C', ['--compile']) && argsInProject(args, ctx)
+    case 'rg':
+      return noGlobs && !args.some((w) => /^--pre(-glob)?(=|$)/.test(w.text)) && argsInProject(args, ctx, patternFirst(args))
+    case 'find':
+      if (!noGlobs || args.some((w) => FIND_ACTIONS.has(w.text))) return false
+      return argsInProject(args.filter((_w, i) => !FIND_VALUE_ARGS.has(args[i - 1]?.text ?? '')), ctx)
+    case 'sed': {
+      if (!noGlobs) return false
+      const flags = args.filter(isFlag).map((w) => w.text)
+      if (!flags.some((f) => ['-n', '--quiet', '--silent'].includes(f))) return false
+      if (flags.some((f) => !['-n', '-E', '-r', '--quiet', '--silent'].includes(f))) return false
+      const operands = args.filter((w) => !isFlag(w))
+      return operands.length >= 1 && SED_PRINT.test(operands[0]!.text) && argsInProject(operands.slice(1), ctx)
+    }
+    case 'cd':
+      return args.length === 1 && argv[0] !== '-' && pathOk(args[0]!, ctx)
+    case 'git': {
+      if (!noGlobs) return false
+      let rest = args
+      while (rest[0]?.text === '--no-pager') rest = rest.slice(1)
+      const sub = rest[0]?.text ?? ''
+      const tail = rest.slice(1)
+      if (tail.some((w) => GIT_REFUSED.test(w.text))) return false
+      if (GIT_READS.has(sub)) return argsInProject(tail, ctx, sub === 'grep' ? patternFirst(tail) : 0)
+      if (sub === 'reflog') return tail.length === 0 || (tail[0]!.text === 'show' && argsInProject(tail.slice(1), ctx))
+      if (sub === 'stash') return tail.length === 1 && tail[0]!.text === 'list'
+      if (sub === 'remote') return tail.length === 0 || (tail.length === 1 && ['-v', '--verbose'].includes(tail[0]!.text))
+      if (sub === 'branch') return tail.every((w) => GIT_BRANCH_LIST.has(w.text))
+      return false
+    }
+    case 'npm': case 'pnpm': case 'yarn': case 'bun': {
+      if (name === 'pnpm' && argv[0] === 'exec') return allowedTool(argv.slice(1), args.slice(1), ctx)
+      if (name === 'yarn' && argv[0] && TEST_TOOLS.has(argv[0])) return allowedTool(argv, args, ctx)
+      const at = argv[0] === 'run' ? 1 : 0
+      return !!argv[at] && SCRIPT.test(argv[at]!) && argsInProject(args.slice(at + 1), ctx)
+    }
+    case 'npx': case 'bunx':
+      return allowedTool(argv, args, ctx)
+    case 'python': case 'python3':
+      return argv[0] === '-m' && !!argv[1] && PY_MODULES.has(argv[1]) && argsInProject(args.slice(2), ctx)
+    case 'go':
+      if (args.some((w) => /^--?(exec|toolexec|vettool)(=|$)/.test(w.text))) return false
+      return ['test', 'build', 'vet', 'fmt'].includes(argv[0] ?? '') && argsInProject(args.slice(1), ctx)
+    case 'gofmt':
+      return argsInProject(args, ctx)
+    case 'cargo':
+      if (args.some((w) => /^--config(=|$)|^-Z/.test(w.text))) return false
+      return ['test', 'build', 'check', 'clippy', 'fmt', 'doc'].includes(argv[0] ?? '') && argsInProject(args.slice(1), ctx)
+    case 'make':
+      return args.every((w) => !isFlag(w) && MAKE_TARGETS.has(w.text))
+    case 'flutter': case 'dart':
+      return ['test', 'analyze', 'format', 'build'].includes(argv[0] ?? '') && argsInProject(args.slice(1), ctx)
+    case 'gradle': case './gradlew':
+      return /^(test|build|check|assemble\w*)$/.test(argv[0] ?? '') && argsInProject(args.slice(1), ctx)
+    case 'mvn':
+      return ['test', 'compile', 'verify', 'package'].includes(argv[0] ?? '') && argsInProject(args.slice(1), ctx)
+    case 'swift':
+      return ['test', 'build'].includes(argv[0] ?? '') && argsInProject(args.slice(1), ctx)
+    case 'rspec': case 'ctest': case 'rubocop':
+      return argsInProject(args, ctx)
+    case 'mix':
+      return ['test', 'format', 'compile'].includes(argv[0] ?? '') && argsInProject(args.slice(1), ctx)
+    case 'bundle':
+      if (argv[0] !== 'exec') return false
+      if (argv[1] === 'rspec' || argv[1] === 'rubocop') return argsInProject(args.slice(2), ctx)
+      return argv[1] === 'rake' && ['test', 'spec'].includes(argv[2] ?? '') && argsInProject(args.slice(3), ctx)
+    default:
+      return (TEST_TOOLS.has(name) || PY_TOOLS.has(name)) && argsInProject(args, ctx)
+  }
+}
+
+/** A redirection that only folds descriptors (`2>&1`), discards (`>/dev/null`) or reads a project file. */
+function redirectOk(r: { op: string; fd: number | null; target: string }, ctx: Ctx): boolean {
+  if ((r.op === '>&' || r.op === '<&') && /^\d+$/.test(r.target)) return true
+  if (['>', '>>', '&>', '&>>', '>|'].includes(r.op)) return r.target === '/dev/null'
+  if (r.op === '<') return inProject(r.target, ctx.cwd, { home: ctx.home })
+  return false
+}
+
+/**
+ * One command line is allowed when it reads with certainty and EVERY simple command in it is allowed.
+ * Paths are resolved against `opts.cwd`: without one, a command that names any path is not allowed.
+ */
+export function isAllowedCommand(command: string, opts: PathContext = {}): boolean {
+  if (!command.trim() || isDenyClass(command)) return false
+  const parsed = parseShell(command)
+  if (!parsed.ok) return false
+  const ctx: Ctx = { cwd: opts.cwd ?? null, home: opts.home === undefined ? homedir() : opts.home }
+  return parsed.commands.every((cmd) => cmd.redirects.every((r) => redirectOk(r, ctx)) && allowedSimple(cmd, ctx))
+}
+
+// ── the structured tool call ────────────────────────────────────────────────────────────────────────
+
+/** A tool call as the engine's transcript records it (Claude Code `tool_use`, Codex `function_call`). */
+export interface ToolCall { name: string; input: unknown }
+
+const record = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+const parseMaybe = (value: unknown): unknown => {
+  if (typeof value !== 'string') return value
+  try { return JSON.parse(value) } catch { return value }
+}
+const shellQuote = (word: string): string => /^[A-Za-z0-9_./:=@%+,-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`
+
+const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Read'])
+const SEARCH_TOOLS = new Set(['Glob', 'Grep', 'LS'])
+const SHELL_TOOLS = new Set(['Bash', 'shell', 'exec_command', 'local_shell'])
+
+/** The shell command a tool call runs, exactly, or null when it runs none (or one this cannot read). */
+export function toolCommand(tool: ToolCall): string | null {
+  if (!SHELL_TOOLS.has(tool.name)) return null
+  const input = record(parseMaybe(tool.input))
+  if (!input) return null
+  if (typeof input.command === 'string') return input.command
+  if (typeof input.cmd === 'string') return input.cmd
+  const argv = Array.isArray(input.command) && input.command.every((a) => typeof a === 'string') ? input.command as string[] : null
+  if (!argv?.length) return null
+  // Codex: ["bash", "-lc", "<script>"] runs the script; anything else is an argv, quoted back into a line.
+  if (argv.length === 3 && /^(\/bin\/|\/usr\/bin\/)?(ba|z)?sh$/.test(argv[0]!) && /^-l?c$/.test(argv[1]!)) return argv[2]!
+  return argv.map(shellQuote).join(' ')
+}
+
+/** The file a read/edit/search tool call names; null for a search with no path (the project itself). */
+function toolPath(tool: ToolCall): string | null | undefined {
+  const input = record(parseMaybe(tool.input))
+  if (!input) return undefined
+  for (const key of ['file_path', 'notebook_path', 'path']) if (typeof input[key] === 'string') return input[key] as string
+  return null
+}
+
+/** Whether a `[y]` may approve this exact tool call. Anything unrecognised is not. */
+export function isAllowToolCall(tool: ToolCall, opts: PathContext = {}): boolean {
+  if (SHELL_TOOLS.has(tool.name)) {
+    const command = toolCommand(tool)
+    return command !== null && isAllowedCommand(command, opts)
+  }
+  const path = toolPath(tool)
+  if (EDIT_TOOLS.has(tool.name)) return typeof path === 'string' && inProject(path, opts.cwd, { home: opts.home })
+  if (SEARCH_TOOLS.has(tool.name)) return path === null || (typeof path === 'string' && inProject(path, opts.cwd, { home: opts.home }))
+  return false
+}
+
+const squash = (text: string): string => text.replace(/\s+/g, '')
 
 const FILE_HEADER = /^(edit|write|create|update|read|view)( file)?$/i
 const SEARCH_HEADER = /^(glob|grep|search|list( files)?|ls)$/i
 const BASH_HEADER = /^(bash( command)?|run( command)?|shell( command)?|execute( shell)?( command)?)$/i
 const EDIT_QUESTION = /make this edit to (.+?)\?\s*$/i
+/** An option row as painted (`❯ 1. Yes`), or a key hint under them. */
+const OPTION_ROW = /^([>›❯*]\s*)?\d+[.)]\s|^(esc|press|enter|tab)\b/i
 
-/**
- * Whether a `[y]` may approve this dialog. `dialog` is the whole dialog, line by line, as painted.
- * Only a permission prompt can be allow-class; anything unrecognised is not.
- */
-export function isAllowClass(dialog: string, opts: { permission: boolean; cwd?: string | null }): boolean {
-  if (!opts.permission || !dialog.trim() || isDenyClass(dialog)) return false
-  const lines = dialog.split('\n').map((line) => line.trim())
-  // Claude's edit prompt names its file in the question itself.
-  for (const line of lines) {
-    const edit = EDIT_QUESTION.exec(line)
-    if (edit) return inProject(edit[1]!, opts.cwd)
-  }
-  // Codex (and anything that prints the command itself with a `$ ` prompt): every command line counts.
-  const dollar = lines.filter((line) => line.startsWith('$ ')).map((line) => line.slice(2))
-  if (dollar.length) return dollar.every(isAllowedCommand)
-  const headerAt = lines.findIndex((line) => FILE_HEADER.test(line) || SEARCH_HEADER.test(line) || BASH_HEADER.test(line))
-  if (headerAt < 0) return false
-  const header = lines[headerAt]!
-  // The block under the header, to the first blank line.
+/** The lines under a header, to the first blank line after them. */
+function blockUnder(lines: string[], headerAt: number): string[] {
   const block: string[] = []
   for (const line of lines.slice(headerAt + 1)) {
     if (!line) { if (block.length) break; continue }
     block.push(line)
   }
+  return block
+}
+
+/** The `$ ` command line (Codex), with the lines under it up to a blank one; null when there is not exactly one. */
+function dollarBlock(lines: string[]): { at: number; lines: string[] } | null {
+  const starts = lines.map((line, at) => ({ line, at })).filter(({ line }) => line.startsWith('$ '))
+  if (starts.length !== 1) return null
+  const at = starts[0]!.at
+  const out = [lines[at]!.slice(2)]
+  for (const line of lines.slice(at + 1)) { if (!line) break; out.push(line) }
+  return { at, lines: out }
+}
+
+/**
+ * The ONE open tool call this dialog paints, or null (none, or more than one could be). Strict: a shell
+ * call only under a shell header (or Codex's `$ `), whose painted lines are exactly its command (and its
+ * description); a file call only under a file header that names exactly its file.
+ */
+export function matchToolCall(dialog: string, tools: readonly ToolCall[], cwd?: string | null): ToolCall | null {
+  const lines = dialog.split('\n').map((line) => line.trim())
+  const headerAt = lines.findIndex((line) => FILE_HEADER.test(line) || BASH_HEADER.test(line) || SEARCH_HEADER.test(line))
+  const header = headerAt >= 0 ? lines[headerAt]! : ''
+  const dollar = dollarBlock(lines)
+  const hits = tools.filter((tool) => {
+    if (SHELL_TOOLS.has(tool.name)) {
+      const command = toolCommand(tool)
+      if (!command || !squash(command)) return false
+      const input = record(parseMaybe(tool.input))
+      const description = typeof input?.description === 'string' ? squash(input.description) : ''
+      if (dollar) return squash(dollar.lines.join('')) === squash(command)
+      if (!BASH_HEADER.test(header)) return false
+      const painted = squash(blockUnder(lines, headerAt).join(''))
+      return painted === squash(command) || (!!description && painted === squash(command) + description)
+    }
+    if (!FILE_HEADER.test(header) && !SEARCH_HEADER.test(header)) return false
+    const path = toolPath(tool)
+    if (typeof path !== 'string' || !path) return false
+    const named = paintedPath(blockUnder(lines, headerAt)[0] ?? '')
+    const shown = cwd && isAbsolute(path) ? relative(cwd, path) : path
+    return named === shown || named === path
+  })
+  return hits.length === 1 ? hits[0]! : null
+}
+
+// ── allow-class dialogs ─────────────────────────────────────────────────────────────────────────────
+
+export interface AllowOptions extends PathContext {
+  permission: boolean
+  /** The engine's open tool calls for this harness, when its transcript has them. */
+  tools?: readonly ToolCall[]
+}
+
+/**
+ * Whether a `[y]` may approve this dialog. `dialog` is the whole dialog, line by line, as painted.
+ * Only a permission prompt can be allow-class; anything unrecognised, or not read with certainty, is not.
+ */
+export function isAllowClass(dialog: string, opts: AllowOptions): boolean {
+  if (!opts.permission || !dialog.trim() || isDenyClass(dialog)) return false
+  const ctx: PathContext = { cwd: opts.cwd, home: opts.home }
+  const lines = dialog.split('\n').map((line) => line.trim())
+
+  // Claude's edit prompt: the header names the file, the preview follows, then ONE question naming the
+  // same file, then only the options. A second "make this edit" line, or one with more than options after
+  // it (a line the preview's text painted), is file content, not the dialog: no [y].
+  const edits = lines.map((line, at) => ({ at, match: EDIT_QUESTION.exec(line) })).filter((e) => e.match)
+  if (edits.length > 1) return false
+  if (edits.length === 1) {
+    const { at, match } = edits[0]!
+    if (lines.slice(at + 1).some((line) => line && !OPTION_ROW.test(line))) return false
+    const file = paintedPath(match![1]!)
+    const headerAt = lines.findIndex((line) => FILE_HEADER.test(line))
+    if (headerAt < 0 || headerAt > at || paintedPath(blockUnder(lines, headerAt)[0] ?? '') !== file) return false
+  }
+
+  // The exact call, when the transcript has exactly one that this dialog paints.
+  const tool = opts.tools?.length ? matchToolCall(dialog, opts.tools, opts.cwd) : null
+  if (tool) return isAllowToolCall(tool, ctx)
+  if (edits.length === 1) return inProject(paintedPath(edits[0]!.match![1]!), opts.cwd, { home: opts.home })
+
+  // Codex (and anything that prints the command with a `$ ` prompt): exactly ONE command line, standing
+  // alone. A line right under it could be the command continuing (or wrapping): not read with certainty.
+  if (lines.some((line) => line.startsWith('$ '))) {
+    const dollar = dollarBlock(lines)
+    return !!dollar && dollar.lines.length === 1 && isAllowedCommand(dollar.lines[0]!, ctx)
+  }
+
+  const headerAt = lines.findIndex((line) => FILE_HEADER.test(line) || SEARCH_HEADER.test(line) || BASH_HEADER.test(line))
+  if (headerAt < 0) return false
+  const header = lines[headerAt]!
+  const block = blockUnder(lines, headerAt)
   if (!block.length) return SEARCH_HEADER.test(header)
-  if (FILE_HEADER.test(header)) return block.length === 1 && inProject(block[0]!, opts.cwd)
-  if (SEARCH_HEADER.test(header)) return block.every((line) => !/(^|\s)(\/|~)/.test(line) || inProject(line.split(/\s+/).pop()!, opts.cwd))
-  // Bash: the command's lines, then (usually) one line of description written as a sentence. A trailing
-  // line that reads like prose is the description; anything else must be an allowed command, together.
-  const command = [...block]
-  while (command.length > 1 && /^[A-Z][a-z]+(\s|$)/.test(command[command.length - 1]!) && !/[|;&<>$`]/.test(command[command.length - 1]!)) command.pop()
-  return isAllowedCommand(command.join(' '))
+  if (FILE_HEADER.test(header)) return block.length === 1 && inProject(paintedPath(block[0]!), opts.cwd, { home: opts.home })
+  if (SEARCH_HEADER.test(header)) {
+    return block.every((line) => !/(^|\s)(\/|~|\.\.)/.test(line) || inProject(paintedPath(line.split(/\s+/).pop()!), opts.cwd, { home: opts.home }))
+  }
+  // Bash, painted: the command's lines, then (usually) a description line — which a line of the command can
+  // look exactly like. Without the transcript's tool call, only a block of ONE line is read with certainty.
+  return block.length === 1 && isAllowedCommand(block[0]!, ctx)
 }

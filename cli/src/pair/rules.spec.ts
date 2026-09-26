@@ -120,7 +120,8 @@ describe('act-within-rules, end to end on the owning machine', () => {
     const acts = () => journal.since().entries.filter((e) => e.kind === 'act')
     return { sensor, owner, keyed, ask, acts, events, run }
   }
-  const bash = (cmd: string) => `Bash command\n\n  ${cmd}\n  Run it\n\nDo you want to proceed?\n1. Yes\n2. No`
+  // Painted with no description line: a one-line block is read with certainty (pair/classify.ts).
+  const bash = (cmd: string) => `Bash command\n\n  ${cmd}\n\nDo you want to proceed?\n1. Yes\n2. No`
 
   it('answers an allow-class prompt by rule, journals it as the rule\'s, and pushes it for the brain to report', async () => {
     const m = machine({ rules: [{ name: 'tests', question: 'npm test', choice: 'Yes' }] })

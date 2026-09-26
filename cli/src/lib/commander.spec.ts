@@ -751,3 +751,20 @@ describe('CommanderMirror keeps the complete final answer beside the clipped one
     expect(Buffer.from(full, 'utf8').toString('utf8')).toBe(full)
   })
 })
+
+describe('CommanderMirror keeps the open tool calls for the pair\'s floor', () => {
+  it('a call is open from its tool_start to its tool_end, and a turn boundary clears them all', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-commander-tools-'))
+    const mirror = new CommanderMirror({ send: () => {}, sendWeb: () => {}, hasDevice: () => false, summarize: async () => null, dataDir: dir })
+    mirror.ingest([
+      { type: 'turn_started', payload: { userMessage: 'test it' } },
+      { type: 'tool_start', payload: { id: 't1', tool: 'Bash', input: { command: 'npm test', description: 'Run the tests' } } },
+      { type: 'tool_start', payload: { id: 't2', tool: 'Read', input: { file_path: '/w/a.ts' } } },
+      { type: 'tool_end', payload: { id: 't2', tool: 'Read', output: '', isError: false, summary: '' } },
+    ] as LiveEvent[], 's1')
+    expect(mirror.openTools('s1')).toEqual([{ name: 'Bash', input: { command: 'npm test', description: 'Run the tests' } }])
+    mirror.ingest([{ type: 'turn_ended', payload: {} }] as LiveEvent[], 's1')
+    expect(mirror.openTools('s1')).toEqual([])
+    rmSync(dir, { recursive: true, force: true })
+  })
+})

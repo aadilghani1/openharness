@@ -226,8 +226,9 @@ describe('voice', () => {
   })
 })
 
-/** A permission prompt as the watcher reads it: the whole dialog, every line. */
-const permit = (cmd: string, description = 'Run it') => ({ permission: true, dialog: `Bash command\n\n  ${cmd}\n  ${description}\n\nDo you want to proceed?\n1. Yes\n2. No` })
+/** A permission prompt as the watcher reads it: the whole dialog, every line, and the transcript's open call. */
+const permit = (cmd: string, description = 'Run it') => ({ permission: true, dialog: `Bash command\n\n  ${cmd}\n  ${description}\n\nDo you want to proceed?\n1. Yes\n2. No`,
+  tools: [{ name: 'Bash', input: { command: cmd, description } }] })
 const tick = async (): Promise<void> => { await settle(UNSOLICITED_GAP_MS) }
 
 describe('the brain', () => {
