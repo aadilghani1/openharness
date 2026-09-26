@@ -105,6 +105,31 @@ failure or a question. A per-desk cursor stops repeats; a daemon restart is a ba
 - **P5 Rules and handing it work**: `pair.jsonc`, `start_project`, `zoo.autonomy`. Tests: rules never
   approve deny-class prompts; every action is journaled.
 
+## As built (P0–P3)
+
+- **The switch.** Pairing is on while the account's zoo (`GET /api/zoo`, re-read on `zoo_changed` and on
+  every reconnect) has `pair` set to a roster id. Signed out, a guest window says which daemon its local zoo
+  pairs with `daemon_presence { pair }`. Off, every daemon senses nothing and answers `pair_*` with `PAIR_OFF`.
+- **Local frames** go only to the loopback socket bound to this computer's machine (`sendLocal`), and
+  `daemon_act`/`daemon_presence` are consumed on any bound socket and never forwarded:
+  - `daemon_state { pair, needs: [{ machineId, machine, agentId, name, engine, requestId, question, options,
+    deny, since, id?, line?, actions? }], working, failing: [{ machineId, machine, agentId, name, reason }],
+    machines: [{ machineId, name, status, local }] }` on change and to a client as it attaches; `pair: null`
+    means use the roster lines. `status` is `ok`, `connecting`, `unreachable`, `unlinked`, `old` or `off`.
+  - `daemon_say` as above; `daemon_unsay { id, reason }` with `answered`, `gone`, `done` or `stale`.
+  - `daemon_brief { desk, line, items: [{ id, kind, machineId, machine, agentId?, name?, line }] }`, `kind` one
+    of `waiting`, `failed`, `unreachable`, `done`.
+  - `daemon_presence { active, awayMs?, desk?, pair? }`; `daemon_act { requestId, id, choice }` →
+    `daemon_act_result { requestId, id, ok, machineId?, error?, detail? }`. `choice` is an action's `choice`
+    or its key. Errors: `PAIR_OFF`, `GONE`, `NOT_OFFERED`, `STALE_QUESTION`, `DENY_CLASS`, `UNSUPPORTED`,
+    `MACHINE_<STATUS>`.
+- **Machine to machine**: `pair_watch { off? }` → `{ snapshot }`, then `pair_event { machineId, rev, agentId,
+  harness, entry?, baseline?, removed? }`; `pair_journal { epoch?, seq? | at?, limit? }` → `{ epoch, seq,
+  entries, reset?, truncated? }`; `pair_read { agentId }` → `{ harness }`. `pair_answer` and `pair_pause`
+  answer `UNSUPPORTED` until the stale-answer guard and the control layer land; so does the local answer
+  behind `daemon_act` (after the brain's own checks). Local-only `pair { verb: status | list | journal |
+  read }` → `pair_result`.
+
 ## Risks
 
 - A late answer landing on the next dialog (fixed on main first; see the stale-answer PR).
