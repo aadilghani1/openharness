@@ -63,7 +63,9 @@ export function renderPortrait(roster, d, version, mood, { t = 0, lid = null, mo
 export function statusCell(roster, sprite, baseWidth = sprite.length) {
   const cells = roster.rules.statusCells
   const left = Math.max(0, Math.floor((cells - Math.min(baseWidth, cells)) / 2))
-  return ' ' + ' '.repeat(left) + sprite + ' '.repeat(Math.max(0, cells - left - sprite.length)) + ' '
+  // Always exactly statusCells + 2 wide. A borrowed baton may run into the right gutter (a 6-cell
+  // sprite, centred one cell in, plus ' |' ends on the gutter); nothing else ever reaches it.
+  return (' ' + ' '.repeat(left) + sprite).padEnd(cells + 2).slice(0, cells + 2)
 }
 
 /** The base width statusCell centres on: the version's sprite in its idle mood. */

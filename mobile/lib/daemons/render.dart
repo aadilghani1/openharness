@@ -111,8 +111,10 @@ String statusCell(DaemonRoster roster, String sprite, [int? base]) {
   final width = base ?? sprite.length;
   final left = ((cells - (width < cells ? width : cells)) / 2).floor();
   final pad = left < 0 ? 0 : left;
-  final right = cells - pad - sprite.length;
-  return ' ${' ' * pad}$sprite${' ' * (right < 0 ? 0 : right)} ';
+  // Always exactly cells + 2 wide: a borrowed baton may run into the right
+  // gutter (render.mjs statusCell).
+  final cell = ' ${' ' * pad}$sprite'.padRight(cells + 2);
+  return cell.substring(0, cells + 2);
 }
 
 /// The base width [statusCell] centres on: the version's sprite in its idle

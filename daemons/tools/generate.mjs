@@ -223,6 +223,10 @@ for (const d of roster.daemons) {
     frames.cards.push({ id: d.id, version, shiny: true, serial: 42, nickname: 'pip', hatched: '2026-09-26', egg: 'first', out: cardLines(roster, d, { version, shiny: true, serial: 42, nickname: 'pip', hatched: '2026-09-26', egg: 'first' }) })
   }
 }
+for (const c of frames.cells) {
+  if (c.out.length !== rules.statusCells + 2) fail(`${c.id} ${c.v} ${c.mood}: status cell is ${c.out.length} wide, not ${rules.statusCells + 2}`)
+  if (c.out.trimEnd().length > rules.statusCells + 2) fail(`${c.id} ${c.v} ${c.mood}: status cell content overflows`)
+}
 frames.banners = roster.daemons.map(d => ({ id: d.id, out: renderBanner(banner, d.id) }))
 output('daemons/frames.json', JSON.stringify(frames) + '\n')
 
