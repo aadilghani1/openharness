@@ -61,6 +61,7 @@ import { flashCommand } from './lib/flash.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from './lib/loginCallback.js'
 import { AuthSessionError, AuthSessionManager, clearAuthSession, readAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { PAIR_HARNESS_DSH, ZooTurnCounter, ZooTurnReporter } from './lib/zooTurns.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { ensureGridInstalled, type GridInstallResult } from './lib/gridInstall.js'
 import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
@@ -2870,6 +2871,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     heartbeats.set(sessionId, timer)
   }
 
+  // Turns that count toward the zoo's eggs and the paired daemon's bond (lib/zooTurns.ts): a turn a
+  // person started, seen live, in a session that is not a sub-agent, a terminal or the pair harness.
+  // Reported once a minute as `zoo.turn` through the same signed-in path as /api/zoo; a guest's turns
+  // are the desktop client's to count, so nothing is counted while signed out.
+  const zooTurnCounter = new ZooTurnCounter({
+    eligible: (sessionId) => {
+      const session = registry.bySession(sessionId)
+      return !!session && !isTerminalEngine(session.engine) && session.dsh !== PAIR_HARNESS_DSH && !isSubagentSession(sessionId)
+    },
+  })
+  const zooTurnReporter = new ZooTurnReporter({
+    post: (body) => proxyBackend('POST', '/api/zoo/ops', body),
+    signedIn: () => readAuthSession() !== null,
+    machineId: () => backend.machineId,
+  })
+
   emitSessionEvents = (sessionId: string, events: ReturnType<CursorNormalizer['ingest']>, opts?: { resumed?: boolean; replay?: boolean }): void => {
     if (!events.length || !registry.bySession(sessionId)?.active) return
     const usageSession = registry.bySession(sessionId)
@@ -2899,6 +2916,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       backend.send(frame)
       if (event.type === 'turn_started') {
+        zooTurnCounter.started(sessionId, { replay: !!(opts?.resumed || opts?.replay) })
         turnStartedAt.set(sessionId, Date.now())
         console.log(`[turn] ${sid(sessionId)} started · engine=${registry.bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
         input.onTurnStarted(agentIdFor(sessionId), event.payload.userMessage)
@@ -2911,6 +2929,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // and marking it pre-turn is how a restarted daemon never announced a question Codex had open.
         if (!opts?.resumed) questionWatcher.noteTurnStart(sessionId)
       } else if (event.type === 'turn_ended') {
+        if (zooTurnCounter.ended(sessionId, { replay: !!(opts?.resumed || opts?.replay), aborted: event.payload.aborted === true })) {
+          zooTurnReporter.count()
+        }
         const startedAt = turnStartedAt.get(sessionId)
         turnStartedAt.delete(sessionId)
         // Say when a turn was KILLED. The log previously showed an interrupt as a fresh `[turn] started
@@ -2986,6 +3007,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     syncRecapPool()
     turnStates.delete(sessionId)
     turnStartedAt.delete(sessionId)
+    zooTurnCounter.forget(sessionId)
     codexNormalizers.delete(sessionId)
     cursorNormalizers.delete(sessionId)
     opencodeReaders.get(sessionId)?.stop()
@@ -5822,6 +5844,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await dshViewers.stopAll()
     await dshVerdicts.stop()
     autonomousDeviceDirect?.stop()
+    // The last minute's turns, best effort: an update restart should not lose them, nor wait on them.
+    zooTurnReporter.stop()
+    await Promise.race([zooTurnReporter.flush(), new Promise((resolve) => setTimeout(resolve, 2000).unref())])
     await backend.stop()
     try { if (readPid() === process.pid) rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
     process.exit(0)
