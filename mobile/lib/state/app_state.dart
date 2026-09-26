@@ -50,6 +50,7 @@ import 'session_preview.dart';
 import 'terminal_pane.dart';
 import 'desk_sync.dart';
 import 'phone_desk.dart';
+import '../daemons/zoo_client.dart';
 import 'swarm.dart';
 import '../terminal/terminal_binary.dart';
 import '../update/desktop_updater.dart';
@@ -567,6 +568,16 @@ class AppNotifier extends ChangeNotifier {
     read: () => api.desk(),
     write: (ops) => api.deskOps(ops),
     onChanged: notifyListeners,
+  );
+
+  // ── the zoo: the account's daemons and eggs ──────────────────────────────
+  //
+  // `daemons/zoo_client.dart` holds it. Its own document, like the desk and
+  // separate from it: read on sign-in, on `zoo_changed`, and when the app comes
+  // back to the front. The closures read `api` lazily for the desk's reason.
+  late final ZooClient zoo = ZooClient(
+    read: () => api.zoo(),
+    write: (ops) => api.zooOps(ops),
   );
 
   /// The account's tabs, in the desk's order. Empty where the desk has nothing
@@ -2384,6 +2395,8 @@ class AppNotifier extends ChangeNotifier {
     // over REST rather than from any machine — so they can land before the
     // first machine has finished dialling.
     _desk.ensure();
+    // The zoo the same way: the daemon on the chip is account state.
+    zoo.ensure();
     try {
       // The request a viewer already has in flight (above), or a fresh one where
       // there is none — a desktop, whose machine list is served by a daemon that
@@ -2573,6 +2586,7 @@ class AppNotifier extends ChangeNotifier {
     pendingAuthorizeUrl = null;
     _awaitingFirstMessage = null;
     _desk.reset();
+    zoo.reset();
     analyticsAccount.clear();
     _daemonSupervisionTimer?.cancel();
     _daemonSupervisionTimer = null;
@@ -2892,6 +2906,8 @@ class AppNotifier extends ChangeNotifier {
     // The desk belongs to the account, not to the phone: its tabs go with the
     // session, writes this phone never managed to send included.
     _desk.reset();
+    // The zoo is the account's too.
+    zoo.reset();
     currentUser = null;
     machines = [];
     machineStates.clear();
@@ -3664,6 +3680,7 @@ class AppNotifier extends ChangeNotifier {
     // A boot that found the daemon still connecting finishes THROUGH here, so
     // the desk is joined here as well — [PhoneDesk.ensure] makes that once.
     _desk.ensure();
+    zoo.ensure();
     try {
       await refreshMachines();
       if (!_authWorkCurrent(revision)) return;
@@ -6988,6 +7005,12 @@ class AppNotifier extends ChangeNotifier {
         // machines mean one GET.
         _desk.noticeRevision(payload['revision']);
         return;
+      case 'zoo_changed':
+        // The account's daemons and eggs changed — an egg earned on a computer,
+        // a hatch or a pair switch on another client. Once per machine, like
+        // `desk_changed`; [ZooClient.noticeRevision] makes that one GET.
+        zoo.noticeRevision(payload['revision']);
+        return;
       case 'node_status':
         final online = payload['online'] == true;
         await _applyNodeStatus(machine, online);
@@ -7312,6 +7335,9 @@ class AppNotifier extends ChangeNotifier {
     // whatever they were when the phone went into a pocket, until something
     // else happened to change them.
     unawaited(_desk.refresh());
+    // The zoo too, for the same reason: a `zoo_changed` sent while the phone
+    // was in a pocket reached nobody.
+    if (status == AppStatus.authenticated) unawaited(zoo.refresh());
   }
 
   /// The app went into a pocket: stop the reads that only make sense in front
@@ -7349,6 +7375,7 @@ class AppNotifier extends ChangeNotifier {
     sessionPreviews.dispose();
     agentNotices.dispose();
     _desk.dispose();
+    zoo.dispose();
     super.dispose();
   }
 }

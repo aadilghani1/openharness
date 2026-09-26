@@ -57,7 +57,8 @@ List<String> cardLines(
     return '| ${padded.substring(0, _inner)} |';
   }
 
-  final head = '${cardNumber(roster, d)}  DROP ${drop.n}: '
+  final head =
+      '${cardNumber(roster, d)}  DROP ${drop.n}: '
       '${drop.name.toUpperCase()}';
   final rarity = '${shiny ? 'SHINY ' : ''}${d.rarity.toUpperCase()}';
   final gap = _inner - head.length - rarity.length;
@@ -137,7 +138,11 @@ List<ShelfCell> shelfCells(
 }
 
 /// `zoo: drop 1 unix  3/9  +secret`
-String shelfTitle(DaemonRoster roster, Iterable<String> ownedIds, {String? drop}) {
+String shelfTitle(
+  DaemonRoster roster,
+  Iterable<String> ownedIds, {
+  String? drop,
+}) {
   final owned = ownedIds.toSet();
   final id = drop ?? roster.drops.first.id;
   final set = roster.daemons.where((d) => d.drop == id).toList();

@@ -117,7 +117,13 @@ String statusCell(DaemonRoster roster, String sprite, [int? base]) {
 /// The base width [statusCell] centres on: the version's sprite in its idle
 /// mood.
 int baseWidth(DaemonRoster roster, DaemonDef d, int versionIndex) =>
-    renderSprite(roster, d, versionIndex, DaemonMood.idle, motion: false).length;
+    renderSprite(
+      roster,
+      d,
+      versionIndex,
+      DaemonMood.idle,
+      motion: false,
+    ).length;
 
 /// The hatchling before it has colour: every drawn cell becomes `#`.
 String silhouette(String sprite) => sprite.replaceAll(RegExp(r'[^ ]'), '#');
