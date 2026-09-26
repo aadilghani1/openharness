@@ -85,6 +85,9 @@ import { PairControl, StartedHarnesses } from './pair/control.js'
 import { PairToken } from './pair/token.js'
 import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClientDeps } from './pair/client.js'
 import { serveMcp } from './pair/mcp.js'
+import { PairHarness, type PairEngine } from './pair/pairHarness.js'
+import { probeEngines } from './lib/engineProbe.js'
+import { ensureBuiltinPair } from './dsh/builtins.js'
 import { DEFAULT_AUTONOMY, type Autonomy } from './pair/floor.js'
 import { randomUUID } from 'node:crypto'
 import { engineInstallRecipe } from './lib/engineInstall.js'
@@ -1801,6 +1804,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const pairToken = new PairToken(join(env.ADAPTER_DATA_DIR, 'pair', 'token'))
   /** `talk` / `daemon_talk`: the person's words to the pair harness — bound once it can be started. */
   let pairTalk: (text: string) => Promise<Record<string, unknown>> = async () => ({ ok: false, error: 'UNSUPPORTED' })
+  /** A turn started or ended on the pair harness: it is in use (its idle pause waits). Bound with it. */
+  let pairHarnessActivity: (agentId: string) => void = () => {}
+  /** The pair harness is the daemon's own: its turns are nobody's news (no notification, no count). */
+  const isPairHarnessSession = (sessionId: string): boolean => registry.bySession(sessionId)?.dsh === PAIR_HARNESS_DSH
   const pairSensor = new PairSensor({
     machineId: () => backendRef?.machineId ?? session?.machineId ?? computerId(),
     journal: new PairJournal({ dir: join(env.ADAPTER_DATA_DIR, 'pair') }),
@@ -2797,7 +2804,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     agentIdFor: (sessionId) => registry.bySession(sessionId)?.agentId,
     // An Orchestrator specialist's turn end, or the Director's while specialists are still out, is not
     // announced: the person asked to hear from the main agent once, not from every sub-agent.
-    isSubagent: isSubagentSession,
+    // The pair harness's turns are silent on the dial too, like a sub-agent's.
+    isSubagent: (sessionId: string) => isSubagentSession(sessionId) || isPairHarnessSession(sessionId),
     // A claude sub-agent still at work is one whose transcript is still growing:
     // `<session>/subagents/agent-<id>.jsonl` beside the parent's (the same file enrichSubagentStats
     // reads). Written in the last SUBAGENT_IDLE_MS = alive; the held turn end waits for it.
@@ -2969,8 +2977,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // it always did.
       if (event.type === 'turn_ended') {
         if (opts?.resumed || opts?.replay) frame.replay = true
-        if (isSubagentSession(sessionId)) frame.subagent = true
+        // The pair harness is the daemon talking to you, not work finishing: no app notifies on it.
+        if (isSubagentSession(sessionId) || isPairHarnessSession(sessionId)) frame.subagent = true
       }
+      if (event.type === 'turn_started' || event.type === 'turn_ended') pairHarnessActivity(agentId)
       backend.send(frame)
       // The pair sensor reads the same two flags the apps do: a replay is a baseline, a sub-agent is nobody's news.
       if (event.type === 'turn_started') {
@@ -4270,6 +4280,54 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     newId: () => randomUUID(),
   })
   backend.pairControl = pairControl
+  // THE PAIR HARNESS (pair/pairHarness.ts): the daemon as a conversation, started or resumed when you talk
+  // to it, paused when idle. Mode ask, the harnessd MCP server injected, a fresh token every launch.
+  const pairHarness = new PairHarness({
+    pairedDaemon: () => pairSensor.pairedDaemon(),
+    engine: async () => {
+      const found = await probeEngines(['claude', 'codex']).catch(() => [])
+      return (['claude', 'codex'] as PairEngine[]).find((engine) => found.some((e) => e.engine === engine && e.installed)) ?? null
+    },
+    // The launcher when this daemon is the installed release it runs; otherwise exactly this process.
+    mcpCommand: () => {
+      const launcher = join(env.HARNESS_BIN_DIR, 'harness')
+      const script = process.argv[1] ? resolve(process.argv[1]) : ''
+      return script === join(env.ADAPTER_CLI_DIR, 'cli.js') && existsSync(launcher) ? [launcher] : [process.execPath, ...process.execArgv, script]
+    },
+    token: pairToken,
+    workspace: join(env.ADAPTER_DATA_DIR, 'pair', 'workspace'),
+    stateFile: join(env.ADAPTER_DATA_DIR, 'pair', 'harness.json'),
+    install: (files) => ensureBuiltinPair(PAIR_HARNESS_DSH, files),
+    find: () => {
+      const live = registry.advertised()
+      return [
+        ...live.filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'live' as const })),
+        ...stoppedAgents.available(live).filter((s) => s.dsh === PAIR_HARNESS_DSH).map((s) => ({ agentId: s.agentId, status: 'stopped' as const })),
+      ]
+    },
+    create: async ({ engine, cwd, prompt, name }) => {
+      if (!backend.onCreateAgent) return { ok: false, error: 'UNSUPPORTED' }
+      const created = await backend.onCreateAgent({
+        engine, cwd, bypassPermission: false, permissionMode: 'ask', grid: null, codexHome: null,
+        dsh: PAIR_HARNESS_DSH, prompt, name, agent: null,
+      })
+      return created.ok ? { ok: true, agentId: created.session.agentId } : created
+    },
+    resume: async (agentId) => {
+      if (!backend.onResumeAgent) return { ok: false, error: 'UNSUPPORTED' }
+      const resumed = await backend.onResumeAgent(agentId)
+      return resumed.ok ? { ok: true } : resumed
+    },
+    stop: async (agentId) => { await backend.onDeleteAgent?.(agentId) },
+    send: (agentId, text) => backend.onMessage?.(agentId, text, randomUUID()),
+    working: (agentId) => {
+      const sessionId = registry.resolve(agentId)?.sessionId
+      return !!sessionId && mirror.isBusy(sessionId)
+    },
+    now: Date.now,
+  })
+  pairTalk = (text) => pairHarness.talk(text)
+  pairHarnessActivity = (agentId) => pairHarness.activity(agentId)
   pairBrain = new PairBrain({
     pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
     fleet: pairFleet,
@@ -4522,6 +4580,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     onVoiceRouteReply: (voiceId, reply) => windowRouter.reply(voiceId, reply),
     onDaemonAct: (_connId, payload, reply) => { void pairBrain?.onAct(payload, (frame) => { reply(frame) }) },
+    // The person talking to their daemon: forwarded to the pair harness, which starts or wakes for it.
+    onDaemonTalk: (_connId, payload, reply) => {
+      const requestId = typeof payload.requestId === 'string' ? payload.requestId.slice(0, 120) : ''
+      const text = typeof payload.text === 'string' ? payload.text.slice(0, 8_000) : ''
+      void pairTalk(text)
+        .catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
+        .then((result) => { reply({ type: 'daemon_talk_result', payload: { requestId, ...result } }) })
+    },
     onDaemonPresence: (connId, payload) => pairBrain?.onPresence(connId, payload),
     machineId: backend.machineId,
     backend,
