@@ -1,0 +1,134 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { afterEach, describe, expect, it } from 'vitest'
+
+import { MARK_CLOSE, MARK_OPEN, SessionSearchStore, queryTerms, type IndexedSession } from './store.js'
+import type { IndexedTurn } from './turns.js'
+
+const DAY = 86_400_000
+const NOW = Date.parse('2026-09-26T12:00:00Z')
+const stores: SessionSearchStore[] = []
+const dirs: string[] = []
+afterEach(() => {
+  for (const store of stores.splice(0)) store.close()
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
+function open(path = ':memory:'): SessionSearchStore {
+  const store = SessionSearchStore.open(path)
+  if (!store) throw new Error('node:sqlite is required for these tests')
+  stores.push(store)
+  return store
+}
+
+function session(sessionId: string, header: string, lastAt: number, agentId = `agent-${sessionId}`): IndexedSession {
+  return { sessionId, agentId, engine: 'claude', path: `/t/${sessionId}.jsonl`, header, size: 1, mtime: 1, resumeOffset: 0, resumeTurn: 0, lastAt, turns: 0 }
+}
+
+function turn(index: number, ask: string, answer = '', tools = '', at: number | null = null): IndexedTurn {
+  return { turn: index, offset: index * 100, at, ask, answer, tools }
+}
+
+const plain = (snippet: string) => snippet.replaceAll(MARK_OPEN, '[').replaceAll(MARK_CLOSE, ']')
+
+describe('queryTerms', () => {
+  it('makes each word a prefix phrase of its parts and drops what cannot mean anything alone', () => {
+    expect(queryTerms('swarm_search.dart OH-14')).toEqual(['"swarm search dart"*', '"oh 14"*'])
+    expect(queryTerms('a fix  FIX x')).toEqual(['"fix"*'])
+    expect(queryTerms('  ')).toEqual([])
+  })
+
+  it('never passes FTS5 syntax through', () => {
+    const store = open()
+    store.writeSession(session('s1', 'Dial', NOW), 0, [turn(0, 'fix the dial')])
+    for (const query of ['"dial', 'dial" OR "x', 'NEAR(dial', 'dial*', '-dial', 'dial:', '^dial', '(', '"']) {
+      expect(() => store.search(query, { now: NOW })).not.toThrow()
+    }
+    expect(store.search('NEAR(dial', { now: NOW })).toEqual([])
+    expect(store.search('dial"', { now: NOW }).map((hit) => hit.sessionId)).toEqual(['s1'])
+  })
+})
+
+describe('SessionSearchStore', () => {
+  it('finds a session by a word from any turn, as a prefix, with its own snippet', () => {
+    const store = open()
+    store.writeSession(session('dial', 'Deploy firmware', NOW - DAY), 0, [
+      turn(0, 'flash the latest firmware'),
+      turn(1, 'the dial scroll jumps two rows', 'Halved the scroll delta in ui.c.', 'Edit devices/dial/src/ui.c'),
+    ])
+    store.writeSession(session('web', 'Landing page', NOW - DAY), 0, [turn(0, 'make the hero scroll smoothly')])
+    const hits = store.search('scrol', { now: NOW })
+    expect(hits.map((hit) => hit.sessionId).sort()).toEqual(['dial', 'web'])
+    // Each hit's snippet comes from its own turn — see the CAST in search().
+    expect(hits.map((hit) => plain(hit.snippet)).sort()).toEqual([
+      'make the hero [scroll] smoothly',
+      'the dial [scroll] jumps two rows',
+    ])
+    expect(hits.find((hit) => hit.sessionId === 'dial')).toMatchObject({ turn: 1, field: 'ask', agentId: 'agent-dial', engine: 'claude' })
+  })
+
+  it('ranks a turn holding every word above a session that has them only in different turns', () => {
+    const store = open()
+    store.writeSession(session('together', 'A', NOW - 20 * DAY), 0, [turn(0, 'port the daemon to windows')])
+    store.writeSession(session('spread', 'B', NOW), 0, [turn(0, 'port scan'), turn(1, 'resize the windows')])
+    store.writeSession(session('half', 'C', NOW), 0, [turn(0, 'port only')])
+    const hits = store.search('windows port', { now: NOW })
+    expect(hits.map((hit) => [hit.sessionId, hit.together])).toEqual([['together', true], ['spread', false]])
+  })
+
+  it('matches words split between the session name and what was said in it', () => {
+    const store = open()
+    store.writeSession(session('mobile', 'Mobile app build', NOW), 0, [turn(0, 'swipe right opens Find')])
+    const [hit] = store.search('mobile swipe', { now: NOW })
+    expect(hit).toMatchObject({ sessionId: 'mobile', together: false, field: 'ask' })
+    expect(plain(hit.snippet)).toBe('[swipe] right opens Find')
+    expect(store.search('mobile', { now: NOW })[0]).toMatchObject({ field: 'name', turn: -1 })
+  })
+
+  it('reports the field that matched: the ask first, then the name, the answer, the tools', () => {
+    const store = open()
+    store.writeSession(session('s', 'Session', NOW), 0, [turn(0, 'why', 'because of keystone hashing', 'Bash rg keystone')])
+    expect(store.search('keystone', { now: NOW })[0].field).toBe('answer')
+    store.writeSession(session('t', 'Tools', NOW), 0, [turn(0, 'look', '', 'Read cli/src/lib/e2ee/core.ts')])
+    expect(store.search('core.ts', { now: NOW }).map((hit) => [hit.sessionId, hit.field])).toEqual([['t', 'tools']])
+  })
+
+  it('prefers the recent of two equally good matches, but not over a much better old one', () => {
+    const store = open()
+    store.writeSession(session('old', 'x', NOW - 60 * DAY), 0, [turn(0, 'cohort retention')])
+    store.writeSession(session('new', 'y', NOW - DAY), 0, [turn(0, 'cohort retention')])
+    expect(store.search('retention', { now: NOW }).map((hit) => hit.sessionId)).toEqual(['new', 'old'])
+    // One passing mention in a long tool log, yesterday, does not outrank a session about it.
+    store.writeSession(session('mention', 'z', NOW - DAY), 0, [turn(0, 'check the logs', '', `Bash ${'grep -n x file.txt '.repeat(60)} retention`)])
+    expect(store.search('retention', { now: NOW }).map((hit) => hit.sessionId)).toEqual(['new', 'old', 'mention'])
+  })
+
+  it('replaces turns from a point on, keeps earlier ones, and counts them', () => {
+    const store = open()
+    store.writeSession(session('s', 'S', NOW), 0, [turn(0, 'alpha'), turn(1, 'beta draft')])
+    store.writeSession({ ...session('s', 'S renamed', NOW), resumeOffset: 100, resumeTurn: 1 }, 1, [turn(1, 'beta final'), turn(2, 'gamma')])
+    expect(store.session('s')).toMatchObject({ header: 'S renamed', resumeOffset: 100, resumeTurn: 1, turns: 3 })
+    expect(store.search('draft', { now: NOW })).toEqual([])
+    expect(store.search('alpha', { now: NOW })).toHaveLength(1)
+    expect(store.search('renamed', { now: NOW })).toHaveLength(1)
+    expect(store.counts()).toEqual({ sessions: 1, turns: 3 })
+    store.removeSession('s')
+    expect(store.counts()).toEqual({ sessions: 0, turns: 0 })
+    expect(store.search('alpha', { now: NOW })).toEqual([])
+  })
+
+  it('rebuilds an index written by another schema version', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-search-'))
+    dirs.push(dir)
+    const path = join(dir, 'index.db')
+    const first = open(path)
+    first.writeSession(session('s', 'S', NOW), 0, [turn(0, 'alpha')])
+    ;(first as unknown as { db: { exec(sql: string): void } }).db.exec("UPDATE meta SET value = '0' WHERE key = 'schema'")
+    first.close()
+    stores.splice(stores.indexOf(first), 1)
+    const second = open(path)
+    expect(second.counts()).toEqual({ sessions: 0, turns: 0 })
+  })
+})

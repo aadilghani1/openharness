@@ -113,6 +113,7 @@ import { shouldReplayCommander } from './lib/commanderReplay.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from './lib/runtimeProfileController.js'
 import { parseRuntimeProfile, type RuntimeModelOption } from './lib/runtimeProfile.js'
 import { sid, preview, logFrame } from './lib/log.js'
+import type { SessionSearchResult } from './lib/sessionSearch/indexer.js'
 import {
   TerminalP2pResponderPool,
   TERMINAL_P2P_DOWN_TYPES,
@@ -618,6 +619,9 @@ export class BackendSocket {
   recentProvider: RecentProvider | null = null
   /** The person's own last questions for an agent, newest first. See the `agent_recent` case. */
   recentAsksProvider: ((agentId: string, n: number) => string[]) | null = null
+  /** Answers `session_search` from this machine's transcript index (lib/sessionSearch/). Null when
+   *  this Node has no `node:sqlite`. */
+  sessionSearchProvider: ((query: string, limit?: number) => SessionSearchResult) | null = null
   /** Runtime Model/Effort integration, wired by cli.ts for registered tmux sessions. */
   runtimeModelsProvider: ((sessionId?: string) => Promise<RuntimeModelOption[]>) | null = null
   /** Answers `usage_read` — this machine's own agent-account usage (lib/accountUsage.ts). A field
@@ -2729,6 +2733,17 @@ export class BackendSocket {
           void this.accountUsageReader()
             .then((providers) => reply(type, requestId, { providers }))
             .catch(() => reply(type, requestId, { error: 'USAGE_READ_FAILED' }))
+          return
+        }
+
+        // Every conversation on this machine, searched by what was said in it (lib/sessionSearch/).
+        // Synchronous and a few milliseconds: the index is local SQLite FTS5. The words searched for
+        // arrive sealed and the hits leave sealed — the relay reads neither.
+        case 'session_search': {
+          if (!this.sessionSearchProvider) { reply(type, requestId, { error: 'SEARCH_UNAVAILABLE' }); return }
+          const query = typeof payload.query === 'string' ? payload.query.slice(0, 500) : ''
+          const limit = typeof payload.limit === 'number' ? payload.limit : undefined
+          reply(type, requestId, { ...this.sessionSearchProvider(query, limit) })
           return
         }
 

@@ -93,6 +93,8 @@ import { restoreAgents } from './lib/restoreAgents.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
+import { SessionSearchIndex, folderWords, type SearchSource } from './lib/sessionSearch/indexer.js'
+import { SessionSearchStore } from './lib/sessionSearch/store.js'
 import { sweepWorktrees } from './lib/worktreeSweep.js'
 import { nameBranchAfterSession } from './lib/branchNaming.js'
 import { forgetAgentProject } from './lib/agentProject.js'
@@ -2783,6 +2785,39 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.recentProvider = (id, n) => mirror.recent(registry.resolve(id)?.sessionId || stoppedAgents.get(id)?.sessionId || id, n)
   backend.recentAsksProvider = (id, n) => mirror.recentAsks(registry.resolve(id)?.sessionId || stoppedAgents.get(id)?.sessionId || id, n)
 
+  // Session search: every turn of every conversation on this machine, live and stopped, indexed from
+  // its transcript and searched by `session_search` (lib/sessionSearch/). Nothing leaves the machine
+  // but the hits for a query. A Node without `node:sqlite` has no index; the RPC then says so.
+  const sessionSearch = (() => {
+    try {
+      const store = SessionSearchStore.open(join(env.ADAPTER_DATA_DIR, 'session-search.db'))
+      if (!store) {
+        console.warn('[search] node:sqlite is not available on this Node — session search is off')
+        return null
+      }
+      const index = new SessionSearchIndex({
+        store,
+        sources: () => [...registry.list(), ...stoppedAgents.list()].flatMap((s): SearchSource[] => (
+          s.sessionId && s.transcriptPath ? [{
+            agentId: s.agentId,
+            sessionId: s.sessionId,
+            engine: s.engine,
+            transcriptPath: s.transcriptPath,
+            header: [projectDisplayName(s), s.title, folderWords(s.cwd)].filter(Boolean).join(' · '),
+            updatedAt: s.updatedAt ?? 0,
+          }] : []
+        )),
+        log: (line) => console.log(line),
+      })
+      index.start()
+      return index
+    } catch (error) {
+      console.error('[search] could not open the session index:', error instanceof Error ? error.message : error)
+      return null
+    }
+  })()
+  backend.sessionSearchProvider = sessionSearch ? (query, limit) => sessionSearch.search(query, limit) : null
+
   const runtimeController = new RuntimeProfileController({
     manager: runtimeProfiles,
     getSession: (id) => registry.resolve(id),
@@ -2898,6 +2933,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         if (isSubagentSession(sessionId)) frame.subagent = true
       }
       backend.send(frame)
+      if (event.type === 'turn_started' || event.type === 'turn_ended') sessionSearch?.touch(sessionId)
       if (event.type === 'turn_started') {
         turnStartedAt.set(sessionId, Date.now())
         console.log(`[turn] ${sid(sessionId)} started · engine=${registry.bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
