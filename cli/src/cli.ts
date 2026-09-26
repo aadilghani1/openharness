@@ -87,6 +87,11 @@ import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClie
 import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
 import { PairConfigFile, pairConfigPath, ruleRunner } from './pair/rules.js'
+import { LessonSignals } from './pair/learn/signals.js'
+import { LessonDistiller } from './pair/learn/distill.js'
+import { LessonStore } from './pair/learn/store.js'
+import { PairLearner, joinProposals } from './pair/learn/propose.js'
+import { runtimeLessons } from './pair/learn/publish.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { ensureBuiltinPair } from './dsh/builtins.js'
 import { DEFAULT_AUTONOMY, isAutonomy, type Autonomy } from './pair/floor.js'
@@ -1828,6 +1833,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     onEnabledChanged: (on) => onPairToggled(on),
   })
+  // LEARNING (pair/learn, daemons/LEARNING.md): the lessons folder, and what this machine notices in its own
+  // harnesses' events while pairing is on. The learner that distills and proposes is bound with the brain.
+  const lessonStore = new LessonStore({ root: env.HARNESS_LESSONS_DIR, now: Date.now })
+  let pairLearner: PairLearner | null = null
+  const lessonSignals = new LessonSignals({
+    now: Date.now,
+    machine: () => terminalHintMachineName(),
+    file: join(env.ADAPTER_DATA_DIR, 'pair', 'learn', 'signals.json'),
+    home: homedir(),
+    onSignal: (signal) => pairLearner?.signal(signal),
+  })
+  /** The approved lesson skills a harness session in `workspace` loads (the Store runtime path). Never throws. */
+  const lessonsFor = (workspace: string) => {
+    try { return runtimeLessons(lessonStore, workspace) } catch { return null }
+  }
   const syncSession = (s: RegisteredSession, opts: { device?: boolean } = {}): void => {
     // A terminal is not the dial's business (see `deviceAgentRow`): it is never upserted there, and
     // the one time it must be REMOVED from there — the engine it adopted has exited — the caller
@@ -3034,6 +3054,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // (mirror sets summarizing=true in the mirror.ingest below). The timer keeps fanning "Summarizing…"
         // to the device and self-cancels once mirror.heartbeat() reports idle (summary done).
       }
+    }
+    // Learning notices only what the sensor would: pairing on, never a sub-agent, a terminal or the pair itself.
+    const learnFrom = registry.bySession(sessionId)
+    if (learnFrom && pairSensor.enabled() && !isTerminalEngine(learnFrom.engine) && !isSubagentSession(sessionId) && !isPairHarnessSession(sessionId)) {
+      lessonSignals.ingest({ agentId: learnFrom.agentId, sessionId, engine: learnFrom.engine, cwd: learnFrom.cwd ?? null }, events,
+        { replay: !!(opts?.resumed || opts?.replay) })
     }
     mirror.ingest(events, sessionId)
     // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
@@ -4242,6 +4268,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       .then((result) => result.ok ? { ok: true as const } : { ok: false as const, error: result.error, detail: result.detail }),
     message: (agentId, text, deliveryId) => {
       if (!backend.onMessage) throw new Error('message handler not wired')
+      // The daemon's own words are never the person correcting an agent (pair/learn/signals.ts).
+      lessonSignals.daemonSent(agentId, text)
       backend.onMessage(agentId, text, deliveryId)
     },
     cancel: (agentId) => backend.onCancel?.(agentId),
@@ -4302,6 +4330,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     started: new StartedHarnesses(join(env.ADAPTER_DATA_DIR, 'pair', 'started.json')),
     talk: (text) => pairTalk(text),
     changed: () => pairBrain?.stateChanged(),
+    lessons: async (payload) => pairLearner ? pairLearner.local(payload) : { ok: false, error: 'UNSUPPORTED' },
     now: Date.now,
     newId: () => randomUUID(),
   })
@@ -4354,13 +4383,37 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   pairTalk = (text) => pairHarness.talk(text)
   pairHarnessActivity = (agentId) => pairHarness.activity(agentId)
+  // THE LEARNER (pair/learn/propose.ts): distills what this machine noticed while nothing is working — a model
+  // only with pair.jsonc "model": true — and, when you are at this computer, proposes one lesson at a time.
+  pairLearner = new PairLearner({
+    store: lessonStore,
+    distiller: new LessonDistiller({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairConfig.get().model, now: Date.now, home: homedir() }),
+    pairedDaemon: () => pairSensor.pairedDaemon(),
+    autonomy: () => pairAutonomy(),
+    voice: pairVoice,
+    sendLocal: (frame) => backend.sendLocal(frame),
+    present: () => !!pairBrain?.isActive && pairBrain.present(),
+    focused: (agentId) => pairBrain?.isFocused(backend.machineId, agentId) ?? false,
+    busy: () => pairSensor.snapshot().harnesses.some((h) => h.working),
+    projects: () => [...new Set([...registry.advertised(), ...stoppedAgents.available(registry.advertised())].map((s) => s.cwd).filter((cwd): cwd is string => !!cwd))],
+    learned: ({ daemon, lesson }) => { pairSensor.learned({ daemon, name: lesson.name, agentId: lesson.from[0]?.agentId, engine: lesson.from[0]?.engine }) },
+    // TODO(zoo): grant bond xp to `daemon` for an approved lesson once the backend has an op for it (the
+    // `learned` journal entry above is the record it can count from). Nothing is sent today.
+    credit: () => {},
+    machineId: () => backend.machineId,
+    changed: () => pairBrain?.stateChanged(),
+    home: homedir(),
+    now: Date.now,
+    log: (line) => console.log(line),
+  })
+  setInterval(() => { void pairLearner?.tick().catch((err) => console.warn(`[learn] tick failed: ${err instanceof Error ? err.message : err}`)) }, 60_000).unref()
   pairBrain = new PairBrain({
     pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
     fleet: pairFleet,
     // A model's words only when the person opted in (pair.jsonc "model": true).
     triage: new PairTriage({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), modelEnabled: () => pairConfig.get().model, now: Date.now }),
     voice: pairVoice,
-    proposals: pairControl,
+    proposals: joinProposals(pairControl, pairLearner),
     autonomy: () => pairAutonomy(),
     sendLocal: (frame) => backend.sendLocal(frame),
     sendLocalTo: (connId, frame) => backend.sendLocalTo(connId, frame),
@@ -4810,7 +4863,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         console.warn(`[dsh] ${id} is not installed on this machine · cannot restore its harness context`)
         return null
       }
-      return prepareHarnessLaunch(installed, workspace, engine, runtimeKey, { privateGrid: backend.gridName() })
+      return prepareHarnessLaunch(installed, workspace, engine, runtimeKey, { privateGrid: backend.gridName() }, null, lessonsFor(workspace))
     },
   }
   // Whatever the source (the row itself, or a grid override the desktop just sent), the agent's DSH,
@@ -5307,7 +5360,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
-      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label, dshAccount))
+      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label, dshAccount, null, lessonsFor(cwd)))
       if (!prepared.ok) return prepared
       dshEnv = prepared.launch.env
       dshArgs = prepared.launch.args
@@ -5470,7 +5523,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const cwd = source.cwd
       const sourceKey = forkRuntimeKey({ cwd, agentId: source.agentId, dshRuntime: source.dshRuntime })
       const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label,
-        { privateGrid: backend.gridName() }, sourceKey))
+        { privateGrid: backend.gridName() }, sourceKey, lessonsFor(cwd)))
       if (!prepared.ok) return prepared
       dshEnv = prepared.launch.env
       dshArgs = prepared.launch.args
@@ -7471,7 +7524,14 @@ switch (cmd) {
         .then(() => { process.exitCode = 0 }).catch(onError)
       break
     }
-    pairControlCommand(rest, { ...pairClient, output: (line) => process.stdout.write(`${line}\n`), error: (line) => console.error(line) })
+    // `lessons approve` asks the person at this terminal; with no terminal (an agent's shell tool) it refuses.
+    const confirm = process.stdin.isTTY && process.stderr.isTTY
+      ? (question: string) => new Promise<boolean>((resolve) => {
+        const rl = createInterface({ input: process.stdin, output: process.stderr })
+        rl.question(question, (answer) => { rl.close(); resolve(/^y(es)?$/i.test(answer.trim())) })
+      })
+      : null
+    pairControlCommand(rest, { ...pairClient, confirm, output: (line) => process.stdout.write(`${line}\n`), error: (line) => console.error(line) })
       .then((code) => { process.exitCode = code }).catch(onError)
     break
   }
