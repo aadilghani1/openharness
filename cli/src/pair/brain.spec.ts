@@ -16,6 +16,7 @@ import { PairFleet, relayPairLinkOpener, type PairLinkOpener } from './fleet.js'
 import { PairTriage, actionsFor, parseTriage, type PairOneShot } from './triage.js'
 import { PairVoice, DISPLAY_MS, UNSOLICITED_GAP_MS, doneLine, failLine, fillLine, needLine } from './voice.js'
 import { PairBrain, type AnswerResult } from './brain.js'
+import { ARM_MS, ShownLines } from './shown.js'
 import type { DaemonSay, PairEvent, PairQuestion } from './protocol.js'
 import type { Autonomy } from './floor.js'
 import { BackendSocket } from '../backendSocket.js'
@@ -82,19 +83,25 @@ function world(opts: { oneshot?: PairOneShot | null; answer?: (i: { agentId: str
   const oneshot = opts.oneshot === undefined ? null : opts.oneshot
   const answer = vi.fn(opts.answer ?? (async () => ({ ok: true })))
   const triage = new PairTriage({ oneshot, modelEnabled: () => opts.model === true, now: Date.now })
-  const voice = new PairVoice({ sendLocal: (f) => frames.push(f), now: Date.now })
+  // Every keyed frame is recorded against the windows it reaches, as cli.ts does (pair/shown.ts).
+  const shown = new ShownLines(Date.now)
+  const sendLocal = shown.sender((f) => frames.push(f), () => brain?.clientIds() ?? [])
+  const voice = new PairVoice({ sendLocal, now: Date.now })
   brain = new PairBrain({
     pairing: { enabled: () => local.enabled(), pairedDaemon: () => local.pairedDaemon() },
-    fleet, triage, voice,
-    sendLocal: (f) => frames.push(f),
-    sendLocalTo: (connId, frame) => { toClient.push({ connId, frame }); return true },
+    fleet, triage, voice, shown,
+    sendLocal,
+    sendLocalTo: shown.senderTo((connId, frame) => { toClient.push({ connId, frame }); return true }),
     answer, autonomy: () => opts.autonomy ?? 'suggest', now: Date.now,
   })
   const says = () => frames.filter((f) => f.type === 'daemon_say').map((f) => f.payload as DaemonSay)
   const unsays = () => frames.filter((f) => f.type === 'daemon_unsay').map((f) => f.payload as Frame)
-  const act = async (payload: Frame): Promise<Frame> => {
+  /** A key from a window: it draws the line first (daemon_shown), and presses a moment later. */
+  const act = async (payload: Frame, opts: { conn?: string; shown?: boolean } = {}): Promise<Frame> => {
+    const conn = opts.conn ?? 'local:window'
+    if (opts.shown !== false) { brain!.onShown(conn, { id: payload.id }); await vi.advanceTimersByTimeAsync(ARM_MS) }
     const replies: Frame[] = []
-    await brain!.onAct(payload, (f) => replies.push(f))
+    await brain!.onKey(conn, payload, (f) => replies.push(f))
     return replies[0].payload as Frame
   }
   return { local, remote, brain, fleet, frames, toClient, says, unsays, act, answer, triage }
@@ -253,6 +260,41 @@ describe('the brain', () => {
     await settle(DISPLAY_MS + 200)
     expect((state().needs as Frame[])[0]).not.toHaveProperty('actions')
     expect(await w.act({ requestId: 'r1', id: w.says()[0].id, choice: 'y' })).toMatchObject({ ok: false, error: 'GONE' })
+  })
+
+  it('a key counts only from the window that was shown the line, a moment after it was shown', async () => {
+    const w = world()
+    w.brain.clientAttached('local:window')
+    await settle()
+    w.remote.reply({ ok: true })
+    w.remote.sensor.question('api', 'q_1', ask('Approve Bash command: npm test'), permit('npm test'))
+    await settle(200)
+    const id = w.says()[0].id
+    // Never acknowledged as displayed: a script replaying the id has nothing to show for it.
+    expect(await w.act({ requestId: 'r1', id, choice: 'y' }, { shown: false })).toMatchObject({ ok: false, error: 'NOT_SHOWN' })
+    // Another connection cannot borrow this window's acknowledgement.
+    w.brain.onShown('local:window', { id })
+    w.brain.clientAttached('local:script')
+    await settle(ARM_MS)
+    expect(await w.act({ requestId: 'r2', id, choice: 'y' }, { conn: 'local:script', shown: false })).toMatchObject({ ok: false, error: 'NOT_SHOWN' })
+    w.brain.clientDetached('local:window')
+    w.brain.clientAttached('local:window')
+    // A connection that is not an attached window (a tool, a relayed socket) is refused outright.
+    expect(await w.act({ requestId: 'r3', id, choice: 'y' }, { conn: 'local:tool' })).toMatchObject({ ok: false, error: 'UI_ONLY' })
+    // Shown and keyed in the same breath: too soon.
+    w.brain.onShown('local:window', { id })
+    const replies: Frame[] = []
+    await w.brain.onKey('local:window', { requestId: 'r4', id, choice: 'y' }, (f) => replies.push(f))
+    expect(replies[0].payload).toMatchObject({ ok: false, error: 'TOO_SOON' })
+    expect(w.remote.answers).toEqual([])
+    // A moment later, it counts.
+    await settle(ARM_MS)
+    replies.length = 0
+    await w.brain.onKey('local:window', { requestId: 'r5', id, choice: 'y' }, (f) => replies.push(f))
+    expect(replies[0].payload).toMatchObject({ ok: true, machineId: 'machine-b' })
+    // A window that went away takes its acknowledgements with it.
+    w.brain.clientDetached('local:window')
+    expect(await w.act({ requestId: 'r6', id, choice: 'n' }, { shown: false })).toMatchObject({ ok: false, error: 'UI_ONLY' })
   })
 
   it('replaces the template in place when an opted-in model answers in time — never waits for it', async () => {

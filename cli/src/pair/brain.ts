@@ -27,6 +27,7 @@ import { autoLine, backLine, DISPLAY_MS, failLine, keysPrefix, type PairVoice } 
 import { composeBrief } from './brief.js'
 import { str, type DaemonAction, type PairJournalEntry } from './protocol.js'
 import type { Autonomy } from './floor.js'
+import type { ShownLines } from './shown.js'
 
 /** An absence this long is a return worth a brief (daemons/README.md: `back` after 15 minutes). */
 export const BRIEF_AWAY_MS = 15 * 60_000
@@ -68,6 +69,11 @@ export interface PairBrainDeps {
   onGuestAutonomy?: (autonomy: string | null) => void
   /** The brain started or stopped thinking (cli.ts keeps the router's worker warm while it does). */
   onActiveChanged?: (active: boolean) => void
+  /**
+   * Which window was shown which line (pair/shown.ts). A key counts only from a window that received the
+   * line and acknowledged it as displayed, ARM_MS before the key (`onKey`).
+   */
+  shown?: ShownLines
   now: () => number
 }
 
@@ -107,6 +113,9 @@ export class PairBrain {
 
   get isActive(): boolean { return this.active }
 
+  /** The windows (and `hn`) attached right now: whom a local frame reaches. */
+  clientIds(): string[] { return [...this.clients] }
+
   private autonomy(): Autonomy { return this.deps.autonomy?.() ?? 'suggest' }
 
   // ── who is here ───────────────────────────────────────────────────────────────────────────────────
@@ -127,14 +136,18 @@ export class PairBrain {
   clientDetached(connId: string): void {
     this.clients.delete(connId)
     this.presence.delete(connId)
+    this.deps.shown?.detach(connId)
     if (this.clients.size === 0 && !this.departed.has(LOCAL_DESK)) this.departed.set(LOCAL_DESK, this.deps.now())
     this.refresh()
   }
 
-  /** `daemon_presence { active, awayMs, pair?, desk?, focusAgentId?, focusMachineId?, doneSeen? }` from a window or `hn`. */
-  onPresence(connId: string, payload: Record<string, unknown>): void {
-    if ('pair' in payload) this.deps.onGuestPair?.(typeof payload.pair === 'string' ? payload.pair : null)
-    if ('autonomy' in payload) this.deps.onGuestAutonomy?.(typeof payload.autonomy === 'string' ? payload.autonomy : null)
+  /**
+   * `daemon_presence { active, awayMs, pair?, desk?, focusAgentId?, focusMachineId?, doneSeen? }` from a window
+   * or `hn`. A guest's `pair` and `autonomy` count only from a window bound to this machine (`meta.ui`).
+   */
+  onPresence(connId: string, payload: Record<string, unknown>, meta: { ui: boolean } = { ui: true }): void {
+    if (meta.ui && 'pair' in payload) this.deps.onGuestPair?.(typeof payload.pair === 'string' ? payload.pair : null)
+    if (meta.ui && 'autonomy' in payload) this.deps.onGuestAutonomy?.(typeof payload.autonomy === 'string' ? payload.autonomy : null)
     const prior = this.presence.get(connId)
     // What the person is looking at: never spoken about. `null` clears it; absent keeps what was said.
     let focus = prior?.focus ?? null
@@ -224,7 +237,7 @@ export class PairBrain {
       const id = `brief:${item.machineId}:${question.requestId}:${now}`
       this.deps.voice.hold({ id, mood: 'need', line: item.line, actions, ttlMs: BRIEF_KEYS_MS,
         about: { machineId: item.machineId, agentId: item.agentId, requestId: question.requestId } })
-      return { ...item, id, actions, line: `${keysPrefix(actions)}${item.line}` }
+      return { ...item, id, actions, line: `${keysPrefix(actions)}${item.line}`, ...(question.dialog !== undefined ? { detail: question.dialog } : {}) }
     })
     this.deps.sendLocal({ type: 'daemon_brief', payload: { desk, line, items: written } })
   }
@@ -326,6 +339,9 @@ export class PairBrain {
     const said = this.deps.voice.say({
       id, mood: 'need', line: template.line, actions: template.actions, ttlMs: DISPLAY_MS,
       about: { machineId: change.machineId, agentId: harness.agentId, requestId: question.requestId },
+      // What [y] would approve, in full: the window shows it before it acknowledges the line.
+      ...(question.dialog !== undefined ? { detail: question.dialog } : {}),
+      harness: { machineId: change.machineId, machine: change.machine, agentId: harness.agentId, name: harness.name },
     })
     if (!said) return
     this.needSays.set(key, { id })
@@ -386,12 +402,34 @@ export class PairBrain {
 
   // ── one key ───────────────────────────────────────────────────────────────────────────────────────
 
+  /** `daemon_shown { id }`: this window has drawn that line (its keys, and its detail in full). */
+  onShown(connId: string, payload: Record<string, unknown>): void {
+    const id = str(payload.id, 200)
+    if (id && this.clients.has(connId)) this.deps.shown?.shown(connId, id)
+  }
+
+  /**
+   * A key from a window (`daemon_act` over the daemon's socket): it counts only from a window attached here
+   * (never a tool), that received this line and acknowledged it as displayed at least ARM_MS ago. Then
+   * `onAct`, which checks the line is still live and the question on it is still the one on screen.
+   */
+  async onKey(connId: string, payload: Record<string, unknown>, send: (frame: Record<string, unknown>) => void): Promise<void> {
+    const requestId = str(payload.requestId, 120)
+    const id = str(payload.id, 200)
+    const refuse = (error: string, detail: string): void => { send({ type: 'daemon_act_result', payload: { requestId, id, ok: false, error, detail } }) }
+    if (!this.clients.has(connId)) { refuse('UI_ONLY', 'A key counts only from a window attached to this daemon.'); return }
+    const shown = this.deps.shown ? this.deps.shown.check(connId, id) : 'NOT_SHOWN'
+    if (shown === 'NOT_SHOWN') { refuse('NOT_SHOWN', 'That line was never shown on this window (daemon_shown).'); return }
+    if (shown === 'TOO_SOON') { refuse('TOO_SOON', 'A key counts a moment after its line is shown.'); return }
+    await this.onAct(payload, send, { connId })
+  }
+
   /**
    * `daemon_act { requestId, id, choice }`: the person pressed a key on a line. Answered on the machine
    * that owns the harness, and only while the line is showing and the question on it is STILL the one the
    * line was about — a key pressed a moment late must not land on the next dialog. Always replies.
    */
-  async onAct(payload: Record<string, unknown>, send: (frame: Record<string, unknown>) => void): Promise<void> {
+  async onAct(payload: Record<string, unknown>, send: (frame: Record<string, unknown>) => void, _origin: { connId: string } | null = null): Promise<void> {
     const requestId = str(payload.requestId, 120)
     const id = str(payload.id, 200)
     const choice = str(payload.choice, 200)
@@ -468,6 +506,8 @@ export class PairBrain {
         return {
           machineId: h.machineId, machine: h.machine, agentId: h.harness.agentId, name: h.harness.name, engine: h.harness.engine,
           requestId: q.requestId, question: q.text, options: q.options, deny: q.deny, allow: q.allow, since: q.since,
+          // The whole dialog: what a [y] on its line would approve, for the window to show in full.
+          ...(q.dialog !== undefined ? { detail: q.dialog } : {}),
           ...(live ? { id: live.id, line: live.line, actions: live.actions } : {}),
         }
       })

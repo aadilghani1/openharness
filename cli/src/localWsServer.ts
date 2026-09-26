@@ -102,16 +102,29 @@ export interface LocalWsServerOptions {
    */
   onVoiceRouteReply?: (voiceId: string, reply: WindowVoiceReply) => void
   /**
-   * The pair brain's keys and presence (pair/brain.ts): `daemon_act` (a key pressed on a daemon's line)
-   * and `daemon_presence` (the person is here, or was away). Consumed like `app_focus` — whichever
-   * machine this socket is bound to, they are about this desk and never travel on. Absent (no brain),
-   * `daemon_act` answers UNSUPPORTED and presence is dropped.
+   * The pair brain's frames from a window (pair/brain.ts, daemons/BRAIN.md "Security"): `daemon_act` (a key
+   * pressed on a daemon's line), `daemon_shown` (the window drew a line), `daemon_confirm` (the person said
+   * yes to a setting), `daemon_talk` (words to the pair harness) and `daemon_presence` (here, or away).
+   * Consumed like `app_focus` and never travel on. They are taken ONLY over the daemon's own Unix socket —
+   * never TCP (LOCAL_SOCKET_REQUIRED) — and all but presence only from a UI connection: a window bound to
+   * this machine, not a tool (`harness pair`, the MCP server) and not a relayed machine (UI_ONLY). Absent
+   * (no brain), a request answers UNSUPPORTED and the rest is dropped.
    */
   onDaemonAct?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
-  onDaemonPresence?: (connId: string, payload: Record<string, unknown>) => void
+  /** `meta.ui`: a window bound to this machine (else a relayed machine's socket: its desk facts only). */
+  onDaemonPresence?: (connId: string, payload: Record<string, unknown>, meta: { ui: boolean }) => void
   /** `daemon_talk { requestId, text }`: the person's words to their daemon (the pair harness) → `daemon_talk_result`. */
   onDaemonTalk?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
+  /** `daemon_shown { id }`: this window has displayed that line, detail and all. */
+  onDaemonShown?: (connId: string, payload: Record<string, unknown>) => void
+  /** `daemon_confirm { requestId, kind, nonce, accept }` → `daemon_confirm_result`. */
+  onDaemonConfirm?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
 }
+
+/** The pair brain's frames from a window. */
+const DAEMON_IN = new Set(['daemon_act', 'daemon_presence', 'daemon_talk', 'daemon_shown', 'daemon_confirm'])
+/** The reply each request among them gets. */
+const DAEMON_RESULT: Record<string, string> = { daemon_act: 'daemon_act_result', daemon_talk: 'daemon_talk_result', daemon_confirm: 'daemon_confirm_result' }
 
 /** One candidate, as the window draws it in the picker. */
 export interface RouteCandidate {
@@ -275,8 +288,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   const servers = [server, ...(options.localSocketServer ? [options.localSocketServer] : [])]
   for (const each of servers) each.on('upgrade', onUpgrade)
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req: http.IncomingMessage) => {
     const connId = `local:${randomUUID()}`
+    // Over the daemon's own Unix socket (0600, in a 0700 folder): this user's process, not any user's.
+    const trusted = isTrustedLocal(req)
+    /** Introduced itself as a tool (`machine_select { tool: true }`): `harness pair`, the MCP server. */
+    let tool = false
     let selected = false
     // Which machine THIS connection is bound to. The app opens one local socket per machine, so it is
     // fixed for the life of the connection — set once, beside `selected`.
@@ -329,7 +346,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             return
           }
           if (requestedMachineId === options.machineId) {
-            if (!options.backend.registerLocalClient(connId, sink, payload.tool === true ? { tool: true } : {})) {
+            tool = payload.tool === true
+            if (!options.backend.registerLocalClient(connId, sink, tool ? { tool: true } : {})) {
               close(1011, 'local registration failed')
               return
             }
@@ -530,20 +548,37 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             return
           }
         }
-        // THE PAIR BRAIN'S FRAMES. Loopback only, in both directions: never forwarded to a relayed machine,
+        // THE PAIR BRAIN'S FRAMES. Local only, in both directions: never forwarded to a relayed machine,
         // never dispatched into the backend socket (whose `send()` uploads). Not awaited on this chain — an
         // answer relayed to another machine takes seconds, and this chain carries the terminal's keystrokes.
-        if (!isBinary && (parsed?.type === 'daemon_act' || parsed?.type === 'daemon_presence' || parsed?.type === 'daemon_talk')) {
+        //
+        // A key here can answer a harness, so the transport is part of the check (daemons/BRAIN.md,
+        // "Security"): only the Unix socket, whose file mode keeps other users out — never the TCP port any
+        // user's process can reach — and, for everything but presence, only a window bound to this machine.
+        if (!isBinary && parsed && typeof parsed.type === 'string' && DAEMON_IN.has(parsed.type)) {
+          const type: string = parsed.type
           const payload = (parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
             ? parsed.payload : {}) as Record<string, unknown>
-          if (parsed.type === 'daemon_presence') { options.onDaemonPresence?.(connId, payload); return }
-          if (parsed.type === 'daemon_talk') {
-            if (options.onDaemonTalk) { options.onDaemonTalk(connId, payload, (frame) => sink.sendFrame(frame)); return }
-            sink.sendFrame({ type: 'daemon_talk_result', payload: { requestId: payload.requestId, ok: false, error: 'UNSUPPORTED' } })
-            return
+          const answer = (fields: Record<string, unknown>): void => {
+            const resultType = DAEMON_RESULT[type]
+            if (!resultType) return   // presence and shown are one-way: dropped, never answered
+            sink.sendFrame({ type: resultType, payload: {
+              requestId: payload.requestId,
+              ...(type === 'daemon_act' ? { id: payload.id } : {}),
+              ...(type === 'daemon_confirm' ? { kind: payload.kind, nonce: payload.nonce } : {}),
+              ...fields,
+            } })
           }
-          if (options.onDaemonAct) { options.onDaemonAct(connId, payload, (frame) => sink.sendFrame(frame)); return }
-          sink.sendFrame({ type: 'daemon_act_result', payload: { requestId: payload.requestId, id: payload.id, ok: false, error: 'UNSUPPORTED' } })
+          if (!trusted) { answer({ ok: false, error: 'LOCAL_SOCKET_REQUIRED', detail: 'The daemon takes these only over its own socket, never TCP.' }); return }
+          if (tool) { answer({ ok: false, error: 'UI_ONLY', detail: 'A tool is not a window: keys, talk and confirmations come from a window.' }); return }
+          const ui = !relay && boundMachineId === options.machineId
+          if (type === 'daemon_presence') { options.onDaemonPresence?.(connId, payload, { ui }); return }
+          if (!ui) { answer({ ok: false, error: 'UI_ONLY', detail: 'Keys, talk and confirmations come from a window on this machine\'s own socket.' }); return }
+          const reply = (frame: Frame): boolean => sink.sendFrame(frame)
+          if (type === 'daemon_shown') { options.onDaemonShown?.(connId, payload); return }
+          const handler = type === 'daemon_act' ? options.onDaemonAct : type === 'daemon_talk' ? options.onDaemonTalk : options.onDaemonConfirm
+          if (handler) { handler(connId, payload, reply); return }
+          answer({ ok: false, error: 'UNSUPPORTED' })
           return
         }
         if (!isBinary && boundMachineId && ws.readyState === WebSocket.OPEN) {

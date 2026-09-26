@@ -91,6 +91,7 @@ import { LessonSignals } from './pair/learn/signals.js'
 import { LessonDistiller } from './pair/learn/distill.js'
 import { LessonStore } from './pair/learn/store.js'
 import { PairLearner, joinProposals } from './pair/learn/propose.js'
+import { ShownLines } from './pair/shown.js'
 import { runtimeLessons } from './pair/learn/publish.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { ensureBuiltinPair } from './dsh/builtins.js'
@@ -4317,7 +4318,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     log: (line) => console.log(line),
   })
   pairRules = (agentId, requestId) => { void runRules(agentId, requestId).catch(() => {}) }
-  const pairVoice = new PairVoice({ sendLocal: (frame) => backend.sendLocal(frame), now: Date.now })
+  // Which window was shown which line (pair/shown.ts): every pair frame that carries a keyed id goes out
+  // through these, so a key counts only from a window that received its line and said it drew it.
+  const pairShown = new ShownLines(Date.now)
+  const pairSendLocal = pairShown.sender((frame) => backend.sendLocal(frame), () => backend.localClientIds())
+  const pairSendLocalTo = pairShown.senderTo((connId, frame) => backend.sendLocalTo(connId, frame))
+  const pairVoice = new PairVoice({ sendLocal: pairSendLocal, now: Date.now })
   // THE CONTROL INTERFACE (pair/control.ts): the pair harness's tools, behind the loopback `pair` request —
   // `harness pair <verb>` and the harnessd MCP server. Writes need the pair harness's token and pass the
   // autonomy dial; then this machine's PairOwner, or another machine's over the fleet's sealed link.
@@ -4399,7 +4405,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     pairedDaemon: () => pairSensor.pairedDaemon(),
     autonomy: () => pairAutonomy(),
     voice: pairVoice,
-    sendLocal: (frame) => backend.sendLocal(frame),
+    sendLocal: pairSendLocal,
     present: () => !!pairBrain?.isActive && pairBrain.present(),
     focused: (agentId) => pairBrain?.isFocused(backend.machineId, agentId) ?? false,
     busy: () => pairSensor.snapshot().harnesses.some((h) => h.working),
@@ -4423,8 +4429,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     voice: pairVoice,
     proposals: joinProposals(pairControl, pairLearner),
     autonomy: () => pairAutonomy(),
-    sendLocal: (frame) => backend.sendLocal(frame),
-    sendLocalTo: (connId, frame) => backend.sendLocalTo(connId, frame),
+    sendLocal: pairSendLocal,
+    sendLocalTo: pairSendLocalTo,
+    shown: pairShown,
     // A key pressed on a line about THIS machine's harness: the owner's floor, then the dialog's own
     // requestId, checked as the keys go in (STALE_QUESTION, nothing typed, when it changed).
     answer: (input) => pairOwner.answer(input, 'key'),
@@ -4668,7 +4675,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return sent
     },
     onVoiceRouteReply: (voiceId, reply) => windowRouter.reply(voiceId, reply),
-    onDaemonAct: (_connId, payload, reply) => { void pairBrain?.onAct(payload, (frame) => { reply(frame) }) },
+    // A key from a window: it counts only if this window was shown the line (pair/shown.ts, BRAIN.md Security).
+    onDaemonAct: (connId, payload, reply) => {
+      if (!pairBrain) { reply({ type: 'daemon_act_result', payload: { requestId: payload.requestId, id: payload.id, ok: false, error: 'UNSUPPORTED' } }); return }
+      void pairBrain.onKey(connId, payload, (frame) => { reply(frame) })
+    },
+    onDaemonShown: (connId, payload) => pairBrain?.onShown(connId, payload),
     // The person talking to their daemon: forwarded to the pair harness, which starts or wakes for it.
     onDaemonTalk: (_connId, payload, reply) => {
       const requestId = typeof payload.requestId === 'string' ? payload.requestId.slice(0, 120) : ''
@@ -4677,7 +4689,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         .catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
         .then((result) => { reply({ type: 'daemon_talk_result', payload: { requestId, ...result } }) })
     },
-    onDaemonPresence: (connId, payload) => { zooPresence.presence(connId, payload); pairBrain?.onPresence(connId, payload) },
+    onDaemonPresence: (connId, payload, meta) => { zooPresence.presence(connId, payload); pairBrain?.onPresence(connId, payload, meta) },
     machineId: backend.machineId,
     backend,
     relayPool,
