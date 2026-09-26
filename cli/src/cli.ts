@@ -76,7 +76,12 @@ import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOve
 import { isTerminalEngine, type AgentEngine } from './engines/types.js'
 import { PairJournal } from './pair/journal.js'
 import { PairSensor } from './pair/sensor.js'
-import { PAIR_HARNESS_DSH, isPairDaemonId } from './pair/protocol.js'
+import { PairBrain } from './pair/brain.js'
+import { PairFleet, relayPairLinkOpener } from './pair/fleet.js'
+import { PairTriage } from './pair/triage.js'
+import { PairVoice, isRosterDaemon } from './pair/voice.js'
+import { randomUUID } from 'node:crypto'
+import { PAIR_HARNESS_DSH } from './pair/protocol.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './lib/engineLaunch.js'
 import { workspaceMissing } from './lib/workspaceCheck.js'
@@ -179,7 +184,7 @@ import {
   syncSummaryPoolSessions,
 } from './lib/summarize.js'
 import type { CableAgent } from './cable/cableSession.js'
-import { routeVoiceTask, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
+import { routeVoiceTask, runPairOneShot, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
 import { E2eeStore } from './lib/e2ee/store.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
@@ -1780,6 +1785,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // exists. `onPairToggled` is bound the same way, to things declared further down.
   let onPairToggled: (on: boolean) => void = () => {}
   let refreshPairFromZoo: () => void = () => {}
+  /** The thinking half (pair/brain.ts), built once the relay pool exists. */
+  let pairBrain: PairBrain | null = null
   const pairSensor = new PairSensor({
     machineId: () => backendRef?.machineId ?? session?.machineId ?? computerId(),
     journal: new PairJournal({ dir: join(env.ADAPTER_DATA_DIR, 'pair') }),
@@ -3598,7 +3605,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     void proxyBackend('GET', '/api/zoo').then((result) => {
       if (result.status === 200) {
         const pair = (result.body.data as { zoo?: { pair?: unknown } } | undefined)?.zoo?.pair
-        zooPair = { known: true, pair: typeof pair === 'string' && isPairDaemonId(pair) ? pair : null }
+        zooPair = { known: true, pair: isRosterDaemon(pair) ? pair : null }
       } else if (result.status === 401) {
         zooPair = { known: false, pair: null }
       }
@@ -3609,7 +3616,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.pairService = pairSensor
   // An open question the watcher already announced before pairing came on is announced again, so the
   // sensor hears it too (clients dedupe a repeated push by requestId).
-  onPairToggled = (on) => { if (on) questionWatcher.reset() }
+  onPairToggled = (on) => { if (on) questionWatcher.reset(); pairBrain?.refresh() }
   refreshPairFromZoo()
 
   // Built HERE rather than beside the cable stack that also uses it (further down), because the hook
@@ -4135,12 +4142,54 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // already has).
   const relayIdentityStore = new E2eeStore()
   relayIdentityStore.init()
+  const relayPeers = new MachinePeerStore()
   const relayPool = new RemoteRelayPool(
     auth,
     env.BACKEND_WS_URL.replace(/\/$/, ''),
     relayIdentityStore.getIdentity(),
-    new MachinePeerStore(),
+    relayPeers,
   )
+  // THE PAIR BRAIN (pair/brain.ts, daemons/BRAIN.md): thinks only while a window or `hn` is attached to
+  // THIS daemon — the computer you are at. Other linked machines are read over background relay sessions
+  // (never the window's own) with sealed `pair_*`. Everything it says goes out through sendLocal.
+  const pairFleet = new PairFleet({
+    local: {
+      machineId: () => backend.machineId,
+      name: () => terminalHintMachineName(),
+      snapshot: () => pairSensor.snapshot(),
+      subscribe: (listener) => pairSensor.subscribe(listener),
+      journal: (payload) => pairSensor.journal(payload),
+    },
+    machines: () => machineListCache.list().machines
+      .filter((m) => !m.local)
+      .map((m) => ({ machineId: m.machineId, name: m.name, linked: relayPeers.get(m.machineId) !== null })),
+    open: relayPairLinkOpener({
+      acquire: (machineId, sink, onClosed) => relayPool.acquireIsolated(machineId, readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV,
+        { type: 'machine_select', payload: { machineId } }, sink, onClosed),
+      newId: () => randomUUID(),
+    }),
+    onChange: (change) => pairBrain?.onFleetChange(change),
+  })
+  pairBrain = new PairBrain({
+    pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
+    fleet: pairFleet,
+    triage: new PairTriage({ oneshot: (prompt, opts) => runPairOneShot(prompt, opts, registry.active()), now: Date.now }),
+    voice: new PairVoice({ sendLocal: (frame) => backend.sendLocal(frame), now: Date.now }),
+    sendLocal: (frame) => backend.sendLocal(frame),
+    sendLocalTo: (connId, frame) => backend.sendLocalTo(connId, frame),
+    // A key is REFUSED, not typed, until the stale-answer guard lands (BRAIN.md "Risks": a late answer
+    // landing on the next dialog). The brain has already checked that the question is still the one
+    // the person saw; this is where `answer({ expectRequestId })` plugs in.
+    answer: async () => ({ ok: false, error: 'UNSUPPORTED', detail: 'Answering from a daemon key waits on the stale-answer guard.' }),
+    onGuestPair: (daemonId) => { guestPair = isRosterDaemon(daemonId) ? daemonId : null; applyPair() },
+    onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
+    now: Date.now,
+  })
+  backend.onLocalClient = (connId, attached) => {
+    if (attached) pairBrain?.clientAttached(connId)
+    else pairBrain?.clientDetached(connId)
+  }
+  for (const connId of backend.localClientIds()) pairBrain.clientAttached(connId)
   // Spoken tasks go to the WINDOW to be routed, not to the copy of the router in this process.
   //
   // Built here because both ends need it: the local socket hands it the window's replies, and the cable
@@ -4371,6 +4420,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return sent
     },
     onVoiceRouteReply: (voiceId, reply) => windowRouter.reply(voiceId, reply),
+    onDaemonAct: (_connId, payload, reply) => { void pairBrain?.onAct(payload, (frame) => { reply(frame) }) },
+    onDaemonPresence: (connId, payload) => pairBrain?.onPresence(connId, payload),
     machineId: backend.machineId,
     backend,
     relayPool,
@@ -4845,7 +4896,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.onCommanderJoin = () => { setSummaryPoolDeviceConnected(deviceIsWatching()); mirror.replayAll(); questionWatcher.reset() } // re-announce an open question
   backend.onCommanderPresenceChanged = (connected) => {
     setSummaryPoolDeviceConnected(connected || backend.autonomousDeviceConnected())
-    setVoiceRouterDeviceConnected(connected)   // warm the voice-router worker while a device is connected
+    // Warm the voice-router worker while a device is connected — or while the pair brain may need it.
+    setVoiceRouterDeviceConnected(connected || pairBrain?.isActive === true)
   }
 
   // Web cancel (C-c) interrupts the turn — claude writes no end_turn line to close it, so stop the

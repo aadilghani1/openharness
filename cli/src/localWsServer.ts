@@ -100,6 +100,14 @@ export interface LocalWsServerOptions {
    * separate frame rather than a flag on the answer.
    */
   onVoiceRouteReply?: (voiceId: string, reply: WindowVoiceReply) => void
+  /**
+   * The pair brain's keys and presence (pair/brain.ts): `daemon_act` (a key pressed on a daemon's line)
+   * and `daemon_presence` (the person is here, or was away). Consumed like `app_focus` — whichever
+   * machine this socket is bound to, they are about this desk and never travel on. Absent (no brain),
+   * `daemon_act` answers UNSUPPORTED and presence is dropped.
+   */
+  onDaemonAct?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
+  onDaemonPresence?: (connId: string, payload: Record<string, unknown>) => void
 }
 
 /** One candidate, as the window draws it in the picker. */
@@ -518,6 +526,17 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             })
             return
           }
+        }
+        // THE PAIR BRAIN'S FRAMES. Loopback only, in both directions: never forwarded to a relayed machine,
+        // never dispatched into the backend socket (whose `send()` uploads). Not awaited on this chain — an
+        // answer relayed to another machine takes seconds, and this chain carries the terminal's keystrokes.
+        if (!isBinary && (parsed?.type === 'daemon_act' || parsed?.type === 'daemon_presence')) {
+          const payload = (parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
+            ? parsed.payload : {}) as Record<string, unknown>
+          if (parsed.type === 'daemon_presence') { options.onDaemonPresence?.(connId, payload); return }
+          if (options.onDaemonAct) { options.onDaemonAct(connId, payload, (frame) => sink.sendFrame(frame)); return }
+          sink.sendFrame({ type: 'daemon_act_result', payload: { requestId: payload.requestId, id: payload.id, ok: false, error: 'UNSUPPORTED' } })
+          return
         }
         if (!isBinary && boundMachineId && ws.readyState === WebSocket.OPEN) {
           const agentId = (parsed?.payload as Record<string, unknown> | undefined)?.agentId

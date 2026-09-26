@@ -1054,6 +1054,16 @@ export class BackendSocket {
     }
   }
 
+  /** One frame to ONE window on this computer, if it is one. Never queued, never to the cloud. */
+  sendLocalTo(connId: string, frame: Frame): boolean {
+    const sink = this.localClients.get(connId)
+    if (!sink) return false
+    if (env.LOG_FRAMES) logFrame('→', 'local', frame)
+    if (sink.sendFrame(frame)) return true
+    void this.unregisterLocalClient(connId)
+    return false
+  }
+
   /** Ask one local desktop to select focus, without opening panes in every window. */
   sendFirstLocal(frame: Frame): boolean {
     for (const [connId, sink] of this.localClients) {
@@ -1174,12 +1184,20 @@ export class BackendSocket {
     if (!isLocalClientId(connId) || this.localClients.has(connId)) return false
     this.localClients.set(connId, sink)
     this.sendAppPresence('open')
+    this.onLocalClient?.(connId, true)
     return true
   }
+
+  /** The windows attached right now — for a listener that arrives after some of them did. */
+  localClientIds(): string[] { return [...this.localClients.keys()] }
+
+  /** A window (or `hn`) on this computer attached or went away — the pair brain thinks only while one is here. */
+  onLocalClient: ((connId: string, attached: boolean) => void) | null = null
 
   /** Release all connection-scoped state when the loopback WebSocket closes. */
   async unregisterLocalClient(connId: string): Promise<void> {
     if (!this.localClients.delete(connId)) return
+    this.onLocalClient?.(connId, false)
     this.rowStateWindows.delete(connId)
     this.viewerForwarder.closeConnection(connId)
     this.pairService?.unwatch(connId)

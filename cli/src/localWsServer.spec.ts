@@ -439,6 +439,61 @@ describe('local CLI WebSocket', () => {
     ws.close()
   })
 
+  it('consumes the pair brain\'s daemon_act and daemon_presence locally, on its own socket and a relayed one', async () => {
+    const backend = new FakeBackend()
+    const relayed: Frame[] = []
+    const relayPool = {
+      acquire: async (_machineId: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+        sink.sendFrame({ type: 'connected', payload: { machineId: 'other-machine', e2ee: false } })
+        return { send: async (frame: Frame) => { relayed.push(frame) }, sendBinary: async () => {}, detach: () => {} }
+      },
+      acquireIsolated: async () => { throw new Error('unused') },
+      invalidate: () => {},
+    }
+    const acts: Array<Record<string, unknown>> = []
+    const presence: Array<Record<string, unknown>> = []
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, {
+      machineId, backend, autonomousEnv: 'test',
+      relayPool: relayPool as unknown as NonNullable<Parameters<typeof attachLocalWsServer>[1]['relayPool']>,
+      onDaemonAct: (_connId, payload, reply) => { acts.push(payload); reply({ type: 'daemon_act_result', payload: { requestId: payload.requestId, ok: true } }) },
+      onDaemonPresence: (_connId, payload) => { presence.push(payload) },
+    })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
+    for (const bound of [machineId, 'other-machine']) {
+      const ws = new WebSocket(url)
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: bound, localProtocolVersion: 1 } }))
+      await connected
+      const result = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'daemon_presence', payload: { active: true, awayMs: 0 } }))
+      ws.send(JSON.stringify({ type: 'daemon_act', payload: { requestId: `r-${bound}`, id: 'need:x', choice: 'No' } }))
+      expect(await result).toEqual({ type: 'daemon_act_result', payload: { requestId: `r-${bound}`, ok: true } })
+      ws.close()
+    }
+    expect(acts.map((a) => a.requestId)).toEqual([`r-${machineId}`, 'r-other-machine'])
+    expect(presence).toHaveLength(2)
+    // Neither this daemon's dispatcher (whose send() uploads) nor the relayed machine ever saw one.
+    expect(backend.frames).toEqual([])
+    expect(relayed).toEqual([])
+  })
+
+  it('answers daemon_act UNSUPPORTED when there is no pair brain, rather than passing it on', async () => {
+    const backend = new FakeBackend()
+    const ws = new WebSocket(await start(backend))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    const result = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'daemon_act', payload: { requestId: 'r1', id: 'need:x', choice: 'y' } }))
+    expect(await result).toEqual({ type: 'daemon_act_result', payload: { requestId: 'r1', id: 'need:x', ok: false, error: 'UNSUPPORTED' } })
+    expect(backend.frames).toEqual([])
+    ws.close()
+  })
+
   it('carries the window\'s answer about a spoken task, and keeps it off the wire', async () => {
     const backend = new FakeBackend()
     const replies: Array<{ voiceId: string; reply: unknown }> = []
