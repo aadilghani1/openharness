@@ -99,6 +99,9 @@ pub struct Agent {
     /// Its last turn ended in an error (the daemon's `error`: an API error, a message not
     /// delivered) — failed, until you look at it or its next turn starts.
     pub errored: bool,
+    /// When its transcript last changed, as the daemon last read it (tokenUsage.updatedAt, ms):
+    /// what it last did, while no window was watching too.
+    pub usage_at: u64,
 }
 
 /// A pull request for an agent's branch: its number, state (Open, Draft, Merged, Closed), link.
@@ -202,7 +205,7 @@ impl Agent {
         State::Ready
     }
 
-    pub fn recency(&self) -> u64 { self.active_at.max(self.created_at) }
+    pub fn recency(&self) -> u64 { self.active_at.max(self.created_at).max(self.usage_at) }
 
     /// When it came to be as it is (ms since the epoch): waiting on you since its question, working
     /// since its turn began, done or failed since it ended; idle, paused or offline since it last
@@ -291,6 +294,7 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         pr_checked: previous.and_then(|p| p.pr_checked),
         recap_asked: previous.map(|p| p.recap_asked).unwrap_or(false),
         errored: previous.map(|p| p.errored).unwrap_or(false),
+        usage_at: row.get("tokenUsage").map(|u| time(u, "updatedAt")).filter(|t| *t > 0).or(previous.map(|p| p.usage_at)).unwrap_or(0),
         todos: previous.map(|p| p.todos.clone()).unwrap_or_default(),
         subagents: previous.map(|p| p.subagents.clone()).unwrap_or_default(),
     }

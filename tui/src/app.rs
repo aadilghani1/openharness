@@ -341,6 +341,14 @@ pub struct App {
     pub cfg_finished: bool,
     /// When the terminal lost focus, and the fleet's counts then (needs you, failed, done).
     pub away: Option<(Instant, (usize, usize, usize))>,
+    /// When you last looked at each harness (ms), kept between runs (~/.harness/tui/seen.json):
+    /// one that did something after it, while hn was closed or on another screen, is done and
+    /// unread when hn next hears of it. Before [seen_since] (hn's first run) everything counts as
+    /// seen. [seen_rostered]: the machines whose first roster has been read against it.
+    pub seen_at: HashMap<(String, String), u64>,
+    pub seen_since: u64,
+    pub seen_dirty: bool,
+    pub seen_rostered: HashSet<String>,
     /// select-pane -m: the marked pane (join-pane and swap-pane take it as their source).
     pub marked: Option<u64>,
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
@@ -471,6 +479,10 @@ impl App {
             key_run: None,
             cfg_finished: false,
             away: None,
+            seen_at: HashMap::new(),
+            seen_since: 0,
+            seen_dirty: false,
+            seen_rostered: HashSet::new(),
             marked: None,
             return_to: None,
             held_reply: None,
@@ -784,6 +796,7 @@ impl App {
             if let Ok(reply) = reply {
                 let rows = reply.get("agents").and_then(Value::as_array).cloned().unwrap_or_default();
                 app.fleet.replace_roster(&id, &rows);
+                app.catch_up(&id);
                 app.sync_titles();
             }
         });
@@ -868,10 +881,11 @@ impl App {
                     // Done and not yet read — any harness's turn (not a re-read, not a sub-agent's)
                     // that ended where you were not looking: the focused pane, with the terminal
                     // focused. A visible pane beside the one you type in is not being read.
-                    if !replay && !subagent && looking.as_ref() != Some(&agent.key()) {
+                    let key = agent.key();
+                    if !replay && !subagent && looking.as_ref() != Some(&key) {
                         agent.unread = true;
-                        if mine && !visible.contains(&agent.key()) { self.say(format!("{name} finished"), theme::ONLINE) }
-                    }
+                        if mine && !visible.contains(&key) { self.say(format!("{name} finished"), theme::ONLINE) }
+                    } else if looking.as_ref() == Some(&key) { self.mark_seen_key(key) }
                     if mine && !self.terminal_focused && !replay && !subagent { crate::notify("Harness", &format!("{name} finished")) }
                 }
             }
@@ -1905,9 +1919,56 @@ impl App {
         self.refresh_pane_info(pane);
     }
 
+    /// A machine's first roster since hn started, read against when you last looked at each of
+    /// its harnesses: one that has done something since (its transcript changed after), and is
+    /// not working or asking now, is done and unread — what finished while hn was closed.
+    pub fn catch_up(&mut self, machine_id: &str) {
+        if !self.seen_rostered.insert(machine_id.to_string()) { return }
+        let floor = self.seen_since;
+        for agent in self.fleet.agents.values_mut().filter(|a| a.machine_id == machine_id && a.engine != "terminal") {
+            let seen = self.seen_at.get(&(agent.machine_id.clone(), agent.id.clone())).copied().unwrap_or(floor);
+            if agent.usage_at > seen && !agent.working && agent.question.is_none() && agent.status != "stopped" {
+                agent.unread = true;
+                if agent.since == 0 { agent.since = agent.usage_at }
+            }
+        }
+    }
+
+    /// seen.json's path.
+    fn seen_path() -> std::path::PathBuf {
+        std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui").join("seen.json")
+    }
+
+    /// When you last looked at each harness, from the run before (the first run starts the clock).
+    pub fn load_seen(&mut self) {
+        let doc: Value = std::fs::read_to_string(Self::seen_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+        self.seen_since = doc.get("since").and_then(Value::as_u64).unwrap_or_else(fleet::now_ms);
+        for (k, v) in doc.get("seen").and_then(Value::as_object).cloned().unwrap_or_default() {
+            if let (Some((m, a)), Some(t)) = (k.split_once(':'), v.as_u64()) { self.seen_at.insert((m.to_string(), a.to_string()), t); }
+        }
+        if doc.is_null() { self.seen_dirty = true }
+    }
+
+    pub fn save_seen(&mut self) {
+        if !self.seen_dirty { return }
+        self.seen_dirty = false;
+        let seen: serde_json::Map<String, Value> = self.seen_at.iter().map(|((m, a), t)| (format!("{m}:{a}"), json!(t))).collect();
+        let path = Self::seen_path();
+        if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+        let temp = path.with_extension("json.tmp");
+        if std::fs::write(&temp, json!({ "since": self.seen_since, "seen": seen }).to_string()).is_ok() { let _ = std::fs::rename(temp, path); }
+    }
+
+    /// You have looked at this harness now.
+    pub fn mark_seen_key(&mut self, key: (String, String)) {
+        self.seen_at.insert(key, fleet::now_ms());
+        self.seen_dirty = true;
+    }
+
     pub fn seen(&mut self, pane: u64) {
         let Some(p) = self.panes.get(&pane) else { return };
         let key = (p.machine_id.clone(), p.agent_id.clone());
+        self.mark_seen_key(key.clone());
         if let Some(agent) = self.fleet.agents.get_mut(&key) {
             // Looked at here (an error it ended in too): the dial takes its notification away.
             agent.errored = false;
@@ -3067,6 +3128,7 @@ impl App {
         }
         if self.tick % 120 == 0 { self.refresh_machines() }
         if self.tick % 80 == 40 { self.fleet.save_cache() }
+        if self.tick % 20 == 10 { self.save_seen() }
         if self.tick % 240 == 0 { let ids: Vec<String> = self.links.keys().cloned().collect(); for id in ids { self.relist(&id) } }
         if self.toast.as_ref().map(|t| now.duration_since(t.2) > Duration::from_secs(4)).unwrap_or(false) { self.toast = None }
         if let Some(Modal::Picker { picker, .. }) = &mut self.modal {

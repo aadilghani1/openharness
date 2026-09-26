@@ -103,6 +103,15 @@ const server = http.createServer((req, res) => {
     { machineId: LOCAL, name: DEMO ? 'studio' : 'mock-local', status: 'running' },
     { machineId: REMOTE, name: DEMO ? 'gpu-box' : 'mock-remote', status: 'running' },
   ] })
+  // Harnesses that finish a turn with no window watching: their transcripts change now
+  // (tokenUsage.updatedAt), as the daemon would record (POST /test/finish?n=5).
+  if (req.url.startsWith('/test/finish') && req.method === 'POST') {
+    const n = Number(new URL(req.url, 'http://x').searchParams.get('n') || 1)
+    const fleet = Object.values(agents).flat().filter((a) => a.engine !== 'terminal' && a.status === 'active' && a.launch?.state !== 'failed').slice(0, n)
+    const at = new Date().toISOString()
+    for (const a of fleet) { a.tokenUsage = { totalTokens: (a.tokenUsage?.totalTokens || 0) + 1000, updatedAt: at }; a.finishedAway = true }
+    return json(res, { finished: fleet.map((a) => a.name) })
+  }
   if (req.url === '/test/dial' && req.method === 'GET') return json(res, { ...dial, agents: Object.values(agents).flat().map((a) => ({ id: a.id, name: a.name, sessionId: a.sessionId })) })
   if (req.url === '/test/dial' && req.method === 'POST') {
     let body = ''
@@ -162,7 +171,7 @@ wss.on('connection', (ws) => {
         if (asked) setTimeout(() => ws.send(JSON.stringify(asked)), 300)
         const ev = (x, type, payload = {}) => ws.send(JSON.stringify({ type, agentId: x.id, dbSessionId: x.sessionId, payload: { agentId: x.id, sessionId: x.sessionId, ...payload } }))
         // Of the fleet, about half work; the rest are idle. Each working one steps through a turn.
-        let busy = agents[machine].filter((x, i) => x.status === 'active' && x.engine !== 'terminal' && x.launch.state !== 'failed' && !x.name.startsWith('Add rate') && (i < 6 || i % 2 === 0))
+        let busy = agents[machine].filter((x, i) => x.status === 'active' && x.engine !== 'terminal' && x.launch.state !== 'failed' && !x.name.startsWith('Add rate') && !x.finishedAway && (i < 6 || i % 2 === 0))
         let tick = 0
         const beat = setInterval(() => {
           tick++

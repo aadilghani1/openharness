@@ -227,6 +227,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     }
     if let Some(problem) = config.problems.first() { app.say(problem.clone(), theme::DANGER) }
     else if let Some(path) = read.last() { if app.messages.is_empty() { app.say(format!("{} read — your prefix is {}", path.replace(&std::env::var("HOME").unwrap_or_default(), "~"), keys::name(&app.keymap.prefix)), theme::WARN) } }
+    // When you last looked at each harness (what finished while hn was closed shows as done).
+    app.load_seen();
     app.boot();
     // The sessions a client left (C-b d), and the one asked for.
     app.start_session = start;
@@ -308,6 +310,8 @@ async fn run(config: config::Config) -> io::Result<()> {
         }
     }
     app.fleet.save_cache();
+    app.mark_seen();
+    app.save_seen();
     if app.start_failed.is_none() { app.save_sessions() }
     if let Some(path) = &socket { let _ = std::fs::remove_file(path); }
     let session = app.session_name();
