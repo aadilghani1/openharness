@@ -739,8 +739,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           final canSubmit = search.canSubmit(row);
           final unavailableReason = search.sessionUnavailable(row);
           final alreadyHere = search.alreadyHere(row);
-          final activityAge = widget.bios && row.lastActivityAt != null
-              ? harnessActivityAge(row.lastActivityAt, DateTime.now())
+          // The time the rows are sorted by, so the ages read in order.
+          final activityAge = widget.bios && row.lastUsedAt != null
+              ? harnessActivityAge(row.lastUsedAt, DateTime.now())
               : null;
           final presentation = (
             row,
@@ -1337,7 +1338,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                   '${modelAction == null ? '' : ', $modelAction'}'
                   '${widget.unavailableReason == null ? '' : ', ${widget.unavailableReason}'}'
                   '${row.shortcut == null ? '' : ', Shortcut ${row.shortcut}'}'
-                  '${widget.activityAge == null ? '' : ', Last active ${widget.activityAge} ago'}',
+                  '${widget.activityAge == null ? '' : ', Last used ${widget.activityAge} ago'}',
         excludeSemantics: true,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1397,7 +1398,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                     ] else if (widget.activityAge case final age?) ...[
                       SizedBox(width: cell.width * 2),
                       Tooltip(
-                        message: 'Last active ${row.lastActivityAt!.toLocal()}',
+                        message: 'Last used ${row.lastUsedAt!.toLocal()}',
                         child: Text(
                           age,
                           maxLines: 1,

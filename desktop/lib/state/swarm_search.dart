@@ -971,7 +971,7 @@ class SwarmSearchController extends ChangeNotifier {
             swarmId: original?.swarmId,
             paneId: original?.paneId,
             previewKey: original?.previewKey,
-            lastActivityAt: session.lastActiveAt,
+            lastUsedAt: session.lastUsedAt,
             current: original?.current ?? false,
             searchFields: [
               ...?original?.fields,

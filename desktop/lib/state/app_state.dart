@@ -1523,6 +1523,13 @@ class AppNotifier extends ChangeNotifier {
 
   void _noteNavigation() {
     _paneFocusByUser = !_navigatingFromDevice;
+    // A device's move is not a person opening anything — but it does leave a
+    // different harness in front, so the next gesture on it is an open again.
+    if (_navigatingFromDevice) {
+      _touchedFocus = null;
+    } else {
+      _touchFocusedAgent();
+    }
   }
 
   /// Native focus also changes during reparenting and dialog dismissal. The
@@ -4674,6 +4681,7 @@ class AppNotifier extends ChangeNotifier {
           prev.parentAgentId != agent.parentAgentId ||
           prev.project != agent.project ||
           prev.lastActivityAt != agent.lastActivityAt ||
+          prev.lastOpenedAt != agent.lastOpenedAt ||
           prev.tokensUsed != agent.tokensUsed ||
           prev.outputStats != agent.outputStats ||
           prev.tokensUpdatedAt != agent.tokensUpdatedAt ||
@@ -7908,6 +7916,93 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// How long a second open of the SAME harness, with no other harness
+  /// opened in between, folds into the first. Only the same one: A, B, A in
+  /// quick succession is three opens, or the order would say B was last.
+  static const agentTouchDebounce = Duration(seconds: 3);
+
+  ({String machineId, String agentId, DateTime at})? _lastAgentTouch;
+
+  /// The harness the focus last stamped, so the grid's pointer-down — every
+  /// click inside the tile already in front re-focuses it — is not an open.
+  (String, String)? _touchedFocus;
+
+  /// Tell a harness's own daemon that a person just opened or focused it, so
+  /// its `lastOpenedAt` moves and with it "last used" order in EVERY client
+  /// (`agent_update {agentId, opened: true}`, sealed like any agent_update).
+  ///
+  /// Fire-and-forget. Nothing waits on it and nothing is said when it fails:
+  /// an older daemon answers MISSING_UPDATE and the list simply keeps sorting
+  /// by activity; a socket that is down loses one stamp. Never dials a socket
+  /// for it, and never for a view-only shared harness — its owner's order is
+  /// not this window's to move.
+  void touchAgent(String machineId, String agentId) {
+    if (_disposed) return;
+    final machine = machineStates[machineId];
+    if (machine == null ||
+        machine.machine.isShared ||
+        machine.needsLink ||
+        machine.nodeOnline == false ||
+        machine.connectionStatus != ConnectionStatus.connected ||
+        (_pool == null && connectionForTest == null)) {
+      return;
+    }
+    final now = DateTime.now();
+    final last = _lastAgentTouch;
+    if (last != null &&
+        last.machineId == machineId &&
+        last.agentId == agentId &&
+        now.difference(last.at) < agentTouchDebounce) {
+      return;
+    }
+    _lastAgentTouch = (machineId: machineId, agentId: agentId, at: now);
+    unawaited(_sendAgentTouch(machine, agentId));
+  }
+
+  Future<void> _sendAgentTouch(MachineState machine, String agentId) async {
+    final revision = _authRevision;
+    try {
+      final result = await _conn(machine.machine.machineId).request(
+        'agent_update',
+        payload: {'agentId': agentId, 'opened': true},
+        timeout: const Duration(seconds: 10),
+      );
+      if (!_machineWorkCurrent(machine, revision)) return;
+      // The daemon's own stamp, taken now rather than on the next push, so the
+      // list this window just opened from is already in its new order. Only
+      // this one field: the reply is not a frame to rebuild the agent from.
+      final returned = result['agent'];
+      final raw = returned is Map && (returned['id'] ?? agentId) == agentId
+          ? returned['lastOpenedAt']
+          : null;
+      final opened = raw is String ? DateTime.tryParse(raw) : null;
+      if (opened == null) return;
+      final index = machine.agents.indexWhere((a) => a.id == agentId);
+      if (index == -1) return;
+      final current = machine.agents[index];
+      final known = current.lastOpenedAt;
+      if (known != null && !opened.isAfter(known)) return;
+      machine.agents = [...machine.agents]
+        ..[index] = current.copyWith(lastOpenedAt: opened);
+      notifyListeners();
+    } catch (_) {
+      // MISSING_UPDATE from an older daemon, a timeout, a dropped socket: the
+      // stamp is a courtesy to the ordering, never worth an error band.
+    }
+  }
+
+  /// Stamp the harness now in front, when it is a different one from the
+  /// last stamped — see [touchAgent]. A viewer is its agent's, as in
+  /// [_announceAppFocus].
+  void _touchFocusedAgent() {
+    final pane = focusedPane;
+    final agentId = pane?.agentId ?? pane?.ownerAgentId;
+    final focus = agentId == null ? null : (pane!.machineId, agentId);
+    if (focus == _touchedFocus) return;
+    _touchedFocus = focus;
+    if (focus != null) touchAgent(focus.$1, focus.$2);
+  }
+
   bool _agentStopCurrent(_AgentStop request) {
     if (!identical(
       _agentStops[(request.machine.machine.machineId, request.agent.id)],
@@ -9425,6 +9520,14 @@ class AppNotifier extends ChangeNotifier {
     // duplicate with the inferred one is free: the daemon drops the second against where the dial
     // already is.
     if (focus && target == activeSwarm) _announceAppFocus();
+    // A new tile takes the focus without passing [focusPane], so the open is
+    // said here — for a person's add only, never a device's door.
+    if (focus &&
+        target == activeSwarm &&
+        intent == AttachIntent.person &&
+        !_navigatingFromDevice) {
+      _touchFocusedAgent();
+    }
     // The agent may already have a viewer the grid could not show until now,
     // because this tile is what it hangs beside.
     _syncViewerPane(machine, agent);

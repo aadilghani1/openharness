@@ -248,7 +248,7 @@ class SwarmDestination {
     this.detailBranchOffset,
     this.terminalDetail,
     this.promptContext,
-    this.lastActivityAt,
+    this.lastUsedAt,
     required this.swarmId,
     required this.current,
     this.machineId,
@@ -291,7 +291,11 @@ class SwarmDestination {
   /// and machine before paths and branches, which are more likely to truncate.
   final String? terminalDetail;
   final PromptContext? promptContext;
-  final DateTime? lastActivityAt;
+
+  /// When the harness was last used — the later of its activity and of a
+  /// person last opening it in any client ([Agent.lastUsedAt]). What Open
+  /// Harness sorts by, and the age it prints beside the row.
+  final DateTime? lastUsedAt;
   final String? swarmId, machineId, agentId, engine;
   final String? modelId;
   bool get isModel => modelId != null;
@@ -687,7 +691,7 @@ class SwarmLocationCatalog {
       agentId: pane.agentId,
       previewKey: agent == null ? null : app.previewKey(pane.machineId, agent),
       engine: engine,
-      lastActivityAt: agent?.lastActivityAt,
+      lastUsedAt: agent?.lastUsedAt,
       current: swarm.id == app.activeSwarmId && pane.id == app.focusedPaneId,
       // The agent's own title first, ranked like the name: "board fab check"
       // finds the agent whose work that is, not whichever recap mentions fab.
@@ -704,8 +708,10 @@ class SwarmLocationCatalog {
   }
 }
 
-/// Open Harness uses the same activity timestamp it shows beside each session.
-/// Undated rows come last; ties retain visit recency and search relevance.
+/// Open Harness sorts by last use — activity, or a person opening the harness
+/// in any client, whichever is later — the same time it shows beside each
+/// session. Undated rows come last; ties retain visit recency and search
+/// relevance.
 List<SwarmDestination> rankSwarmDestinationsByActivity(
   List<SwarmDestination> all,
   String query, {
@@ -716,8 +722,8 @@ List<SwarmDestination> rankSwarmDestinationsByActivity(
   final rank = {for (var i = 0; i < matches.length; i++) matches[i].id: i};
   final visits = {for (var i = 0; i < recent.length; i++) recent[i]: i};
   matches.sort((a, b) {
-    final aTime = a.lastActivityAt;
-    final bTime = b.lastActivityAt;
+    final aTime = a.lastUsedAt;
+    final bTime = b.lastUsedAt;
     final activity = aTime == null
         ? (bTime == null ? 0 : 1)
         : bTime == null
@@ -1254,7 +1260,7 @@ List<SwarmDestination> swarmDestinations(
         agentId: agentId,
         previewKey: row == null ? null : app.previewKey(machineId, row.$2),
         engine: engine,
-        lastActivityAt: row?.$2.lastActivityAt,
+        lastUsedAt: row?.$2.lastUsedAt,
         current:
             owner?.id == app.activeSwarmId && pane?.id == app.focusedPaneId,
         // The agent's own title is ranked like its name (see titleFields):
