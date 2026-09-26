@@ -73,10 +73,10 @@ export const hashConfig = (text: string): string => createHash('sha256').update(
  * then there is no pair (the sensor stays off) and the dial asks for `watch`.
  */
 export function pairingFrom(zoo: { known: boolean; pair: string | null; autonomy: Autonomy; consent: boolean },
-  guest: { pair: string | null; autonomy: Autonomy | null; consent: boolean }, fallback: Autonomy): { pair: string | null; autonomy: Autonomy } {
+  guest: { pair: string | null; autonomy: Autonomy | null; consent: boolean }, fallback: Autonomy): { pair: string | null; autonomy: Autonomy; consented: boolean } {
   const consented = zoo.known ? zoo.consent : guest.consent
-  if (!consented) return { pair: null, autonomy: 'watch' }
-  return zoo.known ? { pair: zoo.pair, autonomy: zoo.autonomy } : { pair: guest.pair, autonomy: guest.autonomy ?? fallback }
+  if (!consented) return { pair: null, autonomy: 'watch', consented }
+  return zoo.known ? { pair: zoo.pair, autonomy: zoo.autonomy, consented } : { pair: guest.pair, autonomy: guest.autonomy ?? fallback, consented }
 }
 
 interface Saved { autonomy: Autonomy | null; rules: string | null }
@@ -113,14 +113,18 @@ export class PairGate {
 
   // ── autonomy ─────────────────────────────────────────────────────────────────────────────────────
 
-  /** The zoo's (or a guest window's) level changed, or was read again. */
-  setRequested(level: Autonomy): void {
+  /**
+   * The zoo's (or a guest window's) level changed, or was read again. `keepConfirmed`: the level is held
+   * down by something other than the person's dial (no consent yet, the zoo unreadable for a moment), so
+   * what they confirmed before still stands when it comes back.
+   */
+  setRequested(level: Autonomy, opts: { keepConfirmed?: boolean } = {}): void {
     this.requested = level
     const waiting = this.pending.get('autonomy')
     if (rank(level) <= rank(this.level) || rank(level) <= SUGGEST || this.saved.autonomy === level) {
       if (waiting) this.drop('autonomy', 'replaced')
-      // Lowered below what was confirmed: raising it again asks again.
-      if (this.saved.autonomy && rank(level) < rank(this.saved.autonomy)) {
+      // The person lowered it below what they confirmed: raising it again asks again.
+      if (!opts.keepConfirmed && this.saved.autonomy && rank(level) < rank(this.saved.autonomy)) {
         this.saved.autonomy = rank(level) > SUGGEST ? level : null
         this.save()
       }

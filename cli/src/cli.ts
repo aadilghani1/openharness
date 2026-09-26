@@ -3684,7 +3684,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const applyPair = (): void => {
     const pairing = pairingFrom(zooPair, { pair: guestPair, autonomy: guestAutonomy, consent: guestConsent }, DEFAULT_AUTONOMY)
     // A request: a step above `suggest` waits for the person's yes at a window (pair/gate.ts).
-    pairGate.setRequested(pairing.autonomy)
+    pairGate.setRequested(pairing.autonomy, { keepConfirmed: !pairing.consented })
     pairSensor.setPair(pairing.pair)
   }
   refreshPairFromZoo = () => {

@@ -70,6 +70,11 @@ describe('the autonomy dial', () => {
     again.g.setRequested('act-on-key')
     expect(again.g.autonomy()).toBe('act-on-key')
     expect(again.g.requests()).toEqual([])
+    // Held down by something that is not the person's dial (no consent yet, the zoo unreadable): kept.
+    again.g.setRequested('watch', { keepConfirmed: true })
+    expect(again.g.autonomy()).toBe('watch')
+    again.g.setRequested('act-on-key')
+    expect(again.g.autonomy()).toBe('act-on-key')
     again.g.setRequested('suggest')
     again.g.setRequested('act-on-key')
     expect(again.g.autonomy()).toBe('suggest')
@@ -183,12 +188,12 @@ describe('a guest window\'s dial', () => {
 describe('first-day consent', () => {
   it('nothing is paired (the sensor stays off) and the dial asks for watch until the person said yes', () => {
     const guest = { pair: 'tim', autonomy: 'suggest' as const, consent: false }
-    expect(pairingFrom({ known: true, pair: 'tim', autonomy: 'act-on-key', consent: false }, guest, 'watch')).toEqual({ pair: null, autonomy: 'watch' })
-    expect(pairingFrom({ known: true, pair: 'tim', autonomy: 'act-on-key', consent: true }, guest, 'watch')).toEqual({ pair: 'tim', autonomy: 'act-on-key' })
+    expect(pairingFrom({ known: true, pair: 'tim', autonomy: 'act-on-key', consent: false }, guest, 'watch')).toEqual({ pair: null, autonomy: 'watch', consented: false })
+    expect(pairingFrom({ known: true, pair: 'tim', autonomy: 'act-on-key', consent: true }, guest, 'watch')).toEqual({ pair: 'tim', autonomy: 'act-on-key', consented: true })
     // Signed out: the guest window's own answer, pair and dial.
     const unknown = { known: false, pair: null, autonomy: 'watch' as const, consent: false }
-    expect(pairingFrom(unknown, guest, 'watch')).toEqual({ pair: null, autonomy: 'watch' })
-    expect(pairingFrom(unknown, { ...guest, consent: true }, 'watch')).toEqual({ pair: 'tim', autonomy: 'suggest' })
-    expect(pairingFrom(unknown, { pair: 'tim', autonomy: null, consent: true }, 'watch')).toEqual({ pair: 'tim', autonomy: 'watch' })
+    expect(pairingFrom(unknown, guest, 'watch')).toEqual({ pair: null, autonomy: 'watch', consented: false })
+    expect(pairingFrom(unknown, { ...guest, consent: true }, 'watch')).toEqual({ pair: 'tim', autonomy: 'suggest', consented: true })
+    expect(pairingFrom(unknown, { pair: 'tim', autonomy: null, consent: true }, 'watch')).toEqual({ pair: 'tim', autonomy: 'watch', consented: true })
   })
 })
