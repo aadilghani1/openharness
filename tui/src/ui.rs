@@ -973,8 +973,10 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         }
     }
     let cells = expand_tabs(cells);
-    let right_w = row.right.width();
-    let show_right = !row.right.is_empty() && text_w >= lead_w + right_w + 14;
+    let right = row.right_at(text_w);
+    let narrow = right.len() != row.right.len();
+    let right_w = right.width();
+    let show_right = !right.is_empty() && text_w >= lead_w + right_w + 14;
     let avail = text_w.saturating_sub(lead_w + if show_right { right_w + 2 } else { 0 });
     let cells: Vec<(char, Style)> = hscroll(cells, avail, &o.ellipsis, o.hscroll, o.hscroll_off, o.keep_right).into_iter().map(|(c, part, on)| (c, cell(part, on))).collect();
     let mut run = String::new();
@@ -997,8 +999,8 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         let right_at = label_len + if detail_len > 0 { 2 + detail_len } else { 0 } + 2;
         // The right column is dim text of the line's own.
         let dim = Style::default().add_modifier(Modifier::DIM);
-        for (i, c) in row.right.chars().enumerate() {
-            let on = hits.contains(&((right_at + i) as u32));
+        for (i, c) in right.chars().enumerate() {
+            let on = !narrow && hits.contains(&((right_at + i) as u32));
             spans.push(Span::styled(c.to_string(), cell(Some(dim), on)));
         }
     }
@@ -1089,13 +1091,14 @@ fn expand_tabs(cells: Vec<Cell>) -> Vec<Cell> {
 fn fits_line(row: &crate::picker::Row, text_w: usize) -> bool {
     let cw = |c: char| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
     let lead_w: usize = row.lead.iter().map(|s| s.content.width()).sum();
-    let right_w = row.right.width();
-    let show_right = !row.right.is_empty() && text_w >= lead_w + right_w + 14;
+    let right = row.right_at(text_w);
+    let right_w = right.width();
+    let show_right = !right.is_empty() && text_w >= lead_w + right_w + 14;
     let avail = text_w.saturating_sub(lead_w + if show_right { right_w + 2 } else { 0 });
     let detail: usize = row.detail.iter().flat_map(|s| s.content.chars()).map(cw).sum();
     let has_detail = row.detail.iter().any(|s| !s.content.is_empty());
     let title = expand_tabs(row.label.chars().map(|c| (c, None, false)).collect()).iter().map(|c| cw(c.0)).sum::<usize>();
-    title + if has_detail { 2 + detail } else { 0 } <= avail && (row.right.is_empty() || show_right)
+    title + if has_detail { 2 + detail } else { 0 } <= avail && (right.is_empty() || show_right)
 }
 
 /// A row's whole line as cells, for --wrap: the lead's glyphs, the title and the detail (lit where

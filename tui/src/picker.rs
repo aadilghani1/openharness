@@ -27,11 +27,21 @@ pub struct Row {
     /// How many of the label's first characters are dim (a buffer's `name: N bytes: `): part of
     /// the line, matched and scrolled with it.
     pub label_dim: usize,
+    /// The right column in a narrow list (under NARROW columns), so the line keeps its room.
+    pub right_narrow: Option<String>,
+}
+
+/// A list narrower than this shows a row's narrow right column.
+pub const NARROW: usize = 56;
+
+impl Row {
+    /// The right column at [text_w].
+    pub fn right_at(&self, text_w: usize) -> &str { if text_w < NARROW { self.right_narrow.as_deref().unwrap_or(&self.right) } else { &self.right } }
 }
 
 impl Row {
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Row {
-        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, label_dim: 0 }
+        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, label_dim: 0, right_narrow: None }
     }
     pub fn extra(mut self, text: impl Into<String>) -> Row { self.extra = text.into(); self }
     pub fn group(mut self, text: impl Into<String>) -> Row { self.group = Some(text.into()); self }
@@ -40,6 +50,7 @@ impl Row {
     pub fn right(mut self, text: impl Into<String>) -> Row { self.right = text.into(); self }
     pub fn boost(mut self, by: u32) -> Row { self.boost = by; self }
     pub fn label_dim(mut self, chars: usize) -> Row { self.label_dim = chars; self }
+    pub fn right_narrow(mut self, text: impl Into<String>) -> Row { self.right_narrow = Some(text.into()); self }
 }
 
 pub struct Picker {

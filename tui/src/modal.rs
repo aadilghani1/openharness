@@ -229,6 +229,7 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
             // Its pull request, where it has one (what it cost is in the preview).
             let pr = a.pr.as_ref().map(|p| p.label()).unwrap_or_default();
             let _ = is_open;
+            let narrow = ago(since);
             let right = [pr, if many { app.fleet.machine_name(&a.machine_id) } else { String::new() }, ago(since)]
                 .into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("  ");
             let live = !matches!(state, State::Paused | State::Offline);
@@ -239,6 +240,7 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
                 .lead(vec![span(dot, fg(color)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
                 .detail(detail)
                 .right(right)
+                .right_narrow(narrow)
         })
         .collect()
 }
