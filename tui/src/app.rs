@@ -1613,18 +1613,17 @@ impl App {
             let given = crate::ipc::ask(std::path::Path::new(owner), &["hn-release-session".into(), "-t".into(), r.name.clone()]);
             if !matches!(given, Some((_, _, 0))) { self.error(format!("session {} is another client's", r.name)); return false }
         }
-        // Claimed while the file is held: two clients never both take it.
+        // Read and claimed while the file is held: two clients never both take it.
         let path = Self::sessions_path();
-        let row = {
-            let _lock = crate::ipc::lock(&path);
-            let doc = read_sessions(&path);
-            doc["sessions"].as_array().and_then(|rows| rows.iter().find(|row| row.get("name").and_then(Value::as_str) == Some(r.name.as_str())
-                && !row.get("desk").and_then(Value::as_bool).unwrap_or(false) && live_owner(row).is_none()).cloned())
-        };
-        let Some(stash) = row.and_then(|row| self.stash_from_row(&row, id)) else { self.error(format!("can't find session: {}", r.name)); return false };
+        let lock = crate::ipc::lock(&path);
+        let doc = read_sessions(&path);
+        let row = doc["sessions"].as_array().and_then(|rows| rows.iter().find(|row| row.get("name").and_then(Value::as_str) == Some(r.name.as_str())
+            && !row.get("desk").and_then(Value::as_bool).unwrap_or(false) && live_owner(row).is_none()).cloned());
+        let Some(stash) = row.and_then(|row| self.stash_from_row(&row, id)) else { drop(lock); self.error(format!("can't find session: {}", r.name)); return false };
         self.sessions.push(stash);
+        self.write_sessions_held(Save::Stay);
+        drop(lock);
         self.remote.borrow_mut().stamp = None;
-        self.save_sessions();
         true
     }
 
@@ -1810,6 +1809,13 @@ impl App {
     /// says), beside the other clients' sessions as they wrote them; the desk's name; and the
     /// session in front.
     pub fn write_sessions(&self, how: Save) {
+        let path = Self::sessions_path();
+        let _lock = crate::ipc::lock(&path);
+        self.write_sessions_held(how)
+    }
+
+    /// write_sessions with the file's lock already held.
+    fn write_sessions_held(&self, how: Save) {
         if self.handed_over || (self.capture.is_some() && self.tabs.is_empty()) { return }
         let window = |app: &App, t: &Tab, nums: &HashMap<String, usize>| {
             // A shell hn made is ended when its window is killed, by whichever client does it.
@@ -1819,7 +1825,6 @@ impl App {
         };
         let me = crate::ipc::here().map(|p| p.display().to_string());
         let path = Self::sessions_path();
-        let _lock = crate::ipc::lock(&path);
         let doc = read_sessions(&path);
         let here = Stash { id: self.session_id, alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), options: Default::default(), env: Default::default() };
         let mut ours = Vec::new();
@@ -1906,8 +1911,12 @@ impl App {
         if !self.headless {
             let held: HashSet<String> = doc["sessions"].as_array().map(|rows| rows.iter().filter(|r| r.get("headless").and_then(Value::as_bool).unwrap_or(false)).filter_map(live_owner).collect()).unwrap_or_default();
             for owner in &held { let _ = crate::ipc::ask(std::path::Path::new(owner), &["hn-hand-over".into()]); }
-            if !held.is_empty() { doc = read_sessions(&Self::sessions_path()) }
         }
+        // The rows no client has are read and made this client's while the file is held: two
+        // clients starting together never both take one.
+        let path = Self::sessions_path();
+        let lock = crate::ipc::lock(&path);
+        doc = read_sessions(&path);
         for row in doc["sessions"].as_array().cloned().unwrap_or_default() {
             let name = row.get("name").and_then(Value::as_str).map(str::to_string);
             if row.get("desk").and_then(Value::as_bool).unwrap_or(false) { if name.is_some() && self.session_desk { self.session_alias = name } continue }
@@ -1917,6 +1926,8 @@ impl App {
             let id = self.remote_id(&name);
             if let Some(stash) = self.stash_from_row(&row, id) { self.sessions.push(stash) }
         }
+        self.write_sessions_held(Save::Stay);
+        drop(lock);
         self.remote.borrow_mut().stamp = None;
         // The session in front when the last client left — or one a headless client holds (it
         // made them for a script; this client is where they are meant to be seen).
