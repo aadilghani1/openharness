@@ -535,6 +535,18 @@ void main() {
     await shoot(tester, key, '4b-new-task');
   });
 
+  testWidgets('new, keyboard up', skip: skip, (tester) async {
+    final key = await pumpScreen(
+      tester,
+      NewAgentPage(notifier: notifier, machineId: 'm', voice: voice),
+    );
+    await tester.tap(find.byType(TextField));
+    await tester.enterText(find.byType(TextField), 'Fix the login test');
+    tester.view.viewInsets = const FakeViewPadding(bottom: 336 * 3);
+    await tester.pump(const Duration(milliseconds: 300));
+    await shoot(tester, key, '4e-new-keyboard');
+  });
+
   testWidgets('new, project chooser', skip: skip, (tester) async {
     final key = await pumpScreen(
       tester,

@@ -343,6 +343,50 @@ class _TtyFieldState extends State<TtyField> {
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final multi = widget.lines > 1;
+    final field = TextField(
+      controller: widget.controller,
+      focusNode: _focus,
+      autofocus: widget.autofocus,
+      onChanged: widget.onChanged,
+      onSubmitted: (_) => widget.onSubmitted?.call(),
+      minLines: multi ? 3 : 1,
+      maxLines: multi ? widget.lines : 1,
+      maxLength: widget.maxLength,
+      maxLengthEnforcement: MaxLengthEnforcement.enforced,
+      keyboardType:
+          widget.keyboardType ?? (multi ? TextInputType.multiline : null),
+      autofillHints: widget.autofillHints,
+      textInputAction: widget.action,
+      // The keyboard's own composing, left on: Vietnamese Telex on iOS rides on
+      // autocorrection. See `ComposingKeyboard`.
+      autocorrect: ComposingKeyboard.autocorrect,
+      enableSuggestions: ComposingKeyboard.enableSuggestions,
+      smartDashesType: SmartDashesType.disabled,
+      smartQuotesType: SmartQuotesType.disabled,
+      textCapitalization: multi
+          ? TextCapitalization.sentences
+          : TextCapitalization.none,
+      cursorColor: tty.green,
+      cursorWidth: 2,
+      style: tty.style(size: multi ? TtySize.row : TtySize.title),
+      decoration: InputDecoration(
+        isCollapsed: true,
+        constraints: const BoxConstraints(),
+        filled: false,
+        border: InputBorder.none,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
+        disabledBorder: InputBorder.none,
+        contentPadding: EdgeInsets.zero,
+        counterText: '',
+        hintText: widget.hint,
+        hintMaxLines: multi ? 3 : 1,
+        hintStyle: tty.style(
+          color: tty.faint,
+          size: multi ? TtySize.row : TtySize.title,
+        ),
+      ),
+    );
     return GestureDetector(
       // A tap anywhere in the box — not only on the text — takes the keyboard.
       behavior: HitTestBehavior.opaque,
@@ -354,65 +398,38 @@ class _TtyFieldState extends State<TtyField> {
           borderRadius: BorderRadius.circular(6),
         ),
         padding: EdgeInsets.fromLTRB(12, multi ? 10 : 0, 4, multi ? 6 : 0),
-        child: Row(
-          crossAxisAlignment: multi
-              ? CrossAxisAlignment.start
-              : CrossAxisAlignment.center,
-          children: [
-            if (widget.leading case final leading?) ...[
-              leading,
-              const SizedBox(width: 8),
-            ],
-            Expanded(
-              child: TextField(
-                controller: widget.controller,
-                focusNode: _focus,
-                autofocus: widget.autofocus,
-                onChanged: widget.onChanged,
-                onSubmitted: (_) => widget.onSubmitted?.call(),
-                minLines: multi ? 3 : 1,
-                maxLines: multi ? widget.lines : 1,
-                maxLength: widget.maxLength,
-                maxLengthEnforcement: MaxLengthEnforcement.enforced,
-                keyboardType:
-                    widget.keyboardType ??
-                    (multi ? TextInputType.multiline : null),
-                autofillHints: widget.autofillHints,
-                textInputAction: widget.action,
-                // The keyboard's own composing, left on: Vietnamese Telex on iOS rides on
-                // autocorrection. See `ComposingKeyboard`.
-                autocorrect: ComposingKeyboard.autocorrect,
-                enableSuggestions: ComposingKeyboard.enableSuggestions,
-                smartDashesType: SmartDashesType.disabled,
-                smartQuotesType: SmartQuotesType.disabled,
-                textCapitalization: multi
-                    ? TextCapitalization.sentences
-                    : TextCapitalization.none,
-                cursorColor: tty.green,
-                cursorWidth: 2,
-                style: tty.style(size: multi ? TtySize.row : TtySize.title),
-                decoration: InputDecoration(
-                  isCollapsed: true,
-                  constraints: const BoxConstraints(),
-                  filled: false,
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  disabledBorder: InputBorder.none,
-                  contentPadding: EdgeInsets.zero,
-                  counterText: '',
-                  hintText: widget.hint,
-                  hintMaxLines: multi ? 3 : 1,
-                  hintStyle: tty.style(
-                    color: tty.faint,
-                    size: multi ? TtySize.row : TtySize.title,
+        child: multi
+            // Multi-line: the text starts at the top; what trails it (the mic) sits in the bottom
+            // corner, under the thumb, and the text keeps clear of it.
+            ? Stack(
+                children: [
+                  Padding(
+                    padding: EdgeInsets.only(
+                      right: widget.trailing.isEmpty ? 8 : 44,
+                    ),
+                    child: field,
                   ),
-                ),
+                  if (widget.trailing.isNotEmpty)
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: widget.trailing,
+                      ),
+                    ),
+                ],
+              )
+            : Row(
+                children: [
+                  if (widget.leading case final leading?) ...[
+                    leading,
+                    const SizedBox(width: 8),
+                  ],
+                  Expanded(child: field),
+                  ...widget.trailing,
+                ],
               ),
-            ),
-            ...widget.trailing,
-          ],
-        ),
       ),
     );
   }
