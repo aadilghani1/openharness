@@ -892,10 +892,18 @@ class _NewAgentPageState extends State<NewAgentPage> {
                         ),
                       const SizedBox(height: 10),
                       TtyPrimaryButton(
-                        label: _failed ? 'Try Again' : 'Start',
+                        // Says what it will do: start, or choose what is still missing first.
+                        label: _failed
+                            ? 'Try Again'
+                            : ready
+                            ? 'Start'
+                            : _engine == null
+                            ? 'Choose an agent'
+                            : 'Choose a project',
                         busy: _creating,
                         busyLabel: 'Starting…',
-                        onPressed: ready ? () => unawaited(_start()) : null,
+                        // Never a dead button: with a choice missing, Start opens its chooser.
+                        onPressed: () => unawaited(_start()),
                       ),
                     ],
                   ),
@@ -969,16 +977,33 @@ class _NewAgentPageState extends State<NewAgentPage> {
   void _applyDefaultProject() {
     if (_folder != null || _project != null || _projectDefaulted) return;
     final history = widget.notifier.projectHistory;
+    // Then, with no history on this phone: the folder of the computer's most recent harness —
+    // someone who has only ever started harnesses on the desktop still opens New ready to Start.
     final folder =
         widget.folder ??
         history.selected(_machineId) ??
-        history.recent(_machineId).firstOrNull;
+        history.recent(_machineId).firstOrNull ??
+        _latestAgentFolder();
     if (folder == null) return;
     _projectDefaulted = true;
     _folder = folder;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _folder == folder) unawaited(_loadGit(folder));
     });
+  }
+
+  String? _latestAgentFolder() {
+    final agents = [...?_machine?.agents]
+      ..sort(
+        (a, b) => (b.lastUsedAt ?? DateTime(0)).compareTo(
+          a.lastUsedAt ?? DateTime(0),
+        ),
+      );
+    for (final agent in agents) {
+      final path = agent.project?.root ?? agent.project?.cwd;
+      if (path != null && path.isNotEmpty) return path;
+    }
+    return null;
   }
 
   /// Set once the default project has been applied, so a person who clears it is not handed it
