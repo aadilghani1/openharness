@@ -1029,6 +1029,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
 
   /// The button: a missing choice opens its chooser and says why, the desktop's `requiredChoice`.
   Future<void> _start() async {
+    // The keyboard goes with the form: the new harness should open on its terminal and the mic,
+    // not on a keyboard left up from typing the task.
+    FocusManager.instance.primaryFocus?.unfocus();
     if (_engine == null) {
       setState(() => _error = 'Choose an agent.');
       await _chooseAgent();
