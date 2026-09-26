@@ -157,10 +157,14 @@ class FzfInfoLine extends StatelessWidget {
     required this.matched,
     required this.total,
     this.actions = const [],
+    this.label,
   });
 
   final int matched;
   final int total;
+
+  /// A word in place of the count, for a list that counts itself elsewhere — `:`'s models.
+  final String? label;
   final List<({String label, VoidCallback onTap})> actions;
 
   @override
@@ -172,7 +176,7 @@ class FzfInfoLine extends StatelessWidget {
         children: [
           const SizedBox(width: 24),
           TtyText(
-            matched == total ? '$total' : '$matched/$total',
+            label ?? (matched == total ? '$total' : '$matched/$total'),
             color: tty.yellow,
           ),
           const SizedBox(width: 8),

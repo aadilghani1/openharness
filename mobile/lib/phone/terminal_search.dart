@@ -11,6 +11,7 @@ import 'package:harness_mobile/shared/widgets/app_dialog.dart'
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'agents_page.dart' show openNewAgent;
+import 'find_models.dart';
 import 'fzf.dart';
 import 'tty.dart';
 import 'phone_search_actions.dart';
@@ -432,16 +433,27 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                   SizedBox(height: media.padding.top),
                   _FindHeader(search: _search, onBack: _back),
                   Expanded(
-                    child: PhoneSearchResults(
-                      key: _results,
-                      notifier: widget.notifier,
-                      controller: _search,
-                      fzf: true,
-                      showing: widget.showing,
-                      onOpen: _close,
-                    ),
+                    child: switch ((_search.isModelMode, widget.showing)) {
+                      // `:` — the models the agent on screen can run on.
+                      (true, final showing?) => FindModels(
+                        notifier: widget.notifier,
+                        machineId: showing.machineId,
+                        agentId: showing.agentId,
+                        query: _search.matchQuery,
+                        onPicked: _close,
+                      ),
+                      _ => PhoneSearchResults(
+                        key: _results,
+                        notifier: widget.notifier,
+                        controller: _search,
+                        fzf: true,
+                        showing: widget.showing,
+                        onOpen: _close,
+                      ),
+                    },
                   ),
                   FzfInfoLine(
+                    label: _search.isModelMode ? 'models' : null,
                     matched: _search.matchCount,
                     total: _search.total,
                     actions: [
@@ -503,7 +515,7 @@ class _FindHeader extends StatelessWidget {
               child: TtyText(
                 search.isCommandMode || search.isHelpMode || search.isGroupMode
                     ? search.title.toLowerCase()
-                    : '> cmds  # projects  @ machines  ? help',
+                    : '> cmds # projects @ machines : models',
                 color: tty.dim,
               ),
             ),

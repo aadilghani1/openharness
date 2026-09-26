@@ -75,7 +75,7 @@ class PhoneSearchController extends ChangeNotifier {
   int total = 0;
   int matchCount = 0;
 
-  static final _quickAccessPrefix = RegExp(r'^[>@#?]');
+  static final _quickAccessPrefix = RegExp(r'^[>@#?:]');
   static final _commandPrefix = RegExp(r'^>\s*');
   static final _helpPrefix = RegExp(r'^\?\s*');
 
@@ -83,6 +83,10 @@ class PhoneSearchController extends ChangeNotifier {
   bool get isHelpMode => modes && query.trimLeft().startsWith('?');
   bool get isProjectMode => modes && query.trimLeft().startsWith('#');
   bool get isMachineMode => modes && query.trimLeft().startsWith('@');
+
+  /// `:` — the models the agent on screen can run on, the desktop ⌘P's `:`. Drawn by Find itself
+  /// (it needs the machine's grid, asked for as the mode opens), so this list stays empty.
+  bool get isModelMode => modes && query.trimLeft().startsWith(':');
   bool get isGroupMode => isProjectMode || isMachineMode;
 
   String get commandQuery => query.trimLeft().replaceFirst(_commandPrefix, '');
@@ -100,7 +104,7 @@ class PhoneSearchController extends ChangeNotifier {
       ? commandQuery
       : isHelpMode
       ? helpQuery
-      : isGroupMode
+      : isGroupMode || isModelMode
       ? query.trimLeft().substring(1).trimLeft()
       : query;
 
@@ -112,6 +116,8 @@ class PhoneSearchController extends ChangeNotifier {
       ? 'Projects'
       : isMachineMode
       ? 'Machines'
+      : isModelMode
+      ? 'Models'
       : _groupScope != null
       ? 'Harnesses · ${_groupScope!.name}'
       : 'Search';
@@ -126,6 +132,8 @@ class PhoneSearchController extends ChangeNotifier {
       ? 'Search projects…'
       : isMachineMode
       ? 'Search machines…'
+      : isModelMode
+      ? 'Search models…'
       : kPhoneSearchHint;
 
   void setQuery(String value) {
@@ -255,6 +263,13 @@ class PhoneSearchController extends ChangeNotifier {
   bool _disposed = false;
 
   void _filter() {
+    if (isModelMode) {
+      rows = const [];
+      total = 0;
+      matchCount = 0;
+      _commandIds = const {};
+      return;
+    }
     if (isHelpMode) {
       // The modes keep the order they are taught in; what follows `?` only
       // narrows them, the way a quick-open's own `?` does.
@@ -347,7 +362,11 @@ class PhoneSearchController extends ChangeNotifier {
   /// Whether the rows are agents — the plain list, or one project's or machine's — rather than
   /// commands, projects or machines.
   bool get _listsAgents =>
-      !isCommandMode && !isHelpMode && !isProjectMode && !isMachineMode;
+      !isCommandMode &&
+      !isHelpMode &&
+      !isProjectMode &&
+      !isMachineMode &&
+      !isModelMode;
 
   /// With nothing typed, the commands run lately lead, newest first; the rest
   /// keep their order. Once something is typed, the match decides.

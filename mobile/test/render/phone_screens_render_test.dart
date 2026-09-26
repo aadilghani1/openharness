@@ -9,8 +9,10 @@ import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
+import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/phone/terminal_page.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
+import 'package:harness_mobile/phone/voice_mic_face.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
@@ -81,10 +83,14 @@ class _Conn extends WsConn {
   }) async => {};
 }
 
-Future<void> _loadFont(String family, List<String> files) async {
+Future<void> _loadFont(
+  String family,
+  List<String> files, {
+  String dir = '/Library/Fonts',
+}) async {
   final loader = FontLoader(family);
   for (final file in files) {
-    final bytes = await File('/Library/Fonts/$file').readAsBytes();
+    final bytes = await File('$dir/$file').readAsBytes();
     loader.addFont(Future.value(ByteData.view(bytes.buffer)));
   }
   await loader.load();
@@ -108,6 +114,19 @@ Future<void> _loadFonts() async {
   }
   for (final family in ['.AppleSystemUIFont', 'SF Pro Text']) {
     await _loadFont(family, sans);
+  }
+  // The icons still on screen (the mic's glyph, the key bar), from the package in the pub cache.
+  final lucide =
+      '${Platform.environment['HOME']}/.pub-cache/hosted/pub.dev/lucide_icons_flutter-3.1.19/assets';
+  if (Directory(lucide).existsSync()) {
+    await _loadFont('packages/lucide_icons_flutter/Lucide', [
+      'lucide.ttf',
+    ], dir: lucide);
+    for (final weight in [100, 200, 300, 400, 500, 600]) {
+      await _loadFont('packages/lucide_icons_flutter/Lucide$weight', [
+        'LucideVariable-w$weight.ttf',
+      ], dir: '$lucide/build_font');
+    }
   }
 }
 
@@ -164,7 +183,12 @@ void main() {
           cwd: '/Users/me/code/autonomous-harness',
           minutesAgo: 3,
         ),
-        _agent('b', 'docs-rewrite', cwd: '/Users/me/code/site', minutesAgo: 120),
+        _agent(
+          'b',
+          'docs-rewrite',
+          cwd: '/Users/me/code/site',
+          minutesAgo: 120,
+        ),
       ];
     notifier.machineStates['mini'] = MachineState(mini)
       ..nodeOnline = true
@@ -194,7 +218,10 @@ void main() {
     }
     session.seedScreen(screen);
     notifier.adoptSessionForTest(session);
-    await notifier.projectHistory.select('m', '/Users/me/code/autonomous-harness');
+    await notifier.projectHistory.select(
+      'm',
+      '/Users/me/code/autonomous-harness',
+    );
     language = ValueNotifier('en');
     voice = VoiceInputController(
       transcriber: FakeTranscriber().call,
@@ -216,9 +243,7 @@ void main() {
           key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
       final image = await boundary.toImage(pixelRatio: 3);
       final png = await image.toByteData(format: ui.ImageByteFormat.png);
-      await File(
-        '$_outDir/$name.png',
-      ).writeAsBytes(png!.buffer.asUint8List());
+      await File('$_outDir/$name.png').writeAsBytes(png!.buffer.asUint8List());
     });
   }
 
@@ -288,5 +313,90 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 400));
     await shoot(tester, key, '4-new');
+  });
+
+  testWidgets('focus, keyboard up', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, focus());
+    await tester.tap(find.byType(TerminalView));
+    await tester.pump();
+    tester.view.viewInsets = const FakeViewPadding(bottom: 336 * 3);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    await shoot(tester, key, '1b-focus-keyboard');
+  });
+
+  testWidgets('focus, recording', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, focus());
+    await tester.tap(find.byType(VoiceMicCore));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await shoot(tester, key, '1c-focus-recording');
+  });
+
+  testWidgets('focus, actions', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, focus());
+    await tester.tap(find.text('…'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await shoot(tester, key, '1d-focus-actions');
+  });
+
+  Future<void> openFind(WidgetTester tester) async {
+    await tester.tap(find.byKey(const ValueKey('terminal-find')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+  }
+
+  testWidgets('find, typed', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, focus());
+    await openFind(tester);
+    await tester.enterText(find.byType(TextField), 'ap');
+    await tester.pump(const Duration(milliseconds: 200));
+    await shoot(tester, key, '3b-find-typed');
+  });
+
+  testWidgets('find, commands', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, focus());
+    await openFind(tester);
+    await tester.enterText(find.byType(TextField), '>');
+    await tester.pump(const Duration(milliseconds: 200));
+    await shoot(tester, key, '3c-find-commands');
+  });
+
+  testWidgets('new, options open', skip: skip, (tester) async {
+    final key = await pumpScreen(
+      tester,
+      NewAgentPage(notifier: notifier, machineId: 'm'),
+    );
+    await tester.tap(find.text('options'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await shoot(tester, key, '4b-new-options');
+  });
+
+  testWidgets('new, project chooser', skip: skip, (tester) async {
+    final key = await pumpScreen(
+      tester,
+      NewAgentPage(notifier: notifier, machineId: 'm'),
+    );
+    await tester.tap(find.text('project'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await shoot(tester, key, '4c-new-project-chooser');
+  });
+
+  testWidgets('new, agent chooser', skip: skip, (tester) async {
+    final key = await pumpScreen(
+      tester,
+      NewAgentPage(notifier: notifier, machineId: 'm'),
+    );
+    await tester.tap(find.text('agent'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await shoot(tester, key, '4d-new-agent-chooser');
+  });
+
+  testWidgets('settings', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, SettingsPage(notifier: notifier));
+    await shoot(tester, key, '5-settings');
   });
 }
