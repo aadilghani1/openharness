@@ -58,23 +58,26 @@ class DaemonChip extends StatelessWidget {
                 children: [
                   Container(
                     height: height,
-                    alignment: Alignment.center,
                     padding: const EdgeInsets.symmetric(horizontal: 3),
                     decoration: BoxDecoration(
                       color: DaemonInk.ground,
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(color: DaemonInk.line),
                     ),
-                    child: Text(
-                      face.cell,
-                      maxLines: 1,
-                      softWrap: false,
-                      textScaler: TextScaler.noScaling,
-                      style: DaemonInk.mono(
-                        size: 12.5,
-                        color: colour,
-                        weight: FontWeight.w600,
-                        height: 1,
+                    // As wide as its ten cells, wherever it is put.
+                    child: Align(
+                      widthFactor: 1,
+                      child: Text(
+                        face.cell,
+                        maxLines: 1,
+                        softWrap: false,
+                        textScaler: TextScaler.noScaling,
+                        style: DaemonInk.mono(
+                          size: 12.5,
+                          color: colour,
+                          weight: FontWeight.w600,
+                          height: 1,
+                        ),
                       ),
                     ),
                   ),

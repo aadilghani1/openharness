@@ -183,7 +183,8 @@ void main() {
     expect(backend.written, [
       {'op': 'zoo.pair', 'id': 'vim'},
     ]);
-    expect(find.text('vim'), findsWidgets);
+    await tester.pump();
+    expect(tester.getSemantics(vim).label, 'vim, paired');
     // Empty slots are numbered; the secret is a `[ ! ]`.
     expect(
       tester.getSemantics(find.byKey(const ValueKey('daemon-shelf-#03'))).label,

@@ -458,22 +458,37 @@ class _Shelf extends StatelessWidget {
           style: DaemonInk.mono(size: 12.5, color: DaemonInk.dim),
         ),
         const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final cell in cells)
-              _ShelfCell(
-                cell: cell,
-                paired: cell.daemon?.id == pair,
-                onPair: cell.daemon == null || cell.daemon!.id == pair
-                    ? null
-                    : () {
-                        HapticFeedback.selectionClick();
-                        zoo.pair(cell.daemon!.id);
-                      },
-              ),
-          ],
+        // An even grid, as many slots to a row as fit: a box back, whatever
+        // the width of the phone.
+        LayoutBuilder(
+          builder: (context, constraints) {
+            const gap = 8.0, least = 84.0;
+            final columns = ((constraints.maxWidth + gap) / (least + gap))
+                .floor()
+                .clamp(1, 5);
+            final width =
+                (constraints.maxWidth - gap * (columns - 1)) / columns;
+            return Wrap(
+              spacing: gap,
+              runSpacing: gap,
+              children: [
+                for (final cell in cells)
+                  SizedBox(
+                    width: width,
+                    child: _ShelfCell(
+                      cell: cell,
+                      paired: cell.daemon?.id == pair,
+                      onPair: cell.daemon == null || cell.daemon!.id == pair
+                          ? null
+                          : () {
+                              HapticFeedback.selectionClick();
+                              zoo.pair(cell.daemon!.id);
+                            },
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
         if (owned.length > 1) ...[
           const SizedBox(height: 10),
@@ -513,7 +528,7 @@ class _ShelfCell extends StatelessWidget {
         behavior: HitTestBehavior.opaque,
         onTap: onPair,
         child: Container(
-          constraints: const BoxConstraints(minWidth: 80, minHeight: 48),
+          constraints: const BoxConstraints(minHeight: 48),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
             color: DaemonInk.deep,
@@ -523,30 +538,33 @@ class _ShelfCell extends StatelessWidget {
               width: paired ? 1.5 : 1,
             ),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                cell.top,
-                softWrap: false,
-                textScaler: TextScaler.noScaling,
-                style: DaemonInk.mono(
-                  size: 13,
-                  color: d?.color ?? DaemonInk.faint,
-                  weight: FontWeight.w600,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  cell.top,
+                  softWrap: false,
+                  textScaler: TextScaler.noScaling,
+                  style: DaemonInk.mono(
+                    size: 13,
+                    color: d?.color ?? DaemonInk.faint,
+                    weight: FontWeight.w600,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                paired ? '${cell.label} *' : cell.label,
-                softWrap: false,
-                textScaler: TextScaler.noScaling,
-                style: DaemonInk.mono(
-                  size: 11,
-                  color: d == null ? DaemonInk.faint : DaemonInk.dim,
+                const SizedBox(height: 2),
+                Text(
+                  paired ? '${cell.label} *' : cell.label,
+                  softWrap: false,
+                  textScaler: TextScaler.noScaling,
+                  style: DaemonInk.mono(
+                    size: 11,
+                    color: d == null ? DaemonInk.faint : DaemonInk.dim,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
