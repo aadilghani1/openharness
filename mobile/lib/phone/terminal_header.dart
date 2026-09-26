@@ -57,7 +57,8 @@ class TerminalHeader extends StatelessWidget {
   /// the stream is read-only.
   final List<Widget> trailing;
 
-  /// The row's height, not counting its insets.
+  /// The row's height, not counting its insets, at the default text size —
+  /// see [rowHeightFor] for larger text.
   ///
   /// Two lines of type: 15pt name over 12.5pt folder, with the engine mark
   /// centred against the pair.
@@ -68,8 +69,32 @@ class TerminalHeader extends StatelessWidget {
   static const double bottomInset = 8;
 
   /// The whole header, insets and divider included — what floats over the
-  /// terminal's top rows while it is shown.
+  /// terminal's top rows while it is shown — at the default text size; see
+  /// [heightFor].
   static const double height = topInset + rowHeight + bottomInset + 1;
+
+  static const double _nameSize = 15;
+  static const double _placeSize = 12.5;
+  static const double _lineHeight = 1.2;
+  static const double _lineGap = 2;
+
+  /// The row's height at [scaler]: [rowHeight], or taller once larger text
+  /// needs more for the two lines. Each line is exactly its scaled size times
+  /// [_lineHeight] tall, so this is what the row lays out to.
+  ///
+  /// ⚠️ **The row grows; it is not cut.** It was a fixed 40pt, and at 1.5x
+  /// text the two lines needed 52: the names spilled out of the bottom of the
+  /// row, with or without anything beside them.
+  static double rowHeightFor(TextScaler scaler) => math.max(
+    rowHeight,
+    ((scaler.scale(_nameSize) + scaler.scale(_placeSize)) * _lineHeight +
+            _lineGap)
+        .ceilToDouble(),
+  );
+
+  /// [height] at [scaler]: what the header covers of the terminal under it.
+  static double heightFor(TextScaler scaler) =>
+      topInset + rowHeightFor(scaler) + bottomInset + 1;
 
   /// The engine mark's size. Big enough to carry the status dot on its corner
   /// without the dot hiding it.
@@ -86,8 +111,12 @@ class TerminalHeader extends StatelessWidget {
         sideInset,
         bottomInset,
       ),
-      child: SizedBox(
-        height: rowHeight,
+      // At least the row's height, never a cap on it: a line that turns out
+      // taller than [rowHeightFor] reckons grows the row rather than spilling.
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          minHeight: rowHeightFor(MediaQuery.textScalerOf(context)),
+        ),
         child: Row(
           children: [
             BadgedEngineMark(
@@ -368,13 +397,13 @@ class _Identity extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
             color: AppPalette.textPrimary,
-            fontSize: 15,
+            fontSize: TerminalHeader._nameSize,
             fontWeight: FontWeight.w600,
-            height: 1.2,
+            height: TerminalHeader._lineHeight,
           ),
         ),
         if (hasPlace) ...[
-          const SizedBox(height: 2),
+          const SizedBox(height: TerminalHeader._lineGap),
           TerminalPlaceLine(
             machine: machineName,
             folder: project?.label,
@@ -388,9 +417,9 @@ class _Identity extends StatelessWidget {
 
   TextStyle get _placeStyle => TextStyle(
     color: AppPalette.textSecondary,
-    fontSize: 12.5,
+    fontSize: TerminalHeader._placeSize,
     fontWeight: FontWeight.w500,
-    height: 1.2,
+    height: TerminalHeader._lineHeight,
   );
 }
 

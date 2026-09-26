@@ -1620,7 +1620,9 @@ class _TerminalPageState extends State<TerminalPage>
                                 Positioned(
                                   right: TerminalActionColumn.inset,
                                   top: _ownsInput
-                                      ? TerminalActionColumn.topInset
+                                      ? TerminalActionColumn.topInsetFor(
+                                          MediaQuery.textScalerOf(context),
+                                        )
                                       : null,
                                   bottom: _ownsInput
                                       ? null

@@ -91,7 +91,11 @@ class TerminalActionColumn extends StatefulWidget {
   /// never meet — and the rows Search now covers are the OLDEST on screen,
   /// which is the opposite end of the pane from the prompt being typed into.
   /// That is the whole reason it moves rather than staying where it was.
-  static const double topInset = TerminalHeader.height + 8;
+  ///
+  /// At [scaler], because larger text makes the header's row taller — see
+  /// [TerminalHeader.heightFor].
+  static double topInsetFor(TextScaler scaler) =>
+      TerminalHeader.heightFor(scaler) + 8;
 
   /// The DRAWN gap between one circle and the next, the same all the way down.
   ///
