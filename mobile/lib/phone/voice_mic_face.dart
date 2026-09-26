@@ -118,7 +118,7 @@ class VoiceMicCore extends StatelessWidget {
   /// The visible circle's diameter. A size up from the 52 it was in the corner:
   /// centred at the foot of Focus it is the one control on the screen, the way
   /// a camera's shutter is.
-  static const double diameter = 64;
+  static const double diameter = 56;
 
   final VoiceMicFace face;
 

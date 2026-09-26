@@ -60,6 +60,13 @@ class Tty {
     theme.background,
   );
 
+  /// One terminal row's height — the pane's line height (1.2) at its size. Every height in the
+  /// chrome is a whole number of these.
+  double get row => fontSize * 1.2;
+
+  /// The shortest a tappable row may be drawn: whole rows, at least 44pt.
+  double get tapRow => (44 / row).ceil() * row;
+
   /// One character cell's width — the grid every column in the chrome sits on.
   double get cell => _cellWidth(fontFamily, fontFallback, fontSize);
 
@@ -97,7 +104,8 @@ class Tty {
     fontFamily: fontFamily,
     fontFamilyFallback: fontFallback,
     fontSize: size ?? fontSize,
-    height: 1.25,
+    // The terminal's own line height, so chrome rows and output rows keep one pitch.
+    height: 1.2,
     color: color ?? text,
     backgroundColor: background,
     fontWeight: weight,

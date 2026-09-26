@@ -1075,6 +1075,11 @@ class TerminalSession extends ChangeNotifier {
   /// the injection from there: it adapts slash commands to the pane's engine and retries the
   /// submit Enter. A client typing bytes can do neither — which is exactly how Codex ended up
   /// holding a composed line unsent, its Enter arriving in the same read as the text.
+  /// Where a finished voice take goes instead of [sendComposerText], while the page has a reason
+  /// to route it — an agent's question dialog is open, and a paste-and-Return would answer it
+  /// blind. Set and cleared by the page; null the rest of the time.
+  Future<bool> Function(String text)? voiceDeliver;
+
   Future<bool> sendComposerText(String text) async {
     if (!acceptsInput) return false;
     final content = text.trimRight();

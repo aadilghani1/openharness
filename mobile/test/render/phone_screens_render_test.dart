@@ -245,6 +245,9 @@ void main() {
       final png = await image.toByteData(format: ui.ImageByteFormat.png);
       await File('$_outDir/$name.png').writeAsBytes(png!.buffer.asUint8List());
     });
+    // Done with the screen: take it down and run its clocks out, so no timer outlives the test.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 10));
   }
 
   Future<GlobalKey> pumpScreen(WidgetTester tester, Widget home) async {
@@ -331,6 +334,27 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     await shoot(tester, key, '1c-focus-recording');
+    // The take's clock is the controller's, not the screen's: throw the take away to stop it.
+    voice.clear();
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('focus, prompt', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, focus());
+    notifier.panes.first.session!.terminal.write(
+      '\r\n\x1b[2m────────────────────────────────────────────\x1b[0m\r\n'
+      ' \x1b[1mBash command\x1b[0m\r\n'
+      '   rm -rf build/ && flutter build ios\r\n'
+      ' Do you want to proceed?\r\n'
+      ' \x1b[36m❯ 1. Yes\x1b[0m\r\n'
+      "   2. Yes, and don't ask again for rm commands\r\n"
+      '   3. No, and tell Claude what to do differently\r\n'
+      '\r\n'
+      ' \x1b[2mEsc to cancel · Enter to confirm\x1b[0m',
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    await shoot(tester, key, '1e-focus-prompt');
   });
 
   testWidgets('focus, actions', skip: skip, (tester) async {

@@ -46,7 +46,7 @@ VoiceMicAction voiceMicAction(
 /// the person's back is worse than asking for one more tap.
 VoiceMicAction _tapAction(VoiceInputController voice, TerminalSession session) {
   final canSend = session.acceptsInput;
-  void send() => unawaited(voice.submit(session.sendComposerText));
+  void send() => unawaited(voice.submit(session.voiceDeliver ?? session.sendComposerText));
   if (voice.isSending) return _face(VoiceMicFace.sending);
   return switch (voice.status) {
     VoiceInputStatus.transcribing => _face(VoiceMicFace.busy),
@@ -131,7 +131,7 @@ VoiceMicAction _holdAction(
         : VoiceMicFace.talk,
     onPressed: live ? _live : null,
     onHoldStart: live
-        ? () => unawaited(voice.startHold(session.sendComposerText))
+        ? () => unawaited(voice.startHold(session.voiceDeliver ?? session.sendComposerText))
         : null,
     onHoldFinish: live ? _release(voice, session) : null,
   );
@@ -158,7 +158,7 @@ void Function({required bool cancelled}) _release(
     voice.cancelHold();
     return;
   }
-  unawaited(voice.finishHold(session.sendComposerText));
+  unawaited(voice.finishHold(session.voiceDeliver ?? session.sendComposerText));
 };
 
 /// Marks the button live in hold mode without giving it anything to do on tap.

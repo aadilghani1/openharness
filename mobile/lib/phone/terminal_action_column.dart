@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -14,7 +12,6 @@ import 'voice_input_controller.dart';
 import 'voice_mic_button.dart';
 import 'voice_mic_face.dart';
 import 'voice_mic_fab.dart';
-import 'voice_status_pill.dart';
 
 /// The terminal's floating controls, stacked in its bottom-right corner:
 /// the mic, then Search.
@@ -98,16 +95,8 @@ class TerminalActionColumn extends StatefulWidget {
   /// That is the whole reason it moves rather than staying where it was.
   static const double topInset = TerminalHeader.height + 8;
 
-  /// The capsule's widest, however wide the phone: a notice is easier to read
-  /// in two lines of a sensible length than in one line across a tablet.
-  static const double _capsuleMaxWidth = 360;
 
-  /// What the capsule leaves clear at the terminal's left and right edges.
-  static const double _capsuleSideMargin = 16;
 
-  /// The gap between the capsule and the mic under it — clear of the mic's hit area, which spills
-  /// past its slot (see [VoiceMicButton.touchOverhang]).
-  static const double _capsuleGap = VoiceMicButton.touchOverhang + 4;
 
   @override
   State<TerminalActionColumn> createState() => _TerminalActionColumnState();
@@ -157,34 +146,12 @@ class _TerminalActionColumnState extends State<TerminalActionColumn> {
     if (session == null) {
       return const VoiceMicButton(face: VoiceMicFace.talk, onPressed: null);
     }
-    // The capsule stands OVER the mic, centred with it, and grows upward: the column is laid from
-    // its foot (see `terminal_page.dart`), so the mic never moves under the thumb.
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: math.min(
-              TerminalActionColumn._capsuleMaxWidth,
-              MediaQuery.sizeOf(context).width -
-                  2 * TerminalActionColumn._capsuleSideMargin,
-            ),
-          ),
-          // The gap stands under the capsule even while it is empty: the
-          // column is laid from its foot, so the mic never moves for it.
-          child: Padding(
-            padding: const EdgeInsets.only(
-              bottom: TerminalActionColumn._capsuleGap,
-            ),
-            child: VoiceStatusPill(voice: widget.voice, slipped: _slipped),
-          ),
-        ),
-        VoiceMicFab(
-          voice: widget.voice,
-          session: session,
-          onSlipChanged: _onSlipChanged,
-        ),
-      ],
+    // The mic alone: what it is doing is said on the status line, as one terminal row — see
+    // `VoiceBarLine`.
+    return VoiceMicFab(
+      voice: widget.voice,
+      session: session,
+      onSlipChanged: _onSlipChanged,
     );
   }
 
