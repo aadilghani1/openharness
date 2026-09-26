@@ -170,6 +170,18 @@ export class PairSensor implements PairService {
     return entry
   }
 
+  /**
+   * A lesson the person approved (pair/learn): journaled as `learned`, crediting the daemon that found it —
+   * the record a later zoo op can grant bond from. Not a change to any harness, so nothing is pushed.
+   */
+  learned(fields: { daemon: string; name: string; agentId?: string; engine?: string }): PairJournalEntry | null {
+    if (!this.on) return null
+    const name = statusText(fields.name, 80) || 'lesson'
+    return this.deps.journal.append({
+      at: this.now(), kind: 'learned', agentId: fields.agentId ?? '', name, engine: fields.engine ?? '', text: `learned "${name}"`, daemon: fields.daemon,
+    })
+  }
+
   /** One harness's state, or null when it is not watched. */
   harness(agentId: string): PairHarness | null {
     const h = this.harnesses.get(agentId)

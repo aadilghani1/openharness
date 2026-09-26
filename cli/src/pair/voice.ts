@@ -65,7 +65,7 @@ export function lineText(value: string, max: number): string {
 
 /** `[y/n/g] ` — the keys a line offers, FIRST, so a narrow pane that cuts the end still shows them. */
 export function keysPrefix(actions: readonly { key: string }[]): string {
-  const keys = (['y', 'n', 'g'] as const).filter((k) => actions.some((a) => a.key === k))
+  const keys = (['y', 'n', 's', 'g'] as const).filter((k) => actions.some((a) => a.key === k))
   return keys.length ? `[${keys.join('/')}] ` : ''
 }
 
@@ -267,6 +267,13 @@ export class PairVoice {
   }
 
   wasSaid(id: string): boolean { return this.spoken.has(id) }
+
+  /** A line of this mood is showing (or its keys are held for a brief) right now. */
+  showing(mood: DaemonMood): boolean {
+    this.sweep(this.deps.now())
+    for (const { say } of this.live.values()) if (say.mood === mood) return true
+    return false
+  }
 
   private sweep(now: number): void {
     for (const [id, { say, at }] of [...this.live]) if (now - at >= say.ttlMs) this.live.delete(id)
