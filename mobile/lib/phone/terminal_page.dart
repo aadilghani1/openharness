@@ -763,6 +763,11 @@ class _TerminalPageState extends State<TerminalPage>
 
   @override
   void dispose() {
+    // A take started here must not come back to a page that is gone.
+    final session = widget.notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    if (session?.voiceDeliver == _deliverVoice) session?.voiceDeliver = null;
     _barMessageTimer?.cancel();
     _barMessage.dispose();
     _scrollback.dispose();
@@ -912,13 +917,30 @@ class _TerminalPageState extends State<TerminalPage>
     _flash('✓ ${key.number} ${key.label}');
   }
 
-  /// A voice take while the agent's question is open: it answers the question or it is not sent.
-  Future<bool> _answerByVoice(String text) async {
-    final view = _questionWatcher?.view;
+  /// Where a voice take goes: to the agent's prompt, echoed on the status line once it has landed —
+  /// or, while the agent's question is open, to that question, as its answer or not at all.
+  Future<bool> _deliverVoice(String text) async {
     final session = widget.notifier
         .paneOfAgent(widget.machineId, widget.agentId)
         ?.session;
     if (session == null) return false;
+    if (_questionWatcher?.view != null) return _answerByVoice(session, text);
+    final sent = await session.sendComposerText(text);
+    // After the send is acknowledged, never before: an echo that shows first is a promise.
+    if (sent && mounted) {
+      HapticFeedback.lightImpact();
+      _flash('✓ ${_windowName(session.agentName)}  ${_clip(text.trim(), 28)}');
+    }
+    return sent;
+  }
+
+  /// [text] cut to [cells], the way the chrome cuts a name: `··` where it stops.
+  static String _clip(String text, int cells) =>
+      text.length <= cells ? text : '${text.substring(0, cells - 2)}··';
+
+  /// A voice take while the agent's question is open: it answers the question or it is not sent.
+  Future<bool> _answerByVoice(TerminalSession session, String text) async {
+    final view = _questionWatcher?.view;
     if (view == null) return session.sendComposerText(text);
     if (!view.answerable || view.multi) {
       _flash('✗ answer on screen', error: true);
@@ -1595,9 +1617,7 @@ class _TerminalPageState extends State<TerminalPage>
     _syncQuestionWatcher(agent?.engine, session);
     // While the agent's question is open, a voice take answers it — never a paste and a blind
     // Return into the dialog. See [_answerByVoice].
-    session?.voiceDeliver = _questionWatcher?.view != null
-        ? _answerByVoice
-        : null;
+    session?.voiceDeliver = _deliverVoice;
     // Read once: the body reserves it, and search subtracts what the body
     // already took. See [_navigationBar].
     final navigationBar = _navigationBar;
@@ -2065,6 +2085,7 @@ class _TerminalPageState extends State<TerminalPage>
                             session: session,
                             onSearch: _openSearch,
                             unread: widget.notifier.agentNotices.unread,
+                            working: _agentWorking,
                           ),
                         ),
                       ),

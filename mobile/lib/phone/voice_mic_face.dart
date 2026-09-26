@@ -113,7 +113,12 @@ bool _spins(VoiceMicFace face) =>
 /// The round, filled part of the mic: its colour, its glow, and the glyph for
 /// what a press will do.
 class VoiceMicCore extends StatelessWidget {
-  const VoiceMicCore({super.key, required this.face, required this.dead});
+  const VoiceMicCore({
+    super.key,
+    required this.face,
+    required this.dead,
+    this.working = false,
+  });
 
   /// The visible circle's diameter. A size up from the 52 it was in the corner:
   /// centred at the foot of Focus it is the one control on the screen, the way
@@ -124,6 +129,10 @@ class VoiceMicCore extends StatelessWidget {
 
   /// Drawn as a button that cannot be pressed: frosted, not filled.
   final bool dead;
+
+  /// The agent is working: the rim is a 2pt ring in the text's faint ink rather than a hairline —
+  /// at the thumb, whose turn it is.
+  final bool working;
 
   static const Duration _morph = Duration(milliseconds: 300);
 
@@ -198,7 +207,9 @@ class VoiceMicCore extends StatelessWidget {
         shape: BoxShape.circle,
         // The terminal's own ground, near-opaque, so the glyph reads over any line of output.
         color: tty.ground.withValues(alpha: 0.94),
-        border: Border.all(color: tty.dim, width: 1.5),
+        border: working
+            ? Border.all(color: tty.faint, width: 2)
+            : Border.all(color: tty.dim, width: 1.5),
       );
     }
     return BoxDecoration(

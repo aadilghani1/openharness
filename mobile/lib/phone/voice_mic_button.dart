@@ -34,9 +34,13 @@ class VoiceMicButton extends StatefulWidget {
     this.onHoldStart,
     this.onHoldFinish,
     this.onSlipChanged,
+    this.working = false,
   });
 
   final VoiceMicFace face;
+
+  /// The agent is working — see [VoiceMicCore.working].
+  final bool working;
 
   /// Null draws the button dimmed and dead.
   ///
@@ -299,7 +303,11 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
                     duration: const Duration(milliseconds: 140),
                     curve: Curves.easeOut,
                     scale: _pressed && !_slippedOff ? 0.92 : 1,
-                    child: VoiceMicCore(face: _face, dead: _dead),
+                    child: VoiceMicCore(
+                      face: _face,
+                      dead: _dead,
+                      working: widget.working,
+                    ),
                   ),
                 ),
               ),

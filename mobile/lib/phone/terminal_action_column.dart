@@ -45,9 +45,13 @@ class TerminalActionColumn extends StatefulWidget {
     required this.onSearch,
     this.unread,
     this.searchOnly = false,
+    this.working = false,
   });
 
   final VoiceInputController voice;
+
+  /// The agent is working: the mic wears a ring — see `VoiceMicCore.working`.
+  final bool working;
 
   /// Agents that finished while you were on this one. Search is where they are
   /// reached from, so it wears their count — the dial's bell pill. Null draws
@@ -94,9 +98,6 @@ class TerminalActionColumn extends StatefulWidget {
   /// which is the opposite end of the pane from the prompt being typed into.
   /// That is the whole reason it moves rather than staying where it was.
   static const double topInset = TerminalHeader.height + 8;
-
-
-
 
   @override
   State<TerminalActionColumn> createState() => _TerminalActionColumnState();
@@ -152,6 +153,7 @@ class _TerminalActionColumnState extends State<TerminalActionColumn> {
       voice: widget.voice,
       session: session,
       onSlipChanged: _onSlipChanged,
+      working: widget.working,
     );
   }
 
