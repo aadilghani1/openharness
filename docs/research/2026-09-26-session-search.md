@@ -50,7 +50,9 @@ the session named Mobile whose swipe discussion came later.
 
 - **Reuse, not a parser per format.** A pass runs the engine's own incremental normalizer, the one
   the live view uses, over the transcript. Every JSONL engine (Claude, Codex, Cursor, Pi, Amp,
-  Grok, Muse, Agy, Copilot, Command Code) comes for free, cleaning included.
+  Grok, Muse, Agy, Copilot, Command Code) comes for free, cleaning included. The engines that keep
+  history in a database (OpenCode, Kilo, Hermes, Devin) go through the readers and replay
+  normalizers `session_get` uses, read whole when the session changed.
 - **Left out:** tool output, reasoning, images. Tool-output records are recognised by their first
   kilobyte and skipped unparsed. Across all 76 real transcripts, asks, answers, turn times and
   offsets come out identical with and without the skip.
@@ -178,9 +180,6 @@ snippet, together, score }], indexed, pending, tookMs }`.
 
 ## Not yet
 
-- **Engines without transcript files** (OpenCode, Kilo, Hermes, Devin keep history in databases):
-  searchable by name only. Their readers already produce the same events, so a backfill through
-  them is the next step.
 - **Sessions started outside Harness** (plain `claude`, `codex`) could be indexed too, so any past
   conversation on the machine can be found and resumed.
 - **Untitled sessions** ("Claude harness 9-26 13:41") are now found by their content, but a
