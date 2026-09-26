@@ -79,10 +79,13 @@ class TerminalActionColumn extends StatefulWidget {
   /// How far the column sits from the terminal's right and bottom edges.
   static const double inset = VoiceMicFab.inset;
 
-  /// How far the orb's slot sits above the foot of the page. Low, Siri's way: the orb straddles
-  /// the home indicator's strip rather than floating up over the prompt, and the terminal runs full
-  /// screen under it. A tap there is the app's; only a swipe up from the very edge is the system's.
-  static const double orbBottom = 8;
+  /// How far the orb's slot sits above the foot of the page. Low and centred, where Siri's orb
+  /// stands over the dock — below the agent's prompt rather than on it — and the terminal runs full
+  /// screen under it.
+  ///
+  /// Measured off Siri: its orb's centre stands about 76pt above the foot of an iPhone 14, so
+  /// this slot's foot sits half the slot below that.
+  static const double orbBottom = 76 - VoiceMicButton.extent / 2;
 
   /// How far Search sits from the terminal's TOP edge while the keyboard is up
   /// — see [searchOnly].

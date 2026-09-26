@@ -64,26 +64,61 @@ AppNotifier _app() {
 }
 
 void main() {
-  testWidgets('the form offers only machines that can host an agent', (
-    tester,
-  ) async {
+  testWidgets(
+    'the Project chooser offers only machines that can host an agent',
+    (tester) async {
+      final app = _app();
+      addTearDown(app.dispose);
+      // A folder on each machine; the sleeping one's must not be offered.
+      await app.projectHistory.select('ready', '/code/app');
+      await app.projectHistory.select('sleeping', '/code/site');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: NewAgentPage(notifier: app, machineId: 'ready'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      // The desktop's default: the project last started on this machine.
+      expect(find.text('app'), findsOneWidget);
+
+      await tester.tap(find.text('Project'));
+      await tester.pumpAndSettle();
+
+      Finder inChooser(Finder finder) =>
+          find.descendant(of: find.byType(BottomSheet), matching: finder);
+      expect(inChooser(find.text('Studio · /code/app')), findsOneWidget);
+      expect(
+        find.textContaining('Laptop'),
+        findsNothing,
+        reason: 'an offline machine cannot host a new agent',
+      );
+    },
+  );
+
+  testWidgets('a swipe right anywhere goes back', (tester) async {
     final app = _app();
     addTearDown(app.dispose);
     await tester.pumpWidget(
       MaterialApp(
-        home: NewAgentPage(notifier: app, machineId: 'ready'),
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => NewAgentPage(notifier: app, machineId: 'ready'),
+              ),
+            ),
+            child: const Text('open'),
+          ),
+        ),
       ),
     );
+    await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    // The machine row unfolds into the others there are to choose from.
-    await tester.tap(find.text('Studio'));
+    expect(find.byType(NewAgentPage), findsOneWidget);
+
+    await tester.drag(find.text('Options'), const Offset(200, 0));
     await tester.pumpAndSettle();
 
-    expect(find.text('Studio'), findsOneWidget);
-    expect(
-      find.text('Laptop'),
-      findsNothing,
-      reason: 'an offline machine cannot host a new agent',
-    );
+    expect(find.byType(NewAgentPage), findsNothing);
   });
 }

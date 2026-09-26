@@ -85,8 +85,8 @@ void main() {
     (tester) async {
       final app = _app(_Conn());
       addTearDown(app.dispose);
-      // A folder this machine has been used with before. Its row is titled by the path's last
-      // segment, so this is the 'grid' tapped below.
+      // A folder this machine has been used with before — the Project row's
+      // default, titled by the path's last segment.
       await app.projectHistory.select('m', '/src/grid');
       await tester.pumpWidget(
         MaterialApp(
@@ -95,21 +95,10 @@ void main() {
       );
       await tester.pump();
 
-      // PROJECT and ENGINE are folded shut — the page says what is chosen and
-      // opens onto the choices. The folders already worked in are behind Search
-      // project, which is a sheet rather than a second fold.
-      await tester.tap(find.text('Choose a folder'));
-      await tester.pump();
-      await tester.tap(find.text('Search project'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.tap(find.text('grid'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      // Claude is the engine the form starts on, and the ENGINE row now shows
-      // it rather than offering it — so there is nothing to tap.
-      await tester.pump();
-      await tester.tap(find.text('Create Harness'));
+      // The desktop's ⌘N defaults: the project last started here and the engine
+      // the form starts on are already chosen, so the button is the whole flow.
+      expect(find.text('grid'), findsOneWidget);
+      await tester.tap(find.text('New Harness').last);
       // The create resolves on a microtask, then the route it pushes has to slide in — and only once
       // that transition ends does the form's own route come off the stack.
       await tester.pump();

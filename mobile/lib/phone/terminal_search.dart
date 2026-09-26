@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
@@ -9,6 +10,7 @@ import 'package:harness_mobile/shared/widgets/app_dialog.dart'
     show kDialogVeilBlur, kSheetVeilOpacity;
 import 'package:harness_mobile/state/app_state.dart';
 
+import 'agents_page.dart' show openNewAgent;
 import 'phone_search_actions.dart';
 import 'phone_search_controller.dart';
 import 'phone_search_field.dart';
@@ -250,6 +252,18 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
 
   /// `+`: away first, then the new-agent form. Null while no machine can take one.
   VoidCallback? _newAgent() {
+    // On the machine of the agent on screen, as a swipe left does; else the command's first ready
+    // machine.
+    final showing = widget.showing;
+    final here = showing == null
+        ? null
+        : widget.notifier.stateOf(showing.machineId);
+    if (here != null && here.nodeOnline != false && !here.needsLink) {
+      return () {
+        _close();
+        unawaited(openNewAgent(context, widget.notifier, showing!.machineId));
+      };
+    }
     final command = phoneSearchCommands(
       context,
       widget.notifier,
