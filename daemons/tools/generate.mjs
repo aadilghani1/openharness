@@ -140,7 +140,11 @@ function output(path, content) {
 }
 
 const header = '// Generated from daemons/roster.json by daemons/tools/generate.mjs. Do not edit.\n'
-output('desktop/lib/daemons/roster.g.dart', `${header}// ignore_for_file: prefer_single_quotes\nconst daemonRosterJson = r'''\n${text}''';\n`)
+// The Dart clients read the whole roster as a raw string: the desktop and the phone, each its own
+// package (the phone depends on nothing else in this repo), so each gets its own copy.
+const dartRoster = `${header}// ignore_for_file: prefer_single_quotes\nconst daemonRosterJson = r'''\n${text}''';\n`
+output('desktop/lib/daemons/roster.g.dart', dartRoster)
+output('mobile/lib/daemons/roster.g.dart', dartRoster)
 
 // The server needs only what decides a draw, a grant or a level: who exists, how rare, the egg rules,
 // what earns an egg and how bond grows. Art stays in the clients.

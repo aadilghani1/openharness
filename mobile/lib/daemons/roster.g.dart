@@ -1,0 +1,1195 @@
+// Generated from daemons/roster.json by daemons/tools/generate.mjs. Do not edit.
+// ignore_for_file: prefer_single_quotes
+const daemonRosterJson = r'''
+{
+  "version": 1,
+  "rules": {
+    "moods": [
+      "idle",
+      "work",
+      "need",
+      "done",
+      "fail",
+      "back",
+      "nap",
+      "boop"
+    ],
+    "eyes": {
+      "idle": "o",
+      "work": "=",
+      "need": "?",
+      "done": "^",
+      "fail": "x",
+      "back": "^",
+      "nap": "-",
+      "boop": "O"
+    },
+    "blinks": {
+      "ack": [
+        [
+          "-",
+          120
+        ]
+      ],
+      "look": [
+        [
+          "-",
+          120
+        ]
+      ],
+      "slow": [
+        [
+          "_",
+          180
+        ],
+        [
+          "-",
+          520
+        ],
+        [
+          "_",
+          180
+        ]
+      ]
+    },
+    "noBlinkMoods": [
+      "work",
+      "nap",
+      "boop"
+    ],
+    "holdMs": {
+      "done": 3000,
+      "back": 1300,
+      "fail": 4200,
+      "boop": 900
+    },
+    "backFrameMs": 110,
+    "versions": [
+      "0.1",
+      "1.0",
+      "2.0"
+    ],
+    "bondForVersion": {
+      "0.1": 0,
+      "1.0": 2,
+      "2.0": 4
+    },
+    "bond": {
+      "xpPerTurn": 1,
+      "xpPerDay": 5,
+      "levels": [
+        0,
+        50,
+        150,
+        300,
+        600
+      ]
+    },
+    "statusCells": 8,
+    "portraitMaxCols": 28,
+    "portraitMaxRows": 8,
+    "ligatureUnsafe": [
+      "==",
+      "??",
+      "!=",
+      "::",
+      "~~",
+      "->",
+      "=>",
+      "<=",
+      ">=",
+      "<>",
+      "||",
+      "&&",
+      "++",
+      "//",
+      "^=",
+      "~=",
+      ":="
+    ],
+    "rarities": [
+      "common",
+      "rare",
+      "legendary",
+      "secret"
+    ],
+    "shinyOneIn": 256,
+    "pityPerMiss": 1,
+    "firstEgg": {
+      "need": 5,
+      "habits": [
+        {
+          "key": "turn",
+          "label": "Finish a turn in a harness"
+        },
+        {
+          "key": "split",
+          "label": "Run two harnesses side by side"
+        },
+        {
+          "key": "find",
+          "label": "Find something with Cmd-O"
+        },
+        {
+          "key": "elsewhere",
+          "label": "Answer a harness from another device"
+        },
+        {
+          "key": "machine",
+          "label": "Connect a second computer"
+        },
+        {
+          "key": "store",
+          "label": "Try a Store harness"
+        },
+        {
+          "key": "resume",
+          "label": "Resume a paused harness"
+        },
+        {
+          "key": "days",
+          "label": "Come back on three different days"
+        }
+      ]
+    },
+    "eggs": {
+      "first": {
+        "look": "\\_O_/",
+        "weights": {
+          "common": 60,
+          "rare": 27,
+          "legendary": 12,
+          "secret": 1
+        }
+      },
+      "turn": {
+        "look": "\\_O_/",
+        "weights": {
+          "common": 60,
+          "rare": 27,
+          "legendary": 12,
+          "secret": 1
+        }
+      },
+      "week": {
+        "look": "\\_0_/",
+        "weights": {
+          "common": 45,
+          "rare": 35,
+          "legendary": 18,
+          "secret": 2
+        }
+      },
+      "marathon": {
+        "look": "\\_@_/",
+        "weights": {
+          "common": 25,
+          "rare": 40,
+          "legendary": 32,
+          "secret": 3
+        }
+      },
+      "night": {
+        "look": "*\\_O_/",
+        "weights": {
+          "common": 50,
+          "rare": 30,
+          "legendary": 12,
+          "secret": 8
+        },
+        "boost": {
+          "bat": 4
+        }
+      },
+      "history": {
+        "look": "\\_47_/",
+        "weights": {
+          "common": 60,
+          "rare": 27,
+          "legendary": 12,
+          "secret": 1
+        }
+      },
+      "easter": {
+        "look": "\\_?_/",
+        "weights": {
+          "common": 0,
+          "rare": 0,
+          "legendary": 50,
+          "secret": 50
+        }
+      }
+    },
+    "earn": {
+      "turn": {
+        "every": 40,
+        "dailyCap": 20
+      },
+      "week": {
+        "days": 3
+      },
+      "marathon": {
+        "turns": 500,
+        "machines": 2
+      },
+      "night": {
+        "nights": 3,
+        "fromHour": 0,
+        "toHour": 4
+      }
+    },
+    "historyDates": {
+      "04-01": "teapot",
+      "09-09": "moth",
+      "10-31": "zombie"
+    },
+    "easterWords": [
+      "xyzzy"
+    ],
+    "nest": [
+      "\\_O_/",
+      "~\\_O_/~",
+      "\\_.._/",
+      "\\_o.o_/"
+    ],
+    "egg": [
+      "       .--.",
+      "      /    \\",
+      "     |      |",
+      "     |      |",
+      "      \\    /",
+      "   \\___'--'___/"
+    ]
+  },
+  "drops": [
+    {
+      "id": "unix",
+      "n": 1,
+      "name": "unix"
+    }
+  ],
+  "daemons": [
+    {
+      "id": "tim",
+      "n": 1,
+      "drop": "unix",
+      "rarity": "common",
+      "color": {
+        "xterm": 71,
+        "hex": "#5faf5f"
+      },
+      "family": [
+        [
+          "screen",
+          1987
+        ],
+        [
+          "tmux",
+          2007
+        ],
+        [
+          "tim",
+          2026
+        ]
+      ],
+      "lore": "Named the way vim was: vi improved. tmux replaced screen; tim is tmux improved, and so is the app it lives in.",
+      "first": "oh hi. i'm tim. tmux, improved. what are we building?",
+      "lines": {
+        "idle": "two agents idle. nothing needs you.",
+        "work": "two panes busy. i'm watching both.",
+        "need": "codex@office wants to run the migration. i'd say yes. [y/n]",
+        "done": "claude finished the refactor. 3 files, tests pass.",
+        "fail": "codex exited 1. same flaky test as tuesday.",
+        "back": "welcome back. 2 done, 1 waiting 40m. nothing on fire.",
+        "nap": "detached. reattach any time.",
+        "boop": "hey. that's my status line."
+      },
+      "sprites": {
+        "0.1": "[{e} {e}]",
+        "1.0": "[{e}|{e}]",
+        "2.0": "\\[{e}|{e}]/"
+      },
+      "work": [
+        "\\[{e}|{e}]/",
+        "|[{e}|{e}]|",
+        "/[{e}|{e}]\\",
+        "-[{e}|{e}]-"
+      ],
+      "workMs": 150,
+      "portraits": {
+        "0.1": [
+          "  ___________",
+          " |           |",
+          " |   {e}   {e}   |",
+          " |    {m}    |",
+          " |_[0]{g}______|",
+          "   /_\\   /_\\"
+        ],
+        "1.0": [
+          "  ___________",
+          " |     |     |",
+          " |  {e}  |  {e}  |",
+          " |    {m}    |",
+          " |_[0]_tim{g}__|",
+          "   /_\\   /_\\"
+        ],
+        "2.0": [
+          "  ___________",
+          " |     |     |",
+          "{a}|  {e}  |  {e}  |{b}",
+          " |    {m}    |",
+          " |_[0]_tim{g}__|",
+          "   /_\\   /_\\"
+        ]
+      },
+      "parts": {
+        "a": {
+          "rest": "\\",
+          "work": [
+            "\\",
+            "-",
+            "/",
+            "-"
+          ],
+          "ms": 150
+        },
+        "b": {
+          "rest": "/",
+          "work": [
+            "/",
+            "-",
+            "\\",
+            "-"
+          ],
+          "ms": 150
+        }
+      },
+      "moodParts": {
+        "m": {
+          "idle": "\\_/",
+          "work": "---",
+          "need": " o ",
+          "done": "\\_/",
+          "fail": "/-\\",
+          "back": "\\_/",
+          "nap": " . ",
+          "boop": " O "
+        },
+        "g": {
+          "idle": "*",
+          "work": "#",
+          "need": "!",
+          "done": "*",
+          "fail": "!",
+          "back": "*",
+          "nap": "~",
+          "boop": "*"
+        }
+      },
+      "turn": "arms: a twirling baton in the status line, waving in the portrait"
+    },
+    {
+      "id": "fish",
+      "n": 2,
+      "drop": "unix",
+      "rarity": "common",
+      "color": {
+        "xterm": 73,
+        "hex": "#5fafaf"
+      },
+      "family": [
+        [
+          "fish",
+          2005
+        ],
+        [
+          "fish 4",
+          2025
+        ]
+      ],
+      "lore": "The Friendly Interactive SHell: \"Finally, a command line shell for the 90s.\" Rewritten in Rust for 4.0. It finishes your sentences in grey.",
+      "first": "finally, a buddy for the 90s. hi!",
+      "lines": {
+        "idle": "all quiet in the pond.",
+        "work": "agents are swimming along nicely.",
+        "need": "claude has a question for you.",
+        "done": "codex finished!",
+        "fail": "that one sank. same test as last time.",
+        "back": "welcome back! 2 done while you were out.",
+        "nap": "drifting for a bit. blub.",
+        "boop": "blub!"
+      },
+      "suggest": {
+        "need": " answer yes",
+        "done": " open the diff"
+      },
+      "sprites": {
+        "0.1": "><({e})",
+        "1.0": "><({e})>",
+        "2.0": "><(({e})>"
+      },
+      "work": [
+        "><(({e})> ",
+        "><(({e})>.",
+        "><(({e})>o",
+        "><(({e})>O"
+      ],
+      "workMs": 150,
+      "portraits": {
+        "0.1": [
+          "   .--.",
+          " ><  {e} >{b}",
+          "   '--'"
+        ],
+        "1.0": [
+          "    _.-._",
+          " |\\/ (( {e}'.",
+          " |  ((    >{b}",
+          " |/\\ (( .'",
+          "    '-.-'"
+        ],
+        "2.0": [
+          "                     {o}",
+          "      _.-\"\"\"-._    {O}",
+          " |\\ .'  ((  ((  {e}'.",
+          " |  >  ((  ((     >{b}",
+          " |/ '.  ((  ((  .'",
+          "      '-.___.-'"
+        ]
+      },
+      "parts": {
+        "o": {
+          "rest": "o",
+          "work": [
+            " ",
+            ".",
+            "o",
+            "O"
+          ],
+          "ms": 220
+        },
+        "O": {
+          "rest": "O",
+          "work": [
+            ".",
+            "o",
+            "O",
+            " "
+          ],
+          "ms": 220
+        }
+      },
+      "moodParts": {
+        "b": {
+          "idle": "",
+          "work": "",
+          "need": " ?",
+          "done": " o",
+          "fail": "",
+          "back": " o",
+          "nap": " z",
+          "boop": " O"
+        }
+      },
+      "turn": "bubbles, . o O"
+    },
+    {
+      "id": "ping",
+      "n": 3,
+      "drop": "unix",
+      "rarity": "common",
+      "color": {
+        "xterm": 221,
+        "hex": "#ffd75f"
+      },
+      "family": [
+        [
+          "ping",
+          1983
+        ]
+      ],
+      "lore": "Named after the sound of sonar. It shares its name with a 1933 picture book about a duck. It measures every round trip.",
+      "first": "PING you (127.0.0.1): hi. you there?",
+      "lines": {
+        "idle": "0 packets waiting. all good.",
+        "work": "3 agents replying. avg 12s per turn.",
+        "need": "PING you: codex@office is waiting. you there?",
+        "done": "64 bytes from claude: done time=4m12s",
+        "fail": "request timeout for codex. exit 1.",
+        "back": "you're back. 2 replies, 1 waiting, 0% loss.",
+        "nap": "floating. no packets for a bit.",
+        "boop": "pong."
+      },
+      "sprites": {
+        "0.1": "({e} )>",
+        "1.0": "__({e} )>",
+        "2.0": "~__({e} )>"
+      },
+      "work": [
+        "~__({e} )>",
+        "-__({e} )>",
+        ".__({e} )>",
+        "-__({e} )>"
+      ],
+      "workMs": 150,
+      "portraits": {
+        "0.1": [
+          "   .-.",
+          "  ( {e} )>",
+          " ,-) (.",
+          " \\ '-' )",
+          "  '---'"
+        ],
+        "1.0": [
+          "      .-.",
+          "     ( {e} )>",
+          "  ,   )  (",
+          "  |\\.'    '.",
+          "   \\  '--'  )",
+          "    '-.__.-'"
+        ],
+        "2.0": [
+          "      .-.",
+          "     ( {e} )> {s}",
+          "  ,   )  (",
+          "  |\\.'    '.",
+          " _.\\  '--'  )._",
+          "  {w}"
+        ]
+      },
+      "parts": {
+        "w": {
+          "rest": "~^~-~^~-~^~-~",
+          "work": [
+            "~^~-~^~-~^~-~",
+            "^~-~^~-~^~-~^",
+            "~-~^~-~^~-~^~",
+            "-~^~-~^~-~^~-"
+          ],
+          "ms": 200
+        }
+      },
+      "moodParts": {
+        "s": {
+          "idle": "",
+          "work": "",
+          "need": "  ) ) )",
+          "done": "",
+          "fail": "",
+          "back": "",
+          "nap": "",
+          "boop": ""
+        }
+      },
+      "turn": "ripples, ~ ^ -"
+    },
+    {
+      "id": "bat",
+      "n": 4,
+      "drop": "unix",
+      "rarity": "common",
+      "color": {
+        "xterm": 103,
+        "hex": "#8787af"
+      },
+      "family": [
+        [
+          "cat",
+          1971
+        ],
+        [
+          "bat",
+          2018
+        ]
+      ],
+      "lore": "cat has printed files since Unix v1. bat calls itself \"a cat(1) clone with wings.\" It hatches as a kitten; the wings ship in 2.0.",
+      "first": "a cat(1) clone, with wings. i'll take it from here.",
+      "lines": {
+        "idle": "watching. from above.",
+        "work": "three agents busy. i have the high ground.",
+        "need": "claude is waiting on you. it's been pacing.",
+        "done": "codex finished. i highlighted the interesting lines.",
+        "fail": "a test fell over. i'd start at line 212.",
+        "back": "you're back. i kept the lights low. 2 done.",
+        "nap": "hanging upside down for a bit.",
+        "boop": "...rude."
+      },
+      "sprites": {
+        "0.1": "({e}.{e})",
+        "1.0": "=({e}.{e})=",
+        "2.0": "/({e}.{e})\\"
+      },
+      "work": [
+        "/({e}.{e})\\",
+        "-({e}.{e})-",
+        "\\({e}.{e})/",
+        "-({e}.{e})-"
+      ],
+      "workMs": 150,
+      "portraits": {
+        "0.1": [
+          "  /|   |\\",
+          " ( {e} . {e} )",
+          "  =\\ w /="
+        ],
+        "1.0": [
+          "   /|     |\\",
+          "  / '.___.' \\",
+          " |  {e}  .  {e}  |",
+          " =\\    w    /=",
+          "   '-.___.-'",
+          "     |   |  )",
+          "     |_|_|_/"
+        ],
+        "2.0": [
+          "         /|     |\\",
+          " {l}     / '.___.' \\     {r}",
+          "/  '-._|  {e}  .  {e}  |_.-'  \\",
+          "\\/\\/\\/ =\\    w    /= \\/\\/\\/",
+          "         '-.___.-'",
+          "          |_| |_|"
+        ]
+      },
+      "parts": {
+        "l": {
+          "rest": "/\\",
+          "work": [
+            "/\\",
+            "__",
+            "\\/",
+            "__"
+          ],
+          "ms": 150
+        },
+        "r": {
+          "rest": "/\\",
+          "work": [
+            "/\\",
+            "__",
+            "\\/",
+            "__"
+          ],
+          "ms": 150
+        }
+      },
+      "turn": "wings, flapping"
+    },
+    {
+      "id": "vim",
+      "n": 5,
+      "drop": "unix",
+      "rarity": "rare",
+      "color": {
+        "xterm": 107,
+        "hex": "#87af5f"
+      },
+      "family": [
+        [
+          "ed",
+          1969
+        ],
+        [
+          "vi",
+          1976
+        ],
+        [
+          "vim",
+          1991
+        ]
+      ],
+      "lore": "ed begat vi, and vi begat vim, Vi IMproved. The ~ are the empty lines of its buffer. Famous for being hard to leave.",
+      "first": "hi. i'm vim. no, you can't exit me. :help pairing",
+      "lines": {
+        "idle": "-- NORMAL -- nothing pending.",
+        "work": "-- INSERT -- three agents typing.",
+        "need": "E37: claude wants to write. add ! to approve.",
+        "done": "\"auth.ts\" 3L written. clean.",
+        "fail": "E492: codex tried something odd. exit 1.",
+        "back": ":earlier 40m  2 done, 1 waiting.",
+        "nap": "-- NORMAL -- resting my eyes.",
+        "boop": "-- VISUAL -- you selected me."
+      },
+      "sprites": {
+        "0.1": "~ {e}_{e}",
+        "1.0": "< {e}_{e} >",
+        "2.0": "< {e}_{e} >_"
+      },
+      "work": [
+        "< {e}_{e} >_",
+        "< {e}_{e} > "
+      ],
+      "workMs": 400,
+      "portraits": {
+        "0.1": [
+          "~    .",
+          "~  .' '.",
+          "~ < {e} {e} >",
+          "~  '.v.'",
+          "~    '",
+          "~"
+        ],
+        "1.0": [
+          "~      /\\",
+          "~    .'  '.",
+          "~   < {e}  {e} >",
+          "~    '.\\/.'",
+          "~      \\/",
+          "~",
+          "{mode}"
+        ],
+        "2.0": [
+          "~      /\\",
+          "~    .'  '.",
+          "~   < {e}  {e} >{k}",
+          "~    '.\\/.'",
+          "~      \\/",
+          "~",
+          " [No Name] [+]    1,1  All",
+          "{mode}"
+        ]
+      },
+      "parts": {
+        "k": {
+          "rest": "_",
+          "work": [
+            "_",
+            " "
+          ],
+          "ms": 400
+        }
+      },
+      "moodParts": {
+        "mode": {
+          "idle": "-- NORMAL --",
+          "work": "-- INSERT --",
+          "need": ":confirm (y/n)?",
+          "done": "\"auth.ts\" 3L written",
+          "fail": "E492: Not an editor command",
+          "back": ":earlier 40m",
+          "nap": "-- NORMAL -- zz",
+          "boop": "-- VISUAL --"
+        }
+      },
+      "turn": "a blinking cursor, _"
+    },
+    {
+      "id": "zsh",
+      "n": 6,
+      "drop": "unix",
+      "rarity": "rare",
+      "color": {
+        "xterm": 173,
+        "hex": "#d7875f"
+      },
+      "family": [
+        [
+          "sh",
+          1971
+        ],
+        [
+          "bash",
+          1989
+        ],
+        [
+          "zsh",
+          1990
+        ]
+      ],
+      "lore": "A hermit crab that keeps moving into better shells: the Thompson shell, bash (the Bourne-Again SHell), then zsh, named after a teaching assistant's login.",
+      "first": "sh, then bash, now me. born again, twice.",
+      "lines": {
+        "idle": "no jobs. clean prompt.",
+        "work": "[3] jobs running in the background.",
+        "need": "zsh: suspended (tty input)  codex@office",
+        "done": "[1]  + done  claude  auth refactor",
+        "fail": "[2]  - exit 1  codex  billing.spec.ts",
+        "back": "you were away 40m. i autocorrected nothing. promise.",
+        "nap": "moving into a quieter shell for a bit.",
+        "boop": "zsh: command not found: boop"
+      },
+      "sprites": {
+        "0.1": "@ {e},,{e}",
+        "1.0": "@v{e},,{e}v",
+        "2.0": "@V{e},,{e}V"
+      },
+      "work": [
+        "@V{e},,{e}V",
+        "@v{e},,{e}v"
+      ],
+      "workMs": 260,
+      "portraits": {
+        "0.1": [
+          "    .-.",
+          "   ( @ )",
+          " v({e},,{e})v",
+          "   /\\/\\"
+        ],
+        "1.0": [
+          "       .--.",
+          "     .' .-.'.",
+          "    /  ( @ ) \\",
+          "   '.   '-'  .'",
+          " ({c})({e} ,, {e})({c})",
+          "     /\\/  \\/\\"
+        ],
+        "2.0": [
+          " ({c})    _.---._    ({c})",
+          "  \\ \\  .'  .-.  '.  / /",
+          "   \\ \\/   ( @ )   \\/ /",
+          "    \\ |    '-'    | /",
+          "     '.({e}  ,,,  {e}).'",
+          "       /\\/\\/   \\/\\/\\"
+        ]
+      },
+      "parts": {
+        "c": {
+          "rest": "\\/",
+          "work": [
+            "\\/",
+            "/\\"
+          ],
+          "ms": 260
+        }
+      },
+      "turn": "claws, (\\/) (/\\) snapping"
+    },
+    {
+      "id": "biff",
+      "n": 7,
+      "drop": "unix",
+      "rarity": "rare",
+      "color": {
+        "xterm": 180,
+        "hex": "#d7af87"
+      },
+      "family": [
+        [
+          "biff",
+          1980
+        ]
+      ],
+      "lore": "biff told Berkeley Unix users when mail arrived. It was named after a dog who barked at the mail carrier. Now it barks when an agent needs you.",
+      "first": "woof. i'm biff. i bark when you have mail. and agents.",
+      "lines": {
+        "idle": "watching the door.",
+        "work": "three agents inside. i hear them working.",
+        "need": "woof! codex@office needs you!",
+        "done": "claude's done! good agent! good!",
+        "fail": "grr. a test failed. i'm sitting next to it.",
+        "back": "you're back!!! 2 done, 1 waiting. i waited too.",
+        "nap": "lying down by the door.",
+        "boop": "!!!"
+      },
+      "sprites": {
+        "0.1": "U{e}w{e}U",
+        "1.0": "U({e}w{e})U",
+        "2.0": "U({e}w{e})U~"
+      },
+      "work": [
+        "U({e}w{e})U~",
+        "U({e}w{e})U/",
+        "U({e}w{e})U|",
+        "U({e}w{e})U\\"
+      ],
+      "workMs": 150,
+      "portraits": {
+        "0.1": [
+          "   .-.___.-.",
+          "  ( /     \\ )",
+          "   '| {e} {e} |'",
+          "    \\ (_) /",
+          "     '{m}'"
+        ],
+        "1.0": [
+          "   .-.  ___  .-.",
+          "  / / .'   '. \\ \\",
+          " | | / {e}   {e} \\ | |",
+          "  \\_\\|  (_)  |/_/",
+          "      \\ {m} /",
+          "       '---'"
+        ],
+        "2.0": [
+          "   .-.  ___  .-.",
+          "  / / .'   '. \\ \\",
+          " | | / {e}   {e} \\ | |",
+          "  \\_\\|  (_)  |/_/",
+          "      \\ {m} /",
+          "     .-'---'-.",
+          "    (  |   |  )_{t}",
+          "     '-'   '-'"
+        ]
+      },
+      "parts": {
+        "t": {
+          "rest": "~",
+          "work": [
+            "~",
+            "/",
+            "|",
+            "\\"
+          ],
+          "ms": 150
+        }
+      },
+      "moodParts": {
+        "m": {
+          "idle": "\\_/",
+          "work": "\\_/",
+          "need": "\\O/",
+          "done": "\\U/",
+          "fail": ".-.",
+          "back": "\\U/",
+          "nap": "\\_/",
+          "boop": "\\U/"
+        }
+      },
+      "turn": "tail, ~ / | \\ wagging"
+    },
+    {
+      "id": "fzf",
+      "n": 8,
+      "drop": "unix",
+      "rarity": "legendary",
+      "color": {
+        "xterm": 110,
+        "hex": "#87afd7"
+      },
+      "family": [
+        [
+          "find",
+          null
+        ],
+        [
+          "fzf",
+          2013
+        ]
+      ],
+      "lore": "find walks directory trees. fzf finds things fuzzily, shows its match count, and keeps the best match next to the prompt.",
+      "first": "> hello   1/1   it's me, fzf. i find things.",
+      "lines": {
+        "idle": "0/0. nothing to find.",
+        "work": "3/12 agents busy. filtering out the noise.",
+        "need": "> needs you   1/1   codex@office",
+        "done": "best match for 'done': claude, auth refactor.",
+        "fail": "0/1 matches for 'passing tests'. codex failed.",
+        "back": "4/7 things changed. want the top one?",
+        "nap": "no query. resting.",
+        "boop": "> boop   0/0"
+      },
+      "sprites": {
+        "0.1": ";{e};{e};",
+        "1.0": ",;{e};{e};,",
+        "2.0": "> ;{e};{e};"
+      },
+      "work": [
+        "> ;{e};{e};",
+        "> ,{e},{e},",
+        "> '{e}'{e}'",
+        "> ,{e},{e},"
+      ],
+      "workMs": 180,
+      "portraits": {
+        "0.1": [
+          "   ,;:;,",
+          "  ; {e} {e} ;",
+          "   ':;:'"
+        ],
+        "1.0": [
+          "    ,;:;:;:;,",
+          "  ,;'       ';,",
+          "  ;:  {e}   {e}  :;",
+          "  ':,   .   ,:'",
+          "    ';:;:;:;'"
+        ],
+        "2.0": [
+          "    {f}",
+          "  ,;'       ';,",
+          "  ;:  {e}   {e}  :;",
+          "  ':,   .   ,:'",
+          "    ';:;:;:;'",
+          "  {n}",
+          "> _"
+        ]
+      },
+      "parts": {
+        "f": {
+          "rest": ",;:;:;:;,",
+          "work": [
+            ",;:;:;:;,",
+            ";:;:;:;:;",
+            ":;:;:;:;:"
+          ],
+          "ms": 180
+        }
+      },
+      "moodParts": {
+        "n": {
+          "idle": "0/0",
+          "work": "3/12",
+          "need": "1/1",
+          "done": "1/1",
+          "fail": "0/1",
+          "back": "4/7",
+          "nap": "0/0",
+          "boop": "0/0"
+        }
+      },
+      "turn": "fuzz, ; : , '"
+    },
+    {
+      "id": "tldr",
+      "n": 9,
+      "drop": "unix",
+      "rarity": "legendary",
+      "color": {
+        "xterm": 179,
+        "hex": "#d7af5f"
+      },
+      "family": [
+        [
+          "man",
+          1971
+        ],
+        [
+          "tldr",
+          null
+        ]
+      ],
+      "lore": "man pages date from the first Unix Programmer's Manual. tldr pages are the short version: one example, no essay. It gets smaller with every release.",
+      "first": "tldr: hi.",
+      "lines": {
+        "idle": "nothing.",
+        "work": "3 working.",
+        "need": "codex: needs you.",
+        "done": "done. tests pass.",
+        "fail": "failed. flaky test.",
+        "back": "tl;dr 2 done, 1 waiting.",
+        "nap": "zz.",
+        "boop": "no."
+      },
+      "sprites": {
+        "0.1": "({e})v({e})",
+        "1.0": "({e}v{e})",
+        "2.0": "{e}v{e}"
+      },
+      "work": [
+        "{e}v{e} |",
+        "{e}v{e} /",
+        "{e}v{e} -",
+        "{e}v{e} \\"
+      ],
+      "workMs": 130,
+      "portraits": {
+        "0.1": [
+          "   \\             /",
+          "   |'-._______.-'|",
+          "   |  .-.   .-.  |",
+          "   | ( {e} ) ( {e} ) |",
+          "   |  '-' v '-'  |",
+          "    \\  \\/\\/\\/\\  /",
+          "     '-.m___m.-'",
+          "   [____MAN(1)___]"
+        ],
+        "1.0": [
+          "   \\       /",
+          "   |'-._.-'|",
+          "   |({e}) ({e})|",
+          "   \\   v   /",
+          "    '-m-m-'",
+          "    [tldr]"
+        ],
+        "2.0": [
+          "  \\ /",
+          " ({e}v{e})",
+          "  m m",
+          " tl;dr"
+        ]
+      },
+      "turn": "a twirling baton beside it"
+    },
+    {
+      "id": "grue",
+      "n": 10,
+      "drop": "unix",
+      "rarity": "secret",
+      "color": {
+        "xterm": 246,
+        "hex": "#949494"
+      },
+      "family": [
+        [
+          "grue",
+          1977
+        ]
+      ],
+      "lore": "Zork, MIT: \"It is pitch black. You are likely to be eaten by a grue.\" Nobody has seen one. It hatches only from eggs found in the dark, and shows up only in a dark theme.",
+      "first": "it is pitch black. you are likely to be paired with a grue.",
+      "lines": {
+        "idle": "...",
+        "work": "it is dark. your agents are working. i can hear them.",
+        "need": "something in the dark wants your answer.",
+        "done": "the lamp is lit. codex is done.",
+        "fail": "a test was eaten. it wasn't me.",
+        "back": "you came back to the dark. brave.",
+        "nap": "...",
+        "boop": "you touched something in the dark."
+      },
+      "eyes": {
+        "idle": ".",
+        "work": ".",
+        "need": "o",
+        "done": "*",
+        "fail": "x",
+        "back": "o",
+        "nap": " ",
+        "boop": "O"
+      },
+      "lid": " ",
+      "darkOnly": true,
+      "sprites": {
+        "0.1": "{e} {e}",
+        "1.0": "{e}  {e}",
+        "2.0": "{e}   {e}"
+      },
+      "work": [
+        "{e}   {e}",
+        "    {e}",
+        "{e}   {e}",
+        "{e}    "
+      ],
+      "workMs": 300,
+      "portraits": {
+        "0.1": [
+          "",
+          "    {e} {e}"
+        ],
+        "1.0": [
+          "",
+          "",
+          "    {e}       {e}"
+        ],
+        "2.0": [
+          "       ,  '  '  '  ,       ",
+          "    '                 `    ",
+          "  ,     {e}         {e}     ,  ",
+          "    `     {t}     '    ",
+          "       '  ,  ,  ,  '       "
+        ]
+      },
+      "moodParts": {
+        "t": {
+          "idle": "       ",
+          "work": "       ",
+          "need": "       ",
+          "done": "       ",
+          "fail": "vVvVvVv",
+          "back": "       ",
+          "nap": "       ",
+          "boop": "       "
+        }
+      },
+      "turn": "eyes, flickering"
+    }
+  ]
+}
+''';

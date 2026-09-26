@@ -18,6 +18,7 @@ clients and the server build against.
 | `tools/generate.mjs` | Checks the roster against the art rules and writes the copies below. `--check` in CI. |
 | `frames.json` | Generated. Frames every port must reproduce, byte for byte. |
 | `desktop/lib/daemons/roster.g.dart` | Generated. The roster as a Dart raw string. |
+| `mobile/lib/daemons/roster.g.dart` | Generated. The same raw string for the phone, which depends on no other package here. |
 | `backend/src/lib/daemonRoster.g.ts` | Generated. Only what decides a draw, a grant or a level: ids, rarities, drops, egg, earn and bond rules. |
 | `cli/src/pair/roster.g.ts` | Generated. Ids and lines: the pair brain's template voice ([BRAIN.md](BRAIN.md)). |
 
