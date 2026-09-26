@@ -14,8 +14,15 @@ const roster = JSON.parse(text)
 const { rules } = roster
 
 const problems = []
-const fail = msg => problems.push(msg)
+const fail = msg => { if (!problems.includes(msg)) problems.push(msg) }
 const printable = s => /^[\x20-\x7e]*$/.test(s)
+// Programming fonts (Fira Code, JetBrains Mono, Cascadia) merge these pairs into one glyph, so two eyes
+// side by side, or an eye against a face character, would draw as a symbol. No frame may contain one.
+const unsafe = rules.ligatureUnsafe ?? []
+if (!Array.isArray(unsafe) || !unsafe.length || unsafe.some(p => typeof p !== 'string' || p.length < 2 || !printable(p))) {
+  fail('rules.ligatureUnsafe must list the printable character pairs that fonts merge')
+}
+const ligature = s => unsafe.find(p => s.includes(p))
 
 const ids = new Set()
 const drops = new Set(roster.drops.map(d => d.id))
@@ -54,17 +61,21 @@ for (const d of roster.daemons) {
           const s = renderSprite(roster, d, vi, mood, { t, lid })
           if (s.length > rules.statusCells) fail(`${d.id} ${v} ${mood}: sprite "${s}" is wider than ${rules.statusCells} cells`)
           if (!printable(s)) fail(`${d.id} ${v} ${mood}: sprite "${s}" is not printable ASCII`)
+          if (ligature(s)) fail(`${d.id} ${v} ${mood}: sprite "${s}" has "${ligature(s)}", which fonts draw as one glyph`)
         }
       }
     }
     for (const v of Object.keys(d.portraits || {})) {
       for (const t of times) {
-        const lines = renderPortrait(roster, d, v, mood, { t })
-        if (lines.length > rules.portraitMaxRows) fail(`${d.id} ${v}: portrait has ${lines.length} rows`)
-        for (const line of lines) {
-          if (/\{[a-zA-Z]+\}/.test(line)) fail(`${d.id} ${v} ${mood}: unfilled placeholder in "${line}"`)
-          if (!printable(line)) fail(`${d.id} ${v} ${mood}: portrait line "${line}" is not printable ASCII`)
-          if (line.length > rules.portraitMaxCols) fail(`${d.id} ${v}: portrait line is ${line.length} columns`)
+        for (const lid of [null, '-', '_']) {
+          const lines = renderPortrait(roster, d, v, mood, { t, lid })
+          if (lines.length > rules.portraitMaxRows) fail(`${d.id} ${v}: portrait has ${lines.length} rows`)
+          for (const line of lines) {
+            if (/\{[a-zA-Z]+\}/.test(line)) fail(`${d.id} ${v} ${mood}: unfilled placeholder in "${line}"`)
+            if (!printable(line)) fail(`${d.id} ${v} ${mood}: portrait line "${line}" is not printable ASCII`)
+            if (line.length > rules.portraitMaxCols) fail(`${d.id} ${v}: portrait line is ${line.length} columns`)
+            if (ligature(line)) fail(`${d.id} ${v} ${mood}: portrait line "${line}" has "${ligature(line)}", which fonts draw as one glyph`)
+          }
         }
       }
     }
@@ -73,6 +84,11 @@ for (const d of roster.daemons) {
 for (const [kind, egg] of Object.entries(rules.eggs)) {
   for (const r of rules.rarities) if (typeof egg.weights[r] !== 'number') fail(`egg ${kind}: no weight for ${r}`)
   for (const id of Object.keys(egg.boost || {})) if (!ids.has(id)) fail(`egg ${kind}: boosts unknown daemon ${id}`)
+}
+// The nest and the eggs sit in the same status line and panel as the daemons.
+for (const s of [...rules.nest, ...rules.egg, ...Object.values(rules.eggs).map(e => e.look)]) {
+  if (!printable(s)) fail(`egg art "${s}" is not printable ASCII`)
+  if (ligature(s)) fail(`egg art "${s}" has "${ligature(s)}", which fonts draw as one glyph`)
 }
 if (rules.firstEgg.need > rules.firstEgg.habits.length) fail('first egg needs more habits than exist')
 // Earning and growing (README, "Earning eggs and growing"): whole positive numbers, an egg rule for every

@@ -34,18 +34,29 @@ clients and the server build against.
 ## Art rules
 
 Printable 7-bit ASCII only (0x20–0x7e), so every terminal, font, phone and paste into Slack or GitHub
-shows the same thing. Turn off ligatures wherever a daemon is drawn. Where that is impossible (a
-terminal's own font), the art itself is safe: no frame of any mood contains a pair that programming
-fonts merge (`==` `??` `!=` `::` `->` `=>` and the like), so the two eyes are never drawn side by side.
+shows the same thing. Turn off ligatures wherever a daemon is drawn, and keep the art safe where that
+is impossible (a terminal's own font):
 
+- **No ligature pairs.** Many people keep ligatures on, so no frame may contain a pair that programming
+  fonts (Fira Code, JetBrains Mono, Cascadia) draw as one glyph: `rules.ligatureUnsafe` lists them
+  (`==` `??` `!=` `::` `~~` `->` `=>` `<=` `>=` `<>` `||` `&&` `++` `//` `^=` `~=` `:=`), and
+  `generate.mjs` renders every sprite, portrait, nest and egg in every mood, frame and blink and fails on
+  any of them. So two eyes never touch (tim's `[o o]`, not `[oo]`, or working would draw `[==]` as one
+  glyph), and an eye never touches a face character that pairs with a mood's eye (`=` `?` `-` beside `>`,
+  `<`, `!`, `^`, `~` or `:`). Put a nose, a mouth, a pane `|` or a space between.
 - **Sprite**: one line, at most 8 cells, centred in the status line with one cell of gutter each side.
-  Three versions: `0.1`, `1.0`, `2.0`.
+  Three versions: `0.1`, `1.0`, `2.0`. Every 0.1 sprite has its own silhouette characters, so ten
+  hatchlings never read alike at a glance.
 - **Portrait**: at most 8 rows by 28 columns. Shown in the daemon's panel, the hatch reveal, the zoo and
-  the card. A daemon may draw one portrait per version; a missing version uses the nearest one drawn.
-- **Eyes carry the mood.** The body stays still; a mood changes at most two cells of the sprite.
+  the card. Every daemon in drop 1 draws one portrait per version, growing from the same face (NetHack's
+  kitten, housecat, large cat): fewer parts when young, a lore-true feature each release. A missing
+  version uses the nearest one drawn.
+- **Eyes carry the mood.** The body stays still; a mood changes at most two cells of the sprite. A
+  portrait may add one or two lore-true mood parts, never more.
 - **Placeholders** (see `render.mjs`): `{e}` an eye; `{<part>}` a moving part with a `rest` glyph and
   `work` frames; `{<moodPart>}` a value per mood (tim's mouth `{m}` and tmux window flag `{g}`, vim's
-  mode line `{mode}`).
+  mode line `{mode}`, fish's mouth bubble `{b}`, ping's sonar `{s}`, biff's mouth `{m}` with its tongue
+  out when happy, fzf's match count `{n}`, and the grue's teeth `{t}`, seen only when something was eaten).
 - **Colour** is a filter over the drawing, never the only signal. Each daemon has one xterm-256 colour,
   used only on the terminal background (panel, reveal, zoo, card), with a darker variant on light
   themes. In the status line the daemon takes the status line's own text colour: daemon colours fail
@@ -76,14 +87,16 @@ finishes at once do not queue.
 Every motion is finite and ends at rest. There is no idle animation timer.
 
 - **Working**: the 2.0 sprite steps through its `work` frames, one step per real agent event (a tool
-  starting, output arriving), at most two steps a second (tim's arms turn like a twirling baton).
-  A baton that stops turning means an agent that stopped. Younger versions borrow the baton `|/-\`
-  after the sprite; the face never shifts, because the slot centres on the version's base sprite.
-  A Motion setting turns all of this off.
+  starting, output arriving), at most two steps a second (tim's arms turn like a twirling baton), and
+  the portrait's parts move the same way (tim's arms wave, bat's wings flap, zsh's claws snap, biff's
+  tail wags). A baton that stops turning means an agent that stopped. Younger versions borrow the
+  baton `|/-\` after the sprite; the face never shifts, because the slot centres on the version's base
+  sprite. A Motion setting turns all of this off.
 - **Blinks answer something**:
   - `ack`, one blink 160 ms after something it watches changes (a harness needs you, a turn finishes, a test fails);
   - `look`, one blink when you look at it (hover, open its panel, return to the window), at most once per 2.5 s;
-  - `slow`, a slow blink (cats show trust this way) when you return after a break, when you meet, when it levels up.
+  - `slow`, a slow blink (cats show trust this way), about a second long (half-lid, shut, half-lid), when you
+    return after a break, when you meet, when it levels up.
   - No blinks while working, napping or booped.
 - Reduce Motion and background windows stop all frames; the face still changes.
 
@@ -288,7 +301,7 @@ block:
 .----------------------------------------.
 | #01/09  DROP 1: UNIX            COMMON |
 |                                        |
-|  [oo]    tim 0.1                       |
+|  [o o]   tim 0.1                       |
 |  screen -> tmux -> tim                 |
 |                                        |
 |  "oh hi. i'm tim. tmux, improved.      |
