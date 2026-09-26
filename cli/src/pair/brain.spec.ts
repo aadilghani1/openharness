@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { PairJournal } from './journal.js'
 import { PairSensor, type PairSubject } from './sensor.js'
 import { PairFleet, relayPairLinkOpener, type PairLinkOpener } from './fleet.js'
-import { PairTriage, actionsFor, parseTriage, type PairOneShot } from './triage.js'
+import { PairTriage, actionsFor, parseTriage, triagePrompt, type PairOneShot } from './triage.js'
 import { PairVoice, DISPLAY_MS, UNSOLICITED_GAP_MS, doneLine, failLine, fillLine, needLine } from './voice.js'
 import { PairBrain, TALK_COST_NOTE, type AnswerResult } from './brain.js'
 import { ARM_MS, ShownLines } from './shown.js'
@@ -130,6 +130,13 @@ describe('triage', () => {
       line: '[y/n/g] bell in api: Approve Bash command: npm test', recommend: null, tier: 0,
       actions: [{ key: 'y', label: 'Yes', choice: '1. Yes' }, { key: 'n', label: 'No, and tell Claude what to do', choice: '3. No, and tell Claude what to do' }, { key: 'g', label: 'open', choice: 'open' }],
     })
+  })
+
+  it('never hands a model a secret: the question and its options are redacted in the prompt', () => {
+    const token = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
+    const prompt = triagePrompt({ ...input, question: { ...question, text: `Approve Bash command: GITHUB_TOKEN=${token} npm test`, options: ['1. Yes', `2. No, use ${token}`] } })
+    expect(prompt).not.toContain(token)
+    expect(prompt).toContain('[redacted]')
   })
 
   it('offers no [y] when the only yes answers for more than this once', () => {

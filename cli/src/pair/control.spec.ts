@@ -105,6 +105,17 @@ describe('each tool maps to the right call', () => {
     expect(w.fleet.journals).toHaveBeenCalledWith(1_000_000 - 30 * 60_000, 3_000)
   })
 
+  it('a read tool answers the pair harness — a model — with secrets taken out, ids and folders kept', async () => {
+    const w = world()
+    const token = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789'
+    w.owner.read.mockImplementation((agentId: string) => ({ ok: true as const, harness: null, row: { agentId, name: 'api', engine: 'claude', status: 'waiting', cwd: '/w/api',
+      question: { requestId: 'q1', text: `export ANTHROPIC_API_KEY=${token}`, options: ['1. Yes', '2. No'], multi: false, deny: false, allow: false, permission: true, since: 0, dialog: `Bash command\n\n  export ANTHROPIC_API_KEY=${token}` } },
+      recaps: [`used ${token}`], asks: [] }))
+    const read = await w.call('read_harness', { agentId: 'api' }, false)
+    expect(JSON.stringify(read)).not.toContain(token)
+    expect(read).toMatchObject({ ok: true, row: { agentId: 'api', cwd: '/w/api', question: { requestId: 'q1' } } })
+  })
+
   it('writes on this machine go to its owner as `pair`; on another as the matching sealed request', async () => {
     const w = world({ autonomy: 'act-on-key' })
     // Started by the pair, so it may drive them without a key.

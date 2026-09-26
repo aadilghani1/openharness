@@ -168,6 +168,24 @@ describe('PairSensor', () => {
     delete SUBJECTS.cwd
   })
 
+  it('takes secrets out of every journal line, and out of a page on its way to another machine', () => {
+    const { s, journal } = sensor()
+    const token = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789'
+    s.question('api', 'q_1', ask(`Bash: curl -H "Authorization: Bearer ${token}" https://x`, ['Yes', `No, use ${token}`]))
+    s.recap('api', `set API_KEY=${token} and ran it`)
+    s.acted({ agentId: 'api', name: 'api', engine: 'claude' }, { by: 'key', action: 'send', text: `sent "password=hunter2hunter2"` })
+    const written = readFileSync(journal.path, 'utf8')
+    expect(written).not.toContain(token)
+    expect(written).not.toContain('hunter2hunter2')
+    expect(written).toContain('[redacted]')
+    // What the window shows the person is the dialog as it is: only the journal is redacted.
+    expect(s.harness('api')?.question?.text).toContain(token)
+    // A line written before redaction existed still leaves redacted.
+    writeFileSync(journal.path, `${written}${JSON.stringify({ epoch: journal.epoch, seq: 99, at: clock, kind: 'recap', agentId: 'api', name: 'api', engine: 'claude', text: `token=${token}` })}\n`)
+    const page = new PairSensor({ machineId: () => 'machine-a', journal: new PairJournal({ dir }), describe: (id) => SUBJECTS[id] ?? null, now }).journal({})
+    expect(JSON.stringify(page)).not.toContain(token)
+  })
+
   it('pushes to a remote watcher until its push says it is gone', () => {
     const { s } = sensor()
     const got: PairEvent[] = []

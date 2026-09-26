@@ -33,6 +33,7 @@ import { DIALOG_MAX, statusText, str, type DaemonAction, type DaemonHarness, typ
 import { answerFloor, bareOption, type Autonomy } from './floor.js'
 import type { OwnerRow } from './owner.js'
 import { RateLimit } from './limit.js'
+import { redactDeep } from './redact.js'
 
 export type ToolKind = 'read' | 'write' | 'say'
 
@@ -168,7 +169,8 @@ export class PairControl {
     if (!this.deps.pairing.enabled()) return fail('PAIR_OFF', 'Nothing is paired: hatch or pair a daemon first.')
     const args = payload
     try {
-      if (tool.kind === 'read') return await this.read(verb, args)
+      // What a read tool answers goes to the pair harness — a model: secrets out (pair/redact.ts).
+      if (tool.kind === 'read') return redactDeep(await this.read(verb, args))
       if (tool.kind === 'say') return this.say(args)
       return await this.write(verb, args)
     } catch (err) {

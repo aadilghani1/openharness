@@ -16,9 +16,12 @@
  *
  * Off unless the account's zoo has a paired daemon. Off, it records nothing and answers PAIR_OFF.
  */
+import { homedir } from 'node:os'
 import type { ShapedQuestion } from '../lib/askQuestion.js'
 import type { PairJournal } from './journal.js'
 import { isAllowClass, type ToolCall } from './classify.js'
+import { redactEntry } from './redact.js'
+import type { JournalInput } from './journal.js'
 import {
   DIALOG_MAX, isDenyClass, statusText, str,
   type PairAction, type PairActor, type PairEvent, type PairHarness, type PairJournalEntry, type PairJournalPage,
@@ -42,6 +45,8 @@ export interface PairSensorDeps {
   now?: () => number
   /** Pairing turned on or off — cli.ts re-gates the question watcher and the recap on it. */
   onEnabledChanged?: (on: boolean) => void
+  /** The home folder redaction writes as `~` (os.homedir() when absent). */
+  home?: string | null
 }
 
 type EntryFields = Omit<PairJournalEntry, 'epoch' | 'seq' | 'at' | 'agentId' | 'name' | 'engine'>
@@ -169,7 +174,7 @@ export class PairSensor implements PairService {
       ...(fields.origin ? { origin: statusText(fields.origin, 120) } : {}) }
     const h = this.harnesses.get(subject.agentId) ?? this.admit(subject.agentId)
     if (h) return this.change(h, entryFields)
-    const entry = this.deps.journal.append({
+    const entry = this.append({
       at: this.now(), agentId: subject.agentId, name: statusText(subject.name, 80) || subject.agentId.slice(0, 8), engine: subject.engine, ...entryFields,
     })
     this.rev++
@@ -184,7 +189,7 @@ export class PairSensor implements PairService {
   learned(fields: { daemon: string; name: string; agentId?: string; engine?: string }): PairJournalEntry | null {
     if (!this.on) return null
     const name = statusText(fields.name, 80) || 'lesson'
-    return this.deps.journal.append({
+    return this.append({
       at: this.now(), kind: 'learned', agentId: fields.agentId ?? '', name, engine: fields.engine ?? '', text: `learned "${name}"`, daemon: fields.daemon,
     })
   }
@@ -195,7 +200,7 @@ export class PairSensor implements PairService {
    */
   relayed(fields: { target: string; agentId: string; name: string; engine: string; requestId: string; text: string; origin: string }): PairJournalEntry | null {
     if (!this.on) return null
-    return this.deps.journal.append({
+    return this.append({
       at: this.now(), kind: 'relayed', by: 'key', action: 'answer', agentId: fields.agentId, name: statusText(fields.name, 80), engine: fields.engine,
       requestId: fields.requestId, text: statusText(fields.text, 300), target: statusText(fields.target, 120), origin: statusText(fields.origin, 120),
     })
@@ -242,14 +247,19 @@ export class PairSensor implements PairService {
     this.watchers.delete(connId)
   }
 
+  /**
+   * A page of the journal: to this computer's brief, and — sealed — to another machine's. Redacted again on
+   * the way out (a line written before redaction existed is still one).
+   */
   journal(payload: Record<string, unknown>): PairJournalPage {
     const num = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined
-    return this.deps.journal.since({
+    const page = this.deps.journal.since({
       ...(typeof payload.epoch === 'string' ? { epoch: payload.epoch } : {}),
       ...(num(payload.seq) !== undefined ? { seq: num(payload.seq) } : {}),
       ...(num(payload.at) !== undefined ? { at: num(payload.at) } : {}),
       ...(num(payload.limit) !== undefined ? { limit: num(payload.limit) } : {}),
     })
+    return { ...page, entries: page.entries.map((entry) => redactEntry(entry, this.home)) }
   }
 
   read(payload: Record<string, unknown>): Record<string, unknown> {
@@ -277,6 +287,13 @@ export class PairSensor implements PairService {
 
   // ── internals ─────────────────────────────────────────────────────────────────────────────────────
 
+  /** Every journal line goes through here: question text, options, recaps and acts with secrets taken out. */
+  private append(input: JournalInput): PairJournalEntry {
+    return this.deps.journal.append(redactEntry(input, this.home))
+  }
+
+  private get home(): string | null { return this.deps.home === undefined ? homedir() : this.deps.home }
+
   private admit(agentId: string, subagent?: boolean): PairHarness | null {
     if (!this.on || !agentId) return null
     const subject = this.deps.describe(agentId)
@@ -298,7 +315,7 @@ export class PairSensor implements PairService {
   private change(h: PairHarness, fields: EntryFields | null, baseline = false): PairJournalEntry | null {
     this.rev++
     const entry = fields
-      ? this.deps.journal.append({ at: this.now(), agentId: h.agentId, name: h.name, engine: h.engine, ...fields })
+      ? this.append({ at: this.now(), agentId: h.agentId, name: h.name, engine: h.engine, ...fields })
       : undefined
     this.emit({
       machineId: this.deps.machineId(),
