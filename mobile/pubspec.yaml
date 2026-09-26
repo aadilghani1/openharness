@@ -81,6 +81,18 @@ dev_dependencies:
   # The p2p routing is all timers (retry, migration sweep, upgrade) — tests drive
   # them without waiting them out.
   fake_async: ^1.3.1
+  # The on-device performance benchmark (`integration_test/perf_test.dart`,
+  # driven by `test_driver/perf_driver.dart`): production widgets in a profile
+  # build on a real phone, timed frame by frame. See `integration_test/README.md`.
+  integration_test:
+    sdk: flutter
+  flutter_driver:
+    sdk: flutter
+  # Keeps the phone from auto-locking during a benchmark run: synthetic touches
+  # do not reset iOS's idle timer, and a lock mid-run suspends the app and drops
+  # the driver's connection. A dev dependency — not in release builds — and
+  # called only by `integration_test/perf/scenarios.dart`.
+  wakelock_plus: ^1.8.0
 
 flutter:
   uses-material-design: true
