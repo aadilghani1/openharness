@@ -14,6 +14,13 @@
  *    typed straight into a pane (only delivered messages carry a deliveryId), so a prompt a script or a
  *    `/loop` types counts too; the server's daily cap is what bounds that.
  *
+ *    A counted turn carries two more facts: its `minutes` (whole agent-minutes from its live start to
+ *    its end; every 10 count as one more turn on the server) and whether it finished while the person
+ *    was `away` from this computer (the night egg).
+ *
+ *  - `LocalPresence` knows whether the person is at this computer: the local clients (a window, `hn`)
+ *    attached and what their `daemon_presence` says. Away is no active client for `ZOO_AWAY_MS`.
+ *
  *  - `ZooTurnReporter` batches counted turns for a minute and sends them as `zoo.turn` ops, one per
  *    local (day, hour), through the daemon's authenticated backend path — signed in only; a guest's
  *    turns are counted by the desktop client in its local zoo, never here. Each op carries a batch id;
@@ -21,6 +28,7 @@
  *    is dropped by the server rather than counted twice.
  */
 import { randomBytes } from 'node:crypto'
+import { PAIR_ROSTER } from '../pair/roster.g.js'
 
 /** How long counted turns gather before one report. */
 export const ZOO_TURN_FLUSH_MS = 60_000
@@ -32,8 +40,16 @@ const MAX_PENDING_OPS = 64
 const STALE_AFTER_DAYS = 2
 /** The Store harness the pair brain runs in (daemons/BRAIN.md, P4). Its turns are the daemon's own. */
 export const PAIR_HARNESS_DSH = 'autonomous/pair'
+/** No active local client for this long, and a turn that finishes is an away turn (roster
+ *  `earn.night.awayMinutes`, 30). */
+export const ZOO_AWAY_MS = PAIR_ROSTER.awayMinutes * 60_000
+/** The most minutes one turn counts: a turn whose end was never seen, stretched over days, counts one. */
+export const ZOO_TURN_MAX_MINUTES = 24 * 60
 
-export interface ZooTurnOp { op: 'zoo.turn'; batchId: string; n: number; day: string; hour: number; machineId: string }
+/** A turn that counts: how long it ran, and whether it finished while the person was away. */
+export interface ZooCountedTurn { minutes: number; away: boolean }
+/** `minutes` and `away` are sent only when above 0, so a server from before them still takes the rest. */
+export interface ZooTurnOp { op: 'zoo.turn'; batchId: string; n: number; minutes?: number; away?: number; day: string; hour: number; machineId: string }
 export type ZooPost = (body: { ops: ZooTurnOp[] }) => Promise<{ status: number; body: Record<string, unknown> }>
 
 const pad = (n: number): string => String(n).padStart(2, '0')
@@ -48,28 +64,93 @@ export interface ZooTurnCounterDeps {
   /** Whether a session is one a person drives: not a sub-agent, not a terminal, not the pair harness.
    *  Asked when the turn ends, since that is when a Director's `busy` is known. */
   eligible: (sessionId: string) => boolean
+  /** Whether the person is away from this computer now (LocalPresence.away). Asked when a counted turn
+   *  ends. Absent: never away. */
+  away?: () => boolean
+  now?: () => number
 }
 
 export class ZooTurnCounter {
-  /** Sessions whose open turn started live on the engine's prompt record. */
-  private readonly open = new Set<string>()
+  /** Sessions whose open turn started live on the engine's prompt record, and when. */
+  private readonly open = new Map<string, number>()
+  private readonly now: () => number
 
-  constructor(private readonly deps: ZooTurnCounterDeps) {}
-
-  /** A `turn_started`. `replay` covers both a transcript re-read and a turn picked up at attach. */
-  started(sessionId: string, opts: { replay: boolean }): void {
-    if (opts.replay) this.open.delete(sessionId)
-    else this.open.add(sessionId)
+  constructor(private readonly deps: ZooTurnCounterDeps) {
+    this.now = deps.now ?? Date.now
   }
 
-  /** A `turn_ended`: whether it counts toward the zoo. */
-  ended(sessionId: string, opts: { replay: boolean; aborted: boolean }): boolean {
-    const live = this.open.delete(sessionId)
-    return live && !opts.replay && !opts.aborted && this.deps.eligible(sessionId)
+  /** A `turn_started`. `replay` covers both a transcript re-read and a turn picked up at attach. A second
+   *  live start before the end (a prompt queued into a running turn) keeps the first start. */
+  started(sessionId: string, opts: { replay: boolean }): void {
+    if (opts.replay) this.open.delete(sessionId)
+    else if (!this.open.has(sessionId)) this.open.set(sessionId, this.now())
+  }
+
+  /** A `turn_ended`: the turn as it counts toward the zoo, or null when it does not. */
+  ended(sessionId: string, opts: { replay: boolean; aborted: boolean }): ZooCountedTurn | null {
+    const startedAt = this.open.get(sessionId)
+    this.open.delete(sessionId)
+    if (startedAt === undefined || opts.replay || opts.aborted || !this.deps.eligible(sessionId)) return null
+    const minutes = Math.min(Math.floor(Math.max(0, this.now() - startedAt) / 60_000), ZOO_TURN_MAX_MINUTES)
+    return { minutes, away: this.deps.away?.() ?? false }
   }
 
   forget(sessionId: string): void {
     this.open.delete(sessionId)
+  }
+}
+
+// ── Whether the person is here ───────────────────────────────────────────────────────────────────
+/**
+ * Whether the person is at this computer, from the local clients this harnessd serves (a window, `hn`;
+ * never a tool client): here while any attached client is active — one that has not said otherwise is —
+ * and away from the moment the last one went inactive (`daemon_presence { active: false }`) or detached.
+ * A client going inactive may say how long its keyboard was already idle (`awayMs`), which moves that
+ * moment back. Until a client has come and gone, the absence counts from when this process started, so
+ * a restart never makes a turn an away turn.
+ */
+export class LocalPresence {
+  /** Attached clients, and whether each says the person is active. */
+  private readonly clients = new Map<string, boolean>()
+  /** When the person was last here. */
+  private leftAt: number
+
+  constructor(private readonly now: () => number = Date.now) {
+    this.leftAt = now()
+  }
+
+  attached(connId: string): void {
+    this.clients.set(connId, true)
+  }
+
+  detached(connId: string): void {
+    const was = this.here()
+    this.clients.delete(connId)
+    if (was && !this.here()) this.leftAt = this.now()
+  }
+
+  /** A client's `daemon_presence`. Only `active` (and, going inactive, `awayMs`) matters here. */
+  presence(connId: string, payload: Record<string, unknown>): void {
+    if (typeof payload.active !== 'boolean') return
+    const was = this.here()
+    this.clients.set(connId, payload.active)
+    if (!was || this.here()) return
+    const idle = typeof payload.awayMs === 'number' && Number.isFinite(payload.awayMs) ? Math.max(0, payload.awayMs) : 0
+    this.leftAt = this.now() - idle
+  }
+
+  here(): boolean {
+    for (const active of this.clients.values()) if (active) return true
+    return false
+  }
+
+  /** How long the person has been away: 0 while here. */
+  awayMs(): number {
+    return this.here() ? 0 : Math.max(0, this.now() - this.leftAt)
+  }
+
+  away(): boolean {
+    return this.awayMs() >= ZOO_AWAY_MS
   }
 }
 
@@ -89,8 +170,8 @@ export interface ZooTurnReporterDeps {
 }
 
 export class ZooTurnReporter {
-  /** Turns counted since the last flush, by local day and hour. */
-  private readonly buckets = new Map<string, { day: string; hour: number; n: number }>()
+  /** Turns counted since the last flush, by local day and hour, with their minutes and away turns. */
+  private readonly buckets = new Map<string, { day: string; hour: number; n: number; minutes: number; away: number }>()
   /** Ops made but not yet accepted, oldest first. A retry sends them again with the same batch ids. */
   private pending: ZooTurnOp[] = []
   private timer: unknown = null
@@ -111,12 +192,14 @@ export class ZooTurnReporter {
   }
 
   /** One counted turn, finished now. */
-  count(): void {
+  count(turn: ZooCountedTurn = { minutes: 0, away: false }): void {
     if (this.stopped || !this.deps.signedIn()) return
     const { day, hour } = localDayHour(this.now())
     const key = `${day}T${hour}`
-    const bucket = this.buckets.get(key) ?? { day, hour, n: 0 }
+    const bucket = this.buckets.get(key) ?? { day, hour, n: 0, minutes: 0, away: 0 }
     bucket.n += 1
+    bucket.minutes += Math.min(Math.max(0, Math.floor(turn.minutes)), ZOO_TURN_MAX_MINUTES)
+    if (turn.away) bucket.away += 1
     this.buckets.set(key, bucket)
     this.arm()
   }
@@ -162,8 +245,20 @@ export class ZooTurnReporter {
     }
     const machineId = this.deps.machineId()
     for (const b of this.buckets.values()) {
+      // Past 50 turns a bucket is split; its minutes and away turns go with the first ops that can hold
+      // them (a day per turn, and at most one away per turn).
+      let minutes = b.minutes
+      let away = b.away
       for (let left = b.n; left > 0; left -= MAX_TURNS_PER_OP) {
-        this.pending.push({ op: 'zoo.turn', batchId: this.newBatchId(), n: Math.min(left, MAX_TURNS_PER_OP), day: b.day, hour: b.hour, machineId })
+        const n = Math.min(left, MAX_TURNS_PER_OP)
+        const m = Math.min(minutes, n * ZOO_TURN_MAX_MINUTES)
+        const a = Math.min(away, n)
+        minutes -= m
+        away -= a
+        this.pending.push({
+          op: 'zoo.turn', batchId: this.newBatchId(), n, ...(m > 0 ? { minutes: m } : {}), ...(a > 0 ? { away: a } : {}),
+          day: b.day, hour: b.hour, machineId,
+        })
       }
     }
     this.buckets.clear()

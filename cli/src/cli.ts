@@ -61,7 +61,7 @@ import { flashCommand } from './lib/flash.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from './lib/loginCallback.js'
 import { AuthSessionError, AuthSessionManager, clearAuthSession, readAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
-import { PAIR_HARNESS_DSH, ZooTurnCounter, ZooTurnReporter } from './lib/zooTurns.js'
+import { LocalPresence, PAIR_HARNESS_DSH, ZooTurnCounter, ZooTurnReporter } from './lib/zooTurns.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { ensureGridInstalled, type GridInstallResult } from './lib/gridInstall.js'
 import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
@@ -2945,12 +2945,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Turns that count toward the zoo's eggs and the paired daemon's bond (lib/zooTurns.ts): a turn a
   // person started, seen live, in a session that is not a sub-agent, a terminal or the pair harness.
   // Reported once a minute as `zoo.turn` through the same signed-in path as /api/zoo; a guest's turns
-  // are the desktop client's to count, so nothing is counted while signed out.
+  // are the desktop client's to count, so nothing is counted while signed out. Each carries its minutes
+  // and whether it finished while the person was away from this computer (no active local window or
+  // `hn` for 30 minutes: zooPresence, fed below beside the pair brain), which is what earns night eggs.
+  const zooPresence = new LocalPresence()
   const zooTurnCounter = new ZooTurnCounter({
     eligible: (sessionId) => {
       const session = registry.bySession(sessionId)
       return !!session && !isTerminalEngine(session.engine) && session.dsh !== PAIR_HARNESS_DSH && !isSubagentSession(sessionId)
     },
+    away: () => zooPresence.away(),
   })
   const zooTurnReporter = new ZooTurnReporter({
     post: (body) => proxyBackend('POST', '/api/zoo/ops', body),
@@ -3008,9 +3012,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // and marking it pre-turn is how a restarted daemon never announced a question Codex had open.
         if (!opts?.resumed) questionWatcher.noteTurnStart(sessionId)
       } else if (event.type === 'turn_ended') {
-        if (zooTurnCounter.ended(sessionId, { replay: !!(opts?.resumed || opts?.replay), aborted: event.payload.aborted === true })) {
-          zooTurnReporter.count()
-        }
+        const counted = zooTurnCounter.ended(sessionId, { replay: !!(opts?.resumed || opts?.replay), aborted: event.payload.aborted === true })
+        if (counted) zooTurnReporter.count(counted)
         const startedAt = turnStartedAt.get(sessionId)
         turnStartedAt.delete(sessionId)
         // Say when a turn was KILLED. The log previously showed an interrupt as a fresh `[turn] started
@@ -4373,10 +4376,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     now: Date.now,
   })
   backend.onLocalClient = (connId, attached) => {
-    if (attached) pairBrain?.clientAttached(connId)
-    else pairBrain?.clientDetached(connId)
+    if (attached) { zooPresence.attached(connId); pairBrain?.clientAttached(connId) }
+    else { zooPresence.detached(connId); pairBrain?.clientDetached(connId) }
   }
-  for (const connId of backend.localClientIds()) pairBrain.clientAttached(connId)
+  for (const connId of backend.localClientIds()) { zooPresence.attached(connId); pairBrain.clientAttached(connId) }
   // Spoken tasks go to the WINDOW to be routed, not to the copy of the router in this process.
   //
   // Built here because both ends need it: the local socket hands it the window's replies, and the cable
@@ -4616,7 +4619,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         .catch((err): Record<string, unknown> => ({ ok: false, error: 'FAILED', detail: err instanceof Error ? err.message.slice(0, 200) : undefined }))
         .then((result) => { reply({ type: 'daemon_talk_result', payload: { requestId, ...result } }) })
     },
-    onDaemonPresence: (connId, payload) => pairBrain?.onPresence(connId, payload),
+    onDaemonPresence: (connId, payload) => { zooPresence.presence(connId, payload); pairBrain?.onPresence(connId, payload) },
     machineId: backend.machineId,
     backend,
     relayPool,
