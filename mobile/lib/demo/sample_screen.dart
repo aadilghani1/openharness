@@ -352,7 +352,9 @@ class ClaudeLook extends SampleLook {
       for (final (i, row) in _promptRows(
         state.input,
         width - 6,
-        placeholder: 'Try "write a test for session.ts"',
+        // Claude Code's own kind of nudge, and true of any project: not one project's file name
+        // on every harness.
+        placeholder: 'Try "run the tests and fix what fails"',
       ).indexed)
         [Span(i == 0 ? '> ' : '  '), ...row],
     ], width);

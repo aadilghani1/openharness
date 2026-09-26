@@ -55,6 +55,12 @@ class TerminalTitle extends StatelessWidget {
   final VoidCallback onFind;
   final VoidCallback? onActions;
 
+  /// A long branch shortened in the middle — `fix/login-refresh-token` → `fix/logi…sh-token` — where
+  /// both ends say which one it is; cut at the end, `fix/logi` said nothing.
+  static String _short(String branch) => branch.length <= 18
+      ? branch
+      : '${branch.substring(0, 8)}…${branch.substring(branch.length - 8)}';
+
   /// Three terminal rows: two of text and half a row of air above and below, which is also what
   /// makes each word a 44pt target.
   static double heightOf(Tty tty) => 3 * tty.row;
@@ -155,7 +161,8 @@ class TerminalTitle extends StatelessWidget {
                                 ),
                               if (branch case final branch?)
                                 TextSpan(
-                                  text: '${place == null ? '' : ' · '}$branch',
+                                  text:
+                                      '${place == null ? '' : ' · '}${_short(branch)}',
                                   style: tty.style(
                                     color: tty.magenta,
                                     size: TtySize.meta,
