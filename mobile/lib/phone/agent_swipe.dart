@@ -15,6 +15,7 @@ import 'phone_search_catalog.dart' show phoneAgentId;
 import 'agent_swipe_list.dart';
 import 'terminal_page.dart';
 import 'voice_input_controller.dart';
+import 'voice_input_scope.dart';
 
 /// One agent's terminal, with the agents beside it a swipe away.
 ///
@@ -186,10 +187,15 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   ///
   /// Transcribes through `notifier.api` read at CALL time, not captured here: the notifier replaces
   /// its client when the session changes, and a captured one would sign with a token that is gone.
-  late final VoiceInputController _voice = VoiceInputController(
-    transcriber: (wav, lang) =>
-        widget.notifier.api.transcribeVoice(wav, lang: lang),
-  );
+  ///
+  /// A [VoiceInputScope] above the pager makes it instead — sample mode's, which records nothing
+  /// and hears scripted words. Read on first use, in [build], where the scope can be looked up.
+  late final VoiceInputController _voice =
+      VoiceInputScope.maybeOf(context)?.create() ??
+      VoiceInputController(
+        transcriber: (wav, lang) =>
+            widget.notifier.api.transcribeVoice(wav, lang: lang),
+      );
 
   /// Tell the search this agent was reached.
   ///

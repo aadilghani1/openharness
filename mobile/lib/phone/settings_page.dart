@@ -5,6 +5,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:harness_mobile/core/app_version.dart';
+import 'package:harness_mobile/demo/sample_mode.dart'
+    show SampleMode, SampleSession;
 import 'package:harness_mobile/core/device_name.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -145,15 +147,10 @@ class _Body extends StatelessWidget {
       MediaQuery.paddingOf(context).bottom + 24,
     ),
     children: [
-      const SettingsCaption('Account'),
+      SettingsCaption(_sample(context) == null ? 'Account' : 'Sample'),
       SettingsGroup(
         children: [
-          SettingsRow(
-            leading: _Avatar(notifier: notifier),
-            title: notifier.currentUser?.displayName ?? 'Signed in',
-            detail: notifier.currentUser?.email,
-            onTap: () => _showAccountSheet(context, notifier),
-          ),
+          _accountRow(context),
           // The computers this phone reaches — here rather than a menu of their own: linking one is
           // a once-a-while errand, and Find already reaches every agent on them.
           SettingsRow(
@@ -221,6 +218,30 @@ class _Body extends StatelessWidget {
       SettingsGroup(children: const [_VersionRow(), _BuildRow()]),
     ],
   );
+
+  /// The sample this page is in, or null in the real app — see `lib/demo/sample_mode.dart`.
+  SampleSession? _sample(BuildContext context) =>
+      SampleMode.maybeOf(context) ?? SampleMode.ofNotifier(notifier);
+
+  /// Who is signed in — or, in sample mode, which has no account to show or sign out of, the
+  /// way back out of it.
+  Widget _accountRow(BuildContext context) {
+    final sample = _sample(context);
+    if (sample != null) {
+      return SettingsRow(
+        key: const ValueKey('settings-leave-sample'),
+        title: 'Leave sample',
+        detail: 'Mock computers and harnesses — nothing here is real',
+        onTap: sample.leave,
+      );
+    }
+    return SettingsRow(
+      leading: _Avatar(notifier: notifier),
+      title: notifier.currentUser?.displayName ?? 'Signed in',
+      detail: notifier.currentUser?.email,
+      onTap: () => _showAccountSheet(context, notifier),
+    );
+  }
 
   void _showAccountSheet(BuildContext context, AppNotifier notifier) {
     showPhoneSheet(

@@ -1325,6 +1325,11 @@ class AppNotifier extends ChangeNotifier {
   ApiClient _newApiClient() =>
       ApiClient(config: config, session: session, auth: viewer?.auth);
 
+  /// Where the harnesses this notifier sees are counted — the app's own [harnessStats], kept on
+  /// disk. Sample mode (`lib/demo/`) counts into one of its own: its harnesses are not the
+  /// person's, and must not land in their figures.
+  HarnessStats get stats => harnessStats;
+
   String? get lastError => _lastError;
   bool get lastErrorRetryable => _lastErrorRetryable;
   String? get bootStatusMessage => _bootStatusMessage;
@@ -4559,7 +4564,7 @@ class AppNotifier extends ChangeNotifier {
       // Closed even when the machine has been replaced under us: this path is
       // the only end a stalled turn ever gets, and a stats turn left open would
       // sit there until quit and then bank every hour since as work.
-      harnessStats.onTurnEnded(key);
+      stats.onTurnEnded(key);
       final current = machineStates[machine.machine.machineId];
       if (!identical(current, machine)) return;
       if (machine.processingAgentIds.remove(agentId)) notifyListeners();
@@ -4596,7 +4601,7 @@ class AppNotifier extends ChangeNotifier {
     // disconnect, a deleted agent — so this is where the clock stops. An end for
     // a turn this process never saw start contributes nothing (see
     // `HarnessStats.onTurnEnded`), which is what makes the disconnect sweep safe.
-    harnessStats.onTurnEnded(key);
+    stats.onTurnEnded(key);
     final machine = machineStates[machineId];
     machine?.processingAgentIds.remove(agentId);
     // A question cannot outlive its own turn — the daemon's watcher says the
@@ -5118,7 +5123,7 @@ class AppNotifier extends ChangeNotifier {
       unawaited(projectHistory.select(machineId, projectPath));
     }
     // Apply each creation receipt once, even if its transport result is replayed.
-    harnessStats.onAgentSpawned();
+    stats.onAgentSpawned();
     notifyListeners();
     if (_creationPlacementError(targetId, split) != null) {
       _lastError =
@@ -7189,7 +7194,7 @@ class AppNotifier extends ChangeNotifier {
           // is a turn already under way, and counting one would report an agent
           // this app merely reconnected to as work somebody just asked for.
           if (type == 'turn_started') {
-            harnessStats.onTurnStarted(
+            stats.onTurnStarted(
               _turnActivityKey(machine.machine.machineId, agentId),
             );
           }
