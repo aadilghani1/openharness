@@ -70,6 +70,35 @@ pub struct Stash {
 #[derive(Clone, Debug, Default)]
 pub struct StartSession { pub name: Option<String>, pub create: bool, pub attach_existing: bool, pub window: Option<String>, pub cwd: Option<String>, pub command: Option<String> }
 
+/// A session this client does not have: another client of this server name has it (`owner`, the
+/// socket that client listens on), or none does (its client detached). As the sessions file says:
+/// listed with this client's own, and made this client's when it is gone to.
+#[derive(Clone, Debug)]
+pub struct RemoteSession { pub id: u32, pub name: String, pub owner: Option<String>, pub front: bool, pub created: i64, pub activity: i64, pub active: usize, pub windows: Vec<(usize, String, usize)> }
+
+/// The sessions file as last read (its time and size, and when its clients were last asked after),
+/// the sessions in it this client does not have, and the ids this client gives them (`$N`).
+#[derive(Default)]
+pub struct Remote { stamp: Option<(std::time::SystemTime, u64)>, read_at: Option<Instant>, rows: Vec<RemoteSession>, pub ids: HashMap<String, u32> }
+
+/// How a client writes its sessions: as its own; one of them given up to another client; or every
+/// one of them left for the next (it detaches).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Save { Stay, Release(u32), Leave }
+
+/// The sessions file, as read (empty when there is none).
+pub fn read_sessions(path: &std::path::Path) -> Value {
+    let mut doc: Value = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    if !doc.is_object() { doc = json!({}) }
+    if !doc.get("sessions").map(Value::is_array).unwrap_or(false) { doc["sessions"] = json!([]) }
+    doc
+}
+
+/// A session's client (its row's owner) while it runs: the socket it listens on.
+pub fn live_owner(row: &Value) -> Option<String> {
+    row.get("owner").and_then(Value::as_str).filter(|o| crate::ipc::answers(std::path::Path::new(o))).map(str::to_string)
+}
+
 /// Where a server name's (-L) sessions are kept between clients.
 pub fn sessions_path(name: Option<&str>) -> std::path::PathBuf {
     let name = name.map(str::to_string).or_else(|| std::env::var("HN_SOCKET_NAME").ok()).filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
@@ -320,7 +349,14 @@ pub struct App {
     pub session_activity: i64,
     /// The session the client was in before this one (switch-client -l, C-b L).
     pub last_session: Option<u32>,
-    pub next_session_id: u32,
+    pub next_session_id: std::cell::Cell<u32>,
+    /// The sessions this client does not have (other clients', or no client's), as the file said.
+    pub remote: std::cell::RefCell<Remote>,
+    /// This client gave its sessions to another (a terminal attached to the one it showed, as
+    /// `attach -d`): it writes none of them again.
+    pub handed_over: bool,
+    /// Its sessions' windows and panes as last written (save_if_changed).
+    pub sessions_sig: String,
     /// While a command runs in another session (`-t work:2`): the session to come back to.
     pub swap_back: Option<u32>,
     /// The session asked for at start (`hn new -A -s main`, `hn attach -t work`).
@@ -463,11 +499,15 @@ impl App {
             session_alias: None,
             sessions: Vec::new(),
             session_id: 0,
-            session_desk: true,
+            // desk=off: the first session is a session like any other (tmux's `0`).
+            session_desk: desk_mode != DeskMode::Off,
             session_created: epoch_secs(),
             session_activity: epoch_secs(),
             last_session: None,
-            next_session_id: 1,
+            next_session_id: std::cell::Cell::new(1),
+            remote: Default::default(),
+            handed_over: false,
+            sessions_sig: String::new(),
             swap_back: None,
             start_session: None,
             start_failed: None,
@@ -1424,9 +1464,11 @@ impl App {
     }
 
     /// Session [id] in front, as it is, with nothing else done (a command that names it runs
-    /// there); false if there is none.
+    /// there); false if there is none. One no client has (its client detached) is this client's
+    /// from now on.
     pub fn swap_session(&mut self, id: u32) -> bool {
         if id == self.session_id { return true }
+        if !self.sessions.iter().any(|s| s.id == id) && !self.take_session(id, false) { return false }
         let Some(i) = self.sessions.iter().position(|s| s.id == id) else { return false };
         let next = self.sessions.remove(i);
         let cur = self.stash_current();
@@ -1436,9 +1478,11 @@ impl App {
     }
 
     /// switch-client (server_client_set_session): the client shows session [id] at its current
-    /// window, whose alerts are seen; the one it leaves is its last session.
+    /// window, whose alerts are seen; the one it leaves is its last session. Another client's is
+    /// given up by that client first.
     pub fn switch_session(&mut self, id: u32) {
         if id == self.session_id { return }
+        if !self.sessions.iter().any(|s| s.id == id) && !self.take_session(id, true) { return }
         let from = self.session_id;
         // The session the client leaves was in use until now (session_update_activity).
         let used = std::mem::replace(&mut self.session_activity, epoch_secs());
@@ -1453,9 +1497,136 @@ impl App {
         self.save_sessions();
     }
 
-    /// A session's own formats, for a session not in front (a #{S:} loop's).
+    /// A new session id (`$N`), as tmux's next_session_id: never given twice by this client.
+    pub fn alloc_session_id(&self) -> u32 {
+        let id = self.next_session_id.get();
+        self.next_session_id.set(id + 1);
+        id
+    }
+
+    /// The id this client gives a session it does not have (the same each time it is asked).
+    fn remote_id(&self, name: &str) -> u32 {
+        if let Some(id) = self.remote.borrow().ids.get(name) { return *id }
+        let id = self.alloc_session_id();
+        self.remote.borrow_mut().ids.insert(name.to_string(), id);
+        id
+    }
+
+    /// One of this client's own sessions, by its exact name.
+    pub fn own_session(&self, name: &str) -> Option<u32> {
+        if self.session_name() == name { return Some(self.session_id) }
+        self.sessions.iter().find(|s| self.stash_name(s) == name).map(|s| s.id)
+    }
+
+    /// The sessions this client does not have — other clients' and those no client has — as the
+    /// sessions file says: read again when it changes, and its clients asked after again when
+    /// that is two seconds old.
+    pub fn remote_rows(&self) -> Vec<RemoteSession> {
+        let path = Self::sessions_path();
+        let stamp = std::fs::metadata(&path).ok().map(|m| (m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len()));
+        let stale = {
+            let r = self.remote.borrow();
+            r.stamp != stamp || stamp.is_none() || r.read_at.map(|t| t.elapsed() > Duration::from_secs(2)).unwrap_or(true)
+        };
+        if stale {
+            let me = crate::ipc::here().map(|p| p.display().to_string());
+            let doc = read_sessions(&path);
+            let mut rows = Vec::new();
+            for row in doc["sessions"].as_array().cloned().unwrap_or_default() {
+                if row.get("desk").and_then(Value::as_bool).unwrap_or(false) { continue }
+                let Some(name) = row.get("name").and_then(Value::as_str).map(str::to_string) else { continue };
+                if me.is_some() && row.get("owner").and_then(Value::as_str) == me.as_deref() { continue }
+                let owner = live_owner(&row);
+                let windows = row.get("windows").and_then(Value::as_array).map(|ws| ws.iter().map(|w| (
+                    w.get("num").and_then(Value::as_u64).unwrap_or(0) as usize,
+                    w.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                    w.get("panes").and_then(Value::as_array).map(|p| p.len()).unwrap_or(0),
+                )).collect()).unwrap_or_default();
+                let created = row.get("created").and_then(Value::as_i64).unwrap_or(0);
+                rows.push(RemoteSession {
+                    id: self.remote_id(&name), front: owner.is_some() && row.get("front").and_then(Value::as_bool).unwrap_or(false), owner, name, created,
+                    activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), active: row.get("active").and_then(Value::as_u64).unwrap_or(0) as usize, windows,
+                });
+            }
+            let mut r = self.remote.borrow_mut();
+            r.rows = rows;
+            r.stamp = stamp;
+            r.read_at = Some(Instant::now());
+        }
+        let mine: Vec<String> = std::iter::once(self.session_name()).chain(self.sessions.iter().map(|s| self.stash_name(s))).collect();
+        self.remote.borrow().rows.iter().filter(|s| !mine.contains(&s.name)).cloned().collect()
+    }
+
+    /// The client that has session [id], when another client has it: the socket it listens on.
+    pub fn remote_owner(&self, id: u32) -> Option<String> {
+        if id == self.session_id || self.sessions.iter().any(|s| s.id == id) { return None }
+        self.remote_rows().into_iter().find(|r| r.id == id).and_then(|r| r.owner)
+    }
+
+    /// A session this client does not have, made its own, as the file has it. One another client
+    /// has ([from_client]) is given up by that client first — which detaches, as `attach -d`
+    /// detaches a session's other clients, when it is the session it shows.
+    pub fn take_session(&mut self, id: u32, from_client: bool) -> bool {
+        let Some(r) = self.remote_rows().into_iter().find(|r| r.id == id) else { return false };
+        if let Some(owner) = &r.owner {
+            if !from_client { return false }
+            let given = crate::ipc::ask(std::path::Path::new(owner), &["hn-release-session".into(), "-t".into(), r.name.clone()]);
+            if !matches!(given, Some((_, _, 0))) { self.error(format!("session {} is another client's", r.name)); return false }
+        }
+        // Claimed while the file is held: two clients never both take it.
+        let path = Self::sessions_path();
+        let row = {
+            let _lock = crate::ipc::lock(&path);
+            let doc = read_sessions(&path);
+            doc["sessions"].as_array().and_then(|rows| rows.iter().find(|row| row.get("name").and_then(Value::as_str) == Some(r.name.as_str())
+                && !row.get("desk").and_then(Value::as_bool).unwrap_or(false) && live_owner(row).is_none()).cloned())
+        };
+        let Some(stash) = row.and_then(|row| self.stash_from_row(&row, id)) else { self.error(format!("can't find session: {}", r.name)); return false };
+        self.sessions.push(stash);
+        self.remote.borrow_mut().stamp = None;
+        self.save_sessions();
+        true
+    }
+
+    /// hn-release-session: session [name] given up to the client that asked (it goes there). The
+    /// session this client shows: it detaches, every session it had left for the next client, as
+    /// tmux's `attach -d` detaches the others.
+    pub fn release_session(&mut self, name: &str) -> Result<(), String> {
+        if !self.session_desk && self.session_name() == name {
+            self.write_sessions(Save::Leave);
+            self.handed_over = true;
+            self.quit = true;
+            return Ok(())
+        }
+        let Some(i) = self.sessions.iter().position(|s| !s.desk && self.stash_name(s) == name) else { return Err(format!("can't find session: {name}")) };
+        let id = self.sessions[i].id;
+        self.write_sessions(Save::Release(id));
+        let gone = self.sessions.remove(i);
+        for t in &gone.tabs { for p in t.panes() { self.drop_pane(p) } }
+        let mut r = self.remote.borrow_mut();
+        r.ids.insert(name.to_string(), id);
+        r.stamp = None;
+        Ok(())
+    }
+
+    /// A session's own formats, for a session not in front (a #{S:} loop's, list-sessions').
     pub fn stash_value(&self, id: u32, key: &str) -> Option<String> {
-        let s = self.sessions.iter().find(|s| s.id == id)?;
+        let Some(s) = self.sessions.iter().find(|s| s.id == id) else {
+            let r = self.remote_rows().into_iter().find(|r| r.id == id)?;
+            return Some(match key {
+                "session_name" => r.name.clone(),
+                "session_id" => format!("${}", r.id),
+                "session_windows" => r.windows.len().to_string(),
+                // Attached: shown by its client.
+                "session_attached" => (r.front as u8).to_string(),
+                "session_many_attached" | "session_marked" | "session_alerts" => "0".into(),
+                "session_created" | "session_last_attached" => r.created.to_string(),
+                "session_activity" => r.activity.to_string(),
+                "window_index" => r.windows.get(r.active).map(|w| w.0.to_string()).unwrap_or_default(),
+                "window_name" => r.windows.get(r.active).map(|w| w.1.clone()).unwrap_or_default(),
+                _ => return None,
+            })
+        };
         Some(match key {
             "session_name" => self.stash_name(s),
             "session_id" => format!("${}", s.id),
@@ -1469,9 +1640,18 @@ impl App {
         })
     }
 
-    /// Every session, (id, name), in tmux's order: by name.
+    /// A session's windows (number, name, panes), whichever client has it.
+    pub fn session_windows(&self, id: u32) -> Vec<(usize, String, usize)> {
+        let of = |tabs: &[Tab], nums: &HashMap<String, usize>| tabs.iter().filter(|t| t.root.is_some()).map(|t| (nums.get(&t.id).copied().unwrap_or(0), t.name.clone(), t.panes().len())).collect();
+        if id == self.session_id { return of(&self.tabs, &self.nums) }
+        if let Some(s) = self.sessions.iter().find(|s| s.id == id) { return of(&s.tabs, &s.nums) }
+        self.remote_rows().into_iter().find(|r| r.id == id).map(|r| r.windows).unwrap_or_default()
+    }
+
+    /// Every session, (id, name), in tmux's order: by name — this client's and the others'.
     pub fn session_list(&self) -> Vec<(u32, String)> {
-        let mut v: Vec<(u32, String)> = std::iter::once((self.session_id, self.session_name())).chain(self.sessions.iter().map(|s| (s.id, self.stash_name(s)))).collect();
+        let mut v: Vec<(u32, String)> = std::iter::once((self.session_id, self.session_name())).chain(self.sessions.iter().map(|s| (s.id, self.stash_name(s))))
+            .chain(self.remote_rows().into_iter().map(|r| (r.id, r.name))).collect();
         v.sort_by(|a, b| a.1.cmp(&b.1));
         v
     }
@@ -1510,17 +1690,18 @@ impl App {
         self.sessions.iter().find(|s| s.tabs.iter().any(|t| t.wid == wid)).map(|s| s.id)
     }
 
-    /// session_create: a session [name] (else its number) with one window — a shell (or
-    /// [command]) in [cwd], named [window] (automatic-rename off) — made in the background
-    /// ([detached]) or gone to.
+    /// session_create: a session [name] (else its number: its id, as tmux's) with one window — a
+    /// shell (or [command]) in [cwd], named [window] (automatic-rename off) — made in the
+    /// background ([detached]) or gone to.
     pub fn new_session(&mut self, name: Option<&str>, window: Option<&str>, cwd: Option<String>, command: Option<String>, detached: bool) -> Result<u32, String> {
-        let name = match name {
-            Some(n) => session_check_name(n).ok_or_else(|| "invalid session: ".to_string())?,
-            None => { let mut n = self.next_session_id; while self.find_session(&format!("={n}")).is_some() { n += 1 } n.to_string() }
+        let (id, name) = match name {
+            Some(n) => {
+                let n = session_check_name(n).ok_or_else(|| "invalid session: ".to_string())?;
+                if self.find_session(&format!("={n}")).is_some() { return Err(format!("duplicate session: {n}")) }
+                (self.alloc_session_id(), n)
+            }
+            None => loop { let id = self.alloc_session_id(); if self.find_session(&format!("={id}")).is_none() { break (id, id.to_string()) } },
         };
-        if self.find_session(&format!("={name}")).is_some() { return Err(format!("duplicate session: {name}")) }
-        let id = self.next_session_id;
-        self.next_session_id += 1;
         // Named as tmux names a new window, for what it runs (the shell), until automatic-rename.
         let shell = self.options.get("default-shell", "", None).filter(|s| !s.is_empty()).or_else(|| std::env::var("SHELL").ok()).unwrap_or_else(|| "sh".into());
         let program = command.as_deref().and_then(|c| c.split_whitespace().next()).unwrap_or(&shell).rsplit('/').next().unwrap_or("sh").to_string();
@@ -1544,89 +1725,158 @@ impl App {
     /// window of the session in front went): one file per server name (-L).
     fn sessions_path() -> std::path::PathBuf { sessions_path(None) }
 
-    /// Every session but the desk's as its windows stand — each window's name, number, layout and
-    /// its panes' harnesses — and the desk's name, and which session is in front.
-    pub fn save_sessions(&self) {
-        if self.capture.is_some() && self.tabs.is_empty() { return }
+    pub fn save_sessions(&self) { self.write_sessions(Save::Stay) }
+
+    /// Written again when its sessions' windows or panes changed: what other clients of this
+    /// name list of this one's sessions (and take, when one is gone to) is how they stand.
+    pub fn save_if_changed(&mut self) {
+        if self.handed_over || self.start_failed.is_some() || self.quit { return }
+        let mut sig = String::new();
+        let mut add = |name: String, tabs: &[Tab], nums: &HashMap<String, usize>| {
+            sig.push_str(&name);
+            for t in tabs.iter().filter(|t| t.root.is_some()) { sig.push_str(&format!("|{}:{}:{}:{:?}", t.id, t.name, nums.get(&t.id).copied().unwrap_or(0), t.panes())) }
+            sig.push('\n');
+        };
+        if !self.session_desk { add(self.session_name(), &self.tabs, &self.nums) }
+        for s in self.sessions.iter().filter(|s| !s.desk) { add(self.stash_name(s), &s.tabs, &s.nums) }
+        if sig != self.sessions_sig { self.sessions_sig = sig; self.save_sessions() }
+    }
+
+    /// Every session this client has as its windows stand — each window's name, number, layout
+    /// and its panes' harnesses — marked as this client's (else left for the next, as [how]
+    /// says), beside the other clients' sessions as they wrote them; the desk's name; and the
+    /// session in front.
+    pub fn write_sessions(&self, how: Save) {
+        if self.handed_over || (self.capture.is_some() && self.tabs.is_empty()) { return }
         let window = |app: &App, t: &Tab, nums: &HashMap<String, usize>| {
             // A shell hn made is ended when its window is killed, by whichever client does it.
             let panes: Vec<Value> = t.panes().iter().filter_map(|p| app.panes.get(p)).map(|p| json!([p.machine_id, p.agent_id, app.shells.contains(&(p.machine_id.clone(), p.agent_id.clone()))])).collect();
             let focus = t.focus.and_then(|f| t.panes().iter().position(|p| *p == f)).unwrap_or(0);
             json!({ "name": t.name, "named": t.named, "num": nums.get(&t.id).copied(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus })
         };
-        let mut rows = Vec::new();
-        let here = Stash { id: self.session_id, alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), options: Default::default(), env: Default::default() };
-        for (s, tabs, nums) in std::iter::once((&here, &self.tabs, &self.nums)).chain(self.sessions.iter().map(|s| (s, &s.tabs, &s.nums))) {
-            let windows: Vec<Value> = if s.desk { Vec::new() } else { tabs.iter().filter(|t| t.root.is_some()).map(|t| window(self, t, nums)).collect() };
-            if !s.desk && windows.is_empty() { continue }
-            rows.push(json!({ "name": s.alias, "desk": s.desk, "created": s.created, "active": s.active, "windows": windows }));
-        }
-        if self.forget_sessions { rows.clear() }
-        let doc = json!({ "current": self.session_alias.clone().filter(|_| !self.session_desk && !self.forget_sessions), "sessions": rows });
+        let me = crate::ipc::here().map(|p| p.display().to_string());
         let path = Self::sessions_path();
+        let _lock = crate::ipc::lock(&path);
+        let doc = read_sessions(&path);
+        let here = Stash { id: self.session_id, alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), options: Default::default(), env: Default::default() };
+        let mut ours = Vec::new();
+        let mut names = HashSet::new();
+        let mut desk = None;
+        for (s, tabs, nums, front) in std::iter::once((&here, &self.tabs, &self.nums, true)).chain(self.sessions.iter().map(|s| (s, &s.tabs, &s.nums, false))) {
+            // The desk's session is every client's: its windows are the desk's tabs.
+            if s.desk { desk = Some(json!({ "name": s.alias, "desk": true, "created": s.created, "active": s.active, "windows": [] })); continue }
+            let windows: Vec<Value> = tabs.iter().filter(|t| t.root.is_some()).map(|t| window(self, t, nums)).collect();
+            if windows.is_empty() { continue }
+            let name = self.stash_name(s);
+            names.insert(name.clone());
+            let left = how == Save::Leave || how == Save::Release(s.id);
+            ours.push(json!({ "name": name, "desk": false, "created": s.created, "activity": s.activity, "active": s.active, "windows": windows,
+                "owner": if left { Value::Null } else { json!(me) }, "front": front && !left }));
+        }
+        let mut rows = Vec::new();
+        if !self.forget_sessions {
+            // The others: every session as its client wrote it, but for one this client has now.
+            for row in doc["sessions"].as_array().cloned().unwrap_or_default() {
+                if row.get("desk").and_then(Value::as_bool).unwrap_or(false) { if desk.is_none() { rows.push(row) } continue }
+                if me.is_some() && row.get("owner").and_then(Value::as_str) == me.as_deref() { continue }
+                if row.get("name").and_then(Value::as_str).map(|n| names.contains(n)).unwrap_or(true) { continue }
+                rows.push(row);
+            }
+            rows.extend(desk);
+            rows.extend(ours);
+        }
+        let current = if self.forget_sessions { Value::Null }
+            else if how == Save::Stay || how == Save::Leave { if self.session_desk { Value::Null } else { json!(self.session_name()) } }
+            else { doc.get("current").cloned().unwrap_or(Value::Null) };
+        let doc = json!({ "current": current, "sessions": rows });
         if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
-        let temp = path.with_extension("json.tmp");
-        if std::fs::write(&temp, doc.to_string()).is_ok() { let _ = std::fs::rename(temp, path); }
+        let temp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        if std::fs::write(&temp, doc.to_string()).is_ok() { let _ = std::fs::rename(temp, &path); }
+        self.remote.borrow_mut().stamp = None;
     }
 
-    /// The sessions a client before this one left (save_sessions), back as they were: each
-    /// window's harnesses in their panes, laid out as they were. Then the one asked for at start
-    /// (`hn attach -t work`, `hn new -A -s main`), else the one that was in front.
-    pub fn load_sessions(&mut self) {
-        let doc: Value = std::fs::read_to_string(Self::sessions_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    /// A session as the file keeps it: each window's harnesses in their panes, laid out as they
+    /// were, numbered and named as they were. None when none of its windows has a pane.
+    fn stash_from_row(&mut self, row: &Value, id: u32) -> Option<Stash> {
+        let name = row.get("name").and_then(Value::as_str)?.to_string();
         let (w, h) = (self.body().width, self.body().height);
-        for row in doc.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default() {
+        let mut tabs = Vec::new();
+        let mut nums = HashMap::new();
+        for win in row.get("windows").and_then(Value::as_array).cloned().unwrap_or_default() {
+            let panes: Vec<(String, String)> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))).collect()).unwrap_or_default();
+            if panes.is_empty() { continue }
+            for p in win.get("panes").and_then(Value::as_array).cloned().unwrap_or_default() {
+                if p.get(2).and_then(Value::as_bool).unwrap_or(false) { if let (Some(m), Some(a)) = (p.get(0).and_then(Value::as_str), p.get(1).and_then(Value::as_str)) { self.shells.insert((m.to_string(), a.to_string())); } }
+            }
+            let ids: Vec<u64> = panes.iter().map(|(m, a)| self.new_pane(m, a)).collect();
+            let mut tab = Tab::new(win.get("name").and_then(Value::as_str).unwrap_or(""));
+            tab.named = win.get("named").and_then(Value::as_bool).unwrap_or(false);
+            let layout = win.get("layout").and_then(Value::as_str).unwrap_or("");
+            tab.root = Node::from_tmux(layout, &ids, w, h).or_else(|| layout::arrange(layout::Named::Tiled, &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")));
+            tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
+            if let Some(n) = win.get("num").and_then(Value::as_u64) { nums.insert(tab.id.clone(), n as usize); }
+            tabs.push(tab);
+        }
+        if tabs.is_empty() { return None }
+        let active = row.get("active").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let created = row.get("created").and_then(Value::as_i64).unwrap_or_else(epoch_secs);
+        Some(Stash { id, alias: Some(name), desk: false, active: active.min(tabs.len() - 1), tabs, lastw: Vec::new(), nums,
+            created, activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), options: Default::default(), env: Default::default() })
+    }
+
+    /// The sessions no running client has (save_sessions: left by clients that detached), back
+    /// as they were; another client's stay with it, listed here. Then the one asked for at start
+    /// (`hn attach -t work`, `hn new -A -s main`: another client's is given up by it), else the
+    /// one in front when the last client left — unless another client has it.
+    pub fn load_sessions(&mut self) {
+        let doc = read_sessions(&Self::sessions_path());
+        let me = crate::ipc::here().map(|p| p.display().to_string());
+        for row in doc["sessions"].as_array().cloned().unwrap_or_default() {
             let name = row.get("name").and_then(Value::as_str).map(str::to_string);
-            if row.get("desk").and_then(Value::as_bool).unwrap_or(false) { if name.is_some() { self.session_alias = name } continue }
+            if row.get("desk").and_then(Value::as_bool).unwrap_or(false) { if name.is_some() && self.session_desk { self.session_alias = name } continue }
             let Some(name) = name else { continue };
-            if self.find_session(&format!("={name}")).is_some() { continue }
-            let mut tabs = Vec::new();
-            let mut nums = HashMap::new();
-            for win in row.get("windows").and_then(Value::as_array).cloned().unwrap_or_default() {
-                let panes: Vec<(String, String)> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))).collect()).unwrap_or_default();
-                if panes.is_empty() { continue }
-                for p in win.get("panes").and_then(Value::as_array).cloned().unwrap_or_default() {
-                    if p.get(2).and_then(Value::as_bool).unwrap_or(false) { if let (Some(m), Some(a)) = (p.get(0).and_then(Value::as_str), p.get(1).and_then(Value::as_str)) { self.shells.insert((m.to_string(), a.to_string())); } }
+            if live_owner(&row).filter(|o| Some(o) != me.as_ref()).is_some() { continue }
+            if self.own_session(&name).is_some() { continue }
+            let id = self.remote_id(&name);
+            if let Some(stash) = self.stash_from_row(&row, id) { self.sessions.push(stash) }
+        }
+        self.remote.borrow_mut().stamp = None;
+        let current = doc.get("current").and_then(Value::as_str).map(str::to_string).and_then(|c| self.own_session(&c)).filter(|c| *c != self.session_id);
+        match self.start_session.clone() {
+            None => if let Some(id) = current { self.switch_session(id) },
+            Some(start) => {
+                let found = start.name.as_deref().and_then(|n| self.find_session(&format!("={n}")));
+                match (found, start.create) {
+                    // attach -t, new -A: there already.
+                    (Some(id), false) => { self.switch_session(id); self.start_session = None }
+                    (Some(id), true) if start.attach_existing => { self.switch_session(id); self.start_session = None }
+                    (Some(_), true) => { self.start_error(format!("duplicate session: {}", start.name.clone().unwrap_or_default())) }
+                    // A fresh start's first session is the desk's (desk=off: the client's first),
+                    // named as asked; another is made once this computer is connected
+                    // (maybe_start_shell).
+                    (None, true) if self.sessions.is_empty() && self.session_alias.is_none() && start.window.is_none() => {
+                        self.session_alias = start.name.as_deref().and_then(session_check_name);
+                    }
+                    (None, true) => {}
+                    (None, false) => match &start.name {
+                        Some(n) => self.start_error(format!("can't find session: {n}")),
+                        None => { self.start_session = None; if let Some(id) = current { self.switch_session(id) } }
+                    },
                 }
-                let ids: Vec<u64> = panes.iter().map(|(m, a)| self.new_pane(m, a)).collect();
-                let mut tab = Tab::new(win.get("name").and_then(Value::as_str).unwrap_or(""));
-                tab.named = win.get("named").and_then(Value::as_bool).unwrap_or(false);
-                let layout = win.get("layout").and_then(Value::as_str).unwrap_or("");
-                tab.root = Node::from_tmux(layout, &ids, w, h).or_else(|| layout::arrange(layout::Named::Tiled, &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")));
-                tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
-                if let Some(n) = win.get("num").and_then(Value::as_u64) { nums.insert(tab.id.clone(), n as usize); }
-                tabs.push(tab);
             }
-            if tabs.is_empty() { continue }
-            let id = self.next_session_id;
-            self.next_session_id += 1;
-            let active = row.get("active").and_then(Value::as_u64).unwrap_or(0) as usize;
-            let created = row.get("created").and_then(Value::as_i64).unwrap_or_else(epoch_secs);
-            self.sessions.push(Stash { id, alias: Some(name), desk: false, active: active.min(tabs.len() - 1), tabs, lastw: Vec::new(), nums,
-                created, activity: created, options: Default::default(), env: Default::default() });
         }
-        let current = doc.get("current").and_then(Value::as_str).map(str::to_string);
-        let Some(start) = self.start_session.clone() else {
-            if let Some(id) = current.and_then(|c| self.find_session(&format!("={c}"))) { self.switch_session(id) }
-            return;
-        };
-        let found = start.name.as_deref().and_then(|n| self.find_session(&format!("={n}")));
-        match (found, start.create) {
-            // attach -t, new -A: there already.
-            (Some(id), false) => { self.switch_session(id); self.start_session = None }
-            (Some(id), true) if start.attach_existing => { self.switch_session(id); self.start_session = None }
-            (Some(_), true) => { self.start_error(format!("duplicate session: {}", start.name.clone().unwrap_or_default())) }
-            // A fresh start's first session is the desk's, named as asked; another is made once
-            // this computer is connected (maybe_start_shell).
-            (None, true) if self.sessions.is_empty() && self.session_alias.is_none() && start.window.is_none() => {
-                self.session_alias = start.name.as_deref().and_then(session_check_name);
+        if self.start_failed.is_some() { return }
+        // desk=off: the session the client started in is tmux's first (named by its number); still
+        // empty when another is in front, it goes.
+        if !self.session_desk || self.sessions.iter().any(|s| s.id == 0 && !s.desk) {
+            if let Some(i) = self.sessions.iter().position(|s| s.id == 0 && !s.desk && s.tabs.iter().all(|t| t.root.is_none())) { self.sessions.remove(i); }
+            else if self.session_id == 0 && self.session_alias.is_none() {
+                let mut n = 0u32;
+                while self.find_session(&format!("={n}")).is_some() { n = self.alloc_session_id() }
+                self.session_alias = Some(n.to_string());
             }
-            (None, true) => {}
-            (None, false) => match &start.name {
-                Some(n) => self.start_error(format!("can't find session: {n}")),
-                None => { self.start_session = None; if let Some(id) = current.and_then(|c| self.find_session(&format!("={c}"))) { self.switch_session(id) } }
-            },
         }
+        self.save_sessions();
     }
 
     /// A start that can't be done (`hn attach -t nosuch`): said as tmux says it, and no client.

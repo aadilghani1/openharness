@@ -938,8 +938,11 @@ pub fn hn_owned(name: &str) -> bool {
 /// runs in it, as tmux's commands act on any session: that session in front while it runs, the
 /// one on screen back after.
 fn run_words(app: &mut App, words: &[String]) {
+    let words = &session_targets(app, words);
     match other_session(app, words) {
         Some(id) if app.swap_back.is_none() => {
+            // Another client's session: the command runs in that client, its output here.
+            if let Some(owner) = app.remote_owner(id) { return forward(app, &owner, words) }
             let back = app.session_id;
             app.swap_back = Some(back);
             app.swap_session(id);
@@ -953,11 +956,52 @@ fn run_words(app: &mut App, words: &[String]) {
     }
 }
 
+/// The other running clients of this server name (-L): their sockets.
+fn other_clients() -> Vec<std::path::PathBuf> {
+    let me = crate::ipc::here();
+    let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
+    crate::ipc::clients_of(&name).into_iter().filter(|c| Some(c) != me.as_ref()).collect()
+}
+
+/// A command for a session another client has, run by that client: what it prints printed here,
+/// its errors said here, its status this command's.
+fn forward(app: &mut App, owner: &str, words: &[String]) {
+    match crate::ipc::ask(std::path::Path::new(owner), words) {
+        Some((out, err, code)) => {
+            if !out.is_empty() { app.print(&words[0], out) }
+            for e in err { app.error(e) }
+            if code != 0 { app.cli_code = code }
+        }
+        None => app.error(format!("no client at {owner}")),
+    }
+}
+
+/// cmd_find_get_window / cmd_find_get_pane's last try: a bare word (`-t main`) that is no window
+/// (or pane) of the session in front but names a session is that session's current window (its
+/// active pane) — written `main:` so the command finds it there.
+fn session_targets(app: &App, words: &[String]) -> Vec<String> {
+    let Some(entry) = words.first().and_then(|w| crate::cmd::find(w).ok()) else { return words.to_vec() };
+    let Ok(args) = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)) else { return words.to_vec() };
+    let mut out = words.to_vec();
+    for (spec, flag) in [(entry.target, 't'), (entry.source, 's')] {
+        let (Some(spec), Some(t)) = (spec, args.get(flag)) else { continue };
+        if spec.kind == crate::cmd::Kind::Session || t.is_empty() || t.contains([':', '.']) || t.starts_with(['%', '@', '$', '{', '!', '+', '-', '~', '^']) { continue }
+        if crate::cmd::resolve(app, Some(t), spec).is_ok() || app.find_session(t).is_none() { continue }
+        // The word itself, where it stands (`-tmain` or `-t main`).
+        let want = format!("-{flag}");
+        if let Some(i) = out.iter().position(|w| *w == want).filter(|i| out.get(i + 1).map(|v| v == t).unwrap_or(false)) { out[i + 1] = format!("{t}:") }
+        else if let Some(i) = out.iter().position(|w| *w == format!("{want}{t}")) { out[i] = format!("{want}{t}:") }
+    }
+    out
+}
+
 /// The session (not the one in front) a command's -t or -s names: the part before `:`, the whole
 /// target for a session's own commands, `$N`, or the session of a `%pane` or `@window`.
 fn other_session(app: &App, words: &[String]) -> Option<u32> {
     let entry = crate::cmd::find(words.first()?).ok()?;
-    if matches!(entry.name, "switch-client" | "attach-session" | "new-session" | "detach-client" | "kill-server" | "list-sessions" | "list-windows" | "list-panes") { return None }
+    if matches!(entry.name, "switch-client" | "attach-session" | "new-session" | "detach-client" | "kill-server" | "list-sessions") { return None }
+    // list-windows -a and list-panes -a go through every session themselves.
+    if matches!(entry.name, "list-windows" | "list-panes") && words.iter().any(|w| w == "-a") { return None }
     let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).ok()?;
     for (spec, flag) in [(entry.target, 't'), (entry.source, 's')] {
         let (Some(spec), Some(t)) = (spec, args.get(flag)) else { continue };
@@ -1493,8 +1537,11 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 Err(e) => app.error(e),
             }
         }
-        "list-windows" | "list-sessions" | "list-panes" | "list-clients" => {
+        "list-windows" | "list-sessions" | "list-panes" | "list-clients" | "hn-list-clients" => {
             // tmux's list-* with its own templates (-F another), -f a filter, #{line} the count.
+            // list-clients: this client's line, then the other clients' of this name (each asked
+            // for its own: hn-list-clients).
+            let (command, clients) = if command == "hn-list-clients" { ("list-clients", false) } else { (command, command == "list-clients") };
             let filter = opt(words, "-f");
             // Every session's (list-sessions, and -a): each in front in turn while its lines are made.
             let all = command == "list-sessions" || flag(words, "-a");
@@ -1503,7 +1550,29 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let outer = app.swap_back;
             let mut lines = Vec::new();
             for sid in order {
-            if sid != me { app.swap_back = Some(me); app.swap_session(sid); }
+            // Another client's session: its row made here (list-sessions), else its lines asked
+            // of that client.
+            if let Some(owner) = app.remote_owner(sid) {
+                let template = opt(words, "-F");
+                if command == "list-sessions" {
+                    let template = template.unwrap_or_else(|| "#{session_name}: #{session_windows} windows (created #{t:session_created})#{?session_attached, (attached),}".into());
+                    let keep = filter.as_ref().map(|f| { let v = crate::format::expand_session(app, f, sid); !v.is_empty() && v != "0" }).unwrap_or(true);
+                    if keep { lines.push(crate::format::expand_session(app, &template, sid)) }
+                    continue;
+                }
+                let name = app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| n).unwrap_or_default();
+                let mut ask = vec![command.to_string()];
+                if command == "list-panes" { ask.push("-s".into()) }
+                ask.extend(["-t".to_string(), if command == "list-panes" { format!("={name}:") } else { format!("={name}") }, "-F".into()]);
+                ask.push(template.unwrap_or_else(|| match command {
+                    "list-panes" => "#{session_name}:#{window_index}.#{pane_index}: [#{pane_width}x#{pane_height}] [history #{history_size}/#{history_limit}, #{history_bytes} bytes] #{pane_id}#{?pane_active, (active),}#{?pane_dead, (dead),}".into(),
+                    _ => "#{session_name}:#{window_index}: #{window_name}#{window_raw_flags} (#{window_panes} panes) [#{window_width}x#{window_height}] ".into(),
+                }));
+                if let Some(f) = &filter { ask.extend(["-f".to_string(), f.clone()]) }
+                if let Some((out, _, _)) = crate::ipc::ask(std::path::Path::new(&owner), &ask) { lines.extend(out) }
+                continue;
+            }
+            if sid != me { app.swap_back = Some(me); if !app.swap_session(sid) { app.swap_back = outer; continue } }
             let rows: Vec<(usize, Option<u64>)> = match command {
                 "list-panes" => {
                     let windows: Vec<usize> = if flag(words, "-a") || flag(words, "-s") { (0..app.tabs.len()).collect() } else { vec![opt(words, "-t").and_then(|t| window_target(app, &t)).unwrap_or(app.active)] };
@@ -1535,6 +1604,12 @@ fn run_words_in(app: &mut App, words: &[String]) {
             if sid != me { app.swap_session(me); app.swap_back = outer; }
             }
             app.format_line = None;
+            if clients {
+                let mut ask: Vec<String> = vec!["hn-list-clients".into()];
+                if let Some(t) = opt(words, "-F") { ask.extend(["-F".to_string(), t]) }
+                if let Some(f) = &filter { ask.extend(["-f".to_string(), f.clone()]) }
+                for other in other_clients() { if let Some((out, _, _)) = crate::ipc::ask(&other, &ask) { lines.extend(out) } }
+            }
             app.print(command, lines);
         }
         "set-option" | "set-window-option" => {
@@ -1849,8 +1924,19 @@ fn run_words_in(app: &mut App, words: &[String]) {
         }
         "clock-mode" => { if let Some(f) = app.focused() { app.modal = Some(Modal::Clock { pane: f }) } else { app.modal = Some(Modal::Clock { pane: 0 }) } }
         "refresh-client" => { app.redraw_all = true; for id in app.panes.keys().copied().collect::<Vec<_>>() { if app.rects.iter().any(|(r, _)| *r == id) { app.open_stream(id, false) } } }
-        // Every session goes, the saved ones too (the harnesses keep running).
-        "kill-server" => { app.sessions.clear(); app.session_alias = None; app.forget_sessions = true; app.quit = true }
+        // Every session goes, the saved ones too (the harnesses keep running) — and every other
+        // client of this server name with them.
+        "kill-server" => {
+            for other in other_clients() { let _ = crate::ipc::ask(&other, &["hn-kill-client".into()]); }
+            app.sessions.clear(); app.session_alias = None; app.forget_sessions = true; app.quit = true
+        }
+        // kill-server, from another client of this name: this one's sessions go, and it exits.
+        "hn-kill-client" => { app.sessions.clear(); app.session_alias = None; app.forget_sessions = true; app.quit = true }
+        // Another client of this name takes a session this one has (it attached there).
+        "hn-release-session" => {
+            let Some(t) = opt(words, "-t") else { return app.error("missing -t") };
+            if let Err(e) = app.release_session(&t) { app.error(e) }
+        }
         "kill-session" => {
             // -C: the windows' alerts cleared; -a: every other session; else this one (or -t's),
             // its windows closed as kill-window closes them — the last taking the session with it,
@@ -1899,16 +1985,25 @@ fn run_words_in(app: &mut App, words: &[String]) {
             }
         }
         "detach-client" => {
-            // -s: the clients of that session (one not found: nothing); -a: every other client;
-            // -t: that client, by its tty, or tmux's error.
+            // -s: the clients showing that session (this one, another of this name's, or none: one
+            // not found is nothing); -a: every other client of this name; -t: that client, by its
+            // tty (this one or another), or tmux's error.
             if let Some(s) = opt(words, "-s") {
-                let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Session, can_fail: true, window_index: false, default_marked: false };
-                if crate::cmd::resolve(app, Some(&s), spec).is_err() { return }
-            } else if flag(words, "-a") { return }
-            else if let Some(t) = opt(words, "-t") {
+                let Some(id) = app.find_session(&s) else { return };
+                if id == app.session_id { app.quit = true }
+                else if let Some(owner) = app.remote_owner(id).filter(|_| app.stash_value(id, "session_attached").as_deref() == Some("1")) {
+                    let _ = crate::ipc::ask(std::path::Path::new(&owner), &["detach-client".into()]);
+                }
+                return;
+            }
+            if flag(words, "-a") { for other in other_clients() { let _ = crate::ipc::ask(&other, &["detach-client".into()]); } return }
+            if let Some(t) = opt(words, "-t") {
                 let t = t.strip_suffix(':').unwrap_or(&t).to_string();
                 let tty = crate::app::tty_name();
-                if t != tty && Some(t.as_str()) != tty.strip_prefix("/dev/") { return app.error(format!("can't find client: {t}")) }
+                if t != tty && Some(t.as_str()) != tty.strip_prefix("/dev/") {
+                    for other in other_clients() { if matches!(crate::ipc::ask(&other, &["detach-client".into(), "-t".into(), t.clone()]), Some((_, _, 0))) { return } }
+                    return app.error(format!("can't find client: {t}"))
+                }
             }
             app.quit = true;
         }

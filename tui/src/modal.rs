@@ -254,10 +254,12 @@ pub fn session_rows(app: &App) -> Vec<Row> {
     let all = app.session_list();
     if all.len() < 2 { return Vec::new() }
     all.into_iter().map(|(id, name)| {
-        let windows = if id == app.session_id { app.tabs.iter().filter(|t| t.root.is_some()).count() } else { app.sessions.iter().find(|s| s.id == id).map(|s| s.tabs.len()).unwrap_or(0) };
+        let windows = app.session_windows(id).len();
+        // Attached: this client's, or shown by another client.
+        let attached = id == app.session_id || app.stash_value(id, "session_attached").as_deref() == Some("1");
         Row::new(format!("session:{id}"), format!("{name}: {windows} windows")).group("Sessions")
             .lead(vec![span("§ ", fg(theme::MUTED))])
-            .right(if id == app.session_id { "attached".to_string() } else { String::new() })
+            .right(if attached { "attached".to_string() } else { String::new() })
     }).collect()
 }
 

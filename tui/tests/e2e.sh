@@ -44,7 +44,7 @@ wait_eq() { # wait_eq <what> <expected> <command…>: until the command prints w
 
 # As tmux starts: window 0 is a shell on this computer.
 expect "starts in a shell, as tmux does" "Mock terminal (mock)" 5000
-expect "status line, tmux-style" "[mock-local] 0:"
+expect "status line, tmux-style (desk=off: the first session is tmux's 0)" "[0] 0:"
 tmux_ send-keys -t t C-b s
 expect "C-b s opens the fzf list" "Search harnesses"
 tmux_ send-keys -t t "codex"

@@ -265,6 +265,8 @@ async fn run(config: config::Config) -> io::Result<()> {
         // The event hooks for what that changed, then any waiting; a config's errors, once there
         // is a pane to show them in.
         app.notify_changes();
+        // What another terminal's client sees of this one's sessions, kept up to date.
+        app.save_if_changed();
         commands::run_pending_hooks(&mut app);
         app.show_causes();
         app.mark_seen();
@@ -312,8 +314,9 @@ async fn run(config: config::Config) -> io::Result<()> {
     app.fleet.save_cache();
     app.mark_seen();
     app.save_seen();
-    if app.start_failed.is_none() { app.save_sessions() }
-    if let Some(path) = &socket { let _ = std::fs::remove_file(path); }
+    // Its sessions left for the next client (another terminal's, or `hn` again).
+    if app.start_failed.is_none() { app.write_sessions(app::Save::Leave) }
+    if let Some(path) = &socket { let _ = std::fs::remove_file(path); let _ = std::fs::remove_file(path.with_extension("port")); }
     let session = app.session_name();
     drop(term);
     drop(restore);

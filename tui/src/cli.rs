@@ -94,10 +94,44 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
         // Any tmux command: run on the newest running client, its output printed here.
         // Any tmux command (by name, alias, or the start of one), or hn's: run by the client.
         // (A name it does not know may be a command-alias: the running client knows.)
-        c if crate::commands::is_command_name(c) || crate::cmd::find(c).is_ok() || (!c.starts_with('-') && crate::ipc::alive(socket.as_deref(), name.as_deref())) => Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await),
+        c if crate::commands::is_command_name(c) || crate::cmd::find(c).is_ok() || (!c.starts_with('-') && crate::ipc::alive(socket.as_deref(), name.as_deref())) => {
+            // One naming a session another client of this name has: run by that client.
+            if socket.is_none() {
+                if let Some(owner) = owner_of_target(args, name.as_deref()) {
+                    if let Some(code) = crate::ipc::call_at(&owner, args).await { return Some(code) }
+                }
+            }
+            Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await)
+        }
         c if !c.starts_with('-') => { eprintln!("{}", crate::cmd::find(c).err().unwrap_or_default()); Some(1) }
         _ => None,
     }
+}
+
+/// The client a command goes to when its -t (or -s) names a session a running client of this
+/// server name has — tmux's one server has every session; hn's clients each have theirs.
+fn owner_of_target(args: &[String], name: Option<&str>) -> Option<std::path::PathBuf> {
+    let entry = crate::cmd::find(args.first()?).ok()?;
+    if matches!(entry.name, "new-session" | "attach-session" | "switch-client" | "list-sessions" | "kill-server") { return None }
+    let a = crate::cmd::parse(entry, &crate::tmuxconf::unblock(args)).ok()?;
+    let doc = crate::app::read_sessions(&crate::app::sessions_path(name));
+    let rows: Vec<Value> = doc["sessions"].as_array()?.iter().filter(|r| !r.get("desk").and_then(Value::as_bool).unwrap_or(false)).cloned().collect();
+    let named = |r: &Value| r.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+    for flag in ['t', 's'] {
+        let Some(t) = a.get(flag) else { continue };
+        if t.starts_with(['%', '@', '$']) || (!t.contains(':') && t.contains('.')) { continue }
+        let s = t.split(':').next().unwrap_or(t);
+        let (exact, s) = match s.strip_prefix('=') { Some(s) => (true, s), None => (false, s) };
+        if s.is_empty() { continue }
+        // cmd_find_get_session: the exact name, else the only one it starts.
+        let hit = rows.iter().find(|r| named(r) == s).or_else(|| {
+            if exact { return None }
+            let starts: Vec<&Value> = rows.iter().filter(|r| named(r).starts_with(s)).collect();
+            (starts.len() == 1).then(|| starts[0])
+        });
+        if let Some(owner) = hit.and_then(crate::app::live_owner) { return Some(owner.into()) }
+    }
+    None
 }
 
 /// What `hn new …` or `hn attach …` asks of the client it starts: the session (-s, or attach's
@@ -133,12 +167,21 @@ async fn offline(port: u16, args: &[String], name: Option<&str>) -> i32 {
     let desk = http_json(port, "GET", "/api/desk", None).await.unwrap_or(json!({}));
     let desk_windows = desk.get("tabs").and_then(Value::as_array).map(|t| t.iter().filter(|t| t.get("panes").and_then(Value::as_array).map(|p| !p.is_empty()).unwrap_or(false)).count()).unwrap_or(0);
     let now = crate::app::epoch_secs();
-    let mut sessions: Vec<(String, usize, i64, bool)> = vec![(desk_name.clone(), desk_windows, desk_row.and_then(|r| r.get("created").and_then(Value::as_i64)).unwrap_or(now), true)];
+    // The desk's session is there while the desk has windows (desk=off: there is none).
+    let deskless = std::env::var("HARNESS_TUI_DESK").as_deref() == Ok("off");
+    let mut sessions: Vec<(String, usize, i64, bool)> = Vec::new();
+    if !deskless && desk_windows > 0 { sessions.push((desk_name.clone(), desk_windows, desk_row.and_then(|r| r.get("created").and_then(Value::as_i64)).unwrap_or(now), true)) }
     for r in rows.iter().filter(|r| !r.get("desk").and_then(Value::as_bool).unwrap_or(false)) {
         let Some(n) = r.get("name").and_then(Value::as_str) else { continue };
         sessions.push((n.to_string(), r.get("windows").and_then(Value::as_array).map(|w| w.len()).unwrap_or(0), r.get("created").and_then(Value::as_i64).unwrap_or(now), false));
     }
     sessions.sort_by(|x, y| x.0.cmp(&y.0));
+    // No session anywhere: tmux's words for no server.
+    if sessions.is_empty() && matches!(entry.name, "list-sessions" | "has-session" | "kill-session") {
+        let sock = crate::ipc::dir().join(format!("{}.sock", name.unwrap_or("default")));
+        eprintln!("no server running on {}", sock.display());
+        return 1;
+    }
     // cmd_find_get_session: exact, the only one it starts, the only one it matches.
     let find = |t: &str| -> Option<usize> {
         let (exact, t) = match t.strip_prefix('=') { Some(t) => (true, t), None => (false, t) };

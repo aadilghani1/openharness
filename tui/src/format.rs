@@ -52,6 +52,13 @@ pub fn every(app: &App, window: usize, pane: Option<u64>) -> Vec<String> {
 }
 
 /// A format as a config's %if reads it: no #() jobs run (tmux's FORMAT_NOJOBS).
+/// A format for a session not in front (another client's, or a list's row): its session_*
+/// values its own, as a #{S:} loop expands them.
+pub fn expand_session(app: &App, fmt: &str, session: u32) -> String {
+    let mut es = Es { app, window: app.active, pane: None, time: true, nojobs: false, depth: 0, now: now_secs(), session: (session != app.session_id).then_some(session) };
+    expand1(&mut es, fmt)
+}
+
 pub fn expand_nojobs(app: &App, fmt: &str) -> String {
     let mut es = Es { app, window: app.active, pane: app.focused(), time: true, nojobs: true, depth: 0, now: now_secs(), session: None };
     expand1(&mut es, fmt)

@@ -107,11 +107,7 @@ fn session(app: &App, id: &str) -> Vec<Line<'static>> {
     let Some(sid) = id.strip_prefix("session:").and_then(|n| n.parse::<u32>().ok()) else { return vec![] };
     let name = app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| n).unwrap_or_default();
     let mut out = vec![Line::from(vec![bold(name), dim(if sid == app.session_id { "  attached" } else { "" })]), Line::raw("")];
-    let windows: Vec<(usize, String, usize)> = if sid == app.session_id {
-        app.tabs.iter().enumerate().map(|(i, t)| (app.win_num(i), t.name.clone(), t.panes().len())).collect()
-    } else {
-        app.sessions.iter().find(|s| s.id == sid).map(|s| s.tabs.iter().map(|t| (s.nums.get(&t.id).copied().unwrap_or(0), t.name.clone(), t.panes().len())).collect()).unwrap_or_default()
-    };
+    let windows = app.session_windows(sid);
     for (n, name, panes) in windows { out.push(Line::from(vec![Span::raw(format!("  {n}: {name}")), dim(format!("  ({panes} panes)"))])) }
     out.push(Line::raw(""));
     out.push(dim("enter goes to it").into());

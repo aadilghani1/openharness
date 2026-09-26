@@ -120,7 +120,29 @@ const server = http.createServer((req, res) => {
     return
   }
   if (req.url === '/api/desk' && req.method === 'GET') return json(res, desk)
-  if (req.url === '/api/desk/ops') { desk.revision++; return json(res, desk) }
+  if (req.url === '/api/desk/ops') {
+    // Applied as the daemon's desk store applies them (MOCK_DESK=fixed: left as it is).
+    let body = ''
+    req.on('data', (c) => { body += c })
+    req.on('end', () => {
+      let ops = []
+      try { ops = JSON.parse(body || '{}').ops || [] } catch {}
+      if (process.env.MOCK_DESK === 'fixed') ops = []
+      const tab = (id) => desk.tabs.find((t) => t.id === id)
+      for (const op of ops) {
+        if (op.op === 'tab.create' && !tab(op.id)) desk.tabs.splice(Math.min(op.index ?? desk.tabs.length, desk.tabs.length), 0, { id: op.id, name: op.name, nameIsCustom: !!op.nameIsCustom, panes: [], layout: {} })
+        if (op.op === 'tab.close') desk.tabs = desk.tabs.filter((t) => t.id !== op.id)
+        if (op.op === 'tab.move') { const t = tab(op.id); if (t) { desk.tabs = desk.tabs.filter((x) => x !== t); desk.tabs.splice(Math.min(op.index, desk.tabs.length), 0, t) } }
+        if (op.op === 'tab.rename') { const t = tab(op.id); if (t) { t.name = op.name; t.nameIsCustom = !!op.nameIsCustom } }
+        if (op.op === 'tab.layout') { const t = tab(op.id); if (t) t.layout = op.layout }
+        if (op.op === 'pane.add') { const t = tab(op.tabId); if (t && !t.panes.some((p) => p.agentId === op.agentId)) t.panes.splice(Math.min(op.index ?? t.panes.length, t.panes.length), 0, { machineId: op.machineId, agentId: op.agentId }) }
+        if (op.op === 'pane.remove') { const t = tab(op.tabId); if (t) t.panes = t.panes.filter((p) => p.agentId !== op.agentId) }
+      }
+      desk.revision++
+      json(res, desk)
+    })
+    return
+  }
   res.writeHead(404); res.end('{}')
 })
 
