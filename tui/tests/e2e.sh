@@ -47,9 +47,17 @@ expect "starts in a shell, as tmux does" "Mock terminal (mock)" 5000
 expect "status line, tmux-style (desk=off: the first session is tmux's 0)" "[0] 0:"
 tmux_ send-keys -t t C-b s
 expect "C-b s opens the fzf list" "Search harnesses"
-tmux_ send-keys -t t "codex"
+tmux_ send-keys -t t 'Mock\ Claude'
 expect "fuzzy filter narrows" "1/"
+# Enter, as tmux's chooser: the harness in a window of its own (not a split of this one).
 tmux_ send-keys -t t Enter
+expect "C-b s Enter: a window of its own" "1:· Mock Claude*"
+wait_eq "the harness window's one pane" "1" hn display -p '#{window_panes}'
+hn kill-window
+tmux_ send-keys -t t C-b s
+tmux_ send-keys -t t "codex"
+expect "fuzzy filter narrows again" "1/"
+tmux_ send-keys -t t C-v
 expect "pane streams the keyframe" "Mock Codex (mock)"
 tmux_ send-keys -t t "echo-me"
 expect "typing round-trips" "echo-me"

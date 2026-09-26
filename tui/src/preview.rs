@@ -98,7 +98,7 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
         for recap in recaps.iter().take(2) { for (i, l) in recap.lines().take(6).enumerate() { out.push(Line::from(vec![dim(if i == 0 { "⏺ " } else { "  " }), Span::raw(l.to_string())])) } }
     }
     out.push(Line::raw(""));
-    out.push(dim(if app.find_pane(machine_id, agent_id).is_some() { "on screen — enter goes to it" } else { "enter opens it here · C-t window · C-v beside · C-x below" }).into());
+    out.push(dim(if app.find_pane(machine_id, agent_id).is_some() { "on screen — enter goes to it" } else { "enter opens it in a window · C-v beside · C-x below · M-enter here" }).into());
     out
 }
 

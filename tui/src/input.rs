@@ -434,7 +434,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             if machine.is_none() && project.is_none() && *filter == Filter::All { rows.extend(modal::session_rows(app)) }
             picker.set_rows(rows);
             picker.status = modal::open_status(app, *filter);
-            picker.hints = vec![("enter", "open"), ("M-1..9", "answer"), ("M-m", "read"), ("C-v", "beside"), ("C-x", "below"), ("C-t", "window"), ("M-a", "type an answer"), ("M-s", "message"), ("M-r", "restart"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
+            picker.hints = vec![("enter", "go"), ("M-1..9", "answer"), ("M-m", "read"), ("C-v", "beside"), ("C-x", "below"), ("M-enter", "here"), ("M-a", "type an answer"), ("M-s", "message"), ("M-r", "restart"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
             picker.empty = if app.fleet.agents.is_empty() { "no harnesses yet — C-b C makes one".into() } else { String::new() };
         }
         PickerKind::Palette => { picker.set_rows(modal::palette_rows(app)); picker.hints = vec![("enter", "run"), ("C-b :", "type one")] }
@@ -1759,16 +1759,17 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
                 (Choice::SplitDown, _) => Placement::Split(Dir::Vertical),
                 (Choice::Here, _) => Placement::Replace,
                 (_, Some(dir)) => Placement::Split(dir),
-                _ => Placement::Auto(None),
+                // Enter, as tmux's chooser: to the harness's window, or a window of its own.
+                _ => Placement::Tab,
             };
-            // fzf --multi: Enter acts on every marked row — the first where asked, the rest beside it.
+            // fzf --multi: Enter acts on every marked row — a window each (C-v / C-x: the first
+            // where asked, the rest beside it).
             let mut targets: Vec<(String, String)> = picker.marked.iter().filter_map(|m| split_key(m)).collect();
             if targets.is_empty() { targets.push((machine.clone(), agent.clone())) }
             for (i, (machine, agent)) in targets.iter().enumerate() {
                 let state = app.fleet.agent(machine, agent).map(|a| app.fleet.state_of(a));
                 if state == Some(crate::fleet::State::Offline) { continue }
-                // C-t with marks: a window each; otherwise the first where asked, the rest beside it.
-                let place = if i == 0 || choice == Choice::Tab { placement.clone() } else { Placement::Auto(None) };
+                let place = if i == 0 || placement == Placement::Tab { placement.clone() } else { Placement::Auto(None) };
                 app.open_agent(machine, agent, place);
                 if state == Some(crate::fleet::State::Paused) {
                     if let Some((_, pane)) = app.find_pane(machine, agent) { app.resume(pane) }
@@ -1781,7 +1782,7 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             let option = id.split('#').nth(1).and_then(|s| s.parse::<usize>().ok());
             match (choice, option) {
                 (Choice::Enter, Some(option)) => { if answer(app, &machine, &agent, option) { picker.say("Answered") } return keep(app, kind, picker) }
-                _ => app.open_agent(&machine, &agent, Placement::Auto(None)),
+                _ => app.open_agent(&machine, &agent, Placement::Tab),
             }
         }
         PickerKind::Palette => {
