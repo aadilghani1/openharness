@@ -325,7 +325,7 @@ void main() {
   testWidgets('new', skip: skip, (tester) async {
     final key = await pumpScreen(
       tester,
-      NewAgentPage(notifier: notifier, machineId: 'm'),
+      NewAgentPage(notifier: notifier, machineId: 'm', voice: voice),
     );
     await tester.pump(const Duration(milliseconds: 400));
     await shoot(tester, key, '4-new');
@@ -400,20 +400,23 @@ void main() {
     await shoot(tester, key, '3c-find-commands');
   });
 
-  testWidgets('new, options open', skip: skip, (tester) async {
+  testWidgets('new, task typed', skip: skip, (tester) async {
     final key = await pumpScreen(
       tester,
-      NewAgentPage(notifier: notifier, machineId: 'm'),
+      NewAgentPage(notifier: notifier, machineId: 'm', voice: voice),
     );
-    await tester.tap(find.text('options'));
+    await tester.enterText(
+      find.byType(TextField),
+      'Fix the login test that fails on CI, then run the whole suite.',
+    );
     await tester.pump(const Duration(milliseconds: 300));
-    await shoot(tester, key, '4b-new-options');
+    await shoot(tester, key, '4b-new-task');
   });
 
   testWidgets('new, project chooser', skip: skip, (tester) async {
     final key = await pumpScreen(
       tester,
-      NewAgentPage(notifier: notifier, machineId: 'm'),
+      NewAgentPage(notifier: notifier, machineId: 'm', voice: voice),
     );
     await tester.tap(find.text('project'));
     await tester.pump();
@@ -424,7 +427,7 @@ void main() {
   testWidgets('new, agent chooser', skip: skip, (tester) async {
     final key = await pumpScreen(
       tester,
-      NewAgentPage(notifier: notifier, machineId: 'm'),
+      NewAgentPage(notifier: notifier, machineId: 'm', voice: voice),
     );
     await tester.tap(find.text('agent'));
     await tester.pump();

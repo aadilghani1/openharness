@@ -84,9 +84,9 @@ void main() {
       await tester.tap(find.text('project'));
       await tester.pumpAndSettle();
 
-      // The chooser is fzf: one line per `machine · folder` pair.
+      // One row per `machine:folder` pair.
       expect(
-        find.textContaining('Studio · /code/app', findRichText: true),
+        find.textContaining('Studio:/code/app', findRichText: true),
         findsOneWidget,
       );
       expect(
@@ -118,7 +118,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(NewAgentPage), findsOneWidget);
 
-    await tester.drag(find.text('options'), const Offset(200, 0));
+    await tester.drag(find.text('agent'), const Offset(200, 0));
     await tester.pumpAndSettle();
 
     expect(find.byType(NewAgentPage), findsNothing);

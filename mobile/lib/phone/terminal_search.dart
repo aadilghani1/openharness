@@ -282,10 +282,18 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
             widget.notifier,
             place.machineId,
             folder: place.folder,
+            voice: widget.voice,
           ),
         );
       } else if (ready) {
-        unawaited(openNewAgent(context, widget.notifier, showing!.machineId));
+        unawaited(
+          openNewAgent(
+            context,
+            widget.notifier,
+            showing!.machineId,
+            voice: widget.voice,
+          ),
+        );
       } else {
         command!.run();
       }

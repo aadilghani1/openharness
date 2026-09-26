@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-
-import 'fzf.dart';
+import 'find_row.dart';
 import 'tty.dart';
+import 'tty_controls.dart';
 
 /// One row of a [showNewAgentChooser] list.
 class ChooserItem<T> {
@@ -42,38 +42,60 @@ class ChooserItem<T> {
   }
 }
 
-/// A chooser for one of New's rows — fzf, the same list as Find: one-line rows over a `> ` prompt,
-/// the likeliest answer next to it, the count and `esc` on the info line.
+/// A chooser for one of New's rows — a full-height sheet that slides UP, since sideways means Find
+/// and New: a title and Cancel, a search field at the top, the list growing down with `✓` on the
+/// current value, and the `+` actions ending it. A tap picks and closes.
 ///
-/// [items] sit nearest the prompt; [actions] (the Project chooser's clone, open folder, new folder)
-/// above them, never filtered.
+/// [fold] keeps a long list short: past that many items a `more` row stands in for the rest, until
+/// it is tapped or something is typed.
 Future<T?> showNewAgentChooser<T>(
   BuildContext context, {
   required String hint,
   required List<ChooserItem<T>> items,
   List<ChooserItem<T>> actions = const [],
+  String? title,
+  int? fold,
 }) => Navigator.of(context, rootNavigator: true).push<T>(
   PageRouteBuilder<T>(
-    opaque: true,
-    transitionDuration: const Duration(milliseconds: 120),
-    reverseTransitionDuration: const Duration(milliseconds: 90),
-    pageBuilder: (_, _, _) =>
-        _Chooser<T>(hint: hint, items: items, actions: actions),
-    transitionsBuilder: (_, animation, _, child) =>
-        FadeTransition(opacity: animation, child: child),
+    opaque: false,
+    barrierColor: Colors.black54,
+    barrierDismissible: true,
+    transitionDuration: const Duration(milliseconds: 200),
+    reverseTransitionDuration: const Duration(milliseconds: 160),
+    pageBuilder: (_, _, _) => _Chooser<T>(
+      title: title ?? hint.replaceFirst(RegExp(r'^Search '), ''),
+      hint: hint,
+      items: items,
+      actions: actions,
+      fold: fold,
+    ),
+    transitionsBuilder: (_, animation, _, child) => SlideTransition(
+      position: Tween(begin: const Offset(0, 1), end: Offset.zero).animate(
+        CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        ),
+      ),
+      child: child,
+    ),
   ),
 );
 
 class _Chooser<T> extends StatefulWidget {
   const _Chooser({
+    required this.title,
     required this.hint,
     required this.items,
     required this.actions,
+    this.fold,
   });
 
+  final String title;
   final String hint;
   final List<ChooserItem<T>> items;
   final List<ChooserItem<T>> actions;
+  final int? fold;
 
   @override
   State<_Chooser<T>> createState() => _ChooserState<T>();
@@ -83,6 +105,7 @@ class _ChooserState<T> extends State<_Chooser<T>> {
   final _controller = TextEditingController();
   final _focus = FocusNode();
   String _query = '';
+  bool _unfolded = false;
 
   @override
   void dispose() {
@@ -97,78 +120,124 @@ class _ChooserState<T> extends State<_Chooser<T>> {
     Navigator.of(context).pop(item.value);
   }
 
+  void _cancel() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.of(context).pop();
+  }
+
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
+    final media = MediaQuery.of(context);
     final query = _query.trim();
     final matches = [
       for (final item in widget.items)
         if (item.matches(query)) item,
     ];
-    // Reversed: the first match sits on the prompt, the actions at the top of the screen.
-    final rows = [...matches, ...widget.actions];
+    final fold = widget.fold;
+    final folded =
+        fold != null && !_unfolded && query.isEmpty && matches.length > fold;
+    final shown = folded ? matches.take(fold).toList() : matches;
     final terms = query.isEmpty
         ? const <String>[]
         : query.split(RegExp(r'\s+'));
-    return Scaffold(
-      backgroundColor: tty.ground,
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SizedBox(
-              height: 36,
-              child: Padding(
-                padding: const EdgeInsets.only(left: 24, top: 10),
-                child: TtyText(widget.hint.toLowerCase(), color: tty.faint),
-              ),
-            ),
-            Expanded(
-              child: ListView.builder(
-                reverse: true,
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                itemCount: rows.length,
-                itemBuilder: (context, index) {
-                  final item = rows[index];
-                  final action = index >= matches.length;
-                  return FzfRow(
-                    title: item.title,
-                    detail: item.subtitle,
-                    terms: action ? const [] : terms,
-                    mark: item.selected ? '*' : (action ? '+' : null),
-                    markColor: action ? tty.cyan : tty.green,
-                    enabled: item.enabled,
-                    trailingColor: item.warn ? tty.yellow : null,
-                    trailing: item.warn ? 'risky' : null,
-                    onTap: () => _choose(item),
-                  );
-                },
-              ),
-            ),
-            FzfInfoLine(
-              matched: matches.length,
-              total: widget.items.length,
-              actions: [
-                (
-                  label: 'esc',
-                  onTap: () {
-                    FocusManager.instance.primaryFocus?.unfocus();
-                    Navigator.of(context).pop();
-                  },
+    // Everything but a strip at the top, where the form it belongs to still shows.
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        height: media.size.height - media.padding.top - 12,
+        decoration: BoxDecoration(
+          color: tty.ground,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+          border: Border(
+            top: BorderSide(color: tty.dim.withValues(alpha: 0.6)),
+          ),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TtyText(
+                        widget.title,
+                        size: TtySize.title,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
+                    TtyTextButton(label: 'Cancel', onPressed: _cancel),
+                  ],
                 ),
-              ],
-            ),
-            FzfPrompt(
-              controller: _controller,
-              focus: _focus,
-              onChanged: (value) => setState(() => _query = value),
-              onSubmitted: () {
-                final first = matches.where((item) => item.enabled).firstOrNull;
-                if (first != null) _choose(first);
-              },
-            ),
-          ],
+              ),
+              if (widget.items.length > 5)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                  child: TtyField(
+                    controller: _controller,
+                    focus: _focus,
+                    hint: widget.hint,
+                    action: TextInputAction.search,
+                    onChanged: (value) => setState(() => _query = value),
+                    onSubmitted: () {
+                      final first = matches
+                          .where((item) => item.enabled)
+                          .firstOrNull;
+                      if (first != null) _choose(first);
+                    },
+                  ),
+                ),
+              Expanded(
+                child: ListView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: EdgeInsets.only(bottom: media.padding.bottom + 16),
+                  children: [
+                    for (final item in shown)
+                      FindRow(
+                        title: item.title,
+                        detail: item.subtitle,
+                        terms: terms,
+                        state: item.selected
+                            ? '✓'
+                            : item.warn
+                            ? 'risky'
+                            : null,
+                        stateColor: item.selected ? tty.green : tty.red,
+                        enabled: item.enabled,
+                        onTap: () => _choose(item),
+                      ),
+                    if (folded)
+                      FindRow(
+                        title: 'more',
+                        detail:
+                            '${matches.length - shown.length} others, A to Z',
+                        onTap: () => setState(() => _unfolded = true),
+                      ),
+                    if (matches.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                        child: TtyText(
+                          'No match.',
+                          color: tty.faint,
+                          size: TtySize.row,
+                        ),
+                      ),
+                    if (widget.actions.isNotEmpty) const SizedBox(height: 8),
+                    for (final action in widget.actions)
+                      FindAddRow(
+                        label: action.title,
+                        detail: action.subtitle,
+                        onTap: action.enabled ? () => _choose(action) : null,
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

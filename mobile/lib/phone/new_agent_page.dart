@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/core/codex_profiles.dart';
+import 'package:harness_mobile/core/first_task.dart';
 import 'package:harness_mobile/core/permission_modes.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -19,6 +20,8 @@ import 'new_agent_draft.dart';
 import 'phone_status.dart';
 import 'new_agent_chooser.dart';
 import 'tty.dart';
+import 'tty_controls.dart';
+import 'voice_input_controller.dart';
 
 /// Starting an agent from the phone: a folder on that machine, and an engine to
 /// run there.
@@ -37,7 +40,12 @@ class NewAgentPage extends StatefulWidget {
     required this.notifier,
     required this.machineId,
     this.folder,
+    this.voice,
   });
+
+  /// The mic the task field talks through — the pager's, so a take survives the swipe here. Null
+  /// makes the page its own.
+  final VoiceInputController? voice;
 
   final AppNotifier notifier;
   final String machineId;
@@ -171,7 +179,47 @@ class _NewAgentPageState extends State<NewAgentPage> {
   @override
   void dispose() {
     _keepDraft();
+    _task.dispose();
+    _ownVoice?.dispose();
     super.dispose();
+  }
+
+  /// The first task — `prompt` on `agent_create`. Optional: empty starts the harness idle.
+  final _task = TextEditingController();
+
+  /// Made on the first tap of the mic, not before: a recorder opens a platform channel, and a
+  /// form nobody talks to should not.
+  VoiceInputController? _ownVoice;
+  VoiceInputController? get _voiceIfAny => widget.voice ?? _ownVoice;
+
+  /// The task field's mic: talk, and what was said is added to the task.
+  void _talk() {
+    final voice =
+        _voiceIfAny ??
+        (_ownVoice = VoiceInputController(
+          transcriber: (wav, lang) =>
+              widget.notifier.api.transcribeVoice(wav, lang: lang),
+        ));
+    if (widget.voice == null) setState(() {});
+    if (voice.status == VoiceInputStatus.listening) {
+      unawaited(
+        voice.submit((text) async {
+          if (!mounted) return false;
+          final said = text.trim();
+          final before = _task.text.trimRight();
+          final next = before.isEmpty ? said : '$before $said';
+          _task.value = TextEditingValue(
+            text: next,
+            selection: TextSelection.collapsed(offset: next.length),
+          );
+          setState(() {});
+          return true;
+        }),
+      );
+      return;
+    }
+    if (voice.status == VoiceInputStatus.idle)
+      unawaited(voice.startListening());
   }
 
   /// Takes back what the form was left holding — see [NewAgentDraft].
@@ -187,6 +235,11 @@ class _NewAgentPageState extends State<NewAgentPage> {
   void _restoreDraft() {
     final draft = newAgentDraft;
     if (draft == null) return;
+    // Opened for a place — `+ New Harness in api` — the place wins; only the words carry over.
+    if (widget.folder != null) {
+      _task.text = draft.task ?? '';
+      return;
+    }
     if (widget.notifier.stateOf(draft.machineId) == null) {
       newAgentDraft = null;
       return;
@@ -204,6 +257,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
     _git = draft.git;
     _gitFolder = draft.gitFolder;
     _codexProfile = draft.codexProfile;
+    _task.text = draft.task ?? '';
   }
 
   /// Leaves the form's answers where the next open will find them. Called from [dispose], so it
@@ -212,7 +266,10 @@ class _NewAgentPageState extends State<NewAgentPage> {
   void _keepDraft() {
     // Nothing chosen and nothing typed is not a draft; it is the form as it opens. Kept, it would
     // pin the page to whichever machine was last looked at for the rest of the run.
-    if (_folder == null && _project == null && _branchName == null) {
+    if (_folder == null &&
+        _project == null &&
+        _branchName == null &&
+        _task.text.trim().isEmpty) {
       newAgentDraft = null;
       return;
     }
@@ -230,6 +287,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       git: _git,
       gitFolder: _gitFolder,
       codexProfile: _codexProfile,
+      task: _task.text,
     );
   }
 
@@ -334,7 +392,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
       placeholder: _placeholder ?? 'new-branch',
     );
   }
-
 
   /// What this form calls an engine.
   ///
@@ -565,6 +622,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       // with its own default CODEX_HOME.
       codexHome: _showsCodexProfile ? _codexProfile?.path : null,
       attempt: creation,
+      prompt: _engine != null && takesFirstTask(_engine!) ? _task.text : null,
     );
     if (!mounted) return;
     if (error == null) {
@@ -578,8 +636,12 @@ class _NewAgentPageState extends State<NewAgentPage> {
     setState(() {
       _creating = false;
       _error = error;
+      _failed = true;
     });
   }
+
+  /// The last Start did not take: the button says Try Again, and every value stays.
+  bool _failed = false;
 
   /// Where a finished creation lands: inside the agent it just started.
   ///
@@ -611,6 +673,11 @@ class _NewAgentPageState extends State<NewAgentPage> {
     builder: (context, _) {
       final tty = Tty.of(context);
       _applyDefaultProject();
+      final info = _repository;
+      final mode = _permissionModeChoice;
+      final ready = _engine != null && (_folder != null || _project != null);
+      final nothingRunning = _machines.every((m) => m.agents.isEmpty);
+      final count = _task.text.trim().length;
       return Scaffold(
         backgroundColor: tty.ground,
         body: SafeArea(
@@ -627,46 +694,184 @@ class _NewAgentPageState extends State<NewAgentPage> {
                 unawaited(Navigator.of(context).maybePop());
               }
             },
-            // A shell, not a form: each row is a word to change, and the command at the foot is
-            // what they add up to — the same `harness new` the CLI takes. A tap on it runs it.
+            // A form, the phone's way: who and where on top, what to do and Start at the foot, in
+            // the thumb's reach and riding the keyboard. See
+            // docs/plans/2026-09-26-003-mobile-find-new-spec.md.
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _TitleLine(onEsc: () => Navigator.of(context).maybePop()),
-                const SizedBox(height: 8),
-                _Field(
-                  label: 'agent',
-                  value: _engine == null ? 'choose' : _engineName(_engine!),
-                  note: _engine == null ? null : _engineNote(_engine!),
-                  onTap: () => unawaited(_chooseAgent()),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TtyText(
+                          'New Harness',
+                          size: TtySize.title,
+                          weight: FontWeight.w700,
+                        ),
+                      ),
+                      TtyTextButton(
+                        label: 'Cancel',
+                        onPressed: () => Navigator.of(context).maybePop(),
+                      ),
+                    ],
+                  ),
                 ),
-                _Field(
-                  label: 'project',
-                  value: _projectValue,
-                  onTap: () => unawaited(_chooseProject()),
-                ),
-                _Field(
-                  label: 'options',
-                  value: _optionsOpen ? '' : _optionsSummary,
-                  arrow: _optionsOpen ? '▾' : '▸',
-                  onTap: () => setState(() => _optionsOpen = !_optionsOpen),
-                ),
-                if (_optionsOpen) ..._optionRows(),
-                const Spacer(),
-                if (_error != null)
+                if (nothingRunning)
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                    child: Text(
-                      'error: ${_error!}',
-                      style: tty.style(color: tty.red),
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                    child: TtyText(
+                      'Nothing running yet. Start your first harness.',
+                      color: tty.faint,
+                      size: TtySize.meta,
                     ),
                   ),
-                _CommandLine(
-                  command: _command,
-                  running: _creating,
-                  onRun: _creating ? null : () => unawaited(_start()),
-                ),
                 const SizedBox(height: 8),
+                Expanded(
+                  child: ListView(
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: EdgeInsets.zero,
+                    children: [
+                      TtyFormRow(
+                        label: 'agent',
+                        value: _engine == null
+                            ? 'Choose an agent'
+                            : _engineName(_engine!),
+                        valueColor: _engine == null ? tty.cyan : null,
+                        detail: _engine == null ? null : _engineNote(_engine!),
+                        onTap: _creating
+                            ? null
+                            : () => unawaited(_chooseAgent()),
+                      ),
+                      TtyFormRow(
+                        label: 'project',
+                        value: _folder == null && _project == null
+                            ? 'Choose a project'
+                            : _projectValue,
+                        valueColor: _folder == null && _project == null
+                            ? tty.cyan
+                            : null,
+                        detail: _folder == null ? null : _tilde(_folder!),
+                        onTap: _creating
+                            ? null
+                            : () => unawaited(_chooseProject()),
+                      ),
+                      if (info != null || _gitLoading || _gitFailed)
+                        TtyFormRow(
+                          label: 'branch',
+                          valueColor: info == null && !_gitLoading
+                              ? tty.faint
+                              : null,
+                          value: _gitLoading
+                              ? 'Reading…'
+                              : info == null
+                              ? 'No answer from the computer'
+                              : _worktree
+                              ? 'New worktree'
+                              : _branchTitle,
+                          detail: info == null
+                              ? null
+                              : _worktree
+                              ? 'from $_branchTitle, in its own folder'
+                              : _branchNote,
+                          onTap: info == null || _creating
+                              ? null
+                              : () => unawaited(_chooseBranch(info)),
+                        ),
+                      if (_permissionModes.isNotEmpty)
+                        TtyFormRow(
+                          label: 'approvals',
+                          value: mode?.label ?? 'Auto-approve',
+                          valueColor: (mode?.risky ?? false) ? tty.red : null,
+                          onTap: _creating
+                              ? null
+                              : () => unawaited(_chooseApprovals()),
+                        ),
+                      if (_showsCodexProfile)
+                        TtyFormRow(
+                          label: 'profile',
+                          value: _codexProfile?.label ?? 'Default',
+                          onTap: _creating
+                              ? null
+                              : () => unawaited(_chooseProfile()),
+                        ),
+                    ],
+                  ),
+                ),
+                // The dock: the task, then Start. It rides the keyboard.
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TtyText(
+                              'task (optional)',
+                              color: tty.faint,
+                              size: TtySize.meta,
+                            ),
+                          ),
+                          if (count > 1800)
+                            TtyText(
+                              '$count/$kFirstTaskMaxLength',
+                              color: count > kFirstTaskMaxLength
+                                  ? tty.red
+                                  : tty.faint,
+                              size: TtySize.meta,
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      TtyField(
+                        controller: _task,
+                        hint: 'What should it do?',
+                        lines: 6,
+                        maxLength: kFirstTaskMaxLength,
+                        action: TextInputAction.newline,
+                        onChanged: (_) => setState(() {}),
+                        trailing: [
+                          Align(
+                            alignment: Alignment.bottomRight,
+                            child: ListenableBuilder(
+                              listenable: _voiceIfAny ?? const _Silent(),
+                              builder: (context, _) {
+                                final status = _voiceIfAny?.status;
+                                return TtyFieldMic(
+                                  live:
+                                      status == VoiceInputStatus.listening ||
+                                      status == VoiceInputStatus.starting,
+                                  onTap: _creating ? null : _talk,
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (_error != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            '✗ ${_error!}',
+                            style: tty.style(
+                              color: tty.red,
+                              size: TtySize.meta,
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 10),
+                      TtyPrimaryButton(
+                        label: _failed ? 'Try Again' : 'Start',
+                        busy: _creating,
+                        busyLabel: 'Starting…',
+                        onPressed: ready ? () => unawaited(_start()) : null,
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -675,40 +880,58 @@ class _NewAgentPageState extends State<NewAgentPage> {
     },
   );
 
-  /// The command these choices add up to — what the CLI would be given for the same harness.
-  String get _command {
-    final parts = <String>['harness', 'new'];
-    if (_engine case final engine?) parts.add(engine);
-    final machine = _machine?.machine.displayName;
-    if (machine != null) parts.add('@${machine.replaceAll(' ', '-')}');
-    if (_folder case final folder?) {
-      parts.add(_tilde(folder));
-    } else if (_project?.repository case final repository?) {
-      parts.add(repository.url);
-    } else if (_project != null) {
-      parts.add('--new');
+  /// The branch row: this folder as it is, or a new worktree — and any other branch behind them.
+  Future<void> _chooseBranch(GitProjectInfo info) async {
+    final here = info.branch ?? 'This folder';
+    final picked = await showNewAgentChooser<String>(
+      context,
+      title: 'Branch',
+      hint: 'Search branches',
+      items: [
+        ChooserItem(
+          value: 'here',
+          title: here,
+          subtitle: 'this folder, as it is',
+          selected: !_worktree && _branchName == null,
+        ),
+        ChooserItem(
+          value: 'worktree',
+          title: 'New Worktree',
+          subtitle: 'a new branch from $here, in its own folder',
+          selected: _worktree,
+        ),
+      ],
+      actions: const [
+        ChooserItem(
+          value: 'other',
+          title: 'Other Branch',
+          subtitle: 'start from another branch, or name a new one',
+        ),
+      ],
+    );
+    if (picked == null || !mounted) return;
+    switch (picked) {
+      case 'here':
+        setState(() {
+          _worktree = false;
+          _branchRef = defaultBranchRef(info, worktree: false);
+          _branchName = null;
+          _error = null;
+        });
+      case 'worktree':
+        setState(() {
+          _worktree = true;
+          _branchRef = defaultBranchRef(info, worktree: true);
+          _error = null;
+        });
+      case 'other':
+        await _pickBranch(info);
     }
-    final mode = _permissionModeChoice;
-    if (mode != null && mode.id != kDefaultPermissionMode) {
-      parts.add('--mode ${mode.id}');
-    }
-    return parts.join(' ');
   }
 
   /// A home folder written the way a shell prints it.
   static String _tilde(String path) =>
       path.replaceFirst(RegExp(r'^/(Users|home)/[^/]+'), '~');
-
-  /// What Options holds, folded: the approvals mode and the branch.
-  String get _optionsSummary {
-    final parts = <String>[
-      if (_permissionModes.isNotEmpty)
-        (_permissionModeChoice?.label ?? 'Auto-approve').toLowerCase(),
-      if (_repository != null)
-        _worktree ? '$_branchTitle, worktree' : _branchTitle,
-    ];
-    return parts.join(' · ');
-  }
 
   /// How far the current drag has gone right — see the swipe back in [build].
   double _swipedBack = 0;
@@ -733,9 +956,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// Set once the default project has been applied, so a person who clears it is not handed it
   /// back on the next build.
   bool _projectDefaulted = false;
-
-  /// Whether Options is open: Approvals, Profile, Branch and Worktree.
-  bool _optionsOpen = false;
 
   /// The project on one line: its folder's name, and the machine in front of it only when there is
   /// more than one to tell apart. The full path is in the chooser.
@@ -771,14 +991,20 @@ class _NewAgentPageState extends State<NewAgentPage> {
 
   Future<void> _chooseAgent() async {
     final machine = _machine;
+    // Claude Code and Codex first — what nearly everyone runs — then the rest A to Z behind `more`.
+    const first = ['claude', 'codex'];
+    final ids = {for (final identity in _engines) identity.id, ?_engine};
     final ordered = [
-      ?_engine,
-      for (final identity in _engines)
-        if (identity.id != _engine) identity.id,
+      for (final id in first)
+        if (ids.contains(id)) id,
+      ...(ids.where((id) => !first.contains(id)).toList()
+        ..sort((a, b) => _engineName(a).compareTo(_engineName(b)))),
     ];
     final picked = await showNewAgentChooser<String>(
       context,
+      title: 'Agent',
       hint: 'Search agents',
+      fold: ordered.where(first.contains).length,
       items: [
         for (final id in ordered)
           ChooserItem(
@@ -827,7 +1053,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
           ChooserItem(
             value: _ProjectChoice.folder(id, folder),
             title: _basename(folder),
-            subtitle: '${machine.machine.displayName} · $folder',
+            subtitle: '${machine.machine.displayName}:${_tilde(folder)}',
             icon: LucideIcons.folder300,
             selected: id == _machineId && folder == _folder,
           ),
@@ -838,20 +1064,21 @@ class _NewAgentPageState extends State<NewAgentPage> {
     final canMake = _canMakeProject;
     final picked = await showNewAgentChooser<_ProjectChoice>(
       context,
+      title: 'Project',
       hint: 'Search projects',
       actions: [
+        ChooserItem(
+          value: const _ProjectChoice.open(),
+          title: 'Open Folder',
+          subtitle: 'Any folder on $here',
+          icon: LucideIcons.folderSearch300,
+        ),
         ChooserItem(
           value: const _ProjectChoice.clone(),
           title: 'Clone Repository',
           subtitle: _projectSourceNote ?? 'A GitHub repository, on $here',
           icon: LucideIcons.gitBranch300,
           enabled: canMake,
-        ),
-        ChooserItem(
-          value: const _ProjectChoice.open(),
-          title: 'Open Folder',
-          subtitle: 'Any folder on $here',
-          icon: LucideIcons.folderSearch300,
         ),
         ChooserItem(
           value: const _ProjectChoice.newFolder(),
@@ -895,6 +1122,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
   Future<void> _chooseApprovals() async {
     final picked = await showNewAgentChooser<String>(
       context,
+      title: 'Approvals',
       hint: 'How much it may do without asking',
       items: [
         for (final mode in _permissionModes)
@@ -915,6 +1143,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
   Future<void> _chooseProfile() async {
     final picked = await showNewAgentChooser<LocalCodexProfile?>(
       context,
+      title: 'Profile',
       hint: 'Search profiles',
       items: [
         ChooserItem(
@@ -936,55 +1165,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
     );
     if (!mounted) return;
     setState(() => _codexProfile = picked);
-  }
-
-  /// Options, open: approvals, profile (Codex with profiles), branch and worktree — indented under
-  /// the options row, the way a nested setting reads in a config file.
-  List<Widget> _optionRows() {
-    final info = _repository;
-    final mode = _permissionModeChoice;
-    return [
-      if (_permissionModes.isNotEmpty)
-        _Field(
-          label: 'approvals',
-          value: (mode?.label ?? 'Auto-approve').toLowerCase(),
-          nested: true,
-          warn: mode?.risky ?? false,
-          onTap: () => unawaited(_chooseApprovals()),
-        ),
-      if (_showsCodexProfile)
-        _Field(
-          label: 'profile',
-          value: _codexProfile?.label ?? 'default',
-          nested: true,
-          onTap: () => unawaited(_chooseProfile()),
-        ),
-      _Field(
-        label: 'branch',
-        value: _gitLoading
-            ? 'reading…'
-            : info == null
-            ? (_gitFailed ? 'no answer' : 'not a git repo')
-            : _branchTitle,
-        note: info == null ? null : _branchNote,
-        nested: true,
-        onTap: info == null || _gitLoading
-            ? null
-            : () => unawaited(_pickBranch(info)),
-      ),
-      if (info != null)
-        _Field(
-          label: 'worktree',
-          value: _worktree ? 'on' : 'off',
-          arrow: '',
-          nested: true,
-          onTap: () => setState(() {
-            _worktree = !_worktree;
-            _branchRef = defaultBranchRef(info, worktree: _worktree);
-            _error = null;
-          }),
-        ),
-    ];
   }
 
   /// The branch row: the picker, and the name dialog behind its first entry.
@@ -1191,161 +1371,13 @@ class _ProjectChoice {
   final String? folder;
 }
 
-/// The title line: `new harness` dim at the left, `esc` at the right — the way back.
-class _TitleLine extends StatelessWidget {
-  const _TitleLine({required this.onEsc});
-
-  final VoidCallback onEsc;
+/// A listenable that never speaks — the mic's before a recorder exists.
+class _Silent implements Listenable {
+  const _Silent();
 
   @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return SizedBox(
-      height: 44,
-      child: Row(
-        children: [
-          const SizedBox(width: 16),
-          Expanded(child: TtyText('new harness', color: tty.faint)),
-          TtyTap(
-            onTap: onEsc,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TtyText('esc', color: tty.cyan),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// One setting: its name in a fixed column, dim, then its value, then `▸` — a line of a config
-/// file you can tap.
-class _Field extends StatelessWidget {
-  const _Field({
-    required this.label,
-    required this.value,
-    this.note,
-    this.onTap,
-    this.nested = false,
-    this.warn = false,
-    this.arrow = '▸',
-  });
-
-  final String label;
-  final String value;
-  final String? note;
-  final VoidCallback? onTap;
-  final bool nested;
-  final bool warn;
-  final String arrow;
+  void addListener(VoidCallback listener) {}
 
   @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return TtyTap(
-      onTap: onTap,
-      minHeight: 46,
-      child: Padding(
-        padding: EdgeInsets.only(left: nested ? 32 : 16, right: 16),
-        child: Row(
-          children: [
-            SizedBox(
-              width: nested ? 96 : 88,
-              child: TtyText(label, color: tty.faint),
-            ),
-            Expanded(
-              child: Text.rich(
-                TextSpan(
-                  children: [
-                    TextSpan(
-                      text: value,
-                      style: tty.style(
-                        color: onTap == null
-                            ? tty.dim
-                            : warn
-                            ? tty.yellow
-                            : tty.text,
-                      ),
-                    ),
-                    if (note case final note?)
-                      TextSpan(
-                        text: '  $note',
-                        style: tty.style(color: tty.faint),
-                      ),
-                  ],
-                ),
-                maxLines: 1,
-                softWrap: false,
-                overflow: TextOverflow.clip,
-              ),
-            ),
-            if (onTap != null && arrow.isNotEmpty)
-              TtyText(arrow, color: tty.faint),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// The command these choices make, as a shell prints it: `$ harness new claude @M2 ~/code/app`.
-/// A tap runs it — the one button, at the foot under the thumb, and it reads as what it does.
-class _CommandLine extends StatelessWidget {
-  const _CommandLine({
-    required this.command,
-    required this.running,
-    this.onRun,
-  });
-
-  final String command;
-  final bool running;
-  final VoidCallback? onRun;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return TtyTap(
-      onTap: onRun,
-      semanticsLabel: 'New harness: $command',
-      minHeight: 56,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-        decoration: BoxDecoration(
-          border: Border(
-            top: BorderSide(color: tty.dim.withValues(alpha: 0.6)),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text.rich(
-              TextSpan(
-                children: [
-                  TextSpan(
-                    text: r'$ ',
-                    style: tty.style(color: tty.green, weight: FontWeight.w700),
-                  ),
-                  TextSpan(text: command, style: tty.style()),
-                  // The cursor at the end of a typed command: it says "press enter". Still, not
-                  // blinking — nothing on this screen draws at rest.
-                  TextSpan(
-                    text: running ? '' : ' █',
-                    style: tty.style(color: tty.text),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 6),
-            TtyText(
-              running ? 'starting…' : '⏎ tap to run',
-              color: running ? tty.yellow : tty.dim,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  void removeListener(VoidCallback listener) {}
 }

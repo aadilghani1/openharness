@@ -244,7 +244,7 @@ class TtyFormRow extends StatelessWidget {
           children: [
             SizedBox(
               width: labelWidth,
-              child: TtyText(label, color: tty.faint, size: TtySize.row),
+              child: TtyText(label, color: tty.faint, size: TtySize.meta),
             ),
             Expanded(
               child: Column(

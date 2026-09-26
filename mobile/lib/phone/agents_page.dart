@@ -15,6 +15,7 @@ import 'link_page.dart';
 import 'phone_card.dart';
 import 'phone_fab.dart';
 import 'new_agent_page.dart';
+import 'voice_input_controller.dart';
 import 'phone_header.dart';
 import 'phone_navigation.dart';
 import 'phone_sheet.dart';
@@ -305,9 +306,14 @@ Future<void> openNewAgent(
   AppNotifier notifier,
   String machineId, {
   String? folder,
+  VoiceInputController? voice,
 }) => Navigator.of(context).push(
   phoneRoute(
-    (_) =>
-        NewAgentPage(notifier: notifier, machineId: machineId, folder: folder),
+    (_) => NewAgentPage(
+      notifier: notifier,
+      machineId: machineId,
+      folder: folder,
+      voice: voice,
+    ),
   ),
 );

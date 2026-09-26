@@ -1010,7 +1010,12 @@ class _TerminalPageState extends State<TerminalPage>
   /// is the top route.
   Future<void> _newAgentHere() async {
     dismissKeyboardForSwipe();
-    await openNewAgent(context, widget.notifier, widget.machineId);
+    await openNewAgent(
+      context,
+      widget.notifier,
+      widget.machineId,
+      voice: widget.voice,
+    );
     if (mounted) setState(() {});
   }
 
