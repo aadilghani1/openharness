@@ -822,7 +822,7 @@ impl App {
                     agent.working = true;
                     agent.last_beat = Some(Instant::now());
                     agent.active_at = now;
-                    if ty == "turn_started" { agent.unread = false }
+                    if ty == "turn_started" { agent.unread = false; agent.errored = false }
                     let text = |k: &str| payload.get(k).and_then(Value::as_str).unwrap_or("");
                     // What it was asked (the turn's message; not a replay of an old one).
                     if ty == "turn_started" { if let Some(l) = fleet::first_line(text("userMessage")) { agent.asked = Some(l) } }
@@ -860,7 +860,7 @@ impl App {
                     agent.doing = None;
                     // What the turn came to: the first line of its final message.
                     let said = std::mem::take(&mut agent.said);
-                    if aborted { agent.did = Some("Interrupted".into()) } else if let Some(line) = fleet::first_line(&said) { agent.did = Some(line) }
+                    if aborted { agent.did = Some("Interrupted".into()) } else if agent.errored { } else if let Some(line) = fleet::first_line(&said) { agent.did = Some(line) }
                     let name = agent.name.clone();
                     let mine = opened.contains(&agent.key());
                     // tim hatches on the first turn finished while you watch, and is pleased after each.
@@ -898,6 +898,7 @@ impl App {
             "error" => {
                 if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
                     if let Some(l) = payload.get("message").and_then(Value::as_str).and_then(fleet::first_line) { agent.did = Some(format!("Error: {l}")) }
+                    agent.errored = true;
                 }
             }
             "commander_question" => {
@@ -1908,7 +1909,8 @@ impl App {
         let Some(p) = self.panes.get(&pane) else { return };
         let key = (p.machine_id.clone(), p.agent_id.clone());
         if let Some(agent) = self.fleet.agents.get_mut(&key) {
-            // Looked at here: the dial takes its notification away too.
+            // Looked at here (an error it ended in too): the dial takes its notification away.
+            agent.errored = false;
             if std::mem::take(&mut agent.unread) { crate::dial::seen(self, &key.1) }
         }
     }

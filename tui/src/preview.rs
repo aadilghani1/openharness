@@ -37,13 +37,13 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     let state = app.fleet.state_of(a);
     let (word, color) = match state {
         State::NeedsInput => ("waiting on you", Color::Yellow), State::Working => ("working", Color::Cyan), State::Done => ("finished a turn", Color::Green),
-        State::Ready => ("ready", Color::Green), State::Starting => ("starting", Color::Yellow), State::Failed => ("failed to start", Color::Red),
+        State::Ready => ("idle", Color::Green), State::Starting => ("starting", Color::Yellow), State::Failed => (if a.launch == "failed" { "failed to start" } else { "failed" }, Color::Red),
         State::Paused => ("paused — enter resumes it", Color::DarkGray), State::Offline => ("offline", Color::DarkGray),
     };
     let home = app.homes.get(machine_id).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
     let cwd = if !home.is_empty() && a.cwd.starts_with(&home) { format!("~{}", &a.cwd[home.len()..]) } else { a.cwd.clone() };
     let mut out = vec![
-        Line::from(vec![Span::styled(word.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)), dim(format!("  {}", ago(a.recency())))]),
+        Line::from(vec![Span::styled(word.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)), dim(format!("  {}", ago(a.state_since(state))))]),
         Line::raw(""),
         kv("agent", theme::engine_label(&a.engine).to_string()),
         kv("machine", app.fleet.machine_name(machine_id)),

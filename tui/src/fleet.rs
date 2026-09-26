@@ -96,6 +96,9 @@ pub struct Agent {
     pub todos: Vec<(String, String)>,
     /// The sub-agents it has running (a Task's tool call, until its end): id and what each does.
     pub subagents: Vec<(String, String)>,
+    /// Its last turn ended in an error (the daemon's `error`: an API error, a message not
+    /// delivered) — failed, until you look at it or its next turn starts.
+    pub errored: bool,
 }
 
 /// A pull request for an agent's branch: its number, state (Open, Draft, Merged, Closed), link.
@@ -194,11 +197,23 @@ impl Agent {
         if self.launch == "failed" { return State::Failed }
         if self.question.is_some() { return State::NeedsInput }
         if self.working { return State::Working }
+        if self.errored { return State::Failed }
         if self.unread { return State::Done }
         State::Ready
     }
 
     pub fn recency(&self) -> u64 { self.active_at.max(self.created_at) }
+
+    /// When it came to be as it is (ms since the epoch): waiting on you since its question, working
+    /// since its turn began, done or failed since it ended; idle, paused or offline since it last
+    /// did anything.
+    pub fn state_since(&self, state: State) -> u64 {
+        match &self.question {
+            Some(q) => now_ms().saturating_sub(q.since.elapsed().as_millis() as u64),
+            None if self.since > 0 && !matches!(state, State::Ready | State::Paused | State::Offline) => self.since,
+            None => self.recency(),
+        }
+    }
 }
 
 pub fn now_ms() -> u64 {
@@ -275,6 +290,7 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         pr: previous.and_then(|p| p.pr.clone()),
         pr_checked: previous.and_then(|p| p.pr_checked),
         recap_asked: previous.map(|p| p.recap_asked).unwrap_or(false),
+        errored: previous.map(|p| p.errored).unwrap_or(false),
         todos: previous.map(|p| p.todos.clone()).unwrap_or_default(),
         subagents: previous.map(|p| p.subagents.clone()).unwrap_or_default(),
     }
@@ -415,16 +431,19 @@ impl Fleet {
     /// starting, idle, paused, offline — within the first three and working, the one that has
     /// waited (or run) longest first; the rest most recent first.
     pub fn ranked(&self) -> Vec<&Agent> {
-        let mut all: Vec<&Agent> = self.agents.values().collect();
         let bucket = |st: State| match st { State::NeedsInput => 0, State::Failed => 1, State::Done => 2, State::Working => 3, State::Starting => 4, State::Ready => 5, State::Paused => 6, State::Offline => 7 };
-        all.sort_by(|a, b| {
-            let (sa, sb) = (self.state_of(a), self.state_of(b));
-            let by_age = |x: &Agent| match &x.question { Some(q) => now_ms().saturating_sub(q.since.elapsed().as_millis() as u64), None => x.since };
-            bucket(sa).cmp(&bucket(sb))
-                .then_with(|| if bucket(sa) <= 3 { by_age(a).cmp(&by_age(b)) } else { b.recency().cmp(&a.recency()) })
-                .then(a.name.cmp(&b.name))
-        });
-        all
+        // Each one's key once (the clock read once for all: a comparison that read it again could
+        // order two alike harnesses both ways, which a sort must never see).
+        let now = now_ms();
+        let mut keyed: Vec<((u8, u64, &str), &Agent)> = self.agents.values().map(|a| {
+            let b = bucket(self.state_of(a));
+            let age = match &a.question { Some(q) => now.saturating_sub(q.since.elapsed().as_millis() as u64), None => a.since };
+            // The urgent ones longest waiting first; the rest most recent first.
+            let order = if b <= 3 { age } else { u64::MAX - a.recency() };
+            ((b, order, a.name.as_str()), a)
+        }).collect();
+        keyed.sort_by(|x, y| x.0.cmp(&y.0));
+        keyed.into_iter().map(|(_, a)| a).collect()
     }
 
     /// How many harnesses (shells aside) are in each state: the status line's counts.

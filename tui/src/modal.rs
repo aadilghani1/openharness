@@ -225,7 +225,7 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
             let detail = vec![span(line, if loud { fg(theme::ATTENTION) } else if quiet { fg(theme::MUTED) } else { Style::default() })];
             // Where it works and how long it has been as it is (waiting on you since its question,
             // working since its turn began, done since it ended).
-            let since = match &a.question { Some(q) => crate::fleet::now_ms().saturating_sub(q.since.elapsed().as_millis() as u64), None if a.since > 0 && !quiet => a.since, None => a.recency() };
+            let since = a.state_since(state);
             // Right: the machine (when there are several) and how long — the name and its line
             // come first; where it works is searchable and in the preview's title.
             // Its pull request, where it has one (what it cost is in the preview).
@@ -385,15 +385,18 @@ pub fn inbox_rows(app: &App) -> Vec<Row> {
     let mut rows = Vec::new();
     for a in agents {
         let q = a.question.as_ref().unwrap();
-        let head = format!("{} · {}", a.name, app.fleet.machine_name(&a.machine_id));
+        // Who asks (the harness, its project, its machine), then its options by number — one row
+        // a question, answered where it stands (M-1…9, M-a).
+        let who = [a.name.clone(), a.project.clone(), app.fleet.machine_name(&a.machine_id)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+        let options = q.options.iter().enumerate().map(|(i, o)| format!("{} {o}", i + 1)).collect::<Vec<_>>().join(" · ");
         let (mark, mark_color) = engine_mark(&a.engine);
-        rows.push(Row::new(format!("{}:{}#", a.machine_id, a.id), q.prompt.clone()).extra(head.clone()).group(head.clone())
+        let since = crate::fleet::now_ms().saturating_sub(q.since.elapsed().as_millis() as u64);
+        let mut detail = vec![span(who.clone(), fg(theme::MUTED))];
+        if !options.is_empty() { detail.push(span(format!("  {options}"), fg(theme::ACCENT))) }
+        rows.push(Row::new(format!("{}:{}#", a.machine_id, a.id), q.prompt.clone()).extra(format!("{who} {} {options}", a.branch))
             .lead(vec![span("? ", fg(theme::ATTENTION).add_modifier(ratatui::style::Modifier::REVERSED)), span(mark, fg(mark_color)), span(" ", Style::default())])
-            .right(format!("{}s", q.since.elapsed().as_secs())));
-        for (index, option) in q.options.iter().enumerate() {
-            rows.push(Row::new(format!("{}:{}#{index}", a.machine_id, a.id), option.clone()).extra(head.clone()).group(head.clone())
-                .lead(vec![span(format!("    {} ", index + 1), fg(theme::ACCENT))]));
-        }
+            .detail(detail)
+            .right(ago(since)));
     }
     rows
 }
@@ -411,8 +414,9 @@ pub const NEEDS_ARGS: &[&str] = &["select-window", "rename-window", "move-window
 
 pub fn machine_rows(app: &App) -> Vec<Row> {
     app.fleet.machines.iter().map(|m| {
-        let running = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.status == "active").count();
-        let waiting = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.question.is_some()).count();
+        // Its harnesses by what they do: the fleet's counts, for this machine.
+        let here: Vec<State> = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.engine != "terminal").map(|a| app.fleet.state_of(a)).collect();
+        let n = |s: State| here.iter().filter(|x| **x == s).count();
         let (dot, color, word) = match &m.reach {
             _ if m.local && m.reach == Reach::Ready => ("●", theme::ONLINE, "this computer".to_string()),
             Reach::Ready => ("●", theme::ONLINE, "connected".into()),
@@ -423,7 +427,9 @@ pub fn machine_rows(app: &App) -> Vec<Row> {
             _ => ("○", theme::MUTED, "offline".into()),
         };
         let rtt = app.rtt.get(&m.id).filter(|_| m.usable()).map(|d| format!("{}ms  ", d.as_millis())).unwrap_or_default();
-        let counts = if waiting > 0 { format!("{rtt}{running} running · {waiting} waiting") } else { format!("{rtt}{running} running") };
+        let counts = [(State::NeedsInput, "waiting"), (State::Failed, "failed"), (State::Done, "done"), (State::Working, "working"), (State::Ready, "idle")]
+            .iter().filter(|(s, _)| n(*s) > 0).map(|(s, w)| format!("{} {w}", n(*s))).collect::<Vec<_>>().join(" · ");
+        let counts = format!("{rtt}{}", if counts.is_empty() { "no harnesses".into() } else { counts });
         Row::new(m.id.clone(), m.name.clone()).extra(m.status.clone())
             .lead(vec![span(dot, fg(color)), span(" ", Style::default())])
             .detail(vec![span(word, fg(color))])

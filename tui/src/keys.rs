@@ -170,6 +170,9 @@ impl Keymap {
             }
         }
         for b in t.iter_mut() { if let Some(n) = notes.get(&name(&b.chord)) { b.note = n.clone() } }
+        // C-b s runs tmux's command, which in hn is the list of every harness (with the sessions):
+        // its note says what it does here.
+        if let Some(b) = t.iter_mut().find(|b| b.chord == ch('s')) { b.note = "Choose a harness or a session from a list".into() }
         // The root table's defaults are tmux's mouse bindings (a click selects the pane, the wheel
         // enters copy mode, a drag on a border resizes, the right button opens the menus).
         let root: Vec<Binding> = include_str!("../tests/fixtures/tmux-3.5a-root.txt").lines().filter_map(fixture_binding).collect();

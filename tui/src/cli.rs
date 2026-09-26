@@ -274,18 +274,28 @@ async fn send(port: u16, args: &[String]) -> i32 {
     }
     let (Some(target), false) = (target, text.is_empty()) else { eprintln!("usage: hn send-message -t <harness> <text>"); return 2 };
     let (_, list) = match machines(port).await { Ok(m) => m, Err(e) => { eprintln!("hn: {e}"); return 1 } };
+    // As tmux finds a target: its id, else its exact name, else the only name it starts —
+    // more than one of those is ambiguous, and nothing is sent.
     let want = target.to_lowercase();
-    for (id, _, up) in list {
-        if !up { continue }
-        if let Some(a) = roster(port, &id).await.into_iter().find(|a| a.id == target || a.name.to_lowercase().starts_with(&want)) {
+    let mut all: Vec<(String, crate::fleet::Agent)> = Vec::new();
+    for (id, _, up) in list { if up { for a in roster(port, &id).await { all.push((id.clone(), a)) } } }
+    let exact: Vec<&(String, crate::fleet::Agent)> = all.iter().filter(|(_, a)| a.id == target || a.name.to_lowercase() == want).collect();
+    let starts: Vec<&(String, crate::fleet::Agent)> = all.iter().filter(|(_, a)| a.name.to_lowercase().starts_with(&want)).collect();
+    let hits = if !exact.is_empty() { exact } else { starts };
+    match hits.as_slice() {
+        [] => { eprintln!("hn: can't find harness: {target}"); 1 }
+        [(machine, a)] => {
             let (tx, _rx) = mpsc::unbounded_channel();
-            let link = Link::spawn(port, &id, 0, tx);
+            let link = Link::spawn(port, machine, 0, tx);
             let _ = link.rpc("agents_list", json!({}), Duration::from_secs(8)).await;
             link.send("message", json!({ "agentId": a.id, "content": text.join(" ") }));
             tokio::time::sleep(Duration::from_millis(300)).await;
-            return 0;
+            0
+        }
+        many => {
+            let names: Vec<String> = many.iter().take(8).map(|(_, a)| a.name.clone()).collect();
+            eprintln!("hn: ambiguous harness: {target}, could be: {}{}", names.join(", "), if many.len() > 8 { ", …" } else { "" });
+            1
         }
     }
-    eprintln!("hn: can't find harness: {target}");
-    1
 }

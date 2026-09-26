@@ -432,7 +432,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             if machine.is_none() && project.is_none() && *filter == Filter::All { rows.extend(modal::session_rows(app)) }
             picker.set_rows(rows);
             picker.status = modal::open_status(app, *filter);
-            picker.hints = vec![("enter", "open"), ("C-t", "window"), ("C-v", "beside"), ("C-x", "below"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause"), ("M-1..9", "answer"), ("M-a", "type an answer")];
+            picker.hints = vec![("enter", "open"), ("M-1..9", "answer"), ("C-v", "beside"), ("C-x", "below"), ("C-t", "window"), ("M-a", "type an answer"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
             picker.empty = if app.fleet.agents.is_empty() { "no harnesses yet — C-b C makes one".into() } else { String::new() };
         }
         PickerKind::Palette => { picker.set_rows(modal::palette_rows(app)); picker.hints = vec![("enter", "run"), ("C-b :", "type one")] }
@@ -458,7 +458,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
         PickerKind::Inbox => {
             picker.set_rows(modal::inbox_rows(app));
             picker.status = format!("{} waiting", app.fleet.waiting());
-            picker.hints = vec![("enter", "answer / go"), ("C-o", "open"), ("M-1..9", "answer"), ("M-a", "type an answer")];
+            picker.hints = vec![("M-1..9", "answer"), ("M-a", "type an answer"), ("enter", "go"), ("C-o", "open")];
             picker.empty = "Nobody is waiting on you.".into();
         }
         PickerKind::Machines => {
@@ -1666,7 +1666,10 @@ fn answer_with(app: &mut App, machine: &str, agent: &str, value: &str) -> bool {
     let Some(q) = a.question.clone() else { return false };
     let session = a.session_id.clone();
     let Some(link) = app.link(machine) else { return false };
-    link.send("question_response", json!({ "requestId": q.request_id, "agentId": agent, "sessionId": session, "answers": { q.answer_key: value } }))
+    let sent = link.send("question_response", json!({ "requestId": q.request_id, "agentId": agent, "sessionId": session, "answers": { q.answer_key: value } }));
+    // Answered: off the counts, the list and C-b a now, not when the daemon's close comes back.
+    if sent { if let Some(a) = app.fleet.agents.get_mut(&(machine.to_string(), agent.to_string())) { a.question = None } }
+    sent
 }
 
 fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
