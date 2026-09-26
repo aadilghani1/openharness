@@ -142,6 +142,7 @@ zoo = {
   daemons: [{ id, hatchedAt, egg, shiny, nickname?, bond, xp, version }],   // id is a roster id
   eggs:    [{ id, kind, grantedAt, date? }],     // kind is a key of rules.eggs; date on a history egg
   pair:    daemonId | null,
+  autonomy: 'watch' | 'suggest' | 'act-on-key' | 'act-within-rules',   // the pair's dial; default suggest
   habits:  [habitKey],             // first-egg habits done, from rules.firstEgg.habits
   firstEgg: bool,                  // the first egg has been granted
   pity:    number,                 // hatches since the last secret
@@ -168,6 +169,7 @@ Ops (every op is idempotent; an op on something missing is dropped, never an err
 | `zoo.hatch { eggId }` | Draws on the server, adds the daemon, removes the egg, pairs it if nothing is paired. Answers `hatched: [{ eggId, daemonId, shiny }]`. |
 | `zoo.pair { id }` | Pairs a daemon you own. |
 | `zoo.nickname { id, nickname }` | 1–24 printable ASCII characters, or null to clear. |
+| `zoo.autonomy { level }` | How much the paired daemon may do on its own ([BRAIN.md](BRAIN.md), "Autonomy dial"). A level the server does not know is dropped. |
 | `zoo.easter { word }` | A word from `rules.easterWords` grants one `easter` egg, once per word. |
 | `zoo.seed { zoo }` | A guest's local zoo on first sign-in. Applied only while the account zoo is empty. |
 | `zoo.turn { batchId, n, day, hour, machineId }` | Turns finished on one machine in one local hour (see "Earning eggs and growing"). harnessd sends it. |

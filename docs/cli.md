@@ -98,6 +98,14 @@ your `y`, `act-on-key` lets the daemon drive harnesses it started and batches th
 Whatever the dial, it never deletes, restarts, forks or bypasses, never types into a terminal or its own
 harness, and never approves a prompt that pushes, forces, deletes, deploys, publishes, drops or merges.
 
+Per machine, `~/.config/harness/pair.jsonc` (or under `$XDG_CONFIG_HOME`; JSON with comments) holds
+`"model": true` to let the daemon ask one small model for better status-line words (off by default),
+and the `rules` it runs while the dial is `act-within-rules`: `{ "harness": "api*", "engine": "claude",
+"project": "~/code/api", "question": "^Approve Bash command: npm test", "choice": "Yes" }`. A rule never
+answers a push/force/delete/deploy/publish/drop/merge prompt, never picks "don't ask again", and approves
+a permission prompt only when it is a read, test, build, formatter or in-project edit. What it did is
+journaled and reported.
+
 `harness pair mcp [--token-file <path>]` serves the same tools as a stdio MCP server named `harnessd`, for
 an engine that speaks MCP. Both speak the loopback `pair` request (`{ verb, …arguments }` →
 `pair_result`) after a `machine_select` with `tool: true`: a tool client is answered like any other but is
