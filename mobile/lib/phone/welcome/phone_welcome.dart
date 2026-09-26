@@ -324,7 +324,7 @@ class _Hello extends StatelessWidget {
                   if (onTrySample != null)
                     Center(
                       child: TtyTextButton(
-                        label: 'Try it now — no computer needed',
+                        label: 'Try it — no computer needed',
                         onPressed: onTrySample,
                       ),
                     ),
@@ -337,15 +337,24 @@ class _Hello extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(LucideIcons.lock300, size: 13, color: tty.faint),
-                      const SizedBox(width: 6),
-                      Flexible(
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Icon(
+                          LucideIcons.lock300,
+                          size: 13,
+                          color: tty.faint,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
                         child: Text(
                           'End-to-end encrypted. Your code stays on your computer.',
-                          textAlign: TextAlign.center,
-                          style: tty.style(size: 11, color: tty.faint),
+                          style: tty.style(
+                            size: TtySize.meta,
+                            color: tty.faint,
+                          ),
                         ),
                       ),
                     ],

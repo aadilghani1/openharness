@@ -173,7 +173,8 @@ class _ChooserState<T> extends State<_Chooser<T>> {
                   ],
                 ),
               ),
-              if (widget.items.length > 5)
+              // Search where there is something to search: a long list that is not folded.
+              if (widget.items.length > 8 && widget.fold == null)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
                   child: TtyField(
@@ -227,12 +228,15 @@ class _ChooserState<T> extends State<_Chooser<T>> {
                         ),
                       ),
                     if (widget.actions.isNotEmpty) const SizedBox(height: 8),
+                    // An action the computer cannot do is left out, not drawn dead: a greyed row
+                    // with no reason reads as broken.
                     for (final action in widget.actions)
-                      FindAddRow(
-                        label: action.title,
-                        detail: action.subtitle,
-                        onTap: action.enabled ? () => _choose(action) : null,
-                      ),
+                      if (action.enabled)
+                        FindAddRow(
+                          label: action.title,
+                          detail: action.subtitle,
+                          onTap: () => _choose(action),
+                        ),
                   ],
                 ),
               ),

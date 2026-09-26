@@ -190,7 +190,7 @@ class VoiceMicCore extends StatelessWidget {
   }
 
   Color _inkFor(_Fill fill, Tty tty) => switch (fill) {
-    _Fill.accent => tty.theme.brightWhite,
+    _Fill.accent => tty.theme.black,
     _Fill.warn => tty.theme.black,
     _Fill.glass => face == VoiceMicFace.off ? tty.dim : tty.text,
   };
@@ -206,15 +206,17 @@ class VoiceMicCore extends StatelessWidget {
       return BoxDecoration(
         shape: BoxShape.circle,
         // The terminal's own ground, near-opaque, so the glyph reads over any line of output.
-        color: tty.ground.withValues(alpha: 0.94),
+        color: tty.ground,
         border: working
             ? Border.all(color: tty.faint, width: 2)
             : Border.all(color: tty.dim, width: 1.5),
       );
     }
+    // Recording, the face is the send button: green, the colour of go. Red stays on the bar's
+    // `●` and its clock, where it means "recording" and nothing else.
     return BoxDecoration(
       shape: BoxShape.circle,
-      color: fill == _Fill.warn ? tty.yellow : tty.red,
+      color: fill == _Fill.warn ? tty.yellow : tty.green,
     );
   }
 
