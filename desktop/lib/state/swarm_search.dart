@@ -575,6 +575,7 @@ class SwarmSearchController extends ChangeNotifier {
     cursor = 0;
     _selectedId = null;
     _filter();
+    _content?.search(_contentQuery);
     notifyListeners();
     return true;
   }
@@ -698,6 +699,7 @@ class SwarmSearchController extends ChangeNotifier {
     _selectedId = draft.selectedId;
     cursor = 0;
     _filter();
+    _content?.search(_contentQuery);
     notifyListeners();
   }
 

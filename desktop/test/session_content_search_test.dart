@@ -341,6 +341,44 @@ void main() {
       },
     );
 
+    test('a restored draft searches what was said too', () async {
+      final connection = SearchConnection({
+        'retention': [
+          {
+            'agentId': 'a7',
+            'sessionId': 's7',
+            'snippet': 'x',
+            'together': true,
+            'score': 1,
+          },
+        ],
+      });
+      final app = createApp(
+        connected: true,
+        connectionForTest: (_) => connection,
+      );
+      addTearDown(app.dispose);
+      SwarmSearchController open() => SwarmSearchController(
+        app,
+        const [],
+        adding: true,
+        offersCreate: true,
+        activityFirst: true,
+        placement: HarnessPlacement.newTab,
+      );
+      final first = open()..setQuery('retention');
+      final draft = first.draft;
+      first.dispose();
+      await answered();
+      connection.asked.clear();
+      final again = open();
+      addTearDown(again.dispose);
+      again.restoreDraft(draft, newTab: true);
+      await answered();
+      expect(connection.asked, ['retention']);
+      expect(again.rows.map((row) => row.agentId), contains('a7'));
+    });
+
     test(
       'a hit arriving later does not take the row somebody moved to',
       () async {
