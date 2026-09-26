@@ -109,6 +109,9 @@ enum TerminalFontChoice {
 /// (family, size) always returns the identical object, so both the renderer's
 /// guard and [ValueNotifier]'s own "don't notify on a no-op set" work for
 /// free.
+/// The terminal's line height on the phone — see [TerminalFontStore].
+const kPhoneTerminalLineHeight = 1.3;
+
 class TerminalFontStore extends ValueNotifier<TerminalStyle> {
   TerminalFontStore({LocalKeyValueStore? storage})
     : _storage = storage ?? HarnessFileStore.shared,
@@ -132,6 +135,10 @@ class TerminalFontStore extends ValueNotifier<TerminalStyle> {
         (choice, size),
         () => TerminalStyle(
           fontSize: size,
+          // A little more air between lines than xterm's 1.2: on a phone the terminal is mostly
+          // READ — an agent's prose, a few inches from the eye — and tight lines are what makes a
+          // stream of it tiring to follow. Costs about one row in twelve.
+          height: kPhoneTerminalLineHeight,
           fontFamily: choice.fontFamily,
           fontFamilyFallback: choice.fontFamilyFallback,
         ),
