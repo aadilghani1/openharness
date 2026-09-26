@@ -24,11 +24,14 @@ pub struct Row {
     pub disabled: bool,
     /// Ranked above equal matches (live harnesses over paused ones).
     pub boost: u32,
+    /// How many of the label's first characters are dim (a buffer's `name: N bytes: `): part of
+    /// the line, matched and scrolled with it.
+    pub label_dim: usize,
 }
 
 impl Row {
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Row {
-        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0 }
+        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, label_dim: 0 }
     }
     pub fn extra(mut self, text: impl Into<String>) -> Row { self.extra = text.into(); self }
     pub fn group(mut self, text: impl Into<String>) -> Row { self.group = Some(text.into()); self }
@@ -36,6 +39,7 @@ impl Row {
     pub fn detail(mut self, spans: Vec<Span<'static>>) -> Row { self.detail = spans; self }
     pub fn right(mut self, text: impl Into<String>) -> Row { self.right = text.into(); self }
     pub fn boost(mut self, by: u32) -> Row { self.boost = by; self }
+    pub fn label_dim(mut self, chars: usize) -> Row { self.label_dim = chars; self }
 }
 
 pub struct Picker {
@@ -105,6 +109,19 @@ pub struct Picker {
     /// the last draw), for the mouse.
     pub prompt_at: std::cell::Cell<(u16, u16)>,
     pub box_rows: std::cell::Cell<(u16, u16)>,
+    /// Where the list and the preview window are (from the last draw): what the mouse is over.
+    pub list_area: std::cell::Cell<ratatui::layout::Rect>,
+    pub preview_area: std::cell::Cell<Option<(ratatui::layout::Rect, char)>>,
+    /// A drag in the preview (it scrolls: the row and offset it began at), or on its border (it
+    /// resizes), and the size it was given that way (columns, or rows above and below).
+    pub preview_drag: Option<(u16, u16)>,
+    pub border_drag: bool,
+    pub preview_cells: Option<i64>,
+    /// change-preview-window and toggle-preview-wrap: the preview window as they left it (and
+    /// which of change-preview-window's alternatives is next); toggle-sort: sorting turned over.
+    pub preview_window: Option<crate::theme::PreviewWindow>,
+    pub pw_next: usize,
+    pub sort_flipped: bool,
 }
 
 impl Picker {
@@ -133,6 +150,14 @@ impl Picker {
             marked: Vec::new(),
             preview: !crate::theme::fzf_opts().preview_window.hidden,
             preview_scroll: Default::default(),
+            list_area: Default::default(),
+            preview_area: Default::default(),
+            preview_drag: None,
+            border_drag: false,
+            preview_cells: None,
+            preview_window: None,
+            pw_next: 0,
+            sort_flipped: false,
             preview_of: None,
             preview_fresh: std::cell::Cell::new(true),
             preview_following: Default::default(),
@@ -216,7 +241,7 @@ impl Picker {
                     None => {}
                 }
             }
-            sorted = !self.keep_order && q.sortable() && !o.no_sort;
+            sorted = !self.keep_order && q.sortable() && (o.no_sort == self.sort_flipped);
             if sorted { scored.sort_by(|a, b| a.0.cmp(&b.0)) }
             self.visible = scored.into_iter().map(|(_, i, hits)| (i, hits)).chain(hidden.into_iter().map(|i| (i, Vec::new()))).collect();
         }

@@ -563,7 +563,7 @@ impl PreviewWindow {
 }
 
 /// parsePreviewWindow: its tokens (split at , and :) over [pw]; `<N(…)` an alternative under N.
-fn parse_preview_window(pw: &mut PreviewWindow, input: &str) {
+pub fn parse_preview_window(pw: &mut PreviewWindow, input: &str) {
     let mut alternative: Option<String> = None;
     let chars: Vec<char> = input.chars().collect();
     let mut i = 0;

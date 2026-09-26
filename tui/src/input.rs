@@ -198,23 +198,39 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
     crate::mouse::on_event(app, mouse);
 }
 
-/// The mouse over hn's lists (the choose modes): the wheel moves the rows, or the preview under
-/// it; a click takes a row, a second one opens it; a click outside the box closes it.
+/// The mouse over hn's lists (the choose modes), as fzf's: the wheel moves the list or scrolls the
+/// preview, whichever it is over; a click takes a row, a second one opens it; in the preview a
+/// drag scrolls it and a drag on its border resizes it; a click outside the box closes it.
 fn modal_mouse(app: &mut App, mouse: MouseEvent) {
+    let inside = |r: ratatui::layout::Rect| mouse.column >= r.x && mouse.column < r.x + r.width && mouse.row >= r.y && mouse.row < r.y + r.height;
+    let (list, preview) = match &app.modal { Some(Modal::Picker { picker, .. }) => (picker.list_area.get(), picker.preview_area.get().filter(|_| picker.preview)), _ => (Default::default(), None) };
+    let in_preview = preview.map(|(r, _)| inside(r)).unwrap_or(false);
     match mouse.kind {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
             let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
-            let half = app.size.0 / 2;
             if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
-                if picker.preview && mouse.column >= half { picker.preview_by(if up { -1 } else { 1 }) }
-                else { let r: i64 = if theme::fzf().reverse { -1 } else { 1 }; picker.move_by(if up { r } else { -r }) }
+                if in_preview { picker.preview_by(if up { -1 } else { 1 }) }
+                else if inside(list) { let r: i64 = if theme::fzf().reverse { -1 } else { 1 }; picker.move_by(if up { r } else { -r }) }
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            if let Some(Modal::Picker { picker, .. }) = &mut app.modal { if picker.bar_drag { picker.drag_bar(mouse.column, mouse.row, false); } }
+            if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
+                if picker.bar_drag { picker.drag_bar(mouse.column, mouse.row, false); }
+                // The preview follows the mouse: dragged up, its lines come up.
+                else if let Some((row, from)) = picker.preview_drag { picker.preview_to(from as i64 + row as i64 - mouse.row as i64) }
+                else if picker.border_drag {
+                    let (Some((p, pos)), l) = (picker.preview_area.get(), picker.list_area.get()) else { return };
+                    let (left, top) = (p.x.min(l.x) as i64, p.y.min(l.y) as i64);
+                    let (right, bottom) = ((p.x + p.width).max(l.x + l.width) as i64, (p.y + p.height).max(l.y + l.height) as i64);
+                    let (x, y) = (mouse.column as i64, mouse.row as i64);
+                    let cells = match pos { 'l' => x - left + 1, 'u' => y - top + 1, 'd' => bottom - y, _ => right - x };
+                    picker.preview_cells = Some(cells.max(1));
+                }
+            }
         }
-        MouseEventKind::Up(_) => { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.bar_drag = false } }
+        MouseEventKind::Up(_) => { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.bar_drag = false; picker.preview_drag = None; picker.border_drag = false } }
         // fzf's right click: the row under it, then toggle (a mark, in a list that takes marks).
+        MouseEventKind::Down(MouseButton::Right) if !inside(list) => {}
         MouseEventKind::Down(MouseButton::Right) => {
             if let Some(Modal::Picker { kind, picker }) = &mut app.modal {
                 let multi = matches!(kind, PickerKind::Open { .. }) && !picker.query.starts_with(['>', '@', '#', ':', '*', '?']);
@@ -224,7 +240,15 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
         MouseEventKind::Down(MouseButton::Left) => {
             // fzf's scrollbar: pressed, the list follows the mouse while it is held.
             if let Some(Modal::Picker { picker, .. }) = &mut app.modal { if picker.drag_bar(mouse.column, mouse.row, true) { picker.bar_drag = true; return } }
-            let hit = match &mut app.modal { Some(Modal::Picker { picker, .. }) => Some(picker.click(mouse.row)), _ => None };
+            // In the preview: its border (the side toward the list) resizes it, the rest scrolls it.
+            if in_preview {
+                if let (Some(Modal::Picker { picker, .. }), Some((p, pos))) = (&mut app.modal, preview) {
+                    let on_border = match pos { 'l' => mouse.column + 1 == p.x + p.width, 'u' => mouse.row + 1 == p.y + p.height, 'd' => mouse.row == p.y, _ => mouse.column == p.x };
+                    if on_border { picker.border_drag = true } else { picker.preview_drag = Some((mouse.row, picker.preview_scroll.get())) }
+                }
+                return;
+            }
+            let hit = match &mut app.modal { Some(Modal::Picker { picker, .. }) if inside(list) || mouse.column >= list.x && mouse.column < list.x + list.width => Some(picker.click(mouse.row)), Some(Modal::Picker { .. }) => Some(false), _ => None };
             match hit {
                 Some(true) => {
                     let double = matches!(app.last_click, Some((9, _, r, at, _)) if r == mouse.row && at.elapsed() < Duration::from_millis(400));
@@ -488,9 +512,11 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![("enter", "run it")];
         }
         PickerKind::Buffers => {
-            // tmux's choose-buffer rows: `name: size bytes: "sample"`, newest first.
+            // tmux's choose-buffer rows: `name: size bytes: "sample"`, newest first — each one line,
+            // as fzf has it over list-buffers: matched, cut and scrolled whole.
             let rows = app.paste.walk().map(|b| {
-                crate::picker::Row::new(b.name.clone(), format!("\"{}\"", crate::paste::sample(b))).lead(vec![ratatui::text::Span::styled(format!("{}: {} bytes: ", b.name, b.data.len()), theme::fg(theme::MUTED))])
+                let lead = format!("{}: {} bytes: ", b.name, b.data.len());
+                crate::picker::Row::new(b.name.clone(), format!("{lead}\"{}\"", crate::paste::sample(b))).label_dim(lead.chars().count())
             }).collect();
             picker.set_rows(rows);
             picker.empty = "no buffers".into();
@@ -1482,15 +1508,39 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             "backward-word" => picker.qmove(-1, true), "forward-word" => picker.qmove(1, true),
             "backward-delete-char" => picker.backspace(false), "delete-char" => picker.delete_forward(),
             "delete-char/eof" => { if picker.query.is_empty() { return End::Abort } picker.delete_forward() }
+            "backward-delete-char/eof" => { if picker.query.is_empty() { return End::Abort } picker.backspace(false) }
+            // cancel: a query first, then the list.
+            "cancel" => { if picker.query.is_empty() { return End::Abort } picker.set_query("") }
+            "accept-or-print-query" => { if picker.visible.is_empty() { return End::Abort } return End::Accept }
+            "hide-preview" => picker.preview = false, "show-preview" => picker.preview = true,
+            "toggle-preview-wrap" => {
+                let mut pw = picker.preview_window.clone().unwrap_or_else(|| theme::fzf_opts().preview_window.clone());
+                pw.wrap = Some(!pw.wrap.unwrap_or(false));
+                picker.preview_window = Some(pw);
+            }
+            "toggle-sort" => { picker.sort_flipped = !picker.sort_flipped; picker.refilter() }
+            // change-preview-window(a|b|…): each time the next of them, over the --preview-window
+            // it started with (an empty one is that one).
+            a if a.starts_with("change-preview-window(") && a.ends_with(')') => {
+                let specs: Vec<&str> = a["change-preview-window(".len()..a.len() - 1].split('|').collect();
+                let spec = specs[picker.pw_next % specs.len()];
+                picker.pw_next += 1;
+                let mut pw = theme::fzf_opts().preview_window.clone();
+                if !spec.is_empty() { theme::parse_preview_window(&mut pw, spec) }
+                picker.preview = !pw.hidden;
+                picker.preview_cells = None;
+                picker.preview_window = Some(pw);
+            }
             "yank" => picker.yank(),
             "accept-non-empty" => { if !picker.visible.is_empty() { return End::Accept } }
             "accept" => return End::Accept,
-            "abort" | "cancel" => return End::Abort,
+            "abort" => return End::Abort,
             "up" => picker.move_by(up), "down" => picker.move_by(-up),
             "page-up" => crate::ui::page(picker, up, false), "page-down" => crate::ui::page(picker, -up, false),
             "toggle" => picker.toggle_mark(),
-            "select-all" => { if multi { picker.marked = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect() } }
-            "deselect-all" => picker.marked.clear(),
+            // The matches into the marks (those the query hides stay marked), or out of them.
+            "select-all" => { if multi { for (i, _) in picker.visible.clone() { let id = picker.rows[i].id.clone(); if !picker.marked.contains(&id) { picker.marked.push(id) } } } }
+            "deselect-all" => { let shown: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); picker.marked.retain(|m| !shown.contains(m)) }
             "toggle-all" => { if multi { let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); for id in all { if let Some(at) = picker.marked.iter().position(|m| *m == id) { picker.marked.remove(at); } else { picker.marked.push(id) } } } }
             "toggle-preview" => picker.preview = !picker.preview, "toggle-wrap" => picker.toggle_wrap(),
             "preview-up" => picker.preview_by(-1), "preview-down" => picker.preview_by(1),

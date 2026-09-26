@@ -652,6 +652,9 @@ fn calculate_size(base: i64, size: theme::Size, occupied: i64, min: i64) -> i64 
 /// hidden or the list has none; with the outer border on the right and nothing of the preview's
 /// there, the list (and the preview) take back the border's column of padding (listStickToRight).
 /// The third value: whether that column is the list's (else it is left blank).
+/// Whether the list sorts by score (--no-sort, turned over by toggle-sort).
+fn o_sorts(picker: &Picker) -> bool { theme::fzf_opts().no_sort == picker.sort_flipped }
+
 fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
     let o = theme::fzf_opts();
     let (_, outer_right, _, _) = border_sides();
@@ -660,7 +663,7 @@ fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
     let rect = |x: i64, y: i64, w: i64, h: i64| Rect::new(x.max(0) as u16, y.max(0) as u16, w.max(0) as u16, h.max(0) as u16);
     let alone = |stick: bool| (rect(x, y, width + stick as i64, height), None, stick);
     if !picker.preview { return alone(outer_right) }
-    let mut pw = &o.preview_window;
+    let mut pw = picker.preview_window.as_ref().unwrap_or(&o.preview_window);
     loop {
         let shape = pw.shape().to_string();
         let (bt, br, bb, bl) = shape_sides(&shape);
@@ -669,7 +672,8 @@ fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
         let min_h = 1 + bt as i64 + bb as i64;
         let (list, pbox, stick) = match pw.position {
             'u' | 'd' => {
-                let ph = calculate_size(height, pw.size, 3 - no_separator_line() as i64, min_h);
+                // Its border dragged: the rows it was given, its border's included.
+                let ph = match picker.preview_cells { Some(n) => n.clamp(min_h, (height - (3 - no_separator_line() as i64)).max(min_h)), None => calculate_size(height, pw.size, 3 - no_separator_line() as i64, min_h) };
                 if pw.threshold > 0 && ph < pw.threshold as i64 { if let Some(alt) = &pw.alternative { if alt.hidden { return alone(outer_right) } pw = alt; continue } }
                 if pw.hidden { return alone(outer_right) }
                 let stick = outer_right && !br;
@@ -680,7 +684,7 @@ fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
                 else { (rect(x, y, w, height - ph), rect(x, y + height - ph, w, ph), stick) }
             }
             _ => {
-                let pwidth = calculate_size(width, pw.size, 4, min_w);
+                let pwidth = match picker.preview_cells { Some(n) => n.clamp(min_w, (width - 4).max(min_w)), None => calculate_size(width, pw.size, 4, min_w) };
                 if pw.threshold > 0 && pwidth < pw.threshold as i64 { if let Some(alt) = &pw.alternative { if alt.hidden { return alone(outer_right) } pw = alt; continue } }
                 if pw.hidden { return alone(outer_right) }
                 if pw.position == 'l' {
@@ -719,6 +723,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let pal = theme::fzf().pal;
     if let Some(bg) = pal.border.style().bg { buf.set_style(body, Style::default().bg(bg)) }
     let (area, pbox, stick) = fzf_split(body, picker);
+    picker.list_area.set(area);
+    picker.preview_area.set(pbox.as_ref().map(|p| (p.rect, p.opts.position)));
     let (_, right_border, _, _) = border_sides();
     if right_border {
         // The outer border's margin on the right: the list's column now (listStickToRight), blank
@@ -806,6 +812,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     picker.prompt_at.set((prompt_y, area.x + pw));
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
     let mut count = format!("{}/{}", picker.visible.len(), total);
+    // A toggle-sort binding: whether it sorts (+S) or not (-S), as fzf's info says.
+    if theme::fzf_opts().binds.iter().any(|(_, a)| a.split('+').any(|x| x == "toggle-sort")) { count.push_str(if o_sorts(picker) { " +S" } else { " -S" }) }
     if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) { count.push_str(&format!(" ({})", picker.marked.len())) }
     // fzf's printInfoImpl, each --info laid out as it lays it out: the count in the info pair, cut
     // with `..` when the room runs out (trimMessage); the separator's line filled with its string
@@ -953,7 +961,8 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     for s in &row.lead { spans.push(Span::styled(s.content.clone(), cell(Some(s.style), false))) }
     let lead_w: usize = row.lead.iter().map(|s| s.content.width()).sum();
     let label_len = row.label.chars().count();
-    let mut cells: Vec<Cell> = row.label.chars().enumerate().map(|(i, c)| (c, None, hits.contains(&(i as u32)))).collect();
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    let mut cells: Vec<Cell> = row.label.chars().enumerate().map(|(i, c)| (c, (i < row.label_dim).then_some(dim), hits.contains(&(i as u32)))).collect();
     let detail_len: usize = row.detail.iter().map(|s| s.content.chars().count()).sum();
     if detail_len > 0 {
         cells.push((' ', None, false));
@@ -1093,7 +1102,8 @@ fn fits_line(row: &crate::picker::Row, text_w: usize) -> bool {
 /// the query matched them) and the right column, dim — picker::line after the lead.
 fn line_cells(row: &crate::picker::Row, hits: &[u32]) -> Vec<Cell> {
     let mut cells: Vec<Cell> = row.lead.iter().flat_map(|s| s.content.chars().map(move |c| (c, Some(s.style), false))).collect();
-    cells.extend(row.label.chars().enumerate().map(|(i, c)| (c, None, hits.contains(&(i as u32)))));
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    cells.extend(row.label.chars().enumerate().map(|(i, c)| (c, (i < row.label_dim).then_some(dim), hits.contains(&(i as u32)))));
     let mut at = row.label.chars().count();
     if row.detail.iter().any(|s| !s.content.is_empty()) {
         cells.extend([(' ', None, false), (' ', None, false)]);
@@ -1664,7 +1674,9 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: 
     let (iw, height) = (inner.width as usize, inner.height as usize);
     let text = crate::preview::lines(app, kind, &id);
     let fzf_wrap = pw.wrap == Some(true);
-    let lines: Vec<Line> = match pw.wrap { None => text.into_iter().flat_map(|l| wrap_line(l, iw)).collect(), _ => text };
+    // fzf's preview does not wrap unless told (a buffer's text is as it is); hn's own notes about a
+    // harness, a machine or a command do, where nothing says otherwise.
+    let lines: Vec<Line> = match pw.wrap { None if !matches!(kind, PickerKind::Buffers) => text.into_iter().flat_map(|l| wrap_line(l, iw)).collect(), _ => text };
     let total = lines.len();
     // A new row's preview starts where follow or +N says.
     if picker.preview_fresh.replace(false) {
