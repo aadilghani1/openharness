@@ -26,9 +26,9 @@ class Tty {
       terminalThemeFor(AppTheme.palette.value, terminalThemeStore.value),
       font.fontFamily,
       font.fontFamilyFallback,
-      // A size up from the terminal's own 13: chrome is read at a glance and tapped, and one step
-      // larger keeps its rows on the same grid feel without reading as smaller than the output.
-      font.fontSize + 1,
+      // The terminal's own size, exactly: chrome and output share one cell, so a status line or an
+      // fzf row lands on the same columns as the agent's text beside it.
+      font.fontSize,
     );
   }
 
@@ -39,7 +39,14 @@ class Tty {
 
   Color get ground => theme.background;
   Color get text => theme.foreground;
+
+  /// Rules, marks and the gutter — brightBlack, as a terminal draws its own furniture.
   Color get dim => theme.brightBlack;
+
+  /// Secondary TEXT in the chrome: labels, details, hints. brightBlack on the ground is 3.1:1, too
+  /// faint to read at a glance on a phone; this is the agent's own faint text, about 4.9:1.
+  Color get faint =>
+      Color.alphaBlend(theme.foreground.withValues(alpha: 0.52), theme.background);
   Color get green => theme.green;
   Color get yellow => theme.yellow;
   Color get red => theme.red;
@@ -53,8 +60,33 @@ class Tty {
     theme.background,
   );
 
-  /// One line of text, the terminal's line height.
-  double get line => fontSize * 1.45;
+  /// One character cell's width — the grid every column in the chrome sits on.
+  double get cell => _cellWidth(fontFamily, fontFallback, fontSize);
+
+  /// Where the terminal's text starts: the pane's own left padding. Column 0 of the chrome.
+  static const double origin = 10;
+
+  /// The x of column [n].
+  double col(int n) => origin + n * cell;
+
+  static final _cells = <(String, double), double>{};
+  static double _cellWidth(String family, List<String> fallback, double size) =>
+      _cells.putIfAbsent((family, size), () {
+        final painter = TextPainter(
+          text: TextSpan(
+            text: 'MMMMMMMMMM',
+            style: TextStyle(
+              fontFamily: family,
+              fontFamilyFallback: fallback,
+              fontSize: size,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        final width = painter.width / 10;
+        painter.dispose();
+        return width;
+      });
 
   TextStyle style({
     Color? color,

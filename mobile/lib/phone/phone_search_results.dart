@@ -81,8 +81,16 @@ class PhoneSearchResults extends StatefulWidget {
 class PhoneSearchResultsState extends State<PhoneSearchResults> {
   /// Opens the first row a tap could open — Enter in the desktop's ⌘P, the return key here.
   void openFirst() {
-    for (final row in widget.controller.rows) {
-      if (widget.controller.canSubmit(row)) {
+    final search = widget.controller;
+    final showing = widget.showing;
+    final rows = search.matchQuery.trim().isEmpty && showing != null
+        ? [
+            for (final row in search.rows)
+              if (!_isShowing(row, showing)) row,
+          ]
+        : search.rows;
+    for (final row in rows) {
+      if (search.canSubmit(row)) {
         _tap(row);
         return;
       }
@@ -188,18 +196,29 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
             search.total == 0 && search.matchQuery.trim().isEmpty
                 ? 'no harnesses yet'
                 : 'no match',
-            color: tty.dim,
+            color: tty.faint,
           ),
         ),
       );
     }
+    // With nothing typed, the agent already on screen is not what Enter should take: it moves to
+    // the far end, so the cursor row is the one before it — tmux's `C-b l`, back to the last.
+    final ordered = search.matchQuery.trim().isEmpty && showing != null
+        ? [
+            for (final row in rows)
+              if (!_isShowing(row, showing)) row,
+            for (final row in rows)
+              if (_isShowing(row, showing)) row,
+          ]
+        : rows;
+    final cursorAt = ordered.indexWhere(search.canSubmit);
     return ListView.builder(
       reverse: true,
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: EdgeInsets.zero,
-      itemCount: rows.length,
+      itemCount: ordered.length,
       itemBuilder: (context, index) {
-        final row = rows[index];
+        final row = ordered[index];
         final entry = row.entry;
         final openable = search.canSubmit(row);
         final badge = phoneSearchBadge(row, openable: openable);
@@ -218,6 +237,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
           terms: terms,
           mark: onScreen ? '*' : null,
           markColor: tty.green,
+          cursor: index == cursorAt,
           enabled: openable || _resuming == row.id,
           trailing: _resuming == row.id
               ? 'resuming'
@@ -231,6 +251,10 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       },
     );
   }
+
+  static bool _isShowing(PhoneDestination row, AgentRef showing) =>
+      row.entry?.machineId == showing.machineId &&
+      row.entry?.agent.id == showing.agentId;
 
   Widget _grouped(PhoneSearchController search, List<PhoneDestination> rows) {
     final bottom = MediaQuery.paddingOf(context).bottom + 16;

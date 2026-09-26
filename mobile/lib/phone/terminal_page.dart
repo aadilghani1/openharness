@@ -1578,99 +1578,92 @@ class _TerminalPageState extends State<TerminalPage>
                                     // listening for its notifications as they
                                     // bubble past is what survives that, and costs
                                     // the panel no knowledge of the page's chrome.
-                                    child:
-                                        NotificationListener<
-                                          ScrollNotification
-                                        >(
-                                          onNotification:
-                                              _chrome.onNotification,
-                                          child: agentGone
-                                              ? _AgentGone(
-                                                  name: _cachedAgentName,
-                                                  onPickAnother:
-                                                      _pickAnotherAgent,
-                                                )
-                                              : pane == null || session == null
-                                              ? _Attaching(key: _skeletonKey)
-                                              : TerminalPanel(
-                                                  key: ValueKey(pane.id),
-                                                  notifier: widget.notifier,
-                                                  session: session,
-                                                  // Only the page on screen takes the keyboard — see
-                                                  // [TerminalPage.isActive]. `visible` is the same answer for the
-                                                  // panel's other half: a page parked beside this one releases
-                                                  // focus, stops rendering and stops resizing its remote shell.
-                                                  //
-                                                  // Whether it also HOLDS one that is already
-                                                  // up is a separate question, and the pager asks
-                                                  // it on every swipe — see [_shouldFocus].
-                                                  focused: _shouldFocus,
-                                                  // Asks again when `focused` did
-                                                  // not move — coming back from
-                                                  // another app. See
-                                                  // [didChangeAppLifecycleState].
-                                                  focusRequest: _focusRequest,
-                                                  visible: widget.isActive,
-                                                  // Hold the remote resize while the keyboard
-                                                  // slides. Separate from `visible` because this
-                                                  // must NOT release focus — the animation being
-                                                  // waited on is the one that focus started.
-                                                  //
-                                                  // The keyboard is the only thing left that
-                                                  // moves this pane's height: the header slides
-                                                  // OVER the terminal rather than out of its
-                                                  // column — see [_SlideAway].
-                                                  //
-                                                  // ⚠️ Held for as long as search is open, too:
-                                                  // its keyboard is typing a query over a faded
-                                                  // terminal, and resizing the agent's shell for
-                                                  // it redrew the whole TUI on the way in and
-                                                  // again on the way out.
-                                                  settling:
-                                                      _keyboardSettling ||
-                                                      _heldForSearch,
-                                                  // ⚠️ The tap is taken in the panel, not by a
-                                                  // `Listener` over it. xterm's own `_onTapDown`
-                                                  // calls `requestKeyboard()`, so anything that
-                                                  // merely ALSO reacted to the tap would raise
-                                                  // the keyboard before the words said were typed
-                                                  // into the prompt — and a re-armed claim on top
-                                                  // of it was measured asking Android twice per
-                                                  // tap, which answers a show mid-animation by
-                                                  // cancelling and restarting it. Null while the
-                                                  // keyboard is up or coming, so the tap is
-                                                  // xterm's and the keyboard stays.
-                                                  //
-                                                  // ⚠️ A tap on a pane that cannot take input
-                                                  // asks for the TERMINAL, not the keyboard:
-                                                  // raising one over a read-only pane offers
-                                                  // a prompt that silently swallows every
-                                                  // letter. The band above says why, so the
-                                                  // tap takes the person to its button. See
-                                                  // [_ControlBanner].
-                                                  onInputTap: blocked
-                                                      ? () => unawaited(
-                                                          _takeControl(),
-                                                        )
-                                                      : _shouldFocus
-                                                      ? null
-                                                      : () => unawaited(
-                                                          _raiseKeyboard(
-                                                            session,
-                                                          ),
-                                                        ),
-                                                  showHeader: false,
-                                                  // tmux's copy-mode position while
-                                                  // reading back — see [_CopyModePosition].
-                                                  scrollback: _scrollback,
-                                                  jumpToEndRequest: _jumpToEnd,
-                                                  // No composer, and so no grip above it: the
-                                                  // page hands the pane its full height and the
-                                                  // software keyboard drives the terminal
-                                                  // directly. The mic's send is what kept the
-                                                  // composer's batched turn.
-                                                ),
-                                        ),
+                                    child: NotificationListener<ScrollNotification>(
+                                      onNotification: _chrome.onNotification,
+                                      child: agentGone
+                                          ? _AgentGone(
+                                              name: _cachedAgentName,
+                                              onPickAnother: _pickAnotherAgent,
+                                            )
+                                          : pane == null || session == null
+                                          ? _Attaching(key: _skeletonKey)
+                                          : TerminalPanel(
+                                              key: ValueKey(pane.id),
+                                              notifier: widget.notifier,
+                                              session: session,
+                                              // Only the page on screen takes the keyboard — see
+                                              // [TerminalPage.isActive]. `visible` is the same answer for the
+                                              // panel's other half: a page parked beside this one releases
+                                              // focus, stops rendering and stops resizing its remote shell.
+                                              //
+                                              // Whether it also HOLDS one that is already
+                                              // up is a separate question, and the pager asks
+                                              // it on every swipe — see [_shouldFocus].
+                                              focused: _shouldFocus,
+                                              // Asks again when `focused` did
+                                              // not move — coming back from
+                                              // another app. See
+                                              // [didChangeAppLifecycleState].
+                                              focusRequest: _focusRequest,
+                                              visible: widget.isActive,
+                                              // Hold the remote resize while the keyboard
+                                              // slides. Separate from `visible` because this
+                                              // must NOT release focus — the animation being
+                                              // waited on is the one that focus started.
+                                              //
+                                              // The keyboard is the only thing left that
+                                              // moves this pane's height: the header slides
+                                              // OVER the terminal rather than out of its
+                                              // column — see [_SlideAway].
+                                              //
+                                              // ⚠️ Held for as long as search is open, too:
+                                              // its keyboard is typing a query over a faded
+                                              // terminal, and resizing the agent's shell for
+                                              // it redrew the whole TUI on the way in and
+                                              // again on the way out.
+                                              settling:
+                                                  _keyboardSettling ||
+                                                  _heldForSearch,
+                                              // ⚠️ The tap is taken in the panel, not by a
+                                              // `Listener` over it. xterm's own `_onTapDown`
+                                              // calls `requestKeyboard()`, so anything that
+                                              // merely ALSO reacted to the tap would raise
+                                              // the keyboard before the words said were typed
+                                              // into the prompt — and a re-armed claim on top
+                                              // of it was measured asking Android twice per
+                                              // tap, which answers a show mid-animation by
+                                              // cancelling and restarting it. Null while the
+                                              // keyboard is up or coming, so the tap is
+                                              // xterm's and the keyboard stays.
+                                              //
+                                              // ⚠️ A tap on a pane that cannot take input
+                                              // asks for the TERMINAL, not the keyboard:
+                                              // raising one over a read-only pane offers
+                                              // a prompt that silently swallows every
+                                              // letter. The band above says why, so the
+                                              // tap takes the person to its button. See
+                                              // [_ControlBanner].
+                                              onInputTap: blocked
+                                                  ? () => unawaited(
+                                                      _takeControl(),
+                                                    )
+                                                  : _shouldFocus
+                                                  ? null
+                                                  : () => unawaited(
+                                                      _raiseKeyboard(session),
+                                                    ),
+                                              showHeader: false,
+                                              // tmux's copy-mode position while
+                                              // reading back — see [_CopyModePosition].
+                                              scrollback: _scrollback,
+                                              jumpToEndRequest: _jumpToEnd,
+                                              // No composer, and so no grip above it: the
+                                              // page hands the pane its full height and the
+                                              // software keyboard drives the terminal
+                                              // directly. The mic's send is what kept the
+                                              // composer's batched turn.
+                                            ),
+                                    ),
                                   ),
                                   // ⚠️ **The skeleton is laid OVER the live panel, not
                                   // swapped in for it, and that is not a stylistic
@@ -1702,8 +1695,7 @@ class _TerminalPageState extends State<TerminalPage>
                                   // any other page, and nothing here needs to know the
                                   // difference. The header says who has it and offers
                                   // "Take control"; the body is the terminal.
-                                  if (session != null &&
-                                      !session.hasScreen)
+                                  if (session != null && !session.hasScreen)
                                     Positioned.fill(
                                       child: _Attaching(key: _skeletonKey),
                                     ),
@@ -1731,23 +1723,6 @@ class _TerminalPageState extends State<TerminalPage>
                                   // prompt being typed into, which is exactly
                                   // what the keyboard is for; up there it covers
                                   // the oldest rows on screen.
-                                  // Keyboard up: Find, top right. With it
-                                  // down the mic is the orb in its own strip
-                                  // under the terminal — laid over the whole
-                                  // page further down, not in here.
-                                  if (_ownsInput)
-                                    Positioned(
-                                      right: TerminalActionColumn.inset,
-                                      top: TerminalActionColumn.topInset,
-                                      child: TerminalActionColumn(
-                                        voice: widget.voice,
-                                        session: session,
-                                        onSearch: _openSearch,
-                                        searchOnly: true,
-                                        unread:
-                                            widget.notifier.agentNotices.unread,
-                                      ),
-                                    ),
                                 ],
                               ),
                             ),
@@ -2181,7 +2156,6 @@ class _TerminalPageState extends State<TerminalPage>
     messenger.showSnackBar(SnackBar(content: Text(error)));
   }
 }
-
 
 /// What the terminal shows when the agent it opened on is not there any more.
 ///

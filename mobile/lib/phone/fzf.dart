@@ -22,8 +22,13 @@ class FzfRow extends StatelessWidget {
     this.mark,
     this.markColor,
     this.enabled = true,
+    this.cursor = false,
     this.onTap,
   });
+
+  /// fzf's cursor row — the one Enter takes: `▌` in red in the gutter, the selection ground behind,
+  /// the name in bold.
+  final bool cursor;
 
   final String title;
   final String? detail;
@@ -46,7 +51,7 @@ class FzfRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final ink = enabled ? tty.text : tty.dim;
-    return TtyTap(
+    final row = TtyTap(
       minHeight: height,
       onTap: enabled && onTap != null
           ? () {
@@ -60,8 +65,8 @@ class FzfRow extends StatelessWidget {
             width: 24,
             child: Center(
               child: TtyText(
-                mark ?? ' ',
-                color: markColor ?? tty.red,
+                cursor ? '▌' : (mark ?? ' '),
+                color: cursor ? tty.red : (markColor ?? tty.red),
                 weight: FontWeight.w700,
               ),
             ),
@@ -73,13 +78,16 @@ class FzfRow extends StatelessWidget {
                   ...fzfHighlight(
                     title,
                     terms,
-                    base: tty.style(color: ink),
+                    base: tty.style(
+                      color: ink,
+                      weight: cursor ? FontWeight.w700 : FontWeight.w400,
+                    ),
                     hit: tty.style(color: tty.green, weight: FontWeight.w700),
                   ),
                   if (detail case final detail? when detail.isNotEmpty)
                     TextSpan(
                       text: '  $detail',
-                      style: tty.style(color: tty.dim),
+                      style: tty.style(color: tty.faint),
                     ),
                 ],
               ),
@@ -96,6 +104,7 @@ class FzfRow extends StatelessWidget {
         ],
       ),
     );
+    return cursor ? ColoredBox(color: tty.selected, child: row) : row;
   }
 }
 
@@ -175,13 +184,11 @@ class FzfInfoLine extends StatelessWidget {
       child: Row(
         children: [
           const SizedBox(width: 24),
-          TtyText(
-            label ?? (matched == total ? '$total' : '$matched/$total'),
-            color: tty.yellow,
-          ),
+          // fzf's info line: always `matched/total`, then its rule drawn in `─`, not a hairline.
+          TtyText(label ?? '$matched/$total', color: tty.yellow),
           const SizedBox(width: 8),
           Expanded(
-            child: Container(height: 1, color: tty.dim.withValues(alpha: 0.6)),
+            child: ClipRect(child: TtyText('─' * 80, color: tty.dim)),
           ),
           for (final action in actions)
             TtyTap(
@@ -222,6 +229,10 @@ class FzfPrompt extends StatelessWidget {
     return SizedBox(
       height: 48,
       child: Row(
+        // ⚠️ On the text's baseline, not centred: a field and a glyph centred separately sat the
+        // query ~9pt above its `>`.
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
         children: [
           SizedBox(
             width: 24,
@@ -231,6 +242,7 @@ class FzfPrompt extends StatelessWidget {
           ),
           Expanded(
             child: TextField(
+              textAlignVertical: TextAlignVertical.center,
               controller: controller,
               focusNode: focus,
               onChanged: onChanged,
@@ -250,6 +262,9 @@ class FzfPrompt extends StatelessWidget {
               // Bare: the app theme fills and rounds every field, and a prompt has neither.
               decoration: InputDecoration(
                 isCollapsed: true,
+                // The app theme gives every field a minimum height, which floated the text to the
+                // top of a taller box.
+                constraints: const BoxConstraints(),
                 filled: false,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,
@@ -257,7 +272,7 @@ class FzfPrompt extends StatelessWidget {
                 disabledBorder: InputBorder.none,
                 contentPadding: EdgeInsets.zero,
                 hintText: hint,
-                hintStyle: tty.style(color: tty.dim),
+                hintStyle: tty.style(color: tty.faint),
               ),
             ),
           ),

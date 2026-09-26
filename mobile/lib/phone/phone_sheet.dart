@@ -182,7 +182,7 @@ class _TmuxMenuState extends State<_TmuxMenu> {
             if (section.caption case final caption?)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
-                child: TtyText(caption.toLowerCase(), color: tty.dim),
+                child: TtyText(caption.toLowerCase(), color: tty.faint),
               ),
             for (final action in section.visible) _item(tty, action),
             if (section.hiddenCount > 0)
@@ -264,7 +264,7 @@ class _TmuxMenuState extends State<_TmuxMenu> {
             if (action.chevron)
               Padding(
                 padding: const EdgeInsets.only(left: 8),
-                child: TtyText('▸', color: tty.dim),
+                child: TtyText('▸', color: tty.faint),
               ),
           ],
         ),

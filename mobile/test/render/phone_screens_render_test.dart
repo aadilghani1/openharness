@@ -209,7 +209,7 @@ void main() {
     session.streamId = 's';
     // A screen to show — kept from "last time", which is what a render needs: the live path waits
     // for a keyframe this fixture has no machine to send.
-    final screen = Terminal(maxLines: 1000)..resize(44, 40);
+    final screen = Terminal(maxLines: 1000)..resize(46, 49);
     for (var line = 0; line < 60; line++) {
       screen.write('earlier output line $line\r\n');
     }

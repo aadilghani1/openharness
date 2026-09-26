@@ -413,10 +413,6 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     return Container(
       key: _sheetKey,
       color: tty.ground,
-      // The edge that leads the slide in and out; at rest it is off screen.
-      foregroundDecoration: BoxDecoration(
-        border: Border(right: BorderSide(color: tty.dim)),
-      ),
       child: MediaQuery(
         data: media.copyWith(
           padding: media.padding.copyWith(top: 0, bottom: 0),
@@ -431,7 +427,6 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   SizedBox(height: media.padding.top),
-                  _FindHeader(search: _search, onBack: _back),
                   Expanded(
                     child: switch ((_search.isModelMode, widget.showing)) {
                       // `:` — the models the agent on screen can run on.
@@ -452,6 +447,8 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                       ),
                     },
                   ),
+                  // fzf's --header sits right above the info line, next to the prompt it explains.
+                  _FindHeader(search: _search, onBack: _back),
                   FzfInfoLine(
                     label: _search.isModelMode ? 'models' : null,
                     matched: _search.matchCount,
@@ -516,7 +513,7 @@ class _FindHeader extends StatelessWidget {
                 search.isCommandMode || search.isHelpMode || search.isGroupMode
                     ? search.title.toLowerCase()
                     : '> cmds # projects @ machines : models',
-                color: tty.dim,
+                color: tty.cyan,
               ),
             ),
     );

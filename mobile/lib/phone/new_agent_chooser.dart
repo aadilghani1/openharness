@@ -120,7 +120,7 @@ class _ChooserState<T> extends State<_Chooser<T>> {
               height: 36,
               child: Padding(
                 padding: const EdgeInsets.only(left: 24, top: 10),
-                child: TtyText(widget.hint.toLowerCase(), color: tty.dim),
+                child: TtyText(widget.hint.toLowerCase(), color: tty.faint),
               ),
             ),
             Expanded(

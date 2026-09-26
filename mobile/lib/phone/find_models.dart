@@ -84,7 +84,7 @@ class _FindModelsState extends State<FindModels> {
       final rows = <Widget>[];
       Widget note(String text) => Padding(
         padding: const EdgeInsets.fromLTRB(24, 8, 12, 8),
-        child: Text(text, style: tty.style(color: tty.dim)),
+        child: Text(text, style: tty.style(color: tty.faint)),
       );
       if (!kModelSheetEngines.contains(engine)) {
         rows.add(

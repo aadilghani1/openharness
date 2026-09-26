@@ -1198,7 +1198,7 @@ class _TitleLine extends StatelessWidget {
       child: Row(
         children: [
           const SizedBox(width: 16),
-          Expanded(child: TtyText('new harness', color: tty.dim)),
+          Expanded(child: TtyText('new harness', color: tty.faint)),
           TtyTap(
             onTap: onEsc,
             child: Padding(
@@ -1245,7 +1245,7 @@ class _Field extends StatelessWidget {
           children: [
             SizedBox(
               width: nested ? 96 : 88,
-              child: TtyText(label, color: tty.dim),
+              child: TtyText(label, color: tty.faint),
             ),
             Expanded(
               child: Text.rich(
@@ -1264,7 +1264,7 @@ class _Field extends StatelessWidget {
                     if (note case final note?)
                       TextSpan(
                         text: '  $note',
-                        style: tty.style(color: tty.dim),
+                        style: tty.style(color: tty.faint),
                       ),
                   ],
                 ),
@@ -1274,7 +1274,7 @@ class _Field extends StatelessWidget {
               ),
             ),
             if (onTap != null && arrow.isNotEmpty)
-              TtyText(arrow, color: tty.dim),
+              TtyText(arrow, color: tty.faint),
           ],
         ),
       ),
