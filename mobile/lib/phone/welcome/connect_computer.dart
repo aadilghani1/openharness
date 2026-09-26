@@ -8,6 +8,7 @@ import 'package:harness_mobile/state/app_state.dart';
 
 import '../tty.dart';
 import '../tty_controls.dart';
+import 'how_it_works.dart';
 
 /// The commands that put Harness on a computer, in order — the README's "Get started".
 const kSetUpCommands = [
@@ -171,6 +172,12 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
                   ),
                   const SizedBox(height: 32),
                   if (widget.signedIn) const _Watching(),
+                  Center(
+                    child: TtyTextButton(
+                      label: 'How Harness works',
+                      onPressed: () => unawaited(openHowItWorks(context)),
+                    ),
+                  ),
                   if (widget.onTrySample != null) ...[
                     const SizedBox(height: 16),
                     Center(

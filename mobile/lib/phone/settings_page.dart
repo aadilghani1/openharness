@@ -15,11 +15,14 @@ import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
 import 'machines_tab.dart';
-import 'phone_header.dart';
 import 'phone_navigation.dart' show phoneRoute;
 import 'phone_name_store.dart';
 import 'phone_sheet.dart';
 import 'settings_row.dart';
+import 'welcome/how_it_works.dart';
+import 'welcome/focus_hints.dart';
+import 'tty_controls.dart';
+import 'tty.dart';
 import 'stats_entry.dart';
 import 'usage_entry.dart';
 import 'voice_language.dart';
@@ -75,15 +78,49 @@ class SettingsPage extends StatelessWidget {
     listenable: notifier,
     builder: (context, _) {
       AppTheme.watch(context);
+      final tty = Tty.of(context);
       return Scaffold(
-        backgroundColor: AppPalette.windowBg,
+        backgroundColor: tty.ground,
         body: SafeArea(
           bottom: false,
-          child: Column(
-            children: [
-              PhoneHeader(large: large, title: 'Settings'),
-              Expanded(child: _Body(notifier: notifier)),
-            ],
+          // The terminal's face for every row below, as on every other screen of the phone.
+          // Through the theme, not only a DefaultTextStyle: every Material in the rows resets the
+          // default text style from the theme's text theme.
+          child: Theme(
+            data: Theme.of(context).copyWith(
+              textTheme: Theme.of(context).textTheme.apply(
+                fontFamily: tty.fontFamily,
+                fontFamilyFallback: tty.fontFallback,
+              ),
+            ),
+            child: DefaultTextStyle.merge(
+              style: TextStyle(
+                fontFamily: tty.fontFamily,
+                fontFamilyFallback: tty.fontFallback,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (!large)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TtyTextButton(
+                        label: '‹ Back',
+                        onPressed: () => Navigator.of(context).maybePop(),
+                      ),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                    child: TtyText(
+                      'Settings',
+                      size: 24,
+                      weight: FontWeight.w700,
+                    ),
+                  ),
+                  Expanded(child: _Body(notifier: notifier)),
+                ],
+              ),
+            ),
           ),
         ),
       );
@@ -159,6 +196,26 @@ class _Body extends StatelessWidget {
       SettingsGroup(children: [_PaletteRow(), _TextSizeRow()]),
       const SettingsNote(
         'Harness is dark-only, so a palette picks the shade rather than the mode.',
+      ),
+      const SettingsCaption('Help'),
+      SettingsGroup(
+        children: [
+          SettingsRow(
+            title: 'How Harness works',
+            onTap: () => unawaited(openHowItWorks(context)),
+          ),
+          SettingsRow(
+            title: 'Show the tips again',
+            onTap: () {
+              unawaited(FocusHintsSeen.shared.forget());
+              ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                const SnackBar(
+                  content: Text('The tips come back on the next harness.'),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       const SettingsCaption('About'),
       SettingsGroup(children: const [_VersionRow(), _BuildRow()]),

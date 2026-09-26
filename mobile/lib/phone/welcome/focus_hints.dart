@@ -40,6 +40,16 @@ class FocusHintsSeen {
     return _seen!;
   }
 
+  /// Show them again, on the next Focus — Settings ▸ Show the tips again.
+  Future<void> forget() async {
+    _seen = false;
+    try {
+      await _storage.delete(_key);
+    } on Exception {
+      // Back for this run at least.
+    }
+  }
+
   Future<void> markSeen() async {
     _seen = true;
     try {

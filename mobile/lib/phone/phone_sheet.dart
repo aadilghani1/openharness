@@ -14,6 +14,7 @@ import 'package:harness_mobile/shared/widgets/app_dialog.dart'
 
 import 'settings_row.dart';
 import 'tty.dart';
+import 'tty_controls.dart';
 
 /// One action in a phone sheet.
 class PhoneSheetAction {
@@ -126,7 +127,7 @@ Future<void> showPhoneSheet(
       barrierOnTapHint: localizations.scrimOnTapHint(
         localizations.bottomSheetLabel,
       ),
-      // tmux's `display-menu`, not an iOS sheet: no handle, square, the terminal's ground.
+      // The terminal's ground, a rounded top like every sheet New opens, no handle.
       showDragHandle: false,
       backgroundColor: Tty.of(context).ground,
       isScrollControlled: true,
@@ -148,9 +149,9 @@ Future<void> showPhoneSheet(
   );
 }
 
-/// The sheet as tmux draws a menu (`C-b <`, `display-menu`): a box in the terminal's own line,
-/// the title set into its top border, one plain line per item, a rule between groups. The item
-/// that destroys something is red; one that opens more ends in `▸`.
+/// A harness's menu, the phone's way: its name and where it runs at the top with Cancel, one 17pt
+/// row per action, a rule between groups, the destructive one red, `›` on one that opens more.
+/// Drawn in the terminal's face, like every sheet New opens.
 class _TmuxMenu extends StatefulWidget {
   const _TmuxMenu({
     required this.title,
@@ -172,7 +173,6 @@ class _TmuxMenuState extends State<_TmuxMenu> {
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    final line = BorderSide(color: tty.dim);
     final groups = <List<Widget>>[
       if (widget.actions.isNotEmpty)
         [for (final action in widget.actions) _item(tty, action)],
@@ -181,8 +181,12 @@ class _TmuxMenuState extends State<_TmuxMenu> {
           [
             if (section.caption case final caption?)
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
-                child: TtyText(caption.toLowerCase(), color: tty.faint),
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+                child: TtyText(
+                  caption.toLowerCase(),
+                  color: tty.faint,
+                  size: TtySize.meta,
+                ),
               ),
             for (final action in section.visible) _item(tty, action),
             if (section.hiddenCount > 0)
@@ -197,48 +201,69 @@ class _TmuxMenuState extends State<_TmuxMenu> {
               ),
           ],
     ];
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 12, 8, 8),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // The top border with the title set into it: `─ hn · M2 ──────`.
-          Row(
+    // `hn · M2:autonomous-harness (main)`: the name on its own line, where it runs under it.
+    final split = widget.title.indexOf(' · ');
+    final name = split < 0 ? widget.title : widget.title.substring(0, split);
+    final place = split < 0 ? null : widget.title.substring(split + 3);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 4, 6),
+          child: Row(
             children: [
-              SizedBox(width: 10, child: Container(height: 1, color: tty.dim)),
-              Flexible(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: TtyText(widget.title, color: tty.text),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: tty.style(
+                        size: TtySize.title,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
+                    if (place != null)
+                      Text(
+                        place,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: tty.style(size: TtySize.meta, color: tty.faint),
+                      ),
+                  ],
                 ),
               ),
-              Expanded(child: Container(height: 1, color: tty.dim)),
+              TtyTextButton(
+                label: 'Cancel',
+                onPressed: () => Navigator.of(context).maybePop(),
+              ),
             ],
           ),
-          Flexible(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                border: Border(left: line, right: line, bottom: line),
-              ),
-              child: ListView(
-                shrinkWrap: true,
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                children: [
-                  for (var g = 0; g < groups.length; g++) ...[
-                    if (g > 0)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Container(height: 1, color: tty.dim),
-                      ),
-                    ...groups[g],
-                  ],
-                ],
-              ),
-            ),
+        ),
+        Flexible(
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.only(bottom: 8),
+            children: [
+              for (var g = 0; g < groups.length; g++) ...[
+                if (g > 0)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Container(
+                      height: 1,
+                      color: tty.dim.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ...groups[g],
+              ],
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -250,21 +275,33 @@ class _TmuxMenuState extends State<_TmuxMenu> {
         : tty.text;
     return TtyTap(
       onTap: action.enabled ? (onTap ?? () => widget.onAction(action)) : null,
-      minHeight: 44,
+      semanticsLabel: action.label,
+      minHeight: 52,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Row(
           children: [
-            Expanded(child: TtyText(action.label, color: color)),
+            Expanded(
+              child: TtyText(
+                action.label,
+                color: color,
+                size: TtySize.row,
+                weight: FontWeight.w500,
+              ),
+            ),
             if (action.value case final value?)
               Padding(
                 padding: const EdgeInsets.only(left: 8),
-                child: TtyText(value, color: action.valueColor ?? tty.dim),
+                child: TtyText(
+                  value,
+                  color: action.valueColor ?? tty.faint,
+                  size: TtySize.meta,
+                ),
               ),
             if (action.chevron)
               Padding(
                 padding: const EdgeInsets.only(left: 8),
-                child: TtyText('▸', color: tty.faint),
+                child: TtyText('›', color: tty.faint, size: TtySize.title),
               ),
           ],
         ),
@@ -299,6 +336,9 @@ class _PhoneSheetRoute<T> extends ModalBottomSheetRoute<T> {
     required super.showDragHandle,
     required super.isScrollControlled,
   }) : super(
+         shape: const RoundedRectangleBorder(
+           borderRadius: BorderRadius.vertical(top: Radius.circular(10)),
+         ),
          modalBarrierColor: Colors.black.withValues(alpha: kSheetVeilOpacity),
        );
 
@@ -321,9 +361,6 @@ class _PhoneSheetRoute<T> extends ModalBottomSheetRoute<T> {
     );
   }
 }
-
-
-
 
 /// A yes/no question before something that cannot be undone — stopping a harness, unlinking a
 /// machine. Returns true only if the destructive button was the one pressed; Cancel, a tap on the

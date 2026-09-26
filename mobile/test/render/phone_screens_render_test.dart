@@ -9,6 +9,7 @@ import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
+import 'package:harness_mobile/phone/welcome/how_it_works.dart';
 import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/phone/welcome/focus_hints.dart';
 import 'package:harness_mobile/phone/link_page.dart';
@@ -391,6 +392,11 @@ void main() {
       LinkPage(notifier: notifier, machineId: 'studio'),
     );
     await shoot(tester, key, '0f-unlock');
+  });
+
+  testWidgets('how it works', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, const HowItWorksPage());
+    await shoot(tester, key, '0g-how-it-works');
   });
 
   testWidgets('focus', skip: skip, (tester) async {
