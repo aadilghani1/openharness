@@ -98,7 +98,7 @@ export class LessonStore {
   // ── reading ─────────────────────────────────────────────────────────────────────────────────────────
 
   pending(): LessonRecord[] {
-    return this.readDir('pending').sort((a, b) => a.created - b.created)
+    return this.readDir('pending').sort(byCreated)
   }
 
   approved(): LessonRecord[] {
@@ -106,7 +106,7 @@ export class LessonStore {
     for (const entry of this.journal()) if (entry.op === 'approved') commits.set(entry.id, entry.record?.commit ?? null)
     return [...this.readDir('skills'), ...this.readDir('notes')]
       .map((r) => ({ ...r, commit: commits.get(r.id) ?? null }))
-      .sort((a, b) => a.created - b.created)
+      .sort(byCreated)
   }
 
   /** Every lesson: pending, approved, and the ones reverted or skipped (from the journal). */
@@ -359,6 +359,10 @@ export class LessonStore {
     writeFileSync(`${file}.tmp`, JSON.stringify(state), { mode: 0o600 })
     renameSync(`${file}.tmp`, file)
   }
+}
+
+function byCreated(a: LessonRecord, b: LessonRecord): number {
+  return a.created - b.created || a.id.localeCompare(b.id)
 }
 
 function gitError(err: unknown): string {
