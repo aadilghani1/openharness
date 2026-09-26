@@ -68,7 +68,7 @@ pub struct Stash {
 
 /// What `hn new` or `hn attach` asked for when it started this client.
 #[derive(Clone, Debug, Default)]
-pub struct StartSession { pub name: Option<String>, pub create: bool, pub attach_existing: bool, pub window: Option<String>, pub cwd: Option<String>, pub command: Option<String> }
+pub struct StartSession { pub name: Option<String>, pub create: bool, pub attach_existing: bool, pub window: Option<String>, pub cwd: Option<String>, pub command: Option<String>, pub target: Option<String> }
 
 /// A session this client does not have: another client of this server name has it (`owner`, the
 /// socket that client listens on), or none does (its client detached). As the sessions file says:
@@ -80,6 +80,11 @@ pub struct RemoteSession { pub id: u32, pub name: String, pub owner: Option<Stri
 /// the sessions in it this client does not have, and the ids this client gives them (`$N`).
 #[derive(Default)]
 pub struct Remote { stamp: Option<(std::time::SystemTime, u64)>, read_at: Option<Instant>, rows: Vec<RemoteSession>, pub ids: HashMap<String, u32> }
+
+/// A wait-for channel (cmd-wait-for.c's wait_channel): woken with nobody waiting, locked, and who
+/// waits for it or for its lock.
+#[derive(Default)]
+pub struct WaitChannel { pub woken: bool, pub locked: bool, pub waiters: Vec<tokio::sync::oneshot::Sender<()>>, pub lockers: std::collections::VecDeque<tokio::sync::oneshot::Sender<()>> }
 
 /// How a client writes its sessions: as its own; one of them given up to another client; or every
 /// one of them left for the next (it detaches).
@@ -357,6 +362,8 @@ pub struct App {
     pub handed_over: bool,
     /// Its sessions' windows and panes as last written (save_if_changed).
     pub sessions_sig: String,
+    /// wait-for's channels, by name.
+    pub wait_channels: HashMap<String, WaitChannel>,
     /// No terminal (--headless): tmux's server with no client attached, holding sessions for
     /// the commands of a script until a client takes them.
     pub headless: bool,
@@ -512,6 +519,7 @@ impl App {
             handed_over: false,
             sessions_sig: String::new(),
             headless: false,
+            wait_channels: HashMap::new(),
             swap_back: None,
             start_session: None,
             start_failed: None,
@@ -1871,10 +1879,22 @@ impl App {
         match self.start_session.clone() {
             None => if let Some(id) = current { self.switch_session(id) },
             Some(start) => {
-                let found = start.name.as_deref().and_then(|n| self.find_session(&format!("={n}")));
+                // attach -t finds a session as tmux does (its name, the only one it starts, a
+                // pattern); new -s is the exact name.
+                let found = start.name.as_deref().and_then(|n| if start.create { self.find_session(&format!("={n}")) } else { self.find_session(n) });
                 match (found, start.create) {
-                    // attach -t, new -A: there already.
-                    (Some(id), false) => { self.switch_session(id); self.start_session = None }
+                    // attach -t, new -A: there already (attach -t work:2: at that window).
+                    (Some(id), false) => {
+                        self.switch_session(id);
+                        self.start_session = None;
+                        if let Some(w) = &start.target {
+                            let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: false, default_marked: false };
+                            match crate::cmd::resolve(self, Some(&format!(":{w}")), spec).ok().and_then(|f| f.window) {
+                                Some(i) => self.select_tab(i),
+                                None => { let e = format!("can't find window: {w}"); self.start_error(e); return }
+                            }
+                        }
+                    }
                     (Some(id), true) if start.attach_existing => { self.switch_session(id); self.start_session = None }
                     (Some(_), true) => { self.start_error(format!("duplicate session: {}", start.name.clone().unwrap_or_default())) }
                     // A fresh start's first session is the desk's (desk=off: the client's first),
@@ -1885,7 +1905,7 @@ impl App {
                     }
                     (None, true) => {}
                     (None, false) => match &start.name {
-                        Some(n) => self.start_error(format!("can't find session: {n}")),
+                        Some(n) => self.start_error(format!("can't find session: {}", n.trim_start_matches('='))),
                         None => { self.start_session = None; if let Some(id) = current { self.switch_session(id) } }
                     },
                 }

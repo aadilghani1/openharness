@@ -189,9 +189,14 @@ pub fn start_session(args: &[String]) -> Option<crate::app::StartSession> {
     match entry.name {
         "new-session" => Some(crate::app::StartSession {
             name: a.get('s').map(str::to_string), create: true, attach_existing: a.has('A') > 0, window: a.get('n').map(str::to_string),
-            cwd: a.get('c').map(str::to_string), command: (!a.values.is_empty()).then(|| a.values.join(" ")),
+            cwd: a.get('c').map(str::to_string), command: (!a.values.is_empty()).then(|| a.values.join(" ")), target: None,
         }),
-        "attach-session" => Some(crate::app::StartSession { name: a.get('t').map(|t| t.split(':').next().unwrap_or(t).to_string()).filter(|t| !t.is_empty()), cwd: a.get('c').map(str::to_string), ..Default::default() }),
+        "attach-session" => Some(crate::app::StartSession {
+            name: a.get('t').map(|t| t.split(':').next().unwrap_or(t).to_string()).filter(|t| !t.is_empty()), cwd: a.get('c').map(str::to_string),
+            // attach -t work:2 — the window it goes to.
+            target: a.get('t').and_then(|t| t.split_once(':')).map(|(_, w)| w.to_string()).filter(|w| !w.is_empty()),
+            ..Default::default()
+        }),
         _ => None,
     }
 }

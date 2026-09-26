@@ -525,8 +525,8 @@ fn run_queue(app: &mut App, mut queue: Queue) {
             let line = match (&app.key_run, app.capture.is_some()) { (Some(k), _) => format!("{} key {k}: {text}", crate::app::tty_name()), (None, true) => format!("command: {text}"), (None, false) => format!("{} command: {text}", crate::app::tty_name()) };
             app.add_message(line);
         }
-        let job = match shell_job(app, &words) { Ok(j) => j, Err(e) => { app.error(e); app.origin = None; app.mouse_ev = saved; app.hook_state = saved_hook; continue } };
-        let Some(Job { command, cwd, delay, background, done }) = job else {
+        let job = match wait_job(app, &words).unwrap_or_else(|| shell_job(app, &words)) { Ok(j) => j, Err(e) => { app.error(e); app.origin = None; app.mouse_ev = saved; app.hook_state = saved_hook; continue } };
+        let Some(Job { command, cwd, delay, background, done, wait }) = job else {
             let errors = app.errors;
             run_words(app, &words);
             // cmdq_fire_command: a command that failed fires command-error, one that did not its
@@ -545,6 +545,7 @@ fn run_queue(app: &mut App, mut queue: Queue) {
         // What the job chooses to run next keeps the item's mouse event.
         let mouse = std::mem::replace(&mut app.mouse_ev, saved);
         let run = async move {
+            if let Some(w) = wait { let _ = w.await; return Outcome::default() }
             if delay > 0.0 { tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await }
             let Some(command) = command else { return Outcome::default() };
             let mut c = tokio::process::Command::new("/bin/sh");
@@ -678,7 +679,39 @@ pub fn run_pending_hooks(app: &mut App) {
 struct Outcome { code: i32, signal: Option<i32>, out: String, failed: Option<String> }
 
 /// A shell command to run, and what to do when it has: the commands to run next, first.
-struct Job { command: Option<String>, cwd: Option<String>, delay: f64, background: bool, done: Box<dyn FnOnce(&mut App, Outcome) -> Queue + Send> }
+struct Job { command: Option<String>, cwd: Option<String>, delay: f64, background: bool, done: Box<dyn FnOnce(&mut App, Outcome) -> Queue + Send>,
+    /// wait-for: what the job waits on instead of a command (the channel woken, its lock handed on).
+    wait: Option<tokio::sync::oneshot::Receiver<()>> }
+
+/// wait-for [-L | -S | -U] channel, as cmd-wait-for.c: a wait (or a lock someone holds) is a job
+/// the queue — and the shell that ran it — waits on until -S wakes the channel (a -S nobody
+/// waited for wakes the next wait at once) or -U hands the lock on; -S and -U are done at once.
+/// None for any other command.
+fn wait_job(app: &mut App, words: &[String]) -> Option<Result<Option<Job>, String>> {
+    let entry = words.first().and_then(|w| crate::cmd::find(w).ok())?;
+    if entry.name != "wait-for" { return None }
+    let args = match crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)) { Ok(a) => a, Err(e) => return Some(Err(e)) };
+    let name = args.values.first().cloned().unwrap_or_default();
+    // No client to wait (a config read at start): tmux's words.
+    let clientless = app.origin.is_some() && app.capture.is_none() && app.key_run.is_none();
+    let job = |rx| Some(Ok(Some(Job { command: None, cwd: None, delay: 0.0, background: false, done: Box::new(|_, _| Default::default()), wait: Some(rx) })));
+    let ch = app.wait_channels.entry(name.clone()).or_default();
+    let result = if args.has('S') > 0 {
+        if ch.waiters.is_empty() { ch.woken = true } else { for w in ch.waiters.drain(..) { let _ = w.send(()); } }
+        Some(Ok(None))
+    } else if args.has('L') > 0 {
+        if clientless { return Some(Err("not able to lock".into())) }
+        if !ch.locked { ch.locked = true; Some(Ok(None)) } else { let (tx, rx) = tokio::sync::oneshot::channel(); ch.lockers.push_back(tx); job(rx) }
+    } else if args.has('U') > 0 {
+        if !ch.locked { Some(Err(format!("channel {name} not locked"))) }
+        else { match ch.lockers.pop_front() { Some(next) => { let _ = next.send(()); } None => ch.locked = false } Some(Ok(None)) }
+    } else {
+        if clientless { return Some(Err("not able to wait".into())) }
+        if ch.woken { ch.woken = false; Some(Ok(None)) } else { let (tx, rx) = tokio::sync::oneshot::channel(); ch.waiters.push(tx); job(rx) }
+    };
+    if app.wait_channels.get(&name).map(|c| !c.woken && !c.locked && c.waiters.is_empty() && c.lockers.is_empty()).unwrap_or(false) { app.wait_channels.remove(&name); }
+    result
+}
 
 /// if-shell and run-shell, as cmd-if-shell.c and cmd-run-shell.c run them: the command expanded
 /// as a format for the target pane (a target not found leaves none), run by /bin/sh in the
@@ -706,15 +739,15 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
                 if let Some(e) = o.failed { app.error(e); return Default::default() }
                 let pick = if o.code == 0 && o.signal.is_none() { yes } else { no };
                 pick.map(|c| queue_of(app, &c)).unwrap_or_default()
-            }) }))
+            }), wait: None }))
         }
         _ => {
             let delay = match args.get('d') { Some(d) => d.trim().parse::<f64>().map_err(|_| format!("invalid delay time: {d}"))?, None => 0.0 };
-            if args.get('d').is_none() && args.values.is_empty() { return Ok(Some(Job { command: None, cwd: None, delay: 0.0, background: true, done: Box::new(|_, _| Default::default()) })) }
+            if args.get('d').is_none() && args.values.is_empty() { return Ok(Some(Job { command: None, cwd: None, delay: 0.0, background: true, done: Box::new(|_, _| Default::default()), wait: None })) }
             if args.has('C') > 0 {
                 // -C: after the delay, the argument runs as tmux commands.
                 let c = args.values.first().cloned();
-                return Ok(Some(Job { command: None, cwd: None, delay, background, done: Box::new(move |app, _| c.map(|c| queue_of(app, &c)).unwrap_or_default()) }));
+                return Ok(Some(Job { command: None, cwd: None, delay, background, done: Box::new(move |app, _| c.map(|c| queue_of(app, &c)).unwrap_or_default()), wait: None }));
             }
             let command = args.values.first().map(|c| expand(c));
             let shown = command.clone().unwrap_or_default();
@@ -734,7 +767,7 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
                     if background && app.capture.is_none() && crate::copy::print(app, &lines, true) {} else { app.print("run-shell", lines) }
                 }
                 Default::default()
-            }) }))
+            }), wait: None }))
         }
     }
 }
