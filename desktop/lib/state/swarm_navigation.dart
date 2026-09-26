@@ -704,7 +704,9 @@ class SwarmLocationCatalog {
   }
 }
 
-/// Open Harness uses the same activity timestamp it shows beside each session.
+/// Open Harness uses the same activity timestamp it shows beside each session,
+/// within each [SwarmMatchStrength]: typing "hn" puts the harness named hn
+/// first, however many newer ones live in a folder whose path spells h…n.
 /// Undated rows come last; ties retain visit recency and search relevance.
 List<SwarmDestination> rankSwarmDestinationsByActivity(
   List<SwarmDestination> all,
@@ -712,24 +714,29 @@ List<SwarmDestination> rankSwarmDestinationsByActivity(
   List<String> recent = const [],
   SessionPreviewStore? previews,
 }) {
-  final matches = rankSwarmDestinations(all, query, previews: previews);
-  final rank = {for (var i = 0; i < matches.length; i++) matches[i].id: i};
+  final matches = _matchSwarmDestinations(all, query, previews);
   final visits = {for (var i = 0; i < recent.length; i++) recent[i]: i};
   matches.sort((a, b) {
-    final aTime = a.lastActivityAt;
-    final bTime = b.lastActivityAt;
+    final strength = a.strength.index.compareTo(b.strength.index);
+    if (strength != 0) return strength;
+    final aTime = a.entry.lastActivityAt;
+    final bTime = b.entry.lastActivityAt;
     final activity = aTime == null
         ? (bTime == null ? 0 : 1)
         : bTime == null
         ? -1
         : bTime.compareTo(aTime);
     if (activity != 0) return activity;
-    final visit = (visits[a.id] ?? recent.length).compareTo(
-      visits[b.id] ?? recent.length,
+    final visit = (visits[a.entry.id] ?? recent.length).compareTo(
+      visits[b.entry.id] ?? recent.length,
     );
-    return visit != 0 ? visit : rank[a.id]!.compareTo(rank[b.id]!);
+    if (visit != 0) return visit;
+    final score = a.score.compareTo(b.score);
+    if (score != 0) return score;
+    final name = compareNatural(a.entry.fields.first, b.entry.fields.first);
+    return name != 0 ? name : a.entry.id.compareTo(b.entry.id);
   });
-  return matches;
+  return [for (final match in matches) match.entry];
 }
 
 /// Each swarm is one selectable parent, followed by its matching agent views.
@@ -1288,42 +1295,86 @@ List<String> swarmQueryTerms(String query) {
 
 /// The same field preference drives ranking and the visible match emphasis.
 /// A good metadata match should not paint unrelated fuzzy title characters.
+/// Whole words beat fragments: "port" is exact in "port", a prefix of
+/// "port audit", a word of "windows port" and only a fragment of "support".
+/// Scattered letters must start a word and stay close together; loose, they
+/// matched nearly any folder ("auth" in ".../autonomous-harness/...").
 int? swarmFieldMatchScore(String field, String term, {required bool title}) {
   final offset = field.indexOf(term);
-  final spread = offset >= 0 ? 0 : subsequenceSpread(field, term);
-  if (spread == null) return null;
-  return (title ? 0 : 64) +
-      (field == term
-          ? 0
-          : offset == 0
-          ? 8
-          : offset > 0
-          ? 16
-          : 128 + spread);
+  final int score;
+  if (offset == 0) {
+    score = field.length == term.length ? 0 : 8;
+  } else if (offset > 0) {
+    score = wordStartIndexOf(field, term, offset) >= 0 ? 12 : 16;
+  } else {
+    final spread = wordSubsequenceSpread(field, term);
+    if (spread == null) return null;
+    score = 128 + spread;
+  }
+  return (title ? 0 : 64) + score;
 }
 
+/// How well a row matched, coarsest first. Harnesses order by activity only
+/// among equally good matches, so the one named for a word is never buried
+/// under newer ones that mention it in a folder or a recap.
+enum SwarmMatchStrength {
+  /// The whole query is the name.
+  exact,
+
+  /// Every word starts a word of the name or title.
+  name,
+
+  /// A fragment of the name, or a whole word of the project, branch or machine.
+  context,
+
+  /// A fragment of the project, branch, folder or machine.
+  fragment,
+
+  /// Scattered letters of the name or its context.
+  scattered,
+
+  /// Only in what was asked or answered.
+  content;
+
+  static SwarmMatchStrength ofScore(int score) => score <= 12
+      ? name
+      : score <= 76
+      ? context
+      : score < 128
+      ? fragment
+      : scattered;
+}
+
+typedef _SwarmMatch = ({
+  SwarmDestination entry,
+  int score,
+  SwarmMatchStrength strength,
+});
+
 /// Each word may match a different field, in either order: "mini auth" and
-/// "auth mini" both find Auth on Mac mini. Names outrank incidental metadata.
-/// Existing preview text is a fallback, with literal word fragments rather
-/// than scattered-letter matches across long paragraphs. Reading it never
-/// warms the cache or contacts a machine.
-List<SwarmDestination> rankSwarmDestinations(
+/// "auth mini" both find Auth on Mac mini. Existing preview text is the last
+/// resort, matched at word starts so "port" does not find every "support".
+/// Reading it never warms the cache or contacts a machine.
+List<_SwarmMatch> _matchSwarmDestinations(
   List<SwarmDestination> all,
-  String query, {
-  List<String> recent = const [],
+  String query,
   SessionPreviewStore? previews,
-}) {
+) {
   final needle = query.trim().toLowerCase();
   final terms = swarmQueryTerms(query);
-  final recency = {for (var i = 0; i < recent.length; i++) recent[i]: i};
-  final ranked = <({SwarmDestination entry, int score, bool content})>[];
+  final matches = <_SwarmMatch>[];
   for (final entry in all) {
-    if (entry.fields.take(entry.titleFieldCount).contains(needle)) {
-      ranked.add((entry: entry, score: -1, content: false));
+    if (needle.isNotEmpty &&
+        entry.fields.take(entry.titleFieldCount).contains(needle)) {
+      matches.add((
+        entry: entry,
+        score: -1,
+        strength: SwarmMatchStrength.exact,
+      ));
       continue;
     }
     var total = 0;
-    var content = false;
+    var strength = SwarmMatchStrength.name;
     String? excerpt;
     for (final term in terms) {
       int? best;
@@ -1337,27 +1388,44 @@ List<SwarmDestination> rankSwarmDestinations(
         if (score == null) continue;
         if (best == null || score < best) best = score;
         // Every remaining field is metadata, whose best possible score is 64.
-        // An exact/prefix/substring title match already beats that; an exact
+        // A whole-word or fragment title match already beats that; an exact
         // metadata match ties it. Neither needs further field scans.
         if (best <= 64) break;
       }
+      final SwarmMatchStrength termStrength;
       if (best == null) {
         excerpt ??= entry.previewKey == null
             ? ''
             : previews?.read(entry.previewKey!)?.searchText ?? '';
-        if (!excerpt.contains(term)) {
+        if (wordStartIndexOf(excerpt, term) < 0) {
           total = -1;
           break;
         }
-        content = true;
+        termStrength = SwarmMatchStrength.content;
         best = 256;
+      } else {
+        termStrength = SwarmMatchStrength.ofScore(best);
       }
+      if (termStrength.index > strength.index) strength = termStrength;
       total += best;
     }
     if (total >= 0) {
-      ranked.add((entry: entry, score: total, content: content));
+      matches.add((entry: entry, score: total, strength: strength));
     }
   }
+  return matches;
+}
+
+/// Names outrank incidental metadata, and metadata outranks preview text.
+List<SwarmDestination> rankSwarmDestinations(
+  List<SwarmDestination> all,
+  String query, {
+  List<String> recent = const [],
+  SessionPreviewStore? previews,
+}) {
+  final needle = query.trim().toLowerCase();
+  final recency = {for (var i = 0; i < recent.length; i++) recent[i]: i};
+  final ranked = _matchSwarmDestinations(all, query, previews);
   int tier(SwarmDestination e) => !e.hasView
       ? 3
       : e.current
@@ -1365,8 +1433,10 @@ List<SwarmDestination> rankSwarmDestinations(
       : recency.containsKey(e.id)
       ? 0
       : 1;
+  bool content(_SwarmMatch match) =>
+      match.strength == SwarmMatchStrength.content;
   ranked.sort((a, b) {
-    var order = (a.content ? 1 : 0).compareTo(b.content ? 1 : 0);
+    var order = (content(a) ? 1 : 0).compareTo(content(b) ? 1 : 0);
     if (order == 0) order = a.score.compareTo(b.score);
     if (order == 0 && needle.isEmpty) {
       order = tier(a.entry).compareTo(tier(b.entry));

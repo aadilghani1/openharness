@@ -19,7 +19,11 @@ List<SearchFieldMatch> searchResultMatches(
     for (var i = 0; i < row.fields.length; i++) {
       final field = row.fields[i];
       if (field.length > 4096) continue;
-      final score = swarmFieldMatchScore(field, term, title: i == 0);
+      final score = swarmFieldMatchScore(
+        field,
+        term,
+        title: i < row.titleFieldCount,
+      );
       if (score != null && (best == null || score < best)) {
         best = score;
         fieldIndex = i;
@@ -79,7 +83,7 @@ List<SearchTextRun> searchTextRuns(
       ));
     } else {
       final fuzzy = <({int start, int end})>[];
-      if (subsequenceSpread(
+      if (wordSubsequenceSpread(
             match.field,
             match.term,
             onMatch: (start, end) =>
