@@ -1931,6 +1931,27 @@ fn run_words_in(app: &mut App, words: &[String]) {
             if let Err(e) = app.options.set(&name, value.as_deref(), &f, &tab_id, pane) { app.error(e) }
         }
         "wait-for" | "wait" => {}
+        // The server is this client (or a headless one): running already.
+        "start-server" => {}
+        // tmux locks the terminal with lock-command; hn leaves that to the terminal's own.
+        "lock-server" | "lock-session" | "lock-client" => app.error(format!("{command}: hn does not lock the terminal (use your terminal's or the system's lock)")),
+        // cmd-show-prompt-history.c: each type's history, oldest first; clear-prompt-history.
+        "show-prompt-history" | "clear-prompt-history" => {
+            const TYPES: [&str; 4] = ["command", "search", "target", "window-target"];
+            let which: Vec<usize> = match opt(words, "-T") {
+                Some(t) => match TYPES.iter().position(|x| *x == t) { Some(i) => vec![i], None => return app.error(format!("invalid type: {t}")) },
+                None => (0..4).collect(),
+            };
+            if command == "clear-prompt-history" { for i in which { app.history[i].clear() } return }
+            let mut lines = Vec::new();
+            for i in which {
+                lines.push(format!("History for {}:", TYPES[i]));
+                lines.push(String::new());
+                for (n, h) in app.history[i].iter().enumerate() { lines.push(format!("{}: {h}", n + 1)) }
+                lines.push(String::new());
+            }
+            app.print(command, lines);
+        }
         "pipe-pane" => {
             // cmd-pipe-pane.c [-IOo] [-t pane] [command]: the pane's old pipe closed; then, given a
             // command (expanded as a format), a new one — its stdin what the pane prints (-O, the

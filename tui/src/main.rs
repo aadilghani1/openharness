@@ -116,6 +116,59 @@ fn main() -> io::Result<()> {
     tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?.block_on(run(config))
 }
 
+/// hn with no terminal (--headless): tmux's server when no client is attached. It keeps the
+/// sessions a script makes (`hn new -d -s proj; hn new-window -t proj:1; hn send-keys …`) and
+/// answers every command, until a client attaches to them (each one taken as it is) — or there
+/// are none left, and it goes, as tmux's server exits with its last session.
+async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
+    let ticks = tx.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(250));
+        loop { interval.tick().await; if ticks.send(Event::Tick).is_err() { break } }
+    });
+    // tmux's default-size.
+    let mut app = app::App::new(port, tx.clone(), (80, 24));
+    app.headless = true;
+    app.terminal_focused = false;
+    let Some(socket) = ipc::serve(tx.clone(), port) else { return Ok(()) };
+    app.update_environment();
+    let read = commands::load_config(&mut app);
+    app.cfg_finished = true;
+    app.config_files = read;
+    if config.prefix_set { app.keymap.prefix = config.prefix }
+    app.boot();
+    app.load_sessions();
+    app.notify_changes();
+    let mut busy = Instant::now();
+    loop {
+        let first = tokio::select! {
+            event = rx.recv() => event,
+            _ = tokio::time::sleep(Duration::from_millis(500)) => None,
+        };
+        let mut apply = |app: &mut app::App, event: Event| match event {
+            Event::Input(_) => {}
+            Event::Machine { machine_id, generation, event } => app.on_machine(machine_id, generation, event),
+            Event::Apply(f) => { f(app); busy = Instant::now() }
+            Event::Tick => app.on_tick(),
+        };
+        if let Some(event) = first { apply(&mut app, event) }
+        while let Ok(event) = rx.try_recv() { apply(&mut app, event) }
+        app.notify_changes();
+        app.save_if_changed();
+        commands::run_pending_hooks(&mut app);
+        app.flush_acks();
+        if app.quit { break }
+        // No session of its own left (or none came): gone, as tmux's server goes.
+        if !app.holds_sessions() && busy.elapsed() > Duration::from_secs(2) { break }
+    }
+    app.fleet.save_cache();
+    app.write_sessions(app::Save::Leave);
+    let _ = std::fs::remove_file(&socket);
+    let _ = std::fs::remove_file(socket.with_extension("port"));
+    Ok(())
+}
+
 async fn run(config: config::Config) -> io::Result<()> {
     let started = Instant::now();
     let mark = |what: &str| {
@@ -156,8 +209,21 @@ async fn run(config: config::Config) -> io::Result<()> {
         cli::out(&text);
         return Ok(())
     }
+    // -C: tmux's control mode (iTerm2's -CC), which hn does not have.
+    if f.control { eprintln!("hn: control mode (-C) is not supported"); std::process::exit(1) }
+    // -c: the command run by the default shell, as tmux does when it is a login shell.
+    if let Some(c) = &f.shell_command {
+        let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
+        let status = std::process::Command::new(shell).arg("-c").arg(c).status();
+        std::process::exit(status.ok().and_then(|s| s.code()).unwrap_or(1))
+    }
     let explicit = f.port.or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok()));
     let port = explicit.unwrap_or(18473u16);
+    // tmux's server with no client attached: sessions held for a script's commands.
+    if f.headless {
+        if let Some(n) = &f.name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } }
+        return run_headless(config, port).await;
+    }
     // hn <command>: answered from here (hn ls) or by the running client (a tmux command).
     if let Some(code) = cli::run(&f.rest, explicit, f.socket.as_deref(), f.name.as_deref()).await { std::process::exit(code) }
     // -L name, starting a client: its socket's name.

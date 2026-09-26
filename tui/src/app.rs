@@ -357,6 +357,9 @@ pub struct App {
     pub handed_over: bool,
     /// Its sessions' windows and panes as last written (save_if_changed).
     pub sessions_sig: String,
+    /// No terminal (--headless): tmux's server with no client attached, holding sessions for
+    /// the commands of a script until a client takes them.
+    pub headless: bool,
     /// While a command runs in another session (`-t work:2`): the session to come back to.
     pub swap_back: Option<u32>,
     /// The session asked for at start (`hn new -A -s main`, `hn attach -t work`).
@@ -508,6 +511,7 @@ impl App {
             remote: Default::default(),
             handed_over: false,
             sessions_sig: String::new(),
+            headless: false,
             swap_back: None,
             start_session: None,
             start_failed: None,
@@ -1285,6 +1289,8 @@ impl App {
     /// Tell the daemon which harness is in front of the person: its terminal gets the short (2ms)
     /// output window instead of 8ms. Local machine only — a relayed machine keeps its own.
     fn report_focus(&mut self) {
+        // A headless client is in front of nobody.
+        if self.headless { return }
         // The dial's ring before its focus: a focus the ring does not hold yet is dropped.
         crate::dial::announce(self, false);
         let Some(id) = self.focused() else { return };
@@ -1722,7 +1728,9 @@ impl App {
             created: epoch_secs(), activity: epoch_secs(), options: Default::default(), env: Default::default() });
         // Its shell, on this computer, into its window wherever that is by then.
         crate::input::new_shell_from(self, None, Placement::Fill(tab_id), cwd, command);
-        if !detached { self.switch_session(id) }
+        // A headless client shows nothing: the newest session is the one a command with no -t
+        // is for (cmd_find_best_session).
+        if !detached || self.headless { self.switch_session(id) }
         self.save_sessions();
         Ok(id)
     }
@@ -1768,16 +1776,21 @@ impl App {
         let mut ours = Vec::new();
         let mut names = HashSet::new();
         let mut desk = None;
-        for (s, tabs, nums, front) in std::iter::once((&here, &self.tabs, &self.nums, true)).chain(self.sessions.iter().map(|s| (s, &s.tabs, &s.nums, false))) {
+        for (s, tabs, nums, lastw, front) in std::iter::once((&here, &self.tabs, &self.nums, &self.lastw, true)).chain(self.sessions.iter().map(|s| (s, &s.tabs, &s.nums, &s.lastw, false))) {
             // The desk's session is every client's: its windows are the desk's tabs.
             if s.desk { desk = Some(json!({ "name": s.alias, "desk": true, "created": s.created, "active": s.active, "windows": [] })); continue }
-            let windows: Vec<Value> = tabs.iter().filter(|t| t.root.is_some()).map(|t| window(self, t, nums)).collect();
+            let kept: Vec<&Tab> = tabs.iter().filter(|t| t.root.is_some()).collect();
+            let windows: Vec<Value> = kept.iter().map(|t| window(self, t, nums)).collect();
             if windows.is_empty() { continue }
             let name = self.stash_name(s);
             names.insert(name.clone());
             let left = how == Save::Leave || how == Save::Release(s.id);
-            ours.push(json!({ "name": name, "desk": false, "created": s.created, "activity": s.activity, "active": s.active, "windows": windows,
-                "owner": if left { Value::Null } else { json!(me) }, "front": front && !left }));
+            // The current window and the ones before it (C-b l, the - flag), by their place here.
+            let at = |id: &String| kept.iter().position(|t| t.id == *id);
+            let active = tabs.get(s.active).and_then(|t| at(&t.id)).unwrap_or(0);
+            let last: Vec<usize> = lastw.iter().filter_map(at).collect();
+            ours.push(json!({ "name": name, "desk": false, "created": s.created, "activity": s.activity, "active": active, "last": last, "windows": windows,
+                "owner": if left { Value::Null } else { json!(me) }, "front": front && !left && !self.headless, "headless": self.headless && !left }));
         }
         let mut rows = Vec::new();
         if !self.forget_sessions {
@@ -1826,7 +1839,8 @@ impl App {
         if tabs.is_empty() { return None }
         let active = row.get("active").and_then(Value::as_u64).unwrap_or(0) as usize;
         let created = row.get("created").and_then(Value::as_i64).unwrap_or_else(epoch_secs);
-        Some(Stash { id, alias: Some(name), desk: false, active: active.min(tabs.len() - 1), tabs, lastw: Vec::new(), nums,
+        let lastw: Vec<String> = row.get("last").and_then(Value::as_array).map(|l| l.iter().filter_map(|i| tabs.get(i.as_u64()? as usize).map(|t| t.id.clone())).collect()).unwrap_or_default();
+        Some(Stash { id, alias: Some(name), desk: false, active: active.min(tabs.len() - 1), tabs, lastw, nums,
             created, activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), options: Default::default(), env: Default::default() })
     }
 
@@ -1847,7 +1861,13 @@ impl App {
             if let Some(stash) = self.stash_from_row(&row, id) { self.sessions.push(stash) }
         }
         self.remote.borrow_mut().stamp = None;
-        let current = doc.get("current").and_then(Value::as_str).map(str::to_string).and_then(|c| self.own_session(&c)).filter(|c| *c != self.session_id);
+        // The session in front when the last client left — or one a headless client holds (it
+        // made them for a script; this client is where they are meant to be seen).
+        let held = |name: &str| doc["sessions"].as_array().map(|rows| rows.iter().any(|r| r.get("name").and_then(Value::as_str) == Some(name)
+            && r.get("headless").and_then(Value::as_bool).unwrap_or(false) && live_owner(r).is_some())).unwrap_or(false);
+        let current = doc.get("current").and_then(Value::as_str).map(str::to_string)
+            .and_then(|c| self.own_session(&c).or_else(|| if held(&c) && !self.headless { self.find_session(&format!("={c}")) } else { None }))
+            .filter(|c| *c != self.session_id);
         match self.start_session.clone() {
             None => if let Some(id) = current { self.switch_session(id) },
             Some(start) => {
@@ -2473,6 +2493,13 @@ impl App {
 
     /// Whether the session in front has a window with a pane in it.
     pub fn has_windows(&self) -> bool { self.tabs.iter().any(|t| t.root.is_some()) }
+
+    /// Whether this client has a session of its own: any but the desk's, and the one it started
+    /// in only once it has a window (a headless client goes when it has none).
+    pub fn holds_sessions(&self) -> bool {
+        let real = |id: u32, desk: bool, windows: bool| !desk && (id != 0 || windows);
+        real(self.session_id, self.session_desk, self.has_windows()) || self.sessions.iter().any(|s| real(s.id, s.desk, s.tabs.iter().any(|t| t.root.is_some())))
+    }
 
     /// tmux's break-pane: the pane becomes a window of its own (keeping its id), at the first
     /// free index or `num`; -d: not gone to.
@@ -3178,6 +3205,8 @@ impl App {
     /// Until then (or if it never connects: not signed in) the window shows what it can.
     pub fn maybe_start_shell(&mut self) {
         if self.shell_asked || !self.desk_answered || self.capture.is_some() { return }
+        // A headless client makes only the sessions it is asked for.
+        if self.headless { self.shell_asked = true; return }
         // `hn new -s work` (a session besides the desk's): made here, with its shell.
         if self.start_session.as_ref().map(|s| s.create && self.session_alias.as_deref() != s.name.as_deref()).unwrap_or(false) {
             if self.link(&self.fleet.local_id).is_none() { return }

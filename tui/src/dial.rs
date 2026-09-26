@@ -66,7 +66,7 @@ impl Default for Dial {
 }
 
 /// hn answers the dial: the desktop app is not running.
-pub fn leading(app: &App) -> bool { app.dial.checked && !app.dial.app_running }
+pub fn leading(app: &App) -> bool { !app.headless && app.dial.checked && !app.dial.app_running }
 
 /// hn follows the dial: it leads, or its terminal is the one in front.
 fn following(app: &App) -> bool { leading(app) || app.terminal_focused }

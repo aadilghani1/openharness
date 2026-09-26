@@ -18,11 +18,17 @@ use crate::fleet::agent_from;
 
 /// Run a CLI subcommand; None when `args` is not one (the client should start).
 /// tmux's usage line, hn's flags.
-pub const USAGE: &str = "usage: hn [-hV] [-f file] [-L socket-name] [-S socket-path] [--port port]\n          [command [flags]]";
+pub const USAGE: &str = "usage: hn [-2DhluNVv] [-c shell-command] [-f file] [-L socket-name]\n          [-S socket-path] [-T features] [--port port] [command [flags]]";
 
 /// The command line, read as tmux reads its own: flags, then a command.
 #[derive(Default, Debug)]
-pub struct Flags { pub help: bool, pub long_help: bool, pub version: bool, pub keys: bool, pub licenses: bool, pub config: Option<String>, pub socket: Option<String>, pub name: Option<String>, pub port: Option<u16>, pub rest: Vec<String> }
+pub struct Flags { pub help: bool, pub long_help: bool, pub version: bool, pub keys: bool, pub licenses: bool, pub config: Option<String>, pub socket: Option<String>, pub name: Option<String>, pub port: Option<u16>, pub rest: Vec<String>,
+    /// -c: a command for the shell (tmux as a login shell).
+    pub shell_command: Option<String>,
+    /// --headless: tmux's server with no client attached (started for a script's commands).
+    pub headless: bool,
+    /// -C: control mode, which hn does not have.
+    pub control: bool }
 
 pub fn flags(args: &[String]) -> Result<Flags, String> {
     let mut f = Flags::default();
@@ -36,6 +42,7 @@ pub fn flags(args: &[String]) -> Result<Flags, String> {
             "--version" => f.version = true,
             "--keys" => f.keys = true,
             "--licenses" => f.licenses = true,
+            "--headless" => f.headless = true,
             "--port" => { i += 1; f.port = Some(args.get(i).and_then(|p| p.parse().ok()).ok_or("--port needs a port")?) }
             _ if a.starts_with("--") => return Err(format!("unknown option -- {}", &a[2..])),
             _ => {
@@ -46,9 +53,13 @@ pub fn flags(args: &[String]) -> Result<Flags, String> {
                     match chars[j] {
                         'h' => f.help = true,
                         'V' => f.version = true,
-                        c @ ('f' | 'L' | 'S') => {
+                        // tmux's: 256 colours, UTF-8, a login shell, verbose logs, no server start,
+                        // no daemon — each already so, or nothing to hn.
+                        '2' | 'u' | 'l' | 'v' | 'N' | 'D' => {}
+                        'C' => f.control = true,
+                        c @ ('f' | 'L' | 'S' | 'T' | 'c') => {
                             let value: String = if j + 1 < chars.len() { chars[j + 1..].iter().collect() } else { i += 1; args.get(i).cloned().ok_or(format!("option requires an argument -- {c}"))? };
-                            match c { 'f' => f.config = Some(value), 'L' => f.name = Some(value), _ => f.socket = Some(value) }
+                            match c { 'f' => f.config = Some(value), 'L' => f.name = Some(value), 'S' => f.socket = Some(value), 'c' => f.shell_command = Some(value), _ => {} }
                             break;
                         }
                         c => return Err(format!("unknown option -- {c}")),
@@ -85,8 +96,15 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
             let detached = crate::cmd::find(c).ok().and_then(|e| crate::cmd::parse(e, args).ok()).map(|a| a.has('d') > 0).unwrap_or(false);
             // $HN_SOCKET: what a client sets for what it runs, as tmux's $TMUX.
             let inside = std::env::var("HN_SOCKET").map(|v| !v.is_empty()).unwrap_or(false);
-            if detached && !crate::ipc::alive(socket.as_deref(), name.as_deref()) { return Some(offline(port, args, name.as_deref()).await) }
+            // new -d with no client: tmux's server starts for it (hn with no terminal).
+            if detached && !crate::ipc::alive(socket.as_deref(), name.as_deref()) && !spawn_headless(name.as_deref(), explicit_port).await { return Some(offline(port, args, name.as_deref()).await) }
             if detached || inside { Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await) } else { None }
+        }
+        // start-server: hn with no terminal holds the sessions no client has (and goes, as tmux's
+        // server does, when there are none).
+        "start-server" | "start" => {
+            if !crate::ipc::alive(socket.as_deref(), name.as_deref()) && has_sessions(name.as_deref()) { spawn_headless(name.as_deref(), explicit_port).await; }
+            Some(0)
         }
         // No client running: what tmux's server would answer — the sessions a client left (and the
         // desk's), from where they are kept.
@@ -95,6 +113,8 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
         // Any tmux command (by name, alias, or the start of one), or hn's: run by the client.
         // (A name it does not know may be a command-alias: the running client knows.)
         c if crate::commands::is_command_name(c) || crate::cmd::find(c).is_ok() || (!c.starts_with('-') && crate::ipc::alive(socket.as_deref(), name.as_deref())) => {
+            // No client, and sessions kept: tmux's server has them — hn with no terminal, started.
+            if socket.is_none() && !crate::ipc::alive(None, name.as_deref()) && has_sessions(name.as_deref()) { spawn_headless(name.as_deref(), explicit_port).await; }
             // One naming a session another client of this name has: run by that client.
             if socket.is_none() {
                 if let Some(owner) = owner_of_target(args, name.as_deref()) {
@@ -106,6 +126,32 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
         c if !c.starts_with('-') => { eprintln!("{}", crate::cmd::find(c).err().unwrap_or_default()); Some(1) }
         _ => None,
     }
+}
+
+/// Whether sessions are kept for this server name (no client has them, or one does).
+fn has_sessions(name: Option<&str>) -> bool {
+    let doc = crate::app::read_sessions(&crate::app::sessions_path(name));
+    doc["sessions"].as_array().map(|rows| rows.iter().any(|r| !r.get("desk").and_then(Value::as_bool).unwrap_or(false))).unwrap_or(false)
+}
+
+/// tmux's server, started for a command when no client runs: hn with no terminal (--headless), in
+/// a session of its own (closing this terminal leaves it), holding the sessions until a client
+/// attaches to them. False when it did not come up.
+pub async fn spawn_headless(name: Option<&str>, port: Option<u16>) -> bool {
+    use std::os::unix::process::CommandExt;
+    let Ok(me) = std::env::current_exe() else { return false };
+    let mut cmd = std::process::Command::new(me);
+    if let Some(n) = name { cmd.args(["-L", n]); }
+    if let Some(p) = port { cmd.args(["--port", &p.to_string()]); }
+    cmd.arg("--headless").env_remove("HN_AS_TMUX").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    // SAFETY: setsid is async-signal-safe, called in the child before exec.
+    unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }); }
+    if cmd.spawn().is_err() { return false }
+    for _ in 0..250 {
+        if crate::ipc::alive(None, name) { return true }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
 }
 
 /// The client a command goes to when its -t (or -s) names a session a running client of this

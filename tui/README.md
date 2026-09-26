@@ -36,6 +36,19 @@ as tmux's tree does; `C-b s` lists them after the harnesses, so typing a session
 tmux-sessionizer and tmuxinator-style scripts work. The first session is the desk's (named for
 this computer unless you name it); the others are this computer's, kept between clients.
 
+**More than one terminal** works as with one tmux server. Each `hn` is a client, and each
+session is with one client at a time. `hn attach -t main` from a second terminal (or over SSH)
+takes `main` over: if the first terminal was showing it, that one detaches, as `tmux attach -d`
+does. Commands from a shell reach every session, whichever terminal has it. `hn ls`,
+`list-clients` and `detach-client -a` see them all, and nothing is lost when they detach in any
+order. The desk's session is the exception: every terminal shows it at once.
+
+**With no terminal open**, scripts still work. The first command that needs a server starts hn
+without a terminal: tmux's server, holding the sessions until you attach. For example,
+`hn new -d -s proj; hn new-window -t proj:1; hn send-keys -t proj:1 'npm run dev' Enter`, or
+tmuxinator's own script. It exits when it has no sessions left. tmux's `-2 -u -l -v -N -D -T`
+flags are accepted (hn already works that way) and `-c` runs a command in your shell.
+
 ## Keys
 
 tmux's. The prefix is `C-b`; `C-b s` then `C-v`, `C-x` or `C-t` puts any harness beside, below or in a new window; every default tmux binding does what it does in tmux, with a window
