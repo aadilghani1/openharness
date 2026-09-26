@@ -7,6 +7,7 @@ export const PAIR_ROSTER = {
     "n",
     "summary"
   ],
+  "awayMinutes": 30,
   "daemons": [
     {
       "id": "tim",

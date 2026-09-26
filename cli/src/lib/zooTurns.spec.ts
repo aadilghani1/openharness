@@ -1,34 +1,40 @@
 import { describe, expect, it, vi } from 'vitest'
-import { localDayHour, ZOO_TURN_FLUSH_MS, ZooTurnCounter, ZooTurnReporter, type ZooPost, type ZooTurnOp } from './zooTurns.js'
+import {
+  LocalPresence, localDayHour, ZOO_AWAY_MS, ZOO_TURN_FLUSH_MS, ZooTurnCounter, ZooTurnReporter, type ZooPost, type ZooTurnOp,
+} from './zooTurns.js'
+
+// `ended` answers the counted turn, or null. These tests were written when it answered true/false: a
+// counted turn is now `{ minutes, away }` (economy v2: long turns count more; away turns earn nights).
+const COUNTED = { minutes: 0, away: false }
 
 describe('ZooTurnCounter — which finished turns count', () => {
-  const counter = (eligible: (id: string) => boolean = () => true) => new ZooTurnCounter({ eligible })
+  const counter = (eligible: (id: string) => boolean = () => true) => new ZooTurnCounter({ eligible, now: () => 0 })
 
   it('counts a turn it saw start live and finish', () => {
     const c = counter()
     c.started('s1', { replay: false })
-    expect(c.ended('s1', { replay: false, aborted: false })).toBe(true)
-    expect(c.ended('s1', { replay: false, aborted: false })).toBe(false)          // one end, one count
+    expect(c.ended('s1', { replay: false, aborted: false })).toEqual(COUNTED)
+    expect(c.ended('s1', { replay: false, aborted: false })).toBeNull()          // one end, one count
   })
 
   it('never counts a replay, a turn picked up at attach, or an end it never saw start', () => {
     const c = counter()
     c.started('s1', { replay: true })
-    expect(c.ended('s1', { replay: false, aborted: false })).toBe(false)
+    expect(c.ended('s1', { replay: false, aborted: false })).toBeNull()
     c.started('s2', { replay: false })
-    expect(c.ended('s2', { replay: true, aborted: false })).toBe(false)
-    expect(c.ended('s3', { replay: false, aborted: false })).toBe(false)
+    expect(c.ended('s2', { replay: true, aborted: false })).toBeNull()
+    expect(c.ended('s3', { replay: false, aborted: false })).toBeNull()
     // A live start after a replayed one counts as usual.
     c.started('s1', { replay: false })
-    expect(c.ended('s1', { replay: false, aborted: false })).toBe(true)
+    expect(c.ended('s1', { replay: false, aborted: false })).toEqual(COUNTED)
   })
 
   it('does not count a turn killed by an interrupt', () => {
     const c = counter()
     c.started('s1', { replay: false })
-    expect(c.ended('s1', { replay: false, aborted: true })).toBe(false)
+    expect(c.ended('s1', { replay: false, aborted: true })).toBeNull()
     c.started('s1', { replay: false })
-    expect(c.ended('s1', { replay: false, aborted: false })).toBe(true)
+    expect(c.ended('s1', { replay: false, aborted: false })).toEqual(COUNTED)
   })
 
   it('asks whether the session is one a person drives when the turn ends', () => {
@@ -37,14 +43,116 @@ describe('ZooTurnCounter — which finished turns count', () => {
     const c = counter(eligible)
     for (const id of ['sub-agent', 'terminal', 'pair', 'mine']) c.started(id, { replay: false })
     expect(eligible).not.toHaveBeenCalled()
-    expect(['sub-agent', 'terminal', 'pair', 'mine'].map((id) => c.ended(id, { replay: false, aborted: false }))).toEqual([false, false, false, true])
+    expect(['sub-agent', 'terminal', 'pair', 'mine'].map((id) => c.ended(id, { replay: false, aborted: false }))).toEqual([null, null, null, COUNTED])
   })
 
   it('forgets a session that went away mid-turn', () => {
     const c = counter()
     c.started('s1', { replay: false })
     c.forget('s1')
-    expect(c.ended('s1', { replay: false, aborted: false })).toBe(false)
+    expect(c.ended('s1', { replay: false, aborted: false })).toBeNull()
+  })
+
+  it('measures a turn\'s whole minutes from its live start to its end', () => {
+    let now = 1_000_000
+    const c = new ZooTurnCounter({ eligible: () => true, now: () => now })
+    c.started('s1', { replay: false })
+    now += 25 * 60_000 + 59_000
+    expect(c.ended('s1', { replay: false, aborted: false })).toEqual({ minutes: 25, away: false })
+    // A prompt queued into a running turn starts nothing new: the turn runs from its first start.
+    c.started('s1', { replay: false })
+    now += 10 * 60_000
+    c.started('s1', { replay: false })
+    now += 5 * 60_000
+    expect(c.ended('s1', { replay: false, aborted: false })).toEqual({ minutes: 15, away: false })
+    // A turn whose end never came in days counts one day.
+    c.started('s2', { replay: false })
+    now += 3 * 86_400_000
+    expect(c.ended('s2', { replay: false, aborted: false })).toEqual({ minutes: 1440, away: false })
+    // A clock that went backwards counts nothing, not less than nothing.
+    c.started('s3', { replay: false })
+    now -= 60_000
+    expect(c.ended('s3', { replay: false, aborted: false })).toEqual({ minutes: 0, away: false })
+  })
+
+  it('asks whether the person is away when a counted turn ends, and only then', () => {
+    const away = vi.fn(() => true)
+    const c = new ZooTurnCounter({ eligible: (id) => id !== 'terminal', away, now: () => 0 })
+    c.started('s1', { replay: false })
+    c.started('terminal', { replay: false })
+    expect(away).not.toHaveBeenCalled()
+    expect(c.ended('terminal', { replay: false, aborted: false })).toBeNull()
+    expect(away).not.toHaveBeenCalled()
+    expect(c.ended('s1', { replay: false, aborted: false })).toEqual({ minutes: 0, away: true })
+    expect(away).toHaveBeenCalledOnce()
+  })
+})
+
+describe('LocalPresence — whether the person is at this computer', () => {
+  function clock() {
+    let now = 5_000_000
+    return { now: () => now, pass: (ms: number) => { now += ms } }
+  }
+
+  it('is away 30 minutes after the last window or hn detached', () => {
+    expect(ZOO_AWAY_MS).toBe(30 * 60_000)
+    const t = clock()
+    const p = new LocalPresence(t.now)
+    p.attached('win')
+    p.attached('hn')
+    t.pass(ZOO_AWAY_MS * 3)
+    expect(p.away()).toBe(false)                                             // here all along
+    p.detached('win')
+    t.pass(ZOO_AWAY_MS)
+    expect(p.here()).toBe(true)                                              // hn is still attached
+    p.detached('hn')
+    t.pass(ZOO_AWAY_MS - 1)
+    expect(p.away()).toBe(false)
+    t.pass(1)
+    expect(p.away()).toBe(true)
+    p.attached('win')
+    expect(p.away()).toBe(false)
+    expect(p.awayMs()).toBe(0)
+  })
+
+  it('follows what a client says: inactive, with the idle time it saw, then back', () => {
+    const t = clock()
+    const p = new LocalPresence(t.now)
+    p.attached('win')
+    p.presence('win', { focusAgentId: 'a1' })                                // no `active`: nothing changes
+    expect(p.here()).toBe(true)
+    p.presence('win', { active: false, awayMs: 20 * 60_000 })                // idle 20 minutes already
+    expect(p.here()).toBe(false)
+    t.pass(10 * 60_000)
+    expect(p.away()).toBe(true)
+    p.presence('win', { active: true, awayMs: 30 * 60_000 })
+    expect(p.away()).toBe(false)
+    p.presence('win', { active: false, awayMs: 'long' })
+    t.pass(ZOO_AWAY_MS - 1)
+    expect(p.away()).toBe(false)
+  })
+
+  it('stays here while any one client is active', () => {
+    const t = clock()
+    const p = new LocalPresence(t.now)
+    p.attached('a')
+    p.attached('b')
+    p.presence('a', { active: false })
+    t.pass(ZOO_AWAY_MS * 2)
+    expect(p.away()).toBe(false)
+    p.presence('b', { active: false })
+    t.pass(ZOO_AWAY_MS)
+    expect(p.away()).toBe(true)
+  })
+
+  it('counts an absence from its own start, so a restart is never an away turn', () => {
+    const t = clock()
+    const p = new LocalPresence(t.now)
+    expect(p.here()).toBe(false)
+    t.pass(ZOO_AWAY_MS - 1)
+    expect(p.away()).toBe(false)
+    t.pass(1)
+    expect(p.away()).toBe(true)
   })
 })
 
@@ -98,6 +206,45 @@ function harness(opts: { answers?: Array<{ status: number; body?: Record<string,
     },
   }
 }
+
+describe('ZooTurnReporter — minutes and away turns', () => {
+  it('sends a batch\'s minutes and away turns beside its count', async () => {
+    const h = harness()
+    h.reporter.count({ minutes: 25, away: false })
+    h.reporter.count({ minutes: 3, away: true })
+    h.reporter.count({ minutes: 0, away: true })
+    await h.tick()
+    expect(h.posts).toEqual([[{ op: 'zoo.turn', batchId: 'b1', n: 3, minutes: 28, away: 2, day: '2026-09-26', hour: 10, machineId: 'mac-1' }]])
+  })
+
+  it('leaves them out at 0, so a server from before them takes the report', async () => {
+    const h = harness()
+    h.reporter.count({ minutes: 0, away: false })
+    h.reporter.count()
+    await h.tick()
+    expect(h.posts[0][0]).toEqual({ op: 'zoo.turn', batchId: 'b1', n: 2, day: '2026-09-26', hour: 10, machineId: 'mac-1' })
+    expect(h.posts[0][0]).not.toHaveProperty('minutes')
+    expect(h.posts[0][0]).not.toHaveProperty('away')
+  })
+
+  it('keeps them with their local hour, and splits them with the turns past 50', async () => {
+    const h = harness()
+    h.at(new Date(2026, 8, 26, 23, 59, 0)); h.reporter.count({ minutes: 90, away: true })
+    h.at(new Date(2026, 8, 27, 0, 0, 30)); h.reporter.count({ minutes: 5000, away: true })
+    await h.tick()
+    expect(h.posts[0].map(({ n, minutes, away, hour }) => ({ n, minutes, away, hour }))).toEqual([
+      { n: 1, minutes: 90, away: 1, hour: 23 },
+      { n: 1, minutes: 1440, away: 1, hour: 0 },                            // one turn counts a day at most
+    ])
+    const big = harness()
+    for (let i = 0; i < 60; i++) big.reporter.count({ minutes: 1440, away: i < 55 })
+    await big.tick()
+    expect(big.posts[0].map(({ n, minutes, away }) => ({ n, minutes, away }))).toEqual([
+      { n: 50, minutes: 50 * 1440, away: 50 },
+      { n: 10, minutes: 10 * 1440, away: 5 },
+    ])
+  })
+})
 
 describe('ZooTurnReporter — reporting counted turns', () => {
   it('gathers a minute of turns into one zoo.turn for the local day and hour', async () => {

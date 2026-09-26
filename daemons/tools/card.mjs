@@ -4,7 +4,10 @@
 // a card is a portrait, not a presence indicator.
 //
 //   node daemons/tools/card.mjs tim [--version 1.0] [--shiny] [--serial 42] [--nickname pip] [--svg]
-//   node daemons/tools/card.mjs --shelf tim,vim,grue [--svg]
+//   node daemons/tools/card.mjs --shelf tim*x2,vim,grue [--drop unix] [--svg]
+//
+// A shelf entry is a daemon id, `*` when it is shiny, and `xN` for N of it (the original and N-1
+// duplicates merged into it).
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { renderPortrait, renderSprite } from './render.mjs'
@@ -56,13 +59,37 @@ export function cardLines(roster, d, { version = roster.rules.versions[0], shiny
   ]
 }
 
-/** A shelf: the zoo's sprites in order, `[ ? ]` for missing regulars, `[ ! ]` for a missing secret. */
-export function shelfLines(roster, ownedIds, { drop = roster.drops[0].id } = {}) {
-  const owned = new Set(ownedIds)
+/** A drop's state at `now`: `released` (its daemons hatch), `announced` (they show as silhouettes), or
+ *  `hidden` (not announced yet). Dates are UTC days. */
+export function dropState(drop, now = new Date()) {
+  const at = day => Date.parse(`${day}T00:00:00.000Z`)
+  if (!drop?.release || at(drop.release) <= now.getTime()) return 'released'
+  return drop.announce && at(drop.announce) <= now.getTime() ? 'announced' : 'hidden'
+}
+
+/** The hatchling before it has colour: every drawn cell becomes `#`. */
+export const silhouette = sprite => sprite.replace(/[^ ]/g, '#')
+
+/** A shelf entry: an id, or `{ id, shiny, dupes }` for a daemon with duplicates merged into it. */
+const ownedMap = owned => new Map(owned.map(o => typeof o === 'string' ? [o, { id: o }] : [o.id, o]))
+
+/**
+ * A shelf: the zoo's sprites in order, `[ ? ]` for missing regulars, `[ ! ]` for a missing secret, and
+ * `x2` beside a daemon with a duplicate merged into it. A drop announced but not released shows its
+ * regulars as silhouettes (and its secret as `[ ! ]`); a drop not yet announced shows nothing.
+ */
+export function shelfLines(roster, owned, { drop = roster.drops[0].id, now = new Date() } = {}) {
+  const have = ownedMap(owned)
   const set = roster.daemons.filter(d => d.drop === drop)
+  const drop1 = roster.drops.find(x => x.id === drop)
+  const state = dropState(drop1, now)
+  if (state === 'hidden') return []
   const cells = set.map(d => {
-    if (!owned.has(d.id)) return { top: d.rarity === 'secret' ? '[ ! ]' : '[ ? ]', label: d.rarity === 'secret' ? 'secret' : cardNumber(roster, d).slice(0, 3) }
-    return { top: renderSprite(roster, d, roster.rules.versions.length - 1, 'idle', { motion: false }), label: d.id }
+    const number = d.rarity === 'secret' ? 'secret' : cardNumber(roster, d).slice(0, 3)
+    if (state === 'announced') return { top: d.rarity === 'secret' ? '[ ! ]' : silhouette(renderSprite(roster, d, 0, 'idle', { motion: false })), label: number }
+    const mine = have.get(d.id)
+    if (!mine) return { top: d.rarity === 'secret' ? '[ ! ]' : '[ ? ]', label: number }
+    return { top: renderSprite(roster, d, roster.rules.versions.length - 1, 'idle', { motion: false }), label: mine.dupes ? `${d.id} x${mine.dupes + 1}` : d.id }
   })
   const rows = []
   for (let i = 0; i < cells.length; i += 5) {
@@ -71,10 +98,11 @@ export function shelfLines(roster, ownedIds, { drop = roster.drops[0].id } = {})
     rows.push(slice.map(c => c.label.padEnd(10)).join('').trimEnd())
     rows.push('')
   }
-  const drop1 = roster.drops.find(x => x.id === drop)
-  const have = set.filter(d => owned.has(d.id) && d.rarity !== 'secret').length
+  const count = set.filter(d => have.has(d.id) && d.rarity !== 'secret').length
   const of = set.filter(d => d.rarity !== 'secret').length
-  return [`zoo: drop ${drop1?.n ?? 1} ${drop1?.name ?? drop}  ${have}/${of}${set.some(d => d.rarity === 'secret' && owned.has(d.id)) ? '  +secret' : ''}`, '', ...rows].slice(0, -1)
+  const head = `zoo: drop ${drop1?.n ?? 1} ${drop1?.name ?? drop}  ` +
+    (state === 'announced' ? `out ${drop1.release}` : `${count}/${of}${set.some(d => d.rarity === 'secret' && have.has(d.id)) ? '  +secret' : ''}`)
+  return [head, '', ...rows].slice(0, -1)
 }
 
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -109,11 +137,12 @@ export function cardSvg(roster, d, opts = {}) {
   return svgFor(lines, { colors, title: `${d.id}, a ${d.rarity} daemon` })
 }
 
-/** The shelf as SVG, each owned daemon in its own colour and the empty slots faint. */
-export function shelfSvg(roster, ownedIds, opts = {}) {
-  const owned = new Set(ownedIds)
+/** The shelf as SVG, each owned daemon in its own colour (a shiny one in its shiny colour) and the empty
+ *  slots and silhouettes faint. */
+export function shelfSvg(roster, owned, opts = {}) {
+  const have = ownedMap(owned)
   const set = roster.daemons.filter(d => d.drop === (opts.drop ?? roster.drops[0].id))
-  const lines = shelfLines(roster, ownedIds, opts)
+  const lines = shelfLines(roster, owned, opts)
   const svg = svgFor(lines, { title: 'daemon zoo' })
   // Colour the sprite rows cell by cell: rows 2, 5, 8… hold sprites, ten columns per cell.
   return svg.replace(/<text x="(\d+)" y="(\d+)" fill="[^"]+" xml:space="preserve">([^<]*)<\/text>/g, (whole, x, y, body) => {
@@ -122,7 +151,8 @@ export function shelfSvg(roster, ownedIds, opts = {}) {
     const first = ((row - 2) / 3) * 5
     const spans = set.slice(first, first + 5).map((d, i) => {
       const cell = lines[row].slice(i * 10, i * 10 + 10)
-      const color = owned.has(d.id) ? d.color.hex : '#626262'
+      const mine = dropState(roster.drops.find(x => x.id === d.drop), opts.now) === 'released' && have.get(d.id)
+      const color = mine ? (mine.shiny && d.shiny ? d.shiny.hex : d.color.hex) : '#626262'
       return `<tspan fill="${color}">${esc(cell)}</tspan>`
     }).join('')
     return `<text x="${x}" y="${y}" xml:space="preserve">${spans}</text>`
@@ -137,8 +167,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const svg = args.includes('--svg')
   const shelf = flag('--shelf')
   if (shelf) {
-    const ids = String(shelf).split(',').filter(Boolean)
-    process.stdout.write(svg ? shelfSvg(roster, ids) : shelfLines(roster, ids).join('\n') + '\n')
+    // `tim*x3`: a shiny tim with two duplicates merged into it.
+    const owned = String(shelf).split(',').filter(Boolean).map(entry => {
+      const [, id, star, n] = /^([a-z][a-z0-9-]*)(\*?)(?:x(\d+))?$/.exec(entry) ?? [null, entry, '', null]
+      return { id, shiny: star === '*', ...(n && Number(n) > 1 ? { dupes: Number(n) - 1 } : {}) }
+    })
+    const opts = { drop: flag('--drop') ?? undefined }
+    process.stdout.write(svg ? shelfSvg(roster, owned, opts) : shelfLines(roster, owned, opts).join('\n') + '\n')
   } else {
     const d = roster.daemons.find(x => x.id === args[0])
     if (!d) { console.error(`usage: card.mjs <${roster.daemons.map(x => x.id).join('|')}> [--version v] [--shiny] [--serial n] [--nickname s] [--svg]`); process.exit(2) }

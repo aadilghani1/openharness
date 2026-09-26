@@ -24,14 +24,35 @@ if (!Array.isArray(unsafe) || !unsafe.length || unsafe.some(p => typeof p !== 's
 }
 const ligature = s => unsafe.find(p => s.includes(p))
 
+/** The hex a terminal draws for an xterm-256 index from 16: the 6x6x6 cube, then the grey ramp. */
+function xtermHex(n) {
+  const hex = x => x.toString(16).padStart(2, '0')
+  if (n >= 232) { const g = 8 + 10 * (n - 232); return `#${hex(g)}${hex(g)}${hex(g)}` }
+  const level = [0, 0x5f, 0x87, 0xaf, 0xd7, 0xff], i = n - 16
+  return `#${hex(level[Math.floor(i / 36)])}${hex(level[Math.floor(i / 6) % 6])}${hex(level[i % 6])}`
+}
+
 const ids = new Set()
 const drops = new Set(roster.drops.map(d => d.id))
+// A drop is announced 14 days before it is released; only released drops hatch, announced ones show as
+// silhouettes (README, "The draw", "Cards and shelves").
+const isoDay = s => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s
+for (const drop of roster.drops) {
+  if (!isoDay(drop.announce) || !isoDay(drop.release)) fail(`drop ${drop.id}: announce and release must be YYYY-MM-DD dates`)
+  else if (Date.parse(drop.release) - Date.parse(drop.announce) !== 14 * 86_400_000) fail(`drop ${drop.id}: announce must be 14 days before release`)
+}
 for (const d of roster.daemons) {
   if (ids.has(d.id)) fail(`${d.id}: duplicate id`)
   ids.add(d.id)
   if (!/^[a-z][a-z0-9-]{0,15}$/.test(d.id)) fail(`${d.id}: id must be a short lowercase command name`)
   if (!rules.rarities.includes(d.rarity)) fail(`${d.id}: unknown rarity ${d.rarity}`)
   if (!drops.has(d.drop)) fail(`${d.id}: unknown drop ${d.drop}`)
+  // Colours are xterm-256 indices with the hex a terminal shows for them. A shiny daemon wears its own.
+  for (const [what, c] of [['color', d.color], ['shiny', d.shiny]]) {
+    if (!c || !Number.isInteger(c.xterm) || c.xterm < 16 || c.xterm > 255) fail(`${d.id}: ${what}.xterm must be an xterm-256 index from 16 to 255`)
+    else if (c.hex !== xtermHex(c.xterm)) fail(`${d.id}: ${what}.hex ${c.hex} is not xterm ${c.xterm} (${xtermHex(c.xterm)})`)
+  }
+  if (d.shiny && d.color && d.shiny.xterm === d.color.xterm) fail(`${d.id}: a shiny colour must differ from the usual one`)
   if (!d.first || !printable(d.first)) fail(`${d.id}: first words missing or not ASCII`)
   // Lines are templates: only known slots, and every template has an example with its slots filled.
   if (rules.lineSlots) {
@@ -90,20 +111,35 @@ for (const s of [...rules.nest, ...rules.egg, ...Object.values(rules.eggs).map(e
   if (!printable(s)) fail(`egg art "${s}" is not printable ASCII`)
   if (ligature(s)) fail(`egg art "${s}" has "${ligature(s)}", which fonts draw as one glyph`)
 }
-if (rules.firstEgg.need > rules.firstEgg.habits.length) fail('first egg needs more habits than exist')
+const habitKeys = rules.firstEgg.habits.map(h => h.key)
+if (rules.firstEgg.need > habitKeys.length) fail('first egg needs more habits than exist')
+for (const k of rules.firstEgg.require ?? []) if (!habitKeys.includes(k)) fail(`firstEgg.require names unknown habit ${k}`)
+if ((rules.firstEgg.require ?? []).length > rules.firstEgg.need) fail('firstEgg requires more habits than it needs')
+if (!(rules.setupEgg?.need > rules.firstEgg.need) || rules.setupEgg.need > habitKeys.length) fail('setupEgg.need must be more than firstEgg.need and at most every habit')
 // Earning and growing (README, "Earning eggs and growing"): whole positive numbers, an egg rule for every
 // kind the server grants, levels that climb from 0, and a version for every level a daemon can reach.
 const whole = (v, min = 1) => Number.isInteger(v) && v >= min
-for (const kind of ['turn', 'week', 'marathon', 'night', 'history']) if (!rules.eggs[kind]) fail(`egg ${kind} is earned but has no egg rule`)
+for (const kind of ['first', 'setup', 'easter', 'turn', 'week', 'marathon', 'night', 'history']) if (!rules.eggs[kind]) fail(`egg ${kind} is granted but has no egg rule`)
+// Secrets sit outside the set: only an egg with a secret weight can hold one, so some egg must.
+if (roster.daemons.some(d => d.rarity === 'secret') && !Object.values(rules.eggs).some(e => e.weights.secret > 0)) fail('a secret exists but no egg can hold one')
 const earn = rules.earn ?? {}
-for (const [path, v] of [['turn.every', earn.turn?.every], ['turn.dailyCap', earn.turn?.dailyCap], ['week.days', earn.week?.days],
-  ['marathon.turns', earn.marathon?.turns], ['marathon.machines', earn.marathon?.machines], ['night.nights', earn.night?.nights]]) {
+for (const [path, v] of [['turn.every', earn.turn?.every], ['turn.dailyCap', earn.turn?.dailyCap], ['turn.minutesPerTurn', earn.turn?.minutesPerTurn],
+  ['week.days', earn.week?.days], ['marathon.turns', earn.marathon?.turns], ['marathon.machines', earn.marathon?.machines],
+  ['night.nights', earn.night?.nights], ['night.awayMinutes', earn.night?.awayMinutes], ['history.days', earn.history?.days]]) {
   if (!whole(v)) fail(`earn.${path} must be a whole number of at least 1`)
 }
 if (earn.week?.days > 7) fail('earn.week.days cannot be more than the 7 days of a week')
-if (!whole(earn.night?.fromHour, 0) || !whole(earn.night?.toHour, 0) || earn.night.fromHour > earn.night.toHour || earn.night.toHour > 23) {
-  fail('earn.night hours must be 0-23, fromHour <= toHour')
+// A night may run past midnight: fromHour 22, toHour 6 is 22:00 to 06:59.
+if (!whole(earn.night?.fromHour, 0) || !whole(earn.night?.toHour, 0) || earn.night.fromHour > 23 || earn.night.toHour > 23 || earn.night.fromHour === earn.night.toHour + 1) {
+  fail('earn.night hours must be 0-23 and leave some hours of the day outside the night')
 }
+if (earn.history?.days > 28) fail('earn.history.days must be at most 28 (a history egg is once per date per year)')
+for (const [path, v] of [['secretGuaranteeAt', rules.secretGuaranteeAt], ['duplicateXp', rules.duplicateXp], ['overflowXp', rules.overflowXp]]) {
+  if (!whole(v)) fail(`rules.${path} must be a whole number of at least 1`)
+}
+// Easter words are never shipped in the clear: the roster holds the sha256 of each lowercased word.
+if ('easterWords' in rules) fail('rules.easterWords is gone: list sha256 hashes in rules.easterHashes')
+if (!Array.isArray(rules.easterHashes) || rules.easterHashes.some(h => !/^[0-9a-f]{64}$/.test(h))) fail('rules.easterHashes must be lowercase sha256 hex strings')
 const levels = rules.bond?.levels ?? []
 if (levels[0] !== 0 || levels.some((x, i) => !whole(x, 0) || (i > 0 && x <= levels[i - 1]))) fail('bond.levels must start at 0 and climb')
 if (!whole(rules.bond?.xpPerTurn, 0) || !whole(rules.bond?.xpPerDay, 0)) fail('bond.xpPerTurn and bond.xpPerDay must be whole numbers')
@@ -170,24 +206,30 @@ const server = {
     rarities: rules.rarities,
     shinyOneIn: rules.shinyOneIn,
     pityPerMiss: rules.pityPerMiss,
-    firstEgg: { need: rules.firstEgg.need, habits: rules.firstEgg.habits.map(h => h.key) },
+    secretGuaranteeAt: rules.secretGuaranteeAt,
+    duplicateXp: rules.duplicateXp,
+    overflowXp: rules.overflowXp,
+    firstEgg: { need: rules.firstEgg.need, require: rules.firstEgg.require ?? [], habits: habitKeys },
+    setupEgg: rules.setupEgg,
     eggs: Object.fromEntries(Object.entries(rules.eggs).map(([k, e]) => [k, { weights: e.weights, ...(e.boost ? { boost: e.boost } : {}) }])),
-    easterWords: rules.easterWords,
+    easterHashes: rules.easterHashes,
     versions: rules.versions,
     bondForVersion: rules.bondForVersion,
     bond: rules.bond,
     earn: rules.earn,
     historyDates: rules.historyDates,
   },
-  drops: roster.drops.map(d => d.id),
+  drops: roster.drops.map(d => ({ id: d.id, announce: d.announce, release: d.release })),
   daemons: roster.daemons.map(d => ({ id: d.id, n: d.n, drop: d.drop, rarity: d.rarity })),
 }
 output('backend/src/lib/daemonRoster.g.ts', `${header}export const DAEMON_ROSTER = ${JSON.stringify(server, null, 2)} as const\n`)
 // The pair brain's template voice (cli/src/pair/voice.ts): who exists and what each says per mood, and —
 // for the pair harness's instructions (cli/src/pair/pairHarness.ts) — each daemon's lore, first words and
-// family. The cli compiles only what is under cli/src, so it gets its own copy rather than reading this folder.
+// family. Also how long an absence makes a finished turn an away turn (cli/src/lib/zooTurns.ts, the night
+// egg). The cli compiles only what is under cli/src, so it gets its own copy rather than reading this folder.
 const pair = {
   lineSlots: rules.lineSlots ?? [],
+  awayMinutes: rules.earn.night.awayMinutes,
   daemons: roster.daemons.map(d => ({ id: d.id, lore: d.lore, first: d.first, family: d.family, lines: d.lines })),
 }
 output('cli/src/pair/roster.g.ts', `${header}export const PAIR_ROSTER = ${JSON.stringify(pair, null, 2)} as const\n`)

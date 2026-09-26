@@ -94,7 +94,9 @@ class DaemonRules {
             boost: Map<String, num>.from(e.value['boost'] as Map? ?? const {}),
           ),
       },
-      easterWords = [for (final w in raw['easterWords'] as List) w as String],
+      easterHashes = [
+        for (final h in raw['easterHashes'] as List? ?? const []) h as String,
+      ],
       nest = [for (final n in raw['nest'] as List) n as String],
       egg = [for (final n in raw['egg'] as List) n as String],
       lineSlots = raw['lineSlots'] == null
@@ -127,7 +129,8 @@ class DaemonRules {
   final int firstEggNeed;
   final List<DaemonHabit> habits;
   final Map<String, DaemonEggKind> eggs;
-  final List<String> easterWords;
+  /// sha256 of each lowercased easter word: the words themselves never ship.
+  final List<String> easterHashes;
   final List<String> nest;
   final List<String> egg;
 

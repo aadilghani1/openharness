@@ -11,17 +11,24 @@
  * race draws again against the fresh zoo; only the draw that was written is answered, and the same for
  * the eggs granted and the levels reached. After a change every adapter socket of the user hears
  * `zoo_changed` (lib/adapterAccountPushes.ts), and so does every web and phone socket (lib/webWs.ts).
+ *
+ * Every hatch of a daemon the account did not own takes that daemon's next serial (`DaemonMint`, an
+ * atomic increment shared by every account) before the write; a duplicate takes none. A serial minted
+ * for a write that lost the race is kept for the retry's hatch of the same daemon, so a race costs no
+ * numbers; one the request never writes is a gap, never a number given twice.
  */
 import type { FastifyInstance } from 'fastify'
 import { Prisma } from '@prisma/client'
 import type { z } from 'zod'
 import { prisma } from '../lib/prisma.js'
 import { publishZooChanged } from '../lib/bus.js'
-import { applyZooOps, emptyZoo, parseZoo, zooOpsBodySchema, type ZooContext, type ZooDoc, type ZooOp } from '../lib/zoo.js'
+import { applyZooOps, emptyZoo, parseZoo, zooOpsBodySchema, type Hatched, type Zoo, type ZooContext, type ZooDoc, type ZooOp } from '../lib/zoo.js'
 import { validateBody } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 
 const WRITE_ATTEMPTS = 5
+/** Two first-ever hatches of one daemon at once both try to create its counter; the loser increments. */
+const MINT_ATTEMPTS = 3
 
 async function readZoo(userId: string): Promise<ZooDoc> {
   const row = await prisma.zoo.findUnique({ where: { userId } })
@@ -38,6 +45,50 @@ async function contextFor(userId: string, ops: ZooOp[]): Promise<ZooContext> {
   return { ownsMachine: (id) => owned.has(id) }
 }
 
+/** The next serial of `daemonId`: an atomic increment of its counter, which starts at 1 on the first
+ *  hatch of that daemon anywhere. */
+async function mint(daemonId: string): Promise<number> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const row = await prisma.daemonMint.upsert({
+        where: { daemonId },
+        create: { daemonId, count: 1 },
+        update: { count: { increment: 1 } },
+        select: { count: true },
+      })
+      return row.count
+    } catch (error) {
+      if (attempt < MINT_ATTEMPTS && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') continue
+      throw error
+    }
+  }
+}
+
+/** Serials minted during this request and not yet written, by daemon id, lowest first. */
+type SerialPool = Map<string, number[]>
+
+/**
+ * Give each daemon this request hatched new (not a duplicate) its serial: one kept from an attempt that
+ * lost the race, or a fresh one. Returns what it used, so a lost race can put them back.
+ */
+async function giveSerials(zoo: Zoo, hatched: Hatched[], pool: SerialPool): Promise<Array<[string, number]>> {
+  const used: Array<[string, number]> = []
+  for (const h of hatched) {
+    if (h.duplicate) continue
+    const d = zoo.daemons.find((x) => x.id === h.daemonId)
+    if (!d) continue
+    const serial = pool.get(h.daemonId)?.shift() ?? await mint(h.daemonId)
+    d.serial = serial
+    h.serial = serial
+    used.push([h.daemonId, serial])
+  }
+  return used
+}
+
+function keepSerials(pool: SerialPool, used: Array<[string, number]>): void {
+  for (const [id, serial] of used) pool.set(id, [...(pool.get(id) ?? []), serial].sort((a, b) => a - b))
+}
+
 export async function zooRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/zoo', async (req, reply) => {
     sendSuccess(reply, await readZoo(req.user!.sub))
@@ -48,23 +99,25 @@ export async function zooRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const userId = req.user!.sub
       const ctx = await contextFor(userId, req.body.ops)
+      const serials: SerialPool = new Map()
       for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt++) {
         const current = await readZoo(userId)
         const applied = applyZooOps(current.zoo, req.body.ops, undefined, new Date(), ctx)
         // Nothing moved — the same request twice, or ops on eggs already hatched. Say where we are.
         if (!applied.changed) return sendSuccess(reply, { ...current, hatched: [], grants: [], levelUps: [] })
+        const used = await giveSerials(applied.zoo, applied.hatched, serials)
         const next = { revision: current.revision + 1, zoo: applied.zoo }
         const state = next.zoo as unknown as Prisma.InputJsonValue
         // Compare-and-set on the revision: whoever wrote first wins, the other re-reads and replays.
         const bumped = await prisma.zoo.updateMany({ where: { userId, revision: current.revision }, data: { revision: next.revision, state } })
         if (bumped.count !== 1) {
-          if (current.revision !== 0) continue
+          if (current.revision !== 0) { keepSerials(serials, used); continue }
           // No row yet (the only way revision 0 and no update): make it. A second client making it at
           // the same moment trips the unique index and re-reads what the first one wrote.
           try {
             await prisma.zoo.create({ data: { userId, revision: next.revision, state } })
           } catch (error) {
-            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') continue
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') { keepSerials(serials, used); continue }
             throw error
           }
         }

@@ -12,7 +12,7 @@
  * deterministic, and is `crypto.randomInt` in production. Eggs earned from work are granted here too:
  * a client reports turns, never eggs.
  */
-import { randomInt } from 'node:crypto'
+import { createHash, randomInt } from 'node:crypto'
 import { z } from 'zod'
 import { DAEMON_ROSTER } from './daemonRoster.g.js'
 
@@ -23,12 +23,19 @@ export const ZOO_NICKNAME_MAX = 24
  *  integer weights inside `randomInt`'s range whatever a stored document says. */
 export const ZOO_MAX_PITY = 1_000_000
 /** Eggs earned while the nest is full wait here, oldest first. 64 turn eggs is months at the daily cap;
- *  past that an earned egg is not kept. */
+ *  past that each further egg is `rules.overflowXp` for the paired daemon instead. */
 export const ZOO_MAX_HELD = 64
 /** How many `zoo.turn` batch ids are remembered to drop a replay. A reporter retries within minutes. */
 export const ZOO_BATCH_MEMORY = 64
 /** The most turns one `zoo.turn` may report (a reporter batches a minute; the daily cap is far lower). */
 export const ZOO_TURN_MAX_N = 50
+/** The most agent-minutes one `zoo.turn` may report: a day for each of its turns (harnessd counts at most
+ *  a day for one turn). The daily cap bounds what they earn long before this. */
+export const ZOO_TURN_MAX_MINUTES = ZOO_TURN_MAX_N * 24 * 60
+/** How many duplicates one daemon remembers; far past anything drawn. */
+export const ZOO_MAX_DUPES = 1_000_000
+/** The highest serial a daemon may carry. */
+const ZOO_MAX_SERIAL = 1_000_000_000
 /** A report may be this many days later than the latest local day on Earth still allows (a retry after
  *  an offline stretch); anything older, or a day that has not started anywhere yet, is dropped. */
 export const ZOO_TURN_LATE_DAYS = 1
@@ -47,20 +54,24 @@ export const cryptoRng: Rng = (n) => randomInt(n)
 // ── What the roster says ─────────────────────────────────────────────────────────────────────────
 interface EggRule { weights: Readonly<Record<string, number>>; boost?: Readonly<Record<string, number>> }
 interface RosterDaemon { id: string; n: number; drop: string; rarity: string }
+/** A drop is announced (shown as silhouettes on shelves) before it is released (drawn from). */
+interface RosterDrop { id: string; announce: string; release: string }
 
 const RULES = DAEMON_ROSTER.rules
 const EGG_RULES: Readonly<Record<string, EggRule>> = RULES.eggs
 /** The rule for an egg kind — own keys only, so a kind spelled `constructor` is simply unknown. */
 const eggRule = (kind: string): EggRule | undefined => Object.hasOwn(EGG_RULES, kind) ? EGG_RULES[kind] : undefined
+/** Only an egg with a secret weight can hold a secret, and only its hatches count toward the pity. */
+const holdsSecret = (kind: string): boolean => (eggRule(kind)?.weights.secret ?? 0) > 0
 const ROSTER_DAEMONS: readonly RosterDaemon[] = DAEMON_ROSTER.daemons
-const RELEASED_DROPS: ReadonlySet<string> = new Set<string>(DAEMON_ROSTER.drops)
+const DROPS: readonly RosterDrop[] = DAEMON_ROSTER.drops
 const ROSTER_IDS: ReadonlySet<string> = new Set(ROSTER_DAEMONS.map((d) => d.id))
 const HABIT_KEYS: ReadonlySet<string> = new Set<string>(RULES.firstEgg.habits)
-const EASTER_WORDS: ReadonlySet<string> = new Set<string>(RULES.easterWords)
+/** Habits the first egg cannot come without (a finished turn). */
+const FIRST_REQUIRES: readonly string[] = RULES.firstEgg.require
+const EASTER_HASHES: ReadonlySet<string> = new Set<string>(RULES.easterHashes)
 const VERSIONS: readonly string[] = RULES.versions
 const FIRST_VERSION = VERSIONS[0]
-/** Every daemon a draw may give: the released drops, in roster order. */
-const RELEASED: readonly RosterDaemon[] = ROSTER_DAEMONS.filter((d) => RELEASED_DROPS.has(d.drop))
 const EARN = RULES.earn
 const BOND_LEVELS: readonly number[] = RULES.bond.levels
 const BOND_FOR_VERSION: Readonly<Record<string, number>> = RULES.bondForVersion
@@ -68,6 +79,27 @@ const BOND_FOR_VERSION: Readonly<Record<string, number>> = RULES.bondForVersion
 const HISTORY_DATES: Readonly<Record<string, string | null>> = RULES.historyDates
 /** Why a marathon egg was earned; each earns one, once. */
 const MARATHON_REASONS = ['turns', 'machines'] as const
+
+/**
+ * Whether a drop is out at `now`: its `release` day (UTC) has begun. Only released drops hatch; a drop
+ * that is announced but not yet released is the shelves' silhouettes, never a draw.
+ */
+export function dropReleased(drop: RosterDrop, now: Date): boolean {
+  return Date.parse(`${drop.release}T00:00:00.000Z`) <= now.getTime()
+}
+
+/** Every daemon a draw may give at `now`: the released drops, in roster order. */
+export function releasedDaemons(now: Date): RosterDaemon[] {
+  const out = new Set(DROPS.filter((d) => dropReleased(d, now)).map((d) => d.id))
+  return ROSTER_DAEMONS.filter((d) => out.has(d.drop))
+}
+
+/** The sha256 (hex) of an easter word as `zoo.easter` sends it, trimmed and lowercased. The roster lists
+ *  only these, so the words themselves never ship to a client. */
+export function easterHash(word: string): string {
+  return createHash('sha256').update(word.trim().toLowerCase()).digest('hex')
+}
+const HASH_RE = /^[0-9a-f]{64}$/
 
 // ── Days, weeks and levels ───────────────────────────────────────────────────────────────────────
 const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/
@@ -86,6 +118,39 @@ export function isLocalDay(s: string): boolean {
 const dayNumber = (day: string): number => {
   const [y, m, d] = day.split('-').map(Number)
   return Date.UTC(y, m - 1, d) / DAY_MS
+}
+const dayOf = (n: number): string => new Date(n * DAY_MS).toISOString().slice(0, 10)
+
+/**
+ * The night a turn finishing at local `hour` of `day` belongs to, named by the day it began, or null
+ * outside the night hours. Night hours may run past midnight (22:00 to 06:59): a turn at 02:00 on the
+ * 22nd belongs to the night of the 21st, like one at 23:00 on the 21st.
+ */
+export function nightOf(day: string, hour: number): string | null {
+  const { fromHour, toHour } = EARN.night
+  if (fromHour <= toHour) return hour >= fromHour && hour <= toHour ? day : null
+  if (hour >= fromHour) return day
+  return hour <= toHour ? dayOf(dayNumber(day) - 1) : null
+}
+
+/**
+ * The history dates whose egg is open on `day`: each `MM-DD` of `rules.historyDates`, in the year its
+ * week began, when `day` falls within `earn.history.days` of it (so 12-30 is open until 01-05). A date is
+ * named with its year: one egg per date per year.
+ */
+export function historyDatesOpen(day: string): string[] {
+  const at = dayNumber(day)
+  const year = Number(day.slice(0, 4))
+  const open: string[] = []
+  for (const mmdd of Object.keys(HISTORY_DATES)) {
+    for (const y of [year - 1, year]) {
+      const date = `${y}-${mmdd}`
+      if (!isLocalDay(date)) continue                                    // 02-29 in a year without one
+      const since = at - dayNumber(date)
+      if (since >= 0 && since < EARN.history.days) open.push(date)
+    }
+  }
+  return open.sort()
 }
 
 /** The ISO 8601 week a calendar day belongs to, `YYYY-Www` (weeks start on Monday; week 1 holds the
@@ -133,8 +198,16 @@ export const zooDaemonSchema = z.object({
   /** Absent on a daemon stored before xp existed; read as the least xp its bond needs. */
   xp: z.number().int().min(0).max(ZOO_MAX_XP).optional(),
   version: z.string().refine((v) => VERSIONS.includes(v), 'unknown version'),
+  /** How many duplicates merged into this one (the shelf's `x2` is one). Absent: none. */
+  dupes: z.number().int().min(1).max(ZOO_MAX_DUPES).optional(),
+  /** Its mint number: the nth of its kind the server hatched (`DaemonMint`). Absent on a guest's daemon
+   *  and on one hatched before serials. */
+  serial: z.number().int().min(1).max(ZOO_MAX_SERIAL).optional(),
+  /** `local`: hatched in a guest's zoo on a client, brought in by `zoo.seed`; it has no serial. */
+  origin: z.literal('local').optional(),
 }).strict()
-/** `date` is the local day a history egg was earned on; its MM-DD picks the daemon it leans toward. */
+/** `date` is the history date a history egg remembers (`YYYY-MM-DD`, the year its week began); its MM-DD
+ *  picks the daemon it leans toward. */
 export const zooEggSchema = z.object({ id: key, kind: key, grantedAt: isoTime, date: localDay.optional() }).strict()
 
 export type ZooDaemon = Omit<z.infer<typeof zooDaemonSchema>, 'xp'> & { xp: number }
@@ -147,19 +220,21 @@ export interface ZooHeld { kind: string; date?: string }
  * `zoo.seed`).
  */
 export interface ZooProgress {
-  /** Counted turns, all time (after the daily cap). A turn egg every `earn.turn.every`. */
+  /** Counted turns, all time (after the daily cap): each turn once, plus one per `earn.turn.minutesPerTurn`
+   *  agent-minutes. A turn egg every `earn.turn.every`. */
   turns: number
   /** Counted turns per local day, the last two weeks. The daily cap and the week egg read this. */
   days: Record<string, number>
   /** ISO weeks whose week egg was earned, the last few. */
   weeks: string[]
-  /** Local days with a counted turn in the night hours since the last night egg. */
+  /** Nights (named by the local day they began) with a counted turn that finished while the person was
+   *  away, since the last night egg. */
   nights: string[]
   /** The first machines turns were reported from (up to `earn.marathon.machines`). */
   machines: string[]
   /** Marathon eggs earned, by reason: `turns`, `machines`. */
   marathon: string[]
-  /** Local days whose history egg was earned, the last few. */
+  /** History dates (`YYYY-MM-DD`, the year each week began) whose egg was earned, the last few. */
   history: string[]
   /** Eggs earned while the nest was full, oldest first. */
   held: ZooHeld[]
@@ -186,21 +261,30 @@ export interface Zoo {
   autonomy: ZooAutonomy
   habits: string[]
   firstEgg: boolean
+  /** The setup egg (the second habit egg, at `rules.setupEgg.need` habits) has been granted. */
+  setupEgg: boolean
+  /** Hatches of eggs that can hold a secret since the last secret. */
   pity: number
+  /** sha256 of each easter word already used. */
   easter: string[]
   progress: ZooProgress
 }
 export interface ZooDoc { revision: number; zoo: Zoo }
-export interface Hatched { eggId: string; daemonId: string; shiny: boolean }
-/** An egg that arrived in the nest during this request (earned now, or held until there was room). */
-export interface Grant { kind: string; eggId: string }
+/**
+ * What one hatch gave. A duplicate (a daemon already owned) merged into the one you have: `duplicate`
+ * and the `xp` it gave. `serial` is the new daemon's mint number, set by the route (routes/zoo.ts).
+ */
+export interface Hatched { eggId: string; daemonId: string; shiny: boolean; duplicate?: true; xp?: number; serial?: number }
+/** An egg that arrived in the nest during this request (earned now, or held until there was room): its
+ *  `eggId`. Or one earned with 64 already held, which became `xp` for the paired daemon instead. */
+export interface Grant { kind: string; eggId?: string; xp?: number }
 /** A daemon whose bond reached a new level during this request, and the version it is now. */
 export interface LevelUp { id: string; level: number; version: string }
 
 export const emptyProgress = (): ZooProgress =>
   ({ turns: 0, days: {}, weeks: [], nights: [], machines: [], marathon: [], history: [], held: [], batches: [] })
 export const emptyZoo = (): Zoo =>
-  ({ daemons: [], eggs: [], pair: null, autonomy: ZOO_DEFAULT_AUTONOMY, habits: [], firstEgg: false, pity: 0, easter: [], progress: emptyProgress() })
+  ({ daemons: [], eggs: [], pair: null, autonomy: ZOO_DEFAULT_AUTONOMY, habits: [], firstEgg: false, setupEgg: false, pity: 0, easter: [], progress: emptyProgress() })
 
 // Names in ops are plain strings rather than roster enums on purpose: a newer client naming a habit or
 // a word this server does not know yet gets that op dropped, not the whole batch refused.
@@ -215,14 +299,18 @@ export const zooOpSchema = z.discriminatedUnion('op', [
   // A guest's local zoo, read entry by entry like a stored one (a bad entry is dropped, not the seed).
   z.object({ op: z.literal('zoo.seed'), zoo: z.record(z.string(), z.unknown()) }).strict(),
   // Turns that finished on one machine, all in one local hour of one local day. harnessd sends it.
+  // `minutes`: the agent-minutes those turns ran; `away`: how many of them finished while the person was
+  // away from this computer. Absent means 0 (a harnessd from before either existed).
   z.object({
     op: z.literal('zoo.turn'),
     batchId: key,
     n: z.number().int().min(1).max(ZOO_TURN_MAX_N),
+    minutes: z.number().int().min(0).max(ZOO_TURN_MAX_MINUTES).optional(),
+    away: z.number().int().min(0).max(ZOO_TURN_MAX_N).optional(),
     day: localDay,
     hour: z.number().int().min(0).max(23),
     machineId: key,
-  }).strict(),
+  }).strict().refine((op) => (op.away ?? 0) <= op.n, 'away counts turns, so it is at most n'),
 ])
 export type ZooOp = z.infer<typeof zooOpSchema>
 
@@ -300,6 +388,28 @@ function grown(d: z.infer<typeof zooDaemonSchema>): ZooDaemon {
   return { ...d, xp, bond, version: versionFor(bond) }
 }
 
+/** Easter words used, as hashes. A word stored before words were hashed reads as its hash; a seed keeps
+ *  only the hashes this roster knows. */
+function parseEaster(raw: unknown, strict: boolean): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const item of raw) {
+    if (typeof item !== 'string' || item.length < 1 || item.length > 64) continue
+    const hash = HASH_RE.test(item) ? item : easterHash(item)
+    if ((strict && !EASTER_HASHES.has(hash)) || out.includes(hash)) continue
+    out.push(hash)
+    if (out.length >= 64) break
+  }
+  return out
+}
+
+/** A second record of a daemon already read (a zoo from before duplicates merged) folds into the first:
+ *  counted in its `dupes`, shiny if either was. It gives no xp: that is a hatch's to give. */
+function fold(into: ZooDaemon, dup: ZooDaemon): void {
+  into.dupes = Math.min((into.dupes ?? 0) + 1 + (dup.dupes ?? 0), ZOO_MAX_DUPES)
+  if (dup.shiny) into.shiny = true
+}
+
 /**
  * The zoo as stored (Json), validated entry by entry; anything malformed is dropped rather than served.
  *
@@ -316,8 +426,10 @@ export function parseZoo(raw: unknown, opts: { roster?: boolean } = {}): Zoo {
       const parsed = zooDaemonSchema.safeParse(item)
       if (!parsed.success) continue
       if (strict && (!ROSTER_IDS.has(parsed.data.id) || !eggRule(parsed.data.egg))) continue
-      daemons.push(grown(parsed.data))
-      if (daemons.length >= ZOO_MAX_DAEMONS) break
+      const d = grown(parsed.data)
+      const first = daemons.find((x) => x.id === d.id)
+      if (first) fold(first, d)
+      else if (daemons.length < ZOO_MAX_DAEMONS) daemons.push(d)
     }
   }
   const eggs: ZooEgg[] = []
@@ -339,8 +451,9 @@ export function parseZoo(raw: unknown, opts: { roster?: boolean } = {}): Zoo {
     autonomy: isAutonomy(src.autonomy) ? src.autonomy : ZOO_DEFAULT_AUTONOMY,
     habits: uniqueStrings(src.habits, (h) => !strict || HABIT_KEYS.has(h), 64),
     firstEgg: src.firstEgg === true,
+    setupEgg: src.setupEgg === true,
     pity,
-    easter: uniqueStrings(src.easter, (w) => !strict || EASTER_WORDS.has(w), 64),
+    easter: parseEaster(src.easter, strict),
     progress: parseProgress(src.progress, strict),
   }
 }
@@ -350,38 +463,48 @@ export function parseZoo(raw: unknown, opts: { roster?: boolean } = {}): Zoo {
 const WEIGHT_UNITS = 1_000_000
 
 /**
- * Who can come out of an egg of `kind` for this zoo, and how likely, in whole units (README, "The draw"):
+ * Who can come out of an egg of `kind` for this zoo at `now`, and how likely, in whole units (README,
+ * "The draw"):
  *
- *  1. Eligible: every released daemon not owned; when all are owned, duplicates are allowed again.
+ *  1. Eligible: every released regular (not a secret) you do not own; once you own every released
+ *     regular, every released regular again (a duplicate). Secrets sit outside the set: an unowned
+ *     released secret is eligible, but only from an egg whose `weights.secret` is above 0.
  *  2. Weight: `weights[rarity] / (eligible of that rarity)`, plus `pity * pityPerMiss` for a secret,
  *     times `boost[id]`. A rarity with no eligible daemon gives its weight to nothing.
+ *  3. The pity guarantee: from an egg that can hold a secret, when `pity` is one short of
+ *     `secretGuaranteeAt` and a released secret is unowned, only the unowned secrets are eligible.
  *
- * One case the README leaves open: an egg whose unowned daemons all weigh nothing (an easter egg once
- * every legendary and secret is owned). That egg draws as if everything were owned — duplicates of what
- * it can give — rather than giving nobody.
+ * An egg whose eligible daemons all weigh nothing (an easter egg once every legendary and secret is
+ * owned) draws as if everything were owned — duplicates of what it can give — rather than giving nobody.
  */
-export function drawWeights(zoo: Zoo, kind: string): Array<{ id: string; rarity: string; weight: number }> {
+export function drawWeights(zoo: Zoo, kind: string, now: Date = new Date()): Array<{ id: string; rarity: string; weight: number }> {
   const egg = eggRule(kind)
   if (!egg) return []
+  const secretsToo = holdsSecret(kind)
+  const released = releasedDaemons(now)
   const owned = new Set(zoo.daemons.map((d) => d.id))
-  const unowned = RELEASED.filter((d) => !owned.has(d.id))
+  const regulars = released.filter((d) => d.rarity !== 'secret')
+  const fresh = regulars.filter((d) => !owned.has(d.id))
+  const secrets = secretsToo ? released.filter((d) => d.rarity === 'secret' && !owned.has(d.id)) : []
   const weigh = (pool: readonly RosterDaemon[]) => {
     const perRarity = new Map<string, number>()
     for (const d of pool) perRarity.set(d.rarity, (perRarity.get(d.rarity) ?? 0) + 1)
     return pool.map((d) => {
       const base = (egg.weights[d.rarity] ?? 0) / perRarity.get(d.rarity)!
-      const pity = d.rarity === 'secret' ? zoo.pity * RULES.pityPerMiss : 0
+      const pity = d.rarity === 'secret' && secretsToo ? zoo.pity * RULES.pityPerMiss : 0
       const boost = egg.boost && Object.hasOwn(egg.boost, d.id) ? egg.boost[d.id] : 1
       return { id: d.id, rarity: d.rarity, weight: Math.round((base + pity) * boost * WEIGHT_UNITS) }
     })
   }
-  const fresh = weigh(unowned)
-  return fresh.some((w) => w.weight > 0) ? fresh : weigh(RELEASED)
+  if (secrets.length && zoo.pity + 1 >= RULES.secretGuaranteeAt) return weigh(secrets)
+  const eligible = new Set([...(fresh.length ? fresh : regulars), ...secrets])
+  const weights = weigh(released.filter((d) => eligible.has(d)))
+  return weights.some((w) => w.weight > 0) ? weights : weigh(released)
 }
 
 /** One draw: who hatches, then (independently) whether it is shiny. `rng` is called in that order. */
-export function draw(zoo: Zoo, kind: string, rng: Rng): { id: string; rarity: string; shiny: boolean } | null {
-  const weights = drawWeights(zoo, kind)
+export function draw(zoo: Zoo, kind: string, rng: Rng, now: Date = new Date()): { id: string; rarity: string; shiny: boolean } | null {
+  const weights = drawWeights(zoo, kind, now)
   const total = weights.reduce((sum, w) => sum + w.weight, 0)
   if (total <= 0) return null
   let at = rng(total)
@@ -397,19 +520,19 @@ export function draw(zoo: Zoo, kind: string, rng: Rng): { id: string; rarity: st
  * The daemon a history egg from `date` gives: that date's daemon from `rules.historyDates`, when a
  * released drop holds it and you do not own it yet. Otherwise null, and the egg draws like any other.
  */
-export function historyDaemon(zoo: Zoo, date: string | undefined): RosterDaemon | null {
+export function historyDaemon(zoo: Zoo, date: string | undefined, now: Date = new Date()): RosterDaemon | null {
   if (!date) return null
   const mmdd = date.slice(5)
   const id = Object.hasOwn(HISTORY_DATES, mmdd) ? HISTORY_DATES[mmdd] : null
   if (!id || zoo.daemons.some((d) => d.id === id)) return null
-  return RELEASED.find((d) => d.id === id) ?? null
+  return releasedDaemons(now).find((d) => d.id === id) ?? null
 }
 
 /** The draw for one egg: a history egg's own daemon when it has one to give, else the usual draw. */
-function drawEgg(zoo: Zoo, egg: ZooEgg, rng: Rng): { id: string; rarity: string; shiny: boolean } | null {
-  const own = egg.kind === 'history' ? historyDaemon(zoo, egg.date) : null
+function drawEgg(zoo: Zoo, egg: ZooEgg, rng: Rng, now: Date): { id: string; rarity: string; shiny: boolean } | null {
+  const own = egg.kind === 'history' ? historyDaemon(zoo, egg.date, now) : null
   if (own) return { id: own.id, rarity: own.rarity, shiny: rng(RULES.shinyOneIn) === 0 }
-  return draw(zoo, egg.kind, rng)
+  return draw(zoo, egg.kind, rng, now)
 }
 
 // ── Ops ──────────────────────────────────────────────────────────────────────────────────────────
@@ -444,11 +567,39 @@ function grantEgg(zoo: Zoo, kind: string, rng: Rng, now: Date, out: Outcome, dat
   return true
 }
 
+/** xp for one daemon; a new level bumps bond and version and is answered in `levelUps`. */
+function grow(d: ZooDaemon, xp: number, out: Outcome): void {
+  if (xp <= 0) return
+  d.xp = Math.min(d.xp + xp, ZOO_MAX_XP)
+  const level = levelFor(d.xp)
+  if (level <= d.bond) return
+  d.bond = level
+  d.version = versionFor(level)
+  out.levelUps.push({ id: d.id, level, version: d.version })
+}
+
+/** The paired daemon: the first one hatched with the paired id. */
+const pairedDaemon = (zoo: Zoo): ZooDaemon | undefined => zoo.pair === null ? undefined : zoo.daemons.find((x) => x.id === zoo.pair)
+
+/** xp for the paired daemon. Nothing without a pair. */
+function addXp(zoo: Zoo, xp: number, out: Outcome): void {
+  const d = pairedDaemon(zoo)
+  if (d) grow(d, xp, out)
+}
+
 /** An egg earned from work. It joins the queue of held eggs, which `releaseHeld` empties into the nest
- *  while there is room — so an egg earned with a full nest waits its turn instead of being lost. */
-function earnEgg(zoo: Zoo, kind: string, date?: string): void {
-  if (zoo.progress.held.length >= ZOO_MAX_HELD) return
-  zoo.progress.held.push(date ? { kind, date } : { kind })
+ *  while there is room — so an egg earned with a full nest waits its turn instead of being lost. Past
+ *  64 held it becomes `rules.overflowXp` for the paired daemon, answered as a grant with its `xp` (with
+ *  nothing paired, nothing has hatched to grow, and it is lost). */
+function earnEgg(zoo: Zoo, kind: string, out: Outcome, date?: string): void {
+  if (zoo.progress.held.length < ZOO_MAX_HELD) {
+    zoo.progress.held.push(date ? { kind, date } : { kind })
+    return
+  }
+  const d = pairedDaemon(zoo)
+  if (!d) return
+  grow(d, RULES.overflowXp, out)
+  out.grants.push({ kind, xp: RULES.overflowXp })
 }
 
 /** Held eggs into the nest, oldest first, while there is room. Runs after every op, so a hatch that
@@ -463,27 +614,21 @@ function releaseHeld(zoo: Zoo, rng: Rng, now: Date, out: Outcome): boolean {
   return changed
 }
 
-/** The first egg, when enough habits are done and it has not been given. Checked on every habit op, so
- *  a grant that found the nest full happens on the next one. */
-function maybeGrantFirstEgg(zoo: Zoo, rng: Rng, now: Date, out: Outcome): boolean {
-  if (zoo.firstEgg) return false
-  const done = zoo.habits.filter((h) => HABIT_KEYS.has(h)).length
-  if (done < RULES.firstEgg.need) return false
-  if (!grantEgg(zoo, 'first', rng, now, out)) return false
-  zoo.firstEgg = true
-  return true
-}
-
-/** xp for the paired daemon (the first one hatched with that id); a new level bumps bond and version. */
-function addXp(zoo: Zoo, xp: number, out: Outcome): void {
-  const d = zoo.pair === null ? undefined : zoo.daemons.find((x) => x.id === zoo.pair)
-  if (!d || xp <= 0) return
-  d.xp = Math.min(d.xp + xp, ZOO_MAX_XP)
-  const level = levelFor(d.xp)
-  if (level <= d.bond) return
-  d.bond = level
-  d.version = versionFor(level)
-  out.levelUps.push({ id: d.id, level, version: d.version })
+/**
+ * The eggs habits earn, each once: the first egg at `firstEgg.need` habits, one of them every habit in
+ * `firstEgg.require` (a finished turn); then the setup egg at `setupEgg.need`. Checked on every habit op,
+ * so a grant that found the nest full happens on the next one.
+ */
+function maybeGrantHabitEggs(zoo: Zoo, rng: Rng, now: Date, out: Outcome): boolean {
+  const done = zoo.habits.filter((h) => HABIT_KEYS.has(h))
+  let changed = false
+  if (!zoo.firstEgg && done.length >= RULES.firstEgg.need && FIRST_REQUIRES.every((k) => done.includes(k))) {
+    if (grantEgg(zoo, 'first', rng, now, out)) { zoo.firstEgg = true; changed = true }
+  }
+  if (zoo.firstEgg && !zoo.setupEgg && done.length >= RULES.setupEgg.need) {
+    if (grantEgg(zoo, 'setup', rng, now, out)) { zoo.setupEgg = true; changed = true }
+  }
+  return changed
 }
 
 /** Whether a reported local day can be today somewhere on Earth (UTC-12 to UTC+14), or is at most
@@ -497,10 +642,12 @@ function dayInWindow(day: string, now: Date): boolean {
 type TurnOp = Extract<ZooOp, { op: 'zoo.turn' }>
 
 /**
- * Turns finished on one machine (README, "Earning eggs and growing"). In order: the daily cap decides
- * how many count; counted turns earn turn eggs, the 500-turn marathon egg, a worked day toward the week
- * egg, a night toward the night egg, and a history date's egg; the paired daemon gets xp for each and
- * for the first counted turn of the day. A machine seen may earn the second-machine marathon egg.
+ * Turns finished on one machine (README, "Earning eggs and growing"). A turn counts once, and once more
+ * for every `earn.turn.minutesPerTurn` agent-minutes the batch ran. In order: the daily cap decides how
+ * many count; counted turns earn turn eggs, the 500-turn marathon egg, a worked day toward the week egg,
+ * a night toward the night egg (a turn that finished while you were away, in the night hours), and the
+ * egg of a history date whose week is open; the paired daemon gets xp for each and for the first counted
+ * turn of the day. A machine seen may earn the second-machine marathon egg.
  */
 function applyTurn(zoo: Zoo, op: TurnOp, now: Date, out: Outcome, ctx: ZooContext): boolean {
   const p = zoo.progress
@@ -513,12 +660,13 @@ function applyTurn(zoo: Zoo, op: TurnOp, now: Date, out: Outcome, ctx: ZooContex
     changed = true
     if (p.machines.length >= machines && !p.marathon.includes('machines')) {
       p.marathon.push('machines')
-      earnEgg(zoo, 'marathon')
+      earnEgg(zoo, 'marathon', out)
     }
   }
 
   const before = p.days[op.day] ?? 0
-  const counted = Math.max(0, Math.min(op.n, EARN.turn.dailyCap - before))
+  const units = op.n + Math.floor((op.minutes ?? 0) / EARN.turn.minutesPerTurn)
+  const counted = Math.max(0, Math.min(units, EARN.turn.dailyCap - before))
   if (counted > 0) {
     changed = true
     p.days[op.day] = before + counted
@@ -527,29 +675,31 @@ function applyTurn(zoo: Zoo, op: TurnOp, now: Date, out: Outcome, ctx: ZooContex
     const turnsBefore = p.turns
     p.turns = Math.min(p.turns + counted, ZOO_MAX_TURNS)
     const every = EARN.turn.every
-    for (let k = Math.floor(turnsBefore / every); k < Math.floor(p.turns / every); k++) earnEgg(zoo, 'turn')
+    for (let k = Math.floor(turnsBefore / every); k < Math.floor(p.turns / every); k++) earnEgg(zoo, 'turn', out)
     if (p.turns >= EARN.marathon.turns && !p.marathon.includes('turns')) {
       p.marathon.push('turns')
-      earnEgg(zoo, 'marathon')
+      earnEgg(zoo, 'marathon', out)
     }
 
     const week = isoWeek(op.day)
     if (!p.weeks.includes(week) && Object.keys(p.days).filter((d) => isoWeek(d) === week).length >= EARN.week.days) {
       p.weeks = [...p.weeks, week].slice(-WEEK_MEMORY)
-      earnEgg(zoo, 'week')
+      earnEgg(zoo, 'week', out)
     }
 
-    if (op.hour >= EARN.night.fromHour && op.hour <= EARN.night.toHour && !p.nights.includes(op.day)) {
-      p.nights.push(op.day)
+    const night = (op.away ?? 0) > 0 ? nightOf(op.day, op.hour) : null
+    if (night && !p.nights.includes(night)) {
+      p.nights.push(night)
       if (p.nights.length >= EARN.night.nights) {
         p.nights = []
-        earnEgg(zoo, 'night')
+        earnEgg(zoo, 'night', out)
       }
     }
 
-    if (Object.hasOwn(HISTORY_DATES, op.day.slice(5)) && !p.history.includes(op.day)) {
-      p.history = [...p.history, op.day].slice(-HISTORY_MEMORY)
-      earnEgg(zoo, 'history', op.day)
+    for (const date of historyDatesOpen(op.day)) {
+      if (p.history.includes(date)) continue
+      p.history = [...p.history, date].slice(-HISTORY_MEMORY)
+      earnEgg(zoo, 'history', out, date)
     }
 
     addXp(zoo, counted * RULES.bond.xpPerTurn + (before === 0 ? RULES.bond.xpPerDay : 0), out)
@@ -582,6 +732,7 @@ const clone = (zoo: Zoo): Zoo => ({
   autonomy: zoo.autonomy,
   habits: [...zoo.habits],
   firstEgg: zoo.firstEgg,
+  setupEgg: zoo.setupEgg,
   pity: zoo.pity,
   easter: [...zoo.easter],
   progress: cloneProgress(zoo.progress),
@@ -591,8 +742,8 @@ const clone = (zoo: Zoo): Zoo => ({
  * Apply one op to `zoo` IN PLACE (applyZooOps hands it a copy). Returns whether anything changed; what
  * it hatched, granted or levelled goes into `out`.
  *
- * Duplicates share their roster id, so `zoo.pair` and `zoo.nickname` name a daemon by id and address
- * the first one hatched with it.
+ * A daemon is one record per roster id: a duplicate merges into it. `zoo.pair` and `zoo.nickname` name a
+ * daemon by id (a zoo stored with two records of one id is folded when read: see parseZoo).
  */
 function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx: ZooContext): boolean {
   switch (op.op) {
@@ -600,18 +751,30 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
       if (!HABIT_KEYS.has(op.key)) return false
       let changed = false
       if (!zoo.habits.includes(op.key)) { zoo.habits.push(op.key); changed = true }
-      if (maybeGrantFirstEgg(zoo, rng, now, out)) changed = true
+      if (maybeGrantHabitEggs(zoo, rng, now, out)) changed = true
       return changed
     }
     case 'zoo.hatch': {
       const i = zoo.eggs.findIndex((e) => e.id === op.eggId)
-      if (i < 0 || zoo.daemons.length >= ZOO_MAX_DAEMONS) return false
+      if (i < 0) return false
       const egg = zoo.eggs[i]
-      const drawn = drawEgg(zoo, egg, rng)
+      const drawn = drawEgg(zoo, egg, rng, now)
       if (!drawn) return false                                   // a kind this roster cannot draw
+      const original = zoo.daemons.find((d) => d.id === drawn.id)
+      if (!original && zoo.daemons.length >= ZOO_MAX_DAEMONS) return false
       zoo.eggs.splice(i, 1)
+      // The pity counts only hatches that could have been a secret.
+      if (drawn.rarity === 'secret') zoo.pity = 0
+      else if (holdsSecret(egg.kind)) zoo.pity = Math.min(zoo.pity + 1, ZOO_MAX_PITY)
+      if (original) {
+        // A duplicate grows the one you have, and a shiny one makes it shiny.
+        original.dupes = Math.min((original.dupes ?? 0) + 1, ZOO_MAX_DUPES)
+        if (drawn.shiny) original.shiny = true
+        grow(original, RULES.duplicateXp, out)
+        out.hatched.push({ eggId: egg.id, daemonId: drawn.id, shiny: drawn.shiny, duplicate: true, xp: RULES.duplicateXp })
+        return true
+      }
       zoo.daemons.push({ id: drawn.id, hatchedAt: now.toISOString(), egg: egg.kind, shiny: drawn.shiny, bond: 0, xp: 0, version: FIRST_VERSION })
-      zoo.pity = drawn.rarity === 'secret' ? 0 : Math.min(zoo.pity + 1, ZOO_MAX_PITY)
       if (zoo.pair === null) zoo.pair = drawn.id
       out.hatched.push({ eggId: egg.id, daemonId: drawn.id, shiny: drawn.shiny })
       return true
@@ -634,10 +797,11 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
       return true
     }
     case 'zoo.easter': {
-      if (!EASTER_WORDS.has(op.word) || zoo.easter.includes(op.word)) return false
+      const hash = easterHash(op.word)
+      if (!EASTER_HASHES.has(hash) || zoo.easter.includes(hash)) return false
       // A full nest leaves the word unspent, so saying it again later still works.
       if (!grantEgg(zoo, 'easter', rng, now, out)) return false
-      zoo.easter.push(op.word)
+      zoo.easter.push(hash)
       return true
     }
     case 'zoo.seed': {
@@ -653,7 +817,9 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
       const progress = fresh ? { ...seed.progress, machines: [], batches: [] } : zoo.progress
       // The guest's dial comes along when it set one; otherwise the account keeps its own.
       const autonomy = isAutonomy((op.zoo as { autonomy?: unknown }).autonomy) ? seed.autonomy : zoo.autonomy
-      Object.assign(zoo, seed, { eggs, pair: seed.pair ?? seed.daemons[0]?.id ?? null, progress, autonomy })
+      // A guest's daemons hatched on a client: marked local, and never with a serial (only the server mints).
+      const daemons = seed.daemons.map(({ serial: _serial, ...d }): ZooDaemon => ({ ...d, origin: 'local' }))
+      Object.assign(zoo, seed, { daemons, eggs, pair: seed.pair ?? seed.daemons[0]?.id ?? null, progress, autonomy })
       return true
     }
     case 'zoo.turn':
