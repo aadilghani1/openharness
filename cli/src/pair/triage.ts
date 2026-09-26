@@ -14,6 +14,7 @@
  * untrusted (it is whatever a pane painted) and is fenced as data in the prompt.
  */
 import { needLine, rosterLine } from './voice.js'
+import { bareOption, isApproveOption, isDeclineOption } from './floor.js'
 import { statusText, type DaemonAction, type PairQuestion } from './protocol.js'
 
 export const TRIAGE_BUDGET_MS = 2_500
@@ -53,21 +54,9 @@ export interface TriageDeps {
   hourlyCap?: number
 }
 
-const YES = /^(yes|y|allow|approve|accept|proceed|continue|ok|okay|run|confirm)\b/i
-const NO = /^(no|n|deny|reject|decline|cancel|don'?t|do not|skip|abort|stop)\b/i
-
-/** An option as a person reads it: "1. Yes, and don't ask again" → "yes, and don't ask again". */
-function bare(option: string): string {
-  return option.replace(/^\s*(\d+[.)]|[>›❯*-])\s*/, '').trim()
-}
-
-function yesOption(options: string[]): string | null {
-  return options.find((option) => YES.test(bare(option))) ?? null
-}
-
-function noOption(options: string[]): string | null {
-  return options.find((option) => NO.test(bare(option))) ?? null
-}
+const bare = bareOption
+const yesOption = (options: string[]): string | null => options.find(isApproveOption) ?? null
+const noOption = (options: string[]): string | null => options.find(isDeclineOption) ?? null
 
 /** The keys for a question. `[y]` is only ever the recommendation, or a template's plain yes. */
 export function actionsFor(question: PairQuestion, recommend: string | null): DaemonAction[] {

@@ -56,7 +56,8 @@ afterEach(() => vi.restoreAllMocks())
 
 describe('pair frames are sealed application frames', () => {
   it('registers every request, result and push, and nothing else under pair_', () => {
-    expect([...PAIR_REQUESTS].sort()).toEqual(['pair_answer', 'pair_journal', 'pair_pause', 'pair_read', 'pair_watch'])
+    expect([...PAIR_REQUESTS].sort()).toEqual(['pair_answer', 'pair_journal', 'pair_list', 'pair_pause', 'pair_read',
+      'pair_resume', 'pair_send', 'pair_start', 'pair_stop', 'pair_watch'])
     expect([...PAIR_PUSHES]).toEqual(['pair_event'])
     for (const type of PAIR_REQUESTS) {
       expect(encryptDownFrame(type)).toBe(true)
@@ -152,7 +153,27 @@ describe('the daemon answering another machine\'s brain', () => {
     await socket.stop()
   })
 
-  it('pair_journal and pair_read answer sealed; pair_answer and pair_pause are UNSUPPORTED for now', async () => {
+  it('the writes and pair_list/pair_read go to the owning machine\'s floor, sealed both ways', async () => {
+    const { socket, dispatch } = harness()
+    const handled: Array<[string, Frame]> = []
+    socket.pairOwner = { handle: async (type, payload) => { handled.push([type, payload]); return type === 'pair_answer' ? { error: 'STALE_QUESTION', detail: 'changed' } : { ok: true } } }
+    const { crypto, sent } = pairedPeer(socket, 'peer-1')
+    await dispatch(crypto.wrapOutgoing({ type: 'pair_answer', payload: { requestId: 'r1', agentId: 'a1', expectRequestId: 'q1', choice: 'Yes', by: 'key' } }), 'peer-1')
+    await vi.waitFor(() => expect(sent.length).toBe(1))
+    const reply = sent.shift()!
+    expect(JSON.stringify(reply.frame)).not.toContain('STALE_QUESTION')
+    expect(crypto.unwrapIncoming(reply.frame)?.payload).toEqual({ requestId: 'r1', error: 'STALE_QUESTION', detail: 'changed' })
+    for (const type of ['pair_send', 'pair_stop', 'pair_start', 'pair_pause', 'pair_resume', 'pair_list', 'pair_read']) {
+      await dispatch(crypto.wrapOutgoing({ type, payload: { requestId: type, agentId: 'a1' } }), 'peer-1')
+      await vi.waitFor(() => expect(sent.length).toBe(1))
+      expect(crypto.unwrapIncoming(sent.shift()!.frame)?.payload).toEqual({ requestId: type, ok: true })
+    }
+    expect(handled.map(([type]) => type)).toEqual(['pair_answer', 'pair_send', 'pair_stop', 'pair_start', 'pair_pause', 'pair_resume', 'pair_list', 'pair_read'])
+    expect(handled[0][1]).toMatchObject({ agentId: 'a1', expectRequestId: 'q1', choice: 'Yes', by: 'key' })
+    await socket.stop()
+  })
+
+  it('pair_journal and pair_read answer sealed; the writes are UNSUPPORTED with no owner, like an older daemon', async () => {
     const { socket, dispatch } = harness()
     const { crypto, sent } = pairedPeer(socket, 'peer-1')
     for (const [type, expected] of [

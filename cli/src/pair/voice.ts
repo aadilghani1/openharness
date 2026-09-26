@@ -169,8 +169,9 @@ export class PairVoice {
     if (this.spoken.has(say.id)) return false
     if (say.mood === 'done' && now - this.lastDone < DONE_COOLDOWN_MS) return false
     while (this.recent.length && now - this.recent[0] >= SAY_WINDOW_MS) this.recent.shift()
-    // A question is the one thing worth saying over the limit: it is what the voice is for.
-    if (this.recent.length >= SAY_WINDOW_MAX && say.mood !== 'need') return false
+    // A question is the one thing worth saying over the limit: it is what the voice is for. So is a
+    // proposal waiting on your key — the action does not happen until it is heard.
+    if (this.recent.length >= SAY_WINDOW_MAX && say.mood !== 'need' && say.mood !== 'ask') return false
     this.recent.push(now)
     if (say.mood === 'done') this.lastDone = now
     this.remember(say.id)

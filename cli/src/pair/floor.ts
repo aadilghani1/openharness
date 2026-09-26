@@ -1,0 +1,76 @@
+/**
+ * THE FLOOR (daemons/BRAIN.md, "Control interface"): what the paired daemon may never do, at any autonomy
+ * level, from any caller — a key a person pressed, a tool the pair harness called, a rule in pair.jsonc.
+ *
+ *   - No delete, restart, fork or bypass. Those verbs do not exist in the control interface at all; a
+ *     harness it starts runs in mode `ask`.
+ *   - It never types into a terminal (a shell is not an agent) or into its own harness.
+ *   - A deny-class permission prompt (push, force, rm -rf, deploy, publish, drop, merge — protocol.ts
+ *     `isDenyClass`) is never approved: the only answer anything but the person's own hands may key into
+ *     it is the dialog's own decline.
+ *   - An answer is always one of the dialog's own options, never free text typed into its "Type
+ *     something" row.
+ *
+ * Decided here, and checked AGAIN on the machine that owns the harness (pair/owner.ts): question text is
+ * untrusted, a remote brain may be older or wrong, and a model's tool call is only a request.
+ */
+
+export const AUTONOMY_LEVELS = ['watch', 'suggest', 'act-on-key', 'act-within-rules'] as const
+export type Autonomy = typeof AUTONOMY_LEVELS[number]
+/** What a zoo that never set it means (backend/src/lib/zoo.ts reads the same default). */
+export const DEFAULT_AUTONOMY: Autonomy = 'suggest'
+
+export function isAutonomy(value: unknown): value is Autonomy {
+  return typeof value === 'string' && (AUTONOMY_LEVELS as readonly string[]).includes(value)
+}
+
+const YES = /^(yes|y|allow|approve|accept|proceed|continue|ok|okay|run|confirm)\b/i
+const NO = /^(no|n|deny|reject|decline|cancel|don'?t|do not|skip|abort|stop)\b/i
+
+/** An option as a person reads it: "1. Yes, and don't ask again" → "Yes, and don't ask again". */
+export function bareOption(option: string): string {
+  return option.replace(/^\s*(\d+[.)]|[>›❯*-])\s*/, '').trim()
+}
+
+export function isApproveOption(option: string): boolean {
+  return YES.test(bareOption(option))
+}
+
+export function isDeclineOption(option: string): boolean {
+  return NO.test(bareOption(option))
+}
+
+const norm = (value: string): string => value.replace(/\s+/g, ' ').trim().toLowerCase()
+
+/** The dialog's own option `choice` names (exactly, or without its number), or null. */
+export function matchOption(options: readonly string[], choice: string): string | null {
+  const want = norm(choice)
+  if (!want) return null
+  return options.find((option) => norm(option) === want)
+    ?? options.find((option) => norm(bareOption(option)) === want)
+    ?? null
+}
+
+export type FloorRefusal = 'NOT_OFFERED' | 'DENY_CLASS'
+
+/**
+ * Whether `choice` may be keyed into this question by anything but the person's hands in the pane.
+ * Answers the option to key (the dialog's own spelling), or why not.
+ */
+export function answerFloor(question: { options: readonly string[]; deny: boolean }, choice: string):
+  { ok: true; option: string } | { ok: false; error: FloorRefusal; detail: string } {
+  const option = matchOption(question.options, choice)
+  if (!option) return { ok: false, error: 'NOT_OFFERED', detail: 'That is not one of the question\'s own options.' }
+  if (question.deny && !isDeclineOption(option)) {
+    return { ok: false, error: 'DENY_CLASS', detail: 'This prompt pushes, deletes, deploys, publishes, drops or merges: only you can approve it.' }
+  }
+  return { ok: true, option }
+}
+
+/** Why a harness can never be driven by the daemon (typed into, answered, stopped, paused), or null. */
+export type Untouchable = 'terminal' | 'pair'
+
+export function untouchableDetail(why: Untouchable): string {
+  return why === 'terminal' ? 'A terminal is a shell, not an agent: the daemon never types into it.'
+    : 'That is the daemon\'s own harness: it never drives itself.'
+}

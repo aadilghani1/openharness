@@ -639,6 +639,10 @@ export class BackendSocket {
    * sends, and the loopback-only `pair` request. Null answers UNSUPPORTED, like an older daemon.
    */
   pairService: PairService | null = null
+  /** The owning machine's reads and writes for the pair (pair/owner.ts). Null: those answer UNSUPPORTED. */
+  pairOwner: { handle: (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>> } | null = null
+  /** The control interface (pair/control.ts) behind the loopback `pair` request: the verbs it answers. */
+  pairControl: { verbs: ReadonlySet<string>; local: (payload: Record<string, unknown>, connId: string) => Promise<Record<string, unknown>> } | null = null
   /** The account's zoo changed (a `zoo_changed` from the backend) — cli.ts re-reads which daemon is paired. */
   onZooChanged: ((revision: number) => void) | null = null
   runtimeProfileProvider: ((session: RegisteredSession) => string | null) | null = null
@@ -1455,25 +1459,32 @@ export class BackendSocket {
   }
 
   /**
-   * `pair_watch` / `pair_journal` / `pair_read` from another machine's brain, and the local `pair`.
-   *
-   * `pair_answer` and `pair_pause` are contract only for now: answering waits on the stale-answer guard
-   * (a late answer must never land on the NEXT dialog), and pausing on the pair harness's control layer.
-   * Both answer UNSUPPORTED, which is exactly what an older daemon says, so a brain already handles it.
+   * The pair brain's requests (daemons/BRAIN.md):
+   *   - `pair_watch` / `pair_journal` from another machine's brain, answered by the sensor;
+   *   - `pair_list`, `pair_read` and the writes (`pair_answer`, `pair_send`, `pair_stop`, `pair_start`,
+   *     `pair_pause`, `pair_resume`), answered by the owning machine's PairOwner (pair/owner.ts), which
+   *     re-checks the floor and journals every action;
+   *   - the loopback-only `pair`: the control interface's verbs (pair/control.ts) when it is wired, the
+   *     sensor's own read verbs otherwise.
+   * An older daemon answers every one of them UNSUPPORTED, which a brain already handles.
    */
   private handlePair(connId: string, type: string, payload: Record<string, unknown>, local: boolean,
     reply: (t: string, rid: unknown, p: Record<string, unknown>) => void): void {
     const requestId = payload.requestId
     const service = this.pairService
+    const detached = (work: Promise<Record<string, unknown>>): void => {
+      void work.then((result) => reply(type, requestId, result)).catch(() => reply(type, requestId, { error: 'PAIR_FAILED' }))
+    }
     if (type === 'pair') {
       if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Ask the pair brain on this computer.' }); return }
+      const verb = typeof payload.verb === 'string' ? payload.verb : ''
+      const control = this.pairControl
+      if (control && control.verbs.has(verb)) { detached(control.local(payload, connId)); return }
       if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-      void service.local(payload)
-        .then((result) => reply(type, requestId, result))
-        .catch(() => reply(type, requestId, { error: 'PAIR_FAILED' }))
+      detached(service.local(payload))
       return
     }
-    if (type === 'pair_answer' || type === 'pair_pause' || !service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+    if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
     if (!service.enabled()) { reply(type, requestId, { error: 'PAIR_OFF' }); return }
     if (type === 'pair_watch') {
       if (payload.off === true) { service.unwatch(connId); reply(type, requestId, { ok: true }); return }
@@ -1481,7 +1492,15 @@ export class BackendSocket {
       reply(type, requestId, { snapshot })
       return
     }
-    reply(type, requestId, type === 'pair_journal' ? { ...service.journal(payload) } : service.read(payload))
+    if (type === 'pair_journal') { reply(type, requestId, { ...service.journal(payload) }); return }
+    const owner = this.pairOwner
+    if (!owner) {
+      reply(type, requestId, type === 'pair_read' ? service.read(payload) : { error: 'UNSUPPORTED' })
+      return
+    }
+    // Detached: an answer keys a dialog and a pause saves a conversation, both seconds of work that must
+    // not hold the watch's pushes behind them on this connection.
+    detached(owner.handle(type, payload))
   }
 
   /** One `pair_event` to one watcher: plaintext over loopback, sealed pairwise (`wrapTarget`) otherwise.

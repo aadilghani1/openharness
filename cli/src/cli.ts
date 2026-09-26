@@ -80,6 +80,8 @@ import { PairBrain } from './pair/brain.js'
 import { PairFleet, relayPairLinkOpener } from './pair/fleet.js'
 import { PairTriage } from './pair/triage.js'
 import { PairVoice, isRosterDaemon } from './pair/voice.js'
+import { PairOwner, type OwnerSubject } from './pair/owner.js'
+import { DEFAULT_AUTONOMY, type Autonomy } from './pair/floor.js'
 import { randomUUID } from 'node:crypto'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './lib/engineLaunch.js'
@@ -1786,6 +1788,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let refreshPairFromZoo: () => void = () => {}
   /** The thinking half (pair/brain.ts), built once the relay pool exists. */
   let pairBrain: PairBrain | null = null
+  /** How much the daemon may do on its own (zoo `autonomy`, pair/floor.ts). Read with the paired daemon. */
+  let pairAutonomyLevel: Autonomy = DEFAULT_AUTONOMY
+  const pairAutonomy = (): Autonomy => pairAutonomyLevel
   const pairSensor = new PairSensor({
     machineId: () => backendRef?.machineId ?? session?.machineId ?? computerId(),
     journal: new PairJournal({ dir: join(env.ADAPTER_DATA_DIR, 'pair') }),
@@ -4171,6 +4176,63 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     }),
     onChange: (change) => pairBrain?.onFleetChange(change),
   })
+  // THE OWNING MACHINE'S HALF of every pair write (pair/owner.ts): a key pressed here, the pair harness's
+  // tool call, a rule, or another machine's brain over sealed pair_* — all go through the same floor, and
+  // every action is journaled. `agent_delete` is Stop/Pause (the conversation is kept); nothing here can
+  // delete, restart, fork or bypass.
+  const pairSubject = (s: RegisteredSession, status: OwnerSubject['status']): OwnerSubject => ({
+    agentId: s.agentId, name: projectDisplayName(s), engine: s.engine, status,
+    untouchable: isTerminalEngine(s.engine) ? 'terminal' : s.dsh === PAIR_HARNESS_DSH ? 'pair' : null,
+    cwd: s.cwd ?? null, dsh: s.dsh ?? null,
+  })
+  const pairOwner = new PairOwner({
+    sensor: pairSensor,
+    autonomy: () => pairAutonomy(),
+    subject: (agentId) => {
+      const live = registry.resolve(agentId)
+      if (live && registry.terminalAvailable(live.agentId)) return pairSubject(live, 'live')
+      const stopped = stoppedAgents.get(agentId)
+      return stopped ? pairSubject(stopped, 'stopped') : null
+    },
+    subjects: () => {
+      const live = registry.advertised()
+      return [...live.map((s) => pairSubject(s, 'live')), ...stoppedAgents.available(live).map((s) => pairSubject(s, 'stopped'))]
+    },
+    recent: (agentId) => ({
+      recaps: (backend.recentProvider?.(agentId, 3) ?? []).map((r) => r?.recap || r?.text || '').filter(Boolean),
+      asks: backend.recentAsksProvider?.(agentId, 3) ?? [],
+    }),
+    // Keyed by the question's own text; AskQuestionController checks the dialog on screen is still
+    // `requestId` before a single key goes in, and answers STALE_QUESTION otherwise.
+    keyAnswer: ({ agentId, requestId, question, option }) => questions.answer({ agentId, requestId, answers: { [question || 'answer']: option } })
+      .then((result) => result.ok ? { ok: true as const } : { ok: false as const, error: result.error, detail: result.detail }),
+    message: (agentId, text, deliveryId) => {
+      if (!backend.onMessage) throw new Error('message handler not wired')
+      backend.onMessage(agentId, text, deliveryId)
+    },
+    cancel: (agentId) => backend.onCancel?.(agentId),
+    // Mode `ask`, bypass off, always: the daemon never starts anything that approves itself.
+    create: async ({ engine, cwd, prompt, name }) => {
+      if (!backend.onCreateAgent) return { ok: false, error: 'UNSUPPORTED' }
+      if (!ENGINES.includes(engine as AgentEngine)) return { ok: false, error: 'INVALID_ENGINE' }
+      const created = await backend.onCreateAgent({
+        engine: engine as AgentEngine, cwd, bypassPermission: false, permissionMode: 'ask',
+        grid: null, codexHome: null, dsh: null, prompt, name, agent: null,
+      })
+      return created.ok ? { ok: true, agentId: created.session.agentId } : created
+    },
+    stop: async (agentId) => {
+      if (!backend.onDeleteAgent) throw Object.assign(new Error('stop is not wired'), { code: 'UNSUPPORTED' })
+      await backend.onDeleteAgent(agentId)
+    },
+    resume: async (agentId) => {
+      if (!backend.onResumeAgent) return { ok: false, error: 'UNSUPPORTED' }
+      const resumed = await backend.onResumeAgent(agentId)
+      return resumed.ok ? { ok: true } : resumed
+    },
+    newId: () => randomUUID(),
+  })
+  backend.pairOwner = pairOwner
   pairBrain = new PairBrain({
     pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
     fleet: pairFleet,
@@ -4178,10 +4240,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     voice: new PairVoice({ sendLocal: (frame) => backend.sendLocal(frame), now: Date.now }),
     sendLocal: (frame) => backend.sendLocal(frame),
     sendLocalTo: (connId, frame) => backend.sendLocalTo(connId, frame),
-    // A key is REFUSED, not typed, until the stale-answer guard lands (BRAIN.md "Risks": a late answer
-    // landing on the next dialog). The brain has already checked that the question is still the one
-    // the person saw; this is where `answer({ expectRequestId })` plugs in.
-    answer: async () => ({ ok: false, error: 'UNSUPPORTED', detail: 'Answering from a daemon key waits on the stale-answer guard.' }),
+    // A key pressed on a line about THIS machine's harness: the owner's floor, then the dialog's own
+    // requestId, checked as the keys go in (STALE_QUESTION, nothing typed, when it changed).
+    answer: (input) => pairOwner.answer(input, 'key'),
     onGuestPair: (daemonId) => { guestPair = isRosterDaemon(daemonId) ? daemonId : null; applyPair() },
     onActiveChanged: (active) => setVoiceRouterDeviceConnected(backend.hasCommander() || active),
     now: Date.now,

@@ -45,9 +45,9 @@ export interface PairBrainDeps {
   sendLocal: (frame: Record<string, unknown>) => void
   sendLocalTo: (connId: string, frame: Record<string, unknown>) => boolean
   /**
-   * Key an answer into a question on THIS machine. Injected, because answering waits on the stale-answer
-   * guard (a late answer must never land on the next dialog): until it lands this says UNSUPPORTED.
-   * The brain has already checked the question is still the one the person saw.
+   * Key an answer into a question on THIS machine: the owner's floor (pair/owner.ts), then
+   * AskQuestionController, which types nothing unless the dialog on screen is still `requestId`
+   * (STALE_QUESTION otherwise). The brain has already checked the question is the one the person saw.
    */
   answer: (input: { agentId: string; requestId: string; choice: string }) => Promise<AnswerResult>
   /** A guest's window says which daemon its local zoo pairs (daemon_presence.pair). */
@@ -334,12 +334,15 @@ export class PairBrain {
       result = { ok: false, error: err instanceof Error ? err.message.slice(0, 60) : 'FAILED' }
     }
     if (result.ok) this.deps.voice.unsay(id, 'answered')
+    // The dialog on screen was not the one the line was about: nothing was typed, and the line's keys
+    // can never work again. The next watch of that harness says what is on screen now.
+    else if (result.error === 'STALE_QUESTION') this.deps.voice.unsay(id, 'stale')
     reply({ ok: result.ok, machineId: target.machineId, ...(result.error ? { error: result.error } : {}), ...(result.detail ? { detail: result.detail } : {}) })
   }
 
   private async remoteAnswer(target: FleetHarness, requestId: string, choice: string): Promise<AnswerResult> {
     const result = await this.deps.fleet.request(target.machineId, 'pair_answer', {
-      agentId: target.harness.agentId, requestId, expectRequestId: requestId, choice,
+      agentId: target.harness.agentId, requestId, expectRequestId: requestId, choice, by: 'key',
     })
     if (typeof result.error === 'string') return { ok: false, error: result.error, ...(typeof result.detail === 'string' ? { detail: result.detail } : {}) }
     return { ok: result.ok === true }

@@ -307,6 +307,24 @@ describe('the brain', () => {
     expect(w.answer).not.toHaveBeenCalled()
   })
 
+  it('surfaces the dialog\'s own STALE_QUESTION in daemon_act_result, from this machine and from another', async () => {
+    const w = world({ answer: async () => ({ ok: false, error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' }) })
+    w.remote.reply({ error: 'STALE_QUESTION', detail: 'That question is no longer open.' })
+    w.brain.clientAttached('local:window')
+    await settle()
+    w.local.question('web', 'q_local', ask('Read src/auth.ts?'))
+    w.remote.sensor.question('api', 'q_remote', ask('Bash: npm test'))
+    await settle(200)
+    const [localSay, remoteSay] = w.says()
+    expect(await w.act({ requestId: 'r1', id: localSay.id, choice: 'y' }))
+      .toEqual({ requestId: 'r1', id: localSay.id, ok: false, machineId: 'machine-a', error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' })
+    expect(await w.act({ requestId: 'r2', id: remoteSay.id, choice: 'y' }))
+      .toEqual({ requestId: 'r2', id: remoteSay.id, ok: false, machineId: 'machine-b', error: 'STALE_QUESTION', detail: 'That question is no longer open.' })
+    expect(w.remote.answers[0]).toMatchObject({ expectRequestId: 'q_remote', by: 'key' })
+    // Nothing was typed, and those keys can never work again: both lines go, as stale.
+    expect(w.unsays()).toEqual([{ id: localSay.id, reason: 'stale' }, { id: remoteSay.id, reason: 'stale' }])
+  })
+
   it('refuses a key for a deny-class prompt whatever the client sends, and one never offered', async () => {
     const w = world()
     w.brain.clientAttached('local:window')

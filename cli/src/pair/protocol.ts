@@ -10,8 +10,13 @@
  *     machine (`pair_*`, sealed — see lib/e2ee/applicationFrames.ts).
  */
 
-/** What the journal records. `question`/`answered` pair up by requestId. */
-export type PairKind = 'start' | 'done' | 'fail' | 'question' | 'answered' | 'recap'
+/** What the journal records. `question`/`answered` pair up by requestId. `act` is something the daemon
+ *  did to a harness (pair/owner.ts): who asked is `by`, what it did is `action`. */
+export type PairKind = 'start' | 'done' | 'fail' | 'question' | 'answered' | 'recap' | 'act'
+
+/** Who made the daemon act: a key a person pressed, the pair harness's own tool call, a pair.jsonc rule. */
+export type PairActor = 'key' | 'pair' | 'rule'
+export type PairAction = 'answer' | 'send' | 'stop' | 'start' | 'pause' | 'resume'
 
 export interface PairJournalEntry {
   /** The journal's lifetime: a new file (or one that could not be read) is a new epoch. */
@@ -29,6 +34,9 @@ export interface PairJournalEntry {
   options?: string[]
   /** The question matches a deny-class prompt (see isDenyClass). Decided here, on the owning machine. */
   deny?: boolean
+  /** On an `act`: who asked for it, and what was done. */
+  by?: PairActor
+  action?: PairAction
 }
 
 export interface PairQuestion {
@@ -131,10 +139,15 @@ export function isDenyClass(question: string, options: string[] = []): boolean {
 
 // ── local frames (loopback only) ────────────────────────────────────────────────────────────────────
 
-export const DAEMON_OUT_TYPES = new Set(['daemon_state', 'daemon_say', 'daemon_unsay', 'daemon_brief', 'daemon_act_result'])
-export const DAEMON_IN_TYPES = new Set(['daemon_act', 'daemon_presence'])
+export const DAEMON_OUT_TYPES = new Set(['daemon_state', 'daemon_say', 'daemon_unsay', 'daemon_brief', 'daemon_act_result', 'daemon_talk_result'])
+export const DAEMON_IN_TYPES = new Set(['daemon_act', 'daemon_presence', 'daemon_talk'])
 
-export type DaemonMood = 'need' | 'done' | 'fail' | 'back'
+/**
+ * The face a line wants. `auto` reports something it already did (a rule, or the pair driving a harness
+ * it started) — drawn like `done`; `say` is the pair harness talking (its `say` tool) — drawn like `idle`;
+ * `ask` is a proposal waiting for your key (autonomy `suggest`/`act-on-key`) — drawn like `need`.
+ */
+export type DaemonMood = 'need' | 'done' | 'fail' | 'back' | 'auto' | 'say' | 'ask'
 
 export interface DaemonAction {
   /** The key a client binds: `y` approves the recommendation, `n` declines. */
