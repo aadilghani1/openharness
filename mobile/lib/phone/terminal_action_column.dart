@@ -135,8 +135,7 @@ class _TerminalActionColumnState extends State<TerminalActionColumn> {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    // One backdrop read for the buttons' blurs — see [FloatingGlass].
-    return BackdropGroup(child: _column(context, widget.session));
+    return _column(context, widget.session);
   }
 
   Widget _column(BuildContext context, TerminalSession? session) {
