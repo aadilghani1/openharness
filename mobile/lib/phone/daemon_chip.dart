@@ -1,0 +1,107 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
+
+import 'daemon_scope.dart';
+import 'daemon_sheet.dart';
+import 'daemon_style.dart';
+
+/// The paired daemon in the header: its eight-cell sprite in its colour, on a
+/// sliver of night (see [DaemonInk]), the way it sits in tmux's status line on
+/// a computer. Before any daemon it is the nest at its stage, or the egg ready
+/// to hatch.
+///
+/// A tap boops it and opens its sheet. A dot on its corner says eggs are
+/// waiting. Nothing at all is drawn outside the signed-in shell or before the
+/// zoo has answered — a boot never flashes an empty nest at somebody who owns
+/// six daemons.
+///
+/// ⚠️ **Art is not scaled with the text.** The sprite is ten cells of ASCII in
+/// a 26pt header slot; larger text would push the names beside it off the
+/// row. A screen reader hears [DaemonFace.semantics] instead, and the sheet
+/// this opens scales everything.
+class DaemonChip extends StatelessWidget {
+  const DaemonChip({super.key});
+
+  static const height = 26.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final host = DaemonScope.maybeOf(context);
+    if (host == null) return const SizedBox.shrink();
+    return ListenableBuilder(
+      listenable: Listenable.merge([host.face, host.zoo]),
+      builder: (context, _) {
+        final face = host.face;
+        if (!face.visible) return const SizedBox.shrink();
+        final def = face.def;
+        final colour =
+            def?.color ?? (face.eggReady ? DaemonInk.yellow : DaemonInk.dim);
+        final eggs = host.zoo.zoo.eggs.length;
+        return Semantics(
+          key: const ValueKey('daemon-chip'),
+          button: true,
+          label: face.semantics,
+          hint: 'Opens your daemon',
+          excludeSemantics: true,
+          child: TouchTarget(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                HapticFeedback.selectionClick();
+                face.boop();
+                showDaemonSheet(context, host);
+              },
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    height: height,
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    decoration: BoxDecoration(
+                      color: DaemonInk.ground,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: DaemonInk.line),
+                    ),
+                    child: Text(
+                      face.cell,
+                      maxLines: 1,
+                      softWrap: false,
+                      textScaler: TextScaler.noScaling,
+                      style: DaemonInk.mono(
+                        size: 12.5,
+                        color: colour,
+                        weight: FontWeight.w600,
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                  if (def != null && eggs > 0)
+                    Positioned(
+                      right: -3,
+                      top: -3,
+                      child: Container(
+                        key: const ValueKey('daemon-chip-eggs'),
+                        width: 9,
+                        height: 9,
+                        decoration: BoxDecoration(
+                          color: DaemonInk.yellow,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: DaemonInk.ground,
+                            width: 1.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}

@@ -30,6 +30,8 @@ import 'package:harness_mobile/widgets/terminal_panel.dart';
 import 'agent_model_sections.dart';
 import 'agent_model_sheet.dart';
 import 'agents_list_page.dart';
+import 'daemon_chip.dart';
+import 'daemon_scope.dart';
 import 'delete_agent.dart';
 import 'held_height.dart';
 import 'machines_tab.dart';
@@ -540,6 +542,7 @@ class _TerminalPageState extends State<TerminalPage>
     if (!mounted) return;
     final view = _questionWatcher?.view;
     final open = view != null && view.answerable;
+    _tellDaemon(open ? view : null);
     setState(() {
       // Cleared as the dialog goes, so the NEXT question raises the keyboard
       // again even if it words itself identically.
@@ -547,6 +550,31 @@ class _TerminalPageState extends State<TerminalPage>
     });
     if (_questionWatcher?.queued == null) _queueRaisedFor = null;
     _raiseForQuestion();
+  }
+
+  /// The daemon on this phone, cached so a page going can take its report back
+  /// (a disposed page cannot look its scope up).
+  DaemonHostState? _daemon;
+
+  /// Tell the daemon a question is open on this page, or that it went. The
+  /// machine's own question frame never reaches a phone on the relay, so a
+  /// dialog read off the screen is how the daemon learns a harness needs you.
+  void _tellDaemon(QuestionPaneView? view) {
+    final host = _daemon ??= DaemonScope.maybeOf(context);
+    if (host == null) return;
+    final agent = widget.notifier
+        .stateOf(widget.machineId)
+        ?.agents
+        .where((a) => a.id == widget.agentId)
+        .firstOrNull;
+    host.noteQuestion(
+      this,
+      machineId: widget.machineId,
+      agentId: widget.agentId,
+      key: view?.fingerprint,
+      who: agent?.displayName ?? 'a harness',
+      question: view?.question ?? '',
+    );
   }
 
   /// Raise the keyboard for the question on the pane, if it has not had its
@@ -745,6 +773,11 @@ class _TerminalPageState extends State<TerminalPage>
   @override
   void dispose() {
     widget.notifier.removeListener(_onNotifier);
+    _daemon?.noteQuestion(
+      this,
+      machineId: widget.machineId,
+      agentId: widget.agentId,
+    );
     _questionWatcher?.removeListener(_onQuestionPane);
     _questionWatcher?.dispose();
     _cancelSettle();
@@ -1711,6 +1744,12 @@ class _TerminalPageState extends State<TerminalPage>
                                   // Null while the agent is not loaded: there is
                                   // nothing to act on yet, and a menu of actions
                                   // that all fail is worse than no menu.
+                                  // The paired daemon: its sprite, a tap from its
+                                  // sheet. See `daemon_chip.dart`.
+                                  const Padding(
+                                    padding: EdgeInsets.only(left: 8),
+                                    child: DaemonChip(),
+                                  ),
                                   if (agent != null)
                                     TerminalHeaderAction(
                                       // Stood up, not laid flat: three dots in a
