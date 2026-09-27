@@ -18,25 +18,44 @@ export type Refusal = 'pipe-to-shell' | 'secret' | 'disable-safety' | 'injection
 
 /** Credentials by their shape. Checked on a lesson before redaction: a lesson with one is refused. */
 const SECRET_PATTERNS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+  // PEM keys (RSA, EC, OPENSSH, PKCS#8 …) and armored PGP private key blocks; a key cut off runs to the end.
+  /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
   /\bsk-(ant-)?[A-Za-z0-9_-]{16,}/g,
   /\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/g,
   /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
   /\bglpat-[A-Za-z0-9_-]{20,}/g,
   /\bxox[abposr]-[A-Za-z0-9-]{10,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bAIza[0-9A-Za-z_-]{35}\b/g,
+  // AWS access key ids: long-term (AKIA) and temporary, from STS (ASIA).
+  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
+  // A Google key may end in `-`, where \b would need a word character after it.
+  /\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/g,
   /\bnpm_[A-Za-z0-9]{36}\b/g,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
 ]
 
+/**
+ * The names a secret is assigned to, as the last part of a longer name: `DB_PASSWORD`, `aws_secret_access_key`,
+ * `x-api-key`, and the camelCase of AWS's own JSON (`SecretAccessKey`, `SessionToken`) — but not inside a word
+ * (`oauth`, `nopassword`, `OAuth`). No prefix is matched, only the one character before the name: a pattern that
+ * walked `a-b-c-…` from every word boundary took seconds on one long line of a tool's output. Case-insensitive
+ * by hand, so the camelCase hump (a capital after a lowercase letter or digit) can be told from a word.
+ */
+const SECRET_NAMES = ['api[_-]?key', 'apikey', 'access[_-]?key', 'secret(?:[_-]?key)?', 'token', 'password', 'passwd', 'pwd', 'auth', 'credentials?', 'private[_-]?key']
+const anyCase = (src: string): string => src.replace(/[a-z]/g, (c) => `[${c}${c.toUpperCase()}]`)
+const SECRET_NAME = `(?:(?<![A-Za-z0-9])(?:${SECRET_NAMES.map(anyCase).join('|')})|(?<=[a-z0-9])(?:${SECRET_NAMES.map((n) => n[0].toUpperCase() + anyCase(n.slice(1))).join('|')}))`
+/** The name, its quote (plain, or JSON-escaped `\"` in a log line holding JSON), and `:` or `=`. */
+const SECRET_LEAD = `${SECRET_NAME}${/\\?["']?\s*[:=]\s*/.source}`
 /** `token=…`, `"password": "…"`, `Authorization: Bearer …` — the value goes, the name stays. A value that
- *  is a reference (`$API_KEY`, `<token>`, `{secret}`) or already `[redacted]` is not a secret. */
-const ASSIGNED_SECRET = /\b((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|apikey|access[_-]?key|secret(?:[_-]?key)?|token|password|passwd|pwd|auth|credentials?|private[_-]?key)["']?\s*[:=]\s*["']?)([^\s"',;$<{[][^\s"',;]{5,})/gi
+ *  is a reference (`$API_KEY`, `<token>`, `{secret}`) or already `[redacted]` is not a secret. A backslash
+ *  is part of a value, unless it escapes the closing quote. */
+const ASSIGNED_SECRET = new RegExp(`(${SECRET_LEAD}${/\\?["']?/.source})${/((?:[^\s"',;\\$<{[]|\\(?!["']))(?:[^\s"',;\\]|\\(?!["'])){5,})/.source}`, 'g')
+/** A quoted value goes whole, spaces and all (`"password": "correct horse battery staple"`). */
+const QUOTED_SECRET = new RegExp(`(${SECRET_LEAD})${/(\\?["'])(?![\s$<{[\\])([^\n]{6,512}?)\2/.source}`, 'g')
 const BEARER = /\b(bearer|basic)\s+[A-Za-z0-9._~+/-]{12,}=*/gi
-const URL_CREDENTIALS = /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi
-// `git@github.com:org/repo` is an address, not a person's email.
-const EMAIL = /\b(?!git@)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g
+// Bounded (a scheme is short): from every word boundary of a long line, an unbounded scheme rescanned the rest.
+const URL_CREDENTIALS = /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@:]+:[^\s/@]+@/gi
+// `git@github.com:org/repo` is an address, not a person's email. Bounded for the same reason, past RFC 5321's 64 and 255.
+const EMAIL = /\b(?!git@)[A-Za-z0-9._%+-]{1,256}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,}\b/g
 const HOME_PATHS: RegExp[] = [
   /\/Users\/[^/\s"'`]+/g,
   /\/home\/[^/\s"'`]+/g,
@@ -50,18 +69,21 @@ export interface RedactOptions {
 
 export function hasSecret(text: string): boolean {
   if (SECRET_PATTERNS.some((pattern) => { pattern.lastIndex = 0; return pattern.test(text) })) return true
-  ASSIGNED_SECRET.lastIndex = 0
-  BEARER.lastIndex = 0
-  URL_CREDENTIALS.lastIndex = 0
-  return ASSIGNED_SECRET.test(text) || BEARER.test(text) || URL_CREDENTIALS.test(text)
+  for (const pattern of [ASSIGNED_SECRET, QUOTED_SECRET, BEARER, URL_CREDENTIALS]) {
+    pattern.lastIndex = 0
+    if (pattern.test(text)) return true
+  }
+  return false
 }
 
 /** Secrets, emails and home folders out. Idempotent. */
 export function redact(text: string, opts: RedactOptions = {}): string {
   let out = text
   for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, '[redacted]')
-  out = out.replace(ASSIGNED_SECRET, (_whole, name: string) => `${name}[redacted]`)
+  // Bearer first: `auth: Bearer <token>` would otherwise lose the word `Bearer` and keep the token.
   out = out.replace(BEARER, (whole) => `${whole.split(/\s+/)[0]} [redacted]`)
+  out = out.replace(QUOTED_SECRET, (_whole, name: string, quote: string) => `${name}${quote}[redacted]${quote}`)
+  out = out.replace(ASSIGNED_SECRET, (_whole, name: string) => `${name}[redacted]`)
   out = out.replace(URL_CREDENTIALS, '$1[redacted]@')
   out = out.replace(EMAIL, '[email]')
   const home = opts.home?.replace(/\/+$/, '')

@@ -405,7 +405,11 @@ export class LessonStore {
     try {
       this.run(['add', '--', '.gitignore'])
       this.run(['commit', '-q', '-m', 'lessons: ignore usage and export records', '--', '.gitignore'])
-    } catch { /* the next write tries again */ }
+    } catch {
+      // Put it back, so the next write tries again: left staged, it would ride along in the next commit.
+      try { this.run(['reset', '-q', '--', '.gitignore']) } catch { /* nothing staged */ }
+      writeFileSync(ignore, text, { mode: 0o600 })
+    }
   }
 
   private gitEnv(): NodeJS.ProcessEnv {
