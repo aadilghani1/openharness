@@ -227,7 +227,13 @@ async fn run(config: config::Config) -> io::Result<()> {
         let status = std::process::Command::new(shell).arg("-c").arg(c).status();
         std::process::exit(status.ok().and_then(|s| s.code()).unwrap_or(1))
     }
-    let explicit = f.port.or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok()));
+    // $PORT (as the daemon reads it): set but not a port is an error — never the default
+    // daemon's port in its place, which is someone's real one.
+    let from_env = match std::env::var("PORT") {
+        Ok(p) => match p.trim().parse::<u16>() { Ok(n) if n > 0 => Some(n), _ => { eprintln!("hn: PORT is not a port number: '{p}'"); std::process::exit(1) } },
+        Err(_) => None,
+    };
+    let explicit = f.port.or(from_env);
     let port = explicit.unwrap_or(18473u16);
     // tmux's server with no client attached: sessions held for a script's commands.
     if f.headless {
