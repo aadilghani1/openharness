@@ -1340,8 +1340,15 @@ class _TerminalPanelState extends State<TerminalPanel>
     widget.onInputTap?.call();
   }
 
+  /// Whether a tap on a link opens it. On a phone, always: there is no ⌘ or ctrl to hold, and a
+  /// URL or `file:line` you cannot open by touching it is a dead word. Elsewhere, with the modifier.
+  bool get _linkTapOpens =>
+      defaultTargetPlatform == TargetPlatform.iOS ||
+      defaultTargetPlatform == TargetPlatform.android ||
+      _linkModifierPressed;
+
   bool _onLinkTapDown(TapDownDetails details, CellOffset cell) {
-    _pressedLink = _linkModifierPressed
+    _pressedLink = _linkTapOpens
         ? _linkAtPointer(details.globalPosition)
         : null;
     return _pressedLink != null;
@@ -1353,7 +1360,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     // Read the current buffer again: streamed output may have replaced the
     // text between press and release, or this pane may now show another agent.
     if (target == null ||
-        !_linkModifierPressed ||
+        !_linkTapOpens ||
         target != _linkAtPointer(details.globalPosition)) {
       return;
     }
