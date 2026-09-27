@@ -1800,7 +1800,8 @@ fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'st
 fn header_line_at(picker: &Picker, width: usize, indent: usize) -> Option<Line<'static>> {
     // change-header: its text in place of the hints.
     if let Some(h) = &picker.header_text { if h.is_empty() { return None } return Some(Line::from(vec![Span::raw(" ".repeat(indent)), Span::styled(clip(h, width.saturating_sub(indent)), theme::fzf().header_style())])) }
-    if picker.hints.is_empty() && picker.heading.is_none() { return None }
+    // (No row at all when every hint's key is bound to something else and there is no heading.)
+    if picker.heading.is_none() && picker.hints.iter().all(|(k, _)| crate::input::rebound(k)) { return None }
     let mut spans = vec![Span::raw(" ".repeat(indent))];
     let mut used = indent;
     // What the list is for, first (a task about to be sent).
