@@ -151,6 +151,7 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     app.headless = true;
     app.terminal_focused = false;
     let Some(socket) = ipc::serve(tx.clone(), port) else { return Ok(()) };
+    if let Some(here) = ipc::here() { ipc::mark_headless(&here) }
     let read = commands::load_config(&mut app);
     app.cfg_finished = true;
     app.config_files = read;
@@ -194,6 +195,7 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     app.fleet.save_cache();
     app.write_sessions(app::Save::Leave);
     mirror::tell_mirrors_now(&app);
+    if let Some(here) = ipc::here() { let _ = std::fs::remove_file(here.with_extension("headless")); }
     ipc::gone(&socket);
     // (hn with no terminal going leaves the server's say as it was.)
     ids::leave(None);
@@ -339,6 +341,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     app.first_session();
     // `hn <command>` from a shell comes in here.
     let socket = ipc::serve(tx.clone(), port);
+    // (A client with a terminal: never marked as one without, whatever a crash left.)
+    if let Some(here) = ipc::here() { let _ = std::fs::remove_file(here.with_extension("headless")); }
     // tmux's defaults, then ~/.tmux.conf, then tui.toml: each one can change what the last set.
     // Mouse on (Shift-drag is still the terminal's own selection) unless tmux.conf says off.
     app.mouse = true;

@@ -621,6 +621,9 @@ pub struct App {
     /// The turns that ended in an error, not looked at since (when, and the error's line): kept
     /// in seen.json, so a failure is still ✗ after hn starts again.
     pub agent_errors: HashMap<(String, String), (u64, String)>,
+    /// The questions harness-needs was fired for, by this server name ("name\trequest" → when):
+    /// a client that starts later (the headless left at a detach) does not fire them again.
+    pub announced: HashMap<String, u64>,
     /// seen.json as this client last read or wrote it (its time and size): another terminal's
     /// write is read in.
     seen_stamp: Option<(std::time::SystemTime, u64)>,
@@ -810,6 +813,7 @@ impl App {
             seen_dirty: false,
             seen_rostered: HashSet::new(),
             agent_errors: HashMap::new(),
+            announced: HashMap::new(),
             seen_stamp: None,
             back_from: None,
             marked: None,
@@ -1335,6 +1339,7 @@ impl App {
                     let name = agent.name.clone();
                     let hook_key = agent.key();
                     let prompt = agent.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default();
+                    let rid = agent.question.as_ref().map(|q| q.request_id.clone()).unwrap_or_default();
                     if fresh && !visible.contains(&agent.key()) {
                         { let k = self.keymap.hint("choose-tree -a").unwrap_or_default(); self.say(format!("{name} is waiting on you — {k}"), theme::ATTENTION); self.toast_hold = Some(4000) }
                         // A bell as a window's is rung: not with bell-action none, nor visual-bell on.
@@ -1342,7 +1347,15 @@ impl App {
                         if !quiet { crate::bell() }
                     }
                     if fresh && !self.terminal_focused { crate::notify(&format!("{name} needs input"), &prompt) }
-                    if fresh { crate::commands::notify_harness(self, "harness-needs", &hook_key) }
+                    // harness-needs once a question, by this server name — not again from the client
+                    // that takes over at a detach, nor at the next start.
+                    let server = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
+                    let asked_key = format!("{server}\t{machine_id}:{rid}");
+                    if fresh && !self.announced.contains_key(&asked_key) {
+                        self.announced.insert(asked_key, fleet::now_ms());
+                        self.seen_dirty = true;
+                        crate::commands::notify_harness(self, "harness-needs", &hook_key)
+                    }
                 } else {
                     // A harness not listed yet (the daemon hands the open questions over as the
                     // link comes up, before hn has asked for the list): kept until it is.
@@ -2420,12 +2433,16 @@ impl App {
     }
 
     /// Whether this process runs the harness hooks: one of a server name's does, as tmux runs a
-    /// hook once — the oldest running client (its socket made first).
+    /// hook once — the oldest running client with a terminal (a hook's message shows on one, as
+    /// tmux shows it on the best client), else the oldest with none.
     pub fn runs_agent_hooks(&self) -> bool {
         let Some(me) = crate::ipc::here() else { return true };
         let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
         let made = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
-        crate::ipc::clients_of(&name).into_iter().min_by_key(|p| made(p)).map(|oldest| oldest == me).unwrap_or(true)
+        let clients = crate::ipc::clients_of(&name);
+        let attached: Vec<std::path::PathBuf> = clients.iter().filter(|p| !crate::ipc::is_headless(p)).cloned().collect();
+        let pool = if attached.is_empty() { clients } else { attached };
+        pool.into_iter().min_by_key(|p| made(p)).map(|oldest| oldest == me).unwrap_or(true)
     }
 
     /// A session of this client's: its windows' ids and names, and its current window's id.
@@ -3409,6 +3426,9 @@ impl App {
                 *e = (*e).max(t);
             }
         }
+        for (k, v) in doc.get("asked").and_then(Value::as_object).cloned().unwrap_or_default() {
+            if let Some(t) = v.as_u64() { let e = self.announced.entry(k).or_insert(0); *e = (*e).max(t); }
+        }
         for (k, v) in doc.get("errors").and_then(Value::as_object).cloned().unwrap_or_default() {
             let (Some((m, a)), Some(at)) = (k.split_once(':'), v.get("at").and_then(Value::as_u64)) else { continue };
             let key = (m.to_string(), a.to_string());
@@ -3427,10 +3447,14 @@ impl App {
         self.merge_seen(&doc);
         let seen: serde_json::Map<String, Value> = self.seen_at.iter().map(|((m, a), t)| (format!("{m}:{a}"), json!(t))).collect();
         let errors: serde_json::Map<String, Value> = self.agent_errors.iter().map(|((m, a), (at, line))| (format!("{m}:{a}"), json!({ "at": at, "line": line }))).collect();
+        // (A week of them: a question open longer than that is asked again.)
+        let week = fleet::now_ms().saturating_sub(7 * 24 * 3600 * 1000);
+        self.announced.retain(|_, t| *t >= week);
+        let asked: serde_json::Map<String, Value> = self.announced.iter().map(|(k, t)| (k.clone(), json!(t))).collect();
         let path = Self::seen_path();
         if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
         let temp = path.with_extension(format!("json.{}.tmp", std::process::id()));
-        if std::fs::write(&temp, json!({ "since": self.seen_since, "seen": seen, "errors": errors }).to_string()).is_ok() { let _ = std::fs::rename(temp, path); }
+        if std::fs::write(&temp, json!({ "since": self.seen_since, "seen": seen, "errors": errors, "asked": asked }).to_string()).is_ok() { let _ = std::fs::rename(temp, path); }
         self.seen_stamp = Self::seen_stamp_now();
     }
 

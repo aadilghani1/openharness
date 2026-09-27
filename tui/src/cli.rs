@@ -139,8 +139,9 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
         // Any tmux command (by name, alias, or the start of one), or hn's: run by the client.
         // (A name it does not know may be a command-alias: the running client knows.)
         c if crate::commands::is_command_name(c) || crate::cmd::find(c).is_ok() || (!c.starts_with('-') && crate::ipc::alive(socket.as_deref(), name.as_deref())) => {
-            // No client, and sessions kept: tmux's server has them — hn with no terminal, started.
-            if socket.is_none() && !crate::ipc::alive(None, name.as_deref()) && has_sessions(name.as_deref()) { spawn_headless(name.as_deref(), explicit_port).await; }
+            // No client, and sessions kept (the desk's too, which `ls` lists): tmux's server has
+            // them — hn with no terminal, started, so every command is answered as `ls` is.
+            if socket.is_none() && !crate::ipc::alive(None, name.as_deref()) && has_any_session(name.as_deref()) { spawn_headless(name.as_deref(), explicit_port).await; }
             // One naming a session another client of this name has: run by that client.
             if socket.is_none() {
                 if let Some(owner) = owner_of_target(args, name.as_deref()) {
@@ -164,6 +165,12 @@ pub fn has_session_named(name: Option<&str>, t: &str) -> bool {
     if let Some(id) = t.strip_prefix('$').and_then(|i| i.parse::<u64>().ok()) { return rows.iter().any(|r| r.get("id").and_then(Value::as_u64) == Some(id)) }
     if let Some(exact) = t.strip_prefix('=') { return names.iter().any(|n| n == exact) }
     names.iter().any(|n| n == t) || names.iter().filter(|n| n.starts_with(t)).count() == 1
+}
+
+/// Any session kept for this server name, the desk's included.
+pub fn has_any_session(name: Option<&str>) -> bool {
+    let doc = crate::app::read_sessions(&crate::app::sessions_path(name));
+    doc["sessions"].as_array().map(|rows| !rows.is_empty()).unwrap_or(false)
 }
 
 pub fn has_sessions(name: Option<&str>) -> bool {

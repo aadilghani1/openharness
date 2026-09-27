@@ -30,6 +30,13 @@ static CLAIMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 pub fn forwarded() -> bool { FORWARDED.load(std::sync::atomic::Ordering::Relaxed) }
 pub fn here() -> Option<PathBuf> { HERE.get().cloned() }
 
+/// A client with no terminal (hn --headless) marks its socket so (`<socket>.headless`): the
+/// clients with one run what shows on a terminal first.
+pub fn mark_headless(socket: &std::path::Path) { let _ = std::fs::write(socket.with_extension("headless"), b""); }
+
+/// Whether the client at [socket] has no terminal.
+pub fn is_headless(socket: &std::path::Path) -> bool { socket.with_extension("headless").exists() }
+
 pub fn dir() -> PathBuf {
     let base = std::env::var("HN_TMPDIR").or_else(|_| std::env::var("TMUX_TMPDIR")).unwrap_or_else(|_| "/tmp".into());
     PathBuf::from(base).join(format!("hn-{}", unsafe { getuid() }))
