@@ -3723,7 +3723,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // is no account zoo: a guest's window keeps its own and says which daemon is paired in `daemon_presence`
   // (pair/brain.ts), which is what `guestPair` holds. A backend that cannot be reached keeps the last answer
   // rather than switching pairing off on a blip.
-  let zooPair: { known: boolean; pair: string | null; autonomy: Autonomy; consent: boolean } = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY, consent: false }
+  let zooPair: { known: boolean; pair: string | null; autonomy: Autonomy; consent: boolean; consentAt: string | null } = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY, consent: false, consentAt: null }
   let guestPair: string | null = null
   let guestAutonomy: Autonomy | null = null
   let guestConsent = false
@@ -3734,17 +3734,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Daemons off: nothing is paired, and the dial is left as it was (nothing reads it).
     if (!daemons.on()) { pairSensor.setPair(null); return }
     const pairing = pairingFrom(zooPair, { pair: guestPair, autonomy: guestAutonomy, consent: guestConsent }, DEFAULT_AUTONOMY)
-    // A request: a step above `suggest` waits for the person's yes at a window (pair/gate.ts).
-    pairGate.setRequested(pairing.autonomy, { keepConfirmed: !pairing.consented })
+    // A request: a step above `suggest` waits for the person's yes at a window (pair/gate.ts), and a yes
+    // holds only under the consent (`epoch`) it was given in.
+    pairGate.setRequested(pairing.autonomy, { keepConfirmed: !pairing.consented, epoch: pairing.epoch })
     pairSensor.setPair(pairing.pair)
   }
   onZooRead = (result) => {
     if (result.status === 200) {
-      const zoo = (result.body.data as { zoo?: { pair?: unknown; autonomy?: unknown; consent?: { watching?: unknown } | null } } | undefined)?.zoo
+      const zoo = (result.body.data as { zoo?: { pair?: unknown; autonomy?: unknown; consent?: { watching?: unknown; at?: unknown } | null } } | undefined)?.zoo
       const pair = zoo?.pair
-      zooPair = { known: true, pair: isRosterDaemon(pair) ? pair : null, autonomy: isAutonomy(zoo?.autonomy) ? zoo.autonomy : DEFAULT_AUTONOMY, consent: zoo?.consent?.watching === true }
+      const at = zoo?.consent?.at
+      zooPair = {
+        known: true, pair: isRosterDaemon(pair) ? pair : null, autonomy: isAutonomy(zoo?.autonomy) ? zoo.autonomy : DEFAULT_AUTONOMY,
+        consent: zoo?.consent?.watching === true, consentAt: typeof at === 'string' && at.length <= 64 ? at : null,
+      }
     } else if (result.status === 401) {
-      zooPair = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY, consent: false }
+      zooPair = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY, consent: false, consentAt: null }
     }
     applyPair()
   }

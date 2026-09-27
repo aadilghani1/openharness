@@ -22,6 +22,8 @@ const SECRETS: readonly string[] = ROSTER.filter((d) => d.rarity === 'secret').m
 const RARITY = new Map<string, string>(ROSTER.map((d) => [d.id, d.rarity]))
 /** After drop 1's release (2026-09-26), so every daemon of the roster is drawable. */
 const NOW = new Date('2026-10-01T12:00:00.000Z')
+/** An hour on: when a retried request arrives. */
+const LATER = new Date('2026-10-01T13:00:00.000Z')
 const N = 200_000
 const SHINY = 1 / R.shinyOneIn
 
@@ -445,17 +447,11 @@ describe('replay: the same request twice changes nothing the second time', () =>
     const rng = seeded(64)
     for (let z = 0; z < 5_000; z++) {
       const zoo = reachableZoo(rng, rng(8))
+      // Consent answered any number of times, before and after dial moves: no exception (see below).
       const ops = Array.from({ length: 1 + rng(64) }, () => (rng(10) ? randomOp(zoo, rng, true) : { op: 'zoo.consent' as const, watching: rng(2) === 0 }))
-      // Minus the known exception (pinned below): a batch that answers the consent question more than once,
-      // or after moving the dial. Keep the first consent op, and only when no dial move precedes it.
-      const dial = ops.findIndex((op) => op.op === 'zoo.autonomy')
-      const consent = ops.findIndex((op) => op.op === 'zoo.consent')
-      for (let i = ops.length - 1; i >= 0; i--) {
-        if (ops[i].op === 'zoo.consent' && (i !== consent || (dial >= 0 && dial < i))) ops.splice(i, 1)
-      }
-      if (!ops.length) ops.push({ op: 'zoo.habit', key: 'find' })
       const once = applyZooOps(zoo, ops, rng, NOW)
-      const twice = applyZooOps(once.zoo, ops, rng, NOW)
+      // Delivered again an hour later: consent's time is the first delivery's, like everything else.
+      const twice = applyZooOps(once.zoo, ops, rng, LATER)
       expect(twice.zoo, JSON.stringify(ops)).toEqual(once.zoo)
       expect(twice.hatched).toEqual([])
       expect(twice.grants).toEqual([])
@@ -463,29 +459,110 @@ describe('replay: the same request twice changes nothing the second time', () =>
   }, 120_000)
 })
 
-describe('replay: a known exception', () => {
-  // KNOWN ISSUE (reported, not fixed here): `zoo.consent { watching: true }` drops the dial to `watch` only on
-  // the transition, so its effect depends on the consent it finds. Within one batch that makes the replay (a
-  // retry after a lost answer) land somewhere else than the first delivery did:
-  //  - [dial up, agree]: lands at `watch`; the replay finds consent given, keeps the dial move and ends ABOVE
-  //    `watch`, at a level the person never chose after agreeing.
-  //  - [agree, revoke] on a zoo already agreed at act-on-key: lands at act-on-key; the replay drops it to `watch`.
-  // These assert the contract ("the same request twice changes nothing") and are expected to fail until
-  // lib/zoo.ts decides what the dial should do.
+describe('replay: consent and the dial, in any order', () => {
+  // Found by the replay property above (it held these out as a known exception until fixed): `zoo.consent
+  // { watching: true }` dropped the dial to `watch` only on the transition, so its effect depended on the
+  // consent it found, and a retried request (its answer lost) landed somewhere else than the first delivery:
+  //  - [dial up, agree]: the first delivery lands at `watch`; the replay found consent given, kept the dial
+  //    move and ended ABOVE `watch`, at a level the person never chose after agreeing.
+  //  - [agree, revoke] on a zoo agreed at act-on-key: the first delivery kept act-on-key; the replay agreed
+  //    from "revoked", which dropped it to `watch`.
+  // Now each op is an assignment in the person's order — a level sets the dial, a yes sets it to `watch`
+  // (every yes, a repeated one too), a no leaves it — and consent's time moves only when a request changes
+  // the answer. So a request lands in the same place however often it arrives.
   const dialUpThenAgree: ZooOp[] = [{ op: 'zoo.autonomy', level: 'act-on-key' }, { op: 'zoo.consent', watching: true }]
   const agreeThenRevoke: ZooOp[] = [{ op: 'zoo.consent', watching: true }, { op: 'zoo.consent', watching: false }]
   const agreed: Zoo = { ...emptyZoo(), autonomy: 'act-on-key', consent: { watching: true, at: '2026-09-30T00:00:00.000Z' } }
-  it('(what the first delivery does, so the expected failures below fail for the replay only)', () => {
-    expect(applyZooOps(emptyZoo(), dialUpThenAgree, seeded(1), NOW).zoo.autonomy).toBe('watch')
-    expect(applyZooOps(agreed, agreeThenRevoke, seeded(1), NOW).zoo.autonomy).toBe('act-on-key')
-  })
-  it.fails('a replay of [dial up, agree to be watched] stays at watch', () => {
+
+  it('a replay of [dial up, agree to be watched] stays at watch', () => {
     const once = applyZooOps(emptyZoo(), dialUpThenAgree, seeded(1), NOW)
-    expect(applyZooOps(once.zoo, dialUpThenAgree, seeded(1), NOW).zoo.autonomy).toBe('watch')
+    expect(once.zoo).toMatchObject({ autonomy: 'watch', consent: { watching: true, at: NOW.toISOString() } })
+    const twice = applyZooOps(once.zoo, dialUpThenAgree, seeded(1), LATER)
+    expect(twice.zoo).toEqual(once.zoo)
+    expect(twice.changed).toBe(false)
   })
-  it.fails('a replay of [agree, revoke] keeps the dial where the first delivery left it', () => {
+
+  it('a replay of [agree, revoke] keeps the dial where the first delivery left it', () => {
+    // The yes starts the dial at watch (the person agreed again, so they opt in again); the no keeps it.
     const once = applyZooOps(agreed, agreeThenRevoke, seeded(1), NOW)
-    expect(applyZooOps(once.zoo, agreeThenRevoke, seeded(1), NOW).zoo.autonomy).toBe('act-on-key')
+    expect(once.zoo).toMatchObject({ autonomy: 'watch', consent: { watching: false, at: NOW.toISOString() } })
+    const twice = applyZooOps(once.zoo, agreeThenRevoke, seeded(1), LATER)
+    expect(twice.zoo).toEqual(once.zoo)
+    expect(twice.changed).toBe(false)
+  })
+
+  // Everything a person can do to these two in one request, in every order: each of the six moves below,
+  // every sequence of up to four (so every permutation of every choice of four), from every start there is.
+  type Move = 'watch' | 'suggest' | 'act-on-key' | 'act-within-rules' | 'agree' | 'revoke'
+  const MOVES: Move[] = ['watch', 'suggest', 'act-on-key', 'act-within-rules', 'agree', 'revoke']
+  const opOf = (move: Move): ZooOp => move === 'agree' || move === 'revoke'
+    ? { op: 'zoo.consent', watching: move === 'agree' }
+    : { op: 'zoo.autonomy', level: move }
+  const sequences = (n: number): Move[][] => n === 0 ? [[]] : sequences(n - 1).flatMap((s) => MOVES.map((m) => [...s, m]))
+  const ALL = [1, 2, 3, 4].flatMap(sequences)
+  const STARTS: Zoo[] = [null, true, false].flatMap((watching) => (['watch', 'suggest', 'act-on-key', 'act-within-rules'] as const).map((autonomy): Zoo => ({
+    ...emptyZoo(), autonomy, consent: watching === null ? null : { watching, at: '2026-09-29T00:00:00.000Z' },
+  })))
+  /** What the person's moves, in their order, say: the last answer, and the last move of the dial — a yes
+   *  being a move to `watch`. Computed from the moves alone, not from the zoo's code. */
+  const meant = (start: Zoo, moves: Move[]): { autonomy: string; watching: boolean | null } => {
+    const answers = moves.filter((m) => m === 'agree' || m === 'revoke')
+    const dial = moves.filter((m) => m !== 'revoke').map((m) => (m === 'agree' ? 'watch' : m))
+    return {
+      autonomy: dial.length ? dial[dial.length - 1] : start.autonomy,
+      watching: answers.length ? answers[answers.length - 1] === 'agree' : start.consent?.watching ?? null,
+    }
+  }
+
+  it(`every order of up to four moves, from every start: lands where the moves say, and a replay moves nothing (${ALL.length} x ${STARTS.length})`, () => {
+    for (const start of STARTS) {
+      for (const moves of ALL) {
+        const ops = moves.map(opOf)
+        const why = `${JSON.stringify(start.consent)} ${start.autonomy} + [${moves.join(', ')}]`
+        const once = applyZooOps(start, ops, seeded(1), NOW)
+        expect({ autonomy: once.zoo.autonomy, watching: once.zoo.consent?.watching ?? null }, why).toEqual(meant(start, moves))
+        // Consent's time moves exactly when the request changed the answer.
+        const moved = (once.zoo.consent?.watching ?? null) !== (start.consent?.watching ?? null)
+        expect(once.zoo.consent?.at ?? null, why).toBe(moved ? NOW.toISOString() : start.consent?.at ?? null)
+        expect(once.changed, why).toBe(once.zoo.autonomy !== start.autonomy || moved)
+        // The replay, later, and a third delivery: nothing moves, nothing is written.
+        const twice = applyZooOps(once.zoo, ops, seeded(1), LATER)
+        expect(twice.zoo, why).toEqual(once.zoo)
+        expect(twice.changed, why).toBe(false)
+        // One request is the same as the moves sent one at a time (a client that never batched).
+        const oneByOne = ops.reduce((zoo, op) => applyZooOps(zoo, [op], seeded(1), NOW).zoo, start)
+        expect({ autonomy: oneByOne.autonomy, watching: oneByOne.consent?.watching ?? null }, why).toEqual(meant(start, moves))
+        // A level above watch is only ever one the person chose after their last yes.
+        const lastYes = moves.lastIndexOf('agree')
+        if (lastYes >= 0 && once.zoo.autonomy !== 'watch') {
+          expect(moves.slice(lastYes + 1), why).toContain(once.zoo.autonomy)
+        }
+      }
+    }
+  })
+
+  it('a revoked level is never raised again by the yes that follows, in one request or two', () => {
+    const revoked = applyZooOps(agreed, [{ op: 'zoo.consent', watching: false }], seeded(1), NOW).zoo
+    expect(revoked).toMatchObject({ autonomy: 'act-on-key', consent: { watching: false } })
+    expect(applyZooOps(revoked, [{ op: 'zoo.consent', watching: true }], seeded(1), LATER).zoo.autonomy).toBe('watch')
+    const both = applyZooOps(agreed, [{ op: 'zoo.consent', watching: false }, { op: 'zoo.consent', watching: true }], seeded(1), NOW)
+    // Agreed before and after: consent (and its time) did not change, but the yes still starts at watch.
+    expect(both.zoo).toMatchObject({ autonomy: 'watch', consent: agreed.consent })
+    expect(both.changed).toBe(true)
+  })
+
+  it('two writers racing a yes and a dial move: the later write wins, as the person\'s later move', () => {
+    // The compare-and-set loser replays its request on the winner's zoo (last writer wins by the zoo's
+    // revision): the result is the two moves in the order they were written, either of which a person
+    // could have made — a raise after the yes stands, a yes after the raise starts at watch.
+    const agree: ZooOp[] = [{ op: 'zoo.consent', watching: true }]
+    const raise: ZooOp[] = [{ op: 'zoo.autonomy', level: 'suggest' }]
+    const after = (first: ZooOp[], second: ZooOp[]): Zoo => applyZooOps(applyZooOps(emptyZoo(), first, seeded(1), NOW).zoo, second, seeded(1), NOW).zoo
+    expect(after(agree, raise)).toMatchObject({ autonomy: 'suggest', consent: { watching: true } })
+    expect(after(raise, agree)).toMatchObject({ autonomy: 'watch', consent: { watching: true } })
+    // The later write delivered again changes nothing.
+    expect(applyZooOps(after(agree, raise), raise, seeded(1), LATER).changed).toBe(false)
+    expect(applyZooOps(after(raise, agree), agree, seeded(1), LATER).changed).toBe(false)
   })
 })
 

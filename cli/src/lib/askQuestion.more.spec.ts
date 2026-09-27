@@ -25,6 +25,7 @@ import {
 } from './askQuestion.js'
 import type { RegisteredSession } from './registry.js'
 import type { AgentEngine } from '../engines/types.js'
+import { isAllowClass } from '../pair/classify.js'
 
 const fixture = (name: string): string => readFileSync(join(__dirname, '__fixtures__', `question-${name}.txt`), 'utf8')
 const permission = (name: string): string => readFileSync(join(__dirname, '__fixtures__', `permission-${name}.txt`), 'utf8')
@@ -209,6 +210,89 @@ describe('an answer whose key names no question (regression: a short or empty ke
       expect(await r.controller.answer({ sessionId: 's1', answers: { [key]: 'Yes' } })).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
       expect(r.keys).toEqual([])
     }
+  })
+})
+
+describe('a stale `Approve …` header (regression: a header from an earlier dialog named the current one)', () => {
+  // An approval is titled `Approve <header>: <argument>`, and the header is shared by every prompt of its
+  // kind. Two ways an earlier prompt's header reached the current one:
+  //  - pickAnswer's prefix rule: a key left from an earlier prompt — `Approve Bash command` (its argument
+  //    unread) — was a prefix of `Approve Bash command: rm -rf ~/projects`, so a no-requestId "Yes" to the
+  //    old prompt approved the new one; the other way round, an old full title named a header-only one.
+  //  - the parser: an unframed prompt under an answered one still in scrollback walked up past that one's
+  //    rows to its frame, and was titled — and its dialog read by the pair's classifier — by the OLD header
+  //    and command. A [y] on `npm test` would have approved whatever the new prompt runs.
+  const rule = '─'.repeat(60)
+  const earlier = [rule, ' Bash command', '', '   npm test', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel · Tab to amend', '']
+  const output = ['⏺ Bash(npm test)', '  ⎿  ok', '']
+  const unframed = [' Do you want to proceed?', '   python3 scripts/wipe.py --all', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel', '']
+  const headerOnly = [rule, ' Bash command', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel'].join('\n')
+  const rmRf = permission('claude').replaceAll('curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin', 'rm -rf ~/projects')
+  const project = { permission: true, cwd: '/tmp/project' }
+
+  it('pickAnswer: an approval is named by its own text only, never a prefix either way', () => {
+    const exact = { exact: true }
+    expect(pickAnswer({ 'Approve Bash command': 'Yes' }, 'Approve Bash command: rm -rf ~/projects', new Set(), exact)).toBeNull()
+    expect(pickAnswer({ 'Approve Bash command: npm test': 'Yes' }, 'Approve Bash command', new Set(), exact)).toBeNull()
+    expect(pickAnswer({ 'Approve Bash command: rm -rf ~/pro': 'Yes' }, 'Approve Bash command: rm -rf ~/projects', new Set(), exact)).toBeNull()
+    expect(pickAnswer({ 'approve bash command:  rm -rf ~/projects…': 'No' }, 'Approve Bash command: rm -rf ~/projects', new Set(), exact))
+      .toEqual({ key: 'approve bash command:  rm -rf ~/projects…', value: 'No' })
+    // A question the agent asks keeps its prefix rule (the device cuts long labels).
+    expect(pickAnswer({ 'Which drink would': 'Tea' }, 'Which drink would you like?', new Set())).not.toBeNull()
+  })
+
+  it('types nothing into a permission prompt for a no-requestId answer keyed by an earlier prompt\'s header', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const stale = rig([rmRf, CLOSED])
+    expect(await stale.controller.answer({ sessionId: 's1', answers: { 'Approve Bash command': 'Yes' } })).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(stale.keys).toEqual([])
+    // …nor into a header-only prompt for an earlier prompt's full title.
+    const bare = rig([headerOnly, CLOSED])
+    expect(await bare.controller.answer({ sessionId: 's1', answers: { 'Approve Bash command: npm test': 'Yes' } })).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(bare.keys).toEqual([])
+    // The prompt's own title still answers it, and its requestId still answers it by position.
+    const own = rig([rmRf, CLOSED])
+    expect(await own.controller.answer({ sessionId: 's1', answers: { 'Approve Bash command: rm -rf ~/projects': 'No' } })).toEqual({ ok: true })
+    expect(own.keys).toEqual(['3'])
+    const byId = rig([rmRf, CLOSED])
+    expect(await byId.controller.answer({ requestId: idOf(rmRf), sessionId: 's1', answers: { 'Approve Bash command': 'No' } })).toEqual({ ok: true })
+    expect(byId.keys).toEqual(['3'])
+  })
+
+  it('an unframed prompt under an answered one is not titled, or read, by the answered one', () => {
+    const view = asQuestion(parseQuestionPane([...earlier, ...output, ...unframed].join('\n')))
+    expect(view.question).toBe('python3 scripts/wipe.py --all')
+    expect(view.dialog).not.toMatch(/Bash command|^\s*npm test$|Tab to amend/m)
+    expect(view.dialog).toContain('python3 scripts/wipe.py --all')
+    expect(isAllowClass(view.dialog!, project)).toBe(false)
+    // What it was read as before: `Approve Bash command: npm test`, a dialog the classifier allows a [y] on.
+    expect(isAllowClass([' Bash command', '', '   npm test', ''].join('\n'), project)).toBe(true)
+  })
+
+  it('an earlier question dialog ends the walk the same way; right under one, the title is "Approval required"', () => {
+    const question = [rule, ' ☐ Drink', '', ' Which drink would you like?', '', ' ❯ 1. Tea', '   2. Coffee', '', ' Enter to select · ↑/↓ to navigate · Esc to cancel', '']
+    const view = asQuestion(parseQuestionPane([...question, ...output, ...unframed].join('\n')))
+    expect(view.question).toBe('python3 scripts/wipe.py --all')
+    expect(view.dialog).not.toMatch(/Drink|Tea|Coffee/)
+    const underIt = asQuestion(parseQuestionPane([...earlier, ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel'].join('\n')))
+    expect(underIt).toMatchObject({ permission: true, question: 'Approval required', dialog: '❯ 1. Yes\n   2. No' })
+  })
+
+  it('a framed prompt under an answered one still reads its own frame, header and command, under its own id', () => {
+    const current = [rule, ' Bash command', '', '   ls -la', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel']
+    const view = asQuestion(parseQuestionPane([...earlier, ...output, ...current].join('\n')))
+    expect(view.question).toBe('Approve Bash command: ls -la')
+    expect(view.dialog).toBe('Bash command\n\n   ls -la\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No')
+    expect(idOf([...earlier, ...output, ...current].join('\n'))).toBe(idOf(current.join('\n')))
+  })
+
+  it('numbered text inside the frame, and prose that mentions a key, are not an earlier dialog', () => {
+    const edit = [rule, ' Edit file', ' notes.md', '', ' 1. Add the tests', ' 2. Make Esc close the modal', '    press esc to see it', '',
+      ' Do you want to make this edit to notes.md?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel']
+    const view = asQuestion(parseQuestionPane(edit.join('\n')))
+    expect(view.question).toBe('Approve Edit file: notes.md')
+    expect(view.dialog).toContain('Make Esc close the modal')
   })
 })
 

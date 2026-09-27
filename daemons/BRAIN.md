@@ -119,7 +119,8 @@ recaps, file contents and anything a model says are untrusted data. So:
    `daemon_confirm { kind: 'autonomy' | 'rules', nonce }` from a window that displayed the request. Every
    change is announced with a `daemon_say`; `daemon_state` carries `autonomy`, `autonomyRequested` and
    `confirms`. What was confirmed is kept 0600 (`pair/confirmed.json`); lowering below it has to be
-   confirmed again to go back. Rules apply only to
+   confirmed again to go back, and a yes holds only under the consent it was given in (the zoo's
+   `consent.at`): once consent is answered again, the daemon steps down to `suggest` and asks again. Rules apply only to
    allow-class permission prompts, never to a plan or a question the agent asks.
 5. **Talk and the pair's words.** `talk` is only `daemon_talk` from a window (the `pair` verb answers
    `UI_ONLY`), six a minute and sixty an hour, each answer with a cost note. The pair harness's `say` is
@@ -307,8 +308,9 @@ restart is a baseline, not a return.
   agent's question, never a persistent option. A malformed file is no rules at all. Not built:
   `start_project`.
 - **Consent** (`zoo.consent { watching }`, `consent { watching, at }`): until it is true, `pairingFrom`
-  pairs nothing (no sensor, no journal, no learner) and asks for `watch`; agreeing sets the dial to
-  `watch`. A guest window says it in `daemon_presence { consent }`. What the daemon reads and writes, for
+  pairs nothing (no sensor, no journal, no learner) and asks for `watch`; every yes sets the dial to
+  `watch`, so a level held before a no never comes back with the yes that follows (and the gate's
+  confirmation of it is void under the new `consent.at`). A guest window says it in `daemon_presence { consent }`. What the daemon reads and writes, for
   the consent screen: [README.md](README.md), "What your daemon sees".
 - **Voice** (`pair/voice.ts`): roster lines are slot templates (`{who}`, `{q}`, `{recap}`, `{n}`,
   `{summary}`), filled verbatim; the daemon's words keep their case, digits and spacing; a template with an

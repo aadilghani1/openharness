@@ -857,17 +857,20 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
       zoo.pair = op.id
       return true
     }
+    // The dial and consent are plain assignments, in the order the person made them; what they changed is
+    // settled once the whole request has run (settleConsent), never per op. See applyZooOps.
     case 'zoo.autonomy': {
-      if (!isAutonomy(op.level) || zoo.autonomy === op.level) return false
-      zoo.autonomy = op.level
-      return true
+      if (isAutonomy(op.level)) zoo.autonomy = op.level
+      return false
     }
     case 'zoo.consent': {
-      if (zoo.consent?.watching === op.watching) return false
-      // Agreeing to be watched starts at `watch`: the person opts into `suggest` and above afterwards.
+      // Agreeing to be watched starts at `watch`, every time — agreeing again too: the person opts into
+      // `suggest` and above afterwards, with a dial move made after the yes. Saying no leaves the dial where
+      // it is (nothing is sensed), and a later yes starts at `watch` again, so a level held before a no is
+      // never raised again by the yes that follows it.
       if (op.watching) zoo.autonomy = 'watch'
-      zoo.consent = { watching: op.watching, at: now.toISOString() }
-      return true
+      zoo.consent = { watching: op.watching, at: zoo.consent?.at ?? '' }
+      return false
     }
     case 'zoo.nickname': {
       const d = zoo.daemons.find((x) => x.id === op.id)
@@ -913,6 +916,24 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
   }
 }
 
+/**
+ * The dial and consent after a request, from what they were before it: consent's time moves only when the
+ * request as a whole changed the answer, and what changed is counted once, net. Whether the request moved
+ * them is what they are now against what they were — never whether some op along the way touched them.
+ *
+ * That is what makes a request that answers consent and moves the dial land in the same place however
+ * often it is delivered (a retry after a lost answer, a writer that lost the compare-and-set): each op is
+ * an assignment, so the dial ends at the last move the person made — a level, or `watch` for a yes — and
+ * consent at their last answer, whatever the zoo held when the request arrived.
+ */
+function settleConsent(before: Zoo, next: Zoo, now: Date): boolean {
+  const was = before.consent
+  const is = next.consent
+  if (is && is.watching !== was?.watching) next.consent = { watching: is.watching, at: now.toISOString() }
+  else next.consent = was ? { ...was } : null
+  return next.autonomy !== before.autonomy || next.consent?.watching !== was?.watching
+}
+
 /** Apply `ops` in order to a copy of `zoo`. `changed` is false when every op was a no-op — the same
  *  request twice, or ops on things already gone — and then nothing needs writing. After every op any
  *  held egg that now fits is let into the nest. */
@@ -926,5 +947,6 @@ export function applyZooOps(
     if (applyZooOp(next, op, rng, now, out, ctx)) changed = true
     if (releaseHeld(next, rng, now, out)) changed = true
   }
+  if (settleConsent(zoo, next, now)) changed = true
   return { changed, zoo: next, ...out }
 }

@@ -173,7 +173,7 @@ describe('the confirmation store', () => {
     const { g } = gate(nested)
     g.setRequested('act-on-key')
     g.confirm('autonomy', 'n1', true)
-    expect(JSON.parse(readFileSync(nested, 'utf8'))).toEqual({ autonomy: 'act-on-key', rules: null })
+    expect(JSON.parse(readFileSync(nested, 'utf8'))).toEqual({ autonomy: 'act-on-key', rules: null, epoch: null })
 
     const blocker = join(dir, 'file')
     writeFileSync(blocker, 'x')
@@ -183,5 +183,122 @@ describe('the confirmation store', () => {
     expect(broken.g.confirm('autonomy', 'n1', true)).toEqual({ ok: true, kind: 'autonomy' })
     expect(broken.g.autonomy()).toBe('act-on-key')
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[pair\] could not keep what was confirmed: /))
+  })
+})
+
+describe('consent: a yes holds only under the consent it was given in', () => {
+  // The zoo's dial is a request, and anything local can move it. A yes to a level was given under one
+  // answer to the consent question (the zoo's `consent.at`, the epoch). Once the person has answered it
+  // again — taken it back and given it again, maybe while this daemon was not reading, and the dial raised
+  // after — the old yes must not carry the daemon back up: it steps down to suggest and asks again.
+  it('the same consent read again keeps the yes; a new one voids it, steps down and asks again', () => {
+    const file = join(dir, 'confirmed.json')
+    const { g, events } = gate(file)
+    g.setRequested('act-on-key', { epoch: 'A' })
+    g.confirm('autonomy', 'n1', true)
+    expect(g.autonomy()).toBe('act-on-key')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ autonomy: 'act-on-key', rules: null, epoch: 'A' })
+    g.setRequested('act-on-key', { epoch: 'A' })
+    // Revoked and given again (a new `at`), the dial raised again by something: not the old yes.
+    events.length = 0
+    g.setRequested('act-on-key', { epoch: 'B' })
+    expect(g.autonomy()).toBe('suggest')
+    expect(g.requests()).toEqual([expect.objectContaining({ kind: 'autonomy', level: 'act-on-key', nonce: 'n2' })])
+    expect(events.map((e) => e.type)).toEqual(['changed', 'asked'])
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ autonomy: null, rules: null, epoch: 'B' })
+    // The person says yes again, under B: that one holds, across a restart too.
+    g.confirm('autonomy', 'n2', true)
+    const again = gate(file)
+    again.g.setRequested('act-on-key', { epoch: 'B' })
+    expect(again.g.autonomy()).toBe('act-on-key')
+    expect(again.g.requests()).toEqual([])
+    // Answered again with the dial back at watch (a yes starts there): one step, straight down.
+    again.events.length = 0
+    again.g.setRequested('watch', { epoch: 'C' })
+    expect(again.g.autonomy()).toBe('watch')
+    expect(again.events.map((e) => e.type === 'changed' ? e.line.split(':')[0] : e.type)).toEqual(['autonomy act-on-key -> watch'])
+  })
+
+  it('a hold-down (no consent yet, the zoo unreadable) is not a new answer; a request waiting under the old one goes', () => {
+    const { g, events } = gate()
+    g.setRequested('act-on-key', { epoch: 'A' })
+    g.confirm('autonomy', 'n1', true)
+    g.setRequested('watch', { keepConfirmed: true, epoch: null })
+    g.setRequested('act-on-key', { epoch: 'A' })
+    expect(g.autonomy()).toBe('act-on-key')
+    g.setRequested('suggest', { epoch: 'A' })
+    g.setRequested('act-within-rules', { epoch: 'A' })
+    expect(g.requests().map((r) => r.nonce)).toEqual(['n2'])
+    events.length = 0
+    g.setRequested('act-within-rules', { epoch: 'B' })
+    expect(events.map((e) => e.type)).toEqual(['dropped', 'asked'])
+    expect(g.confirm('autonomy', 'n2', true)).toMatchObject({ ok: false, error: 'STALE_CONFIRM' })
+    expect(g.autonomy()).toBe('suggest')
+  })
+
+  it('a yes kept before epochs were kept counts under no consent: asked once more', () => {
+    const file = join(dir, 'confirmed.json')
+    writeFileSync(file, JSON.stringify({ autonomy: 'act-on-key', rules: null }))
+    const { g } = gate(file)
+    g.setRequested('act-on-key')
+    expect(g.autonomy()).toBe('act-on-key')           // no epoch said: as before
+    const fresh = gate(file)
+    fresh.g.setRequested('act-on-key', { epoch: 'A' })
+    expect(fresh.g.autonomy()).toBe('watch')
+    expect(fresh.g.requests()).toHaveLength(1)
+    // An epoch in the store that is not one (too long) is none: the yes it came with is asked again.
+    writeFileSync(file, JSON.stringify({ autonomy: 'act-on-key', rules: null, epoch: 'x'.repeat(65) }))
+    const odd = gate(file)
+    odd.g.setRequested('act-on-key', { epoch: 'x'.repeat(65) })
+    expect(odd.g.autonomy()).toBe('watch')
+    expect(odd.g.requests()).toHaveLength(1)
+  })
+
+  // Every order of up to four of these, on a fresh gate: reads of the zoo under two consents (A, then B:
+  // answered again), a hold-down, and the person's yes or no to whatever waits.
+  type Step = 'A:suggest' | 'A:act-on-key' | 'B:act-on-key' | 'hold' | 'yes' | 'no'
+  const STEPS: Step[] = ['A:suggest', 'A:act-on-key', 'B:act-on-key', 'hold', 'yes', 'no']
+  const orders = (n: number): Step[][] => n === 0 ? [[]] : orders(n - 1).flatMap((o) => STEPS.map((s) => [...o, s]))
+  const ALL = [1, 2, 3, 4].flatMap(orders)
+
+  it(`every order of up to four steps: above suggest only by a yes under the consent read last, and a read again moves nothing (${ALL.length})`, () => {
+    for (const steps of ALL) {
+      const { g, events } = gate(null)
+      let epoch: string | null = null        // the consent of the last read that was not a hold-down
+      let yesSince = false                   // a yes to a level since that consent was first read
+      let last: (() => void) | null = null
+      for (const step of steps) {
+        if (step === 'yes' || step === 'no') {
+          const waiting = g.requests().find((r) => r.kind === 'autonomy')
+          if (waiting) {
+            g.confirm('autonomy', waiting.nonce, step === 'yes')
+            if (step === 'yes') yesSince = true
+          }
+          last = null
+          continue
+        }
+        const read = step === 'hold'
+          ? () => g.setRequested('watch', { keepConfirmed: true, epoch: null })
+          : () => g.setRequested(step.slice(2) as 'suggest' | 'act-on-key', { epoch: step.slice(0, 1) })
+        if (step !== 'hold' && step.slice(0, 1) !== epoch) { epoch = step.slice(0, 1); yesSince = false }
+        read()
+        last = read
+      }
+      const why = steps.join(', ')
+      if (g.autonomy() === 'act-on-key') expect(yesSince, why).toBe(true)
+      expect(['watch', 'suggest', 'act-on-key'], why).toContain(g.autonomy())
+      // What was asked for last caps the level (a hold-down holds it at watch).
+      const lastRead = [...steps].reverse().find((s) => s !== 'yes' && s !== 'no')
+      if (lastRead === 'hold') expect(g.autonomy(), why).toBe('watch')
+      if (lastRead === 'A:suggest') expect(g.autonomy(), why).toBe('suggest')
+      // The last read delivered again: nothing is announced, nothing moves.
+      if (last) {
+        const before = { level: g.autonomy(), requests: g.requests() }
+        const count = events.length
+        last()
+        expect({ level: g.autonomy(), requests: g.requests() }, why).toEqual(before)
+        expect(events.length, why).toBe(count)
+      }
+    }
   })
 })
