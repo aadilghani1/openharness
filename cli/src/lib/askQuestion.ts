@@ -25,14 +25,15 @@
 
 import type { RegisteredSession } from './registry.js'
 import type { AgentEngine } from '../engines/types.js'
-import { parseMuseQuestionPane } from '../engines/muse/askQuestion.js'
+import { locateMuseQuestion } from '../engines/muse/askQuestion.js'
 import { ampSelectionKeys, parseAmpQuestionPane } from '../engines/amp/askQuestion.js'
-import { kiloSelectionKeys, parseKiloQuestionPane } from '../engines/kilo/askQuestion.js'
+import { kiloSelectionKeys, locateKiloQuestion, parseKiloQuestionPane } from '../engines/kilo/askQuestion.js'
 import { parseCursorPermissionPane } from '../engines/cursor/askQuestion.js'
-import { parseDevinPermissionPane, parseDevinQuestionPane } from '../engines/devin/askQuestion.js'
+import { locateDevinPermission, locateDevinQuestion } from '../engines/devin/askQuestion.js'
 import { parseGrokQuestionPane } from '../engines/grok/askQuestion.js'
-import { parseAgyQuestionPane } from '../engines/agy/askQuestion.js'
+import { locateAgyQuestion } from '../engines/agy/askQuestion.js'
 import { withCopilotSubject } from '../engines/copilot/askQuestion.js'
+import { earlierDialogEnd, PERMISSION_FOOTER_RE, QUESTION_FOOTER_RE } from './dialogEnd.js'
 
 /** Device-facing question shape — byte-for-byte the hosted runtime’s `commanderQuestions()` output. */
 export interface ShapedQuestion {
@@ -135,19 +136,44 @@ export function shapeQuestions(questions: unknown): ShapedQuestion[] {
   })
 }
 
+/** A dialog one reader found, and the line it anchored on: what ranks two readers of the same pane. */
+export interface FoundDialog {
+  view: QuestionView | ReviewView
+  at: number
+}
+
+function permissionView(view: PaneView): PaneView {
+  return view?.kind === 'question' ? { ...view, permission: true } : view
+}
+
+function asPermission(found: FoundDialog | null): FoundDialog | null {
+  return found && { ...found, view: permissionView(found.view) as QuestionView }
+}
+
 /**
- * The dialog on screen, read the way `engine` paints it.
+ * The LOWEST dialog any reader found: the live one. A pane keeps an answered dialog in its scrollback, and
+ * an engine with two readers (a question and an approval, say) must never let the first reader's hit on
+ * that one shadow the second reader's hit on the dialog under it: devin's approval under its answered
+ * question, muse's approval under a question, opencode's question under an approval. A tie is one dialog
+ * read twice, and the earlier reader, the engine's own, keeps it.
+ */
+function lowest(...found: Array<FoundDialog | null>): PaneView {
+  let best: FoundDialog | null = null
+  for (const f of found) if (f && (!best || f.at > best.at)) best = f
+  return best?.view ?? null
+}
+
+/**
+ * The dialog on screen, read the way `engine` paints it: the LAST one on the pane, and nothing of it from
+ * above an earlier dialog's end (`dialogEnd.ts`).
  *
  * Claude and Command Code share one shape (see parseQuestionPane); devin draws a different one and gets
  * its own parser rather than more branches in here.
  */
-function permissionView(view: PaneView): PaneView {
-  return view?.kind === 'question' ? { ...view, permission: true } : view
-}
 export function parseEngineQuestionPane(engine: AgentEngine, capture: string): PaneView {
   // Devin's two dialogs are told apart by one word in the footer (`↵ select` vs `↵ confirm`), so they can
-  // never both match. Only one can be on screen anyway: answering either replaces it with a summary line.
-  if (engine === 'devin') return parseDevinQuestionPane(capture) ?? permissionView(parseDevinPermissionPane(capture))
+  // never both match the same dialog; but an answered one of either kind can sit above the live one.
+  if (engine === 'devin') return lowest(locateDevinQuestion(capture), asPermission(locateDevinPermission(capture)))
   // Cursor has no ask-the-user tool, so its permission prompt is the ONLY dialog it ever draws — and it
   // numbers nothing, stating each row's key in the row instead.
   if (engine === 'cursor') return permissionView(parseCursorPermissionPane(capture))
@@ -155,22 +181,19 @@ export function parseEngineQuestionPane(engine: AgentEngine, capture: string): P
   // rows — both confuse the shared parser, so it reads its own. Its PERMISSION prompt is a different
   // dialog entirely (`Would you like to allow this network access?` over `1. Yes, proceed (y)` rows under
   // a `Press enter to confirm` footer, `__fixtures__/permission-muse.txt`) and that one the shared parser
-  // reads exactly, so it falls through rather than getting a parser of its own.
-  if (engine === 'muse') return parseMuseQuestionPane(capture) ?? parseQuestionPane(capture)
+  // reads exactly, so it is read by both and the lower wins.
+  if (engine === 'muse') return lowest(locateMuseQuestion(capture), locateQuestionPane(capture))
   // Amp's is a permission prompt with unnumbered rows — nothing the shared parser can anchor on.
   if (engine === 'amp') return permissionView(parseAmpQuestionPane(capture))
   // Kilo's is the same kind of prompt but laid out HORIZONTALLY, sharing its line with the key hints —
   // it is a fork of opencode that did not keep opencode's dialog.
   if (engine === 'kilo') return permissionView(parseKiloQuestionPane(capture))
-  if (engine === 'grok') {
-    const view = parseGrokQuestionPane(capture)
-    // Grok prints this footer only for tool approval, never its questionnaire.
-    return /always-approve|Ctrl\+o:/i.test(capture) ? permissionView(view) : view
-  }
+  // Grok tells its approval from its questionnaire itself, by the live dialog's own footer.
+  if (engine === 'grok') return parseGrokQuestionPane(capture)
   // agy's ask-the-user dialog anchors on `Question N/M:` under an `↑/↓ Navigate` footer, which the
   // shared parser cannot see. Its PERMISSION prompt is numbered rows under `Do you want to proceed?`
-  // and the shared parser reads that one exactly, so it falls through.
-  if (engine === 'agy') return parseAgyQuestionPane(capture) ?? parseQuestionPane(capture)
+  // and the shared parser reads that one exactly, so it is read by both and the lower wins.
+  if (engine === 'agy') return lowest(locateAgyQuestion(capture), locateQuestionPane(capture))
   // Hermes, OpenCode and Copilot paint the dialog inside a box; peel the border and the shared parser
   // fits. Measured on Copilot: framed it returns null, unframed it reads the question, the three
   // options AND spots `4. Other (type your answer)` as the free-text row rather than an option.
@@ -178,17 +201,19 @@ export function parseEngineQuestionPane(engine: AgentEngine, capture: string): P
   // Copilot boxes its dialog the same way, but names the SUBJECT of a permission prompt above the
   // question — "attempting to access the following URL:" over a boxed value. Without it the device
   // shows "Do you want to allow this access?" and a bare "Yes", with nothing to judge.
-  if (engine === 'copilot') return withCopilotSubject(parseQuestionPane(unframe(capture)), capture)
+  if (engine === 'copilot') {
+    const found = locateQuestionPane(unframe(capture))
+    return found ? withCopilotSubject(found.view, capture, found.at) : null
+  }
   if (engine === 'opencode') {
     // OpenCode's PERMISSION prompt is the horizontal one kilo inherited from it — same `△ Permission
     // required` title, same `⇆ select · enter confirm` footer, same unnumbered rows. Measured: the live
     // capture in `permission-opencode.txt` parses through kilo's parser unchanged, so it is shared rather
-    // than copied. Tried FIRST because that dialog numbers nothing: the shared parser would still match
-    // its `enter confirm` footer and then walk up into whatever numbered rows the scrollback holds.
-    const permission = parseKiloQuestionPane(capture)
-    if (permission) return permissionView(permission)
+    // than copied. Listed FIRST because that dialog numbers nothing: on its own dialog the shared parser
+    // still matches the `enter confirm` footer and walks up into whatever numbered rows are above, and
+    // the tie goes to kilo's reader.
     const plain = unframe(capture)
-    return opencodeReview(plain) ?? parseQuestionPane(plain)
+    return lowest(asPermission(locateKiloQuestion(capture)), locateOpencodeReview(plain), locateQuestionPane(plain))
   }
   if (engine === 'codex') return withCodexLabels(parseQuestionPane(capture))
   return parseQuestionPane(capture)
@@ -227,16 +252,17 @@ function withCodexLabels(view: PaneView): PaneView {
  * `submitRow` carries the KEY to press, which for every other CLI happens to be a digit — 'Enter' rides
  * the same field rather than widening the type for one engine.
  */
-function opencodeReview(plain: string): ReviewView | null {
+function locateOpencodeReview(plain: string): FoundDialog | null {
   const lines = stripAnsi(plain).split('\n')
   const footer = lines.findLastIndex((l) => /enter\s+submit/i.test(l))
   if (footer < 0) return null
+  const floor = earlierDialogEnd(lines, footer, 14)
   let sawReview = false
-  for (let i = footer - 1; i >= 0 && footer - i <= 14; i--) {
+  for (let i = footer - 1; i > floor && footer - i <= 14; i--) {
     if (parseRow(lines[i])) return null            // rows above ⇒ still a question, not the review
     if (/^\s*review\s*$/i.test(lines[i])) { sawReview = true; break }
   }
-  return sawReview ? { kind: 'review', submitRow: 'Enter' } : null
+  return sawReview ? { view: { kind: 'review', submitRow: 'Enter' }, at: footer } : null
 }
 
 function unframe(capture: string): string {
@@ -375,12 +401,6 @@ const APPROVE_RE = /^(yes|allow|approve|accept|proceed|run|continue)\b/i
 // row is "Tell Claude what to change". Keep `tell ... what to change` narrow so
 // an ordinary numbered list beginning with "Tell" cannot become an approval.
 const REJECT_RE = /^(no|reject|deny|decline|cancel|skip|don'?t|stop)\b|^tell\b.*\bwhat to change\b/i
-/** The key hints a permission dialog prints under its rows: claude `Esc to cancel \u00b7 Tab to amend`,
- *  Command Code `\u2191/\u2193 navigate \u00b7 enter select \u00b7 ctrl+e explain`. Proximity to the rows is what makes this
- *  a guard and not a search \u2014 it must sit within a few lines UNDER them. */
-// Claude's plan review footer changed from Esc/Tab hints to
-// "shift+tab to approve with this feedback" plus ctrl+g.
-const PERMISSION_FOOTER_RE = /\besc\b|enter\s+select|ctrl\+e|shift\+tab\s+to\s+approve/i
 /** The solid rule that opens the frame. Deliberately NOT the dashed one (`\u254c`) that brackets an edit diff,
  *  which sits BELOW the header and would cost the title. */
 const FRAME_RULE_RE = /^\s*[\u2500\u2501\u2550]{6,}\s*$/
@@ -389,32 +409,6 @@ const ANY_RULE_RE = /^\s*[\u2500\u2501\u2550\u254c\u2504\u2508-]{6,}\s*$/
 /** The dialog's own question line, and Command Code's `Press [ctrl+e] \u2026` hint: both sit between the
  *  header and the rows, and neither says what is being approved. */
 const PERMISSION_PROSE_RE = /^((do|would) you\b|press \[)/i
-
-/** A live dialog's footer (`parseQuestionPane`'s anchor). */
-const QUESTION_FOOTER_RE = /enter to (select|confirm|submit)|enter\s+(submit|confirm|toggle)/i
-/** How a key-hint line starts (`Esc to cancel`, `Enter to select`, `↑/↓ navigate`, `Press enter to confirm`),
- *  and prose that merely mentions a key (`Make Esc close the modal`) does not. */
-const HINT_START_RE = /^\s*(esc\b|enter\b|tab\b|shift\+tab\b|ctrl\+|press enter\b|[↑↓⇆←→])/i
-
-/**
- * Where an EARLIER dialog ends above the row at `start`, or -1: its key hints (`Esc to cancel`, `Enter to
- * select`, …) on a line of their own, right under its numbered rows. That dialog was answered and is only
- * still in scrollback, so nothing at or above it belongs to the one at `start`: not a frame's opening rule,
- * not its header (`Bash command`), not its command. Read across it, an unframed prompt was titled by the
- * PREVIOUS prompt's header and command — `Approve Bash command: npm test` over `python3 wipe.py --all`.
- */
-function earlierDialogEnd(lines: string[], start: number, reach: number): number {
-  for (let i = start - 1; i >= 0 && start - i <= reach; i--) {
-    const line = lines[i]
-    if (!HINT_START_RE.test(line) || !(PERMISSION_FOOTER_RE.test(line) || QUESTION_FOOTER_RE.test(line))) continue
-    for (let j = i - 1; j >= 0 && i - j <= 4; j--) {
-      if (!lines[j].trim()) continue
-      if (parseRow(lines[j])) return i
-      break
-    }
-  }
-  return -1
-}
 
 /** The opening rule of the frame the rows at `start` sit in, or -1 when they have none of their own. */
 function frameTop(lines: string[], start: number, floor: number): number {
@@ -507,6 +501,11 @@ export function parsePermissionPane(lines: string[]): { view: QuestionView; inde
 }
 
 export function parseQuestionPane(capture: string): PaneView {
+  return locateQuestionPane(capture)?.view ?? null
+}
+
+/** `parseQuestionPane`, with the line its dialog was anchored on. */
+function locateQuestionPane(capture: string): FoundDialog | null {
   const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n')
   // Each CLI words its own footer, and OpenCode rewords it PER SCREEN — `enter submit` on a single
   // question, `enter toggle` on a multi-select, `enter confirm` on a step of a multi-question. They all
@@ -524,35 +523,43 @@ export function parseQuestionPane(capture: string): PaneView {
   // rows adjacent, in that order — because the summary lines above are numbered too and reading them as
   // options is how the device answered everything and then sat there, never submitting.
   const submit = findSubmitPair(lines)
-  // A permission prompt is a FOURTH anchor and gets ranked exactly like the other three: whichever sits
-  // lowest on screen is the live dialog. That ordering is what keeps the two apart in both directions —
-  // codex and hermes draw an approval whose footer the question anchor also matches, and there the footer
-  // is BELOW the rows, so the question path (which reads a better title off the same block) still wins.
+  // Command Code paints the SAME dialog with no footer at all — the pane simply ends at the last option.
+  // Its tab bar is the only thing above the rows that is unmistakably part of the dialog, so it anchors
+  // that dialog, read DOWNWARD. Nothing else on either CLI's screen looks like "● X | ◯ Y" followed by a
+  // numbered list, which is what keeps ordinary numbered output from being read as a question.
+  const tabBar = findTabBarDialog(lines)
+  // A permission prompt is one more anchor, and every anchor is ranked the same way: whichever sits
+  // lowest on screen is the live dialog, the others are scrollback. That ordering is what keeps the two
+  // apart in both directions — codex and hermes draw an approval whose footer the question anchor also
+  // matches, and there the footer is BELOW the rows, so the question path (which reads a better title off
+  // the same block) still wins. And a footer-less dialog under an answered one is the live one: anchored
+  // on the answered one's footer instead, Command Code's question was announced as the OLD question.
   const permission = parsePermissionPane(lines)
-  if (permission && permission.index > footer && permission.index > review && permission.index > (submit?.index ?? -1)) {
-    return permission.view
+  if (permission && permission.index > Math.max(footer, review, submit?.index ?? -1, tabBar)) {
+    return { view: permission.view, at: permission.index }
   }
-  if (review > footer) {
+  if (tabBar > Math.max(footer, review, submit?.index ?? -1)) {
+    const view = parseDownward(lines, tabBar)
+    return view && { view, at: tabBar }
+  }
+  if (review > footer && review > (submit?.index ?? -1)) {
     for (let i = review + 1; i < lines.length && i - review <= 10; i++) {
       const row = parseRow(lines[i])
-      if (row && /^submit answers$/i.test(row.label)) return { kind: 'review', submitRow: row.number }
+      if (row && /^submit answers$/i.test(row.label)) return { view: { kind: 'review', submitRow: row.number }, at: review }
     }
     return null
   }
-  if (submit && submit.index > footer) return { kind: 'review', submitRow: submit.row }
-  // Command Code paints the SAME dialog with no footer at all — the pane simply ends at the last option.
-  // Its tab bar is the only thing above the rows that is unmistakably part of the dialog, so anchor on
-  // that and read DOWNWARD. Nothing else on either CLI's screen looks like "● X | ◯ Y" followed by a
-  // numbered list, which is what keeps ordinary numbered output from being read as a question.
-  const anchor = footer >= 0 ? footer : findTabBarDialog(lines)
-  if (anchor < 0) return null
-  if (footer < 0) return parseDownward(lines, anchor)
+  if (submit && submit.index > footer) return { view: { kind: 'review', submitRow: submit.row }, at: submit.index }
+  if (footer < 0) return null
 
-  // Rows belonging to this dialog: the numbered rows just above the footer, back to the row numbered 1.
+  // Rows belonging to this dialog: the numbered rows just above the footer, back to the row numbered 1 —
+  // and never from above an earlier dialog's end, which is where a dialog whose top is scrolled out of
+  // the pane would otherwise borrow its first rows.
   const rows: QuestionRow[] = []
   let checkbox = false   // `[ ]` / `[✔]` on a row ⇒ this question is multi-select
   let start = -1
-  for (let i = footer - 1; i >= 0 && footer - i <= 40; i--) {
+  const floor = earlierDialogEnd(lines, footer, 40)
+  for (let i = footer - 1; i > floor && footer - i <= 40; i--) {
     const row = parseRow(lines[i])
     if (!row) continue
     rows.unshift(row)
@@ -561,7 +568,7 @@ export function parseQuestionPane(capture: string): PaneView {
   }
   const enterSubmits = /enter to submit answer/i.test(lines[footer])
   if (rows.length && start < 0 && enterSubmits) {
-    return { kind: 'question', partial: true, enterSubmits, question: '', rows, multi: checkbox, typeRow: null }
+    return { view: { kind: 'question', partial: true, enterSubmits, question: '', rows, multi: checkbox, typeRow: null }, at: footer }
   }
   if (start < 0 || rows.length === 0) return null
 
@@ -569,9 +576,11 @@ export function parseQuestionPane(capture: string): PaneView {
   // and its rows — `[tab bar | header chip] · blank · question · blank · rows` — so those, and a rule,
   // are the TOP of this frame. Stop there, never skip past: mid-repaint the question line can be blank
   // for one capture, and walking on would pick up the PREVIOUS question still sitting in scrollback and
-  // pair a stale title with the live options. An empty result just means "look again next tick".
+  // pair a stale title with the live options. An empty result just means "look again next tick". The
+  // end of an earlier dialog is a top too: its footer is not this dialog's question.
   let question = ''
-  for (let i = start - 1; i >= 0 && start - i <= 12; i--) {
+  const top = earlierDialogEnd(lines, start, 12)
+  for (let i = start - 1; i > top && start - i <= 12; i--) {
     const line = lines[i].trim()
     if (!line) continue
     if (/[←→]/.test(line) || /^[☐☒✔✓]/.test(line) || /^[─━-]{6,}$/.test(line)) break
@@ -581,12 +590,15 @@ export function parseQuestionPane(capture: string): PaneView {
 
   const answerable = rows.filter((r) => !CHAT_ROW.test(r.label) && !TYPE_ROW.test(r.label))
   return {
-    kind: 'question',
-    ...(enterSubmits ? { enterSubmits } : {}),
-    question,
-    rows: answerable,
-    multi: checkbox,
-    typeRow: rows.find((r) => TYPE_ROW.test(r.label)) ?? null,
+    view: {
+      kind: 'question',
+      ...(enterSubmits ? { enterSubmits } : {}),
+      question,
+      rows: answerable,
+      multi: checkbox,
+      typeRow: rows.find((r) => TYPE_ROW.test(r.label)) ?? null,
+    },
+    at: footer,
   }
 }
 
