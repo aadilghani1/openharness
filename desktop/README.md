@@ -67,11 +67,17 @@ For a local production build, run `bash scripts/build-web-release.sh X.Y.Z`.
 - Existing account-bound sharing invitations open read-only through the observer
   relay, with the owner's identity verified. Public, anonymous session URLs and
   published snapshots are the next product layer; they are not implemented here.
-- Preferences and cached workspace metadata persist in this origin's local
-  storage. Tokens and machine-link keys use session storage: they survive reloads
-  within a tab, but a new independent tab requires sign-in and linking again.
-  Browser session restoration/duplication can preserve that session storage;
-  use **Sign out** to explicitly clear the authentication session.
+- Login, linked machines, preferences, and cached workspace metadata persist in
+  this origin's local storage across tabs and browser restarts. Only the pending
+  OAuth transaction is tab-local. Browser locks serialize token refresh and
+  machine-key writes; signing out or changing accounts reloads other open tabs.
+  **Sign out** clears authentication while keeping this browser's machine links.
+  Clearing site data removes both; private browsing retains them only for that
+  private session. Existing tab credentials migrate on the next reload.
+- **Download app** sits at the top right of sign-in and workspace screens, opening
+  the existing macOS/Linux download page in a separate tab. Browser sign-in uses
+  a full-page fleet diagram and prominent CTA, sharing the native login actions
+  and their waiting, cancellation, and recovery states.
 - Workspace shortcuts use **Option/Alt** in the browser: Alt-P finds agents,
   Alt-N starts an agent, and Alt-T opens a Harness tab. Text editing and terminal
   Control keys keep their usual behavior. The shared shortcut sheet and welcome

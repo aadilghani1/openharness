@@ -3,7 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_selector/file_selector.dart';
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show kIsWeb, listEquals;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -59,6 +59,7 @@ import '../widgets/engine_identity.dart';
 import '../widgets/status_line.dart';
 import '../widgets/workspace_status_line.dart';
 import '../widgets/workspace_bar_control.dart';
+import '../widgets/web_download_button.dart';
 import '../widgets/grid_model_picker.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
@@ -4504,7 +4505,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
           '${index + 1}:${names[app.swarms[index].id]}',
       ];
       final toolHeight = workspaceBarControlHeight(context);
-      final contentWidth = math.max(0.0, constraints.maxWidth - cell.width * 7);
+      final downloadWidth = kIsWeb
+          ? WebDownloadButton.widthOf(context) + cell.width
+          : 0.0;
+      final contentWidth = math.max(
+        0.0,
+        constraints.maxWidth - cell.width * 7 - downloadWidth,
+      );
       final tabBudget = contentWidth * .45;
       _tabWidths = [
         for (final label in labels)
@@ -4699,6 +4706,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     ),
                   ),
                 ),
+              ],
+              if (kIsWeb) ...[
+                SizedBox(width: cell.width),
+                const WebDownloadButton(),
               ],
               SizedBox(width: cell.width),
             ],

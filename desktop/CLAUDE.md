@@ -100,6 +100,9 @@ Do not fork screens or create a second frontend. `kViewerMode` is true on the we
 the browser owns its OAuth session, peer links, and end-to-end relay encryption.
 `viewer/browser_login.dart` validates the same-tab callback against the backend's
 PKCE transaction; conditional adapters handle storage and native-only services.
+`platform_auth_web.dart` serializes shared login/refresh/logout with Web Locks
+and reloads other tabs when the account changes. Auth and E2EE keys persist in
+origin-local storage; only the OAuth transaction is in session storage.
 Private shared sessions use `ObserverRelayCodec` and `/api/observer-ws`, verifying
 the owner and permitting only observation. Anonymous public pages are not included.
 See [README.md](README.md#web-development) for origin setup, browser storage

@@ -11529,6 +11529,7 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
+    viewer?.auth.dispose();
     _modelManager?.dispose();
     _modelsMenu?.dispose();
     for (final project in _orchestratorProjects.values) {

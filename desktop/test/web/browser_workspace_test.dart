@@ -12,10 +12,12 @@ import 'package:harness/core/models.dart';
 import 'package:harness/core/test_run.dart';
 import 'package:harness/core/viewer_mode.dart';
 import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/screens/login_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/grid_pictures.dart';
 import 'package:harness/terminal/terminal_font_store.dart';
+import 'package:harness/widgets/web_download_button.dart';
 import 'package:web/web.dart' as web;
 
 void main() {
@@ -34,7 +36,7 @@ void main() {
   );
 
   test(
-    'browser persists preferences and isolates credentials to the tab',
+    'browser persists preferences and credentials across tab storage loss',
     () async {
       final store = HarnessFileStore.shared;
       const pref = 'test_browser_preference',
@@ -52,12 +54,13 @@ void main() {
       expect(web.window.localStorage.getItem('harness.web.v1.$pref'), 'large');
       expect(
         web.window.localStorage.getItem('harness.web.v1.$credential'),
-        isNull,
+        'synthetic',
       );
       expect(
         web.window.sessionStorage.getItem('harness.web.v1.$credential'),
-        'synthetic',
+        isNull,
       );
+      expect(await HarnessFileStore().read(credential), 'synthetic');
       await store.delete(credential);
       expect(await store.read(credential), isNull);
     },
@@ -90,6 +93,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Harness like a boss.'), findsOneWidget);
+    expect(find.byType(WebDownloadButton), findsOneWidget);
     expect(tester.takeException(), isNull);
     final tabs = app.swarms.length;
     await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
@@ -106,7 +110,44 @@ void main() {
     expect(find.textContaining('No harnesses yet.'), findsOneWidget);
     expect(find.textContaining('This tab is full'), findsNothing);
     expect(tester.takeException(), isNull);
+    tester.view.physicalSize = const Size(390, 844);
+    await tester.pump(const Duration(milliseconds: 100));
+    final download = tester.getRect(find.byType(WebDownloadButton));
+    expect(download.right, lessThanOrEqualTo(390));
+    expect(download.top, greaterThanOrEqualTo(0));
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
     app.dispose();
   });
+
+  testWidgets(
+    'web landing keeps a large sign-in action and download visible on a phone',
+    (tester) async {
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+      );
+      tester.view.physicalSize = const Size(390, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: LoginScreen(notifier: app),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      final download = tester.getRect(find.byType(WebDownloadButton));
+      final signIn = tester.getRect(
+        find.widgetWithText(FilledButton, 'Sign in'),
+      );
+      expect(download.bottom, lessThan(signIn.top));
+      expect(download.right, lessThanOrEqualTo(390));
+      expect(signIn.height, greaterThanOrEqualTo(56));
+      expect(find.text('Sign in').hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      app.dispose();
+    },
+  );
 }
