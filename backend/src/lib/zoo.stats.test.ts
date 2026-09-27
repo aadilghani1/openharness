@@ -15,9 +15,9 @@ import { DAEMON_ROSTER } from './daemonRoster.g.js'
  */
 
 const R = DAEMON_ROSTER.rules
-/** After drop 1's release (2026-09-26) and before drop 2's (2026-10-11): drop 1 is every daemon a draw can give. */
+/** After drop 1's (init) release on 2026-09-27, with unix and tty on hold: drop 1 is every daemon a draw can give. */
 const NOW = new Date('2026-10-01T12:00:00.000Z')
-const OUT = new Set(DAEMON_ROSTER.drops.filter((d) => Date.parse(`${d.release}T00:00:00.000Z`) <= NOW.getTime()).map((d) => d.id))
+const OUT = new Set(DAEMON_ROSTER.drops.filter((d) => 'release' in d && Date.parse(`${d.release}T00:00:00.000Z`) <= NOW.getTime()).map((d) => d.id))
 const ROSTER = DAEMON_ROSTER.daemons.filter((d) => OUT.has(d.drop))
 const KINDS = Object.keys(R.eggs) as Array<keyof typeof R.eggs>
 const REGULARS: readonly string[] = ROSTER.filter((d) => d.rarity !== 'secret').map((d) => d.id)
@@ -223,14 +223,14 @@ describe('the draw, measured: 200,000 hatches per egg kind', () => {
 
   it('weighs a rarity by how many of it are left, and gives an emptied rarity to nobody', () => {
     const cases: Array<[keyof typeof R.eggs, string[], number]> = [
-      ['first', ['tim', 'fish', 'ping', 'bat'], 0],            // no common left: its 60 goes nowhere
+      ['first', ['tim', 'gnu', 'lynx', 'mutt'], 0],            // no common left: its 60 goes nowhere
       ['first', ['tim'], 0],                                   // tim owned: the boost has nothing to boost
-      ['turn', ['tim', 'fish', 'vim', 'fzf'], 0],
-      ['week', ['vim', 'zsh', 'biff', 'fzf', 'tldr'], 0],      // only commons left
-      ['marathon', ['tim', 'fish', 'ping', 'bat', 'fzf'], 0],
-      ['night', ['bat'], 3],                                   // the boosted one owned; pity 3 on the grue
+      ['turn', ['tim', 'gnu', 'yak', 'tux'], 0],
+      ['week', ['yak', 'gopher', 'bug', 'tux', 'auk'], 0],     // only commons left
+      ['marathon', ['tim', 'gnu', 'lynx', 'mutt', 'tux'], 0],
+      ['night', ['bug'], 3],                                   // the boosted one owned; pity 3 on beastie
       ['night', [], 6],
-      ['easter', ['fzf'], 2],
+      ['easter', ['tux'], 2],
     ]
     for (const [kind, owned, pity] of cases) {
       const zoo = zooOwning(owned, { pity })
@@ -245,19 +245,19 @@ describe('the draw, measured: 200,000 hatches per egg kind', () => {
     const noBoost = new Map([...expectedOdds('setup', new Set())])        // setup: the first egg's weights, no boost
     const lost = chiSquare(t.byId, noBoost, t.n)
     expect(lost.chi2).toBeGreaterThan(100 * CHI2_999[lost.df])
-    // A turn egg that could hold the grue (as if its secret weight were the night egg's) would be told apart too.
+    // A turn egg that could hold beastie (as if its secret weight were the night egg's) would be told apart too.
     const leaky = new Map([...expectedOdds('turn', new Set())].map(([id, p]) => [id, p * 0.92] as [string, number]))
-    leaky.set('grue', 0.08)
+    leaky.set('beastie', 0.08)
     expect(chiSquare(freshRun('turn').byId, leaky, N).chi2).toBeGreaterThan(100 * CHI2_999[9])
   }, 60_000)
 })
 
 // ── The pity guarantee ───────────────────────────────────────────────────────────────────────────
 /**
- * The exact distribution of which night hatch (1..8) first gives the grue, from a fresh zoo hatching only
+ * The exact distribution of which night hatch (1..8) first gives beastie, from a fresh zoo hatching only
  * night eggs: a walk over (regulars owned, pity), each step with the README's odds.
  */
-function grueArrival(): number[] {
+function beastieArrival(): number[] {
   const arrival = new Array(R.secretGuaranteeAt + 1).fill(0)
   const walk = (owned: string[], pity: number, p: number, hatch: number): void => {
     const odds = expectedOdds('night', new Set(owned), pity)
@@ -273,7 +273,7 @@ function grueArrival(): number[] {
 
 describe('the dark egg: the secret by the 8th egg that can hold it', () => {
   const players = N
-  it(`always gives the grue by the ${R.secretGuaranteeAt}th night egg, at the README's odds for each hatch (${players} players)`, () => {
+  it(`always gives beastie by the ${R.secretGuaranteeAt}th night egg, at the README's odds for each hatch (${players} players)`, () => {
     const rng = seeded(8)
     const seen = new Array(R.secretGuaranteeAt + 1).fill(0)
     const eggs = Array.from({ length: R.secretGuaranteeAt }, (_, i) => egg(`n${i + 1}`, 'night'))
@@ -283,21 +283,21 @@ describe('the dark egg: the secret by the 8th egg that can hold it', () => {
       expect(r.hatched.length).toBe(R.secretGuaranteeAt)
       expect(r.hatched.some((h) => h.duplicate)).toBe(false)             // nothing repeats on the way
       const at = r.hatched.findIndex((h) => SECRETS.includes(h.daemonId))
-      expect(at, 'no grue in eight night eggs').toBeGreaterThanOrEqual(0)
+      expect(at, 'no beastie in eight night eggs').toBeGreaterThanOrEqual(0)
       seen[at + 1]++
-      // Pity counts the night hatches since the grue.
+      // Pity counts the night hatches since beastie.
       expect(r.zoo.pity).toBe(R.secretGuaranteeAt - 1 - at)
     }
-    const exact = grueArrival()
+    const exact = beastieArrival()
     expect(exact.reduce((s, p) => s + p, 0)).toBeCloseTo(1, 12)
-    expect(exact[1]).toBeCloseTo(8 / 137.5, 12)                           // drop 1: 8 of 137.5 on the first night egg
+    expect(exact[1]).toBeCloseTo(8 / 130, 12)                             // drop 1: 8 of 130 on the first night egg
     // The guarantee carries the most weight: the 8th hatch is the likeliest single arrival.
     for (let k = 1; k < R.secretGuaranteeAt; k++) expect(exact[R.secretGuaranteeAt]).toBeGreaterThan(exact[k])
     const odds = new Map(exact.map((p, k) => [String(k), p] as [string, number]).filter(([, p]) => p > 0))
     const counts = new Map(seen.map((c, k) => [String(k), c] as [string, number]).filter(([, c]) => c > 0))
     const { chi2, df } = chiSquare(counts, odds, players)
     expect(chi2, `arrival chi-square ${chi2.toFixed(2)} on ${df} df`).toBeLessThan(CHI2_999[df])
-    for (const [k, p] of odds) expectProportion(counts.get(k) ?? 0, players, p, `grue at night hatch ${k}`)
+    for (const [k, p] of odds) expectProportion(counts.get(k) ?? 0, players, p, `beastie at night hatch ${k}`)
   }, 120_000)
 
   it('holds across night and easter eggs mixed with eggs that cannot hold it, which never move the pity', () => {
@@ -314,24 +314,24 @@ describe('the dark egg: the secret by the 8th egg that can hold it', () => {
         const holds = kind === 'night' || kind === 'easter'
         if (holds) capable++
         if (!holds) expect(zoo.pity, `${kind} moved the pity`).toBe(pityBefore)
-        expect(capable, 'the 8th egg that could hold the grue did not').toBeLessThanOrEqual(R.secretGuaranteeAt)
+        expect(capable, 'the 8th egg that could hold beastie did not').toBeLessThanOrEqual(R.secretGuaranteeAt)
       }
       if (capable === R.secretGuaranteeAt) expect(zoo.daemons.some((d) => SECRETS.includes(d.id))).toBe(true)
     }
   }, 120_000)
 
-  it('guarantees from any stored pity: at 7 the next egg that can hold it is the grue, every time', () => {
+  it('guarantees from any stored pity: at 7 the next egg that can hold it is beastie, every time', () => {
     const rng = seeded(7)
     for (const kind of ['night', 'easter']) {
-      const t = tallyDraws(zooOwning(['tim', 'vim'], { pity: R.secretGuaranteeAt - 1 }), kind, 20_000, 7)
-      expect(t.byId.get('grue')).toBe(20_000)
+      const t = tallyDraws(zooOwning(['tim', 'yak'], { pity: R.secretGuaranteeAt - 1 }), kind, 20_000, 7)
+      expect(t.byId.get('beastie')).toBe(20_000)
       const r = applyZooOps(zooOwning([], { pity: 999, eggs: [egg('e', kind)] }), [{ op: 'zoo.hatch', eggId: 'e' }], rng, NOW)
-      expect(r.hatched[0].daemonId).toBe('grue')
+      expect(r.hatched[0].daemonId).toBe('beastie')
       expect(r.zoo.pity).toBe(0)
     }
-    // With the grue owned, pity guarantees nothing: a night egg draws its regulars at its usual odds.
-    const owned = zooOwning(['grue'], { pity: R.secretGuaranteeAt - 1 })
-    expectMatches(tallyDraws(owned, 'night', N, 70), expectedOdds('night', new Set(['grue']), R.secretGuaranteeAt - 1), 'night with the grue owned')
+    // With beastie owned, pity guarantees nothing: a night egg draws its regulars at its usual odds.
+    const owned = zooOwning(['beastie'], { pity: R.secretGuaranteeAt - 1 })
+    expectMatches(tallyDraws(owned, 'night', N, 70), expectedOdds('night', new Set(['beastie']), R.secretGuaranteeAt - 1), 'night with beastie owned')
   }, 120_000)
 })
 
@@ -353,9 +353,9 @@ describe('no duplicate before every regular is owned', () => {
           const complete = REGULARS.every((id) => owned.has(id))
           if (h.duplicate && !complete) {
             // The one documented exception (README, draw rule 6): an easter egg with only commons and rares
-            // left to give, the grue already owned, has nothing it can weigh and draws as if all were owned.
+            // left to give, beastie already owned, has nothing it can weigh and draws as if all were owned.
             expect(kind).toBe('easter')
-            expect(owned.has('grue') && owned.has('fzf') && owned.has('tldr')).toBe(true)
+            expect(owned.has('beastie') && owned.has('tux') && owned.has('auk')).toBe(true)
             easterFallbacks++
           }
           if (!h.duplicate && RARITY.get(h.daemonId) !== 'secret') regularHatches++
