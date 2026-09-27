@@ -73,6 +73,8 @@ pub struct Stash {
     pub env: std::collections::BTreeMap<String, EnvVar>,
     /// Its start directory (tmux's s->cwd: new -c, attach -c; else the folder it was made in).
     pub path: Option<String>,
+    /// Its session group (new -t): the sessions of one group have the same windows.
+    pub group: Option<String>,
 }
 
 /// What `hn new` or `hn attach` asked for when it started this client.
@@ -81,7 +83,9 @@ pub struct StartSession { pub name: Option<String>, pub create: bool, pub attach
     /// attach -d (new -A -D): the session's other clients detached, as tmux's; -r: only watched.
     pub detach: bool, pub readonly: bool,
     /// attach -f's client flags (read-only, ignore-size, active-pane …; -r is read-only and ignore-size).
-    pub flags: Vec<String> }
+    pub flags: Vec<String>,
+    /// new -t: the session whose group it joins (its windows shared). 
+    pub group: Option<String> }
 
 impl StartSession {
     /// How it goes to a session another client has: -d takes it, -r watches it, else shared.
@@ -189,6 +193,9 @@ const NO_WID: u64 = u64::MAX;
 /// The session a client starts in, before it is one (App::first_session).
 pub const UNNUMBERED: u32 = u32::MAX;
 
+/// A window. One linked into several sessions (link-window, a session group) is the same id in
+/// each — its copies kept alike (App::sync_links); what is the winlink's (alerts) is each one's.
+#[derive(Clone)]
 pub struct Tab {
     /// The desk's tab id (32 hex), shared with every other window on the account.
     pub id: String,
@@ -466,6 +473,8 @@ pub struct App {
     /// kill-session under way (kill_windows): its windows' window-unlinked wait for its
     /// session-closed, as session_destroy orders them.
     pub killing_session: bool,
+    /// unlink-window under way: a window closed here stays in the other sessions it is in.
+    pub unlinking: bool,
     /// Pull requests by repository and branch (`machine|root|branch`): the answer and when it
     /// came, shared with this computer's other clients through prs.json — one question per
     /// branch every five minutes (an hour for a merged or closed one), not one per harness each.
@@ -605,6 +614,11 @@ pub struct App {
     pub session_env: std::collections::BTreeMap<String, EnvVar>,
     /// The session in front's start directory (#{session_path}); none: where hn started.
     pub session_path: Option<String>,
+    /// The session in front's group (new -t), if it is in one.
+    pub session_group: Option<String>,
+    /// Windows killed (not only unlinked) since the links were last synced: gone from every
+    /// session that has them.
+    pub killed_windows: Vec<String>,
     /// tim, the creature in the status line.
     pub tim: crate::tim::Tim,
     /// Shells hn made for split-window / new-window: they end with their pane.
@@ -675,6 +689,7 @@ impl App {
             cli_held: std::collections::VecDeque::new(),
             last_cli: Instant::now(),
             killing_session: false,
+            unlinking: false,
             prs: HashMap::new(),
             window_gone: false,
             pending_questions: Vec::new(),
@@ -740,6 +755,8 @@ impl App {
             global_env: std::env::vars().map(|(k, v)| (k, EnvVar { value: Some(v), hidden: false })).collect(),
             session_env: Default::default(),
             session_path: None,
+            session_group: None,
+            killed_windows: Vec::new(),
             tim: crate::tim::Tim::load(),
             shells: HashSet::new(),
             starting_shell: None,
@@ -1827,12 +1844,14 @@ impl App {
     // ── sessions ────────────────────────────────────────────────────────────────
 
     fn stash_current(&mut self) -> Stash {
+        self.sync_links();
         let activity = self.session_activity;
         Stash {
             id: self.session_id, used: self.session_used, mirror: self.mirror.take(), alias: self.session_alias.take(), desk: self.session_desk,
             tabs: std::mem::take(&mut self.tabs), active: self.active, lastw: std::mem::take(&mut self.lastw), nums: std::mem::take(&mut self.nums),
             created: self.session_created, activity, last_attached: self.session_last_attached, options: std::mem::take(&mut self.options.session), env: std::mem::take(&mut self.session_env),
             path: self.session_path.take(),
+            group: self.session_group.take(),
         }
     }
 
@@ -1853,6 +1872,7 @@ impl App {
         self.options.session = s.options;
         self.session_env = s.env;
         self.session_path = s.path;
+        self.session_group = s.group;
     }
 
     /// Session [id] in front, as it is, with nothing else done (a command that names it runs
@@ -1861,6 +1881,8 @@ impl App {
     pub fn swap_session(&mut self, id: u32) -> bool {
         if id == self.session_id { return true }
         if !self.sessions.iter().any(|s| s.id == id) && !self.take_session(id, false) { return false }
+        // (The one coming in front brought up to date with this one's windows first.)
+        self.sync_links();
         let Some(i) = self.sessions.iter().position(|s| s.id == id) else { return false };
         let next = self.sessions.remove(i);
         let cur = self.stash_current();
@@ -2059,6 +2081,18 @@ impl App {
     /// A session's own formats, for a session not in front (a #{S:} loop's, list-sessions').
     pub fn stash_value(&self, id: u32, key: &str) -> Option<String> {
         if key == "session_path" { if let Some(p) = self.sessions.iter().find(|s| s.id == id).and_then(|s| s.path.clone()) { return Some(p) } }
+        // A session not in front's group (#{S:}, the tree): as the one in front has its own.
+        if key.starts_with("session_group") && self.sessions.iter().any(|s| s.id == id && s.mirror.is_none()) {
+            let g = self.sessions.iter().find(|s| s.id == id).and_then(|s| s.group.clone());
+            return Some(match (key, g) {
+                ("session_grouped", g) => (g.is_some() as u8).to_string(),
+                (_, None) => String::new(),
+                ("session_group", Some(g)) => g,
+                ("session_group_size", Some(g)) => self.group_sessions(&g).len().to_string(),
+                ("session_group_list", Some(g)) => self.group_sessions(&g).into_iter().map(|(_, n)| n).collect::<Vec<_>>().join(","),
+                _ => return None,
+            });
+        }
         let Some(s) = self.sessions.iter().find(|s| s.id == id) else {
             let r = self.remote_rows().into_iter().find(|r| r.id == id)?;
             return Some(match key {
@@ -2123,6 +2157,74 @@ impl App {
             "pane_active" => ((focus == Some(pane)) as u8).to_string(),
             _ => return None,
         })
+    }
+
+    /// Session [id]'s group, if it is in one.
+    pub fn group_of(&self, id: u32) -> Option<String> {
+        if id == self.session_id { self.session_group.clone() } else { self.sessions.iter().find(|s| s.id == id).and_then(|s| s.group.clone()) }
+    }
+
+    /// Whether window [id] (its tab id) is in a session besides the one in front.
+    pub fn linked_elsewhere(&self, id: &str) -> bool {
+        self.sessions.iter().any(|s| s.mirror.is_none() && s.tabs.iter().any(|t| t.id == id && t.root.is_some()))
+    }
+
+    /// The sessions window [id] is in, by name in tmux's order (#{window_linked_sessions_list}).
+    pub fn window_sessions(&self, id: &str) -> Vec<String> {
+        let mut v: Vec<(u32, String)> = Vec::new();
+        if self.tabs.iter().any(|t| t.id == id && t.root.is_some()) { v.push((self.session_id, self.session_name())) }
+        for s in self.sessions.iter().filter(|s| s.mirror.is_none() && s.tabs.iter().any(|t| t.id == id && t.root.is_some())) { v.push((s.id, self.stash_name(s))) }
+        v.sort_by(|a, b| a.1.cmp(&b.1));
+        v.into_iter().map(|(_, n)| n).collect()
+    }
+
+    /// The sessions of group [g] (the one in front too), by name.
+    pub fn group_sessions(&self, g: &str) -> Vec<(u32, String)> {
+        let mut v: Vec<(u32, String)> = Vec::new();
+        if self.session_group.as_deref() == Some(g) { v.push((self.session_id, self.session_name())) }
+        for s in self.sessions.iter().filter(|s| s.group.as_deref() == Some(g)) { v.push((s.id, self.stash_name(s))) }
+        v.sort_by(|a, b| a.1.cmp(&b.1));
+        v
+    }
+
+    /// Linked windows (link-window, session groups) kept alike: the windows killed gone from
+    /// every session (one left with none gone too), the session in front's windows copied into
+    /// the other sessions that have them — and, for a group, its set of windows (at the same
+    /// numbers) into every session of the group, each keeping its own current window.
+    pub fn sync_links(&mut self) {
+        let killed = std::mem::take(&mut self.killed_windows);
+        let group = self.session_group.clone();
+        let front: HashSet<String> = self.tabs.iter().filter(|t| t.root.is_some()).map(|t| t.id.clone()).collect();
+        let shares = |s: &Stash| s.mirror.is_none() && ((group.is_some() && s.group == group) || s.tabs.iter().any(|t| front.contains(&t.id) || killed.contains(&t.id)));
+        if !self.sessions.iter().any(shares) { return }
+        let mut emptied = Vec::new();
+        let tabs: Vec<Tab> = self.tabs.iter().filter(|t| t.root.is_some()).cloned().collect();
+        let nums = self.nums.clone();
+        for s in self.sessions.iter_mut().filter(|s| s.mirror.is_none()) {
+            let had = s.tabs.iter().any(|t| t.root.is_some());
+            let current = s.tabs.get(s.active).map(|t| t.id.clone());
+            let alerts: HashMap<String, u8> = s.tabs.iter().map(|t| (t.id.clone(), t.alerts)).collect();
+            // (A session in front with no window left is going: its group keeps theirs.)
+            if group.is_some() && s.group == group && !tabs.is_empty() {
+                s.tabs = tabs.iter().map(|t| { let mut c = t.clone(); c.alerts = alerts.get(&t.id).copied().unwrap_or(0); c }).collect();
+                s.nums = tabs.iter().filter_map(|t| nums.get(&t.id).map(|n| (t.id.clone(), *n))).collect();
+            } else {
+                s.tabs.retain(|t| !killed.contains(&t.id));
+                for t in s.tabs.iter_mut() {
+                    if let Some(f) = tabs.iter().find(|x| x.id == t.id) { *t = f.clone(); t.alerts = alerts.get(&t.id).copied().unwrap_or(0) }
+                }
+                for k in &killed { s.nums.remove(k); }
+            }
+            s.lastw.retain(|id| s.tabs.iter().any(|t| &t.id == id));
+            s.active = current.and_then(|c| s.tabs.iter().position(|t| t.id == c)).unwrap_or(0);
+            if s.tabs.is_empty() { if had { emptied.push(s.id) } s.tabs.push(Tab::home()); s.active = 0 }
+        }
+        // A session left with no window is gone (session_destroy).
+        for id in emptied {
+            let name = self.sessions.iter().find(|s| s.id == id).map(|s| self.stash_name(s)).unwrap_or_default();
+            self.sessions.retain(|s| s.id != id);
+            crate::commands::notify_session(self, "session-closed", id, &name, None);
+        }
     }
 
     /// A window named (-n): automatic-rename off, as tmux's window_set_name with it.
@@ -2253,7 +2355,7 @@ impl App {
         // Its directory: -c, else the folder of the shell that asked (tmux's client cwd).
         let path = cwd.clone().or_else(|| self.cli_cwd.clone()).or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string()));
         self.sessions.push(Stash { id, used: use_order(), mirror: None, alias: Some(name.clone()), desk: false, tabs: vec![tab], active: 0, lastw: Vec::new(), nums: HashMap::from([(tab_id.clone(), base)]),
-            created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: self.environ_update(), path });
+            created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: self.environ_update(), path, group: None });
         // cmd-new-session.c: its window linked (spawn_window), then the session created.
         crate::commands::notify_session(self, "window-linked", id, &name, Some(linked));
         crate::commands::notify_session(self, "session-created", id, &name, None);
@@ -2266,13 +2368,48 @@ impl App {
         Ok(id)
     }
 
+    /// new-session -t: a session in [target]'s group (made of [target] if it is in none), with its
+    /// windows at their numbers, the lowest current — named [name], else `group-N` by its id.
+    pub fn group_session(&mut self, target: u32, name: Option<&str>, detached: bool) -> Result<u32, String> {
+        if self.remote_owner(target).is_some() || self.sessions.iter().any(|s| s.id == target && s.mirror.is_some()) { return Err("session is another client's".into()) }
+        let tname = self.session_list().into_iter().find(|(i, _)| *i == target).map(|(_, n)| n).ok_or_else(|| "can't find session".to_string())?;
+        let group = if target == self.session_id { self.session_group.clone() } else { self.sessions.iter().find(|s| s.id == target).and_then(|s| s.group.clone()) }.unwrap_or(tname);
+        let name = match name {
+            Some(n) => {
+                let n = session_check_name(n).ok_or_else(|| format!("invalid session: {n}"))?;
+                if self.find_session(&format!("={n}")).is_some() { return Err(format!("duplicate session: {n}")) }
+                Some(n)
+            }
+            None => None,
+        };
+        // Its windows as the target has them now.
+        self.sync_links();
+        let (tabs, nums): (Vec<Tab>, HashMap<String, usize>) = if target == self.session_id { (self.tabs.clone(), self.nums.clone()) } else {
+            let s = self.sessions.iter().find(|s| s.id == target).ok_or_else(|| "can't find session".to_string())?;
+            (s.tabs.clone(), s.nums.clone())
+        };
+        let mut tabs: Vec<Tab> = tabs.into_iter().filter(|t| t.root.is_some()).map(|mut t| { t.alerts = 0; t }).collect();
+        if tabs.is_empty() { return Err("no windows to share".into()) }
+        tabs.sort_by_key(|t| nums.get(&t.id).copied().unwrap_or(usize::MAX));
+        if target == self.session_id { self.session_group = Some(group.clone()) } else if let Some(s) = self.sessions.iter_mut().find(|s| s.id == target) { s.group = Some(group.clone()) }
+        let id = self.alloc_session_id();
+        let name = name.unwrap_or_else(|| format!("{group}-{id}"));
+        let path = self.cli_cwd.clone().or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string()));
+        self.sessions.push(Stash { id, used: use_order(), mirror: None, alias: Some(name.clone()), desk: false, tabs, active: 0, lastw: Vec::new(), nums,
+            created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: self.environ_update(), path, group: Some(group) });
+        crate::commands::notify_session(self, "session-created", id, &name, None);
+        if !detached || self.headless { self.switch_session(id) }
+        self.save_sessions();
+        Ok(id)
+    }
+
     /// A session [name] with one empty window (its windows to come: a project's harnesses).
     pub fn empty_session(&mut self, name: &str) -> u32 {
         let id = self.alloc_session_id();
         let tab = Tab::home();
         let base = self.base_index;
         self.sessions.push(Stash { id, used: use_order(), mirror: None, alias: Some(name.to_string()), desk: false, nums: HashMap::from([(tab.id.clone(), base)]), tabs: vec![tab], active: 0, lastw: Vec::new(),
-            created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: self.environ_update(), path: None });
+            created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: self.environ_update(), path: None, group: None });
         crate::commands::notify_session(self, "session-created", id, name, None);
         id
     }
@@ -2324,7 +2461,7 @@ impl App {
         let me = crate::ipc::here().map(|p| p.display().to_string());
         let path = Self::sessions_path();
         let doc = read_sessions(&path);
-        let here = Stash { id: self.session_id, used: self.session_used, mirror: self.mirror.clone(), alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), last_attached: self.session_last_attached, options: self.options.session.clone(), env: self.session_env.clone(), path: self.session_path.clone() };
+        let here = Stash { id: self.session_id, used: self.session_used, mirror: self.mirror.clone(), alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), last_attached: self.session_last_attached, options: self.options.session.clone(), env: self.session_env.clone(), path: self.session_path.clone(), group: self.session_group.clone() };
         let mut ours = Vec::new();
         let mut names = HashSet::new();
         let mut desk = None;
@@ -2348,7 +2485,7 @@ impl App {
                 "mirrors": if left { 0 } else { self.mirrors.values().filter(|m| **m == s.id).count() },
                 // Its own options and environment (set -t, setenv -t, update-environment's), kept
                 // wherever it goes.
-                "options": s.options, "env": env_json(&s.env), "path": s.path }));
+                "options": s.options, "env": env_json(&s.env), "path": s.path, "group": s.group }));
         }
         let mut rows = Vec::new();
         if !self.forget_sessions {
@@ -2405,6 +2542,16 @@ impl App {
         let (w, h) = (self.body().width, self.body().height);
         let panes: Vec<(String, String)> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))).collect()).unwrap_or_default();
         if panes.is_empty() { return None }
+        // A window another session has too (link-window, a group), already read: the same
+        // window again — its id, its panes — not a second one.
+        if let Some(wid) = win.get("wid").and_then(Value::as_u64) {
+            let same = |t: &Tab| t.root.is_some() && t.wid() == wid && t.panes().iter().map(|p| self.panes.get(p).map(|x| (x.machine_id.clone(), x.agent_id.clone()))).collect::<Option<Vec<_>>>().as_ref() == Some(&panes);
+            if let Some(t) = self.tabs.iter().chain(self.sessions.iter().flat_map(|s| s.tabs.iter())).find(|t| same(t)) {
+                let mut t = t.clone();
+                t.alerts = 0;
+                return Some((t, win.get("num").and_then(Value::as_u64).map(|n| n as usize)));
+            }
+        }
         for p in win.get("panes").and_then(Value::as_array).cloned().unwrap_or_default() {
             if p.get(2).and_then(Value::as_bool).unwrap_or(false) { if let (Some(m), Some(a)) = (p.get(0).and_then(Value::as_str), p.get(1).and_then(Value::as_str)) { self.shells.insert((m.to_string(), a.to_string())); } }
         }
@@ -2445,7 +2592,7 @@ impl App {
         let created = row.get("created").and_then(Value::as_i64).unwrap_or_else(epoch_secs);
         let lastw: Vec<String> = row.get("last").and_then(Value::as_array).map(|l| l.iter().filter_map(|i| tabs.get(i.as_u64()? as usize).map(|t| t.id.clone())).collect()).unwrap_or_default();
         Some(Stash { id, used: 0, mirror: None, alias: Some(name), desk: false, active: active.min(tabs.len() - 1), tabs, lastw, nums,
-            created, activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), last_attached: row.get("last_attached").and_then(Value::as_i64).unwrap_or(0), options: options_from(row), env: env_from(row), path: row.get("path").and_then(Value::as_str).map(str::to_string) })
+            created, activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), last_attached: row.get("last_attached").and_then(Value::as_i64).unwrap_or(0), options: options_from(row), env: env_from(row), path: row.get("path").and_then(Value::as_str).map(str::to_string), group: row.get("group").and_then(Value::as_str).map(str::to_string) })
     }
 
     /// The sessions no running client has (save_sessions: left by clients that detached), back
@@ -2509,6 +2656,29 @@ impl App {
                     }
                     (Some(id), true) if start.attach_existing => { self.switch_session_as(id, start.attach_how()); self.start_session = None }
                     (Some(_), true) => { self.start_error(format!("duplicate session: {}", start.name.clone().unwrap_or_default())) }
+                    // new -t: a session in that one's group — made by the client that has it
+                    // (shown here as it has it), or here when it is this client's.
+                    (None, true) if start.group.is_some() => {
+                        self.start_session = None;
+                        let t = start.group.clone().unwrap_or_default();
+                        let Some(target) = self.find_session(&t) else { self.start_error(format!("can't find session: {t}")); return };
+                        match self.remote_owner(target) {
+                            Some(owner) => {
+                                let mut ask: Vec<String> = vec!["new-session".into(), "-d".into(), "-P".into(), "-F".into(), "#{session_name}".into(), "-t".into(), format!("${target}")];
+                                if let Some(n) = &start.name { ask.extend(["-s".into(), n.clone()]) }
+                                match crate::ipc::ask(std::path::Path::new(&owner), &ask) {
+                                    Some((out, _, 0)) => {
+                                        let name = out.first().map(|l| l.trim_end_matches(BARE).to_string()).unwrap_or_default();
+                                        self.remote.borrow_mut().stamp = None;
+                                        match self.find_session(&format!("={name}")) { Some(id) => self.switch_session_as(id, start.attach_how()), None => { self.start_error(format!("can't find session: {name}")); return } }
+                                    }
+                                    Some((_, err, _)) => { self.start_error(err.join("\n")); return }
+                                    None => { self.start_error("the client that has it did not answer".into()); return }
+                                }
+                            }
+                            None => if let Err(e) = self.group_session(target, start.name.as_deref(), false) { self.start_error(e); return },
+                        }
+                    }
                     // A fresh start's first session is the desk's (desk=off: the client's first),
                     // named as asked; another is made once this computer is connected
                     // (maybe_start_shell).
@@ -2691,8 +2861,11 @@ impl App {
                 self.lastw.retain(|x| *x != gone.id);
                 if i == self.active { select = true; self.active = self.tabs.iter().position(|t| t.id == id).unwrap_or(0) }
                 else if i < self.active { self.active -= 1 }
-                for p in gone.panes() { self.end_shell(p); self.drop_pane(p) }
-                if gone.on_desk { self.desk_op(json!({ "op": "tab.close", "id": gone.id })) }
+                // (Unlinked here; destroyed only when no other session has it.)
+                if !self.linked_elsewhere(&gone.id) {
+                    for p in gone.panes() { self.end_shell(p); self.drop_pane(p) }
+                    if gone.on_desk { self.desk_op(json!({ "op": "tab.close", "id": gone.id })) }
+                }
             }
         }
         let n = idx.unwrap_or_else(|| self.free_num());
@@ -3467,8 +3640,15 @@ impl App {
         let elsewhere = self.swap_back.is_some_and(|b| b != self.session_id);
         let gone = (self.session_id, self.session_name(), tab.wid(), tab.name.clone());
         let unlinked = |app: &mut App, g: (u32, String, u64, String)| crate::commands::notify_session(app, "window-unlinked", g.0, &g.1, Some((g.2, g.3)));
-        for id in tab.panes() { self.end_shell(id); self.drop_pane(id) }
-        if tab.on_desk { self.desk_op(json!({ "op": "tab.close", "id": tab.id })) }
+        // A window in other sessions too (link-window, a group): unlinked here only when this
+        // session goes or unlink-window asks (the window lives on there); killed, it goes from
+        // them all (sync_links).
+        let linked = self.linked_elsewhere(&tab.id);
+        if !(linked && (self.unlinking || self.killing_session)) {
+            if linked { self.killed_windows.push(tab.id.clone()) }
+            for id in tab.panes() { self.end_shell(id); self.drop_pane(id) }
+            if tab.on_desk { self.desk_op(json!({ "op": "tab.close", "id": tab.id })) }
+        }
         // The last window gone: the session is over (tmux's `[exited]` when it was the last).
         if self.tabs.is_empty() {
             self.tabs.push(Tab::home());

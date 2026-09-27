@@ -42,7 +42,7 @@ pub const TABLE_NAMES: &[&str] = &["active_window_index", "alternate_on", "alter
 pub fn every(app: &App, window: usize, pane: Option<u64>) -> Vec<String> {
     let dead = pane.and_then(|p| app.panes.get(&p)).map(|p| matches!(p.phase, crate::pane::Phase::Card { .. })).unwrap_or(false);
     let skip = |n: &str| matches!(n, "buffer_created" | "buffer_name" | "buffer_sample" | "buffer_size") || (n.starts_with("mouse_") && !n.ends_with("_flag")) || (n.starts_with("pane_dead_") && !dead)
-        || (n.starts_with("session_group") && n != "session_grouped") || matches!(n, "client_last_session" | "window_bigger" | "window_offset_x" | "window_offset_y" | "session_attached_list" | "window_active_clients_list" | "pane_mode");
+        || (n.starts_with("session_group") && n != "session_grouped" && app.session_group.is_none()) || matches!(n, "client_last_session" | "window_bigger" | "window_offset_x" | "window_offset_y" | "session_attached_list" | "window_active_clients_list" | "pane_mode");
     let mut out: Vec<String> = TABLE_NAMES.iter().filter(|n| !skip(n)).filter_map(|n| {
         let v = match table(app, n, window, pane)? { Val::Str(s) => s, Val::Time(t) => t.to_string() };
         Some(format!("{n}={v}"))
@@ -941,6 +941,14 @@ pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
 /// The clients showing the session in front: this one (not hn with no terminal, nor while a
 /// command has another session in front) and those showing it as this one has it — or, for a
 /// session shown here as another client has it, that client's count.
+/// How many terminals show session [id] (the one in front, the one a command is in for a moment,
+/// another of this client's).
+fn attached_to(app: &App, id: u32) -> usize {
+    if id == app.session_id { return attached(app) }
+    let here = (Some(id) == app.swap_back && !app.headless) as usize;
+    here + app.mirrors.values().filter(|m| **m == id).count()
+}
+
 fn attached(app: &App) -> usize {
     if app.mirror.is_some() && app.swap_back.is_none() { return app.mirror_attached.max(1) as usize }
     let here = !(app.swap_back.is_some() || app.headless) as usize;
@@ -1180,12 +1188,34 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "session_path" => app.session_path.clone().unwrap_or_else(|| std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default()),
         // The session the client was in before this one.
         "client_last_session" => app.last_session.and_then(|l| app.session_list().into_iter().find(|(i, _)| *i == l)).map(|(_, n)| n).unwrap_or_default(),
-        "session_group" | "pane_dead_status" | "pane_start_command" => String::new(),
+        "pane_dead_status" | "pane_start_command" => String::new(),
+        // Its session group (new -t): none when it is in none (tmux's NULL), but _grouped.
+        "session_group" | "session_group_size" | "session_group_list" | "session_group_attached" | "session_group_many_attached" | "session_group_attached_list" => {
+            let Some(g) = app.session_group.clone() else { return Some(Val::Str(String::new())) };
+            let members = app.group_sessions(&g);
+            let on: Vec<usize> = members.iter().map(|(id, _)| attached_to(app, *id)).collect();
+            let total: usize = on.iter().sum();
+            match name {
+                "session_group" => g,
+                "session_group_size" => members.len().to_string(),
+                "session_group_list" => members.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>().join(","),
+                "session_group_attached" => total.to_string(),
+                "session_group_many_attached" => ((total > 1) as u8).to_string(),
+                _ => if total > 0 && !app.headless { crate::app::tty_name() } else { String::new() },
+            }
+        }
+        "session_grouped" => (app.session_group.is_some() as u8).to_string(),
+        // The sessions its window is in (link-window, a group).
+        "window_linked" | "window_linked_sessions" | "window_linked_sessions_list" => {
+            let list = tab.map(|t| app.window_sessions(&t.id)).unwrap_or_default();
+            // (session_is_linked: in a session outside its group — a group's own sessions all have it.)
+            let group = app.session_group.as_deref().map(|g| app.group_sessions(g).len()).unwrap_or(1);
+            match name { "window_linked" => ((list.len() > group) as u8).to_string(), "window_linked_sessions" => list.len().to_string(), _ => list.join(",") }
+        }
         "pane_input_off" => pane.map(|p| p.input_off).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "window_activity_flag" => flags(app, window).contains('#').then_some("1").unwrap_or("0").into(),
         "window_silence_flag" => flags(app, window).contains('~').then_some("1").unwrap_or("0").into(),
-        "session_grouped" | "window_linked" | "window_bigger" | "window_offset_x" | "window_offset_y"
-        | "client_control_mode" => "0".into(),
+        "window_bigger" | "window_offset_x" | "window_offset_y" | "client_control_mode" => "0".into(),
         // What went to the terminal (bytes), and what was dropped (none: hn never drops output).
         "client_written" if !app.headless => crate::term_out::WRITTEN.load(std::sync::atomic::Ordering::Relaxed).to_string(),
         "client_discarded" if !app.headless => "0".into(),
@@ -1269,8 +1299,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // Every client of the session shows its current window.
         "window_active_clients" => if window == app.active { attached(app).to_string() } else { "0".into() },
         "window_active_sessions" => "1".into(),
-        "window_active_sessions_list" | "window_linked_sessions_list" => app.session_name(),
-        "window_linked_sessions" => "1".into(),
+        "window_active_sessions_list" => app.session_name(),
         // A cell's pixels (TIOCGWINSZ's over its cells, as tty_resize has them): the client's (0
         // when the terminal does not say; none with no terminal), the window's (16x32, tmux's
         // DEFAULT_XPIXEL/YPIXEL, then).

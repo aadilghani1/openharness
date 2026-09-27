@@ -165,6 +165,7 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
         if let Some(event) = first { apply(&mut app, event) }
         while let Ok(event) = rx.try_recv() { apply(&mut app, event) }
         app.notify_changes();
+        app.sync_links();
         app.save_if_changed();
         server::publish(&mut app);
         commands::run_pending_hooks(&mut app);
@@ -392,6 +393,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         // is a pane to show them in.
         app.notify_changes();
         // What another terminal's client sees of this one's sessions, kept up to date.
+        app.sync_links();
         app.save_if_changed();
         server::publish(&mut app);
         commands::run_pending_hooks(&mut app);

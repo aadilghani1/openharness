@@ -1286,7 +1286,7 @@ fn target_session(app: &App, t: &str) -> Option<u32> {
 /// and the command runs there; a session it leaves with no window is gone. True when it was one.
 fn cross_session(app: &mut App, words: &[String]) -> bool {
     let Some(entry) = words.first().and_then(|w| crate::cmd::find(w).ok()) else { return false };
-    if !matches!(entry.name, "move-window" | "swap-window" | "join-pane" | "move-pane" | "break-pane") || app.swap_back.is_some() { return false }
+    if !matches!(entry.name, "move-window" | "link-window" | "swap-window" | "join-pane" | "move-pane" | "break-pane") || app.swap_back.is_some() { return false }
     let Ok(args) = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)) else { return false };
     // move-window -r only renumbers -t's session: nothing moves.
     if entry.name == "move-window" && args.has('r') > 0 { return false }
@@ -1304,6 +1304,9 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
     let name_of = |app: &App, id: u32| app.session_list().into_iter().find(|(i, _)| *i == id).map(|(_, n)| n).unwrap_or_default();
     // move-window between two terminals' sessions: the window goes from the client that has it
     // to the one that has the other session (its harnesses running on, its shells that client's).
+    // server_link_window: not between two sessions of one group (they have the same windows).
+    if matches!(entry.name, "move-window" | "link-window") && app.group_of(src).is_some() && app.group_of(src) == app.group_of(dst) { app.error("sessions are grouped"); return true }
+    if entry.name == "link-window" && (app.remote_owner(src).is_some() || app.remote_owner(dst).is_some()) { app.error("can't link a window between two clients' sessions"); return true }
     if entry.name == "move-window" && app.remote_owner(src).is_some() != app.remote_owner(dst).is_some() {
         let detached = args.has('d') > 0;
         if let Some(owner) = app.remote_owner(dst) {
@@ -1335,13 +1338,19 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
     let result: Result<(), String> = (|| {
         app.swap_session(src);
         match entry.name {
-            "move-window" => {
+            "move-window" | "link-window" => {
                 let i = match src_t.as_deref() { Some(t) => window_target(app, t).ok_or_else(|| format!("can't find window: {t}"))?, None => app.active };
-                let tab = app.take_tab(i);
+                // link-window: the same window in both (its copy here, its alerts its own).
+                let link = entry.name == "link-window";
+                let tab = if link { let mut t = app.tabs[i].clone(); t.alerts = 0; t } else { app.take_tab(i) };
                 let wid = tab.wid();
                 app.swap_session(dst);
+                if link && app.tabs.iter().any(|t| t.id == tab.id) { return Err("window is already linked to that session".into()) }
                 app.put_tab(tab, None);
-                run_words_in(app, &with(words, "-s", format!("@{wid}")));
+                // (Then placed there as move-window places it: -t's number, -a/-b, -k, -d.)
+                let mut there = with(words, "-s", format!("@{wid}"));
+                there[0] = "move-window".into();
+                run_words_in(app, &there);
                 // Its number, if the move there failed (the index taken): the first free one.
                 if let Some(w) = app.tabs.iter().position(|t| t.is_wid(wid)) {
                     let id = app.tabs[w].id.clone();
@@ -1737,6 +1746,22 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.error(format!("can't find window: {t}")) }, None => app.active };
             let name = positional(words).join(" ");
             app.rename_tab_at(target, &name);
+        }
+        // link-window within one session: tmux links a window twice into one session; hn has a
+        // window once in each session.
+        "link-window" => app.error("window is already linked to that session"),
+        "unlink-window" => {
+            // cmd-kill-window.c: the window out of this session — only when another session (one
+            // outside its group) has it, unless -k, which kills it when none does.
+            let w = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.error(format!("can't find window: {t}")) }, None => app.active };
+            let id = app.tabs[w].id.clone();
+            let group = app.session_group.clone();
+            let outside = app.sessions.iter().any(|s| s.mirror.is_none() && (group.is_none() || s.group != group) && s.tabs.iter().any(|t| t.id == id && t.root.is_some()));
+            if !outside && !flag(words, "-k") { return app.error("window only linked to one session") }
+            app.unlinking = outside;
+            app.close_tab(w);
+            app.unlinking = false;
+            app.window_gone = true;
         }
         "move-window" => {
             // cmd-move-window.c: -r renumbers the windows; else the source (-s, else this window)
@@ -2751,6 +2776,19 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let name = opt(words, "-s");
             if flag(words, "-A") {
                 if let Some(id) = name.as_deref().and_then(|n| app.find_session(&format!("={n}"))) { if !flag(words, "-d") { app.switch_session(id) } return }
+            }
+            // -t: a session in that one's group, sharing its windows (no shell of its own).
+            if let Some(t) = opt(words, "-t") {
+                if !positional(words).is_empty() || opt(words, "-n").is_some() { return app.error("command or window name given with target") }
+                let Some(target) = app.find_session(&t) else { return app.error(format!("can't find session: {t}")) };
+                match app.group_session(target, name.as_deref(), flag(words, "-d")) {
+                    Ok(id) => if flag(words, "-P") {
+                        let line = crate::format::expand_session(app, &opt(words, "-F").unwrap_or_else(|| "#{session_name}:".into()), id);
+                        app.print("new-session", vec![line]);
+                    },
+                    Err(e) => app.error(e),
+                }
+                return;
             }
             let cwd = opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty());
             let detached = flag(words, "-d");

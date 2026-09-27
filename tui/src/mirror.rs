@@ -48,7 +48,7 @@ pub fn show(app: &mut App, id: u32, readonly: bool) -> bool {
     let Some(row) = row_named(&r.name) else { return false };
     let (w, h) = (app.body().width, app.body().height);
     let mut stash = Stash { id, used: 0, alias: Some(r.name.clone()), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
-        created: r.created, activity: r.activity, last_attached: r.last_attached, options: crate::app::options_from(&row), env: crate::app::env_from(&row), path: row.get("path").and_then(serde_json::Value::as_str).map(str::to_string), mirror: Some(Mirror { owner: owner.clone(), readonly }) };
+        created: r.created, activity: r.activity, last_attached: r.last_attached, options: crate::app::options_from(&row), env: crate::app::env_from(&row), path: row.get("path").and_then(serde_json::Value::as_str).map(str::to_string), group: row.get("group").and_then(serde_json::Value::as_str).map(str::to_string), mirror: Some(Mirror { owner: owner.clone(), readonly }) };
     if !fill(app, &mut stash, &row, Vec::new(), (w, h)) { return false }
     app.sessions.push(stash);
     register(&owner, id, true);
@@ -143,7 +143,7 @@ fn rebuild(app: &mut App, row: &Value) {
     let body = app.body();
     let current = app.tabs.get(app.active).map(|t| t.id.clone());
     let mut stash = Stash { id: app.session_id, used: app.session_used, alias: app.session_alias.clone(), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
-        created: app.session_created, activity: app.session_activity, last_attached: app.session_last_attached, options: Default::default(), env: Default::default(), path: app.session_path.clone(), mirror: app.mirror.clone() };
+        created: app.session_created, activity: app.session_activity, last_attached: app.session_last_attached, options: Default::default(), env: Default::default(), path: app.session_path.clone(), group: app.session_group.clone(), mirror: app.mirror.clone() };
     let old = std::mem::take(&mut app.tabs);
     if !fill(app, &mut stash, row, old, (body.width, body.height)) { return gone(app) }
     app.tabs = stash.tabs;
@@ -230,7 +230,8 @@ pub fn absolute(app: &App, entry: &crate::cmd::Entry, words: &[String]) -> Vec<S
         let id = match spec.kind {
             crate::cmd::Kind::Pane => found.pane.map(crate::pane::tag).or_else(|| wid(found.window)),
             crate::cmd::Kind::Window if spec.window_index => Some(match (given.is_some(), found.idx) { (true, Some(i)) => format!("${sid}:{i}"), _ => format!("${sid}:") }),
-            crate::cmd::Kind::Window => wid(found.window),
+            // (In its session: a window may be in several — link-window, a group.)
+            crate::cmd::Kind::Window => wid(found.window).map(|w| format!("${sid}:{w}")),
             crate::cmd::Kind::Session => Some(format!("${sid}")),
         };
         let Some(id) = id else { continue };
