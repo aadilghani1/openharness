@@ -80,21 +80,16 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      // The desktop's default: the project last started on this machine — and the row says
-      // which computer it is on.
+      // The desktop's default: the project last started on this machine.
       expect(find.text('app', findRichText: true), findsOneWidget);
-      expect(
-        find.textContaining('Studio:/code/app', findRichText: true),
-        findsOneWidget,
-      );
 
       await tester.tap(find.text('project'));
       await tester.pumpAndSettle();
 
-      // One row per `machine:folder` pair — the chooser's, over the form's own line.
+      // One row per `machine:folder` pair.
       expect(
         find.textContaining('Studio:/code/app', findRichText: true),
-        findsNWidgets(2),
+        findsOneWidget,
       );
       expect(
         find.textContaining('Laptop', findRichText: true),
@@ -104,66 +99,46 @@ void main() {
     },
   );
 
-  testWidgets(
-    'a worktree Harness made is not the project: its repository is, on its computer',
-    (tester) async {
-      const worktree =
-          '/home/u/harnesses/worktrees/autonomous-harness/silent-beacon';
-      final app = _app(
-        answers: {
-          'git_project_info': {
-            'isGit': true,
-            'branch': 'silent-beacon',
-            'root': worktree,
-            'mainFolder': '/home/u/code/autonomous-harness',
-            'mainBranch': 'main',
-            'defaultRef': 'refs/remotes/origin/main',
-            'branches': [
-              {'ref': 'refs/heads/main', 'name': 'main'},
-              {
-                'ref': 'refs/remotes/origin/main',
-                'name': 'origin/main',
-                'remote': true,
-              },
-            ],
-          },
+  testWidgets('a worktree Harness made is not the project: its repository is', (
+    tester,
+  ) async {
+    const worktree =
+        '/home/u/harnesses/worktrees/autonomous-harness/silent-beacon';
+    final app = _app(
+      answers: {
+        'git_project_info': {
+          'isGit': true,
+          'branch': 'silent-beacon',
+          'root': worktree,
+          'mainFolder': '/home/u/code/autonomous-harness',
+          'mainBranch': 'main',
+          'defaultRef': 'refs/remotes/origin/main',
+          'branches': [
+            {'ref': 'refs/heads/main', 'name': 'main'},
+            {
+              'ref': 'refs/remotes/origin/main',
+              'name': 'origin/main',
+              'remote': true,
+            },
+          ],
         },
-      );
-      addTearDown(app.dispose);
-      // Opened on another harness's worktree — its folder, handed over as Find hands one.
-      await tester.pumpWidget(
-        MaterialApp(
-          home: NewAgentPage(
-            notifier: app,
-            machineId: 'ready',
-            folder: worktree,
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
+      },
+    );
+    addTearDown(app.dispose);
+    // Opened on another harness's worktree — its folder, handed over as Find hands one.
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NewAgentPage(notifier: app, machineId: 'ready', folder: worktree),
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      expect(
-        find.text('autonomous-harness', findRichText: true),
-        findsOneWidget,
-      );
-      expect(
-        find.textContaining('silent-beacon', findRichText: true),
-        findsNothing,
-      );
-      expect(
-        find.textContaining(
-          'Studio:~/code/autonomous-harness',
-          findRichText: true,
-        ),
-        findsOneWidget,
-      );
-      // Where Start puts it, without opening anything.
-      expect(
-        find.textContaining('new worktree from', findRichText: true),
-        findsOneWidget,
-      );
-    },
-  );
+    expect(find.text('autonomous-harness', findRichText: true), findsOneWidget);
+    expect(
+      find.textContaining('silent-beacon', findRichText: true),
+      findsNothing,
+    );
+  });
 
   testWidgets('a swipe right anywhere goes back', (tester) async {
     final app = _app();

@@ -792,7 +792,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                           valueColor: _folder == null && _project == null
                               ? tty.green
                               : null,
-                          detail: _projectPlace,
+                          detail: null,
                           onTap: _creating
                               ? null
                               : () => unawaited(_chooseProject()),
@@ -801,8 +801,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
                         // sit on their defaults until asked for.
                         TtyFormRow(
                           label: 'options',
-                          value: _optionsSummary,
-                          valueColor: tty.faint,
+                          // Left as it is nearly every time: folded to `[+]`.
+                          value: _optionsOpen ? '[−]' : '[+]',
                           chevron: false,
                           onTap: () =>
                               setState(() => _optionsOpen = !_optionsOpen),
@@ -1084,33 +1084,10 @@ class _NewAgentPageState extends State<NewAgentPage> {
     } else {
       return 'Choose project';
     }
-    return name;
-  }
-
-  /// Where the project is, under its name: the computer and the path — `M2:~/code/web`.
-  String? get _projectPlace {
-    final folder = _folder;
-    if (folder == null) return null;
+    // One line: most repositories live in a folder of the same name, and the full path is in the
+    // chooser. The computer in front only when there is more than one to tell apart.
     final machine = _machine?.machine.displayName;
-    return machine == null ? _tilde(folder) : '$machine:${_tilde(folder)}';
-  }
-
-  /// The options, folded, in one line: where the harness will work and how it asks —
-  /// `new worktree from main · auto-approve`.
-  String get _optionsSummary {
-    final info = _repository;
-    final where = _gitLoading
-        ? 'reading…'
-        : info == null
-        ? 'in this folder'
-        : _worktree
-        ? 'new worktree from $_branchTitle'
-        : 'on $_branchTitle';
-    return [
-      where,
-      if (_permissionModes.isNotEmpty)
-        (_permissionModeChoice?.label ?? 'Auto-approve').toLowerCase(),
-    ].join(' · ');
+    return machine == null || _machines.length < 2 ? name : '$machine:$name';
   }
 
   /// The button: a missing choice opens its chooser and says why, the desktop's `requiredChoice`.
