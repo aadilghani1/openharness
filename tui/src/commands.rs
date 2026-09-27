@@ -1819,8 +1819,24 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let src = match opt(words, "-s") { Some(t) => match pane_target(app, &t) { Some((_, p)) => p, None => return app.error(format!("can't find pane: {t}")) }, None => match app.focused() { Some(f) => f, None => return } };
             // -t as a window index (cmd-find's WINDOW_INDEX: a number no window has yet is fine).
             let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: true, default_marked: false };
-            let num = match opt(words, "-t") { Some(t) => match crate::cmd::resolve(app, Some(&t), spec) { Ok(f) => f.idx, Err(e) => return app.error(e) }, None => None };
-            if let Err(e) = app.break_pane(src, opt(words, "-n"), num, flag(words, "-d")) { app.error(e) }
+            let found = match opt(words, "-t") { Some(t) => match crate::cmd::resolve(app, Some(&t), spec) { Ok(f) => Some(f), Err(e) => return app.error(e) }, None => None };
+            let mut num = found.as_ref().and_then(|f| f.idx);
+            // -a after the target window (else this one), -b before it: the windows from there
+            // move up one (winlink_shuffle_up).
+            if flag(words, "-a") || flag(words, "-b") {
+                let at = found.as_ref().and_then(|f| f.window).map(|w| app.win_num(w)).unwrap_or_else(|| app.win_num(app.active));
+                let at = if flag(words, "-b") { at } else { at + 1 };
+                app.shuffle_up(at);
+                num = Some(at);
+            }
+            if let Err(e) = app.break_pane(src, opt(words, "-n"), num, flag(words, "-d")) { return app.error(e) }
+            // -P: where it went (BREAK_PANE_TEMPLATE, else -F's).
+            if flag(words, "-P") {
+                let Some(w) = app.tabs.iter().position(|t| t.panes().contains(&src)) else { return };
+                let template = opt(words, "-F").unwrap_or_else(|| "#{session_name}:#{window_index}.#{pane_index}".into());
+                let line = crate::format::expand(app, &template, w, Some(src), true);
+                app.print("break-pane", vec![line]);
+            }
         }
         "rotate-window" => {
             // -t: that window; -D the other way; -Z keeps a zoomed window zoomed.
