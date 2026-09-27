@@ -2152,14 +2152,7 @@ impl App {
     /// write_sessions with the file's lock already held.
     pub fn write_sessions_held(&self, how: Save) {
         if self.handed_over || (self.capture.is_some() && self.tabs.is_empty()) { return }
-        let window = |app: &App, t: &Tab, nums: &HashMap<String, usize>| {
-            // A shell hn made is ended when its window is killed, by whichever client does it.
-            // Each pane's harness, whether hn made it (a shell), and its id (%N, kept wherever the
-            // session goes).
-            let panes: Vec<Value> = t.panes().iter().filter_map(|p| app.panes.get(p)).map(|p| json!([p.machine_id, p.agent_id, app.shells.contains(&(p.machine_id.clone(), p.agent_id.clone())), p.id])).collect();
-            let focus = t.focus.and_then(|f| t.panes().iter().position(|p| *p == f)).unwrap_or(0);
-            json!({ "name": t.name, "named": t.named, "num": nums.get(&t.id).copied(), "wid": t.wid(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus, "zoomed": t.zoomed && panes.len() > 1 })
-        };
+        let window = |app: &App, t: &Tab, nums: &HashMap<String, usize>| app.window_json(t, nums.get(&t.id).copied());
         let me = crate::ipc::here().map(|p| p.display().to_string());
         let path = Self::sessions_path();
         let doc = read_sessions(&path);
@@ -2215,33 +2208,51 @@ impl App {
 
     /// A session as the file keeps it: each window's harnesses in their panes, laid out as they
     /// were, numbered and named as they were. None when none of its windows has a pane.
+    /// A window as the sessions file keeps it (and as it goes to another client): its name,
+    /// number, @id, layout, focus, zoom, and each pane's harness, whether hn made it (a shell, ended
+    /// when its window is killed by whichever client does it), and its %id.
+    pub fn window_json(&self, t: &Tab, num: Option<usize>) -> Value {
+        let panes: Vec<Value> = t.panes().iter().filter_map(|p| self.panes.get(p)).map(|p| json!([p.machine_id, p.agent_id, self.shells.contains(&(p.machine_id.clone(), p.agent_id.clone())), p.id])).collect();
+        let focus = t.focus.and_then(|f| t.panes().iter().position(|p| *p == f)).unwrap_or(0);
+        json!({ "name": t.name, "named": t.named, "num": num, "wid": t.wid(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus, "zoomed": t.zoomed && panes.len() > 1 })
+    }
+
+    /// A window made again from window_json (its panes' harnesses, ids and shells taken on here),
+    /// with its number if it had one. None when it has no pane.
+    pub fn tab_from_json(&mut self, win: &Value) -> Option<(Tab, Option<usize>)> {
+        let (w, h) = (self.body().width, self.body().height);
+        let panes: Vec<(String, String)> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))).collect()).unwrap_or_default();
+        if panes.is_empty() { return None }
+        for p in win.get("panes").and_then(Value::as_array).cloned().unwrap_or_default() {
+            if p.get(2).and_then(Value::as_bool).unwrap_or(false) { if let (Some(m), Some(a)) = (p.get(0).and_then(Value::as_str), p.get(1).and_then(Value::as_str)) { self.shells.insert((m.to_string(), a.to_string())); } }
+        }
+        // Each pane with its id (%N) as it was.
+        let kept: Vec<Option<u64>> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter(|p| p.get(1).is_some()).map(|p| p.get(3).and_then(Value::as_u64)).collect()).unwrap_or_default();
+        let ids: Vec<u64> = panes.iter().enumerate().map(|(i, (m, a))| self.new_pane_as(m, a, kept.get(i).copied().flatten())).collect();
+        // And the window its id (@N).
+        let name = win.get("name").and_then(Value::as_str).unwrap_or("");
+        let mut tab = match win.get("wid").and_then(Value::as_u64).filter(|w| self.session_of_window(*w).is_none()) { Some(wid) => Tab::with_wid(name, wid), None => Tab::new(name) };
+        tab.named = win.get("named").and_then(Value::as_bool).unwrap_or(false);
+        let layout = win.get("layout").and_then(Value::as_str).unwrap_or("");
+        // With no terminal: the size the last terminal gave it (tmux keeps it).
+        let (w, h) = match Node::tmux_size(layout).filter(|_| self.headless) { Some(s) => { tab.size = Some(s); s } None => (w, h) };
+        tab.root = Node::from_tmux(layout, &ids, w, h).or_else(|| layout::arrange(layout::Named::Tiled, &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")));
+        tab.order = ids.clone();
+        tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
+        tab.zoomed = win.get("zoomed").and_then(Value::as_bool).unwrap_or(false) && ids.len() > 1;
+        let num = win.get("num").and_then(Value::as_u64).map(|n| n as usize);
+        Some((tab, num))
+    }
+
     fn stash_from_row(&mut self, row: &Value, id: u32) -> Option<Stash> {
         let name = row.get("name").and_then(Value::as_str)?.to_string();
         // Its own id ($N), kept wherever it goes — unless this client has a session by that id.
         let id = row.get("id").and_then(Value::as_u64).map(|i| i as u32).filter(|i| *i != self.session_id && !self.sessions.iter().any(|s| s.id == *i)).unwrap_or(id);
-        let (w, h) = (self.body().width, self.body().height);
         let mut tabs = Vec::new();
         let mut nums = HashMap::new();
         for win in row.get("windows").and_then(Value::as_array).cloned().unwrap_or_default() {
-            let panes: Vec<(String, String)> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))).collect()).unwrap_or_default();
-            if panes.is_empty() { continue }
-            for p in win.get("panes").and_then(Value::as_array).cloned().unwrap_or_default() {
-                if p.get(2).and_then(Value::as_bool).unwrap_or(false) { if let (Some(m), Some(a)) = (p.get(0).and_then(Value::as_str), p.get(1).and_then(Value::as_str)) { self.shells.insert((m.to_string(), a.to_string())); } }
-            }
-            // Each pane with its id (%N) as it was.
-            let kept: Vec<Option<u64>> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter(|p| p.get(1).is_some()).map(|p| p.get(3).and_then(Value::as_u64)).collect()).unwrap_or_default();
-            let ids: Vec<u64> = panes.iter().enumerate().map(|(i, (m, a))| self.new_pane_as(m, a, kept.get(i).copied().flatten())).collect();
-            // And the window its id (@N).
-            let name = win.get("name").and_then(Value::as_str).unwrap_or("");
-            let mut tab = match win.get("wid").and_then(Value::as_u64).filter(|w| self.session_of_window(*w).is_none()) { Some(wid) => Tab::with_wid(name, wid), None => Tab::new(name) };
-            tab.named = win.get("named").and_then(Value::as_bool).unwrap_or(false);
-            let layout = win.get("layout").and_then(Value::as_str).unwrap_or("");
-            // With no terminal: the size the last terminal gave it (tmux keeps it).
-            let (w, h) = match Node::tmux_size(layout).filter(|_| self.headless) { Some(s) => { tab.size = Some(s); s } None => (w, h) };
-            tab.root = Node::from_tmux(layout, &ids, w, h).or_else(|| layout::arrange(layout::Named::Tiled, &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")));
-            tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
-            tab.zoomed = win.get("zoomed").and_then(Value::as_bool).unwrap_or(false) && ids.len() > 1;
-            if let Some(n) = win.get("num").and_then(Value::as_u64) { nums.insert(tab.id.clone(), n as usize); }
+            let Some((tab, num)) = self.tab_from_json(&win) else { continue };
+            if let Some(n) = num { nums.insert(tab.id.clone(), n); }
             tabs.push(tab);
         }
         if tabs.is_empty() { return None }

@@ -1230,6 +1230,21 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
         if let Err(e) = crate::cmd::resolve(app, Some(t), spec) { app.error(e); return true }
     }
     let name_of = |app: &App, id: u32| app.session_list().into_iter().find(|(i, _)| *i == id).map(|(_, n)| n).unwrap_or_default();
+    // move-window between two terminals' sessions: the window goes from the client that has it
+    // to the one that has the other session (its harnesses running on, its shells that client's).
+    if entry.name == "move-window" && app.remote_owner(src).is_some() != app.remote_owner(dst).is_some() {
+        let detached = args.has('d') > 0;
+        if let Some(owner) = app.remote_owner(dst) {
+            let src_target = src_t.clone().unwrap_or_else(|| format!("={}:", name_of(app, src)));
+            let dst_target = dst_t.clone().unwrap_or_else(|| format!("={}:", name_of(app, dst)));
+            give_window(app, src, &src_target, &owner, &dst_target, detached);
+        } else if let Some(owner) = app.remote_owner(src) {
+            let src_target = src_t.clone().unwrap_or_default();
+            let dst_target = dst_t.clone().unwrap_or_else(|| format!("={}:", name_of(app, dst)));
+            take_window(app, &owner, &src_target, dst, &dst_target, detached);
+        }
+        return true;
+    }
     for s in [src, dst] { if app.remote_owner(s).is_some() { app.error(format!("session {} is another client's", name_of(app, s))); return true } }
     // A word's value replaced (-s: what moved, where it is now).
     let with = |words: &[String], flag: &str, value: String| -> Vec<String> {
@@ -1344,6 +1359,83 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
     // (Said above, in tmux's order: not again when the hooks next look.)
     app.hooks_seen_now();
     true
+}
+
+/// A window's session name and number from a target (`=a:1`, `a:1`, `a:`): the session this
+/// client has, and the window's place in it (its current one without a number).
+fn window_of_target(app: &mut App, target: &str) -> Result<(u32, usize), String> {
+    let (s, w) = target.split_once(':').unwrap_or((target, ""));
+    let sid = app.find_session(s).ok_or_else(|| format!("can't find session: {}", s.trim_start_matches('=')))?;
+    let back = app.session_id;
+    if sid != back { app.swap_back = Some(back); app.swap_session(sid); }
+    let found = if w.is_empty() { Some(app.active) } else { window_target(app, &format!(":{w}")) };
+    if sid != back { app.swap_session(back); app.swap_back = None; }
+    found.map(|i| (sid, i)).ok_or_else(|| format!("can't find window: {target}"))
+}
+
+/// move-window to a session another client has: this client's window, described, put there by
+/// that client; gone from here once it is (its harnesses left running, its shells that
+/// client's now).
+fn give_window(app: &mut App, src: u32, src_target: &str, owner: &str, dst_target: &str, detached: bool) {
+    let (sid, i) = match window_of_target(app, src_target) { Ok(x) => x, Err(e) => return app.error(e) };
+    let back = app.session_id;
+    if sid != back { app.swap_back = Some(back); app.swap_session(sid); }
+    let win = app.window_json(&app.tabs[i], None);
+    let mut ask = vec!["hn-put-window".to_string(), "-t".into(), dst_target.to_string(), "-j".into(), win.to_string()];
+    if detached { ask.push("-d".into()) }
+    match crate::ipc::ask(std::path::Path::new(owner), &ask) {
+        Some((_, err, 0)) => {
+            let (sname, wid, wname) = (app.session_name(), app.tabs[i].wid(), app.tabs[i].name.clone());
+            let tab = app.take_tab(i);
+            for p in tab.panes() {
+                if let Some(k) = app.panes.get(&p).map(|x| (x.machine_id.clone(), x.agent_id.clone())) { app.shells.remove(&k); }
+                app.forget_pane(p);
+            }
+            notify_session(app, "window-unlinked", sid, &sname, Some((wid, wname)));
+            for e in err { app.error(e) }
+        }
+        Some((_, err, _)) => { for e in err { app.error(e) } }
+        None => app.error(format!("no client at {owner}")),
+    }
+    // The session it left, with no window now: gone (the client's own: detach-on-destroy).
+    if !app.has_windows() && !app.session_desk && app.tabs.iter().all(|t| t.root.is_none()) {
+        app.swap_back = (sid != back).then_some(back);
+        app.session_gone();
+    }
+    if app.session_id != back && !app.quit { app.swap_session(back); }
+    app.swap_back = None;
+    let _ = src;
+    app.fit_panes();
+    app.save_sessions();
+}
+
+/// move-window from a session another client has: that client gives the window up, described,
+/// and it is put here.
+fn take_window(app: &mut App, owner: &str, src_target: &str, dst: u32, dst_target: &str, detached: bool) {
+    let Some((out, err, code)) = crate::ipc::ask(std::path::Path::new(owner), &["hn-take-window".into(), "-s".into(), src_target.to_string()]) else { return app.error(format!("no client at {owner}")) };
+    if code != 0 { for e in err { app.error(e) } return }
+    let Ok(win) = serde_json::from_str::<serde_json::Value>(&out.join("")) else { return app.error("the window did not come") };
+    put_window(app, dst, dst_target, &win, detached);
+}
+
+/// A window described (window_json) put into session [dst] at [target]'s index (or the next
+/// free one), as move-window links it: window-linked there, gone to unless [detached].
+fn put_window(app: &mut App, dst: u32, target: &str, win: &serde_json::Value, detached: bool) {
+    let back = app.session_id;
+    if dst != back { app.swap_back = Some(back); app.swap_session(dst); }
+    if let Some((tab, _)) = app.tab_from_json(win) {
+        let (wid, wname) = (tab.wid(), tab.name.clone());
+        let at = app.put_tab(tab, None);
+        let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: true, default_marked: false };
+        let idx = target.split_once(':').map(|(_, w)| w).filter(|w| !w.is_empty()).and_then(|w| crate::cmd::resolve(app, Some(&format!(":{w}")), spec).ok()).and_then(|f| f.idx);
+        if let Err(e) = app.move_window(at, idx, false, !detached && dst == back) { app.error(e) }
+        let (sid, sname) = (app.session_id, app.session_name());
+        notify_session(app, "window-linked", sid, &sname, Some((wid, wname)));
+    } else { app.error("the window has no pane") }
+    if app.session_id != back { app.swap_session(back); }
+    app.swap_back = None;
+    app.fit_panes();
+    app.save_sessions();
 }
 
 /// cmd_find_from_nothing: a command from a shell outside hn with no -t (and no -s) is for the
@@ -2390,6 +2482,38 @@ fn run_words_in(app: &mut App, words: &[String]) {
         // A client attached: a headless hn gives it every session, and goes.
         // Another client changed the server's state (options, keys, buffers, environment).
         "hn-server-sync" => crate::server::take(app),
+        // move-window between two clients' sessions: this one's window given up, described
+        // (hn-take-window -s), or one put here (hn-put-window -t … -j <window> [-d]).
+        "hn-take-window" => {
+            let Some(t) = opt(words, "-s") else { return app.error("missing -s") };
+            let (sid, i) = match window_of_target(app, &t) { Ok(x) => x, Err(e) => return app.error(e) };
+            let back = app.session_id;
+            if sid != back { app.swap_back = Some(back); app.swap_session(sid); }
+            let win = app.window_json(&app.tabs[i], None);
+            let (sname, wid, wname) = (app.session_name(), app.tabs[i].wid(), app.tabs[i].name.clone());
+            let tab = app.take_tab(i);
+            for p in tab.panes() {
+                if let Some(k) = app.panes.get(&p).map(|x| (x.machine_id.clone(), x.agent_id.clone())) { app.shells.remove(&k); }
+                app.forget_pane(p);
+            }
+            notify_session(app, "window-unlinked", sid, &sname, Some((wid, wname)));
+            if app.tabs.iter().all(|t| t.root.is_none()) && !app.session_desk {
+                app.swap_back = (sid != back).then_some(back);
+                app.session_gone();
+            }
+            if app.session_id != back && !app.quit { app.swap_session(back); }
+            app.swap_back = None;
+            app.fit_panes();
+            app.save_sessions();
+            app.print("hn-take-window", vec![win.to_string()]);
+        }
+        "hn-put-window" => {
+            let Some(t) = opt(words, "-t") else { return app.error("missing -t") };
+            let Some(win) = opt(words, "-j").and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok()) else { return app.error("missing -j") };
+            let s = t.split(':').next().unwrap_or(&t).to_string();
+            let Some(dst) = app.find_session(&s) else { return app.error(format!("can't find session: {}", s.trim_start_matches('='))) };
+            put_window(app, dst, &t, &win, flag(words, "-d"));
+        }
         // A client shows a session of this one's (-a its socket, -t the session), or no longer (-d).
         "hn-mirror" => {
             if let Some(sock) = opt(words, "-a") {
