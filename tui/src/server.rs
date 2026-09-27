@@ -20,13 +20,13 @@ use crate::paste::Paste;
 /// The server-wide state as this client last wrote or took it (the buffers by name and version:
 /// their text is compared by neither).
 #[derive(Clone, PartialEq)]
-pub struct Synced { options: [BTreeMap<String, String>; 3], keymap: Keymap, buffers: Vec<(String, u64)>, env: BTreeMap<String, EnvVar> }
+pub struct Synced { options: [BTreeMap<String, String>; 5], keymap: Keymap, buffers: Vec<(String, u64)>, env: BTreeMap<String, EnvVar> }
 
 fn path() -> PathBuf { crate::app::sessions_path(None).with_extension("server.json") }
 
 fn now(app: &App) -> Synced {
     Synced {
-        options: [app.options.server.clone(), app.options.global_session.clone(), app.options.global_window.clone()],
+        options: [app.options.server.clone(), app.options.global_session.clone(), app.options.global_window.clone(), desk_session_options(app), desk_window_options(app)],
         keymap: app.keymap.clone(),
         buffers: versions(&app.paste),
         env: app.global_env.clone(),
@@ -35,9 +35,39 @@ fn now(app: &App) -> Synced {
 
 fn versions(p: &Paste) -> Vec<(String, u64)> { p.walk().map(|b| (b.name.clone(), b.order)).collect() }
 
+/// The desk's session is every client's (its windows the desk's tabs): its own options, and its
+/// windows' (`tab<TAB>name`), are the server's to keep alike too — one terminal's `set` or
+/// `setw` is the other's, and a detach loses none of it.
+fn desk_session_options(app: &App) -> BTreeMap<String, String> {
+    if app.session_desk { app.options.session.clone() } else { app.sessions.iter().find(|s| s.desk).map(|s| s.options.clone()).unwrap_or_default() }
+}
+
+fn set_desk_session_options(app: &mut App, m: BTreeMap<String, String>) {
+    if app.session_desk { app.options.session = m } else if let Some(s) = app.sessions.iter_mut().find(|s| s.desk) { s.options = m }
+}
+
+fn desk_tab_ids(app: &App) -> Vec<String> {
+    let tabs: &[crate::app::Tab] = if app.session_desk { &app.tabs } else { app.sessions.iter().find(|s| s.desk).map(|s| s.tabs.as_slice()).unwrap_or(&[]) };
+    tabs.iter().filter(|t| t.on_desk).map(|t| t.id.clone()).collect()
+}
+
+fn desk_window_options(app: &App) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for id in desk_tab_ids(app) { for (k, v) in app.options.windows.get(&id).cloned().unwrap_or_default() { out.insert(format!("{id}\t{k}"), v); } }
+    out
+}
+
+fn set_desk_window_options(app: &mut App, m: BTreeMap<String, String>) {
+    for id in desk_tab_ids(app) {
+        let mine: BTreeMap<String, String> = m.iter().filter_map(|(k, v)| k.strip_prefix(&format!("{id}\t")).map(|n| (n.to_string(), v.clone()))).collect();
+        if mine.is_empty() { app.options.windows.remove(&id); } else { app.options.windows.insert(id, mine); }
+    }
+}
+
 /// Whether the server's state here is still what was last written or taken.
 fn unchanged(app: &App, s: &Synced) -> bool {
     app.options.server == s.options[0] && app.options.global_session == s.options[1] && app.options.global_window == s.options[2]
+        && desk_session_options(app) == s.options[3] && desk_window_options(app) == s.options[4]
         && app.keymap == s.keymap && app.global_env == s.env && app.paste.walk().map(|b| (&b.name, b.order)).eq(s.buffers.iter().map(|(n, o)| (n, *o)))
 }
 
@@ -102,7 +132,7 @@ fn with_file(f: impl FnOnce(&mut Value)) {
     if std::fs::write(&temp, doc.to_string()).is_ok() { let _ = std::fs::rename(&temp, &path); }
 }
 
-const MAPS: [&str; 3] = ["server", "global-session", "global-window"];
+const MAPS: [&str; 5] = ["server", "global-session", "global-window", "desk-session", "desk-windows"];
 
 /// What changed from [before] to [after], into the file's copy: an option set or unset, the key
 /// tables (whole), a buffer made, set or freed, a variable of the global environment.
@@ -235,11 +265,13 @@ pub fn take(app: &mut App) {
     // follows), each one gone unset.
     for (i, name) in MAPS.iter().enumerate() {
         let theirs: BTreeMap<String, String> = doc["options"][*name].as_object().map(|m| m.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect()).unwrap_or_default();
-        let mine = match i { 0 => app.options.server.clone(), 1 => app.options.global_session.clone(), _ => app.options.global_window.clone() };
+        let mine = match i { 0 => app.options.server.clone(), 1 => app.options.global_session.clone(), 2 => app.options.global_window.clone(), 3 => desk_session_options(app), _ => desk_window_options(app) };
         if theirs == mine { continue }
+        // (A file from before the desk's were kept: the desk's left as they are here.)
+        if i >= 3 && doc["options"][*name].is_null() { continue }
         let changed: Vec<String> = theirs.iter().filter(|(k, v)| mine.get(*k) != Some(*v)).map(|(k, _)| k.clone()).chain(mine.keys().filter(|k| !theirs.contains_key(*k)).cloned()).collect();
-        match i { 0 => app.options.server = theirs, 1 => app.options.global_session = theirs, _ => app.options.global_window = theirs }
-        for name in changed { crate::commands::option_changed(app, &name) }
+        match i { 0 => app.options.server = theirs, 1 => app.options.global_session = theirs, 2 => app.options.global_window = theirs, 3 => set_desk_session_options(app, theirs), _ => set_desk_window_options(app, theirs) }
+        for name in changed { let name = name.rsplit('\t').next().unwrap_or(&name).to_string(); crate::commands::option_changed(app, &name) }
     }
     if doc["keys"].is_object() { app.keymap = keys_from(&doc["keys"], app.keymap.clone()) }
     app.paste = paste_from(&doc);

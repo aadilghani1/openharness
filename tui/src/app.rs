@@ -470,6 +470,9 @@ pub struct App {
     pub tails_asked: HashSet<String>,
     pub desk_mode: DeskMode,
     pub desk_revision: i64,
+    /// The desk session's windows' own state as the last client left it (their options, zoom,
+    /// pane titles), put back as the desk's tabs come.
+    pub desk_windows_saved: HashMap<String, Value>,
     desk_loaded: bool,
     pub started: Instant,
     pub daemon_down: bool,
@@ -880,6 +883,7 @@ impl App {
             tails_asked: HashSet::new(),
             desk_mode,
             desk_revision: -1,
+            desk_windows_saved: HashMap::new(),
             desk_loaded: false,
             exited: false,
             desk_answered: false,
@@ -2560,7 +2564,13 @@ impl App {
         let mut desk = None;
         for (s, tabs, nums, lastw, front) in std::iter::once((&here, &self.tabs, &self.nums, &self.lastw, true)).chain(self.sessions.iter().map(|s| (s, &s.tabs, &s.nums, &s.lastw, false))) {
             // The desk's session is every client's: its windows are the desk's tabs.
-            if s.desk { desk = Some(json!({ "name": s.alias, "desk": true, "created": s.created, "active": s.active, "windows": [] })); continue }
+            // (Its windows are the desk's; what is the session's own — its options, environment,
+            // group, folder — and its windows' own state are kept here, as any session's are.)
+            if s.desk {
+                let state: Vec<Value> = tabs.iter().filter(|t| t.root.is_some()).map(|t| self.window_kept(t)).collect();
+                desk = Some(json!({ "name": s.alias, "desk": true, "created": s.created, "active": s.active, "windows": [], "options": s.options, "env": env_json(&s.env), "group": s.group, "path": s.path, "window_state": state }));
+                continue
+            }
             // Another client's, shown here: that client writes it.
             if s.mirror.is_some() { continue }
             let kept: Vec<&Tab> = tabs.iter().filter(|t| t.root.is_some()).collect();
@@ -2615,7 +2625,57 @@ impl App {
         // Its own options (set -w) and its panes' (set -p), kept with it wherever it goes.
         let options = self.options.windows.get(&t.id).cloned().unwrap_or_default();
         let pane_options: serde_json::Map<String, Value> = t.panes().iter().filter_map(|p| self.options.panes.get(p).map(|m| (p.to_string(), json!(m)))).collect();
-        json!({ "name": t.name, "named": t.named, "num": num, "wid": t.wid(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus, "zoomed": t.zoomed && panes.len() > 1, "options": options, "pane_options": pane_options })
+        let titles: serde_json::Map<String, Value> = t.panes().iter().filter_map(|p| self.panes.get(p).filter(|x| !x.title.is_empty()).map(|x| (p.to_string(), json!(x.title)))).collect();
+        json!({ "id": t.id, "titles": titles, "name": t.name, "named": t.named, "num": num, "wid": t.wid(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus, "zoomed": t.zoomed && panes.len() > 1, "options": options, "pane_options": pane_options })
+    }
+
+    /// A window's own state that a client leaving keeps for the next (the desk's windows, whose
+    /// panes and layout the desk has): its options, its panes', zoom, the panes' titles.
+    fn window_kept(&self, t: &Tab) -> Value {
+        let options = self.options.windows.get(&t.id).cloned().unwrap_or_default();
+        let pane_options: serde_json::Map<String, Value> = t.panes().iter().filter_map(|p| self.options.panes.get(p).map(|m| (p.to_string(), json!(m)))).collect();
+        let titles: serde_json::Map<String, Value> = t.panes().iter().filter_map(|p| self.panes.get(p).filter(|x| !x.title.is_empty()).map(|x| (p.to_string(), json!(x.title)))).collect();
+        json!({ "id": t.id, "options": options, "pane_options": pane_options, "zoomed": t.zoomed, "titles": titles, "focus": t.focus })
+    }
+
+    /// The desk session's own state from the file: on the desk session (in front or kept), its
+    /// windows' as their tabs come (apply_desk).
+    fn take_desk_row(&mut self, row: &Value) {
+        let (options, env) = (options_from(row), env_from(row));
+        let group = row.get("group").and_then(Value::as_str).map(str::to_string);
+        let path = row.get("path").and_then(Value::as_str).map(str::to_string);
+        let created = row.get("created").and_then(Value::as_i64);
+        if self.session_desk {
+            if !options.is_empty() { self.options.session = options }
+            if !env.is_empty() { self.session_env = env }
+            if group.is_some() { self.session_group = group }
+            if path.is_some() { self.session_path = path }
+            if let Some(c) = created { self.session_created = c }
+        } else if let Some(s) = self.sessions.iter_mut().find(|s| s.desk) {
+            if !options.is_empty() { s.options = options }
+            if !env.is_empty() { s.env = env }
+            if group.is_some() { s.group = group }
+            if path.is_some() { s.path = path }
+            if let Some(c) = created { s.created = c }
+        }
+        for w in row.get("window_state").and_then(Value::as_array).cloned().unwrap_or_default() {
+            if let Some(id) = w.get("id").and_then(Value::as_str) { self.desk_windows_saved.insert(id.to_string(), w.clone()); }
+        }
+    }
+
+    /// A desk window's kept state on its tab (once: the desk's own updates after that are live).
+    fn restore_desk_window(&mut self, index: usize) {
+        let Some(tab) = self.tabs.get(index) else { return };
+        let Some(w) = self.desk_windows_saved.remove(&tab.id) else { return };
+        let mut tab = std::mem::replace(&mut self.tabs[index], Tab::home());
+        self.take_window_options(&mut tab, &w);
+        // (Its active pane, by its id — the desk's panes keep theirs — then its zoom.)
+        if let Some(f) = w.get("focus").and_then(Value::as_u64).filter(|f| tab.panes().contains(f)) { tab.set_active(f) }
+        if w.get("zoomed").and_then(Value::as_bool).unwrap_or(false) && tab.panes().len() > 1 { tab.zoomed = true }
+        for (p, title) in w.get("titles").and_then(Value::as_object).cloned().unwrap_or_default() {
+            if let (Ok(p), Some(t)) = (p.parse::<u64>(), title.as_str()) { if let Some(x) = self.panes.get_mut(&p) { x.title = t.to_string() } }
+        }
+        self.tabs[index] = tab;
     }
 
     /// A window's own options and its panes', as window_json keeps them, taken on for [tab].
@@ -2636,7 +2696,16 @@ impl App {
         let panes: Vec<(String, String)> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))).collect()).unwrap_or_default();
         if panes.is_empty() { return None }
         // A window another session has too (link-window, a group), already read: the same
-        // window again — its id, its panes — not a second one.
+        // window again — its id, its panes — not a second one. By its id (kept in the file), or
+        // (a file from before ids were kept) its @N and harnesses.
+        if let Some(id) = win.get("id").and_then(Value::as_str) {
+            if let Some(t) = self.tabs.iter().chain(self.sessions.iter().flat_map(|s| s.tabs.iter())).find(|t| t.id == id && t.root.is_some()) {
+                let mut t = t.clone();
+                t.alerts = 0;
+                t.on_desk = false;
+                return Some((t, win.get("num").and_then(Value::as_u64).map(|n| n as usize)));
+            }
+        }
         if let Some(wid) = win.get("wid").and_then(Value::as_u64) {
             let same = |t: &Tab| t.root.is_some() && t.wid() == wid && t.panes().iter().map(|p| self.panes.get(p).map(|x| (x.machine_id.clone(), x.agent_id.clone()))).collect::<Option<Vec<_>>>().as_ref() == Some(&panes);
             if let Some(t) = self.tabs.iter().chain(self.sessions.iter().flat_map(|s| s.tabs.iter())).find(|t| same(t)) {
@@ -2654,6 +2723,14 @@ impl App {
         // And the window its id (@N).
         let name = win.get("name").and_then(Value::as_str).unwrap_or("");
         let mut tab = match win.get("wid").and_then(Value::as_u64).filter(|w| self.session_of_window(*w).is_none()) { Some(wid) => Tab::with_wid(name, wid), None => Tab::new(name) };
+        // Its id as it was (a window linked elsewhere, the desk's, finds it by that).
+        if let Some(id) = win.get("id").and_then(Value::as_str).filter(|i| !i.is_empty()) { tab.id = id.to_string() }
+        // The titles its panes were given (select-pane -T).
+        for (i, p) in win.get("panes").and_then(Value::as_array).cloned().unwrap_or_default().iter().enumerate() {
+            let old = p.get(3).and_then(Value::as_u64).map(|n| n.to_string());
+            let title = old.and_then(|o| win.pointer(&format!("/titles/{o}")).and_then(Value::as_str).map(str::to_string));
+            if let (Some(t), Some(pid)) = (title, ids.get(i)) { if let Some(x) = self.panes.get_mut(pid) { x.title = t } }
+        }
         tab.named = win.get("named").and_then(Value::as_bool).unwrap_or(false);
         let layout = win.get("layout").and_then(Value::as_str).unwrap_or("");
         // With no terminal: the size the last terminal gave it (tmux keeps it).
@@ -2708,7 +2785,11 @@ impl App {
         doc = read_sessions(&path);
         for row in doc["sessions"].as_array().cloned().unwrap_or_default() {
             let name = row.get("name").and_then(Value::as_str).map(str::to_string);
-            if row.get("desk").and_then(Value::as_bool).unwrap_or(false) { if name.is_some() && self.session_desk { self.session_alias = name } continue }
+            if row.get("desk").and_then(Value::as_bool).unwrap_or(false) {
+                if name.is_some() && self.session_desk { self.session_alias = name }
+                self.take_desk_row(&row);
+                continue
+            }
             let Some(name) = name else { continue };
             if live_owner(&row).filter(|o| Some(o) != me.as_ref()).is_some() { continue }
             if self.own_session(&name).is_some() { continue }
@@ -4453,6 +4534,18 @@ impl App {
                     tab.root = desk_root(&tab.layout, preset, &ids, w, h);
                     if tab.focus.map(|f| !ids.contains(&f)).unwrap_or(true) { tab.focus = ids.first().copied() }
                 }
+                // The same window another session has (link-window, a group), already read: that
+                // window here too — its panes, not a second pane for each of its harnesses.
+                None if self.sessions.iter().any(|s| !s.desk && s.tabs.iter().any(|t| t.id == id && t.root.is_some())) => {
+                    let Some(mut tab) = self.sessions.iter().flat_map(|s| s.tabs.iter()).find(|t| t.id == id && t.root.is_some()).cloned() else { continue };
+                    tab.alerts = 0;
+                    tab.on_desk = true;
+                    tab.layout = layout_doc;
+                    if named { tab.name = name; tab.named = true }
+                    let at = rows.iter().position(|r| r.get("id").and_then(Value::as_str) == Some(tab.id.as_str())).unwrap_or(self.tabs.len()).min(self.tabs.len());
+                    self.tabs.insert(at, tab);
+                    if at <= self.active && !first_load { self.active += 1 }
+                }
                 None => {
                     // The desk's window and panes: the ids every client gives them.
                     let ids: Vec<u64> = panes.iter().map(|(m, a)| self.new_pane_as(m, a, Some(crate::ids::desk(crate::ids::Kind::Pane, &format!("{m}:{a}"))))).collect();
@@ -4470,6 +4563,8 @@ impl App {
                 }
             }
         }
+        // The desk windows' own state as the last client left it (options, zoom, titles).
+        if !self.desk_windows_saved.is_empty() { for i in 0..self.tabs.len() { if self.tabs[i].on_desk { self.restore_desk_window(i) } } }
         // Tabs the desk no longer has — closed on another computer.
         let gone: Vec<usize> = self.tabs.iter().enumerate().filter(|(_, t)| t.on_desk && !seen.contains(&t.id)).map(|(i, _)| i).collect();
         for index in gone.into_iter().rev() {
