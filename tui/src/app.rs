@@ -1653,7 +1653,7 @@ impl App {
         let _ = tx.send((out, err, code));
     }
 
-    fn waiting_open(&self) -> bool { matches!(self.modal, Some(Modal::Menu(_)) | Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) }
+    fn waiting_open(&self) -> bool { matches!(self.modal, Some(Modal::Menu(_)) | Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) | Some(Modal::DisplayPanes { .. })) }
 
     /// The menu or prompt a shell's command opened has closed: the shell has its answer.
     /// A command from a shell: run now — or, when it opens a shell (new, neww, splitw, a popup,
@@ -3838,10 +3838,6 @@ impl App {
         self.fit_panes();
     }
 
-    pub fn select_pane_index(&mut self, index: usize) {
-        if let Some(id) = self.tab().panes().get(index).copied() { let tab = self.active; self.focus_pane(tab, id) }
-    }
-
     /// last-pane (select-pane -l): the pane active before this one — with no such pane in a
     /// window of two, the other one, as tmux has it; -Z keeps a zoomed window zoomed.
     pub fn select_last(&mut self, w: usize, keep_zoom: bool) {
@@ -4366,7 +4362,7 @@ impl App {
             for p in ids { self.refresh_pane_info(p) }
         }
         // display-panes goes away after display-panes-time, as in tmux.
-        if matches!(self.modal, Some(crate::modal::Modal::DisplayPanes { until }) if Instant::now() >= until) { self.modal = None }
+        if matches!(self.modal, Some(crate::modal::Modal::DisplayPanes { until: Some(until), .. }) if Instant::now() >= until) { self.modal = None }
         self.orphans.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(10));
         for pane in self.panes.values_mut() { pane.settle_predictions() }
         let now = Instant::now();

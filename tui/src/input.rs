@@ -48,6 +48,23 @@ fn on_key(app: &mut App, key: KeyEvent) {
     // A message goes on the next key, as tmux's does; and tim notices you are back.
     app.toast = None;
     app.tim.touched = std::time::Instant::now();
+    // display-panes (cmd_display_panes_key), before any table: a number, or a letter for 10 on,
+    // runs its template for that pane (select-pane) and closes it — as does one no pane has;
+    // any other key (every key with -N) closes it and goes on as it would have.
+    if matches!(app.modal, Some(Modal::DisplayPanes { .. })) {
+        let Some(Modal::DisplayPanes { template, keys: takes, .. }) = app.modal.take() else { return };
+        let plain = !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        let index = match key.code { KeyCode::Char(c @ '0'..='9') if plain => Some(c as usize - '0' as usize), KeyCode::Char(c @ 'a'..='z') if plain => Some(10 + c as usize - 'a' as usize), _ => None };
+        if let (true, Some(i)) = (takes, index) {
+            let base = app.pane_base(app.active);
+            if let Some(id) = i.checked_sub(base).and_then(|k| app.tab().panes().get(k).copied()) {
+                if app.tab().zoomed { app.tab_mut().zoomed = false; app.fit_panes() }
+                let command = commands::template_replace(template.as_deref().unwrap_or("select-pane -t \"%%%\""), &crate::pane::tag(id), 1);
+                commands::execute(app, &command);
+            }
+            return;
+        }
+    }
     // A table of your own (switch-client -T): its key runs, and the client goes back to root
     // (a -r key keeps the table); the prefix, or a key it does not have, goes on as from root.
     if let Some(table) = app.key_table.take() {
@@ -1085,12 +1102,7 @@ fn modal_key(app: &mut App, key: KeyEvent) {
             // tmux: the confirm key (y, or -c's) runs it, Enter too with -y; any other says no.
             if key.code == KeyCode::Char(yes) || (enter_yes && key.code == KeyCode::Enter) { commands::execute(app, &command) }
         }
-        Modal::DisplayPanes { .. } => {
-            if let KeyCode::Char(c @ '0'..='9') = key.code {
-                let n = (c as usize) - ('0' as usize);
-                app.select_pane_index(n.saturating_sub(app.pane_base(app.active)));
-            }
-        }
+        Modal::DisplayPanes { .. } => {}
         Modal::Clock { .. } => {}
         // tmux's menu (menu_key_cb): an item's key chooses it; ↑ k ↓ j move (round the ends,
         // past rules and disabled items), PPage C-b and NPage by five, g Home / G End the first

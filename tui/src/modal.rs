@@ -151,7 +151,9 @@ pub enum Modal {
     /// yes (-c), and with `enter_yes` (-y) so does Enter.
     Confirm { prompt: String, command: String, key: char, enter_yes: bool },
     /// tmux `display-panes` (C-b q): a big number on every pane; press one to go there.
-    DisplayPanes { until: std::time::Instant },
+    /// display-panes: until when (none: until a key, -d 0), the command a number runs (%% its
+    /// pane), and whether keys choose at all (-N: not).
+    DisplayPanes { until: Option<std::time::Instant>, template: Option<String>, keys: bool },
     /// tmux `clock-mode` (C-b t).
     Clock { pane: u64 },
     /// display-popup: a shell floating over the window; it goes when its program exits.

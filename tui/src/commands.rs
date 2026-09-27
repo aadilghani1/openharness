@@ -1861,7 +1861,19 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 None => app.error(format!("invalid layout: {name}")),
             }
         }
-        "display-panes" => app.modal = Some(Modal::DisplayPanes { until: std::time::Instant::now() + std::time::Duration::from_millis(app.display_panes_ms) }),
+        "display-panes" => {
+            // cmd_display_panes_exec: none over one already open; -d how long (0: until a key),
+            // else display-panes-time; the template a number runs; -N no keys; a shell that ran
+            // it waits until it closes (not with -b).
+            if matches!(app.modal, Some(Modal::DisplayPanes { .. })) { return }
+            let ms = match opt(words, "-d") {
+                Some(d) => match d.parse::<i64>() { Ok(n) if n < 0 => return app.error("delay too small"), Ok(n) if n > u32::MAX as i64 => return app.error("delay too large"), Ok(n) => n as u64, Err(_) => return app.error("delay invalid") },
+                None => app.display_panes_ms,
+            };
+            let until = (ms > 0).then(|| std::time::Instant::now() + std::time::Duration::from_millis(ms));
+            app.modal = Some(Modal::DisplayPanes { until, template: positional(words).first().cloned(), keys: !flag(words, "-N") });
+            app.wait_cli = app.capture.is_some() && !flag(words, "-b");
+        }
         "copy-mode" => {
             // cmd-copy-mode.c [-deHMqu] [-s src-pane] [-t target-pane]: the pane into copy mode, a
             // copy of its screen and history (another pane's with -s) — -q every mode it is in
