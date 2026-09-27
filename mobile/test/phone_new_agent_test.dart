@@ -81,7 +81,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       // The desktop's default: the project last started on this machine.
-      expect(find.text('app', findRichText: true), findsOneWidget);
+      expect(find.text('Studio:app', findRichText: true), findsOneWidget);
 
       await tester.tap(find.text('project'));
       await tester.pumpAndSettle();
@@ -133,7 +133,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('autonomous-harness', findRichText: true), findsOneWidget);
+    expect(
+      find.text('Studio:autonomous-harness', findRichText: true),
+      findsOneWidget,
+    );
     expect(
       find.textContaining('silent-beacon', findRichText: true),
       findsNothing,

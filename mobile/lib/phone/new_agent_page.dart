@@ -1071,8 +1071,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// back on the next build.
   bool _projectDefaulted = false;
 
-  /// The project on one line: its folder's name, and the machine in front of it only when there is
-  /// more than one to tell apart. The full path is in the chooser.
+  /// The project on one line: `computer:name`. The full path is in the chooser.
   String get _projectValue {
     final String name;
     if (_folder case final folder?) {
@@ -1084,10 +1083,11 @@ class _NewAgentPageState extends State<NewAgentPage> {
     } else {
       return 'Choose project';
     }
-    // One line: most repositories live in a folder of the same name, and the full path is in the
-    // chooser. The computer in front only when there is more than one to tell apart.
+    // One line, `computer:name` — always the computer, as the title on Focus and every Find row
+    // write it. Most repositories live in a folder of the same name; the full path is in the
+    // chooser.
     final machine = _machine?.machine.displayName;
-    return machine == null || _machines.length < 2 ? name : '$machine:$name';
+    return machine == null ? name : '$machine:$name';
   }
 
   /// The button: a missing choice opens its chooser and says why, the desktop's `requiredChoice`.
