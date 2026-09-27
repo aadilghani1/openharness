@@ -873,7 +873,8 @@ enum Val { Str(String), Time(i64) }
 fn tab_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect> {
     if window == app.active { if let Some((_, r)) = app.rects.iter().find(|(id, _)| *id == pane) { return Some(*r) } }
     let mut out = Vec::new();
-    app.tabs.get(window)?.root.as_ref()?.rects(app.body(), &mut out);
+    let tab = app.tabs.get(window)?;
+    tab.root.as_ref()?.rects(app.window_area(tab), &mut out);
     out.into_iter().find(|(id, _)| *id == pane).map(|(_, r)| r)
 }
 
@@ -908,7 +909,7 @@ pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
 /// The pane's own cells, from its window's top-left corner: tmux's pane_left/top/width/height.
 pub fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect> {
     let r = tab_rect(app, window, pane)?;
-    let body = app.body();
+    let body = app.window_area(app.tabs.get(window)?);
     let c = app.content_of(app.tabs.get(window)?, r);
     Some(ratatui::layout::Rect { x: c.x - body.x, y: c.y - body.y, width: c.width, height: c.height })
 }
@@ -986,8 +987,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         }
         "client_width" => app.size.0.to_string(),
         "client_height" => app.size.1.to_string(),
-        "window_width" => app.body().width.to_string(),
-        "window_height" => app.body().height.to_string(),
+        "window_width" => tab.map(|t| app.window_area(t).width).unwrap_or(app.body().width).to_string(),
+        "window_height" => tab.map(|t| app.window_area(t).height).unwrap_or(app.body().height).to_string(),
         // At an edge of the window (vim-tmux-navigator style configs ask).
         "pane_at_top" | "pane_at_bottom" | "pane_at_left" | "pane_at_right" => {
             let body = app.body();

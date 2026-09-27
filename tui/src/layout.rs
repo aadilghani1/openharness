@@ -564,6 +564,14 @@ impl Node {
         format!("{:04x},{b}", checksum(&b))
     }
 
+    /// The size a layout string was written at (its first cell's: `acfd,120x31,0,0,0` is 120×31).
+    pub fn tmux_size(text: &str) -> Option<(u16, u16)> {
+        let body = match text.split_once(',') { Some((c, rest)) if c.len() == 4 && c.chars().all(|x| x.is_ascii_hexdigit()) => rest, _ => text };
+        let (w, rest) = body.split_once('x')?;
+        let h: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        Some((w.parse().ok()?, h.parse().ok()?))
+    }
+
     /// A layout from tmux's string, fitted to sx × sy: each cell given the pane its number names
     /// (%N) when they are `ids`, else `ids` in order (None when it does not read, or its cells do
     /// not match the panes).

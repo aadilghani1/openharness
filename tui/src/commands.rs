@@ -2198,7 +2198,20 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let limit = app.buffer_limit();
             if let Err(e) = app.paste.set(text, opt(words, "-b").as_deref(), limit) { app.error(e) }
         }
-        "resize-window" => app.error("resize-window: a window is the terminal's size here"),
+        "resize-window" => {
+            // A window no terminal shows (hn with no terminal, a session in the background): its
+            // own size, as tmux's resize-window — -x, -y, or -U -D -L -R by the adjustment (1).
+            let Some(w) = opt(words, "-t").map(|t| window_target(app, &t)).unwrap_or(Some(app.active)) else { return app.error(format!("can't find window: {}", opt(words, "-t").unwrap_or_default())) };
+            if !app.headless && app.swap_back.is_none() { return app.error("resize-window: a window on screen is the terminal's size here") }
+            let (mut x, mut y) = app.tabs[w].root.as_ref().map(|r| r.size()).unwrap_or_else(|| app.default_size());
+            let by = positional(words).first().and_then(|v| v.parse::<u16>().ok()).unwrap_or(1);
+            if let Some(v) = opt(words, "-x").and_then(|v| v.parse::<u16>().ok()) { x = v }
+            if let Some(v) = opt(words, "-y").and_then(|v| v.parse::<u16>().ok()) { y = v }
+            if flag(words, "-L") { x = x.saturating_sub(by) } if flag(words, "-R") { x = x.saturating_add(by) }
+            if flag(words, "-U") { y = y.saturating_sub(by) } if flag(words, "-D") { y = y.saturating_add(by) }
+            app.tabs[w].size = Some((x.max(1), y.max(1)));
+            app.fit_panes();
+        }
         "respawn-window" => {
             // tmux's respawn-window: refused while anything runs in the window, unless -k.
             let w = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(w) => w, None => return }, None => app.active };
@@ -2316,7 +2329,15 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let detached = flag(words, "-d");
             // -P: printed once its pane is there (#{pane_index}, #{pane_id}), as new-window -P.
             if flag(words, "-P") { app.print_new = Some(opt(words, "-F").unwrap_or_else(|| "#{session_name}:".into())) }
-            if let Err(e) = app.new_session(name.as_deref(), opt(words, "-n").as_deref(), cwd, shell_command(words), detached) { app.print_new = None; app.error(e) }
+            match app.new_session(name.as_deref(), opt(words, "-n").as_deref(), cwd, shell_command(words), detached) {
+                // A session no terminal shows yet: -x by -y, else default-size (tmux's 80x24).
+                Ok(id) => if detached || app.headless {
+                    let (dx, dy) = app.default_size();
+                    let n = |f: &str, d: u16| opt(words, f).and_then(|v| v.parse::<u16>().ok()).filter(|v| *v > 0).unwrap_or(d);
+                    app.size_session(id, (n("-x", dx), n("-y", dy)));
+                },
+                Err(e) => { app.print_new = None; app.error(e) }
+            }
         }
         "detach-client" => {
             // -s: the clients showing that session (this one, another of this name's, or none: one

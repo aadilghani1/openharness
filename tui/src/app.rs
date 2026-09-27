@@ -180,6 +180,9 @@ pub struct Tab {
     /// empty window (the one a client starts with, new-window's before its pane) has it when it
     /// is first asked for (wid), so one that is never a window takes no number.
     wid: std::cell::Cell<u64>,
+    /// The window's own size while no terminal shows it (new -x -y, resize-window, the size the
+    /// last terminal gave it): hn with no terminal keeps it, as tmux keeps a detached window's.
+    pub size: Option<(u16, u16)>,
     pub name: String,
     pub named: bool,
     pub root: Option<Node>,
@@ -221,7 +224,7 @@ impl Tab {
     pub fn home() -> Tab { Tab::with_wid("home", NO_WID) }
     /// A window with the id it had (a session another client kept, the desk's).
     pub fn with_wid(name: &str, wid: u64) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, layout: json!({}) }
+        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, layout: json!({}) }
     }
     /// Its @N, numbered now if it has none yet.
     pub fn wid(&self) -> u64 {
@@ -1404,12 +1407,82 @@ impl App {
     }
 
     /// Resize every visible pane's far terminal to its tile. Called after any layout change.
+    /// A session's windows given a size of their own (new-session -d -x -y, default-size).
+    pub fn size_session(&mut self, id: u32, size: (u16, u16)) {
+        let tabs = if id == self.session_id { &mut self.tabs } else { match self.sessions.iter_mut().find(|s| s.id == id) { Some(s) => &mut s.tabs, None => return } };
+        for t in tabs.iter_mut() { t.size = Some(size) }
+        self.fit_panes();
+    }
+
+    /// default-size: a window's size when no terminal gave it one (tmux's 80x24).
+    pub fn default_size(&self) -> (u16, u16) {
+        let v = self.options.get("default-size", "", None).unwrap_or_default();
+        v.split_once('x').and_then(|(w, h)| Some((w.parse::<u16>().ok()?.max(1), h.parse::<u16>().ok()?.max(1)))).unwrap_or((80, 24))
+    }
+
+    /// Where a window's panes are laid out: the client's body, or (hn with no terminal) the
+    /// window's own size from the top left.
+    pub fn window_area(&self, tab: &Tab) -> Rect {
+        if !self.headless { return self.body() }
+        let (w, h) = tab.root.as_ref().map(|r| r.size()).unwrap_or_else(|| tab.size.unwrap_or(self.default_size()));
+        Rect::new(0, 0, w, h)
+    }
+
+    /// Windows no terminal shows — every window, with no terminal; a session in the background's
+    /// that has a size of its own (new -d -x -y) — laid out at their own sizes, and their panes'
+    /// terminals made that size, as tmux keeps a detached session's windows.
+    fn fit_detached(&mut self) {
+        let default = self.default_size();
+        let headless = self.headless;
+        let mut wants: Vec<(u64, (u16, u16))> = Vec::new();
+        let mut size_of = |app: &App, tab: &mut Tab, own: bool| {
+            if !own && tab.size.is_none() { return }
+            let status = app.pane_status(tab);
+            let size = tab.size.unwrap_or(default);
+            let Some(root) = tab.root.as_mut() else { return };
+            root.status = status;
+            if root.size() != size { root.resize(size.0, size.1) }
+            let area = Rect::new(0, 0, size.0, size.1);
+            let mut out = Vec::new();
+            match tab.focus.filter(|_| tab.zoomed) { Some(f) => out.push((f, area)), None => root.rects(area, &mut out) }
+            for (id, r) in out { let c = app.content_of(tab, r); wants.push((id, (c.width, c.height))) }
+        };
+        if headless {
+            let mut tabs = std::mem::take(&mut self.tabs);
+            for t in tabs.iter_mut() { size_of(self, t, true) }
+            self.tabs = tabs;
+        }
+        let mut sessions = std::mem::take(&mut self.sessions);
+        for s in sessions.iter_mut().filter(|s| s.mirror.is_none()) { for t in s.tabs.iter_mut() { size_of(self, t, headless) } }
+        self.sessions = sessions;
+        let mut idle = Vec::new();
+        for (id, content) in wants {
+            let Some(pane) = self.panes.get_mut(&id) else { continue };
+            if headless && pane.stream.is_none() && !pane.opening && matches!(pane.phase, Phase::Connecting(_)) { idle.push(id) }
+            let want = pane::stream_size(content.0, content.1);
+            if pane.want == want { continue }
+            pane.want = want;
+            let Some(stream) = pane.stream else { continue };
+            if pane.read_only { continue }
+            pane.resize_seq += 1;
+            let seq = pane.resize_seq;
+            if let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone()) {
+                link.send("terminal_resize", json!({ "streamId": stream.to_string(), "resizeSeq": seq, "cols": want.0, "rows": want.1 }));
+            }
+        }
+        for id in idle { self.open_stream(id, false) }
+    }
+
     pub fn fit_panes(&mut self) {
+        self.fit_detached();
+        if self.headless { self.rects = self.compute_rects(); return }
         // Every window's cells follow the client's size (tmux resizes its windows to it), with the
         // title rows counted when the window shows them.
         let body = self.body();
         for i in 0..self.tabs.len() {
             let status = self.pane_status(&self.tabs[i]);
+            // window-size latest: shown here, it is this terminal's size.
+            self.tabs[i].size = None;
             if let Some(root) = self.tabs[i].root.as_mut() {
                 root.status = status;
                 if root.size() != (body.width, body.height) { root.resize(body.width, body.height) }
@@ -2115,6 +2188,8 @@ impl App {
             let mut tab = match win.get("wid").and_then(Value::as_u64).filter(|w| self.session_of_window(*w).is_none()) { Some(wid) => Tab::with_wid(name, wid), None => Tab::new(name) };
             tab.named = win.get("named").and_then(Value::as_bool).unwrap_or(false);
             let layout = win.get("layout").and_then(Value::as_str).unwrap_or("");
+            // With no terminal: the size the last terminal gave it (tmux keeps it).
+            let (w, h) = match Node::tmux_size(layout).filter(|_| self.headless) { Some(s) => { tab.size = Some(s); s } None => (w, h) };
             tab.root = Node::from_tmux(layout, &ids, w, h).or_else(|| layout::arrange(layout::Named::Tiled, &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")));
             tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
             tab.zoomed = win.get("zoomed").and_then(Value::as_bool).unwrap_or(false) && ids.len() > 1;
@@ -2487,7 +2562,7 @@ impl App {
     fn compute_rects(&self) -> Vec<(u64, Rect)> {
         let tab = self.tab();
         let mut out = Vec::new();
-        let body = self.body();
+        let body = self.window_area(tab);
         if let Some(root) = &tab.root {
             if tab.zoomed { if let Some(focus) = tab.focus { return vec![(focus, body)] } }
             root.rects(body, &mut out);
@@ -2503,7 +2578,7 @@ impl App {
             if index == self.active { continue }
             if let Some(root) = &tab.root {
                 let mut out = Vec::new();
-                root.rects(self.body(), &mut out);
+                root.rects(self.window_area(tab), &mut out);
                 if let Some((_, r)) = out.iter().find(|(id, _)| *id == pane_id) { let c = self.content_of(tab, *r); return Some((c.width, c.height)) }
             }
         }
