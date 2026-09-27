@@ -1169,14 +1169,10 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
             submit_prompt(app, p);
             return;
         }
-        KeyCode::Backspace | KeyCode::Char('h') if key.code == KeyCode::Backspace || ctrl => {
-            if alt {
-                let mut from = at;
-                while from > 0 && chars[from - 1] == ' ' { from -= 1 }
-                while from > 0 && chars[from - 1] != ' ' { from -= 1 }
-                let mut v = chars.clone(); v.drain(from..at); set(&mut p, v, from); changed = true;
-            } else if at > 0 { let mut v = chars.clone(); v.remove(at - 1); set(&mut p, v, at - 1); changed = true }
-            else if p.value.is_empty() && !incremental { return } // backspace on an empty prompt closes it
+        // BSpace and C-h: the character before the cursor (none, and the prompt stays, at its
+        // start); M-BSpace is no key of tmux's prompt.
+        KeyCode::Backspace | KeyCode::Char('h') if (key.code == KeyCode::Backspace || ctrl) && !alt => {
+            if at > 0 { let mut v = chars.clone(); v.remove(at - 1); set(&mut p, v, at - 1); changed = true }
         }
         KeyCode::Delete => { if at < size { let mut v = chars.clone(); v.remove(at); set(&mut p, v, at); changed = true } }
         KeyCode::Char('d') if ctrl => { if at < size { let mut v = chars.clone(); v.remove(at); set(&mut p, v, at); changed = true } }
