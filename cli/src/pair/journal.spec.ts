@@ -99,8 +99,10 @@ describe('PairJournal on disk', () => {
     mkdirSync(join(dir, 'journal.jsonl'))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const j = new PairJournal({ dir, newEpoch: () => 'e' })
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[pair\] journal rewrite failed: /))
+    // Inert until used (the daemons off switch): making one touches nothing.
+    expect(warn).not.toHaveBeenCalled()
     const appended = j.append(entry(1, { kind: 'fail', text: 'boom' }))
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[pair\] journal rewrite failed: /))
     expect(appended.seq).toBe(1)
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[pair\] journal append failed: /))
     expect(j.since().entries).toEqual([appended])

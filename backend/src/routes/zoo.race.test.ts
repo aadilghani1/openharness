@@ -77,6 +77,7 @@ vi.mock('../lib/bus.js', () => ({ publishZooChanged: mocks.changed }))
 vi.mock('../lib/ssoAuth.js', async (original) => ({ ...await original<typeof import('../lib/ssoAuth.js')>(), authenticateAccessToken: mocks.auth }))
 
 import { zooRoutes } from './zoo.js'
+import { DAEMONS_EVERYONE } from '../lib/daemonsSwitch.js'
 import { emptyZoo, parseZoo, type Hatched, type Zoo, type ZooEgg, type ZooOp } from '../lib/zoo.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
@@ -96,7 +97,8 @@ describe('zoo writes racing on one account', () => {
     store.reset()
     mocks.changed.mockClear()
     app = Fastify(); app.setErrorHandler(errorHandler); registerAuthMiddleware(app, mocks.auth as never)
-    await app.register(zooRoutes); await app.ready()
+    // The server's daemons switch on for everyone (lib/daemonsSwitch.ts): what these tests are about.
+    await app.register(zooRoutes, { daemons: DAEMONS_EVERYONE }); await app.ready()
   })
   afterEach(async () => { await app.close() })
 
