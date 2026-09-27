@@ -41,6 +41,7 @@ class TerminalHeader extends StatelessWidget {
     required this.status,
     this.machineName,
     this.trailing = const [],
+    this.onFind,
   });
 
   /// The agent this terminal belongs to. Null while it is still loading.
@@ -57,48 +58,32 @@ class TerminalHeader extends StatelessWidget {
   /// the stream is read-only.
   final List<Widget> trailing;
 
-  /// The row's height, not counting its insets, at the default text size —
-  /// see [rowHeightFor] for larger text.
+  /// A tap on the mark or the names: Find, the list of agents. The name then wears a `⌄`, which is
+  /// how iOS says a title opens a list — the visible door to what a swipe right also opens. Null
+  /// leaves the names inert.
+  final VoidCallback? onFind;
+
+  /// The row's height, not counting its insets.
   ///
   /// Two lines of type: 15pt name over 12.5pt folder, with the engine mark
   /// centred against the pair.
-  static const double rowHeight = 40;
+  ///
+  /// ONE line now — the agent's name — where it was two with the machine, folder and branch under
+  /// it. The header floats over the terminal's top rows, so every point it gives up is text; where
+  /// the agent runs is in the ⋮ sheet and on its row in Find.
+  static const double rowHeight = 28;
 
   static const double sideInset = 14;
-  static const double topInset = 6;
-  static const double bottomInset = 8;
+  static const double topInset = 4;
+  static const double bottomInset = 6;
 
   /// The whole header, insets and divider included — what floats over the
-  /// terminal's top rows while it is shown — at the default text size; see
-  /// [heightFor].
+  /// terminal's top rows while it is shown.
   static const double height = topInset + rowHeight + bottomInset + 1;
-
-  static const double _nameSize = 15;
-  static const double _placeSize = 12.5;
-  static const double _lineHeight = 1.2;
-  static const double _lineGap = 2;
-
-  /// The row's height at [scaler]: [rowHeight], or taller once larger text
-  /// needs more for the two lines. Each line is exactly its scaled size times
-  /// [_lineHeight] tall, so this is what the row lays out to.
-  ///
-  /// ⚠️ **The row grows; it is not cut.** It was a fixed 40pt, and at 1.5x
-  /// text the two lines needed 52: the names spilled out of the bottom of the
-  /// row, with or without anything beside them.
-  static double rowHeightFor(TextScaler scaler) => math.max(
-    rowHeight,
-    ((scaler.scale(_nameSize) + scaler.scale(_placeSize)) * _lineHeight +
-            _lineGap)
-        .ceilToDouble(),
-  );
-
-  /// [height] at [scaler]: what the header covers of the terminal under it.
-  static double heightFor(TextScaler scaler) =>
-      topInset + rowHeightFor(scaler) + bottomInset + 1;
 
   /// The engine mark's size. Big enough to carry the status dot on its corner
   /// without the dot hiding it.
-  static const double markSize = 28;
+  static const double markSize = 20;
 
   @override
   Widget build(BuildContext context) {
@@ -111,22 +96,37 @@ class TerminalHeader extends StatelessWidget {
         sideInset,
         bottomInset,
       ),
-      // At least the row's height, never a cap on it: a line that turns out
-      // taller than [rowHeightFor] reckons grows the row rather than spilling.
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          minHeight: rowHeightFor(MediaQuery.textScalerOf(context)),
-        ),
+      child: SizedBox(
+        height: rowHeight,
         child: Row(
           children: [
-            BadgedEngineMark(
-              agent: agent,
-              status: status,
-              ring: AppPalette.windowBg,
-            ),
-            const SizedBox(width: 11),
             Expanded(
-              child: _Identity(agent: agent, machineName: machineName),
+              child: Semantics(
+                button: onFind != null,
+                label: onFind == null ? null : 'Find an agent',
+                child: GestureDetector(
+                  key: const ValueKey('terminal-find'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onFind,
+                  child: Row(
+                    children: [
+                      BadgedEngineMark(
+                        agent: agent,
+                        status: status,
+                        ring: AppPalette.windowBg,
+                      ),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: _Identity(
+                          agent: agent,
+                          machineName: machineName,
+                          opensFind: onFind != null,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
             ...trailing,
           ],
@@ -374,41 +374,59 @@ class _GlintPainter extends CustomPainter {
 /// and the branch [AgentProject.shownBranch]. See [TerminalPlaceLine] for how
 /// the three share the width.
 class _Identity extends StatelessWidget {
-  const _Identity({required this.agent, required this.machineName});
+  const _Identity({
+    required this.agent,
+    required this.machineName,
+    this.opensFind = false,
+  });
 
   final Agent? agent;
   final String? machineName;
+
+  /// Whether a tap here opens Find — the name then wears a `⌄`.
+  final bool opensFind;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final agent = this.agent;
-    final project = agent?.project;
+    // The name alone, and the machine after it only in the faint face — one line. The folder and
+    // branch are in the ⋮ sheet.
     final machineName = this.machineName;
-    final hasPlace =
-        project != null || (machineName != null && machineName.isNotEmpty);
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
       children: [
-        Text(
-          agent?.displayName ?? 'Harness',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: AppPalette.textPrimary,
-            fontSize: TerminalHeader._nameSize,
-            fontWeight: FontWeight.w600,
-            height: TerminalHeader._lineHeight,
+        Flexible(
+          child: Text(
+            agent?.displayName ?? 'Harness',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: AppPalette.textPrimary,
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
+            ),
           ),
         ),
-        if (hasPlace) ...[
-          const SizedBox(height: TerminalHeader._lineGap),
-          TerminalPlaceLine(
-            machine: machineName,
-            folder: project?.label,
-            branch: project?.shownBranch,
-            style: _placeStyle,
+        if (opensFind)
+          Padding(
+            padding: const EdgeInsets.only(left: 3),
+            child: Icon(
+              LucideIcons.chevronDown,
+              size: 15,
+              color: AppPalette.textSecondary,
+            ),
+          ),
+        if (machineName != null && machineName.isNotEmpty) ...[
+          const SizedBox(width: 8),
+          Flexible(
+            flex: 0,
+            child: Text(
+              machineName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: _placeStyle,
+            ),
           ),
         ],
       ],
@@ -417,9 +435,9 @@ class _Identity extends StatelessWidget {
 
   TextStyle get _placeStyle => TextStyle(
     color: AppPalette.textSecondary,
-    fontSize: TerminalHeader._placeSize,
+    fontSize: 12.5,
     fontWeight: FontWeight.w500,
-    height: TerminalHeader._lineHeight,
+    height: 1.2,
   );
 }
 

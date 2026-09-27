@@ -4,7 +4,7 @@ import { readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
-import { BackendSocket, compactRuntimePickerModels, deviceAgentListItem, deviceAgentRow, grokHistoryPage } from './backendSocket.js'
+import { AGENT_OPENED_THROTTLE_MS, BackendSocket, compactRuntimePickerModels, deviceAgentListItem, deviceAgentRow, grokHistoryPage } from './backendSocket.js'
 import { AuthSessionError, type AuthSessionManager } from './lib/authSession.js'
 import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
@@ -87,6 +87,118 @@ describe('confirmed harness pause replies', () => {
     if (state !== 'confirmed') expect(reply.deleted).toBeUndefined()
     if (state === 'unconfirmed') expect(reply.detail).toBe('The process could not be verified.')
     await socket.stop()
+  })
+})
+
+/**
+ * `agent_update {opened: true}` — an app opened this agent, so the daemon that owns it stamps
+ * `lastOpenedAt` on its own clock and tells every app, which then all sort by the same "last used".
+ */
+describe('agent_update opened: one "last used" for every app', () => {
+  const OPENED = Date.UTC(2026, 8, 26, 9, 30)
+  const iso = (ms: number) => new Date(ms).toISOString()
+  let socket: BackendSocket
+  let frames: any[]
+  let agentId = ''
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    // Only the clock: the dispatch queue and vi.waitFor still run on real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(OPENED)
+    socket = new BackendSocket('fixture')
+    frames = []
+    socket.registerLocalClient('local:opened', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    agentId = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7301' }], cwd: '/tmp/opened' })!.agentId
+  })
+
+  afterEach(async () => {
+    registry.removeAgent(agentId)
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    await socket.stop()
+  })
+
+  const replyTo = (requestId: string) => frames.find(frame => frame.type === 'agent_update_result' && frame.payload.requestId === requestId)?.payload
+  /** What `handleLocalFrame` queues for a window on this computer, awaited so the clock stays put. */
+  async function update(payload: Record<string, unknown>, requestId: string): Promise<any> {
+    await (socket as any).dispatchDown({ type: 'agent_update', payload: { requestId, ...payload } }, 'local:opened', 'local')
+    return replyTo(requestId)
+  }
+  const pushes = () => frames.filter(frame => frame.type === 'agent_synced')
+
+  it('arrives through the desktop window’s own door (localWsServer → handleLocalFrame)', async () => {
+    socket.handleLocalFrame('local:opened', { type: 'agent_update', payload: { requestId: 'door', agentId, opened: true } })
+    await vi.waitFor(() => expect(replyTo('door')).toBeTruthy())
+    // vi.waitFor moves a faked clock while it polls, so the stamp is read back rather than predicted.
+    const stamped = registry.byAgent(agentId)?.lastOpenedAt
+    expect(stamped).toBeGreaterThanOrEqual(OPENED)
+    expect(replyTo('door').agent.lastOpenedAt).toBe(iso(stamped!))
+    expect(pushes()).toHaveLength(1)
+  })
+
+  it('stamps the owner’s clock, answers with the frame, and pushes it to every app but the dial', async () => {
+    const commander = vi.spyOn(socket, 'sendCommander')
+    // A time from the client is never taken: two apps whose clocks disagree would order the list differently.
+    const reply = await update({ agentId, opened: true, lastOpenedAt: '2001-01-01T00:00:00.000Z', at: 1 }, 'open-1')
+    expect(reply.error).toBeUndefined()
+    expect(reply.agent).toMatchObject({ id: agentId, lastOpenedAt: iso(OPENED) })
+    expect(registry.byAgent(agentId)?.lastOpenedAt).toBe(OPENED)
+    expect(pushes()).toHaveLength(1)
+    expect(pushes()[0].payload.agent).toEqual(reply.agent)
+    expect(commander).not.toHaveBeenCalled()
+  })
+
+  it('answers a repeat inside the throttle with the current frame, and stamps and tells no one', async () => {
+    await update({ agentId, opened: true }, 'open-1')
+    vi.setSystemTime(OPENED + AGENT_OPENED_THROTTLE_MS - 1)
+    const repeat = await update({ agentId, opened: true }, 'open-2')
+    expect(repeat.agent).toMatchObject({ id: agentId, lastOpenedAt: iso(OPENED) })
+    expect(registry.byAgent(agentId)?.lastOpenedAt).toBe(OPENED)
+    expect(pushes()).toHaveLength(1)
+
+    vi.setSystemTime(OPENED + AGENT_OPENED_THROTTLE_MS)
+    const later = await update({ agentId, opened: true }, 'open-3')
+    expect(later.agent.lastOpenedAt).toBe(iso(OPENED + AGENT_OPENED_THROTTLE_MS))
+    expect(pushes()).toHaveLength(2)
+    expect(pushes()[1].payload.agent.lastOpenedAt).toBe(iso(OPENED + AGENT_OPENED_THROTTLE_MS))
+  })
+
+  it('still answers MISSING_UPDATE for a request that asks for nothing, and stamps nothing', async () => {
+    expect(await update({ agentId }, 'empty')).toMatchObject({ error: 'MISSING_UPDATE' })
+    expect(await update({ agentId, opened: false }, 'not-opened')).toMatchObject({ error: 'MISSING_UPDATE' })
+    expect(await update({ agentId, opened: 'yes' }, 'truthy')).toMatchObject({ error: 'MISSING_UPDATE' })
+    expect(await update({ opened: true }, 'no-agent')).toMatchObject({ error: 'MISSING_AGENT_ID' })
+    expect(await update({ agentId: 'nobody', opened: true }, 'unknown')).toMatchObject({ error: 'AGENT_NOT_FOUND' })
+    expect(registry.byAgent(agentId)?.lastOpenedAt).toBeUndefined()
+    expect(pushes()).toHaveLength(0)
+  })
+
+  it('stamps but does not push an agent whose terminal this daemon cannot see', async () => {
+    // Such a row is not in agents_list; a push would put it back on every screen (cli.ts syncSession).
+    registry.setTerminalAvailable(agentId, false)
+    const reply = await update({ agentId, opened: true }, 'hidden')
+    expect(reply.agent.lastOpenedAt).toBe(iso(OPENED))
+    expect(pushes()).toHaveLength(0)
+  })
+
+  it('takes the open from a sealed remote session too — the phone, or another computer’s desktop via its relay', async () => {
+    const internals = socket as any
+    const clear = { type: 'agent_update', payload: { requestId: 'remote-1', agentId, opened: true } }
+    vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue(clear)
+    vi.spyOn(internals.e2ee, 'hasSession').mockReturnValue(true)
+    const sealedReply = vi.spyOn(internals.e2ee, 'wrapRpcReply').mockReturnValue({ type: 'agent_update_result', payload: { __e2e: 'sealed' } })
+    await internals.dispatchDown({ type: 'agent_update', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'remote-conn')
+    expect(sealedReply).toHaveBeenCalledWith('remote-conn', 'agent_update_result', 'remote-1',
+      expect.objectContaining({ agent: expect.objectContaining({ id: agentId, lastOpenedAt: iso(OPENED) }) }))
+    // ...and this computer's own window hears the new order like everyone else.
+    expect(pushes()).toHaveLength(1)
+  })
+
+  it('refuses an unsealed remote open like any other agent_update', async () => {
+    await (socket as any).dispatchDown({ type: 'agent_update', payload: { requestId: 'plain', agentId, opened: true } }, 'remote-conn')
+    expect(registry.byAgent(agentId)?.lastOpenedAt).toBeUndefined()
+    expect(pushes()).toHaveLength(0)
   })
 })
 
@@ -795,7 +907,7 @@ describe('BackendSocket outbound queue', () => {
       cliVersion: null,
       processIdentity: null,
       registeredAt: 1,
-      updatedAt: 1,
+      touchedAt: 1,
       lastHookAt: 1,
       lastTranscriptAt: 1,
     }
@@ -1054,7 +1166,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
       runtimes: [{ backend: 'tmux', paneId: '%9' }], primaryRuntimeKey: 'tmux/%9', tmuxPane: '%9',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     }
     socket.onCreateAgent = async () => ({ ok: true, session: pending })
 
@@ -1081,7 +1193,7 @@ describe('BackendSocket outbound queue', () => {
     socket.registerLocalClient('local:resume', {
       sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true,
     })
-    const inputs: Array<{ resumeSessionId?: string | null; cwd: string }> = []
+    const inputs: Array<{ resumeSessionId?: string | null; takeOver?: string | null; cwd: string }> = []
     socket.onCreateAgent = async (input) => {
       inputs.push(input)
       return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app.' }
@@ -1095,12 +1207,17 @@ describe('BackendSocket outbound queue', () => {
     expect(inputs[0]).toMatchObject({ resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', cwd: '/work/cohorts' })
     // What cli.ts said about it reaches the client as it was said.
     expect(reply('ok')).toMatchObject({ error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app.' })
+    // Taken over from the terminal that has it: how, passed on as asked.
+    create('wait', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', takeOver: 'wait' })
+    await vi.waitFor(() => expect(reply('wait')).toBeDefined())
+    expect(inputs[1]).toMatchObject({ takeOver: 'wait' })
     create('shape', { resumeSessionId: '../../etc/passwd' })
     create('prompt', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', prompt: 'and then this' })
-    await vi.waitFor(() => expect(reply('prompt')).toBeDefined())
-    expect(reply('shape')).toMatchObject({ error: 'INVALID_SESSION' })
-    expect(reply('prompt')).toMatchObject({ error: 'INVALID_SESSION' })
-    expect(inputs).toHaveLength(1)
+    create('how', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', takeOver: 'forcefully' })
+    create('what', { takeOver: 'now' })
+    await vi.waitFor(() => expect(reply('what')).toBeDefined())
+    for (const id of ['shape', 'prompt', 'how', 'what']) expect(reply(id)).toMatchObject({ error: 'INVALID_SESSION' })
+    expect(inputs).toHaveLength(2)
     await socket.unregisterLocalClient('local:resume')
     await socket.stop()
   })
@@ -1117,7 +1234,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
       runtimes: [{ backend: 'tmux', paneId: '%9' }], primaryRuntimeKey: 'tmux/%9', tmuxPane: '%9',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     })
     const create = vi.fn(async (input: { bypassPermission: boolean; permissionMode: string | null }) => ({ ok: true as const, session: pending(`b-${create.mock.calls.length}`) }))
     socket.onCreateAgent = create
@@ -1159,7 +1276,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'nqhieu84', cwd: homedir(),
       runtimes: [{ backend: 'tmux', paneId: '%9' }], primaryRuntimeKey: 'tmux/%9', tmuxPane: '%9',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     }
     const create = vi.fn(async (_input: { engine: string; cwd: string }) => ({ ok: true as const, session: pending }))
     socket.onCreateAgent = create
@@ -1196,7 +1313,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
       runtimes: [{ backend: 'tmux', paneId: '%receipt' }], primaryRuntimeKey: 'tmux/%receipt', tmuxPane: '%receipt',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     }
     const lookup = vi.spyOn(registry, 'byAgent').mockReturnValue(pending)
     let finish!: () => void
@@ -1730,7 +1847,7 @@ describe('agent_fork RPC', () => {
     forkedFrom: { agentId: 'agent-1', name: 'Agent one' },
     transcriptPath: null, projectDir: 'workspace', cwd: '/tmp/workspace', runtimes: [], primaryRuntimeKey: '',
     tmuxPane: '%2', source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-    registeredAt: 2, updatedAt: 2, lastHookAt: 2, lastTranscriptAt: 2,
+    registeredAt: 2, touchedAt: 2, lastHookAt: 2, lastTranscriptAt: 2,
   }
 
   function localSocket(): { socket: BackendSocket; frames: Array<Record<string, unknown>> } {
@@ -1875,7 +1992,7 @@ describe('agent_restart RPC', () => {
     cliVersion: null,
     processIdentity: null,
     registeredAt: 1,
-    updatedAt: 1,
+    touchedAt: 1,
     lastHookAt: 1,
     lastTranscriptAt: 1,
   }
@@ -2283,7 +2400,7 @@ describe('agent_create with a prompt, a name and a named agent', () => {
     transcriptPath: null, projectDir: 'home', cwd: '/home/someone', defaultName: 'Local model',
     runtimes: [{ backend: 'tmux', paneId: '%11' }], primaryRuntimeKey: 'tmux/%11', tmuxPane: '%11',
     source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-    registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 
   async function create(choices: Record<string, unknown>) {
