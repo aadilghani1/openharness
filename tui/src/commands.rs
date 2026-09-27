@@ -1079,11 +1079,19 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
     let Some(entry) = words.first().and_then(|w| crate::cmd::find(w).ok()) else { return false };
     if !matches!(entry.name, "move-window" | "swap-window" | "join-pane" | "move-pane" | "break-pane") || app.swap_back.is_some() { return false }
     let Ok(args) = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)) else { return false };
+    // move-window -r only renumbers -t's session: nothing moves.
+    if entry.name == "move-window" && args.has('r') > 0 { return false }
     let back = app.session_id;
     let (src_t, dst_t) = (args.get('s').map(str::to_string), args.get('t').map(str::to_string));
     let src = src_t.as_deref().and_then(|t| target_session(app, t)).unwrap_or(back);
     let dst = dst_t.as_deref().and_then(|t| target_session(app, t)).unwrap_or(back);
     if src == dst { return false }
+    // A -t that names nothing (no session, and nothing here): its error, and nothing moved.
+    if let (Some(t), None) = (dst_t.as_deref(), dst_t.as_deref().and_then(|t| target_session(app, t))) {
+        // (move-window finds its -t itself, as a window index: cmd-move-window.c.)
+        let spec = entry.target.unwrap_or(crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: true, default_marked: false });
+        if let Err(e) = crate::cmd::resolve(app, Some(t), spec) { app.error(e); return true }
+    }
     let name_of = |app: &App, id: u32| app.session_list().into_iter().find(|(i, _)| *i == id).map(|(_, n)| n).unwrap_or_default();
     for s in [src, dst] { if app.remote_owner(s).is_some() { app.error(format!("session {} is another client's", name_of(app, s))); return true } }
     // A word's value replaced (-s: what moved, where it is now).
@@ -1104,6 +1112,11 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
                 app.swap_session(dst);
                 app.put_tab(tab, None);
                 run_words_in(app, &with(words, "-s", format!("@{wid}")));
+                // Its number, if the move there failed (the index taken): the first free one.
+                if let Some(w) = app.tabs.iter().position(|t| t.wid == wid) {
+                    let id = app.tabs[w].id.clone();
+                    if app.nums.get(&id).copied() == Some(usize::MAX / 2) { app.nums.remove(&id); app.renumber() }
+                }
             }
             "swap-window" => {
                 let i = match src_t.as_deref() { Some(t) => window_target(app, t).ok_or_else(|| format!("can't find window: {t}"))?, None => app.active };
@@ -1163,6 +1176,13 @@ fn other_session(app: &App, words: &[String]) -> Option<u32> {
     if matches!(entry.name, "switch-client" | "attach-session" | "new-session" | "detach-client" | "kill-server" | "list-sessions") { return None }
     // list-windows -a and list-panes -a go through every session themselves.
     if matches!(entry.name, "list-windows" | "list-panes") && words.iter().any(|w| w == "-a") { return None }
+    // move-window -r: -t is a session (cmd-move-window.c finds it itself), renumbered there.
+    if entry.name == "move-window" && words.iter().any(|w| w == "-r") {
+        let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).ok()?;
+        let t = args.get('t')?;
+        let id = target_session(app, t).or_else(|| app.find_session(t.split(':').next().unwrap_or(t)))?;
+        return (id != app.session_id).then_some(id);
+    }
     let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).ok()?;
     for (spec, flag) in [(entry.target, 't'), (entry.source, 's')] {
         let (Some(spec), Some(t)) = (spec, args.get(flag)) else { continue };

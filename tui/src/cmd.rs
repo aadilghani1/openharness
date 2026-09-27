@@ -341,7 +341,9 @@ fn window_in_session(app: &App, window: &str, exact: bool, index_ok: bool, f: &m
 /// cmd_find_get_window: an `@id`, a window of this session, else a session (its current window).
 fn window_anywhere(app: &App, window: &str, only: bool, exact: bool, index_ok: bool, f: &mut Found) -> bool {
     if window_in_session(app, window, exact, index_ok, f) { return true }
-    if !only && session_matches(app, window, false) { f.window = Some(app.active); f.idx = Some(app.win_num(app.active)); return true }
+    // A session's name: its current window — but where an index is wanted (new-window -t work),
+    // no index: the next free one there (cmd_find_get_window leaves idx unset).
+    if !only && session_matches(app, window, false) { f.window = Some(app.active); f.idx = (!index_ok).then(|| app.win_num(app.active)); return true }
     false
 }
 
