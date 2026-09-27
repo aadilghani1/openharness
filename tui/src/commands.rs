@@ -939,6 +939,16 @@ pub fn source(app: &mut App, file: &str, parse_only: bool, verbose: bool) -> Res
     source_text(app, file, &text, parse_only, verbose)
 }
 
+/// A file source-file could not read is an error; one that does not parse is a cause, which
+/// tmux prints (cfg_print_causes: into view mode for a terminal, the shell's output otherwise —
+/// which then exits 1).
+fn config_cause(app: &mut App, file: &str, e: String) {
+    let parse = e.strip_prefix(&format!("{file}:")).map(|r| r.starts_with(|c: char| c.is_ascii_digit())).unwrap_or(false);
+    if !parse { return app.error(e) }
+    if app.capture.is_some() { app.cli_code = 1 }
+    app.print("source-file", vec![e]);
+}
+
 /// The standard input's names: what a shell pipes in, never hn's own terminal.
 pub fn is_stdin(path: &str) -> bool { matches!(path, "-" | "/dev/stdin" | "/dev/fd/0") }
 
@@ -2319,7 +2329,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 // which would wait for keys forever.
                 if is_stdin(&path) {
                     let Some(text) = app.cli_stdin.clone() else { app.error(format!("{path}: no standard input here")); continue };
-                    match source_text(app, "-", &text, parse_only, verbose) { Ok(items) => app.insert_next.extend(items), Err(e) => app.error(e) }
+                    match source_text(app, "-", &text, parse_only, verbose) { Ok(items) => app.insert_next.extend(items), Err(e) => config_cause(app, "-", e) }
                     continue;
                 }
                 let pattern = if path.starts_with('/') { path.clone() } else { format!("{cwd}/{path}") };
@@ -2330,7 +2340,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             for file in files {
                 match source(app, &file, parse_only, verbose) {
                     Ok(items) => app.insert_next.extend(items),
-                    Err(e) => app.error(e),
+                    Err(e) => config_cause(app, &file, e),
                 }
             }
         }
