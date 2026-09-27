@@ -1831,6 +1831,9 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
                 pw.wrap = Some(!pw.wrap.unwrap_or(false));
                 picker.preview_window = Some(pw);
             }
+            "toggle-track" => { picker.track_flipped = !picker.track_flipped }
+            "track-current" if !picker.tracking() => { picker.track_flipped = !picker.track_flipped }
+            "untrack-current" if picker.tracking() => { picker.track_flipped = !picker.track_flipped }
             "toggle-sort" => { picker.sort_flipped = !picker.sort_flipped; picker.refilter() }
             // change-preview-window(a|b|…): each time the next of them, over the --preview-window
             // it started with (an empty one is that one).

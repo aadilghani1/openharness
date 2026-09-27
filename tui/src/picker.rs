@@ -169,6 +169,8 @@ pub struct Picker {
     pub preview_alt: std::cell::Cell<bool>,
     pub pw_next: usize,
     pub sort_flipped: bool,
+    /// toggle-track: --track turned the other way.
+    pub track_flipped: bool,
 }
 
 impl Picker {
@@ -224,6 +226,7 @@ impl Picker {
             preview_alt: Default::default(),
             pw_next: 0,
             sort_flipped: false,
+            track_flipped: false,
             preview_of: None,
             preview_fresh: std::cell::Cell::new(true),
             preview_following: Default::default(),
@@ -398,9 +401,13 @@ impl Picker {
     /// as it was changes nothing.
     fn changed(&mut self, before: &str) {
         if self.query == before { return }
-        self.selected_id = None;
+        // --track (or toggle-track): the item it was on, wherever it goes.
+        if !self.tracking() { self.selected_id = None }
         self.refilter();
     }
+
+    /// --track, as toggle-track last left it.
+    pub fn tracking(&self) -> bool { crate::theme::fzf_opts().track != self.track_flipped }
 
     fn byte_at(&self, chars: usize) -> usize { self.query.char_indices().nth(chars).map(|(i, _)| i).unwrap_or(self.query.len()) }
 

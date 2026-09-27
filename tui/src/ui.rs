@@ -828,7 +828,12 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let mut typed_w = shown.width().min(q_room) as u16;
     // What an inline count keeps clear of: the query and a margin, or the ghost, as fzf shifts it.
     let mut shift = typed_w as i32 + 1;
-    if picker.query.is_empty() && !picker.placeholder.is_empty() {
+    if let Some(ghost) = o.ghost.as_ref().filter(|g| picker.query.is_empty() && !g.is_empty()) {
+        // --ghost: yours, cut at the edge as fzf cuts it.
+        buf.set_stringn(area.x + pw, prompt_y, ghost, q_room, pal.ghost.style());
+        typed_w = ghost.width().min(q_room) as u16;
+        shift = typed_w as i32;
+    } else if picker.query.is_empty() && !picker.placeholder.is_empty() {
         // The placeholder (fzf's --ghost), whole scopes only, leaving an inline count its place.
         let room = if mode.starts_with("inline") { q_room.saturating_sub(16) } else { q_room };
         let mut text = String::new();
@@ -843,6 +848,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let mut count = format!("{}/{}", picker.visible.len(), total);
     // A toggle-sort binding: whether it sorts (+S) or not (-S), as fzf's info says.
     if theme::fzf_opts().binds.iter().any(|(_, a)| a.split('+').any(|x| x == "toggle-sort")) { count.push_str(if o_sorts(picker) { " +S" } else { " -S" }) }
+    // --track: +T.
+    if picker.tracking() { count.push_str(" +T") }
     let limit = theme::fzf_opts().multi_limit;
     if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) || limit > 0 { count.push_str(&if limit > 0 { format!(" ({}/{limit})", picker.marked.len()) } else { format!(" ({})", picker.marked.len()) }) }
     // fzf's printInfoImpl, each --info laid out as it lays it out: the count in the info pair, cut
