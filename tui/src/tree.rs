@@ -1329,7 +1329,7 @@ fn run_command(app: &mut App, target: Option<(u32, String, u64)>, template: &str
     let command = crate::commands::template_replace(template, name, 1);
     if command.trim().is_empty() { return }
     let run = |app: &mut App, current: Option<(String, u64)>| {
-        let saved = std::mem::replace(&mut app.hook_state, current.map(|t| std::sync::Arc::new(crate::commands::HookState { formats: Vec::new(), target: Some(t) })));
+        let saved = std::mem::replace(&mut app.hook_state, current.map(|t| std::sync::Arc::new(crate::commands::HookState { formats: Vec::new(), target: Some(t), session: None })));
         crate::commands::execute(app, &command);
         app.hook_state = saved;
     };

@@ -342,6 +342,15 @@ fn canonical_with(command: &str, separator: &str) -> String {
         return groups.iter().map(|g| canonical_with(g, separator)).collect::<Vec<_>>().join(between);
     }
     split_blocks(command).iter().map(|words| {
+        // cmd_print: its flags as args_print puts them (those without values bundled, by letter,
+        // then each with its value), then its arguments — for a command with no block in it.
+        if !words.iter().any(|(_, b)| *b) {
+            let plain: Vec<String> = words.iter().map(|(w, _)| w.clone()).collect();
+            if let Some(line) = plain.first().and_then(|n| crate::cmd::find(n).ok()).filter(|_| !words.iter().any(|(w, _)| w == ";")).and_then(|e| crate::cmd::parse(e, &plain).ok().map(|a| (e, a))).map(|(e, a)| {
+                let rest = a.print();
+                if rest.is_empty() { e.name.to_string() } else { format!("{} {rest}", e.name) }
+            }) { return line }
+        }
         words.iter().enumerate().map(|(i, (w, block))| {
             if *block { return format!("{{ {} }}", canonical_with(w, " ; ")) }
             if i == 0 { return resolve(w).to_string() }
@@ -522,7 +531,7 @@ pub struct Item { pub words: Vec<String>, pub origin: Option<(std::sync::Arc<str
 /// What a hook's commands run with (cmdq_new_state, CMDQ_STATE_NOHOOKS): its formats and the pane
 /// it is about (the tab's id and the pane), their current one.
 #[derive(Clone, Debug, Default)]
-pub struct HookState { pub formats: Vec<(String, String)>, pub target: Option<(String, u64)> }
+pub struct HookState { pub formats: Vec<(String, String)>, pub target: Option<(String, u64)>, pub session: Option<u32> }
 
 pub type Queue = std::collections::VecDeque<Item>;
 
@@ -557,7 +566,19 @@ fn run_queue(app: &mut App, mut queue: Queue) {
         let job = match wait_job(app, &words).unwrap_or_else(|| shell_job(app, &words)) { Ok(j) => j, Err(e) => { app.error(e); app.origin = None; app.mouse_ev = saved; app.hook_state = saved_hook; continue } };
         let Some(Job { command, cwd, delay, background, done, wait }) = job else {
             let errors = app.errors;
-            run_words(app, &words);
+            // A hook about a session not in front (its own after- hook): run there.
+            let there = hook.as_ref().and_then(|h| h.session).filter(|s| *s != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|x| x.id == *s && x.mirror.is_none()));
+            match there {
+                Some(sid) => {
+                    let back = app.session_id;
+                    app.swap_back = Some(back);
+                    app.swap_session(sid);
+                    run_words(app, &words);
+                    app.swap_back = None;
+                    if app.session_id != back { app.swap_session(back); }
+                }
+                None => run_words(app, &words),
+            }
             // cmdq_fire_command: a command that failed fires command-error, one that did not its
             // after- hook — not a command a hook ran.
             let hooks = if hook.is_none() { command_hooks(app, &words, app.errors != errors) } else { Queue::new() };
@@ -673,11 +694,17 @@ fn command_hooks(app: &mut App, words: &[String], failed: bool) -> Queue {
     let name = if failed { "command-error".to_string() } else { format!("after-{}", entry.name) };
     if !crate::options::is_hook(&name) || name == "after-queue" { return Queue::new() }
     let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).unwrap_or_default();
+    // cmdq_insert_hook: the hook of the command's target session (its options), run about it.
+    let sid = other_session(app, words).filter(|s| app.swap_back.is_none() && app.sessions.iter().any(|x| x.id == *s && x.mirror.is_none()));
+    let back = app.session_id;
+    if let Some(sid) = sid { app.swap_back = Some(back); app.swap_session(sid); }
     let target = app.current();
     let mut formats = vec![("hook".to_string(), name.clone())];
     formats.extend(args.hook_formats());
-    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))) };
-    hook_items(app, &name, target, state)
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: sid };
+    let items = hook_items(app, &name, target, state);
+    if sid.is_some() { app.swap_back = None; if app.session_id != back { app.swap_session(back); } }
+    items
 }
 
 /// An event's hook (notify_add): run once the work that caused it is done, with #{hook},
@@ -701,7 +728,7 @@ pub fn notify(app: &mut App, name: &str, window: Option<usize>, pane: Option<u64
     // window's active one otherwise.
     if let Some(p) = pane { formats.push(("hook_pane".to_string(), crate::pane::tag(p))) }
     let target = w.or(Some(app.active)).and_then(|w| pane.or(app.tabs.get(w).and_then(|t| t.focus)).map(|p| (w, p)));
-    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))) };
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: None };
     let items = hook_items(app, name, target, state);
     app.pending_hooks.extend(items);
 }
@@ -719,7 +746,7 @@ pub fn notify_session(app: &mut App, name: &str, sid: u32, session_name: &str, w
     ];
     if let Some((wid, w)) = window { formats.push(("hook_window".to_string(), format!("@{wid}"))); formats.push(("hook_window_name".to_string(), w)) }
     let target = app.tabs.get(app.active).and_then(|t| t.focus).map(|p| (app.active, p));
-    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))) };
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: None };
     let items = hook_items(app, name, target, state);
     app.pending_hooks.extend(items);
 }
@@ -747,7 +774,7 @@ pub fn notify_harness(app: &mut App, name: &str, key: &(String, String)) {
         ("hook_harness_question".to_string(), question),
     ];
     let target = pane.or_else(|| app.focused().map(|p| (app.active, p)));
-    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))) };
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: None };
     let items = hook_items(app, name, target, state);
     app.pending_hooks.extend(items);
 }
@@ -764,7 +791,7 @@ pub fn notify_gone(app: &mut App, name: &str, wid: u64, window_name: &str) {
         ("hook_window_name".to_string(), window_name.to_string()),
     ];
     let target = app.focused().map(|p| (app.active, p));
-    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))) };
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: None };
     let items = hook_items(app, name, target, state);
     app.pending_hooks.extend(items);
 }
