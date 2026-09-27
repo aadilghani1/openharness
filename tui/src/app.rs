@@ -459,6 +459,8 @@ pub struct App {
     /// came, shared with this computer's other clients through prs.json — one question per
     /// branch every five minutes (an hour for a merged or closed one), not one per harness each.
     pub prs: HashMap<String, (Option<fleet::Pr>, u64)>,
+    /// A window has gone since the last renumber (renumber-windows closes the gap then).
+    pub window_gone: bool,
     /// Questions for harnesses not listed when they came (machine, frame, when).
     pub pending_questions: Vec<(String, Value, Instant)>,
     /// Branches whose pull request is being asked right now (one ask per branch).
@@ -659,6 +661,7 @@ impl App {
             last_cli: Instant::now(),
             killing_session: false,
             prs: HashMap::new(),
+            window_gone: false,
             pending_questions: Vec::new(),
             pr_asking: HashSet::new(),
             prs_read: None,
@@ -2576,11 +2579,15 @@ impl App {
     /// Give every window without an index the first free one; forget closed windows'.
     pub fn renumber(&mut self) {
         let ids: HashSet<String> = self.tabs.iter().map(|t| t.id.clone()).collect();
+        let before = self.nums.len();
         self.nums.retain(|id, _| ids.contains(id));
-        // renumber-windows on: no gaps, in order.
-        if self.options.get("renumber-windows", "", None).as_deref() == Some("on") {
-            for (i, t) in self.tabs.iter().enumerate() { self.nums.insert(t.id.clone(), i + self.base_index); }
-            return;
+        if self.nums.len() < before { self.window_gone = true }
+        // renumber-windows on (server_renumber_session): when a window has gone, the others
+        // numbered from base-index in their order — only then; a new one takes the first free.
+        if std::mem::take(&mut self.window_gone) && self.options.get("renumber-windows", "", None).as_deref() == Some("on") {
+            let mut order: Vec<(usize, String)> = self.tabs.iter().enumerate().filter_map(|(i, t)| self.nums.get(&t.id).map(|n| (*n, t.id.clone())).or(Some((usize::MAX - self.tabs.len() + i, t.id.clone())))).collect();
+            order.sort();
+            for (k, (_, id)) in order.into_iter().enumerate() { self.nums.insert(id, k + self.base_index); }
         }
         for i in 0..self.tabs.len() {
             if self.nums.contains_key(&self.tabs[i].id) { continue }
@@ -3149,7 +3156,7 @@ impl App {
     pub fn take_tab(&mut self, index: usize) -> Tab {
         let current = index == self.active;
         let mut tab = self.tabs.remove(index);
-        self.nums.remove(&tab.id);
+        if self.nums.remove(&tab.id).is_some() { self.window_gone = true }
         self.lastw.retain(|x| *x != tab.id);
         if index < self.active { self.active -= 1 }
         if self.tabs.is_empty() { self.tabs.push(Tab::home()) }

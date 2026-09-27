@@ -617,6 +617,8 @@ fn run_queue(app: &mut App, mut queue: Queue) {
         });
         return;
     }
+    // (Windows numbered after what ran — with no terminal to draw, too: renumber-windows.)
+    app.renumber();
 }
 
 /// The commands a hook holds, as queue items run with [state] — each item of the hook array,
@@ -1712,7 +1714,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 idx = Some(at);
             }
             let Some(src) = app.tabs.iter().position(|t| t.id == id) else { return };
-            if let Err(e) = app.move_window(src, idx, flag(words, "-k"), !flag(words, "-d")) { app.error(e) }
+            if let Err(e) = app.move_window(src, idx, flag(words, "-k"), !flag(words, "-d")) { return app.error(e) }
+            // cmd-move-window.c: the session renumbered after (renumber-windows on).
+            app.window_gone = true;
         }
         "select-pane" => {
             // tmux's select-pane [-DdeLlMmRUZ] [-T title] [-t target-pane]. -M clears the mark,
