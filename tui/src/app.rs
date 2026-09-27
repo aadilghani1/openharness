@@ -67,6 +67,8 @@ pub struct Stash {
     pub created: i64,
     /// When it was last used (session_update_activity): when the client left it, else when made.
     pub activity: i64,
+    /// When a client last went to it (server_client_set_session); 0 while none has.
+    pub last_attached: i64,
     pub options: std::collections::BTreeMap<String, String>,
     pub env: std::collections::BTreeMap<String, EnvVar>,
 }
@@ -106,7 +108,7 @@ pub enum Attach { Share, Watch, Take }
 #[derive(Clone, Debug)]
 pub struct RemoteSession { pub id: u32, pub name: String, pub owner: Option<String>,
     /// The clients showing it: its owner's (when in front there) and those that show it as it has it.
-    pub attached: u32, pub created: i64, pub activity: i64, pub active: usize, pub windows: Vec<(usize, String, usize)>,
+    pub attached: u32, pub created: i64, pub activity: i64, pub last_attached: i64, pub active: usize, pub windows: Vec<(usize, String, usize)>,
     /// Its windows' ids (@N) and its panes' (%N inside: pane::tag), as its client keeps them.
     pub wids: Vec<u64>, pub pane_ids: Vec<u64> }
 
@@ -432,6 +434,8 @@ pub struct App {
     pub session_activity: i64,
     /// Its place in the order sessions are used in (use_order).
     pub session_used: u64,
+    /// session_last_attached of the session in front (0 while no client has gone to it).
+    pub session_last_attached: i64,
     /// The session the client was in before this one (switch-client -l, C-b L).
     pub last_session: Option<u32>,
     /// The sessions this client does not have (other clients', or no client's), as the file said.
@@ -644,6 +648,7 @@ impl App {
             session_created: epoch_secs(),
             session_activity: epoch_secs(),
             session_used: use_order(),
+            session_last_attached: 0,
             last_session: None,
             remote: Default::default(),
             handed_over: false,
@@ -1765,7 +1770,7 @@ impl App {
         Stash {
             id: self.session_id, used: self.session_used, mirror: self.mirror.take(), alias: self.session_alias.take(), desk: self.session_desk,
             tabs: std::mem::take(&mut self.tabs), active: self.active, lastw: std::mem::take(&mut self.lastw), nums: std::mem::take(&mut self.nums),
-            created: self.session_created, activity, options: std::mem::take(&mut self.options.session), env: std::mem::take(&mut self.session_env),
+            created: self.session_created, activity, last_attached: self.session_last_attached, options: std::mem::take(&mut self.options.session), env: std::mem::take(&mut self.session_env),
         }
     }
 
@@ -1782,6 +1787,7 @@ impl App {
         self.nums = s.nums;
         self.session_created = s.created;
         self.session_activity = s.activity;
+        self.session_last_attached = s.last_attached;
         self.options.session = s.options;
         self.session_env = s.env;
     }
@@ -1819,8 +1825,10 @@ impl App {
         if !self.swap_session(id) { self.session_activity = used; return }
         // attach-session and switch-client: update-environment's variables from this client.
         self.update_environment();
-        // …and the one it goes to is in use from now (server_client_set_session).
+        // …and the one it goes to is in use from now, and attached now (server_client_set_session).
         self.session_activity = epoch_secs();
+        // (Not by hn with no terminal: no client is attached there.)
+        if !self.headless { self.session_last_attached = epoch_secs() }
         self.session_used = use_order();
         self.last_session = Some(from);
         // A session left with no window (the one a client started in, before its shell came):
@@ -1902,7 +1910,7 @@ impl App {
                 let attached = front as u32 + if owner.is_some() { row.get("mirrors").and_then(Value::as_u64).unwrap_or(0) as u32 } else { 0 };
                 rows.push(RemoteSession {
                     id, wids, pane_ids, attached, owner, name, created,
-                    activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), active: row.get("active").and_then(Value::as_u64).unwrap_or(0) as usize, windows,
+                    activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), last_attached: row.get("last_attached").and_then(Value::as_i64).unwrap_or(0), active: row.get("active").and_then(Value::as_u64).unwrap_or(0) as usize, windows,
                 });
             }
             let mut r = self.remote.borrow_mut();
@@ -1991,7 +1999,8 @@ impl App {
                 // Attached: shown by its client.
                 "session_attached" => r.attached.to_string(),
                 "session_many_attached" | "session_marked" | "session_alerts" => "0".into(),
-                "session_created" | "session_last_attached" => r.created.to_string(),
+                "session_created" => r.created.to_string(),
+                "session_last_attached" => if r.last_attached > 0 { r.last_attached.to_string() } else { String::new() },
                 "session_activity" => r.activity.to_string(),
                 "window_index" => r.windows.get(r.active).map(|w| w.0.to_string()).unwrap_or_default(),
                 "window_name" => r.windows.get(r.active).map(|w| w.1.clone()).unwrap_or_default(),
@@ -2003,7 +2012,8 @@ impl App {
             "session_id" => format!("${}", s.id),
             "session_windows" => s.tabs.len().to_string(),
             "session_attached" | "session_many_attached" | "session_marked" | "session_alerts" => "0".into(),
-            "session_created" | "session_last_attached" => s.created.to_string(),
+            "session_created" => s.created.to_string(),
+            "session_last_attached" => if s.last_attached > 0 { s.last_attached.to_string() } else { String::new() },
             "session_activity" => s.activity.to_string(),
             "window_index" => s.tabs.get(s.active).and_then(|t| s.nums.get(&t.id)).map(|n| n.to_string()).unwrap_or_default(),
             "window_name" => s.tabs.get(s.active).map(|t| t.name.clone()).unwrap_or_default(),
@@ -2152,7 +2162,7 @@ impl App {
         let base = self.base_index;
         let linked = (tab.wid(), tab.name.clone());
         self.sessions.push(Stash { id, used: use_order(), mirror: None, alias: Some(name.clone()), desk: false, tabs: vec![tab], active: 0, lastw: Vec::new(), nums: HashMap::from([(tab_id.clone(), base)]),
-            created: epoch_secs(), activity: epoch_secs(), options: Default::default(), env: self.environ_update() });
+            created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: self.environ_update() });
         // cmd-new-session.c: its window linked (spawn_window), then the session created.
         crate::commands::notify_session(self, "window-linked", id, &name, Some(linked));
         crate::commands::notify_session(self, "session-created", id, &name, None);
@@ -2171,7 +2181,7 @@ impl App {
         let tab = Tab::home();
         let base = self.base_index;
         self.sessions.push(Stash { id, used: use_order(), mirror: None, alias: Some(name.to_string()), desk: false, nums: HashMap::from([(tab.id.clone(), base)]), tabs: vec![tab], active: 0, lastw: Vec::new(),
-            created: epoch_secs(), activity: epoch_secs(), options: Default::default(), env: self.environ_update() });
+            created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: self.environ_update() });
         crate::commands::notify_session(self, "session-created", id, name, None);
         id
     }
@@ -2223,7 +2233,7 @@ impl App {
         let me = crate::ipc::here().map(|p| p.display().to_string());
         let path = Self::sessions_path();
         let doc = read_sessions(&path);
-        let here = Stash { id: self.session_id, used: self.session_used, mirror: self.mirror.clone(), alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), options: self.options.session.clone(), env: self.session_env.clone() };
+        let here = Stash { id: self.session_id, used: self.session_used, mirror: self.mirror.clone(), alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), last_attached: self.session_last_attached, options: self.options.session.clone(), env: self.session_env.clone() };
         let mut ours = Vec::new();
         let mut names = HashSet::new();
         let mut desk = None;
@@ -2242,7 +2252,7 @@ impl App {
             let at = |id: &String| kept.iter().position(|t| t.id == *id);
             let active = tabs.get(s.active).and_then(|t| at(&t.id)).unwrap_or(0);
             let last: Vec<usize> = lastw.iter().filter_map(at).collect();
-            ours.push(json!({ "name": name, "id": (s.id != UNNUMBERED).then_some(s.id), "desk": false, "created": s.created, "activity": s.activity, "active": active, "last": last, "windows": windows,
+            ours.push(json!({ "name": name, "id": (s.id != UNNUMBERED).then_some(s.id), "desk": false, "created": s.created, "activity": s.activity, "last_attached": s.last_attached, "active": active, "last": last, "windows": windows,
                 "owner": if left { Value::Null } else { json!(me) }, "front": front && !left && !self.headless, "headless": self.headless && !left,
                 "mirrors": if left { 0 } else { self.mirrors.values().filter(|m| **m == s.id).count() },
                 // Its own options and environment (set -t, setenv -t, update-environment's), kept
@@ -2342,7 +2352,7 @@ impl App {
         let created = row.get("created").and_then(Value::as_i64).unwrap_or_else(epoch_secs);
         let lastw: Vec<String> = row.get("last").and_then(Value::as_array).map(|l| l.iter().filter_map(|i| tabs.get(i.as_u64()? as usize).map(|t| t.id.clone())).collect()).unwrap_or_default();
         Some(Stash { id, used: 0, mirror: None, alias: Some(name), desk: false, active: active.min(tabs.len() - 1), tabs, lastw, nums,
-            created, activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), options: options_from(row), env: env_from(row) })
+            created, activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), last_attached: row.get("last_attached").and_then(Value::as_i64).unwrap_or(0), options: options_from(row), env: env_from(row) })
     }
 
     /// The sessions no running client has (save_sessions: left by clients that detached), back

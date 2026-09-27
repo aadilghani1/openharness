@@ -2566,6 +2566,12 @@ fn run_words_in(app: &mut App, words: &[String]) {
             if let Some(sock) = opt(words, "-a") {
                 let sid = opt(words, "-t").and_then(|t| t.trim_start_matches('$').parse::<u32>().ok()).unwrap_or(app.session_id);
                 app.mirrors.insert(sock, sid);
+                // A client went to it (server_client_set_session): used and attached now — the
+                // session a command from a shell with no -t is for.
+                let now = crate::app::epoch_secs();
+                if sid == app.session_id { app.session_used = crate::app::use_order(); app.session_activity = now; app.session_last_attached = now }
+                else if let Some(s) = app.sessions.iter_mut().find(|s| s.id == sid) { s.used = crate::app::use_order(); s.activity = now; s.last_attached = now }
+                app.save_sessions();
             } else if let Some(sock) = opt(words, "-d") { app.mirrors.remove(&sock); }
             app.status_redraws += 1;
         }

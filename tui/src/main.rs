@@ -340,6 +340,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     // The sessions a client left (C-b d), and the one asked for.
     app.start_session = start;
     app.load_sessions();
+    // The client is attached to it now (server_client_set_session).
+    app.session_last_attached = app::epoch_secs();
     // update-environment (as tmux.conf set it): this client's variables into its session's.
     app.update_environment();
     // The client is attached: the hooks' first look, then client-attached.

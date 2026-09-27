@@ -48,7 +48,7 @@ pub fn show(app: &mut App, id: u32, readonly: bool) -> bool {
     let Some(row) = row_named(&r.name) else { return false };
     let (w, h) = (app.body().width, app.body().height);
     let mut stash = Stash { id, used: 0, alias: Some(r.name.clone()), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
-        created: r.created, activity: r.activity, options: crate::app::options_from(&row), env: crate::app::env_from(&row), mirror: Some(Mirror { owner: owner.clone(), readonly }) };
+        created: r.created, activity: r.activity, last_attached: r.last_attached, options: crate::app::options_from(&row), env: crate::app::env_from(&row), mirror: Some(Mirror { owner: owner.clone(), readonly }) };
     if !fill(app, &mut stash, &row, Vec::new(), (w, h)) { return false }
     app.sessions.push(stash);
     register(&owner, id, true);
@@ -143,7 +143,7 @@ fn rebuild(app: &mut App, row: &Value) {
     let body = app.body();
     let current = app.tabs.get(app.active).map(|t| t.id.clone());
     let mut stash = Stash { id: app.session_id, used: app.session_used, alias: app.session_alias.clone(), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
-        created: app.session_created, activity: app.session_activity, options: Default::default(), env: Default::default(), mirror: app.mirror.clone() };
+        created: app.session_created, activity: app.session_activity, last_attached: app.session_last_attached, options: Default::default(), env: Default::default(), mirror: app.mirror.clone() };
     let old = std::mem::take(&mut app.tabs);
     if !fill(app, &mut stash, row, old, (body.width, body.height)) { return gone(app) }
     app.tabs = stash.tabs;

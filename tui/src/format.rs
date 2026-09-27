@@ -1233,7 +1233,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "cursor_x" | "cursor_y" => pane.map(|p| { let c = p.term.grid().cursor.point; if name == "cursor_x" { c.column.0.to_string() } else { c.line.0.to_string() } }).unwrap_or_default(),
         // Times: when this client started, and when a window last had something happen.
         "session_created" => return Some(Val::Time(app.session_created)),
-        "session_last_attached" | "client_created" | "start_time" => return Some(Val::Time(started(app))),
+        "session_last_attached" => return Some(if app.session_last_attached > 0 { Val::Time(app.session_last_attached) } else { Val::Str(String::new()) }),
+        "client_created" | "start_time" => return Some(Val::Time(started(app))),
         // The client's session is in use now; one a command has in front, when it last was.
         "session_activity" if app.swap_back.is_some_and(|b| b != app.session_id) => return Some(Val::Time(app.session_activity)),
         "session_activity" | "client_activity" => return Some(Val::Time(now_secs())),
