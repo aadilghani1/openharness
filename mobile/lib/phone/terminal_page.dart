@@ -2141,6 +2141,70 @@ class _TerminalPageState extends State<TerminalPage>
                               ),
                       ),
                     ),
+                    // The ground under the mic's row: the output fades out behind esc, the mic and
+                    // what sits beside them, the way content fades under a toolbar — only ever
+                    // seen while the history is read back, since the live end sits above it.
+                    if (!_ownsInput)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        height: _statusBottom + 24,
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Tty.of(context).ground.withValues(alpha: 0),
+                                  Tty.of(context).ground,
+                                ],
+                                stops: const [0, 0.3],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    // The line above the mic: what is going on, in a few words — see [_statusLine].
+                    if (!_ownsInput)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: _statusBottom - _StatusLine.below,
+                        child: IgnorePointer(
+                          child: ListenableBuilder(
+                            listenable: Listenable.merge([
+                              widget.voice,
+                              _barMessage,
+                            ]),
+                            builder: (context, _) =>
+                                _statusLine() ?? const SizedBox.shrink(),
+                          ),
+                        ),
+                      ),
+                    // How loud the take is: a glow behind the mic that swells with the voice.
+                    if (!_ownsInput)
+                      ListenableBuilder(
+                        listenable: widget.voice,
+                        builder: (context, _) =>
+                            widget.voice.status == VoiceInputStatus.listening
+                            ? Positioned(
+                                left: 0,
+                                right: 0,
+                                bottom: _micCenter - VoiceLevelHalo.extent / 2,
+                                child: IgnorePointer(
+                                  child: Center(
+                                    child: VoiceLevelHalo(voice: widget.voice),
+                                  ),
+                                ),
+                              )
+                            : const Positioned(
+                                left: 0,
+                                bottom: 0,
+                                child: SizedBox.shrink(),
+                              ),
+                      ),
                     // The mic: Siri's orb, low at the foot and centred, floating
                     // over the terminal — which stays full screen under it, the
                     // way the home screen stays whole under Siri. Laid over the
@@ -2195,25 +2259,8 @@ class _TerminalPageState extends State<TerminalPage>
                           ),
                         ),
                     ],
-                    // The line above the mic: what is going on, in a few words — see [_statusLine].
-                    if (!_ownsInput)
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: _statusBottom - _StatusLine.below,
-                        child: IgnorePointer(
-                          child: ListenableBuilder(
-                            listenable: Listenable.merge([
-                              widget.voice,
-                              _barMessage,
-                            ]),
-                            builder: (context, _) =>
-                                _statusLine() ?? const SizedBox.shrink(),
-                          ),
-                        ),
-                      ),
-                    // A take recording: its clock and level on the mic's right, and esc on its left
-                    // throws it away — the terminal's key for "not that".
+                    // A take recording: esc on the mic's left throws it away — the terminal's key for
+                    // "not that". Nothing on its right: the mic itself says it is listening.
                     if (!_ownsInput)
                       ListenableBuilder(
                         listenable: widget.voice,
@@ -2223,28 +2270,6 @@ class _TerminalPageState extends State<TerminalPage>
                           }
                           return Stack(
                             children: [
-                              Positioned(
-                                left:
-                                    MediaQuery.sizeOf(context).width / 2 +
-                                    VoiceMicButton.extent / 2 +
-                                    16,
-                                bottom: _micCenter - 14,
-                                // On the ground, not bare: the output runs under the mic while
-                                // it is read back, and the clock has to read over it.
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    color: Tty.of(context).ground,
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 5,
-                                    ),
-                                    child: VoiceTakeClock(voice: widget.voice),
-                                  ),
-                                ),
-                              ),
                               Positioned(
                                 right:
                                     MediaQuery.sizeOf(context).width / 2 +

@@ -1,15 +1,14 @@
 import 'package:flutter/material.dart';
 
 import 'tty.dart';
-import 'tty_controls.dart' show TtySize;
+import 'voice_mic_face.dart' show VoiceMicCore;
 import 'voice_input_controller.dart';
 
-/// What the mic is doing, said beside it.
+/// What the mic is doing — shown by the mic itself, not said beside it.
 ///
-/// While a take records, [VoiceTakeClock] sits on the mic's right: `● 0:04 ▁▃▅▇▆▃`, red, the
-/// mic's level newest on the right. Everything else a take goes through — opening the mic,
-/// transcribing, sending, a take waiting to be sent again — is a few words on the line above the
-/// mic ([voiceStatus]). The take goes to the harness on screen, which its title already names.
+/// Recording, the mic is green and [VoiceLevelHalo] glows behind it with the voice; opening,
+/// transcribing and sending, its arc spins. Words appear on the line above it only when something
+/// went wrong ([voiceStatus]). The take goes to the harness on screen, which its title names.
 abstract final class VoiceLine {
   /// Whether the voice has anything to say or show.
   static bool shows(VoiceInputController voice) =>
@@ -20,48 +19,46 @@ abstract final class VoiceLine {
       voice.status == VoiceInputStatus.listening ||
       voice.status == VoiceInputStatus.transcribing;
 
-  /// Whether a take is being recorded right now: the clock shows, and esc throws it away.
+  /// Whether a take is being recorded right now: esc then throws it away.
   static bool recording(VoiceInputController voice) =>
       voice.status == VoiceInputStatus.starting ||
       voice.status == VoiceInputStatus.listening;
 }
 
-/// The words for the line above the mic, or null while it records (the clock says that) or has
-/// nothing to say.
+/// The words for the line above the mic — only when something went wrong: the mic could not
+/// start or heard nothing, or a take is kept unsent. Null the rest of the time, the mic's own
+/// face saying the rest.
 ({String text, Color color})? voiceStatus(VoiceInputController voice, Tty tty) {
   if (voice.notice case final notice?) {
     return (text: notice.toLowerCase(), color: tty.yellow);
   }
-  if (voice.isSending) return (text: 'sending…', color: tty.faint);
-  return switch (voice.status) {
-    VoiceInputStatus.starting => (text: 'opening the mic…', color: tty.faint),
-    VoiceInputStatus.listening => null,
-    VoiceInputStatus.transcribing => (text: 'transcribing…', color: tty.yellow),
-    _ when VoiceLine.shows(voice) => (
-      text: 'not sent · tap the mic again',
-      color: tty.red,
-    ),
-    _ => null,
-  };
+  final idle =
+      !voice.isSending &&
+      voice.status != VoiceInputStatus.starting &&
+      voice.status != VoiceInputStatus.listening &&
+      voice.status != VoiceInputStatus.transcribing;
+  if (idle && voice.transcript.isNotEmpty) {
+    return (text: 'not sent · tap the mic again', color: tty.red);
+  }
+  return null;
 }
 
-/// `● 0:04 ▁▃▅▇▆▃` — the take's length and the mic's level, beside the mic while it records.
-///
-/// Nothing here animates on its own: it redraws as the mic's level moves, which is only while it
-/// records.
-class VoiceTakeClock extends StatefulWidget {
-  const VoiceTakeClock({super.key, required this.voice});
+/// How loud the take is, as Siri shows it: a soft green glow behind the mic that swells with the
+/// voice — [VoiceMicCore.diameter] at silence, 28pt wider at full voice.
+class VoiceLevelHalo extends StatefulWidget {
+  const VoiceLevelHalo({super.key, required this.voice});
 
   final VoiceInputController voice;
 
+  /// The widest it grows: the box it is laid out in.
+  static const double extent = VoiceMicCore.diameter + 28;
+
   @override
-  State<VoiceTakeClock> createState() => _VoiceTakeClockState();
+  State<VoiceLevelHalo> createState() => _VoiceLevelHaloState();
 }
 
-class _VoiceTakeClockState extends State<VoiceTakeClock> {
-  static const _bars = ' ▁▂▃▄▅▆▇█';
-  static const _kept = 6;
-  final _levels = <double>[];
+class _VoiceLevelHaloState extends State<VoiceLevelHalo> {
+  double _level = 0;
 
   @override
   void initState() {
@@ -70,7 +67,7 @@ class _VoiceTakeClockState extends State<VoiceTakeClock> {
   }
 
   @override
-  void didUpdateWidget(VoiceTakeClock old) {
+  void didUpdateWidget(VoiceLevelHalo old) {
     super.didUpdateWidget(old);
     if (!identical(old.voice, widget.voice)) {
       old.voice.level.removeListener(_onLevel);
@@ -86,43 +83,29 @@ class _VoiceTakeClockState extends State<VoiceTakeClock> {
 
   void _onLevel() {
     if (widget.voice.status != VoiceInputStatus.listening) return;
-    setState(() {
-      _levels.add(widget.voice.level.value.clamp(0.0, 1.0));
-      if (_levels.length > _kept) _levels.removeAt(0);
-    });
-  }
-
-  String get _wave => [
-    for (final level in _levels)
-      _bars[(level * (_bars.length - 1)).round().clamp(0, _bars.length - 1)],
-  ].join().padLeft(_kept, _bars[1]);
-
-  String get _clock {
-    final length = widget.voice.takeLength;
-    final seconds = length.inSeconds % 60;
-    return '${length.inMinutes}:${seconds.toString().padLeft(2, '0')}';
+    final level = widget.voice.level.value.clamp(0.0, 1.0);
+    if ((level - _level).abs() > 0.02) setState(() => _level = level);
   }
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    return ExcludeSemantics(
-      child: Text.rich(
-        TextSpan(
-          children: [
-            TextSpan(
-              text: '● $_clock ',
-              style: tty.style(color: tty.red, size: TtySize.meta),
-            ),
-            TextSpan(
-              text: _wave,
-              style: tty.style(color: tty.text, size: TtySize.meta),
-            ),
-          ],
+    final size =
+        VoiceMicCore.diameter +
+        (VoiceLevelHalo.extent - VoiceMicCore.diameter) * _level;
+    return SizedBox.square(
+      dimension: VoiceLevelHalo.extent,
+      child: Center(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: tty.green.withValues(alpha: 0.28),
+          ),
         ),
-        maxLines: 1,
-        softWrap: false,
-        overflow: TextOverflow.clip,
       ),
     );
   }
