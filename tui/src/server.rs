@@ -118,7 +118,13 @@ fn merge(doc: &mut Value, before: Option<&Synced>, after: &Synced, paste: &Paste
             }
         }
     }
-    if before.map(|b| b.keymap != after.keymap).unwrap_or(true) { doc["keys"] = keys_json(&after.keymap) }
+    match before {
+        Some(b) if b.keymap == after.keymap => {}
+        // What this client bound and unbound, into the file's tables binding by binding: two
+        // terminals binding at the same moment both keep theirs.
+        Some(b) if doc["keys"].is_object() => { let file = keys_from(&doc["keys"], after.keymap.clone()); doc["keys"] = keys_json(&merge_keys(file, &b.keymap, &after.keymap)) }
+        _ => doc["keys"] = keys_json(&after.keymap),
+    }
     // Buffers by name: each one new or set again, each one gone; the counters past every client's.
     let old: &[(String, u64)] = before.map(|b| b.buffers.as_slice()).unwrap_or(&[]);
     let mut list: Vec<Value> = if before.is_none() { Vec::new() } else { doc["buffers"]["list"].as_array().cloned().unwrap_or_default() };
@@ -140,6 +146,41 @@ fn merge(doc: &mut Value, before: Option<&Synced>, after: &Synced, paste: &Paste
     let env = doc["env"].as_object_mut().unwrap();
     for (k, v) in &after.env { if before.map(|b| b.env.get(k) != Some(v)).unwrap_or(true) { env.insert(k.clone(), json!({ "value": v.value, "hidden": v.hidden })); } }
     if let Some(b) = before { for k in b.env.keys() { if !after.env.contains_key(k) { env.insert(k.clone(), Value::Null); } } }
+}
+
+/// One table's changes from [before] to [after] made to [file]: each binding added or changed
+/// set there (in its place, else last), each one gone taken out.
+fn merge_table(file: &mut Vec<Binding>, before: &[Binding], after: &[Binding]) {
+    for b in after.iter().filter(|b| !before.contains(b)) {
+        match file.iter_mut().find(|f| f.chord == b.chord) { Some(f) => *f = b.clone(), None => file.push(b.clone()) }
+    }
+    for gone in before.iter().filter(|b| !after.iter().any(|a| a.chord == b.chord)) { file.retain(|f| f.chord != gone.chord) }
+}
+
+/// The key tables as the file has them, with what this client changed (from [before] to
+/// [after]) made to them.
+fn merge_keys(mut file: Keymap, before: &Keymap, after: &Keymap) -> Keymap {
+    if before.prefix != after.prefix { file.prefix = after.prefix }
+    if before.prefix2 != after.prefix2 { file.prefix2 = after.prefix2 }
+    if before.repeat_ms != after.repeat_ms { file.repeat_ms = after.repeat_ms }
+    if before.hint_ms != after.hint_ms { file.hint_ms = after.hint_ms }
+    merge_table(&mut file.prefix_table, &before.prefix_table, &after.prefix_table);
+    merge_table(&mut file.root_table, &before.root_table, &after.root_table);
+    merge_table(&mut file.copy_vi, &before.copy_vi, &after.copy_vi);
+    merge_table(&mut file.copy_emacs, &before.copy_emacs, &after.copy_emacs);
+    let names: std::collections::BTreeSet<String> = before.named.keys().chain(after.named.keys()).cloned().collect();
+    for name in names {
+        match (before.named.get(&name), after.named.get(&name)) {
+            (Some(_), None) => { file.named.remove(&name); }
+            (b, Some(a)) => merge_table(file.named.entry(name).or_default(), b.map(Vec::as_slice).unwrap_or(&[]), a),
+            (None, None) => {}
+        }
+    }
+    for x in after.copy_unbound.iter().filter(|x| !before.copy_unbound.contains(x)) { if !file.copy_unbound.contains(x) { file.copy_unbound.push(*x) } }
+    for x in before.copy_unbound.iter().filter(|x| !after.copy_unbound.contains(x)) { file.copy_unbound.retain(|f| f != x) }
+    for t in after.removed.iter().filter(|t| !before.removed.contains(t)) { if !file.removed.contains(t) { file.removed.push(*t) } }
+    for t in before.removed.iter().filter(|t| !after.removed.contains(t)) { file.removed.retain(|f| f != t) }
+    file
 }
 
 /// The file's buffers, as a Paste.
