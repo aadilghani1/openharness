@@ -108,10 +108,5 @@ void main() {
     await tester.tap(find.text('Continue with email'));
     await wait(800);
     await shot('sign-in-email');
-    await tester.tap(find.text('‹ Back'));
-    await wait(600);
-    await tester.tap(find.text('Set up my computer'));
-    await wait(800);
-    await shot('set-up-computer');
   });
 }

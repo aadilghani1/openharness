@@ -342,13 +342,7 @@ class _Hello extends StatelessWidget {
                         onPressed: onTrySample,
                       ),
                     ),
-                  Center(
-                    child: TtyTextButton(
-                      label: 'Set up my computer',
-                      color: tty.faint,
-                      onPressed: onNewHere,
-                    ),
-                  ),
+                  // No 'Set up my computer' here: it began with the same email as Continue.
                   const SizedBox(height: 8),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,

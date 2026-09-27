@@ -109,9 +109,15 @@ class FindRow extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text.rich(
                   TextSpan(
+                    // Only where the words are there as typed: fzf's scattered letters inside a
+                    // question or a path read as noise.
                     children: fzfHighlight(
                       detail,
-                      terms,
+                      [
+                        for (final term in terms)
+                          if (detail.toLowerCase().contains(term.toLowerCase()))
+                            term,
+                      ],
                       base: tty.style(
                         color: detailColor ?? tty.faint,
                         size: TtySize.meta,

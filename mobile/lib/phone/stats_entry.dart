@@ -31,7 +31,7 @@ Widget buildStatsSettingsRow(BuildContext context, AppNotifier notifier) =>
           // anything?" without a push. Empty reads as an em dash rather than "0 agents", which
           // looks like a figure that was measured and came out zero.
           value: summary.isEmpty
-              ? '—'
+              ? null
               : '${formatStatCount(summary.agentsSpawned)} '
                     '${summary.agentsSpawned == 1 ? 'agent' : 'agents'}',
           onTap: () =>

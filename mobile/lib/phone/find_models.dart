@@ -110,7 +110,7 @@ class _FindModelsState extends State<FindModels> {
           rows.add(
             FindRow(
               title: ownTitle,
-              detail: (reading?['account'] as String?) ?? 'subscription',
+              detail: reading?['account'] as String?,
               terms: needle.isEmpty ? const [] : [needle],
               state: agent?.gridModel == null ? '✓' : null,
               stateColor: tty.green,

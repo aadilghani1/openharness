@@ -344,7 +344,6 @@ class _PhoneNameRow extends StatelessWidget {
       return SettingsRow(
         key: const ValueKey('settings-phone-name'),
         title: 'This phone',
-        detail: 'How a desktop names this phone when it takes a terminal',
         value: notifier.phoneClientDescriptor().name,
         onTap: () => unawaited(
           showAppDialog<void>(
