@@ -8,6 +8,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/empty_state.dart';
 import 'package:harness_mobile/notify/agent_notice.dart' show NoticeKind;
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/state/external_session.dart';
 
 import 'agent_index.dart';
 import 'find_row.dart';
@@ -359,6 +360,33 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     final openable = widget.controller.canSubmit(row);
     final showing = widget.showing;
     final onScreen = showing != null && _isShowing(row, showing);
+    // A conversation Harness did not start: where it was said, and `resume` — or, open in a
+    // terminal or app elsewhere, that instead, and no tap.
+    if (row.external case final external?) {
+      final hit = widget.controller.contentHitFor(row.id);
+      return FindRow(
+        title: row.title,
+        detail: row.detail,
+        branch: null,
+        tail: [
+          external.engineLabel,
+          if (row.lastAt case final at?) fzfAge(at, now),
+        ].join(' · '),
+        said: hit == null || hit.snippet.isEmpty || hit.field == 'name'
+            ? null
+            : (lead: snippetLead(hit.field), runs: snippetRuns(hit.snippet)),
+        state: _resuming == row.id
+            ? 'opening…'
+            : external.open
+            ? 'open in ${external.originLabel}'
+            : 'resume',
+        stateColor: external.open ? tty.faint : tty.text,
+        terms: terms,
+        selected: selected,
+        enabled: openable || _resuming == row.id,
+        onTap: _resuming != null ? null : () => _tap(row),
+      );
+    }
     if (entry == null) {
       return FindRow(
         title: row.title,
@@ -539,6 +567,10 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       _run(opened);
       return;
     }
+    if (opened.external case final external?) {
+      unawaited(_resumeExternal(opened, external));
+      return;
+    }
     final entry = opened.entry;
     if (entry == null) return;
     if (entry.agent.isStopped) {
@@ -546,6 +578,38 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       return;
     }
     _openAgent(entry);
+  }
+
+  /// A conversation Harness did not start, opened as a new harness that resumes it in its own
+  /// folder (`claude --resume`, `codex resume`), then its terminal. The machine refuses one open
+  /// elsewhere or already a harness, and the reason is said.
+  Future<void> _resumeExternal(
+    PhoneDestination row,
+    ExternalSessionRef external,
+  ) async {
+    final machineId = row.machineId;
+    if (machineId == null) return;
+    setState(() => _resuming = row.id);
+    final attempt = AgentCreationAttempt();
+    final error = await widget.notifier.resumeConversation(
+      machineId,
+      engine: external.engine,
+      folder: external.cwd,
+      sessionId: external.sessionId,
+      name: external.title.isEmpty ? null : external.title,
+      attempt: attempt,
+    );
+    if (!mounted) return;
+    setState(() => _resuming = null);
+    final agentId = attempt.agentId;
+    if (error != null || agentId == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text(error ?? 'Could not open that conversation.')),
+      );
+      return;
+    }
+    widget.onOpen?.call();
+    openAgent(context, widget.notifier, machineId, agentId);
   }
 
   /// Bring a stopped agent back, then open it — the desktop's

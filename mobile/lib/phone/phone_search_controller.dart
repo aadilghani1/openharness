@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import 'package:harness_mobile/core/phone_search_history.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/state/external_session.dart';
 import 'package:harness_mobile/state/search_when.dart';
 import 'package:harness_mobile/state/session_content_search.dart';
 
@@ -97,6 +98,27 @@ class PhoneSearchController extends ChangeNotifier {
     if (_disposed) return;
     _filter();
     notifyListeners();
+  }
+
+  /// A Find row for a conversation Harness did not start, from the hit that found it: its title (or
+  /// what was first asked), and where it ran — the desktop's `externalSessionDestination`.
+  PhoneDestination _externalRow(
+    SessionContentHit hit,
+    ExternalSessionRef external,
+  ) {
+    final machine = notifier.stateOf(hit.machineId)?.machine.displayName ?? '';
+    return PhoneDestination(
+      id: hit.destinationId,
+      kind: PhoneDestinationKind.external,
+      title: external.title.isEmpty ? 'Untitled conversation' : external.title,
+      detail: '$machine:${external.folderName}',
+      machineId: hit.machineId,
+      machineLabel: machine,
+      engine: external.engine,
+      external: external,
+      lastAt: hit.lastAt ?? hit.at,
+      searchFields: [external.folderName, external.cwd, external.engineLabel],
+    );
   }
 
   /// With a time in the query, the rows worked on then: the conversation last moved in it, or a
@@ -265,6 +287,11 @@ class PhoneSearchController extends ChangeNotifier {
     ),
     PhoneDestinationKind.command => _commandIds.contains(row.id),
     PhoneDestinationKind.mode => true,
+    // Not while it is open in a terminal or an app elsewhere — two processes would write one
+    // conversation — nor while its machine cannot be asked.
+    PhoneDestinationKind.external =>
+      !(row.external?.open ?? true) &&
+          notifier.searchableMachineIds.contains(row.machineId),
   };
 
   void _rebuild() {
@@ -383,10 +410,21 @@ class PhoneSearchController extends ChangeNotifier {
           ];
     total = candidates.length;
     _findExtras();
+    // Conversations Harness did not start, found by what was said in them: a row only while a
+    // search matches one, never in the list as it opens — the desktop Cmd-P's rule.
+    final found = _contentQuery.isEmpty || _groupScope != null || isCommandMode
+        ? candidates
+        : [
+            ...candidates,
+            for (final hit in _content.hitsFor(_contentQuery).values)
+              if (hit.external case final external?
+                  when !candidates.any((row) => row.id == hit.destinationId))
+                _externalRow(hit, external),
+          ];
     rows = isCommandMode
         ? _recentFirst(rankPhoneDestinations(candidates, commandQuery))
         : rankPhoneDestinations(
-            _within(candidates),
+            _within(found),
             wordsQuery,
             recent: history?.recent ?? const <String>[],
             previews: notifier.sessionPreviews,

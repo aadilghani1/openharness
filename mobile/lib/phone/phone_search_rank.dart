@@ -272,8 +272,10 @@ List<PhoneDestination> rankPhoneDestinations(
 /// The conversation that moved last first — the true time; opening a harness is not work on it. An
 /// agent never dated, and anything that is not an agent, after.
 int _lastMovedFirst(PhoneDestination a, PhoneDestination b) {
-  final left = a.entry?.agent.updatedAt?.millisecondsSinceEpoch ?? 0;
-  final right = b.entry?.agent.updatedAt?.millisecondsSinceEpoch ?? 0;
+  final left =
+      (a.entry?.agent.updatedAt ?? a.lastAt)?.millisecondsSinceEpoch ?? 0;
+  final right =
+      (b.entry?.agent.updatedAt ?? b.lastAt)?.millisecondsSinceEpoch ?? 0;
   return right.compareTo(left);
 }
 

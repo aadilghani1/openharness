@@ -4980,6 +4980,43 @@ class AppNotifier extends ChangeNotifier {
           : permissionModeApproves(permissionMode),
       'codexHome': ?codexHome,
     };
+    return _create(
+      machineId,
+      choices,
+      swarmId: swarmId,
+      split: split,
+      attempt: creation,
+    );
+  }
+
+  /// A Claude Code or Codex conversation Harness did not start, opened as a harness that resumes
+  /// it, in its own folder (Find's "not in Harness" rows, `ExternalSessionRef`) — the desktop's
+  /// `resumeConversation`. The machine refuses one open elsewhere, already a harness, or whose
+  /// folder is gone, and says why. Null when it started; otherwise what to tell the person. The
+  /// new harness's id is on [attempt] once it has.
+  Future<String?> resumeConversation(
+    String machineId, {
+    required String engine,
+    required String folder,
+    required String sessionId,
+    String? name,
+    AgentCreationAttempt? attempt,
+  }) => _create(machineId, {
+    'engine': engine,
+    'cwd': folder,
+    'bypassPermission': true,
+    'name': ?name,
+    'resumeSessionId': sessionId,
+  }, attempt: attempt);
+
+  Future<String?> _create(
+    String machineId,
+    Map<String, dynamic> choices, {
+    String? swarmId,
+    PaneSplitRequest? split,
+    AgentCreationAttempt? attempt,
+  }) {
+    final creation = attempt ?? AgentCreationAttempt();
     if (creation._choices != null &&
         (creation._machineId != machineId ||
             !mapEquals(creation._choices, choices))) {
@@ -5022,6 +5059,14 @@ class AppNotifier extends ChangeNotifier {
               'Install tmux there, then try again.',
         'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
           'Update the harness CLI on this machine to create a harness',
+        // Opening a conversation Harness did not start (`resumeSessionId`). The machine says what
+        // stopped it: open elsewhere, already a harness, gone.
+        'SESSION_OPEN_ELSEWHERE' ||
+        'SESSION_IN_HARNESS' ||
+        'SESSION_NOT_FOUND' ||
+        'SESSION_FOLDER_GONE' ||
+        'INVALID_SESSION' =>
+          detail ?? 'Could not open that conversation on $machine.',
         _ => 'Create harness failed: ${detail ?? code}',
       };
 
@@ -5094,6 +5139,12 @@ class AppNotifier extends ChangeNotifier {
         'GRID_CONFIG_FAILED',
         'UNSUPPORTED_ON_REMOTE',
         'UNSUPPORTED',
+        // A conversation Harness did not start, refused before its pane opens.
+        'SESSION_OPEN_ELSEWHERE',
+        'SESSION_IN_HARNESS',
+        'SESSION_NOT_FOUND',
+        'SESSION_FOLDER_GONE',
+        'INVALID_SESSION',
       };
       if (refusedBeforeLaunch.contains(failure.code)) {
         return creation._complete(

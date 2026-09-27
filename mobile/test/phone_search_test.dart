@@ -99,6 +99,66 @@ AppNotifier _app(
   return app;
 }
 
+/// A machine whose session index found "dial" in a Claude Code conversation Harness did not start,
+/// and that resumes it as a harness when asked.
+class _ExternalConn extends WsConn {
+  _ExternalConn()
+    : super(
+        wsBaseUrl: 'ws://fixture.invalid',
+        autonomousEnv: 'test',
+        machineId: 'box',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+      );
+
+  final created = <Map<String, dynamic>>[];
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type == 'agent_create') {
+      created.add(payload);
+      return {
+        'state': 'created',
+        'creationId': payload['creationId'],
+        'agent': {
+          'id': 'resumed',
+          'name': 'Fix the dial',
+          'status': 'active',
+          'engine': 'claude',
+          'terminal': {'available': true},
+        },
+      };
+    }
+    if (type != 'session_search') return {};
+    return {
+      'hits': [
+        if ((payload['query'] as String).startsWith('dial'))
+          {
+            'agentId': '',
+            'sessionId': 'c0ffee',
+            'engine': 'claude',
+            'field': 'ask',
+            'snippet': 'make the \u0002dial\u0003 scroll smoothly',
+            'together': true,
+            'score': 1,
+            'external': {
+              'cwd': '/home/u/code/dial',
+              'title': 'Fix the dial',
+              'origin': 'terminal',
+              'open': false,
+            },
+          },
+      ],
+    };
+  }
+}
+
 /// A machine whose session index heard "dial" in agent 2312's conversation.
 class _SearchConn extends WsConn {
   _SearchConn()
@@ -1278,6 +1338,56 @@ void main() {
         findsOneWidget,
       );
       // Opening search reaches the machines (see `reachAllMachines`): let its timers run out.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 30));
+    },
+  );
+
+  testWidgets(
+    'a conversation Harness did not start is found by what was said, and a tap resumes it',
+    (tester) async {
+      final machine = _machine('box', [_agent('3188', minutesAgo: 4)]);
+      final conn = _ExternalConn();
+      final app = _app([machine], conn: conn);
+      addTearDown(app.dispose);
+      final search = PhoneSearchController(notifier: app, modes: false);
+      addTearDown(search.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PhoneSearchResults(
+              notifier: app,
+              controller: search,
+              fzf: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      search.setQuery('dial');
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+
+      // Only a search shows it — the desktop Cmd-P's rule — with where it was said, and `resume`.
+      expect(find.text('Fix the dial', findRichText: true), findsOneWidget);
+      expect(find.text('resume'), findsOneWidget);
+      expect(
+        find.textContaining('> make the dial scroll', findRichText: true),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('Fix the dial', findRichText: true));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(conn.created.single['resumeSessionId'], 'c0ffee');
+      expect(conn.created.single['cwd'], '/home/u/code/dial');
+      expect(conn.created.single['engine'], 'claude');
+      expect(
+        machine.agents.map((agent) => agent.id),
+        contains('resumed'),
+        reason: 'the new harness joins its machine',
+      );
+
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 30));
     },
