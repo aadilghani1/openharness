@@ -723,6 +723,8 @@ pub fn launch(app: &mut App, prefix: &str, filter: Filter) {
     picker.qcursor = prefix.chars().count();
     prepare(app, &kind);
     fill(app, &kind, &mut picker);
+    // As choose-tree starts on the current session: on this window's harness, so Enter stays.
+    if prefix.is_empty() { if let Some((machine, agent)) = focused_agent(app) { picker.select(&format!("{machine}:{agent}")) } }
     app.modal = Some(Modal::Picker { kind, picker });
 }
 

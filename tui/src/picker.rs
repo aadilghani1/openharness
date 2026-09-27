@@ -421,6 +421,11 @@ impl Picker {
     /// The cursor on the first result (and the view at its start).
     pub fn to_top(&mut self) { self.cursor = 0; self.scroll = 0; self.skip_disabled(1) }
 
+    /// The cursor on the item [id], if it is in the results.
+    pub fn select(&mut self, id: &str) {
+        if let Some(at) = self.visible.iter().position(|(i, _)| self.rows[*i].id == id) { self.cursor = at; self.skip_disabled(1) }
+    }
+
     fn skip_disabled(&mut self, direction: i64) {
         if self.visible.is_empty() { self.selected_id = None; self.preview_of = None; return }
         let n = self.visible.len() as i64;
