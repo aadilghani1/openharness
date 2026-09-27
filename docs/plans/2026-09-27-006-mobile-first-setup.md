@@ -160,6 +160,10 @@ password or signed in twice.
 3. **Sign-in is your email, never a password,** on the phone, the desktop and the CLI: approve on a
    device you have, or a six-digit email code for your first. The browser sign-in retires.
 
+- **Trust stays per computer, as it is.** A computer admits only keys on its own list
+  (`cli/src/lib/e2ee/manager.ts` `onHello`), so one viewer links N computers: O(N), which is fine.
+  The signed device list is shelved; it would only save the per-computer password steps.
+
 ## Open
 
 1. **Outside sessions** (Claude Code or Codex started by hand, not through Harness). Index them by default, or ask once on the computer ("Show my Claude Code and
