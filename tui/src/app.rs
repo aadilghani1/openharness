@@ -2200,6 +2200,9 @@ impl App {
         };
         if !self.session_desk && self.mirror.is_none() { add(self.session_name(), &self.tabs, &self.nums, self.active) }
         for s in self.sessions.iter().filter(|s| !s.desk && s.mirror.is_none()) { add(self.stash_name(s), &s.tabs, &s.nums, s.active) }
+        // …and each session's options and environment (set-environment from the other client).
+        sig.push_str(&format!("{:?}{:?}", self.options.session, self.session_env));
+        for s in self.sessions.iter().filter(|s| !s.desk && s.mirror.is_none()) { sig.push_str(&format!("{:?}{:?}", s.options, s.env)) }
         if sig != self.sessions_sig { self.sessions_sig = sig; self.save_sessions() }
     }
 
@@ -2618,7 +2621,24 @@ impl App {
 
     /// environ_update: each update-environment pattern's variables from hn's own environment
     /// into the session's, or the pattern cleared there when none match.
-    pub fn update_environment(&mut self) { let u = self.environ_update(); self.session_env.extend(u) }
+    pub fn update_environment(&mut self) {
+        let u = self.environ_update();
+        // Another client's session: its environment is that client's, so it is changed there
+        // (one call, the variables `;`-separated) and read back.
+        if let Some(m) = self.mirror.clone().filter(|_| !crate::ipc::forwarded() && !u.is_empty()) {
+            let target = format!("${}", self.session_id);
+            let mut words: Vec<String> = Vec::new();
+            for (k, v) in &u {
+                if !words.is_empty() { words.push(";".into()) }
+                words.extend(["set-environment".into(), "-t".into(), target.clone()]);
+                match &v.value { Some(val) => words.extend([k.clone(), val.clone()]), None => words.extend(["-r".into(), k.clone()]) }
+            }
+            crate::commands::forward(self, &m.owner, &words);
+            crate::mirror::refresh(self);
+            return;
+        }
+        self.session_env.extend(u)
+    }
 
     /// environ_update: each variable update-environment names, from this client's environment —
     /// its value, or marked to be taken away (`-NAME`) when this client has none.
