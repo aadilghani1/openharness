@@ -17,6 +17,7 @@ fn kv(k: &str, v: impl Into<String>) -> Line<'static> { Line::from(vec![dim(form
 pub fn lines(app: &App, kind: &PickerKind, id: &str) -> Vec<Line<'static>> {
     match kind {
         PickerKind::Open { .. } if id.starts_with("session:") => session(app, id),
+        PickerKind::Open { .. } if id.starts_with("external:") => external(app, id),
         PickerKind::Open { .. } | PickerKind::Inbox | PickerKind::Route { .. } => {
             let key = id.split('#').next().unwrap_or(id);
             match key.split_once(':') { Some((m, a)) => harness(app, m, a), None => vec![] }
@@ -45,6 +46,27 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     let mut out = vec![
         Line::from(vec![Span::styled(word.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)), dim(format!("  {}", ago(a.state_since(state))))]),
     ];
+    // Its latest turns, when its session's index has them: as its terminal shows them, the newest
+    // at the bottom (where the preview starts), what it asks you below them.
+    if let Some(tail) = app.tails.get(&a.session_id) {
+        let facts = [app.fleet.machine_name(machine_id), cwd.clone(), a.branch.clone()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+        out.push(dim(facts).into());
+        out.push(Line::raw(""));
+        out.extend(turns(app, &a.session_id, tail));
+        if let Some(q) = &a.question {
+            out.push(Line::raw(""));
+            out.push(Line::from(vec![Span::styled("? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), bold(q.prompt.clone())]));
+            for (i, o) in q.options.iter().enumerate() { out.push(Line::from(vec![Span::styled(format!("  M-{} ", i + 1), Style::default().fg(theme::fzf().hl)), Span::raw(o.clone())])) }
+            out.push(dim(if q.multi { "  M-a several (1,3) or your own words" } else { "  M-a your own words" }).into());
+        }
+        out.push(Line::raw(""));
+        let place = app.find_pane_anywhere(machine_id, agent_id).map(|(sid, n, _)| if sid == app.session_id { format!("in window {n} — enter goes to it") } else {
+            let name = app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| n).unwrap_or_default();
+            format!("in {name}:{n} — enter goes to it")
+        });
+        out.push(dim(place.unwrap_or_else(|| "enter opens it in a window · C-v beside · C-x below · M-enter here".into())).into());
+        return out;
+    }
     // What it asks, or why it failed, first: at 80×24 the preview is a few rows.
     if let Some(q) = &a.question {
         out.push(Line::raw(""));
@@ -120,6 +142,100 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
         format!("in {name}:{n} — enter goes to it")
     });
     out.push(dim(place.unwrap_or_else(|| "enter opens it in a window · C-v beside · C-x below · M-enter here".into())).into());
+    out
+}
+
+/// Whether a row's preview reads bottom up — a session's latest turns, the newest at the bottom —
+/// so it starts at its end.
+pub fn bottom_up(app: &App, kind: &PickerKind, id: &str) -> bool {
+    if !matches!(kind, PickerKind::Open { .. }) { return false }
+    app.row_session(id).map(|(_, s)| app.tails.contains_key(&s)).unwrap_or(false)
+}
+
+/// A session's latest turns (session_tail), oldest first: each ask after `❯`, the answer, the
+/// tools it ran dim — the words C-b s searched for bold. An older turn the search matched says
+/// where it was first.
+fn turns(app: &App, session: &str, tail: &Value) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    let rows: Vec<Value> = tail.get("rows").and_then(Value::as_array).cloned().unwrap_or_default();
+    let words: Vec<String> = app.said_for.split_whitespace().map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()).filter(|w| w.chars().count() >= 2).collect();
+    let first = rows.first().and_then(|r| r.get("turn")).and_then(Value::as_i64).unwrap_or(0);
+    if let Some(hit) = app.said.iter().find(|h| h.session_id == session && h.turn >= 0 && h.turn < first) {
+        out.push(Line::from(vec![Span::styled("Matched earlier", Style::default().fg(theme::fzf().hl).add_modifier(Modifier::BOLD)), dim(format!(" · {}", ago(hit.at)))]));
+        out.push(Line::from(marked(&hit.snippet)));
+        out.push(Line::raw(""));
+    }
+    let total = tail.get("total").and_then(Value::as_u64).unwrap_or(rows.len() as u64);
+    if tail.get("hasMore").and_then(Value::as_bool).unwrap_or(false) && total > rows.len() as u64 { out.push(dim(format!("… {} earlier turns", total - rows.len() as u64)).into()); out.push(Line::raw("")) }
+    for (i, r) in rows.iter().enumerate() {
+        let text = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        let (ask, answer, tools) = (text("ask"), text("answer"), text("tools"));
+        if i > 0 && !ask.is_empty() { out.push(Line::raw("")) }
+        for (j, l) in ask.lines().take(8).enumerate() {
+            let mut spans = vec![if j == 0 { Span::styled("❯ ", Style::default().fg(theme::fzf().prompt)) } else { Span::raw("  ") }];
+            spans.extend(lit(l, &words, Style::default().add_modifier(Modifier::BOLD)));
+            out.push(Line::from(spans));
+        }
+        for t in tools.lines().filter(|t| !t.trim().is_empty()).take(6) { out.push(Line::from(vec![dim("  ⎿ "), dim(t.to_string())])) }
+        // (Its answer as the agent's terminal writes it: ⏺ before the first line.)
+        for (j, l) in answer.lines().take(60).enumerate() { let mut spans = vec![if j == 0 { dim("⏺ ") } else { Span::raw("  ") }]; spans.extend(lit(l, &words, Style::default())); out.push(Line::from(spans)) }
+    }
+    if rows.is_empty() { out.push(dim("(nothing said yet)").into()) }
+    out
+}
+
+/// [text] with the words searched for in bold (whole or in part, any case).
+fn lit(text: &str, words: &[String], base: Style) -> Vec<Span<'static>> {
+    if words.is_empty() { return vec![Span::styled(text.to_string(), base)] }
+    let lower = text.to_lowercase();
+    // (Byte ranges of the lower-cased text line up with the text's only for ASCII; otherwise plain.)
+    if lower.len() != text.len() { return vec![Span::styled(text.to_string(), base)] }
+    let mut marks = vec![false; text.len()];
+    for w in words { let mut from = 0; while let Some(at) = lower[from..].find(w.as_str()) { let s = from + at; for m in &mut marks[s..s + w.len()] { *m = true } from = s + w.len(); } }
+    let mut out = Vec::new();
+    let mut start = 0;
+    for i in 1..=text.len() {
+        if i == text.len() || marks[i] != marks[start] {
+            if text.is_char_boundary(start) && text.is_char_boundary(i) {
+                let style = if marks[start] { base.add_modifier(Modifier::BOLD) } else { base };
+                out.push(Span::styled(text[start..i].to_string(), style));
+                start = i;
+            }
+        }
+    }
+    out
+}
+
+/// A search snippet: its matched words (between \u{2} and \u{3}) bold, on one line.
+fn marked(snippet: &str) -> Vec<Span<'static>> {
+    let mut out = vec![Span::raw("  ")];
+    let flat = snippet.replace('\n', " ");
+    for (i, part) in flat.split(['\u{2}', '\u{3}']).enumerate() {
+        if part.is_empty() { continue }
+        out.push(if i % 2 == 1 { bold(part.to_string()) } else { Span::raw(part.to_string()) });
+    }
+    out
+}
+
+/// A conversation Harness did not start: what it is, where it ran, its latest turns (the newest
+/// at the bottom), and what Enter does with it.
+fn external(app: &App, id: &str) -> Vec<Line<'static>> {
+    let Some((m, s)) = id.strip_prefix("external:").and_then(|r| r.split_once(':')) else { return vec![] };
+    let Some(x) = app.said.iter().filter_map(|h| h.external.as_ref()).find(|x| x.machine == m && x.session_id == s) else { return vec![dim("(gone)").into()] };
+    let home = app.homes.get(m).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
+    let cwd = if !home.is_empty() && x.cwd.starts_with(&home) { format!("~{}", &x.cwd[home.len()..]) } else { x.cwd.clone() };
+    let mut out = vec![
+        Line::from(vec![Span::styled("not in Harness", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)), dim(format!("  {}", ago(x.last_at)))]),
+        dim([theme::engine_label(&x.engine).to_string(), app.fleet.machine_name(m), cwd].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")).into(),
+        Line::raw(""),
+    ];
+    match app.tails.get(s) {
+        Some(tail) => out.extend(turns(app, s, tail)),
+        None => out.push(dim("…").into()),
+    }
+    out.push(Line::raw(""));
+    out.push(if x.open { Line::styled("Open in another terminal or app — close it there to open it here", Style::default().fg(Color::Yellow)) }
+        else { dim("enter resumes it in a window · C-v beside · C-x below · M-enter here").into() });
     out
 }
 

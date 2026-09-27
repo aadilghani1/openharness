@@ -57,6 +57,9 @@ pub struct Agent {
     pub project: String,
     pub branch: String,
     pub created_at: u64,
+    /// When its conversation last moved (the daemon's `updatedAt`: dated work in its transcript,
+    /// else its engine's last word, else its creation) — what the desktop and phone sort by.
+    pub updated_at: u64,
     /// When this client first had it (a list's row, or one it just made).
     pub known_at: Instant,
     pub active_at: u64,
@@ -209,7 +212,9 @@ impl Agent {
         State::Ready
     }
 
-    pub fn recency(&self) -> u64 { self.active_at.max(self.created_at).max(self.usage_at) }
+    /// When it was last active: its conversation's time (updatedAt), or later what this client saw
+    /// it do — never a bookkeeping stamp (its token count's refresh moves every harness at once).
+    pub fn recency(&self) -> u64 { let t = self.updated_at.max(self.active_at); if t > 0 { t } else { self.created_at } }
 
     /// When it came to be as it is (ms since the epoch): waiting on you since its question, working
     /// since its turn began, done or failed since it ended; idle, paused or offline since it last
@@ -271,6 +276,7 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         project: s(&project, "name"),
         branch: s(&project, "branch"),
         created_at: time(row, "createdAt"),
+        updated_at: time(row, "updatedAt"),
         known_at: previous.map(|p| p.known_at).unwrap_or_else(Instant::now),
         // Not `updatedAt`: the daemon restamps every row on each reconcile.
         active_at: previous.map(|p| p.active_at).unwrap_or(0),

@@ -1976,12 +1976,16 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: 
     // harness, a machine or a command do, where nothing says otherwise.
     let lines: Vec<Line> = match pw.wrap { None if !matches!(kind, PickerKind::Buffers) => text.into_iter().flat_map(|l| wrap_line(l, iw)).collect(), _ => text };
     let total = lines.len();
-    // A new row's preview starts where follow or +N says.
+    // A new row's preview starts where follow or +N says — a session's latest turns at their end
+    // (the newest at the bottom, as its terminal has them), once they have come.
+    let bottom_up = crate::preview::bottom_up(app, kind, &id);
     if picker.preview_fresh.replace(false) {
+        *picker.preview_bottom.borrow_mut() = None;
         picker.preview_following.set(pw.follow);
         if !pw.follow { if let Some(n) = scroll_offset(&pw.scroll, height) { picker.preview_scroll.set(n.min(total.saturating_sub(1)).min(u16::MAX as usize) as u16) } }
     }
-    if pw.follow && picker.preview_following.get() { picker.preview_scroll.set(picker.preview_scroll.get().max(total.saturating_sub(height).min(u16::MAX as usize) as u16)) }
+    if bottom_up && picker.preview_bottom.borrow().as_deref() != Some(id.as_str()) { *picker.preview_bottom.borrow_mut() = Some(id.clone()); picker.preview_following.set(true) }
+    if (pw.follow || bottom_up) && picker.preview_following.get() { picker.preview_scroll.set(picker.preview_scroll.get().max(total.saturating_sub(height).min(u16::MAX as usize) as u16)) }
     // The rows it fills from its offset (fzf: a wrapped line takes as many as it needs).
     let draw_from = |offset: usize| -> (Vec<Line<'static>>, bool) {
         let mut rows = Vec::new();

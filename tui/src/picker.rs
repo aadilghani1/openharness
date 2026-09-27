@@ -126,6 +126,8 @@ pub struct Picker {
     /// whether it follows its end (follow, until scrolled up from it).
     pub preview_fresh: std::cell::Cell<bool>,
     pub preview_following: std::cell::Cell<bool>,
+    /// The row whose preview was last put at its end (a session's turns read bottom up).
+    pub preview_bottom: std::cell::RefCell<Option<String>>,
     /// fzf's --wrap, toggled by toggle-wrap (M-/): a long row goes on over the lines below it —
     /// and the columns it was last wrapped at (0 before it is drawn so), for the page keys.
     pub wrap: bool,
@@ -176,6 +178,11 @@ pub struct Picker {
     pub history_at: Option<usize>, pub history_draft: String,
     /// jump (Some(false)) or jump-accept (Some(true)): the rows labelled, the next key picks one.
     pub jumping: Option<bool>,
+    /// C-b s: the order its rows had when it opened, which they keep while it is open.
+    pub hold: Option<Vec<String>>,
+    /// C-b s: the rows its query found by what was said in them (best first), and that query.
+    pub said: Vec<String>,
+    pub said_query: String,
     /// change-header: the header row's text instead of the keys' hints.
     pub header_text: Option<String>,
     /// unbind / toggle-bind: keys that do nothing in this list now.
@@ -249,6 +256,9 @@ impl Picker {
             history_at: None, history_draft: String::new(),
             jumping: None,
             header_text: None,
+            hold: None,
+            said: Vec::new(),
+            said_query: String::new(),
             unbound: Default::default(),
             multi_override: None,
             excluded: Default::default(),
@@ -257,6 +267,7 @@ impl Picker {
             preview_of: None,
             preview_fresh: std::cell::Cell::new(true),
             preview_following: Default::default(),
+            preview_bottom: Default::default(),
             wrap: crate::theme::fzf_opts().wrap,
             wrap_width: Default::default(),
             line_cache: Default::default(),
@@ -299,8 +310,11 @@ impl Picker {
         if self.prefixed && scope_of(query).is_some() { query = &query.trim_start()[1..] }
         // fzf sorts only when a term asks for something (`!x` alone keeps the input order).
         let mut sorted = false;
+        // A conversation Harness did not start is listed only for the query that found it.
+        let found_now = self.said_query == query.trim();
+        let offered = |r: &Row| !r.id.starts_with("external:") || (found_now && self.said.contains(&r.id));
         if query.trim().is_empty() {
-            self.visible = self.rows.iter().enumerate().filter(|(_, r)| !self.excluded.contains(&r.id)).map(|(i, _)| (i, Vec::new())).collect();
+            self.visible = self.rows.iter().enumerate().filter(|(_, r)| !self.excluded.contains(&r.id) && offered(r)).map(|(i, _)| (i, Vec::new())).collect();
         } else {
             // fzf itself (fzf.rs, ported from fzf 0.67): the extended-search terms, FuzzyMatchV2's
             // scores and lit characters, the tiebreak — over the line as it is drawn.
@@ -345,7 +359,7 @@ impl Picker {
             let edge = { use unicode_width::UnicodeWidthStr; self.rows.iter().filter(|r| !r.disabled).map(|r| r.lead.iter().map(|s| s.content.width()).sum::<usize>() + line(r).width()).max().unwrap_or(0).min(self.text_w) };
             let mut hidden: Vec<usize> = Vec::new();
             for (index, row) in self.rows.iter().enumerate() {
-                if row.disabled || self.excluded.contains(&row.id) { continue }
+                if row.disabled || self.excluded.contains(&row.id) || !offered(row) { continue }
                 let keywords = format!("{} {}", row.label, row.extra);
                 if negated.iter().any(|(w, s)| w.chars().count() >= 3 && names_word(&keywords, w, *s)) { continue }
                 let chars: Vec<char> = if self.live { steady_line(row, self.text_w, edge) } else { line(row).chars().collect() };
@@ -376,7 +390,13 @@ impl Picker {
             let plain: Vec<String> = groups.iter().flatten().filter(|(w, _)| w.chars().count() >= 3).map(|(w, _)| w.to_lowercase()).collect();
             let scattered = |i: usize| !plain.is_empty() && !plain.iter().any(|w| line(&self.rows[i]).to_lowercase().contains(w.as_str()));
             let (weak, strong): (Vec<_>, Vec<_>) = if hidden.is_empty() { (Vec::new(), scored) } else { scored.into_iter().partition(|(_, i, _)| scattered(*i)) };
-            self.visible = strong.into_iter().map(|(_, i, hits)| (i, hits)).chain(hidden.into_iter().map(|i| (i, Vec::new()))).chain(weak.into_iter().map(|(_, i, hits)| (i, hits))).collect();
+            // Then what was said in them (session search, on the machines): rows no other way found,
+            // in the order the machines ranked them.
+            let taken: std::collections::HashSet<usize> = strong.iter().map(|(_, i, _)| *i).chain(hidden.iter().copied()).chain(weak.iter().map(|(_, i, _)| *i)).collect();
+            let said: Vec<usize> = if self.said_query == query.trim() { self.said.iter().filter_map(|id| self.rows.iter().position(|r| &r.id == id && !r.disabled && !self.excluded.contains(&r.id))).filter(|i| !taken.contains(i)).collect() } else { Vec::new() };
+            let mut seen = std::collections::HashSet::new();
+            let said: Vec<usize> = said.into_iter().filter(|i| seen.insert(*i)).collect();
+            self.visible = strong.into_iter().map(|(_, i, hits)| (i, hits)).chain(hidden.into_iter().map(|i| (i, Vec::new()))).chain(said.into_iter().map(|i| (i, Vec::new()))).chain(weak.into_iter().map(|(_, i, hits)| (i, hits))).collect();
         }
         // --tac: the input order reversed (wherever the order is the input's).
         if crate::theme::fzf_opts().tac && !sorted { self.visible.reverse() }
@@ -389,6 +409,9 @@ impl Picker {
         self.cursor = keep.unwrap_or(self.cursor.min(self.visible.len().saturating_sub(1)));
         self.skip_disabled(1);
     }
+
+    /// The cursor on the first result (and the view at its start).
+    pub fn to_top(&mut self) { self.cursor = 0; self.scroll = 0; self.skip_disabled(1) }
 
     fn skip_disabled(&mut self, direction: i64) {
         if self.visible.is_empty() { self.selected_id = None; self.preview_of = None; return }

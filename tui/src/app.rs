@@ -202,9 +202,35 @@ pub struct External {
     pub open: bool,
     /// Its latest turn (ms since the epoch).
     pub last_at: u64,
-    /// Where a search matched it (the matched words between \u{2} and \u{3}).
+}
+
+/// A session_search hit: a harness's session found by what was said in it, or a conversation
+/// Harness did not start.
+#[derive(Clone, Debug)]
+pub struct Said {
+    pub machine: String,
+    pub session_id: String,
+    pub agent_id: String,
+    /// Where it matched (the words between \u{2} and \u{3}); the turn (-1: its name).
     pub snippet: String,
-    pub score: f64,
+    pub turn: i64,
+    pub at: u64,
+    pub external: Option<External>,
+}
+
+/// The hits in a session_search reply from [machine], best first.
+pub fn said_hits(machine: &str, reply: &Value) -> Vec<Said> {
+    let externals = externals(machine, reply);
+    reply.get("hits").and_then(Value::as_array).map(|hits| hits.iter().filter_map(|h| {
+        let text = |k: &str| h.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        let session_id = text("sessionId");
+        if session_id.is_empty() { return None }
+        Some(Said {
+            machine: machine.to_string(), agent_id: text("agentId"), snippet: text("snippet"),
+            turn: h.get("turn").and_then(Value::as_i64).unwrap_or(-1), at: h.get("at").and_then(Value::as_f64).unwrap_or(0.0) as u64,
+            external: externals.iter().find(|x| x.session_id == session_id).cloned(), session_id,
+        })
+    }).collect()).unwrap_or_default()
 }
 
 /// The external conversations in a session_search reply from [machine].
@@ -216,7 +242,6 @@ pub fn externals(machine: &str, reply: &Value) -> Vec<External> {
             machine: machine.to_string(), session_id: text(h, "sessionId"), engine: text(h, "engine"), title: text(x, "title"), cwd: text(x, "cwd"),
             open: x.get("open").and_then(Value::as_bool).unwrap_or(false),
             last_at: h.get("lastAt").and_then(Value::as_f64).or_else(|| h.get("at").and_then(Value::as_f64)).unwrap_or(0.0) as u64,
-            snippet: text(h, "snippet"), score: h.get("score").and_then(Value::as_f64).unwrap_or(0.0),
         })
     }).filter(|x| !x.session_id.is_empty()).collect()).unwrap_or_default()
 }
@@ -434,6 +459,15 @@ pub struct App {
     home_shown: bool,
     /// The pane C-b c was pressed from: the machine and folder the home page's shell (t) takes.
     pub home_from: Option<(String, String)>,
+    /// C-b s's search by what was said (each machine's session_search): the query wanted and when
+    /// to ask (a moment after the last key), the query the hits answer, and the hits.
+    pub said_want: String,
+    pub said_due: Option<Instant>,
+    pub said_for: String,
+    pub said: Vec<Said>,
+    /// Sessions' latest turns (session_tail), by session id: read once each time C-b s opens.
+    pub tails: HashMap<String, Value>,
+    pub tails_asked: HashSet<String>,
     pub desk_mode: DeskMode,
     pub desk_revision: i64,
     desk_loaded: bool,
@@ -830,6 +864,12 @@ impl App {
             home_asked: HashSet::new(),
             home_shown: false,
             home_from: None,
+            said_want: String::new(),
+            said_due: None,
+            said_for: String::new(),
+            said: Vec::new(),
+            tails: HashMap::new(),
+            tails_asked: HashSet::new(),
             desk_mode,
             desk_revision: -1,
             desk_loaded: false,
@@ -4658,8 +4698,58 @@ impl App {
         }
     }
 
+    /// C-b s's query, a moment after its last key: every connected machine asked what was said
+    /// (its hits kept while the query is still the one they answer; the list filled again).
+    fn ask_said(&mut self) {
+        if !self.said_due.is_some_and(|d| Instant::now() >= d) { return }
+        self.said_due = None;
+        let query = self.said_want.clone();
+        let machines: Vec<String> = self.fleet.machines.iter().filter(|m| m.usable()).map(|m| m.id.clone()).collect();
+        for machine in machines {
+            let Some(link) = self.link(&machine) else { continue };
+            let (q, m, query) = (query.clone(), machine.clone(), query.clone());
+            self.spawn(async move { link.rpc("session_search", json!({ "query": q, "limit": 20 }), Duration::from_secs(10)).await }, move |app, reply| {
+                if app.said_want != query { return }
+                if app.said_for != query { app.said.clear(); app.said_for = query.clone() }
+                app.said.retain(|s| s.machine != m);
+                // (A daemon without session search finds nothing this way.)
+                if let Ok(reply) = reply { app.said.extend(said_hits(&m, &reply)) }
+                // On the best match, it stays on the best match as the answers come (fzf keeps
+                // its cursor's place, not its item, as results arrive).
+                let top = matches!(&app.modal, Some(crate::modal::Modal::Picker { picker, .. }) if picker.cursor == 0);
+                crate::input::refill(app);
+                if top { if let Some(crate::modal::Modal::Picker { picker, .. }) = app.modal.as_mut() { picker.to_top() } }
+            });
+        }
+    }
+
+    /// The latest turns of the rows C-b s shows first — the one it is on and the next two — read
+    /// once while it is open (session_tail), for its preview.
+    fn ask_tails(&mut self) {
+        let Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Open { .. }, picker }) = &self.modal else { return };
+        let ids: Vec<String> = picker.visible.iter().skip(picker.cursor).take(3).map(|(i, _)| picker.rows[*i].id.clone()).collect();
+        for id in ids {
+            let Some((machine, session)) = self.row_session(&id) else { continue };
+            if session.is_empty() || !self.tails_asked.insert(session.clone()) { continue }
+            let Some(link) = self.link(&machine) else { continue };
+            let s = session.clone();
+            self.spawn(async move { link.rpc("session_tail", json!({ "sessionId": s, "maxChars": 16_000 }), Duration::from_secs(10)).await }, move |app, reply| {
+                if let Ok(tail) = reply { app.tails.insert(session, tail); }
+            });
+        }
+    }
+
+    /// A C-b s row's machine and session: a harness's (`machine:agent`), or a conversation's.
+    pub fn row_session(&self, id: &str) -> Option<(String, String)> {
+        if let Some(rest) = id.strip_prefix("external:") { return rest.split_once(':').map(|(m, s)| (m.to_string(), s.to_string())) }
+        let (m, a) = id.split('#').next()?.split_once(':')?;
+        self.fleet.agent(m, a).map(|x| (m.to_string(), x.session_id.clone()))
+    }
+
     pub fn on_tick(&mut self) {
         self.ask_home_external();
+        self.ask_said();
+        self.ask_tails();
         self.tick += 1;
         // Since you were here: once every machine's harnesses are listed, so it counts them all.
         if self.back_from.is_some() && !self.headless && self.fleet_ready() { self.back_again() }

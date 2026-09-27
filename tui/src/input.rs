@@ -411,20 +411,19 @@ impl HomeRow {
     }
 }
 
-/// The home page's nine: the harnesses that need you first, then everything by when it was last
-/// used — harnesses (paused ones too) and the Claude Code and Codex conversations from the last 30
-/// days that Harness did not start, on every connected machine, as the desktop's welcome page lists
-/// them.
+/// The home page's nine, as the desktop's welcome page lists them: by when each was last active,
+/// the latest first — harnesses (paused ones too) and the Claude Code and Codex conversations from
+/// the last 30 days that Harness did not start, on every connected machine.
 pub fn home_rows(app: &App) -> Vec<HomeRow> {
-    use crate::fleet::State;
-    let urgent = |s: State| matches!(s, State::NeedsInput | State::Failed | State::Done);
-    let mut all: Vec<(bool, u64, HomeRow)> = app.fleet.ranked().into_iter()
-        .filter(|a| app.fleet.state_of(a) != State::Offline)
-        .map(|a| (urgent(app.fleet.state_of(a)), a.recency(), HomeRow::Harness(a.key().0, a.key().1)))
+    let mut all: Vec<(u64, HomeRow)> = app.fleet.agents.values()
+        .filter(|a| app.fleet.state_of(a) != crate::fleet::State::Offline)
+        .map(|a| (a.recency(), HomeRow::Harness(a.key().0, a.key().1)))
         .collect();
-    all.extend(app.home_external.iter().map(|x| (false, x.last_at, HomeRow::External(x.clone()))));
-    all.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
-    let ranked: Vec<HomeRow> = all.into_iter().map(|(_, _, r)| r).collect();
+    all.extend(app.home_external.iter().map(|x| (x.last_at, HomeRow::External(x.clone()))));
+    // (Ties by name, so two alike keep their places between readings.)
+    let name = |r: &HomeRow| match r { HomeRow::Harness(m, a) => app.fleet.agent(m, a).map(|x| x.name.clone()).unwrap_or_default(), HomeRow::External(x) => x.title.clone() };
+    all.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| name(&a.1).cmp(&name(&b.1))));
+    let ranked: Vec<HomeRow> = all.into_iter().map(|(_, r)| r).collect();
     // Numbers are for fingers: a row keeps its number while you look at the list, however the
     // harnesses' activity reorders them (the order is fresh each time the window is entered).
     let mut order = app.home_order.borrow_mut();
@@ -439,6 +438,12 @@ pub fn home_rows(app: &App) -> Vec<HomeRow> {
 /// named for its title — in the window here when it is empty (else a new one). Its machine says
 /// why when it will not (open elsewhere, already a harness, its folder gone).
 pub fn resume_external(app: &mut App, x: &crate::app::External) {
+    let placement = if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab };
+    resume_external_as(app, x, placement)
+}
+
+/// resume_external, placed as asked (a new window, beside, below, here).
+pub fn resume_external_as(app: &mut App, x: &crate::app::External, placement: Placement) {
     let Some(link) = app.link(&x.machine) else { app.say("That machine is not connected", theme::DANGER); return };
     let mut payload = json!({ "engine": x.engine, "cwd": x.cwd, "bypassPermission": true, "resumeSessionId": x.session_id, "creationId": uuid::Uuid::new_v4().to_string() });
     if !x.title.is_empty() { payload["name"] = json!(x.title) }
@@ -449,7 +454,6 @@ pub fn resume_external(app: &mut App, x: &crate::app::External) {
         Ok(reply) => {
             if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
                 app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
-                let placement = if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab };
                 app.open_agent(&machine, id, placement);
                 app.toast = None;
             } else { app.say("The machine opened no harness", theme::DANGER) }
@@ -519,6 +523,17 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             // With more than one session, they are in the list too (Enter goes to one), after the
             // harnesses: tmux's C-b s is its sessions.
             if machine.is_none() && project.is_none() && *filter == Filter::All { rows.extend(modal::session_rows(app)) }
+            // What the query found by what was said in them: the conversations Harness did not
+            // start among the rows, and every hit's row in the list whatever its line says.
+            if machine.is_none() && project.is_none() { rows.extend(modal::external_rows(app)) }
+            // The list holds still while it is open: a row keeps the place it had when the list
+            // opened, whatever its harness does meanwhile (new ones come after) — typing re-ranks.
+            match &picker.hold {
+                Some(order) => { let at = |id: &str| order.iter().position(|o| o == id).unwrap_or(usize::MAX); rows.sort_by_key(|r| at(&r.id)) }
+                None => picker.hold = Some(rows.iter().map(|r| r.id.clone()).collect()),
+            }
+            picker.said = app.said.iter().map(|s| if s.external.is_some() { format!("external:{}:{}", s.machine, s.session_id) } else { format!("{}:{}", s.machine, s.agent_id) }).collect();
+            picker.said_query = app.said_for.clone();
             picker.set_rows(rows);
             picker.status = modal::open_status(app, *filter);
             picker.hints = vec![("enter", "go"), ("M-1..9", "answer"), ("M-m", "read"), ("C-v", "beside"), ("C-x", "below"), ("M-enter", "here"), ("M-a", "type an answer"), ("M-s", "message"), ("M-r", "restart"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
@@ -668,6 +683,8 @@ pub fn launch(app: &mut App, prefix: &str, filter: Filter) {
         if same_mode { app.modal = None; return }
     }
     let kind = match prefix { "" => PickerKind::Open { filter, machine: None, project: None }, p => modal::launcher_kind(p, &PickerKind::Palette) };
+    // C-b s reads afresh each time it opens: what was said, and the sessions' latest turns.
+    if matches!(kind, PickerKind::Open { .. }) { app.said.clear(); app.said_for.clear(); app.said_want.clear(); app.said_due = None; app.tails.clear(); app.tails_asked.clear() }
     let (title, placeholder) = modal::launcher_title(app, &kind);
     let mut picker = Picker::new(title, placeholder);
     picker.prefixed = true;
@@ -1871,6 +1888,13 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         }
     }
     let mut kind = kind;
+    // C-b s: what was said, searched on every machine a moment after the last key.
+    if picker.query != before && matches!(kind, PickerKind::Open { machine: None, project: None, .. }) && crate::picker::scope_of(&picker.query).is_none() {
+        let q = picker.query.trim().to_string();
+        app.said_want = q.clone();
+        if q.chars().filter(|c| c.is_alphanumeric()).count() >= 2 { app.said_due = Some(Instant::now() + Duration::from_millis(150)) }
+        else { app.said_due = None; app.said.clear(); app.said_for.clear() }
+    }
     if picker.query != before {
         // Marks belong to one list: switching scope (> commands, @ machines…) drops them.
         let scope = |q: &str| crate::picker::scope_of(q);
@@ -2254,6 +2278,20 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             let sid = id.as_deref().and_then(|i| i.strip_prefix("session:")).and_then(|n| n.parse().ok()).unwrap_or(app.session_id);
             SPLIT.with(|s| s.set(None));
             app.switch_session(sid);
+        }
+        // A conversation Harness did not start: resumed as a harness (a new window, or where C-v,
+        // C-x, M-enter say); one open in another terminal or app is not opened twice.
+        PickerKind::Open { .. } if id.as_deref().map(|i| i.starts_with("external:")).unwrap_or(false) => {
+            let found = id.as_deref().and_then(|i| i.strip_prefix("external:")).and_then(|r| r.split_once(':'))
+                .and_then(|(m, s)| app.said.iter().filter_map(|h| h.external.as_ref()).find(|x| x.machine == m && x.session_id == s).cloned());
+            let Some(x) = found else { return keep(app, kind, picker) };
+            if x.open { picker.say("It is open in another terminal or app — close it there first"); return keep(app, kind, picker) }
+            let placement = match choice {
+                Choice::SplitRight => Placement::Split(Dir::Horizontal), Choice::SplitDown => Placement::Split(Dir::Vertical), Choice::Here => Placement::Replace,
+                _ => if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab },
+            };
+            SPLIT.with(|s| s.set(None));
+            resume_external_as(app, &x, placement);
         }
         PickerKind::Open { .. } => {
             let Some((machine, agent)) = id.as_deref().and_then(split_key) else { return keep(app, kind, picker) };
