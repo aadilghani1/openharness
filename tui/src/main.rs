@@ -347,7 +347,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     // When you last looked at each harness (what finished while hn was closed shows as done).
     app.load_seen();
     app.boot();
-    // The sessions a client left (C-b d), and the one asked for.
+    // The sessions a client left (C-b d), and the one asked for; attach's client flags.
+    app.client_flags = start.as_ref().map(|s| s.flags.clone()).unwrap_or_default();
     app.start_session = start;
     app.load_sessions();
     // The client is attached to it now (server_client_set_session).

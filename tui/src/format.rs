@@ -1165,7 +1165,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "session_grouped" | "window_linked" | "window_bigger" | "window_offset_x" | "window_offset_y"
         | "client_control_mode" => "0".into(),
         // attach -r: read-only (and its size ignored, as tmux flags it).
-        "client_readonly" => app.mirror.as_ref().is_some_and(|m| m.readonly).then_some("1").unwrap_or("0").into(),
+        "client_readonly" => app.read_only().then_some("1").unwrap_or("0").into(),
         "pane_pipe" => pane.map(|p| app.pipes.contains_key(&p.id)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "server_sessions" => app.session_list().len().to_string(),
         "client_utf8" => "1".into(),
@@ -1177,8 +1177,16 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "client_key_table" => app.key_table.clone().unwrap_or_else(|| if app.prefix { "prefix".into() } else { "root".into() }),
         // server_client_get_flags, in its order.
         "client_flags" => {
-            let ro = app.mirror.as_ref().is_some_and(|m| m.readonly);
-            format!("attached,{}{}{}UTF-8", if app.terminal_focused { "focused," } else { "" }, if ro { "ignore-size," } else { "" }, if ro { "read-only," } else { "" })
+            let has = |f: &str| app.client_flags.iter().any(|x| x == f);
+            let ro = app.read_only();
+            let mut out = String::from("attached,");
+            if app.terminal_focused { out.push_str("focused,") }
+            if has("ignore-size") || app.mirror.as_ref().is_some_and(|m| m.readonly) { out.push_str("ignore-size,") }
+            for f in ["no-output", "wait-exit", "pause-after"] { if has(f) { out.push_str(f); out.push(',') } }
+            if ro { out.push_str("read-only,") }
+            if has("active-pane") { out.push_str("active-pane,") }
+            out.push_str("UTF-8");
+            out
         }
         "pane_last" => (focus.is_some() && focus == tab.and_then(|t| t.last_focus())).then_some("1").unwrap_or("0").into(),
         "pane_dead" => pane.map(|p| matches!(p.phase, crate::pane::Phase::Card { .. })).unwrap_or(false).then_some("1").unwrap_or("0").into(),

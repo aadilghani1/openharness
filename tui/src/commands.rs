@@ -469,7 +469,7 @@ pub fn execute_bound(app: &mut App, line: &str) {
 /// (commands flagged CMD_READONLY: attach, detach, list-clients, switch-client); anything else is
 /// "client is read-only".
 fn read_only_refused(app: &mut App, q: &Queue) -> bool {
-    if !app.mirror.as_ref().is_some_and(|m| m.readonly) { return false }
+    if !app.read_only() { return false }
     let allowed = q.iter().all(|i| i.words.first().and_then(|w| crate::cmd::find(w).ok()).map(|e| matches!(e.name, "attach-session" | "detach-client" | "list-clients" | "switch-client")).unwrap_or(false));
     if !allowed { app.error("client is read-only") }
     !allowed
@@ -2725,6 +2725,13 @@ fn run_words_in(app: &mut App, words: &[String]) {
             app.quit = true;
         }
         "switch-client" => {
+            // -r: the client read-only (and its size ignored), or not — turned over.
+            if flag(words, "-r") {
+                if app.client_flags.iter().any(|f| f == "read-only") { app.client_flags.retain(|f| f != "read-only" && f != "ignore-size") }
+                else { app.client_flags.extend(["read-only".to_string(), "ignore-size".to_string()]) }
+                app.status_redraws += 1;
+                if opt(words, "-t").is_none() && opt(words, "-T").is_none() { return }
+            }
             // -T: the key table the next key is looked up in (tmux's modal keys).
             if let Some(t) = opt(words, "-T") {
                 match t.as_str() {

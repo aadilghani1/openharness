@@ -229,13 +229,24 @@ pub fn start_session(args: &[String]) -> Option<crate::app::StartSession> {
             name: a.get('s').map(str::to_string), create: true, attach_existing: a.has('A') > 0, window: a.get('n').map(str::to_string),
             cwd: a.get('c').map(str::to_string), command: (!a.values.is_empty()).then(|| a.values.join(" ")), target: None,
             // new -A -D: attached, the session's other clients detached.
-            detach: a.has('D') > 0, readonly: false,
+            detach: a.has('D') > 0, readonly: false, flags: Vec::new(),
         }),
         "attach-session" => Some(crate::app::StartSession {
             name: a.get('t').map(|t| t.split(':').next().unwrap_or(t).to_string()).filter(|t| !t.is_empty()), cwd: a.get('c').map(str::to_string),
             // attach -t work:2 — the window it goes to.
             target: a.get('t').and_then(|t| t.split_once(':')).map(|(_, w)| w.to_string()).filter(|w| !w.is_empty()),
-            detach: a.has('d') > 0, readonly: a.has('r') > 0,
+            // -f's flags (a `!` before one: not it), -r read-only and ignore-size.
+            flags: {
+                let mut f: Vec<String> = Vec::new();
+                if a.has('r') > 0 { f.extend(["read-only".to_string(), "ignore-size".to_string()]) }
+                // (A terminal's flags: the others — no-output, wait-exit, pause-after — are a
+                // control-mode client's, and tmux leaves them off one.)
+                for x in a.get('f').unwrap_or("").split(',').map(str::trim).filter(|x| matches!(x.trim_start_matches('!'), "read-only" | "ignore-size" | "active-pane")) {
+                    match x.strip_prefix('!') { Some(n) => f.retain(|y| y != n), None => if !f.iter().any(|y| y == x) { f.push(x.to_string()) } }
+                }
+                f
+            },
+            detach: a.has('d') > 0, readonly: a.has('r') > 0 || a.get('f').unwrap_or("").split(',').any(|x| x.trim() == "read-only"),
             ..Default::default()
         }),
         _ => None,

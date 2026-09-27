@@ -77,7 +77,9 @@ pub struct Stash {
 #[derive(Clone, Debug, Default)]
 pub struct StartSession { pub name: Option<String>, pub create: bool, pub attach_existing: bool, pub window: Option<String>, pub cwd: Option<String>, pub command: Option<String>, pub target: Option<String>,
     /// attach -d (new -A -D): the session's other clients detached, as tmux's; -r: only watched.
-    pub detach: bool, pub readonly: bool }
+    pub detach: bool, pub readonly: bool,
+    /// attach -f's client flags (read-only, ignore-size, active-pane …; -r is read-only and ignore-size).
+    pub flags: Vec<String> }
 
 impl StartSession {
     /// How it goes to a session another client has: -d takes it, -r watches it, else shared.
@@ -490,6 +492,8 @@ pub struct App {
     pub swap_back: Option<u32>,
     /// The session asked for at start (`hn new -A -s main`, `hn attach -t work`).
     pub start_session: Option<StartSession>,
+    /// The client's flags (attach -r / -f, switch-client -r): read-only, ignore-size, active-pane …
+    pub client_flags: Vec<String>,
     /// Why the start asked for could not be done (`can't find session: work`).
     pub start_failed: Option<String>,
     /// kill-server: no session is kept for the next client.
@@ -676,6 +680,7 @@ impl App {
             mirror_attached: 0,
             swap_back: None,
             start_session: None,
+            client_flags: Vec::new(),
             start_failed: None,
             forget_sessions: false,
             enriching: 0,
@@ -2661,6 +2666,9 @@ impl App {
     pub fn focused(&self) -> Option<u64> { self.tab().focus }
 
     /// Everything but the status line (tmux `status-position`, bottom by default).
+    /// A read-only client (attach -r, -f read-only, switch-client -r; or watching another's).
+    pub fn read_only(&self) -> bool { self.client_flags.iter().any(|f| f == "read-only") || self.mirror.as_ref().is_some_and(|m| m.readonly) }
+
     pub fn body(&self) -> Rect {
         let n = self.status_lines();
         // hn with no terminal: the window in front's own size (its session's -x/-y, default-size)
