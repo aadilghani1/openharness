@@ -1,12 +1,15 @@
 // The phone's Dart renderer against the reference renderer's pinned frames
 // (daemons/frames.json, written by daemons/tools/generate.mjs): every sprite,
-// portrait, status cell, card and banner, byte for byte, so the phone draws
-// exactly what hn, the desktop and the lookbook draw.
+// portrait, status cell, card, banner and plate colour, byte for byte, so the
+// phone draws exactly what hn, the desktop and the lookbook draw. And the
+// baked plates (daemons/plates.json) as the phone reads them.
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/painting.dart' show Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/daemons/card.dart';
+import 'package:harness_mobile/daemons/plates.dart';
 import 'package:harness_mobile/daemons/render.dart';
 import 'package:harness_mobile/daemons/roster.dart';
 import 'package:harness_mobile/daemons/zoo.dart';
@@ -43,32 +46,88 @@ void main() {
     for (final (i, raw) in (source['drops'] as List).indexed) {
       expect(roster.drops[i].announce, (raw as Map)['announce']);
       expect(roster.drops[i].release, raw['release']);
+      expect(roster.drops[i].hold, raw['hold'] == true);
     }
+    // Drop init: ten daemons drawn filled, each with a gradient and a shiny
+    // one, and no line portrait; the status line keeps their sprites.
+    final init = roster.daemons.where((d) => d.drop == 'init').toList();
+    expect(init.map((d) => d.id), [
+      'tim', 'gnu', 'lynx', 'mutt', 'yak', //
+      'gopher', 'bug', 'tux', 'auk', 'beastie',
+    ]);
+    for (final d in init) {
+      expect(d.plate, isTrue, reason: d.id);
+      expect(d.portraits, isEmpty, reason: d.id);
+      expect(d.gradient, isNotNull, reason: d.id);
+      expect(d.gradientFor(shiny: true), same(d.shinyGradient), reason: d.id);
+      expect(d.sprites.keys, roster.rules.versions, reason: d.id);
+    }
+    expect(roster.byId('tmux')!.plate, isFalse);
+    expect(roster.byId('tmux')!.gradientFor(shiny: true), isNull);
+    expect(roster.rules.plate!.cols, {'portrait': 28, 'reveal': 56});
+    expect(roster.rules.plate!.frameMs, 170);
   });
 
   test(
     'a drop is announced, then released, on UTC days (card.mjs dropState)',
     () {
-      final unix = roster.drop('unix')!;
+      final init = roster.drop('init')!;
       expect(
-        unix.stateAt(DateTime.utc(2026, 9, 11, 23, 59, 59)),
+        init.stateAt(DateTime.utc(2026, 9, 12, 23, 59, 59)),
         DropState.hidden,
       );
-      expect(unix.stateAt(DateTime.utc(2026, 9, 12)), DropState.announced);
+      expect(init.stateAt(DateTime.utc(2026, 9, 13)), DropState.announced);
       expect(
-        unix.stateAt(DateTime.utc(2026, 9, 25, 23, 59, 59)),
+        init.stateAt(DateTime.utc(2026, 9, 26, 23, 59, 59)),
         DropState.announced,
       );
-      expect(unix.stateAt(DateTime.utc(2026, 9, 26)), DropState.released);
+      expect(init.stateAt(DateTime.utc(2026, 9, 27)), DropState.released);
       // A drop without dates is out.
       expect(
         const DaemonDrop('x', 2, 'x').stateAt(DateTime.utc(2000)),
         DropState.released,
       );
       expect(shelfDrops(roster, DateTime.utc(2026, 9, 1)), isEmpty);
-      expect(shelfDrops(roster, DateTime.utc(2026, 9, 20)).single.id, 'unix');
+      expect(shelfDrops(roster, DateTime.utc(2026, 9, 20)).single.id, 'init');
+      expect(shelfDrops(roster, DateTime.utc(2030)).single.id, 'init');
     },
   );
+
+  test('a drop on hold is shown nowhere, whatever its dates say', () {
+    for (final id in ['unix', 'tty']) {
+      final held = roster.drop(id)!;
+      expect(held.hold, isTrue);
+      expect(held.announce, isNull);
+      expect(held.release, isNull);
+      for (final day in [DateTime.utc(2000), DateTime.utc(2030)]) {
+        expect(held.stateAt(day), DropState.hidden, reason: '$id $day');
+        expect(shelfCells(roster, const [], drop: id, now: day), isEmpty);
+        // Not even what you own of it: no shelf, no count.
+        expect(
+          shelfLines(roster, shelfEntries(['tmux', 'vim']), drop: id, now: day),
+          isEmpty,
+        );
+      }
+    }
+    // Hold is read before the dates (card.mjs dropState): a held drop with
+    // dates long past is still hidden.
+    const dated = DaemonDrop(
+      'x',
+      4,
+      'x',
+      announce: '2000-01-01',
+      release: '2000-01-15',
+      hold: true,
+    );
+    expect(dated.stateAt(DateTime.utc(2026)), DropState.hidden);
+    // Its daemons still render if a zoo from before ever pairs one.
+    final tmux = roster.byId('tmux')!;
+    expect(renderSprite(roster, tmux, 0, DaemonMood.idle), '[o o]');
+    expect(
+      renderPortrait(roster, tmux, '0.1', DaemonMood.idle, motion: false),
+      isNotEmpty,
+    );
+  });
 
   test('a card carries its serial; a guest\'s daemon has none', () {
     final tim = roster.byId('tim')!;
@@ -102,15 +161,12 @@ void main() {
       ownedCardLines(roster, tim, seeded).join('\n'),
       isNot(contains('#00')),
     );
-    // The portrait rows are the ones a card colours.
+    // The portrait rows are the ones a card colours: tim is drawn filled,
+    // so they hold its portrait plate at 2.0, idle, frame 0.
     final rows = cardPortraitRows(roster, tim, '2.0');
-    final portrait = renderPortrait(
-      roster,
-      tim,
-      '2.0',
-      DaemonMood.idle,
-      motion: false,
-    );
+    final portrait = daemonPlates.still('tim', PlateSize.portrait, '2.0');
+    expect(portrait, isNotEmpty);
+    expect(cardPortrait(roster, tim, '2.0'), portrait);
     expect(rows.to - rows.from, portrait.length);
     for (final (i, line) in portrait.indexed) {
       expect(lines[rows.from + i], contains(line));
@@ -205,7 +261,31 @@ void main() {
     }
     // Secrets sit outside the numbered set.
     expect(cardNumber(roster, roster.byId('tim')!), '#01/09');
+    expect(cardNumber(roster, roster.byId('beastie')!), '#S/09');
+    // A held drop numbers its own set.
+    expect(cardNumber(roster, roster.byId('tmux')!), '#01/09');
     expect(cardNumber(roster, roster.byId('grue')!), '#S/09');
+  });
+
+  test('a plate daemon\'s card shows its portrait plate, idle, frame 0', () {
+    for (final d in roster.daemons.where((d) => d.plate)) {
+      for (final v in roster.rules.versions) {
+        final plate = daemonPlates.still(d.id, PlateSize.portrait, v);
+        final card = cardLines(roster, d, version: v);
+        final rows = cardPortraitRows(roster, d, v);
+        expect(rows.to - rows.from, plate.length, reason: '${d.id} $v');
+        final pad = ((cardWidth - 4 - plate.first.length) / 2).floor();
+        for (final (i, row) in plate.indexed) {
+          expect(
+            card[rows.from + i],
+            '| ${(' ' * pad + row).padRight(cardWidth - 4)} |',
+            reason: '${d.id} $v row $i',
+          );
+        }
+        // Given the plate (card.mjs's `{ plate }`), the same card.
+        expect(cardLines(roster, d, version: v, plate: plate), card);
+      }
+    }
   });
 
   test('the generated banner copy matches banner.json', () {
@@ -246,17 +326,25 @@ void main() {
   });
 
   test('the shelf matches card.mjs shelfLines', () {
-    expect(shelfLines(roster, shelfEntries(['tim', 'vim', 'grue'])), [
-      'zoo: drop 1 unix  2/9  +secret',
-      '',
-      r'\[o|o]/   [ ? ]     [ ? ]     [ ? ]     < o_o >_',
-      'tim       #02       #03       #04       vim',
-      '',
-      '[ ? ]     [ ? ]     [ ? ]     [ ? ]     .   .',
-      '#06       #07       #08       #09       grue',
-    ]);
-    expect(shelfLines(roster, const []), [
-      'zoo: drop 1 unix  0/9',
+    final released = DateTime.utc(2026, 9, 27);
+    expect(
+      shelfLines(
+        roster,
+        shelfEntries(['tim', 'gnu', 'beastie']),
+        now: released,
+      ),
+      [
+        'zoo: drop 1 init  2/9  +secret',
+        '',
+        r'~(o o)~   \_oUo_/   [ ? ]     [ ? ]     [ ? ]',
+        'tim       gnu       #03       #04       #05',
+        '',
+        '[ ? ]     [ ? ]     [ ? ]     [ ? ]     }oWo{ -E',
+        '#06       #07       #08       #09       beastie',
+      ],
+    );
+    expect(shelfLines(roster, const [], now: released), [
+      'zoo: drop 1 init  0/9',
       '',
       '[ ? ]     [ ? ]     [ ? ]     [ ? ]     [ ? ]',
       '#01       #02       #03       #04       #05',
@@ -270,22 +358,22 @@ void main() {
   test(
     'the shelf counts duplicates and shows announced drops, as card.mjs',
     () {
-      // node daemons/tools/card.mjs --shelf 'tim*x2,vim,grue x4'
+      // node daemons/tools/card.mjs --shelf 'tim*x2,gnu,beastiex4'
       final released = DateTime.utc(2026, 9, 27);
       expect(
         shelfLines(roster, const [
           ShelfEntry('tim', shiny: true, dupes: 1),
-          ShelfEntry('vim'),
-          ShelfEntry('grue', dupes: 3),
+          ShelfEntry('gnu'),
+          ShelfEntry('beastie', dupes: 3),
         ], now: released),
         [
-          'zoo: drop 1 unix  2/9  +secret',
+          'zoo: drop 1 init  2/9  +secret',
           '',
-          r'\[o|o]/   [ ? ]     [ ? ]     [ ? ]     < o_o >_',
-          'tim x2    #02       #03       #04       vim',
+          r'~(o o)~   \_oUo_/   [ ? ]     [ ? ]     [ ? ]',
+          'tim x2    gnu       #03       #04       #05',
           '',
-          '[ ? ]     [ ? ]     [ ? ]     [ ? ]     .   .',
-          '#06       #07       #08       #09       grue x4',
+          '[ ? ]     [ ? ]     [ ? ]     [ ? ]     }oWo{ -E',
+          '#06       #07       #08       #09       beastie x4',
         ],
       );
       final cells = shelfCells(roster, const [
@@ -299,15 +387,15 @@ void main() {
         shelfLines(
           roster,
           shelfEntries(['tim']),
-          now: DateTime.utc(2026, 9, 25, 23, 59, 59),
+          now: DateTime.utc(2026, 9, 26, 23, 59, 59),
         ),
         [
-          'zoo: drop 1 unix  out 2026-09-26',
+          'zoo: drop 1 init  out 2026-09-27',
           '',
-          '## ##     #####     ## ##     #####     # ###',
+          '## ##     #####     #####     ######    #####',
           '#01       #02       #03       #04       #05',
           '',
-          '# ####    #####     #####     #######   [ ! ]',
+          '#####     ###       ### ##    ####      [ ! ]',
           '#06       #07       #08       #09       secret',
         ],
       );
@@ -320,7 +408,7 @@ void main() {
       expect(announced.any((c) => c.owned), isFalse);
       // Not announced yet: shown nowhere.
       expect(
-        shelfLines(roster, const [], now: DateTime.utc(2026, 9, 1)),
+        shelfLines(roster, const [], now: DateTime.utc(2026, 9, 12)),
         isEmpty,
       );
       expect(
@@ -355,7 +443,7 @@ void main() {
     expect(silhouette('[oo]'), '####');
     expect(silhouette('o   o'), '#   #');
     expect(
-      rarityStamp(roster, roster.byId('vim')!, shiny: true),
+      rarityStamp(roster, roster.byId('yak')!, shiny: true),
       '[ * SHINY * RARE ]  #05/09',
     );
   });
@@ -363,7 +451,161 @@ void main() {
   test('a new version morphs in three quick frames', () {
     final tim = roster.byId('tim')!;
     String at(int v) => renderSprite(roster, tim, v, DaemonMood.idle);
-    expect(versionMorph(at(0), at(1)), ['## ##', '#####', '[o|o]']);
-    expect(versionMorph(at(1), at(2)), ['#####', '#######', r'\[o|o]/']);
+    expect(versionMorph(at(0), at(1)), ['## ##', '### ###', ',(o o),']);
+    expect(versionMorph(at(1), at(2)), ['### ###', '### ###', '~(o o)~']);
+    // A line-art daemon of a held drop grows the same way.
+    final tmux = roster.byId('tmux')!;
+    String old(int v) => renderSprite(roster, tmux, v, DaemonMood.idle);
+    expect(versionMorph(old(0), old(1)), ['## ##', '#####', '[o|o]']);
+  });
+
+  // ── plates ─────────────────────────────────────────────────────────────────
+
+  test('the generated plates are plates.json, parsed once', () {
+    final source =
+        jsonDecode(File('../daemons/plates.json').readAsStringSync()) as Map;
+    expect(daemonPlates.source, source['source']);
+    expect(daemonPlates.frameMs, source['frameMs']);
+    expect(daemonPlates.frameMs, roster.rules.plate!.frameMs);
+    final daemons = source['daemons'] as Map;
+    expect(daemons.keys, [
+      for (final d in roster.daemons)
+        if (d.plate) d.id,
+    ]);
+    for (final e in daemons.entries) {
+      for (final s in (e.value as Map).entries) {
+        for (final v in (s.value as Map).entries) {
+          for (final m in (v.value as Map).entries) {
+            final frames = daemonPlates.frames(
+              e.key as String,
+              PlateSize.values.byName(s.key as String),
+              v.key as String,
+              daemonMoodNamed(m.key as String)!,
+            );
+            expect(
+              [for (final f in frames) f.join('\n')],
+              m.value,
+              reason: '${e.key} ${s.key} ${v.key} ${m.key}',
+            );
+          }
+        }
+      }
+    }
+    // A loop is split into rows once and kept.
+    expect(
+      daemonPlates.frames('tim', PlateSize.reveal, '2.0', DaemonMood.idle),
+      same(
+        daemonPlates.frames('tim', PlateSize.reveal, '2.0', DaemonMood.idle),
+      ),
+    );
+    // A line-art daemon has none; a version not baked draws as the nearest
+    // one below.
+    expect(daemonPlates.has('tmux'), isFalse);
+    expect(
+      daemonPlates.frames('tmux', PlateSize.portrait, '2.0', DaemonMood.idle),
+      isEmpty,
+    );
+    expect(
+      daemonPlates.frames('tim', PlateSize.portrait, '1.5', DaemonMood.idle),
+      daemonPlates.frames('tim', PlateSize.portrait, '1.0', DaemonMood.idle),
+    );
+  });
+
+  test('every plate keeps its shape: one crop per width and version', () {
+    final rules = roster.rules.plate!;
+    for (final d in roster.daemons.where((d) => d.plate)) {
+      for (final size in PlateSize.values) {
+        for (final v in roster.rules.versions) {
+          int? width, height;
+          for (final mood in DaemonMood.values) {
+            final loop = daemonPlates.frames(d.id, size, v, mood);
+            final why = '${d.id} ${size.name} $v ${mood.name}';
+            expect(
+              loop,
+              hasLength(
+                mood == DaemonMood.idle ? rules.idleFrames : rules.otherFrames,
+              ),
+              reason: why,
+            );
+            for (final rows in loop) {
+              width ??= rows.first.length;
+              height ??= rows.length;
+              expect(rows, hasLength(height), reason: why);
+              for (final row in rows) {
+                expect(row.length, width, reason: why);
+                expect(printable.hasMatch(row), isTrue, reason: why);
+              }
+            }
+          }
+          expect(width, lessThanOrEqualTo(rules.cols[size.name]!));
+          expect(height, lessThanOrEqualTo(rules.maxRows[size.name]!));
+        }
+      }
+    }
+  });
+
+  test('every plate colour matches bake.mjs plateColor', () {
+    final cases = (frames['plateColors'] as List).cast<Map>();
+    expect(cases, isNotEmpty);
+    var cells = 0;
+    for (final f in cases) {
+      final d = roster.byId(f['id'] as String)!;
+      final rows = daemonPlates.frames(
+        d.id,
+        PlateSize.values.byName(f['size'] as String),
+        f['v'] as String,
+        daemonMoodNamed(f['mood'] as String)!,
+      )[f['frame'] as int];
+      expect(rows, hasLength(f['rows']));
+      final bg = f['bg'] as String;
+      final ground = Color(0xff000000 | int.parse(bg.substring(1), radix: 16));
+      final shiny = f['shiny'] == true;
+      final palette = PlatePalette.of(
+        roster,
+        d,
+        rows.length,
+        ground: ground,
+        shiny: shiny,
+      );
+      for (final c in (f['cells'] as List).cast<Map>()) {
+        final r = c['r'] as int, ch = c['ch'] as String;
+        expect(rows[r][c['c'] as int], ch);
+        final why = '${d.id} shiny=$shiny r=$r c=${c['c']} $ch';
+        expect(
+          plateHex(roster, d, rows.length, r, ch, ground: ground, shiny: shiny),
+          c['hex'],
+          reason: why,
+        );
+        expect(
+          palette.at(r, ch),
+          plateColor(
+            roster,
+            d,
+            rows.length,
+            r,
+            ch,
+            ground: ground,
+            shiny: shiny,
+          ),
+          reason: why,
+        );
+        cells++;
+      }
+    }
+    expect(cells, greaterThan(1000));
+    // A space is not drawn; a line-art daemon has no plate colour.
+    final tim = roster.byId('tim')!;
+    expect(plateHex(roster, tim, 12, 0, ' '), isNull);
+    expect(plateHex(roster, roster.byId('tmux')!, 12, 0, '#'), isNull);
+    // `#` is the row colour itself: the top row the gradient's top, the last
+    // its bottom; `@` burns toward white; a shiny tim is gold.
+    expect(plateHex(roster, tim, 12, 0, '#'), tim.gradient!.top);
+    expect(plateHex(roster, tim, 12, 11, '#'), tim.gradient!.bottom);
+    expect(plateHex(roster, tim, 1, 0, '%'), tim.gradient!.top);
+    expect(
+      plateHex(roster, tim, 12, 11, '#', shiny: true),
+      tim.shinyGradient!.bottom,
+    );
+    expect(tim.shinyGradient!.bottom, '#d7af00');
   });
 }

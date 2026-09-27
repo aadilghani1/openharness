@@ -12,7 +12,7 @@ const daemon = (id: string, extra: Partial<ZooDaemon> = {}): ZooDaemon =>
   ({ id, hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 0, version: '0.1', ...extra })
 const zooOf = (patch: Partial<Zoo>): Zoo => ({ ...emptyZoo(), ...patch, progress: { ...emptyProgress(), ...(patch.progress ?? {}) } })
 const lesson = (lessonId: string, daemonId = 'tim'): ZooOp => ({ op: 'zoo.lesson', lessonId, daemonId })
-const apply = (zoo: Zoo, ops: ZooOp[]) => applyZooOps(zoo, ops, () => 0, new Date('2026-09-26T12:00:00.000Z'))
+const apply = (zoo: Zoo, ops: ZooOp[]) => applyZooOps(zoo, ops, () => 0, new Date('2026-09-27T12:00:00.000Z'))
 const xpOf = (zoo: Zoo, id: string) => zoo.daemons.find((d) => d.id === id)?.xp
 
 describe('zoo.lesson — bond for a lesson you approved', () => {
@@ -21,19 +21,19 @@ describe('zoo.lesson — bond for a lesson you approved', () => {
   })
 
   it('grows the daemon that found it, even when another one is paired', () => {
-    const zoo = zooOf({ daemons: [daemon('tim'), daemon('fish')], pair: 'fish' })
+    const zoo = zooOf({ daemons: [daemon('tim'), daemon('gnu')], pair: 'gnu' })
     const r = apply(zoo, [lesson('3f2a9c1b', 'tim')])
     expect(r.changed).toBe(true)
     expect(xpOf(r.zoo, 'tim')).toBe(XP)
-    expect(xpOf(r.zoo, 'fish')).toBe(0)
+    expect(xpOf(r.zoo, 'gnu')).toBe(0)
     expect(r.zoo.progress.lessons).toEqual(['3f2a9c1b'])
   })
 
   it('grows the paired daemon when the one that found it is not yours', () => {
-    const zoo = zooOf({ daemons: [daemon('fish')], pair: 'fish' })
+    const zoo = zooOf({ daemons: [daemon('gnu')], pair: 'gnu' })
     const r = apply(zoo, [lesson('a1', 'tim')])
-    expect(xpOf(r.zoo, 'fish')).toBe(XP)
-    expect(r.zoo.daemons.map((d) => d.id)).toEqual(['fish'])
+    expect(xpOf(r.zoo, 'gnu')).toBe(XP)
+    expect(r.zoo.daemons.map((d) => d.id)).toEqual(['gnu'])
   })
 
   it('counts a lesson once: a retry of a report that landed grows nothing and writes nothing', () => {
@@ -90,6 +90,7 @@ describe('zoo.lesson — bond for a lesson you approved', () => {
     expect(stored.progress.lessons).toEqual(['a1', 'a2'])
     const guest = { daemons: [daemon('tim')], progress: { turns: 3, lessons: ['g1'] } }
     const seeded = apply(emptyZoo(), [{ op: 'zoo.seed', zoo: guest }])
+    expect(seeded.zoo.daemons.map((d) => d.id)).toEqual(['tim'])              // the seed landed
     expect(seeded.zoo.progress.lessons).toEqual([])
   })
 })
