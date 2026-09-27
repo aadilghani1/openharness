@@ -451,6 +451,12 @@ describe('cli.ts routes everything daemon-related through the switch', () => {
     expect(at('daemons.start()')).toBeGreaterThan(at('onDaemonsChanged = (on) => {'))
   })
 
+  it('tells the windows already attached: the switch, pairing and the zoo\'s pair and dial all refresh the brain', () => {
+    expect(onChanged).toMatch(/applyPair\(\)\s+pairBrain\?\.refresh\(\)\s+\}$/)
+    expect(source).toContain('onPairToggled = (on) => { if (on) questionWatcher.reset(); pairBrain?.refresh() }')
+    expect(source).toMatch(/pairSensor\.setPair\(pairing\.pair\)\n(\s+\/\/[^\n]*\n)*\s+pairBrain\?\.refresh\(\)\n\s+\}/)
+  })
+
   it('gates the reporters, turns, lessons, the pair harness, the pair request and every daemon_* frame', () => {
     expect(source.match(/enabled: \(\) => daemons\.on\(\)/g)).toHaveLength(2)
     expect(source).toContain('if (daemons.on()) zooTurnCounter.started(')

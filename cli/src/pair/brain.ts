@@ -9,7 +9,8 @@
  *
  * Local frames only, and only through `sendLocal`/`sendLocalTo`:
  *   out  daemon_state { pair, needs[], working, failing[], machines[], done, asks[], acted[], autonomy,
- *                        autonomyRequested?, confirms[] }   (on change, and to a new client)
+ *                        autonomyRequested?, confirms[] }   (on change, to a new client, and to every
+ *                        client when pairing or the daemons switch changes: refresh)
  *        daemon_say / daemon_unsay         (pair/voice.ts)
  *        daemon_brief { desk, line, items[] }   (on return, pair/brief.ts; a lesson's [s], pair/learn)
  *        daemon_act_result { requestId, id, ok, error? }   (to the client that acted)
@@ -162,8 +163,10 @@ export class PairBrain {
   clientAttached(connId: string): void {
     const first = this.clients.size === 0
     this.clients.add(connId)
-    this.refresh()
-    if (this.active) this.deps.sendLocalTo(connId, { type: 'daemon_state', payload: this.state() })
+    // This window started the brain: every window here is told (it is the only one). Already thinking: the
+    // others have the state, so only the new one is sent it.
+    if (this.sync()) this.sendState(true)
+    else if (this.active) this.deps.sendLocalTo(connId, { type: 'daemon_state', payload: this.state() })
     // Nobody was here and now somebody is: a reconnect after long enough is a return.
     const left = this.departed.get(LOCAL_DESK)
     if (first && left !== undefined) {
@@ -177,7 +180,8 @@ export class PairBrain {
     this.presence.delete(connId)
     this.deps.shown?.detach(connId)
     if (this.clients.size === 0 && !this.departed.has(LOCAL_DESK)) this.departed.set(LOCAL_DESK, this.deps.now())
-    this.refresh()
+    // It stops when the last window left (nobody to tell) — or, had pairing gone off unsaid, the rest are told.
+    if (this.sync() && this.clients.size > 0) this.sendState(true)
   }
 
   /**
@@ -291,10 +295,22 @@ export class PairBrain {
     return false
   }
 
-  /** Pairing or the set of clients changed: start or stop thinking. */
+  /**
+   * Pairing, consent or the autonomy dial changed, or the daemons switch turned on or off (cli.ts): start or
+   * stop thinking, and tell every window attached what daemon_state says now — the fleet's, or the off result
+   * that sends it back to roster lines. A window attached before pairing came on hears it here, not on its
+   * next reconnect. Idempotent: a start or a stop is always said, once; otherwise only a state the windows
+   * were not already sent.
+   */
   refresh(): void {
+    const moved = this.sync()
+    if (this.clients.size > 0) this.sendState(moved)
+  }
+
+  /** Start or stop thinking for the pairing and the windows there are now. True when it started or stopped. */
+  private sync(): boolean {
     const should = this.deps.pairing.enabled() && this.clients.size > 0
-    if (should === this.active) return
+    if (should === this.active) return false
     this.active = should
     this.deps.onActiveChanged?.(should)
     if (should) {
@@ -303,9 +319,8 @@ export class PairBrain {
       this.deps.fleet.stop()
       this.needSays.clear()
       if (this.stateTimer) { clearTimeout(this.stateTimer); this.stateTimer = null }
-      // Pairing went off with a client still attached: tell it once, so it falls back to roster lines.
-      if (this.clients.size > 0) this.sendState(true)
     }
+    return true
   }
 
   /** Something outside the fleet changed what daemon_state says (a proposal came or went). */

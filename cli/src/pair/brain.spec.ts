@@ -432,12 +432,14 @@ describe('the brain', () => {
     w.remote.links[0].drop()
     await settle(61_000)
     expect(w.fleet.machines().find((m) => m.machineId === 'machine-b')?.status).toBe('ok')
-    // The window reconnects: it is sent the state, not the line again.
+    // The window reconnects: it is sent the state, not the line again. It was the only window, so its
+    // return starts the brain, and a start is told to every window attached (this one).
+    const statesBefore = w.frames.filter((f) => f.type === 'daemon_state').length
     w.brain.clientDetached('local:window')
     w.brain.clientAttached('local:window')
+    expect(w.frames.filter((f) => f.type === 'daemon_state').length).toBe(statesBefore + 1)
     await settle(200)
     expect(w.says()).toHaveLength(1)
-    expect(w.toClient.filter((t) => t.frame.type === 'daemon_state').length).toBeGreaterThanOrEqual(2)
     expect(w.frames.filter((f) => f.type === 'daemon_state').at(-1)?.payload).toMatchObject({ needs: [{ requestId: 'q_1' }] })
   })
 
@@ -623,6 +625,47 @@ describe('the brain', () => {
     await settle()
     expect(fleetStatus).toBe('old')
     old.stop()
+  })
+
+  it('pairing coming on tells the window already on the socket, never a tool client or the cloud', async () => {
+    const socket = new BackendSocket('token')
+    const internals = socket as unknown as { queue: Array<{ data: string }>; enqueue: (m: unknown) => void }
+    const enqueued: string[] = []
+    const enqueue = internals.enqueue.bind(socket)
+    internals.enqueue = (msg: unknown) => { enqueued.push(JSON.stringify(msg)); enqueue(msg) }
+    const windowFrames: Frame[] = []
+    const toolFrames: Frame[] = []
+    socket.registerLocalClient('local:window', { sendFrame: (f) => { windowFrames.push(f); return true }, sendBinary: () => true })
+    socket.registerLocalClient('local:tool', { sendFrame: (f) => { toolFrames.push(f); return true }, sendBinary: () => true }, { tool: true })
+    let paired: string | null = null
+    const fleet = new PairFleet({
+      local: { machineId: () => socket.machineId, name: () => 'desk', snapshot: () => ({ machineId: socket.machineId, epoch: 'e', seq: 0, rev: 0, harnesses: [] }), subscribe: () => () => {}, journal: () => ({ epoch: 'e', seq: 0, entries: [] }) },
+      machines: () => [], open: async () => { throw new Error('NO_PEER_LINK') }, onChange: () => {},
+    })
+    const brain = new PairBrain({
+      pairing: { enabled: () => paired !== null, pairedDaemon: () => paired }, fleet,
+      triage: new PairTriage({ oneshot: null, now: Date.now }),
+      voice: new PairVoice({ sendLocal: (f) => socket.sendLocal(f), now: Date.now }),
+      sendLocal: (f) => socket.sendLocal(f), sendLocalTo: (c, f) => socket.sendLocalTo(c, f),
+      answer: async () => ({ ok: false, error: 'UNSUPPORTED' }), now: Date.now,
+    })
+    // As cli.ts does: the windows already here (never the tool), then pairing comes on and it refreshes.
+    for (const connId of socket.localClientIds()) brain.clientAttached(connId)
+    expect(brain.clientIds()).toEqual(['local:window'])
+    expect(windowFrames.filter((f) => f.type === 'daemon_state')).toEqual([])
+    paired = 'tim'
+    brain.refresh()
+    brain.refresh()
+    await settle(500)
+    expect(windowFrames.filter((f) => f.type === 'daemon_state').map((f) => (f.payload as Frame).pair)).toEqual(['tim'])
+    paired = null
+    brain.refresh()
+    expect(windowFrames.filter((f) => f.type === 'daemon_state').map((f) => (f.payload as Frame).pair)).toEqual(['tim', null])
+    expect(toolFrames.filter((f) => String(f.type).startsWith('daemon_'))).toEqual([])
+    expect(enqueued.filter((m) => m.includes('daemon_'))).toEqual([])
+    await socket.unregisterLocalClient('local:window')
+    await socket.unregisterLocalClient('local:tool')
+    await socket.stop()
   })
 
   it('sends daemon_* only through sendLocal: nothing reaches the cloud queue', async () => {

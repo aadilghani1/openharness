@@ -135,6 +135,89 @@ describe('the brain: on and off', () => {
     expect(w.states().at(-1)).toMatchObject({ pair: null, needs: [], machines: [], asks: [], acted: [] })
   })
 
+  it('a window attached before pairing came on is told the state when it does: to every window, once', async () => {
+    const w = world({ enabled: false })
+    w.brain.clientAttached('local:window')
+    w.brain.clientAttached('local:hn')
+    expect(w.brain.isActive).toBe(false)
+    expect(w.states()).toEqual([])
+    // The zoo got a paired daemon and the person's consent (or the daemons switch came on): cli.ts refreshes.
+    w.setEnabled(true)
+    w.brain.refresh()
+    expect(w.brain.isActive).toBe(true)
+    expect(w.f.fleet.start).toHaveBeenCalledTimes(1)
+    // One frame through sendLocal reaches every window at once; none is sent one of its own.
+    expect(w.states()).toHaveLength(1)
+    expect(w.states()[0]).toMatchObject({ pair: 'tim', autonomy: 'suggest', needs: [], confirms: [] })
+    expect(w.toClient).toEqual([])
+    // Asked again with nothing changed (the zoo re-read, the switch's own refresh after pairing's): nothing more.
+    w.brain.refresh(); w.brain.refresh()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(w.states()).toHaveLength(1)
+    expect(w.f.fleet.start).toHaveBeenCalledTimes(1)
+    // Another daemon paired, or the dial moved, while it thinks: said once each.
+    w.setDaemon('ping')
+    w.brain.refresh(); w.brain.refresh()
+    w.setAutonomy('watch')
+    w.brain.refresh(); w.brain.refresh()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(w.states().map((s) => [s.pair, s.autonomy])).toEqual([['tim', 'suggest'], ['ping', 'suggest'], ['ping', 'watch']])
+  })
+
+  it('the daemons switch going off tells every window the off result, once; idle, only a change is said', async () => {
+    const w = world()
+    w.brain.clientAttached('local:window')
+    w.brain.clientAttached('local:hn')
+    expect(w.states()).toHaveLength(1)
+    // Daemons off takes pairing with it (the sensor unpairs), then the switch refreshes the brain again.
+    w.setEnabled(false)
+    w.brain.refresh()
+    w.brain.refresh()
+    expect(w.brain.isActive).toBe(false)
+    expect(w.f.fleet.stop).toHaveBeenCalledTimes(1)
+    expect(w.states()).toHaveLength(2)
+    expect(w.states()[1]).toMatchObject({ pair: null, needs: [], working: 0, failing: [], machines: [], asks: [], acted: [] })
+    // Idle: the switch coming back on with nothing paired says nothing new...
+    w.brain.refresh()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(w.states()).toHaveLength(2)
+    // ...a dial that moved is said, once.
+    w.setAutonomy('watch')
+    w.brain.refresh(); w.brain.refresh()
+    expect(w.states()).toHaveLength(3)
+    expect(w.states()[2]).toMatchObject({ pair: null, autonomy: 'watch' })
+    // With no window attached nobody is told anything.
+    w.brain.clientDetached('local:window')
+    w.brain.clientDetached('local:hn')
+    w.setEnabled(true)
+    w.brain.refresh()
+    expect(w.brain.isActive).toBe(false)
+    expect(w.states()).toHaveLength(3)
+    // The only frame of its own: the state to `hn`, which attached while it was thinking.
+    expect(w.toClient.map((t) => t.connId)).toEqual(['local:hn'])
+  })
+
+  it('no duplicate: a window that attaches while it thinks is sent the state alone, the others nothing', async () => {
+    const w = world()
+    w.brain.clientAttached('local:window')
+    expect(w.states()).toHaveLength(1)
+    w.brain.clientAttached('local:hn')
+    expect(w.states()).toHaveLength(1)
+    expect(w.toClient.map((t) => [t.connId, t.frame.type])).toEqual([['local:hn', 'daemon_state']])
+    w.brain.refresh()
+    w.brain.clientDetached('local:hn')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(w.states()).toHaveLength(1)
+    expect(w.toClient).toHaveLength(1)
+    // The last window leaves and one comes back: the brain starts again, and that start is said to it —
+    // even when the state is the very one said before it stopped.
+    w.brain.clientDetached('local:window')
+    expect(w.brain.isActive).toBe(false)
+    w.brain.clientAttached('local:window')
+    expect(w.states()).toHaveLength(2)
+    expect(w.states()[1]).toEqual(w.states()[0])
+  })
+
   it('while not thinking, fleet changes and state changes are ignored; an act answers PAIR_OFF', async () => {
     const w = world({ enabled: false })
     w.brain.clientAttached('local:window')

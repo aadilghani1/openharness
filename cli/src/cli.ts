@@ -3795,6 +3795,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // holds only under the consent (`epoch`) it was given in.
     pairGate.setRequested(pairing.autonomy, { keepConfirmed: !pairing.consented, epoch: pairing.epoch })
     pairSensor.setPair(pairing.pair)
+    // Pairing on or off already refreshed the brain (onPairToggled); another daemon paired, or the dial moved,
+    // reaches the windows attached here now. The brain sends only what they were not already sent.
+    pairBrain?.refresh()
   }
   onZooRead = (result) => {
     if (result.status === 200) {
