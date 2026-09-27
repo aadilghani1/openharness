@@ -131,6 +131,8 @@ pub struct Pane {
     pub search: crate::copy::PaneSearch,
     /// Output arrived while in a mode (#{pane_unseen_changes}).
     pub unseen: bool,
+    /// In clock mode (C-b t): the time drawn over it until a key reaches it (window-clock.c).
+    pub clock: bool,
     /// When each history line went into the history (0: not known), oldest first — while the
     /// history is not full; after that they are not known.
     pub times: std::collections::VecDeque<i64>,
@@ -251,6 +253,7 @@ impl Pane {
             tree_at: 0,
             search: Default::default(),
             unseen: false,
+            clock: false,
             times: Default::default(),
             hist_marks: Default::default(),
             screen_marks: Vec::new(),

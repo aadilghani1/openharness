@@ -2721,7 +2721,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
             app.save_sessions();
             if renamed { let sid = app.session_id; notify_session(app, "session-renamed", sid, &name, None) }
         }
-        "clock-mode" => { if let Some(f) = app.focused() { app.modal = Some(Modal::Clock { pane: f }) } else { app.modal = Some(Modal::Clock { pane: 0 }) } }
+        // A mode of the pane (window-clock.c): -t's, or this one; it stays there while you go
+        // elsewhere, until a key reaches the pane.
+        "clock-mode" => { if let Some((_, p)) = target_pane(app, words) { if let Some(pane) = app.panes.get_mut(&p) { pane.clock = true; app.redraw_all = true } } }
         "refresh-client" => { app.redraw_all = true; for id in app.panes.keys().copied().collect::<Vec<_>>() { if app.rects.iter().any(|(r, _)| *r == id) { app.open_stream(id, false) } } }
         // Every session goes, the saved ones too (the harnesses keep running) — and every other
         // client of this server name with them.

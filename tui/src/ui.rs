@@ -59,15 +59,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         if app.tab().root.is_none() { empty_window(buf, app, body) }
         else { cursor = window(buf, app, body) }
     }
-    match &app.modal {
-        Some(Modal::DisplayPanes { .. }) => display_panes(buf, app),
-        Some(Modal::Clock { pane }) => {
-            let rect = app.rects.iter().find(|(id, _)| id == pane).map(|(_, r)| app.content_of(app.tab(), *r)).unwrap_or(body);
-            clock(buf, app, rect);
-            cursor = None;
-        }
-        _ => {}
+    // Panes in clock mode: the time over each (its cursor hidden).
+    if !full_screen && app.tab().root.is_some() {
+        let clocks: Vec<Rect> = app.rects.iter().filter(|(id, _)| app.panes.get(id).map(|p| p.clock).unwrap_or(false)).map(|(id, r)| { if Some(*id) == app.focused() { cursor = None } app.content_of(app.tab(), *r) }).collect();
+        for rect in clocks { clock(buf, app, rect) }
     }
+    if let Some(Modal::DisplayPanes { .. }) = &app.modal { display_panes(buf, app) }
     if let Some(modal) = &mut app.modal {
         match modal {
             // (--no-input: no prompt, no cursor.)

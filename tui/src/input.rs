@@ -94,7 +94,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
         }
         if let Some(binding) = app.keymap.prefix_command(&chord).cloned() {
             // A list or view on screen gives way to the command, as tmux's choose modes do.
-            if matches!(app.modal, Some(Modal::Clock { .. }) | Some(Modal::DisplayPanes { .. }) | Some(Modal::Picker { .. })) { app.modal = None }
+            if matches!(app.modal, Some(Modal::DisplayPanes { .. }) | Some(Modal::Picker { .. })) { app.modal = None }
             app.repeat_until = binding.repeat.then(|| Instant::now() + Duration::from_millis(app.keymap.repeat_ms));
             commands::execute_bound(app, &binding.command);
         }
@@ -156,6 +156,8 @@ fn on_key(app: &mut App, key: KeyEvent) {
         if let Some(bytes) = encode_key(&key, alacritty_terminal::term::TermMode::empty()) { buffer.push(bytes); return }
     }
     let Some(focus) = app.focused() else { home_key(app, key); return };
+    // Clock mode: any key that reaches the pane ends it (window_clock_key), and goes no further.
+    if let Some(p) = app.panes.get_mut(&focus).filter(|p| p.clock) { p.clock = false; app.redraw_all = true; return }
     let Some(pane) = app.panes.get(&focus) else { return };
     match &pane.phase {
         Phase::Card { title, .. } => {
@@ -1238,7 +1240,6 @@ fn modal_key(app: &mut App, key: KeyEvent) {
             if key.code == KeyCode::Char(yes) || (enter_yes && key.code == KeyCode::Enter) { commands::execute(app, &command) }
         }
         Modal::DisplayPanes { .. } => {}
-        Modal::Clock { .. } => {}
         // tmux's menu (menu_key_cb): an item's key chooses it; ↑ k ↓ j move (round the ends,
         // past rules and disabled items), PPage C-b and NPage by five, g Home / G End the first
         // and last, Enter the chosen one, Escape C-c C-g q leave.

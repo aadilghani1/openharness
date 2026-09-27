@@ -155,8 +155,6 @@ pub enum Modal {
     /// display-panes: until when (none: until a key, -d 0), the command a number runs (%% its
     /// pane), and whether keys choose at all (-N: not).
     DisplayPanes { until: Option<std::time::Instant>, template: Option<String>, keys: bool },
-    /// tmux `clock-mode` (C-b t).
-    Clock { pane: u64 },
     /// display-popup: a shell floating over the window; it goes when its program exits.
     /// display-popup: its program's pane, where it is, its border (lines: tmux's box lines,
     /// `none` for -B), title (a format drawn with its styles) and styles (-s, -S).

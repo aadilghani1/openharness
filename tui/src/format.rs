@@ -965,7 +965,7 @@ pub fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layo
 /// tmux's format table: a variable's value for a window (and a pane: else the window's active
 /// one), or None when there is no such variable. Times are seconds since the epoch.
 /// clock-mode on this pane (the mode on top of its others).
-fn clock_on(app: &App, pane: Option<u64>) -> bool { matches!(app.modal, Some(crate::modal::Modal::Clock { pane: c }) if Some(c) == pane) }
+fn clock_on(app: &App, pane: Option<u64>) -> bool { pane.and_then(|p| app.panes.get(&p)).map(|p| p.clock).unwrap_or(false) }
 
 fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<Val> {
     let tab = app.tabs.get(window);
