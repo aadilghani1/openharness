@@ -1100,3 +1100,106 @@ describe('the review\'s simulation: a real QuestionWatcher and AskQuestionContro
     expect(w.keys).toEqual([])
   })
 })
+
+describe('every captured dialog keeps its requestId', () => {
+  // Pinned from this parser before the sweep below: main's fingerprint and the dialog's signature. Bounding
+  // a dialog by the one above it only ever cuts what an EARLIER dialog left on the pane, so no capture of a
+  // single dialog may change id: a moved id is a question re-announced to every client, and an answer in
+  // flight refused as stale. A new fixture is pinned here by being added to the folder.
+  const PINNED: Record<string, string> = {
+    'permission-agy.txt': 'q_bca21c05',
+    'permission-claude-edit.txt': 'q_1e726361',
+    'permission-claude-plan.txt': 'q_5a686475',
+    'permission-claude.txt': 'q_3e2bb796',
+    'permission-codex.txt': 'q_0472f3a7',
+    'permission-commandcode.txt': 'q_f044b488',
+    'permission-copilot.txt': 'q_62873249',
+    'permission-cursor.txt': 'q_e2102acb',
+    'permission-devin.txt': 'q_0ed54a33',
+    'permission-grok.txt': 'q_5396976a',
+    'permission-hermes.txt': 'q_9fe12e7e',
+    'permission-muse.txt': 'q_2d480eba',
+    'permission-opencode.txt': 'q_0f7b7b0e',
+    'question-agy.txt': 'q_c81fea46',
+    'question-codex.txt': 'q_f50314d5',
+    'question-commandcode.txt': 'q_66cbf314',
+    'question-copilot.txt': 'q_101c92a4',
+    'question-devin-multi.txt': 'q_19c3200e',
+    'question-devin.txt': 'q_19a084b7',
+    'question-grok.txt': 'q_a5e412d6',
+    'question-hermes.txt': 'q_58484dc6',
+    'question-kilo.txt': 'q_0f7b7b0e',
+    'question-multi.txt': 'q_6b6969c5',
+    'question-muse.txt': 'q_42c9e375',
+    'question-opencode.txt': 'q_a71204f9',
+    'question-single.txt': 'q_321279c1',
+    'question-tabs.txt': 'q_76723591',
+  }
+  const answered = ['─'.repeat(60), ' Bash command', '', '   npm test', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel · Tab to amend', '',
+    '⏺ Bash(npm test)', '  ⎿  ok', '']
+
+  it('pins every open fixture', () => {
+    expect(Object.keys(PINNED).sort()).toEqual(OPEN)
+  })
+
+  it.each(OPEN)('%s: alone, and under an answered prompt in scrollback', (file) => {
+    expect(idIn(file, paneOf(file))).toBe(PINNED[file])
+    expect(idIn(file, [...answered, paneOf(file)].join('\n'))).toBe(PINNED[file])
+  })
+
+  it('reads muse\'s approval, not the answered question above it (regression)', () => {
+    const pane = [paneOf('question-muse.txt'), paneOf('permission-muse.txt')].join('\n')
+    expect(viewIn('permission-muse.txt', pane)).toMatchObject({ question: '$ curl -s https://example.com', rows: [{ label: 'Yes, proceed (y)' }, { label: expect.stringMatching(/^Yes, don't ask again/) }, { label: expect.stringMatching(/^No/) }] })
+    expect(idIn('permission-muse.txt', pane)).toBe(PINNED['permission-muse.txt'])
+  })
+
+  it('reads Command Code\'s footer-less question, not the answered question above it (regression)', () => {
+    const pane = [paneOf('question-single.txt'), paneOf('question-commandcode.txt')].join('\n')
+    expect(viewIn('question-commandcode.txt', pane).question).toBe('"Cầu vụ" bạn muốn game gì?')
+    expect(idIn('question-commandcode.txt', pane)).toBe(PINNED['question-commandcode.txt'])
+  })
+})
+
+describe('the dialog read is the LAST one on the pane (regression: an answered dialog above was read instead)', () => {
+  // A pane keeps an answered dialog in its scrollback and paints the live one under it. Every reader must
+  // read the live one, and nothing of it from above the answered one's end: found with the live dialog
+  // under an answered one, muse's approval read as the muse question above it, and Command Code's
+  // footer-less question as the footered question above it — under THAT question's requestId.
+  const ALL = readdirSync(FIXTURES).filter((file) => /^(permission|question)-.*\.txt$/.test(file)).sort()
+  /** What a client is shown, and the id its answer comes back under. */
+  const readIn = (file: string, pane: string) => {
+    const view = parseEngineQuestionPane(engineOf(file), pane)
+    return view?.kind === 'question' && view.question ? { ...view, id: questionRequestId('s1', view) } : view
+  }
+  /**
+   * The capture cut to its own dialog: the fewest last lines that read as the whole capture does, alone and
+   * under unrelated output. The second half keeps the dialog's own top (a rule, a bullet) in the cut: the
+   * dialog a footer dialog carries reads up to it, and without it would read the output above instead.
+   */
+  const ownDialog = (file: string): string => {
+    const lines = paneOf(file).split('\n')
+    const whole = JSON.stringify(readIn(file, paneOf(file)))
+    const output = `${Array(14).fill('  some earlier output').join('\n')}\n`
+    const same = (top: number) => JSON.stringify(readIn(file, lines.slice(top).join('\n'))) === whole
+      && JSON.stringify(readIn(file, output + lines.slice(top).join('\n'))) === whole
+    let top = 0
+    while (top + 1 < lines.length && same(top + 1)) top++
+    return lines.slice(top).join('\n')
+  }
+
+  it('sweeps every captured dialog', () => {
+    expect(ALL.length).toBeGreaterThanOrEqual(29)
+    expect(ALL).toEqual(expect.arrayContaining([...OPEN, 'question-review.txt', 'question-commandcode-review.txt', 'question-opencode-review.txt']))
+  })
+
+  it.each(ALL)('%s: under every other captured dialog, answered, reads as it does alone', (file) => {
+    const alone = readIn(file, paneOf(file))
+    expect(alone).not.toBeNull()
+    const own = ownDialog(file)
+    for (const other of ALL.filter((name) => name !== file)) {
+      // The whole capture under the other's whole capture, and this dialog alone right under the other's.
+      expect({ other, read: readIn(file, [paneOf(other), paneOf(file)].join('\n')) }).toEqual({ other, read: alone })
+      expect({ other, read: readIn(file, [paneOf(other).trimEnd(), own].join('\n')) }).toEqual({ other, read: alone })
+    }
+  })
+})
