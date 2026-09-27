@@ -1,0 +1,94 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { afterEach, describe, expect, it } from 'vitest'
+
+import { claudeProvider, readClaudeHead } from './claude.js'
+import { scanMemo } from './support.js'
+import type { ProcessView } from './types.js'
+
+const dirs: string[] = []
+afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+function home(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'externals-claude-'))
+  dirs.push(dir)
+  return dir
+}
+function write(path: string, lines: unknown[]): string {
+  mkdirSync(join(path, '..'), { recursive: true })
+  writeFileSync(path, lines.map((line) => typeof line === 'string' ? line : JSON.stringify(line)).join('\n') + '\n')
+  return path
+}
+const A = '11111111-1111-4111-8111-111111111111'
+const B = '22222222-2222-4222-8222-222222222222'
+const line = (sessionId: string, entrypoint: string, extra: Record<string, unknown> = {}) => ({
+  type: 'user', sessionId, cwd: '/work/dial', entrypoint, timestamp: '2026-09-20T10:00:00Z',
+  message: { role: 'user', content: 'fix the dial scroll' }, ...extra,
+})
+const view = (alive: (pid: number) => boolean): ProcessView => ({
+  list: async () => [], openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive,
+})
+
+describe('readClaudeHead', () => {
+  it('reads a terminal or the Claude app, never a program, a sub-agent or a line it cannot trust', async () => {
+    const dir = home()
+    const file = (name: string, lines: unknown[]) => write(join(dir, `${name}.jsonl`), lines)
+    // The first lines may carry no entrypoint: a mode, a title, a line being written.
+    expect(await readClaudeHead(file('t', [{ type: 'permission-mode' }, '{"entrypoint": half', line(A, 'cli')])))
+      .toEqual({ sessionId: A, cwd: '/work/dial', origin: 'terminal' })
+    expect(await readClaudeHead(file('d', [line(A, 'claude-desktop')]))).toMatchObject({ origin: 'claude-app' })
+    expect(await readClaudeHead(file('s', [line(A, 'sdk-cli')]))).toBeNull()
+    expect(await readClaudeHead(file('x', [line(A, 'cli', { isSidechain: true })]))).toBeNull()
+    expect(await readClaudeHead(file('r', [line(A, 'cli', { cwd: 'relative/path' })]))).toBeNull()
+    expect(await readClaudeHead(file('i', [line('short', 'cli')]))).toBeNull()
+    expect(await readClaudeHead(file('n', ['["entrypoint"]']))).toBeNull()
+    expect(await readClaudeHead(file('e', [{ type: 'summary', summary: 'nothing else' }]))).toBeNull()
+  })
+})
+
+describe('claudeProvider', () => {
+  it("finds a project's own conversations, not a sub-agent's, and not Harness's own byproducts", async () => {
+    const root = home()
+    const projects = join(root, 'projects')
+    write(join(projects, '-work-dial', `${A}.jsonl`), [line(A, 'cli')])
+    write(join(projects, '-work-dial', `${B}.jsonl`), [line(B, 'cli', { cwd: '/data/harness/summary-scratch' })])
+    write(join(projects, '-work-dial', 'notes.txt'), ['not a transcript'])
+    write(join(projects, '-work-dial', A, 'subagents', 'agent-1.jsonl'), [line(A, 'cli')])
+    writeFileSync(join(projects, 'stray-file'), '')
+    mkdirSync(join(projects, '-work-dial', 'odd.jsonl'))
+    symlinkSync(join(root, 'nowhere.jsonl'), join(projects, '-work-dial', 'broken.jsonl'))
+    const provider = claudeProvider({ projectsDir: projects, home: root })
+    const memo = scanMemo({ excluded: ['/data/harness'] })
+    const found = await provider.scan(memo.context())
+    expect(found).toEqual([expect.objectContaining({
+      sessionId: A, engine: 'claude', cwd: '/work/dial', origin: 'terminal', title: '',
+      transcriptPath: join(projects, '-work-dial', `${A}.jsonl`),
+    })])
+    expect(found[0].mtime).toBeGreaterThan(0)
+    // Nothing where nothing is.
+    expect(await claudeProvider({ projectsDir: join(root, 'none'), home: root }).scan(memo.context())).toEqual([])
+  })
+
+  it('knows its owners from their live process records, and whether they are between turns', async () => {
+    const root = home()
+    write(join(root, 'sessions', '101.json'), [{ pid: 101, sessionId: A, status: 'busy' }])
+    write(join(root, 'sessions', '102.json'), [{ pid: 102, sessionId: B, status: 'idle' }])
+    write(join(root, 'sessions', '103.json'), [{ pid: 103, sessionId: B }])
+    write(join(root, 'sessions', '104.json'), ['{ being written'])
+    write(join(root, 'sessions', '105.json'), [{ pid: '105', sessionId: B }])
+    write(join(root, 'sessions', '106.json'), [{ pid: 106 }])
+    write(join(root, 'sessions', 'notes.txt'), ['x'])
+    mkdirSync(join(root, 'sessions', 'dir.json'))
+    const provider = claudeProvider({ projectsDir: join(root, 'projects'), home: root })
+    const claims = await provider.owners!(view((pid) => pid === 101 || pid === 102 || pid === 106))
+    expect(claims.sort((a, b) => a.pid - b.pid)).toEqual([
+      { sessionId: A, pid: 101, record: join(root, 'sessions', '101.json') },
+      { sessionId: B, pid: 102, record: join(root, 'sessions', '102.json') },
+    ])
+    expect(await provider.busy!({ pid: 101, record: join(root, 'sessions', '101.json') })).toBe(true)
+    expect(await provider.busy!({ pid: 102, record: join(root, 'sessions', '102.json') })).toBe(false)
+    // The record gone is the process gone: not mid-turn.
+    expect(await provider.busy!({ pid: 9, record: join(root, 'sessions', 'gone.json') })).toBe(false)
+  })
+})

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { forEachLine, lineNormalizer, lineTime, skipPredicate } from './transcript.js'
+import { copilotOwnLine, forEachLine, lineNormalizer, lineTime, museOwnStream, skipPredicate } from './transcript.js'
 import { TurnCollector, type IndexedTurn } from './turns.js'
 
 const dirs: string[] = []
@@ -170,5 +170,29 @@ describe("the person's words outside Claude's prompt records", () => {
     expect(text).not.toContain('Goal check-in')
     expect(text).not.toContain('Goal set')
     expect(text).not.toContain('Base directory')
+  })
+})
+
+describe("engines' own lines", () => {
+  it("keeps a Muse session's own stream, and records that name none", () => {
+    expect(museOwnStream('{"stream":{"kind":"session","id":"s1"},"payload":{}}', 's1')).toBe(true)
+    expect(museOwnStream('{"stream":{"kind":"session","id":"child"},"payload":{}}', 's1')).toBe(false)
+    expect(museOwnStream('{"payload":{}}', 's1')).toBe(true)
+  })
+
+  it("keeps Copilot's own events, not a sub-agent's or a prompt nobody typed", () => {
+    expect(copilotOwnLine('{"type":"assistant.message","data":{"content":"hi"}}')).toBe(true)
+    expect(copilotOwnLine('{"type":"assistant.message","agentId":"a1","data":{}}')).toBe(false)
+    expect(copilotOwnLine('{"type":"assistant.message","agentId":"","data":{}}')).toBe(true)
+    expect(copilotOwnLine('{"type":"user.message","data":{"content":"x","source":"skill-review"}}')).toBe(false)
+    expect(copilotOwnLine('{"type":"user.message","data":{"content":"x","source":""}}')).toBe(true)
+    expect(copilotOwnLine('{"type":"user.message","data":{"content":"go on","isAutopilotContinuation":true}}')).toBe(false)
+    expect(copilotOwnLine('{"type":"tool.call","data":{"source":"x"}}')).toBe(true)
+    expect(copilotOwnLine('{"type":"user.message","data":{"source": half')).toBe(true)
+    // Through the search reader: a sub-agent's answer is not the conversation's.
+    const normalize = lineNormalizer('copilot', 'c1')!
+    expect(normalize('{"type":"assistant.message","agentId":"a1","data":{"content":"sub"}}')).toEqual([])
+    const muse = lineNormalizer('muse', 's1')!
+    expect(muse('{"stream":{"kind":"session","id":"child"},"payload":{}}')).toEqual([])
   })
 })

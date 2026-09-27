@@ -130,7 +130,9 @@ class SessionContentHit {
       title: title is String ? title : '',
       open: external['open'] == true,
       openIn: switch (external['openIn']) {
-        final String where when where == 'terminal' || where == 'app' => where,
+        final String where
+            when where == 'terminal' || where == 'app' || where == 'harness' =>
+          where,
         _ => null,
       },
     );
