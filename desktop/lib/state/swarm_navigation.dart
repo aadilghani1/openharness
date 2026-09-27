@@ -715,7 +715,9 @@ List<SwarmDestination> rankSwarmDestinationsByActivity(
   List<String> recent = const [],
   SessionPreviewStore? previews,
   Map<String, SessionContentHit>? contentHits,
+  DateTime? Function(SwarmDestination row)? activityOf,
 }) {
+  final activity = activityOf ?? (SwarmDestination row) => row.lastActivityAt;
   final matches = _matchSwarmDestinations(
     all,
     query,
@@ -733,14 +735,14 @@ List<SwarmDestination> rankSwarmDestinationsByActivity(
       final said = b.said.compareTo(a.said);
       if (said != 0) return said;
     }
-    final aTime = a.entry.lastActivityAt;
-    final bTime = b.entry.lastActivityAt;
-    final activity = aTime == null
+    final aTime = activity(a.entry);
+    final bTime = activity(b.entry);
+    final byTime = aTime == null
         ? (bTime == null ? 0 : 1)
         : bTime == null
         ? -1
         : bTime.compareTo(aTime);
-    if (activity != 0) return activity;
+    if (byTime != 0) return byTime;
     final visit = (visits[a.entry.id] ?? recent.length).compareTo(
       visits[b.entry.id] ?? recent.length,
     );

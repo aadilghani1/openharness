@@ -740,9 +740,14 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           final canSubmit = search.canSubmit(row);
           final unavailableReason = search.sessionUnavailable(row);
           final alreadyHere = search.alreadyHere(row);
-          final activityAge = widget.bios && row.lastActivityAt != null
-              ? harnessActivityAge(row.lastActivityAt, DateTime.now())
-              : null;
+          // As of this opening, like the order: the list does not move while
+          // it is open. Under a minute is "now", not "0m".
+          final activity = widget.bios ? search.activityOf(row) : null;
+          final activityAge = activity == null
+              ? null
+              : search.openedAt.difference(activity).inMinutes < 1
+              ? 'now'
+              : harnessActivityAge(activity, search.openedAt);
           final presentation = (
             row,
             selected,

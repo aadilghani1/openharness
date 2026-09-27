@@ -159,6 +159,9 @@ void main() {
                   name: 'Agent 7',
                   engine: 'codex',
                   terminalAvailable: true,
+                  lastActivityAt: DateTime.now().subtract(
+                    const Duration(seconds: 20),
+                  ),
                 )
               : agent,
       ];
@@ -200,6 +203,9 @@ void main() {
       await tester.pump(const Duration(seconds: 10));
       expect(tails, [null], reason: 'nothing refreshes while Cmd-P is open');
       expect(find.text('Working'), findsOneWidget);
+      // Under a minute old reads "now", not "0m".
+      expect(find.text('now'), findsOneWidget);
+      expect(find.text('0m'), findsNothing);
 
       final list = find.byKey(const ValueKey('session-tail:m:s7'));
       expect(list, findsOneWidget);
