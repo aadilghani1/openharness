@@ -12,7 +12,6 @@ import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/workspace_onboarding.dart';
-import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/onboarding_card.dart';
 
@@ -105,7 +104,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> localHarness() async {
+  void localHarness() {
     app.stateOf('m')!.agents = const [
       Agent(
         id: 'work',
@@ -115,136 +114,9 @@ void main() {
       ),
     ];
     app.adoptSessionForTest(terminal('work', []));
-    await app.handleMachineEventForTest('m', {
-      'type': 'turn_ended',
-      'agentId': 'work',
-    });
   }
 
-  testWidgets(
-    'unlocks require completed work; agent and model switches are not new harnesses',
-    (tester) async {
-      app.inventory = const GridModels(
-        gridName: 'home',
-        models: [GridModel(id: 'qwen', node: 'm')],
-      );
-      await app.modelManager.refresh();
-      await mount(tester);
-      app.stateOf('m')!.agents = const [
-        Agent(
-          id: 'work',
-          name: 'Work',
-          engine: 'codex',
-          terminalAvailable: true,
-        ),
-      ];
-      app.adoptSessionForTest(terminal('work', []));
-      app.notifyListeners();
-      await tester.pumpAndSettle();
-      expect(journey.completed(OnboardingStep.harnesses), isFalse);
-      await app.handleMachineEventForTest('m', {
-        'type': 'turn_started',
-        'agentId': 'work',
-      });
-      await tester.pumpAndSettle();
-      expect(journey.completed(OnboardingStep.harnesses), isFalse);
-      await app.handleMachineEventForTest('m', {
-        'type': 'turn_ended',
-        'agentId': 'work',
-      });
-      await tester.pumpAndSettle();
-      expect(journey.completed(OnboardingStep.harnesses), isTrue);
-      expect(find.text('1/4'), findsNothing);
-      app.stateOf('m')!.agents = const [
-        Agent(
-          id: 'work',
-          name: 'Work',
-          engine: 'claude',
-          gridModel: 'qwen',
-          terminalAvailable: true,
-        ),
-      ];
-      app.notifyListeners();
-      await tester.pumpAndSettle();
-      expect(journey.completed(OnboardingStep.models), isFalse);
-      await app.handleMachineEventForTest('m', {
-        'type': 'turn_ended',
-        'agentId': 'work',
-      });
-      await tester.pumpAndSettle();
-      expect(journey.completed(OnboardingStep.models), isTrue);
-      expect(journey.completed(OnboardingStep.store), isFalse);
-      app.stateOf('m')!.agents = const [
-        Agent(
-          id: 'work',
-          name: 'Work',
-          engine: 'claude',
-          dsh: 'autonomous/kicad',
-          terminalAvailable: true,
-        ),
-      ];
-      for (final extra in [
-        {'subagent': true},
-        {
-          'payload': {'error': 'failed'},
-        },
-      ]) {
-        await app.handleMachineEventForTest('m', {
-          'type': 'turn_ended',
-          'agentId': 'work',
-          ...extra,
-        });
-        await tester.pumpAndSettle();
-        expect(journey.completed(OnboardingStep.store), isFalse);
-      }
-      await app.handleMachineEventForTest('m', {
-        'type': 'turn_ended',
-        'agentId': 'work',
-      });
-      await tester.pumpAndSettle();
-      expect(journey.completed(OnboardingStep.store), isTrue);
-      expect(journey.completed(OnboardingStep.machines), isFalse);
-      expect(find.text('2/3'), findsNothing);
-      // A real remote turn earns the remaining milestone.
-      const remote = Machine(
-        machineId: 'r',
-        name: 'Remote',
-        authMode: MachineAuthMode.remote,
-      );
-      app.machineStates['r'] = MachineState(remote)
-        ..agents = const [
-          Agent(id: 'remote', name: 'Remote work', engine: 'codex'),
-        ];
-      final remoteSession = TerminalSession(
-        machineId: 'r',
-        agentId: 'remote',
-        agentName: 'Remote work',
-        engineId: 'codex',
-        send: (_, _) async => true,
-        sendBinary: (_) async => true,
-      );
-      app.adoptSessionForTest(remoteSession);
-      await app.handleMachineEventForTest('r', {
-        'type': 'turn_ended',
-        'agentId': 'remote',
-      });
-      await tester.pumpAndSettle();
-      expect(journey.completed(OnboardingStep.machines), isTrue);
-      expect(find.byKey(const ValueKey('onboarding-progress')), findsNothing);
-      expect(
-        find.byKey(const ValueKey('onboarding-harnesses-complete')),
-        findsNothing,
-      );
-      expect(
-        find.byKey(const ValueKey('workspace-status-bar')),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
-
-  for (var completed = 0; completed <= 4; completed++) {
+  for (var completed = 0; completed <= 3; completed++) {
     testWidgets(
       'welcome has the same working actions with $completed saved steps',
       (tester) async {
@@ -410,7 +282,6 @@ void main() {
     final map = MemoryKeymap();
     addTearDown(map.dispose);
     await mount(tester, keymap: map);
-    expect(find.byTooltip('Models'), findsNothing);
     expect(find.byTooltip('Models ⌘I'), findsNothing);
     map.apply('''{"bindings":[
       {"keys":"cmd+i","command":null},
@@ -492,6 +363,10 @@ void main() {
       await openWorkspaceTool(tester, 'harnesses');
       expect(find.text('New Harness'), findsNothing);
       expect(journey.completed(OnboardingStep.harnesses), isFalse);
+      expect(
+        find.byKey(const ValueKey('onboarding-harnesses-dot')),
+        findsNothing,
+      );
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       await openWorkspaceTool(tester, 'harnesses');
@@ -507,7 +382,7 @@ void main() {
     testWidgets(
       'Machines guides access to existing work (password=$hasPassword)',
       (tester) async {
-        await localHarness();
+        localHarness();
         if (hasPassword) app.password = '123456';
         await mount(tester);
         expect(journey.next, OnboardingStep.machines);
@@ -583,14 +458,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(app.connections, ['source']);
       expect(resourceScope('@'), findsOneWidget);
-      expect(resourceSearch(tester).selected!.machineId, 'source');
-      expect(field, findsNothing);
-      expect(app.stateOf('source')!.needsLink, isFalse);
-      expect(
-        app.stateOf('source')!.connectionStatus,
-        ConnectionStatus.connected,
-      );
-      expect(app.allPanes, isEmpty);
       await key(tester, LogicalKeyboardKey.enter);
       expect(resourceScope('@'), findsOneWidget);
       expect(app.panes, isEmpty);
@@ -600,8 +467,7 @@ void main() {
       expect(find.text('Work on this computer'), findsNothing);
       await key(tester, LogicalKeyboardKey.enter);
       expect(app.panes.single.agentId, 'existing');
-      expect(journey.completed(OnboardingStep.machines), isTrue);
-      expect(journey.completed(OnboardingStep.harnesses), isFalse);
+      expect(journey.completed(OnboardingStep.machines), isFalse);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },
@@ -640,15 +506,15 @@ void main() {
   );
 
   testWidgets(
-    'skipping Machines offers Store; local models remain available without a download',
+    'skipping Machines offers Models; explore selects Local without starting a download',
     (tester) async {
-      await localHarness();
+      localHarness();
       await app.modelManager.refresh();
       await mount(tester);
       await openWorkspaceTool(tester, 'machines');
       journey.dismiss(OnboardingStep.machines);
       await tester.pump();
-      expect(journey.next, OnboardingStep.store);
+      expect(journey.next, OnboardingStep.models);
       expect(find.byKey(const ValueKey('onboarding-models-dot')), findsNothing);
       await openWorkspaceTool(tester, 'models');
       expect(resourceScope(':'), findsOneWidget);

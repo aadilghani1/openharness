@@ -44,6 +44,9 @@ void main() {
     bool native = false,
     bool reduceMotion = false,
     Completer<void>? gate,
+    // These tests are about daemons that are on: a guest here has turned on
+    // Daemons (preview). The off cases are in daemon_off_test.dart.
+    bool guestPreview = true,
   }) async {
     remote = FakeZooTransport()
       ..zoo = seed
@@ -70,6 +73,7 @@ void main() {
           zoo: zoo,
           zooTransport: remote,
           daemonClock: () => tester.binding.clock.now(),
+          daemonsPreview: ValueNotifier(guestPreview),
         ),
       ),
     );
@@ -109,7 +113,9 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('a guest has a local zoo at once', (tester) async {
+  testWidgets('a guest who turned on the preview has a local zoo at once', (
+    tester,
+  ) async {
     app.signedIn = false;
     await mount(tester);
     await tester.pump();

@@ -7,6 +7,13 @@
 /// Nothing is shown until the zoo has loaded: [loaded] stays false while the
 /// scope is unknown (a signed-in window before its profile arrives) and while
 /// the first read is in flight, so a boot never flashes a stranger's nest.
+///
+/// Daemons ship dark (daemons/README.md, "Off switches"). A signed-in window
+/// shows them only once `GET /api/zoo` answers 200; a 404 (or a 401, or no way
+/// to ask) is [DaemonsSwitch.off]: nothing is shown, read, kept or sent, and
+/// the window behaves exactly as it did before daemons existed. A failed read
+/// is not an answer: whatever was known stands, and it is asked again. A
+/// guest's local zoo is off unless the person turned on Daemons (preview).
 library;
 
 import 'dart:async';
@@ -21,10 +28,12 @@ import 'roster.dart';
 import 'zoo.dart';
 
 abstract interface class ZooTransport {
-  /// `{revision, zoo}`, or null when this harnessd has no zoo (it predates it).
+  /// `{revision, zoo}`, or null when daemons are off: a 404 (switched off on
+  /// the server or in harnessd, or a harnessd that predates the zoo) or a
+  /// 401. A failure to answer throws: that is not off.
   Future<Map<String, dynamic>?> fetch();
 
-  /// `{revision, zoo, hatched}`, or null under the same condition.
+  /// `{revision, zoo, hatched}`, or null under the same conditions.
   Future<Map<String, dynamic>?> apply(List<Map<String, dynamic>> ops);
 }
 
@@ -60,6 +69,21 @@ class ZooDaemonGrew extends ZooEvent {
   final bool versionChanged;
 }
 
+/// Whether this window has daemons at all.
+enum DaemonsSwitch {
+  /// Not decided yet: no profile, or the first read has no answer. Nothing
+  /// shows and nothing is sent; no space is kept for the slot.
+  unknown,
+
+  /// The server has no zoo for this account (404), harnessd is switched off
+  /// (`DAEMONS_OFF`), or a guest did not turn on the preview. Everything
+  /// daemon-related stays hidden and silent.
+  off,
+
+  /// `GET /api/zoo` answered 200, or a guest turned on the preview.
+  on,
+}
+
 enum ZooSource {
   /// Not loaded yet, or no scope.
   none,
@@ -82,6 +106,11 @@ class ZooController extends ChangeNotifier {
        _now = now ?? DateTime.now;
 
   static const localZooKey = 'daemons.zoo.v1.local';
+
+  /// Daemons are asked about again once the last answer is this old (on or
+  /// off), besides on `zoo_changed` and a reconnect; a failed read is retried
+  /// no less often than this.
+  static const recheckEvery = Duration(hours: 6);
   static String prefsKey(String scope) =>
       'daemons.prefs.v1.${base64Url.encode(utf8.encode(scope))}';
 
@@ -92,6 +121,11 @@ class ZooController extends ChangeNotifier {
 
   String? _scope;
   ZooTransport? _remote;
+  bool _enabled = true;
+  bool _off = false;
+  bool _prefsRead = false;
+  DateTime? _answeredAt;
+  bool _fetching = false;
   ZooSource _source = ZooSource.none;
   Zoo _zoo = Zoo.empty;
   int _revision = 0;
@@ -112,6 +146,14 @@ class ZooController extends ChangeNotifier {
 
   String? get scope => _scope;
   ZooSource get source => _source;
+
+  /// Whether this window has daemons: [DaemonsSwitch.on] exactly when the zoo
+  /// has [loaded].
+  DaemonsSwitch get daemons => loaded
+      ? DaemonsSwitch.on
+      : _off
+      ? DaemonsSwitch.off
+      : DaemonsSwitch.unknown;
 
   /// New eggs and level-ups, for the face and the notices.
   Stream<ZooEvent> get events => _events.stream;
@@ -178,11 +220,54 @@ class ZooController extends ChangeNotifier {
   bool get needsHint => loaded && _zoo.daemons.isEmpty && !_hintSeen;
 
   /// Choose whose zoo this window shows: `guest`, `account:<id>`, or null
-  /// while that is not known yet. A new scope forgets everything.
-  void bind(String? scope, {ZooTransport? remote}) {
-    if (_disposed || scope == _scope) return;
+  /// while that is not known yet. A new scope forgets everything. An account
+  /// is asked through [remote] (none: off); a guest's local zoo shows only
+  /// when [enabled] (the Daemons (preview) setting) and is otherwise off
+  /// without reading anything.
+  void bind(String? scope, {ZooTransport? remote, bool enabled = true}) {
+    if (_disposed ||
+        (scope == _scope && remote == _remote && enabled == _enabled)) {
+      return;
+    }
     _scope = scope;
     _remote = remote;
+    _enabled = enabled;
+    _source = ZooSource.none;
+    _zoo = Zoo.empty;
+    _local = Zoo.empty;
+    _prefsRead = false;
+    _off = false;
+    _revision = 0;
+    _hatchingEgg = null;
+    _unsent.clear();
+    _retry?.cancel();
+    _retry = null;
+    _answeredAt = null;
+    _fetching = false;
+    _failures = 0;
+    _days.clear();
+    _easterAsked.clear();
+    _hintSeen = false;
+    final generation = ++_generation;
+    if (scope != null && (!enabled || (remote == null && scope != 'guest'))) {
+      // Nothing to ask, nothing to read: off from the start.
+      _off = true;
+    }
+    notifyListeners();
+    if (scope != null && !_off) unawaited(_load(generation));
+  }
+
+  /// Daemons are off: `DAEMONS_OFF` from harnessd, or a 404 on a write. All
+  /// of it goes, at once; an account is asked again later ([recheckIfDue],
+  /// `zoo_changed`, a reconnect).
+  void switchOff() {
+    if (_disposed || _scope == null || _off) return;
+    _goOff(_generation);
+  }
+
+  void _goOff(int generation) {
+    final was = loaded;
+    _off = true;
     _source = ZooSource.none;
     _zoo = Zoo.empty;
     _revision = 0;
@@ -191,34 +276,56 @@ class ZooController extends ChangeNotifier {
     _retry?.cancel();
     _retry = null;
     _failures = 0;
-    _days.clear();
-    _easterAsked.clear();
-    _hintSeen = false;
-    final generation = ++_generation;
+    _answeredAt = _now();
+    if (was) debugPrint('zoo: daemons are off');
     notifyListeners();
-    if (scope != null) unawaited(_load(generation));
+  }
+
+  /// Ask again when the last answer is [recheckEvery] old: no timer is kept
+  /// for it; the window calls this as it syncs.
+  void recheckIfDue() {
+    final at = _answeredAt;
+    if (_disposed ||
+        _scope == null ||
+        _remote == null ||
+        _fetching ||
+        at == null ||
+        _now().difference(at) < recheckEvery) {
+      return;
+    }
+    unawaited(_fetch(_generation));
   }
 
   bool _current(int generation) => !_disposed && generation == _generation;
 
   Future<void> _load(int generation) async {
+    if (_remote == null) {
+      // A guest who turned on the preview: its local zoo.
+      await _readPrefs();
+      if (!_current(generation)) return;
+      _adoptLocal();
+      return;
+    }
+    await _fetch(generation);
+  }
+
+  /// This installation's local zoo and this scope's preferences, read once,
+  /// and only once daemons are on.
+  Future<void> _readPrefs() async {
+    if (_prefsRead) return;
     final scope = _scope!;
+    final generation = _generation;
     await _saving;
     final local = await _readJson(localZooKey);
     final prefs = await _readJson(prefsKey(scope));
-    if (!_current(generation)) return;
+    if (!_current(generation) || _prefsRead) return;
+    _prefsRead = true;
     _local = Zoo.fromJson(local?['zoo'], roster);
     _seeded = local?['seeded'] == true;
     for (final day in prefs?['days'] as List? ?? const []) {
       if (day is String) _days.add(day);
     }
     _hintSeen = prefs?['hintSeen'] == true;
-    final remote = _remote;
-    if (remote == null) {
-      _adoptLocal();
-      return;
-    }
-    await _fetch(generation);
   }
 
   void _adoptLocal() {
@@ -255,21 +362,30 @@ class ZooController extends ChangeNotifier {
     final remote = _remote;
     if (remote == null) return;
     Map<String, dynamic>? raw;
+    _fetching = true;
     try {
       raw = await remote.fetch();
     } catch (error) {
+      if (_current(generation)) _fetching = false;
       if (!_current(generation)) return;
+      // Not an answer: whatever was known stands (on stays on, off stays
+      // off), and it is asked again.
       debugPrint('zoo: read failed: $error');
       if (!loaded) _scheduleRetry(generation);
       return;
     }
     if (!_current(generation)) return;
+    _fetching = false;
     if (raw == null) {
-      // This harnessd has no zoo yet. The local zoo stands in, and is seeded
-      // into the account's the first time one answers.
-      if (!loaded || isAccount) _adoptLocal();
+      // 404 (the server's zoo is switched off, or harnessd's is) or 401:
+      // daemons are off. Nothing shows, nothing is sent.
+      _goOff(generation);
       return;
     }
+    await _readPrefs();
+    if (!_current(generation)) return;
+    _off = false;
+    _answeredAt = _now();
     final wasAccount = isAccount;
     if (!wasAccount) {
       // At sign-in the guest's zoo goes first, ahead of any habit this window
@@ -286,10 +402,15 @@ class ZooController extends ChangeNotifier {
     if (!wasAccount && _unsent.isNotEmpty) _flushUnsent(generation);
   }
 
+  /// A failed read is asked again after 5 s, doubling up to [recheckEvery];
+  /// a failed write (daemons on) after 5 s, doubling up to a minute.
   void _scheduleRetry(int generation) {
     _failures++;
+    final seconds = 5 * (1 << (_failures - 1).clamp(0, 12));
     final wait = Duration(
-      seconds: (5 * (1 << (_failures - 1).clamp(0, 4))).clamp(5, 60),
+      seconds: loaded
+          ? seconds.clamp(5, 60)
+          : min(seconds, recheckEvery.inSeconds),
     );
     _retry?.cancel();
     _retry = Timer(wait, () {
@@ -357,7 +478,11 @@ class ZooController extends ChangeNotifier {
         final answer = await _remote!.apply([
           {'op': 'zoo.seed', 'zoo': seed},
         ]);
-        if (!_current(generation) || answer == null) return;
+        if (!_current(generation)) return;
+        if (answer == null) {
+          _goOff(generation);
+          return;
+        }
         _seeded = true;
         _saveLocal();
         _adopt(answer, baseline: true);
@@ -506,7 +631,11 @@ class ZooController extends ChangeNotifier {
         }
       });
       final answer = await completer.future;
-      if (!_current(generation) || answer == null) return null;
+      if (!_current(generation)) return null;
+      if (answer == null) {
+        _goOff(generation);
+        return null;
+      }
       _adopt(answer);
       return [
         for (final h in answer['hatched'] as List? ?? const [])
@@ -591,8 +720,13 @@ class ZooController extends ChangeNotifier {
       }
       if (!_current(generation)) return;
       _failures = 0;
+      if (answer == null) {
+        // A 404 on a write: daemons were switched off since the read.
+        _goOff(generation);
+        return;
+      }
       _unsent.removeRange(0, batch.length.clamp(0, _unsent.length));
-      if (answer != null) _adopt(answer);
+      _adopt(answer);
     });
   }
 

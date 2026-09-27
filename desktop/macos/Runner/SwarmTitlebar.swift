@@ -1561,11 +1561,56 @@ private final class SwarmTabStrip: NSView {
     }
   }
 
+  /// Whether the slot may take its space now; tests replace it. By default:
+  /// no mouse button is held and the pointer is off this strip, so tabs never
+  /// move under a click.
+  var daemonMayAppear: (() -> Bool)?
+  /// The state that shows the slot, held until [daemonMayAppear] says yes.
+  private(set) var pendingDaemon: [String: Any]?
+  private var daemonRevealTimer: Timer?
+
+  private func daemonCanAppear() -> Bool {
+    if let gate = daemonMayAppear { return gate() }
+    guard NSEvent.pressedMouseButtons == 0 else { return false }
+    guard let window else { return true }
+    return !bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+  }
+
+  /// Try the held state again; the timer stops once it is shown or withdrawn.
+  func retryPendingDaemon() {
+    guard let pending = pendingDaemon else {
+      daemonRevealTimer?.invalidate()
+      daemonRevealTimer = nil
+      return
+    }
+    if daemonCanAppear() {
+      daemonRevealTimer?.invalidate()
+      daemonRevealTimer = nil
+      pendingDaemon = nil
+      updateDaemon(pending)
+    }
+  }
+
   /// The daemon's face, tooltip and voice. A mood or voice change repaints the
   /// slot and the voice line only; layout runs only when the slot appears or goes.
+  /// A hidden slot takes no space at all. It appears at the first quiet moment
+  /// (see [daemonMayAppear]); until then the bar stays exactly as it was.
   func updateDaemon(_ state: [String: Any]) {
     let wasHidden = daemonButton.isHidden
-    daemonButton.isHidden = state["visible"] as? Bool != true
+    let wanted = state["visible"] as? Bool == true
+    if wanted && wasHidden && !daemonCanAppear() {
+      pendingDaemon = state
+      if daemonRevealTimer == nil {
+        daemonRevealTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+          self?.retryPendingDaemon()
+        }
+      }
+      return
+    }
+    pendingDaemon = nil
+    daemonRevealTimer?.invalidate()
+    daemonRevealTimer = nil
+    daemonButton.isHidden = !wanted
     daemonButton.busy = state["busy"] as? Bool == true
     daemonButton.isEnabled = actionsEnabled && !daemonButton.isHidden && !daemonButton.busy
     daemonButton.state = state["open"] as? Bool == true ? .on : .off

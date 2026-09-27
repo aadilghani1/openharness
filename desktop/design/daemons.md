@@ -6,6 +6,57 @@ says where the desktop keeps each part and what it chose where the contract
 leaves room. It replaces the local "terminal companion" (six species, canned
 chat, a local blind box), which is gone.
 
+## Off: invisible and free
+
+Daemons ship dark ([daemons/README.md](../../daemons/README.md), "Off
+switches"). Anyone who does not have them gets the window from before daemons
+existed, exactly:
+
+- **Signed in**, the server decides. `GET /api/zoo` answering 200 is on. A 404
+  (the server's `HARNESS_DAEMONS`, an account not in `HARNESS_DAEMONS_USERS`,
+  harnessd's local kill switch answering `DAEMONS_OFF`, or a harnessd that
+  predates the zoo) or a 401 is off, and so is `error: 'DAEMONS_OFF'` on any
+  `daemon_*_result` or `pair_result` (`DaemonBrain.switchedOff`), and a 404 on
+  a write. A 5xx or no answer is not off: whatever was known stands (nothing
+  shows until the first answer) and it is asked again after 5 s, doubling to
+  6 h. It is asked again on `zoo_changed`, on a reconnect, and once the last
+  answer is 6 h old (`ZooController.recheckIfDue`, checked as the window syncs:
+  no timer is kept for it).
+- **Signed out**, there is no server to ask: a guest's local zoo is off until
+  the person turns on **Daemons (preview)** in Settings ▸ Account
+  (`daemons_preview` in the local store, `lib/daemons/daemons_preview.dart`,
+  loaded before the first frame). Off, nothing local is even read.
+
+Off (and while it is not known yet) means: no status slot and no space kept
+for it (the Flutter bar and native lay out the bar from before daemons; native
+hears no `daemon` key and no `daemonState`), no voice line, panel, reveal,
+notices or hint, no habits, `zoo.turn` or easter ops, no `daemon_*` or `pair`
+frame (the brain's sends go through `_sendDaemonFrame`, which sends nothing
+unless the zoo has loaded; frames harnessd sends are heard but nothing of them
+shows), no `xyzzy` row, and the daemon's commands are not bound
+(`HarnessCommand.daemon`, `daemonCommandsActive`): ⌘⌥T reaches the pane as it
+did before, and neither the command list, the shortcut list, keyboard practice
+nor the native keymap has them. The daemon's settings file is read only once
+daemons are on. Switching off while on takes all of it away at once.
+
+`test/daemon_off_test.dart` holds all of this to the bar from before daemons
+at five widths (`test/fixtures/status_bar_before_daemons.json`, measured on
+`refs/heads/daemons` by `test/support/status_bar_layout.dart`); the native
+checks hold the AppKit bar to the same with the daemon hidden.
+
+**Appearing.** When daemons turn on (the first 200, or the preview switched
+on), the slot takes its space at the first quiet moment: no mouse button held,
+the pointer off the bar, and no key or pointer event for 800 ms (at once when
+nothing has been touched yet). Native holds the slot back the same way while a
+button is down or the pointer is on its strip (`daemonMayAppear`). Tabs never
+move under a click.
+
+**The welcome's steps are not the daemon's habits.** `WorkspaceOnboarding` is
+the one from before daemons: Harnesses, Machines, Models; a harness at work in
+a pane completes Harnesses; Machines or Models imply it; a person who had
+finished stays finished. The daemon's habits are its own, reported only while
+daemons are on.
+
 ## Where things live
 
 | part | file |
@@ -16,7 +67,8 @@ chat, a local blind box), which is gone.
 | line templates and their slots | `lib/daemons/daemon_lines.dart` |
 | Motion, Quiet and the panel's last tab, kept per computer | `lib/daemons/daemon_settings.dart` (`daemons.settings.v1`) |
 | zoo shape, rules, local draw | `lib/daemons/zoo.dart` |
-| zoo state: account, guest, seed | `lib/daemons/zoo_controller.dart` |
+| zoo state: account, guest, seed; on, off or not known yet | `lib/daemons/zoo_controller.dart` |
+| Daemons (preview), a guest's switch | `lib/daemons/daemons_preview.dart`, the row in `lib/settings/sections/account_section.dart` |
 | moods, blinks, work steps, tally, voice | `lib/daemons/daemon_face.dart` |
 | the pair brain's frames, shown and armed, confirms, talk and `pair` requests | `lib/daemons/daemon_brain.dart` |
 | lessons (list, show, skip, revert; taught only by the live line's key) | `lib/daemons/daemon_lessons.dart` |
@@ -44,7 +96,8 @@ news. Writes are queued and retried; every op is idempotent. Habits, pair and
 nickname show at once and are confirmed by the answer; eggs and draws are the
 server's.
 
-A guest keeps a local zoo (`daemons.zoo.v1.local` in the app's local store)
+A guest who turned on Daemons (preview) keeps a local zoo
+(`daemons.zoo.v1.local` in the app's local store)
 with the same shape and rules (economy v2, `backend/src/lib/zoo.ts`), drawn on
 the client: regulars first and secrets only from eggs whose `weights.secret`
 is above 0 (drop 1: night and easter), the pity counting only those eggs and
@@ -57,9 +110,8 @@ records of one daemon reads as one. The autonomy dial is zoo state too
 (`zoo.consent { watching }`, kept as `consent { watching, at }`; null until
 answered; a yes puts the dial at `watch`). The zoo is sent once with
 `zoo.seed` the first time an account's zoo answers; the server keeps the
-account's own dial and consent. A harnessd that predates
-the zoo answers 404; the window then uses the local zoo too, and seeds it when
-the account's zoo appears.
+account's own dial and consent. A 404 is off (see above): the window no longer
+falls back to the local zoo.
 
 At sign-in the guest's zoo is queued first, ahead of any habit report, and
 only when the account holds no daemon, egg or habit (the server refuses it
@@ -437,7 +489,8 @@ window.
 
 `SwarmScreen` reads only Reduce Motion from `MediaQuery`, so a resize no longer
 rebuilds the workspace. Session rows are built once per tick and shared by the
-toolbar, the badge, the native payload and the daemon. There is no idle timer
+toolbar, the badge, the native payload and the daemon. Off, none of the daemon's
+work runs: no face sync, no habits, no frames, no settings read. There is no idle timer
 and no animation loop: work frames step on agent events, and timers only end a
 held face, run a blink or the return wave, end a nap, hold a line until you
 pause, and clear a spoken line. Agent events reach the face through their own

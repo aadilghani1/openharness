@@ -11,8 +11,13 @@ import 'package:harness/daemons/zoo_controller.dart';
 
 class _Memory implements LocalKeyValueStore {
   final values = <String, String>{};
+  final reads = <String>[];
   @override
-  Future<String?> read(String key) async => values[key];
+  Future<String?> read(String key) async {
+    reads.add(key);
+    return values[key];
+  }
+
   @override
   Future<void> write(String key, String value) async => values[key] = value;
   @override
@@ -892,21 +897,126 @@ void main() {
       expect(zoo.paired?.id, 'fzf');
     });
 
-    test('a harnessd without a zoo falls back to the local zoo', () async {
-      final remote = FakeZooTransport(available: false);
+    test(
+      'a 404 is off: nothing shown, read or sent; asked again on '
+      'zoo_changed, a reconnect or when the answer is six hours old',
+      () async {
+        var clock = DateTime(2026, 9, 26, 9, 42);
+        final remote = FakeZooTransport(available: false);
+        final zoo = ZooController(
+          storage: storage,
+          random: Random(2),
+          now: () => clock,
+        );
+        addTearDown(zoo.dispose);
+        zoo.bind('account:u1', remote: remote);
+        expect(zoo.daemons, DaemonsSwitch.unknown);
+        await pumpEventQueue();
+        expect(zoo.daemons, DaemonsSwitch.off);
+        expect(zoo.loaded, isFalse);
+        expect(zoo.source, ZooSource.none);
+        expect(
+          storage.reads,
+          isEmpty,
+          reason: 'nothing local is read while off',
+        );
+        // Nothing is reported or kept while off.
+        zoo.habit('turn');
+        zoo.noteDay();
+        expect(zoo.easter('xyzzy'), isFalse);
+        zoo.recordTurns(3, machineId: 'm');
+        await zoo.flush();
+        expect(remote.batches, isEmpty);
+        expect(storage.values, isEmpty);
+        expect(remote.fetches, 1);
+        // Not due yet: no request.
+        clock = clock.add(const Duration(hours: 5));
+        zoo.recheckIfDue();
+        await pumpEventQueue();
+        expect(remote.fetches, 1);
+        clock = clock.add(const Duration(hours: 1));
+        zoo.recheckIfDue();
+        await pumpEventQueue();
+        expect(remote.fetches, 2);
+        expect(zoo.daemons, DaemonsSwitch.off);
+        // Switched on at the server: zoo_changed (or a reconnect) asks again.
+        remote.available = true;
+        zoo.pushed(1);
+        await pumpEventQueue();
+        expect(zoo.daemons, DaemonsSwitch.on);
+        expect(zoo.isAccount, isTrue);
+        // And off again: a 404 on a write takes everything away at once.
+        remote
+          ..zoo = const Zoo(
+            daemons: [ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first')],
+            pair: 'tim',
+          )
+          ..revision = 2;
+        zoo.pushed(2);
+        await pumpEventQueue();
+        expect(zoo.paired?.id, 'tim');
+        remote.available = false;
+        zoo.habit('split');
+        await zoo.flush();
+        expect(zoo.daemons, DaemonsSwitch.off);
+        expect(zoo.paired, isNull);
+      },
+    );
+
+    test(
+      'an account with no way to ask is off; a failed read is not',
+      () async {
+        final zoo = controller();
+        addTearDown(zoo.dispose);
+        zoo.bind('account:u1');
+        expect(zoo.daemons, DaemonsSwitch.off);
+        final remote = FakeZooTransport()..failWith = StateError('502');
+        zoo.bind('account:u2', remote: remote);
+        await pumpEventQueue();
+        expect(zoo.daemons, DaemonsSwitch.unknown, reason: 'a 5xx is not off');
+      },
+    );
+
+    test(
+      'switchOff (DAEMONS_OFF from harnessd) hides everything at once',
+      () async {
+        final remote = FakeZooTransport()
+          ..zoo = const Zoo(
+            daemons: [ZooDaemon(id: 'vim', hatchedAt: '', egg: 'first')],
+            pair: 'vim',
+          );
+        final zoo = controller();
+        addTearDown(zoo.dispose);
+        zoo.bind('account:u1', remote: remote);
+        await pumpEventQueue();
+        expect(zoo.daemons, DaemonsSwitch.on);
+        zoo.switchOff();
+        expect(zoo.daemons, DaemonsSwitch.off);
+        expect(zoo.paired, isNull);
+        expect(zoo.loaded, isFalse);
+        zoo.refresh();
+        await pumpEventQueue();
+        expect(zoo.daemons, DaemonsSwitch.on, reason: 'asked again: 200');
+      },
+    );
+
+    test('a guest is off unless the preview is on; turning it on shows the '
+        'local zoo', () async {
       final zoo = controller();
       addTearDown(zoo.dispose);
-      zoo.bind('account:u1', remote: remote);
+      zoo.bind('guest', enabled: false);
+      expect(zoo.daemons, DaemonsSwitch.off);
       await pumpEventQueue();
-      expect(zoo.source, ZooSource.local);
+      expect(storage.reads, isEmpty);
       zoo.habit('turn');
-      await zoo.flush();
-      remote.available = true;
-      zoo.pushed(1);
+      expect(storage.values, isEmpty);
+      zoo.bind('guest');
       await pumpEventQueue();
-      await zoo.flush();
-      expect(zoo.isAccount, isTrue);
-      expect(remote.zoo.habits, ['turn'], reason: 'seeded on first answer');
+      expect(zoo.daemons, DaemonsSwitch.on);
+      expect(zoo.source, ZooSource.local);
+      zoo.bind('guest', enabled: false);
+      expect(zoo.daemons, DaemonsSwitch.off);
+      expect(zoo.loaded, isFalse);
     });
 
     testWidgets('a failed read retries and stays hidden meanwhile', (

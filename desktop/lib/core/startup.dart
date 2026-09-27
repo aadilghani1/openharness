@@ -2,6 +2,7 @@ import '../shared/theme/appearance_prefs_store.dart';
 import '../stats/harness_stats.dart';
 import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_theme_store.dart';
+import '../daemons/daemons_preview.dart';
 import '../notify/alert_sounds.dart';
 import '../notify/system_notifications.dart';
 
@@ -25,6 +26,7 @@ Future<void> loadPersistedSettings({
   AlertSoundStore? alertSounds,
   ScreenAlertStore? screenAlerts,
   DesktopNotificationStore? desktopNotifications,
+  DaemonsPreviewStore? daemonsPreview,
 }) async {
   // Independent stores may load together, but all must finish before runApp.
   // Font and appearance share a serialized file store; each reads its related
@@ -46,5 +48,8 @@ Future<void> loadPersistedSettings({
     (alertSounds ?? alertSoundStore).load(),
     (screenAlerts ?? screenAlertStore).load(),
     (desktopNotifications ?? desktopNotificationStore).load(),
+    // Before the first frame: a guest who turned daemons on sees the slot
+    // decided at once, and one who did not never has it reserved.
+    (daemonsPreview ?? daemonsPreviewStore).load(),
   ]);
 }

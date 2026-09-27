@@ -226,7 +226,12 @@ picker; focused context links keep their scope.
 Leave a window drag area between tabs and context and prevent overlap in
 narrow windows. Native menus and commands remain available.
 
-The daemon sits at the far right, directly after the focused context and PR:
+Only while daemons are on (the account's `GET /api/zoo` answered 200, or a
+guest turned on Daemons (preview)), the daemon sits at the far right, directly
+after the focused context and PR. Off, or before that is known, nothing is
+reserved for it and the bar is exactly the one described above; when it turns
+on, the slot waits for a quiet moment (no button held, the pointer off the
+bar) so tabs never move under a click. On:
 the paired daemon's sprite, or the nest while the first egg incubates
 (`\_O_/` `~\_O_/~` `\_.._/` `\_o.o_/`). Its one-cell inner gutters provide
 separation; add no extra gap or divider. Use the same 13 pt workspace font as

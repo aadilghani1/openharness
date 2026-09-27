@@ -23,7 +23,10 @@
 ///     is never spoken about
 ///
 /// An older harnessd sends none of these; the face then keeps the roster's
-/// lines and the window's own view of its harnesses.
+/// lines and the window's own view of its harnesses. A harnessd whose daemons
+/// are switched off (daemons/README.md, "Off switches") answers every request
+/// with `error: 'DAEMONS_OFF'`: the window hears [DaemonBrain.switchedOff] and
+/// hides everything.
 library;
 
 import 'dart:async';
@@ -796,6 +799,7 @@ class DaemonBrain extends ChangeNotifier {
   final _errors = StreamController<String>.broadcast(sync: true);
   final _opens = StreamController<DaemonAbout>.broadcast(sync: true);
   final _results = StreamController<DaemonActResult>.broadcast(sync: true);
+  final _switchedOff = StreamController<void>.broadcast(sync: true);
   String? _desk;
   bool _disposed = false;
 
@@ -827,6 +831,9 @@ class DaemonBrain extends ChangeNotifier {
 
   /// What each key did (a lesson learned or skipped, or why not).
   Stream<DaemonActResult> get results => _results.stream;
+
+  /// harnessd answered a request with `DAEMONS_OFF`: daemons are off here.
+  Stream<void> get switchedOff => _switchedOff.stream;
 
   DaemonTalkPhase get talkPhase => _talkPhase;
   String? get talkError => _talkError;
@@ -914,9 +921,29 @@ class DaemonBrain extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
+  /// The replies to what this window asked (`daemon_act_result`,
+  /// `daemon_confirm_result`, `daemon_talk_result`, `pair_result`).
+  static const replies = {
+    'daemon_act_result',
+    'daemon_confirm_result',
+    'daemon_talk_result',
+    'pair_result',
+  };
+
   /// A local frame from this computer's harnessd.
   void receive(String type, Map<String, dynamic> payload) {
     if (_disposed) return;
+    if (replies.contains(type) && payload['error'] == 'DAEMONS_OFF') {
+      // Switched off in harnessd: nothing heard so far holds, and the
+      // window hides everything. A `pair` request hears its own answer.
+      final waiting = _requests.remove(payload['requestId']);
+      if (waiting != null && !waiting.isCompleted) {
+        waiting.complete({...payload}..remove('requestId'));
+      }
+      reset();
+      _switchedOff.add(null);
+      return;
+    }
     switch (type) {
       case 'daemon_state':
         _state = DaemonBrainState.fromJson(payload);
@@ -1280,6 +1307,7 @@ class DaemonBrain extends ChangeNotifier {
     unawaited(_errors.close());
     unawaited(_opens.close());
     unawaited(_results.close());
+    unawaited(_switchedOff.close());
     super.dispose();
   }
 }

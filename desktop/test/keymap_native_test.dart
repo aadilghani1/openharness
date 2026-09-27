@@ -24,6 +24,20 @@ void main() {
     expect(jsonEncode(snapshot), contains('swarm.new'));
   });
 
+  test('the daemon\'s keys reach native only while daemons are on', () {
+    final keymap = MemoryKeymap();
+    addTearDown(keymap.dispose);
+    addTearDown(() => daemonCommandsActive.value = false);
+    expect(daemonCommandsActive.value, isFalse);
+    final off = jsonEncode(nativeKeymapSnapshot(keymap));
+    expect(off, isNot(contains('app.daemon')));
+    expect(off, isNot(contains('alt+cmd+t')));
+    daemonCommandsActive.value = true;
+    final on = jsonEncode(nativeKeymapSnapshot(keymap));
+    expect(on, contains('app.daemon_talk'));
+    expect(on, contains('alt+cmd+t'));
+  });
+
   test(
     'native payload carries resolved contexts, unbinding and actual hints',
     () async {
@@ -55,7 +69,11 @@ void main() {
       final contexts = changed['contexts']! as Map;
       for (final context in KeymapContext.values) {
         final rows = (contexts[context.name] as List).cast<Map>();
-        final bindings = keymap.current.bindingsFor(context);
+        // The daemon's commands exist only while daemons are on (off here).
+        final bindings = keymap.current
+            .bindingsFor(context)
+            .where((b) => harnessCommandActive(b.command!))
+            .toList();
         expect(rows.length, bindings.length);
         for (final binding in bindings) {
           final row = rows.singleWhere(

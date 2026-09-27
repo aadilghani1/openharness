@@ -21,6 +21,9 @@ import 'package:harness/daemons/render.dart';
 import 'package:harness/daemons/roster.dart';
 import 'package:harness/daemons/zoo.dart';
 import 'package:harness/daemons/zoo_controller.dart';
+import 'package:harness/core/models.dart' show CurrentUserProfile;
+import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/state/swarm_catalog.dart' show SwarmProjectStore;
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/terminal/terminal_text.dart';
@@ -31,7 +34,10 @@ import 'package:harness/widgets/daemon_panel.dart';
 import 'package:harness/widgets/daemon_slot.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle, TerminalTheme;
 
+import 'daemons/zoo_test.dart' show FakeZooTransport;
 import 'support/real_fonts.dart';
+import 'support/status_bar_layout.dart' show seedStatusBarWorkspace;
+import 'swarm_state_test.dart' show createApp;
 
 class _Memory implements LocalKeyValueStore {
   final values = <String, String>{};
@@ -1817,5 +1823,57 @@ void main() {
       expect(find.byKey(const ValueKey('daemon-hatch-card')), findsNothing);
       await tester.pumpWidget(const SizedBox());
     });
+  }
+
+  // The whole workspace bar, as the window draws it: daemons off (the
+  // server's 404, or a guest who has not turned on the preview) is the bar
+  // from before daemons existed; on (200, or a guest who turned it on) keeps
+  // the slot at the right.
+  for (final (name, guest, on, preview) in [
+    ('off-404', false, false, false),
+    ('off-guest-default', true, true, false),
+    ('on-200', false, true, false),
+    ('on-guest-preview', true, true, true),
+  ]) {
+    for (final width in [1024.0, 1440.0]) {
+      testWidgets('workspace bar, daemons $name, ${width.toInt()}', (
+        tester,
+      ) async {
+        final app = createApp();
+        addTearDown(app.dispose);
+        seedStatusBarWorkspace(app);
+        if (guest) app.signedIn = false;
+        app.currentUser = guest
+            ? null
+            : const CurrentUserProfile(id: 'u1', email: 'review@example.test');
+        final zoo = ZooController(storage: _Memory());
+        addTearDown(zoo.dispose);
+        final remote = FakeZooTransport(available: on)
+          ..zoo = _paired('tim', version: '1.0')
+          ..revision = 1;
+        final switchOn = ValueNotifier(preview);
+        addTearDown(switchOn.dispose);
+        await _capture(
+          tester,
+          'workspace-bar-$name-${width.toInt()}',
+          Size(width, 240),
+          (context) => SwarmScreen(
+            notifier: app,
+            nativeTabs: false,
+            projectStore: SwarmProjectStore(),
+            zoo: zoo,
+            zooTransport: remote,
+            daemonsPreview: switchOn,
+          ),
+          settle: const Duration(milliseconds: 200),
+        );
+        expect(
+          find.byKey(const ValueKey('daemon-slot')),
+          on && (!guest || preview) ? findsOneWidget : findsNothing,
+        );
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump(const Duration(seconds: 11));
+      });
+    }
   }
 }

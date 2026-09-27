@@ -330,9 +330,10 @@ class MachineState {
   String? pendingOfflineAgentId;
   final Set<String> processingAgentIds = {};
 
-  /// Successful turn events from work opened in this workspace. Capture the
-  /// harness and model at completion so later switches cannot earn milestones.
-  /// Account changes discard MachineState; durable progress lives in onboarding.
+  /// Successful turn events from work opened in this workspace: the daemon's
+  /// `turn` and `store` habits (read only while daemons are on). Capture the
+  /// harness and model at completion so later switches cannot earn them.
+  /// Account changes discard MachineState; the zoo keeps what was earned.
   final completedHarnessUses = <({String harness, String? model})>{};
   int completedHarnessTurns = 0;
 

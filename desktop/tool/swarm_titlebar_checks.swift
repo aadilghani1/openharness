@@ -218,10 +218,74 @@ private extension SwarmTabButton {
 }
 
 private extension SwarmTabStrip {
+  /// Every frame the bar lays out, apart from the daemon's own.
+  func barFrames() -> [NSRect] {
+    [scroll.frame, document.frame, newButton.frame, contextButton.frame, focusedModelButton.frame,
+     pullRequestButton.frame] + tabs.map { $0.frame }
+  }
+
+  /// Daemons off: no key, or `visible: false`, lays out exactly the bar from
+  /// before daemons existed, at every width. On, the slot waits for a quiet
+  /// moment before it takes its space, and nothing moves meanwhile.
+  func checkDaemonOff() throws {
+    let originalSize = frame.size
+    defer { setFrameSize(originalSize); daemonMayAppear = nil; updateDaemon([:]) }
+    let base: [String: Any] = ["enabled": true, "activeId": "off-3",
+      "tabs": (0..<7).map { ["id": "off-\($0)", "name": "Off \($0)", "label": "\($0 + 1):code"] },
+      "focusedContext": ["text": "Codex  M2:project  (main)", "canSelectModel": true],
+      "focusedModel": ["text": "gpt-5", "paneId": 3, "agentId": "a1"],
+      "pullRequest": ["text": "PR #298 · Merged", "url": "https://github.com/acme/repo/pull/298"]]
+    daemonMayAppear = { true }
+    for width in [480.0, 720.0, 1024.0, 1440.0, 1920.0] {
+      setFrameSize(NSSize(width: width, height: 52))
+      update(base)
+      layoutSubtreeIfNeeded()
+      let before = barFrames()
+      var hidden = base
+      hidden["daemon"] = ["visible": false, "glyph": "\\_O_/", "voice": "pip: hello"]
+      update(hidden)
+      layoutSubtreeIfNeeded()
+      try checkTitlebar(barFrames() == before && daemonButton.isHidden && daemonButton.frame.width == 0,
+        "A hidden daemon reserves nothing at \(Int(width))pt: the bar is the one from before daemons")
+      try checkTitlebar(voiceLabel.isHidden && !contextButton.isHidden,
+        "A hidden daemon never speaks over the context at \(Int(width))pt")
+    }
+    setFrameSize(NSSize(width: 1024, height: 52))
+    update(base)
+    layoutSubtreeIfNeeded()
+    let quiet = barFrames()
+    var allowed = false
+    daemonMayAppear = { allowed }
+    var shown = base
+    shown["daemon"] = ["visible": true, "glyph": "\\_O_/"]
+    update(shown)
+    layoutSubtreeIfNeeded()
+    try checkTitlebar(daemonButton.isHidden && pendingDaemon != nil && barFrames() == quiet,
+      "While a button is held or the pointer is on the bar, the slot waits and no tab moves")
+    retryPendingDaemon()
+    try checkTitlebar(daemonButton.isHidden && barFrames() == quiet, "It keeps waiting until the bar is quiet")
+    allowed = true
+    retryPendingDaemon()
+    layoutSubtreeIfNeeded()
+    try checkTitlebar(!daemonButton.isHidden && pendingDaemon == nil && daemonButton.frame.width > 0 &&
+      daemonButton.frame.maxX <= bounds.width, "At the first quiet moment the slot takes its space")
+    // Off again while one waits: the wait is dropped, nothing appears.
+    update(base)
+    allowed = false
+    update(shown)
+    update(base)
+    allowed = true
+    retryPendingDaemon()
+    layoutSubtreeIfNeeded()
+    try checkTitlebar(daemonButton.isHidden && pendingDaemon == nil && barFrames() == quiet,
+      "A slot withdrawn before it appeared never appears")
+  }
+
   func checkDaemon() throws {
     let originalSize = frame.size
     let originalEmit = emit
-    defer { setFrameSize(originalSize); emit = originalEmit }
+    daemonMayAppear = { true }
+    defer { setFrameSize(originalSize); emit = originalEmit; daemonMayAppear = nil }
     var events: [String] = []
     emit = { method, _ in events.append(method) }
     var daemon: [String: Any] = ["visible": true, "glyph": "\\_O_/",
@@ -1593,6 +1657,7 @@ do {
   try strip.checkSharedTypography()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
   try strip.checkDaemon()
+  try strip.checkDaemonOff()
   try checkTitlebar(titlebarCheckApp.windows.isEmpty, "Checks never open an application window")
   if CommandLine.arguments.contains("--window-layout") {
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),

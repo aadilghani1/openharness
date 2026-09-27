@@ -143,7 +143,9 @@ class ApiClient {
 
   // -- the zoo: the account's daemons and eggs (daemons/README.md), proxied like the desk --
 
-  /// `{revision, zoo}`; null when the daemon predates the zoo (404) or is signed out (401).
+  /// `{revision, zoo}`; null when daemons are off: a 404 (the server's switch, harnessd's
+  /// `DAEMONS_OFF`, or a harnessd that predates the zoo) or signed out (401). A 5xx throws: it
+  /// is not an answer (daemons/README.md, "Off switches").
   Future<Map<String, dynamic>?> zoo() async {
     final res = await _dio.get('/api/zoo');
     if (res.statusCode == 404 || res.statusCode == 401) return null;
