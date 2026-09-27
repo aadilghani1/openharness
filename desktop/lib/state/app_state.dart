@@ -1151,6 +1151,8 @@ class AppNotifier extends ChangeNotifier {
     }
     _activeSwarmId = id;
     railFocused = false;
+    // A tab chosen — clicked, ⌘-number, ⌘] — is chosen to work in.
+    _tabStripHold = null;
     _noteNavigation();
     final pane = focusedPane;
     selectedMachineId = pane?.machineId;
@@ -1319,6 +1321,16 @@ class AppNotifier extends ChangeNotifier {
     );
     if (_activeSwarmId == id) {
       _activeSwarmId = swarms[index.clamp(0, swarms.length - 1)].id;
+      // The tab beside it is shown and selected, but its terminal is not where
+      // the next key goes: that key was typed at the work that just closed. The
+      // keyboard waits on the tab strip ([tabStripFocused]). A fresh welcome
+      // has no terminal to protect and keeps its own focus; closing a tab with
+      // no panes (the Store, an unused New Tab) goes back to work as before.
+      if (replacement == null && removed.panes.isNotEmpty) {
+        _holdTabStrip();
+      } else {
+        _tabStripHold = null;
+      }
     }
     if (persist) _persistLayout();
     notifyListeners();
@@ -1604,7 +1616,9 @@ class AppNotifier extends ChangeNotifier {
   /// model already records a click/shortcut before asking the renderer to
   /// focus, so that echo must not turn a layout change into a terminal claim.
   void focusPaneFromRenderer(int paneId) {
-    if (focusedPaneId == paneId) return;
+    // A terminal that took the keys while the strip held them (a Tab into the
+    // grid) is where the keys are now; the model says so rather than lying.
+    if (focusedPaneId == paneId && !tabStripFocused) return;
     _fromDevice(() => focusPane(paneId));
   }
 
@@ -1949,7 +1963,67 @@ class AppNotifier extends ChangeNotifier {
   /// Which row the rail's cursor is on, indexing [railRows].
   int railCursor = 0;
 
-  bool isPaneFocused(int paneId) => !railFocused && focusedPaneId == paneId;
+  bool isPaneFocused(int paneId) =>
+      !railFocused && !tabStripFocused && focusedPaneId == paneId;
+
+  /// True while the KEYBOARD is on the tab strip rather than in any pane.
+  ///
+  /// Closing the ACTIVE tab with work in it — ⌘W, the strip's own close, or
+  /// its final pane going (⌘⇧W, the pane's close button, the viewer toggle) —
+  /// selects the tab beside it. That tab used to take the keys at once, so
+  /// somebody still typing after the close typed into an agent they never
+  /// chose. Now the neighbour is shown and selected, and its terminal takes
+  /// the keyboard only when the person says so: a click in it, ⏎ on the strip
+  /// ([focusFromTabStrip]), a focus-pane key, a tab chosen.
+  ///
+  /// Folded into [isPaneFocused] like [railFocused]: a terminal claims input
+  /// when `focused` goes true, which is what hands the keys over when this
+  /// lets go. Held against the tab, the pane and the focus request it was set
+  /// for, so anything that moves the view on — another tab, a pane opened or
+  /// chosen, a reveal — lets go by itself. Never persisted: it is view intent.
+  bool get tabStripFocused {
+    final hold = _tabStripHold;
+    return hold != null &&
+        hold.tab == activeSwarmId &&
+        hold.pane == focusedPaneId &&
+        hold.request == _paneFocusRequest;
+  }
+
+  ({String tab, int? pane, int request})? _tabStripHold;
+
+  /// Bumped each time a close sends the keyboard to the tab strip, so the
+  /// window moves its own focus there once per close.
+  int get tabStripFocusRequest => _tabStripFocusRequest;
+  int _tabStripFocusRequest = 0;
+
+  void _holdTabStrip() {
+    _tabStripHold = (
+      tab: activeSwarmId,
+      pane: focusedPaneId,
+      request: _paneFocusRequest,
+    );
+    _tabStripFocusRequest++;
+  }
+
+  /// ⏎ on the tab strip: the selected tab's focused pane takes the keyboard.
+  void focusFromTabStrip() {
+    if (!tabStripFocused) return;
+    _tabStripHold = null;
+    _noteNavigation();
+    _paneFocusRequest++;
+    notifyListeners();
+  }
+
+  /// A focus-pane key pressed while the strip holds the keyboard goes back
+  /// into the grid at the pane this tab already had focused — whichever arrow
+  /// it was, the way off the strip is into the tab under it.
+  bool _enterGridFromTabStrip() {
+    if (!tabStripFocused) return false;
+    final id = focusedPaneId ?? panes.firstOrNull?.id;
+    if (id == null) return false;
+    focusPane(id, reveal: true);
+    return true;
+  }
 
   /// The rail as a flat list of rows, in the order it is drawn.
   ///
@@ -2092,6 +2166,8 @@ class AppNotifier extends ChangeNotifier {
     if (!panes.any((pane) => pane.id == paneId)) return;
     final moved = focusedPaneId != paneId || railFocused;
     railFocused = false;
+    // A click in a tile or a focus key is the person going back into the grid.
+    _tabStripHold = null;
     // Remembered only on a REAL move. Re-focusing the tile you are already on
     // happens constantly — see the note below about why it is announced anyway
     // — and recording it would make the previous-pane command return you to
@@ -9724,6 +9800,7 @@ class AppNotifier extends ChangeNotifier {
   /// it is: an arrow that wraps to the far side of the screen reads as a jump,
   /// not as a step.
   void focusPaneVertically(int delta) {
+    if (_enterGridFromTabStrip()) return;
     final to = _neighbour(dx: 0, dy: delta) ?? _wrapVertically(delta);
     if (to != null) focusPane(panes[to].id, reveal: true);
   }
@@ -9785,6 +9862,7 @@ class AppNotifier extends ChangeNotifier {
     // lands on the last tile, right onto the first. A ring that stopped dead at
     // one end would make the same key mean "go left" in the middle of the grid
     // and "do nothing" at its edge, which is a key people stop trusting.
+    if (_enterGridFromTabStrip()) return;
     if (railFocused) {
       if (panes.isEmpty) return;
       unfocusRail();
@@ -9871,6 +9949,7 @@ class AppNotifier extends ChangeNotifier {
   set _previousPaneId(int? value) => activeSwarm.previousPaneId = value;
 
   void focusLastPane() {
+    if (_enterGridFromTabStrip()) return;
     final back = _previousPaneId;
     if (back == null) return;
     if (!panes.any((pane) => pane.id == back)) {
@@ -9917,6 +9996,7 @@ class AppNotifier extends ChangeNotifier {
   /// dead at the last one reads as a broken key. Moves focus ONLY — nothing on
   /// the grid changes, which is what separates it from [movePaneBy].
   void focusPaneBy(int delta) {
+    if (_enterGridFromTabStrip()) return;
     if (panes.length < 2) return;
     final at = panes.indexWhere((pane) => pane.id == focusedPaneId);
     final next = at < 0 ? 0 : (at + delta + panes.length) % panes.length;

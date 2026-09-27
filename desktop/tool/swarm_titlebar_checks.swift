@@ -962,6 +962,34 @@ private extension SwarmTabStrip {
   }
 }
 
+private extension SwarmTabStrip {
+  /// Dart's `tabsFocused`: closing the active tab left the keyboard on the
+  /// strip, so the selected tab is drawn focused until the person goes in.
+  func checkKeyboardOnTabs() throws {
+    let rows = (0..<3).map { ["id": "strip-\($0)", "name": "Strip \($0)", "label": "\($0 + 1):work"] }
+    update(["enabled": true, "activeId": "strip-1", "tabs": rows])
+    let resting = tabs.map { $0.renderedPixels() }
+    try checkTitlebar(tabs.allSatisfy { !$0.keyboardFocus }, "Tabs start without the strip's keyboard focus")
+    update(["enabled": true, "activeId": "strip-1", "tabs": rows, "tabsFocused": true])
+    try checkTitlebar(tabs.map(\.keyboardFocus) == [false, true, false],
+      "Only the selected tab shows the strip's keyboard focus")
+    try checkTitlebar(tabs[1].renderedPixels() != resting[1] &&
+      tabs[0].renderedPixels() == resting[0] && tabs[2].renderedPixels() == resting[2],
+      "The selected tab is drawn focused and its neighbours are unchanged")
+    let select = tabs[1].accessibilityChildren()!.compactMap { $0 as? NSButton }.first!
+    try checkTitlebar(select.accessibilityHelp()?.contains("Return") == true,
+      "VoiceOver hears that Return types in the selected tab")
+    update(["enabled": false, "activeId": "strip-1", "tabs": rows, "tabsFocused": true])
+    try checkTitlebar(tabs[1].renderedPixels() == resting[1], "A strip behind a modal draws no keyboard focus")
+    update(["enabled": true, "activeId": "strip-2", "tabs": rows, "tabsFocused": true])
+    try checkTitlebar(tabs.map(\.keyboardFocus) == [false, false, true],
+      "The strip's keyboard focus follows the selected tab")
+    update(["enabled": true, "activeId": "strip-1", "tabs": rows])
+    try checkTitlebar(tabs.allSatisfy { !$0.keyboardFocus } && tabs[1].renderedPixels() == resting[1] &&
+      select.accessibilityHelp() == nil, "Going into the tab clears the strip's focus")
+  }
+}
+
 private final class TitlebarCheckDrag: NSObject, NSDraggingInfo {
   var draggingDestinationWindow: NSWindow?
   var draggingSourceOperationMask: NSDragOperation = .move
@@ -1653,6 +1681,7 @@ do {
   try checkTitlebar(unknown.isTemplate && unknown.size == NSSize(width: 16, height: 16), "Unknown engines have a native-size adaptive initial")
   let strip = SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 52))
   try strip.runChecks()
+  try SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 52)).checkKeyboardOnTabs()
   try strip.checkAgentIdentity()
   try strip.checkSharedTypography()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()

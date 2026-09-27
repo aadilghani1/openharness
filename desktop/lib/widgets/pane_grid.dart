@@ -252,6 +252,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
     widget.notifier.focusedPaneId,
     widget.notifier.paneFocusRequest,
     widget.notifier.zoomedPaneId,
+    widget.notifier.tabStripFocused,
   );
 
   @override
@@ -330,6 +331,9 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
         ModalRoute.of(context)?.isCurrent == false) {
       return;
     }
+    // A closed tab left the keyboard on the tab strip: the tab shown now does
+    // not take it until the person goes into it. The screen focuses the strip.
+    if (app.tabStripFocused) return;
     if (app.focusedPane?.session?.focusInput() != true) {
       // Blank pages and not-yet-mounted destinations must release the old
       // terminal's text client immediately, without focusing welcome search.
