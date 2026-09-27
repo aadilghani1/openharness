@@ -1304,6 +1304,9 @@ impl App {
                 // alerts_check_all: the bell first, then the activity.
                 if belled { self.alert(t, BELL) }
                 self.alert(t, ACTIVITY);
+            } else if let Some(tab) = self.sessions.iter_mut().flat_map(|s| s.tabs.iter_mut()).find(|t| t.panes().contains(&id)) {
+                // A session not in front: its window's activity all the same (window_update_activity).
+                tab.touch();
             }
         }
     }
@@ -3038,6 +3041,8 @@ impl App {
             if !self.split_at(t, id, at) { self.drop_pane(id); self.error("no space for new pane"); return }
             let tab = &mut self.tabs[t];
             tab.add_pane(id, at.pane, at.before, at.full);
+            // The new shell's first output is the window's activity (its time, not an alert).
+            tab.touch();
             // tmux takes a zoomed window out of zoom (-Z: zooms its active pane after); the new
             // pane is its active one unless -d.
             if !at.detached || tab.focus.is_none() { tab.set_active(id) }

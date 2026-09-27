@@ -419,8 +419,8 @@ impl Tree {
             let by_name = || ta.name.as_bytes().cmp(tb.name.as_bytes());
             let r = match field {
                 0 => app.win_num(*a).cmp(&app.win_num(*b)),
-                // (Within one second: the newer window first, as by tmux's microseconds.)
-                2 => tb.activity.cmp(&ta.activity).then(tb.wid().cmp(&ta.wid())).then_with(by_name),
+                // (Within one second: the one active last first, as by tmux's microseconds.)
+                2 => tb.activity.cmp(&ta.activity).then(tb.last_output.cmp(&ta.last_output)).then(tb.wid().cmp(&ta.wid())).then_with(by_name),
                 _ => by_name(),
             };
             if reversed { r.reverse() } else { r }
