@@ -94,5 +94,6 @@ These ship with the CLI regardless of the flag and deserve their own watch:
 - Windows: the brain's keys need the Unix socket, so they are unavailable there.
 - `zoo.turn` and presence are self-reported: a person can inflate only their own zoo. Serials are not
   proof of rarity until a verify endpoint exists.
-- #366: closing a tab's last pane closes the tab, and focus moves to the neighbouring tab's terminal.
-  Decide before merging whether focus should go to the tab strip instead.
+- Decided for #366: closing a tab's last pane closes the tab, and the keyboard goes to the tab strip, not
+  the neighbouring tab's terminal, so typing after a close never reaches another agent (⌘W follows the
+  same rule).

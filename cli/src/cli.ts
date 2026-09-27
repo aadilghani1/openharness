@@ -126,6 +126,7 @@ import { createRetainExitedSession } from './lib/retainExitedSession.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from './lib/sessionSearch/indexer.js'
+import { ExternalSessions, OpenSessions, processAlive, sessionBusy, stopSessionOwner, type SessionOwner } from './lib/sessionSearch/external.js'
 import { SessionSearchStore } from './lib/sessionSearch/store.js'
 import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.js'
 import { sweepWorktrees } from './lib/worktreeSweep.js'
@@ -153,7 +154,7 @@ import { ApiConnections } from './lib/apiConnections.js'
 import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { prepareApiInstructions } from './lib/apiInstructions.js'
 import type { AgentDshContext } from './lib/agentFrame.js'
-import { basename } from 'node:path'
+import { basename, dirname as parentDir } from 'node:path'
 import {
   bypassPermissionActive,
   permissionModeFromArgv,
@@ -260,7 +261,7 @@ import {
 } from './engines/commandcode/normalizer.js'
 import { probeGatewayRuntime } from './lib/gatewayRuntime.js'
 import { probeGridAssignment, sameGridAssignment } from './lib/gridAssignment.js'
-import { agentFrame, type AgentFrame } from './lib/agentFrame.js'
+import { agentFrame, lastActivityAt, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { SessionInputController } from './lib/sessionInput.js'
 import { DeviceResultJournal } from './lib/autonomous-device/resultJournal.js'
@@ -270,6 +271,7 @@ import { RuntimeProfileManager, parseRuntimeProfile } from './lib/runtimeProfile
 import { RuntimeProfileController, inspectRuntimePane } from './lib/runtimeProfileController.js'
 import { deviceErrorText } from './lib/deviceErrors.js'
 import { correlateAgentEvent, turnHeartbeatFrame } from './lib/agentEvent.js'
+import { transcriptIsFirstTurn } from './lib/firstTurnReplay.js'
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()
@@ -2259,7 +2261,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    */
   const neverFoldedHistory = new Set<string>()
   /**
-   * Sessions whose first turn has already been replayed live by an attach.
+   * Sessions whose first turn has already been replayed live by an attach, or whose transcript an attach
+   * has already folded.
    *
    * NOT the same question as `neverFoldedHistory` above, which is why they stay two sets: that one asks
    * "where should the watcher start reading?", this one asks "has this session's file already been
@@ -2583,7 +2586,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // `reset` attach (claude fires `SessionStart` on compact, which resets) would fold the by-then
     // complete transcript and emit it live on top of everything the watcher had already streamed. That
     // is the same duplicate-turn class this whole change exists to remove.
-    if (replayLive) replayedFirstTurn.add(session.sessionId)
+    // Any fold of a transcript with content counts too: the watcher now tails it from the end, so a later
+    // replay could only send history out again as if it were live.
+    if (replayLive || lines.length) replayedFirstTurn.add(session.sessionId)
     if (initialEvents.length) {
       emitSessionEvents(session.sessionId, initialEvents)
       console.log(`[agent] ${sid(session.agentId)} replayed the first turn its transcript already held · ${initialEvents.length} events`)
@@ -2937,6 +2942,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Session search: every turn of every conversation on this machine, live and stopped, indexed from
   // its transcript and searched by `session_search` (lib/sessionSearch/). Nothing leaves the machine
   // but the hits for a query. A Node without `node:sqlite` has no index; the RPC then says so.
+  // Claude Code and Codex conversations on this machine that Harness did not start, found on disk
+  // so Cmd-P can find them and open one here; and which sessions a process has open right now.
+  const externalSessions = new ExternalSessions({ claudeProjectsDir: env.CLAUDE_PROJECTS_DIR, codexHome: env.CODEX_HOME })
+  const openSessions = new OpenSessions({ claudeHome: parentDir(env.CLAUDE_PROJECTS_DIR) })
   const sessionSearch = (() => {
     try {
       const store = SessionSearchStore.open(join(env.ADAPTER_DATA_DIR, SESSION_SEARCH_FILE))
@@ -2946,22 +2955,37 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       const index = new SessionSearchIndex({
         store,
-        sources: () => [...registry.list(), ...stoppedAgents.list()].flatMap((s): SearchSource[] => {
-          const readHistory = s.transcriptPath ? undefined : databaseHistory(s)
-          if (!s.sessionId || (!s.transcriptPath && !readHistory)) return []
-          return [{
-            agentId: s.agentId,
-            sessionId: s.sessionId,
-            engine: s.engine,
-            transcriptPath: s.transcriptPath || null,
-            header: [projectDisplayName(s), s.title, folderWords(s.cwd)].filter(Boolean).join(' · '),
-            // Conversation stamps only (lib/agentFrame.ts lastActivityAt): the registry's own
-            // updatedAt moves on every discovery pass.
-            updatedAt: Math.max(s.lastTranscriptAt || 0, s.lastHookAt || 0) || s.boundAt || s.registeredAt || 0,
-            readHistory,
-          }]
-        }),
+        sources: () => {
+          const own = [...registry.list(), ...stoppedAgents.list()]
+          const sources = own.flatMap((s): SearchSource[] => {
+            const readHistory = s.transcriptPath ? undefined : databaseHistory(s)
+            if (!s.sessionId || (!s.transcriptPath && !readHistory)) return []
+            return [{
+              agentId: s.agentId,
+              sessionId: s.sessionId,
+              engine: s.engine,
+              transcriptPath: s.transcriptPath || null,
+              header: [projectDisplayName(s), s.title, folderWords(s.cwd)].filter(Boolean).join(' · '),
+              // Conversation stamps only: the row's `touchedAt` moves on every discovery pass.
+              changedAt: Math.max(s.lastTranscriptAt || 0, s.lastHookAt || 0) || s.boundAt || s.registeredAt || 0,
+              readHistory,
+            }]
+          })
+          // Conversations Harness did not start — any Harness agent's, earlier ones included, are not.
+          const known = store.ownedSessionIds()
+          for (const s of own) if (s.sessionId) known.add(s.sessionId)
+          for (const e of externalSessions.list()) {
+            if (known.has(e.sessionId)) continue
+            sources.push({
+              agentId: '', sessionId: e.sessionId, engine: e.engine, transcriptPath: e.transcriptPath,
+              header: '', changedAt: e.mtime, external: { cwd: e.cwd, origin: e.origin, title: e.title },
+            })
+          }
+          return sources
+        },
         agents: () => [...registry.list(), ...stoppedAgents.list()].map((s) => s.agentId),
+        discover: () => externalSessions.scan(),
+        openSessions,
         log: (line) => console.log(line),
       })
       index.start()
@@ -2972,6 +2996,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     }
   })()
   backend.sessionSearchProvider = sessionSearch ? (query, options) => sessionSearch.search(query, options) : null
+  backend.sessionTailProvider = sessionSearch ? (sessionId, options) => sessionSearch.tail(sessionId, options) : null
 
   const runtimeController = new RuntimeProfileController({
     manager: runtimeProfiles,
@@ -3363,10 +3388,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // so the birth-vs-`registeredAt` comparison stays, and comparing against `boundAt` instead — the
     // obvious-looking alternative, since `boundAt` is when this session was bound — does not work: the
     // transcript is created a moment BEFORE the hook binds it.
-    const bornAfterAgent = !meta.rebound && entry.boundAt !== null
-      && entry.boundAt - entry.registeredAt > 0
-      && !!entry.transcriptPath
-      && await statBirthMs(entry.transcriptPath) >= entry.registeredAt
+    //
+    // And only while the file is new (`transcriptIsFirstTurn`): a long session's transcript was born after
+    // its agent too, and after a daemon restart its next SessionStart replayed the whole history live.
+    const bornAfterAgent = transcriptIsFirstTurn(
+      entry,
+      entry.transcriptPath ? await statBirthMs(entry.transcriptPath) : 0,
+      { rebound: !!meta.rebound, now: Date.now() },
+    )
     const attached = await attachSession(entry, reset, entry.engine === 'cursor', bornAfterAgent)
     if (!attached) {
       registry.unbindSession(entry.sessionId)
@@ -4232,7 +4261,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onRemotePasswordStatus: () => ({ status: 200, body: backend.remotePasswordStatus() }),
     // Local dashboard (GET /api/status): adapter health + computer fingerprint + local pairings. It
     // deliberately does NOT expose chat/transcripts — those live in the cloud web (WEB_URL/commander).
-    onStatus: () => ({
+    onStatus: async () => ({
       machineId: backend.machineId,
       computerId: computerId(),
       // Whether this daemon booted with an account. Read LIVE, not from the boot session: a login or
@@ -4292,7 +4321,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         dataDir: tildify(env.ADAPTER_DATA_DIR),
         port: daemonPort(),
       },
-      sessions: registry.advertised().map((s) => ({
+      sessions: await Promise.all(registry.advertised().map(async (s) => ({
         id: s.agentId,
         sessionId: s.sessionId,
         name: projectDisplayName(s),
@@ -4300,8 +4329,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         cwd: tildify(s.cwd ?? ''),
         tmuxPane: s.tmuxPane || null,
         terminal: { available: registry.terminalAvailable(s.agentId), primary: s.primaryRuntimeKey, runtimes: s.runtimes },
-        updatedAt: s.updatedAt,
-      })),
+        // When the conversation last moved, as in every agent frame — not the row's `touchedAt`.
+        updatedAt: await lastActivityAt(s),
+      }))),
       pairs: backend.listPairs(),
       pending: backend.pendingPair(),
     }),
@@ -4313,6 +4343,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onMachineRename: (machineId, name) => proxyBackend('PATCH', `/api/machines/${encodeURIComponent(machineId)}`, { name }),
     onMachineDelete: (machineId) => proxyBackend('DELETE', `/api/machines/${encodeURIComponent(machineId)}`),
     onAuthMe: () => proxyBackend('GET', '/api/auth/me'),
+    onAuthHandoff: () => proxyBackend('POST', '/api/auth/handoff', {}),
     // Signed out there is nothing shared WITH this computer and nobody to ask: a share is made on the
     // account. Answered as an empty list rather than proxied into the backend's 401, which is the one
     // status the desktop app reads as "your session ended" — and a guest has no session to end.
@@ -5434,8 +5465,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * Watch a pane this daemon just opened until its engine process shows up (ready), dies (failed), or
    * ten minutes pass. Shared by create and fork: the two open panes the same way and wait the same way.
    */
-  const watchNewPane = async (engine: AgentEngine, pending: RegisteredSession, spawned: { runtime: TmuxRuntimeRef }, command: string[], installIfMissing: ReturnType<typeof engineInstallRecipe> | undefined): Promise<void> => {
-    const budgetMs = 10 * 60_000
+  const watchNewPane = async (engine: AgentEngine, pending: RegisteredSession, spawned: { runtime: TmuxRuntimeRef }, command: string[], installIfMissing: ReturnType<typeof engineInstallRecipe> | undefined, budgetMs = 10 * 60_000): Promise<void> => {
     const startedAt = Date.now()
     let delayMs = 50
     try {
@@ -5513,7 +5543,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         })
         delayMs = Math.min(delayMs * 2, 750)
       }
-      const detail = `${engine} did not expose an engine process within 10 minutes. The terminal remains available.`
+      const detail = `${engine} did not expose an engine process within ${Math.round(budgetMs / 60_000)} minutes. The terminal remains available.`
       const failed = registry.setLaunch(pending.agentId, { state: 'failed', error: 'START_TIMEOUT', detail })
       if (failed) announceSession(failed)
       console.warn(`[agent] create timed out · ${engine} · agent ${pending.agentId}`)
@@ -5522,8 +5552,75 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     }
   }
 
-  backend.onCreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent }) => {
+  /**
+   * Whether a conversation Harness did not start can be opened here as a harness: one discovery found
+   * (looked for again if it is new), on this engine, not already a harness, and not open in a running
+   * process — a terminal or the engine's app that still has it would write it too.
+   *
+   * One open in a terminal can be taken over ([takeOver]): the terminal's process is stopped and the
+   * conversation resumes here. Asked without it, the refusal says whether that process is mid-turn,
+   * so the person can choose to wait for the turn to end or stop it now. An app's is never stopped.
+   */
+  const adoptableSession = async (sessionId: string, engine: AgentEngine, takeOver: 'idle' | 'now' | 'wait' | null): Promise<{ ok: true; cwd: string; title: string; owner: SessionOwner | null; busy: boolean } | { ok: false; error: string; detail: string }> => {
+    if (registry.bySession(sessionId) || stoppedAgents.list().some((s) => s.sessionId === sessionId)) {
+      return { ok: false, error: 'SESSION_IN_HARNESS', detail: 'This conversation is already a harness here.' }
+    }
+    const found = externalSessions.get(sessionId) ?? (await externalSessions.scan(), externalSessions.get(sessionId))
+    if (!found) return { ok: false, error: 'SESSION_NOT_FOUND', detail: 'This conversation is no longer on this machine.' }
+    if (found.engine !== engine) return { ok: false, error: 'INVALID_ENGINE', detail: `This is a ${found.engine} conversation.` }
+    // The Codex app keeps a thread in a folder of its own, which people tidy away. Checked before
+    // anything is stopped: a take-over that then cannot open would only have closed it.
+    if (!existsSync(found.cwd)) {
+      return { ok: false, error: 'SESSION_FOLDER_GONE', detail: `The folder it ran in is gone: ${found.cwd}` }
+    }
+    const title = found.title || sessionSearch?.session(sessionId)?.title || ''
+    const owner = await openSessions.owner(sessionId)
+    if (!owner) return { ok: true, cwd: found.cwd, title, owner: null, busy: false }
+    const engineName = engine === 'claude' ? 'Claude Code' : 'Codex'
+    if (!owner.tty) {
+      return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: `It is open in the ${engine === 'claude' ? 'Claude' : 'Codex'} app. Close it there, then open it here.` }
+    }
+    const busy = await sessionBusy(owner)
+    if (busy && (takeOver === null || takeOver === 'idle')) {
+      return { ok: false, error: 'SESSION_BUSY_IN_TERMINAL', detail: `${engineName} is working on it in a terminal.` }
+    }
+    if (takeOver === null) {
+      return { ok: false, error: 'SESSION_OPEN_IN_TERMINAL', detail: `It is open in ${engineName} in a terminal. Moving it here quits it there.` }
+    }
+    return { ok: true, cwd: found.cwd, title, owner, busy }
+  }
+
+  /**
+   * A conversation taken over when its turn ends (`takeOver: 'wait'`): its pane waits for the
+   * terminal's process to go (engineLaunch `waitForPid`), and this stops that process once the turn
+   * is over. It gives up when the harness does — closed, or Ctrl-C in its pane — and when the person
+   * quits it in the terminal themselves, which is the pane's cue as well.
+   */
+  const takeOverWhenIdle = async (agentId: string, owner: SessionOwner, sessionId: string): Promise<void> => {
+    for (;;) {
+      await new Promise<void>((resolve) => { const timer = setTimeout(resolve, 1_000); timer.unref?.() })
+      if (registry.byAgent(agentId)?.launch?.state !== 'starting' || !processAlive(owner.pid)) return
+      if (await sessionBusy(owner)) continue
+      const stopped = await stopSessionOwner(owner)
+      console.log(`[agent] take over ${sid(sessionId)} · turn ended · pid ${owner.pid} ${stopped ? 'stopped' : 'did not stop'}`)
+      return
+    }
+  }
+
+  backend.onCreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
+    // A conversation Harness did not start opens in its own folder, under its own title — taken over
+    // from the terminal that has it, when asked to.
+    let owner: SessionOwner | null = null
+    let ownerBusy = false
+    if (resumeSessionId) {
+      const adopted = await adoptableSession(resumeSessionId, engine, takeOver ?? null)
+      if (!adopted.ok) return adopted
+      cwd = adopted.cwd
+      name = name ?? (adopted.title || null)
+      owner = adopted.owner
+      ownerBusy = adopted.busy
+    }
     try {
       if (!statSync(cwd).isDirectory()) return { ok: false, error: 'CWD_NOT_FOUND' }
     } catch {
@@ -5665,7 +5762,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent) : [])]
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
-    const launchOptions = { bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(prompt ? { firstPrompt: prompt } : {}), terminalHint: { machineName: terminalHintMachineName() } }
+    // The terminal's process goes last, once nothing else here can refuse the launch: stopped now, or
+    // — to wait for its turn — left running for the pane to wait on. Stopped mid-turn, the resumed
+    // conversation is told to carry on.
+    const waitFor = owner && takeOver === 'wait' && ownerBusy ? owner : null
+    if (owner && !waitFor) {
+      if (!await stopSessionOwner(owner)) {
+        return { ok: false, error: 'SESSION_STOP_FAILED', detail: 'The terminal that has it did not quit. Close it there, then open it here.' }
+      }
+      console.log(`[agent] take over ${sid(resumeSessionId ?? '')} · pid ${owner.pid} stopped${ownerBusy ? ' mid-turn' : ''}`)
+    }
+    const firstPrompt = prompt ?? (owner && !waitFor && ownerBusy ? 'continue' : null)
+    const launchOptions = { bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(resumeSessionId ? { resumeSessionId } : {}), ...(waitFor ? { waitForPid: { pid: waitFor.pid, name: engine === 'claude' ? 'Claude Code' : 'Codex' } } : {}), terminalHint: { machineName: terminalHintMachineName() } }
     const command = buildEngineCommandArgv(engine, launchOptions)
     const argv = buildEngineLaunchArgv(engine, launchOptions)
     // A tmux route is enough to stream its screen. Register it before looking for a process so both
@@ -5713,7 +5821,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession(pending)
     if (pending.dsh) attachDsh(pending)
 
-    void watchNewPane(engine, pending, spawned, command, installIfMissing)
+    // A pane waiting out another terminal's turn may wait as long as that turn takes.
+    void watchNewPane(engine, pending, spawned, command, installIfMissing, waitFor ? 24 * 60 * 60_000 : undefined)
+    if (waitFor && resumeSessionId) void takeOverWhenIdle(pending.agentId, waitFor, resumeSessionId)
     console.log(`[agent] create pane open · ${engine} · agent ${pending.agentId}`)
     return { ok: true, session: pending }
   }

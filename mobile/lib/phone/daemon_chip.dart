@@ -7,9 +7,10 @@ import 'daemon_scope.dart';
 import 'daemon_sheet.dart';
 import 'daemon_style.dart';
 
-/// The paired daemon in the header: its eight-cell sprite in its colour, on a
-/// sliver of night (see [DaemonInk]), the way it sits in tmux's status line on
-/// a computer. Before any daemon it is the nest at its stage, or the egg ready
+/// The paired daemon at the right end of the terminal's title (and of the
+/// empty home's top line): its eight-cell sprite in its colour, on a sliver of
+/// night (see [DaemonInk]), the way it sits in tmux's status line on a
+/// computer. Before any daemon it is the nest at its stage, or the egg ready
 /// to hatch.
 ///
 /// A shiny daemon wears its shiny colour and a `*` before its slot (outside
@@ -20,13 +21,17 @@ import 'daemon_style.dart';
 /// empty nest at somebody who owns six daemons.
 ///
 /// ⚠️ **Art is not scaled with the text.** The sprite is ten cells of ASCII in
-/// a 26pt header slot; larger text would push the names beside it off the
-/// row. A screen reader hears [DaemonFace.semantics] instead, and the sheet
-/// this opens scales everything.
+/// a 26pt slot; larger text would push the names beside it off the row. A
+/// screen reader hears [DaemonFace.semantics] instead, and the sheet this
+/// opens scales everything.
 class DaemonChip extends StatelessWidget {
-  const DaemonChip({super.key});
+  const DaemonChip({super.key, this.margin = EdgeInsets.zero});
 
   static const height = 26.0;
+
+  /// Space kept around the chip, only while it draws: with daemons off, or
+  /// before the zoo answers, whatever it sits beside keeps the room it had.
+  final EdgeInsetsGeometry margin;
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +47,7 @@ class DaemonChip extends StatelessWidget {
             def?.colorFor(shiny: face.shiny) ??
             (face.eggReady ? DaemonInk.yellow : DaemonInk.dim);
         final eggs = host.zoo.zoo.eggs.length;
-        return Semantics(
+        final chip = Semantics(
           key: const ValueKey('daemon-chip'),
           button: true,
           label: face.semantics,
@@ -126,6 +131,9 @@ class DaemonChip extends StatelessWidget {
             ),
           ),
         );
+        return margin == EdgeInsets.zero
+            ? chip
+            : Padding(padding: margin, child: chip);
       },
     );
   }
