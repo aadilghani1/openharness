@@ -16,7 +16,7 @@ import { chmodSync, existsSync, rmSync } from 'node:fs'
 import { builtinSqlite } from '../sqliteRead.js'
 import type { IndexedTurn } from './turns.js'
 
-const SCHEMA_VERSION = '7'
+const SCHEMA_VERSION = '8'
 
 /** The row that holds a session's name, title and folder: searchable beside its turns. */
 export const HEADER_TURN = -1
@@ -48,6 +48,23 @@ export interface IndexedSession {
   resumeTurn: number
   lastAt: number | null
   turns: number
+  /**
+   * A conversation Harness did not start (lib/sessionSearch/external.ts), whose `agentId` is empty:
+   * its title (Codex's thread name, Claude's own title, else the first ask), the folder it resumes in,
+   * and where it ran. Empty for a Harness session.
+   */
+  title?: string
+  cwd?: string
+  origin?: string
+}
+
+/** What a hit on a conversation Harness did not start carries, so a client can show and resume it. */
+export interface ExternalHit {
+  title: string
+  cwd: string
+  origin: string
+  /** Open in a running process elsewhere (a terminal, the engine's app): not to be opened twice. */
+  open?: boolean
 }
 
 export interface SearchHit {
@@ -68,6 +85,8 @@ export interface SearchHit {
   together: boolean
   /** 0–1, higher is better: relevance blended with recency; comparable across machines. */
   score: number
+  /** Set for a conversation Harness did not start; its `agentId` is then empty. */
+  external?: ExternalHit
 }
 
 // BM25 column weights: header (name/title/folder), what was asked, the answer, tool calls.
@@ -117,6 +136,8 @@ export interface SessionTail {
    * continuation rows up, and it is what the session is doing now.
    */
   lastAsk?: TailRow
+  /** For a conversation Harness did not start: what a hit on it carries, and whether it is open. */
+  external?: ExternalHit
 }
 
 /** What one preview page holds, and what a caller may ask for. */
@@ -314,7 +335,10 @@ export class SessionSearchStore {
         resume_offset INTEGER NOT NULL,
         resume_turn INTEGER NOT NULL,
         last_at INTEGER,
-        turns INTEGER NOT NULL
+        turns INTEGER NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        cwd TEXT NOT NULL DEFAULT '',
+        origin TEXT NOT NULL DEFAULT ''
       );
       CREATE TABLE turns (
         id INTEGER PRIMARY KEY,
@@ -368,13 +392,16 @@ export class SessionSearchStore {
   }
 
   /** Who each session belongs to and when it was last worked on, read once per change. */
-  private meta: Map<string, { agentId: string; engine: string; lastAt: number | null }> | null = null
+  private meta: Map<string, SessionMeta> | null = null
 
-  private sessionMeta(): Map<string, { agentId: string; engine: string; lastAt: number | null }> {
+  private sessionMeta(): Map<string, SessionMeta> {
     if (!this.meta) {
-      this.meta = new Map(this.statement('SELECT session_id, agent_id, engine, last_at FROM sessions').all().map((row) => [
+      this.meta = new Map(this.statement('SELECT session_id, agent_id, engine, last_at, title, cwd, origin FROM sessions').all().map((row) => [
         row.session_id as string,
-        { agentId: row.agent_id as string, engine: row.engine as string, lastAt: (row.last_at as number | null) ?? null },
+        {
+          agentId: row.agent_id as string, engine: row.engine as string, lastAt: (row.last_at as number | null) ?? null,
+          ...(row.agent_id ? {} : { external: { title: String(row.title ?? ''), cwd: String(row.cwd ?? ''), origin: String(row.origin ?? '') } }),
+        },
       ]))
     }
     return this.meta
@@ -433,6 +460,11 @@ export class SessionSearchStore {
     return tail
   }
 
+  /** Sessions the index files under a Harness agent, earlier ones (before a `/clear`) included. */
+  ownedSessionIds(): Set<string> {
+    return new Set(this.statement("SELECT session_id FROM sessions WHERE agent_id != ''").all().map((row) => row.session_id as string))
+  }
+
   sessionIds(): string[] {
     return this.statement('SELECT session_id FROM sessions').all().map((row) => row.session_id as string)
   }
@@ -451,10 +483,11 @@ export class SessionSearchStore {
       for (const turn of turns) insert.run(session.sessionId, turn.turn, turn.at, '', turn.ask, turn.answer, turn.tools)
       const count = this.statement('SELECT count(*) AS n FROM turns WHERE session_id = ? AND turn >= 0').get(session.sessionId)?.n as number
       this.statement(`INSERT OR REPLACE INTO sessions
-        (session_id, agent_id, engine, path, header, size, mtime, resume_offset, resume_turn, last_at, turns)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        (session_id, agent_id, engine, path, header, size, mtime, resume_offset, resume_turn, last_at, turns, title, cwd, origin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         session.sessionId, session.agentId, session.engine, session.path, session.header, session.size,
         session.mtime, session.resumeOffset, session.resumeTurn, session.lastAt, count,
+        session.title ?? '', session.cwd ?? '', session.origin ?? '',
       )
     })
   }
@@ -632,6 +665,7 @@ export class SessionSearchStore {
         snippet,
         together: match.together,
         score: Math.round(score * 1000) / 1000,
+        ...externalOf(session),
       }
     })
   }
@@ -692,6 +726,7 @@ export class SessionSearchStore {
         snippet: clipAsk(asked || String(row.answer ?? '')),
         together: true,
         score: Math.round(Math.pow(0.5, Math.max(0, now - at) / 86_400_000 / RECENCY_HALF_LIFE_DAYS) * 1000) / 1000,
+        ...externalOf(session),
       })
     }
     return hits
@@ -723,5 +758,16 @@ function toSession(row: Record<string, unknown>): IndexedSession {
     resumeTurn: row.resume_turn as number,
     lastAt: (row.last_at as number | null) ?? null,
     turns: row.turns as number,
+    title: String(row.title ?? ''),
+    cwd: String(row.cwd ?? ''),
+    origin: String(row.origin ?? ''),
   }
+}
+
+type SessionMeta = { agentId: string; engine: string; lastAt: number | null; external?: ExternalHit }
+
+/** The fields a hit on a session Harness did not start adds. */
+function externalOf(session: SessionMeta): { external: ExternalHit } | Record<string, never> {
+  // A copy: a search marks whether it is open, and the cache it came from outlives the search.
+  return session.external ? { external: { ...session.external } } : {}
 }

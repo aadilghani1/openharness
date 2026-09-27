@@ -2450,19 +2450,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(failure.message),
-        action: SnackBarAction(
-          label: 'Start New Conversation',
-          onPressed: () => _openNewHarness(
-            machineId: row.machineId!,
-            engine: agent?.dsh ?? agent?.engine,
-            folder: agent?.project?.cwd,
-            swarmId: app.swarms.any((tab) => tab.id == target)
-                ? target
-                : app.activeSwarmId,
-            placement: placement,
-            task: '',
-          ),
-        ),
+        // A conversation Harness did not start says what stopped it (open in
+        // a terminal, gone); a new, empty one is not what was asked for.
+        action: row.external != null
+            ? null
+            : SnackBarAction(
+                label: 'Start New Conversation',
+                onPressed: () => _openNewHarness(
+                  machineId: row.machineId!,
+                  engine: agent?.dsh ?? agent?.engine,
+                  folder: agent?.project?.cwd,
+                  swarmId: app.swarms.any((tab) => tab.id == target)
+                      ? target
+                      : app.activeSwarmId,
+                  placement: placement,
+                  task: '',
+                ),
+              ),
       ),
     );
   }

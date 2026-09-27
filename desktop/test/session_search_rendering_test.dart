@@ -301,13 +301,169 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  testWidgets(
+    'a conversation Harness did not start is found, previewed, and opened as a harness resuming it',
+    (tester) async {
+      const session = '01a0c4ad-de5e-7000-8000-000000000001';
+      const busy = '01a0c4ad-de5e-7000-8000-000000000002';
+      Map<String, dynamic> external(String id, {required bool open}) => {
+        'agentId': '',
+        'sessionId': id,
+        'engine': 'codex',
+        'field': 'ask',
+        'snippet':
+            'compare ${kSnippetMarkOpen}retention$kSnippetMarkClose by cohort',
+        'together': true,
+        'score': .9,
+        'lastAt': DateTime.now()
+            .subtract(const Duration(days: 2))
+            .millisecondsSinceEpoch,
+        'external': {
+          'title': open ? 'Retention, still open' : 'Retention cohorts',
+          'cwd': '/work/cohorts',
+          'origin': open ? 'terminal' : 'codex-app',
+          'open': open,
+        },
+      };
+      final connection = TailConnection(
+        {
+          'retention cohorts': [
+            external(session, open: false),
+            external(busy, open: true),
+          ],
+        },
+        tail: (payload) => {
+          'rows': [
+            {
+              'turn': 0,
+              'at': DateTime.now()
+                  .subtract(const Duration(days: 2))
+                  .millisecondsSinceEpoch,
+              'ask': 'compare retention by cohort',
+              'answer': 'Day-7 retention is 35%.',
+              'tools': '',
+            },
+          ],
+          'hasMore': false,
+          'total': 1,
+          'external': {'open': payload['sessionId'] == busy},
+        },
+        create: (payload) => {
+          'creationId': payload['creationId'],
+          'state': 'failed',
+          'failure': {
+            'code': 'SESSION_OPEN_ELSEWHERE',
+            'detail': 'It is open in another terminal or app. Close it there, then open it here.',
+          },
+        },
+      );
+      final app = createApp(
+        connected: true,
+        connectionForTest: (_) => connection,
+      );
+      final map = MemoryKeymap();
+      final projects = SwarmProjectStore();
+      addTearDown(map.dispose);
+      addTearDown(projects.dispose);
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1280, 800);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          builder: (_, child) => grid.BrightnessScope(
+            child: KeymapProvider(keymap: map, child: child!),
+          ),
+          home: SwarmScreen(
+            notifier: app,
+            nativeTabs: false,
+            projectStore: projects,
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await openHarnessPicker(tester);
+      await tester.enterText(
+        find.byKey(const ValueKey('swarm-search-input')),
+        'retention cohorts',
+      );
+      for (var i = 0; i < 4; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      final search = tester
+          .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+          .search;
+      // Found by what was said in it, as a row of its own.
+      final row = search.rows.firstWhere(
+        (row) => row.external?.sessionId == session,
+      );
+      expect(row.title, 'Retention cohorts');
+      expect(row.detail, 'Codex · Codex app · cohorts · not in Harness');
+      expect(search.canSubmit(row), isTrue);
+      final open = search.rows.firstWhere(
+        (row) => row.external?.sessionId == busy,
+      );
+      expect(search.canSubmit(open), isFalse);
+      expect(
+        search.sessionUnavailable(open),
+        contains('Open in another terminal'),
+      );
+
+      // Previewed like any session: what it is, where it ran, its latest turn.
+      while (search.selected?.id != row.id) {
+        search.move(1);
+      }
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(
+        find.text('Codex · Codex app · cohorts · not in Harness'),
+        findsWidgets,
+      );
+      expect(
+        find.textContaining('Day-7 retention is 35%', findRichText: true),
+        findsOneWidget,
+      );
+
+      // Enter opens a harness resuming it; the machine's refusal is said as it said it.
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(connection.creates, hasLength(1));
+      expect(
+        connection.creates.single,
+        containsPair('resumeSessionId', session),
+      );
+      expect(connection.creates.single, containsPair('engine', 'codex'));
+      expect(connection.creates.single, containsPair('cwd', '/work/cohorts'));
+      expect(
+        connection.creates.single,
+        containsPair('name', 'Retention cohorts'),
+      );
+      expect(
+        find.text(
+          'It is open in another terminal or app. Close it there, then open it here.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Start New Conversation'), findsNothing);
+
+      app.dispose();
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }
 
 /// A machine that searches and previews: `session_tail` answered by [tail].
 class TailConnection extends SearchConnection {
-  TailConnection(super.answers, {required this.tail});
+  TailConnection(super.answers, {required this.tail, this.create});
 
   final Map<String, dynamic> Function(Map<String, dynamic> payload) tail;
+
+  /// How `agent_create` is answered; each payload is kept in [creates].
+  final Map<String, dynamic> Function(Map<String, dynamic> payload)? create;
+  final creates = <Map<String, dynamic>>[];
 
   @override
   Future<Map<String, dynamic>> request(
@@ -316,6 +472,10 @@ class TailConnection extends SearchConnection {
     Duration timeout = const Duration(seconds: 20),
   }) async {
     if (type == 'session_tail') return tail(payload);
+    if (type == 'agent_create' && create != null) {
+      creates.add(payload);
+      return create!(payload);
+    }
     return super.request(type, payload: payload, timeout: timeout);
   }
 }

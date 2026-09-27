@@ -1419,10 +1419,16 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                       ),
                     ] else if (widget.unavailableReason case final reason?) ...[
                       SizedBox(width: cell.width * 2),
-                      Text(
-                        reason,
-                        maxLines: 1,
-                        style: terminalContentStyle(color: muted),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: constraints.maxWidth * .4,
+                        ),
+                        child: Text(
+                          reason,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: terminalContentStyle(color: muted),
+                        ),
                       ),
                     ] else if (row.shortcut case final shortcut?) ...[
                       SizedBox(width: cell.width * 2),

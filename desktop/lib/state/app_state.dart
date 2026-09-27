@@ -7296,7 +7296,6 @@ class AppNotifier extends ChangeNotifier {
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
   }) {
-    final creation = attempt ?? AgentCreationAttempt();
     final choices = <String, dynamic>{
       'engine': engine,
       if (projectFolder == null && folder != null) 'cwd': folder,
@@ -7326,6 +7325,55 @@ class AppNotifier extends ChangeNotifier {
       // same refusal for an engine that has no such thing (`AGENT_UNSUPPORTED`).
       'agent': ?agent,
     };
+    return _create(
+      machineId,
+      choices,
+      projectFolder: projectFolder,
+      dsh: dsh,
+      swarmId: swarmId,
+      split: split,
+      attempt: attempt,
+      placement: placement,
+    );
+  }
+
+  /// A Claude Code or Codex conversation Harness did not start, opened as a
+  /// harness that resumes it, in its own folder (Cmd-P, `ExternalSessionRef`).
+  /// The machine refuses one open elsewhere, already a harness, or whose folder
+  /// is gone, and says why. Null when it started; otherwise what to tell the
+  /// person.
+  Future<String?> resumeConversation(
+    String machineId, {
+    required String engine,
+    required String folder,
+    required String sessionId,
+    String? name,
+    String? swarmId,
+    HarnessPlacement? placement,
+  }) => _create(
+    machineId,
+    {
+      'engine': engine,
+      'cwd': folder,
+      'bypassPermission': true,
+      'name': ?name,
+      'resumeSessionId': sessionId,
+    },
+    swarmId: swarmId,
+    placement: placement,
+  );
+
+  Future<String?> _create(
+    String machineId,
+    Map<String, dynamic> choices, {
+    ProjectFolderRequest? projectFolder,
+    String? dsh,
+    String? swarmId,
+    PaneSplitRequest? split,
+    AgentCreationAttempt? attempt,
+    HarnessPlacement? placement,
+  }) {
+    final creation = attempt ?? AgentCreationAttempt();
     if (creation._choices != null &&
         (creation._machineId != machineId ||
             creation._projectFolder?.isGenerated !=
@@ -7438,6 +7486,14 @@ class AppNotifier extends ChangeNotifier {
       'This engine cannot be opened as that named agent on $machine.',
     'INVALID_PERMISSION_MODE' =>
       'This engine has no such permission mode on $machine.',
+    // Opening a conversation Harness did not start (`resumeSessionId`). The
+    // machine says what stopped it: open elsewhere, already a harness, gone.
+    'SESSION_OPEN_ELSEWHERE' ||
+    'SESSION_IN_HARNESS' ||
+    'SESSION_NOT_FOUND' ||
+    'SESSION_FOLDER_GONE' ||
+    'INVALID_SESSION' =>
+      detail ?? 'Could not open that conversation on $machine.',
     // A daemon that predates the terminal engine refuses it by name; the
     // fix is the same one the other UNSUPPORTED codes ask for.
     'INVALID_ENGINE' =>
@@ -7641,6 +7697,12 @@ class AppNotifier extends ChangeNotifier {
         'GRID_CONFIG_FAILED',
         'UNSUPPORTED_ON_REMOTE',
         'UNSUPPORTED',
+        // A conversation Harness did not start, refused before its pane opens.
+        'SESSION_OPEN_ELSEWHERE',
+        'SESSION_IN_HARNESS',
+        'SESSION_NOT_FOUND',
+        'SESSION_FOLDER_GONE',
+        'INVALID_SESSION',
       };
       if (refusedBeforeLaunch.contains(failure.code)) {
         if (failure.code == 'INVALID_CWD' && choices['projectSource'] != null) {

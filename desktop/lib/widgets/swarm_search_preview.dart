@@ -70,6 +70,16 @@ class SwarmSearchPreview extends StatefulWidget {
   State<SwarmSearchPreview> createState() => _SwarmSearchPreviewState();
 }
 
+/// The conversation an external row previews: its own, on its machine.
+SessionTailKey? _externalKey(SwarmDestination row) =>
+    switch ((row.external, row.machineId)) {
+      (final external?, final machineId?) => (
+        machineId: machineId,
+        sessionId: external.sessionId,
+      ),
+      _ => null,
+    };
+
 /// The session a single-agent row previews the end of: the agent's current
 /// one, which is what opening the row shows.
 SessionTailKey? _tailKey(_PreviewAgent item) => switch (item.agent.sessionId) {
@@ -148,6 +158,10 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
       ], prioritize: true);
       // The next rows' latest turns, so arrowing down finds them ready.
       for (final neighbor in neighbors) {
+        if (_externalKey(neighbor) case final key?) {
+          app.sessionTails.want(key);
+          continue;
+        }
         final items = _agents(app, neighbor);
         if (neighbor.isGroup || items.length != 1) continue;
         if (_tailKey(items.single) case final key?) app.sessionTails.want(key);
@@ -156,10 +170,113 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   }
 
   void _wantTail(SwarmDestination row) {
+    if (_externalKey(row) case final key?) {
+      app.sessionTails.want(key);
+      return;
+    }
     final items = _agents(app, row);
     if (row.isGroup || items.length != 1) return;
     final item = items.single;
     if (_tailKey(item) case final key?) app.sessionTails.want(key);
+  }
+
+  /// A conversation Harness did not start: what it is and where it ran, then
+  /// its latest turns from the bottom up, as any session's.
+  Widget _external(
+    SwarmDestination row,
+    ExternalSessionRef external,
+    EdgeInsets padding,
+    Size cell,
+    TerminalTheme theme,
+  ) {
+    final terminal = widget.terminal;
+    final muted = terminal
+        ? terminalContentStyle(color: theme.foreground.withValues(alpha: .54))
+        : _muted;
+    final body = terminal
+        ? terminalContentStyle(color: theme.foreground)
+        : _body;
+    final warning = terminal ? theme.yellow : const Color(0xffe9bf79);
+    final gap = terminal ? cell.height : 12.0;
+    final key = _externalKey(row)!;
+    final tail = app.sessionTails.read(key);
+    final open = tail?.openElsewhere ?? external.open;
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          row.title,
+          style: terminal
+              ? body
+              : AppType.monoLabel(fontWeight: FontWeight.w600, height: 1.25),
+        ),
+        Text(row.detail, style: muted),
+        Text(
+          [
+            external.cwd,
+            if (row.machineLabel.isNotEmpty) row.machineLabel,
+          ].join(' · '),
+          style: muted,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        if (open)
+          Padding(
+            padding: EdgeInsets.only(top: gap * .5),
+            child: Text(
+              '${widget.search.sessionUnavailable(row) ?? 'Open elsewhere'}. '
+              'Close it there to open it here.',
+              style: muted.copyWith(color: warning),
+            ),
+          ),
+      ],
+    );
+    if (tail == null || tail.rows.isEmpty) {
+      _scroll.reversed = false;
+      final found = widget.search.contentHitFor(row.id);
+      return SingleChildScrollView(
+        key: ValueKey('preview-content:${row.id}'),
+        controller: _scroll,
+        padding: padding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            header,
+            if (found != null) ...[
+              SizedBox(height: gap),
+              SessionSnippetText(found, style: body, maxLines: null),
+            ],
+          ],
+        ),
+      );
+    }
+    _scroll.reversed = true;
+    return Column(
+      key: ValueKey('preview-content:${row.id}'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: padding.copyWith(bottom: gap),
+          child: header,
+        ),
+        Expanded(
+          child: SessionTailView(
+            tail: tail,
+            tails: app.sessionTails,
+            tailKey: key,
+            controller: _scroll,
+            words: [
+              for (final word in widget.search.wordsQuery.split(RegExp(r'\s+')))
+                if (word.length > 1) word,
+            ],
+            body: body,
+            muted: muted,
+            gap: gap,
+            padding: padding.copyWith(top: 0),
+          ),
+        ),
+      ],
+    );
   }
 
   /// One agent's preview: its session's latest turns from the bottom up when
@@ -335,6 +452,16 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
                 ],
               ],
             ),
+          );
+        }
+        if (row.external case final external?) {
+          final content = _external(row, external, padding, cell, theme);
+          return Semantics(
+            container: true,
+            label: 'Conversation preview',
+            child: _scroll.reversed
+                ? content
+                : Scrollbar(controller: _scroll, child: content),
           );
         }
         final agents = _agents(app, row);

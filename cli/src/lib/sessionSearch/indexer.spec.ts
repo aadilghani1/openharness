@@ -99,6 +99,48 @@ describe('SessionSearchIndex', () => {
     expect(await index.tail('unknown')).toBeNull()
   })
 
+  it("indexes a conversation Harness did not start under its own title, says if it is open, and drops it with its file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-search-external-'))
+    dirs.push(dir)
+    const titled = (type: string, key: string, title: string) => JSON.stringify({ type, [key]: title, sessionId: 'e1' }) + '\n'
+    const claudeFile = join(dir, 'e1.jsonl')
+    writeFileSync(claudeFile, prompt('why does the dial scroll jump', 0) + titled('ai-title', 'aiTitle', 'Dial scroll jump')
+      + answer('The delta is doubled.', 1) + titled('custom-title', 'customTitle', 'Dial fix') + titled('ai-title', 'aiTitle', 'Later AI title'))
+    const untitledFile = join(dir, 'e2.jsonl')
+    writeFileSync(untitledFile, prompt('compare retention\nby cohort please', 0) + answer('Day-7 is 35%.', 1))
+    const store = SessionSearchStore.open(':memory:')!
+    const open = new Set(['e1'])
+    let sources: SearchSource[] = [
+      { agentId: '', sessionId: 'e1', engine: 'claude', transcriptPath: claudeFile, header: '', updatedAt: 2, external: { cwd: '/work/dial', origin: 'terminal', title: '' } },
+      { agentId: '', sessionId: 'e2', engine: 'claude', transcriptPath: untitledFile, header: '', updatedAt: 1, external: { cwd: '/work/cohorts', origin: 'claude-app', title: '' } },
+    ]
+    const index = new SessionSearchIndex({
+      store, sources: () => sources, agents: () => [],
+      openSessions: { known: () => open, fresh: async () => open },
+    })
+    cleanups.push(() => { index.stop(); store.close() })
+    const settle = async () => {
+      index.sweep()
+      await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+    }
+    await settle()
+    // The person's own title wins over Claude's; with none, the first ask, on one line.
+    expect(store.session('e1')).toMatchObject({ agentId: '', title: 'Dial fix', cwd: '/work/dial', origin: 'terminal' })
+    expect(store.session('e2')?.title).toBe('compare retention by cohort please')
+    // Found by its title, marked as not Harness's, and as open elsewhere.
+    const hit = index.search('dial fix').hits[0]
+    expect(hit).toMatchObject({ sessionId: 'e1', agentId: '', external: { title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true } })
+    expect(index.search('cohort').hits[0]).toMatchObject({ sessionId: 'e2', external: { origin: 'claude-app', open: false } })
+    const tail = await index.tail('e1')
+    expect(tail?.external).toEqual({ title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true })
+
+    // Its file gone, it leaves the index at the next sweep.
+    sources = sources.filter((source) => source.sessionId !== 'e2')
+    await settle()
+    expect(store.session('e2')).toBeUndefined()
+    expect(store.session('e1')).toBeDefined()
+  })
+
   it('starts over when the transcript was rewritten shorter', async () => {
     const { path, found, settle } = setup(prompt('first long conversation about cohorts and retention', 0) + answer('Done with the cohort table.', 1))
     await settle()

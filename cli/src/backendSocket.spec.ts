@@ -1075,6 +1075,36 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('opens a harness on a conversation Harness did not start, and refuses what a resume cannot take', async () => {
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:resume', {
+      sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true,
+    })
+    const inputs: Array<{ resumeSessionId?: string | null; cwd: string }> = []
+    socket.onCreateAgent = async (input) => {
+      inputs.push(input)
+      return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app.' }
+    }
+    const create = (requestId: string, extra: Record<string, unknown>) => socket.handleLocalFrame('local:resume', {
+      type: 'agent_create', payload: { requestId, engine: 'codex', cwd: '/work/cohorts', ...extra },
+    })
+    const reply = (requestId: string) => frames.find((frame) => (frame.payload as { requestId?: string }).requestId === requestId)?.payload
+    create('ok', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001' })
+    await vi.waitFor(() => expect(reply('ok')).toBeDefined())
+    expect(inputs[0]).toMatchObject({ resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', cwd: '/work/cohorts' })
+    // What cli.ts said about it reaches the client as it was said.
+    expect(reply('ok')).toMatchObject({ error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app.' })
+    create('shape', { resumeSessionId: '../../etc/passwd' })
+    create('prompt', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', prompt: 'and then this' })
+    await vi.waitFor(() => expect(reply('prompt')).toBeDefined())
+    expect(reply('shape')).toMatchObject({ error: 'INVALID_SESSION' })
+    expect(reply('prompt')).toMatchObject({ error: 'INVALID_SESSION' })
+    expect(inputs).toHaveLength(1)
+    await socket.unregisterLocalClient('local:resume')
+    await socket.stop()
+  })
+
   it('creates with approvals bypassed unless the client turns that off', async () => {
     const socket = new BackendSocket('token')
     const frames: Array<Record<string, unknown>> = []
