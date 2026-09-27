@@ -10,7 +10,7 @@ import { isAbsolute, relative, resolve } from 'node:path'
 
 import { isHarnessSession } from '../../harnessSessionLabel.js'
 import { processRows } from '../../tmux.js'
-import type { ProcessView, RunningProcess, ScanContext } from './types.js'
+import { type ProcessView, type RunningProcess, type ScanContext, UNSETTLED } from './types.js'
 
 /** A folder's entries, or none when it is missing or unreadable. */
 export async function entries(dir: string): Promise<Dirent[]> {
@@ -130,7 +130,7 @@ export interface ScanMemo {
  * scan reads everything once; later ones read only what changed.
  */
 export function scanMemo(options: { excluded: readonly string[]; paceEvery?: number } = { excluded: [] }): ScanMemo {
-  const kept = new Map<string, { fingerprint: string; value: unknown }>()
+  const kept = new Map<string, { fingerprint: string; value: unknown; settled?: boolean }>()
   let touched = new Set<string>()
   let reads = 0
   const every = options.paceEvery ?? 64
@@ -143,6 +143,15 @@ export function scanMemo(options: { excluded: readonly string[]; paceEvery?: num
         const value = await read()
         kept.set(key, { fingerprint, value })
         return value
+      },
+      head: async <T>(key: string, stamp: string, read: () => Promise<T | null | typeof UNSETTLED>): Promise<T | null> => {
+        touched.add(key)
+        const found = kept.get(key)
+        if (found && (found.settled || found.fingerprint === stamp)) return found.value as T | null
+        const value = await read()
+        const settled = value !== UNSETTLED
+        kept.set(key, { fingerprint: stamp, value: settled ? value : null, settled })
+        return settled ? value : null
       },
       excluded: (cwd) => options.excluded.some((dir) => within(dir, cwd)),
       pace: async () => {

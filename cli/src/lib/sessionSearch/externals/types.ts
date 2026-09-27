@@ -41,11 +41,22 @@ export interface ExternalSession {
   readHistory?: () => Promise<readonly LiveEvent[]>
   /** Arguments a resume needs besides the id: a Hermes profile (`-p work`). */
   launchArgs?: readonly string[]
+  /** Its other ids: one Hermes conversation carries on under a new id each time it is compressed. */
+  aliases?: readonly string[]
 }
+
+/** A file's head that cannot be judged yet: the engine is still writing its first lines. */
+export const UNSETTLED: unique symbol = Symbol('unsettled')
 
 export interface ScanContext {
   /** `read`, run again only when `fingerprint` (a file's size and time) changed since the last scan. */
   memo<T>(key: string, fingerprint: string, read: () => Promise<T>): Promise<T>
+  /**
+   * A file's head, read once for good — unless `read` says it cannot judge it yet (UNSETTLED: the
+   * first lines are still being written). Then it is read again when [stamp] changes, and counts as
+   * no session meanwhile.
+   */
+  head<T>(key: string, stamp: string, read: () => Promise<T | null | typeof UNSETTLED>): Promise<T | null>
   /** A folder whose sessions are Harness's own byproducts (its data folder): never offered. */
   excluded(cwd: string): boolean
   /** Lets the daemon breathe between files on a long first scan. */
@@ -79,6 +90,12 @@ export interface OwnerClaim {
   record: string
   /** An app or a shared server holds it (a Grok leader, `kilo serve`): never stopped from here. */
   app?: boolean
+  /**
+   * The only evidence is the process's arguments: they name the session it STARTED on, and a TUI can
+   * move to another conversation since (`/resume` in it). The session may be open there, so it is not
+   * opened a second time; but the process is never stopped on the strength of it.
+   */
+  fromArgs?: boolean
 }
 
 export interface ExternalProvider {

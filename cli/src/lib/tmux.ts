@@ -612,7 +612,8 @@ const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: string[]
   kilo: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/, unless: ['--fork'] },
   pi: { flags: ['--session', '--session-id'], id: /^[0-9a-f][0-9a-f-]{7,}$/i },
   // Hermes ids are timestamps: 20260728_115628_f2c86a.
-  hermes: { flags: ['--resume', '-r'], id: /^\d{8}_\d{6}_[0-9a-z]+$/i },
+  // Hermes ids are timestamps (20260728_115628_f2c86a), or uuids for an editor's (ACP) sessions.
+  hermes: { flags: ['--resume', '-r'], id: /^(?:\d{8}_\d{6}_[0-9a-z]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i },
   // `devin -r <id>` / `--resume <id>`: ids are word slugs (`brisk-otter`).
   devin: { flags: ['--resume', '-r'], id: /^[a-z0-9]+(?:-[a-z0-9]+)+$/ },
   commandcode: { flags: ['--resume', '-r', '--session'], id: /^[0-9a-f-]{16,}$/i },

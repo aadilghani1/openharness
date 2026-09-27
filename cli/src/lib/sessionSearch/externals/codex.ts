@@ -11,8 +11,8 @@
 
 import { join } from 'node:path'
 
-import { absoluteFolder, entries, fileStamp, firstLine, parseLine, readTail, readText, record, text } from './support.js'
-import type { ExternalOrigin, ExternalProvider, ExternalSession, OwnerClaim, ProcessView, ScanContext } from './types.js'
+import { absoluteFolder, entries, fileStamp, firstLine, parseLine, readHead, readTail, readText, record, text } from './support.js'
+import { type ExternalOrigin, type ExternalProvider, type ExternalSession, type OwnerClaim, type ProcessView, type ScanContext, UNSETTLED } from './types.js'
 
 /** How much of a rollout is read for its first line: `session_meta` carries the base instructions. */
 const HEAD_BYTES = 1024 * 1024
@@ -21,10 +21,14 @@ const ROLLOUT_ID = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 
 export interface CodexHead { sessionId: string; cwd: string; origin: ExternalOrigin }
 
-/** A rollout's session, folder and source, from its first line. */
-export async function readCodexHead(path: string): Promise<CodexHead | null> {
+/**
+ * A rollout's session, folder and source, from its first line. UNSETTLED while that line has no end
+ * yet in a file shorter than what is read: Codex is still writing it.
+ */
+export async function readCodexHead(path: string): Promise<CodexHead | null | typeof UNSETTLED> {
   const line = await firstLine(path, HEAD_BYTES)
-  const row = record(line === null ? null : parseLine(line))
+  if (line === null) return Buffer.byteLength(await readHead(path, HEAD_BYTES)) < HEAD_BYTES ? UNSETTLED : null
+  const row = record(parseLine(line))
   const meta = record(row?.payload)
   if (row?.type !== 'session_meta' || !meta) return null
   const origin: ExternalOrigin | null = meta.source === 'cli' ? 'terminal'
@@ -99,7 +103,7 @@ export function codexProvider(options: { home: string }): ExternalProvider {
         const stamp = await fileStamp(path)
         if (!stamp) continue
         // A rollout's first line never changes: read once, however the file grows.
-        const head = await ctx.memo(`codex:${path}`, 'head', () => readCodexHead(path))
+        const head = await ctx.head(`codex:${path}`, stamp.stamp, () => readCodexHead(path))
         await ctx.pace()
         if (!head || ctx.excluded(head.cwd)) continue
         found.push({ ...head, engine: 'codex', title: titles.get(head.sessionId) ?? '', mtime: stamp.mtime, transcriptPath: path })

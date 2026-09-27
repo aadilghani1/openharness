@@ -11,7 +11,7 @@
 
 import { open } from 'node:fs/promises'
 
-import { harnessTtys as readHarnessTtys, processAlive, processTtys, processView, scanMemo } from './externals/support.js'
+import { harnessTtys as readHarnessTtys, processAlive, processTtys, processView, run, scanMemo } from './externals/support.js'
 import type { ExternalEngine, ExternalProvider, ExternalSession, OwnerClaim, ProcessView } from './externals/types.js'
 
 export type { ExternalEngine, ExternalOrigin, ExternalProvider, ExternalSession } from './externals/types.js'
@@ -66,6 +66,10 @@ export class ExternalSessions {
     const byId = new Map<string, ExternalSession>()
     for (const session of all) if (!byId.has(session.sessionId)) byId.set(session.sessionId, session)
     this.found = [...byId.values()]
+    // An older id of a conversation that carried on under a new one finds the conversation.
+    for (const session of this.found) {
+      for (const alias of session.aliases ?? []) if (!byId.has(alias)) byId.set(alias, session)
+    }
     this.byId = byId
     return this.found
   }
@@ -73,9 +77,10 @@ export class ExternalSessions {
 
 /**
  * Where an open session is: a terminal, which Harness can take it over from; an app, which it cannot;
- * or one of Harness's own panes, whose agent the daemon is still binding.
+ * one of Harness's own panes, whose agent the daemon is still binding; or `maybe` a terminal, whose
+ * process was started on it and may have moved on since (`OwnerClaim.fromArgs`).
  */
-export type OpenIn = 'terminal' | 'app' | 'harness'
+export type OpenIn = 'terminal' | 'app' | 'harness' | 'maybe'
 
 /** The process that has a session open. */
 export interface SessionOwner {
@@ -87,6 +92,8 @@ export interface SessionOwner {
   record: string
   /** It runs in one of Harness's own panes: an agent of Harness's, never an outside conversation. */
   harness?: boolean
+  /** Only its arguments name the session: it may have moved on, and is never stopped from here. */
+  fromArgs?: boolean
 }
 
 export interface OpenSessionsOptions {
@@ -150,7 +157,7 @@ export class OpenSessions {
     if (this.answer && now - this.answer.at <= (this.opts.maxAgeMs ?? 5_000)) return Promise.resolve(this.answer)
     this.asking ??= this.read().then((owners) => {
       const open = new Map([...owners].map(([id, owner]): [string, OpenIn] => [
-        id, owner.harness ? 'harness' : owner.tty ? 'terminal' : 'app',
+        id, owner.harness ? 'harness' : !owner.tty ? 'app' : owner.fromArgs ? 'maybe' : 'terminal',
       ]))
       this.answer = { at: (this.opts.now ?? Date.now)(), owners, open }
       return this.answer
@@ -177,10 +184,14 @@ export class OpenSessions {
     ])
     for (const claim of claims) {
       const tty = claim.app ? null : ttys.get(claim.pid) ?? null
-      owners.set(claim.sessionId, {
+      const owner: SessionOwner = {
         pid: claim.pid, engine: claim.engine, tty, record: claim.record,
         ...(tty && harness.has(tty) ? { harness: true } : {}),
-      })
+        ...(claim.fromArgs ? { fromArgs: true } : {}),
+      }
+      // Hard evidence outranks a process's arguments for the same session.
+      const known = owners.get(claim.sessionId)
+      if (!known || (known.fromArgs && !owner.fromArgs)) owners.set(claim.sessionId, owner)
     }
     return owners
   }
@@ -192,6 +203,21 @@ export interface StopOptions {
   sleep?: (ms: number) => Promise<void>
   /** Writes to the owner's terminal; tests replace it. */
   writeTty?: (tty: string, text: string) => Promise<void>
+  /** The foreground job [pid] leads, if it leads one; tests replace it. */
+  job?: (pid: number) => Promise<number | null>
+}
+
+/**
+ * The foreground job an engine leads in its terminal: the process group it heads, when that group is
+ * the one the terminal is showing. Its whole job is signalled then, so what it started for its screen
+ * goes with it (Hermes's terminal UI runs a Node child its Python does not pass SIGTERM to). An
+ * engine that does not lead its job (Codex's native binary under its Node launcher, anything run
+ * without job control) is signalled alone: its group may hold the shell it runs in.
+ */
+export async function foregroundJob(pid: number, exec: typeof run = run): Promise<number | null> {
+  const out = await exec('ps', ['-o', 'pgid=,tpgid=', '-p', String(pid)], 3_000)
+  const [pgid, tpgid] = (out ?? '').trim().split(/\s+/).map(Number)
+  return pgid === pid && tpgid === pid ? pid : null
 }
 
 /**
@@ -217,8 +243,9 @@ export async function stopSessionOwner(owner: Pick<SessionOwner, 'pid' | 'tty'>,
     }
     return !alive(owner.pid)
   }
+  const job = await (opts.job ?? foregroundJob)(owner.pid).catch(() => null)
   const signal = (name: NodeJS.Signals): void => {
-    try { kill(owner.pid, name) } catch { /* already gone */ }
+    try { kill(job ? -job : owner.pid, name) } catch { /* already gone */ }
   }
   signal('SIGTERM')
   if (!await gone(5_000)) {

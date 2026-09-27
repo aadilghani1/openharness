@@ -33,6 +33,8 @@ export interface ExternalPaths {
   hermesRoot: string
   devinHome: string
   piAgentDir: string
+  /** Pi's moved sessions folder (`PI_CODING_AGENT_SESSION_DIR`), when set. */
+  piSessionDir?: string
   commandcodeHome: string
   museHome: string
   agyHome: string
@@ -58,6 +60,7 @@ export function externalPaths(vars: NodeJS.ProcessEnv = process.env): ExternalPa
     hermesRoot: env.HERMES_HOME,
     devinHome: env.DEVIN_HOME,
     piAgentDir: vars.PI_CODING_AGENT_DIR || join(env.PI_HOME, 'agent'),
+    ...(vars.PI_CODING_AGENT_SESSION_DIR ? { piSessionDir: vars.PI_CODING_AGENT_SESSION_DIR } : {}),
     commandcodeHome: env.COMMANDCODE_HOME,
     museHome: env.MUSE_HOME,
     agyHome: env.AGY_HOME,
@@ -76,7 +79,7 @@ export function externalProviders(paths: ExternalPaths = externalPaths()): Exter
     opencodeProvider({ engine: 'kilo', dbPath: paths.kiloDb }),
     hermesProvider({ root: paths.hermesRoot }),
     devinProvider({ home: paths.devinHome }),
-    piProvider({ agentDir: paths.piAgentDir }),
+    piProvider({ agentDir: paths.piAgentDir, ...(paths.piSessionDir ? { sessionDir: paths.piSessionDir } : {}) }),
     commandcodeProvider({ home: paths.commandcodeHome }),
     museProvider({ home: paths.museHome }),
     agyProvider({ home: paths.agyHome }),

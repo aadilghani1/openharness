@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { codexProvider, codexTitles, codexTurnOpen, readCodexHead, rollouts } from './codex.js'
 import { scanMemo } from './support.js'
-import type { ProcessView } from './types.js'
+import { type ProcessView, UNSETTLED } from './types.js'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -43,10 +43,14 @@ describe('readCodexHead', () => {
     expect(await readCodexHead(file('type', { type: 'other', payload: {} }))).toBeNull()
     expect(await readCodexHead(file('nopayload', { type: 'session_meta' }))).toBeNull()
     expect(await readCodexHead(file('garbage', 'not json'))).toBeNull()
-    // No newline yet: the first line is still being written.
+    // No newline yet: the first line is still being written, and is not judged until it is done —
+    // unless it is longer than any first line.
     const partial = join(dir, 'partial.jsonl')
     writeFileSync(partial, JSON.stringify(meta(C, 'cli')))
-    expect(await readCodexHead(partial)).toBeNull()
+    expect(await readCodexHead(partial)).toBe(UNSETTLED)
+    const endless = join(dir, 'endless.jsonl')
+    writeFileSync(endless, 'x'.repeat(1024 * 1024 + 10))
+    expect(await readCodexHead(endless)).toBeNull()
   })
 })
 

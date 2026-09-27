@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { UNSETTLED } from './types.js'
 import {
   absoluteFolder, entries, epochMs, fileStamp, firstLine, harnessTtys, listProcesses, parseLine, parseLsof, parseTtys,
   processAlive, processTtys, processView, readHead, readJson, readTail, readText, record, run, scanMemo, text, UUID,
@@ -123,6 +124,29 @@ describe('scanMemo', () => {
     expect(await memo.context().memo('b', '1', read)).toBe(4)
     expect(ctx.excluded('/data/harness/summary-scratch')).toBe(true)
     expect(ctx.excluded('/work')).toBe(false)
+  })
+
+  it("keeps a file's head for good once it can be judged, and reads it again until then", async () => {
+    const memo = scanMemo()
+    let reads = 0
+    let answer: string | null | typeof UNSETTLED = UNSETTLED
+    const read = async () => { reads++; return answer }
+    const ctx = memo.context()
+    expect(await ctx.head('f', '1', read)).toBeNull()
+    expect(await ctx.head('f', '1', read)).toBeNull()
+    expect(reads).toBe(1)
+    answer = 'head'
+    expect(await ctx.head('f', '2', read)).toBe('head')
+    expect(await ctx.head('f', '3', read)).toBe('head')
+    expect(reads).toBe(2)
+    answer = null
+    expect(await ctx.head('g', '1', read)).toBeNull()
+    expect(await ctx.head('g', '2', read)).toBeNull()
+    expect(reads).toBe(3)
+    memo.prune()
+    memo.prune()
+    expect(await memo.context().head('g', '9', read)).toBeNull()
+    expect(reads).toBe(4)
   })
 
   it('lets the daemon breathe every so often, and has sensible defaults', async () => {

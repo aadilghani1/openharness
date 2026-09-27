@@ -2845,7 +2845,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           const known = store.ownedSessionIds()
           for (const s of own) if (s.sessionId) known.add(s.sessionId)
           for (const e of externalSessions.list()) {
-            if (known.has(e.sessionId) || (!e.transcriptPath && !e.readHistory)) continue
+            // A conversation Harness holds under any of its ids is Harness's.
+            if (known.has(e.sessionId) || e.aliases?.some((id) => known.has(id)) || (!e.transcriptPath && !e.readHistory)) continue
             sources.push({
               agentId: '', sessionId: e.sessionId, engine: e.engine, transcriptPath: e.transcriptPath,
               header: '', changedAt: e.mtime, external: { cwd: e.cwd, origin: e.origin, title: e.title },
@@ -4992,10 +4993,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * so the person can choose to wait for the turn to end or stop it now. An app's is never stopped.
    */
   const adoptableSession = async (sessionId: string, engine: AgentEngine, takeOver: 'idle' | 'now' | 'wait' | null): Promise<{ ok: true; cwd: string; title: string; owner: SessionOwner | null; busy: boolean; launchArgs: readonly string[] } | { ok: false; error: string; detail: string }> => {
-    if (registry.bySession(sessionId) || stoppedAgents.list().some((s) => s.sessionId === sessionId)) {
+    const held = (id: string) => !!registry.bySession(id) || stoppedAgents.list().some((s) => s.sessionId === id)
+    if (held(sessionId)) {
       return { ok: false, error: 'SESSION_IN_HARNESS', detail: 'This conversation is already a harness here.' }
     }
     const found = externalSessions.get(sessionId) ?? (await externalSessions.scan(), externalSessions.get(sessionId))
+    if (found && [found.sessionId, ...found.aliases ?? []].some(held)) {
+      return { ok: false, error: 'SESSION_IN_HARNESS', detail: 'This conversation is already a harness here.' }
+    }
     if (!found) return { ok: false, error: 'SESSION_NOT_FOUND', detail: 'This conversation is no longer on this machine.' }
     if (found.engine !== engine) return { ok: false, error: 'INVALID_ENGINE', detail: `This is a ${found.engine} conversation.` }
     // The Codex app keeps a thread in a folder of its own, which people tidy away. Checked before
@@ -5010,6 +5015,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const engineName = engineLabel(engine)
     // A process in one of Harness's own panes is an agent the daemon is still binding: never stopped.
     if (owner.harness) return { ok: false, error: 'SESSION_IN_HARNESS', detail: 'This conversation is already a harness here.' }
+    // Started on it, as its arguments say, and perhaps moved on since: not opened twice, never stopped.
+    if (owner.fromArgs) {
+      return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: `It may be open in ${engineName} in a terminal. Close it there, then open it here.` }
+    }
     if (!owner.tty) {
       return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: `It is open in ${engineName}'s app or an editor. Close it there, then open it here.` }
     }
