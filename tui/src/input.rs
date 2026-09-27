@@ -153,6 +153,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
     if app.modal.is_some() { modal_key(app, key); return }
     // A shell is on its way (split-window, new-window): what is typed meanwhile is its.
     if let Some(buffer) = app.starting_shell.as_mut() {
+        let key = if key.code == KeyCode::Enter { KeyEvent::new(key.code, key.modifiers - KeyModifiers::SHIFT) } else { key };
         if let Some(bytes) = encode_key(&key, alacritty_terminal::term::TermMode::empty()) { buffer.push(bytes); return }
     }
     let Some(focus) = app.focused() else { home_key(app, key); return };
@@ -167,12 +168,12 @@ fn on_key(app: &mut App, key: KeyEvent) {
         }
         // Mid-takeover (or still opening): keep what is typed and deliver it once the stream is ours.
         Phase::Connecting(_) => {
-            if let Some(bytes) = encode_key(&key, pane.mode()) {
+            if let Some(bytes) = encode_key(&for_pane(app, focus, key), pane.mode()) {
                 if let Some(p) = app.panes.get_mut(&focus) { if p.opening { p.queued.push(bytes) } }
             }
         }
         Phase::Live | Phase::Watching(_) => {
-            if let Some(bytes) = encode_key(&key, pane.mode()) {
+            if let Some(bytes) = encode_key(&for_pane(app, focus, key), pane.mode()) {
                 if let Some(p) = app.panes.get_mut(&focus) {
                     p.scroll_bottom();
                     // Local echo on a slow link: plain characters appear now, confirmed when the echo lands.
@@ -478,26 +479,26 @@ fn home_key(app: &mut App, key: KeyEvent) {
             None => {}
         }
     };
+    let plain = !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let rows_n = rows.len();
     match key.code {
-        KeyCode::Char(c @ '1'..='9') => open(app, c as usize - '1' as usize),
-        KeyCode::Enter => if rows.is_empty() { run(app, "open") } else { open(app, app.home_cursor) },
-        KeyCode::Up | KeyCode::Char('k') => app.home_cursor = app.home_cursor.saturating_sub(1),
-        KeyCode::Down | KeyCode::Char('j') => app.home_cursor = (app.home_cursor + 1).min(rows.len().saturating_sub(1)),
-        KeyCode::Char('p') => run(app, "open"),
-        KeyCode::Char('o') | KeyCode::Char('#') => run(app, "projects"),
-        KeyCode::Char('n') => run(app, "new"),
-        // A shell here, as tmux's C-b c makes one: in the machine and folder of the pane you came
-        // from, gone with its window.
-        KeyCode::Char('t') => { let from = app.home_from.take(); new_shell_from(app, from, Placement::Auto(None), None, None) }
-        KeyCode::Char('i') | KeyCode::Char(':') => run(app, "models"),
-        KeyCode::Char('I') => run(app, "inbox"),
-        KeyCode::Char('m') | KeyCode::Char('@') => run(app, "machines"),
-        KeyCode::Char('s') | KeyCode::Char('*') => run(app, "store"),
-        KeyCode::Char('>') => run(app, "palette"),
-        KeyCode::Char('b') => run(app, "send"),
-        KeyCode::Char('/') | KeyCode::Char('?') => run(app, "help"),
-        KeyCode::Char('q') => { if app.tabs.len() > 1 { let i = app.active; app.close_tab(i) } }
-        _ => {}
+        // A row by its number, or chosen with the arrows (C-p / C-n) and then Enter.
+        KeyCode::Char(c @ '1'..='9') if plain && (c as usize - '1' as usize) < rows_n => open(app, c as usize - '1' as usize),
+        KeyCode::Up => { app.home_cursor = if app.home_moved { app.home_cursor.saturating_sub(1) } else { 0 }; app.home_moved = true }
+        KeyCode::Char('p') if ctrl => { app.home_cursor = if app.home_moved { app.home_cursor.saturating_sub(1) } else { 0 }; app.home_moved = true }
+        KeyCode::Down => { app.home_cursor = if app.home_moved { (app.home_cursor + 1).min(rows_n.saturating_sub(1)) } else { 0 }; app.home_moved = true }
+        KeyCode::Char('n') if ctrl => { app.home_cursor = if app.home_moved { (app.home_cursor + 1).min(rows_n.saturating_sub(1)) } else { 0 }; app.home_moved = true }
+        KeyCode::Enter if app.home_moved && rows_n > 0 => open(app, app.home_cursor),
+        KeyCode::Esc => app.home_moved = false,
+        // Anything else is typed into a shell made here, as after tmux's C-b c: in the machine and
+        // folder of the pane you came from, what you type (`claude⏎`, `git status⏎`) its.
+        _ => {
+            let Some(bytes) = crate::pane::encode_key(&key, alacritty_terminal::term::TermMode::empty()) else { return };
+            let from = app.home_from.take();
+            new_shell_from(app, from, Placement::Auto(None), None, None);
+            if let Some(buffer) = app.starting_shell.as_mut() { buffer.push(bytes) }
+        }
     }
 }
 
@@ -1320,7 +1321,7 @@ fn modal_key(app: &mut App, key: KeyEvent) {
         }
         // Everything goes to the popup's program (the prefix still works, as in tmux).
         Modal::Popup { pane, x, y, width, height, border, title, look } => {
-            if let Some(bytes) = app.panes.get(&pane).and_then(|p| encode_key(&key, p.mode())) {
+            if let Some(bytes) = app.panes.get(&pane).and_then(|p| encode_key(&for_pane(app, pane, key), p.mode())) {
                 let live = app.panes.get(&pane).map(|p| p.stream.is_some()).unwrap_or(false);
                 if live { app.send_input(pane, &bytes) } else if let Some(p) = app.panes.get_mut(&pane) { p.queued.push(bytes) }
             }
@@ -2823,7 +2824,7 @@ pub fn send_prefix_key(app: &mut App, key: KeyEvent) {
     if let Some(pane) = app.focused().filter(|f| app.panes.get(f).map(|p| p.tree_top()).unwrap_or(false)) {
         return crate::tree::key(app, pane, keys::of(&key), None, true);
     }
-    if let Some(bytes) = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| encode_key(&key, p.mode())) { send_to_focused(app, bytes) }
+    if let Some(bytes) = app.focused().and_then(|f| app.panes.get(&f).map(|p| (f, p))).and_then(|(f, p)| encode_key(&for_pane(app, f, key), p.mode())) { send_to_focused(app, bytes) }
 }
 
 /// One key to a pane, as the pane's program reads it (send-prefix).
@@ -2892,6 +2893,15 @@ pub fn send_keys(app: &mut App, pane: u64, args: &crate::cmd::Args) {
 fn inject_mode_key(app: &mut App, pane: u64, chord: keys::Chord) {
     let table = if crate::copy::ctx(app, pane).vi { "copy-mode-vi" } else { "copy-mode" };
     if let Some(b) = app.keymap.lookup(table, &chord) { commands::execute_bound(app, &b.command) }
+}
+
+/// Shift+Enter as a pane's program reads it: to an agent (Claude Code's newline) or a program that
+/// asked for the kitty keyboard protocol, CSI 13;2u; to a shell, plain Enter, as tmux sends it.
+fn for_pane(app: &App, pane: u64, key: KeyEvent) -> KeyEvent {
+    if key.code != KeyCode::Enter || !key.modifiers.contains(KeyModifiers::SHIFT) { return key }
+    let Some(p) = app.panes.get(&pane) else { return key };
+    let shell = app.fleet.agent(&p.machine_id, &p.agent_id).map(|a| a.engine == "terminal").unwrap_or(true);
+    if shell && !p.mode().intersects(alacritty_terminal::term::TermMode::KITTY_KEYBOARD_PROTOCOL) { KeyEvent::new(key.code, key.modifiers - KeyModifiers::SHIFT) } else { key }
 }
 
 /// `new-harness claude @office ~/src/api`: the words `harness new` takes.

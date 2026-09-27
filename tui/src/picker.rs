@@ -95,6 +95,8 @@ pub struct Picker {
     pub visible: Vec<(usize, Vec<u32>)>,
     pub cursor: usize,
     pub selected_id: Option<String>,
+    /// The cursor was put on an item when the list opened (not moved by you since).
+    pub preselected: bool,
     pub status: String,
     pub hints: Vec<(&'static str, &'static str)>,
     pub keep_order: bool,
@@ -230,6 +232,7 @@ impl Picker {
             visible: Vec::new(),
             cursor: 0,
             selected_id: None,
+            preselected: false,
             status: String::new(),
             hints: Vec::new(),
             keep_order: false,
@@ -421,9 +424,11 @@ impl Picker {
     /// The cursor on the first result (and the view at its start).
     pub fn to_top(&mut self) { self.cursor = 0; self.scroll = 0; self.skip_disabled(1) }
 
-    /// The cursor on the item [id], if it is in the results.
+    /// The cursor on the item [id], if it is in the results — where the list opens (C-b s on this
+    /// window's harness), until a query is typed: then it starts from the best match, as a list
+    /// that opened at its top would.
     pub fn select(&mut self, id: &str) {
-        if let Some(at) = self.visible.iter().position(|(i, _)| self.rows[*i].id == id) { self.cursor = at; self.skip_disabled(1) }
+        if let Some(at) = self.visible.iter().position(|(i, _)| self.rows[*i].id == id) { self.cursor = at; self.skip_disabled(1); self.preselected = at != 0 }
     }
 
     fn skip_disabled(&mut self, direction: i64) {
@@ -467,6 +472,7 @@ impl Picker {
     }
 
     pub fn move_by(&mut self, delta: i64) {
+        self.preselected = false;
         // (Moved: track-current is over.)
         if delta != 0 { self.track_current = None }
         if self.visible.is_empty() { return }
@@ -490,6 +496,7 @@ impl Picker {
         if let Some(id) = &self.track_current { self.selected_id = Some(id.clone()) }
         else if !self.tracking() { self.selected_id = None }
         self.refilter();
+        if std::mem::take(&mut self.preselected) && !self.tracking() { self.to_top() }
     }
 
     /// --track, as toggle-track last left it — or track-current's item.

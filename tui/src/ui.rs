@@ -183,6 +183,8 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
     let key_w = items.iter().map(|(k, _)| k.width()).max().unwrap_or(1).min(8);
     let col_w: usize = key_w + if body.width >= 150 { 44 } else { 32 };
     let cols = ((body.width as usize).saturating_sub(4) / col_w).max(1);
+    // (The columns share the width: a note is cut only where the panel ends.)
+    let col_w = ((body.width as usize).saturating_sub(4) / cols).max(col_w);
     let rows_needed = items.len().div_ceil(cols);
     // (A third of the window at most: the panes stay in view above it.)
     let height = (rows_needed as u16 + 2).min((body.height / 3).max(4)).min(body.height);
@@ -331,7 +333,8 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
         lines.push(Line::styled(format!("{} Finding your harnesses…", theme::spinner(app.tick)), fg(theme::SOFT)));
     } else if rows.is_empty() {
         lines.push(Line::styled("Nothing running.", fg(theme::SOFT)));
-        lines.push(Line::from(vec![Span::styled("n", bold(theme::ACCENT)), Span::styled(" starts a harness · ", fg(theme::MUTED)), Span::styled("o", bold(theme::ACCENT)), Span::styled(" opens a paused one", fg(theme::MUTED))]));
+        let hint = |c: &str| app.keymap.hint(c).unwrap_or_default();
+        lines.push(Line::from(vec![Span::styled(hint("new-harness"), bold(theme::ACCENT)), Span::styled(" starts a harness · ", fg(theme::MUTED)), Span::styled(hint("choose-tree -Zs"), bold(theme::ACCENT)), Span::styled(" opens a paused one", fg(theme::MUTED))]));
     } else {
         let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
         for (index, row) in rows.iter().enumerate() {
@@ -362,7 +365,7 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
             let detail_text = clip(&detail.0, detail_room);
             let used = 2 + 2 + 2 + name_w + 2 + detail_text.width();
             let pad = (width as usize).saturating_sub(used + right.width());
-            let selected = index == app.home_cursor;
+            let selected = app.home_moved && index == app.home_cursor;
             // The chosen row as fzf draws its current line (reverse video where there is no colour).
             let bg = match (selected, theme::fzf().bw) { (true, true) => Style::default().add_modifier(Modifier::REVERSED), (true, false) => Style::default().bg(theme::fzf().bg_plus), _ => Style::default() };
             let tint = |c: Color| if c == theme::MUTED || c == theme::SOFT { bg.add_modifier(Modifier::DIM) } else { bg.fg(theme::paint(c)) };
@@ -378,13 +381,17 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
         }
     }
     lines.push(Line::raw(""));
-    let keys = [("enter", "open"), ("p", "harnesses"), ("o", "projects"), ("n", "new"), ("t", "terminal"), ("i", "models"), ("I", "needs input"), ("m", "machines"), ("s", "store"), (">", "commands"), ("?", "help")];
+    // Typing here is a shell's (as after tmux's C-b c); the rows by number, or the arrows and Enter;
+    // the rest on the prefix's keys, as everywhere.
+    let hint = |c: &str| app.keymap.hint(c).unwrap_or_default();
+    let keys: Vec<(String, &str)> = vec![("1-9".into(), "open"), ("↑↓ enter".into(), "choose"), ("type".into(), "a shell here"), (hint("choose-tree -Zs"), "harnesses"), (hint("new-harness"), "new"), (hint("choose-tree -a"), "waiting"), (hint("choose-tree -m"), "machines")];
+    let keys: Vec<(String, &str)> = keys.into_iter().filter(|(k, _)| !k.is_empty()).collect();
     let mut row: Vec<Span> = Vec::new();
     let mut row_w = 0;
     for (k, w) in keys {
         let piece_w = k.width() + w.width() + 4;
         if row_w + piece_w > width as usize { lines.push(Line::from(std::mem::take(&mut row))); row_w = 0 }
-        row.push(Span::styled(k, bold(theme::ACCENT)));
+        row.push(Span::styled(k.clone(), bold(theme::ACCENT)));
         row.push(Span::styled(format!(" {w}   "), fg(theme::SOFT)));
         row_w += piece_w;
     }

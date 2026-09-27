@@ -81,7 +81,7 @@ sends a plain Enter).
 | tmux keys | |
 |---|---|
 | `C-b s` | every harness on every machine — an fzf list with a live preview |
-| `C-b c` | new window, on the home page: your recent harnesses and the Claude Code and Codex conversations Harness did not start (last 30 days, every machine) — `1…9` or `enter` opens one there (a conversation resumed as a harness), `t` a shell as tmux's. `new-window` from a script, or with options (`-c`, a command…), makes the shell at once, as tmux does; `set -g @hn-new-window shell` makes the key tmux's too |
+| `C-b c` | new window, on the home page: your recent harnesses and the Claude Code and Codex conversations Harness did not start (last 30 days, every machine) — `1…9` opens one there (or `↑`/`↓` then `enter`; a conversation resumed as a harness). Anything you type starts a shell there with your keys in it, as after tmux's `C-b c`: `C-b c` then `claude⏎` runs `claude`. `new-window` from a script, or with options (`-c`, a command…), makes the shell at once, as tmux does; `set -g @hn-new-window shell` (or `@hn-look tmux`) makes the key tmux's too |
 | `C-b %` `C-b "` (and `C-b \|` for `%`) | split right / below — a shell, at once, in this pane's machine and folder (`C-b -` is tmux's delete-buffer) |
 | `C-b o` `C-b ;` `C-b ←↑→↓` `C-b q` | next pane, last pane, pane in a direction, pane numbers |
 | `C-b z` `C-b space` `C-b M-1…7` `C-b { }` `C-b C-o` | zoom, next layout, a layout, swap, rotate |

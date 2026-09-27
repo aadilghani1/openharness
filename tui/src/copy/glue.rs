@@ -250,19 +250,19 @@ fn apply(app: &mut App, pane: u64, out: Out, m: Option<&crate::mouse::Event>) {
     let limit = app.buffer_limit();
     match out {
         Out::Copy { prefix, text } => {
-            if clipboard { crate::clipboard::store(&text) }
+            if clipboard { crate::clipboard::store_as("", &text) }
             app.paste.add_prefixed(prefix.as_deref(), text, limit);
         }
         Out::Pipe { cmd, text, copy } => {
             let cmd = cmd.or_else(|| app.options.get("copy-command", "", None)).filter(|c| !c.is_empty());
             if let Some(cmd) = cmd { crate::input::pipe_to(&cmd, &text) }
             if let Some(prefix) = copy {
-                if clipboard { crate::clipboard::store(&text) }
+                if clipboard { crate::clipboard::store_as("", &text) }
                 app.paste.add_prefixed(prefix.as_deref(), text, limit);
             }
         }
         Out::Append(text) => {
-            if clipboard { crate::clipboard::store(&text) }
+            if clipboard { crate::clipboard::store_as("", &text) }
             match app.paste.top().map(|b| (b.name.clone(), b.data.clone())) {
                 Some((name, data)) => { let _ = app.paste.set(data + &text, Some(&name), limit); }
                 None => { let _ = app.paste.set(text, None, limit); }

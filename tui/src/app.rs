@@ -455,6 +455,8 @@ pub struct App {
     pub prefix_at: Option<Instant>,
     pub tick: u64,
     pub home_cursor: usize,
+    /// The home page's selection moved by you (until then Enter, like any key, starts a shell).
+    pub home_moved: bool,
     /// The Claude Code and Codex conversations Harness did not start that the home page offers
     /// (each machine's session index, asked once each time the page shows), and the machines
     /// asked so far.
@@ -883,6 +885,7 @@ impl App {
             prefix: false,
             tick: 0,
             home_cursor: 0,
+            home_moved: false,
             home_external: Vec::new(),
             home_asked: HashSet::new(),
             home_shown: false,
@@ -4203,6 +4206,7 @@ impl App {
         self.tabs.insert(at, tab);
         self.active = at;
         self.home_cursor = 0;
+        self.home_moved = false;
         self.home_order.borrow_mut().clear();
         self.fit_panes();
     }

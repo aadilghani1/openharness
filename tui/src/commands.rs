@@ -1766,7 +1766,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // tmux makes; `set -g @hn-new-window shell` makes the key tmux's too.
             let bare = app.capture.is_none() && !app.headless && command.is_none() && cwd.is_none() && name.is_none() && opt(words, "-t").is_none()
                 && !["-d", "-a", "-b", "-k", "-P"].iter().any(|f| flag(words, f)) && opt(words, "-e").is_none()
-                && app.options.get("@hn-new-window", "", None).as_deref() != Some("shell");
+                && app.options.get("@hn-new-window", "", None).as_deref() != Some("shell")
+                // (tmux's look is tmux's C-b c too.)
+                && app.options.get("@hn-look", "", None).as_deref() != Some("tmux");
             app.new_tab_at(idx);
             if bare { app.home_from = from; return }
             if let Some(n) = &name { let n = expand(app, n); app.rename_tab(&n) }
