@@ -444,7 +444,8 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     if let Some((text, _, at)) = &app.toast {
         if at.elapsed() < Duration::from_millis(app.toast_ms()) {
             buf.set_style(rect, yellow);
-            buf.set_stringn(rect.x, rect.y, clip(text, rect.width as usize), rect.width as usize, yellow);
+            // Cut at the edge, as tmux's (no … in the last cell).
+            buf.set_stringn(rect.x, rect.y, text, rect.width as usize, yellow);
             return None;
         }
     }

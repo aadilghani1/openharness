@@ -929,6 +929,8 @@ fn io_error(e: &std::io::Error) -> String {
 /// of it runs — then checked command by command; its commands, each with its file and line (-n:
 /// none; -v: each line printed as tmux prints it).
 pub fn source(app: &mut App, file: &str, parse_only: bool, verbose: bool) -> Result<Queue, String> {
+    // A folder reads as nothing, and nothing is said (tmux's file_read of one).
+    if std::fs::metadata(file).map(|m| m.is_dir()).unwrap_or(false) { return source_text(app, file, "", parse_only, verbose) }
     let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {}", match e.kind() {
         std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
         std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
@@ -1864,7 +1866,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // A tmux layout string (#{window_layout}, tmux-resurrect's): the panes take its cells.
             let ids = app.tabs[target].panes();
             let body = app.body();
-            match crate::layout::Node::from_tmux(name, &ids, body.width, body.height) {
+            match crate::layout::Node::from_tmux(name, &ids, body.width, body.height).filter(|_| crate::layout::checksum_ok(name)) {
                 Some(root) => { let tab = &mut app.tabs[target]; tab.root = Some(root); tab.zoomed = false; app.fit_panes(); app.layout_changed(target); app.layout_changed(target) }
                 None => app.error(format!("invalid layout: {name}")),
             }
@@ -2010,8 +2012,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 return app.print("display", lines);
             }
             if opt(words, "-F").is_some() && !positional(words).is_empty() { return app.error("only one of -F or argument must be given") }
-            let text = opt(words, "-F").or_else(|| positional(words).first().cloned()).unwrap_or_default();
-            let text = if text.is_empty() { "[#S] #I:#W, current pane #P - (%H:%M %d-%b-%y)".to_string() } else { text };
+            // An empty one is empty (only none is the default).
+            let text = positional(words).first().cloned().or_else(|| opt(words, "-F")).unwrap_or_else(|| "[#S] #I:#W, current pane #P - (%H:%M %d-%b-%y)".to_string());
             let out = if flag(words, "-l") { text } else {
                 match opt(words, "-t").map(|t| pane_target(app, &t)) {
                     Some(Some((w, p))) => crate::format::expand(app, &text, w, Some(p), true),
@@ -2124,6 +2126,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 } else if name.is_none() { name = Some(w.clone()) } else { return app.error("command show-options: too many arguments (need at most 1)") }
                 i += 1;
             }
+            let name = match name.as_deref().map(crate::options::resolve).transpose() { Ok(n) => n, Err(_) if quiet => return, Err(e) => return app.error(e) };
             let (tab, pane) = match target.as_deref() {
                 Some(t) => match pane_target(app, t) { Some(tp) => tp, None => return app.error(no_such(&f, name.as_deref(), t)) },
                 None => app.current().unwrap_or((app.active, 0)),
@@ -2233,6 +2236,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // pane, or globally), then the options hn acts on read the value now in force.
             let (f, quiet, format, target, args) = crate::tmuxconf::set_flags(&words[1..], command == "set-window-option");
             let Some(name) = args.first().cloned() else { return app.error("command set-option: too few arguments (need at least 1)") };
+            let name = match crate::options::resolve(&name) { Ok(n) => n, Err(_) if quiet => return, Err(e) => return app.error(e) };
             let value = args.get(1).map(|v| if format { expand(app, v) } else { v.clone() });
             // -t: the window (or pane) the option is for; else the one here.
             let (tab, pane) = match target.as_deref() {
@@ -2418,6 +2422,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // one, -u removing the hook (or hook[N]).
             let args = positional(words);
             let Some(name) = args.first().map(|n| expand(app, n)) else { return app.error("command set-hook: too few arguments (need at least 1)") };
+            let name = match crate::options::resolve(&name) { Ok(n) => n, Err(e) => return app.error(e) };
             let (tab, pane) = match opt(words, "-t") {
                 Some(t) => match pane_target(app, &t) { Some(tp) => tp, None => return app.error(format!("can't find pane: {t}")) },
                 None => app.current().unwrap_or((app.active, 0)),
@@ -2556,6 +2561,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let mut data = String::new();
             if flag(words, "-a") && exists { data = app.paste.get(name.as_deref().unwrap_or("")).map(|b| b.data.clone()).unwrap_or_default() }
             data.push_str(&args[0]);
+            // -w: to the terminal's clipboard too (OSC 52), when there is a terminal.
+            if flag(words, "-w") && !app.headless { crate::clipboard::store_as("", &data) }
             let limit = app.buffer_limit();
             if let Err(e) = app.paste.set(data, name.as_deref(), limit) { app.error(e) }
         }

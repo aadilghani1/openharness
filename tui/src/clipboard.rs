@@ -3,10 +3,13 @@
 
 use std::io::Write;
 
-pub fn store(text: &str) {
+pub fn store(text: &str) { store_as("c", text) }
+
+/// OSC 52 with its selection parameter as given (set-buffer -w sends none, as tmux's).
+pub fn store_as(which: &str, text: &str) {
     let encoded = base64(text.as_bytes());
     let mut out = std::io::stdout();
-    let _ = write!(out, "\x1b]52;c;{encoded}\x07");
+    let _ = write!(out, "\x1b]52;{which};{encoded}\x07");
     let _ = out.flush();
 }
 

@@ -22,6 +22,27 @@ pub fn find(name: &str) -> Option<&'static Opt> {
     table::TABLE.iter().chain(table::HOOKS.iter()).find(|o| o.name == base)
 }
 
+/// tmux's options_match: a name as written, or the one option it is the start of (`stat` is
+/// ambiguous, `mou` is mouse); a user option is itself. Unknown names stay as they are.
+pub fn resolve(name: &str) -> Result<String, String> {
+    if name.starts_with('@') { return Ok(name.to_string()) }
+    let (base, rest) = match name.find('[') { Some(i) => (&name[..i], &name[i..]), None => (name, "") };
+    if base.is_empty() || find(base).is_some() { return Ok(name.to_string()) }
+    let mut hits = names().filter(|n| n.starts_with(base));
+    match (hits.next(), hits.next()) {
+        (Some(one), None) => Ok(format!("{one}{rest}")),
+        (Some(_), Some(_)) => Err(format!("ambiguous option: {name}")),
+        _ => Ok(name.to_string()),
+    }
+}
+
+/// tmux's checkshell: a full path to something that runs, and not tmux (hn) itself.
+fn suitable_shell(shell: &str) -> bool {
+    let base = shell.rsplit('/').next().unwrap_or(shell);
+    let Ok(c) = std::ffi::CString::new(shell) else { return false };
+    shell.starts_with('/') && !matches!(base, "hn" | "tmux") && unsafe { libc::access(c.as_ptr(), libc::X_OK) } == 0
+}
+
 /// A hook (set-hook's, show-hooks'), not an option.
 /// Every option's name (hooks too), in the table's order: what the prompt completes.
 pub fn names() -> impl Iterator<Item = &'static str> { table::TABLE.iter().chain(table::HOOKS.iter()).map(|o| o.name) }
@@ -289,6 +310,7 @@ impl Store {
                 let v = if f.append { format!("{}{v}", here.clone().or(now.clone()).unwrap_or_default()) } else { v.to_string() };
                 // options_from_string_check: a style option's value must parse as a style (formats aside).
                 if name.ends_with("-style") && !v.contains("#{") && !crate::draw::valid_style(&v) { return Err(format!("invalid style: {v}")) }
+                if name == "default-shell" && !suitable_shell(&v) { return Err(format!("not a suitable shell: {v}")) }
                 v
             }
             (Some(Kind::Flag), None | Some("")) => if now.as_deref() == Some("on") { "off".into() } else { "on".into() },
