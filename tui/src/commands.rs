@@ -608,8 +608,11 @@ fn run_queue(app: &mut App, mut queue: Queue) {
         };
         app.hook_state = saved_hook;
         app.origin = None;
-        // What the job chooses to run next keeps the item's mouse event.
+        // What the job chooses to run next keeps the item's mouse event — and, run by a hook, the
+        // hook's state (its harness, its formats), as cmd_if_shell_callback inserts the chosen
+        // commands with the item's state.
         let mouse = std::mem::replace(&mut app.mouse_ev, saved);
+        let job_hook = hook.clone();
         let jenv = crate::ipc::job_environ(&app.global_env, &app.session_env);
         let run = async move {
             if let Some(w) = wait { let _ = w.await; return Outcome::default() }
@@ -633,8 +636,10 @@ fn run_queue(app: &mut App, mut queue: Queue) {
             // -b: in the background; the queue goes on, and so does the shell that asked.
             app.spawn(run, move |app, o| {
                 let saved = std::mem::replace(&mut app.mouse_ev, mouse);
+                let saved_hook = std::mem::replace(&mut app.hook_state, job_hook);
                 let next = done(app, o);
                 app.mouse_ev = saved;
+                app.hook_state = saved_hook;
                 if !next.is_empty() { run_queue(app, next) }
             });
             continue;
@@ -647,8 +652,10 @@ fn run_queue(app: &mut App, mut queue: Queue) {
             if from_shell { app.capture = cap; app.capture_err = err; app.cli_tx = tx; app.cli_code = code; app.cli_cwd = cwd }
             // What it chose to run next (if-shell's command, run-shell -C's) goes first.
             let saved = std::mem::replace(&mut app.mouse_ev, mouse);
+            let saved_hook = std::mem::replace(&mut app.hook_state, job_hook);
             let mut next = done(app, o);
             app.mouse_ev = saved;
+            app.hook_state = saved_hook;
             next.extend(queue);
             run_queue(app, next);
             if from_shell && app.capture.is_some() { app.finish_cli() }
