@@ -439,6 +439,11 @@ pub struct App {
     /// kill-session under way (kill_windows): its windows' window-unlinked wait for its
     /// session-closed, as session_destroy orders them.
     pub killing_session: bool,
+    /// Pull requests by repository and branch (`machine|root|branch`): the answer and when it
+    /// came, shared with this computer's other clients through prs.json — one question per
+    /// branch every five minutes (an hour for a merged or closed one), not one per harness each.
+    pub prs: HashMap<String, (Option<fleet::Pr>, u64)>,
+    pub prs_read: Option<Instant>,
     pub unlinked_later: Vec<(u32, String, u64, String)>,
     /// The server's state (global options, key tables, buffers, global environment) as this
     /// client last wrote or took it, and whether a command ran since (server.rs).
@@ -623,6 +628,8 @@ impl App {
             cli_held: std::collections::VecDeque::new(),
             last_cli: Instant::now(),
             killing_session: false,
+            prs: HashMap::new(),
+            prs_read: None,
             unlinked_later: Vec::new(),
             server_synced: None,
             server_dirty: false,
@@ -3991,6 +3998,7 @@ impl App {
             let live = !matches!(a.status.as_str(), "stopped" | "offline");
             let recap = !a.recap_asked && a.did.is_none() && a.engine != "terminal";
             let pr = live && !a.branch.is_empty() && !matches!(a.branch.as_str(), "main" | "master" | "trunk" | "develop") && a.pr_checked.map(|t| now.duration_since(t) > Duration::from_secs(300)).unwrap_or(true);
+            let branch_key = format!("{machine}|{}|{}", if a.project_root.is_empty() { &a.cwd } else { &a.project_root }, a.branch);
             if recap {
                 if let Some(a) = self.fleet.agents.get_mut(&(machine.clone(), agent_id.clone())) { a.recap_asked = true }
                 self.enriching += 1;
@@ -4007,6 +4015,18 @@ impl App {
                     if a.asked.is_none() { a.asked = ask.as_deref().and_then(fleet::first_line) }
                 });
             }
+            // The branch's pull request as another harness (or another client) last heard it.
+            if pr {
+                self.read_prs();
+                let fresh = self.prs.get(&branch_key).filter(|(p, at)| {
+                    let ttl = if p.as_ref().map(|p| matches!(p.state.to_lowercase().as_str(), "merged" | "closed")).unwrap_or(false) { 3600_000 } else { 300_000 };
+                    fleet::now_ms().saturating_sub(*at) < ttl
+                }).map(|(p, _)| p.clone());
+                if let Some(found) = fresh {
+                    if let Some(a) = self.fleet.agents.get_mut(&(machine.clone(), agent_id.clone())) { a.pr = found; a.pr_checked = Some(now) }
+                    continue;
+                }
+            }
             if pr && self.enriching < AT_ONCE {
                 if let Some(a) = self.fleet.agents.get_mut(&(machine.clone(), agent_id.clone())) { a.pr_checked = Some(now) }
                 self.enriching += 1;
@@ -4014,15 +4034,47 @@ impl App {
                 self.spawn(async move { link.rpc("git_pull_request", json!({ "agentId": id }), Duration::from_secs(30)).await }, move |app, reply| {
                     app.enriching = app.enriching.saturating_sub(1);
                     let Ok(reply) = reply else { return };
-                    let Some(a) = app.fleet.agents.get_mut(&(m, agent_id.clone())) else { return };
-                    a.pr = match reply.get("status").and_then(Value::as_str) {
-                        Some("found") => Some(fleet::Pr { number: reply.get("number").and_then(Value::as_u64).unwrap_or(0), state: reply.get("state").and_then(Value::as_str).unwrap_or("").to_string(), url: reply.get("url").and_then(Value::as_str).unwrap_or("").to_string() }),
-                        Some("none") => None,
-                        _ => a.pr.take(),
+                    let found = match reply.get("status").and_then(Value::as_str) {
+                        Some("found") => Some(Some(fleet::Pr { number: reply.get("number").and_then(Value::as_u64).unwrap_or(0), state: reply.get("state").and_then(Value::as_str).unwrap_or("").to_string(), url: reply.get("url").and_then(Value::as_str).unwrap_or("").to_string() })),
+                        Some("none") => Some(None),
+                        _ => None,
                     };
+                    let Some(a) = app.fleet.agents.get_mut(&(m, agent_id.clone())) else { return };
+                    if let Some(p) = found { a.pr = p.clone(); app.keep_pr(branch_key, p) }
                 });
             }
         }
+    }
+
+    fn prs_path() -> std::path::PathBuf { std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui").join("prs.json") }
+
+    /// prs.json as this computer's clients last wrote it (read again at most every ten seconds).
+    fn read_prs(&mut self) {
+        if self.prs_read.map(|t| t.elapsed() < Duration::from_secs(10)).unwrap_or(false) { return }
+        self.prs_read = Some(Instant::now());
+        let doc: Value = std::fs::read_to_string(Self::prs_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+        for (k, v) in doc.as_object().cloned().unwrap_or_default() {
+            let at = v.get("at").and_then(Value::as_u64).unwrap_or(0);
+            if self.prs.get(&k).map(|(_, mine)| *mine >= at).unwrap_or(false) { continue }
+            let pr = v.get("number").and_then(Value::as_u64).map(|number| fleet::Pr { number, state: v.get("state").and_then(Value::as_str).unwrap_or("").into(), url: v.get("url").and_then(Value::as_str).unwrap_or("").into() });
+            self.prs.insert(k, (pr, at));
+        }
+    }
+
+    /// A branch's pull request heard now: kept, and written for the other clients.
+    fn keep_pr(&mut self, key: String, pr: Option<fleet::Pr>) {
+        let at = fleet::now_ms();
+        self.prs.insert(key, (pr, at));
+        // (A day's answers at most; the rest are asked again anyway.)
+        self.prs.retain(|_, (_, t)| at.saturating_sub(*t) < 86_400_000);
+        let doc: serde_json::Map<String, Value> = self.prs.iter().map(|(k, (p, t))| (k.clone(), match p {
+            Some(p) => json!({ "number": p.number, "state": p.state, "url": p.url, "at": t }),
+            None => json!({ "at": t }),
+        })).collect();
+        let path = Self::prs_path();
+        if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+        let temp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        if std::fs::write(&temp, Value::Object(doc).to_string()).is_ok() { let _ = std::fs::rename(temp, path); }
     }
 
     pub fn on_tick(&mut self) {

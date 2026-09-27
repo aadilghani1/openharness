@@ -94,6 +94,8 @@ const desk = DEMO ? { revision: 1, tabs: [
 // The dial's side of the daemon, for the e2e: what the windows told it (the ring, the tabs, the
 // focus, spoken-task replies, messages sent), and every local window to push dial frames at.
 const dial = { said: {}, replies: [], messages: [] }
+// How many of each request the windows made (GET /test/counts), for tests of what hn asks.
+const counts = {}
 const windows = new Set()
 
 const json = (res, body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success: true, data: body })) }
@@ -112,6 +114,7 @@ const server = http.createServer((req, res) => {
     for (const a of fleet) { a.tokenUsage = { totalTokens: (a.tokenUsage?.totalTokens || 0) + 1000, updatedAt: at }; a.finishedAway = true }
     return json(res, { finished: fleet.map((a) => a.name) })
   }
+  if (req.url === '/test/counts') return json(res, counts)
   if (req.url === '/test/dial' && req.method === 'GET') return json(res, { ...dial, agents: Object.values(agents).flat().map((a) => ({ id: a.id, name: a.name, sessionId: a.sessionId })) })
   if (req.url === '/test/dial' && req.method === 'POST') {
     let body = ''
@@ -219,6 +222,7 @@ wss.on('connection', (ws) => {
       return
     }
     const reply = (body) => send(`${type}_result`, { requestId: payload.requestId, ...body })
+    counts[type] = (counts[type] || 0) + 1
     switch (type) {
       case 'agents_list': return reply({ agents: agents[machine].filter((a) => payload.includeStopped || a.status !== 'stopped') })
       case 'models_list': return reply({ models: [{ id: 'runtime-v1:x:claude:opus@high', displayName: 'Opus / High' }, { id: 'runtime-v1:x:claude:sonnet@high', displayName: 'Sonnet / High' }] })
