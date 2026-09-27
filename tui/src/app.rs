@@ -1966,7 +1966,13 @@ impl App {
                     (None, true) => {}
                     (None, false) => match &start.name {
                         Some(n) => self.start_error(format!("can't find session: {}", n.trim_start_matches('='))),
-                        None => { self.start_session = None; if let Some(id) = current { self.switch_session(id) } }
+                        // attach with no -t: the session in front last, wherever it is (another
+                        // terminal's is taken, as attach -t takes it); none kept: a new one.
+                        None => {
+                            self.start_session = None;
+                            let last = doc.get("current").and_then(Value::as_str).and_then(|c| self.find_session(&format!("={c}"))).filter(|c| *c != self.session_id);
+                            if let Some(id) = current.or(last) { self.switch_session(id) }
+                        }
                     },
                 }
             }
