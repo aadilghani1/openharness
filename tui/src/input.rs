@@ -96,6 +96,17 @@ fn on_key(app: &mut App, key: KeyEvent) {
         app.prefix_at = Some(std::time::Instant::now());
         return;
     }
+    // key-table (a session's default table, root unless set — `off` for a nested tmux): its key
+    // runs; one it has not goes to the pane, root's bindings not this client's then.
+    let base = app.options.get("key-table", "", None).unwrap_or_else(|| "root".into());
+    if base != "root" && app.modal.is_none() {
+        if let Some(b) = app.keymap.named.get(&base).and_then(|l| l.iter().rev().find(|b| b.chord == chord)).cloned() {
+            app.status_redraws += 1;
+            commands::execute_bound(app, &b.command);
+            return;
+        }
+    }
+    let root_table = base == "root" || app.modal.is_some();
     // A pane in copy mode or view mode: its mode's table first, then root; a key in neither does
     // nothing — it never reaches the pane's program (server_client_key_callback).
     if let Some(Modal::Copy { pane }) = app.modal {
@@ -111,7 +122,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
             return crate::tree::key(app, pane, chord, None, true);
         }
     }
-    if !typing(app) {
+    if !typing(app) && root_table {
         if let Some(binding) = app.keymap.root_command(&chord).cloned() { app.status_redraws += 1; commands::execute_bound(app, &binding.command); return }
     }
     if app.modal.is_some() { modal_key(app, key); return }

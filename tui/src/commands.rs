@@ -931,6 +931,17 @@ pub fn source(app: &mut App, file: &str, parse_only: bool, verbose: bool) -> Res
         std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
         _ => e.to_string(),
     }))?;
+    source_text(app, file, &text, parse_only, verbose)
+}
+
+/// The standard input's names: what a shell pipes in, never hn's own terminal.
+pub fn is_stdin(path: &str) -> bool { matches!(path, "-" | "/dev/stdin" | "/dev/fd/0") }
+
+/// The standard output's (and error's) names: the shell's, the command's output.
+fn is_stdout(path: &str) -> bool { matches!(path, "-" | "/dev/stdout" | "/dev/fd/1" | "/dev/stderr" | "/dev/fd/2") }
+
+/// source's second half: [text] read as a config file called [file].
+pub fn source_text(app: &mut App, file: &str, text: &str, parse_only: bool, verbose: bool) -> Result<Queue, String> {
     if text.is_empty() { return Ok(Queue::new()) }
     let parsed = crate::cmdparse::parse(&text, app, parse_only).map_err(|(line, e)| format!("{file}:{line}: {e}"))?;
     let aliases = app.options.array("command-alias");
@@ -2238,7 +2249,13 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let mut files = Vec::new();
             for path in positional(words) {
                 let path = if flag(words, "-F") { expand(app, &path) } else { path };
-                if path == "-" { app.say("-: reading the shell's input is not supported", theme::WARN); continue }
+                // The shell's input (- or /dev/stdin): what it piped in — never hn's own terminal,
+                // which would wait for keys forever.
+                if is_stdin(&path) {
+                    let Some(text) = app.cli_stdin.clone() else { app.error(format!("{path}: no standard input here")); continue };
+                    match source_text(app, "-", &text, parse_only, verbose) { Ok(items) => app.insert_next.extend(items), Err(e) => app.error(e) }
+                    continue;
+                }
                 let pattern = if path.starts_with('/') { path.clone() } else { format!("{cwd}/{path}") };
                 let found = glob(&pattern);
                 if found.is_empty() { if !quiet { app.error(format!("{path}: No such file or directory")) } continue }
@@ -2457,7 +2474,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 None => match app.paste.top() { Some(b) => b.clone(), None => return app.error("no buffers") },
             };
             let path = if command == "show-buffer" { "-".to_string() } else { expand(app, &positional(words).first().cloned().unwrap_or_default()) };
-            if path == "-" { return app.print_data(command, &b.data) }
+            // (The shell's output: printed there, not onto hn's own terminal.)
+            if is_stdout(&path) { return app.print_data(command, &b.data) }
             let path = client_path(app, &path);
             let written = if flag(words, "-a") {
                 use std::io::Write;
@@ -2468,7 +2486,10 @@ fn run_words_in(app: &mut App, words: &[String]) {
         "load-buffer" | "loadb" => {
             // tmux's load-buffer [-w] [-b buffer-name] path: the file (from the shell's folder)
             // into a buffer — named, or a new automatic one.
-            let path = client_path(app, &expand(app, &positional(words).first().cloned().unwrap_or_default()));
+            let given = expand(app, &positional(words).first().cloned().unwrap_or_default());
+            // (The shell's input: what it piped in, never hn's own terminal.)
+            if is_stdin(&given) && app.cli_stdin.is_none() { return app.error(format!("{given}: no standard input here")) }
+            let path = if is_stdin(&given) { "-".to_string() } else { client_path(app, &given) };
             let text = if path == "-" { app.cli_stdin.clone().unwrap_or_default() } else {
                 match std::fs::read(&path) { Ok(t) => String::from_utf8_lossy(&t).into_owned(), Err(e) => return app.error(format!("{path}: {}", io_error(&e))) }
             };

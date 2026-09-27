@@ -351,7 +351,7 @@ pub async fn call_at(path: &std::path::Path, words: &[String]) -> Option<i32> {
                 let (read, mut write) = stream.into_split();
                 let cwd = find_cwd();
                 // load-buffer - and source-file -: what is piped in goes with the command.
-                let reads_stdin = words.first().and_then(|w| crate::cmd::find(w).ok()).map(|e| matches!(e.name, "load-buffer" | "source-file")).unwrap_or(false) && words.iter().skip(1).any(|w| w == "-");
+                let reads_stdin = words.first().and_then(|w| crate::cmd::find(w).ok()).map(|e| matches!(e.name, "load-buffer" | "source-file")).unwrap_or(false) && words.iter().skip(1).any(|w| crate::commands::is_stdin(w));
                 let stdin = if reads_stdin { let mut s = String::new(); let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut s); Some(s) } else { None };
                 // From one of a client's own jobs (its $HN_SOCKET): that client is the command's client.
                 let inside = std::env::var("HN_SOCKET").map(|s| !s.is_empty()).unwrap_or(false);
