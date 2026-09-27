@@ -74,7 +74,9 @@ harness's name, not what the program sets), `history-limit 10000` (agents print 
 2000), `mouse on`, `set-titles on` (the terminal's title: `?2 Fix flaky login test — Harness`, the
 harnesses waiting on you and the one in front; `set-titles-string` changes it), and the status line: each window's most urgent harness state before its name,
 and on the right the focused pane's machine (when it is another one), project and branch —
-`gpu-box:ml-lab git:(main)` — where tmux shows the pane's title.
+`gpu-box:ml-lab git:(main)` — where tmux shows the pane's title. One key differs on purpose: ⇧⏎
+reaches the pane as `CSI 13;2u` (a new line in an agent's prompt; tmux, without `extended-keys`,
+sends a plain Enter).
 
 | tmux keys | |
 |---|---|
