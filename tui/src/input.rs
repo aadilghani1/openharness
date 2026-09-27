@@ -1105,7 +1105,11 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
     app.starting_shell = Some(command.map(|c| vec![format!(" clear; exec \"${{SHELL:-sh}}\" -c {}\r", quoted(&c)).into_bytes()]).unwrap_or_default());
     // The session it was asked for in (a command's `-t work:` puts another in front for a moment):
     // where it goes when it comes, in front again for as long as that takes.
-    let session = app.session_id;
+    // (A window's own: the session that has it — new -d's new session is not the one in front.)
+    let session = match &placement {
+        Placement::Fill(tab) if !app.tabs.iter().any(|t| &t.id == tab) => app.sessions.iter().find(|s| s.tabs.iter().any(|t| &t.id == tab)).map(|s| s.id).unwrap_or(app.session_id),
+        _ => app.session_id,
+    };
     app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(60)).await }, move |app, reply| {
         if session != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|s| s.id == session) {
             let back = app.session_id;
@@ -1151,6 +1155,25 @@ fn shell_made(app: &mut App, machine: String, placement: Placement, reply: Resul
                         let line: String = crate::format::spans_for_pane(app, &fmt, w, pane, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect();
                         match app.held_reply.take() { Some(tx) => { let _ = tx.send((vec![line], Vec::new(), 0)); } None => app.say(line, theme::WARN) }
                     }
+                }
+                // -P for a pane made in a session not in front (new -d -s x -P, libtmux's every
+                // session): printed from there. The shell waiting on it is always answered — every
+                // command after it waits behind it.
+                if let Some(fmt) = app.print_new.take() {
+                    let line = match app.find_pane_anywhere(&machine, id) {
+                        Some((sid, _, pane)) if sid != app.session_id => {
+                            let (back, before) = (app.session_id, app.swap_back);
+                            app.swap_back = Some(back);
+                            let line = if app.swap_session(sid) {
+                                app.tabs.iter().position(|t| t.panes().contains(&pane)).map(|w| crate::format::spans_for_pane(app, &fmt, w, pane, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect::<String>()).unwrap_or_default()
+                            } else { String::new() };
+                            app.swap_session(back);
+                            app.swap_back = before;
+                            line
+                        }
+                        _ => String::new(),
+                    };
+                    match app.held_reply.take() { Some(tx) => { let _ = tx.send((vec![line], Vec::new(), 0)); } None => app.say(line, theme::WARN) }
                 }
             }
             Err(e) => {
