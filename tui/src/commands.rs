@@ -1544,6 +1544,32 @@ fn other_session(app: &App, words: &[String]) -> Option<u32> {
 }
 
 /// kill-session: the windows of the session in front closed, the last taking the session with it.
+/// server_check_unattached: this client's sessions that no client shows (the one in front too
+/// when it is [leaving]), with destroy-unattached on — keep-group too, as there are no groups
+/// — gone as kill-session takes them.
+pub fn destroy_unattached(app: &mut App, leaving: bool) {
+    let me = app.session_id;
+    let doomed = |app: &App, id: u32| -> bool {
+        if app.mirrors.values().any(|m| *m == id) { return false }
+        let own = if id == me { app.options.session.get("destroy-unattached").cloned() } else { app.sessions.iter().find(|s| s.id == id).and_then(|s| s.options.get("destroy-unattached").cloned()) };
+        let v = own.or_else(|| app.options.global_session.get("destroy-unattached").cloned()).unwrap_or_default();
+        matches!(v.as_str(), "on" | "keep-group")
+    };
+    let ids: Vec<u32> = app.sessions.iter().filter(|s| !s.desk && s.mirror.is_none() && s.id != me).map(|s| s.id).filter(|id| doomed(app, *id)).collect();
+    let front = leaving && !app.session_desk && app.mirror.is_none() && doomed(app, me);
+    if ids.is_empty() && !front { return }
+    let (quit, exited, back) = (std::mem::replace(&mut app.quit, false), app.exited, app.swap_back);
+    for id in ids {
+        app.swap_back = Some(me);
+        if app.swap_session(id) { kill_windows(app); app.swap_session(me); }
+    }
+    app.swap_back = back;
+    if front { kill_windows(app) }
+    // (Leaving: the client says it detached, whatever the session's going did to it.)
+    app.quit = quit || app.quit;
+    if leaving { app.exited = exited }
+}
+
 fn kill_windows(app: &mut App) {
     let sid = app.session_id;
     let was = std::mem::replace(&mut app.killing_session, true);
@@ -2702,8 +2728,10 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // shown here as it has it (-r only watched), or taken with -d (that client detaching).
             let how = if flag(words, "-d") { crate::app::Attach::Take } else if flag(words, "-r") { crate::app::Attach::Watch } else { crate::app::Attach::Share };
             if let Some(t) = opt(words, "-t") {
-                match app.find_session(t.split(':').next().unwrap_or(&t)) { Some(id) => app.switch_session_as(id, how), None => app.error(format!("can't find session: {t}")) }
+                match app.find_session(t.split(':').next().unwrap_or(&t)) { Some(id) => app.switch_session_as(id, how), None => return app.error(format!("can't find session: {t}")) }
             }
+            // -c: the session's start directory from now on (a format, as tmux expands it).
+            if let Some(c) = opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty()) { app.session_path = Some(c) }
         }
         "new-session" => {
             // tmux's new-session [-AdP] [-c start-directory] [-F format] [-n window-name]
@@ -2720,7 +2748,14 @@ fn run_words_in(app: &mut App, words: &[String]) {
             if flag(words, "-P") { app.print_new = Some(opt(words, "-F").unwrap_or_else(|| "#{session_name}:".into())) }
             match app.new_session(name.as_deref(), opt(words, "-n").as_deref(), cwd, shell_command(words), detached) {
                 // A session no terminal shows yet: -x by -y, else default-size (tmux's 80x24).
-                Ok(id) => if detached || app.headless {
+                Ok(id) => {
+                // -e NAME=value: into the session's environment (environ_put).
+                let puts: Vec<(String, String)> = words.args.as_ref().map(|a| a.all('e').into_iter().filter_map(|v| v.split_once('=').map(|(k, v)| (k.to_string(), v.to_string()))).collect()).unwrap_or_default();
+                for (k, v) in puts {
+                    let var = crate::app::EnvVar { value: Some(v), hidden: false };
+                    if id == app.session_id { app.session_env.insert(k, var); } else if let Some(st) = app.sessions.iter_mut().find(|st| st.id == id) { st.env.insert(k, var); }
+                }
+                if detached || app.headless {
                     let (dx, dy) = app.default_size();
                     let n = |f: &str, d: u16| opt(words, f).and_then(|v| v.parse::<u16>().ok()).filter(|v| *v > 0).unwrap_or(d);
                     let size = (n("-x", dx), n("-y", dy));
@@ -2732,35 +2767,47 @@ fn run_words_in(app: &mut App, words: &[String]) {
                         else if let Some(st) = app.sessions.iter_mut().find(|st| st.id == id) { st.options.insert("default-size".into(), v); }
                     }
                     app.size_session(id, size);
-                },
+                }
+                }
                 Err(e) => { app.print_new = None; app.error(e) }
             }
         }
         "detach-client" => {
             // -s: the clients showing that session (this one, another of this name's, or none: one
             // not found is nothing); -a: every other client of this name; -t: that client, by its
-            // tty (this one or another), or tmux's error.
+            // tty (this one or another), or tmux's error. -E: each becomes that shell command
+            // (MSG_EXEC); -P: each one's parent is sent SIGHUP.
+            let exec = opt(words, "-E");
+            let hup = flag(words, "-P");
+            let mut go: Vec<String> = vec!["detach-client".into()];
+            if let Some(e) = &exec { go.extend(["-E".to_string(), e.clone()]) }
+            if hup { go.push("-P".into()) }
+            let leave = |app: &mut App| { app.exec_after = exec.clone(); app.hup_parent = hup && exec.is_none(); app.quit = true };
             if let Some(s) = opt(words, "-s") {
                 let Some(id) = app.find_session(&s) else { return };
                 // The clients showing it as this one has it (mirror.rs), and the one that has it.
                 let theirs: Vec<String> = app.mirrors.iter().filter(|(_, m)| **m == id).map(|(k, _)| k.clone()).collect();
-                for m in theirs { app.mirrors.remove(&m); crate::ipc::notify_now(std::path::Path::new(&m), &["detach-client".into()]) }
+                for m in theirs { app.mirrors.remove(&m); crate::ipc::notify_now(std::path::Path::new(&m), &go) }
                 if let Some(owner) = app.remote_owner(id).filter(|_| !crate::ipc::forwarded()) {
-                    let _ = crate::ipc::ask(std::path::Path::new(&owner), &["detach-client".into(), "-s".into(), format!("${id}")]);
+                    let mut ask = go.clone();
+                    ask.extend(["-s".to_string(), format!("${id}")]);
+                    let _ = crate::ipc::ask(std::path::Path::new(&owner), &ask);
                 }
-                if id == app.session_id { app.quit = true }
+                if id == app.session_id { leave(app) }
                 return;
             }
-            if flag(words, "-a") { for other in other_clients() { let _ = crate::ipc::ask(&other, &["detach-client".into()]); } return }
+            if flag(words, "-a") { for other in other_clients() { let _ = crate::ipc::ask(&other, &go); } return }
             if let Some(t) = opt(words, "-t") {
                 let t = t.strip_suffix(':').unwrap_or(&t).to_string();
                 let tty = crate::app::tty_name();
                 if t != tty && Some(t.as_str()) != tty.strip_prefix("/dev/") {
-                    for other in other_clients() { if matches!(crate::ipc::ask(&other, &["detach-client".into(), "-t".into(), t.clone()]), Some((_, _, 0))) { return } }
+                    let mut ask = go.clone();
+                    ask.extend(["-t".to_string(), t.clone()]);
+                    for other in other_clients() { if matches!(crate::ipc::ask(&other, &ask), Some((_, _, 0))) { return } }
                     return app.error(format!("can't find client: {t}"))
                 }
             }
-            app.quit = true;
+            leave(app);
         }
         "switch-client" => {
             // -r: the client read-only (and its size ignored), or not — turned over.

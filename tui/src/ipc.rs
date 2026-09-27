@@ -240,7 +240,7 @@ pub fn client_port(socket: Option<&str>, name: Option<&str>) -> Option<u16> {
 /// Which client to ask: -S path, -L name, $HN_SOCKET, $HN_SOCKET_NAME (what a client sets for
 /// what it runs, as tmux's $TMUX: a job's `hn …` reaches the client that ran it), else the newest.
 /// A name's first client, else another of its clients still running.
-fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
+pub fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
     // -S and -L say which, before $HN_SOCKET (a job's `tmux -L other ls` asks the other).
     if let Some(p) = socket { return Some(PathBuf::from(p)) }
     if let Some(n) = name { return Some(clients_of(n).into_iter().next().unwrap_or_else(|| dir().join(format!("{n}.sock")))) }

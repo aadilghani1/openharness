@@ -71,6 +71,8 @@ pub struct Stash {
     pub last_attached: i64,
     pub options: std::collections::BTreeMap<String, String>,
     pub env: std::collections::BTreeMap<String, EnvVar>,
+    /// Its start directory (tmux's s->cwd: new -c, attach -c; else the folder it was made in).
+    pub path: Option<String>,
 }
 
 /// What `hn new` or `hn attach` asked for when it started this client.
@@ -369,6 +371,10 @@ pub struct App {
     /// Each visible pane's full rect (header row included), from the last layout.
     pub rects: Vec<(u64, Rect)>,
     pub quit: bool,
+    /// detach-client -E: the shell command the client becomes as it goes (MSG_EXEC); -P: its
+    /// parent sent SIGHUP after it (MSG_DETACHKILL).
+    pub exec_after: Option<String>,
+    pub hup_parent: bool,
     /// The last window went (tmux's session ended): hn says `[exited]`, not `[detached …]`.
     pub exited: bool,
     /// Where the startup shell stands: the desk has answered (or there is none), and whether
@@ -597,6 +603,8 @@ pub struct App {
     /// The session's environment: update-environment's variables, as they were when hn started
     /// (set, or cleared when hn had none).
     pub session_env: std::collections::BTreeMap<String, EnvVar>,
+    /// The session in front's start directory (#{session_path}); none: where hn started.
+    pub session_path: Option<String>,
     /// tim, the creature in the status line.
     pub tim: crate::tim::Tim,
     /// Shells hn made for split-window / new-window: they end with their pane.
@@ -731,6 +739,7 @@ impl App {
             capture_err: None,
             global_env: std::env::vars().map(|(k, v)| (k, EnvVar { value: Some(v), hidden: false })).collect(),
             session_env: Default::default(),
+            session_path: None,
             tim: crate::tim::Tim::load(),
             shells: HashSet::new(),
             starting_shell: None,
@@ -754,6 +763,8 @@ impl App {
             size,
             rects: Vec::new(),
             quit: false,
+            exec_after: None,
+            hup_parent: false,
             prefix: false,
             tick: 0,
             home_cursor: 0,
@@ -1821,6 +1832,7 @@ impl App {
             id: self.session_id, used: self.session_used, mirror: self.mirror.take(), alias: self.session_alias.take(), desk: self.session_desk,
             tabs: std::mem::take(&mut self.tabs), active: self.active, lastw: std::mem::take(&mut self.lastw), nums: std::mem::take(&mut self.nums),
             created: self.session_created, activity, last_attached: self.session_last_attached, options: std::mem::take(&mut self.options.session), env: std::mem::take(&mut self.session_env),
+            path: self.session_path.take(),
         }
     }
 
@@ -1840,6 +1852,7 @@ impl App {
         self.session_last_attached = s.last_attached;
         self.options.session = s.options;
         self.session_env = s.env;
+        self.session_path = s.path;
     }
 
     /// Session [id] in front, as it is, with nothing else done (a command that names it runs
@@ -1895,6 +1908,8 @@ impl App {
             let s = self.sessions.remove(i);
             crate::mirror::drop_stash(self, s);
         }
+        // server_check_unattached: the sessions no client shows now, with destroy-unattached, go.
+        crate::commands::destroy_unattached(self, false);
         let a = self.active;
         self.tabs[a].alerts = 0;
         if let Some(f) = self.tabs[a].focus { self.seen(f) }
@@ -2043,6 +2058,7 @@ impl App {
 
     /// A session's own formats, for a session not in front (a #{S:} loop's, list-sessions').
     pub fn stash_value(&self, id: u32, key: &str) -> Option<String> {
+        if key == "session_path" { if let Some(p) = self.sessions.iter().find(|s| s.id == id).and_then(|s| s.path.clone()) { return Some(p) } }
         let Some(s) = self.sessions.iter().find(|s| s.id == id) else {
             let r = self.remote_rows().into_iter().find(|r| r.id == id)?;
             return Some(match key {
@@ -2234,8 +2250,10 @@ impl App {
         let tab_id = tab.id.clone();
         let base = self.base_index;
         let linked = (tab.wid(), tab.name.clone());
+        // Its directory: -c, else the folder of the shell that asked (tmux's client cwd).
+        let path = cwd.clone().or_else(|| self.cli_cwd.clone()).or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string()));
         self.sessions.push(Stash { id, used: use_order(), mirror: None, alias: Some(name.clone()), desk: false, tabs: vec![tab], active: 0, lastw: Vec::new(), nums: HashMap::from([(tab_id.clone(), base)]),
-            created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: self.environ_update() });
+            created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: self.environ_update(), path });
         // cmd-new-session.c: its window linked (spawn_window), then the session created.
         crate::commands::notify_session(self, "window-linked", id, &name, Some(linked));
         crate::commands::notify_session(self, "session-created", id, &name, None);
@@ -2254,7 +2272,7 @@ impl App {
         let tab = Tab::home();
         let base = self.base_index;
         self.sessions.push(Stash { id, used: use_order(), mirror: None, alias: Some(name.to_string()), desk: false, nums: HashMap::from([(tab.id.clone(), base)]), tabs: vec![tab], active: 0, lastw: Vec::new(),
-            created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: self.environ_update() });
+            created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: self.environ_update(), path: None });
         crate::commands::notify_session(self, "session-created", id, name, None);
         id
     }
@@ -2306,7 +2324,7 @@ impl App {
         let me = crate::ipc::here().map(|p| p.display().to_string());
         let path = Self::sessions_path();
         let doc = read_sessions(&path);
-        let here = Stash { id: self.session_id, used: self.session_used, mirror: self.mirror.clone(), alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), last_attached: self.session_last_attached, options: self.options.session.clone(), env: self.session_env.clone() };
+        let here = Stash { id: self.session_id, used: self.session_used, mirror: self.mirror.clone(), alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), last_attached: self.session_last_attached, options: self.options.session.clone(), env: self.session_env.clone(), path: self.session_path.clone() };
         let mut ours = Vec::new();
         let mut names = HashSet::new();
         let mut desk = None;
@@ -2330,7 +2348,7 @@ impl App {
                 "mirrors": if left { 0 } else { self.mirrors.values().filter(|m| **m == s.id).count() },
                 // Its own options and environment (set -t, setenv -t, update-environment's), kept
                 // wherever it goes.
-                "options": s.options, "env": env_json(&s.env) }));
+                "options": s.options, "env": env_json(&s.env), "path": s.path }));
         }
         let mut rows = Vec::new();
         if !self.forget_sessions {
@@ -2427,7 +2445,7 @@ impl App {
         let created = row.get("created").and_then(Value::as_i64).unwrap_or_else(epoch_secs);
         let lastw: Vec<String> = row.get("last").and_then(Value::as_array).map(|l| l.iter().filter_map(|i| tabs.get(i.as_u64()? as usize).map(|t| t.id.clone())).collect()).unwrap_or_default();
         Some(Stash { id, used: 0, mirror: None, alias: Some(name), desk: false, active: active.min(tabs.len() - 1), tabs, lastw, nums,
-            created, activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), last_attached: row.get("last_attached").and_then(Value::as_i64).unwrap_or(0), options: options_from(row), env: env_from(row) })
+            created, activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), last_attached: row.get("last_attached").and_then(Value::as_i64).unwrap_or(0), options: options_from(row), env: env_from(row), path: row.get("path").and_then(Value::as_str).map(str::to_string) })
     }
 
     /// The sessions no running client has (save_sessions: left by clients that detached), back
@@ -2479,6 +2497,8 @@ impl App {
                     (Some(id), false) => {
                         self.switch_session_as(id, start.attach_how());
                         self.start_session = None;
+                        // attach -c: the session's start directory from now on.
+                        if let Some(c) = start.cwd.clone().filter(|c| !c.is_empty()) { self.session_path = Some(c) }
                         if let Some(w) = &start.target {
                             let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: false, default_marked: false };
                             match crate::cmd::resolve(self, Some(&format!(":{w}")), spec).ok().and_then(|f| f.window) {
@@ -2575,6 +2595,16 @@ impl App {
                 self.switch_session(id);
                 self.last_session = None;
                 if !desk { self.sessions.retain(|s| s.id != gone) }
+            }
+            // hn with no terminal (tmux's server) and exit-empty off: it stays, with no session.
+            None if self.headless && !desk && self.options.get("exit-empty", "", None).as_deref() == Some("off") => {
+                self.session_id = UNNUMBERED;
+                self.session_alias = None;
+                self.tabs = vec![Tab::home()];
+                self.active = 0;
+                self.options.session.clear();
+                self.session_env.clear();
+                self.session_path = None;
             }
             None => {
                 if !desk { if let Some(desk_id) = self.sessions.iter().find(|s| s.desk).map(|s| s.id) { self.swap_session(desk_id); self.sessions.retain(|s| s.id != gone) } }

@@ -109,6 +109,16 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
             let detached = crate::cmd::find(c).ok().and_then(|e| crate::cmd::parse(e, args).ok()).map(|a| a.has('d') > 0).unwrap_or(false);
             // $HN_SOCKET: what a client sets for what it runs, as tmux's $TMUX.
             let inside = std::env::var("HN_SOCKET").map(|v| !v.is_empty()).unwrap_or(false);
+            // -A with that session there: tmux attaches to it, -d or not (cmd_attach_session) — a
+            // client here, or `open terminal failed` from a shell with no terminal.
+            let parsed = crate::cmd::find(c).ok().and_then(|e| crate::cmd::parse(e, args).ok());
+            if let (Some(s), false) = (parsed.as_ref().filter(|a| a.has('A') > 0).and_then(|a| a.get('s')), inside) {
+                let exact = format!("={s}");
+                let there = if crate::ipc::alive(socket.as_deref(), name.as_deref()) {
+                    crate::ipc::chosen(socket.as_deref(), name.as_deref()).map(|p| matches!(crate::ipc::ask(&p, &["has-session".into(), "-t".into(), exact.clone()]), Some((_, _, 0)))).unwrap_or(false)
+                } else { has_session_named(name.as_deref(), &exact) };
+                if there { return None }
+            }
             // new -d with no client: tmux's server starts for it (hn with no terminal).
             if detached && !crate::ipc::alive(socket.as_deref(), name.as_deref()) && !spawn_headless(name.as_deref(), explicit_port).await { return Some(offline(port, args, name.as_deref()).await) }
             if detached || inside { Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await) } else { None }

@@ -1171,7 +1171,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_agent_icon" => tab.and_then(|_| app.window_state(window)).map(|s| crate::theme::state_mark(s, app.tick).0).unwrap_or("").into(),
         "pane_far" => pane.map(|p| p.machine_id != app.fleet.local_id).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "session_id" => format!("${}", app.session_id),
-        "session_path" => std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default(),
+        "session_path" => app.session_path.clone().unwrap_or_else(|| std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default()),
         // The session the client was in before this one.
         "client_last_session" => app.last_session.and_then(|l| app.session_list().into_iter().find(|(i, _)| *i == l)).map(|(_, n)| n).unwrap_or_default(),
         "session_group" | "pane_dead_status" | "pane_start_command" => String::new(),

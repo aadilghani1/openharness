@@ -173,7 +173,8 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
         // No session of its own left (or none came): gone, as tmux's server goes.
         // (What its own work brings back — a harness's lines — is not a reason to stay.)
         // (Harness hooks set: it stays to run them, as tmux's server runs hooks with no client.)
-        if !app.holds_sessions() && !app.harness_hooks() && app.cli_held.is_empty() && busy.elapsed() > Duration::from_secs(2) && app.last_cli.elapsed() > Duration::from_secs(2) { break }
+        // (exit-empty off: it stays with none, as tmux's server does.)
+        if !app.holds_sessions() && !app.harness_hooks() && app.options.get("exit-empty", "", None).as_deref() != Some("off") && app.cli_held.is_empty() && busy.elapsed() > Duration::from_secs(2) && app.last_cli.elapsed() > Duration::from_secs(2) { break }
     }
     app.fleet.save_cache();
     app.write_sessions(app::Save::Leave);
@@ -437,8 +438,18 @@ async fn run(config: config::Config) -> io::Result<()> {
             }
         }
     }
+    let session = app.session_name();
+    // A detach: the sessions no client shows now, with destroy-unattached, go; and with
+    // exit-unattached, the server when no other client is attached (server_loop).
+    let detaching = !app.exited && !app.forget_sessions && app.start_failed.is_none();
+    if detaching {
+        commands::destroy_unattached(&mut app, true);
+        let exit = app.options.get("exit-unattached", "", None).as_deref() == Some("on");
+        let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
+        if exit && ipc::others_of(&name).is_empty() { app.sessions.clear(); app.session_alias = None; app.forget_sessions = true; app.exited = false }
+    }
     // client-detached (a detach, not an exit or kill-server), what it changes kept for the server.
-    if !app.exited && !app.forget_sessions && app.start_failed.is_none() {
+    if detaching {
         commands::notify(&mut app, "client-detached", None, None);
         commands::run_pending_hooks(&mut app);
         app.server_dirty = true;
@@ -462,13 +473,24 @@ async fn run(config: config::Config) -> io::Result<()> {
     }
     // (A server with the desk lives on past its last terminal, until kill-server.)
     ids::leave(Some(app.desk_mode != app::DeskMode::Off && !app.forget_sessions));
-    let session = app.session_name();
     drop(term);
     drop(restore);
     // `hn attach -t nosuch`: tmux's error, and no client.
     if let Some(e) = &app.start_failed { eprintln!("{e}"); std::process::exit(1) }
     // As tmux says it: the harnesses are still running, and `hn` comes back to them — or the
     // last window went, and the session with it.
-    if app.exited { println!("[exited]") } else if app.forget_sessions { println!("[server exited]") } else { println!("[detached (from session {session})]") }
+    // detach-client -E: the client becomes the command, run by default-shell (client_exec).
+    if let Some(cmd) = app.exec_after.take() {
+        use std::os::unix::process::CommandExt;
+        let shell = app.options.get("default-shell", "", None).filter(|s| !s.is_empty()).or_else(|| std::env::var("SHELL").ok().filter(|s| !s.is_empty())).unwrap_or_else(|| "/bin/sh".into());
+        let e = std::process::Command::new(&shell).arg("-c").arg(&cmd).env("SHELL", &shell).exec();
+        eprintln!("execl failed: {e}");
+        std::process::exit(1);
+    }
+    if app.exited { println!("[exited]") } else if app.forget_sessions && !detaching { println!("[server exited]") }
+    else if app.hup_parent { println!("[detached and SIGHUP (from session {session})]") }
+    else { println!("[detached (from session {session})]") }
+    // detach-client -P: the shell that started the client is sent SIGHUP.
+    if app.hup_parent { let ppid = unsafe { libc::getppid() }; if ppid > 1 { unsafe { libc::kill(ppid, libc::SIGHUP); } } }
     Ok(())
 }
