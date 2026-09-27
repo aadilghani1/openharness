@@ -91,7 +91,12 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
             let up = crate::ipc::alive(socket.as_deref(), name.as_deref()) || (socket.is_none() && spawn_headless(name.as_deref(), explicit_port).await);
             if up { Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await) } else { Some(ls(port).await) }
         }
-        "send-message" => Some(send(port, &args[1..]).await),
+        // send-message: the client's, which knows each machine's link (and the hook's harness);
+        // with none, straight to the daemons.
+        "send-message" => {
+            let up = crate::ipc::alive(socket.as_deref(), name.as_deref()) || (socket.is_none() && spawn_headless(name.as_deref(), explicit_port).await);
+            if up { Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await) } else { Some(send(port, &args[1..]).await) }
+        }
         "tim" => { println!("{}", crate::tim::cli_line()); Some(0) }
         // attach / a: the client itself, as `tmux attach` is.
         "attach" | "attach-session" | "a" | "at" => None,

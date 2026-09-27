@@ -1153,6 +1153,8 @@ fn find_harness(app: &App, t: &str) -> Result<(String, String), String> {
     if let Some(r) = one(agents.iter().filter(|a| a.name == t).map(|a| a.key()).collect()) { return r }
     if let Some(r) = one(agents.iter().filter(|a| a.name.starts_with(t)).map(|a| a.key()).collect()) { return r }
     if let Some(r) = one(agents.iter().filter(|a| crate::cmd::fnmatch(t, &a.name)).map(|a| a.key()).collect()) { return r }
+    // Nothing to look in: say why.
+    if app.link(&app.fleet.local_id).is_none() { return Err("the daemon is not running (harness start)".into()) }
     Err(format!("can't find harness: {t}"))
 }
 
@@ -2920,7 +2922,13 @@ fn run_words_in(app: &mut App, words: &[String]) {
         "send-message" => {
             let text = positional(words).join(" ");
             if text.trim().is_empty() { return app.error("usage: send-message [-t harness] text") }
-            let key = match harness_target(app, words) { Ok(Some(k)) => k, Ok(None) => match input::focused_key(app) { Some(k) => k, None => return app.error("no harness here (-t)") }, Err(e) => return app.error(e) };
+            let key = match harness_target(app, words) {
+                Ok(Some(k)) => k,
+                // From a shell: which one is not a guess (as answer-harness).
+                Ok(None) if app.capture.is_some() => return app.error("send-message: which harness? (-t)"),
+                Ok(None) => match input::focused_key(app) { Some(k) => k, None => return app.error("no harness here (-t)") },
+                Err(e) => return app.error(e),
+            };
             let name = app.fleet.agent(&key.0, &key.1).map(|a| a.name.clone()).unwrap_or_default();
             match app.link(&key.0) { Some(link) => { link.send("message", serde_json::json!({ "agentId": key.1, "content": text })); } None => app.error(format!("{name}'s machine is not connected")) }
         }

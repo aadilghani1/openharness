@@ -207,9 +207,17 @@ hn answer -t 'Add rate' 2    # answer its question: the second choice (1,3 sever
 hn open-harness -h -s billing   # a harness beside this pane (-v below; without either, a window of its own)
 ```
 
-Harnesses have hooks as windows do: `set-hook -g harness-needs 'run-shell "notify #{hook_harness_name}"'`
-runs when one asks, `harness-done` when one ends a turn, `harness-failed` on an error — with
-`#{hook_harness_name}` `#{hook_harness_line}` `#{hook_harness_question}` `#{hook_harness_machine}`.
+Harnesses have hooks as windows do: `harness-needs` runs when one asks, `harness-done` when one
+ends a turn, `harness-failed` on an error — with `#{hook_harness_name}` `#{hook_harness_line}`
+`#{hook_harness_question}` `#{hook_harness_machine}`. In a `~/.tmux.conf` tmux reads too, keep them
+inside `%if` (tmux doesn't know these hooks, and skips the block), and quote what a shell is given
+with `q:` (names hold spaces and brackets):
+
+```tmux
+%if "#{hn_version}"
+set-hook -g harness-needs 'run-shell "notify #{q:hook_harness_name}"'
+%endif
+```
 
 ## Copy mode
 

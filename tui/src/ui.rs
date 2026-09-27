@@ -838,7 +838,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // A toggle-sort binding: whether it sorts (+S) or not (-S), as fzf's info says.
     if theme::fzf_opts().binds.iter().any(|(_, a)| a.split('+').any(|x| x == "toggle-sort")) { count.push_str(if o_sorts(picker) { " +S" } else { " -S" }) }
     let limit = theme::fzf_opts().multi_limit;
-    if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) || limit > 0 { count.push_str(&if limit > 0 { format!(" ({}/{limit})", picker.marked.len()) } else { format!(" ({})", picker.marked.len()) }) }
+    if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) || limit > 0 { count.push_str(&if limit > 0 { format!(" ({}/{limit})", picker.marked.len()) } else { format!(" ({})", picker.marked.len()) }) }
     // fzf's printInfoImpl, each --info laid out as it lays it out: the count in the info pair, cut
     // with `..` when the room runs out (trimMessage); the separator's line filled with its string
     // (RepeatToFill) after a blank in its pair; the last column left blank. A list still loading

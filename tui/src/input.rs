@@ -215,7 +215,7 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
     let in_preview = preview.map(|(r, _)| inside(r)).unwrap_or(false);
     // Shift with a click or the wheel marks as it goes (fzf's shift-left-click, shift-scroll).
     let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
-    let multi = matches!(&app.modal, Some(Modal::Picker { kind: PickerKind::Open { .. }, picker }) if crate::picker::scope_of(&picker.query).is_none());
+    let multi = matches!(&app.modal, Some(Modal::Picker { kind: PickerKind::Open { .. } | PickerKind::Inbox, picker }) if crate::picker::scope_of(&picker.query).is_none());
     match mouse.kind {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
             let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
@@ -251,7 +251,7 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
         MouseEventKind::Down(MouseButton::Right) if !inside(list) => {}
         MouseEventKind::Down(MouseButton::Right) => {
             if let Some(Modal::Picker { kind, picker }) = &mut app.modal {
-                let multi = matches!(kind, PickerKind::Open { .. }) && crate::picker::scope_of(&picker.query).is_none();
+                let multi = matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) && crate::picker::scope_of(&picker.query).is_none();
                 if picker.click(mouse.row) && multi { picker.toggle_mark(); }
             }
         }
@@ -466,7 +466,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             harness_preview(picker);
             picker.set_rows(modal::inbox_rows(app));
             picker.status = format!("{} waiting", app.fleet.waiting());
-            picker.hints = vec![("M-1..9", "answer"), ("M-a", "type an answer"), ("enter", "go"), ("C-o", "open")];
+            picker.hints = vec![("M-1..9", "answer"), ("M-a", "type an answer"), ("enter", "go"), ("C-o", "open"), ("tab", "mark")];
             picker.empty = "Nobody is waiting on you.".into();
         }
         PickerKind::Machines => {
@@ -1437,7 +1437,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         return;
     }
     let before = picker.query.clone();
-    let multi = matches!(kind, PickerKind::Open { .. }) && crate::picker::scope_of(&picker.query).is_none();
+    let multi = matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) && crate::picker::scope_of(&picker.query).is_none();
     let up: i64 = if theme::fzf().reverse { -1 } else { 1 };
     // FZF_DEFAULT_OPTS --bind: your key:action pairs come first (the last bind for a key wins,
     // as in fzf). A key bound only to what hn does not run (execute, become, reload …) keeps this
@@ -1774,8 +1774,23 @@ fn split_key(id: &str) -> Option<(String, String)> {
 
 fn answer_from(app: &mut App, kind: &PickerKind, picker: &mut Picker, option: usize) {
     if !matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) { return }
-    let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) else { return };
-    if answer(app, &machine, &agent, option) { picker.say("Answered") }
+    // fzf --multi: the marked rows, when there are marks — each given its own choice N (those
+    // asking with fewer choices left marked); else the current row.
+    let marked: Vec<(String, String)> = picker.marked.iter().filter_map(|m| split_key(m)).collect();
+    if marked.is_empty() {
+        let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) else { return };
+        if answer(app, &machine, &agent, option) { picker.say("Answered") }
+        return;
+    }
+    let (mut done, mut left) = (0, 0);
+    for (m, a) in &marked { if answer(app, m, a, option) { done += 1 } else { left += 1 } }
+    picker.marked.retain(|id| split_key(id).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.question.is_some())).unwrap_or(false));
+    let n = option + 1;
+    picker.say(match (done, left) {
+        (0, _) => format!("No choice {n} to give"),
+        (d, 0) => format!("{d} answered"),
+        (d, l) => format!("{d} answered · {l} without a choice {n}, still marked"),
+    });
 }
 
 /// Answer an open question with its [option]th choice, from anywhere — no need to open the pane.

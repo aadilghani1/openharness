@@ -455,6 +455,10 @@ pub struct App {
     /// came, shared with this computer's other clients through prs.json — one question per
     /// branch every five minutes (an hour for a merged or closed one), not one per harness each.
     pub prs: HashMap<String, (Option<fleet::Pr>, u64)>,
+    /// Branches whose pull request is being asked right now (one ask per branch).
+    pub pr_asking: HashSet<String>,
+    /// PR lookups this minute: (when the minute began, how many).
+    pub pr_budget: (Instant, u32),
     pub prs_read: Option<Instant>,
     /// Desk windows whose layout changed here, to be sent (send_desk_layouts).
     pub desk_layouts: HashSet<String>,
@@ -650,6 +654,8 @@ impl App {
             last_cli: Instant::now(),
             killing_session: false,
             prs: HashMap::new(),
+            pr_asking: HashSet::new(),
+            pr_budget: (Instant::now(), 0),
             prs_read: None,
             desk_layouts: HashSet::new(),
             desk_no_tmux: false,
@@ -1611,7 +1617,7 @@ impl App {
         let opens_shell = words.iter().any(|w| matches!(crate::cmd::find(w).map(|e| e.name), Ok("new-session" | "new-window" | "split-window" | "respawn-pane" | "respawn-window" | "display-popup")));
         // list-harnesses from a client just started (hn with no terminal, for a script): once
         // every machine's harnesses are known, so it says what each one is doing.
-        let asks_fleet = matches!(words.first().map(String::as_str), Some("list-harnesses" | "lsh" | "answer-harness" | "answer" | "open-harness" | "openh"));
+        let asks_fleet = matches!(words.first().map(String::as_str), Some("list-harnesses" | "lsh" | "answer-harness" | "answer" | "open-harness" | "openh" | "send-message"));
         self.last_cli = Instant::now();
         if !self.cli_held.is_empty() || (opens_shell && !self.cli_ready()) || (asks_fleet && !self.fleet_ready()) { self.cli_held.push_back(job); return }
         job(self)
@@ -2756,7 +2762,6 @@ impl App {
     /// not working or asking now, is done and unread — what finished while hn was closed.
     pub fn catch_up(&mut self, machine_id: &str) {
         if !self.seen_rostered.insert(machine_id.to_string()) { return }
-        let local = machine_id == self.fleet.local_id;
         let floor = self.seen_since;
         let mut ended = Vec::new();
         for agent in self.fleet.agents.values_mut().filter(|a| a.machine_id == machine_id && a.engine != "terminal") {
@@ -2784,7 +2789,6 @@ impl App {
                 if agent.since == 0 { agent.since = *at }
             }
         }
-        if local && !self.headless { self.back_again() }
         for key in ended { crate::commands::notify_harness(self, "harness-done", &key) }
     }
 
@@ -4145,6 +4149,7 @@ impl App {
             let recap = !a.recap_asked && a.did.is_none() && a.engine != "terminal";
             let pr = live && !a.branch.is_empty() && !matches!(a.branch.as_str(), "main" | "master" | "trunk" | "develop") && a.pr_checked.map(|t| now.duration_since(t) > Duration::from_secs(300)).unwrap_or(true);
             let branch_key = format!("{machine}|{}|{}", if a.project_root.is_empty() { &a.cwd } else { &a.project_root }, a.branch);
+            let (working, active_at) = (a.working, a.active_at);
             if recap {
                 if let Some(a) = self.fleet.agents.get_mut(&(machine.clone(), agent_id.clone())) { a.recap_asked = true }
                 self.enriching += 1;
@@ -4161,24 +4166,36 @@ impl App {
                     if a.asked.is_none() { a.asked = ask.as_deref().and_then(fleet::first_line) }
                 });
             }
-            // The branch's pull request as another harness (or another client) last heard it.
+            // The branch's pull request as another harness (or another client) last heard it. Asked
+            // again when a turn has ended since (that is when an agent pushes and opens one), every
+            // 15 minutes while one runs, and otherwise every 30 (6 hours once merged or closed) —
+            // each `gh` lookup is two calls against the same hourly limit the agents' own use.
             if pr {
                 self.read_prs();
                 let fresh = self.prs.get(&branch_key).filter(|(p, at)| {
-                    let ttl = if p.as_ref().map(|p| matches!(p.state.to_lowercase().as_str(), "merged" | "closed")).unwrap_or(false) { 3600_000 } else { 300_000 };
-                    fleet::now_ms().saturating_sub(*at) < ttl
+                    let ended = !working && active_at > *at;
+                    let ttl = if working { 900_000 } else if p.as_ref().map(|p| matches!(p.state.to_lowercase().as_str(), "merged" | "closed")).unwrap_or(false) { 21_600_000 } else { 1_800_000 };
+                    !ended && fleet::now_ms().saturating_sub(*at) < ttl
                 }).map(|(p, _)| p.clone());
                 if let Some(found) = fresh {
                     if let Some(a) = self.fleet.agents.get_mut(&(machine.clone(), agent_id.clone())) { a.pr = found; a.pr_checked = Some(now) }
                     continue;
                 }
+                // Another harness on the branch is asking already.
+                if self.pr_asking.contains(&branch_key) { continue }
             }
-            if pr && self.enriching < AT_ONCE {
+            // At most 20 a minute (a first look at 400 harnesses takes 20 minutes, the ones that
+            // need you first) — 2,400 `gh` calls an hour at worst, under GitHub's 5,000.
+            if pr && self.pr_budget.0.elapsed() > Duration::from_secs(60) { self.pr_budget = (now, 0) }
+            if pr && self.enriching < AT_ONCE && self.pr_budget.1 < 20 {
+                self.pr_budget.1 += 1;
                 if let Some(a) = self.fleet.agents.get_mut(&(machine.clone(), agent_id.clone())) { a.pr_checked = Some(now) }
                 self.enriching += 1;
+                self.pr_asking.insert(branch_key.clone());
                 let (m, id) = (machine.clone(), agent_id.clone());
                 self.spawn(async move { link.rpc("git_pull_request", json!({ "agentId": id }), Duration::from_secs(30)).await }, move |app, reply| {
                     app.enriching = app.enriching.saturating_sub(1);
+                    app.pr_asking.remove(&branch_key);
                     let Ok(reply) = reply else { return };
                     let found = match reply.get("status").and_then(Value::as_str) {
                         Some("found") => Some(Some(fleet::Pr { number: reply.get("number").and_then(Value::as_u64).unwrap_or(0), state: reply.get("state").and_then(Value::as_str).unwrap_or("").to_string(), url: reply.get("url").and_then(Value::as_str).unwrap_or("").to_string() })),
@@ -4225,6 +4242,8 @@ impl App {
 
     pub fn on_tick(&mut self) {
         self.tick += 1;
+        // Since you were here: once every machine's harnesses are listed, so it counts them all.
+        if self.back_from.is_some() && !self.headless && self.fleet_ready() { self.back_again() }
         self.enrich();
         self.maybe_start_shell();
         self.release_waiting();
