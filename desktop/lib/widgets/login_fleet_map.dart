@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../shared/theme/app_theme.dart' as grid;
 
@@ -324,7 +325,7 @@ class _MapPainter extends CustomPainter {
     );
     _text(
       canvas,
-      '● this Mac · 4 linked',
+      kIsWeb ? 'this browser · 4 linked' : '● this Mac · 4 linked',
       Offset(_window.left + 7, _window.top + 6),
 
       color: _fade(palette.ink2, landed),

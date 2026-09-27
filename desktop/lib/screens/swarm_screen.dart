@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart' show listEquals;
@@ -11,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
+import '../core/runtime_platform.dart';
 import '../analytics/analytics.dart';
 import '../core/desktop_window.dart';
 import '../core/harness_file_store.dart';
@@ -154,7 +154,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// tab closes nothing. Null between presses.
   String? _middleDownTab;
   late final bool _native =
-      widget.nativeTabs ?? (Platform.isMacOS && !kUnderTest);
+      widget.nativeTabs ?? (RuntimePlatform.isMacOS && !kUnderTest);
   late final SwarmProjectStore _projects =
       widget.projectStore ??
       SwarmProjectStore(storage: kUnderTest ? null : HarnessFileStore.shared);

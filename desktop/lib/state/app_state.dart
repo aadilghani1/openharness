@@ -503,7 +503,8 @@ class AppNotifier extends ChangeNotifier {
   /// [ViewerServices.login] in a viewer build — which has no CLI — under one name, so every call
   /// site reads the same in both.
   late final SignInClient cliLogin;
-  final CliLink cliLink;
+  CliLink? _cliLink;
+  CliLink get cliLink => _cliLink ??= CliLink();
 
   /// Links to other machines by remote password: [cliLink] in a desktop build, the app itself in a
   /// viewer. THIS machine's own remote password stays on [cliLink] — a viewer is not a machine, and
@@ -1714,7 +1715,6 @@ class AppNotifier extends ChangeNotifier {
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
        session = authSession,
        _store = configStore,
-       cliLink = cliLink ?? CliLink(),
        config = configStore?.config ?? config,
        viewer =
            viewer ??
@@ -1724,6 +1724,7 @@ class AppNotifier extends ChangeNotifier {
                    session: authSession,
                  )
                : null) {
+    _cliLink = cliLink;
     this.cliLogin = cliLogin ?? this.viewer?.login ?? CliLogin();
     this.peerLinks = peerLinks ?? this.viewer?.links ?? this.cliLink;
     _autonomousEnv = this.config.autonomousEnv;
@@ -1750,7 +1751,7 @@ class AppNotifier extends ChangeNotifier {
     config: config,
     session: session,
     auth: viewer?.auth,
-    localTransport: localDaemonTransport,
+    localTransport: viewer == null ? localDaemonTransport : null,
   );
 
   /// How this app reaches the local CLI — its Unix socket or the loopback
@@ -2560,6 +2561,9 @@ class AppNotifier extends ChangeNotifier {
       debugPrint('bootstrap: fallback to login after error: $error\n$stack');
       currentUser = null;
       status = AppStatus.unauthenticated;
+      if (viewer != null) {
+        _lastError = 'Could not complete sign-in. Please sign in again.';
+      }
       notifyListeners();
     } finally {
       // A `finally` rather than a call per exit path: bootstrap resolves four
@@ -2712,6 +2716,9 @@ class AppNotifier extends ChangeNotifier {
       );
       currentUser = null;
       status = AppStatus.unauthenticated;
+      if (viewer != null) {
+        _lastError = 'Could not complete sign-in. Please sign in again.';
+      }
       notifyListeners();
     }
   }
@@ -2926,7 +2933,9 @@ class AppNotifier extends ChangeNotifier {
     // race `harness start`'s own backend handshake and surface a bogus 30s "Could not load
     // machines" timeout. A daemon that never comes up still gets a home screen below, with
     // the failure shown there as before, since that's where the retry affordance lives.
-    _bootStatusMessage = 'Starting local service…';
+    _bootStatusMessage = viewer == null
+        ? 'Starting local service…'
+        : 'Opening workspace…';
     notifyListeners();
     // Before the machines, deliberately: the tiles are intent, they render as
     // "waiting for that machine" on their own, and each attaches as its machine
@@ -4003,7 +4012,7 @@ class AppNotifier extends ChangeNotifier {
   void _ensurePool() {
     if (_pool != null) return;
     _pool = WsPool(
-      localTransport: localDaemonTransport,
+      localTransport: viewer == null ? localDaemonTransport : null,
       wsBaseUrl: config.wsBaseUrl,
       autonomousEnv: _autonomousEnv,
       // Every real desktop WsConn dials the local CLI's loopback WS (transportKind.localPlaintext, see

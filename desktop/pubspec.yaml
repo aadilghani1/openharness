@@ -28,6 +28,8 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+  web: ^1.1.1
+  archive: ^4.0.9
   flutter:
     sdk: flutter
   # Natural ordering for numbered agents, projects, and completion candidates.
@@ -102,12 +104,19 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+  fonts:
+    - family: Roboto Mono
+      fonts:
+        - asset: assets/fonts/roboto-mono/RobotoMono.ttf
+        - asset: assets/fonts/roboto-mono/RobotoMono-Italic.ttf
+          style: italic
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
   assets:
+    - assets/fonts/roboto-mono/OFL.txt
     - assets/machines.svg
     - assets/models.svg
     - assets/harnesses.svg
