@@ -446,6 +446,8 @@ pub struct App {
     pub prs_read: Option<Instant>,
     /// Desk windows whose layout changed here, to be sent (send_desk_layouts).
     pub desk_layouts: HashSet<String>,
+    /// The desk refused a layout's tmux form (a backend from before it): not sent again.
+    pub desk_no_tmux: bool,
     pub unlinked_later: Vec<(u32, String, u64, String)>,
     /// The server's state (global options, key tables, buffers, global environment) as this
     /// client last wrote or took it, and whether a command ran since (server.rs).
@@ -633,6 +635,7 @@ impl App {
             prs: HashMap::new(),
             prs_read: None,
             desk_layouts: HashSet::new(),
+            desk_no_tmux: false,
             unlinked_later: Vec::new(),
             server_synced: None,
             server_dirty: false,
@@ -4001,10 +4004,17 @@ impl App {
     /// has the tab but not yet its pane would close the tab this window just made.
     pub fn desk_ops(&mut self, ops: Vec<Value>) {
         if self.desk_mode != DeskMode::Sync || ops.is_empty() { return }
+        // A layout's tmux form (layout.tmux) goes only to a desk that keeps it: one that refuses
+        // it (a backend from before it) is sent the layout without it from then on.
+        let strip = |ops: &[Value]| -> Vec<Value> { ops.iter().cloned().map(|mut o| { if let Some(l) = o.get_mut("layout").and_then(Value::as_object_mut) { l.remove("tmux"); } o }).collect() };
+        let ops = if self.desk_no_tmux { strip(&ops) } else { ops };
+        let tried_tmux = ops.iter().any(|o| o.pointer("/layout/tmux").is_some());
+        let again = tried_tmux.then(|| strip(&ops));
         let port = self.port;
         self.desk_inflight += 1;
-        self.spawn(async move { http_json(port, "POST", "/api/desk/ops", Some(&json!({ "ops": ops }))).await }, |app, reply| {
+        self.spawn(async move { http_json(port, "POST", "/api/desk/ops", Some(&json!({ "ops": ops }))).await }, move |app, reply| {
             app.desk_inflight = app.desk_inflight.saturating_sub(1);
+            if let (Err(_), Some(ops)) = (&reply, again) { app.desk_no_tmux = true; return app.desk_ops(ops) }
             if app.desk_inflight > 0 { app.desk_stale = true; return }
             match reply {
                 Ok(desk) => app.apply_desk(&desk),

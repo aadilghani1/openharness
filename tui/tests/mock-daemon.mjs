@@ -131,6 +131,11 @@ const server = http.createServer((req, res) => {
       let ops = []
       try { ops = JSON.parse(body || '{}').ops || [] } catch {}
       if (process.env.MOCK_DESK === 'fixed') ops = []
+      // MOCK_DESK=strict: a layout with a key the backend's schema does not know is refused
+      // whole (400), as a backend from before layout.tmux refuses it.
+      if (process.env.MOCK_DESK === 'strict' && ops.some((o) => o.op === 'tab.layout' && Object.keys(o.layout || {}).some((k) => !['presets', 'sizes'].includes(k)))) {
+        res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'invalid body' })); return
+      }
       const tab = (id) => desk.tabs.find((t) => t.id === id)
       for (const op of ops) {
         if (op.op === 'tab.create' && !tab(op.id)) desk.tabs.splice(Math.min(op.index ?? desk.tabs.length, desk.tabs.length), 0, { id: op.id, name: op.name, nameIsCustom: !!op.nameIsCustom, panes: [], layout: {} })
