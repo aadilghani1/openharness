@@ -12,6 +12,8 @@ import * as beastie from './beastie.g.js'
 
 export const PLATE_MODELS = { tim, gnu, lynx, mutt, yak, gopher, bug, tux, auk, beastie }
 
+export const PLATE_SOURCE = '8beb4ee30cb6ce610b6a61690afa0d1f32a71b821be29fcd898bb97572956401'
+
 export const PLATE_ROSTER = {
   "rules": {
     "versions": [

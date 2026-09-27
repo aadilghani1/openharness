@@ -3,10 +3,11 @@
 // Run after changing the roster: node daemons/tools/generate.mjs   (CI: --check)
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { renderSprite, renderPortrait, statusCell, baseWidth, renderBanner, eggStage, eggLine, habitProgress, rollTraits, individualFlags, oneIn, individualDaemon, renderIndividualSprite } from './render.mjs'
 import { cardLines } from './card.mjs'
-import { bakePlates, plateColor, eggColor } from './bake.mjs'
+import { plate as shade, cropBox, crop } from './plate.mjs'
+import { bakePlates, plateColor, eggColor, individualColor } from './bake.mjs'
 import { KINDS as EGG_KINDS, STAGES as EGG_STAGES } from '../plates/egg.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
@@ -198,6 +199,7 @@ for (const key of ['loop', 'rock', 'burstHold', 'burst', 'tumble', 'open']) if (
 const XTERM_HEXES = new Set(Array.from({ length: 240 }, (_, i) => xtermHex(i + 16)))
 const flagName = s => typeof s === 'string' && /^[a-z][a-z0-9-]{0,23}$/.test(s)
 if (roster.daemons.some(d => d.traits) && !xtermColor(rules.plate?.oddEye)) fail('rules.plate.oddEye must be an xterm-256 index from 16 with its hex')
+if (roster.daemons.some(d => d.traits) && !whole(rules.plate?.room, 0)) fail('rules.plate.room: the portrait rows an individual may stand above its species, a whole number')
 const spriteTimes = [0, 50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]
 for (const d of roster.daemons) {
   const T = d.traits
@@ -277,6 +279,29 @@ if (!problems.length) {
       for (const lid of [null, '-', '_']) eggArt(`${d.id} --${name} hatching`, eggLine(roster, 'first', 'hatchling', { sprite: renderSprite(roster, variantD, 0, 'idle', { lid }) }))
     }
   }
+}
+// Every plate species' model takes every trait in its catalogue: DEFAULT (the species plate) holds each
+// proportion at 1, and each marking, extra and the odd eye paints cells of its own material (2.0, idle,
+// at the reveal width).
+const plateModels = {}
+for (const d of problems.length ? [] : roster.daemons.filter(d => d.plate && d.traits)) {
+  const m = plateModels[d.id] = await import(pathToFileURL(resolve(root, `daemons/plates/${d.id}.mjs`)).href)
+  const D = m.DEFAULT
+  if (!D) { fail(`daemons/plates/${d.id}.mjs: no DEFAULT traits`); continue }
+  for (const k of Object.keys(d.traits.props)) if (D[k] !== 1) fail(`daemons/plates/${d.id}.mjs: DEFAULT.${k} must be 1, the species plate`)
+  if (D.marks !== null || D.extra !== null || D.oddEye !== false || D.temper !== 'calm' || D.seed !== 0) fail(`daemons/plates/${d.id}.mjs: DEFAULT is no markings, no extra, no odd eye, calm, seed 0`)
+  const paints = (traits, letter) => {
+    const mats = []
+    shade(m.model({ t: 0, mood: 'idle', age: '2.0', traits: { ...D, seed: 7, ...traits } }), rules.plate.cols.reveal, { mats })
+    return mats.some(row => row.includes(letter))
+  }
+  // An individual's canvas may have room above the species' for a hat: whole portrait rows, at most
+  // rules.plate.room of them, so its plates stay within maxRows plus that (twice it at the reveal).
+  const room = (m.model({ traits: D }).h - m.size.h) / (m.size.h / Math.max(1, Math.round((rules.plate.cols.portrait * m.size.h) / (2 * m.size.w))))
+  if (Math.abs(room - Math.round(room)) > 1e-9 || room < 0 || room > rules.plate.room) fail(`daemons/plates/${d.id}.mjs: an individual's headroom must be whole portrait rows, at most rules.plate.room (${rules.plate.room})`)
+  for (const [marks] of d.traits.marks) if (marks && !paints({ marks }, 'm')) fail(`${d.id} --${marks}: the model paints no marking cells`)
+  for (const [extra] of d.traits.extras) if (extra && !paints({ extra }, 'a')) fail(`${d.id} --${extra}: the model paints no extra cells`)
+  if (!paints({ oddEye: true }, 'e')) fail(`${d.id} --odd-eye: the model paints no odd eye`)
 }
 const habitKeys = rules.firstEgg.habits.map(h => h.key)
 if (rules.firstEgg.need > habitKeys.length) fail('first egg needs more habits than exist')
@@ -487,8 +512,11 @@ const plateRoster = {
   rules: { versions: rules.versions, moods: rules.moods, plate: { cols: rules.plate.cols, maxRows: rules.plate.maxRows, frameMs: rules.plate.frameMs, frames: rules.plate.frames } },
   daemons: roster.daemons.filter(d => d.traits).map(d => ({ id: d.id, traits: { ...d.traits, extras: d.traits.extras.map(e => e.slice(0, 3)) } })),
 }
+// PLATE_SOURCE is plates.json's source hash: what the models and shader were when these were copied,
+// so harnessd keys its cache of individual art by it and draws again after a change.
 output('cli/src/pair/plates/models.g.ts', `${header}${plateIds.map(id => `import * as ${id.replace(/-/g, '_')} from './${id}.g.js'`).join('\n')}\n\n` +
   `export const PLATE_MODELS = { ${plateIds.map(id => (/^[a-z]+$/.test(id) ? id : `'${id}': ${id.replace(/-/g, '_')}`)).join(', ')} }\n\n` +
+  `export const PLATE_SOURCE = '${plates?.source ?? ''}'\n\n` +
   `export const PLATE_ROSTER = ${JSON.stringify(plateRoster, null, 2)}\n`)
 // Frames every port must reproduce exactly (desktop and hn tests read this file).
 const frames = { sprites: [], portraits: [] }
@@ -542,6 +570,23 @@ for (const d of plates ? roster.daemons.filter(d => d.plate) : []) {
       if (ch !== ' ' && (c + r) % 7 === 0) cells.push({ r, c, ch, hex: plateColor(roster, d, rows.length, r, ch, { shiny }) })
     }))
     frames.plateColors.push({ id: d.id, size: 'reveal', v: '2.0', mood: 'idle', frame: 0, shiny, bg: '#0c0c0c', rows: rows.length, cells })
+  }
+}
+// An individual's colours: its colour family down the rows, its markings in its accent, its extra in
+// the extra's colour and its odd eye (render.mjs rollTraits, bake.mjs individualColor), at the portrait
+// width. Each case carries its rows and material rows, so a port checks its painting without a model.
+frames.individualColors = []
+for (const d of roster.daemons.filter(d => d.traits && plateModels[d.id])) {
+  const traits = { ...rollTraits(roster, d.id, 1), marks: d.traits.marks[1][0], extra: d.traits.extras[0][0], oddEye: true }
+  const mats = []
+  const frame = shade(plateModels[d.id].model({ t: 0, mood: 'idle', age: '2.0', traits }), rules.plate.cols.portrait, { mats })
+  const box = cropBox([frame]), rows = crop([frame], box)[0], cells = crop([mats], box)[0]
+  for (const shiny of [false, true]) {
+    const out = []
+    rows.forEach((row, r) => [...row].forEach((ch, c) => {
+      if (ch !== ' ' && (cells[r][c] !== '.' || (c + r) % 7 === 0)) out.push({ r, c, ch, mat: cells[r][c], hex: individualColor(roster, d, traits, rows.length, r, ch, cells[r][c], { shiny }) })
+    }))
+    frames.individualColors.push({ id: d.id, traits, shiny, bg: '#0c0c0c', rows: rows.join('\n'), mats: cells.join('\n'), cells: out })
   }
 }
 for (const c of frames.cells) {

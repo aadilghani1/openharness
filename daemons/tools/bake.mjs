@@ -97,6 +97,24 @@ export function eggColor(roster, kind, rows, r, ch, mat, { bg = '#0c0c0c', light
   return inked(roster, base, ch, bg)
 }
 
+// The colour of one character of an individual's plate (harnessd draws it; rows and material rows).
+// Its body runs down its colour family (render.mjs rollTraits `colour`; a shiny one's is the species'
+// shinyGradient); a marking cell (`m`) is its accent, an extra's (`a`) the extra's colour, the odd eye
+// (`e`) rules.plate.oddEye. Clients paint the species plate in the colour family until the individual's
+// own plate arrives.
+export function individualColor(roster, d, traits, rows, r, ch, mat, { bg = '#0c0c0c', shiny = false } = {}) {
+  let base
+  if (mat === 'm') base = rgb(traits.accent)
+  else if (mat === 'a') base = rgb(d.traits.extras.find(e => e[0] === traits.extra)[2])
+  else if (mat === 'e') base = rgb(roster.rules.plate.oddEye.hex)
+  else {
+    const family = d.traits.colours.find(c => c[0] === traits.colour)
+    const [top, bottom] = shiny ? [d.shinyGradient.top.hex, d.shinyGradient.bottom.hex] : [family[2], family[3]]
+    base = mix(rgb(top), rgb(bottom), rows > 1 ? r / (rows - 1) : 0)
+  }
+  return inked(roster, base, ch, bg)
+}
+
 const rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16))
 const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t))
 // A glyph's brightness from rules.plate.ink: at most 1 mixes from the background toward the colour,

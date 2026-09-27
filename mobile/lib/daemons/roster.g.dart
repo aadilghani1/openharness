@@ -394,6 +394,7 @@ const daemonRosterJson = r'''
         "portrait": 12,
         "reveal": 24
       },
+      "room": 3,
       "frameMs": 170,
       "frames": {
         "idle": 8,
