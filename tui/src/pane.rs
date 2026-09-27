@@ -196,6 +196,11 @@ impl Pane {
             _ => S::DefaultUserShape,
         }
     }
+
+    /// The cursor's colour the program set (OSC 12), as tmux passes it on (rgb:rr/gg/bb).
+    pub fn cursor_colour(&self) -> Option<String> {
+        self.term.colors()[alacritty_terminal::vte::ansi::NamedColor::Cursor].map(|c| format!("rgb:{:02x}/{:02x}/{:02x}", c.r, c.g, c.b))
+    }
 }
 
 impl Pane {

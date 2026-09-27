@@ -387,6 +387,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     let mut last_draw = Instant::now() - frame_budget;
     let mut need_draw = true;
     let mut mouse_all = false;
+    let mut cursor_colour: Option<String> = None;
     loop {
         // Wait for something — or for the frame we owe to come due.
         let wait = if need_draw { frame_budget.saturating_sub(last_draw.elapsed()) } else { Duration::from_secs(3600) };
@@ -427,6 +428,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         if std::mem::take(&mut app.suspend) {
             // C-z: give the shell its terminal back, stop, and pick up where we were on `fg`.
             if enhanced { execute!(term.backend_mut(), PopKeyboardEnhancementFlags)?; }
+            if cursor_colour.take().is_some() { execute!(term.backend_mut(), crossterm::style::Print("\x1b]112\x07"))?; }
             execute!(term.backend_mut(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape, crossterm::style::Print(TITLE_POP))?;
             terminal::disable_raw_mode()?;
             unsafe { libc_raise_tstp() };
@@ -455,6 +457,12 @@ async fn run(config: config::Config) -> io::Result<()> {
             let shape = app.focused().filter(|_| app.modal.is_none()).and_then(|f| app.panes.get(&f)).map(|p| p.cursor_style()).unwrap_or(cursor::SetCursorStyle::DefaultUserShape);
             let code = format!("{shape:?}");
             if code != app.cursor_shape { execute!(term.backend_mut(), shape)?; app.cursor_shape = code }
+            // Its cursor colour (OSC 12) too, and the terminal's own back (OSC 112) when it has none.
+            let colour = app.focused().filter(|_| app.modal.is_none()).and_then(|f| app.panes.get(&f)).and_then(|p| p.cursor_colour());
+            if colour != cursor_colour {
+                match &colour { Some(c) => execute!(term.backend_mut(), crossterm::style::Print(format!("\x1b]12;{c}\x07")))?, None => execute!(term.backend_mut(), crossterm::style::Print("\x1b]112\x07"))? }
+                cursor_colour = colour;
+            }
             if !app.fleet.agents.is_empty() && !app.fleet_marked { app.fleet_marked = true; mark("first frame with harnesses") }
             if !app.first_frame { app.first_frame = true; mark("first frame") }
             last_draw = Instant::now();
@@ -465,6 +473,8 @@ async fn run(config: config::Config) -> io::Result<()> {
             }
         }
     }
+    // The terminal's own cursor colour back.
+    if cursor_colour.is_some() { let _ = execute!(term.backend_mut(), crossterm::style::Print("\x1b]112\x07")); }
     let session = app.session_name();
     // A detach: the sessions no client shows now, with destroy-unattached, go; and with
     // exit-unattached, the server when no other client is attached (server_loop).

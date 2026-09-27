@@ -2273,7 +2273,9 @@ pub(crate) fn map_color(color: AColor, colors: &alacritty_terminal::term::color:
 fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window: (Option<Color>, Option<Color>)) -> Option<Position> {
     if let Some(bg) = window.1 { buf.set_style(area, Style::default().bg(bg)) }
     match &pane.phase {
-        Phase::Connecting(note) => { card(buf, area, &[(note.clone(), Style::default().add_modifier(Modifier::DIM))]); return None }
+        // Opening: nothing to show yet. Lost (the machine's link down), the last screen is kept, as
+        // ssh and mosh keep it — below.
+        Phase::Connecting(note) if pane.last_seq.is_none() => { card(buf, area, &[(note.clone(), Style::default().add_modifier(Modifier::DIM))]); return None }
         Phase::Card { title, detail, keys } => {
             let mut lines = vec![(title.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))];
             for row in detail.lines() { lines.push((row.to_string(), Style::default())) }
@@ -2348,6 +2350,14 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
             }
             _ => { target.set_char(cell.c).set_style(style); }
         }
+    }
+    // The link down: the last screen dimmed, and mosh's one row at the top saying so.
+    if let Phase::Connecting(note) = &pane.phase {
+        buf.set_style(area, Style::default().add_modifier(Modifier::DIM));
+        let row = Rect::new(area.x, area.y, area.width, 1);
+        buf.set_style(row, Style::default().remove_modifier(Modifier::DIM).add_modifier(Modifier::REVERSED));
+        buf.set_stringn(area.x, area.y, format!("{:w$}", format!(" {note}"), w = area.width as usize), area.width as usize, Style::default().remove_modifier(Modifier::DIM).add_modifier(Modifier::REVERSED));
+        return None;
     }
     // Local echo, drawn over the grid: underlined until the far side confirms it.
     for (col, row, c, _) in pane.shown_predictions() {
