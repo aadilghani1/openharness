@@ -512,7 +512,14 @@ fn border_sides() -> (bool, bool, bool, bool) {
 /// with --no-separator).
 fn no_separator_line() -> bool {
     let o = theme::fzf_opts();
-    match o.info_mode.as_str() { "inline" => true, "hidden" | "inline-right" => !o.separator, _ => false }
+    match o.info_mode.as_str() { "inline" => true, "hidden" | "inline-right" => !separator_on(), _ => false }
+}
+
+/// Whether the separator's rule shows: --separator's (or --no-separator's) say, else yes — unless
+/// an input border is set (fzf leaves the rule out inside one).
+fn separator_on() -> bool {
+    let o = theme::fzf_opts();
+    if o.separator_set || !o.separator { o.separator } else { section_shape(&o.input_border, false).is_none() }
 }
 
 /// fzf's --height over a screen [h] rows tall: at least its minimum, no more than the screen
@@ -614,6 +621,123 @@ fn border_glyphs(style: &str) -> (&'static str, &'static str, &'static str, &'st
         "thinblock" => ("▔", "▁", "▏", "▕", "🭽", "🭾", "🭼", "🭿"),
         _ => ("─", "─", "│", "│", "╭", "╮", "╰", "╯"),
     }
+}
+
+/// fzf's section borders (--list-border, --input-border, --header-border, --footer-border): a
+/// shape that shows (`line` shows as a rule on the side toward the list: top, or bottom under
+/// --layout=reverse; a list's `line` shows nothing).
+fn section_shape(shape: &Option<String>, rule_down: bool) -> Option<String> {
+    let s = shape.as_deref()?;
+    match s { "none" => None, "line" => Some(if rule_down { "bottom".into() } else { "top".into() }), _ => Some(s.to_string()) }
+}
+
+/// fzf's resizeWindows, the sections' half: inside [area] the list's window (its border's box and
+/// what is inside it), and the input's (prompt and info), the header's and the footer's windows
+/// when they have one — each a box and its inside.
+#[derive(Default, Clone, Copy)]
+struct Sections { list_box: Option<Rect>, list: Rect, input_box: Option<Rect>, input: Option<Rect>, header_box: Option<Rect>, header: Option<Rect>, footer_box: Option<Rect>, footer: Option<Rect> }
+
+fn sections(area: Rect, has_header: bool, prompt_top: bool, reverse: bool) -> (Sections, [Option<String>; 4]) {
+    let o = theme::fzf_opts();
+    let layout_reverse = prompt_top;
+    let list_shape = o.list_border.as_deref().filter(|s| *s != "none" && *s != "line").map(str::to_string);
+    let input_shape = section_shape(&o.input_border, layout_reverse);
+    let header_shape = section_shape(&o.header_border, layout_reverse);
+    // (fzf's footer border is a rule unless set otherwise.)
+    let footer_shape = if o.footer.is_empty() { None } else { match o.footer_border.as_deref() { Some("line") | None => Some(if layout_reverse { "top".to_string() } else { "bottom".to_string() }), Some("none") => None, Some(s) => Some(s.to_string()) } };
+    let lines = |s: &Option<String>| s.as_deref().map(|s| { let (t, _, b, _) = shape_sides(s); t as i64 + b as i64 }).unwrap_or(0);
+    let has_header_window = has_header && (header_shape.is_some() || input_shape.is_some());
+    let has_input_window = input_shape.is_some() || has_header_window;
+    let input_window_h = if no_separator_line() { 1 } else { 2 };
+    let mut avail = area.height as i64;
+    let input_h = if has_input_window { (lines(&input_shape) + input_window_h).clamp(0, avail) } else { 0 };
+    avail -= input_h;
+    let header_h = if has_header_window { (lines(&header_shape) + 1).clamp(0, avail) } else { 0 };
+    avail -= header_h;
+    let footer_h = if o.footer.is_empty() { 0 } else { (lines(&footer_shape) + o.footer.len() as i64).clamp(0, avail) };
+    let shrink = input_h + header_h + footer_h;
+    let shift = if layout_reverse { input_h + header_h } else { footer_h };
+    let rect = |x: i64, y: i64, w: i64, h: i64| Rect::new(x.max(0) as u16, y.max(0) as u16, w.max(0) as u16, h.max(0) as u16);
+    let (ax, ay, aw) = (area.x as i64, area.y as i64, area.width as i64);
+    // The list's window: its border's box, what is inside.
+    let whole = rect(ax, ay + shift, aw, area.height as i64 - shrink);
+    let mut sec = Sections { list: whole, ..Default::default() };
+    if let Some(shape) = &list_shape {
+        let (t, r, b, l) = shape_sides(shape);
+        sec.list_box = Some(whole);
+        sec.list = rect(ax + if l { 2 } else { 0 }, whole.y as i64 + t as i64, aw - if l { 2 } else { 0 } - r as i64, whole.height as i64 - t as i64 - b as i64);
+    }
+    let w = sec.list_box.unwrap_or(sec.list);
+    let (wt, wh) = (w.y as i64, w.height as i64);
+    // createInnerWindow: a box's inside (no wider than the list's).
+    let inner = |b: Rect, shape: &Option<String>, shift: i64| {
+        let (t, r, bo, l) = shape.as_deref().map(shape_sides).unwrap_or((false, false, false, false));
+        let cols = if l { 2 } else { 0 } + if r { 2 } else { 0 };
+        let width = (b.width as i64 - cols - shift + r as i64).min(sec.list.width as i64);
+        rect(b.x as i64 + shift + if l { 2 } else { 0 }, b.y as i64 + t as i64, width, b.height as i64 - t as i64 - bo as i64)
+    };
+    let header_first = o.header_first;
+    if has_input_window {
+        let btop = match (header_first && has_header_window, layout_reverse, reverse) {
+            (true, false, _) => wt + wh,
+            (true, true, _) => wt - input_h,
+            (false, true, _) => wt - shrink + footer_h,
+            (false, false, _) => wt + wh + header_h,
+        };
+        let b = rect(w.x as i64, btop, w.width as i64, input_h);
+        let (_, _, _, il) = input_shape.as_deref().map(shape_sides).unwrap_or((false, false, false, false));
+        let lshift = if !il && list_shape.as_deref().map(|s| shape_sides(s).3).unwrap_or(false) { 2 } else { 0 };
+        sec.input_box = Some(b);
+        sec.input = Some(inner(b, &input_shape, lshift));
+    }
+    if has_header_window {
+        let btop = match (header_first && has_input_window, layout_reverse) {
+            (true, true) => wt - shrink + footer_h,
+            (true, false) => wt + wh + input_h,
+            (false, true) => wt - header_h,
+            (false, false) => wt + wh,
+        };
+        let b = rect(w.x as i64, btop, w.width as i64, header_h);
+        sec.header_box = Some(b);
+        sec.header = Some(inner(b, &header_shape, 0));
+    }
+    if footer_h > 0 {
+        let btop = if layout_reverse { wt + wh } else { wt - footer_h };
+        let b = rect(w.x as i64, btop, w.width as i64, footer_h);
+        sec.footer_box = Some(b);
+        sec.footer = Some(inner(b, &footer_shape, 0));
+    }
+    (sec, [list_shape, input_shape, header_shape, footer_shape])
+}
+
+/// headerIndentImpl: a header's (or footer's) indent in a window of its own — the rows' gutter,
+/// and the list box's left side, less its own box's.
+fn section_indent(list: &Option<String>, own: &Option<String>) -> u16 {
+    let left = |s: &Option<String>| s.as_deref().map(|s| shape_sides(s).3).unwrap_or(false);
+    (gutter_width() + if left(list) { 2 } else { 0 }).saturating_sub(if left(own) { 2 } else { 0 })
+}
+
+/// A section's box (LightWindow.drawBorder): its shape's sides in the pair, the column inside a
+/// left side in it too; its label on the top (or bottom) edge, centred.
+fn section_box(buf: &mut Buffer, b: Rect, shape: &str, st: Style, label: &str) {
+    if b.width < 2 || b.height == 0 { return }
+    let (top_c, bottom_c, left_c, right_c, tl, tr, bl, br) = border_glyphs(shape);
+    let (top, right, bottom, left) = shape_sides(shape);
+    let (x1, y1) = (b.x + b.width - 1, b.y + b.height - 1);
+    if top { for x in b.x..=x1 { buf.set_string(x, b.y, top_c, st) } }
+    if bottom { for x in b.x..=x1 { buf.set_string(x, y1, bottom_c, st) } }
+    let (y0, yn) = (b.y + top as u16, y1.saturating_sub(bottom as u16));
+    if left { for y in b.y..=y1 { buf.set_string(b.x, y, left_c, st) } if y0 <= yn { for y in y0..=yn { buf.set_string(b.x + 1, y, " ", st) } } }
+    if right { for y in b.y..=y1 { buf.set_string(x1, y, right_c, st) } }
+    if top && left { buf.set_string(b.x, b.y, tl, st) }
+    if top && right { buf.set_string(x1, b.y, tr, st) }
+    if bottom && left { buf.set_string(b.x, y1, bl, st) }
+    if bottom && right { buf.set_string(x1, y1, br, st) }
+    if label.is_empty() || !(top || bottom) { return }
+    let (w, len) = (b.width as i64, label.width() as i64);
+    let col = ((w - len) / 2).max(0) as u16;
+    let row = if top { b.y } else { y1 };
+    buf.set_stringn(b.x + col, row, label, b.width.saturating_sub(col) as usize, theme::fzf().pal.border_label.style());
 }
 
 fn fzf_border(buf: &mut Buffer, body: Rect) {
@@ -765,13 +889,32 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let preview = pbox.as_ref().map(|p| p.rect).filter(|p| p.x > area.x);
     if let Some(bg) = pal.normal.style().bg { buf.set_style(area, Style::default().bg(bg)) }
     let width = area.width as usize;
-    let bottom = area.y + area.height;
     // Prompt, then info, then the header (the keys), then the list above — or, with
     // `--layout=reverse` in FZF_DEFAULT_OPTS, all of it top-down.
     let reverse = theme::fzf().reverse;
     let o = theme::fzf_opts();
     // --layout=reverse puts the prompt on top; reverse-list keeps it at the bottom, rows top-down.
     let prompt_top = o.prompt_top;
+    // The sections (--list-border, --input-border, --header-border, --footer, --style): their
+    // boxes drawn, and from here on the list's window is what is inside its box.
+    let has_hdr = area.height >= 6 && header_line(picker, kind, width.saturating_sub(1)).is_some();
+    let (sec, shapes) = sections(area, has_hdr, prompt_top, reverse);
+    let sectioned = sec.list_box.is_some() || sec.input.is_some() || sec.header.is_some() || sec.footer.is_some();
+    if sectioned {
+        let bst = pal.border.style();
+        if let (Some(b), Some(sh)) = (sec.list_box, &shapes[0]) { section_box(buf, b, sh, pal.list_border.style(), &o.list_label) }
+        if let (Some(b), Some(sh)) = (sec.input_box, &shapes[1]) { section_box(buf, b, sh, bst, &o.input_label) }
+        if let (Some(b), Some(sh)) = (sec.header_box, &shapes[2]) { section_box(buf, b, sh, bst, &o.header_label) }
+        if let (Some(b), Some(sh)) = (sec.footer_box, &shapes[3]) { section_box(buf, b, sh, bst, &o.footer_label) }
+        // The footer's lines indented as the header's (headerIndentImpl).
+        let footer_indent = section_indent(&shapes[0], &shapes[3]);
+        if let Some(f) = sec.footer { for (i, l) in o.footer.iter().enumerate().take(f.height as usize) { buf.set_stringn(f.x + footer_indent, f.y + i as u16, l, f.width.saturating_sub(footer_indent) as usize, pal.header.style()); } }
+    }
+    let area = if sectioned { sec.list } else { area };
+    let width = area.width as usize;
+    let bottom = area.y + area.height;
+    let in_input = sec.input.filter(|_| sectioned);
+    let ia = in_input.unwrap_or(area);
     // --info: default (its own line), inline (after the query), inline-right (right of the
     // prompt, the rule on its own line), right (its own line, the count at the right), hidden.
     let mode = o.info_mode.as_str();
@@ -787,6 +930,14 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let (prompt_y, info_y) = match (header_first, prompt_top) { (true, true) => (prompt_y + 1, info_y + 1), (true, false) => (prompt_y - 1, info_y - 1), _ => (prompt_y, info_y) };
     let edge = if prompt_top { prompt_y.max(info_y) } else { prompt_y.min(info_y) };
     let header_y = match (header_first, prompt_top) { (true, true) => area.y, (true, false) => bottom - 1, _ => if header.is_some() { if prompt_top { edge + 1 } else { edge.saturating_sub(1) } } else { edge } };
+    // In windows of their own: the prompt and info in the input's, the header in the header's.
+    let (prompt_y, info_y) = match in_input {
+        Some(i) => { let last = i.y + i.height.saturating_sub(1); if prompt_top { (i.y, if info_own_line { i.y + 1 } else { i.y }) } else { (last, if info_own_line { last.saturating_sub(1) } else { last }) } }
+        None => (prompt_y, info_y),
+    };
+    let in_header = sec.header.filter(|_| sectioned);
+    let header = match in_header { Some(h) => header_line_at(picker, (h.width as usize).saturating_sub(1), section_indent(&shapes[0], &shapes[2]) as usize), None => header };
+    let header_y = in_header.map(|h| h.y).unwrap_or(header_y);
     let prompt = theme::fzf().prompt_style();
     let prompt_text = theme::fzf().prompt_text.clone();
     // The prompt in its pair (bold as fzf makes it, unless --no-bold or prompt:regular); its
@@ -799,10 +950,10 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     for (i, c) in prompt_text.chars().enumerate() {
         let st = if i >= blank_from && i < prompt_text.len() { clear } else { prompt };
         let (text, w) = if c == '\t' { let n = o.tabstop - pw as usize % o.tabstop; (" ".repeat(n), n) } else { (c.to_string(), unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)) };
-        buf.set_string(area.x + pw, prompt_y, text, st);
+        buf.set_string(ia.x + pw, prompt_y, text, st);
         pw += w as u16;
     }
-    let q_room = width.saturating_sub(pw as usize + 1).max(1);
+    let q_room = (ia.width as usize).saturating_sub(pw as usize + 1).max(1);
     // A query longer than the line (updatePromptOffset): its offset kept between the one that
     // shows the cursor and half the room past it, so moving the cursor moves the cursor, not the
     // text; what is before the cursor, then as much after it as fits.
@@ -824,13 +975,13 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let mut after_w = 0;
     let after: Vec<char> = chars[cx..].iter().take_while(|c| { after_w += cw(c); after_w <= q_room - before_w }).cloned().collect();
     let shown: String = chars[before_from..cx].iter().chain(after.iter()).collect();
-    buf.set_stringn(area.x + pw, prompt_y, &shown, q_room, pal.input.style());
+    buf.set_stringn(ia.x + pw, prompt_y, &shown, q_room, pal.input.style());
     let mut typed_w = shown.width().min(q_room) as u16;
     // What an inline count keeps clear of: the query and a margin, or the ghost, as fzf shifts it.
     let mut shift = typed_w as i32 + 1;
     if let Some(ghost) = o.ghost.as_ref().filter(|g| picker.query.is_empty() && !g.is_empty()) {
         // --ghost: yours, cut at the edge as fzf cuts it.
-        buf.set_stringn(area.x + pw, prompt_y, ghost, q_room, pal.ghost.style());
+        buf.set_stringn(ia.x + pw, prompt_y, ghost, q_room, pal.ghost.style());
         typed_w = ghost.width().min(q_room) as u16;
         shift = typed_w as i32;
     } else if picker.query.is_empty() && !picker.placeholder.is_empty() {
@@ -838,12 +989,12 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         let room = if mode.starts_with("inline") { q_room.saturating_sub(16) } else { q_room };
         let mut text = String::new();
         for part in picker.placeholder.split("   ") { if text.width() + part.width() + 3 > room { break } if !text.is_empty() { text.push_str("   ") } text.push_str(part) }
-        buf.set_stringn(area.x + pw, prompt_y, &text, q_room, pal.ghost.style());
+        buf.set_stringn(ia.x + pw, prompt_y, &text, q_room, pal.ghost.style());
         typed_w = text.width() as u16;
         if !text.is_empty() { shift = typed_w as i32 }
     }
-    let cursor = Position::new(area.x + pw + before_w as u16, prompt_y);
-    picker.prompt_at.set((prompt_y, area.x + pw));
+    let cursor = Position::new(ia.x + pw + before_w as u16, prompt_y);
+    picker.prompt_at.set((prompt_y, ia.x + pw));
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
     let mut count = format!("{}/{}", picker.visible.len(), total);
     // A toggle-sort binding: whether it sorts (+S) or not (-S), as fzf's info says.
@@ -863,9 +1014,9 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     const ASCII_SPINNER: [&str; 8] = ["-", "\\", "|", "/", "-", "\\", "|", "/"];
     let frames: &[&str] = if theme::fzf().unicode { &SPINNER } else { &ASCII_SPINNER };
     let spinner = frames[(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 100) as usize % frames.len()];
-    let w = area.width as i32;
-    let put = |buf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { buf.set_stringn(area.x + x as u16, y, s, (w - x) as usize, st); } };
-    let bar = |buf: &mut Buffer, x: i32, y: u16, n: i32| { if o.separator && n > 0 { put(buf, x, y, &repeat_to_fill(&o.separator_char, n as usize), sep_style) } };
+    let w = ia.width as i32;
+    let put = |buf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { buf.set_stringn(ia.x + x as u16, y, s, (w - x) as usize, st); } };
+    let bar = |buf: &mut Buffer, x: i32, y: u16, n: i32| { if separator_on() && n > 0 { put(buf, x, y, &repeat_to_fill(&o.separator_char, n as usize), sep_style) } };
     // printInfoPrefix: the prefix at [pos] (what fits of it), in the prompt's pair.
     let prefix = |buf: &mut Buffer, pos: i32, y: u16| -> i32 {
         let room = w - pos;
@@ -928,13 +1079,13 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     }
     if let Some(flash) = picker.flash.as_ref().map(|f| f.0.clone()) {
         let text = format!(" {flash} ");
-        let fx = (area.x + area.width).saturating_sub(text.width() as u16 + 1);
+        let fx = (ia.x + ia.width).saturating_sub(text.width() as u16 + 1);
         buf.set_string(fx, info_y, &text, Style::default().fg(Color::Black).bg(Color::Yellow));
     }
-    if let Some(h) = &header { buf.set_line(area.x, header_y, h, area.width); }
+    if let Some(h) = &header { let (hx, hw) = in_header.map(|r| (r.x, r.width)).unwrap_or((area.x, area.width)); buf.set_line(hx, header_y, h, hw); }
     // The list: bottom-up (default), or top-down — under the prompt (reverse) or from the top
     // with the prompt below (reverse-list).
-    let (list_top, list_bottom) = if prompt_top { (if header.is_some() && !header_first { header_y + 1 } else { edge + 1 }, bottom) } else { (area.y, if header.is_some() && !header_first { header_y } else { edge }) };
+    let (list_top, list_bottom) = if in_input.is_some() { (area.y, bottom) } else if prompt_top { (if header.is_some() && !header_first { header_y + 1 } else { edge + 1 }, bottom) } else { (area.y, if header.is_some() && !header_first { header_y } else { edge }) };
     picker.page_rows.set(list_bottom.saturating_sub(list_top).max(1) as i64);
     // The box's rows: the prompt's side through the rows' (the list's rows are added as drawn).
     let edge_rows = [prompt_y, info_y, header_y];
@@ -1581,10 +1732,12 @@ fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
 }
 
 /// fzf's `--header`: the keys this list answers to, in the header colour.
-fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'static>> {
+fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'static>> { header_line_at(picker, width, gutter_width() as usize) }
+
+/// header_line indented [indent] columns (in a header box with a left side, none: its margin
+/// stands for the indent).
+fn header_line_at(picker: &Picker, width: usize, indent: usize) -> Option<Line<'static>> {
     if picker.hints.is_empty() && picker.heading.is_none() { return None }
-    // Indented to the rows' text (past the pointer and marker).
-    let indent = gutter_width() as usize;
     let mut spans = vec![Span::raw(" ".repeat(indent))];
     let mut used = indent;
     // What the list is for, first (a task about to be sent).

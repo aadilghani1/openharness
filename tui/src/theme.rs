@@ -439,6 +439,11 @@ pub fn fzf() -> &'static Fzf {
             let mut take = || value.clone().or_else(|| { i += 1; opts.get(i).cloned() });
             match flag.as_str() {
                 "--color" => { match take() { Some(v) if !v.is_empty() => { if let Some(b) = parse(&mut theme, &v) { base = Some(b) } } _ => theme = EMPTY } }
+                // applyPreset's gutter: the terminal's own colour under minimal, the theme's otherwise.
+                "--style" => { if let Some(v) = take() {
+                    use fzfcolor::{CA, Col};
+                    match v.split(':').next().unwrap_or("").to_lowercase().as_str() { "minimal" => theme.gutter = CA { col: Col::Default, attr: 0 }, "default" | "full" => theme.gutter = CA { col: Col::Undef, attr: 0 }, _ => {} }
+                } }
                 "+c" | "--no-color" => { theme = NO_COLOR; base = Some(NO_COLOR) }
                 "+2" | "--no-256" => theme = DEFAULT16,
                 "--bold" => bold = true, "--no-bold" => bold = false,
@@ -631,13 +636,19 @@ pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_fir
     /// Each --preview-window as written, in order (a list with a look of its own lays them over it).
     pub preview_window_specs: Vec<String>,
     /// --ghost: what an empty query shows (else the list's own placeholder); --track.
-    pub ghost: Option<String>, pub track: bool }
+    pub ghost: Option<String>, pub track: bool,
+    /// The sections' borders (--list-border, --input-border, --header-border, --footer-border; None:
+    /// not set), --footer's lines, and each section's label (--list-label …).
+    pub list_border: Option<String>, pub input_border: Option<String>, pub header_border: Option<String>, pub footer_border: Option<String>,
+    pub footer: Vec<String>, pub list_label: String, pub input_label: String, pub header_label: String, pub footer_label: String,
+    /// --separator given (fzf's opts.Separator not nil): an input border leaves the rule out otherwise.
+    pub separator_set: bool }
 
 pub fn fzf_opts() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = default_opts();
-        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None, keep_right: false, gap: 0, gap_line: None, preview_window: PreviewWindow::default(), preview_label: None, preview_label_pos: (0, false), literal: false, multi_limit: 0, preview_window_set: false, preview_window_specs: Vec::new(), ghost: None, track: false };
+        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None, keep_right: false, gap: 0, gap_line: None, preview_window: PreviewWindow::default(), preview_label: None, preview_label_pos: (0, false), literal: false, multi_limit: 0, preview_window_set: false, preview_window_specs: Vec::new(), ghost: None, track: false, list_border: None, input_border: None, header_border: None, footer_border: None, footer: Vec::new(), list_label: String::new(), input_label: String::new(), header_label: String::new(), footer_label: String::new(), separator_set: false };
         let (mut sep_set, mut bar_set, mut ell_set, mut sign_set) = (false, false, false, false);
         let mut i = 0;
         while i < opts.len() {
@@ -683,6 +694,55 @@ pub fn fzf_opts() -> &'static FzfOpts {
                     o.border = Some(next.unwrap_or_else(|| "rounded".into()))
                 }
                 "--no-border" => o.border = None,
+                // The sections' borders: a shape (rounded when none is given), or none.
+                "--list-border" | "--input-border" | "--header-border" | "--footer-border" => {
+                    let next = value.clone().or_else(|| opts.get(i + 1).filter(|w| !w.starts_with('-') && !w.starts_with('+')).cloned().inspect(|_| i += 1));
+                    let shape = Some(next.unwrap_or_else(|| "rounded".into()));
+                    match flag.as_str() { "--list-border" => o.list_border = shape, "--input-border" => o.input_border = shape, "--header-border" => o.header_border = shape, _ => o.footer_border = shape }
+                }
+                "--no-list-border" => o.list_border = None, "--no-input-border" => o.input_border = None,
+                "--no-header-border" => o.header_border = None, "--no-footer-border" => o.footer_border = None,
+                "--footer" => { if let Some(v) = take() { o.footer = v.split('\n').map(str::to_string).collect() } }
+                "--no-footer" => o.footer.clear(),
+                "--list-label" => { if let Some(v) = take() { o.list_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
+                "--input-label" => { if let Some(v) = take() { o.input_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
+                "--header-label" => { if let Some(v) = take() { o.header_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
+                "--footer-label" => { if let Some(v) = take() { o.footer_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
+                // applyPreset: default, minimal, full[:BORDER_STYLE].
+                "--style" => {
+                    if let Some(v) = take() {
+                        let (name, shape) = v.split_once(':').map(|(n, s)| (n.to_lowercase(), Some(s.to_string()))).unwrap_or((v.to_lowercase(), None));
+                        let reset_separator = |o: &mut FzfOpts, sep_set: &mut bool| { o.separator = true; o.separator_char = "─".into(); o.separator_set = false; *sep_set = false };
+                        match name.as_str() {
+                            "default" => {
+                                (o.list_border, o.input_border, o.header_border, o.footer_border) = (None, None, None, None);
+                                o.preview_window.border = "rounded".into(); o.info_mode = "default".into();
+                                reset_separator(&mut o, &mut sep_set);
+                                o.scrollbar = Some("│".into()); o.preview_scrollbar = Some("│".into()); bar_set = false;
+                                o.highlight_line = false;
+                            }
+                            "minimal" => {
+                                (o.list_border, o.input_border, o.header_border, o.footer_border) = (None, None, None, Some("line".into()));
+                                o.preview_window.border = "line".into(); o.info_mode = "default".into();
+                                o.separator = false; o.separator_char = String::new(); o.separator_set = true; sep_set = true;
+                                o.scrollbar = None; o.preview_scrollbar = None; bar_set = true;
+                                o.highlight_line = false;
+                            }
+                            "full" => {
+                                let shape = shape.filter(|s| !s.is_empty()).unwrap_or_else(|| "rounded".into());
+                                if shape != "line" { o.list_border = Some(shape.clone()) }
+                                (o.input_border, o.header_border, o.footer_border) = (Some(shape.clone()), Some(shape.clone()), Some(shape.clone()));
+                                o.preview_window.border = shape.clone();
+                                if shape == "line" { o.border = Some("line".into()) }
+                                o.info_mode = "inline-right".into();
+                                reset_separator(&mut o, &mut sep_set);
+                                o.scrollbar = Some("│".into()); o.preview_scrollbar = Some("│".into()); bar_set = false;
+                                o.highlight_line = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 // --height=[~][-]HEIGHT[%] (100% or 0: the whole screen), --min-height=N[+].
                 "--height" => { if let Some(v) = take() { o.height = parse_height(&v) } }
                 "--no-height" => o.height = None,
@@ -707,7 +767,7 @@ pub fn fzf_opts() -> &'static FzfOpts {
                         o.tiebreak = v.split(',').filter_map(|c| match c.trim().to_lowercase().as_str() { "length" => Some(Length), "chunk" => Some(Chunk), "pathname" => Some(Pathname), "begin" => Some(Begin), "end" => Some(End), _ => None }).collect();
                     }
                 }
-                "--separator" => { if let Some(v) = take() { o.separator_char = v; o.separator = !o.separator_char.is_empty(); sep_set = true } }
+                "--separator" => { if let Some(v) = take() { o.separator_char = v; o.separator = !o.separator_char.is_empty(); sep_set = true; o.separator_set = true } }
                 "--unicode" => o.unicode = true, "--no-unicode" => o.unicode = false,
                 "--keep-right" => o.keep_right = true, "--no-keep-right" => o.keep_right = false,
                 // --gap[=N] (1 alone), --gap-line[=STR] (┈ alone, - under --no-unicode).
