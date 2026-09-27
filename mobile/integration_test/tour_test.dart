@@ -4,7 +4,6 @@ import 'package:integration_test/integration_test.dart';
 
 import 'package:harness_mobile/main.dart' as app;
 import 'package:harness_mobile/phone/voice_mic_face.dart';
-import 'package:xterm/xterm.dart' show TerminalView;
 
 /// Every state of the phone app, in the real app on a simulator, over the offline sample — a
 /// screenshot each, for review. Signed out on a clean install, so nothing reaches a real account.
@@ -58,11 +57,10 @@ void main() {
     await wait(3000);
     await shot('focus');
 
-    // Typing: only a tap on the prompt's rows, at the terminal's foot, raises the keyboard.
-    await tester.tapAt(
-      tester.getBottomLeft(find.byType(TerminalView).first) +
-          const Offset(30, -12),
-    );
+    // Typing: only a tap on the prompt's rows, at the foot of the screen, raises the keyboard —
+    // left of the mic, which floats over them.
+    final screen = tester.view.physicalSize / tester.view.devicePixelRatio;
+    await tester.tapAt(Offset(30, screen.height - 60));
     await wait(1200);
     await shot('focus-keyboard');
     await tapIf(find.byKey(const ValueKey('terminal-key-Hide keyboard')));

@@ -948,9 +948,14 @@ class _TerminalPageState extends State<TerminalPage>
   /// sample's next step. See [_statusLine].
   double get _statusBottom => _micCenter + VoiceMicButton.extent / 2 + 4;
 
-  /// How far up from the terminal's foot its last line is held while followed: over the status
-  /// line, kept whether it says anything or not, so a message coming and going moves nothing.
-  double get _clearAboveMic => _statusBottom + 22;
+  /// How far up from the terminal's foot its last line is held while followed: just over the
+  /// home strip, and no further. The terminal fills the screen; the mic floats over it, the way
+  /// Siri's orb floats over the home screen (the owner: "we need to fill the screen 100%").
+  ///
+  /// ⚠️ **Except while the agent asks.** Its answers are the lines at its foot, and the keys
+  /// beside the mic would sit on them: the question lifts clear of the keys until it is answered.
+  double get _clearAboveMic =>
+      _questionWatcher?.view != null ? _statusBottom + 22 : _windowBottomInset;
 
   /// The line above the mic, highest first: what a take is doing, a two-second message (`✓ 1
   /// yes`, or an error in red), a question with no keys to offer, the sample's next step. Null
@@ -1845,10 +1850,10 @@ class _TerminalPageState extends State<TerminalPage>
                                 children: [
                                   Positioned.fill(
                                     top: 0,
-                                    // The agent's last line sits just above the mic while
-                                    // the output is followed — see [_AnchoredTerminal]. A
-                                    // move, not a resize: a resize would redraw the
-                                    // agent's whole TUI, and reading back uses every row.
+                                    // The agent's last line sits at the foot while the
+                                    // output is followed — see [_AnchoredTerminal]. A move,
+                                    // not a resize: a resize would redraw the agent's whole
+                                    // TUI, and reading back uses every row.
                                     child: ClipRect(
                                       child: _AnchoredTerminal(
                                         terminal: session?.terminal,
@@ -3438,16 +3443,15 @@ class _KeycapState extends State<_Keycap> {
   }
 }
 
-/// Holds the agent's last line just above the mic while the output is followed at its end, by
-/// moving the terminal rather than resizing it.
+/// Holds the agent's last line at the foot of the screen while the output is followed at its end,
+/// by moving the terminal rather than resizing it.
 ///
-/// A terminal fills from the top, so short output left the rows under the mic empty while its
-/// first lines sat under the title; long output ran its prompt under the mic. Moved, the last line
-/// is always where the thumb and the eye already are — output shorter than the screen sits down
-/// by the mic with the empty rows above it, under the title, and longer output lifts clear. The
-/// pty keeps the whole screen, so reading back through the history uses every row: while it is
-/// read ([enabled] off) the terminal eases back to where it is drawn. Nothing moves on the
-/// alternate screen, where a full-screen program owns its own layout.
+/// A terminal fills from the top, so output shorter than the screen left a band of empty rows at
+/// the bottom while its first lines sat under the title. Moved, it fills the screen from the
+/// bottom up, the empty rows above it, under the title — the screen is always full. The pty
+/// keeps the whole screen, so reading back through the history uses every row: while it is read
+/// ([enabled] off) the terminal eases back to where it is drawn. Nothing moves on the alternate
+/// screen, where a full-screen program owns its own layout.
 class _AnchoredTerminal extends StatefulWidget {
   const _AnchoredTerminal({
     required this.terminal,
