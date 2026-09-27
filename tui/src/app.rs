@@ -128,6 +128,21 @@ pub fn live_owner(row: &Value) -> Option<String> {
     row.get("owner").and_then(Value::as_str).filter(|o| crate::ipc::answers(std::path::Path::new(o))).map(str::to_string)
 }
 
+/// A session's environment as its row keeps it (a variable taken away: its value null).
+pub fn env_json(env: &std::collections::BTreeMap<String, EnvVar>) -> Value {
+    json!(env.iter().map(|(k, v)| (k.clone(), json!({ "value": v.value, "hidden": v.hidden }))).collect::<serde_json::Map<String, Value>>())
+}
+
+pub fn env_from(row: &Value) -> std::collections::BTreeMap<String, EnvVar> {
+    row.get("env").and_then(Value::as_object).map(|m| m.iter().map(|(k, v)| (k.clone(), EnvVar {
+        value: v.get("value").and_then(Value::as_str).map(str::to_string), hidden: v.get("hidden").and_then(Value::as_bool).unwrap_or(false),
+    })).collect()).unwrap_or_default()
+}
+
+pub fn options_from(row: &Value) -> std::collections::BTreeMap<String, String> {
+    row.get("options").and_then(Value::as_object).map(|m| m.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect()).unwrap_or_default()
+}
+
 /// Where a server name's (-L) sessions are kept between clients.
 pub fn sessions_path(name: Option<&str>) -> std::path::PathBuf {
     let name = name.map(str::to_string).or_else(|| std::env::var("HN_SOCKET_NAME").ok()).filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
@@ -1660,6 +1675,8 @@ impl App {
         // The session the client leaves was in use until now (session_update_activity).
         let used = std::mem::replace(&mut self.session_activity, epoch_secs());
         if !self.swap_session(id) { self.session_activity = used; return }
+        // attach-session and switch-client: update-environment's variables from this client.
+        self.update_environment();
         // …and the one it goes to is in use from now (server_client_set_session).
         self.session_activity = epoch_secs();
         self.last_session = Some(from);
@@ -1952,7 +1969,7 @@ impl App {
         let base = self.base_index;
         let linked = (tab.wid(), tab.name.clone());
         self.sessions.push(Stash { id, mirror: None, alias: Some(name.clone()), desk: false, tabs: vec![tab], active: 0, lastw: Vec::new(), nums: HashMap::from([(tab_id.clone(), base)]),
-            created: epoch_secs(), activity: epoch_secs(), options: Default::default(), env: Default::default() });
+            created: epoch_secs(), activity: epoch_secs(), options: Default::default(), env: self.environ_update() });
         // cmd-new-session.c: its window linked (spawn_window), then the session created.
         crate::commands::notify_session(self, "window-linked", id, &name, Some(linked));
         crate::commands::notify_session(self, "session-created", id, &name, None);
@@ -1971,7 +1988,7 @@ impl App {
         let tab = Tab::home();
         let base = self.base_index;
         self.sessions.push(Stash { id, mirror: None, alias: Some(name.to_string()), desk: false, nums: HashMap::from([(tab.id.clone(), base)]), tabs: vec![tab], active: 0, lastw: Vec::new(),
-            created: epoch_secs(), activity: epoch_secs(), options: Default::default(), env: Default::default() });
+            created: epoch_secs(), activity: epoch_secs(), options: Default::default(), env: self.environ_update() });
         crate::commands::notify_session(self, "session-created", id, name, None);
         id
     }
@@ -2025,7 +2042,7 @@ impl App {
         let me = crate::ipc::here().map(|p| p.display().to_string());
         let path = Self::sessions_path();
         let doc = read_sessions(&path);
-        let here = Stash { id: self.session_id, mirror: self.mirror.clone(), alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), options: Default::default(), env: Default::default() };
+        let here = Stash { id: self.session_id, mirror: self.mirror.clone(), alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), options: self.options.session.clone(), env: self.session_env.clone() };
         let mut ours = Vec::new();
         let mut names = HashSet::new();
         let mut desk = None;
@@ -2046,7 +2063,10 @@ impl App {
             let last: Vec<usize> = lastw.iter().filter_map(at).collect();
             ours.push(json!({ "name": name, "id": (s.id != UNNUMBERED).then_some(s.id), "desk": false, "created": s.created, "activity": s.activity, "active": active, "last": last, "windows": windows,
                 "owner": if left { Value::Null } else { json!(me) }, "front": front && !left && !self.headless, "headless": self.headless && !left,
-                "mirrors": if left { 0 } else { self.mirrors.values().filter(|m| **m == s.id).count() } }));
+                "mirrors": if left { 0 } else { self.mirrors.values().filter(|m| **m == s.id).count() },
+                // Its own options and environment (set -t, setenv -t, update-environment's), kept
+                // wherever it goes.
+                "options": s.options, "env": env_json(&s.env) }));
         }
         let mut rows = Vec::new();
         if !self.forget_sessions {
@@ -2106,7 +2126,7 @@ impl App {
         let created = row.get("created").and_then(Value::as_i64).unwrap_or_else(epoch_secs);
         let lastw: Vec<String> = row.get("last").and_then(Value::as_array).map(|l| l.iter().filter_map(|i| tabs.get(i.as_u64()? as usize).map(|t| t.id.clone())).collect()).unwrap_or_default();
         Some(Stash { id, mirror: None, alias: Some(name), desk: false, active: active.min(tabs.len() - 1), tabs, lastw, nums,
-            created, activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), options: Default::default(), env: Default::default() })
+            created, activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), options: options_from(row), env: env_from(row) })
     }
 
     /// The sessions no running client has (save_sessions: left by clients that detached), back
@@ -2385,12 +2405,18 @@ impl App {
 
     /// environ_update: each update-environment pattern's variables from hn's own environment
     /// into the session's, or the pattern cleared there when none match.
-    pub fn update_environment(&mut self) {
+    pub fn update_environment(&mut self) { let u = self.environ_update(); self.session_env.extend(u) }
+
+    /// environ_update: each variable update-environment names, from this client's environment —
+    /// its value, or marked to be taken away (`-NAME`) when this client has none.
+    pub fn environ_update(&self) -> std::collections::BTreeMap<String, EnvVar> {
+        let mut out = std::collections::BTreeMap::new();
         for pattern in self.options.array("update-environment") {
             let found: Vec<(String, String)> = std::env::vars().filter(|(k, _)| crate::cmd::fnmatch(&pattern, k)).collect();
-            if found.is_empty() { self.session_env.insert(pattern, EnvVar { value: None, hidden: false }); }
-            for (k, v) in found { self.session_env.insert(k, EnvVar { value: Some(v), hidden: false }); }
+            if found.is_empty() { out.insert(pattern, EnvVar { value: None, hidden: false }); }
+            for (k, v) in found { out.insert(k, EnvVar { value: Some(v), hidden: false }); }
         }
+        out
     }
 
     /// buffer-limit: how many automatic paste buffers are kept.

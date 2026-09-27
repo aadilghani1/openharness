@@ -39,7 +39,7 @@ pub fn show(app: &mut App, id: u32, readonly: bool) -> bool {
     let Some(row) = row_named(&r.name) else { return false };
     let (w, h) = (app.body().width, app.body().height);
     let mut stash = Stash { id, alias: Some(r.name.clone()), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
-        created: r.created, activity: r.activity, options: Default::default(), env: Default::default(), mirror: Some(Mirror { owner: owner.clone(), readonly }) };
+        created: r.created, activity: r.activity, options: crate::app::options_from(&row), env: crate::app::env_from(&row), mirror: Some(Mirror { owner: owner.clone(), readonly }) };
     if !fill(app, &mut stash, &row, Vec::new(), (w, h)) { return false }
     app.sessions.push(stash);
     register(&owner, id, true);
@@ -137,6 +137,8 @@ fn rebuild(app: &mut App, row: &Value) {
     app.nums = stash.nums;
     app.active = stash.active;
     app.lastw = stash.lastw;
+    app.options.session = crate::app::options_from(row);
+    app.session_env = crate::app::env_from(row);
     // What the owner did is the owner's to hook: nothing fires here for it.
     app.hooks_seen_now();
     if current != app.tabs.get(app.active).map(|t| t.id.clone()) { if let Some(f) = app.tabs[app.active].focus { app.seen(f) } }

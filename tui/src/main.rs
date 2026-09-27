@@ -137,7 +137,6 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     app.headless = true;
     app.terminal_focused = false;
     let Some(socket) = ipc::serve(tx.clone(), port) else { return Ok(()) };
-    app.update_environment();
     let read = commands::load_config(&mut app);
     app.cfg_finished = true;
     app.config_files = read;
@@ -146,6 +145,7 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     server::join(&mut app);
     app.boot();
     app.load_sessions();
+    app.update_environment();
     app.notify_changes();
     let mut busy = Instant::now();
     loop {
@@ -300,7 +300,6 @@ async fn run(config: config::Config) -> io::Result<()> {
     app.mouse = true;
     app.mouse_changed = true;
     // ~/.tmux.conf, read and run as tmux reads and runs it.
-    app.update_environment();
     let read = commands::load_config(&mut app);
     app.cfg_finished = true;
     app.config_files = read.clone();
@@ -330,6 +329,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     // The sessions a client left (C-b d), and the one asked for.
     app.start_session = start;
     app.load_sessions();
+    // update-environment (as tmux.conf set it): this client's variables into its session's.
+    app.update_environment();
     // The client is attached: the hooks' first look, then client-attached.
     app.notify_changes();
     commands::notify(&mut app, "client-attached", None, None);

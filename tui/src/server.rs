@@ -134,13 +134,12 @@ fn merge(doc: &mut Value, before: Option<&Synced>, after: &Synced, paste: &Paste
         let was = doc["buffers"][key].as_u64().unwrap_or(0);
         doc["buffers"][key] = json!(was.max(n));
     }
-    // The global environment: only what was changed here (each client starts from its own).
-    if !doc["env"].is_object() { doc["env"] = json!({}) }
+    // The global environment: the server's — its first client's, whole — and what changed since.
+    if !doc["env"].is_object() || before.is_none() { doc["env"] = json!({}) }
+    if before.is_none() { doc["env-whole"] = json!(true) }
     let env = doc["env"].as_object_mut().unwrap();
-    if let Some(b) = before {
-        for (k, v) in &after.env { if b.env.get(k) != Some(v) { env.insert(k.clone(), json!({ "value": v.value, "hidden": v.hidden })); } }
-        for k in b.env.keys() { if !after.env.contains_key(k) { env.insert(k.clone(), Value::Null); } }
-    }
+    for (k, v) in &after.env { if before.map(|b| b.env.get(k) != Some(v)).unwrap_or(true) { env.insert(k.clone(), json!({ "value": v.value, "hidden": v.hidden })); } }
+    if let Some(b) = before { for k in b.env.keys() { if !after.env.contains_key(k) { env.insert(k.clone(), Value::Null); } } }
 }
 
 /// The file's buffers, as a Paste.
@@ -204,6 +203,8 @@ pub fn take(app: &mut App) {
     if doc["keys"].is_object() { app.keymap = keys_from(&doc["keys"], app.keymap.clone()) }
     app.paste = paste_from(&doc);
     if let Some(env) = doc["env"].as_object() {
+        // The server's environment, as tmux's is its first client's (else only what changed).
+        if doc["env-whole"].as_bool().unwrap_or(false) { app.global_env.clear() }
         for (k, v) in env {
             match v.as_object() {
                 Some(o) => { app.global_env.insert(k.clone(), EnvVar { value: o.get("value").and_then(Value::as_str).map(str::to_string), hidden: o.get("hidden").and_then(Value::as_bool).unwrap_or(false) }); }
