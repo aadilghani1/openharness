@@ -41,6 +41,7 @@ fn box_set(lines: &str) -> (&'static str, &'static str, &'static str, &'static s
 pub fn draw(frame: &mut Frame, app: &mut App) {
     app.renumber();
     let (usstyle, links) = crate::term_out::outer_features(&app.options.array("terminal-features"));
+    crate::term_out::set_colours(crate::term_out::colours_for(&std::env::var("TERM").unwrap_or_default(), &std::env::var("COLORTERM").unwrap_or_default(), &app.options.array("terminal-features"), &app.options.array("terminal-overrides")));
     crate::term_out::begin_frame(usstyle, links);
     let area = frame.area();
     if area.width == 0 || area.height == 0 { return }

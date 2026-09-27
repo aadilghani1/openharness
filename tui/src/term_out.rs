@@ -47,23 +47,28 @@ impl Pen {
 
     /// A cell's attributes (as tmux's tty_attributes writes them) and its symbol.
     fn put(&mut self, w: &mut impl Write, cell: &Cell, extra: Option<&Extra>, usstyle: bool, links: bool) -> io::Result<()> {
-        if cell.modifier != self.modifier {
+        // The colours fitted to the terminal (tty_check_fg / _bg): a bright foreground where
+        // there are only 8 colours is its plain colour, bold.
+        let (fg, bold) = fit_bright(cell.fg);
+        let (bg, ul) = (fit(cell.bg), fit(cell.underline_color));
+        let modifier = if bold { cell.modifier | Modifier::BOLD } else { cell.modifier };
+        if modifier != self.modifier {
             // tmux's tty_attributes: an attribute taken away resets everything, then what is
             // wanted is set again.
-            if !(self.modifier - cell.modifier).is_empty() {
+            if !(self.modifier - modifier).is_empty() {
                 w.write_all(b"\x1b[0m")?;
                 (self.fg, self.bg, self.ul, self.modifier, self.style) = (Color::Reset, Color::Reset, Color::Reset, Modifier::empty(), 0);
             }
-            for (flag, code) in ATTRS { if cell.modifier.contains(flag) && !self.modifier.contains(flag) { write!(w, "\x1b[{code}m")?; if code == 4 { self.style = 1 } } }
-            self.modifier = cell.modifier;
+            for (flag, code) in ATTRS { if modifier.contains(flag) && !self.modifier.contains(flag) { write!(w, "\x1b[{code}m")?; if code == 4 { self.style = 1 } } }
+            self.modifier = modifier;
         }
         // tty_attributes' Smulx: a curly (double, dotted, dashed) underline where the
         // terminal reads one, else a plain one.
         let want = if !cell.modifier.contains(Modifier::UNDERLINED) { 0 } else if usstyle { extra.map(|e| e.underline).filter(|u| *u >= 2).unwrap_or(1) } else { 1 };
         if want != self.style && want > 0 { if want == 1 { w.write_all(b"\x1b[4:1m")? } else { write!(w, "\x1b[4:{want}m")? } self.style = want }
-        if cell.fg != self.fg { write!(w, "\x1b[{}m", sgr(cell.fg, 30))?; self.fg = cell.fg; }
-        if cell.bg != self.bg { write!(w, "\x1b[{}m", sgr(cell.bg, 40))?; self.bg = cell.bg; }
-        if usstyle && cell.underline_color != self.ul { write!(w, "\x1b[{}m", sgr_underline(cell.underline_color))?; self.ul = cell.underline_color; }
+        if fg != self.fg { write!(w, "\x1b[{}m", sgr(fg, 30))?; self.fg = fg; }
+        if bg != self.bg { write!(w, "\x1b[{}m", sgr(bg, 40))?; self.bg = bg; }
+        if usstyle && ul != self.ul { write!(w, "\x1b[{}m", sgr_underline(ul))?; self.ul = ul; }
         // A link (OSC 8) opened where it starts and closed where it ends.
         let want_link = if links { extra.and_then(|e| e.link.clone()) } else { None };
         if want_link != self.link {
@@ -155,6 +160,89 @@ impl<W: Write> Write for Counted<W> {
 impl<W: Write> Write for TmuxBackend<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> { self.inner.write(buf) }
     fn flush(&mut self) -> io::Result<()> { Write::flush(&mut self.inner) }
+}
+
+/// How many colours the terminal shows, as tmux reads it (terminfo's colors; 24-bit with RGB):
+/// 0, 8, 16, 256, or 1 << 24.
+static COLOURS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1 << 24);
+
+pub fn set_colours(n: u32) { COLOURS.store(n, std::sync::atomic::Ordering::Relaxed) }
+
+/// The terminal's colours from its name and what it says of itself, and what the config says of
+/// it: 24-bit with COLORTERM truecolor or 24bit, a `-direct` terminal, or terminal-features' RGB
+/// (terminal-overrides' Tc or RGB) for its name; else 256 for a 256-colour one, 16 for a
+/// 16-colour one, 8 for xterm, screen, linux and their kin, none for vt100 and dumb.
+pub fn colours_for(term: &str, colorterm: &str, features: &[String], overrides: &[String]) -> u32 {
+    let says = |list: &[String], caps: &[&str]| list.iter().any(|f| {
+        let mut parts = f.split(':');
+        let pat = parts.next().unwrap_or("");
+        crate::cmd::fnmatch(pat, term) && parts.any(|c| caps.contains(&c.split('=').next().unwrap_or(c)))
+    });
+    if matches!(colorterm, "truecolor" | "24bit") || term.ends_with("-direct") || says(features, &["RGB"]) || says(overrides, &["Tc", "RGB"]) { return 1 << 24 }
+    if term.contains("256color") || matches!(term, "xterm-kitty" | "xterm-ghostty" | "alacritty" | "wezterm" | "foot" | "tmux-256color") { return 256 }
+    if term.contains("16color") { return 16 }
+    if term.is_empty() { return 256 }
+    if matches!(term, "vt100" | "vt102" | "vt220" | "dumb") { return 0 }
+    8
+}
+
+/// tmux's colour_find_rgb: the nearest of the 256 (the 6x6x6 cube, or the grey ramp).
+fn find_rgb(r: u8, g: u8, b: u8) -> u8 {
+    const Q2C: [i32; 6] = [0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff];
+    let cube = |v: i32| if v < 48 { 0 } else if v < 114 { 1 } else { (v - 35) / 40 };
+    let (r, g, b) = (r as i32, g as i32, b as i32);
+    let (qr, qg, qb) = (cube(r), cube(g), cube(b));
+    let (cr, cg, cb) = (Q2C[qr as usize], Q2C[qg as usize], Q2C[qb as usize]);
+    if cr == r && cg == g && cb == b { return (16 + 36 * qr + 6 * qg + qb) as u8 }
+    let avg = (r + g + b) / 3;
+    let grey_idx = if avg > 238 { 23 } else { (avg - 3) / 10 };
+    let grey = 8 + 10 * grey_idx;
+    let dist = |x: i32, y: i32, z: i32| (x - r) * (x - r) + (y - g) * (y - g) + (z - b) * (z - b);
+    if dist(grey, grey, grey) < dist(cr, cg, cb) { (232 + grey_idx) as u8 } else { (16 + 36 * qr + 6 * qg + qb) as u8 }
+}
+
+/// tmux's colour_256to16.
+const TO16: [u8; 256] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    0, 4, 4, 4, 12, 12, 2, 6, 4, 4, 12, 12, 2, 2, 6, 4,
+    12, 12, 2, 2, 2, 6, 12, 12, 10, 10, 10, 10, 14, 12, 10, 10,
+    10, 10, 10, 14, 1, 5, 4, 4, 12, 12, 3, 8, 4, 4, 12, 12,
+    2, 2, 6, 4, 12, 12, 2, 2, 2, 6, 12, 12, 10, 10, 10, 10,
+    14, 12, 10, 10, 10, 10, 10, 14, 1, 1, 5, 4, 12, 12, 1, 1,
+    5, 4, 12, 12, 3, 3, 8, 4, 12, 12, 2, 2, 2, 6, 12, 12,
+    10, 10, 10, 10, 14, 12, 10, 10, 10, 10, 10, 14, 1, 1, 1, 5,
+    12, 12, 1, 1, 1, 5, 12, 12, 1, 1, 1, 5, 12, 12, 3, 3,
+    3, 7, 12, 12, 10, 10, 10, 10, 14, 12, 10, 10, 10, 10, 10, 14,
+    9, 9, 9, 9, 13, 12, 9, 9, 9, 9, 13, 12, 9, 9, 9, 9,
+    13, 12, 9, 9, 9, 9, 13, 12, 11, 11, 11, 11, 7, 12, 10, 10,
+    10, 10, 10, 14, 9, 9, 9, 9, 9, 13, 9, 9, 9, 9, 9, 13,
+    9, 9, 9, 9, 9, 13, 9, 9, 9, 9, 9, 13, 9, 9, 9, 9,
+    9, 13, 11, 11, 11, 11, 11, 15, 0, 0, 0, 0, 0, 0, 8, 8,
+    8, 8, 8, 8, 7, 7, 7, 7, 7, 7, 15, 15, 15, 15, 15, 15,
+];
+
+/// A colour fitted to the terminal, as tty_check_fg / _bg fit it: 24-bit to the nearest of the
+/// 256 where there is no 24-bit; 256 to 16 where there are fewer, the bright ones the aixterm
+/// ones — or their plain colours where there are only 8; none at all where there is none.
+pub fn fit(c: Color) -> Color { fit_bright(c).0 }
+
+/// [fit], and whether a bright colour became a plain one (a foreground is then bold).
+fn fit_bright(c: Color) -> (Color, bool) {
+    let colours = COLOURS.load(std::sync::atomic::Ordering::Relaxed);
+    if colours == 0 { return (Color::Reset, false) }
+    let c = match c { Color::Rgb(r, g, b) if colours < (1 << 24) => Color::Indexed(find_rgb(r, g, b)), c => c };
+    if colours >= 256 { return (c, false) }
+    let plain = [Color::Black, Color::Red, Color::Green, Color::Yellow, Color::Blue, Color::Magenta, Color::Cyan, Color::Gray];
+    let bright = [Color::DarkGray, Color::LightRed, Color::LightGreen, Color::LightYellow, Color::LightBlue, Color::LightMagenta, Color::LightCyan, Color::White];
+    match c {
+        // One of the 256: its nearest of the 16, a bright one plain where there are 8.
+        Color::Indexed(n) => {
+            let n = TO16[n as usize] as usize;
+            (if n < 8 { plain[n] } else if colours >= 16 { bright[n - 8] } else { plain[n - 8] }, false)
+        }
+        // An aixterm colour (90–97) where there are 8: its plain colour, bright (bold).
+        c => match bright.iter().position(|b| *b == c) { Some(n) if colours < 16 => (plain[n], true), _ => (c, false) },
+    }
 }
 
 /// A colour's SGR parameters as tmux's tty_colours_fg / _bg write them ([base] 30, 40 or 58).
@@ -276,6 +364,14 @@ mod tests {
 
     #[test]
     fn colours_as_tmux_writes_them() {
+        assert_eq!(super::find_rgb(255, 128, 0), 208);
+        assert_eq!(super::find_rgb(0, 64, 128), 24);
+        assert_eq!(super::TO16[208], 9);
+        assert_eq!(super::colours_for("xterm-256color", "", &[], &[]), 256);
+        assert_eq!(super::colours_for("xterm-256color", "truecolor", &[], &[]), 1 << 24);
+        assert_eq!(super::colours_for("xterm-256color", "", &["xterm*:RGB".to_string()], &[]), 1 << 24);
+        assert_eq!(super::colours_for("xterm", "", &[], &[]), 8);
+        assert_eq!(super::colours_for("vt100", "", &[], &[]), 0);
         assert_eq!(sgr(Color::Red, 30), "31");
         assert_eq!(sgr(Color::Green, 40), "42");
         assert_eq!(sgr(Color::LightBlue, 30), "94");
