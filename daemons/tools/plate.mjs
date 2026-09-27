@@ -100,12 +100,16 @@ export function blend(k, ...ds) {
 export const mirror = (cx, d) => (x, y) => d(cx - Math.abs(x - cx), y)
 
 // ---- parts ---------------------------------------------------------------------------------
-// A part is { d, tone = 1, relief, flat, tex, ink = true }, drawn back to front.
+// A part is { d, tone = 1, relief, flat, tex, ink = true, mat }, drawn back to front.
 //   d       the shape
 //   tone    its brightness, 0 to 1
 //   relief  how far in the shape rises to full height (round bodies); omit for a flat part
 //   tex     (x, y) => multiplier on its brightness, for fur, feathers, grain
 //   ink     false to skip the dark line where it overlaps the parts behind it
+//   mat     what the part is made of, when a client paints it in a colour of its own (see plate's
+//           `mats`): 'glow' light through an egg's cracks, 'star' a night egg's stars, 'peek' the
+//           eyes peeking out of a ready egg, 'marks' an individual's markings, 'acc' its rare extra,
+//           'eye' its odd eye. Omit it for the body, which takes the row's colour.
 export const part = (d, o = {}) => ({ d, tone: 1, ...o })
 
 // ---- rendering -----------------------------------------------------------------------------
@@ -114,9 +118,11 @@ const LIGHT = (() => { const v = [-0.5, -0.62, 0.62], n = Math.hypot(...v); retu
 const HALF = (() => { const v = [LIGHT[0], LIGHT[1], LIGHT[2] + 1], n = Math.hypot(...v); return v.map((c) => c / n) })()
 
 // Brightness at a point, 0 to 1, or -1 where no part is. On paper every edge gets an ink line, not
-// only the edges in front of other parts, because the paper itself is light.
-function shader(parts, inkW, paper) {
+// only the edges in front of other parts, because the paper itself is light. `hit.mat` is left
+// holding the material of the part in front there (null for none).
+function shader(parts, inkW, paper, hit) {
   return (x, y) => {
+    hit.mat = null
     for (let i = parts.length - 1; i >= 0; i--) {
       const p = parts[i], d = p.d(x, y)
       if (d >= 0) continue
@@ -134,6 +140,7 @@ function shader(parts, inkW, paper) {
         b = p.tone * (0.46 + 0.58 * lambert) + 0.3 * spec * p.tone
       }
       if (p.tex) b *= p.tex(x, y)
+      hit.mat = p.mat ?? null
       if (p.ink !== false && s < inkW) {
         let behind = false
         for (let j = i - 1; j >= 0; j--) if (parts[j].d(x, y) < 0) { behind = true; break }
@@ -147,15 +154,23 @@ function shader(parts, inkW, paper) {
 
 // Shade a model ({ w, h, parts }) into `cols` columns. Returns the rows as strings, each exactly
 // `cols` wide. `paper` prints dark ink on light paper: highlights stay bare, shadows and edges ink.
-export function plate(model, cols, { paper = false, samples = 2 } = {}) {
+//
+// `mats`, an array, is filled with a second set of rows, one letter per cell: the first letter of
+// the material a cell is made of (`g` glow, `s` star, `p` peek, `m` marks, `a` accessory, `e` odd
+// eye), or `.` for none. A cell takes a material when at least half of its lit samples are that
+// material; a blank cell never has one. The characters are the same with or without it.
+export function plate(model, cols, { paper = false, samples = 2, mats = null } = {}) {
   const rows = Math.max(1, Math.round((cols * model.h) / (2 * model.w)))
   const cw = model.w / cols, ch = model.h / rows
-  const shade = shader(model.parts, cw * 0.55, paper)
-  const out = []
+  const hit = { mat: null }
+  const shade = shader(model.parts, cw * 0.55, paper, hit)
+  const out = [], matRows = []
   for (let r = 0; r < rows; r++) {
-    let line = ''
+    let line = '', matLine = ''
     for (let c = 0; c < cols; c++) {
       const v = []
+      const made = {}
+      let lit = 0
       for (let sy = 0; sy < 3; sy++) {
         for (let sx = 0; sx < 2; sx++) {
           let sum = 0
@@ -164,16 +179,24 @@ export function plate(model, cols, { paper = false, samples = 2 } = {}) {
               const x = (c + (sx + (i + 0.5) / samples) / 2) * cw
               const y = (r + (sy + (j + 0.5) / samples) / 3) * ch
               const b = shade(x, y)
+              if (mats && b >= 0) { lit++; if (hit.mat) made[hit.mat] = (made[hit.mat] ?? 0) + 1 }
               sum += b < 0 ? 0 : paper ? Math.min(1, 1.08 - b) : b
             }
           }
           v.push(sum / (samples * samples))
         }
       }
-      line += pick(v)
+      const glyph = pick(v)
+      line += glyph
+      if (mats) {
+        const mat = glyph === ' ' ? null : Object.keys(made).find((m) => made[m] * 2 >= lit)
+        matLine += mat ? mat[0] : '.'
+      }
     }
     out.push(line)
+    matRows.push(matLine)
   }
+  if (mats) mats.push(...matRows)
   return unligature(out)
 }
 
@@ -199,8 +222,8 @@ function unligature(lines) {
   })
 }
 
-// Crop blank rows and columns shared by every frame, so animation frames stay aligned.
-export function crop(frames) {
+// The blank rows and columns every frame shares: { left, right, top, bottom }.
+export function cropBox(frames) {
   const all = frames.flat()
   const width = Math.max(...all.map((l) => l.length))
   let left = width, right = 0
@@ -208,12 +231,18 @@ export function crop(frames) {
     const a = l.search(/\S/)
     if (a >= 0) { left = Math.min(left, a); right = Math.max(right, l.trimEnd().length) }
   }
-  const rowsOf = (f) => f.map((l) => l.slice(left, right).padEnd(right - left))
   const isBlank = (i) => frames.every((f) => !f[i].trim())
   let top = 0, bottom = frames[0].length
   while (top < bottom && isBlank(top)) top++
   while (bottom > top && isBlank(bottom - 1)) bottom--
-  return frames.map((f) => rowsOf(f).slice(top, bottom))
+  return { left, right, top, bottom }
+}
+
+// Crop blank rows and columns shared by every frame, so animation frames stay aligned. A frame's
+// material rows are cropped with the box of its characters: crop(mats, cropBox(frames)).
+export function crop(frames, box = cropBox(frames)) {
+  const { left, right, top, bottom } = box
+  return frames.map((f) => f.map((l) => l.slice(left, right).padEnd(right - left)).slice(top, bottom))
 }
 
 // ---- eyes ----------------------------------------------------------------------------------
