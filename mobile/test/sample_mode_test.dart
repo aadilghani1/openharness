@@ -9,7 +9,6 @@ import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/voice_mic_face.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/state/app_state.dart';
-import 'package:xterm/xterm.dart' show TerminalView;
 
 const _studio = 'sample-studio';
 
@@ -207,7 +206,10 @@ void main() {
     final notifier = await openSample(tester);
 
     // New is a swipe left from the terminal.
-    await tester.drag(find.byType(TerminalView), const Offset(-240, 0));
+    await tester.dragFrom(
+      tester.getCenter(find.byType(TerminalPage).first) + const Offset(120, 0),
+      const Offset(-240, 0),
+    );
     await settle(tester, const Duration(seconds: 1));
     await tester.tap(find.text('project'));
     await settle(tester, const Duration(milliseconds: 500));

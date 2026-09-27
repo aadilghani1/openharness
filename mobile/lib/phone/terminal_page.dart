@@ -1,15 +1,17 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 // `defaultTargetPlatform` — the navigation bar this page keeps clear of is
 // Android's alone; see [_TerminalPageState._navigationBar].
-import 'package:flutter/foundation.dart' show defaultTargetPlatform;
+import 'package:flutter/foundation.dart' show ValueListenable, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 // `PlatformException` — a refused camera permission arrives as one, and it is
 // the one picker failure with something the person can do about it.
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:xterm/xterm.dart' show TerminalKey;
+import 'package:flutter/scheduler.dart';
+import 'package:xterm/xterm.dart' show Terminal, TerminalKey, TerminalStyle;
 
 import 'package:harness_mobile/core/models.dart' show Agent, AgentProject;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -933,6 +935,16 @@ class _TerminalPageState extends State<TerminalPage>
     return (keys.first, keys.length > 1 ? keys.last : null);
   }
 
+  /// How far up from the terminal's foot its last line is held while followed: clear of the
+  /// mic, with a little air — and clear of the sample's guide line, when that shows.
+  double get _clearAboveMic {
+    final micTop =
+        _windowBottomInset +
+        4 * Tty.of(context).row +
+        VoiceMicButton.extent / 2;
+    return micTop + (_sampleGuide() == null ? 10 : 46);
+  }
+
   /// [_answerKeys] while they can be pressed here: not over the keyboard, nor while recording.
   (QuestionKey, QuestionKey?)? get _answersBesideMic {
     final view = _questionWatcher?.view;
@@ -1773,6 +1785,9 @@ class _TerminalPageState extends State<TerminalPage>
                             // is free; the key bar below scrolls its hints
                             // sideways and keeps that for itself.
                             child: GestureDetector(
+                              // Translucent: the terminal may sit lower than its box (see
+                              // [_AnchoredTerminal]), and a swipe on the rows above it counts.
+                              behavior: HitTestBehavior.translucent,
                               onHorizontalDragStart: widget.sideSwipes
                                   ? _onSwipeStart
                                   : null,
@@ -1789,19 +1804,16 @@ class _TerminalPageState extends State<TerminalPage>
                                 children: [
                                   Positioned.fill(
                                     top: 0,
-                                    // Prompt mode: the terminal lifts four rows so
-                                    // the dialog at its foot sits above the mic,
-                                    // not under it. A translate, not a resize — a
-                                    // resize would redraw the agent's whole TUI.
+                                    // The agent's last line sits just above the mic while
+                                    // the output is followed — see [_AnchoredTerminal]. A
+                                    // move, not a resize: a resize would redraw the
+                                    // agent's whole TUI, and reading back uses every row.
                                     child: ClipRect(
-                                      child: Transform.translate(
-                                        offset: Offset(
-                                          0,
-                                          !_keyBarUp &&
-                                                  _questionWatcher?.view != null
-                                              ? -6 * Tty.of(context).row
-                                              : 0,
-                                        ),
+                                      child: _AnchoredTerminal(
+                                        terminal: session?.terminal,
+                                        enabled: !_keyBarUp && !_ownsInput,
+                                        reading: _scrollback,
+                                        clearBottom: _clearAboveMic,
                                         // ⚠️ The chrome is driven from OUT HERE, not
                                         // from inside the panel. xterm's own
                                         // [Scrollable] is several widgets down and is
@@ -1988,7 +2000,8 @@ class _TerminalPageState extends State<TerminalPage>
                           // line — an answer to give, a take, a message — is laid
                           // over the terminal's bottom rows only while it has
                           // something to say. See [CommandLine].
-                          if (!_keyBarUp) SizedBox(height: _windowBottomInset),
+                          // ⚠️ No strip kept for the home indicator: the terminal runs
+                          // under it, to the glass, as a page does in Safari.
                           // The bottom of this page IS just above the keyboard:
                           // `PhoneShell`'s Scaffold has already resized for it —
                           // the same resize that empties this page's MediaQuery
@@ -3456,6 +3469,159 @@ class _KeycapState extends State<_Keycap> {
       ),
     );
   }
+}
+
+/// Holds the agent's last line just above the mic while the output is followed at its end, by
+/// moving the terminal rather than resizing it.
+///
+/// A terminal fills from the top, so short output left the rows under the mic empty while its
+/// first lines sat under the title; long output ran its prompt under the mic. Moved, the last line
+/// is always where the thumb and the eye already are — output shorter than the screen sits down
+/// by the mic with the empty rows above it, under the title, and longer output lifts clear. The
+/// pty keeps the whole screen, so reading back through the history uses every row: while it is
+/// read ([enabled] off) the terminal eases back to where it is drawn. Nothing moves on the
+/// alternate screen, where a full-screen program owns its own layout.
+class _AnchoredTerminal extends StatefulWidget {
+  const _AnchoredTerminal({
+    required this.terminal,
+    required this.enabled,
+    required this.reading,
+    required this.clearBottom,
+    required this.child,
+  });
+
+  final Terminal? terminal;
+  final bool enabled;
+
+  /// Non-null while the history is read back: the terminal is where it is drawn, then.
+  final ValueListenable<Object?> reading;
+
+  /// How far above the terminal's foot its last line is held.
+  final double clearBottom;
+  final Widget child;
+
+  @override
+  State<_AnchoredTerminal> createState() => _AnchoredTerminalState();
+}
+
+class _AnchoredTerminalState extends State<_AnchoredTerminal> {
+  /// Eases only when the reading starts or stops; output moves it at once, as output moves.
+  DateTime _easeUntil = DateTime.fromMillisecondsSinceEpoch(0);
+
+  late bool _on = _wantsOn;
+
+  bool get _wantsOn => widget.enabled && widget.reading.value == null;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.terminal?.addListener(_changed);
+    widget.reading.addListener(_toggled);
+  }
+
+  @override
+  void didUpdateWidget(_AnchoredTerminal old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.terminal, widget.terminal)) {
+      old.terminal?.removeListener(_changed);
+      widget.terminal?.addListener(_changed);
+    }
+    if (!identical(old.reading, widget.reading)) {
+      old.reading.removeListener(_toggled);
+      widget.reading.addListener(_toggled);
+    }
+    // The keyboard coming or going moves everything at once; the terminal goes with it.
+    _settle(ease: false);
+  }
+
+  @override
+  void dispose() {
+    widget.terminal?.removeListener(_changed);
+    widget.reading.removeListener(_toggled);
+    super.dispose();
+  }
+
+  /// Reading started or stopped (eased — it moves the way the scroll does), or the keyboard
+  /// came or went (at once).
+  void _settle({required bool ease}) {
+    if (_on == _wantsOn) return;
+    _on = _wantsOn;
+    _easeUntil = ease
+        ? DateTime.now().add(const Duration(milliseconds: 240))
+        : DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  void _toggled() {
+    _settle(ease: true);
+    _changed();
+  }
+
+  void _changed() {
+    if (!mounted) return;
+    // Output can land mid-frame (a resize answered during layout): rebuild after it, then.
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+    } else {
+      setState(() {});
+    }
+  }
+
+  /// The rendered height of one row, measured as xterm measures it.
+  static final _cells = Expando<double>();
+  static double _cellHeight(TerminalStyle style) => _cells[style] ??= () {
+    final text = style.toTextStyle();
+    final builder = ui.ParagraphBuilder(text.getParagraphStyle())
+      ..pushStyle(text.getTextStyle())
+      ..addText('mmmmmmmmmm');
+    final paragraph = builder.build()
+      ..layout(const ui.ParagraphConstraints(width: double.infinity));
+    final height = paragraph.height;
+    paragraph.dispose();
+    return height;
+  }();
+
+  double _shift(double viewport) {
+    final terminal = widget.terminal;
+    if (!_on || terminal == null || terminal.isUsingAltBuffer) {
+      return 0;
+    }
+    final buffer = terminal.buffer;
+    final height = buffer.height;
+    if (height == 0) return 0;
+    final cell = _cellHeight(terminalFontStore.value);
+    // The last line with anything on it — the cursor's, or below it where a TUI parked the
+    // cursor higher up.
+    var last = buffer.absoluteCursorY.clamp(0, height - 1);
+    for (var y = height - 1; y > last; y--) {
+      if (buffer.lines[y].getText().trim().isNotEmpty) {
+        last = y;
+        break;
+      }
+    }
+    // Rows are laid from the top until there is history to scroll, and from the foot after.
+    final bottom = height * cell <= viewport
+        ? (last + 1) * cell
+        : viewport - (height - 1 - last) * cell;
+    return viewport - widget.clearBottom - bottom;
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, box) {
+      final ease = DateTime.now().isBefore(_easeUntil);
+      return TweenAnimationBuilder<double>(
+        tween: Tween(end: _shift(box.maxHeight)),
+        duration: ease ? const Duration(milliseconds: 240) : Duration.zero,
+        curve: const Cubic(0.2, 0, 0, 1),
+        builder: (context, dy, child) =>
+            Transform.translate(offset: Offset(0, dy), child: child),
+        child: widget.child,
+      );
+    },
+  );
 }
 
 /// The sample's guide, one faint line above the mic: what to try next. A 6pt green dot glides
