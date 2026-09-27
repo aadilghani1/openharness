@@ -29,6 +29,7 @@ import { AuthSessionManager, AuthSessionError } from './lib/authSession.js'
 import { VERSION } from './version.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
 import { AgentStopError } from './lib/stopAgentService.js'
+import { isHiddenBuiltin } from './dsh/builtins.js'
 import { ENGINES, PROCESS_ENGINES, isTerminalEngine, type AgentEngine, type ProcessEngine } from './engines/types.js'
 import { listDir } from './lib/fsBrowse.js'
 import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
@@ -61,6 +62,7 @@ import { OrchestratorError } from './orchestrator/model.js'
 import { orchestratorRequest } from './orchestrator/wire.js'
 import { shellQuote } from './orchestrator/prompts.js'
 import type { SessionInputDelivery } from './lib/sessionInput.js'
+import type { QuestionAnswerResult } from './lib/askQuestion.js'
 import { engineLabel } from './lib/agentNames.js'
 import { DSH_ID_RE, dshSupportedEngines } from './dsh/manifest.js'
 import { refreshDshRegistry } from './dsh/catalog.js'
@@ -108,12 +110,14 @@ import {
 } from './lib/terminalBinary.js'
 import { b64d, fingerprint, isWrapped } from './lib/e2ee/core.js'
 import { tmuxPaneInfo } from './lib/tmux.js'
-import { encryptRpcResult } from './lib/e2ee/applicationFrames.js'
+import { encryptRpcResult, PAIR_REQUESTS } from './lib/e2ee/applicationFrames.js'
+import type { PairEvent, PairService } from './pair/protocol.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from './lib/deviceRecentTrim.js'
 import { shouldReplayCommander } from './lib/commanderReplay.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from './lib/runtimeProfileController.js'
 import { parseRuntimeProfile, type RuntimeModelOption } from './lib/runtimeProfile.js'
 import { sid, preview, logFrame } from './lib/log.js'
+import type { SessionSearchResult } from './lib/sessionSearch/indexer.js'
 import {
   TerminalP2pResponderPool,
   TERMINAL_P2P_DOWN_TYPES,
@@ -196,7 +200,7 @@ export type DownTransport = 'relay' | 'local' | 'p2p'
  * backend blocks its OWN `__`-prefixed control frames from web clients for the same reason; these
  * two escaped that rule because they are not `__`-prefixed.
  */
-const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'machines_changed'])
+const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed'])
 
 /** A frame type as the sender spelled it, fit for one log line: the relay chooses it, so it is bounded
  *  and escaped rather than trusted not to carry a newline that forges the next line. */
@@ -446,6 +450,12 @@ export class BackendSocket {
   private appOpenOwed = false
   private readonly downChains = new Map<string, Promise<void>>()
   private readonly localClients = new Map<string, LocalClientSink>()
+  /**
+   * Loopback clients that are TOOLS, not windows (`machine_select { tool: true }`): `harness pair`, the
+   * `harnessd` MCP server. They get their RPC replies like any local client, but they are not a person at
+   * this computer — not presence, not a window to push to, and never what wakes the pair brain.
+   */
+  private readonly toolClients = new Set<string>()
   private terminalStreams: TerminalStreamManager | null = null
   private readonly terminalP2p: TerminalP2pResponderPool
   private readonly p2pPendingOpens = new Map<string, Set<string>>()
@@ -538,7 +548,7 @@ export class BackendSocket {
       stateDir: join(env.ADAPTER_DATA_DIR, 'orchestrator'),
       workspaceDir: join(homedir(), 'harnesses', 'orchestrated'),
       command: this.orchestratorCommand ?? `${[process.execPath, ...process.execArgv, process.argv[1]].map(shellQuote).join(' ')} orchestrator --port ${env.PORT} --machine ${shellQuote(this.machineId)}`,
-      catalog: () => listInstalledDsh().filter(d => d.manifest.kind !== 'viewer' && !!d.manifest.engine && supportsFirstPrompt(d.manifest.engine)).map(d => ({
+      catalog: () => listInstalledDsh().filter(d => d.manifest.kind !== 'viewer' && !isHiddenBuiltin(d) && !!d.manifest.engine && supportsFirstPrompt(d.manifest.engine)).map(d => ({
         id: d.id, name: d.manifest.name, description: d.manifest.description ?? '', engine: d.manifest.engine!, viewer: !!d.manifest.viewer,
       })),
       supportsEngine: engine => ENGINES.includes(engine as AgentEngine) && supportsFirstPrompt(engine as AgentEngine),
@@ -605,7 +615,7 @@ export class BackendSocket {
   /** Called when a device answers an AskUserQuestion (`question_response`) — cli.ts drives the CLI's own
    *  terminal dialog (option digit / free text), since a remote machine has no
    *  programmatic answer channel the way the hosted runtime’s brain does. */
-  onQuestionAnswer: ((payload: { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }) => void) | null = null
+  onQuestionAnswer: ((payload: { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }) => Promise<QuestionAnswerResult> | void) | null = null
   /** Called when this machine was deleted/revoked (a `machine_revoked` down-frame, or a 401/403 on the
    *  upgrade) — CLI clears the saved SSO session and shuts down instead of retrying forever. */
   onRevoked: (() => void) | null = null
@@ -619,6 +629,9 @@ export class BackendSocket {
   recentProvider: RecentProvider | null = null
   /** The person's own last questions for an agent, newest first. See the `agent_recent` case. */
   recentAsksProvider: ((agentId: string, n: number) => string[]) | null = null
+  /** Answers `session_search` from this machine's transcript index (lib/sessionSearch/). Null when
+   *  this Node has no `node:sqlite`. */
+  sessionSearchProvider: ((query: string, options: { limit?: number; from?: number; to?: number }) => SessionSearchResult) | null = null
   /** Runtime Model/Effort integration, wired by cli.ts for registered tmux sessions. */
   runtimeModelsProvider: ((sessionId?: string) => Promise<RuntimeModelOption[]>) | null = null
   /** Answers `usage_read` — this machine's own agent-account usage (lib/accountUsage.ts). A field
@@ -633,6 +646,22 @@ export class BackendSocket {
   /** Receives `theme_set` — the desktop's pane colours, to become this machine's tmux
    *  `window-style` (lib/hostTheme.ts). Wired by cli.ts; null answers with UNSUPPORTED. */
   hostThemeSink: ((theme: HostTheme) => void) | null = null
+  /**
+   * The pair brain's sensor (pair/sensor.ts): answers the sealed `pair_*` RPCs another machine's brain
+   * sends, and the loopback-only `pair` request. Null answers UNSUPPORTED, like an older daemon.
+   */
+  pairService: PairService | null = null
+  /** The owning machine's reads and writes for the pair (pair/owner.ts). Null: those answer UNSUPPORTED. */
+  pairOwner: { handle: (type: string, payload: Record<string, unknown>, from: { connId: string; label?: string | null }) => Promise<Record<string, unknown>> } | null = null
+  /** The control interface (pair/control.ts) behind the loopback `pair` request: the verbs it answers. */
+  pairControl: { verbs: ReadonlySet<string>; local: (payload: Record<string, unknown>, connId: string) => Promise<Record<string, unknown>> } | null = null
+  /** The account's zoo changed (a `zoo_changed` from the backend) — cli.ts re-reads which daemon is paired. */
+  onZooChanged: ((revision: number) => void) | null = null
+  /**
+   * Whether daemons run at all (lib/daemonsSwitch.ts). Off, the loopback `pair` request (`harness pair`, the
+   * MCP server) is answered DAEMONS_OFF before any verb runs. Null: always on, as before the switch.
+   */
+  daemonsOn: (() => boolean) | null = null
   runtimeProfileProvider: ((session: RegisteredSession) => string | null) | null = null
   onRuntimeProfileUpdate: ((sessionId: string, selectedModel: string) => Promise<void>) | null = null
   /** Web↔adapter E2EE: group-encrypts user events, runs the CPace pairing, holds per-conn sessions. */
@@ -675,7 +704,7 @@ export class BackendSocket {
    *  polling a pane for a dialog is pointless with nobody rendering it, but "nobody" used to mean
    *  "no device", which left the window unable to learn that an agent was blocked. */
   hasLocalClient(): boolean {
-    return this.localClients.size > 0
+    return this.localClients.size > this.toolClients.size
   }
 
   /** True after a paired device has completed the E2EE hello/welcome session. */
@@ -1041,15 +1070,27 @@ export class BackendSocket {
   /** One frame to every window on this computer — or, given a function, each window its own. */
   sendLocal(frame: Frame | ((connId: string) => Frame)): void {
     for (const [connId, sink] of this.localClients) {
+      if (this.toolClients.has(connId)) continue
       const sent = typeof frame === 'function' ? frame(connId) : frame
       if (env.LOG_FRAMES) logFrame('→', 'local', sent)
       if (!sink.sendFrame(sent)) void this.unregisterLocalClient(connId)
     }
   }
 
+  /** One frame to ONE window on this computer, if it is one. Never queued, never to the cloud. */
+  sendLocalTo(connId: string, frame: Frame): boolean {
+    const sink = this.localClients.get(connId)
+    if (!sink) return false
+    if (env.LOG_FRAMES) logFrame('→', 'local', frame)
+    if (sink.sendFrame(frame)) return true
+    void this.unregisterLocalClient(connId)
+    return false
+  }
+
   /** Ask one local desktop to select focus, without opening panes in every window. */
   sendFirstLocal(frame: Frame): boolean {
     for (const [connId, sink] of this.localClients) {
+      if (this.toolClients.has(connId)) continue
       if (sink.sendFrame(frame)) return true
       void this.unregisterLocalClient(connId)
     }
@@ -1163,18 +1204,31 @@ export class BackendSocket {
   }
 
   /** Attach one authenticated loopback desktop client to the same RPC and event plane as cloud web. */
-  registerLocalClient(connId: string, sink: LocalClientSink): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean } = {}): boolean {
     if (!isLocalClientId(connId) || this.localClients.has(connId)) return false
     this.localClients.set(connId, sink)
+    if (opts.tool) { this.toolClients.add(connId); return true }
     this.sendAppPresence('open')
+    this.onLocalClient?.(connId, true)
     return true
   }
+
+  /** A loopback client that said it is a tool (`harness pair`, the MCP server), not a window. */
+  isToolClient(connId: string): boolean { return this.toolClients.has(connId) }
+
+  /** The windows attached right now — for a listener that arrives after some of them did. */
+  localClientIds(): string[] { return [...this.localClients.keys()].filter((connId) => !this.toolClients.has(connId)) }
+
+  /** A window (or `hn`) on this computer attached or went away — the pair brain thinks only while one is here. */
+  onLocalClient: ((connId: string, attached: boolean) => void) | null = null
 
   /** Release all connection-scoped state when the loopback WebSocket closes. */
   async unregisterLocalClient(connId: string): Promise<void> {
     if (!this.localClients.delete(connId)) return
+    if (!this.toolClients.delete(connId)) this.onLocalClient?.(connId, false)
     this.rowStateWindows.delete(connId)
     this.viewerForwarder.closeConnection(connId)
+    this.pairService?.unwatch(connId)
     // The window left before any link could hear it attach: nothing happened, as far as the backend
     // is concerned, and a later link must not be told otherwise.
     if (this.localClients.size === 0) this.appOpenOwed = false
@@ -1386,7 +1440,7 @@ export class BackendSocket {
     const resultType = `${type}_result`
     if (connId && deviceDump.enabled && this.e2ee.sessionRole(connId) === 'device') deviceDump.record('out', 'legacy', connId, { type: resultType, payload: { requestId, ...payload } })
     // Before the E2EE wrap: an RPC reply is only readable here.
-    if (env.LOG_FRAMES && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type)) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
+    if (env.LOG_FRAMES && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
       return
@@ -1425,6 +1479,70 @@ export class BackendSocket {
       return
     }
     this.send({ type: resultType, payload: { requestId, ...payload } })
+  }
+
+  /**
+   * The pair brain's requests (daemons/BRAIN.md):
+   *   - `pair_watch` / `pair_journal` from another machine's brain, answered by the sensor;
+   *   - `pair_list`, `pair_read` and the writes (`pair_answer`, `pair_send`, `pair_stop`, `pair_start`,
+   *     `pair_pause`, `pair_resume`), answered by the owning machine's PairOwner (pair/owner.ts), which
+   *     re-checks the floor and journals every action;
+   *   - the loopback-only `pair`: the control interface's verbs (pair/control.ts) when it is wired, the
+   *     sensor's own read verbs otherwise.
+   * An older daemon answers every one of them UNSUPPORTED, which a brain already handles.
+   */
+  private handlePair(connId: string, type: string, payload: Record<string, unknown>, local: boolean,
+    reply: (t: string, rid: unknown, p: Record<string, unknown>) => void): void {
+    const requestId = payload.requestId
+    const service = this.pairService
+    const detached = (work: Promise<Record<string, unknown>>): void => {
+      void work.then((result) => reply(type, requestId, result)).catch(() => reply(type, requestId, { error: 'PAIR_FAILED' }))
+    }
+    if (type === 'pair') {
+      if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Ask the pair brain on this computer.' }); return }
+      if (this.daemonsOn && !this.daemonsOn()) { reply(type, requestId, { error: 'DAEMONS_OFF', detail: 'Daemons are off for this account or on this computer.' }); return }
+      const verb = typeof payload.verb === 'string' ? payload.verb : ''
+      const control = this.pairControl
+      if (control && control.verbs.has(verb)) { detached(control.local(payload, connId)); return }
+      if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+      detached(service.local(payload))
+      return
+    }
+    // The machine-to-machine requests come from ANOTHER machine, sealed. This computer's own processes use
+    // `pair` (a tool) or the window's daemon_* frames; a loopback `pair_*` would be a local process
+    // claiming to be a remote brain — and the owner treats a remote request as one (daemons/BRAIN.md).
+    if (local) { reply(type, requestId, { error: 'REMOTE_ONLY', detail: 'pair_* requests come from another machine.' }); return }
+    if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+    if (!service.enabled()) { reply(type, requestId, { error: 'PAIR_OFF' }); return }
+    if (type === 'pair_watch') {
+      if (payload.off === true) { service.unwatch(connId); reply(type, requestId, { ok: true }); return }
+      const snapshot = service.watch(connId, (event) => this.sendPairEvent(connId, event))
+      reply(type, requestId, { snapshot })
+      return
+    }
+    if (type === 'pair_journal') { reply(type, requestId, { ...service.journal(payload) }); return }
+    const owner = this.pairOwner
+    if (!owner) {
+      reply(type, requestId, type === 'pair_read' ? service.read(payload) : { error: 'UNSUPPORTED' })
+      return
+    }
+    // Detached: an answer keys a dialog and a pause saves a conversation, both seconds of work that must
+    // not hold the watch's pushes behind them on this connection.
+    detached(owner.handle(type, payload, { connId, label: this.e2ee.sessionLabel(connId) }))
+  }
+
+  /** One `pair_event` to one watcher: plaintext over loopback, sealed pairwise (`wrapTarget`) otherwise.
+   *  Through the same ordered queue as the watch's reply, and only while the link is up — a push for a
+   *  connection the backend has forgotten is dropped there anyway. False = stop pushing to it. */
+  private sendPairEvent(connId: string, event: PairEvent): boolean {
+    const payload = event as unknown as Record<string, unknown>
+    const local = this.localClients.get(connId)
+    if (local) return local.sendFrame({ type: 'pair_event', payload })
+    if (!this.isConnected()) return false
+    const frame = this.e2ee.wrapTarget(connId, 'pair_event', payload)
+    if (!frame) return false
+    this.sendTo(connId, frame)
+    return true
   }
 
   private async dispatchDown(frame: Frame, connId: string, transport: DownTransport = 'relay'): Promise<void> {
@@ -1513,7 +1631,7 @@ export class BackendSocket {
     // than as an opaque __e2e envelope.
     // Terminal frames contain raw keystrokes, paste text and screen bytes after
     // unwrap. Never pass them to the frame logger, even in diagnostic mode.
-    if (env.LOG_FRAMES && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'orchestrator' && !SHARE_REQUEST_TYPES.has(type)) {
+    if (env.LOG_FRAMES && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'orchestrator' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => this.emitReply(connId, t, rid, p)
@@ -1554,6 +1672,7 @@ export class BackendSocket {
       this.autonomousDeviceRelay?.drop(connId)
       this.e2ee.dropSession(connId)
       this.viewerForwarder.closeConnection(connId)
+      this.pairService?.unwatch(connId)
       await this.terminalP2p.closeConnection(connId, 'client_disconnected', false)
       this.p2pPendingOpens.delete(connId)
       this.p2pStreams.delete(connId)
@@ -1577,6 +1696,16 @@ export class BackendSocket {
     if (type === 'desk_changed') {
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
       this.sendLocal({ type: 'desk_changed', payload: { revision: typeof revision === 'number' ? revision : 0 } })
+      return
+    }
+
+    // The account's zoo — its daemons and eggs — changed on another client: the same hand-off as the
+    // desk, on its own frame, so the window re-reads `/api/zoo` and never the desk (or the other way
+    // round). Backend-only for the same reason as desk_changed.
+    if (type === 'zoo_changed') {
+      const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
+      this.sendLocal({ type: 'zoo_changed', payload: { revision: typeof revision === 'number' ? revision : 0 } })
+      this.onZooChanged?.(typeof revision === 'number' ? revision : 0)
       return
     }
 
@@ -1636,6 +1765,13 @@ export class BackendSocket {
       void orchestratorRequest(this.orchestration(), payload)
         .then(result => reply(type, requestId, result))
         .catch(() => reply(type, requestId, { error: 'ORCHESTRATOR_FAILED' }))
+      return
+    }
+
+    // The pair brain (daemons/BRAIN.md). `pair_*` come from another machine's brain and reach here only
+    // sealed — the default-deny above already refused them in the clear. `pair` is this computer's own.
+    if (PAIR_REQUESTS.has(type) || type === 'pair') {
+      this.handlePair(connId, type, payload, local, reply)
       return
     }
 
@@ -2727,7 +2863,15 @@ export class BackendSocket {
           // A device answered an AskUserQuestion. There's no control channel into an interactive CLI, so
           // cli.ts keys the answer straight into that session's tmux dialog.
           const p = payload as { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }
-          this.onQuestionAnswer?.(p)
+          const answered = this.onQuestionAnswer?.(p)
+          // Detached: driving a dialog takes seconds of keystrokes and repaints. The outcome goes back
+          // under the QUESTION's requestId, so the client that answered can say why nothing happened —
+          // STALE_QUESTION when the dialog changed before the answer arrived and nothing was typed.
+          if (answered) {
+            void answered
+              .then((result) => reply(type, requestId, result.ok ? { ok: true } : { error: result.error, detail: result.detail }))
+              .catch(() => reply(type, requestId, { error: 'ANSWER_FAILED', detail: 'The answer could not be entered.' }))
+          }
           return
         }
 
@@ -2742,6 +2886,19 @@ export class BackendSocket {
           void this.accountUsageReader()
             .then((providers) => reply(type, requestId, { providers }))
             .catch(() => reply(type, requestId, { error: 'USAGE_READ_FAILED' }))
+          return
+        }
+
+        // Every conversation on this machine, searched by what was said in it (lib/sessionSearch/).
+        // Synchronous and a few milliseconds: the index is local SQLite FTS5. The words searched for
+        // arrive sealed and the hits leave sealed — the relay reads neither.
+        case 'session_search': {
+          if (!this.sessionSearchProvider) { reply(type, requestId, { error: 'SEARCH_UNAVAILABLE' }); return }
+          const query = typeof payload.query === 'string' ? payload.query.slice(0, 500) : ''
+          const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined
+          // `from`/`to`: only sessions worked on in that window (epoch ms) — "the dial one from last
+          // week". The client reads the time words, so every machine searches the same window.
+          reply(type, requestId, { ...this.sessionSearchProvider(query, { limit: number(payload.limit), from: number(payload.from), to: number(payload.to) }) })
           return
         }
 

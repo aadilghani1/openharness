@@ -131,6 +131,11 @@ export interface HookServerHandlers {
   /** POST /api/desk/ops — the window's tab edits, applied on the backend (its routes/desk.ts); a
    *  local write, so CSRF-guarded like a rename. */
   onDeskOps?: (body: unknown) => Promise<PairOutcome>
+  /** GET /api/zoo — the account's daemons and eggs (daemons/README.md); proxied like the desk. */
+  onZooRead?: () => Promise<PairOutcome>
+  /** POST /api/zoo/ops — habits, hatches, pair and nickname, applied on the backend (its routes/zoo.ts),
+   *  which alone draws; a local write, so CSRF-guarded like the desk's ops. */
+  onZooOps?: (body: unknown) => Promise<PairOutcome>
   /** /api/store/* — proxy the Harness Store's ratings and reviews to backend the same way: reads
    *  ungated like the machine list, writes (PUT/DELETE) CSRF-guarded like a rename. See storeProxy.ts. */
   onStore?: StoreHandler
@@ -680,6 +685,20 @@ export function startHookServer(
         let body: unknown
         try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
         await proxied(() => handlers.onDeskOps!(body)); return
+      }
+      if (req.method === 'GET' && url === '/api/zoo') {
+        if (!handlers.onZooRead) { json(503, { error: 'UNAVAILABLE' }); return }
+        await proxied(handlers.onZooRead); return
+      }
+      if (req.method === 'POST' && url === '/api/zoo/ops') {
+        // Any local process that sets the header can send an op here, `zoo.autonomy` and `zoo.consent`
+        // included: the account's dial is only a REQUEST to each daemon, which acts above `suggest` only
+        // after the person confirms it at a window (pair/gate.ts, daemons/BRAIN.md "Security").
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onZooOps) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
+        await proxied(() => handlers.onZooOps!(body)); return
       }
       if (req.method === 'GET' && url === '/api/auth/me') {
         const me = handlers.onAuthMe

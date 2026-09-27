@@ -13,6 +13,7 @@ import 'agent_index.dart';
 import 'agent_swipe.dart';
 import 'agent_swipe_list.dart';
 import 'agents_page.dart' show openNewAgent;
+import 'daemon_chip.dart';
 import 'desk_groups.dart';
 import 'machines_tab.dart';
 import 'phone_fab.dart';
@@ -1098,7 +1099,12 @@ class _AgentHomeEmpty extends StatelessWidget {
             PhoneHeader(
               large: true,
               title: 'Harnesses',
-              trailing: [PhoneSearchButton(notifier: notifier)],
+              trailing: [
+                // The paired daemon, beside search: see `daemon_chip.dart`.
+                const DaemonChip(),
+                const SizedBox(width: 12),
+                PhoneSearchButton(notifier: notifier),
+              ],
             ),
             const Expanded(
               child: EmptyState(

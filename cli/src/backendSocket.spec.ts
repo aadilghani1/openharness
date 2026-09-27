@@ -489,6 +489,39 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('answers session_search from the index, sealed to the requester', async () => {
+    const socket = new BackendSocket('token')
+    const asked: Array<[string, number | undefined]> = []
+    socket.sessionSearchProvider = (query, options) => {
+      asked.push([query, options.limit])
+      return { hits: [], indexed: 3, pending: 0, tookMs: 1 }
+    }
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    const unwrap = vi.spyOn(socket.e2ee, 'unwrapDown')
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
+    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+      type: 'session_search_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
+    })
+    const envelope = { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } }
+    unwrap.mockReturnValueOnce({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 } })
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'session_search', payload: envelope } })
+    await vi.waitFor(() => {
+      expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-1', { hits: [], indexed: 3, pending: 0, tookMs: 1 })
+    })
+    expect(asked).toEqual([['dial scroll', 12]])
+
+    // A machine whose Node has no node:sqlite says so rather than going silent.
+    socket.sessionSearchProvider = null
+    unwrap.mockReturnValueOnce({ type: 'session_search', payload: { requestId: 's-2', query: 'dial' } })
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'session_search', payload: envelope } })
+    await vi.waitFor(() => {
+      expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-2', { error: 'SEARCH_UNAVAILABLE' })
+    })
+    await socket.stop()
+  })
+
   it('hands theme_set to the host-theme sink and acknowledges it to the requester', async () => {
     const socket = new BackendSocket('token')
     const received: unknown[] = []
@@ -1598,6 +1631,25 @@ describe('desk_changed relay', () => {
     await socket.unregisterLocalClient('local:desk')
     await socket.stop()
   })
+
+  it('hands the backend\'s zoo_changed to the window as its own frame, and only the backend\'s', async () => {
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:zoo', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'zoo_changed', payload: { revision: 4 } } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'zoo_changed', payload: { revision: 4 } }))
+    expect(frames.some((f) => f.type === 'desk_changed')).toBe(false)
+    // A local client, or a client relayed with its own connId, is not the backend: nothing is relayed.
+    socket.handleLocalFrame('local:zoo', { type: 'zoo_changed', payload: { revision: 99 } })
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'zoo_changed', payload: { revision: 98 } } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(frames.filter((f) => f.type === 'zoo_changed')).toEqual([{ type: 'zoo_changed', payload: { revision: 4 } }])
+    await socket.unregisterLocalClient('local:zoo')
+    await socket.stop()
+  })
 })
 
 describe('agent_fork RPC', () => {
@@ -2559,6 +2611,112 @@ describe('local terminal focus', () => {
     expect(setFocusedAgent.mock.calls).toEqual([['local:window', 'agent-1'], ['local:window', null]])
 
     await socket.unregisterLocalClient('local:window')
+    await socket.stop()
+  })
+})
+
+describe('question_response reports what became of the answer', () => {
+  // The answer is keyed into the agent's own terminal, and it can arrive after the dialog it was for has
+  // gone — the agent moved on, another client answered. The daemon then types nothing, and the client
+  // that answered has to hear why, or it reports "Answered" for an answer that went nowhere.
+  afterEach(() => {
+    wsMock.instances.length = 0
+    vi.restoreAllMocks()
+  })
+
+  function harness() {
+    const socket = new BackendSocket('token')
+    const frames: Array<{ type: string; payload: Record<string, unknown> }> = []
+    socket.registerLocalClient('local:hn', { sendFrame: (frame) => { frames.push(frame as { type: string; payload: Record<string, unknown> }); return true }, sendBinary: () => true })
+    const dispatch = (payload: Record<string, unknown>) =>
+      (socket as any).dispatchDown({ type: 'question_response', payload }, 'local:hn', 'local') as Promise<void>
+    const results = () => frames.filter((f) => f.type === 'question_response_result')
+    return { socket, dispatch, results }
+  }
+
+  it('replies STALE_QUESTION under the question\'s own requestId when the dialog changed first', async () => {
+    const { socket, dispatch, results } = harness()
+    socket.onQuestionAnswer = vi.fn(async () => ({ ok: false as const, error: 'STALE_QUESTION' as const, detail: 'That question changed before your answer arrived.' }))
+    await dispatch({ agentId: 'a1', requestId: 'q_0badf00d', answers: { 'Approve Bash command: ls': 'Yes' } })
+    await vi.waitFor(() => expect(results()).toHaveLength(1))
+    expect(results()[0].payload).toEqual({ requestId: 'q_0badf00d', error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' })
+    expect(socket.onQuestionAnswer).toHaveBeenCalledWith({ agentId: 'a1', requestId: 'q_0badf00d', answers: { 'Approve Bash command: ls': 'Yes' } })
+    await socket.unregisterLocalClient('local:hn')
+  })
+
+  it('replies ok once the answer was typed', async () => {
+    const { socket, dispatch, results } = harness()
+    socket.onQuestionAnswer = vi.fn(async () => ({ ok: true as const }))
+    await dispatch({ agentId: 'a1', requestId: 'q_1', answers: { q: 'Tea' } })
+    await vi.waitFor(() => expect(results()).toHaveLength(1))
+    expect(results()[0].payload).toEqual({ requestId: 'q_1', ok: true })
+    await socket.unregisterLocalClient('local:hn')
+  })
+
+  it('tells the window that answered, and no other window', async () => {
+    const { socket, dispatch, results } = harness()
+    const other: Array<{ type: string }> = []
+    socket.registerLocalClient('local:other', { sendFrame: (frame) => { other.push(frame as { type: string }); return true }, sendBinary: () => true })
+    socket.onQuestionAnswer = vi.fn(async () => ({ ok: true as const }))
+    await dispatch({ agentId: 'a1', requestId: 'q_1', answers: { q: 'Tea' } })
+    await vi.waitFor(() => expect(results()).toHaveLength(1))
+    expect(other.filter((f) => f.type === 'question_response_result')).toEqual([])
+    await socket.unregisterLocalClient('local:other')
+    await socket.unregisterLocalClient('local:hn')
+  })
+
+  it('answers a relayed answerer alone and sealed — never every window and web client of this machine', async () => {
+    // A dial, a phone, or another machine relaying for its app answered over the relay. What became of
+    // that answer is its business: broadcast, every window here and every web client of this machine was
+    // handed a `question_response_result` for an answer it never gave, in the clear.
+    const socket = new BackendSocket('token')
+    const windowFrames: Array<{ type: string }> = []
+    socket.registerLocalClient('local:window', { sendFrame: (frame) => { windowFrames.push(frame as { type: string }); return true }, sendBinary: () => true })
+    const stale = { ok: false as const, error: 'STALE_QUESTION' as const, detail: 'That question changed before your answer arrived.' }
+    socket.onQuestionAnswer = vi.fn(async () => stale)
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    vi.spyOn(socket.e2ee, 'hasSession').mockImplementation((connId: string) => connId === 'dial-1')
+    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+      type: 'question_response_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } },
+    })
+
+    ws.message(sealedDown(socket, 'dial-1', 'question_response', { requestId: 'q_0badf00d', agentId: 'a1', answers: { q: 'Yes' } }))
+
+    await vi.waitFor(() => {
+      expect(wrapReply).toHaveBeenCalledWith('dial-1', 'question_response_result', 'q_0badf00d', { error: stale.error, detail: stale.detail })
+    })
+    await vi.waitFor(() => {
+      const results = parseSent(ws).filter((item) => (item.frame as { type?: string } | undefined)?.type === 'question_response_result')
+      expect(results).toEqual([expect.objectContaining({
+        targetConnId: 'dial-1',
+        frame: { type: 'question_response_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } } },
+      })])
+    })
+    expect(socket.onQuestionAnswer).toHaveBeenCalledWith({ requestId: 'q_0badf00d', agentId: 'a1', answers: { q: 'Yes' } })
+    expect(windowFrames.filter((f) => f.type === 'question_response_result')).toEqual([])
+    await socket.unregisterLocalClient('local:window')
+    await socket.stop()
+  })
+
+  it('still answers only that connection when its session is gone by the time the answer is typed', async () => {
+    // Keying a dialog takes seconds; the answerer can drop in between. Nothing to seal with then — it gets a
+    // bare error, addressed to it, and nobody else hears anything.
+    const socket = new BackendSocket('token')
+    socket.onQuestionAnswer = vi.fn(async () => ({ ok: true as const }))
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(false)
+    ws.message(sealedDown(socket, 'phone-1', 'question_response', { requestId: 'q_1', agentId: 'a1', answers: { q: 'Tea' } }))
+    await vi.waitFor(() => {
+      const results = parseSent(ws).filter((item) => (item.frame as { type?: string } | undefined)?.type === 'question_response_result')
+      expect(results).toEqual([expect.objectContaining({
+        targetConnId: 'phone-1',
+        frame: { type: 'question_response_result', payload: { requestId: 'q_1', error: 'E2EE_REQUIRED' } },
+      })])
+    })
     await socket.stop()
   })
 })

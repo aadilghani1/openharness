@@ -1,0 +1,987 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Terminal Creatures</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=VT323&display=swap" rel="stylesheet">
+<style>
+  /* One visual world on purpose: a terminal at night. Colours are xterm-256 values, named the way tmux spells them. */
+  :root {
+    color-scheme: dark;
+    --bg: #1c1c1c;       /* colour234 */
+    --panel: #262626;    /* colour235 */
+    --deep: #0c0c0c;
+    --line: #3a3a3a;     /* colour237 */
+    --faint: #626262;    /* colour241 */
+    --dim: #949494;      /* colour246 */
+    --ink: #d0d0d0;      /* colour252 */
+    --bright: #eeeeee;   /* colour255 */
+    --green: #5faf5f;    /* colour71, tmux's status line */
+    --yellow: #d7af5f;   /* colour179, tmux's message line */
+    --cyan: #5fafaf;     /* colour73 */
+    --magenta: #af87af;  /* colour139 */
+    --red: #d75f5f;      /* colour167 */
+    --blue: #87afd7;     /* colour110 */
+    --orange: #d7875f;   /* colour173 */
+    --olive: #87af5f;    /* colour107 */
+    --lav: #8787af;      /* colour103 */
+    --tan: #d7af87;      /* colour180 */
+    --duck: #ffd75f;     /* colour221 */
+    --mono: "IBM Plex Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+    --vt: "VT323", "IBM Plex Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 16px/1.6 var(--sans);
+    padding-inline: 20px;
+    padding-block: 20px 72px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  pre, code, kbd, .mono, button, table {
+    font-family: var(--mono);
+    font-variant-ligatures: none;
+    font-feature-settings: "liga" 0, "calt" 0;
+  }
+  pre { margin: 0; }
+  code { font-size: .92em; color: var(--bright); }
+  a { color: var(--blue); }
+  p { max-width: 68ch; margin: 0; }
+  .muted { color: var(--dim); }
+
+  .manline {
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px;
+    font: 13px/1.5 var(--mono); color: var(--dim);
+    padding-block: 6px;
+  }
+  .manline.top { border-bottom: 1px solid var(--line); }
+  .manline.bottom { border-top: 1px solid var(--line); margin-top: 64px; }
+
+  section { display: grid; gap: 14px; }
+  h2 {
+    font: 400 32px/1 var(--vt);
+    letter-spacing: .08em;
+    color: var(--bright);
+    margin: 52px 0 2px;
+  }
+  .ind { padding-left: 56px; display: grid; gap: 14px; }
+  @media (max-width: 700px) { .ind { padding-left: 0; } }
+  .lede { font-size: 18px; color: var(--bright); max-width: 60ch; text-wrap: balance; }
+  .note { font: 13px/1.5 var(--mono); color: var(--dim); }
+
+  /* buttons */
+  button {
+    appearance: none; background: transparent; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 2px;
+    font-size: 13px; line-height: 1.4; padding: 6px 10px; cursor: pointer;
+  }
+  button:hover { border-color: var(--dim); color: var(--bright); }
+  button[aria-pressed="true"] { background: var(--panel); border-color: var(--green); color: var(--bright); }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible, .art:focus-visible, .buddy:focus-visible { outline: 2px solid var(--yellow); outline-offset: 2px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .row .lbl { font: 12px var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: .08em; margin-right: 4px; }
+
+  /* tmux window */
+  .tmux { background: var(--deep); border: 1px solid var(--line); font: 12.5px/1.5 var(--mono); }
+  .panes { display: grid; grid-template-columns: 1fr 1fr; min-height: 214px; }
+  .pane { padding: 10px 12px; white-space: pre-wrap; overflow: hidden; color: var(--ink); }
+  .pane + .pane { border-left: 1px solid var(--green); }
+  .pane .h { color: var(--dim); }
+  .pane .ok { color: var(--green); }
+  .pane .bad { color: var(--red); }
+  .pane .ask { color: var(--yellow); }
+  .pane.sleepy { opacity: .45; }
+  .status {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    background: var(--green); color: #000; padding-left: 8px; white-space: pre; line-height: 1.6;
+  }
+  .status.msg { background: var(--yellow); }
+  .status .left { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .status .right { display: flex; align-items: center; flex-shrink: 0; }
+  .buddy {
+    display: inline-block; width: 10ch; text-align: center; white-space: pre;
+    font-weight: 600; cursor: pointer; background: transparent; border: 0; padding: 0; color: #000;
+    font-size: inherit; line-height: inherit;
+  }
+  .buddy:hover { color: #000; background: rgba(0,0,0,.08); }
+  .suggest { color: rgba(0,0,0,.45); }
+
+  /* roster */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); padding: 14px; display: grid; gap: 10px; align-content: start; }
+  .card .top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .card .num { font: 12px var(--mono); color: var(--faint); }
+  .card .name { font: 600 20px/1 var(--mono); color: var(--bright); }
+  .chip { font: 11px/1.6 var(--mono); border: 1px solid currentColor; padding: 0 6px; text-transform: uppercase; letter-spacing: .08em; }
+  .common { color: var(--ink); } .rare { color: var(--cyan); } .legendary { color: var(--yellow); } .secret { color: var(--magenta); }
+  .art { background: var(--deep); padding: 14px 10px; display: grid; place-items: center; overflow-x: auto; cursor: pointer; min-height: 172px; }
+  .art pre { font: 15px/1.15 var(--mono); white-space: pre; }
+  .art.pitch { background: #000; }
+  .family { font: 13px/1.5 var(--mono); color: var(--dim); }
+  .family b { color: var(--ink); font-weight: 500; }
+  .card p { font-size: 14.5px; line-height: 1.55; color: var(--ink); }
+  .stages { display: flex; flex-wrap: wrap; gap: 6px 16px; font: 13px var(--mono); }
+  .stages span { color: var(--faint); margin-right: 6px; }
+  .voice { font: 13px/1.5 var(--mono); color: var(--dim); border-top: 1px solid var(--line); padding-top: 8px; }
+  .teasers { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .teaser { border: 1px dashed var(--line); padding: 10px; font: 12.5px/1.5 var(--mono); color: var(--dim); display: grid; gap: 4px; }
+  .teaser b { color: var(--faint); font-size: 18px; font-weight: 500; }
+
+  /* hatch */
+  .hatch { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 14px; }
+  @media (max-width: 800px) { .hatch { grid-template-columns: 1fr; } }
+  .stage {
+    align-self: start; position: sticky; top: 16px;
+    background: var(--deep); border: 1px solid var(--line); min-height: 360px; padding: 20px 12px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; overflow: hidden;
+  }
+  .stage.pitch { background: #000; }
+  #egg { font: 17px/1.15 var(--mono); color: var(--yellow); }
+  #big { font: 500 52px/1 var(--mono); white-space: pre; }
+  #banner { font: 14px/1.15 var(--mono); color: var(--bright); white-space: pre; min-height: 4.6em; }
+  #stamp { font: 12px var(--mono); letter-spacing: .1em; }
+  #words { font: 13px/1.5 var(--mono); color: var(--dim); text-align: center; max-width: 42ch; }
+  #pitchline { font: 13px var(--mono); color: var(--dim); text-align: center; }
+  .side { display: grid; gap: 14px; align-content: start; }
+  .box { border: 1px solid var(--line); padding: 12px; display: grid; gap: 10px; }
+  .box h3 { margin: 0; font: 500 12px var(--mono); text-transform: uppercase; letter-spacing: .1em; color: var(--dim); }
+  table.odds { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  table.odds td { padding: 2px 4px; border-bottom: 1px solid var(--panel); }
+  table.odds td:last-child { text-align: right; }
+  .owned { color: var(--faint); text-decoration: line-through; }
+  .shelf { display: flex; flex-wrap: wrap; gap: 6px 12px; font: 13px var(--mono); }
+  .shelf span { white-space: pre; }
+  #cardwrap { display: grid; gap: 8px; }
+  #card { font: 12.5px/1.35 var(--mono); color: var(--ink); background: var(--deep); border: 1px solid var(--line); padding: 12px; overflow-x: auto; }
+
+  /* tables */
+  .tbl { overflow-x: auto; }
+  table.t { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.t th { text-align: left; font-weight: 500; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; font-size: 11.5px; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); }
+  table.t td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--panel); vertical-align: top; }
+  table.t td.s { white-space: pre; color: var(--yellow); }
+  table.t td.p { font-family: var(--sans); font-size: 14px; }
+
+  /* growth */
+  .growth { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .release { border: 1px solid var(--line); display: grid; align-content: start; }
+  .release .art { cursor: default; border-bottom: 1px solid var(--line); min-height: 150px; }
+  .release pre.log { font: 12.5px/1.5 var(--mono); padding: 10px 12px; color: var(--dim); white-space: pre-wrap; }
+  .release pre.log b { color: var(--bright); font-weight: 500; }
+
+  /* spinners */
+  .spins { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .spin { border: 1px solid var(--line); padding: 10px 12px; display: grid; gap: 4px; }
+  .spin .g { font: 500 22px/1.2 var(--mono); color: var(--bright); white-space: pre; min-height: 1.2em; }
+  .spin .n { font: 12.5px var(--mono); color: var(--ink); }
+  .spin .d { font: 12px var(--mono); color: var(--dim); }
+
+  /* memory */
+  .mem { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .mem { grid-template-columns: 1fr; } }
+  .mem .box pre { font: 12.5px/1.6 var(--mono); white-space: pre-wrap; color: var(--ink); }
+  .mem .box pre .t { color: var(--faint); }
+
+  ul.rules { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; max-width: 72ch; }
+  ul.rules li::marker { color: var(--faint); }
+  .seealso { font: 13.5px/1.8 var(--mono); color: var(--ink); max-width: 72ch; }
+
+  @media (max-width: 520px) {
+    .panes { grid-template-columns: 1fr; }
+    .pane + .pane { border-left: 0; border-top: 1px solid var(--green); }
+    #big { font-size: 40px; }
+  }
+</style>
+
+
+<div class="wrap">
+  <header class="manline top">
+    <span>DAEMONS(6)</span><span>Harness Games Manual</span><span>DAEMONS(6)</span>
+  </header>
+
+  <section aria-labelledby="s-name">
+    <h2 id="s-name">NAME</h2>
+    <div class="ind">
+      <p class="lede">daemons — pair-programming buddies that hatch from your work and live in your status line</p>
+      <p>One daemon pairs with you at a time. It watches every harness on every machine, tells you what needs you, and runs the orchestration you ask for. Every daemon can do the whole job; they differ in lore, look and voice. Each is named after a piece of terminal history, the way <b>tim</b> is <b>t</b>mux <b>im</b>proved.</p>
+      <p class="note">Proposal, 26 Sep 2026. Names, odds, art and lines are drafts. Section 6 of the Unix manual is for games.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-syn">
+    <h2 id="s-syn">SYNOPSIS</h2>
+    <div class="ind">
+<pre class="mono" style="font-size:14px;line-height:1.7;color:var(--bright);white-space:pre-wrap">hn zoo                   <span class="muted"># your daemons and eggs</span>
+hn hatch  [egg]          <span class="muted"># open an egg when you have a moment</span>
+hn pair   [daemon]       <span class="muted"># choose who pairs with you</span>
+hn logbook [daemon]      <span class="muted"># your story together</span></pre>
+      <p class="note">Commands are proposals. The desktop app does the same things with a click on the status line.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-desc">
+    <h2 id="s-desc">DESCRIPTION</h2>
+    <div class="ind">
+      <p>The buddy sits at the right end of the status line, in eight cells. Its eyes carry the mood; a part of its body turns while agents work. When it speaks, the status line becomes tmux's yellow message line for a moment. Try the events below, or click the buddy.</p>
+      <div class="tmux" aria-label="A tmux window with two agent panes and the buddy in the status line">
+        <div class="panes">
+          <div class="pane" id="paneL"></div>
+          <div class="pane" id="paneR"></div>
+        </div>
+        <div class="status" id="status">
+          <span class="left" id="statusLeft"></span>
+          <span class="right"><span id="clock">"m2" 09:42</span> <button class="buddy" id="buddy" type="button" aria-label="Buddy"></button></span>
+        </div>
+      </div>
+      <div class="row" role="group" aria-label="Workspace events">
+        <span class="lbl">event</span>
+        <button type="button" data-ev="work">agents working</button>
+        <button type="button" data-ev="need">needs you</button>
+        <button type="button" data-ev="done">turn done</button>
+        <button type="button" data-ev="fail">test failed</button>
+        <button type="button" data-ev="back">back after 40m</button>
+        <button type="button" data-ev="nap">nap</button>
+        <button type="button" data-ev="idle">quiet</button>
+      </div>
+      <div class="row" role="group" aria-label="Choose a daemon" id="heroPick"><span class="lbl">buddy</span></div>
+      <div class="row" role="group" aria-label="Choose a version" id="heroVer"><span class="lbl">version</span></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-cre">
+    <h2 id="s-cre">THE ZOO</h2>
+    <div class="ind">
+      <p>Drop 1, “unix”: ten daemons. tim is common on purpose, so almost everyone meets it early and gets the joke. Click a portrait to boop it.</p>
+      <div class="row" role="group" aria-label="Show every daemon in one mood" id="moodPick"><span class="lbl">mood</span></div>
+      <div class="row" role="group" aria-label="Show every daemon at one version" id="verPick"><span class="lbl">version</span></div>
+      <div class="grid" id="roster"></div>
+      <p class="note">Coming in later drops. Each hint is all you get.</p>
+      <div class="teasers" id="teasers"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-hatch">
+    <h2 id="s-hatch">HATCHING</h2>
+    <div class="ind">
+      <p>An egg never hatches on its own. It waits in the status line until you open it. The reveal runs crack, silhouette, name and card, and you can copy the card into Slack or GitHub as a code block. This is a working simulation of the proposed odds.</p>
+      <div class="hatch">
+        <div class="stage" id="stage" aria-live="polite">
+          <pre id="egg" aria-label="An egg in a nest"></pre>
+          <div id="pitchline" hidden>It is pitch black. You are likely to be eaten by a grue.</div>
+          <pre id="big" hidden></pre>
+          <pre id="banner" hidden></pre>
+          <div id="stamp" hidden></div>
+          <div id="words" hidden></div>
+        </div>
+        <div class="side">
+          <div class="box">
+            <h3>Egg</h3>
+            <div class="row" role="group" aria-label="Egg type" id="eggPick"></div>
+            <div class="note" id="eggNote"></div>
+            <div class="row"><button type="button" id="hatchBtn">hatch it</button><button type="button" id="resetBtn">reset shelf</button></div>
+          </div>
+          <div class="box">
+            <h3>Odds for this egg</h3>
+            <table class="odds" id="odds"></table>
+            <div class="note" id="oddsNote"></div>
+          </div>
+          <div class="box">
+            <h3>Shelf <span id="shelfCount"></span></h3>
+            <div class="shelf" id="shelf"></div>
+          </div>
+        </div>
+      </div>
+      <div id="cardwrap" hidden>
+        <pre id="card"></pre>
+        <div class="row"><button type="button" id="copyBtn">copy card</button><span class="note" id="copyNote"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-eggs">
+    <h2 id="s-eggs">EGGS</h2>
+    <div class="ind">
+      <p id="eggsLede">What you do picks the egg; luck picks what is inside. Longer efforts earn eggs with rarer pools, the way longer walks do in Pokémon Go. Eggs wait in the nest until you open them; when it is full, new ones wait their turn. A turn counts when it finishes in a harness you work in (never a replay, a sub-agent or a plain terminal), and at most 20 count a day across all your machines, so nobody burns tokens farming eggs.</p>
+      <div class="tbl"><table class="t" id="eggTable">
+        <thead><tr><th>egg</th><th>in the status line</th><th>earned by</th><th>leans toward</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <p>While it incubates, the egg shows how close it is, using the nest stages already approved on the branch:</p>
+<pre class="mono" style="font-size:15px;color:var(--yellow)">\_O_/     ~\_O_/~     \_.._/     \_o.o_/
+<span class="muted" style="font-size:12.5px">quiet     stirring    peeking    ready</span></pre>
+      <p>Daemons ship when they are ready: a new idea, drawn and written well, goes out in the next app release. There is no calendar, and a drop can be a single daemon. Dates from computing history are the only scheduled eggs, and they come back every year so nobody misses one for good.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-grow">
+    <h2 id="s-grow">GROWTH</h2>
+    <div class="ind">
+      <p>A daemon keeps its name and face for life. It grows by releases: 0.1 when it hatches, 1.0 at bond level 2, 2.0 at bond level 4. Bond comes from pairing: every turn you finish together, and the first turn of each day. Hatching one you already have grows yours too. It never decays. tldr is the exception that proves the rule: it gets smaller with every release.</p>
+      <div class="row" role="group" aria-label="Choose a daemon" id="growPick"><span class="lbl">daemon</span></div>
+      <div class="growth" id="growth"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-moods">
+    <h2 id="s-moods">MOODS</h2>
+    <div class="ind">
+      <p>The eyes are the face, as in cowsay and Japanese kaomoji. The body stays still, and moods change at most two cells. Moods come from work, never from the clock. Every gesture is finite and ends at rest.</p>
+      <div class="tbl"><table class="t" id="moodTable">
+        <thead><tr><th>mood</th><th>tim</th><th>eyes</th><th>mouth</th><th>flag</th><th>trigger</th><th>tim says</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <p>tim's portrait also moves its mouth, and the bar under its face uses tmux's real window flags: <code>*</code> current, <code>#</code> activity, <code>!</code> bell, <code>~</code> silence. Anyone who knows tmux reads it at a glance.</p>
+      <p>Blinks mean something. A daemon never blinks on a timer or while you type:</p>
+      <ul class="rules">
+        <li><b>I saw that.</b> One blink when something it watches changes: a harness needs you, a turn finishes, a test fails.</li>
+        <li><b>I see you.</b> One blink when you look at it: hover it, open its panel, or come back to the window.</li>
+        <li><b>I trust you.</b> A slow blink, the way cats show trust: when you return after a break, when you meet, when it levels up.</li>
+        <li><b>Concentrating.</b> No blinks while agents work, the way people blink less when they focus. Eyes stay on <code>=</code>.</li>
+      </ul>
+      <p>Try it above: hover the daemon in the status line, press an event, or switch to another tab and come back.</p>
+      <p>Turning parts come from the old spinners. Each daemon has one body part that turns while agents work:</p>
+      <div class="spins" id="spins"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-mem">
+    <h2 id="s-mem">MEMORY</h2>
+    <div class="ind">
+      <p>Work memory belongs to you; stories belong to each daemon. Swapping buddies loses nothing about your work, and each daemon keeps its own history with you.</p>
+      <div class="mem">
+        <div class="box">
+          <h3>Notebook · shared by every daemon</h3>
+<pre><span class="t">projects</span>  harness (m2), api (office)
+<span class="t">you like</span>  small PRs, tests before merge, no force-push
+<span class="t">open</span>      auth refactor, 2 of 3 files
+          billing flake, 3rd time this week
+<span class="t">agents</span>    claude on m2, codex on office
+<span class="t">lessons</span>   12, e.g. run-migrations-safely
+<span class="t">last seen</span> 18:40, “back after lunch”</pre>
+          <p class="note">The same on desktop, hn and phone. A new buddy reads it on day one.</p>
+        </div>
+        <div class="box">
+          <h3>Logbook · tim's own</h3>
+<pre><span class="t">sep 26 0942</span>  hatched on m2. first words: “what are we building?”
+<span class="t">sep 26 1110</span>  you merged #364. you said “finally”.
+<span class="t">sep 29 2307</span>  first night shift. we watched the migration.
+<span class="t">oct 03 1502</span>  learned run-migrations-safely from codex and claude.
+<span class="t">oct 03 1545</span>  tim 1.0 released. second pane.
+<span class="t">oct 03 1546</span>  first actual bug found. you laughed.</pre>
+          <p class="note">15:45 is when the first actual bug, a moth, was taped into the Harvard Mark II log on 9 Sep 1947. Copyable, like the card.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-learn">
+    <h2 id="s-learn">LEARNING</h2>
+    <div class="ind">
+      <p class="lede">Hermes gets better at Hermes. A daemon gets better at your whole team of agents.</p>
+      <p><a href="https://github.com/nousresearch/hermes-agent">Hermes Agent</a> (Nous Research) improves itself through files, not training. After a reply, a background copy of the agent rereads the conversation and saves reusable skills as SKILL.md folders, plus short notes about you. A weekly curator archives skills nobody uses. Everything it learns stays in <code>~/.hermes</code>, so Claude Code, Codex and the rest never see it. Its prompt tells it to “be active”, and Hermes' own issue tracker lists saving the wrong things as a high-priority bug.</p>
+      <p>Harness already sees every turn from every agent on every machine. That makes the daemon the one place where a lesson learned in Codex can reach Claude Code, Cursor, Copilot and Hermes. The loop:</p>
+      <div class="tbl"><table class="t">
+        <thead><tr><th>step</th><th>what happens</th></tr></thead>
+        <tbody>
+          <tr><td>notice</td><td class="p">Only real signals count: you corrected an agent, two agents failed the same way, the same steps were repeated, or a skill loaded and then needed fixing. The default is that there is nothing to learn.</td></tr>
+          <tr><td>propose</td><td class="p">The daemon says it in one line, in its own voice, and waits for your answer. Nothing is taught without your yes.</td></tr>
+          <tr><td>teach</td><td class="p">The lesson becomes a SKILL.md, the one format all five agents load, or a note in the project's AGENTS.md. The <a href="https://agentskills.io">Agent Skills</a> folders reach Claude Code, Codex, Copilot, Cursor and Hermes.</td></tr>
+          <tr><td>borrow</td><td class="p">What each agent learns on its own (Hermes skills, Claude's memory, Codex memories) becomes a candidate for the others. Harness reads those stores and never writes into them.</td></tr>
+          <tr><td>check</td><td class="p">Every lesson records where it came from and whether it gets used. Unused lessons are archived after 30 days and put away after 90. Any lesson can be reverted.</td></tr>
+        </tbody>
+      </table></div>
+      <p>How it sounds in the status line:</p>
+<pre class="mono" style="font-size:13px;line-height:1.7;background:var(--deep);border:1px solid var(--line);padding:12px;overflow-x:auto;white-space:pre"><span style="color:var(--yellow)">tim: you corrected codex about --dry-run. claude made the same mistake on tuesday.</span>
+<span style="color:var(--yellow)">tim: teach all your agents to dry-run migrations first? [y/n/show]</span>
+&gt; y
+<span style="color:var(--yellow)">tim: learned "run-migrations-safely". claude, codex, cursor, copilot and hermes will load it.</span></pre>
+      <p>What gets written, with its origin attached:</p>
+<pre class="mono" style="font-size:12.5px;line-height:1.6;background:var(--deep);border:1px solid var(--line);padding:12px;overflow-x:auto;white-space:pre;color:var(--ink)">---
+name: run-migrations-safely
+description: Run database migrations in the api repo. Use before any migrate command.
+metadata:
+  harness:
+    learned-by: tim
+    from: codex@office turn 14, claude@m2 turn 3
+    approved: 2026-10-03
+    evidence: api/package.json:12, api/scripts/migrate.ts:40
+---
+Run `npm run migrate -- --dry-run` first and show the plan.
+Run the real migration only after the user says yes.</pre>
+      <p>A daemon learns three kinds of things:</p>
+      <ul class="rules">
+        <li><b>About you:</b> how you like to work. This goes in the notebook.</li>
+        <li><b>About your projects:</b> commands, conventions and traps. These become skills and AGENTS.md notes.</li>
+        <li><b>About your agents:</b> which one is good at what, and where each one stumbles. Only Harness can see this, because only Harness watches them all. “codex has passed the billing tests 3 times out of 3, claude once. give this one to codex?”</li>
+      </ul>
+      <p>In the game, every lesson you approve is a trick the daemon learned. Lessons live in the shared notebook, so swapping daemons keeps them all, and the daemon that found a lesson gets the credit in its logbook. Approved lessons also grow bond.</p>
+      <ul class="rules">
+        <li>Agent output is treated as untrusted. A 2026 study of 21 self-improving agent setups found that every one of them saved unsafe lessons, so every lesson is scanned for injected instructions and scripts are never switched on automatically.</li>
+        <li>Secrets, paths and usernames are removed. Lessons live outside your repos unless you ask for them there.</li>
+        <li>Lessons are distilled in batches while you are idle, with a small model, not on every turn.</li>
+        <li>Every approval is one commit in a git-backed folder, so every lesson can be reverted.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-names">
+    <h2 id="s-names">NAMES</h2>
+    <div class="ind">
+      <p>Decided 26 Sep 2026.</p>
+      <div class="tbl"><table class="t">
+        <thead><tr><th>thing</th><th>name</th><th>why</th></tr></thead>
+        <tbody>
+          <tr><td>the creatures</td><td><b>daemons</b></td><td class="p">Unix's always-on helpers, named at MIT's Project MAC (1963) after Maxwell's demon. Unix has drawn its daemons as little creatures for decades. In Philip Pullman's novels a dæmon is an animal companion bonded to one person. All three fit.</td></tr>
+          <tr><td>the collection</td><td><b>zoo</b></td><td class="p">Plain English for a place full of creatures, and a real archive format from the BBS days (1986) that held collections of files. <code>hn zoo</code>.</td></tr>
+          <tr><td>hatching</td><td>hatch</td><td class="p">The verb stays plain. The reveal says “fork() returned 0.”, because every Unix process is born from fork().</td></tr>
+          <tr><td>the background service</td><td>harnessd</td><td class="p">So “daemon” can mean the creature, user-facing text calls the service harnessd, the way sshd and httpd are named. Code keeps its names.</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">Passed over: /usr/games (long to type), ~/bin (reads as trash), cronies (a pun that wears thin), procs (collides with harness ps).</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-cav">
+    <h2 id="s-cav">CAVEATS</h2>
+    <div class="ind">
+      <ul class="rules">
+        <li>Everything is earned by work you would do anyway. No chores.</li>
+        <li>Only turns you started count, with a daily cap, so nobody spends tokens farming eggs.</li>
+        <li>Eggs never hatch on their own. Nothing moves while you type or while an agent is printing.</li>
+        <li>No hunger, decay, death, guilt or streaks to lose. A daemon resting in the zoo keeps its bond.</li>
+        <li>Bond never grants permissions. What a buddy may do alone is your setting.</li>
+        <li>No money: no paid eggs, no loot boxes.</li>
+        <li>Draws happen on the server, so rarity is real and cards can be shared.</li>
+        <li>Printable 7-bit ASCII only. It reads the same in every terminal, font and phone, and pastes into Slack and GitHub inside a code block.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-bugs">
+    <h2 id="s-bugs">BUGS</h2>
+    <div class="ind">
+      <ul class="rules">
+        <li>Trading and visiting a friend's daemon are wanted, later.</li>
+        <li>The odds are placeholders.</li>
+        <li>Approving lessons: ask every time, or let low-risk ones through with a daily digest?</li>
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-see">
+    <h2 id="s-see">SEE ALSO</h2>
+    <div class="ind">
+      <p class="seealso">tmux(1), screen(1), vim(1), ed(1), bat(1), cat(1), zsh(1), bash(1), fzf(1), find(1), fish(1), tldr(1), man(1), biff(1), ping(8), adventure(6), sl(6), cowsay(1)</p>
+    </div>
+  </section>
+
+  <footer class="manline bottom"><span>Harness</span><span>September 26, 2026</span><span>DAEMONS(6)</span></footer>
+</div>
+
+<!-- roster:start -->
+<script type="application/json" id="roster-data">{"version":1,"rules":{"moods":["idle","work","need","done","fail","back","nap","boop"],"eyes":{"idle":"o","work":"=","need":"?","done":"^","fail":"x","back":"^","nap":"-","boop":"O"},"blinks":{"ack":[["-",120]],"look":[["-",120]],"slow":[["_",180],["-",520],["_",180]]},"noBlinkMoods":["work","nap","boop"],"holdMs":{"done":3000,"back":1300,"fail":4200,"boop":900},"backFrameMs":110,"versions":["0.1","1.0","2.0"],"bondForVersion":{"0.1":0,"1.0":2,"2.0":4},"bond":{"xpPerTurn":1,"xpPerDay":5,"levels":[0,50,150,300,600]},"statusCells":8,"portraitMaxCols":28,"portraitMaxRows":8,"ligatureUnsafe":["==","??","!=","::","~~","->","=>","\u003c=",">=","\u003c>","||","&&","++","//","^=","~=",":="],"rarities":["common","rare","legendary","secret"],"shinyOneIn":256,"pityPerMiss":1,"secretGuaranteeAt":8,"duplicateXp":150,"overflowXp":50,"lessonXp":25,"firstEgg":{"need":3,"require":["turn"],"habits":[{"key":"turn","label":"Finish a turn in a harness"},{"key":"split","label":"Run two harnesses side by side"},{"key":"find","label":"Find something with Cmd-O"},{"key":"elsewhere","label":"Answer a harness from another device"},{"key":"machine","label":"Connect a second computer"},{"key":"store","label":"Try a Store harness"},{"key":"resume","label":"Resume a paused harness"},{"key":"days","label":"Come back on three different days"}]},"setupEgg":{"need":6},"eggs":{"first":{"look":"\\_O_/","weights":{"common":60,"rare":27,"legendary":12,"secret":0},"boost":{"tim":4}},"setup":{"look":"\\_$_/","weights":{"common":60,"rare":27,"legendary":12,"secret":0}},"turn":{"look":"\\_O_/","weights":{"common":60,"rare":27,"legendary":12,"secret":0}},"week":{"look":"\\_0_/","weights":{"common":45,"rare":35,"legendary":18,"secret":0}},"marathon":{"look":"\\_@_/","weights":{"common":25,"rare":40,"legendary":32,"secret":0}},"night":{"look":"*\\_O_/","weights":{"common":50,"rare":30,"legendary":12,"secret":8},"boost":{"bat":4}},"history":{"look":"\\_47_/","weights":{"common":60,"rare":27,"legendary":12,"secret":0}},"easter":{"look":"\\_?_/","weights":{"common":0,"rare":0,"legendary":90,"secret":10}}},"earn":{"turn":{"every":40,"dailyCap":20,"minutesPerTurn":10},"week":{"days":3},"marathon":{"turns":500,"machines":2},"night":{"nights":3,"fromHour":22,"toHour":6,"awayMinutes":30},"history":{"days":7}},"historyDates":{"04-01":"teapot","09-09":"moth","10-31":"zombie"},"easterHashes":["184858a00fd7971f810848266ebcecee5e8b69972c5ffaed622f5ee078671aed"],"nest":["\\_O_/","~\\_O_/~","\\_.._/","\\_o.o_/"],"egg":["       .--.","      /    \\","     |      |","     |      |","      \\    /","   \\___'--'___/"],"lineSlots":["who","q","recap","n","summary"],"lineExample":{"who":"codex@office","q":"Bash: npm run migrate","recap":"3 files changed, tests pass","n":"3","summary":"2 done, 1 waiting 40m"}},"drops":[{"id":"unix","n":1,"name":"unix","announce":"2026-09-12","release":"2026-09-26"}],"daemons":[{"id":"tim","n":1,"drop":"unix","rarity":"common","color":{"xterm":71,"hex":"#5faf5f"},"shiny":{"xterm":49,"hex":"#00ffaf"},"family":[["screen",1987],["tmux",2007],["tim",2026]],"lore":"Named the way vim was: vi improved. tmux followed screen; tim is tmux improved, and so is the app it lives in.","first":"oh hi. i'm tim. tmux, improved. what are we building?","lines":{"idle":"all quiet. no alerts.","work":"{n} panes busy. watching.","need":"{who}: {q}  (bell)","done":"silence in {who}: {recap}","fail":"{who} failed: {recap}  (pane is dead)","back":"reattached. {summary}.","nap":"detached. reattach any time.","boop":"hey. that's my status line."},"sprites":{"0.1":"[{e} {e}]","1.0":"[{e}|{e}]","2.0":"\\[{e}|{e}]/"},"work":["\\[{e}|{e}]/","|[{e}|{e}]|","/[{e}|{e}]\\","-[{e}|{e}]-"],"workMs":150,"portraits":{"0.1":["  ___________"," |           |"," |   {e}   {e}   |"," |    {m}    |"," |_[0]{g}______|","   /_\\   /_\\"],"1.0":["  ___________"," |     |     |"," |  {e}  |  {e}  |"," |    {m}    |"," |_[0]_tim{g}__|","   /_\\   /_\\"],"2.0":["  ___________"," |     |     |","{a}|  {e}  |  {e}  |{b}"," |    {m}    |"," |_[0]_tim{g}__|","   /_\\   /_\\"]},"parts":{"a":{"rest":"\\","work":["\\","-","/","-"],"ms":150},"b":{"rest":"/","work":["/","-","\\","-"],"ms":150}},"moodParts":{"m":{"idle":"\\_/","work":"---","need":" o ","done":"\\_/","fail":"/-\\","back":"\\_/","nap":" . ","boop":" O "},"g":{"idle":"*","work":"#","need":"!","done":"*","fail":"!","back":"*","nap":"~","boop":"*"}},"turn":"arms: a twirling baton in the status line, waving in the portrait","examples":{"idle":"all quiet. no alerts.","work":"3 panes busy. watching.","need":"codex@office: Bash: npm run migrate  (bell)","done":"silence in codex@office: 3 files changed, tests pass","fail":"codex@office failed: 3 files changed, tests pass  (pane is dead)","back":"reattached. 2 done, 1 waiting 40m.","nap":"detached. reattach any time.","boop":"hey. that's my status line."}},{"id":"fish","n":2,"drop":"unix","rarity":"common","color":{"xterm":73,"hex":"#5fafaf"},"shiny":{"xterm":214,"hex":"#ffaf00"},"family":[["fish",2005],["fish 4",2025]],"lore":"The Friendly Interactive SHell: \"Finally, a command line shell for the 90s.\" Rewritten in Rust for 4.0. It finishes your sentences in grey.","first":"finally, a buddy for the 90s. hi!","lines":{"idle":"all quiet in the pond.","work":"{n} swimming along nicely.","need":"{who}: {q}  blub?","done":"{who} finished! {recap}","fail":"{who} failed: {recap}  (sank)","back":"welcome back! {summary}.","nap":"drifting for a bit. blub.","boop":"fish: Unknown command: boop"},"suggest":{"done":" open the diff"},"sprites":{"0.1":">\u003c({e})","1.0":">\u003c({e})>","2.0":">\u003c(({e})>"},"work":[">\u003c(({e})> ",">\u003c(({e})>.",">\u003c(({e})>o",">\u003c(({e})>O"],"workMs":150,"portraits":{"0.1":["   .--."," >\u003c  {e} >{b}","   '--'"],"1.0":["    _.-._"," |\\/ (( {e}'."," |  ((    >{b}"," |/\\ (( .'","    '-.-'"],"2.0":["                     {o}","      _.-\"\"\"-._    {O}"," |\\ .'  ((  ((  {e}'."," |  >  ((  ((     >{b}"," |/ '.  ((  ((  .'","      '-.___.-'"]},"parts":{"o":{"rest":"o","work":[" ",".","o","O"],"ms":220},"O":{"rest":"O","work":[".","o","O"," "],"ms":220}},"moodParts":{"b":{"idle":"","work":"","need":" ?","done":" o","fail":"","back":" o","nap":" z","boop":" O"}},"turn":"bubbles, . o O","examples":{"idle":"all quiet in the pond.","work":"3 swimming along nicely.","need":"codex@office: Bash: npm run migrate  blub?","done":"codex@office finished! 3 files changed, tests pass","fail":"codex@office failed: 3 files changed, tests pass  (sank)","back":"welcome back! 2 done, 1 waiting 40m.","nap":"drifting for a bit. blub.","boop":"fish: Unknown command: boop"}},{"id":"ping","n":3,"drop":"unix","rarity":"common","color":{"xterm":221,"hex":"#ffd75f"},"shiny":{"xterm":39,"hex":"#00afff"},"family":[["ping",1983]],"lore":"Named after the sound of sonar. It shares its name with a 1933 picture book about a duck. It measures every round trip.","first":"PING you (127.0.0.1): hi. you there?","lines":{"idle":"0 packets waiting.","work":"{n} in flight.","need":"{who}: {q}  PING","done":"64 bytes from {who}: {recap}","fail":"{who} failed: {recap}  (timeout)","back":"you're back. {summary}.","nap":"floating. no packets for a bit.","boop":"pong."},"sprites":{"0.1":"({e} )>","1.0":"__({e} )>","2.0":"~__({e} )>"},"work":["~__({e} )>","-__({e} )>",".__({e} )>","-__({e} )>"],"workMs":150,"portraits":{"0.1":["   .-.","  ( {e} )>"," ,-) (."," \\ '-' )","  '---'"],"1.0":["      .-.","     ( {e} )>","  ,   )  (","  |\\.'    '.","   \\  '--'  )","    '-.__.-'"],"2.0":["      .-.","     ( {e} )> {s}","  ,   )  (","  |\\.'    '."," _.\\  '--'  )._","  {w}"]},"parts":{"w":{"rest":"~^~-~^~-~^~-~","work":["~^~-~^~-~^~-~","^~-~^~-~^~-~^","~-~^~-~^~-~^~","-~^~-~^~-~^~-"],"ms":200}},"moodParts":{"s":{"idle":"","work":"","need":"  ) ) )","done":"","fail":"","back":"","nap":"","boop":""}},"turn":"ripples, ~ ^ -","examples":{"idle":"0 packets waiting.","work":"3 in flight.","need":"codex@office: Bash: npm run migrate  PING","done":"64 bytes from codex@office: 3 files changed, tests pass","fail":"codex@office failed: 3 files changed, tests pass  (timeout)","back":"you're back. 2 done, 1 waiting 40m.","nap":"floating. no packets for a bit.","boop":"pong."}},{"id":"bat","n":4,"drop":"unix","rarity":"common","color":{"xterm":103,"hex":"#8787af"},"shiny":{"xterm":254,"hex":"#e4e4e4"},"family":[["cat",1971],["bat",2018]],"lore":"cat has printed files since Unix v1. bat calls itself \"a cat(1) clone with wings.\" It hatches as a kitten; the wings ship in 2.0.","first":"a cat(1) clone, with wings. i'll take it from here.","lines":{"idle":"watching from above.","work":"{n} busy. watching from above.","need":"{who}: {q}","done":"{who} finished. highlighted: {recap}","fail":"{who} failed: {recap}","back":"you're back. {summary}. i kept the lights low.","nap":"hanging upside down for a bit.","boop":"...rude."},"sprites":{"0.1":"({e}.{e})","1.0":"=({e}.{e})=","2.0":"/({e}.{e})\\"},"work":["/({e}.{e})\\","-({e}.{e})-","\\({e}.{e})/","-({e}.{e})-"],"workMs":150,"portraits":{"0.1":["  /|   |\\"," ( {e} . {e} )","  =\\ w /="],"1.0":["   /|     |\\","  / '.___.' \\"," |  {e}  .  {e}  |"," =\\    w    /=","   '-.___.-'","     |   |  )","     |_|_|_/"],"2.0":["         /|     |\\"," {l}     / '.___.' \\     {r}","/  '-._|  {e}  .  {e}  |_.-'  \\","\\/\\/\\/ =\\    w    /= \\/\\/\\/","         '-.___.-'","          |_| |_|"]},"parts":{"l":{"rest":"/\\","work":["/\\","__","\\/","__"],"ms":150},"r":{"rest":"/\\","work":["/\\","__","\\/","__"],"ms":150}},"turn":"wings, flapping","examples":{"idle":"watching from above.","work":"3 busy. watching from above.","need":"codex@office: Bash: npm run migrate","done":"codex@office finished. highlighted: 3 files changed, tests pass","fail":"codex@office failed: 3 files changed, tests pass","back":"you're back. 2 done, 1 waiting 40m. i kept the lights low.","nap":"hanging upside down for a bit.","boop":"...rude."}},{"id":"vim","n":5,"drop":"unix","rarity":"rare","color":{"xterm":107,"hex":"#87af5f"},"shiny":{"xterm":226,"hex":"#ffff00"},"family":[["ed",1969],["vi",1976],["vim",1991]],"lore":"ed begat vi, and vi begat vim, Vi IMproved. The ~ marks lines past the end of the buffer. Famous for being hard to leave.","first":"hi. i'm vim. no, you can't exit me. :help pairing","lines":{"idle":"--No lines in buffer--","work":"-- INSERT -- {n} agents typing.","need":"{who}: {q}  E325","done":"\"{who}\" written. {recap}","fail":"{who} failed: {recap}  (1 of 1)","back":":earlier  {summary}.","nap":":sleep 900","boop":"-- VISUAL -- you selected me."},"sprites":{"0.1":"~ {e}_{e}","1.0":"\u003c {e}_{e} >","2.0":"\u003c {e}_{e} >_"},"work":["\u003c {e}_{e} >_","\u003c {e}_{e} > "],"workMs":400,"portraits":{"0.1":["~    .","~  .' '.","~ \u003c {e} {e} >","~  '.v.'","~    '","~"],"1.0":["~      /\\","~    .'  '.","~   \u003c {e}  {e} >","~    '.\\/.'","~      \\/","~","{mode}"],"2.0":["~      /\\","~    .'  '.","~   \u003c {e}  {e} >{k}","~    '.\\/.'","~      \\/","~"," [No Name] [+]    1,1  All","{mode}"]},"parts":{"k":{"rest":"_","work":["_"," "],"ms":400}},"moodParts":{"mode":{"idle":"","work":"-- INSERT --","need":"(y/n/a/q/l/^E/^Y)?","done":"\"pair.log\" 3L, 64B written","fail":"E492: Not an editor command","back":":earlier 40m","nap":":sleep 900","boop":"-- VISUAL --"}},"turn":"a blinking cursor, _","examples":{"idle":"--No lines in buffer--","work":"-- INSERT -- 3 agents typing.","need":"codex@office: Bash: npm run migrate  E325","done":"\"codex@office\" written. 3 files changed, tests pass","fail":"codex@office failed: 3 files changed, tests pass  (1 of 1)","back":":earlier  2 done, 1 waiting 40m.","nap":":sleep 900","boop":"-- VISUAL -- you selected me."}},{"id":"zsh","n":6,"drop":"unix","rarity":"rare","color":{"xterm":173,"hex":"#d7875f"},"shiny":{"xterm":134,"hex":"#af5fd7"},"family":[["sh",1979],["ksh",1983],["zsh",1990]],"lore":"A hermit crab that keeps moving into better shells: the Bourne shell, the Korn shell, then zsh, named after a teaching assistant's login.","first":"the default interactive shell is now zsh. hi.","lines":{"idle":"no jobs.","work":"{n} jobs running in the background.","need":"{who}: {q}  [suspended]","done":"[1]  + done       {who}  {recap}","fail":"{who} failed: {recap}  [exit 1]","back":"you were away. {summary}. i autocorrected nothing.","nap":"moving into a quieter shell for a bit.","boop":"zsh: command not found: boop"},"sprites":{"0.1":"@ {e},,{e}","1.0":"@v{e},,{e}v","2.0":"@V{e},,{e}V"},"work":["@V{e},,{e}V","@v{e},,{e}v"],"workMs":260,"portraits":{"0.1":["    .-.","   ( @ )"," v({e},,{e})v","   /\\/\\"],"1.0":["       .--.","     .' .-.'.","    /  ( @ ) \\","   '.   '-'  .'"," ({c})({e} ,, {e})({c})","     /\\/  \\/\\"],"2.0":[" ({c})    _.---._    ({c})","  \\ \\  .'  .-.  '.  / /","   \\ \\/   ( @ )   \\/ /","    \\ |    '-'    | /","     '.({e}  ,,,  {e}).'","       /\\/\\/   \\/\\/\\"]},"parts":{"c":{"rest":"\\/","work":["\\/","/\\"],"ms":260}},"turn":"claws, (\\/) (/\\) snapping","examples":{"idle":"no jobs.","work":"3 jobs running in the background.","need":"codex@office: Bash: npm run migrate  [suspended]","done":"[1]  + done       codex@office  3 files changed, tests pass","fail":"codex@office failed: 3 files changed, tests pass  [exit 1]","back":"you were away. 2 done, 1 waiting 40m. i autocorrected nothing.","nap":"moving into a quieter shell for a bit.","boop":"zsh: command not found: boop"}},{"id":"biff","n":7,"drop":"unix","rarity":"rare","color":{"xterm":180,"hex":"#d7af87"},"shiny":{"xterm":130,"hex":"#af5f00"},"family":[["biff",1980]],"lore":"biff told Berkeley Unix users when mail arrived (4.0BSD). It was named after a dog who barked at the mail carrier, and `biff y` switched it on. Now it barks when an agent needs you.","first":"woof. i'm biff. i bark when you have mail. and agents.","lines":{"idle":"watching the door.","work":"{n} inside. i hear them working.","need":"{who}: {q}  woof","done":"{who}'s done! good agent! {recap}","fail":"{who} failed: {recap}  grr","back":"you're back! {summary}.","nap":"lying down by the door.","boop":"woof."},"sprites":{"0.1":"U{e}w{e}U","1.0":"U({e}w{e})U","2.0":"U({e}w{e})U~"},"work":["U({e}w{e})U~","U({e}w{e})U/","U({e}w{e})U|","U({e}w{e})U\\"],"workMs":150,"portraits":{"0.1":["   .-.___.-.","  ( /     \\ )","   '| {e} {e} |'","    \\ (_) /","     '{m}'"],"1.0":["   .-.  ___  .-.","  / / .'   '. \\ \\"," | | / {e}   {e} \\ | |","  \\_\\|  (_)  |/_/","      \\ {m} /","       '---'"],"2.0":["   .-.  ___  .-.","  / / .'   '. \\ \\"," | | / {e}   {e} \\ | |","  \\_\\|  (_)  |/_/","      \\ {m} /","     .-'---'-.","    (  |   |  )_{t}","     '-'   '-'"]},"parts":{"t":{"rest":"~","work":["~","/","|","\\"],"ms":150}},"moodParts":{"m":{"idle":"\\_/","work":"\\_/","need":"\\O/","done":"\\U/","fail":".-.","back":"\\U/","nap":"\\_/","boop":"\\U/"}},"turn":"tail, ~ / | \\ wagging","examples":{"idle":"watching the door.","work":"3 inside. i hear them working.","need":"codex@office: Bash: npm run migrate  woof","done":"codex@office's done! good agent! 3 files changed, tests pass","fail":"codex@office failed: 3 files changed, tests pass  grr","back":"you're back! 2 done, 1 waiting 40m.","nap":"lying down by the door.","boop":"woof."}},{"id":"fzf","n":8,"drop":"unix","rarity":"legendary","color":{"xterm":110,"hex":"#87afd7"},"shiny":{"xterm":161,"hex":"#d7005f"},"family":[["find",1974],["fzf",2013]],"lore":"find has walked directory trees since 1974. fzf finds things fuzzily, shows its match count, and keeps the best match next to the prompt.","first":"> hello   1/1   it's me, fzf. i find things.","lines":{"idle":"0/0. nothing to find.","work":"{n} busy. filtering out the noise.","need":"{who}: {q}  1/1","done":"match: {who}  {recap}","fail":"{who} failed: {recap}  0/1","back":"{summary}. best match at the bottom, as always.","nap":"no query. resting.","boop":"> boop  0/0"},"sprites":{"0.1":";{e};{e};","1.0":",;{e};{e};,","2.0":"> ;{e};{e};"},"work":["> ;{e};{e};","> ,{e},{e},","> '{e}'{e}'","> ,{e},{e},"],"workMs":180,"portraits":{"0.1":["   ,;:;,","  ; {e} {e} ;","   ':;:'"],"1.0":["    ,;:;:;:;,","  ,;'       ';,","  ;:  {e}   {e}  :;","  ':,   .   ,:'","    ';:;:;:;'"],"2.0":["    {f}","  ,;'       ';,","  ;:  {e}   {e}  :;","  ':,   .   ,:'","    ';:;:;:;'","  {n}","> _"]},"parts":{"f":{"rest":",;:;:;:;,","work":[",;:;:;:;,",";:;:;:;:;",":;:;:;:;:"],"ms":180}},"moodParts":{"n":{"idle":"0/0","work":"3/12","need":"1/1","done":"1/1","fail":"0/1","back":"4/7","nap":"0/0","boop":"0/0"}},"turn":"fuzz, ; : , '","examples":{"idle":"0/0. nothing to find.","work":"3 busy. filtering out the noise.","need":"codex@office: Bash: npm run migrate  1/1","done":"match: codex@office  3 files changed, tests pass","fail":"codex@office failed: 3 files changed, tests pass  0/1","back":"2 done, 1 waiting 40m. best match at the bottom, as always.","nap":"no query. resting.","boop":"> boop  0/0"}},{"id":"tldr","n":9,"drop":"unix","rarity":"legendary","color":{"xterm":179,"hex":"#d7af5f"},"shiny":{"xterm":118,"hex":"#87ff00"},"family":[["man",1971],["tldr",2013]],"lore":"man pages date from the first Unix Programmer's Manual. tldr pages are the short version: a few examples, no essay. It gets smaller with every release.","first":"tldr: hi.","lines":{"idle":"nothing.","work":"{n} working.","need":"{who}: {q}","done":"{who}: done.","fail":"{who} failed: {recap}","back":"tl;dr {summary}.","nap":"zz.","boop":"no."},"sprites":{"0.1":"({e})v({e})","1.0":"({e}v{e})","2.0":"{e}v{e}"},"work":["{e}v{e} |","{e}v{e} /","{e}v{e} -","{e}v{e} \\"],"workMs":130,"portraits":{"0.1":["   \\             /","   |'-._______.-'|","   |  .-.   .-.  |","   | ( {e} ) ( {e} ) |","   |  '-' v '-'  |","    \\  \\/\\/\\/\\  /","     '-.m___m.-'","   [____MAN(1)___]"],"1.0":["   \\       /","   |'-._.-'|","   |({e}) ({e})|","   \\   v   /","    '-m-m-'","    [tldr]"],"2.0":["  \\ /"," ({e}v{e})","  m m"," tl;dr"]},"turn":"a twirling baton beside it","examples":{"idle":"nothing.","work":"3 working.","need":"codex@office: Bash: npm run migrate","done":"codex@office: done.","fail":"codex@office failed: 3 files changed, tests pass","back":"tl;dr 2 done, 1 waiting 40m.","nap":"zz.","boop":"no."}},{"id":"grue","n":10,"drop":"unix","rarity":"secret","color":{"xterm":246,"hex":"#949494"},"shiny":{"xterm":93,"hex":"#8700ff"},"family":[["grue",1977]],"lore":"Zork, MIT: \"It is pitch black. You are likely to be eaten by a grue.\" Nobody has seen one. It hatches only from eggs found in the dark, and shows up only in a dark theme.","first":"it is pitch black. you are likely to be paired with a grue.","lines":{"idle":"...","work":"it is dark. {n} are working. i can hear them.","need":"{who}: {q}  (in the dark)","done":"the lamp is lit. {who} is done.","fail":"{who} failed: {recap}  (eaten)","back":"you have moved into a dark place.","nap":"...","boop":"you touched something in the dark."},"eyes":{"idle":".","work":".","need":"o","done":"*","fail":"x","back":"o","nap":" ","boop":"O"},"lid":" ","darkOnly":true,"sprites":{"0.1":"{e} {e}","1.0":"{e}  {e}","2.0":"{e}   {e}"},"work":["{e}   {e}","    {e}","{e}   {e}","{e}    "],"workMs":300,"portraits":{"0.1":["","    {e} {e}"],"1.0":["","","    {e}       {e}"],"2.0":["       ,  '  '  '  ,       ","    '                 `    ","  ,     {e}         {e}     ,  ","    `     {t}     '    ","       '  ,  ,  ,  '       "]},"moodParts":{"t":{"idle":"       ","work":"       ","need":"       ","done":"       ","fail":"vVvVvVv","back":"       ","nap":"       ","boop":"       "}},"turn":"eyes, flickering","examples":{"idle":"...","work":"it is dark. 3 are working. i can hear them.","need":"codex@office: Bash: npm run migrate  (in the dark)","done":"the lamp is lit. codex@office is done.","fail":"codex@office failed: 3 files changed, tests pass  (eaten)","back":"you have moved into a dark place.","nap":"...","boop":"you touched something in the dark."}}],"banner":{"about":"The banner face for a daemon name on the hatch reveal: five rows (cap, x-top, mid, base, descender), drawn for Harness in the small line-art style. One column between letters. Printable ASCII only.","rows":5,"gap":1,"glyphs":{"a":["     "," __ _","/ _` |","\\__,_|","      "],"b":[" _   ","| |__","| '_ \\","|_.__/","      "],"c":["    "," __ ","/ _|","\\__|","    "],"d":["    _ "," __| |","/ _` |","\\__,_|","      "],"e":["     "," ___ ","/ -_)","\\___|","     "],"f":["  __ "," / _|","|  _|","|_|  ","     "],"g":["      "," __ _ ","/ _` |","\\__, |","|___/ "],"h":[" _    ","| |_  ","| ' \\ ","|_||_|","      "],"i":[" _ ","(_)","| |","|_|","   "],"j":["   _ ","  (_)","  | |"," _/ |","|__/ "],"k":[" _   ","| |__","| / /","|_\\_\\","     "],"l":[" _ ","| |","| |","|_|","   "],"m":["         "," _ __  ","| '  \\ ","|_|_|_|","       "],"n":["      "," _ _  ","| ' \\ ","|_||_|","      "],"o":["     "," ___ ","/ _ \\","\\___/","     "],"p":["      "," _ __ ","| '_ \\","| .__/","|_|   "],"q":["      "," __ _ ","/ _` |","\\__, |","   |_|"],"r":["     "," _ _ ","| '_|","|_|  ","     "],"s":["   "," __","(_ ","__)","   "],"t":[" _   ","| |_ ","|  _|"," \\__|","     "],"u":["      "," _  _ ","| || |"," \\_,_|","      "],"v":["      ","__ __","\\ V /"," \\_/ ","     "],"w":["        ","__ __ __","\\ V  V /"," \\_/\\_/ ","        "],"x":["     ","__ __","\\ \\ /","/_\\_\\","     "],"y":["      "," _  _ ","| || |"," \\_, |"," |__/ "],"z":["    "," ___","|_ /","/__|","    "]," ":["  ","  ","  ","  ","  "],".":["   ","   ","   "," _ ","(_)"]}}}</script>
+<!-- roster:end -->
+<script>
+(() => {
+  // Everything drawn here comes from daemons/roster.json, injected above by daemons/tools/generate.mjs.
+  const R = JSON.parse(document.getElementById('roster-data').textContent);
+  const RULES = R.rules;
+  const V = RULES.versions, LAST = V.length - 1;
+  const RM = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const LABEL = { idle: 'content', work: 'working', need: 'needs you', done: 'turn done', fail: 'failed', back: 'welcome back', nap: 'asleep', boop: 'booped' };
+  const MOODS = RULES.moods.map(k => [k, LABEL[k] || k]);
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const clock = () => performance.now();
+  const cyc = (list, ms) => list[Math.floor(clock() / ms) % list.length];
+
+  // ---------- the renderer: a port of daemons/tools/render.mjs ----------
+  const eyeFor = (d, mood) => (d.eyes && d.eyes[mood] != null) ? d.eyes[mood] : (RULES.eyes[mood] ?? 'o');
+  function fill(tpl, d, mood, o = {}) {
+    const t = o.t ?? 0, lid = o.lid ?? null, motion = o.motion ?? true;
+    const blinking = lid && !RULES.noBlinkMoods.includes(mood);
+    const eye = blinking ? (d.lid ?? lid) : eyeFor(d, mood);
+    const moving = motion && mood === 'work';
+    return tpl.replace(/\{([a-zA-Z]+)\}/g, (whole, key) => {
+      if (key === 'e') return eye;
+      const mp = d.moodParts && d.moodParts[key];
+      if (mp) return mp[mood] ?? mp.idle;
+      const part = d.parts && d.parts[key];
+      if (part) return moving ? part.work[Math.floor(t / part.ms) % part.work.length] : part.rest;
+      return whole;
+    });
+  }
+  function sprite(d, vi, mood, o = {}) {
+    const t = o.t ?? 0, lid = o.lid ?? null, motion = (o.motion ?? true) && !RM;
+    const moving = motion && (mood === 'work' || mood === 'back');
+    let tpl = d.sprites[V[vi]];
+    if (moving && vi === LAST) tpl = d.work[Math.floor(t / (mood === 'back' ? RULES.backFrameMs : d.workMs)) % d.work.length];
+    let s = fill(tpl, d, mood, { t, lid, motion: false });
+    if (moving && vi < LAST && s.length <= RULES.statusCells - 2) s += ' ' + '|/-\\'[Math.floor(t / 130) % 4];
+    if (mood === 'nap' && s.length < RULES.statusCells) s += 'z';
+    return s;
+  }
+  function portraitFor(d, version) {
+    if (d.portraits[version]) return d.portraits[version];
+    const drawn = V.filter(v => d.portraits[v]);
+    const below = drawn.filter(v => V.indexOf(v) <= V.indexOf(version));
+    return d.portraits[below.length ? below[below.length - 1] : drawn[0]];
+  }
+  const portrait = (d, version, mood, o = {}) =>
+    portraitFor(d, version).map(l => fill(l, d, mood, { ...o, motion: (o.motion ?? true) && !RM })).join('\n');
+  const statusCell = s => {
+    const pad = RULES.statusCells - s.length;
+    return ' ' + ' '.repeat(Math.max(0, Math.floor(pad / 2))) + s + ' '.repeat(Math.max(0, Math.ceil(pad / 2))) + ' ';
+  };
+  const lidAt = (list, now) => { const b = (list || []).find(x => now >= x.t0 && now < x.t1); return b ? b.eye : null; };
+  function blinkSeq(kind, delay) {
+    let t = clock() + (delay || 0);
+    return RULES.blinks[kind].map(([eye, ms]) => { const b = { t0: t, t1: t + ms, eye }; t += ms; return b; });
+  }
+
+  const C = R.daemons;
+  // Lines are templates with slots ({who} {q} {recap} {n} {summary}); the page shows them filled with the roster's example.
+  const lineOf = (d, mood) => (d.examples && d.examples[mood]) || d.lines[mood];
+  const byId = Object.fromEntries(C.map(d => [d.id, d]));
+  // Secrets sit outside the numbered set, as on a card (daemons/tools/card.mjs): #01/09 to #09/09, and #S/09.
+  const NUM = d => {
+    const set = C.filter(x => x.drop === d.drop && x.rarity !== 'secret');
+    const of = String(set.length).padStart(2, '0');
+    return d.rarity === 'secret' ? '#S/' + of : '#' + String(set.indexOf(d) + 1).padStart(2, '0') + '/' + of;
+  };
+  const color = d => d.color.hex;
+  const shinyColor = d => (d.shiny && d.shiny.hex) || 'var(--blue)';
+  const hiddenMoods = new Set(['work', 'nap', 'boop']);
+
+  // ---------- hero: tmux window ----------
+  const hero = { d: byId.tim || C[0], vi: LAST, mood: 'idle', base: 'idle', msgUntil: 0, msg: '', suggest: '', until: 0, blinks: [], seenAt: 0 };
+  const blink = (kind, delay) => { if (!RM) hero.blinks = blinkSeq(kind, delay); };
+  const paneL = document.getElementById('paneL');
+  const paneR = document.getElementById('paneR');
+  const status = document.getElementById('status');
+  const statusLeft = document.getElementById('statusLeft');
+  const buddyBtn = document.getElementById('buddy');
+  const H = s => '<span class="h">' + esc(s) + '</span>';
+  function panes() {
+    const sp = RM ? '*' : cyc(['|', '/', '-', '\\'], 130);
+    const m = hero.base;
+    const L = [H('claude · m2:~/code/harness'), ''];
+    const Rr = [H('codex · office:~/code/api'), ''];
+    if (m === 'work' || m === 'need') L.push('> refactor auth to the new session store', '  Reading src/auth/middleware.ts', '  Editing src/auth/session.ts', '  ' + sp + ' working 2m14s');
+    else if (m === 'done' || m === 'back' || m === 'fail') L.push(H('> refactor auth to the new session store'), '<span class="ok">  Edited 3 files. Tests pass.</span>', '> _');
+    else L.push(H('  (idle)'), '> _');
+    if (m === 'work') Rr.push('> fix the flaky billing test', '  Running npm test -- billing', '  ' + sp + ' working 48s');
+    else if (m === 'need' || m === 'back') Rr.push(H('> fix the flaky billing test'), '<span class="ask">  Run npm run migrate?</span>', '<span class="ask">  1. Yes  2. Yes, always  3. No</span>');
+    else if (m === 'fail') Rr.push(H('> fix the flaky billing test'), '<span class="bad">  1 failing: billing.spec.ts:212</span>', '<span class="bad">  exit 1</span>', '> _');
+    else Rr.push(H('  (idle)'), '> _');
+    paneL.innerHTML = L.join('\n');
+    paneR.innerHTML = Rr.join('\n');
+    paneL.classList.toggle('sleepy', m === 'nap');
+    paneR.classList.toggle('sleepy', m === 'nap');
+  }
+  function heroRender(now) {
+    now = now ?? clock();
+    if (hero.until && now > hero.until) { hero.mood = hero.base; hero.until = 0; }
+    const lid = hiddenMoods.has(hero.mood) ? null : lidAt(hero.blinks, now);
+    const s = sprite(hero.d, hero.vi, hero.mood, { t: now, lid });
+    buddyBtn.textContent = statusCell(s);
+    buddyBtn.setAttribute('aria-label', hero.d.id + ' ' + V[hero.vi] + ', ' + (LABEL[hero.mood] || hero.mood) + '. Click to boop.');
+    const showMsg = now < hero.msgUntil;
+    status.classList.toggle('msg', showMsg);
+    if (showMsg) statusLeft.innerHTML = esc(hero.d.id + ': ' + hero.msg) + (hero.suggest ? '<span class="suggest">' + esc(hero.suggest) + '</span>' : '');
+    else statusLeft.textContent = '[harness] 0:claude' + (hero.base === 'work' ? '*' : '-') + ' 1:codex' + (hero.base === 'need' ? '!' : hero.base === 'work' ? '*' : '-');
+  }
+  function say(line, suggest) { hero.msg = line; hero.suggest = suggest || ''; hero.msgUntil = clock() + 5200; }
+  function event(ev) {
+    const now = clock();
+    hero.base = ev; hero.mood = ev; hero.until = 0;
+    const hold = RULES.holdMs[ev];
+    if (hold) hero.until = now + hold;
+    if (ev === 'idle') hero.msgUntil = 0;
+    else say(lineOf(hero.d, ev), hero.d.suggest && hero.d.suggest[ev]);
+    if (ev === 'need' || ev === 'done' || ev === 'fail') blink('ack', 160);
+    if (ev === 'back') blink('slow', (hold || 0) + 120);
+    panes(); heroRender();
+    document.querySelectorAll('[data-ev]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.ev === ev)));
+  }
+  const settle = () => {
+    if (!hero.until && ['done', 'back', 'fail', 'boop'].includes(hero.mood)) {
+      hero.mood = ['work', 'need', 'nap'].includes(hero.base) ? hero.base : 'idle';
+    }
+  };
+  buddyBtn.addEventListener('click', () => { hero.mood = 'boop'; hero.until = clock() + RULES.holdMs.boop; say(lineOf(hero.d, 'boop')); heroRender(); });
+  const looked = () => { const now = clock(); if (now - hero.seenAt < 2500) return; hero.seenAt = now; blink('look'); };
+  buddyBtn.addEventListener('mouseenter', looked);
+  buddyBtn.addEventListener('focus', looked);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { hero.seenAt = 0; blink('look', 250); } });
+  document.querySelectorAll('[data-ev]').forEach(b => b.addEventListener('click', () => event(b.dataset.ev)));
+  function pickRow(el, items, current, onPick) {
+    items.forEach(([value, label]) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = label; b.setAttribute('aria-pressed', String(value === current));
+      b.addEventListener('click', () => {
+        el.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+        onPick(value);
+      });
+      el.appendChild(b);
+    });
+  }
+  pickRow(document.getElementById('heroPick'), C.map(d => [d.id, d.id]), hero.d.id, id => { hero.d = byId[id]; say(hero.d.first); blink('slow', 300); heroRender(); });
+  pickRow(document.getElementById('heroVer'), V.map((v, i) => [i, v]), hero.vi, i => { hero.vi = i; heroRender(); });
+
+  // ---------- the zoo ----------
+  let rosterMood = 'idle';
+  let rosterVer = V[LAST];
+  const boops = {}, cardBlinks = {}, cardEls = {};
+  const roster = document.getElementById('roster');
+  C.forEach(d => {
+    const el = document.createElement('article');
+    el.className = 'card';
+    const fam = d.family.map((f, i) => (i === d.family.length - 1 ? '<b>' + esc(f[0]) + '</b>' : esc(f[0]))).join(' → ');
+    const yrs = d.family.map(f => f[1] ?? '').filter(Boolean).join(' → ');
+    el.innerHTML =
+      '<div class="top"><span class="num">' + NUM(d) + '</span><span class="name">' + esc(d.id) + '</span><span class="chip ' + d.rarity + '">' + d.rarity + '</span></div>' +
+      '<div class="art' + (d.darkOnly ? ' pitch' : '') + '" tabindex="0" role="button" aria-label="Boop ' + esc(d.id) + '"><pre role="img"></pre></div>' +
+      '<div class="family">' + fam + (yrs ? '<br>' + yrs : '') + '</div>' +
+      '<p>' + esc(d.lore) + '</p>' +
+      '<div class="stages" aria-label="Versions"></div>' +
+      '<div class="voice"></div>';
+    const art = el.querySelector('.art');
+    const boop = () => { boops[d.id] = clock() + RULES.holdMs.boop; renderCard(d); };
+    art.addEventListener('click', boop);
+    art.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); boop(); } });
+    art.addEventListener('mouseenter', () => { if (!RM) cardBlinks[d.id] = blinkSeq('look', 60); });
+    roster.appendChild(el);
+    cardEls[d.id] = el;
+  });
+  function renderCard(d, now) {
+    now = now ?? clock();
+    const el = cardEls[d.id];
+    const mood = boops[d.id] && now < boops[d.id] ? 'boop' : rosterMood;
+    const lid = hiddenMoods.has(mood) ? null : lidAt(cardBlinks[d.id], now);
+    const pre = el.querySelector('.art pre');
+    pre.textContent = portrait(d, rosterVer, mood, { t: now, lid });
+    pre.style.color = color(d);
+    pre.setAttribute('aria-label', d.id + ' ' + rosterVer + ', ' + (LABEL[mood] || mood));
+    el.querySelector('.stages').innerHTML = V.map((v, i) =>
+      '<div><span>' + v + '</span>' + esc(sprite(d, i, mood, { t: now })).replace(/ /g, '&nbsp;') + '</div>').join('');
+    const line = mood === 'idle' ? d.first : lineOf(d, mood);
+    el.querySelector('.voice').innerHTML = esc(d.id + ': ' + line) + (d.suggest && d.suggest[mood] ? '<span style="color:var(--faint)">' + esc(d.suggest[mood]) + '</span>' : '');
+  }
+  const renderCards = () => C.forEach(d => renderCard(d));
+  pickRow(document.getElementById('moodPick'), MOODS.filter(m => m[0] !== 'boop'), rosterMood, k => { rosterMood = k; renderCards(); });
+  pickRow(document.getElementById('verPick'), V.map(v => [v, v]), rosterVer, v => { rosterVer = v; renderCards(); });
+  const TEASE = [['sep 9 · 1947', 'a logbook, a relay, a moth'], ['apr 1 · 418', 'short and stout'], ['0x0', 'a billion-dollar mistake'], ['oct 31', '&lt;defunct&gt;'], ['?', 'changes when you look at it'], ['1963', 'works while you sleep']];
+  document.getElementById('teasers').innerHTML = TEASE.map(t => '<div class="teaser"><b>[ ? ]</b><span>' + t[0] + '</span><span>' + t[1] + '</span></div>').join('');
+
+  // ---------- the banner face (daemons/banner.json), a port of render.mjs renderBanner ----------
+  const BN = R.banner;
+  const fig = w => {
+    const blank = BN.glyphs[' '];
+    const glyphs = [...w.toLowerCase()].map(ch => { const g = BN.glyphs[ch] || blank; const wd = Math.max(...g.map(r => r.length)); return g.map(r => r.padEnd(wd)); });
+    return Array.from({ length: BN.rows }, (_, r) => glyphs.map(g => g[r]).join(' '.repeat(BN.gap)).trimEnd()).filter(l => l.trim()).join('\n');
+  };
+
+  // ---------- hatching (the server's draw, run here for the demo) ----------
+  // The same rules as backend/src/lib/zoo.ts: released drops only; no duplicate of a regular until every
+  // released regular is owned; a secret sits outside that set and comes only from an egg with a secret
+  // weight (night, easter), certainly on the 8th such hatch without one; a duplicate merges into the one
+  // you have (+xp, shiny if it was shiny).
+  const EGG_NAMES = { first: 'first egg', setup: 'setup egg', turn: 'turn egg', week: 'week egg', marathon: 'marathon egg', night: 'night egg', easter: 'easter egg' };
+  const ord = n => n + (n === 2 ? 'nd' : n === 3 ? 'rd' : 'th');
+  const E = RULES.earn || {};
+  const hh = h => String(h).padStart(2, '0');
+  const FE = RULES.firstEgg;
+  const EGG_NOTE = {
+    first: 'Earned by any ' + FE.need + ' of these ' + FE.habits.length + ' habits, as long as one is ' + (FE.require || []).map(k => k === 'turn' ? 'a finished turn' : (FE.habits.find(h => h.key === k) || { label: k }).label.toLowerCase()).join(' and ') + ': ' + FE.habits.map(h => h.label.toLowerCase()).join(', ') + '. Leans toward tim.',
+    setup: RULES.setupEgg ? 'The second egg, at ' + RULES.setupEgg.need + ' habits. Once.' : '',
+    turn: E.turn ? 'Earned every ' + E.turn.every + ' turns you finish. A long turn counts once more for every ' + E.turn.minutesPerTurn + ' minutes the agent works. At most ' + E.turn.dailyCap + ' count per day.' : '',
+    week: E.week ? 'Earned by working on ' + E.week.days + ' days in one week.' : '',
+    marathon: E.marathon ? 'Earned at ' + E.marathon.turns + ' turns, and again for a ' + ord(E.marathon.machines) + ' machine.' : '',
+    night: E.night ? 'Earned on ' + E.night.nights + ' nights when a turn you started finished while you were away (no window or hn for ' + E.night.awayMinutes + ' minutes), between ' + hh(E.night.fromHour) + ':00 and ' + hh(E.night.toHour) + ':59. bat likes the dark. So does something else.' : '',
+    // The words ship only as hashes; this one classic is written out, as a client may.
+    easter: 'Type xyzzy. Nothing happens. Once, an egg does.',
+  };
+  const eggKinds = Object.keys(RULES.eggs).filter(k => EGG_NAMES[k]);
+  const released = drop => { const d = R.drops.find(x => x.id === drop); return !d || !d.release || Date.parse(d.release + 'T00:00:00Z') <= Date.now(); };
+  const POOL = C.filter(d => released(d.drop));
+  const REG = POOL.filter(d => d.rarity !== 'secret');
+  const secretIn = k => (RULES.eggs[k].weights.secret || 0) > 0;
+  const DUP_XP = RULES.duplicateXp || 0;
+  const GUARANTEE = RULES.secretGuaranteeAt || Infinity;
+  const fresh = () => ({ owned: new Map(), pity: 0 });   // id -> { dupes, shiny, xp }
+  let S = fresh();
+  let eggKey = eggKinds.includes('first') ? 'first' : eggKinds[0];
+  let busy = false;
+  const complete = () => REG.every(d => S.owned.has(d.id));
+  function weigh(pool) {
+    const egg = RULES.eggs[eggKey];
+    const per = {};
+    pool.forEach(d => { per[d.rarity] = (per[d.rarity] || 0) + 1; });
+    return pool.map(d => {
+      let w = (egg.weights[d.rarity] || 0) / per[d.rarity];
+      if (d.rarity === 'secret' && secretIn(eggKey)) w += S.pity * RULES.pityPerMiss;
+      if (egg.boost && egg.boost[d.id]) w *= egg.boost[d.id];
+      return { d, w };
+    });
+  }
+  function odds() {
+    const newRegs = REG.filter(d => !S.owned.has(d.id));
+    const secrets = secretIn(eggKey) ? POOL.filter(d => d.rarity === 'secret' && !S.owned.has(d.id)) : [];
+    let rows;
+    if (secrets.length && S.pity + 1 >= GUARANTEE) rows = weigh(secrets);
+    else {
+      const eligible = new Set([...(newRegs.length ? newRegs : REG), ...secrets]);
+      rows = weigh(POOL.filter(d => eligible.has(d)));
+      if (rows.reduce((a, r) => a + r.w, 0) === 0) rows = weigh(POOL);
+    }
+    const tot = rows.reduce((a, r) => a + r.w, 0);
+    const byId = new Map(rows.map(r => [r.d.id, tot ? r.w / tot : 0]));
+    return POOL.map(d => ({ d, p: byId.get(d.id) || 0 }));
+  }
+  function draw() {
+    const o = odds().filter(r => r.p > 0);
+    let x = Math.random();
+    for (const r of o) { x -= r.p; if (x <= 0) return r.d; }
+    return o.length ? o[o.length - 1].d : null;
+  }
+  const eggPre = document.getElementById('egg');
+  const big = document.getElementById('big');
+  const banner = document.getElementById('banner');
+  const stamp = document.getElementById('stamp');
+  const words = document.getElementById('words');
+  const stageEl = document.getElementById('stage');
+  const pitch = document.getElementById('pitchline');
+  const hatchBtn = document.getElementById('hatchBtn');
+  const cardWrap = document.getElementById('cardwrap');
+  const cardPre = document.getElementById('card');
+  const EGG = RULES.egg.slice(0, -1).map(r => r.padEnd(18));
+  const NEST = RULES.egg[RULES.egg.length - 1].padEnd(18);
+  function eggFrame(off, crack) {
+    const rows = EGG.slice();
+    if (crack === 1) rows[2] = '     | /\\/  |     ';
+    if (crack === 2) rows[2] = '     |/\\/\\/\\|     ';
+    const shift = r => (off < 0 ? r.slice(1) + ' ' : off > 0 ? ' ' + r.slice(0, -1) : r);
+    return ['                  ', ...rows.map(shift), NEST].join('\n');
+  }
+  const popFrame = () => ["    '  .--.  .    ", '      /\\/\\/\\      ', "         '        ", '     |\\/\\/\\/|     ', EGG[3], EGG[4], NEST].join('\n');
+  function resetStage() {
+    stageEl.classList.remove('pitch');
+    [big, banner, stamp, words, pitch].forEach(e => { e.hidden = true; });
+    eggPre.hidden = false;
+    eggPre.textContent = eggFrame(0, 0);
+  }
+  function wrap(text, width) {
+    const out = []; let line = '';
+    text.split(' ').forEach(w => { if ((line + ' ' + w).trim().length > width) { out.push(line.trim()); line = w; } else line += ' ' + w; });
+    if (line.trim()) out.push(line.trim());
+    return out;
+  }
+  function cardText(d, shiny, egg) {
+    const W = 42, inner = W - 4;
+    const L = s => '| ' + s.padEnd(inner).slice(0, inner) + ' |';
+    const drop = R.drops.find(x => x.id === d.drop) || { n: 1, name: d.drop };
+    const head = NUM(d) + '  DROP ' + drop.n + ': ' + drop.name.toUpperCase();
+    const r = (shiny ? 'SHINY ' : '') + d.rarity.toUpperCase();
+    const today = new Date().toISOString().slice(0, 10);
+    return [
+      '.' + '-'.repeat(W - 2) + '.',
+      L(head + ' '.repeat(Math.max(1, inner - head.length - r.length)) + r),
+      L(''),
+      L('  ' + sprite(d, 0, 'idle', { motion: false }).padEnd(8) + ' ' + d.id + ' ' + V[0]),
+      L('  ' + d.family.map(f => f[0]).join(' -> ')),
+      L(''),
+      ...wrap('"' + d.first + '"', inner - 2).map(l => L('  ' + l)),
+      L(''),
+      L('  hatched ' + today + ', ' + EGG_NAMES[egg]),
+      "'" + '-'.repeat(W - 2) + "'",
+    ].join('\n');
+  }
+  async function hatch() {
+    if (busy) return;
+    const d = draw();
+    if (!d) return;
+    busy = true; hatchBtn.disabled = true; cardWrap.hidden = true;
+    const shiny = Math.random() < 1 / RULES.shinyOneIn;
+    const egg = eggKey;
+    const had = S.owned.get(d.id);
+    resetStage();
+    if (!RM) {
+      for (let k = 0; k < 2; k++) { for (const off of [-1, 0, 1, 0]) { eggPre.textContent = eggFrame(off, 0); await sleep(90); } await sleep(420); }
+      eggPre.textContent = eggFrame(0, 1); await sleep(450);
+      for (const off of [-1, 1, -1, 1, 0]) { eggPre.textContent = eggFrame(off, 1); await sleep(60); }
+      eggPre.textContent = eggFrame(0, 2); await sleep(520);
+      eggPre.textContent = popFrame(); await sleep(480);
+    }
+    eggPre.hidden = true;
+    const sp = sprite(d, 0, 'idle', { motion: false });
+    if (d.darkOnly) { stageEl.classList.add('pitch'); pitch.hidden = false; if (!RM) await sleep(1600); }
+    big.hidden = false;
+    big.textContent = sp.replace(/[^ ]/g, '#');
+    big.style.color = 'var(--faint)';
+    if (!RM) await sleep(850);
+    big.textContent = sp;
+    big.style.color = shiny ? shinyColor(d) : color(d);
+    if (!RM) {
+      await sleep(320); big.textContent = sprite(d, 0, 'idle', { lid: '-', motion: false });
+      await sleep(120); big.textContent = sp; await sleep(220);
+    }
+    banner.hidden = false; banner.textContent = '';
+    const rows = fig(d.id).split('\n');
+    for (let i = 0; i < rows.length; i++) { banner.textContent = rows.slice(0, i + 1).join('\n'); if (!RM) await sleep(90); }
+    stamp.hidden = false;
+    stamp.className = d.rarity;
+    stamp.textContent = '[ ' + (shiny ? '* SHINY * ' : '') + d.rarity.toUpperCase() + ' ]  ' + NUM(d);
+    words.hidden = false;
+    if (had) {
+      // A duplicate grows the one you have: xp, a level maybe, and a shine if this one was shiny.
+      had.dupes += 1; had.xp += DUP_XP; if (shiny) had.shiny = true;
+      words.innerHTML = 'fork() returned 0. another ' + esc(d.id) + '.<br>' + esc('it merges into yours: +' + DUP_XP + ' xp' + (shiny ? ', and now yours is shiny' : '') + '. x' + (had.dupes + 1) + ' on the shelf.');
+    } else {
+      S.owned.set(d.id, { dupes: 0, shiny, xp: 0 });
+      words.innerHTML = 'fork() returned 0. it\'s a ' + esc(d.id) + '.<br>' + esc(d.id + ' ' + V[0] + ': ' + d.first);
+    }
+    // The pity counts only eggs that can hold a secret.
+    if (d.rarity === 'secret') S.pity = 0; else if (secretIn(egg)) S.pity += 1;
+    cardPre.textContent = cardText(d, shiny || !!(had && had.shiny), egg);
+    cardWrap.hidden = false;
+    document.getElementById('copyNote').textContent = '';
+    busy = false;
+    sideRender();
+  }
+  function sideRender() {
+    const o = odds();
+    const done = complete();
+    document.getElementById('odds').innerHTML = o.map(r => {
+      const owned = S.owned.has(r.d.id);
+      const name = r.d.rarity === 'secret' && !owned ? '???' : r.d.id;
+      const cls = owned && r.p === 0 ? ' class="owned"' : '';
+      return '<tr><td' + cls + '>' + esc(name) + '</td><td class="' + r.d.rarity + '">' + r.d.rarity + '</td><td' + cls + '>' + (owned && r.p === 0 ? 'hatched' : (r.p * 100).toFixed(1) + '%') + '</td></tr>';
+    }).join('');
+    document.getElementById('shelf').innerHTML = POOL.map(d => {
+      const mine = S.owned.get(d.id);
+      if (!mine) return '<span style="color:var(--faint)" title="not hatched yet">' + (d.rarity === 'secret' ? '[!]' : '[?]') + '</span>';
+      return '<span style="color:' + (mine.shiny ? shinyColor(d) : color(d)) + '" title="' + esc(d.id + (mine.shiny ? ', shiny' : '') + (mine.xp ? ', +' + mine.xp + ' xp' : '')) + '">' + esc(sprite(d, 0, 'idle', { motion: false })) + (mine.dupes ? ' x' + (mine.dupes + 1) : '') + '</span>';
+    }).join('');
+    const have = REG.filter(d => S.owned.has(d.id)).length;
+    document.getElementById('shelfCount').textContent = have + '/' + REG.length + (POOL.some(d => d.rarity === 'secret' && S.owned.has(d.id)) ? ' +secret' : '');
+    hatchBtn.disabled = busy;
+    hatchBtn.textContent = done && !o.some(r => r.p > 0 && !S.owned.has(r.d.id)) ? 'hatch a duplicate' : 'hatch it';
+    document.getElementById('eggNote').textContent = EGG_NOTE[eggKey] || '';
+    document.getElementById('oddsNote').textContent =
+      'No duplicates until you have all ' + REG.length + ' regulars. A secret is not one of them: it hatches only from night and easter eggs, and the ' + ord(GUARANTEE) + ' of those without one is it. ' +
+      'A duplicate merges into the one you have: +' + DUP_XP + ' xp, and a shiny duplicate makes yours shiny. Any hatch has a 1 in ' + RULES.shinyOneIn + ' chance to be shiny.' +
+      (secretIn(eggKey) ? ' Hatches of this kind without a secret: ' + S.pity + '.' : '');
+    if (!busy && !eggPre.hidden) eggPre.textContent = eggFrame(0, 0);
+  }
+  pickRow(document.getElementById('eggPick'), eggKinds.map(k => [k, RULES.eggs[k].look + ' ' + EGG_NAMES[k].replace(' egg', '')]), eggKey, k => { if (busy) return; eggKey = k; sideRender(); });
+  hatchBtn.addEventListener('click', hatch);
+  stageEl.addEventListener('click', () => { if (!busy && !eggPre.hidden) hatch(); });
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    if (busy) return;
+    S = fresh();
+    cardWrap.hidden = true; resetStage(); sideRender();
+  });
+  document.getElementById('copyBtn').addEventListener('click', () => {
+    const text = '```\n' + cardPre.textContent + '\n```';
+    const note = document.getElementById('copyNote');
+    const fallback = () => {
+      const r = document.createRange(); r.selectNodeContents(cardPre);
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      note.textContent = 'Selected. Press Cmd-C to copy.';
+    };
+    try { navigator.clipboard.writeText(text).then(() => { note.textContent = 'Copied as a code block.'; }, fallback); } catch (e) { fallback(); }
+  });
+
+  // ---------- eggs table, from the rules ----------
+  const eggRows = eggKinds.map(k => [EGG_NAMES[k], RULES.eggs[k].look, EGG_NOTE[k], leans(k)]);
+  function leans(k) {
+    const w = RULES.eggs[k].weights;
+    const top = Object.entries(w).sort((a, b) => b[1] - a[1])[0][0];
+    const boost = RULES.eggs[k].boost ? ' · ' + Object.keys(RULES.eggs[k].boost).join(', ') + ' boosted' : '';
+    return 'mostly ' + top + (w.secret > 0 ? ' · secret ' + w.secret + '%' : ' · never a secret') + boost;
+  }
+  const hist = Object.entries(RULES.historyDates || {}).map(([md, id]) => md + (id ? ' (' + id + ')' : '')).join(', ');
+  const histDays = (E.history && E.history.days) || 1;
+  if (hist) eggRows.push(['history egg', '\\_47_/', 'Opens on dates from computing history: ' + hist + ', for ' + (histDays === 7 ? 'a week' : histDays + ' days') + ' from the date. Once per date, every year.', "that day's daemon, once it has been drawn · never a secret"]);
+  document.getElementById('eggsLede').textContent = 'What you do picks the egg; luck picks what is inside. Longer efforts earn eggs with rarer pools, the way longer walks do in Pokémon Go. ' +
+    'Eggs wait in the nest until you open them; when it is full, new ones wait their turn, and past 64 waiting each new one is ' + RULES.overflowXp + ' xp for your daemon instead. ' +
+    'A turn counts when it finishes in a harness you work in (never a replay, a sub-agent or a plain terminal), a long one counts once more for every ' + E.turn.minutesPerTurn + ' minutes, and at most ' + E.turn.dailyCap + ' count a day across all your machines, so nobody burns tokens farming eggs.';
+  document.querySelector('#eggTable tbody').innerHTML = eggRows.map(r =>
+    '<tr><td>' + esc(r[0]) + '</td><td class="s">' + esc(r[1]) + '</td><td class="p">' + esc(r[2]) + '</td><td class="p">' + esc(r[3]) + '</td></tr>').join('');
+  const nestEl = document.getElementById('nestRow');
+  if (nestEl) nestEl.textContent = RULES.nest.join('     ');
+
+  // ---------- growth, per daemon ----------
+  const B = RULES.bond || { levels: [0, 50, 150, 300, 600], xpPerTurn: 1, xpPerDay: 5 };
+  const lvlFor = v => RULES.bondForVersion[v];
+  const xpFor = v => B.levels[lvlFor(v)] ?? 0;
+  const perDay = (E.turn ? E.turn.dailyCap : 20) * B.xpPerTurn + B.xpPerDay;
+  const days = xp => Math.ceil(xp / perDay);
+  const TIM_LOG = { '0.1': ['one pane', 'says hello'], '1.0': ['split-window -h: a second pane', 'learned your agents by name'], '2.0': ['added arms, for waving', 'in-jokes from your logbook'] };
+  let growId = hero.d.id;
+  const growthEl = document.getElementById('growth');
+  function renderGrowth() {
+    const d = byId[growId];
+    growthEl.innerHTML = V.map(v => {
+      const log = (d.changelog && d.changelog[v]) || (d.id === 'tim' && TIM_LOG[v]) || [];
+      const when = v === V[0] ? 'hatched' : 'bond level ' + lvlFor(v) + ' · ' + xpFor(v) + ' xp · about ' + days(xpFor(v)) + ' full days';
+      return '<div class="release"><div class="art' + (d.darkOnly ? ' pitch' : '') + '"><pre role="img" aria-label="' + esc(d.id + ' ' + v) + '" style="color:' + color(d) + '">' +
+        esc(portrait(d, v, 'idle', { motion: false })) + '</pre></div>' +
+        '<pre class="log"><b>' + esc(d.id + ' ' + v) + '</b>  ' + esc(sprite(d, V.indexOf(v), 'idle', { motion: false })) + '\n' + esc(when) + (log.length ? '\n- ' + log.map(esc).join('\n- ') : '') + '</pre></div>';
+    }).join('');
+  }
+  pickRow(document.getElementById('growPick'), C.map(d => [d.id, d.id]), growId, id => { growId = id; renderGrowth(); });
+  renderGrowth();
+
+  // ---------- moods table ----------
+  const TRIG = {
+    idle: 'Nothing needs you.', work: 'Any agent is working. A body part turns.', need: 'A harness is waiting on you. Wins over everything automatic.',
+    done: 'A turn you started finished. At most once per 20 seconds.', fail: 'A turn failed or a harness went offline.',
+    back: 'You return after 15 minutes or more. Once per return; it waves.', nap: 'You asked it to nap. Anything that needs you wakes it.',
+    boop: 'You clicked it.',
+  };
+  const tim = byId.tim || C[0];
+  const mp = k => tim.moodParts ? Object.keys(tim.moodParts).map(p => tim.moodParts[p][k] ?? tim.moodParts[p].idle) : [];
+  document.querySelector('#moodTable tbody').innerHTML = MOODS.map(([k, label]) =>
+    '<tr><td>' + label + '</td><td class="s" style="color:' + color(tim) + '">' + esc(sprite(tim, LAST, k, { motion: false })) + '</td><td>' + esc(eyeFor(tim, k) + ' ' + eyeFor(tim, k)) + '</td><td class="s" style="color:var(--ink)">' + esc(mp(k)[0] ?? '') + '</td><td>' + esc(mp(k)[1] != null ? tim.id + mp(k)[1] : '') + '</td><td class="p">' + esc(TRIG[k]) + '</td><td class="p">' + esc(lineOf(tim, k)) + '</td></tr>').join('');
+
+  // ---------- spinners ----------
+  const SPINS = [
+    ['twirling baton', 'PLATO, 1970s · 130 ms', ['|', '/', '-', '\\'], 130],
+    ['growing dot', 'cli-spinners · 140 ms', [' ', '.', 'o', 'O', '@', '*'], 140],
+    ['twinkle', 'cli-spinners · 80 ms', ['+', 'x', '*'], 80],
+    ['turning letter', 'dqpb · 100 ms', ['d', 'q', 'p', 'b'], 100],
+    ['dots', 'the patient one · 400 ms', ['.  ', '.. ', '...', '   '], 400],
+    ['bouncing bar', 'cli-spinners · 80 ms', ['[=   ]', '[==  ]', '[=== ]', '[ ===]', '[  ==]', '[   =]', '[    ]'], 80],
+    ...C.filter(d => d.work && d.work.length > 1 && d.turn).slice(0, 4).map(d => [d.turn.split(',')[0], d.id + ' · ' + d.workMs + ' ms', d.work.map(f => fill(f, d, 'work', { motion: false })), d.workMs]),
+  ];
+  const spinsEl = document.getElementById('spins');
+  spinsEl.innerHTML = SPINS.map((s, i) => '<div class="spin"><div class="g" data-spin="' + i + '">' + esc(RM ? s[2].join(' ') : s[2][0]) + '</div><div class="n">' + esc(s[0]) + '</div><div class="d">' + esc(s[1]) + '</div></div>').join('');
+  const spinG = [...spinsEl.querySelectorAll('[data-spin]')];
+
+  // ---------- one clock for everything that moves ----------
+  function tick() {
+    if (document.hidden) return;
+    const now = clock();
+    settle();
+    heroRender(now);
+    if (hero.base === 'work') panes();
+    if (!RM && rosterMood === 'work') C.forEach(d => renderCard(d, now));
+    else C.forEach(d => {
+      const bl = cardBlinks[d.id];
+      const blinking = bl && bl.length && now < bl[bl.length - 1].t1 + 60;
+      if ((boops[d.id] && now < boops[d.id] + 60) || blinking) renderCard(d, now);
+    });
+    if (!RM) spinG.forEach((g, i) => { g.textContent = cyc(SPINS[i][2], SPINS[i][3]); });
+  }
+  panes(); heroRender(); renderCards(); resetStage(); sideRender();
+  setInterval(tick, 40);
+})();
+</script>
