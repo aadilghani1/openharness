@@ -390,6 +390,40 @@ const ANY_RULE_RE = /^\s*[\u2500\u2501\u2550\u254c\u2504\u2508-]{6,}\s*$/
  *  header and the rows, and neither says what is being approved. */
 const PERMISSION_PROSE_RE = /^((do|would) you\b|press \[)/i
 
+/** A live dialog's footer (`parseQuestionPane`'s anchor). */
+const QUESTION_FOOTER_RE = /enter to (select|confirm|submit)|enter\s+(submit|confirm|toggle)/i
+/** How a key-hint line starts (`Esc to cancel`, `Enter to select`, `↑/↓ navigate`, `Press enter to confirm`),
+ *  and prose that merely mentions a key (`Make Esc close the modal`) does not. */
+const HINT_START_RE = /^\s*(esc\b|enter\b|tab\b|shift\+tab\b|ctrl\+|press enter\b|[↑↓⇆←→])/i
+
+/**
+ * Where an EARLIER dialog ends above the row at `start`, or -1: its key hints (`Esc to cancel`, `Enter to
+ * select`, …) on a line of their own, right under its numbered rows. That dialog was answered and is only
+ * still in scrollback, so nothing at or above it belongs to the one at `start`: not a frame's opening rule,
+ * not its header (`Bash command`), not its command. Read across it, an unframed prompt was titled by the
+ * PREVIOUS prompt's header and command — `Approve Bash command: npm test` over `python3 wipe.py --all`.
+ */
+function earlierDialogEnd(lines: string[], start: number, reach: number): number {
+  for (let i = start - 1; i >= 0 && start - i <= reach; i--) {
+    const line = lines[i]
+    if (!HINT_START_RE.test(line) || !(PERMISSION_FOOTER_RE.test(line) || QUESTION_FOOTER_RE.test(line))) continue
+    for (let j = i - 1; j >= 0 && i - j <= 4; j--) {
+      if (!lines[j].trim()) continue
+      if (parseRow(lines[j])) return i
+      break
+    }
+  }
+  return -1
+}
+
+/** The opening rule of the frame the rows at `start` sit in, or -1 when they have none of their own. */
+function frameTop(lines: string[], start: number, floor: number): number {
+  for (let i = start - 1; i > floor && start - i <= 25; i--) {
+    if (FRAME_RULE_RE.test(lines[i])) return i
+  }
+  return -1
+}
+
 /** Keep a synthesised title inside the device's `text[200]` buffer, with the tail marked as cut. */
 function clipTitle(value: string): string {
   return value.length <= 160 ? value : `${value.slice(0, 159)}\u2026`
@@ -404,14 +438,13 @@ function clipTitle(value: string): string {
  * argument: the command, the file, or the sentence naming it.
  */
 function permissionTitle(lines: string[], start: number): string {
-  let top = -1
-  for (let i = start - 1; i >= 0 && start - i <= 25; i--) {
-    if (FRAME_RULE_RE.test(lines[i])) { top = i; break }
-  }
+  // The header must be THIS dialog's: never read past the end of an earlier one still in scrollback.
+  const floor = earlierDialogEnd(lines, start, 25)
+  const top = frameTop(lines, start, floor)
   // No frame above the rows (codex draws none): the nearest text is the dialog's own question, which
   // names the command outright. Better than inventing a header that is not on screen.
   if (top < 0) {
-    for (let i = start - 1; i >= 0 && start - i <= 4; i--) {
+    for (let i = start - 1; i > floor && start - i <= 4; i--) {
       const line = lines[i].trim()
       if (line) return clipTitle(line)
     }
@@ -482,7 +515,7 @@ export function parseQuestionPane(capture: string): PaneView {
   // __fixtures__/question-codex.txt). Without it that dialog was never a question at all here: the dial
   // showed nothing while the pane waited, and a question it DID show could never be closed, because
   // the watcher had no fingerprint to notice leaving.
-  const footer = lines.findLastIndex((l) => /enter to (select|confirm|submit)|enter\s+(submit|confirm|toggle)/i.test(l))
+  const footer = lines.findLastIndex((l) => QUESTION_FOOTER_RE.test(l))
   // The review screen paints no footer and puts its rows BELOW the prompt, so it needs its own anchor.
   // Whichever anchor is LOWER on screen is the live one (the other is scrollback from an earlier step).
   const review = lines.findLastIndex((l) => /Ready to submit your answers/i.test(l))
@@ -602,6 +635,13 @@ export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | nul
  * `positional` also takes the next unused entry when none names it. Only for a dialog the answer's
  * requestId proves it was written for: without that proof, an answer that names no question on screen
  * belongs to one that is gone, and typing it here would answer — or approve — something nobody saw.
+ *
+ * The text must be the question's OWN (case, spacing and a trailing `…` aside), never a prefix either way.
+ * An approval is titled `Approve <header>: <argument>` and the header is shared by every prompt of its
+ * kind: a key left from an earlier prompt — `Approve Bash command` (its argument unread) — was a prefix of
+ * `Approve Bash command: rm -rf ~/projects` and pressed Yes on it, and an old full title named a
+ * header-only prompt the other way round. A client echoes back the key it was announced, so the whole
+ * text is always there to match; one it has cut is answered through its requestId (`positional`).
  */
 export function pickAnswer(
   answers: Record<string, string>,
@@ -611,8 +651,7 @@ export function pickAnswer(
 ): { key: string; value: string } | null {
   const entries = Object.entries(answers)
   const q = norm(question)
-  const byText = entries.find(([k]) => norm(k) === q)
-    ?? (q.length >= 6 ? entries.find(([k]) => norm(k).startsWith(q) || q.startsWith(norm(k))) : undefined)
+  const byText = q ? entries.find(([k]) => norm(k) === q) : undefined
   if (byText && !used.has(byText[0])) return { key: byText[0], value: byText[1] }
   if (!opts.positional) return null
   const next = entries.find(([k]) => !used.has(k))

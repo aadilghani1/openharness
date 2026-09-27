@@ -6,6 +6,7 @@ import {
   matchRow,
   parseEngineQuestionPane,
   parseQuestionPane,
+  pickAnswer,
   QuestionWatcher,
   questionRequestId,
   shapeQuestions,
@@ -1054,5 +1055,138 @@ describe('the review\'s simulation: a real QuestionWatcher and AskQuestionContro
     const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: 'Yes' } })
     expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
     expect(w.keys).toEqual([])
+  })
+})
+
+describe('a stale `Approve …` header (regression: a header from an earlier dialog named the current one)', () => {
+  // An approval is titled `Approve <header>: <argument>`, and the header is shared by every prompt of its
+  // kind. Two ways an earlier prompt's header reached the current one:
+  //  - pickAnswer's prefix rule: a key left from an earlier prompt — `Approve Bash command` (its argument
+  //    unread) — was a prefix of `Approve Bash command: rm -rf ~/projects`, so a no-requestId "Yes" to the
+  //    old prompt approved the new one; the other way round, an old full title named a header-only one.
+  //  - the parser: an unframed prompt under an answered one still in scrollback walked up past that one's
+  //    rows to its frame, and was titled by the OLD header and command — under the old prompt's very id,
+  //    so a [y] meant for `npm test` passed the id check and approved whatever the new prompt runs.
+  const CURL = 'curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin'
+  const rule = '─'.repeat(60)
+  const earlier = [rule, ' Bash command', '', '   npm test', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel · Tab to amend', '']
+  const output = ['⏺ Bash(npm test)', '  ⎿  ok', '']
+  const unframed = [' Do you want to proceed?', '   python3 scripts/wipe.py --all', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel', '']
+  const headerOnly = [rule, ' Bash command', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel'].join('\n')
+  const rmRf = (): string => permission('claude').replaceAll(CURL, 'rm -rf ~/projects')
+
+  it('pickAnswer: a question is named by its own text only, never a prefix either way', () => {
+    expect(pickAnswer({ 'Approve Bash command': 'Yes' }, 'Approve Bash command: rm -rf ~/projects', new Set())).toBeNull()
+    expect(pickAnswer({ 'Approve Bash command: npm test': 'Yes' }, 'Approve Bash command', new Set())).toBeNull()
+    expect(pickAnswer({ 'Approve Bash command: rm -rf ~/pro': 'Yes' }, 'Approve Bash command: rm -rf ~/projects', new Set())).toBeNull()
+    expect(pickAnswer({ 'Which drink would': 'Tea' }, 'Which drink would you like?', new Set())).toBeNull()
+    // Case, spacing and a trailing ellipsis are not the text.
+    expect(pickAnswer({ 'approve bash command:  rm -rf ~/projects…': 'No' }, 'Approve Bash command: rm -rf ~/projects', new Set()))
+      .toEqual({ key: 'approve bash command:  rm -rf ~/projects…', value: 'No' })
+    // A key that normalises to nothing names no question, not even a blank one.
+    expect(pickAnswer({ '…': 'Yes' }, '', new Set())).toBeNull()
+    // With its requestId's proof, position still answers the dialog it was written for.
+    expect(pickAnswer({ 'Approve Bash command': 'No' }, 'Approve Bash command: rm -rf ~/projects', new Set(), { positional: true }))
+      .toEqual({ key: 'Approve Bash command', value: 'No' })
+  })
+
+  it('types nothing into a permission prompt for a no-requestId answer keyed by an earlier prompt\'s header', async () => {
+    const stale = machine([rmRf(), CLOSED])
+    expect(await stale.controller.answer({ sessionId: 's1', answers: { 'Approve Bash command': 'Yes' } })).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(stale.keys).toEqual([])
+    // …nor into a header-only prompt for an earlier prompt's full title.
+    const bare = machine([headerOnly, CLOSED])
+    expect(asQuestion(parseQuestionPane(headerOnly)).question).toBe('Approve Bash command')
+    expect(await bare.controller.answer({ sessionId: 's1', answers: { 'Approve Bash command: npm test': 'Yes' } })).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(bare.keys).toEqual([])
+    // The prompt's own title still answers it, and its requestId still answers it by position.
+    const own = machine([rmRf(), CLOSED])
+    expect(await own.controller.answer({ sessionId: 's1', answers: { 'Approve Bash command: rm -rf ~/projects': 'No' } })).toEqual({ ok: true })
+    expect(own.keys).toEqual(['3'])
+    const byId = machine([rmRf(), CLOSED])
+    expect(await byId.controller.answer({ requestId: idOf(rmRf()), sessionId: 's1', answers: { 'Approve Bash command': 'No' } })).toEqual({ ok: true })
+    expect(byId.keys).toEqual(['3'])
+  })
+
+  it('an unframed prompt under an answered one is titled by its own command, not the answered one\'s', () => {
+    const view = asQuestion(parseQuestionPane([...earlier, ...output, ...unframed].join('\n')))
+    expect(view).toMatchObject({ permission: true, question: 'python3 scripts/wipe.py --all' })
+    expect(view.question).not.toMatch(/Bash command|npm test/)
+  })
+
+  it('so an answer for the answered prompt is refused on the new one, even carrying that prompt\'s requestId', async () => {
+    // The id the watcher announced `npm test` under: what the person's [y] carries back.
+    const npmTest = idOf([...earlier, ...output].join('\n'))
+    const now = [...earlier, ...output, ...unframed].join('\n')
+    expect(idOf(now)).not.toBe(npmTest)
+    const h = machine([now, CLOSED])
+    expect(await h.controller.answer({ requestId: npmTest, sessionId: 's1', answers: { 'Approve Bash command: npm test': 'Yes' } }))
+      .toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(h.keys).toEqual([])
+  })
+
+  it('an earlier question dialog ends the walk the same way; right under one, the title is "Approval required"', () => {
+    const question = [rule, ' ☐ Drink', '', ' Which drink would you like?', '', ' ❯ 1. Tea', '   2. Coffee', '', ' Enter to select · ↑/↓ to navigate · Esc to cancel', '']
+    expect(asQuestion(parseQuestionPane([...question, ...output, ...unframed].join('\n'))).question).toBe('python3 scripts/wipe.py --all')
+    const underIt = asQuestion(parseQuestionPane([...earlier, ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel'].join('\n')))
+    expect(underIt).toMatchObject({ permission: true, question: 'Approval required' })
+  })
+
+  it('a framed prompt under an answered one still reads its own frame, header and command, under its own id', () => {
+    const current = [rule, ' Bash command', '', '   ls -la', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel']
+    expect(asQuestion(parseQuestionPane([...earlier, ...output, ...current].join('\n'))).question).toBe('Approve Bash command: ls -la')
+    expect(idOf([...earlier, ...output, ...current].join('\n'))).toBe(idOf(current.join('\n')))
+  })
+
+  it('numbered text inside the frame, and prose that mentions a key, are not an earlier dialog', () => {
+    const edit = [rule, ' Edit file', ' notes.md', '', ' 1. Add the tests', ' 2. Make Esc close the modal', '    press esc to see it', '',
+      ' Do you want to make this edit to notes.md?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel']
+    expect(asQuestion(parseQuestionPane(edit.join('\n'))).question).toBe('Approve Edit file: notes.md')
+  })
+})
+
+describe('every captured dialog keeps main\'s requestId', () => {
+  // Pinned from main's parser. The fix above only stops a walk at an EARLIER dialog, so no capture of a
+  // single dialog may change id: a moved id is a question re-announced to every client, and an answer in
+  // flight refused as stale. A new fixture is pinned here by being added to the folder.
+  const PINNED: Record<string, string> = {
+    'permission-agy.txt': 'q_60303071',
+    'permission-claude-edit.txt': 'q_e5db8e92',
+    'permission-claude-plan.txt': 'q_ef5fd1bd',
+    'permission-claude.txt': 'q_53cbacbe',
+    'permission-codex.txt': 'q_4dee428d',
+    'permission-commandcode.txt': 'q_b5f70edc',
+    'permission-copilot.txt': 'q_a83deada',
+    'permission-cursor.txt': 'q_e2102acb',
+    'permission-devin.txt': 'q_0ed54a33',
+    'permission-grok.txt': 'q_5396976a',
+    'permission-hermes.txt': 'q_b57b7882',
+    'permission-muse.txt': 'q_efbbdf0e',
+    'permission-opencode.txt': 'q_0f7b7b0e',
+    'question-agy.txt': 'q_c81fea46',
+    'question-codex.txt': 'q_2b1fb10c',
+    'question-commandcode.txt': 'q_66cbf314',
+    'question-copilot.txt': 'q_c81fea46',
+    'question-devin-multi.txt': 'q_19c3200e',
+    'question-devin.txt': 'q_19a084b7',
+    'question-grok.txt': 'q_a5e412d6',
+    'question-hermes.txt': 'q_541f972b',
+    'question-kilo.txt': 'q_0f7b7b0e',
+    'question-multi.txt': 'q_6945a8c7',
+    'question-muse.txt': 'q_42c9e375',
+    'question-opencode.txt': 'q_048f35db',
+    'question-single.txt': 'q_f0722383',
+    'question-tabs.txt': 'q_b9207692',
+  }
+  const answered = ['─'.repeat(60), ' Bash command', '', '   npm test', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel · Tab to amend', '',
+    '⏺ Bash(npm test)', '  ⎿  ok', '']
+
+  it('pins every open fixture', () => {
+    expect(Object.keys(PINNED).sort()).toEqual(OPEN)
+  })
+
+  it.each(OPEN)('%s: alone, and under an answered prompt in scrollback', (file) => {
+    expect(idIn(file, paneOf(file))).toBe(PINNED[file])
+    expect(idIn(file, [...answered, paneOf(file)].join('\n'))).toBe(PINNED[file])
   })
 })
