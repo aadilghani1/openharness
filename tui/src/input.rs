@@ -224,11 +224,7 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
     app.tim.touched = std::time::Instant::now();
     // tmux asks the terminal for bare motion only when a pane here wants it (or a menu opened by
     // the mouse): the rest of the motion hn is sent never happened, as far as tmux is concerned.
-    if matches!(mouse.kind, MouseEventKind::Moved) {
-        let menu = matches!(&app.modal, Some(Modal::Menu(m)) if !m.no_mouse);
-        let wanted = app.rects.iter().any(|(id, _)| app.panes.get(id).map(|p| p.mode().contains(alacritty_terminal::term::TermMode::MOUSE_MOTION)).unwrap_or(false));
-        if !menu && !wanted { return }
-    }
+    if matches!(mouse.kind, MouseEventKind::Moved) && !app.wants_motion() { return }
     // hn's lists and prompts keep the mouse as they have it; copy mode and a menu are tmux's.
     if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. }) | Some(Modal::Menu(_))) { return modal_mouse(app, mouse) }
     crate::mouse::on_event(app, mouse);

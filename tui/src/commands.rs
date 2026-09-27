@@ -2626,6 +2626,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let text = if path == "-" { app.cli_stdin.clone().unwrap_or_default() } else {
                 match std::fs::read(&path) { Ok(t) => String::from_utf8_lossy(&t).into_owned(), Err(e) => return app.error(format!("{path}: {}", io_error(&e))) }
             };
+            // -w: to the terminal's clipboard too (OSC 52), when there is a terminal.
+            if flag(words, "-w") && !app.headless { crate::clipboard::store_as("", &text) }
             let limit = app.buffer_limit();
             if let Err(e) = app.paste.set(text, opt(words, "-b").as_deref(), limit) { app.error(e) }
         }

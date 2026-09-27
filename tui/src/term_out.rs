@@ -162,6 +162,18 @@ impl<W: Write> Write for TmuxBackend<W> {
     fn flush(&mut self) -> io::Result<()> { Write::flush(&mut self.inner) }
 }
 
+/// The mouse modes tmux asks the terminal for (tty_update_mode): presses, drags and SGR (1000,
+/// 1002, 1006) — and every motion (1003) only while a pane or a menu wants it. 0 off, 1 on, 2 all.
+pub struct Mouse(pub u8);
+
+impl crossterm::Command for Mouse {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        f.write_str(match self.0 { 0 => "\x1b[?1006l\x1b[?1000l\x1b[?1002l\x1b[?1003l", 1 => "\x1b[?1003l\x1b[?1006h\x1b[?1000h\x1b[?1002h", _ => "\x1b[?1006h\x1b[?1000h\x1b[?1002h\x1b[?1003h" })
+    }
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> io::Result<()> { Ok(()) }
+}
+
 /// How many colours the terminal shows, as tmux reads it (terminfo's colors; 24-bit with RGB):
 /// 0, 8, 16, 256, or 1 << 24.
 static COLOURS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1 << 24);

@@ -1325,7 +1325,9 @@ impl App {
                     let prompt = agent.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default();
                     if fresh && !visible.contains(&agent.key()) {
                         { let k = self.keymap.hint("choose-tree -a").unwrap_or_default(); self.say(format!("{name} is waiting on you — {k}"), theme::ATTENTION); self.toast_hold = Some(4000) }
-                        crate::bell();
+                        // A bell as a window's is rung: not with bell-action none, nor visual-bell on.
+                        let quiet = self.options.get("bell-action", "", None).as_deref() == Some("none") || self.options.get("visual-bell", "", None).as_deref() == Some("on");
+                        if !quiet { crate::bell() }
                     }
                     if fresh && !self.terminal_focused { crate::notify(&format!("{name} needs input"), &prompt) }
                     if fresh { crate::commands::notify_harness(self, "harness-needs", &hook_key) }
@@ -1580,8 +1582,8 @@ impl App {
         let agent = self.fleet.agent(&pane.machine_id, &pane.agent_id);
         pane.stream = None;
         pane.phase = match agent.map(|a| a.status.as_str()) {
-            Some("stopped") => Phase::Card { title: "Paused".into(), detail: "The conversation is saved.".into(), keys: vec![("enter".into(), "resume".into()), (self.keymap.hint("choose-tree -s").unwrap_or_default(), "open another".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] },
-            None => Phase::Card { title: "This harness is gone".into(), detail: "It is no longer on its machine.".into(), keys: vec![(self.keymap.hint("choose-tree -s").unwrap_or_default(), "open another".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] },
+            Some("stopped") => Phase::Card { title: "Paused".into(), detail: "The conversation is saved.".into(), keys: vec![("enter".into(), "resume".into()), (self.keymap.hint("choose-tree -Zs").or_else(|| self.keymap.hint("choose-tree -s")).unwrap_or_default(), "open another".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] },
+            None => Phase::Card { title: "This harness is gone".into(), detail: "It is no longer on its machine.".into(), keys: vec![(self.keymap.hint("choose-tree -Zs").or_else(|| self.keymap.hint("choose-tree -s")).unwrap_or_default(), "open another".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] },
             _ if agent.map(|a| a.launch == "starting").unwrap_or(false) => Phase::Connecting("Starting…".into()),
             _ => Phase::Card { title: "The terminal closed".into(), detail: reason, keys: vec![("enter".into(), "reopen".into()), (self.keymap.hint("confirm-before -p \"restart #T? (y/n)\" restart-harness").unwrap_or_else(|| "C-b R".into()), "restart".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] },
         };
@@ -3082,6 +3084,13 @@ impl App {
     }
 
     pub fn tab_mut(&mut self) -> &mut Tab { &mut self.tabs[self.active] }
+    /// Whether every motion of the mouse is wanted: a pane here asked for it (1003), or a menu
+    /// the mouse opened is up (tmux's MODE_MOUSE_ALL).
+    pub fn wants_motion(&self) -> bool {
+        matches!(&self.modal, Some(crate::modal::Modal::Menu(m)) if !m.no_mouse)
+            || self.rects.iter().any(|(id, _)| self.panes.get(id).map(|p| p.mode().contains(alacritty_terminal::term::TermMode::MOUSE_MOTION)).unwrap_or(false))
+    }
+
     pub fn focused(&self) -> Option<u64> { self.tab().focus }
 
     /// Everything but the status line (tmux `status-position`, bottom by default).

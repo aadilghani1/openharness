@@ -45,7 +45,7 @@ use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange, EnableMouseCapture,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -55,15 +55,18 @@ use tokio::sync::mpsc;
 
 use crate::event::Event;
 
-/// A notification on the computer the person is at, through their terminal — OSC 9 (iTerm2,
-/// WezTerm, Ghostty, kitty) and OSC 777 (foot, Ghostty, rxvt). Over SSH it still lands locally.
+/// A notification on the computer the person is at, through their terminal: OSC 777 where it is
+/// the terminal's (foot, rxvt, VTE's), else OSC 9 (iTerm2, WezTerm, Ghostty, kitty) — one, as a
+/// terminal that reads both would show two. Over SSH it still lands locally.
 /// `HARNESS_TUI_NOTIFY=off` silences it.
 pub fn notify(title: &str, body: &str) {
     if std::env::var("HARNESS_TUI_NOTIFY").as_deref() == Ok("off") { return }
     let clean = |t: &str| t.chars().filter(|c| !c.is_control() && *c != ';').collect::<String>();
     let (title, body) = (clean(title), clean(body));
+    let term = std::env::var("TERM").unwrap_or_default();
+    let seven = std::env::var_os("VTE_VERSION").is_some() || term.starts_with("foot") || term.starts_with("rxvt");
     let mut out = io::stdout();
-    let _ = write!(out, "\x1b]9;{title}: {body}\x07\x1b]777;notify;{title};{body}\x07");
+    let _ = if seven { write!(out, "\x1b]777;notify;{title};{body}\x07") } else { write!(out, "\x1b]9;{title}: {body}\x07") };
     let _ = out.flush();
 }
 
@@ -78,13 +81,18 @@ unsafe extern "C" { fn raise(sig: i32) -> i32; }
 /// SIGTSTP, as a shell's job control expects of a program that suspends itself.
 unsafe fn libc_raise_tstp() { unsafe { raise(if cfg!(target_os = "linux") { 20 } else { 18 }); } }
 
+/// The terminal's title saved on its stack as tmux saves it at attach (XTWINOPS 22), and given
+/// back when hn leaves (23): the shell's own title returns.
+const TITLE_PUSH: &str = "\x1b[22;0;0t";
+const TITLE_POP: &str = "\x1b[23;0;0t";
+
 struct Restore { enhanced: bool }
 
 impl Drop for Restore {
     fn drop(&mut self) {
         let mut out = io::stdout();
         if self.enhanced { let _ = execute!(out, PopKeyboardEnhancementFlags); }
-        let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape);
+        let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape, crossterm::style::Print(TITLE_POP));
         let _ = terminal::disable_raw_mode();
     }
 }
@@ -285,7 +293,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     crossterm::style::force_color_output(true);
     terminal::enable_raw_mode()?;
     let mut out = io::stdout();
-    execute!(out, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste, EnableFocusChange)?;
+    execute!(out, crossterm::style::Print(TITLE_PUSH), EnterAlternateScreen, term_out::Mouse(1), EnableBracketedPaste, EnableFocusChange)?;
     // The kitty keyboard protocol, where the terminal has it: ⌘ arrives as SUPER, and ^I is not Tab.
     // Pushed without asking first: the capability query waits for an answer that terminals without
     // the protocol never send (half a second of blank screen), and those terminals ignore the push.
@@ -296,7 +304,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     std::panic::set_hook(Box::new(move |info| {
         let mut out = io::stdout();
         if enhanced { let _ = execute!(out, PopKeyboardEnhancementFlags); }
-        let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape);
+        let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape, crossterm::style::Print(TITLE_POP));
         let _ = terminal::disable_raw_mode();
         default_hook(info);
     }));
@@ -378,6 +386,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     let frame_budget = Duration::from_millis(6);
     let mut last_draw = Instant::now() - frame_budget;
     let mut need_draw = true;
+    let mut mouse_all = false;
     loop {
         // Wait for something — or for the frame we owe to come due.
         let wait = if need_draw { frame_budget.saturating_sub(last_draw.elapsed()) } else { Duration::from_secs(3600) };
@@ -412,24 +421,30 @@ async fn run(config: config::Config) -> io::Result<()> {
         app.mark_seen();
         if app.quit { break }
         if std::mem::take(&mut app.mouse_changed) {
-            if app.mouse { execute!(term.backend_mut(), EnableMouseCapture)?; } else { execute!(term.backend_mut(), DisableMouseCapture)?; }
+            execute!(term.backend_mut(), term_out::Mouse(app.mouse as u8))?;
+            mouse_all = false;
         }
         if std::mem::take(&mut app.suspend) {
             // C-z: give the shell its terminal back, stop, and pick up where we were on `fg`.
             if enhanced { execute!(term.backend_mut(), PopKeyboardEnhancementFlags)?; }
-            execute!(term.backend_mut(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape)?;
+            execute!(term.backend_mut(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape, crossterm::style::Print(TITLE_POP))?;
             terminal::disable_raw_mode()?;
             unsafe { libc_raise_tstp() };
             terminal::enable_raw_mode()?;
-            execute!(term.backend_mut(), EnterAlternateScreen, EnableBracketedPaste, EnableFocusChange, terminal::Clear(terminal::ClearType::All))?;
+            app.title.clear();
+            execute!(term.backend_mut(), crossterm::style::Print(TITLE_PUSH), EnterAlternateScreen, EnableBracketedPaste, EnableFocusChange, terminal::Clear(terminal::ClearType::All))?;
             if enhanced { execute!(term.backend_mut(), PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?; }
-            if app.mouse { execute!(term.backend_mut(), EnableMouseCapture)?; }
+            if app.mouse { execute!(term.backend_mut(), term_out::Mouse(1))?; }
+            mouse_all = false;
             app.cursor_shape.clear();
             // A fresh Terminal repaints everything (ratatui's clear() asks the terminal where its
             // cursor is, and the input reader would eat the answer).
             term = Terminal::new(term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, term_out::Counted(io::stdout()))))?;
             need_draw = true;
         }
+        // Every motion asked for only while something wants it.
+        let all = app.mouse && app.wants_motion();
+        if all != mouse_all { execute!(term.backend_mut(), term_out::Mouse(if all { 2 } else { 1 }))?; mouse_all = all }
         app.flush_acks();
         if refill && matches!(app.modal, Some(modal::Modal::Picker { .. })) { input::refill(&mut app) }
         if need_draw && last_draw.elapsed() >= frame_budget {

@@ -629,6 +629,9 @@ fn modifier_param(mods: KeyModifiers) -> u8 {
 pub fn encode_key(key: &KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
     if key.kind == KeyEventKind::Release { return None }
     let mods = key.modifiers;
+    // ⌘ (the kitty protocol's SUPER, and HYPER) never reaches a pane, as tmux never sees it: an
+    // unbound ⌘C is nothing, not a `c`.
+    if mods.intersects(KeyModifiers::SUPER | KeyModifiers::HYPER) { return None }
     let alt = mods.contains(KeyModifiers::ALT);
     let ctrl = mods.contains(KeyModifiers::CONTROL);
     let shift = mods.contains(KeyModifiers::SHIFT);

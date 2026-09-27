@@ -154,7 +154,7 @@ impl Keymap {
         b(ch('B'), "command-prompt -p (broadcast) { broadcast \"%%\" }", false, "Send one message to every harness in this window");
         b(ch('R'), "confirm-before -p \"restart #T? (y/n)\" restart-harness", false, "Restart this harness");
         b(ch('P'), "confirm-before -p \"pause #T? (y/n)\" pause-harness", false, "Pause this harness (the conversation is kept)");
-        b(ch('K'), "clone-harness", false, "Clone this harness (a second one with its history)");
+        b(ch('K'), "confirm-before -p \"clone #T? (y/n)\" clone-harness", false, "Clone this harness (a second one with its history)");
         drop(b);
         // `/` is list-keys -1N in tmux (describe a key); here it is the far more used search. The
         // describe variant stays reachable through `?`.
