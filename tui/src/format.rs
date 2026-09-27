@@ -910,7 +910,9 @@ pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
     if app.options.tmux_look() && agent.map(|a| a.engine == "terminal").unwrap_or(false) {
         return if p.machine_id == app.fleet.local_id { crate::app::full_hostname() } else { app.fleet.machine_name(&p.machine_id) };
     }
-    agent.map(|a| a.name.clone()).unwrap_or_else(|| p.agent_id.chars().take(8).collect())
+    // A harness not heard of yet (another terminal's new one, before the list comes): what runs
+    // in it, else tmux's own title (the host) — never its id.
+    agent.map(|a| a.name.clone()).or_else(|| p.fg_command.clone()).unwrap_or_else(|| if p.machine_id == app.fleet.local_id { crate::app::full_hostname() } else { app.fleet.machine_name(&p.machine_id) })
 }
 
 /// The pane's own cells, from its window's top-left corner: tmux's pane_left/top/width/height.

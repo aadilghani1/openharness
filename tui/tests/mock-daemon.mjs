@@ -142,6 +142,8 @@ const server = http.createServer((req, res) => {
         if (op.op === 'pane.remove') { const t = tab(op.tabId); if (t) t.panes = t.panes.filter((p) => p.agentId !== op.agentId) }
       }
       desk.revision++
+      // Every window told, as the daemon tells them (they fetch the desk again).
+      if (ops.length) for (const ws of windows) { try { ws.send(JSON.stringify({ type: 'desk_changed', payload: { revision: desk.revision } })) } catch {} }
       json(res, desk)
     })
     return

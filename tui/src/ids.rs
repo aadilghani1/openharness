@@ -122,6 +122,19 @@ pub fn keep(kind: Kind, id: u64) {
     });
 }
 
+/// A desk thing this client made, by the id it gave it: every client calls it that (unless one
+/// was recorded for it first).
+pub fn desk_set(kind: Kind, key: &str, id: u64) {
+    let path = match IDS.lock() { Ok(g) => g.as_ref().and_then(|i| i.file.clone()), Err(_) => None };
+    let Some(path) = path else { return };
+    let id = with_file(&path, |doc| {
+        if let Some(had) = doc["desk"][kind.key()][key].as_u64() { return had }
+        doc["desk"][kind.key()][key] = json!(id);
+        id
+    });
+    if let Ok(mut g) = IDS.lock() { g.get_or_insert_with(Ids::default).desk.insert((kind, key.to_string()), id); }
+}
+
 /// The id every client gives a desk thing (a window by its tab id, a pane by its harness): the
 /// one recorded, else the counter's next, recorded — in one hold of the file.
 pub fn desk(kind: Kind, key: &str) -> u64 {

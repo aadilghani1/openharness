@@ -444,6 +444,8 @@ pub struct App {
     /// branch every five minutes (an hour for a merged or closed one), not one per harness each.
     pub prs: HashMap<String, (Option<fleet::Pr>, u64)>,
     pub prs_read: Option<Instant>,
+    /// Desk windows whose layout changed here, to be sent (send_desk_layouts).
+    pub desk_layouts: HashSet<String>,
     pub unlinked_later: Vec<(u32, String, u64, String)>,
     /// The server's state (global options, key tables, buffers, global environment) as this
     /// client last wrote or took it, and whether a command ran since (server.rs).
@@ -630,6 +632,7 @@ impl App {
             killing_session: false,
             prs: HashMap::new(),
             prs_read: None,
+            desk_layouts: HashSet::new(),
             unlinked_later: Vec::new(),
             server_synced: None,
             server_dirty: false,
@@ -1636,7 +1639,9 @@ impl App {
     /// machine's panes; a daemon that predates it, or a peer, just leaves the fallbacks.
     pub fn refresh_pane_info(&mut self, pane_id: u64) {
         let Some(p) = self.panes.get(&pane_id) else { return };
-        if p.machine_id != self.fleet.local_id || p.stream.is_none() { return }
+        // (No terminal open here for it is fine: the daemon's tmux knows what runs in it — a
+        // window not on screen is named from it too, as tmux names every window.)
+        if p.machine_id != self.fleet.local_id { return }
         let (machine, agent) = (p.machine_id.clone(), p.agent_id.clone());
         let Some(link) = self.link(&machine) else { return };
         self.spawn(async move { link.rpc("terminal_info", json!({ "agentId": agent }), Duration::from_secs(3)).await }, move |app, reply| {
@@ -2124,6 +2129,7 @@ impl App {
     /// name list of this one's sessions (and take, when one is gone to) is how they stand.
     pub fn save_if_changed(&mut self) {
         if self.handed_over || self.start_failed.is_some() || self.quit { return }
+        self.send_desk_layouts();
         let mut sig = String::new();
         // (Each window's active pane, zoom and layout, and the current window: what the clients
         // showing the session show.)
@@ -3146,11 +3152,14 @@ impl App {
             let first = self.tabs[index].focus.or_else(|| self.tabs[index].panes().first().copied());
             let Some(id) = first else { continue };
             let Some(pane) = self.panes.get(&id) else { continue };
-            let Some(agent) = self.fleet.agent(&pane.machine_id, &pane.agent_id) else { continue };
-            let name = if agent.engine == "terminal" && pane.fg_command.is_some() {
+            // (A harness this client has not heard of yet — another terminal's new shell — is
+            // named by what runs in it, when that is known.)
+            let agent = self.fleet.agent(&pane.machine_id, &pane.agent_id);
+            let shell = agent.map(|a| a.engine == "terminal").unwrap_or(true);
+            let name = if shell && pane.fg_command.is_some() {
                 let fmt = self.options.get("automatic-rename-format", &tab_id, Some(id)).unwrap_or_default();
                 crate::format::expand(self, &fmt, index, Some(id), false)
-            } else { agent.name.clone() };
+            } else { match agent { Some(a) => a.name.clone(), None => continue } };
             if !name.is_empty() { self.tabs[index].name = name }
         }
     }
@@ -3329,7 +3338,27 @@ impl App {
     /// a layout string applied, select-layout's own after either, every resize
     /// (layout_resize_layout), zoom and unzoom, a pane split in (spawn_pane) or closed
     /// (layout_close_pane), swap-pane and join-pane in each window.
-    pub fn layout_changed(&mut self, t: usize) { crate::commands::notify(self, "window-layout-changed", Some(t), None) }
+    pub fn layout_changed(&mut self, t: usize) {
+        // A desk window's layout changed here: every terminal lays it out so (sent once the
+        // loop comes round).
+        if self.session_desk { if let Some(tab) = self.tabs.get(t).filter(|t| t.on_desk) { self.desk_layouts.insert(tab.id.clone()); } }
+        crate::commands::notify(self, "window-layout-changed", Some(t), None)
+    }
+
+    /// The desk windows whose layout changed here: their tmux layout to the desk (tab.layout).
+    pub fn send_desk_layouts(&mut self) {
+        if self.desk_layouts.is_empty() || !self.session_desk { return }
+        for id in std::mem::take(&mut self.desk_layouts) {
+            let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) else { continue };
+            let Some(root) = tab.root.as_ref() else { continue };
+            if !tab.layout.is_object() { tab.layout = json!({}) }
+            let now = root.to_tmux();
+            if tab.layout.get("tmux").and_then(Value::as_str) == Some(now.as_str()) { continue }
+            tab.layout["tmux"] = json!(now);
+            let op = json!({ "op": "tab.layout", "id": tab.id, "layout": tab.layout });
+            self.desk_op(op);
+        }
+    }
 
     /// window_pane_update_focus: [pane] is focused when it is the current window's active pane,
     /// the client has focus and no menu or popup is over it; a pane that gains or loses that
@@ -3786,6 +3815,8 @@ impl App {
             if !tab.layout.is_object() { tab.layout = json!({}) }
             if !tab.layout.get("presets").map(Value::is_object).unwrap_or(false) { tab.layout["presets"] = json!({}) }
             tab.layout["presets"][ids.len().to_string()] = json!(preset_to_desk(preset, ids.len()));
+            // (And as tmux lays it out, which the other terminals take over the preset.)
+            if let Some(root) = tab.root.as_ref() { tab.layout["tmux"] = json!(root.to_tmux()) }
             let op = json!({ "op": "tab.layout", "id": tab.id, "layout": tab.layout });
             self.desk_op(op);
         }
@@ -3867,14 +3898,16 @@ impl App {
             match self.tabs.iter().position(|t| t.id == id) {
                 Some(index) => {
                     let tab = &mut self.tabs[index];
-                    if named || !tab.named { tab.name = name; tab.named = named }
+                    // A name given (rename-window) is every terminal's; one automatic-rename gave
+                    // stays as automatic-rename gives it here, from what the window runs.
+                    if named { tab.name = name; tab.named = true } else if tab.named { tab.named = false }
                     tab.on_desk = true;
                     let relayout = tab.layout != layout_doc;
                     tab.layout = layout_doc;
                     if relayout && missing_is_empty(&tab.panes(), &panes, &self.panes) {
                         let ids = tab.panes();
                         let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
-                        tab.root = layout::arrange(layout::Named::of(preset), &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0"));
+                        tab.root = desk_root(&tab.layout, preset, &ids, w, h);
                         continue;
                     }
                     let have: Vec<(u64, (String, String))> = tab.panes().into_iter().filter_map(|pid| self.panes.get(&pid).map(|p| (pid, (p.machine_id.clone(), p.agent_id.clone())))).collect();
@@ -3892,7 +3925,7 @@ impl App {
                     let mut ids = tab.panes();
                     ids.extend(new_ids.iter().copied());
                     let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
-                    tab.root = layout::arrange(layout::Named::of(preset), &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0"));
+                    tab.root = desk_root(&tab.layout, preset, &ids, w, h);
                     if tab.focus.map(|f| !ids.contains(&f)).unwrap_or(true) { tab.focus = ids.first().copied() }
                 }
                 None => {
@@ -3904,7 +3937,7 @@ impl App {
                     tab.on_desk = true;
                     tab.layout = layout_doc;
                     let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
-                    tab.root = layout::arrange(layout::Named::of(preset), &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0"));
+                    tab.root = desk_root(&tab.layout, preset, &ids, w, h);
                     tab.focus = ids.first().copied();
                     let at = rows.iter().position(|r| r.get("id").and_then(Value::as_str) == Some(tab.id.as_str())).unwrap_or(self.tabs.len()).min(self.tabs.len());
                     self.tabs.insert(at, tab);
@@ -3934,6 +3967,13 @@ impl App {
     fn desk_pane_added(&mut self, tab_id: &str, machine_id: &str, agent_id: &str) {
         let Some(index) = self.tabs.iter().position(|t| t.id == tab_id) else { return };
         let mut ops = Vec::new();
+        // The ids this client gave them are every client's for them (%N, @N).
+        if self.desk_mode == DeskMode::Sync && self.session_desk {
+            if let Some(p) = self.tabs[index].panes().into_iter().find(|p| self.panes.get(p).map(|x| x.machine_id == machine_id && x.agent_id == agent_id).unwrap_or(false)) {
+                crate::ids::desk_set(crate::ids::Kind::Pane, &format!("{machine_id}:{agent_id}"), p);
+            }
+            if !self.tabs[index].on_desk { let wid = self.tabs[index].wid(); crate::ids::desk_set(crate::ids::Kind::Window, tab_id, wid) }
+        }
         if !self.tabs[index].on_desk && self.desk_mode == DeskMode::Sync && self.session_desk {
             self.tabs[index].on_desk = true;
             let tab = &self.tabs[index];
@@ -4133,6 +4173,13 @@ impl App {
 /// A desk tab's main pane, as the desktop app draws it: half the window (its presets' main tile is
 /// .5 wide or tall), not tmux's main-pane-width of 80 cells, which a narrow terminal can't spare.
 pub const DESK_MAIN: (&str, &str) = ("50%", "50%");
+
+/// A desk tab's panes laid out: as another terminal left them (its tmux layout, fitted to this
+/// one's size), else its preset for that many panes.
+fn desk_root(doc: &Value, preset: Preset, ids: &[u64], w: u16, h: u16) -> Option<Node> {
+    doc.get("tmux").and_then(Value::as_str).and_then(|l| Node::from_tmux(l, ids, w, h))
+        .or_else(|| layout::arrange(layout::Named::of(preset), ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")))
+}
 
 fn preset_from_desk(id: &str, count: usize) -> Preset {
     match id {
