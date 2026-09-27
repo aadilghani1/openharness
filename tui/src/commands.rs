@@ -1649,6 +1649,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
         _ => &Words::plain(list),
     };
     let command = resolve(&words[0]);
+    // A client's own command where no terminal is attached: tmux's cmd_find_client finds none.
+    let client_only = matches!(command, "switch-client" | "detach-client" | "refresh-client" | "suspend-client" | "lock-client" | "display-panes" | "command-prompt" | "confirm-before" | "display-menu" | "display-popup");
+    if app.headless && client_only && !(command == "detach-client" && opt(words, "-s").is_some()) { return app.error("no current client") }
     match command {
         "new-window" => {
             // tmux's new-window [-abdkPS] [-c dir] [-n name] [-t index] [-F fmt] [command]: a
