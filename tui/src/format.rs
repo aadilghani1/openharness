@@ -511,6 +511,8 @@ fn find(es: &mut Es, key: &str, f: &Flags, time_format: Option<&str>) -> Option<
     let mut found = es.session.and_then(|id| match (es.window_of, es.pane) {
         // A #{P:} loop's pane there: its index and whether it is active are its window's.
         (k, Some(p)) if matches!(key, "pane_index" | "pane_active") => app.stash_pane_value(id, k, p, key),
+        // A #{W:} loop's window there: its active pane's id.
+        (Some(k), None) if key == "pane_id" => app.session_active_pane(id, k).map(crate::pane::tag).or_else(|| app.stash_value(id, key)),
         // (Which kind of line it is — window_format — is the tree's to say.)
         (Some(k), _) if key.starts_with("window_") && key != "window_format" => Some(app.stash_window_value(id, k, key).unwrap_or_default()),
         _ => app.stash_value(id, key),

@@ -1324,6 +1324,7 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
     // to the one that has the other session (its harnesses running on, its shells that client's).
     // server_link_window: not between two sessions of one group (they have the same windows).
     if matches!(entry.name, "move-window" | "link-window") && app.group_of(src).is_some() && app.group_of(src) == app.group_of(dst) { app.error("sessions are grouped"); return true }
+    if entry.name == "swap-window" && app.group_of(src).is_some() && app.group_of(src) == app.group_of(dst) { app.error("can't move window, sessions are grouped"); return true }
     if entry.name == "link-window" && (app.remote_owner(src).is_some() || app.remote_owner(dst).is_some()) { app.error("can't link a window between two clients' sessions"); return true }
     if entry.name == "move-window" && app.remote_owner(src).is_some() != app.remote_owner(dst).is_some() {
         let detached = args.has('d') > 0;
@@ -2090,7 +2091,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let command = positional(words).first().cloned().filter(|c| !c.is_empty());
             let a = crate::tree::Start {
                 buffer: true, session: false, window: false, format: opt(words, "-F"), key_format: opt(words, "-K"), command,
-                filter: opt(words, "-f"), sort: opt(words, "-O"), reversed: flag(words, "-r"), no_preview: flag(words, "-N"), zoom: flag(words, "-Z"),
+                filter: opt(words, "-f"), sort: opt(words, "-O"), reversed: flag(words, "-r"), no_preview: flag(words, "-N"), zoom: flag(words, "-Z"), groups: flag(words, "-G"),
             };
             crate::tree::enter(app, p, w, &a);
         }
@@ -2120,7 +2121,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 let command = positional(words).first().cloned().filter(|c| !c.is_empty());
                 let a = crate::tree::Start {
                     buffer: false, session: flag(words, "-s"), window: flag(words, "-w"), format: opt(words, "-F"), key_format: opt(words, "-K"), command,
-                    filter: opt(words, "-f"), sort: opt(words, "-O"), reversed: flag(words, "-r"), no_preview: flag(words, "-N"), zoom: flag(words, "-Z"),
+                    filter: opt(words, "-f"), sort: opt(words, "-O"), reversed: flag(words, "-r"), no_preview: flag(words, "-N"), zoom: flag(words, "-Z"), groups: flag(words, "-G"),
                 };
                 crate::tree::enter(app, p, w, &a);
             }
@@ -2149,7 +2150,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 _ => title,
             };
             let Some((w, p)) = target_pane(app, words) else { return };
-            let a = crate::tree::Start { buffer: false, session: false, window: false, format: None, key_format: None, command: None, filter: Some(filter), sort: None, reversed: false, no_preview: false, zoom: flag(words, "-Z") };
+            let a = crate::tree::Start { buffer: false, session: false, window: false, format: None, key_format: None, command: None, filter: Some(filter), sort: None, reversed: false, no_preview: false, zoom: flag(words, "-Z"), groups: false };
             crate::tree::enter(app, p, w, &a);
         }
         "display-message" => {

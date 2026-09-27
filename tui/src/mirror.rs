@@ -174,7 +174,9 @@ fn gone(app: &mut App) {
 /// A mirror left behind (switch-client elsewhere): its terminals closed, the owner told.
 pub fn drop_stash(app: &mut App, s: Stash) {
     if let Some(m) = &s.mirror { register(&m.owner, s.id, false) }
-    for t in s.tabs { for p in t.panes() { app.forget_pane(p) } }
+    // (A pane still in a session here — a group's windows are in each of its sessions — stays.)
+    let kept: HashSet<u64> = app.tabs.iter().chain(app.sessions.iter().flat_map(|x| x.tabs.iter())).flat_map(|t| t.panes()).collect();
+    for t in s.tabs { for p in t.panes() { if !kept.contains(&p) { app.forget_pane(p) } } }
 }
 
 /// This client goes (detach, exit): the owner told at once.

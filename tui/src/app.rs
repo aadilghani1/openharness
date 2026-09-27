@@ -118,7 +118,13 @@ pub struct RemoteSession { pub id: u32, pub name: String, pub owner: Option<Stri
     /// The clients showing it: its owner's (when in front there) and those that show it as it has it.
     pub attached: u32, pub created: i64, pub activity: i64, pub last_attached: i64, pub active: usize, pub windows: Vec<(usize, String, usize)>,
     /// Its windows' ids (@N) and its panes' (%N inside: pane::tag), as its client keeps them.
-    pub wids: Vec<u64>, pub pane_ids: Vec<u64> }
+    pub wids: Vec<u64>, pub pane_ids: Vec<u64>,
+    /// Each window's active pane (%N inside).
+    pub active_panes: Vec<u64>,
+    /// Its last window (of its windows, as listed).
+    pub last: Option<usize>,
+    /// Its session group (new -t), if it is in one.
+    pub group: Option<String> }
 
 /// The sessions file as last read (its time and size, and when its clients were last asked after),
 /// the sessions in it this client does not have, and the ids this client gives them (`$N`).
@@ -2101,11 +2107,12 @@ impl App {
                 let id = row.get("id").and_then(Value::as_u64).map(|i| i as u32).unwrap_or_else(|| self.remote_id(&name));
                 let wins = row.get("windows").and_then(Value::as_array).cloned().unwrap_or_default();
                 let wids = wins.iter().filter_map(|w| w.get("wid").and_then(Value::as_u64)).collect();
+                let active_panes = wins.iter().map(|w| { let f = w.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize; w.get("panes").and_then(Value::as_array).and_then(|p| p.get(f)).and_then(|p| p.get(3)).and_then(Value::as_u64).unwrap_or(0) }).collect();
                 let pane_ids = wins.iter().flat_map(|w| w.get("panes").and_then(Value::as_array).cloned().unwrap_or_default()).filter_map(|p| p.get(3).and_then(Value::as_u64)).collect();
                 let front = owner.is_some() && row.get("front").and_then(Value::as_bool).unwrap_or(false);
                 let attached = front as u32 + if owner.is_some() { row.get("mirrors").and_then(Value::as_u64).unwrap_or(0) as u32 } else { 0 };
                 rows.push(RemoteSession {
-                    id, wids, pane_ids, attached, owner, name, created,
+                    id, wids, pane_ids, active_panes, attached, last: row.get("last").and_then(Value::as_array).and_then(|l| l.first()).and_then(Value::as_u64).map(|n| n as usize), owner, name, created, group: row.get("group").and_then(Value::as_str).map(str::to_string),
                     activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), last_attached: row.get("last_attached").and_then(Value::as_i64).unwrap_or(0), active: row.get("active").and_then(Value::as_u64).unwrap_or(0) as usize, windows,
                 });
             }
@@ -2247,6 +2254,12 @@ impl App {
         })
     }
 
+    /// The active pane of a session's [k]th window (session_windows' order), wherever it is kept.
+    pub fn session_active_pane(&self, id: u32, k: usize) -> Option<u64> {
+        if let Some((_, f, _)) = self.stash_panes(id, Some(k)) { return f }
+        self.remote_rows().into_iter().find(|r| r.id == id).and_then(|r| r.active_panes.get(k).copied())
+    }
+
     /// A session's windows' ids (@N), in session_windows' order.
     pub fn session_wids(&self, id: u32) -> Vec<u64> {
         let of = |tabs: &[Tab]| tabs.iter().filter(|t| t.root.is_some()).map(|t| t.wid()).collect();
@@ -2258,7 +2271,9 @@ impl App {
     /// Which of a session's windows (session_windows' order) is its last one, where this client
     /// keeps it.
     fn session_last_window(&self, id: u32) -> Option<usize> {
-        let (tabs, lastw) = if id == self.session_id { (&self.tabs, &self.lastw) } else { let s = self.sessions.iter().find(|s| s.id == id)?; (&s.tabs, &s.lastw) };
+        let (tabs, lastw) = if id == self.session_id { (&self.tabs, &self.lastw) } else {
+            match self.sessions.iter().find(|s| s.id == id) { Some(s) => (&s.tabs, &s.lastw), None => return self.remote_rows().into_iter().find(|r| r.id == id).and_then(|r| r.last) }
+        };
         let last = lastw.iter().find(|id| tabs.iter().any(|t| &t.id == *id && t.root.is_some()))?;
         tabs.iter().filter(|t| t.root.is_some()).position(|t| &t.id == last)
     }
@@ -2285,7 +2300,8 @@ impl App {
 
     /// Session [id]'s group, if it is in one.
     pub fn group_of(&self, id: u32) -> Option<String> {
-        if id == self.session_id { self.session_group.clone() } else { self.sessions.iter().find(|s| s.id == id).and_then(|s| s.group.clone()) }
+        if id == self.session_id { return self.session_group.clone() }
+        match self.sessions.iter().find(|s| s.id == id) { Some(s) => s.group.clone(), None => self.remote_rows().into_iter().find(|r| r.id == id).and_then(|r| r.group) }
     }
 
     /// Whether window [id] (its tab id) is in a session besides the one in front.
@@ -2310,6 +2326,7 @@ impl App {
         let mut v: Vec<(u32, String)> = Vec::new();
         if self.session_group.as_deref() == Some(g) { v.push((self.session_id, self.session_name())) }
         for s in self.sessions.iter().filter(|s| s.group.as_deref() == Some(g)) { v.push((s.id, self.stash_name(s))) }
+        for r in self.remote_rows().into_iter().filter(|r| r.group.as_deref() == Some(g)) { if !v.iter().any(|x| x.0 == r.id) { v.push((r.id, r.name)) } }
         // In the order they joined it (tmux's sg->sessions): the order they were made.
         v.sort_by_key(|a| a.0);
         v
@@ -2334,6 +2351,10 @@ impl App {
             let alerts: HashMap<String, u8> = s.tabs.iter().map(|t| (t.id.clone(), t.alerts)).collect();
             // (A session in front with no window left is going: its group keeps theirs.)
             if group.is_some() && s.group == group && !tabs.is_empty() {
+                // session_group_synchronize1: its current window and its last windows kept by
+                // their numbers (winlink_find_by_index), whatever window is there now.
+                let current_num = current.as_ref().and_then(|c| s.nums.get(c).copied());
+                let last_nums: Vec<usize> = s.lastw.iter().filter_map(|id| s.nums.get(id).copied()).collect();
                 // Its own windows with no pane yet (one made there, its shell on the way; its home
                 // page) are its own until they have one: kept, at their numbers.
                 let pending: Vec<(Tab, Option<usize>)> = s.tabs.iter().filter(|t| t.root.is_none() && !killed.contains(&t.id)).map(|t| (t.clone(), s.nums.get(&t.id).copied())).collect();
@@ -2345,6 +2366,12 @@ impl App {
                     s.nums.insert(t.id.clone(), n);
                     s.tabs.insert(at, t);
                 }
+                let at_num = |s: &Stash, n: usize| s.tabs.iter().find(|t| s.nums.get(&t.id) == Some(&n)).map(|t| t.id.clone());
+                s.lastw = last_nums.into_iter().filter_map(|n| at_num(s, n)).collect();
+                s.active = current_num.and_then(|n| at_num(s, n)).and_then(|id| s.tabs.iter().position(|t| t.id == id))
+                    .or_else(|| current.as_ref().and_then(|c| s.tabs.iter().position(|t| &t.id == c))).unwrap_or(0);
+                if s.tabs.is_empty() { if had { emptied.push(s.id) } s.tabs.push(Tab::home()); s.active = 0 }
+                continue;
             } else {
                 s.tabs.retain(|t| !killed.contains(&t.id));
                 for t in s.tabs.iter_mut() {

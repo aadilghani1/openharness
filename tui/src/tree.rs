@@ -117,6 +117,8 @@ pub struct Start {
     pub sort: Option<String>,
     pub reversed: bool,
     pub no_preview: bool,
+    /// -G: every session of a group (else one each: squash_groups).
+    pub groups: bool,
     pub zoom: bool,
 }
 
@@ -140,6 +142,7 @@ pub struct Tree {
     no_matches: bool,
     search_back: bool,
     sort: usize,
+    groups: bool,
     reversed: bool,
     format: String,
     key_format: String,
@@ -229,6 +232,7 @@ impl Tree {
             no_matches: false,
             search_back: false,
             sort,
+            groups: a.groups,
             reversed: a.reversed,
             format: a.format.clone().unwrap_or_else(|| format.to_string()),
             key_format: a.key_format.clone().unwrap_or_else(|| DEFAULT_KEY_FORMAT.to_string()),
@@ -324,7 +328,16 @@ impl Tree {
             let r = match field { 0 => a.0.cmp(&b.0), 2 => b.2.cmp(&a.2).then(b.3.cmp(&a.3)).then_with(by_name), _ => by_name() };
             if reversed { r.reverse() } else { r }
         });
+        // squash_groups (no -G): one session of each group — the one in front for its own group,
+        // the first to join it for another.
+        let current_group = app.group_of(self.fs.0);
         for (sid, ..) in order {
+            if !self.groups {
+                if let Some(g) = app.group_of(sid) {
+                    let first = app.group_sessions(&g).first().map(|x| x.0);
+                    if (Some(&g) == current_group.as_ref() && sid != self.fs.0) || (Some(&g) != current_group.as_ref() && Some(sid) != first) { continue }
+                }
+            }
             // Another client's session: listed as its own row, as tmux's tree lists every session.
             if in_session(app, sid, |app| self.build_session(app, saved, filter, sid)).is_none() { self.build_remote(app, saved, filter, sid) }
         }
