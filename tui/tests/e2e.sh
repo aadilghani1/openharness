@@ -175,11 +175,14 @@ tmux_ send-keys -t t q
 tmux_ send-keys -t t C-b x
 expect "C-b x asks first" "(y/n)"
 tmux_ send-keys -t t n
-# C-b c's shell, killed with its window (C-b &), goes with it, as tmux kills the pane's shell.
+# C-b c: a new window on the home page (its recent harnesses and conversations, t a shell).
 before=$(dial "(d.deleted || []).length")
 tmux_ send-keys -t t C-b c
 expect "C-b c: another new window" "2:"
-sleep 0.5
+expect "C-b c: the home page, a conversation Harness did not start in it" "Continue NFC device chat"
+# Its shell, killed with its window (C-b &), goes with it, as tmux kills the pane's shell.
+tmux_ send-keys -t t t
+sleep 1
 tmux_ send-keys -t t C-b '&'
 expect "C-b & asks first" "(y/n)"
 tmux_ send-keys -t t y

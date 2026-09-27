@@ -23,7 +23,7 @@ use crate::modal::{Modal, PickerKind, PromptKind};
 use crate::pane::{Pane, Phase};
 use crate::picker::Picker;
 use crate::theme::{self, bold, fg, engine_mark, state_mark};
-use crate::input::home_agents;
+use crate::input::{home_rows, HomeRow};
 
 /// screen_write_box_border_set: a box's corners, sides and its rule's joins, for tmux's box
 /// lines (single, double, heavy, simple, rounded, padded, none).
@@ -304,7 +304,7 @@ fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) {
 const WORDMARK: [&str; 2] = ["█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀", "█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█"];
 
 fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
-    let rows = home_agents(app);
+    let rows = home_rows(app);
     let width = area.width.min(84).saturating_sub(4);
     let left = area.x + (area.width.saturating_sub(width)) / 2;
     let compact = area.height < 22;
@@ -327,17 +327,29 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
         lines.push(Line::from(vec![Span::styled("n", bold(theme::ACCENT)), Span::styled(" starts a harness · ", fg(theme::MUTED)), Span::styled("o", bold(theme::ACCENT)), Span::styled(" opens a paused one", fg(theme::MUTED))]));
     } else {
         let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
-        for (index, (m, a)) in rows.iter().enumerate() {
-            let Some(agent) = app.fleet.agent(m, a) else { continue };
-            let state = app.fleet.state_of(agent);
-            let (dot, _, color) = state_mark(state, app.tick);
-            let (mark, mark_color) = engine_mark(&agent.engine);
+        for (index, row) in rows.iter().enumerate() {
+            // A harness as its state says; a conversation Harness did not start as a paused one
+            // would be (nothing running), its folder where the project goes.
+            let (m, dot, color, engine, title, recency, detail) = match row {
+                HomeRow::Harness(m, a) => {
+                    let Some(agent) = app.fleet.agent(m, a) else { continue };
+                    let (dot, _, color) = state_mark(app.fleet.state_of(agent), app.tick);
+                    let detail = agent.question.as_ref().map(|q| (q.prompt.clone(), theme::ATTENTION)).unwrap_or((if agent.project.is_empty() { agent.cwd.clone() } else { agent.project.clone() }, theme::MUTED));
+                    (m.clone(), dot, color, agent.engine.clone(), agent.name.clone(), agent.recency(), detail)
+                }
+                HomeRow::External(x) => {
+                    let (dot, _, color) = state_mark(crate::fleet::State::Paused, app.tick);
+                    let folder = x.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+                    (x.machine.clone(), dot, color, x.engine.clone(), if x.title.is_empty() { folder.clone() } else { x.title.clone() }, x.last_at, (folder, theme::MUTED))
+                }
+            };
+            let m = &m;
+            let (mark, mark_color) = engine_mark(&engine);
             // Narrow: the machine goes before the title gives way (then the age).
-            let right = if width < 56 { String::new() } else { format!("{}{}", if many && width >= 70 { format!("{}  ", app.fleet.machine_name(m)) } else { String::new() }, ago(agent.recency())) };
-            let detail = agent.question.as_ref().map(|q| (q.prompt.clone(), theme::ATTENTION)).unwrap_or((if agent.project.is_empty() { agent.cwd.clone() } else { agent.project.clone() }, theme::MUTED));
+            let right = if width < 56 { String::new() } else { format!("{}{}", if many && width >= 70 { format!("{}  ", app.fleet.machine_name(m)) } else { String::new() }, ago(recency)) };
             let name_w = if width < 56 { (width as usize).saturating_sub(10).min(28) } else { 28 };
             // Widths are display widths: a CJK or emoji title keeps the columns straight.
-            let name = clip(&agent.name, name_w);
+            let name = clip(&title, name_w);
             let name = format!("{name}{}", " ".repeat(name_w.saturating_sub(name.width())));
             let detail_room = (width as usize).saturating_sub(name_w + right.width() + 12);
             let detail_text = clip(&detail.0, detail_room);

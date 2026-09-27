@@ -400,26 +400,73 @@ fn copy_scroll(app: &mut App, pane: u64, up: bool, n: u32) {
 
 // ── home: the empty tab ─────────────────────────────────────────────────────
 
-pub fn home_agents(app: &App) -> Vec<(String, String)> {
-    let ranked: Vec<(String, String)> = app.fleet.ranked().into_iter()
-        .filter(|a| !matches!(app.fleet.state_of(a), crate::fleet::State::Paused | crate::fleet::State::Offline))
-        .map(|a| a.key())
+/// A row of the home page: a harness, or a conversation Harness did not start (resumed as one).
+#[derive(Clone, Debug)]
+pub enum HomeRow { Harness(String, String), External(crate::app::External) }
+
+impl HomeRow {
+    /// Its key in the home page's order: (machine, agent), or (machine, "x:" session).
+    fn key(&self) -> (String, String) {
+        match self { HomeRow::Harness(m, a) => (m.clone(), a.clone()), HomeRow::External(x) => (x.machine.clone(), format!("x:{}", x.session_id)) }
+    }
+}
+
+/// The home page's nine: the harnesses that need you first, then everything by when it was last
+/// used — harnesses (paused ones too) and the Claude Code and Codex conversations from the last 30
+/// days that Harness did not start, on every connected machine, as the desktop's welcome page lists
+/// them.
+pub fn home_rows(app: &App) -> Vec<HomeRow> {
+    use crate::fleet::State;
+    let urgent = |s: State| matches!(s, State::NeedsInput | State::Failed | State::Done);
+    let mut all: Vec<(bool, u64, HomeRow)> = app.fleet.ranked().into_iter()
+        .filter(|a| app.fleet.state_of(a) != State::Offline)
+        .map(|a| (urgent(app.fleet.state_of(a)), a.recency(), HomeRow::Harness(a.key().0, a.key().1)))
         .collect();
+    all.extend(app.home_external.iter().map(|x| (false, x.last_at, HomeRow::External(x.clone()))));
+    all.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    let ranked: Vec<HomeRow> = all.into_iter().map(|(_, _, r)| r).collect();
     // Numbers are for fingers: a row keeps its number while you look at the list, however the
     // harnesses' activity reorders them (the order is fresh each time the window is entered).
     let mut order = app.home_order.borrow_mut();
-    let mut out: Vec<(String, String)> = order.iter().filter(|k| ranked.contains(k)).cloned().collect();
-    for k in &ranked { if out.len() >= 9 { break } if !out.contains(k) { out.push(k.clone()) } }
+    let mut out: Vec<HomeRow> = order.iter().filter_map(|k| ranked.iter().find(|r| &r.key() == k).cloned()).collect();
+    for r in &ranked { if out.len() >= 9 { break } if !out.iter().any(|o| o.key() == r.key()) { out.push(r.clone()) } }
     out.truncate(9);
-    *order = out.clone();
+    *order = out.iter().map(|r| r.key()).collect();
     out
+}
+
+/// A conversation Harness did not start, opened as a harness that resumes it — in its own folder,
+/// named for its title — in the window here when it is empty (else a new one). Its machine says
+/// why when it will not (open elsewhere, already a harness, its folder gone).
+pub fn resume_external(app: &mut App, x: &crate::app::External) {
+    let Some(link) = app.link(&x.machine) else { app.say("That machine is not connected", theme::DANGER); return };
+    let mut payload = json!({ "engine": x.engine, "cwd": x.cwd, "bypassPermission": true, "resumeSessionId": x.session_id, "creationId": uuid::Uuid::new_v4().to_string() });
+    if !x.title.is_empty() { payload["name"] = json!(x.title) }
+    app.say(format!("Resuming {} on {}…", if x.title.is_empty() { "the conversation" } else { &x.title }, app.fleet.machine_name(&x.machine)), theme::SOFT);
+    app.modal = None;
+    let machine = x.machine.clone();
+    app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(180)).await }, move |app, reply| match reply {
+        Ok(reply) => {
+            if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
+                app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+                let placement = if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab };
+                app.open_agent(&machine, id, placement);
+                app.toast = None;
+            } else { app.say("The machine opened no harness", theme::DANGER) }
+        }
+        Err(e) => app.say(format!("Could not open it: {e}"), theme::DANGER),
+    });
 }
 
 /// A window with no harness in it has no pane to take keys from, so plain letters work here.
 fn home_key(app: &mut App, key: KeyEvent) {
-    let rows = home_agents(app);
+    let rows = home_rows(app);
     let open = |app: &mut App, index: usize| {
-        if let Some((m, a)) = rows.get(index).cloned() { app.open_agent(&m, &a, Placement::Auto(None)) }
+        match rows.get(index).cloned() {
+            Some(HomeRow::Harness(m, a)) => app.open_agent(&m, &a, Placement::Auto(None)),
+            Some(HomeRow::External(x)) => resume_external(app, &x),
+            None => {}
+        }
     };
     match key.code {
         KeyCode::Char(c @ '1'..='9') => open(app, c as usize - '1' as usize),
@@ -429,7 +476,9 @@ fn home_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('p') => run(app, "open"),
         KeyCode::Char('o') | KeyCode::Char('#') => run(app, "projects"),
         KeyCode::Char('n') => run(app, "new"),
-        KeyCode::Char('t') => run(app, "terminal"),
+        // A shell here, as tmux's C-b c makes one: in the machine and folder of the pane you came
+        // from, gone with its window.
+        KeyCode::Char('t') => { let from = app.home_from.take(); new_shell_from(app, from, Placement::Auto(None), None, None) }
         KeyCode::Char('i') | KeyCode::Char(':') => run(app, "models"),
         KeyCode::Char('I') => run(app, "inbox"),
         KeyCode::Char('m') | KeyCode::Char('@') => run(app, "machines"),

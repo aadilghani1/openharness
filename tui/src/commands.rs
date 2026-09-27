@@ -1663,7 +1663,15 @@ fn run_words_in(app: &mut App, words: &[String]) {
                     app.close_tab(i);
                 }
             }
+            // C-b c (a bare new-window, from a key or the prompt): the home page in the new window —
+            // its recent harnesses and conversations to pick from, `t` a shell — as the desktop's
+            // new tab. From a script, or with anything asked of it (-c, -n, a command…), a shell as
+            // tmux makes; `set -g @hn-new-window shell` makes the key tmux's too.
+            let bare = app.capture.is_none() && !app.headless && command.is_none() && cwd.is_none() && name.is_none() && opt(words, "-t").is_none()
+                && !["-d", "-a", "-b", "-k", "-P"].iter().any(|f| flag(words, f)) && opt(words, "-e").is_none()
+                && app.options.get("@hn-new-window", "", None).as_deref() != Some("shell");
             app.new_tab_at(idx);
+            if bare { app.home_from = from; return }
             if let Some(n) = &name { let n = expand(app, n); app.rename_tab(&n) }
             // A window made in a session not in front: its window-linked (notify_changes sees
             // only the one in front).

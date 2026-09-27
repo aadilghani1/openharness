@@ -188,6 +188,39 @@ pub const BARE: char = '\u{2}';
 /// A command's answer to the shell that ran it: printed lines, errors, exit status.
 pub type Reply = (Vec<String>, Vec<String>, i32);
 
+/// A Claude Code or Codex conversation on a machine that Harness did not start (a session_search
+/// hit with `external`): offered on the home page and found by C-b s, and resumed as a harness.
+#[derive(Clone, Debug)]
+pub struct External {
+    pub machine: String,
+    pub session_id: String,
+    pub engine: String,
+    pub title: String,
+    /// The folder it ran in (and resumes in).
+    pub cwd: String,
+    /// Still open in a terminal or the engine's app: not to be opened twice.
+    pub open: bool,
+    /// Its latest turn (ms since the epoch).
+    pub last_at: u64,
+    /// Where a search matched it (the matched words between \u{2} and \u{3}).
+    pub snippet: String,
+    pub score: f64,
+}
+
+/// The external conversations in a session_search reply from [machine].
+pub fn externals(machine: &str, reply: &Value) -> Vec<External> {
+    reply.get("hits").and_then(Value::as_array).map(|hits| hits.iter().filter_map(|h| {
+        let x = h.get("external")?;
+        let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        Some(External {
+            machine: machine.to_string(), session_id: text(h, "sessionId"), engine: text(h, "engine"), title: text(x, "title"), cwd: text(x, "cwd"),
+            open: x.get("open").and_then(Value::as_bool).unwrap_or(false),
+            last_at: h.get("lastAt").and_then(Value::as_f64).or_else(|| h.get("at").and_then(Value::as_f64)).unwrap_or(0.0) as u64,
+            snippet: text(h, "snippet"), score: h.get("score").and_then(Value::as_f64).unwrap_or(0.0),
+        })
+    }).filter(|x| !x.session_id.is_empty()).collect()).unwrap_or_default()
+}
+
 /// A window not numbered yet (Tab::wid).
 const NO_WID: u64 = u64::MAX;
 /// The session a client starts in, before it is one (App::first_session).
@@ -393,6 +426,14 @@ pub struct App {
     pub prefix_at: Option<Instant>,
     pub tick: u64,
     pub home_cursor: usize,
+    /// The Claude Code and Codex conversations Harness did not start that the home page offers
+    /// (each machine's session index, asked once each time the page shows), and the machines
+    /// asked so far.
+    pub home_external: Vec<External>,
+    pub home_asked: HashSet<String>,
+    home_shown: bool,
+    /// The pane C-b c was pressed from: the machine and folder the home page's shell (t) takes.
+    pub home_from: Option<(String, String)>,
     pub desk_mode: DeskMode,
     pub desk_revision: i64,
     desk_loaded: bool,
@@ -785,6 +826,10 @@ impl App {
             prefix: false,
             tick: 0,
             home_cursor: 0,
+            home_external: Vec::new(),
+            home_asked: HashSet::new(),
+            home_shown: false,
+            home_from: None,
             desk_mode,
             desk_revision: -1,
             desk_loaded: false,
@@ -4585,7 +4630,36 @@ impl App {
         if std::fs::write(&temp, Value::Object(doc).to_string()).is_ok() { let _ = std::fs::rename(temp, path); }
     }
 
+    /// The home page is on screen: a window with nothing in it, nothing over it.
+    pub fn home_visible(&self) -> bool { self.modal.is_none() && self.tabs.get(self.active).map(|t| t.root.is_none()).unwrap_or(false) }
+
+    /// The home page's conversations Harness did not start: each connected machine asked once
+    /// while the page shows (`session_search` with a time and no words: the last 30 days), as the
+    /// desktop's welcome page asks; one that connects meanwhile is asked too. Read afresh the next
+    /// time the page shows.
+    fn ask_home_external(&mut self) {
+        let shown = self.home_visible();
+        if shown && !self.home_shown { self.home_asked.clear(); self.home_external.clear() }
+        self.home_shown = shown;
+        if !shown { return }
+        let now = fleet::now_ms();
+        let machines: Vec<String> = self.fleet.machines.iter().filter(|m| m.usable() && !self.home_asked.contains(&m.id)).map(|m| m.id.clone()).collect();
+        for machine in machines {
+            let Some(link) = self.link(&machine) else { continue };
+            self.home_asked.insert(machine.clone());
+            let payload = json!({ "query": "", "from": now.saturating_sub(30 * 86_400_000), "to": now, "limit": 30 });
+            self.spawn(async move { link.rpc("session_search", payload, Duration::from_secs(10)).await }, move |app, reply| {
+                // (A daemon without session search has none to offer.)
+                let Ok(reply) = reply else { return };
+                for x in externals(&machine, &reply) {
+                    if !x.open && !app.home_external.iter().any(|y| y.machine == x.machine && y.session_id == x.session_id) { app.home_external.push(x) }
+                }
+            });
+        }
+    }
+
     pub fn on_tick(&mut self) {
+        self.ask_home_external();
         self.tick += 1;
         // Since you were here: once every machine's harnesses are listed, so it counts them all.
         if self.back_from.is_some() && !self.headless && self.fleet_ready() { self.back_again() }
