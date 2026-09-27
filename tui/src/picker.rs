@@ -321,8 +321,11 @@ impl Picker {
         if self.prefixed && scope_of(query).is_some() { query = &query.trim_start()[1..] }
         // fzf sorts only when a term asks for something (`!x` alone keeps the input order).
         let mut sorted = false;
-        // A conversation Harness did not start is listed only for the query that found it.
-        let found_now = self.said_query == query.trim();
+        // A conversation Harness did not start is listed only for the query that found it — or,
+        // while you type on (the query's words growing or shrinking), for the one before, until
+        // the machines answer the new one (no row blinking out on every key).
+        let terms = said_terms(query);
+        let found_now = !self.said_query.is_empty() && (self.said_query == terms || (!terms.is_empty() && (terms.starts_with(&self.said_query) || self.said_query.starts_with(&terms))));
         let offered = |r: &Row| !r.id.starts_with("external:") || (found_now && self.said.contains(&r.id));
         if query.trim().is_empty() {
             self.visible = self.rows.iter().enumerate().filter(|(_, r)| !self.excluded.contains(&r.id) && offered(r)).map(|(i, _)| (i, Vec::new())).collect();
@@ -400,11 +403,15 @@ impl Picker {
             // found only as letters scattered through the line (c…o…d…e…x in `gpu-box`).
             let plain: Vec<String> = groups.iter().flatten().filter(|(w, _)| w.chars().count() >= 3).map(|(w, _)| w.to_lowercase()).collect();
             let scattered = |i: usize| !plain.is_empty() && !plain.iter().any(|w| line(&self.rows[i]).to_lowercase().contains(w.as_str()));
-            let (weak, strong): (Vec<_>, Vec<_>) = if hidden.is_empty() { (Vec::new(), scored) } else { scored.into_iter().partition(|(_, i, _)| scattered(*i)) };
-            // Then what was said in them (session search, on the machines): rows no other way found,
-            // in the order the machines ranked them.
+            // What was said in them (session search, on the machines), in the order the machines
+            // ranked it — kept out by the query's `!` terms, as any row is.
+            let excluded_by = |i: usize| { let r = &self.rows[i]; let text = format!("{} {} {}", line(r), r.label, r.extra); negated.iter().any(|(w, s)| if *s { text.contains(w.as_str()) } else { text.to_lowercase().contains(w.as_str()) }) };
+            let said_all: Vec<usize> = if found_now { self.said.iter().filter_map(|id| self.rows.iter().position(|r| &r.id == id && !r.disabled && !self.excluded.contains(&r.id))).filter(|i| !excluded_by(*i)).collect() } else { Vec::new() };
+            // Rows its keywords name, or where what was said found it, before rows the query found
+            // only as letters scattered through the line.
+            let (weak, strong): (Vec<_>, Vec<_>) = if hidden.is_empty() && said_all.is_empty() { (Vec::new(), scored) } else { scored.into_iter().partition(|(_, i, _)| scattered(*i) && !said_all.contains(i)) };
             let taken: std::collections::HashSet<usize> = strong.iter().map(|(_, i, _)| *i).chain(hidden.iter().copied()).chain(weak.iter().map(|(_, i, _)| *i)).collect();
-            let said: Vec<usize> = if self.said_query == query.trim() { self.said.iter().filter_map(|id| self.rows.iter().position(|r| &r.id == id && !r.disabled && !self.excluded.contains(&r.id))).filter(|i| !taken.contains(i)).collect() } else { Vec::new() };
+            let said: Vec<usize> = said_all.into_iter().filter(|i| !taken.contains(i)).collect();
             let mut seen = std::collections::HashSet::new();
             let said: Vec<usize> = said.into_iter().filter(|i| seen.insert(*i)).collect();
             self.visible = strong.into_iter().map(|(_, i, hits)| (i, hits)).chain(hidden.into_iter().map(|i| (i, Vec::new()))).chain(said.into_iter().map(|i| (i, Vec::new()))).chain(weak.into_iter().map(|(_, i, hits)| (i, hits))).collect();
@@ -998,3 +1005,40 @@ mod colon_tests {
     }
 }
 
+/// What C-b s asks the machines' session search for, from an fzf query: the words it must find
+/// (fzf's exact `'`, anchors `^` `$` taken off), not those it must not (`!word`) nor a `|` group's
+/// (the search wants every word; either of two is no word it must have). Empty: nothing to ask.
+pub fn said_terms(query: &str) -> String {
+    let words: Vec<&str> = query.split_whitespace().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < words.len() {
+        // A group: this word and those joined to it by `|`.
+        let mut j = i;
+        while j + 2 < words.len() + 1 && words.get(j + 1) == Some(&"|") { j += 2 }
+        if j == i {
+            let w = words[i];
+            if !w.starts_with('!') && w != "|" {
+                let t = w.trim_start_matches('\'').trim_start_matches('^').trim_end_matches('$');
+                if !t.is_empty() { out.push(t.to_string()) }
+            }
+        }
+        i = j + 1;
+    }
+    let text = out.join(" ");
+    if text.chars().filter(|c| c.is_alphanumeric()).count() >= 2 { text } else { String::new() }
+}
+
+#[cfg(test)]
+mod said_tests {
+    #[test]
+    fn only_the_words_it_must_find() {
+        assert_eq!(super::said_terms("nfc"), "nfc");
+        assert_eq!(super::said_terms("'device !nfc"), "device");
+        assert_eq!(super::said_terms("!nfc"), "");
+        assert_eq!(super::said_terms("decimal !billing"), "decimal");
+        assert_eq!(super::said_terms("nfc | decimal"), "");
+        assert_eq!(super::said_terms("^fix login$ api | web"), "fix login");
+        assert_eq!(super::said_terms("a"), "");
+    }
+}

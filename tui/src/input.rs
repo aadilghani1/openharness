@@ -1995,10 +1995,13 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     let mut kind = kind;
     // C-b s: what was said, searched on every machine a moment after the last key.
     if picker.query != before && matches!(kind, PickerKind::Open { machine: None, project: None, .. }) && crate::picker::scope_of(&picker.query).is_none() {
-        let q = picker.query.trim().to_string();
-        app.said_want = q.clone();
-        if q.chars().filter(|c| c.is_alphanumeric()).count() >= 2 { app.said_due = Some(Instant::now() + Duration::from_millis(150)) }
-        else { app.said_due = None; app.said.clear(); app.said_for.clear() }
+        // (Only the words it must find: `!x`, `|` groups and fzf's `'` `^` `$` are the list's.)
+        let q = crate::picker::said_terms(&picker.query);
+        if q != app.said_want {
+            app.said_want = q.clone();
+            if !q.is_empty() { app.said_due = Some(Instant::now() + Duration::from_millis(150)) }
+            else { app.said_due = None; app.said.clear(); app.said_for.clear() }
+        }
     }
     if picker.query != before {
         // Marks belong to one list: switching scope (> commands, @ machines…) drops them.
