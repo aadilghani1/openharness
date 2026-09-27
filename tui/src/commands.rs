@@ -526,6 +526,8 @@ fn queue_of(app: &mut App, line: &str) -> Queue {
 }
 
 fn run_queue(app: &mut App, mut queue: Queue) {
+    // What it runs may change the server's state (server.rs looks when the loop comes round).
+    app.server_dirty = true;
     while let Some(Item { words, origin, mouse, hook }) = queue.pop_front() {
         app.origin = origin;
         let saved = std::mem::replace(&mut app.mouse_ev, mouse);
@@ -1035,8 +1037,49 @@ fn run_words(app: &mut App, words: &[String]) {
     }
 }
 
+/// What follows an option set (its value now [now]; [global]: -g, else for window [tab]): what
+/// hn keeps outside the store — the prefix, the mouse, tim, a window's synchronize-panes …
+fn after_set(app: &mut App, name: &str, now: Option<String>, global: bool, tab: Option<usize>) {
+    let name = name.to_string();
+    // tim: `set -g @tim off` hides the creature (kept), `on` brings it back.
+    if name == "@tim" { app.tim.set_off(matches!(now.as_deref(), Some("off" | "0" | "no"))); return }
+    // alerts_reset_all: every window's silence timer starts again.
+    if name == "monitor-silence" { for t in app.tabs.iter_mut() { t.last_output = std::time::Instant::now() } }
+    if name.starts_with('@') && now.is_none() { app.opts.user.remove(&name); return }
+    // synchronize-panes belongs to a window: this one, or (-g) every window without its own.
+    if name == "synchronize-panes" {
+        let on = now.as_deref() == Some("on");
+        if global { for i in 0..app.tabs.len() { let id = app.tabs[i].id.clone(); if !app.options.windows.get(&id).map(|m| m.contains_key(&name)).unwrap_or(false) { app.tabs[i].sync = on } } }
+        else if let Some(tab) = tab.filter(|t| *t < app.tabs.len()) { app.tabs[tab].sync = on }
+        return;
+    }
+    // An array is read where it is used (command-alias, update-environment …): nothing of
+    // hn's own follows it, and setting it again with its last item would replace it.
+    if name.contains('[') || crate::options::find(&name).map(|o| o.array).unwrap_or(false) { return }
+    // What hn keeps outside the options (the prefix, the mouse, the history limit …)
+    // follows a global value; the options themselves are in the store already, where the
+    // flags put them — a window's own stays that window's.
+    let scope = crate::options::find(&name).map(|o| o.scope);
+    if !global && matches!(scope, Some(crate::options::Scope::Window | crate::options::Scope::Pane)) { app.redraw_all = true; return }
+    let mut settings = crate::tmuxconf::Settings::default();
+    let words = vec!["set".to_string(), "-g".to_string(), name, now.unwrap_or_default()];
+    match crate::tmuxconf::directive(&words, &mut app.keymap, &mut settings) {
+        Ok(()) => { settings.options.store = Default::default(); app.apply_settings(&settings) }
+        Err(e) => app.error(e),
+    }
+}
+
+/// A global or server option another client of the server changed (server.rs): what follows
+/// its value now in force.
+pub fn option_changed(app: &mut App, name: &str) {
+    // A hook's command (after-new-window[0]) is read when the hook fires.
+    if crate::options::is_hook(name.split('[').next().unwrap_or(name)) { return }
+    let now = app.options.get(name, "", None);
+    after_set(app, name, now, true, None);
+}
+
 /// The other running clients of this server name (-L): their sockets.
-fn other_clients() -> Vec<std::path::PathBuf> {
+pub fn other_clients() -> Vec<std::path::PathBuf> {
     let me = crate::ipc::here();
     let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
     crate::ipc::clients_of(&name).into_iter().filter(|c| Some(c) != me.as_ref()).collect()
@@ -1893,32 +1936,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 Err(e) if quiet && e.starts_with("invalid option") => return,
                 Err(e) => return app.error(e),
             };
-            // tim: `set -g @tim off` hides the creature (kept), `on` brings it back.
-            if name == "@tim" { app.tim.set_off(matches!(now.as_deref(), Some("off" | "0" | "no"))); return }
-            // alerts_reset_all: every window's silence timer starts again.
-            if name == "monitor-silence" { for t in app.tabs.iter_mut() { t.last_output = std::time::Instant::now() } }
-            if name.starts_with('@') && now.is_none() { app.opts.user.remove(&name); return }
-            // synchronize-panes belongs to a window: this one, or (-g) every window without its own.
-            if name == "synchronize-panes" {
-                let on = now.as_deref() == Some("on");
-                if f.global { for i in 0..app.tabs.len() { let id = app.tabs[i].id.clone(); if !app.options.windows.get(&id).map(|m| m.contains_key(&name)).unwrap_or(false) { app.tabs[i].sync = on } } }
-                else { app.tabs[tab].sync = on }
-                return;
-            }
-            // An array is read where it is used (command-alias, update-environment …): nothing of
-            // hn's own follows it, and setting it again with its last item would replace it.
-            if crate::options::find(&name).map(|o| o.array).unwrap_or(false) { return }
-            // What hn keeps outside the options (the prefix, the mouse, the history limit …)
-            // follows a global value; the options themselves are in the store already, where the
-            // flags put them — a window's own stays that window's.
-            let scope = crate::options::find(&name).map(|o| o.scope);
-            if !f.global && matches!(scope, Some(crate::options::Scope::Window | crate::options::Scope::Pane)) { app.redraw_all = true; return }
-            let mut settings = crate::tmuxconf::Settings::default();
-            let words = vec!["set".to_string(), "-g".to_string(), name, now.unwrap_or_default()];
-            match crate::tmuxconf::directive(&words, &mut app.keymap, &mut settings) {
-                Ok(()) => { settings.options.store = Default::default(); app.apply_settings(&settings) }
-                Err(e) => app.error(e),
-            }
+            after_set(app, &name, now, f.global, Some(tab));
         }
         "bind-key" | "unbind-key" => {
             let mut settings = crate::tmuxconf::Settings::default();
@@ -2237,6 +2255,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
         // kill-server, from another client of this name: this one's sessions go, and it exits.
         "hn-kill-client" => { app.sessions.clear(); app.session_alias = None; app.forget_sessions = true; app.quit = true }
         // A client attached: a headless hn gives it every session, and goes.
+        // Another client changed the server's state (options, keys, buffers, environment).
+        "hn-server-sync" => crate::server::take(app),
         "hn-hand-over" => { app.write_sessions(crate::app::Save::Leave); app.handed_over = true; app.quit = true }
         // Another client of this name takes a session this one has (it attached there).
         "hn-release-session" => {

@@ -1,0 +1,228 @@
+//! What tmux's one server holds for every client: the server and global options (hooks and
+//! command aliases among them), the key tables, the paste buffers and the global environment.
+//! hn's clients of a server name (-L) each hold a copy, kept the same through a file beside the
+//! sessions file: a client that changes any of it (`set -g`, `bind`, a copy, `setenv -g`, a
+//! `source-file`) writes what changed there and tells the others, which take it — so a copy in
+//! one terminal pastes in another, as it does under one tmux server. A client starting while the
+//! server lives (another client, or sessions kept) takes the file's instead of what its own
+//! ~/.tmux.conf would give, as a tmux server reads its configuration once; a new server's first
+//! client starts the file again.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use serde_json::{json, Map, Value};
+
+use crate::app::{App, EnvVar};
+use crate::keys::{Binding, Keymap, Table};
+use crate::paste::Paste;
+
+/// The server-wide state as this client last wrote or took it (the buffers by name and version:
+/// their text is compared by neither).
+#[derive(Clone, PartialEq)]
+pub struct Synced { options: [BTreeMap<String, String>; 3], keymap: Keymap, buffers: Vec<(String, u64)>, env: BTreeMap<String, EnvVar> }
+
+fn path() -> PathBuf { crate::app::sessions_path(None).with_extension("server.json") }
+
+fn now(app: &App) -> Synced {
+    Synced {
+        options: [app.options.server.clone(), app.options.global_session.clone(), app.options.global_window.clone()],
+        keymap: app.keymap.clone(),
+        buffers: versions(&app.paste),
+        env: app.global_env.clone(),
+    }
+}
+
+fn versions(p: &Paste) -> Vec<(String, u64)> { p.walk().map(|b| (b.name.clone(), b.order)).collect() }
+
+/// Whether the server's state here is still what was last written or taken.
+fn unchanged(app: &App, s: &Synced) -> bool {
+    app.options.server == s.options[0] && app.options.global_session == s.options[1] && app.options.global_window == s.options[2]
+        && app.keymap == s.keymap && app.global_env == s.env && app.paste.walk().map(|b| (&b.name, b.order)).eq(s.buffers.iter().map(|(n, o)| (n, *o)))
+}
+
+// ── the key tables as JSON (keys by tmux's names) ──────────────────────────────
+
+fn table_name(t: Table) -> &'static str { match t { Table::Prefix => "prefix", Table::Root => "root", Table::CopyVi => "copy-mode-vi", Table::CopyEmacs => "copy-mode" } }
+
+fn bindings_json(list: &[Binding]) -> Value {
+    json!(list.iter().map(|b| json!([crate::keys::name(&b.chord), b.command, b.repeat, b.note])).collect::<Vec<_>>())
+}
+
+fn bindings_from(v: &Value) -> Vec<Binding> {
+    v.as_array().map(|a| a.iter().filter_map(|b| Some(Binding {
+        chord: crate::keys::parse(b.get(0)?.as_str()?).ok()?,
+        command: b.get(1)?.as_str()?.to_string(),
+        repeat: b.get(2).and_then(Value::as_bool).unwrap_or(false),
+        note: b.get(3).and_then(Value::as_str).unwrap_or("").to_string(),
+    })).collect()).unwrap_or_default()
+}
+
+fn keys_json(k: &Keymap) -> Value {
+    json!({
+        "prefix": crate::keys::name(&k.prefix),
+        "prefix2": k.prefix2.map(|c| crate::keys::name(&c)),
+        "prefix-table": bindings_json(&k.prefix_table), "root": bindings_json(&k.root_table),
+        "copy-mode-vi": bindings_json(&k.copy_vi), "copy-mode": bindings_json(&k.copy_emacs),
+        "named": k.named.iter().map(|(n, l)| (n.clone(), bindings_json(l))).collect::<Map<String, Value>>(),
+        "copy-unbound": k.copy_unbound.iter().map(|(t, c)| json!([table_name(*t), crate::keys::name(c)])).collect::<Vec<_>>(),
+        "removed": k.removed.iter().map(|t| table_name(*t)).collect::<Vec<_>>(),
+        "repeat-ms": k.repeat_ms, "hint-ms": k.hint_ms,
+    })
+}
+
+fn keys_from(v: &Value, mut k: Keymap) -> Keymap {
+    if let Some(c) = v.get("prefix").and_then(Value::as_str).and_then(|s| crate::keys::parse(s).ok()) { k.prefix = c }
+    k.prefix2 = v.get("prefix2").and_then(Value::as_str).and_then(|s| crate::keys::parse(s).ok());
+    k.prefix_table = bindings_from(&v["prefix-table"]);
+    k.root_table = bindings_from(&v["root"]);
+    k.copy_vi = bindings_from(&v["copy-mode-vi"]);
+    k.copy_emacs = bindings_from(&v["copy-mode"]);
+    k.named = v.get("named").and_then(Value::as_object).map(|m| m.iter().map(|(n, l)| (n.clone(), bindings_from(l))).collect()).unwrap_or_default();
+    k.copy_unbound = v.get("copy-unbound").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| {
+        Some((crate::keys::table_named(x.get(0)?.as_str()?)?, crate::keys::parse(x.get(1)?.as_str()?).ok()?))
+    }).collect()).unwrap_or_default();
+    k.removed = v.get("removed").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| crate::keys::table_named(x.as_str()?)).collect()).unwrap_or_default();
+    if let Some(n) = v.get("repeat-ms").and_then(Value::as_u64) { k.repeat_ms = n }
+    if let Some(n) = v.get("hint-ms").and_then(Value::as_u64) { k.hint_ms = n }
+    k
+}
+
+// ── the file ───────────────────────────────────────────────────────────────────
+
+/// Read the file, change it with [f], and write it back, while its lock is held.
+fn with_file(f: impl FnOnce(&mut Value)) {
+    let path = path();
+    let _lock = crate::ipc::lock(&path.with_extension("lock"));
+    let mut doc: Value = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({}));
+    if !doc.is_object() { doc = json!({}) }
+    f(&mut doc);
+    if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+    let temp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    if std::fs::write(&temp, doc.to_string()).is_ok() { let _ = std::fs::rename(&temp, &path); }
+}
+
+const MAPS: [&str; 3] = ["server", "global-session", "global-window"];
+
+/// What changed from [before] to [after], into the file's copy: an option set or unset, the key
+/// tables (whole), a buffer made, set or freed, a variable of the global environment.
+fn merge(doc: &mut Value, before: Option<&Synced>, after: &Synced, paste: &Paste) {
+    for (i, name) in MAPS.iter().enumerate() {
+        if !doc["options"][*name].is_object() { doc["options"][*name] = json!({}) }
+        let map = doc["options"][*name].as_object_mut().unwrap();
+        match before {
+            None => { map.clear(); for (k, v) in &after.options[i] { map.insert(k.clone(), json!(v)); } }
+            Some(b) => {
+                for (k, v) in &after.options[i] { if b.options[i].get(k) != Some(v) { map.insert(k.clone(), json!(v)); } }
+                for k in b.options[i].keys() { if !after.options[i].contains_key(k) { map.remove(k); } }
+            }
+        }
+    }
+    if before.map(|b| b.keymap != after.keymap).unwrap_or(true) { doc["keys"] = keys_json(&after.keymap) }
+    // Buffers by name: each one new or set again, each one gone; the counters past every client's.
+    let old: &[(String, u64)] = before.map(|b| b.buffers.as_slice()).unwrap_or(&[]);
+    let mut list: Vec<Value> = if before.is_none() { Vec::new() } else { doc["buffers"]["list"].as_array().cloned().unwrap_or_default() };
+    let named = |v: &Value| v.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_default();
+    for (n, _) in old.iter().filter(|(n, _)| !after.buffers.iter().any(|(m, _)| m == n)) { list.retain(|v| named(v) != *n) }
+    for b in paste.walk().filter(|b| !old.iter().any(|(n, o)| *n == b.name && *o == b.order)) {
+        list.retain(|v| named(v) != b.name);
+        list.push(json!({ "name": b.name, "data": b.data, "automatic": b.automatic, "order": b.order, "created": b.created }));
+    }
+    doc["buffers"]["list"] = json!(list);
+    let (index, order) = paste.counters();
+    for (key, n) in [("next-index", index), ("next-order", order)] {
+        let was = doc["buffers"][key].as_u64().unwrap_or(0);
+        doc["buffers"][key] = json!(was.max(n));
+    }
+    // The global environment: only what was changed here (each client starts from its own).
+    if !doc["env"].is_object() { doc["env"] = json!({}) }
+    let env = doc["env"].as_object_mut().unwrap();
+    if let Some(b) = before {
+        for (k, v) in &after.env { if b.env.get(k) != Some(v) { env.insert(k.clone(), json!({ "value": v.value, "hidden": v.hidden })); } }
+        for k in b.env.keys() { if !after.env.contains_key(k) { env.insert(k.clone(), Value::Null); } }
+    }
+}
+
+/// The file's buffers, as a Paste.
+fn paste_from(doc: &Value) -> Paste {
+    let list = doc["buffers"]["list"].as_array().cloned().unwrap_or_default().iter().filter_map(|v| Some(crate::paste::Buffer {
+        name: v.get("name")?.as_str()?.to_string(),
+        data: v.get("data")?.as_str()?.to_string(),
+        automatic: v.get("automatic").and_then(Value::as_bool).unwrap_or(true),
+        order: v.get("order").and_then(Value::as_u64).unwrap_or(0),
+        created: v.get("created").and_then(Value::as_i64).unwrap_or(0),
+    })).collect();
+    Paste::from_parts(list, doc["buffers"]["next-index"].as_u64().unwrap_or(0), doc["buffers"]["next-order"].as_u64().unwrap_or(0))
+}
+
+// ── joining, publishing, taking ────────────────────────────────────────────────
+
+/// A client started (its configuration read): a new server's first client starts the file with
+/// what it has; any other takes the server's.
+pub fn join(app: &mut App) {
+    if crate::ids::fresh() || !path().exists() {
+        let mine = now(app);
+        with_file(|doc| { *doc = json!({}); merge(doc, None, &mine, &app.paste) });
+        app.server_synced = Some(mine);
+    } else {
+        take(app);
+    }
+}
+
+/// After commands ran: what they changed of the server's state, into the file and to the other
+/// clients.
+pub fn publish(app: &mut App) {
+    if !std::mem::take(&mut app.server_dirty) { return }
+    let Some(before) = app.server_synced.as_ref() else { return };
+    if unchanged(app, before) { return }
+    let before = before.clone();
+    let after = now(app);
+    with_file(|doc| merge(doc, Some(&before), &after, &app.paste));
+    app.server_synced = Some(after);
+    let others = crate::commands::other_clients();
+    if others.is_empty() { return }
+    tokio::spawn(async move { for peer in others { tell(&peer).await } });
+}
+
+/// hn-server-sync: another client changed the server's state; this one takes it (what it
+/// changed itself first written, so neither is lost).
+pub fn take(app: &mut App) {
+    app.server_dirty = true;
+    publish(app);
+    let doc: Value = std::fs::read_to_string(path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    if !doc.is_object() { app.server_synced = Some(now(app)); return }
+    // Options: each one that differs set as `set -g` sets it (what hn keeps outside the store
+    // follows), each one gone unset.
+    for (i, name) in MAPS.iter().enumerate() {
+        let theirs: BTreeMap<String, String> = doc["options"][*name].as_object().map(|m| m.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect()).unwrap_or_default();
+        let mine = match i { 0 => app.options.server.clone(), 1 => app.options.global_session.clone(), _ => app.options.global_window.clone() };
+        if theirs == mine { continue }
+        let changed: Vec<String> = theirs.iter().filter(|(k, v)| mine.get(*k) != Some(*v)).map(|(k, _)| k.clone()).chain(mine.keys().filter(|k| !theirs.contains_key(*k)).cloned()).collect();
+        match i { 0 => app.options.server = theirs, 1 => app.options.global_session = theirs, _ => app.options.global_window = theirs }
+        for name in changed { crate::commands::option_changed(app, &name) }
+    }
+    if doc["keys"].is_object() { app.keymap = keys_from(&doc["keys"], app.keymap.clone()) }
+    app.paste = paste_from(&doc);
+    if let Some(env) = doc["env"].as_object() {
+        for (k, v) in env {
+            match v.as_object() {
+                Some(o) => { app.global_env.insert(k.clone(), EnvVar { value: o.get("value").and_then(Value::as_str).map(str::to_string), hidden: o.get("hidden").and_then(Value::as_bool).unwrap_or(false) }); }
+                None => { app.global_env.remove(k); }
+            }
+        }
+    }
+    app.redraw_all = true;
+    app.server_dirty = false;
+    app.server_synced = Some(now(app));
+}
+
+/// Tell another client the server's state changed (it answers once it has taken it).
+async fn tell(peer: &std::path::Path) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let Ok(stream) = tokio::net::UnixStream::connect(peer).await else { return };
+    let (read, mut write) = stream.into_split();
+    let line = format!("{}\n", json!({ "argv": ["hn-server-sync"], "forwarded": true }));
+    if write.write_all(line.as_bytes()).await.is_err() { return }
+    let mut reply = String::new();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::io::BufReader::new(read).read_line(&mut reply)).await;
+}

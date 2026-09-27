@@ -13,7 +13,7 @@ pub struct Buffer {
     pub created: i64,
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct Paste { list: Vec<Buffer>, next_index: u64, next_order: u64 }
 
 fn now() -> i64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0) }
@@ -26,6 +26,15 @@ impl Paste {
         v.into_iter()
     }
 
+
+    /// The buffers as another client of the server has them (server.rs).
+    pub fn from_parts(list: Vec<Buffer>, next_index: u64, next_order: u64) -> Paste {
+        let next_order = next_order.max(list.iter().map(|b| b.order + 1).max().unwrap_or(0));
+        Paste { list, next_index, next_order }
+    }
+
+    /// The next automatic buffer's number and the next buffer's place in the walk.
+    pub fn counters(&self) -> (u64, u64) { (self.next_index, self.next_order) }
 
     /// paste_get_top: the newest automatic buffer (what paste-buffer pastes without -b).
     pub fn top(&self) -> Option<&Buffer> { self.walk().find(|b| b.automatic) }

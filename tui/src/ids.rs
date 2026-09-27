@@ -28,6 +28,12 @@ struct Ids { file: Option<PathBuf>, local: HashMap<Kind, u64>, desk: HashMap<(Ki
 
 static IDS: Mutex<Option<Ids>> = Mutex::new(None);
 
+/// Whether this client's server is a new one (its counters started again when it came).
+static FRESH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether this client is its server's first (no other client, no session kept, when it came).
+pub fn fresh() -> bool { FRESH.load(std::sync::atomic::Ordering::Relaxed) }
+
 /// The counters' file, beside the sessions file of this server name.
 fn path_for(sessions: &std::path::Path) -> PathBuf { sessions.with_extension("ids.json") }
 
@@ -41,7 +47,9 @@ pub fn use_file(sessions: &std::path::Path) {
     let me = std::process::id() as u64;
     with_file(&path, |doc| {
         let others: Vec<u64> = doc["clients"].as_array().map(|a| a.iter().filter_map(Value::as_u64).filter(|p| *p != me && running(*p)).collect()).unwrap_or_default();
-        if others.is_empty() && !kept { *doc = json!({}) }
+        let fresh = others.is_empty() && !kept;
+        FRESH.store(fresh, std::sync::atomic::Ordering::Relaxed);
+        if fresh { *doc = json!({}) }
         doc["clients"] = json!(others.into_iter().chain([me]).collect::<Vec<_>>());
     });
     if let Ok(mut g) = IDS.lock() { g.get_or_insert_with(Ids::default).file = Some(path) }

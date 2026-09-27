@@ -12,6 +12,7 @@ mod cmd;
 mod cmdparse;
 mod commands;
 mod ids;
+mod server;
 mod ipc;
 mod keys;
 mod preview;
@@ -140,6 +141,8 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     app.cfg_finished = true;
     app.config_files = read;
     if config.prefix_set { app.keymap.prefix = config.prefix }
+    // The server's options, keys, buffers and environment: this client's if it is the first.
+    server::join(&mut app);
     app.boot();
     app.load_sessions();
     app.notify_changes();
@@ -159,6 +162,7 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
         while let Ok(event) = rx.try_recv() { apply(&mut app, event) }
         app.notify_changes();
         app.save_if_changed();
+        server::publish(&mut app);
         commands::run_pending_hooks(&mut app);
         app.flush_acks();
         if app.quit { break }
@@ -298,6 +302,9 @@ async fn run(config: config::Config) -> io::Result<()> {
     for (chord, command) in &config.keys {
         match command { Some(c) => app.keymap.bind(keys::Table::Root, *chord, c.clone(), false), None => app.keymap.unbind(keys::Table::Root, chord) }
     }
+    // The server's options, keys, buffers and environment: this client's if it is the first
+    // (tmux reads its configuration once, when its server starts).
+    server::join(&mut app);
     if let Some(problem) = config.problems.first() { app.say(problem.clone(), theme::DANGER) }
     else if let Some(path) = read.last() { if app.messages.is_empty() { app.say(format!("{} read — your prefix is {}", path.replace(&std::env::var("HOME").unwrap_or_default(), "~"), keys::name(&app.keymap.prefix)), theme::WARN) } }
     // Inside a tmux client whose prefix is hn's too: tmux takes it first, and its send-prefix
@@ -351,6 +358,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         app.notify_changes();
         // What another terminal's client sees of this one's sessions, kept up to date.
         app.save_if_changed();
+        server::publish(&mut app);
         commands::run_pending_hooks(&mut app);
         app.show_causes();
         app.mark_seen();

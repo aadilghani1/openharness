@@ -41,7 +41,9 @@ session is with one client at a time. `hn attach -t main` from a second terminal
 takes `main` over: if the first terminal was showing it, that one detaches, as `tmux attach -d`
 does. Commands from a shell reach every session, whichever terminal has it. `hn ls`,
 `list-clients` and `detach-client -a` see them all, and nothing is lost when they detach in any
-order. The desk's session is the exception: every terminal shows it at once.
+order. The desk's session is the exception: every terminal shows it at once. What tmux's server
+holds is every terminal's: `set -g`, `bind`, `setenv -g` and `source-file` in one reach the
+others, a copy in one pastes in another, and ids (`$1 @3 %7`) name the same thing everywhere.
 
 **With no terminal open**, scripts still work. The first command that needs a server starts hn
 without a terminal: tmux's server, holding the sessions until you attach. For example,

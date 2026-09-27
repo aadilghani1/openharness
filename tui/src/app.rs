@@ -394,6 +394,10 @@ pub struct App {
     /// Commands from shells held while this client's machine is not connected yet (its first
     /// moments), the first of them one that opens a shell: run in order once it is (run_cli).
     pub cli_held: std::collections::VecDeque<Box<dyn FnOnce(&mut App) + Send>>,
+    /// The server's state (global options, key tables, buffers, global environment) as this
+    /// client last wrote or took it, and whether a command ran since (server.rs).
+    pub server_synced: Option<crate::server::Synced>,
+    pub server_dirty: bool,
     /// No terminal (--headless): tmux's server with no client attached, holding sessions for
     /// the commands of a script until a client takes them.
     pub headless: bool,
@@ -567,6 +571,8 @@ impl App {
             headless: false,
             wait_channels: HashMap::new(),
             cli_held: std::collections::VecDeque::new(),
+            server_synced: None,
+            server_dirty: false,
             swap_back: None,
             start_session: None,
             start_failed: None,
@@ -1145,7 +1151,7 @@ impl App {
                 let how = self.options.get("set-clipboard", "", None).unwrap_or_default();
                 if how == "off" { continue }
                 crate::clipboard::store(&text);
-                if how == "on" { let limit = self.buffer_limit(); self.paste.add(text, limit) }
+                if how == "on" { let limit = self.buffer_limit(); self.paste.add(text, limit); self.server_dirty = true }
             }
             // alerts.c: output is activity; a BEL is a bell.
             if let Some(t) = self.tabs.iter().position(|t| t.panes().contains(&id)) {
