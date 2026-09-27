@@ -303,10 +303,12 @@ Enter opens one as a harness resuming it (`lib/sessionSearch/external.ts`).
   session is open elsewhere, is already a harness, or its folder is gone (Codex app threads live in
   folders people tidy away).
 - ChatGPT conversations and Codex cloud tasks are not on disk, so they cannot be found.
-- **The welcome page lists them too.** An empty tab offers "Pick up where you left off": up to
-  nine rows, numbered like the terminal client's home, mixing the harnesses you were just with and
-  these conversations from every machine (a `session_search` with the last 30 days and no words).
-  A new user's first screen is their existing Claude Code and Codex work, one key away.
+- **The welcome page lists them too.** An empty tab shows up to nine rows beside its shortcuts,
+  numbered like the terminal client's home: the harnesses you were just with and these
+  conversations from every machine (a `session_search` with the last 30 days and no words), each
+  just a name and an age. A narrow window puts the shortcuts under the list; with nothing to offer
+  the page is the shortcuts alone. A new user's first screen is their existing Claude Code and
+  Codex work, one key away.
 
 Checked on one machine's real folders through a sandboxed daemon: the Codex app's threads and
 terminal sessions were found by what was said in them. A session open in a terminal was refused.

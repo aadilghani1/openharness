@@ -181,11 +181,12 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
         .reduce((a, b) => a > b ? a : b);
     final line = MediaQuery.textScalerOf(context).scale(style.fontSize!) * 1.5;
     final cell = widthOf('M');
-    final listWidth = (cell * 84).clamp(
-      keyWidth + descriptionWidth,
-      double.infinity,
-    );
-    final sessions = _sessionsSection(
+    final commandsWidth = keyWidth + descriptionWidth;
+    // The sessions to pick up, beside the commands: a fixed measure, so a long
+    // title gives way rather than the page.
+    final listWidth = cell * 44;
+    final gap = cell * 2;
+    final sessions = _sessionsList(
       style: style,
       ink: ink,
       accent: accent,
@@ -219,71 +220,68 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                           .clamp(0, double.infinity),
                     ),
                     child: Center(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: sessions == null
-                              ? keyWidth + descriptionWidth
-                              : listWidth,
-                        ),
-                        child: DefaultTextStyle(
-                          style: style,
-                          textAlign: TextAlign.center,
-                          child: Column(
-                            key: const ValueKey('workspace-welcome-text'),
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                'Harness like a boss.',
-                                key: const ValueKey('welcome-tagline'),
-                              ),
-                              SizedBox(height: line),
-                              if (sessions != null) ...[
-                                sessions,
-                                SizedBox(height: line),
-                              ],
-                              for (final row in rows)
-                                Center(
-                                  child: SizedBox(
-                                    width: keyWidth + descriptionWidth,
-                                    child: TextButton(
-                                      key: ValueKey('welcome-${row.command}'),
-                                      onPressed: () => onCommand(row.command),
-                                      style: TextButton.styleFrom(
-                                        foregroundColor: ink,
-                                        textStyle: style,
-                                        padding: const EdgeInsets.symmetric(
-                                          vertical: 2,
-                                        ),
-                                        minimumSize: Size.zero,
-                                        tapTargetSize:
-                                            MaterialTapTargetSize.shrinkWrap,
-                                        shape: const RoundedRectangleBorder(),
-                                      ),
-                                      child: Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          SizedBox(
-                                            width: keyWidth,
-                                            child: Text(
-                                              row.hint ?? '',
-                                              style: TextStyle(color: accent),
-                                              textAlign: TextAlign.left,
-                                            ),
-                                          ),
-                                          Expanded(
-                                            child: Text(
-                                              row.description,
-                                              textAlign: TextAlign.left,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
+                      child: DefaultTextStyle(
+                        style: style,
+                        textAlign: TextAlign.center,
+                        child: Column(
+                          key: const ValueKey('workspace-welcome-text'),
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Harness like a boss.',
+                              key: const ValueKey('welcome-tagline'),
+                            ),
+                            SizedBox(height: line),
+                            if (sessions == null)
+                              _commands(
+                                rows,
+                                commandsWidth,
+                                keyWidth,
+                                style,
+                                ink,
+                                accent,
+                              )
+                            // Side by side when both fit; the commands go under
+                            // the list in a narrow window.
+                            else if (constraints.maxWidth - 48 >=
+                                listWidth + gap * 2 + 1 + commandsWidth)
+                              IntrinsicHeight(
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(width: listWidth, child: sessions),
+                                    SizedBox(width: gap),
+                                    Container(
+                                      key: const ValueKey('welcome-rule'),
+                                      width: 1,
+                                      color: ink.withValues(alpha: .15),
                                     ),
-                                  ),
+                                    SizedBox(width: gap),
+                                    _commands(
+                                      rows,
+                                      commandsWidth,
+                                      keyWidth,
+                                      style,
+                                      ink,
+                                      accent,
+                                    ),
+                                  ],
                                 ),
+                              )
+                            else ...[
+                              SizedBox(width: listWidth, child: sessions),
+                              SizedBox(height: line),
+                              _commands(
+                                rows,
+                                commandsWidth,
+                                keyWidth,
+                                style,
+                                ink,
+                                accent,
+                              ),
                             ],
-                          ),
+                          ],
                         ),
                       ),
                     ),
@@ -307,8 +305,57 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     );
   }
 
-  /// What to pick up, numbered: null when there is nothing to offer.
-  Widget? _sessionsSection({
+  /// The commands, each with its shortcut: the whole page before there is
+  /// anything to pick up, and the column beside the list after.
+  Widget _commands(
+    List<({String command, String description, String? hint})> rows,
+    double width,
+    double keyWidth,
+    TextStyle style,
+    Color ink,
+    Color accent,
+  ) => SizedBox(
+    width: width,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final row in rows)
+          TextButton(
+            key: ValueKey('welcome-${row.command}'),
+            onPressed: () => onCommand(row.command),
+            style: TextButton.styleFrom(
+              foregroundColor: ink,
+              textStyle: style,
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              shape: const RoundedRectangleBorder(),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: keyWidth,
+                  child: Text(
+                    row.hint ?? '',
+                    style: TextStyle(color: accent),
+                    textAlign: TextAlign.left,
+                  ),
+                ),
+                Expanded(
+                  child: Text(row.description, textAlign: TextAlign.left),
+                ),
+              ],
+            ),
+          ),
+      ],
+    ),
+  );
+
+  /// What to pick up, numbered: null when there is nothing to offer. Every row
+  /// is alike — a harness or a conversation Harness did not start, its name
+  /// and how long ago; where it came from is not this page's business.
+  Widget? _sessionsList({
     required TextStyle style,
     required Color ink,
     required Color accent,
@@ -319,32 +366,27 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     final rows = sessions.rows;
     final muted = ink.withValues(alpha: .55);
     if (rows.isEmpty) {
-      return sessions.loading
-          ? Text('Finding your sessions…', style: TextStyle(color: muted))
+      return sessions.loading && widget.app!.searchableMachineIds.isNotEmpty
+          ? Text(
+              'Finding your sessions…',
+              textAlign: TextAlign.left,
+              style: TextStyle(color: muted),
+            )
           : null;
     }
-    final app = widget.app!;
-    final many = app.searchableMachineIds.length > 1;
     return Column(
       key: const ValueKey('welcome-sessions'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          'Pick up where you left off',
-          textAlign: TextAlign.left,
-          style: TextStyle(color: muted),
-        ),
         for (final (index, row) in rows.indexed)
           _sessionRow(
             index,
             row,
-            app: app,
             style: style,
             ink: ink,
             muted: muted,
             accent: accent,
             cell: cell,
-            showMachine: many,
           ),
       ],
     );
@@ -353,40 +395,16 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
   Widget _sessionRow(
     int index,
     SwarmDestination row, {
-    required AppNotifier app,
     required TextStyle style,
     required Color ink,
     required Color muted,
     required Color accent,
     required double cell,
-    required bool showMachine,
   }) {
-    final machine = app.stateOf(row.machineId ?? '');
+    final machine = widget.app!.stateOf(row.machineId ?? '');
     final agent = row.agentId == null
         ? null
         : machine?.agents.where((agent) => agent.id == row.agentId).firstOrNull;
-    final waiting = agent == null ? null : machine?.blockedAgents[agent.id];
-    final working =
-        agent != null && machine!.processingAgentIds.contains(agent.id);
-    final external = row.external;
-    final (dot, dotColor) = external != null
-        ? (' ', muted)
-        : waiting != null
-        ? ('●', const Color(0xffe9bf79))
-        : working
-        ? ('●', const Color(0xffadc5eb))
-        : agent?.isStopped == true
-        ? ('○', muted)
-        : ('●', const Color(0xff9abea5));
-    final folder = external?.cwd
-        .split('/')
-        .where((part) => part.isNotEmpty)
-        .lastOrNull;
-    final detail = external != null
-        ? [external.originLabel, ?folder, 'not in Harness'].join(' · ')
-        : waiting?.prompt ??
-              (agent == null ? null : machine?.projectOf(agent)?.label) ??
-              '';
     final at = row.lastActivityAt;
     final readAt = _sessions!.readAt;
     final age = at == null
@@ -394,10 +412,6 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
         : readAt.difference(at).inMinutes < 1
         ? 'now'
         : harnessActivityAge(at, readAt);
-    final right = [
-      if (showMachine && machine != null) machine.machine.displayName,
-      age,
-    ].where((part) => part.isNotEmpty).join('  ');
     final selected = index == _cursor;
     return TextButton(
       key: ValueKey('welcome-session-${row.id}'),
@@ -417,11 +431,11 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
         children: [
           SizedBox(
             width: cell * 3,
-            child: Text('${index + 1}', style: TextStyle(color: accent)),
-          ),
-          SizedBox(
-            width: cell * 2,
-            child: Text(dot, style: TextStyle(color: dotColor)),
+            child: Text(
+              '${index + 1}',
+              textAlign: TextAlign.left,
+              style: TextStyle(color: accent),
+            ),
           ),
           Padding(
             padding: EdgeInsets.only(right: cell),
@@ -431,32 +445,22 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
               size: (style.fontSize ?? 13) * 1.1,
             ),
           ),
-          SizedBox(
-            width: cell * 30,
+          Expanded(
             child: Text(
               row.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.left,
-              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
-          SizedBox(width: cell * 2),
-          Expanded(
+          SizedBox(
+            width: cell * 5,
             child: Text(
-              detail.replaceAll('\n', ' '),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.left,
-              style: TextStyle(
-                color: waiting != null ? const Color(0xffe9bf79) : muted,
-              ),
+              age,
+              textAlign: TextAlign.right,
+              style: TextStyle(color: muted),
             ),
           ),
-          if (right.isNotEmpty) ...[
-            SizedBox(width: cell * 2),
-            Text(right, style: TextStyle(color: muted)),
-          ],
         ],
       ),
     );

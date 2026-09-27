@@ -109,12 +109,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
       expect(find.byKey(const ValueKey('welcome-sessions')), findsOneWidget);
-      expect(find.text('Pick up where you left off'), findsOneWidget);
       expect(find.text('Continue NFC device chat'), findsOneWidget);
-      expect(
-        find.textContaining('Codex app · e-nfc · not in Harness'),
-        findsOneWidget,
-      );
       expect(find.text('Still open elsewhere'), findsNothing);
 
       await tester.sendKeyEvent(LogicalKeyboardKey.digit2);
@@ -128,6 +123,53 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
       expect(opened, ['e-nfc', 'a2', 'a1']);
+    },
+  );
+
+  testWidgets(
+    'the list beside the commands when both fit, above them when not, and only the commands with nothing to offer',
+    (tester) async {
+      final (connection: _, :sessions) = _setup();
+      Future<void> show(Size size, WelcomeSessions? offered) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        await tester.pumpWidget(
+          MaterialApp(
+            key: UniqueKey(),
+            home: WorkspaceWelcome(
+              onCommand: (_) {},
+              app: offered?.app,
+              onOpen: (_) {},
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      addTearDown(tester.view.reset);
+      final list = find.byKey(const ValueKey('welcome-sessions'));
+      final rule = find.byKey(const ValueKey('welcome-rule'));
+      final start = find.byKey(const ValueKey('welcome-agent.new'));
+
+      await show(const Size(1600, 900), sessions);
+      expect(rule, findsOneWidget);
+      expect(
+        tester.getTopLeft(start).dx,
+        greaterThan(tester.getTopRight(list).dx),
+      );
+
+      await show(const Size(560, 900), sessions);
+      expect(rule, findsNothing);
+      expect(
+        tester.getTopLeft(start).dy,
+        greaterThan(tester.getBottomLeft(list).dy),
+      );
+
+      await show(const Size(1600, 900), null);
+      expect(list, findsNothing);
+      expect(rule, findsNothing);
+      expect(start, findsOneWidget);
     },
   );
 
