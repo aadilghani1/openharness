@@ -765,7 +765,8 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 "--padding" => { if let Some(v) = take() { if let Some(m) = parse_margin(&v) { o.padding = m } } }
                 "--no-padding" => o.padding = [Size::default(); 4],
                 // Its first line, the ANSI colours in it aside.
-                "--border-label" => { if let Some(v) = take() { o.border_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
+                // (Its colours kept: drawn as fzf draws an ANSI label.)
+                "--border-label" => { if let Some(v) = take() { o.border_label = v.split('\n').next().unwrap_or("").to_string() } }
                 "--no-border-label" => o.border_label.clear(),
                 "--border-label-pos" => { if let Some(v) = take() { o.border_label_pos = parse_label_pos(&v) } }
                 "--no-sort" | "+s" => o.no_sort = true,

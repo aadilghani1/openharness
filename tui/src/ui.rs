@@ -727,6 +727,20 @@ fn info_command(cmd: &str, info: &str, query: &str, matched: usize, total: usize
     out
 }
 
+/// [text] with its SGR codes read, at (x, y): each part in its own colours over [base] (fzf's
+/// ansiToColorPair), no wider than [max].
+fn put_ansi(buf: &mut Buffer, x: u16, y: u16, text: &str, base: Style, max: usize) -> usize {
+    let line = crate::preview::ansi_line(text, 8);
+    let mut used = 0usize;
+    for sp in &line.spans {
+        if used >= max { break }
+        let st = if sp.style == Style::default() { base } else { base.patch(sp.style) };
+        let (_, end) = buf.set_stringn(x + used as u16, y, sp.content.as_ref(), max - used, st);
+        used = (end - x) as usize;
+    }
+    used
+}
+
 /// headerIndentImpl: a header's (or footer's) indent in a window of its own — the rows' gutter,
 /// and the list box's left side, less its own box's.
 fn section_indent(list: &Option<String>, own: &Option<String>) -> u16 {
@@ -778,18 +792,20 @@ fn fzf_border(buf: &mut Buffer, body: Rect) {
     if bottom && left { buf.set_string(body.x, y1, bl, st) }
     if bottom && right { buf.set_string(x1, y1, br, st) }
     let o = theme::fzf_opts();
-    if o.border_label.is_empty() || !(top || bottom) { return }
+    // (Measured without its colour codes; drawn with them when it fits whole.)
+    let plain = theme::strip_ansi(&o.border_label);
+    if plain.is_empty() || !(top || bottom) { return }
     let w = body.width as i64;
-    let len = o.border_label.width() as i64;
+    let len = plain.width() as i64;
     let (column, at_bottom) = o.border_label_pos;
     let col = if column == 0 { ((w - len) / 2).max(0) } else if column < 0 { (w + column + 1 - len).max(0) } else { (column - 1).min(w - len) };
     let row = if style == "bottom" || at_bottom { y1 } else { body.y };
     // ansiLabelPrinter: the whole label when it fits, else as much as fits and the ellipsis.
     let text = if len > w {
         let ell: String = { let mut used = 0; o.ellipsis.chars().take_while(|c| { used += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0) as i64; used <= w }).collect() };
-        trim_right(&o.border_label, (w - ell.width() as i64) as i32) + &ell
+        trim_right(&plain, (w - ell.width() as i64) as i32) + &ell
     } else { o.border_label.clone() };
-    if col >= 0 { buf.set_stringn(body.x + col as u16, row, &text, (w - col).max(0) as usize, theme::fzf().pal.border_label.style()); }
+    if col >= 0 { put_ansi(buf, body.x + col as u16, row, &text, theme::fzf().pal.border_label.style(), (w - col).max(0) as usize); }
 }
 
 /// The preview's box (its border, its shape) and what is inside it: the text, and the column of
@@ -964,13 +980,19 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // trailing blanks in the pair's colours without the attributes — parsePrompt's AttrClear, laid
     // on the characters at the blanks' byte offsets, as fzf lays it (after `❯` it misses them); a
     // tab out to the next --tabstop.
-    let blank_from = prompt_text.trim_end_matches([' ', '\t', '\n', '\x0c', '\r']).len();
+    // Its SGR codes read (a coloured --prompt, as fzf renders one): each part in its own colours
+    // over the prompt's pair, the prompt's attributes kept; tabs to the next --tabstop.
+    let pline = crate::preview::ansi_line(&prompt_text, o.tabstop);
+    let pchars: Vec<(char, Style)> = pline.spans.iter().flat_map(|sp| sp.content.chars().map(|c| (c, sp.style)).collect::<Vec<_>>()).collect();
+    let plain: String = pchars.iter().map(|c| c.0).collect();
+    let blank_from = plain.trim_end_matches([' ', '\t', '\n', '\x0c', '\r']).len();
     let clear = theme::fzfcolor::P { attr: 0, ..pal.prompt }.style();
     let mut pw = 0u16;
-    for (i, c) in prompt_text.chars().enumerate() {
-        let st = if i >= blank_from && i < prompt_text.len() { clear } else { prompt };
-        let (text, w) = if c == '\t' { let n = o.tabstop - pw as usize % o.tabstop; (" ".repeat(n), n) } else { (c.to_string(), unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)) };
-        pbuf.set_string(ia.x + pw, prompt_y, text, st);
+    for (i, (c, own)) in pchars.iter().enumerate() {
+        let base = if i >= blank_from && i < plain.len() { clear } else { prompt };
+        let st = if *own == Style::default() { base } else { base.patch(*own) };
+        let w = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+        pbuf.set_string(ia.x + pw, prompt_y, c.to_string(), st);
         pw += w as u16;
     }
     let q_room = (ia.width as usize).saturating_sub(pw as usize + 1).max(1);
