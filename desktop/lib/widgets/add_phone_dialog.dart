@@ -416,7 +416,11 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('Add your phone', style: _ink()),
+                    Text(
+                      'Add your phone',
+                      textAlign: TextAlign.center,
+                      style: _ink(),
+                    ),
                     SizedBox(height: row),
                     ..._body(qrSide, row),
                   ],
