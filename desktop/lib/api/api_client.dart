@@ -186,6 +186,37 @@ class ApiClient {
     );
   }
 
+  /// A one-time code that signs a phone in to this account: the Add Phone
+  /// QR's `h=`, which the phone redeems for a session of its own instead of
+  /// asking for an emailed code (backend `lib/harnessSession.ts`).
+  ///
+  /// Minted by the backend against the daemon's own session, and the daemon
+  /// hands it out over its owner-only socket and nowhere else — a code that
+  /// signs a device in is a credential. So null is an ordinary answer: an
+  /// older daemon or backend, this app on the TCP fallback, the backend down.
+  /// The QR then goes without it and the phone falls back to the email code.
+  Future<({String code, Duration ttl})?> phoneSignInCode() async {
+    try {
+      final res = await _dio.post(
+        '/api/auth/handoff',
+        data: const <String, Object?>{},
+        options: Options(headers: {'x-adapter-local': '1'}),
+      );
+      final data = unwrapApiResponse(res);
+      final code = data is Map ? data['code'] : null;
+      final expiresIn = data is Map ? data['expiresIn'] : null;
+      if (code is! String || code.isEmpty) return null;
+      return (
+        code: code,
+        ttl: Duration(
+          seconds: expiresIn is int && expiresIn > 0 ? expiresIn : 60,
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   // -- the Harness Store: ratings and reviews (control plane, proxied by the local CLI) --
   Future<Map<String, dynamic>?> storeRatings() async {
     final res = await _dio.get('/api/store/ratings');

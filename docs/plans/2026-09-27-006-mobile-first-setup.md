@@ -160,6 +160,18 @@ password or signed in twice.
 3. **Sign-in is your email, never a password,** on the phone, the desktop and the CLI: approve on a
    device you have, or a six-digit email code for your first. The browser sign-in retires.
 
+- **Scan and go, built (2026-09-27).** The Autonomous account service can't sign one device in
+  from another (its grants are password, otp, refresh_token and social_token), so Harness issues
+  the phone's session itself. The signed-in Mac asks the backend for a one-time code
+  (`POST /api/auth/handoff`, 32 random bytes, 90 s, spent by the first redeem) through its daemon's
+  owner-only socket. Add Phone puts it in the QR as `h=` and renews it every minute. The phone
+  trades it at `/api/auth/handoff/redeem` for a `hna_`/`hnr_` session (`backend/src/lib/harnessSession.ts`),
+  renewed at `/api/auth/refresh` and revoked on sign-out. Every sign-in check goes through
+  `authenticateAccessToken`, so that is the one branch; machine connections refuse these sessions.
+  No Allow click on the Mac, by decision: the QR is fresh, single use and on screen for a minute.
+  "Remove" for a phone that isn't yours comes later. Old apps, CLIs and backends fall back to the
+  emailed code. A phone session can't mint codes, or use billing routes that forward the token to
+  the account service.
 - **Trust stays per computer, as it is.** A computer admits only keys on its own list
   (`cli/src/lib/e2ee/manager.ts` `onHello`), so one viewer links N computers: O(N), which is fine.
   The signed device list is shelved; it would only save the per-computer password steps.

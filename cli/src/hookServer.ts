@@ -125,6 +125,9 @@ export interface HookServerHandlers {
   onMachineDelete?: (machineId: string) => Promise<PairOutcome>
   /** GET /api/auth/me — proxy the signed-in user's profile from backend. */
   onAuthMe?: () => Promise<PairOutcome>
+  /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
+   *  Add Phone QR), minted by backend against this daemon's own session. */
+  onAuthHandoff?: () => Promise<PairOutcome>
   onSharedHarnesses?: () => Promise<PairOutcome>
   /** GET /api/desk — the account's tabs, the same on every computer; proxied like the machine list. */
   onDeskRead?: () => Promise<PairOutcome>
@@ -685,6 +688,16 @@ export function startHookServer(
         const me = handlers.onAuthMe
         if (!me) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(me); return
+      }
+      // Add Phone: a code that SIGNS A PHONE IN to this account — the one local route whose answer is
+      // a credential. So not the CSRF header, which any local process can send, but the daemon's
+      // owner-only socket: the filesystem has already said this is the user who signed in. Another
+      // account on a shared computer reaches the loopback port, never the socket. A client on TCP is
+      // refused, and the Add Phone QR goes without the code (the phone asks for an emailed one).
+      if (req.method === 'POST' && url === '/api/auth/handoff') {
+        if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onAuthHandoff) { json(503, { error: 'UNAVAILABLE' }); return }
+        await proxied(handlers.onAuthHandoff); return
       }
       if (req.method === 'PATCH' && url.startsWith('/api/machines/')) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }

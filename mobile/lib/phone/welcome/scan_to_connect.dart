@@ -9,7 +9,8 @@ import '../tty_controls.dart';
 import 'connect_code.dart';
 
 /// **Yes — scan to connect**: the camera, reading the code the desktop app shows under
-/// Settings ▸ Add phone ([ConnectCode]).
+/// Harness ▸ Add Phone… ([ConnectCode]). The scan signs the phone in; [signingIn] says so while it
+/// does.
 ///
 /// ```
 /// ‹
@@ -17,7 +18,7 @@ import 'connect_code.dart';
 ///   │    [ camera view ]   │
 ///   └──────────────────────┘
 /// Scan the code on your computer
-/// In Harness on your Mac: Settings ▸ Add phone
+/// On your Mac: Harness ▸ Add Phone…
 ///
 ///           Use email instead
 /// ```
@@ -30,12 +31,16 @@ class ScanToConnectPage extends StatefulWidget {
     required this.onCode,
     required this.onUseEmail,
     required this.onBack,
+    this.signingIn = false,
     this.camera,
   });
 
   final ValueChanged<ConnectCode> onCode;
   final VoidCallback onUseEmail;
   final VoidCallback onBack;
+
+  /// A code was read and the phone is signing in with it.
+  final bool signingIn;
 
   /// Stands in for the camera in tests and renders. Null opens the real one.
   final Widget? camera;
@@ -108,7 +113,7 @@ class _ScanToConnectPageState extends State<ScanToConnectPage> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
           child: TtyText(
-            'Scan the code on your computer',
+            widget.signingIn ? 'Signing in…' : 'Scan the code on your computer',
             size: TtySize.title,
             weight: FontWeight.w600,
           ),
@@ -117,7 +122,7 @@ class _ScanToConnectPageState extends State<ScanToConnectPage> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
           child: TtyText(
-            'In Harness on your Mac: Settings ▸ Add phone',
+            'On your Mac: Harness ▸ Add Phone…',
             color: tty.faint,
             size: TtySize.meta,
           ),

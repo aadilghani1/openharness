@@ -2805,6 +2805,37 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Sign in with the one-time code a signed-in computer's Add Phone QR
+  /// carries — no email, no digits — and go in. Thrown and kept like
+  /// [signInWithCode]: the welcome screen falls back to an emailed code.
+  Future<void> signInWithScan(String code) async {
+    final login = viewer?.emailLogin;
+    if (_disposed || signingIn || login == null) return;
+    final revision = _invalidateAuthWork();
+    _closedHistory.clear();
+    _lastError = null;
+    signingIn = true;
+    notifyListeners();
+    try {
+      await login.signInWithScan(code, label: phoneClientDescriptor().name);
+      if (!_authWorkCurrent(revision)) return;
+      status = AppStatus.bootstrapping;
+      notifyListeners();
+      await _enterSignedIn(revision);
+    } catch (_) {
+      if (_authWorkCurrent(revision)) {
+        status = AppStatus.unauthenticated;
+        analytics.signInFailed('failed');
+      }
+      rethrow;
+    } finally {
+      if (_authWorkCurrent(revision)) {
+        signingIn = false;
+        notifyListeners();
+      }
+    }
+  }
+
   void _resetLoginBrowser() {
     ++_loginBrowserRevision;
     openingLoginBrowser = false;

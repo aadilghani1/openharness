@@ -46,11 +46,26 @@ class _FakeDaemon {
 PhonePairAnswer Function() _failed(String code) =>
     () => PhonePairAnswer.failed(code);
 
+/// A backend that mints sign-in codes `h1`, `h2`, … — or none at all.
+class _FakeSignIn {
+  _FakeSignIn({this.available = true});
+
+  final bool available;
+  var minted = 0;
+
+  Future<({String code, Duration ttl})?> call() async {
+    if (!available) return null;
+    minted++;
+    return (code: 'h$minted', ttl: const Duration(seconds: 90));
+  }
+}
+
 Future<void> _open(
   WidgetTester tester,
   AppNotifier app,
-  PhonePairCall pair,
-) async {
+  PhonePairCall pair, {
+  PhoneSignInCodeCall? signInCode,
+}) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = const Size(1280, 800);
   addTearDown(tester.view.resetPhysicalSize);
@@ -62,8 +77,15 @@ Future<void> _open(
     ),
   );
   unawaited(
-    showAddPhoneDialog(tester.element(find.byType(Scaffold)), app, pair: pair),
+    showAddPhoneDialog(
+      tester.element(find.byType(Scaffold)),
+      app,
+      pair: pair,
+      signInCode: signInCode ?? _FakeSignIn().call,
+    ),
   );
+  await tester.pump();
+  // The sign-in code's answer, which the QR waits for.
   await tester.pump();
 }
 
@@ -134,6 +156,72 @@ void main() {
     });
   });
 
+  group('the sign-in code', () {
+    test('rides in the fragment as h, after the pairing code', () {
+      final link = phonePairLink(
+        email: 'dee@example.com',
+        machineId: 'm',
+        code: 'ABCDEFGHJKMNPQRS',
+        signIn: 'hnh_abc-_XYZ',
+      );
+      expect(link.hasQuery, isFalse);
+      expect(Uri.splitQueryString(Uri.parse(link.toString()).fragment), {
+        'e': 'dee@example.com',
+        'm': 'm',
+        'c': 'ABCDEFGHJKMNPQRS',
+        'h': 'hnh_abc-_XYZ',
+      });
+    });
+
+    testWidgets('is in the QR, and a new one replaces it every minute', (
+      tester,
+    ) async {
+      final app = _signedInApp();
+      addTearDown(app.dispose);
+      final signIn = _FakeSignIn();
+      final daemon = _FakeDaemon(List.filled(80, _failed('NO_INTENT')));
+      await _open(tester, app, daemon.call, signInCode: signIn.call);
+
+      expect(
+        Uri.splitQueryString(Uri.parse(_qrData(tester)).fragment)['h'],
+        'h1',
+      );
+      await tester.pump(const Duration(seconds: 60));
+      await tester.pump();
+      expect(signIn.minted, 2);
+      expect(
+        Uri.splitQueryString(Uri.parse(_qrData(tester)).fragment)['h'],
+        'h2',
+      );
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      await tester.pump(const Duration(minutes: 3));
+      expect(signIn.minted, 2, reason: 'nothing is minted after closing');
+    });
+
+    testWidgets('without one the QR still pairs — the phone emails a code', (
+      tester,
+    ) async {
+      final app = _signedInApp();
+      addTearDown(app.dispose);
+      final daemon = _FakeDaemon(List.filled(10, _failed('NO_INTENT')));
+      await _open(
+        tester,
+        app,
+        daemon.call,
+        signInCode: _FakeSignIn(available: false).call,
+      );
+      final fields = Uri.splitQueryString(Uri.parse(_qrData(tester)).fragment);
+      expect(fields.keys, ['e', 'm', 'c']);
+      expect(fields['c'], daemon.codes.single);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 10));
+    });
+  });
+
   group('arming the daemon', () {
     testWidgets('retries while no phone is waiting and closes once paired', (
       tester,
@@ -156,6 +244,7 @@ void main() {
           email: 'dee+phone@example.com',
           machineId: 'm',
           code: code,
+          signIn: 'h1',
         ).toString(),
       );
       expect(_status(tester), 'Scan with Harness on your iPhone');
@@ -194,7 +283,7 @@ void main() {
       expect(daemon.codes, hasLength(2));
       final second = daemon.codes.last;
       expect(second, isNot(first));
-      expect(_qrData(tester), endsWith('c=$second'));
+      expect(_qrData(tester), contains('c=$second&'));
       // An instruction outlives the "no phone yet" that follows it.
       await tester.pump();
       expect(_status(tester), "That didn't match. Scan the new code.");

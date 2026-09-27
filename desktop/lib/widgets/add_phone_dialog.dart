@@ -21,29 +21,38 @@ import 'terminal_prompt.dart';
 /// Harness ▸ Add Phone… — a QR the phone scans to sign in to this account AND
 /// pair with this computer, end to end encrypted, with no password typed.
 ///
-/// Two halves, and the QR is only one of them:
+/// Three parts, and the QR is only one of them:
 ///
 /// 1. **The QR** ([phonePairLink]) tells the phone who to sign in as, which
 ///    machine to pair with, and the one-time pairing code.
-/// 2. **Arming the daemon.** The phone, once signed in, sends this machine an
+/// 2. **The sign-in code** ([PhoneSignInCodeCall]), which the QR also carries:
+///    the phone redeems it for a session of its own, so the scan signs it in
+///    with no emailed code. Renewed every minute while the dialog is open —
+///    see [_AddPhoneDialogState._renewSignIn].
+/// 3. **Arming the daemon.** The phone, once signed in, sends this machine an
 ///    `e2e_pair_intent`; the daemon runs the handshake only when somebody on
 ///    THIS computer hands it the same code (`POST /api/pair`, the call
 ///    `harness pair <code>` makes). So while this dialog is open it keeps
 ///    handing it over — see [_AddPhoneDialogState._loop] — and the code is
 ///    live exactly as long as the QR is on screen.
 ///
-/// [pair] is the transport, injectable so a test needs no daemon; by default
-/// it is this app's own loopback client ([phonePairOverDaemon]).
+/// [pair] and [signInCode] are the transport, injectable so a test needs no
+/// daemon; by default they are this app's own loopback client
+/// ([phonePairOverDaemon], [ApiClient.phoneSignInCode]).
 Future<void> showAddPhoneDialog(
   BuildContext context,
   AppNotifier app, {
   AppKeymap? keymap,
   PhonePairCall? pair,
+  PhoneSignInCodeCall? signInCode,
 }) => showTerminalPrompt<void>(
   context,
   keymap: keymap,
-  builder: (_) =>
-      AddPhoneDialog(app: app, pair: pair ?? phonePairOverDaemon(app.api)),
+  builder: (_) => AddPhoneDialog(
+    app: app,
+    pair: pair ?? phonePairOverDaemon(app.api),
+    signInCode: signInCode ?? app.api.phoneSignInCode,
+  ),
 );
 
 /// Where the QR points. The phone's `ConnectCode` (mobile
@@ -81,7 +90,7 @@ String newPhonePairCode({math.Random? random}) {
   ]);
 }
 
-/// `https://harness.autonomous.ai/pair#e=<email>&m=<machineId>&c=<code>`.
+/// `https://harness.autonomous.ai/pair#e=<email>&m=<machineId>&c=<code>&h=<sign-in code>`.
 ///
 /// ⚠️ EVERYTHING rides in the FRAGMENT, never the query. The code is the
 /// out-of-band secret end-to-end encryption rests on, and a browser never
@@ -94,10 +103,16 @@ String newPhonePairCode({math.Random? random}) {
 /// Encoded as a query string inside the fragment, with
 /// [Uri.encodeQueryComponent], because the phone reads it back with
 /// [Uri.splitQueryString] — a `+` in an address has to arrive as a `+`.
+///
+/// [signIn] (`h`) is the one-time code that signs the phone in; without it —
+/// or on a phone app that predates it — the phone signs in with an emailed
+/// code, as before. It is the account's credential for its minute, which is
+/// one more reason all of this rides in the fragment.
 Uri phonePairLink({
   required String email,
   required String machineId,
   required String code,
+  String? signIn,
 }) => Uri(
   scheme: 'https',
   host: kPhonePairHost,
@@ -105,7 +120,8 @@ Uri phonePairLink({
   fragment:
       'e=${Uri.encodeQueryComponent(email)}'
       '&m=${Uri.encodeQueryComponent(machineId)}'
-      '&c=$code',
+      '&c=$code'
+      '${signIn != null ? '&h=${Uri.encodeQueryComponent(signIn)}' : ''}',
 );
 
 /// What one `POST /api/pair` came to, as far as this dialog cares.
@@ -173,11 +189,21 @@ PhonePairCall phonePairOverDaemon(ApiClient api) => (code, cancel) async {
   }
 };
 
+/// A fresh one-time sign-in code for the QR and how long it stays good, or
+/// null when there is none to be had (see [ApiClient.phoneSignInCode]).
+typedef PhoneSignInCodeCall = Future<({String code, Duration ttl})?> Function();
+
 class AddPhoneDialog extends StatefulWidget {
-  const AddPhoneDialog({super.key, required this.app, required this.pair});
+  const AddPhoneDialog({
+    super.key,
+    required this.app,
+    required this.pair,
+    required this.signInCode,
+  });
 
   final AppNotifier app;
   final PhonePairCall pair;
+  final PhoneSignInCodeCall signInCode;
 
   @override
   State<AddPhoneDialog> createState() => _AddPhoneDialogState();
@@ -197,6 +223,11 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   /// How long "Connected" stays up before the dialog closes itself.
   static const _connectedHold = Duration(milliseconds: 1500);
 
+  /// How often the QR gets a new sign-in code. Shorter than the code's own
+  /// life (90 s at the backend), so the one on screen always has at least
+  /// half a minute left in it when a phone reads it.
+  static const _signInRenew = Duration(seconds: 60);
+
   AppNotifier get app => widget.app;
 
   /// A fresh code each time the dialog opens, and a fresh one again after a
@@ -209,6 +240,12 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   bool _running = false;
   Timer? _timer;
   Completer<bool>? _sleeping;
+
+  /// The sign-in code in the QR, once asked for. Null after asking is a QR
+  /// without one: the phone then asks for an emailed code.
+  String? _signIn;
+  bool _signInAsked = false;
+  Timer? _signInTimer;
 
   /// No pairing to be had from this daemon — asking stopped for good.
   bool _stopped = false;
@@ -225,6 +262,7 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
     super.initState();
     app.addListener(_appChanged);
     _syncLoop();
+    unawaited(_renewSignIn());
   }
 
   @override
@@ -232,6 +270,7 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
     _closed = true;
     app.removeListener(_appChanged);
     _timer?.cancel();
+    _signInTimer?.cancel();
     if (_sleeping case final sleeping? when !sleeping.isCompleted) {
       sleeping.complete(false);
     }
@@ -336,6 +375,32 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
       }
       if (!await _sleep(wait)) return;
     }
+  }
+
+  /// Ask for a sign-in code, put it in the QR, and ask again before it runs
+  /// out — for as long as the QR is on screen. A failure is not retried
+  /// sooner: the QR works without one, and the next renewal tries again.
+  Future<void> _renewSignIn() async {
+    ({String code, Duration ttl})? next;
+    try {
+      next = await widget.signInCode();
+    } catch (_) {
+      next = null;
+    }
+    if (_closed || !mounted) return;
+    setState(() {
+      _signIn = next?.code;
+      _signInAsked = true;
+    });
+    if (_connected != null || _stopped) return;
+    final ttl = next?.ttl;
+    final wait = ttl != null && ttl - const Duration(seconds: 30) < _signInRenew
+        ? ttl - const Duration(seconds: 30)
+        : _signInRenew;
+    _signInTimer = Timer(
+      wait > Duration.zero ? wait : _signInRenew,
+      () => unawaited(_renewSignIn()),
+    );
   }
 
   void _say(String message, {bool sticky = false}) => setState(() {
@@ -448,10 +513,14 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
         ),
       ];
     }
+    // A moment's wait for the sign-in code, in the QR's own space: a QR that
+    // changed right after it appeared would be one scanned without it.
+    if (!_signInAsked) return [SizedBox(height: qrSide + row * 2)];
     final link = phonePairLink(
       email: target.email,
       machineId: target.machineId,
       code: _code,
+      signIn: _signIn,
     ).toString();
     return [
       Center(

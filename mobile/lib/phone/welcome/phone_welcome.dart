@@ -32,9 +32,11 @@ import 'set_up_computer.dart';
 /// └──────────────────────────────┘
 /// ```
 ///
-/// **Yes** scans the code the desktop app shows ([ScanToConnectPage]), which names the account: the
-/// email is filled in and its code sent, so signing in is the four digits (`viewer/email_code_api
-/// .dart`, no browser). **Not yet** gets Harness onto the computer ([SetUpComputerPage]). Both
+/// **Yes** scans the code the desktop app shows ([ScanToConnectPage]), and the scan signs the phone
+/// in: the QR carries a one-time code the computer's own sign-in minted
+/// ([AppNotifier.signInWithScan]). A QR without one — an older computer — or one that has expired
+/// names the account instead: the email is filled in and its code sent, so signing in is the four
+/// digits (`viewer/email_code_api.dart`, no browser). **Not yet** gets Harness onto the computer ([SetUpComputerPage]). Both
 /// buttons weigh the same: the question decides, not us. Nothing else is on the screen — no
 /// pretend agents, no diagram — for someone who has never seen Harness.
 class PhoneWelcome extends StatefulWidget {
@@ -44,6 +46,7 @@ class PhoneWelcome extends StatefulWidget {
     this.onTrySample,
     this.sendCode,
     this.signIn,
+    this.signInWithScan,
     this.scanCamera,
   });
 
@@ -55,6 +58,7 @@ class PhoneWelcome extends StatefulWidget {
   /// Stand-ins for the account service, for tests and renders. Null uses [notifier]'s.
   final Future<void> Function(String email)? sendCode;
   final Future<void> Function(String email, String code)? signIn;
+  final Future<void> Function(String code)? signInWithScan;
 
   /// Opens the offline sample; completes when it is left, with `'set-up'` when it was left to set
   /// up a real computer. Null leaves the way out.
@@ -74,6 +78,9 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
   final _codeFocus = FocusNode();
   String? _sentTo;
   bool _busy = false;
+
+  /// Between a scan and the session it signs in: the scan page says so.
+  bool _signingInWithScan = false;
   String? _error;
   int _resendIn = 0;
   Timer? _resendTimer;
@@ -100,15 +107,29 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     _go(_Step.setUp);
   }
 
-  /// A code the desktop app showed: its account's email is filled in and the code sent, so signing
-  /// in is the four digits — and its pairing code is held until its computer shows up, when the
-  /// phone pairs with it instead of asking for a password (`AppNotifier.pendingPairing`).
-  void _onScanned(ConnectCode code) {
+  /// A code the desktop app showed. Its pairing code is held until its computer shows up, when the
+  /// phone pairs with it instead of asking for a password (`AppNotifier.pendingPairing`). Its
+  /// sign-in code signs the phone in there and then; without one, or when it has expired, the
+  /// account's email is filled in and a code sent, so signing in is the four digits.
+  Future<void> _onScanned(ConnectCode code) async {
     final machineId = code.machineId, pairCode = code.pairCode;
     if (machineId != null && pairCode != null) {
       widget.notifier.pendingPairing = (machineId: machineId, code: pairCode);
     }
     _email.text = code.email;
+    final signIn = code.signIn;
+    if (signIn != null) {
+      setState(() => _signingInWithScan = true);
+      try {
+        await (widget.signInWithScan ?? widget.notifier.signInWithScan)(signIn);
+        return;
+      } catch (_) {
+        // Expired, spent, or a backend that predates it: the email is the way on.
+      } finally {
+        if (mounted) setState(() => _signingInWithScan = false);
+      }
+      if (!mounted) return;
+    }
     unawaited(_sendCode());
   }
 
@@ -214,7 +235,8 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
             ),
             _Step.scan => ScanToConnectPage(
               camera: widget.scanCamera,
-              onCode: _onScanned,
+              onCode: (code) => unawaited(_onScanned(code)),
+              signingIn: _signingInWithScan,
               onUseEmail: () => _go(_Step.email),
               onBack: () => _go(_Step.hello),
             ),

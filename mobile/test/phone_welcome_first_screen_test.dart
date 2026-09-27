@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
@@ -19,6 +21,15 @@ void main() {
       expect(code.email, 'ada@example.com');
       expect(code.machineId, 'm1');
       expect(code.pairCode, 'K7QM');
+      expect(code.signIn, isNull);
+      final signedIn = ConnectCode.parse(
+        ConnectCode.link(
+          'ada@example.com',
+          pairCode: 'K7QM',
+          signIn: 'hnh_x-_Y',
+        ),
+      )!;
+      expect(signedIn.signIn, 'hnh_x-_Y');
       // Nothing secret where a browser would send it.
       expect(
         Uri.parse(ConnectCode.link('a@b.co', pairCode: 'K7QM')).query,
@@ -42,6 +53,9 @@ void main() {
 
   late AppNotifier notifier;
   late List<String> sent;
+  late List<String> scanned;
+  Object? scanFails;
+  Completer<void>? scanGate;
 
   setUp(() {
     notifier = AppNotifier(
@@ -50,6 +64,9 @@ void main() {
       configStore: null,
     );
     sent = [];
+    scanned = [];
+    scanFails = null;
+    scanGate = null;
   });
   tearDown(() => notifier.dispose());
 
@@ -60,6 +77,11 @@ void main() {
           notifier: notifier,
           sendCode: (email) async => sent.add(email),
           signIn: (_, _) async {},
+          signInWithScan: (code) async {
+            scanned.add(code);
+            await scanGate?.future;
+            if (scanFails case final error?) throw error;
+          },
           scanCamera: camera ?? const SizedBox(),
         ),
       ),
@@ -111,6 +133,59 @@ void main() {
     expect(sent, ['ada@example.com']);
     expect(find.text('Check your email'), findsOneWidget);
     expect(find.textContaining('ada@example.com'), findsOneWidget);
+  });
+
+  testWidgets(
+    'a code that carries a sign-in signs in by the scan: no email, no digits',
+    (tester) async {
+      scanGate = Completer<void>();
+      await pump(tester);
+      await tester.tap(find.text('Yes — scan to connect'));
+      await tester.pump();
+      final page = tester.widget<ScanToConnectPage>(
+        find.byType(ScanToConnectPage),
+      );
+      page.onCode(
+        ConnectCode.parse(
+          ConnectCode.link(
+            'ada@example.com',
+            machineId: 'mac',
+            pairCode: 'K7QM4XPT9D2W',
+            signIn: 'hnh_one',
+          ),
+        )!,
+      );
+      await tester.pump();
+      expect(find.text('Signing in…'), findsOneWidget);
+      scanGate!.complete();
+      await tester.pump();
+      expect(scanned, ['hnh_one']);
+      expect(sent, isEmpty);
+      expect(find.text('Check your email'), findsNothing);
+      expect(notifier.pendingPairing, (machineId: 'mac', code: 'K7QM4XPT9D2W'));
+    },
+  );
+
+  testWidgets('an expired sign-in in the code falls back to the emailed code', (
+    tester,
+  ) async {
+    scanFails = Exception('That code has expired. Scan the new one.');
+    await pump(tester);
+    await tester.tap(find.text('Yes — scan to connect'));
+    await tester.pump();
+    tester
+        .widget<ScanToConnectPage>(find.byType(ScanToConnectPage))
+        .onCode(
+          ConnectCode.parse(
+            ConnectCode.link('ada@example.com', signIn: 'hnh_old'),
+          )!,
+        );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+    expect(scanned, ['hnh_old']);
+    expect(sent, ['ada@example.com']);
+    expect(find.text('Check your email'), findsOneWidget);
   });
 
   testWidgets('no code at hand: email instead', (tester) async {
