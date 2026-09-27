@@ -10,13 +10,14 @@ import '../tty.dart';
 import '../tty_controls.dart';
 import 'how_it_works_video.dart';
 
-/// Where the desktop app is downloaded — what "Send link to my Mac" carries.
-const kDesktopDownloadUrl = 'https://harness.autonomous.ai/download';
+/// Where the desktop app is downloaded — what "Send link to my Mac" carries. The website's own
+/// download page; a shorter `/download` waits on a website release.
+const kDesktopDownloadUrl = 'https://harness.autonomous.ai/desktop';
 
 /// The terminal way, for a computer without the app (Linux, a server, over SSH): install, sign in,
 /// start — in the installer's own order.
 const kTerminalSetUp = [
-  'curl -fsSL https://harness.autonomous.ai/install.sh | bash',
+  'curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash',
   'harness login',
   'harness start',
 ];
@@ -34,7 +35,7 @@ const kTerminalSetUp = [
 ///   AirDrop · Messages · Email
 ///
 /// or open on your Mac:
-/// harness.autonomous.ai/download
+/// harness.autonomous.ai/desktop
 ///
 /// Then open it, and scan the code it shows.
 ///            Scan to connect

@@ -67,7 +67,7 @@ A new device (the phone app, the desktop app, or the CLI) asks for one thing, yo
 1. **Phone → computer.**
    - The phone signs in with an email code. It is your first device.
    - **Set up your computer** leads with the app: *"Get Harness for Mac"* sends
-     `harness.autonomous.ai/download` to the Mac by AirDrop, Messages or email.
+     `harness.autonomous.ai/desktop` to the Mac by AirDrop, Messages or email.
    - On the Mac, install and open the app, then enter your email.
    - The phone shows *"Approve MacBook Pro? 482 913"*. Approve. The Mac is signed in, its daemon is
      running, and the phone lists its sessions.
@@ -76,7 +76,7 @@ A new device (the phone app, the desktop app, or the CLI) asks for one thing, yo
 3. **Computer → phone.** The phone enters your email. The Mac shows *"Approve iPhone? 482 913"*.
    Approve.
 
-**The terminal path (the 1%):** `curl -fsSL https://harness.autonomous.ai/install.sh | bash`, then
+**The terminal path (the 1%):** `curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash`, then
 `harness login` prints the same code and a QR, and waits for your approval. It needs no browser, so it
 works over SSH. The phone's setup page offers it second, under *"Using a terminal or Linux?"*.
 
@@ -128,7 +128,7 @@ Harness**.
 
 | | Part | Est. |
 |---|---|---|
-| **1. Phone, now** | The setup page leads with "Get Harness for Mac" (share `harness.autonomous.ai/download`). The terminal path is second, with `harness.autonomous.ai/install.sh` and the installer's own order. Plain-words errors. The computer list refreshes live. | 2 days |
+| **1. Phone, now** | The setup page leads with "Get Harness for Mac" (share `harness.autonomous.ai/desktop`). The terminal path is second, with `harness.autonomous.ai/cli/install.sh` and the installer's own order. Plain-words errors. The computer list refreshes live. | 2 days |
 | **2. Backend** | Approval requests (start, poll, approve, deny) that return a daemon-ready session. The signed device list: append-only, delivered to every device. Push to the phone for approvals (APNs; "needs you" wants it too). | 1.5–2 weeks + security review |
 | **3. CLI / daemon** | Trust keys on the verified list. `harness login` shows the code and QR and waits. A launchd/systemd unit so the daemon survives a reboot. | 1 week |
 | **4. Desktop app** | Email-and-approve sign-in in place of the browser. The approval prompt. Settings ▸ Devices. | 1 week |
