@@ -1033,7 +1033,11 @@ fn run_words(app: &mut App, words: &[String]) {
             app.fit_panes();
             app.save_sessions();
         }
-        _ => run_words_in(app, words),
+        _ => {
+            // The session in front is another client's (shown here as it has it): done there.
+            if crate::mirror::route(app, words) { return }
+            run_words_in(app, words)
+        }
     }
 }
 
@@ -1087,7 +1091,7 @@ pub fn other_clients() -> Vec<std::path::PathBuf> {
 
 /// A command for a session another client has, run by that client: what it prints printed here,
 /// its errors said here, its status this command's.
-fn forward(app: &mut App, owner: &str, words: &[String]) {
+pub fn forward(app: &mut App, owner: &str, words: &[String]) {
     // Passed here by another client already: the two sessions are in two terminals.
     if crate::ipc::forwarded() { return app.error("can't do that across terminals: the sessions are in two") }
     match crate::ipc::ask(std::path::Path::new(owner), words) {
@@ -1856,8 +1860,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let mut lines = Vec::new();
             for sid in order {
             // Another client's session: its row made here (list-sessions), else its lines asked
-            // of that client.
-            if let Some(owner) = app.remote_owner(sid) {
+            // of that client (a client's own line is its own, whoever has its session).
+            if let Some(owner) = app.remote_owner(sid).filter(|_| command != "list-clients") {
                 let template = opt(words, "-F");
                 if command == "list-sessions" {
                     let template = template.unwrap_or_else(|| "#{session_name}: #{session_windows} windows (created #{t:session_created})#{?session_attached, (attached),}".into());
@@ -2257,6 +2261,16 @@ fn run_words_in(app: &mut App, words: &[String]) {
         // A client attached: a headless hn gives it every session, and goes.
         // Another client changed the server's state (options, keys, buffers, environment).
         "hn-server-sync" => crate::server::take(app),
+        // A client shows a session of this one's (-a its socket, -t the session), or no longer (-d).
+        "hn-mirror" => {
+            if let Some(sock) = opt(words, "-a") {
+                let sid = opt(words, "-t").and_then(|t| t.trim_start_matches('$').parse::<u32>().ok()).unwrap_or(app.session_id);
+                app.mirrors.insert(sock, sid);
+            } else if let Some(sock) = opt(words, "-d") { app.mirrors.remove(&sock); }
+            app.status_redraws += 1;
+        }
+        // The client that has the session this one shows changed it, or went.
+        "hn-mirror-refresh" => crate::mirror::refresh(app),
         "hn-hand-over" => { app.write_sessions(crate::app::Save::Leave); app.handed_over = true; app.quit = true }
         // Another client of this name takes a session this one has (it attached there).
         "hn-release-session" => {
@@ -2282,9 +2296,11 @@ fn run_words_in(app: &mut App, words: &[String]) {
             kill_windows(app);
         }
         "attach-session" => {
-            // attach -t: the client to that session (it is attached already).
+            // attach -t: the client to that session (it is attached already); another client's
+            // shown here as it has it (-r only watched), or taken with -d (that client detaching).
+            let how = if flag(words, "-d") { crate::app::Attach::Take } else if flag(words, "-r") { crate::app::Attach::Watch } else { crate::app::Attach::Share };
             if let Some(t) = opt(words, "-t") {
-                match app.find_session(t.split(':').next().unwrap_or(&t)) { Some(id) => app.switch_session(id), None => app.error(format!("can't find session: {t}")) }
+                match app.find_session(t.split(':').next().unwrap_or(&t)) { Some(id) => app.switch_session_as(id, how), None => app.error(format!("can't find session: {t}")) }
             }
         }
         "new-session" => {
@@ -2316,10 +2332,13 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // tty (this one or another), or tmux's error.
             if let Some(s) = opt(words, "-s") {
                 let Some(id) = app.find_session(&s) else { return };
-                if id == app.session_id { app.quit = true }
-                else if let Some(owner) = app.remote_owner(id).filter(|_| app.stash_value(id, "session_attached").as_deref() == Some("1")) {
-                    let _ = crate::ipc::ask(std::path::Path::new(&owner), &["detach-client".into()]);
+                // The clients showing it as this one has it (mirror.rs), and the one that has it.
+                let theirs: Vec<String> = app.mirrors.iter().filter(|(_, m)| **m == id).map(|(k, _)| k.clone()).collect();
+                for m in theirs { app.mirrors.remove(&m); crate::ipc::notify_now(std::path::Path::new(&m), &["detach-client".into()]) }
+                if let Some(owner) = app.remote_owner(id).filter(|_| !crate::ipc::forwarded()) {
+                    let _ = crate::ipc::ask(std::path::Path::new(&owner), &["detach-client".into(), "-s".into(), format!("${id}")]);
                 }
+                if id == app.session_id { app.quit = true }
                 return;
             }
             if flag(words, "-a") { for other in other_clients() { let _ = crate::ipc::ask(&other, &["detach-client".into()]); } return }

@@ -12,6 +12,7 @@ mod cmd;
 mod cmdparse;
 mod commands;
 mod ids;
+mod mirror;
 mod server;
 mod ipc;
 mod keys;
@@ -171,6 +172,7 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     }
     app.fleet.save_cache();
     app.write_sessions(app::Save::Leave);
+    mirror::tell_mirrors_now(&app);
     let _ = std::fs::remove_file(&socket);
     let _ = std::fs::remove_file(socket.with_extension("port"));
     ids::leave();
@@ -408,6 +410,9 @@ async fn run(config: config::Config) -> io::Result<()> {
     app.save_seen();
     // Its sessions left for the next client (another terminal's, or `hn` again).
     if app.start_failed.is_none() { app.write_sessions(app::Save::Leave) }
+    // The clients showing its sessions take them; the owner of the one it showed is told.
+    mirror::tell_mirrors_now(&app);
+    mirror::leave(&app);
     if let Some(path) = &socket { let _ = std::fs::remove_file(path); let _ = std::fs::remove_file(path.with_extension("port")); }
     ids::leave();
     let session = app.session_name();

@@ -960,7 +960,12 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "session_windows" => app.tabs.len().to_string(),
         // The session in front is this client's; one a command reaches for a moment is not.
         // The client's own session is attached to it (hn with no terminal is no client).
-        "session_attached" => if app.swap_back.is_some() || app.headless { "0".into() } else { "1".into() },
+        "session_attached" => {
+            // This client, when it shows the session (hn with no terminal is no client), and the
+            // clients showing it as this one has it (mirror.rs).
+            let here = !(app.swap_back.is_some() || app.headless) as usize;
+            (here + app.mirrors.values().filter(|m| **m == app.session_id).count()).to_string()
+        }
         "client_width" => app.size.0.to_string(),
         "client_height" => app.size.1.to_string(),
         "window_width" => app.body().width.to_string(),

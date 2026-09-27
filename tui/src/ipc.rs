@@ -86,6 +86,9 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
                     FORWARDED.store(passed, std::sync::atomic::Ordering::Relaxed);
                     crate::commands::execute_args(app, &words);
                     FORWARDED.store(false, std::sync::atomic::Ordering::Relaxed);
+                    // Another client's command (one showing a session of this one's): what it
+                    // changed written before it hears back, so it shows it at once.
+                    if passed { app.save_if_changed() }
                     // Still waiting on a job (run-shell, if-shell): it answers when it is done.
                     if app.capture.is_some() { app.finish_cli() }
                 });
@@ -99,6 +102,25 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
         }
     });
     Some(path)
+}
+
+/// Another client told something (hn-server-sync, hn-mirror-refresh): sent, and its answer
+/// waited for off the app loop (5s at most).
+pub async fn notify(peer: &std::path::Path, words: &[String]) {
+    let Ok(stream) = tokio::net::UnixStream::connect(peer).await else { return };
+    let (read, mut write) = stream.into_split();
+    let line = format!("{}\n", json!({ "argv": words, "forwarded": true }));
+    if write.write_all(line.as_bytes()).await.is_err() { return }
+    let mut reply = String::new();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), BufReader::new(read).read_line(&mut reply)).await;
+}
+
+/// The same, from a client that is going: sent now, not waited for.
+pub fn notify_now(peer: &std::path::Path, words: &[String]) {
+    use std::io::Write;
+    let Ok(mut stream) = std::os::unix::net::UnixStream::connect(peer) else { return };
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(300)));
+    let _ = stream.write_all(format!("{}\n", json!({ "argv": words, "forwarded": true })).as_bytes());
 }
 
 /// What hn's jobs (run-shell, if-shell, #(), copy-pipe) run with, as tmux's run with TMUX set:

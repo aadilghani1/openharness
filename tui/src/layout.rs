@@ -564,20 +564,21 @@ impl Node {
         format!("{:04x},{b}", checksum(&b))
     }
 
-    /// A layout from tmux's string, its cells given to `ids` in order, fitted to sx × sy (None
-    /// when it does not read, or its cells do not match the panes).
+    /// A layout from tmux's string, fitted to sx × sy: each cell given the pane its number names
+    /// (%N) when they are `ids`, else `ids` in order (None when it does not read, or its cells do
+    /// not match the panes).
     pub fn from_tmux(text: &str, ids: &[u64], sx: u16, sy: u16) -> Option<Node> {
         let body = match text.split_once(',') { Some((c, rest)) if c.len() == 4 && c.chars().all(|x| x.is_ascii_hexdigit()) => rest, _ => text };
         let b: Vec<char> = body.chars().collect();
         let mut n = Node { c: Vec::new(), root: 0, status: Status::Off };
         let mut at = 0usize;
-        let mut next = 0usize;
+        let mut leaves: Vec<(usize, Option<u64>)> = Vec::new();
         fn num(b: &[char], at: &mut usize) -> Option<u32> {
             let start = *at;
             while *at < b.len() && b[*at].is_ascii_digit() { *at += 1 }
             b[start..*at].iter().collect::<String>().parse().ok()
         }
-        fn parse(n: &mut Node, b: &[char], at: &mut usize, parent: Option<usize>, ids: &[u64], next: &mut usize) -> Option<usize> {
+        fn parse(n: &mut Node, b: &[char], at: &mut usize, parent: Option<usize>, leaves: &mut Vec<(usize, Option<u64>)>) -> Option<usize> {
             let i = n.cell(parent);
             let sx = num(b, at)?; if b.get(*at) != Some(&'x') { return None } *at += 1;
             let sy = num(b, at)?; if b.get(*at) != Some(&',') { return None } *at += 1;
@@ -590,18 +591,22 @@ impl Node {
                     *at += 1;
                     n.c[i].dir = Some(dir);
                     loop {
-                        let k = parse(n, b, at, Some(i), ids, next)?;
+                        let k = parse(n, b, at, Some(i), leaves)?;
                         n.c[i].cells.push(k);
                         match b.get(*at) { Some(',') => { *at += 1; continue } Some(c) if *c == close => { *at += 1; break } _ => return None }
                     }
                 }
-                Some(',') if b.get(*at + 1).map(|c| c.is_ascii_digit()).unwrap_or(false) => { *at += 1; num(b, at)?; n.c[i].pane = *ids.get(*next)?; *next += 1 }
-                _ => { n.c[i].pane = *ids.get(*next)?; *next += 1 }
+                // The pane's number: %N is pane N+1 here (pane::tag).
+                Some(',') if b.get(*at + 1).map(|c| c.is_ascii_digit()).unwrap_or(false) => { *at += 1; let p = num(b, at)?; leaves.push((i, Some(p as u64 + 1))) }
+                _ => leaves.push((i, None)),
             }
             Some(i)
         }
-        n.root = parse(&mut n, &b, &mut at, None, ids, &mut next)?;
-        if at != b.len() || next != ids.len() { return None }
+        n.root = parse(&mut n, &b, &mut at, None, &mut leaves)?;
+        if at != b.len() || leaves.len() != ids.len() { return None }
+        let named: Vec<u64> = leaves.iter().filter_map(|(_, p)| *p).collect();
+        let by_number = named.len() == ids.len() && ids.iter().all(|id| named.contains(id));
+        for (k, (cell, p)) in leaves.iter().enumerate() { n.c[*cell].pane = if by_number { p.unwrap_or(ids[k]) } else { ids[k] } }
         n.resize(sx, sy);
         Some(n)
     }

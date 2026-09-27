@@ -181,7 +181,7 @@ pub fn publish(app: &mut App) {
     app.server_synced = Some(after);
     let others = crate::commands::other_clients();
     if others.is_empty() { return }
-    tokio::spawn(async move { for peer in others { tell(&peer).await } });
+    tokio::spawn(async move { for peer in others { crate::ipc::notify(&peer, &["hn-server-sync".to_string()]).await } });
 }
 
 /// hn-server-sync: another client changed the server's state; this one takes it (what it
@@ -214,15 +214,4 @@ pub fn take(app: &mut App) {
     app.redraw_all = true;
     app.server_dirty = false;
     app.server_synced = Some(now(app));
-}
-
-/// Tell another client the server's state changed (it answers once it has taken it).
-async fn tell(peer: &std::path::Path) {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-    let Ok(stream) = tokio::net::UnixStream::connect(peer).await else { return };
-    let (read, mut write) = stream.into_split();
-    let line = format!("{}\n", json!({ "argv": ["hn-server-sync"], "forwarded": true }));
-    if write.write_all(line.as_bytes()).await.is_err() { return }
-    let mut reply = String::new();
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::io::BufReader::new(read).read_line(&mut reply)).await;
 }

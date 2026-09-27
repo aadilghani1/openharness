@@ -161,6 +161,8 @@ fn send_to_focused(app: &mut App, bytes: Vec<u8>) {
 
 /// Keys into a pane (send-keys -t): a watcher's is taken over first, as typing takes it.
 pub fn send_to_pane(app: &mut App, focus: u64, bytes: Vec<u8>) {
+    // attach -r: a session only watched takes no keys.
+    if app.mirror.as_ref().is_some_and(|m| m.readonly) && app.tabs.iter().any(|t| t.panes().contains(&focus)) { return }
     let Some(pane) = app.panes.get_mut(&focus) else { return };
     if pane.read_only || matches!(pane.phase, Phase::Watching(_)) || pane.stream.is_none() {
         pane.queued.push(bytes);

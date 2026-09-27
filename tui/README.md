@@ -36,12 +36,13 @@ as tmux's tree does; `C-b s` lists them after the harnesses, so typing a session
 tmux-sessionizer and tmuxinator-style scripts work. The first session is the desk's (named for
 this computer unless you name it); the others are this computer's, kept between clients.
 
-**More than one terminal** works as with one tmux server. Each `hn` is a client, and each
-session is with one client at a time. `hn attach -t main` from a second terminal (or over SSH)
-takes `main` over: if the first terminal was showing it, that one detaches, as `tmux attach -d`
-does. Commands from a shell reach every session, whichever terminal has it. `hn ls`,
-`list-clients` and `detach-client -a` see them all, and nothing is lost when they detach in any
-order. The desk's session is the exception: every terminal shows it at once. What tmux's server
+**More than one terminal** works as with one tmux server. Each `hn` is a client. `hn attach -t
+main` from a second terminal (or over SSH) shows `main` in both, as tmux does: a split, a new
+window or a window chosen in either shows in both, and either can type into its panes (the first
+key takes the pane's keyboard). `attach -r` only watches; `attach -d` takes the session and
+detaches the others. Commands from a shell reach every session, whichever terminal has it. `hn
+ls`, `list-clients` and `detach-client -a` see them all, and nothing is lost when they detach in
+any order: the last one showing a session keeps it. What tmux's server
 holds is every terminal's: `set -g`, `bind`, `setenv -g` and `source-file` in one reach the
 others, a copy in one pastes in another, and ids (`$1 @3 %7`) name the same thing everywhere.
 
