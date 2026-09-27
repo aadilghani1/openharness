@@ -103,7 +103,7 @@ export interface SessionSearchIndexOptions {
    * Which sessions are open in a running process right now (external.ts `OpenSessions`), so a
    * conversation Harness did not start says whether a terminal still has it. `known` never waits.
    */
-  openSessions?: { known(): ReadonlySet<string>; fresh(): Promise<ReadonlySet<string>> }
+  openSessions?: { known(): ReadonlyMap<string, 'terminal' | 'app'>; fresh(): Promise<ReadonlyMap<string, 'terminal' | 'app'>> }
   /** Looks again for conversations Harness did not start, before each sweep lists its sources. */
   discover?: () => Promise<unknown>
   /** Between full sweeps. */
@@ -212,7 +212,12 @@ export class SessionSearchIndex {
     // Whether a terminal still has it, as last looked: a search never waits for a process table.
     if (hits.some((hit) => hit.external) && this.opts.openSessions) {
       const open = this.opts.openSessions.known()
-      for (const hit of hits) if (hit.external) hit.external.open = open.has(hit.sessionId)
+      for (const hit of hits) {
+        if (!hit.external) continue
+        hit.external.open = open.has(hit.sessionId)
+        const where = open.get(hit.sessionId)
+        if (where) hit.external.openIn = where
+      }
     }
     const indexed = this.opts.store.counts().sessions
     return { hits, indexed, pending: this.queue.size, tookMs: Math.round((performance.now() - started) * 10) / 10 }
@@ -245,7 +250,8 @@ export class SessionSearchIndex {
     if (tail && session && !session.agentId) {
       // A preview of a conversation Harness did not start says whether a terminal has it, as of now.
       const open = await this.opts.openSessions?.fresh().catch(() => null)
-      tail.external = { title: session.title ?? '', cwd: session.cwd ?? '', origin: session.origin ?? '', open: open?.has(sessionId) ?? false }
+      const where = open?.get(sessionId)
+      tail.external = { title: session.title ?? '', cwd: session.cwd ?? '', origin: session.origin ?? '', open: open?.has(sessionId) ?? false, ...(where ? { openIn: where } : {}) }
     }
     return tail
   }

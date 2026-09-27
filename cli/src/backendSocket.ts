@@ -497,6 +497,10 @@ export class BackendSocket {
      *  folder (lib/sessionSearch/external.ts). Null for a new conversation. Shape-checked here; cli.ts
      *  checks it is one it found, not open elsewhere, and not already a harness. */
     resumeSessionId?: string | null
+    /** A conversation open in a terminal, taken over from it: `idle` stops that terminal's process
+     *  only between turns, `now` whatever it is doing (then tells it to continue), `wait` when its
+     *  turn ends. Absent, one open elsewhere is refused and the refusal says whether it is busy. */
+    takeOver?: 'idle' | 'now' | 'wait' | null
   }) =>
     Promise<{ ok: true; session: RegisteredSession } | { ok: false; error: string; detail?: string }>) | null = null
   /** Called on `dsh_install` — cli.ts clones/sets up/doctors the harness and reports each phase. */
@@ -2354,6 +2358,13 @@ export class BackendSocket {
             }
             resumeSessionId = payload.resumeSessionId
           }
+          let takeOver: 'idle' | 'now' | 'wait' | null = null
+          if (payload.takeOver !== undefined && payload.takeOver !== null) {
+            if (!resumeSessionId || (payload.takeOver !== 'idle' && payload.takeOver !== 'now' && payload.takeOver !== 'wait')) {
+              reply(type, requestId, { error: 'INVALID_SESSION', detail: 'takeOver is idle, now or wait, with a resumeSessionId' }); return
+            }
+            takeOver = payload.takeOver
+          }
           const input = {
             engine,
             cwd: typeof cwd === 'string' ? cwd : terminal ? homedir() : '',
@@ -2367,6 +2378,7 @@ export class BackendSocket {
             name,
             agent,
             resumeSessionId,
+            takeOver,
           }
           const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input
           if (creationId !== undefined) {

@@ -1081,7 +1081,7 @@ describe('BackendSocket outbound queue', () => {
     socket.registerLocalClient('local:resume', {
       sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true,
     })
-    const inputs: Array<{ resumeSessionId?: string | null; cwd: string }> = []
+    const inputs: Array<{ resumeSessionId?: string | null; takeOver?: string | null; cwd: string }> = []
     socket.onCreateAgent = async (input) => {
       inputs.push(input)
       return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app.' }
@@ -1095,12 +1095,17 @@ describe('BackendSocket outbound queue', () => {
     expect(inputs[0]).toMatchObject({ resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', cwd: '/work/cohorts' })
     // What cli.ts said about it reaches the client as it was said.
     expect(reply('ok')).toMatchObject({ error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app.' })
+    // Taken over from the terminal that has it: how, passed on as asked.
+    create('wait', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', takeOver: 'wait' })
+    await vi.waitFor(() => expect(reply('wait')).toBeDefined())
+    expect(inputs[1]).toMatchObject({ takeOver: 'wait' })
     create('shape', { resumeSessionId: '../../etc/passwd' })
     create('prompt', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', prompt: 'and then this' })
-    await vi.waitFor(() => expect(reply('prompt')).toBeDefined())
-    expect(reply('shape')).toMatchObject({ error: 'INVALID_SESSION' })
-    expect(reply('prompt')).toMatchObject({ error: 'INVALID_SESSION' })
-    expect(inputs).toHaveLength(1)
+    create('how', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', takeOver: 'forcefully' })
+    create('what', { takeOver: 'now' })
+    await vi.waitFor(() => expect(reply('what')).toBeDefined())
+    for (const id of ['shape', 'prompt', 'how', 'what']) expect(reply(id)).toMatchObject({ error: 'INVALID_SESSION' })
+    expect(inputs).toHaveLength(2)
     await socket.unregisterLocalClient('local:resume')
     await socket.stop()
   })
