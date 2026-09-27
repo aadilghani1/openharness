@@ -360,7 +360,22 @@ class _NewAgentPageState extends State<NewAgentPage> {
     // A late answer about a folder the form has since left belongs to nobody —
     // see the note on [_gitFolder].
     if (!mounted || machineId != _machineId || folder != _folder) return;
-    final info = GitProjectInfo.fromJson(raw);
+    var info = GitProjectInfo.fromJson(raw);
+    // ⚠️ **A worktree is a temporary folder, so New shows its repository** — the desktop's rule
+    // (`state/new_harness.dart`). Harness made it for another harness; opening New on it named
+    // that harness's folder (`silent-beacon`) as the project, which nobody recognises. The
+    // machine names the main checkout, and new work starts from the branch that is on.
+    if (info.mainFolder case final main?) {
+      _folder = main;
+      _gitFolder = main;
+      info = GitProjectInfo(
+        isGit: true,
+        branch: info.mainBranch,
+        branches: info.branches,
+        defaultRef: info.defaultRef,
+        root: main,
+      );
+    }
     setState(() {
       _gitLoading = false;
       _gitFailed = info.unavailable;
@@ -713,7 +728,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+                  padding: const EdgeInsets.fromLTRB(Tty.origin, 8, 4, 0),
                   child: Row(
                     children: [
                       Expanded(
@@ -777,7 +792,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                           valueColor: _folder == null && _project == null
                               ? tty.green
                               : null,
-                          detail: _folder == null ? null : _tilde(_folder!),
+                          detail: _projectPlace,
                           onTap: _creating
                               ? null
                               : () => unawaited(_chooseProject()),
@@ -786,7 +801,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
                         // sit on their defaults until asked for.
                         TtyFormRow(
                           label: 'options',
-                          value: _optionsOpen ? '[−]' : '[+]',
+                          value: _optionsSummary,
+                          valueColor: tty.faint,
                           chevron: false,
                           onTap: () =>
                               setState(() => _optionsOpen = !_optionsOpen),
@@ -1033,6 +1049,10 @@ class _NewAgentPageState extends State<NewAgentPage> {
     });
   }
 
+  /// A folder Harness made for a harness's worktree — `~/harnesses/worktrees/<repo>/<name>`.
+  static bool _isHarnessWorktree(String folder) =>
+      folder.contains('/harnesses/worktrees/');
+
   String? _latestAgentFolder() {
     final agents = [...?_machine?.agents]
       ..sort(
@@ -1064,8 +1084,33 @@ class _NewAgentPageState extends State<NewAgentPage> {
     } else {
       return 'Choose project';
     }
+    return name;
+  }
+
+  /// Where the project is, under its name: the computer and the path — `M2:~/code/web`.
+  String? get _projectPlace {
+    final folder = _folder;
+    if (folder == null) return null;
     final machine = _machine?.machine.displayName;
-    return machine == null || _machines.length < 2 ? name : '$machine:$name';
+    return machine == null ? _tilde(folder) : '$machine:${_tilde(folder)}';
+  }
+
+  /// The options, folded, in one line: where the harness will work and how it asks —
+  /// `new worktree from main · auto-approve`.
+  String get _optionsSummary {
+    final info = _repository;
+    final where = _gitLoading
+        ? 'reading…'
+        : info == null
+        ? 'in this folder'
+        : _worktree
+        ? 'new worktree from $_branchTitle'
+        : 'on $_branchTitle';
+    return [
+      where,
+      if (_permissionModes.isNotEmpty)
+        (_permissionModeChoice?.label ?? 'Auto-approve').toLowerCase(),
+    ].join(' · ');
   }
 
   /// The button: a missing choice opens its chooser and says why, the desktop's `requiredChoice`.
@@ -1139,11 +1184,17 @@ class _NewAgentPageState extends State<NewAgentPage> {
     final pairs = <ChooserItem<_ProjectChoice>>[];
     for (final machine in machines) {
       final id = machine.machine.machineId;
+      // Worktrees Start made are temporary: their repository is the project, and it is listed
+      // once it has been chosen (the desktop's `_recentProjectFolders`).
       final folders = <String>{
-        ...notifier.projectHistory.recent(id),
-        for (final agent in machine.agents)
-          if (agent.project?.root ?? agent.project?.cwd case final path?)
-            if (path.isNotEmpty) path,
+        if (id == _machineId) ?_folder,
+        for (final folder in [
+          ...notifier.projectHistory.recent(id),
+          for (final agent in machine.agents)
+            if (agent.project?.root ?? agent.project?.cwd case final path?)
+              path,
+        ])
+          if (folder.isNotEmpty && !_isHarnessWorktree(folder)) folder,
       };
       for (final folder in folders) {
         pairs.add(

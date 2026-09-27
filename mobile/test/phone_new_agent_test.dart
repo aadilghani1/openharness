@@ -7,9 +7,9 @@ import 'package:harness_mobile/phone/new_agent_page.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
 
-/// A machine that answers every question with nothing.
+/// A machine that answers every question with nothing — or with [answers], by request type.
 class _Conn extends WsConn {
-  _Conn()
+  _Conn([this.answers = const {}])
     : super(
         wsBaseUrl: 'ws://fixture.invalid',
         autonomousEnv: 'test',
@@ -20,25 +20,27 @@ class _Conn extends WsConn {
         onStatus: (_) {},
       );
 
+  final Map<String, Map<String, dynamic>> answers;
+
   @override
   Future<Map<String, dynamic>> request(
     String type, {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
-  }) async => {};
+  }) async => answers[type] ?? {};
 }
 
 /// A machine that is answering, and one that is not.
 ///
 /// The second is the whole point of the picker's filter: an agent cannot be created on a machine
 /// that has not listed its folders or named its engines, so it must not be offered as a host.
-AppNotifier _app() {
+AppNotifier _app({Map<String, Map<String, dynamic>> answers = const {}}) {
   final app = AppNotifier(
     config: AppConfig.dev,
     authSession: AuthSession(),
     configStore: null,
     // The form asks the machine for its engines and Codex profiles as it opens.
-    connectionForTest: (_) => _Conn(),
+    connectionForTest: (_) => _Conn(answers),
   );
   const ready = Machine(
     machineId: 'ready',
@@ -78,21 +80,87 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      // The desktop's default: the project last started on this machine.
+      // The desktop's default: the project last started on this machine — and the row says
+      // which computer it is on.
       expect(find.text('app', findRichText: true), findsOneWidget);
+      expect(
+        find.textContaining('Studio:/code/app', findRichText: true),
+        findsOneWidget,
+      );
 
       await tester.tap(find.text('project'));
       await tester.pumpAndSettle();
 
-      // One row per `machine:folder` pair.
+      // One row per `machine:folder` pair — the chooser's, over the form's own line.
       expect(
         find.textContaining('Studio:/code/app', findRichText: true),
-        findsOneWidget,
+        findsNWidgets(2),
       );
       expect(
         find.textContaining('Laptop', findRichText: true),
         findsNothing,
         reason: 'an offline machine cannot host a new agent',
+      );
+    },
+  );
+
+  testWidgets(
+    'a worktree Harness made is not the project: its repository is, on its computer',
+    (tester) async {
+      const worktree =
+          '/home/u/harnesses/worktrees/autonomous-harness/silent-beacon';
+      final app = _app(
+        answers: {
+          'git_project_info': {
+            'isGit': true,
+            'branch': 'silent-beacon',
+            'root': worktree,
+            'mainFolder': '/home/u/code/autonomous-harness',
+            'mainBranch': 'main',
+            'defaultRef': 'refs/remotes/origin/main',
+            'branches': [
+              {'ref': 'refs/heads/main', 'name': 'main'},
+              {
+                'ref': 'refs/remotes/origin/main',
+                'name': 'origin/main',
+                'remote': true,
+              },
+            ],
+          },
+        },
+      );
+      addTearDown(app.dispose);
+      // Opened on another harness's worktree — its folder, handed over as Find hands one.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: NewAgentPage(
+            notifier: app,
+            machineId: 'ready',
+            folder: worktree,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('autonomous-harness', findRichText: true),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('silent-beacon', findRichText: true),
+        findsNothing,
+      );
+      expect(
+        find.textContaining(
+          'Studio:~/code/autonomous-harness',
+          findRichText: true,
+        ),
+        findsOneWidget,
+      );
+      // Where Start puts it, without opening anything.
+      expect(
+        find.textContaining('new worktree from', findRichText: true),
+        findsOneWidget,
       );
     },
   );

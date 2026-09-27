@@ -213,8 +213,9 @@ void main() {
     await settle(tester, const Duration(seconds: 1));
     await tester.tap(find.text('project'));
     await settle(tester, const Duration(milliseconds: 500));
+    // The chooser's row — the last of the two: the form's own line under the sheet says it too.
     await tester.tap(
-      find.textContaining('studio:~/code/web', findRichText: true),
+      find.textContaining('studio:~/code/web', findRichText: true).last,
     );
     await settle(tester, const Duration(milliseconds: 500));
     // The first task, typed into New's task field, goes with Start.
