@@ -1,33 +1,17 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-import 'command_line.dart';
 import 'tty.dart';
+import 'tty_controls.dart' show TtySize;
 import 'voice_input_controller.dart';
 
-/// The status line while a voice take is live — one terminal row, where vim says `recording @q`:
-/// ` ×   ● 0:04  ▁▃▅▇▆▃▁▃▅▂          → hn`.
+/// What the mic is doing, said beside it.
 ///
-/// `×` throws the take away. `●` and the clock are red while it records; the bars are the mic's
-/// level, newest on the right; `→ hn` is the agent the take was started on and will go to — bound
-/// at touch-down, never moved by a switch (switching agents ends the take). Transcribing, sending
-/// and a take waiting to be sent again each get their own few words in the same place.
-///
-/// Nothing here animates on its own: it redraws as the mic's level moves, which is only while it
-/// records.
-class VoiceBarLine extends StatefulWidget {
-  const VoiceBarLine({
-    super.key,
-    required this.voice,
-    required this.agentName,
-    this.slop = 0,
-  });
-
-  final VoiceInputController voice;
-  final String agentName;
-  final double slop;
-
-  /// Whether the voice has anything to say on the bar.
+/// While a take records, [VoiceTakeClock] sits on the mic's right: `● 0:04 ▁▃▅▇▆▃`, red, the
+/// mic's level newest on the right. Everything else a take goes through — opening the mic,
+/// transcribing, sending, a take waiting to be sent again — is a few words on the line above the
+/// mic ([voiceStatus]). The take goes to the harness on screen, which its title already names.
+abstract final class VoiceLine {
+  /// Whether the voice has anything to say or show.
   static bool shows(VoiceInputController voice) =>
       voice.isSending ||
       voice.notice != null ||
@@ -36,13 +20,47 @@ class VoiceBarLine extends StatefulWidget {
       voice.status == VoiceInputStatus.listening ||
       voice.status == VoiceInputStatus.transcribing;
 
-  @override
-  State<VoiceBarLine> createState() => _VoiceBarLineState();
+  /// Whether a take is being recorded right now: the clock shows, and esc throws it away.
+  static bool recording(VoiceInputController voice) =>
+      voice.status == VoiceInputStatus.starting ||
+      voice.status == VoiceInputStatus.listening;
 }
 
-class _VoiceBarLineState extends State<VoiceBarLine> {
+/// The words for the line above the mic, or null while it records (the clock says that) or has
+/// nothing to say.
+({String text, Color color})? voiceStatus(VoiceInputController voice, Tty tty) {
+  if (voice.notice case final notice?) {
+    return (text: notice.toLowerCase(), color: tty.yellow);
+  }
+  if (voice.isSending) return (text: 'sending…', color: tty.faint);
+  return switch (voice.status) {
+    VoiceInputStatus.starting => (text: 'opening the mic…', color: tty.faint),
+    VoiceInputStatus.listening => null,
+    VoiceInputStatus.transcribing => (text: 'transcribing…', color: tty.yellow),
+    _ when VoiceLine.shows(voice) => (
+      text: 'not sent · tap the mic again',
+      color: tty.red,
+    ),
+    _ => null,
+  };
+}
+
+/// `● 0:04 ▁▃▅▇▆▃` — the take's length and the mic's level, beside the mic while it records.
+///
+/// Nothing here animates on its own: it redraws as the mic's level moves, which is only while it
+/// records.
+class VoiceTakeClock extends StatefulWidget {
+  const VoiceTakeClock({super.key, required this.voice});
+
+  final VoiceInputController voice;
+
+  @override
+  State<VoiceTakeClock> createState() => _VoiceTakeClockState();
+}
+
+class _VoiceTakeClockState extends State<VoiceTakeClock> {
   static const _bars = ' ▁▂▃▄▅▆▇█';
-  static const _kept = 12;
+  static const _kept = 6;
   final _levels = <double>[];
 
   @override
@@ -52,7 +70,7 @@ class _VoiceBarLineState extends State<VoiceBarLine> {
   }
 
   @override
-  void didUpdateWidget(VoiceBarLine old) {
+  void didUpdateWidget(VoiceTakeClock old) {
     super.didUpdateWidget(old);
     if (!identical(old.voice, widget.voice)) {
       old.voice.level.removeListener(_onLevel);
@@ -88,114 +106,23 @@ class _VoiceBarLineState extends State<VoiceBarLine> {
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    final voice = widget.voice;
-    final bar = CommandLine.heightOf(tty);
-    final List<InlineSpan> said;
-    if (voice.notice case final notice?) {
-      said = [
+    return ExcludeSemantics(
+      child: Text.rich(
         TextSpan(
-          text: notice.toLowerCase(),
-          style: tty.style(color: tty.yellow),
-        ),
-      ];
-    } else if (voice.isSending) {
-      said = [
-        TextSpan(
-          text: 'sending…',
-          style: tty.style(color: tty.faint),
-        ),
-      ];
-    } else {
-      said = switch (voice.status) {
-        VoiceInputStatus.starting => [
-          TextSpan(
-            text: '● ',
-            style: tty.style(color: tty.red),
-          ),
-          TextSpan(
-            text: 'opening the mic…',
-            style: tty.style(color: tty.faint),
-          ),
-        ],
-        VoiceInputStatus.listening => [
-          TextSpan(
-            text: '● $_clock  ',
-            style: tty.style(color: tty.red),
-          ),
-          TextSpan(
-            text: _wave,
-            style: tty.style(color: tty.text),
-          ),
-        ],
-        VoiceInputStatus.transcribing => [
-          TextSpan(
-            text: 'transcribing…',
-            style: tty.style(color: tty.yellow),
-          ),
-        ],
-        _ => [
-          TextSpan(
-            text: 'not sent · ',
-            style: tty.style(color: tty.red),
-          ),
-          TextSpan(
-            text: 'tap the mic to send again',
-            style: tty.style(color: tty.faint),
-          ),
-        ],
-      };
-    }
-    return SizedBox(
-      height: bar + widget.slop,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: tty.ground,
-          border: Border(top: BorderSide(color: tty.dim)),
-        ),
-        child: Align(
-          alignment: Alignment.topLeft,
-          child: SizedBox(
-            height: bar,
-            child: Row(
-              children: [
-                Semantics(
-                  button: true,
-                  label: 'Cancel the recording',
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      HapticFeedback.selectionClick();
-                      voice.clear();
-                    },
-                    child: SizedBox(
-                      width: Tty.origin + 5 * tty.cell,
-                      height: bar + widget.slop,
-                      child: Align(
-                        alignment: Alignment.topCenter,
-                        child: SizedBox(
-                          height: bar,
-                          // SF Mono's `×` — it has no `✕`, and a fallback face would
-                          // break the grid.
-                          child: Center(child: TtyText('×', color: tty.text)),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: Text.rich(
-                    TextSpan(children: said),
-                    maxLines: 1,
-                    softWrap: false,
-                    overflow: TextOverflow.clip,
-                  ),
-                ),
-                TtyText('→ ${widget.agentName}', color: tty.faint),
-                const SizedBox(width: Tty.origin),
-              ],
+          children: [
+            TextSpan(
+              text: '● $_clock ',
+              style: tty.style(color: tty.red, size: TtySize.meta),
             ),
-          ),
+            TextSpan(
+              text: _wave,
+              style: tty.style(color: tty.text, size: TtySize.meta),
+            ),
+          ],
         ),
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.clip,
       ),
     );
   }

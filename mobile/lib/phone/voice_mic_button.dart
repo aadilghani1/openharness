@@ -75,7 +75,7 @@ class VoiceMicButton extends StatefulWidget {
   /// now (see `voice_mic_fab.dart`), so this is simply the box the `Positioned`
   /// sizes to — raising it costs the terminal nothing, and the hit area below
   /// already reaches well past it either way.
-  static const double extent = 64;
+  static const double extent = 80;
 
   /// What the finger may actually land on.
   ///
@@ -87,7 +87,7 @@ class VoiceMicButton extends StatefulWidget {
   /// collide with.
   /// The hit circle: the disc and a little more, never the 96pt it was — a tap on the agent's
   /// prompt beside the mic must reach the terminal, not start a recording.
-  static const double touchExtent = 64;
+  static const double touchExtent = 80;
 
   /// How far the hit area spills past its slot on each side.
   ///

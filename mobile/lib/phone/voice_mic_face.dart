@@ -120,10 +120,10 @@ class VoiceMicCore extends StatelessWidget {
     this.working = false,
   });
 
-  /// The visible circle's diameter. A size up from the 52 it was in the corner:
-  /// centred at the foot of Focus it is the one control on the screen, the way
-  /// a camera's shutter is.
-  static const double diameter = 56;
+  /// The visible circle's diameter: Siri's orb, near enough. Centred at the foot of Focus it is
+  /// the one control on the screen, the way a camera's shutter is — and it is held through a
+  /// whole sentence, so it is sized for a thumb, not a fingertip.
+  static const double diameter = 72;
 
   final VoiceMicFace face;
 
@@ -226,7 +226,7 @@ class VoiceMicCore extends StatelessWidget {
     required bool bob,
     required bool motion,
   }) {
-    Icon icon(IconData data) => Icon(data, size: 25, color: ink);
+    Icon icon(IconData data) => Icon(data, size: 30, color: ink);
     return switch (glyph) {
       _Glyph.mic => icon(LucideIcons.mic300),
       _Glyph.micOff => icon(LucideIcons.micOff300),
@@ -316,7 +316,7 @@ class _BusyArcState extends State<_BusyArc>
     child: RotationTransition(
       turns: _turn,
       child: CustomPaint(
-        size: const Size.square(44),
+        size: const Size.square(VoiceMicCore.diameter - 14),
         painter: _ArcPainter(widget.color),
       ),
     ),

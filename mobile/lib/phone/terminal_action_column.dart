@@ -147,8 +147,7 @@ class _TerminalActionColumnState extends State<TerminalActionColumn> {
     if (session == null) {
       return const VoiceMicButton(face: VoiceMicFace.talk, onPressed: null);
     }
-    // The mic alone: what it is doing is said on the status line, as one terminal row — see
-    // `VoiceBarLine`.
+    // The mic alone: what it is doing is said beside it — see `voice_bar_line.dart`.
     return VoiceMicFab(
       voice: widget.voice,
       session: session,

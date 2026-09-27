@@ -3,7 +3,8 @@ import 'dart:ui' as ui;
 
 // `defaultTargetPlatform` — the navigation bar this page keeps clear of is
 // Android's alone; see [_TerminalPageState._navigationBar].
-import 'package:flutter/foundation.dart' show ValueListenable, defaultTargetPlatform;
+import 'package:flutter/foundation.dart'
+    show ValueListenable, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 // `PlatformException` — a refused camera permission arrives as one, and it is
 // the one picker failure with something the person can do about it.
@@ -51,7 +52,6 @@ import 'voice_mic_button.dart';
 import 'phone_navigation.dart';
 import 'phone_search_catalog.dart' show phoneAgentId;
 import 'agent_index.dart';
-import 'command_line.dart';
 import 'terminal_title.dart';
 import 'welcome/focus_hints.dart';
 
@@ -923,7 +923,6 @@ class _TerminalPageState extends State<TerminalPage>
     });
   }
 
-  /// The prompt bar's keys for [view]: its first answers, and ` more ` for the rest in a menu.
   /// The two answers beside the mic while a question is open — its first (`1 yes`) and its last
   /// (`3 no`). The ones between are a tap on their own line in the terminal, where what they
   /// mean is written in full ([_onLineTap]). Null when there is nothing to press: a question
@@ -935,21 +934,51 @@ class _TerminalPageState extends State<TerminalPage>
     return (keys.first, keys.length > 1 ? keys.last : null);
   }
 
-  /// How far up from the terminal's foot its last line is held while followed: clear of the
-  /// mic, with a little air — and clear of the sample's guide line, when that shows.
-  double get _clearAboveMic {
-    final micTop =
-        _windowBottomInset +
-        4 * Tty.of(context).row +
-        VoiceMicButton.extent / 2;
-    return micTop + (_sampleGuide() == null ? 10 : 46);
+  /// The mic's centre, up from the terminal's foot: where Siri's orb stands, just over the home
+  /// strip — where the thumb already is. Fixed in points, not rows: the terminal's size must not
+  /// move it.
+  double get _micCenter =>
+      (_windowBottomInset > 0 ? _windowBottomInset : 12) +
+      4 +
+      VoiceMicButton.extent / 2;
+
+  /// The foot of the line above the mic, where what is going on is said — a take, a message, the
+  /// sample's next step. See [_statusLine].
+  double get _statusBottom => _micCenter + VoiceMicButton.extent / 2 + 4;
+
+  /// How far up from the terminal's foot its last line is held while followed: over the status
+  /// line, kept whether it says anything or not, so a message coming and going moves nothing.
+  double get _clearAboveMic => _statusBottom + 22;
+
+  /// The line above the mic, highest first: what a take is doing, a two-second message (`✓ 1
+  /// yes`, or an error in red), a question with no keys to offer, the sample's next step. Null
+  /// when there is nothing to say.
+  Widget? _statusLine() {
+    final tty = Tty.of(context);
+    if (voiceStatus(widget.voice, tty) case final said?) {
+      return _StatusLine(text: said.text, color: said.color);
+    }
+    if (_barMessage.value case final message?) {
+      return _StatusLine(
+        text: message.text,
+        color: message.error ? tty.red : tty.green,
+      );
+    }
+    final view = _questionWatcher?.view;
+    if (view != null && _answerKeys(view) == null) {
+      return _StatusLine(text: 'answer on screen', color: tty.yellow);
+    }
+    if (_sampleGuide() case final guide?) {
+      return _StatusLine(text: guide.text, glide: guide.glide, dot: true);
+    }
+    return null;
   }
 
   /// [_answerKeys] while they can be pressed here: not over the keyboard, nor while recording.
   (QuestionKey, QuestionKey?)? get _answersBesideMic {
     final view = _questionWatcher?.view;
     if (view == null || _ownsInput || _keyBarUp) return null;
-    if (VoiceBarLine.shows(widget.voice)) return null;
+    if (VoiceLine.shows(widget.voice)) return null;
     return _answerKeys(view);
   }
 
@@ -1995,11 +2024,9 @@ class _TerminalPageState extends State<TerminalPage>
                               ),
                             ),
                           ),
-                          // Nothing at the foot but the home-indicator strip: the
-                          // terminal is the screen. What vim would say on its last
-                          // line — an answer to give, a take, a message — is laid
-                          // over the terminal's bottom rows only while it has
-                          // something to say. See [CommandLine].
+                          // Nothing at the foot: the terminal is the screen. What vim
+                          // would say on its last line — a take, a message — is said on
+                          // the line above the mic. See [_statusLine].
                           // ⚠️ No strip kept for the home indicator: the terminal runs
                           // under it, to the glass, as a page does in Safari.
                           // The bottom of this page IS just above the keyboard:
@@ -2075,46 +2102,6 @@ class _TerminalPageState extends State<TerminalPage>
                         ),
                       ),
                     ),
-                    // vim's last line, only while it has something to say: a take in
-                    // progress, an agent's question with its answers as keys, or a
-                    // two-second message. Its touch reaches into the home strip.
-                    if (!_keyBarUp)
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        child: ListenableBuilder(
-                          listenable: Listenable.merge([
-                            widget.voice,
-                            _barMessage,
-                          ]),
-                          builder: (context, _) {
-                            // The whole home strip: the line's touch — and, with a question open, its
-                            // yellow — runs to the screen's edge.
-                            final slop = _windowBottomInset;
-                            if (VoiceBarLine.shows(widget.voice)) {
-                              return VoiceBarLine(
-                                voice: widget.voice,
-                                agentName: _windowName(
-                                  agent?.displayName ?? 'agent',
-                                ),
-                                slop: slop,
-                              );
-                            }
-                            // The answers are keycaps beside the mic (see [_answerKeys]); the line
-                            // only says so when there are none to offer.
-                            final view = _questionWatcher?.view;
-                            return CommandLine(
-                              slop: slop,
-                              message: _barMessage.value,
-                              promptNote:
-                                  view != null && _answerKeys(view) == null
-                                  ? 'answer on screen'
-                                  : null,
-                            );
-                          },
-                        ),
-                      ),
                     // tmux's copy-mode position, top right, while reading back
                     // through the history: `[42/1380]`. One tap is back at the end.
                     Positioned(
@@ -2145,12 +2132,7 @@ class _TerminalPageState extends State<TerminalPage>
                       Positioned(
                         left: 0,
                         right: 0,
-                        // Centred four rows above the home strip — clear of the
-                        // command line's two, where a thumb rests.
-                        bottom:
-                            _windowBottomInset +
-                            4 * Tty.of(context).row -
-                            VoiceMicButton.extent / 2,
+                        bottom: _micCenter - VoiceMicButton.extent / 2,
                         // Centred at its own size — the mic's slot must not
                         // stretch to the page's width.
                         child: Align(
@@ -2175,10 +2157,7 @@ class _TerminalPageState extends State<TerminalPage>
                             VoiceMicButton.extent / 2 +
                             20 -
                             _Keycap.slop,
-                        bottom:
-                            _windowBottomInset +
-                            4 * Tty.of(context).row -
-                            _Keycap.touch / 2,
+                        bottom: _micCenter - _Keycap.touch / 2,
                         child: _AnswerKeycap(
                           answer: first,
                           onTap: () => _answer(_questionWatcher!.view!, first),
@@ -2191,38 +2170,75 @@ class _TerminalPageState extends State<TerminalPage>
                               VoiceMicButton.extent / 2 +
                               20 -
                               _Keycap.slop,
-                          bottom:
-                              _windowBottomInset +
-                              4 * Tty.of(context).row -
-                              _Keycap.touch / 2,
+                          bottom: _micCenter - _Keycap.touch / 2,
                           child: _AnswerKeycap(
                             answer: last,
                             onTap: () => _answer(_questionWatcher!.view!, last),
                           ),
                         ),
                     ],
-                    // The sample's guide: one faint line 12pt above the mic, what to try next.
-                    if ((_ownsInput ? null : _sampleGuide()) case final guide?)
+                    // The line above the mic: what is going on, in a few words — see [_statusLine].
+                    if (!_ownsInput)
                       Positioned(
                         left: 0,
                         right: 0,
-                        bottom:
-                            _windowBottomInset +
-                            4 * Tty.of(context).row +
-                            VoiceMicButton.extent / 2 +
-                            6,
+                        bottom: _statusBottom - _StatusLine.below,
                         child: IgnorePointer(
-                          child: _SampleGuideLine(
-                            text: guide.text,
-                            glide: guide.glide,
+                          child: ListenableBuilder(
+                            listenable: Listenable.merge([
+                              widget.voice,
+                              _barMessage,
+                            ]),
+                            builder: (context, _) =>
+                                _statusLine() ?? const SizedBox.shrink(),
                           ),
                         ),
+                      ),
+                    // A take recording: its clock and level on the mic's right, and esc on its left
+                    // throws it away — the terminal's key for "not that".
+                    if (!_ownsInput)
+                      ListenableBuilder(
+                        listenable: widget.voice,
+                        builder: (context, _) {
+                          if (!VoiceLine.recording(widget.voice)) {
+                            return const SizedBox.shrink();
+                          }
+                          return Stack(
+                            children: [
+                              Positioned(
+                                left:
+                                    MediaQuery.sizeOf(context).width / 2 +
+                                    VoiceMicButton.extent / 2 +
+                                    16,
+                                bottom: _micCenter - 9,
+                                child: VoiceTakeClock(voice: widget.voice),
+                              ),
+                              Positioned(
+                                right:
+                                    MediaQuery.sizeOf(context).width / 2 +
+                                    VoiceMicButton.extent / 2 +
+                                    20 -
+                                    _Keycap.slop,
+                                bottom: _micCenter - _Keycap.touch / 2,
+                                child: _EscChip(
+                                  semanticsLabel:
+                                      'Escape — throw the take away',
+                                  onTap: () {
+                                    widget.voice.clear();
+                                    _flash('✗ not sent');
+                                  },
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     // `esc`, one tap, beside the mic while the agent is working or asking — the key a
                     // terminal person reaches for most, and the one a phone keyboard does not have.
                     if (!_ownsInput &&
                         session != null &&
                         _answersBesideMic == null &&
+                        !VoiceLine.recording(widget.voice) &&
                         (_agentWorking ||
                             _questionWatcher?.view != null ||
                             (_questionWatcher?.interruptible ?? false)))
@@ -2232,10 +2248,7 @@ class _TerminalPageState extends State<TerminalPage>
                             VoiceMicButton.extent / 2 +
                             20 -
                             _Keycap.slop,
-                        bottom:
-                            _windowBottomInset +
-                            4 * Tty.of(context).row -
-                            _Keycap.touch / 2,
+                        bottom: _micCenter - _Keycap.touch / 2,
                         child: _EscChip(
                           onTap: () {
                             session.terminal.keyInput(TerminalKey.escape);
@@ -2268,8 +2281,7 @@ class _TerminalPageState extends State<TerminalPage>
                             widget.notifier.agentNotices.system
                                 .requestPermission(),
                           ),
-                          micBottom:
-                              _windowBottomInset + 4 * Tty.of(context).row,
+                          micBottom: _micCenter,
                         ),
                       ),
                   ],
@@ -3346,13 +3358,17 @@ class _SlideAway extends StatelessWidget {
 
 /// `esc`, as a key you can reach with a thumb: a small raised chip, 44pt of touch.
 class _EscChip extends StatelessWidget {
-  const _EscChip({required this.onTap});
+  const _EscChip({
+    required this.onTap,
+    this.semanticsLabel = 'Escape — interrupt the agent',
+  });
 
   final VoidCallback onTap;
+  final String semanticsLabel;
 
   @override
   Widget build(BuildContext context) => _Keycap(
-    semanticsLabel: 'Escape — interrupt the agent',
+    semanticsLabel: semanticsLabel,
     haptic: HapticFeedback.mediumImpact,
     onTap: onTap,
     child: TtyText('esc', size: TtySize.meta, weight: FontWeight.w500),
@@ -3624,19 +3640,32 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
   );
 }
 
-/// The sample's guide, one faint line above the mic: what to try next. A 6pt green dot glides
-/// 24pt the way the swipe goes ([glide] 1 right, -1 left) every 2.4s; 0 holds it still.
-class _SampleGuideLine extends StatefulWidget {
-  const _SampleGuideLine({required this.text, required this.glide});
+/// The line above the mic: a few words on what is going on, centred, over a band that fades the
+/// output out above it. The sample's guide wears a 6pt green [dot] that glides 24pt the way the
+/// swipe goes ([glide] 1 right, -1 left) every 2.4s; 0 holds it still.
+class _StatusLine extends StatefulWidget {
+  const _StatusLine({
+    required this.text,
+    this.color,
+    this.glide = 0,
+    this.dot = false,
+  });
 
   final String text;
+
+  /// The words' colour; faint when null.
+  final Color? color;
   final int glide;
+  final bool dot;
+
+  /// How far the band reaches below its words' foot.
+  static const double below = 6;
 
   @override
-  State<_SampleGuideLine> createState() => _SampleGuideLineState();
+  State<_StatusLine> createState() => _StatusLineState();
 }
 
-class _SampleGuideLineState extends State<_SampleGuideLine>
+class _StatusLineState extends State<_StatusLine>
     with SingleTickerProviderStateMixin {
   late final _clock = AnimationController(
     vsync: this,
@@ -3650,7 +3679,7 @@ class _SampleGuideLineState extends State<_SampleGuideLine>
   }
 
   @override
-  void didUpdateWidget(_SampleGuideLine old) {
+  void didUpdateWidget(_StatusLine old) {
     super.didUpdateWidget(old);
     if (old.glide != widget.glide) _sync();
   }
@@ -3692,45 +3721,55 @@ class _SampleGuideLineState extends State<_SampleGuideLine>
         ),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(Tty.origin, 14, Tty.origin, 6),
+        padding: const EdgeInsets.fromLTRB(
+          Tty.origin,
+          14,
+          Tty.origin,
+          _StatusLine.below,
+        ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            SizedBox(
-              width: 30,
-              height: 6,
-              child: AnimatedBuilder(
-                animation: _clock,
-                builder: (context, child) {
-                  // A glide over the first 60% of each beat, easing in and out, then a rest.
-                  final t = Curves.easeInOut.transform(
-                    (_clock.value / 0.6).clamp(0.0, 1.0),
-                  );
-                  final from = widget.glide < 0 ? 24.0 : 0.0;
-                  final x = widget.glide == 0
-                      ? 12.0
-                      : from + widget.glide * 24 * t;
-                  final fade = widget.glide == 0 ? 1.0 : 1 - (t * t);
-                  return Stack(
-                    children: [
-                      Positioned(
-                        left: x,
-                        top: 0,
-                        child: Opacity(opacity: fade, child: child),
-                      ),
-                    ],
-                  );
-                },
-                child: dot,
+            if (widget.dot) ...[
+              SizedBox(
+                width: 30,
+                height: 6,
+                child: AnimatedBuilder(
+                  animation: _clock,
+                  builder: (context, child) {
+                    // A glide over the first 60% of each beat, easing in and out, then a rest.
+                    final t = Curves.easeInOut.transform(
+                      (_clock.value / 0.6).clamp(0.0, 1.0),
+                    );
+                    final from = widget.glide < 0 ? 24.0 : 0.0;
+                    final x = widget.glide == 0
+                        ? 12.0
+                        : from + widget.glide * 24 * t;
+                    final fade = widget.glide == 0 ? 1.0 : 1 - (t * t);
+                    return Stack(
+                      children: [
+                        Positioned(
+                          left: x,
+                          top: 0,
+                          child: Opacity(opacity: fade, child: child),
+                        ),
+                      ],
+                    );
+                  },
+                  child: dot,
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
+              const SizedBox(width: 8),
+            ],
             Flexible(
               child: Text(
                 widget.text,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: tty.style(size: TtySize.meta, color: tty.faint),
+                style: tty.style(
+                  size: TtySize.meta,
+                  color: widget.color ?? tty.faint,
+                ),
               ),
             ),
           ],
