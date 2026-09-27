@@ -20,6 +20,8 @@ import 'phone_search_controller.dart';
 import 'phone_search_rank.dart';
 import 'phone_search_row.dart';
 import 'resume_agent.dart';
+import 'search_result_text.dart'
+    show phoneResultMatches, snippetLead, snippetRuns;
 import 'sheet_list.dart';
 import 'sheet_search_row.dart';
 import 'tty.dart';
@@ -205,7 +207,8 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
   /// the matches in their order, then the commands that match, then `+ New Harness in <project>`.
   /// See docs/plans/2026-09-26-003-mobile-find-new-spec.md.
   Widget _find(PhoneSearchController search, List<PhoneDestination> rows) {
-    final terms = phoneSearchTerms(search.matchQuery);
+    // The words, less any time ("dial last week" lights "dial").
+    final terms = phoneSearchTerms(search.wordsQuery);
     final showing = widget.showing;
     final now = DateTime.now();
     final tty = Tty.of(context);
@@ -370,8 +373,22 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     final state = _stateOf(entry, openable, tty, resuming: _resuming == row.id);
     final asking = question != null && question.isNotEmpty && entry.isWaiting;
     final branch = entry.agent.project?.branch;
+    // Found in what was said rather than in its own name and place: the second line shows where
+    // — the desktop Cmd-P's rule.
+    final hit = widget.controller.contentHitFor(row.id);
+    final said =
+        hit != null &&
+            hit.snippet.isNotEmpty &&
+            hit.field != 'name' &&
+            (terms.isEmpty ||
+                phoneResultMatches(row, terms).length <
+                    terms.take(12).toSet().length)
+        ? (lead: snippetLead(hit.field), runs: snippetRuns(hit.snippet))
+        : null;
     return FindRow(
       title: row.title,
+      strict: true,
+      said: said,
       // `M2:site ⑂ docs-v2 · 2m` — or, while it asks, its question.
       detail: asking
           ? '"${question.split('\n').first}"'

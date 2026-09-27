@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 
 import 'package:harness_mobile/core/phone_search_history.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/state/search_when.dart';
+import 'package:harness_mobile/state/session_content_search.dart';
 
 import 'phone_destination.dart';
 import 'phone_search_catalog.dart';
@@ -23,10 +25,12 @@ const kPhoneSearchHint = 'Search harnesses';
 /// `#` projects, `@` machines, `?` help, and the group scope that choosing a
 /// project or a machine drops you into.
 ///
-/// ⚠️ **Keystrokes never ask a machine anything.** They filter the catalog the
-/// app already holds — agents, machines, projects, and the session content
-/// [AppNotifier.sessionPreviews] has cached — so typing on two bars of signal
-/// stays instant and costs no data.
+/// Keystrokes filter the catalog the app already holds — agents, machines, projects and the
+/// session content [AppNotifier.sessionPreviews] has cached — so the list answers at once. A pause
+/// in typing (110ms) also asks every connected machine's session index what was said in each
+/// conversation (`session_search`, the desktop Cmd-P's search — see
+/// docs/research/2026-09-26-session-search.md); its hits join the ranking as they arrive. Only
+/// the hits leave a machine, sealed like every other request.
 ///
 /// What the desktop has and this does not: panes, tabs, placement, splits, the
 /// preview panel, and the "New Harness" row. All four are about WHERE a result
@@ -39,6 +43,11 @@ class PhoneSearchController extends ChangeNotifier {
     this.modes = true,
   }) {
     _catalog = _cache.read(notifier);
+    _content = SessionContentSearch(
+      machines: () => notifier.searchableMachineIds,
+      ask: (machineId, words, when) =>
+          notifier.searchSessions(machineId, words, when: when),
+    )..addListener(_contentChanged);
     _filter();
     notifier.addListener(_rebuild);
     notifier.sessionPreviews.addListener(_previewChanged);
@@ -62,6 +71,48 @@ class PhoneSearchController extends ChangeNotifier {
   final bool modes;
 
   final _cache = PhoneSearchCatalogCache();
+
+  /// What every machine's session index found for the query — see [contentHitFor].
+  late final SessionContentSearch _content;
+
+  /// The query the machines' session indexes last answered, or null before any answer.
+  String? get contentAnswered => _content.answered;
+
+  /// What a machine's session index found in this row's conversation for the current query.
+  SessionContentHit? contentHitFor(String rowId) =>
+      _contentQuery.isEmpty ? null : _content.hitsFor(_contentQuery)[rowId];
+
+  /// When the query says to look ("dial last week"), and its words without that.
+  ({String words, SearchWhen? when}) get _read => _contentQuery.isEmpty
+      ? (words: matchQuery, when: null)
+      : _content.read(_contentQuery);
+
+  /// The words matched against names and lit in the rows: the query less any time phrase.
+  String get wordsQuery => _read.words;
+
+  /// What the session indexes are asked: a plain harness search only, never a command or a mode.
+  String get _contentQuery => _listsAgents ? matchQuery : '';
+
+  void _contentChanged() {
+    if (_disposed) return;
+    _filter();
+    notifyListeners();
+  }
+
+  /// With a time in the query, the rows worked on then: last used in it, or vouched for by a
+  /// machine that saw a turn in it.
+  List<PhoneDestination> _within(List<PhoneDestination> rows) {
+    final when = _read.when;
+    if (when == null) return rows;
+    final hits = _content.hitsFor(_contentQuery);
+    bool then(DateTime? at) =>
+        at != null && !at.isBefore(when.from) && !at.isAfter(when.to);
+    return [
+      for (final row in rows)
+        if (hits.containsKey(row.id) || then(row.entry?.agent.lastUsedAt)) row,
+    ];
+  }
+
   List<PhoneDestination> _catalog = const [];
   Set<String> _commandIds = const {};
 
@@ -145,6 +196,7 @@ class PhoneSearchController extends ChangeNotifier {
     }
     query = value;
     _filter();
+    _content.search(_contentQuery);
     notifyListeners();
   }
 
@@ -166,6 +218,7 @@ class PhoneSearchController extends ChangeNotifier {
     _groupScope = null;
     query = '';
     _filter();
+    _content.search('');
     notifyListeners();
   }
 
@@ -333,11 +386,14 @@ class PhoneSearchController extends ChangeNotifier {
     rows = isCommandMode
         ? _recentFirst(rankPhoneDestinations(candidates, commandQuery))
         : rankPhoneDestinations(
-            candidates,
-            matchQuery,
+            _within(candidates),
+            wordsQuery,
             recent: history?.recent ?? const <String>[],
             previews: notifier.sessionPreviews,
             byActivity: _listsAgents,
+            contentHits: _contentQuery.isEmpty
+                ? null
+                : _content.hitsFor(_contentQuery),
           );
     matchCount = rows.length;
     // ⚠️ **Not with nothing typed.** That list is the desktop's Harness Monitor
@@ -429,6 +485,9 @@ class PhoneSearchController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _content
+      ..removeListener(_contentChanged)
+      ..dispose();
     notifier.removeListener(_rebuild);
     notifier.sessionPreviews.removeListener(_previewChanged);
     super.dispose();

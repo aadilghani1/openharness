@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:harness_mobile/core/fuzzy_match.dart';
+
 import 'composing_keyboard.dart';
 import 'tty.dart';
 
@@ -108,24 +110,44 @@ class FzfRow extends StatelessWidget {
   }
 }
 
-/// [text] as spans with each typed term lit — a substring where there is one, else fzf's scattered
-/// letters in order.
+/// [text] as spans with each typed term lit — a substring where there is one (one that starts a
+/// word first: "port" lights "windows port", not "support"), else scattered letters in order.
+///
+/// [strict] lights scattered letters the way a harness row matched them (see
+/// `phoneFieldMatchScore`): starting a word and close together, or two letters as initials — so
+/// what is lit is what earned the row its place.
 List<TextSpan> fzfHighlight(
   String text,
   List<String> terms, {
   required TextStyle base,
   required TextStyle hit,
+  bool strict = false,
 }) {
   final lit = List<bool>.filled(text.length, false);
   final lower = text.toLowerCase();
+  // Case folding that changes the length would shift every index: leave such text plain.
+  if (lower.length != text.length) return [TextSpan(text: text, style: base)];
   for (final raw in terms) {
     final term = raw.toLowerCase();
     if (term.isEmpty) continue;
-    final at = lower.indexOf(term);
+    var at = wordStartIndexOf(lower, term);
+    if (at < 0) at = lower.indexOf(term);
     if (at >= 0) {
       for (var i = at; i < at + term.length; i++) {
         lit[i] = true;
       }
+      continue;
+    }
+    if (strict) {
+      wordSubsequenceSpread(
+        lower,
+        term,
+        onMatch: (start, end) {
+          for (var i = start; i < end; i++) {
+            lit[i] = true;
+          }
+        },
+      );
       continue;
     }
     var from = 0;

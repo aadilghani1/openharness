@@ -61,6 +61,8 @@ import '../ws/ws_pool.dart';
 import 'pane_preset.dart';
 import 'pane_arrangement.dart';
 import 'pending_question.dart';
+import 'search_when.dart';
+import 'session_content_search.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
 import '../phone/phone_name_store.dart';
@@ -4838,6 +4840,47 @@ class AppNotifier extends ChangeNotifier {
   /// A short timeout on purpose: this runs while somebody is looking at a form
   /// they have already half filled in, and a machine that cannot answer in six
   /// seconds should leave the rest of the form working.
+  /// Machines whose daemon can be asked what was said in their sessions now — connected, never
+  /// dialled for it: a search must not be what wakes a relay socket.
+  Iterable<String> get searchableMachineIds => [
+    for (final machine in machineStates.values)
+      if (machine.connectionStatus == ConnectionStatus.connected &&
+          !machine.needsLink &&
+          machine.nodeOnline != false)
+        machine.machine.machineId,
+  ];
+
+  /// Every turn of every session on [machineId], searched by its daemon (`session_search`,
+  /// cli/src/lib/sessionSearch/) — the desktop's `searchSessions`, unchanged. Null when the machine
+  /// cannot answer: offline, or a CLI that predates the request, which goes silent rather than
+  /// refusing it — hence the short timeout.
+  Future<List<SessionContentHit>?> searchSessions(
+    String machineId,
+    String query, {
+    SearchWhen? when,
+    int limit = 30,
+  }) async {
+    if (!searchableMachineIds.contains(machineId)) return null;
+    try {
+      final reply = await _conn(machineId).request(
+        'session_search',
+        payload: {
+          'query': query,
+          'limit': limit,
+          if (when != null) ...{
+            'from': when.from.millisecondsSinceEpoch,
+            'to': when.to.millisecondsSinceEpoch,
+          },
+        },
+        timeout: const Duration(seconds: 4),
+      );
+      if (reply['error'] != null) return null;
+      return SessionContentHit.listFromReply(machineId, reply);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<Map<String, dynamic>> readGitProject(
     String machineId,
     String path,

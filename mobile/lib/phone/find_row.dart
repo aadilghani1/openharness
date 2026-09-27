@@ -28,9 +28,18 @@ class FindRow extends StatelessWidget {
     this.selected = false,
     this.enabled = true,
     this.onTap,
+    this.strict = false,
+    this.said,
   });
 
   final String title;
+
+  /// A harness row: its title's letters are lit the way harness rows match — see [fzfHighlight].
+  final bool strict;
+
+  /// Where the machine's session index found the words, in place of [detail]: what was asked
+  /// (`> …`), a command (`$ …`) or the answer, the matched words lit — fzf's preview line.
+  final ({String lead, List<({String text, bool matched})> runs})? said;
 
   /// Line 2: `machine:folder`, or a quoted question.
   final String? detail;
@@ -101,6 +110,7 @@ class FindRow extends StatelessWidget {
                         children: fzfHighlight(
                           title,
                           terms,
+                          strict: strict,
                           base: tty.style(
                             color: ink,
                             size: TtySize.row,
@@ -128,7 +138,26 @@ class FindRow extends StatelessWidget {
                   ],
                 ],
               ),
-              if (detail case final detail? when detail.isNotEmpty) ...[
+              if (said case final said?) ...[
+                const SizedBox(height: 3),
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(text: said.lead, style: _base(tty)),
+                      for (final run in said.runs)
+                        TextSpan(
+                          text: run.text,
+                          style: run.matched
+                              ? tty.style(color: tty.green, size: TtySize.meta)
+                              : _base(tty),
+                        ),
+                    ],
+                  ),
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ] else if (detail case final detail? when detail.isNotEmpty) ...[
                 const SizedBox(height: 3),
                 Text.rich(
                   TextSpan(

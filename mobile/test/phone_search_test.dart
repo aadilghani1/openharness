@@ -99,6 +99,42 @@ AppNotifier _app(
   return app;
 }
 
+/// A machine whose session index heard "dial" in agent 2312's conversation.
+class _SearchConn extends WsConn {
+  _SearchConn()
+    : super(
+        wsBaseUrl: 'ws://fixture.invalid',
+        autonomousEnv: 'test',
+        machineId: 'box',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+      );
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type != 'session_search') return {};
+    return {
+      'hits': [
+        if ((payload['query'] as String).startsWith('dial'))
+          {
+            'agentId': '2312',
+            'sessionId': 'session-2312',
+            'field': 'ask',
+            'snippet': 'fix the \u0002dial\u0003 scroll',
+            'together': true,
+            'score': 1,
+          },
+      ],
+    };
+  }
+}
+
 /// A machine answering `agent_recent` with what was asked of each agent, and
 /// nothing else.
 class _RecentConn extends WsConn {
@@ -1163,6 +1199,88 @@ void main() {
     expect(top('work · 3188'), lessThan(top('work · 2312')));
     expect(top('work · 2312'), lessThan(top('work · 9999')));
   });
+
+  test('typing a name puts the harness named for it first, over newer ones whose path spells it', () {
+    // Main's Cmd-P fix, on the phone: `hn` was 6th of 166 — every newer harness under
+    // `.../harnesses/worktrees/autonomous-harness/...` matched its scattered letters, and a typed
+    // list sorted by last use alone.
+    Agent worktree(int i) => Agent(
+      id: 'w$i',
+      name: 'Claude harness $i',
+      status: 'active',
+      engine: 'claude',
+      project: AgentProject(
+        name: 'autonomous-harness',
+        cwd: '/home/u/harnesses/worktrees/autonomous-harness/w$i',
+      ),
+      updatedAt: _now.subtract(Duration(minutes: i)),
+      terminalAvailable: true,
+    );
+    final machine = _machine('box', [
+      for (var i = 0; i < 5; i++) worktree(i),
+      Agent(
+        id: 'hn',
+        name: 'hn',
+        status: 'active',
+        engine: 'claude',
+        project: const AgentProject(
+          name: 'autonomous-harness',
+          cwd: '/home/u/code/autonomous-harness',
+        ),
+        updatedAt: _now.subtract(const Duration(hours: 3)),
+        terminalAvailable: true,
+      ),
+    ]);
+    final app = _app([machine]);
+    addTearDown(app.dispose);
+    final search = PhoneSearchController(notifier: app, modes: false);
+    addTearDown(search.dispose);
+
+    search.setQuery('hn');
+    expect(search.rows.first.title, 'hn');
+    // Two letters count only as initials: not every harness whose path holds an h and an n.
+    expect(search.rows, hasLength(1));
+  });
+
+  testWidgets(
+    'a word said in a conversation finds its harness, and the row shows where it was said',
+    (tester) async {
+      final machine = _machine('box', [
+        _agent('3188', minutesAgo: 4),
+        _agent('2312', minutesAgo: 30),
+      ]);
+      final app = _app([machine], conn: _SearchConn());
+      addTearDown(app.dispose);
+      final search = PhoneSearchController(notifier: app, modes: false);
+      addTearDown(search.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PhoneSearchResults(
+              notifier: app,
+              controller: search,
+              fzf: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Neither name holds "dial": only what was said in 2312 does.
+      search.setQuery('dial');
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+
+      expect(search.rows.map((row) => row.title), ['work · 2312']);
+      expect(
+        find.textContaining('> fix the dial scroll', findRichText: true),
+        findsOneWidget,
+      );
+      // Opening search reaches the machines (see `reachAllMachines`): let its timers run out.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 30));
+    },
+  );
 
   testWidgets(
     'Find holds the order it opened with: a harness that asks stays put',
