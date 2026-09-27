@@ -86,8 +86,19 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
         // Every harness on every machine (hn's; `ls` is tmux's list-sessions).
         // The running client knows each one's state (what it asks, does, did); with none, the
         // daemons' rosters.
-        "list-harnesses" | "lsh" => if crate::ipc::alive(socket.as_deref(), name.as_deref()) { Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await) } else { Some(ls(port).await) },
-        "send-message" => Some(send(port, &args[1..]).await),
+        // (No client: hn with no terminal answers it, as tmux's server starts for a command.)
+        "list-harnesses" | "lsh" | "answer-harness" | "answer" | "open-harness" | "openh" => {
+            let up = crate::ipc::alive(socket.as_deref(), name.as_deref()) || (socket.is_none() && spawn_headless(name.as_deref(), explicit_port).await);
+            if up { Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await) } else { Some(ls(port).await) }
+        }
+        // send-message: the client's, which knows each machine's link (and the hook's harness);
+        // with none, straight to the daemons.
+        "send-message" | "restart-harness" | "restarth" | "pause-harness" | "resume-harness" | "clone-harness" | "rename-harness" => {
+            let up = crate::ipc::alive(socket.as_deref(), name.as_deref()) || (socket.is_none() && spawn_headless(name.as_deref(), explicit_port).await);
+            if up { Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await) }
+            else if cmd == "send-message" { Some(send(port, &args[1..]).await) }
+            else { eprintln!("no server running"); Some(1) }
+        }
         // The daemons from a shell: hn zoo, card, hatch, talk, lessons, tim (daemon/shell.rs).
         "zoo" | "card" | "hatch" | "talk" | "lessons" | "tim" | "daemon" if crate::daemon::shell::takes(args) => crate::daemon::shell::run(args, port, socket.as_deref(), name.as_deref()).await,
         // attach / a: the client itself, as `tmux attach` is.
@@ -99,6 +110,16 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
             let detached = crate::cmd::find(c).ok().and_then(|e| crate::cmd::parse(e, args).ok()).map(|a| a.has('d') > 0).unwrap_or(false);
             // $HN_SOCKET: what a client sets for what it runs, as tmux's $TMUX.
             let inside = std::env::var("HN_SOCKET").map(|v| !v.is_empty()).unwrap_or(false);
+            // -A with that session there: tmux attaches to it, -d or not (cmd_attach_session) — a
+            // client here, or `open terminal failed` from a shell with no terminal.
+            let parsed = crate::cmd::find(c).ok().and_then(|e| crate::cmd::parse(e, args).ok());
+            if let (Some(s), false) = (parsed.as_ref().filter(|a| a.has('A') > 0).and_then(|a| a.get('s')), inside) {
+                let exact = format!("={s}");
+                let there = if crate::ipc::alive(socket.as_deref(), name.as_deref()) {
+                    crate::ipc::chosen(socket.as_deref(), name.as_deref()).map(|p| matches!(crate::ipc::ask(&p, &["has-session".into(), "-t".into(), exact.clone()]), Some((_, _, 0)))).unwrap_or(false)
+                } else { has_session_named(name.as_deref(), &exact) };
+                if there { return None }
+            }
             // new -d with no client: tmux's server starts for it (hn with no terminal).
             if detached && !crate::ipc::alive(socket.as_deref(), name.as_deref()) && !spawn_headless(name.as_deref(), explicit_port).await { return Some(offline(port, args, name.as_deref()).await) }
             if detached || inside { Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await) } else { None }
@@ -107,7 +128,10 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
         // server does, when there are none).
         "start-server" | "start" => {
             if !crate::ipc::alive(socket.as_deref(), name.as_deref()) && has_sessions(name.as_deref()) { spawn_headless(name.as_deref(), explicit_port).await; }
-            Some(0)
+            // `start-server \; has-session -t proj`: the commands after it, as they run alone.
+            let rest: Vec<String> = args.iter().skip_while(|w| w.as_str() != ";").skip(1).cloned().collect();
+            if rest.is_empty() { return Some(0) }
+            return Box::pin(run(&rest, explicit_port, socket.as_deref(), name.as_deref())).await.or(Some(0));
         }
         // No client running: what tmux's server would answer — the sessions a client left (and the
         // desk's), from where they are kept.
@@ -132,6 +156,17 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
 }
 
 /// Whether sessions are kept for this server name (no client has them, or one does).
+/// A session no client runs, kept in the sessions file, by its name (as -t takes it: exact, `=`
+/// exact, else the start of one name) or its id ($N).
+pub fn has_session_named(name: Option<&str>, t: &str) -> bool {
+    let doc = crate::app::read_sessions(&crate::app::sessions_path(name));
+    let rows: Vec<Value> = doc["sessions"].as_array().cloned().unwrap_or_default();
+    let names: Vec<String> = rows.iter().filter_map(|r| r.get("name").and_then(Value::as_str).map(str::to_string)).collect();
+    if let Some(id) = t.strip_prefix('$').and_then(|i| i.parse::<u64>().ok()) { return rows.iter().any(|r| r.get("id").and_then(Value::as_u64) == Some(id)) }
+    if let Some(exact) = t.strip_prefix('=') { return names.iter().any(|n| n == exact) }
+    names.iter().any(|n| n == t) || names.iter().filter(|n| n.starts_with(t)).count() == 1
+}
+
 pub fn has_sessions(name: Option<&str>) -> bool {
     let doc = crate::app::read_sessions(&crate::app::sessions_path(name));
     doc["sessions"].as_array().map(|rows| rows.iter().any(|r| !r.get("desk").and_then(Value::as_bool).unwrap_or(false))).unwrap_or(false)
@@ -205,13 +240,24 @@ pub fn start_session(args: &[String]) -> Option<crate::app::StartSession> {
             name: a.get('s').map(str::to_string), create: true, attach_existing: a.has('A') > 0, window: a.get('n').map(str::to_string),
             cwd: a.get('c').map(str::to_string), command: (!a.values.is_empty()).then(|| a.values.join(" ")), target: None,
             // new -A -D: attached, the session's other clients detached.
-            detach: a.has('D') > 0, readonly: false,
+            detach: a.has('D') > 0, readonly: false, flags: Vec::new(), group: a.get('t').map(str::to_string),
         }),
         "attach-session" => Some(crate::app::StartSession {
             name: a.get('t').map(|t| t.split(':').next().unwrap_or(t).to_string()).filter(|t| !t.is_empty()), cwd: a.get('c').map(str::to_string),
             // attach -t work:2 — the window it goes to.
             target: a.get('t').and_then(|t| t.split_once(':')).map(|(_, w)| w.to_string()).filter(|w| !w.is_empty()),
-            detach: a.has('d') > 0, readonly: a.has('r') > 0,
+            // -f's flags (a `!` before one: not it), -r read-only and ignore-size.
+            flags: {
+                let mut f: Vec<String> = Vec::new();
+                if a.has('r') > 0 { f.extend(["read-only".to_string(), "ignore-size".to_string()]) }
+                // (A terminal's flags: the others — no-output, wait-exit, pause-after — are a
+                // control-mode client's, and tmux leaves them off one.)
+                for x in a.get('f').unwrap_or("").split(',').map(str::trim).filter(|x| matches!(x.trim_start_matches('!'), "read-only" | "ignore-size" | "active-pane")) {
+                    match x.strip_prefix('!') { Some(n) => f.retain(|y| y != n), None => if !f.iter().any(|y| y == x) { f.push(x.to_string()) } }
+                }
+                f
+            },
+            detach: a.has('d') > 0, readonly: a.has('r') > 0 || a.get('f').unwrap_or("").split(',').any(|x| x.trim() == "read-only"),
             ..Default::default()
         }),
         _ => None,
@@ -238,9 +284,11 @@ async fn offline(port: u16, args: &[String], name: Option<&str>) -> i32 {
     // The desk's session is there while the desk has windows (desk=off: there is none).
     let deskless = std::env::var("HARNESS_TUI_DESK").as_deref() == Ok("off");
     let mut sessions: Vec<(String, usize, i64, bool)> = Vec::new();
+    let mut groups: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     if !deskless && desk_windows > 0 { sessions.push((desk_name.clone(), desk_windows, desk_row.and_then(|r| r.get("created").and_then(Value::as_i64)).unwrap_or(now), true)) }
     for r in rows.iter().filter(|r| !r.get("desk").and_then(Value::as_bool).unwrap_or(false)) {
         let Some(n) = r.get("name").and_then(Value::as_str) else { continue };
+        if let Some(g) = r.get("group").and_then(Value::as_str) { groups.insert(n.to_string(), g.to_string()); }
         sessions.push((n.to_string(), r.get("windows").and_then(Value::as_array).map(|w| w.len()).unwrap_or(0), r.get("created").and_then(Value::as_i64).unwrap_or(now), false));
     }
     sessions.sort_by(|x, y| x.0.cmp(&y.0));
@@ -265,9 +313,18 @@ async fn offline(port: u16, args: &[String], name: Option<&str>) -> i32 {
     let save = |doc: &Value| { if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); } let _ = std::fs::write(&path, doc.to_string()); };
     match entry.name {
         "list-sessions" => {
-            let fmt = a.get('F').unwrap_or("#{session_name}: #{session_windows} windows (created #{t:session_created})");
+            let fmt = a.get('F').unwrap_or("#{session_name}: #{session_windows} windows (created #{t:session_created})#{?session_grouped, (group ,}#{session_group}#{?session_grouped,),}");
             for (n, w, c, _) in &sessions {
-                let line = fmt.replace("#{session_name}", n).replace("#S", n).replace("#{session_windows}", &w.to_string()).replace("#{t:session_created}", &crate::format::strftime_at("%a %b %e %H:%M:%S %Y", *c))
+                // Its group (new -t), and the group's sessions by name.
+                let g = groups.get(n).cloned();
+                let members: Vec<&String> = sessions.iter().map(|s| &s.0).filter(|m| g.is_some() && groups.get(*m) == g.as_ref()).collect();
+                let g = g.unwrap_or_default();
+                let grouped = if g.is_empty() { "0" } else { "1" };
+                let line = fmt.replace("#{?session_grouped, (group ,}#{session_group}#{?session_grouped,),}", &if g.is_empty() { String::new() } else { format!(" (group {g})") })
+                    .replace("#{session_group_size}", &if g.is_empty() { String::new() } else { members.len().to_string() })
+                    .replace("#{session_group_list}", &members.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(","))
+                    .replace("#{session_grouped}", grouped).replace("#{session_group}", &g)
+                    .replace("#{session_name}", n).replace("#S", n).replace("#{session_windows}", &w.to_string()).replace("#{t:session_created}", &crate::format::strftime_at("%a %b %e %H:%M:%S %Y", *c))
                     .replace("#{session_created}", &c.to_string()).replace("#{session_attached}", "0").replace("#{?session_attached, (attached),}", "");
                 if !out(&format!("{line}\n")) { break }
             }

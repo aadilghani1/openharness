@@ -274,7 +274,9 @@ fn session_matches(app: &App, s: &str, exact: bool) -> bool {
     let name = app.session_name();
     if s == name { return true }
     if exact { return false }
-    name.starts_with(s) || fnmatch(s, &name)
+    // cmd_find_get_session over every session: an exact name anywhere first (`api` is api, not
+    // api-v2 in front), then the only one it starts, then the only one it matches.
+    app.find_session(s) == Some(app.session_id)
 }
 
 /// cmd_find_get_window_with_session: a window of this session by id, offset, `! ^ $`, index,
@@ -506,7 +508,9 @@ fn pane_anywhere(app: &App, pane: &str, only: bool) -> Option<Found> {
     }
     let mut f = Found { window: Some(app.active), idx: Some(app.win_num(app.active)), pane: None };
     if pane_in_window(app, app.active, pane, &mut f) { return Some(f) }
-    if only { return None }
+    // (`=` is no pane's: cmd_find_target takes it off a session or a window only, so `=main`
+    // is looked for as it is written, and nothing is called that.)
+    if only || pane.starts_with('=') { return None }
     let mut g = Found::default();
     if window_anywhere(app, pane, false, false, false, &mut g) {
         g.pane = g.window.and_then(|w| app.tabs.get(w)).and_then(|t| t.focus);

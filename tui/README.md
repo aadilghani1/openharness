@@ -74,13 +74,15 @@ harness's name, not what the program sets), `history-limit 10000` (agents print 
 2000), `mouse on`, `set-titles on` (the terminal's title: `?2 Fix flaky login test — Harness`, the
 harnesses waiting on you and the one in front; `set-titles-string` changes it), and the status line: each window's most urgent harness state before its name,
 and on the right the focused pane's machine (when it is another one), project and branch —
-`gpu-box:ml-lab git:(main)` — where tmux shows the pane's title.
+`gpu-box:ml-lab git:(main)` — where tmux shows the pane's title. One key differs on purpose: ⇧⏎
+reaches the pane as `CSI 13;2u` (a new line in an agent's prompt; tmux, without `extended-keys`,
+sends a plain Enter).
 
 | tmux keys | |
 |---|---|
 | `C-b s` | every harness on every machine — an fzf list with a live preview |
-| `C-b c` | new window (a shell) |
-| `C-b %` `C-b "` (`\|` `-`) | split right / below — a shell, at once, in this pane's machine and folder |
+| `C-b c` | new window, on the home page: your recent harnesses and the Claude Code and Codex conversations Harness did not start (last 30 days, every machine) — `1…9` or `enter` opens one there (a conversation resumed as a harness), `t` a shell as tmux's. `new-window` from a script, or with options (`-c`, a command…), makes the shell at once, as tmux does; `set -g @hn-new-window shell` makes the key tmux's too |
+| `C-b %` `C-b "` (and `C-b \|` for `%`) | split right / below — a shell, at once, in this pane's machine and folder (`C-b -` is tmux's delete-buffer) |
 | `C-b o` `C-b ;` `C-b ←↑→↓` `C-b q` | next pane, last pane, pane in a direction, pane numbers |
 | `C-b z` `C-b space` `C-b M-1…7` `C-b { }` `C-b C-o` | zoom, next layout, a layout, swap, rotate |
 | `C-b C-←↑→↓` `C-b M-←↑→↓` | resize (repeatable, like tmux's `-r`) |
@@ -115,7 +117,9 @@ most people's fingers already know it. Its layout options apply too (`--layout`,
 view above it, where fzf would draw it under a prompt at the bottom of a terminal. The preview is
 hn's own text about the row, so two of its defaults are hn's: its label is the row's name (unless
 `--preview-label` gives one), and it wraps its text at spaces (unless `--preview-window` says
-`wrap`, fzf's way with `↳`, or `nowrap`).
+`wrap`, fzf's way with `↳`, or `nowrap`). `C-b s` lays its preview out as
+`right,50%,<90(down,40%)`, your `--preview-window` after it, and the narrow one below 180 columns
+takes your look too — so `hidden` hides it at every width.
 
 Colours are the terminal's 16, as tmux's are, so hn reads on dark, light and Solarized themes.
 
@@ -203,6 +207,20 @@ hn list-panes -F '#{pane_index} #{pane_title}'
 hn list-harnesses            # every harness on every machine and its state (hn ls is list-sessions, as in tmux)
 hn lsh -f '#{==:#{harness_state},needs}' -F '#{harness_name}: #{harness_question}'   # who is waiting, and on what
 hn send-message -t api 'run the tests'   # a message to a harness, as a turn (hn send is send-keys, as in tmux)
+hn answer -t 'Add rate' 2    # answer its question: the second choice (1,3 several; or your own words)
+hn open-harness -h -s billing   # a harness beside this pane (-v below; without either, a window of its own)
+```
+
+Harnesses have hooks as windows do: `harness-needs` runs when one asks, `harness-done` when one
+ends a turn, `harness-failed` on an error — with `#{hook_harness_name}` `#{hook_harness_line}`
+`#{hook_harness_question}` `#{hook_harness_machine}`. In a `~/.tmux.conf` tmux reads too, keep them
+inside `%if` (tmux doesn't know these hooks, and skips the block), and quote what a shell is given
+with `q:` (names hold spaces and brackets):
+
+```tmux
+%if "#{hn_version}"
+set-hook -g harness-needs 'run-shell "notify #{q:hook_harness_name}"'
+%endif
 ```
 
 ## Copy mode

@@ -56,9 +56,12 @@ the session named Mobile whose swipe discussion came later.
 - **Left out:** tool output, reasoning, images. Tool-output records are recognised by their first
   kilobyte and skipped unparsed. Across all 76 real transcripts, asks, answers, turn times and
   offsets come out identical with and without the skip.
+- **Beyond the normalizer (Claude):** a message typed while the agent works is written as a
+  `queued_command` attachment, and a `/goal` only as the meta line that turns its Stop hook on.
+  The live view leaves both out, so the index reads them itself.
 - **Cleaned:** harness wrappers removed, whitespace folded, secrets blanked with the CLI's
-  redactor, encoded blobs dropped. Asks are capped at 8 KB, answers at 12 KB (head and tail kept),
-  tool text at 4 KB.
+  redactor, encoded blobs dropped. Asks are capped at 8 KB. A row holds up to 12 KB of answer and
+  4 KB of tool text; a longer turn goes on in continuation rows, split between lines.
 
 ### Keeping it fresh
 
@@ -229,6 +232,89 @@ What it found, all fixed:
 Also by design: a leading `#` in Cmd-P opens projects, so type issue numbers without it ("issue
 189", "pr #368").
 
+## Tested live
+
+On 2026-09-27 main's daemon replaced the development Mac's real one: the machine's own sessions,
+live, with the app attached. The index built in about 12 s, including a 346 MB Codex rollout. It
+found three things the sandbox runs could not, because they come from long, busy sessions:
+
+- **Messages typed mid-turn were lost.** Claude Code writes them as `queued_command` attachments,
+  which the normalizer skips. There were 405 of them on this machine. The one asking "keyword or
+  vectors or embeddings?" is what this project was built on, and it was not findable.
+- **A `/goal` was lost** the same way: it exists only in the meta line that activates the goal.
+- **The middle of a long turn was lost.** The overnight turn that built this kept its first 3 KB
+  and last 9 KB of answer, so "fts5 bm25" found nothing in it. Continuation rows keep all of it.
+
+On one machine's sessions, the fixes took the index from 1,851 to 2,376 rows and from 12 MB to
+17 MB. The first build takes 5.5 s, and its longest stall is 38–47 ms once a long first pass
+writes 32 rows per transaction (130 ms in one). On one query set drawn from the old index, accuracy
+is unchanged (two rare words 88% → 88%, answer words 99% → 99%, prefixes 71% → 72%, one word 62% →
+58%). That set can only ask about what both indexes hold; the gains are in what the old one did not.
+
+The live run also showed the daemon crash-looping out of memory, which is not search: after a
+restart, the first `SessionStart` from a long session replayed its whole transcript live (3,553
+events from the 346 MB rollout). The replay was meant only for a first turn announced before its
+file existed. This machine's log has 28 out-of-memory crashes since 2026-09-23, on every build
+including the v0.3.1 release. It is fixed separately.
+
+## The preview
+
+⌘P's preview shows the selected session the way its terminal does: bottom-anchored, newest turn at
+the bottom, scrolled up for older ones (shift-↑/↓, page up/down), like fzf's `--preview` showing
+the file itself rather than a summary. The daemon serves it from the same index (`session_tail`),
+so a preview reads no transcript: 0.4 ms for a real session's last page, 1–20 ms over the local
+socket, about 0.4 s from another machine over the relay.
+
+- **The last ~16,000 characters**, about five screens, then 16,000 more each time the list nears
+  its top. A session is fetched once per ⌘P opening, when its row is selected; nothing refreshes
+  while ⌘P stays open, not even for a working agent. The app keeps the last 20 sessions previewed
+  and warms the next two rows while one is selected.
+- **The latest ask stays in view.** After a long autonomous turn it is many rows up, so it is
+  pinned above the turns whenever its own line is not showing.
+- **An older match says where it was** ("Matched earlier · 1d ago") above the turns, and the
+  searched words are bold in them.
+- **A working agent's turn so far** is included: the request brings that session's index up to
+  date first, waiting at most 400 ms. A question waiting on the person sits below the latest turn.
+- **Stored text keeps its line breaks and indentation** so answers read as written; search folds
+  them. Claude Code's label and 800-character instruction around another agent's message are
+  dropped: they were never said in the conversation. Schema 7 rebuilds each index once.
+- Group rows, and machines whose CLI predates `session_tail`, keep the excerpt preview.
+
+## Conversations Harness did not start
+
+⌘P also finds Claude Code and Codex conversations run in a terminal or in the engines' own apps, and
+Enter opens one as a harness resuming it (`lib/sessionSearch/external.ts`).
+
+- **Found on disk.** Every local Codex session, whether from the terminal, the Codex app or a
+  script, is a rollout under `~/.codex/sessions/YYYY/MM/DD/`. Its first line says who wrote it:
+  `source` `cli` (terminal) or `vscode` (the Codex app, `originator` "Codex Desktop", and the
+  editors). Thread names are in `~/.codex/session_index.jsonl`. Claude Code's are under
+  `~/.claude/projects/<folder>/`, with `entrypoint` `cli` or `claude-desktop`. Claude's title is
+  the latest `ai-title` in the transcript, unless the person renamed it (`custom-title`).
+- **Only what a person started.** Codex `exec` runs (scripts), sub-agent threads, and Claude's
+  `sdk-cli` sessions (programs, Harness's own summaries among them) are left out. On one machine:
+  about 210 of 1,227 files, plus a session any Harness agent already has is skipped.
+- **Shown only when a search matches one**, marked `not in Harness`, and previewed like any session.
+- **Open elsewhere** is known exactly. A running Claude Code keeps `~/.claude/sessions/<pid>.json`
+  naming its session, and a running Codex holds its rollout open (`lsof`). ⌘P will not open one
+  that is still open, and the daemon checks again before it resumes.
+- **Resuming** is `agent_create` with `resumeSessionId`: a new pane runs `claude --resume <id>` or
+  `codex resume <id>` in the session's own folder, named after its title. It is refused if the
+  session is open elsewhere, is already a harness, or its folder is gone (Codex app threads live in
+  folders people tidy away).
+- ChatGPT conversations and Codex cloud tasks are not on disk, so they cannot be found.
+- **The welcome page lists them too.** An empty tab shows up to nine rows beside its shortcuts,
+  numbered like the terminal client's home: the harnesses you were just with and these
+  conversations from every machine (a `session_search` with the last 30 days and no words), each
+  just a name and an age. A narrow window puts the shortcuts under the list; with nothing to offer
+  the page is the shortcuts alone. A new user's first screen is their existing Claude Code and
+  Codex work, one key away.
+
+Checked on one machine's real folders through a sandboxed daemon: the Codex app's threads and
+terminal sessions were found by what was said in them. A session open in a terminal was refused.
+Stand-in engines confirmed the resume launch (`codex resume <id>`, `claude --resume <id>`, each in
+its session's folder); no real conversation was touched.
+
 ## Protocol
 
 `session_search { query, limit, from?, to? }` → `{ hits: [{ agentId, sessionId, engine, turn, at,
@@ -241,14 +327,18 @@ ms.
   and the device must re-derive from the new `core.ts`.
 - A Node without `node:sqlite` answers `SEARCH_UNAVAILABLE`.
 
+`session_tail { sessionId, beforeTurn?, maxChars? }` → `{ sessionId, rows: [{ turn, at, ask,
+answer, tools }], hasMore, total, lastAt, lastAsk? }`: a session's latest rows, oldest first, up to
+16,000 characters (64,000 at most). `beforeTurn` pages up from the first row the client has, and
+`lastAsk` (the latest row with an ask) comes with the last page. It is in the same E2EE sets, which
+re-pinned the keystone again. `NOT_INDEXED` for a session the index does not hold.
+
 `harness search <words> [--limit N] [--json]` reads the same index from a shell, and reads the same
 time phrases (`harness search dial last week`). It is read-only: it never migrates or deletes the
 index the daemon owns.
 
 ## Not yet
 
-- **Sessions started outside Harness** (plain `claude`, `codex`) could be indexed too, so any past
-  conversation on the machine can be found and resumed.
 - **Untitled sessions** ("Claude harness 9-26 13:41") are now found by their content, but a
   generated title from the first ask would help the name match as well.
 - **A natural-language "ask" mode** for fuzzy memory ("the one last week where we fixed dial

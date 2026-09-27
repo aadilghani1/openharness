@@ -1,7 +1,9 @@
 //! The terminal hn draws on: ratatui's crossterm backend, with colours written as tmux writes
 //! them — the eight colours and their bright forms as SGR 30–37, 90–97 (40–47, 100–107 behind),
-//! `colourN` as 38;5;N, RGB as 38;2;R;G;B — where crossterm writes every colour as 38;5;N, which
-//! an eight-colour terminal (the Linux console) does not read. Everything else is crossterm's.
+//! and so `colour0`–`colour15` too (terminfo's setaf/setab do that for the first sixteen),
+//! `colourN` past them as 38;5;N, RGB as 38;2;R;G;B — where crossterm writes every colour as
+//! 38;5;N, which an eight-colour terminal (the Linux console) does not read. Everything else is
+//! crossterm's.
 
 use std::io::{self, Write};
 
@@ -10,7 +12,79 @@ use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
 use ratatui::style::{Color, Modifier};
 
-pub struct TmuxBackend<W: Write> { inner: CrosstermBackend<W> }
+/// [shadow]: every cell as last written, row by row — so a row whose width the terminal may
+/// count otherwise can be written again whole.
+pub struct TmuxBackend<W: Write> {
+    inner: CrosstermBackend<W>,
+    shadow: Vec<Vec<Cell>>,
+    /// A frame's changes are one synchronized update (?2026), closed at its flush.
+    syncing: bool,
+    /// The cursor as last written: a frame that changes nothing writes nothing (an idle hn is
+    /// silent, as tmux is — a terminal's or an outer tmux's activity mark stays clear).
+    cursor_at: Option<Position>,
+    cursor_shown: Option<bool>,
+}
+
+/// A cluster whose width terminals may count otherwise than hn does: several code points (a
+/// base and its marks, ZWJ emoji, a keycap, VS16), or a script whose vowels some count as
+/// spacing and some as combining (Thai, Lao, Tibetan, Myanmar, Khmer).
+fn risky(symbol: &str) -> bool {
+    let mut n = 0;
+    for c in symbol.chars() {
+        n += 1;
+        if n > 1 { return true }
+        let u = c as u32;
+        if (0x0E00..=0x0FFF).contains(&u) || (0x1000..=0x109F).contains(&u) || (0x1780..=0x17FF).contains(&u) { return true }
+    }
+    false
+}
+
+/// What the terminal was last told: colours, attributes, the underline's style, the open link.
+struct Pen { fg: Color, bg: Color, ul: Color, modifier: Modifier, style: u8, link: Option<std::sync::Arc<str>> }
+
+impl Pen {
+    fn new() -> Pen { Pen { fg: Color::Reset, bg: Color::Reset, ul: Color::Reset, modifier: Modifier::empty(), style: 0, link: None } }
+
+    /// A cell's attributes (as tmux's tty_attributes writes them) and its symbol.
+    fn put(&mut self, w: &mut impl Write, cell: &Cell, extra: Option<&Extra>, usstyle: bool, links: bool) -> io::Result<()> {
+        // The colours fitted to the terminal (tty_check_fg / _bg): a bright foreground where
+        // there are only 8 colours is its plain colour, bold.
+        let (fg, bold) = fit_bright(cell.fg);
+        let (bg, ul) = (fit(cell.bg), fit(cell.underline_color));
+        let modifier = if bold { cell.modifier | Modifier::BOLD } else { cell.modifier };
+        if modifier != self.modifier {
+            // tmux's tty_attributes: an attribute taken away resets everything, then what is
+            // wanted is set again.
+            if !(self.modifier - modifier).is_empty() {
+                w.write_all(b"\x1b[0m")?;
+                (self.fg, self.bg, self.ul, self.modifier, self.style) = (Color::Reset, Color::Reset, Color::Reset, Modifier::empty(), 0);
+            }
+            for (flag, code) in ATTRS { if modifier.contains(flag) && !self.modifier.contains(flag) { write!(w, "\x1b[{code}m")?; if code == 4 { self.style = 1 } } }
+            self.modifier = modifier;
+        }
+        // tty_attributes' Smulx: a curly (double, dotted, dashed) underline where the
+        // terminal reads one, else a plain one.
+        let want = if !cell.modifier.contains(Modifier::UNDERLINED) { 0 } else if usstyle { extra.map(|e| e.underline).filter(|u| *u >= 2).unwrap_or(1) } else { 1 };
+        if want != self.style && want > 0 { if want == 1 { w.write_all(b"\x1b[4:1m")? } else { write!(w, "\x1b[4:{want}m")? } self.style = want }
+        if fg != self.fg { write!(w, "\x1b[{}m", sgr(fg, 30))?; self.fg = fg; }
+        if bg != self.bg { write!(w, "\x1b[{}m", sgr(bg, 40))?; self.bg = bg; }
+        if usstyle && ul != self.ul { write!(w, "\x1b[{}m", sgr_underline(ul))?; self.ul = ul; }
+        // A link (OSC 8) opened where it starts and closed where it ends.
+        let want_link = if links { extra.and_then(|e| e.link.clone()) } else { None };
+        if want_link != self.link {
+            match &want_link { Some(uri) => write!(w, "\x1b]8;;{uri}\x1b\\")?, None => w.write_all(b"\x1b]8;;\x1b\\")? }
+            self.link = want_link;
+        }
+        w.write_all(cell.symbol().as_bytes())
+    }
+
+    /// Everything back to the terminal's defaults (and so known).
+    fn reset(&mut self, w: &mut impl Write) -> io::Result<()> {
+        if self.link.is_some() { w.write_all(b"\x1b]8;;\x1b\\")? }
+        *self = Pen::new();
+        w.write_all(b"\x1b[0m")
+    }
+}
 
 /// What a pane's cell carries that ratatui's cell cannot: its underline's style (2 double, 3
 /// curly, 4 dotted, 5 dashed — tmux's 4:N) and its link (OSC 8). Kept by position for the frame
@@ -52,12 +126,139 @@ pub fn outer_features(features: &[String]) -> (bool, bool) {
 }
 
 impl<W: Write> TmuxBackend<W> {
-    pub fn new(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer) } }
+    pub fn new(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), syncing: false, cursor_at: None, cursor_shown: None } }
+
+    fn row_risky(&self, y: u16) -> bool { self.shadow.get(y as usize).map(|r| r.iter().any(|c| risky(c.symbol()))).unwrap_or(false) }
+
+    fn remember(&mut self, x: u16, y: u16, cell: &Cell) {
+        let (x, y) = (x as usize, y as usize);
+        if self.shadow.len() <= y { self.shadow.resize(y + 1, Vec::new()) }
+        // (A wide cluster covers the cells after it: ratatui blanks them and sends none.)
+        let wide = unicode_width::UnicodeWidthStr::width(cell.symbol()).max(1);
+        let row = &mut self.shadow[y];
+        if row.len() < x + wide { row.resize(x + wide, Cell::default()) }
+        row[x] = cell.clone();
+        for c in &mut row[x + 1..x + wide] { *c = Cell::default() }
+    }
+}
+
+/// What has been written to the terminal, in bytes (#{client_written}).
+pub static WRITTEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The terminal's writer, its bytes counted.
+pub struct Counted<W: Write>(pub W);
+
+impl<W: Write> Write for Counted<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.0.write(buf)?;
+        WRITTEN.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+        Ok(n)
+    }
+    fn flush(&mut self) -> io::Result<()> { self.0.flush() }
 }
 
 impl<W: Write> Write for TmuxBackend<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> { self.inner.write(buf) }
     fn flush(&mut self) -> io::Result<()> { Write::flush(&mut self.inner) }
+}
+
+/// The mouse modes tmux asks the terminal for (tty_update_mode): presses, drags and SGR (1000,
+/// 1002, 1006) — and every motion (1003) only while a pane or a menu wants it. 0 off, 1 on, 2 all.
+pub struct Mouse(pub u8);
+
+impl crossterm::Command for Mouse {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        f.write_str(match self.0 { 0 => "\x1b[?1006l\x1b[?1000l\x1b[?1002l\x1b[?1003l", 1 => "\x1b[?1003l\x1b[?1006h\x1b[?1000h\x1b[?1002h", _ => "\x1b[?1006h\x1b[?1000h\x1b[?1002h\x1b[?1003h" })
+    }
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> io::Result<()> { Ok(()) }
+}
+
+/// How many colours the terminal shows, as tmux reads it (terminfo's colors; 24-bit with RGB):
+/// 0, 8, 16, 256, or 1 << 24.
+static COLOURS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1 << 24);
+
+pub fn set_colours(n: u32) { COLOURS.store(n, std::sync::atomic::Ordering::Relaxed) }
+
+/// The terminal's colours from its name and what it says of itself, and what the config says of
+/// it: 24-bit with COLORTERM truecolor or 24bit, a `-direct` terminal, or terminal-features' RGB
+/// (terminal-overrides' Tc or RGB) for its name — and for a 256-colour one, which tmux asks what
+/// it is (XDA) and finds 24-bit in every such terminal it knows (iTerm2, kitty, WezTerm, Ghostty,
+/// foot, tmux…); hn cannot ask, so takes it at that, except Terminal.app, which does not answer
+/// and gets the 256. Else 16 for a 16-colour one, 8 for xterm, screen, linux and their kin, none
+/// for vt100 and dumb.
+pub fn colours_for(term: &str, colorterm: &str, features: &[String], overrides: &[String]) -> u32 {
+    let apple = std::env::var("TERM_PROGRAM").as_deref() == Ok("Apple_Terminal");
+    let says = |list: &[String], caps: &[&str]| list.iter().any(|f| {
+        let mut parts = f.split(':');
+        let pat = parts.next().unwrap_or("");
+        crate::cmd::fnmatch(pat, term) && parts.any(|c| caps.contains(&c.split('=').next().unwrap_or(c)))
+    });
+    if matches!(colorterm, "truecolor" | "24bit") || term.ends_with("-direct") || says(features, &["RGB"]) || says(overrides, &["Tc", "RGB"]) { return 1 << 24 }
+    if term.contains("256color") || matches!(term, "xterm-kitty" | "xterm-ghostty" | "alacritty" | "wezterm" | "foot") { return if apple { 256 } else { 1 << 24 } }
+    if term.contains("16color") { return 16 }
+    if term.is_empty() { return 256 }
+    if matches!(term, "vt100" | "vt102" | "vt220" | "dumb") { return 0 }
+    8
+}
+
+/// tmux's colour_find_rgb: the nearest of the 256 (the 6x6x6 cube, or the grey ramp).
+fn find_rgb(r: u8, g: u8, b: u8) -> u8 {
+    const Q2C: [i32; 6] = [0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff];
+    let cube = |v: i32| if v < 48 { 0 } else if v < 114 { 1 } else { (v - 35) / 40 };
+    let (r, g, b) = (r as i32, g as i32, b as i32);
+    let (qr, qg, qb) = (cube(r), cube(g), cube(b));
+    let (cr, cg, cb) = (Q2C[qr as usize], Q2C[qg as usize], Q2C[qb as usize]);
+    if cr == r && cg == g && cb == b { return (16 + 36 * qr + 6 * qg + qb) as u8 }
+    let avg = (r + g + b) / 3;
+    let grey_idx = if avg > 238 { 23 } else { (avg - 3) / 10 };
+    let grey = 8 + 10 * grey_idx;
+    let dist = |x: i32, y: i32, z: i32| (x - r) * (x - r) + (y - g) * (y - g) + (z - b) * (z - b);
+    if dist(grey, grey, grey) < dist(cr, cg, cb) { (232 + grey_idx) as u8 } else { (16 + 36 * qr + 6 * qg + qb) as u8 }
+}
+
+/// tmux's colour_256to16.
+const TO16: [u8; 256] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    0, 4, 4, 4, 12, 12, 2, 6, 4, 4, 12, 12, 2, 2, 6, 4,
+    12, 12, 2, 2, 2, 6, 12, 12, 10, 10, 10, 10, 14, 12, 10, 10,
+    10, 10, 10, 14, 1, 5, 4, 4, 12, 12, 3, 8, 4, 4, 12, 12,
+    2, 2, 6, 4, 12, 12, 2, 2, 2, 6, 12, 12, 10, 10, 10, 10,
+    14, 12, 10, 10, 10, 10, 10, 14, 1, 1, 5, 4, 12, 12, 1, 1,
+    5, 4, 12, 12, 3, 3, 8, 4, 12, 12, 2, 2, 2, 6, 12, 12,
+    10, 10, 10, 10, 14, 12, 10, 10, 10, 10, 10, 14, 1, 1, 1, 5,
+    12, 12, 1, 1, 1, 5, 12, 12, 1, 1, 1, 5, 12, 12, 3, 3,
+    3, 7, 12, 12, 10, 10, 10, 10, 14, 12, 10, 10, 10, 10, 10, 14,
+    9, 9, 9, 9, 13, 12, 9, 9, 9, 9, 13, 12, 9, 9, 9, 9,
+    13, 12, 9, 9, 9, 9, 13, 12, 11, 11, 11, 11, 7, 12, 10, 10,
+    10, 10, 10, 14, 9, 9, 9, 9, 9, 13, 9, 9, 9, 9, 9, 13,
+    9, 9, 9, 9, 9, 13, 9, 9, 9, 9, 9, 13, 9, 9, 9, 9,
+    9, 13, 11, 11, 11, 11, 11, 15, 0, 0, 0, 0, 0, 0, 8, 8,
+    8, 8, 8, 8, 7, 7, 7, 7, 7, 7, 15, 15, 15, 15, 15, 15,
+];
+
+/// A colour fitted to the terminal, as tty_check_fg / _bg fit it: 24-bit to the nearest of the
+/// 256 where there is no 24-bit; 256 to 16 where there are fewer, the bright ones the aixterm
+/// ones — or their plain colours where there are only 8; none at all where there is none.
+pub fn fit(c: Color) -> Color { fit_bright(c).0 }
+
+/// [fit], and whether a bright colour became a plain one (a foreground is then bold).
+fn fit_bright(c: Color) -> (Color, bool) {
+    let colours = COLOURS.load(std::sync::atomic::Ordering::Relaxed);
+    if colours == 0 { return (Color::Reset, false) }
+    let c = match c { Color::Rgb(r, g, b) if colours < (1 << 24) => Color::Indexed(find_rgb(r, g, b)), c => c };
+    if colours >= 256 { return (c, false) }
+    let plain = [Color::Black, Color::Red, Color::Green, Color::Yellow, Color::Blue, Color::Magenta, Color::Cyan, Color::Gray];
+    let bright = [Color::DarkGray, Color::LightRed, Color::LightGreen, Color::LightYellow, Color::LightBlue, Color::LightMagenta, Color::LightCyan, Color::White];
+    match c {
+        // One of the 256: its nearest of the 16, a bright one plain where there are 8.
+        Color::Indexed(n) => {
+            let n = TO16[n as usize] as usize;
+            (if n < 8 { plain[n] } else if colours >= 16 { bright[n - 8] } else { plain[n - 8] }, false)
+        }
+        // An aixterm colour (90–97) where there are 8: its plain colour, bright (bold).
+        c => match bright.iter().position(|b| *b == c) { Some(n) if colours < 16 => (plain[n], true), _ => (c, false) },
+    }
 }
 
 /// A colour's SGR parameters as tmux's tty_colours_fg / _bg write them ([base] 30, 40 or 58).
@@ -70,6 +271,9 @@ fn sgr(c: Color, base: u16) -> String {
         Color::Blue => named(4), Color::Magenta => named(5), Color::Cyan => named(6), Color::Gray => named(7),
         Color::DarkGray => bright(0), Color::LightRed => bright(1), Color::LightGreen => bright(2), Color::LightYellow => bright(3),
         Color::LightBlue => bright(4), Color::LightMagenta => bright(5), Color::LightCyan => bright(6), Color::White => bright(7),
+        // setaf's `%p1%{8}%<%t3%p1%d%e%p1%{16}%<%t9%p1%{8}%-%d%e38;5;%p1%d`.
+        Color::Indexed(n) if n < 8 && base != 58 => named(n as u16),
+        Color::Indexed(n) if n < 16 && base != 58 => bright(n as u16 - 8),
         Color::Indexed(n) => format!("{};5;{n}", base + 8),
         Color::Rgb(r, g, b) => format!("{};2;{r};{g};{b}", base + 8),
     }
@@ -101,59 +305,73 @@ impl<W: Write> Backend for TmuxBackend<W> {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
-        // CrosstermBackend writes through to its writer.
-        let w = &mut self.inner;
+        let cells: Vec<(u16, u16, Cell)> = content.map(|(x, y, c)| (x, y, c.clone())).collect();
+        // Nothing changed: nothing written.
+        if cells.is_empty() { return Ok(()) }
+        if !self.syncing { self.inner.write_all(b"\x1b[?2026h")?; self.syncing = true }
+        // (The cells move the terminal's cursor: where it is must be said again after them.)
+        self.cursor_at = None;
+        // A row that holds (or held) a cluster the terminal may count otherwise is written again
+        // whole from its first column, as fzf writes a line: a cell-by-cell update there would
+        // leave a stale character where the two counts part (a Thai vowel beside a keycap).
+        let touched: std::collections::BTreeSet<u16> = cells.iter().map(|c| c.1).collect();
+        let was: std::collections::HashSet<u16> = touched.iter().copied().filter(|y| self.row_risky(*y)).collect();
+        for (x, y, c) in &cells { self.remember(*x, *y, c) }
+        let whole: std::collections::BTreeSet<u16> = touched.into_iter().filter(|y| was.contains(y) || self.row_risky(*y)).collect();
         let frame = FRAME.lock().ok();
         let frame = frame.as_ref().and_then(|f| f.as_ref());
         let (usstyle, links) = frame.map(|f| (f.usstyle, f.links)).unwrap_or((false, false));
-        let (mut fg, mut bg, mut ul, mut modifier) = (Color::Reset, Color::Reset, Color::Reset, Modifier::empty());
-        // The underline's style as written (0 none, 1 plain, 2… tmux's 4:N), and the open link.
-        let (mut style, mut link): (u8, Option<std::sync::Arc<str>>) = (0, None);
+        let extra_at = |x: u16, y: u16| frame.and_then(|f| f.extras.get(&(x, y)));
+        // CrosstermBackend writes through to its writer.
+        let w = &mut self.inner;
+        let mut pen = Pen::new();
         let mut last: Option<(u16, u16)> = None;
-        for (x, y, cell) in content {
+        for (x, y, cell) in cells.iter().filter(|c| !whole.contains(&c.1)) {
             // The cursor moves only where the cells do not follow on.
-            if !matches!(last, Some((lx, ly)) if x == lx + 1 && y == ly) { write!(w, "\x1b[{};{}H", y + 1, x + 1)?; }
-            last = Some((x, y));
-            let extra = frame.and_then(|f| f.extras.get(&(x, y)));
-            if cell.modifier != modifier {
-                // tmux's tty_attributes: an attribute taken away resets everything, then what is
-                // wanted is set again.
-                if !(modifier - cell.modifier).is_empty() {
-                    w.write_all(b"\x1b[0m")?;
-                    (fg, bg, ul, modifier, style) = (Color::Reset, Color::Reset, Color::Reset, Modifier::empty(), 0);
-                }
-                for (flag, code) in ATTRS { if cell.modifier.contains(flag) && !modifier.contains(flag) { write!(w, "\x1b[{code}m")?; if code == 4 { style = 1 } } }
-                modifier = cell.modifier;
-            }
-            // tty_attributes' Smulx: a curly (double, dotted, dashed) underline where the
-            // terminal reads one, else a plain one.
-            let want = if !cell.modifier.contains(Modifier::UNDERLINED) { 0 } else if usstyle { extra.map(|e| e.underline).filter(|u| *u >= 2).unwrap_or(1) } else { 1 };
-            if want != style && want > 0 { if want == 1 { w.write_all(b"\x1b[4:1m")? } else { write!(w, "\x1b[4:{want}m")? } style = want }
-            if cell.fg != fg { write!(w, "\x1b[{}m", sgr(cell.fg, 30))?; fg = cell.fg; }
-            if cell.bg != bg { write!(w, "\x1b[{}m", sgr(cell.bg, 40))?; bg = cell.bg; }
-            if usstyle && cell.underline_color != ul { write!(w, "\x1b[{}m", sgr_underline(cell.underline_color))?; ul = cell.underline_color; }
-            // A link (OSC 8) opened where it starts and closed where it ends.
-            let want_link = if links { extra.and_then(|e| e.link.clone()) } else { None };
-            if want_link != link {
-                match &want_link { Some(uri) => write!(w, "\x1b]8;;{uri}\x1b\\")?, None => w.write_all(b"\x1b]8;;\x1b\\")? }
-                link = want_link;
-            }
-            w.write_all(cell.symbol().as_bytes())?;
+            if !matches!(last, Some((lx, ly)) if *x == lx + 1 && *y == ly) { write!(w, "\x1b[{};{}H", y + 1, x + 1)?; }
+            last = Some((*x, *y));
+            pen.put(w, cell, extra_at(*x, *y), usstyle, links)?;
         }
-        if link.is_some() { w.write_all(b"\x1b]8;;\x1b\\")? }
+        for y in whole {
+            let Some(row) = self.shadow.get(y as usize) else { continue };
+            write!(w, "\x1b[{};1H", y + 1)?;
+            pen.reset(w)?;
+            w.write_all(b"\x1b[2K")?;
+            let (mut skip, mut placed) = (0usize, true);
+            for (x, cell) in row.iter().enumerate() {
+                if skip > 0 { skip -= 1; continue }
+                // After a cluster the terminal may have counted otherwise, the next cell goes
+                // where hn counts it.
+                if !placed { write!(w, "\x1b[{};{}H", y + 1, x + 1)?; }
+                pen.put(w, cell, extra_at(x as u16, y), usstyle, links)?;
+                skip = unicode_width::UnicodeWidthStr::width(cell.symbol()).saturating_sub(1);
+                placed = !risky(cell.symbol());
+            }
+        }
+        if pen.link.is_some() { w.write_all(b"\x1b]8;;\x1b\\")? }
         w.write_all(b"\x1b[39m\x1b[49m\x1b[59m\x1b[0m")
     }
 
-    fn hide_cursor(&mut self) -> io::Result<()> { self.inner.hide_cursor() }
-    fn show_cursor(&mut self) -> io::Result<()> { self.inner.show_cursor() }
-    fn get_cursor_position(&mut self) -> io::Result<Position> { self.inner.get_cursor_position() }
-    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> { self.inner.set_cursor_position(position) }
-    fn clear(&mut self) -> io::Result<()> { self.inner.clear() }
-    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> { self.inner.clear_region(clear_type) }
+    fn hide_cursor(&mut self) -> io::Result<()> { if self.cursor_shown == Some(false) { return Ok(()) } self.cursor_shown = Some(false); self.inner.hide_cursor() }
+    fn show_cursor(&mut self) -> io::Result<()> { if self.cursor_shown == Some(true) { return Ok(()) } self.cursor_shown = Some(true); self.inner.show_cursor() }
+    // (Never asked of the terminal — \e[6n and a wait for its answer: hn draws the whole screen,
+    // and a terminal slow to answer, or one that never does, must not stop it starting.)
+    fn get_cursor_position(&mut self) -> io::Result<Position> { Ok(Position::ORIGIN) }
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+        let p = position.into();
+        if self.cursor_at == Some(p) { return Ok(()) }
+        self.cursor_at = Some(p);
+        self.inner.set_cursor_position(p)
+    }
+    fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.cursor_at = None; self.cursor_shown = None; self.inner.clear() }
+    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> { if matches!(clear_type, ClearType::All) { self.shadow.clear() } self.inner.clear_region(clear_type) }
     fn append_lines(&mut self, n: u16) -> io::Result<()> { self.inner.append_lines(n) }
     fn size(&self) -> io::Result<Size> { self.inner.size() }
     fn window_size(&mut self) -> io::Result<WindowSize> { self.inner.window_size() }
-    fn flush(&mut self) -> io::Result<()> { Backend::flush(&mut self.inner) }
+    fn flush(&mut self) -> io::Result<()> {
+        if std::mem::take(&mut self.syncing) { self.inner.write_all(b"\x1b[?2026l")? }
+        Backend::flush(&mut self.inner)
+    }
 }
 
 #[cfg(test)]
@@ -162,12 +380,25 @@ mod tests {
 
     #[test]
     fn colours_as_tmux_writes_them() {
+        assert_eq!(super::find_rgb(255, 128, 0), 208);
+        assert_eq!(super::find_rgb(0, 64, 128), 24);
+        assert_eq!(super::TO16[208], 9);
+        assert_eq!(super::colours_for("xterm-16color", "", &[], &[]), 16);
+        assert_eq!(super::colours_for("xterm-256color", "truecolor", &[], &[]), 1 << 24);
+        assert_eq!(super::colours_for("xterm-256color", "", &["xterm*:RGB".to_string()], &[]), 1 << 24);
+        assert_eq!(super::colours_for("xterm", "", &[], &[]), 8);
+        assert_eq!(super::colours_for("vt100", "", &[], &[]), 0);
         assert_eq!(sgr(Color::Red, 30), "31");
         assert_eq!(sgr(Color::Green, 40), "42");
         assert_eq!(sgr(Color::LightBlue, 30), "94");
         assert_eq!(sgr(Color::White, 40), "107");
         assert_eq!(sgr(Color::Reset, 40), "49");
-        assert_eq!(sgr(Color::Indexed(1), 30), "38;5;1");
+        // The first sixteen of the 256 as terminfo's setaf/setab write them (\e[38;5;1m → 31).
+        assert_eq!(sgr(Color::Indexed(1), 30), "31");
+        assert_eq!(sgr(Color::Indexed(9), 30), "91");
+        assert_eq!(sgr(Color::Indexed(4), 40), "44");
+        assert_eq!(sgr(Color::Indexed(12), 40), "104");
+        assert_eq!(sgr(Color::Indexed(16), 30), "38;5;16");
         assert_eq!(sgr(Color::Rgb(1, 2, 3), 40), "48;2;1;2;3");
     }
 }

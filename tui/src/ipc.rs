@@ -23,6 +23,10 @@ static HERE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 /// Set while this client runs a command another client passed it: it asks no client in turn (two
 /// clients each waiting on the other would freeze both).
 static FORWARDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Where commands are handed to the app loop (claim_name's listener too), and whether this client
+/// has taken the name's socket.
+static SINK: std::sync::OnceLock<mpsc::UnboundedSender<Event>> = std::sync::OnceLock::new();
+static CLAIMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub fn forwarded() -> bool { FORWARDED.load(std::sync::atomic::Ordering::Relaxed) }
 pub fn here() -> Option<PathBuf> { HERE.get().cloned() }
 
@@ -57,6 +61,13 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
     // Which daemon this client talks to, beside its socket: `hn -L name list-harnesses` asks that
     // one, never another it happens to find on the default port.
     let _ = std::fs::write(path.with_extension("port"), port.to_string());
+    let _ = SINK.set(sink.clone());
+    accept(listener, sink);
+    Some(path)
+}
+
+/// Each connection's command run on the app loop, its output sent back.
+fn accept(listener: tokio::net::UnixListener, sink: mpsc::UnboundedSender<Event>) {
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
             let sink = sink.clone();
@@ -101,7 +112,28 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
             });
         }
     });
-    Some(path)
+}
+
+/// The name's socket (`work.sock`) when no client answers there any more — its client gone, or
+/// hn with no terminal handed over — taken by this one beside its own, so `-S …/work.sock` and
+/// `-L work` keep reaching the server, as tmux's one socket does. (Checked every two seconds.)
+pub fn claim_name() {
+    if CLAIMED.load(std::sync::atomic::Ordering::Relaxed) { return }
+    let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
+    let primary = dir().join(format!("{name}.sock"));
+    if here().as_deref() == Some(primary.as_path()) || answers(&primary) { return }
+    let Some(sink) = SINK.get().cloned() else { return };
+    let Some(_held) = lock(&primary) else { return };
+    // (Another client may have taken it while this one waited for the lock.)
+    if answers(&primary) { return }
+    let _ = std::fs::remove_file(&primary);
+    let Ok(std_listener) = std::os::unix::net::UnixListener::bind(&primary) else { return };
+    let _ = std_listener.set_nonblocking(true);
+    let Ok(listener) = tokio::net::UnixListener::from_std(std_listener) else { return };
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&primary, std::fs::Permissions::from_mode(0o600)); }
+    if let Some(port) = here().and_then(|h| std::fs::read_to_string(h.with_extension("port")).ok()) { let _ = std::fs::write(primary.with_extension("port"), port); }
+    CLAIMED.store(true, std::sync::atomic::Ordering::Relaxed);
+    accept(listener, sink);
 }
 
 /// Another client told something (hn-server-sync, hn-mirror-refresh): sent, and its answer
@@ -126,16 +158,34 @@ pub fn notify_now(peer: &std::path::Path, words: &[String]) {
 /// What hn's jobs (run-shell, if-shell, #(), copy-pipe) run with, as tmux's run with TMUX set:
 /// HN_SOCKET naming this client, TMUX saying they run under one, and a `tmux` on the PATH that
 /// is hn — so a script's (or a plugin's) `tmux …` reaches this client, never a tmux server.
-pub fn job_env() -> Vec<(String, String)> {
+pub fn job_env() -> Vec<(String, String)> { job_env_with(&std::env::var("PATH").unwrap_or_default()) }
+
+/// job_env over the PATH [path] (the server's, set-environment's).
+pub fn job_env_with(path: &str) -> Vec<(String, String)> {
     let mut env = Vec::new();
     let Some(sock) = here() else { return env };
     env.push(("HN_SOCKET".into(), sock.display().to_string()));
     env.push(("TMUX".into(), format!("{},{},0", sock.display(), std::process::id())));
-    if let Some(bin) = shim() {
-        let path = std::env::var("PATH").unwrap_or_default();
-        env.push(("PATH".into(), format!("{}:{path}", bin.display())));
-    }
+    if let Some(bin) = shim() { env.push(("PATH".into(), format!("{}:{path}", bin.display()))); }
     env
+}
+
+/// A job's whole environment, as tmux's job_run gives one (environ_for_session): the server's
+/// global environment with the session's over it (a variable marked to go, gone), and job_env's
+/// on top. None while the global environment is not known (the process's is used then).
+pub fn job_environ(global: &std::collections::BTreeMap<String, crate::app::EnvVar>, session: &std::collections::BTreeMap<String, crate::app::EnvVar>) -> Option<Vec<(String, String)>> {
+    if global.is_empty() { return None }
+    let mut m: std::collections::BTreeMap<String, Option<String>> = global.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
+    for (k, v) in session { m.insert(k.clone(), v.value.clone()); }
+    let path = m.get("PATH").cloned().flatten().unwrap_or_default();
+    let mut out: Vec<(String, String)> = m.into_iter().filter_map(|(k, v)| v.map(|v| (k, v))).collect();
+    for (k, v) in job_env_with(&path) { out.retain(|(x, _)| *x != k); out.push((k, v)) }
+    Some(out)
+}
+
+/// A job's command given its environment: the whole of [env] when known, else job_env over hn's.
+pub fn set_job_env(c: &mut tokio::process::Command, env: &Option<Vec<(String, String)>>) {
+    match env { Some(e) => { c.env_clear(); c.envs(e.iter().cloned()); } None => { c.envs(job_env()); } }
 }
 
 /// The folder holding hn's `tmux` (made once): a script running this hn as tmux.
@@ -190,11 +240,15 @@ pub fn client_port(socket: Option<&str>, name: Option<&str>) -> Option<u16> {
 /// Which client to ask: -S path, -L name, $HN_SOCKET, $HN_SOCKET_NAME (what a client sets for
 /// what it runs, as tmux's $TMUX: a job's `hn …` reaches the client that ran it), else the newest.
 /// A name's first client, else another of its clients still running.
-fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
+pub fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
     // -S and -L say which, before $HN_SOCKET (a job's `tmux -L other ls` asks the other).
     if let Some(p) = socket { return Some(PathBuf::from(p)) }
     if let Some(n) = name { return Some(clients_of(n).into_iter().next().unwrap_or_else(|| dir().join(format!("{n}.sock")))) }
     if let Some(p) = std::env::var("HN_SOCKET").ok().filter(|s| !s.is_empty()) { return Some(PathBuf::from(p)) }
+    // $TMUX naming an hn socket (what hn's jobs run with; kept where $HN_SOCKET is not, by sudo
+    // or `env -i TMUX=…`): that client, as tmux takes its server from $TMUX. (A real tmux's
+    // socket is not hn's: hn's own are found as before.)
+    if let Some(p) = std::env::var("TMUX").ok().and_then(|t| t.split(',').next().map(PathBuf::from)).filter(|p| p.starts_with(dir())) { return Some(p) }
     let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty());
     if let Some(n) = name { return Some(clients_of(&n).into_iter().next().unwrap_or_else(|| dir().join(format!("{n}.sock")))) }
     if let Some(p) = clients_of("default").into_iter().next() { return Some(p) }
@@ -232,6 +286,13 @@ pub fn clients_of(name: &str) -> Vec<PathBuf> {
     more.sort();
     found.extend(more.into_iter().rev().map(|(_, p)| p).filter(|p| answers(p)));
     found
+}
+
+/// clients_of, less this process's own sockets (its own, and the name's when it took it).
+pub fn others_of(name: &str) -> Vec<PathBuf> {
+    let primary = dir().join(format!("{name}.sock"));
+    let claimed = CLAIMED.load(std::sync::atomic::Ordering::Relaxed);
+    clients_of(name).into_iter().filter(|p| Some(p) != here().as_ref() && !(claimed && *p == primary)).collect()
 }
 
 /// Whether a client is running where a command would go (its socket answers).
@@ -308,7 +369,7 @@ pub async fn call_at(path: &std::path::Path, words: &[String]) -> Option<i32> {
                 let (read, mut write) = stream.into_split();
                 let cwd = find_cwd();
                 // load-buffer - and source-file -: what is piped in goes with the command.
-                let reads_stdin = words.first().and_then(|w| crate::cmd::find(w).ok()).map(|e| matches!(e.name, "load-buffer" | "source-file")).unwrap_or(false) && words.iter().skip(1).any(|w| w == "-");
+                let reads_stdin = words.first().and_then(|w| crate::cmd::find(w).ok()).map(|e| matches!(e.name, "load-buffer" | "source-file")).unwrap_or(false) && words.iter().skip(1).any(|w| crate::commands::is_stdin(w));
                 let stdin = if reads_stdin { let mut s = String::new(); let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut s); Some(s) } else { None };
                 // From one of a client's own jobs (its $HN_SOCKET): that client is the command's client.
                 let inside = std::env::var("HN_SOCKET").map(|s| !s.is_empty()).unwrap_or(false);

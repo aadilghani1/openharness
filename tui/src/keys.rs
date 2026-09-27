@@ -154,7 +154,7 @@ impl Keymap {
         b(ch('B'), "command-prompt -p (broadcast) { broadcast \"%%\" }", false, "Send one message to every harness in this window");
         b(ch('R'), "confirm-before -p \"restart #T? (y/n)\" restart-harness", false, "Restart this harness");
         b(ch('P'), "confirm-before -p \"pause #T? (y/n)\" pause-harness", false, "Pause this harness (the conversation is kept)");
-        b(ch('K'), "clone-harness", false, "Clone this harness (a second one with its history)");
+        b(ch('K'), "confirm-before -p \"clone #T? (y/n)\" clone-harness", false, "Clone this harness (a second one with its history)");
         drop(b);
         // `/` is list-keys -1N in tmux (describe a key); here it is the far more used search. The
         // describe variant stays reachable through `?`.
@@ -404,6 +404,7 @@ pub enum Table { Prefix, Root, CopyVi, CopyEmacs }
 
 /// A key in tmux's spelling: `C-b`, `M-o`, `S-Up`, `%`, `Space`, `PPage`.
 pub fn name(chord: &Chord) -> String {
+    if *chord == NONE { return "None".into() }
     let mut out = String::new();
     if chord.mods.contains(KeyModifiers::CONTROL) { out.push_str("C-") }
     if chord.mods.contains(KeyModifiers::ALT) { out.push_str("M-") }
@@ -432,8 +433,12 @@ const KEYPAD: [&str; 16] = ["KP/", "KP*", "KP-", "KP7", "KP8", "KP9", "KP+", "KP
 /// A key as tmux writes it (`C-a`, `M-Left`, `S-Up`, `Space`, `\;`, `MouseDown1Pane`) or as a
 /// person does (`ctrl+a`) — tmux's key_string_lookup_string: modifiers in either case, `^x` for
 /// C-x, a key's name in any case.
+/// tmux's KEYC_NONE (`set -g prefix None`): a key no terminal sends, so nothing is the prefix.
+pub const NONE: Chord = Chord { code: KeyCode::F(255), mods: KeyModifiers::NONE };
+
 pub fn parse(text: &str) -> Result<Chord, String> {
     let raw = text.trim();
+    if raw == "None" { return Ok(NONE) }
     // A lone quote IS the key (`unbind '"'` arrives here as `"`).
     if raw.chars().count() == 1 { return Ok(Chord::normal(KeyCode::Char(raw.chars().next().unwrap()), KeyModifiers::NONE)) }
     // A quoted key ('"', "'") loses its quotes; M-' and M-" keep theirs.

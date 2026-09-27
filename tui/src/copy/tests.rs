@@ -12,7 +12,7 @@ impl T {
     fn new(text: &str, cols: u16, rows: u16, vi: bool) -> T {
         let mut p = crate::pane::Pane::new(1, "m", "a", cols, rows);
         p.feed(text.as_bytes());
-        let grid = from_term(&p.term, &p.times, false);
+        let grid = from_term(&p.term, &p.times, (&p.hist_marks, &p.screen_marks), false);
         let cur = p.term.grid().cursor.point;
         let c = Copy::copy(grid, (cur.column.0 as u32, cur.line.0.max(0) as u32), cols as u32, rows as u32, &PaneSearch::default(), !vi, false, false);
         T { c, ps: PaneSearch::default(), ctx: Ctx { vi, wrap: true, ws: WS.into() }, outs: Vec::new() }

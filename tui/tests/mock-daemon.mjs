@@ -45,6 +45,40 @@ const agents = DEMO ? {
   [LOCAL]: [agent(randomUUID(), 'Mock Claude', 'claude'), agent(randomUUID(), 'Mock Codex', 'codex'), agent(randomUUID(), 'Mock paused', 'claude', 'stopped')],
   [REMOTE]: [agent(randomUUID(), 'Remote shell', 'terminal')],
 }
+// Claude Code and Codex conversations on this machine that Harness did not start (session_search's
+// `external` hits): two closed, one still open in a terminal (not to be opened twice).
+const HOUR = 3_600_000
+const EXTERNAL = [
+  { sessionId: 'ext-claude-leadership', engine: 'claude', title: 'Design AI leadership team', cwd: '/home/demo/src/org', origin: 'claude-desktop', open: false, lastAt: Date.now() - 50 * HOUR,
+    turns: [['Draft the roles for an AI leadership team', 'Here are five roles: a head of research, …'], ['Add hiring order', 'Hire the head of research first, then …']] },
+  { sessionId: 'ext-codex-nfc', engine: 'codex', title: 'Continue NFC device chat', cwd: '/home/demo/src/nfc', origin: 'vscode', open: false, lastAt: Date.now() - 5 * HOUR,
+    turns: [['Why does the NFC reader drop the first tap?', 'The reader sleeps after 30 s; the first tap wakes it.'], ['Keep it awake while the app is open', 'Done: a keep-alive ping every 20 s.']] },
+  { sessionId: 'ext-codex-retry', engine: 'codex', title: 'Fix the flaky retry test', cwd: '/home/demo/src/api', origin: 'cli', open: true, lastAt: Date.now() - 10 * 60_000,
+    turns: [['The retry test fails one run in ten', 'It races the backoff timer; fake the clock.']] },
+]
+// session_search's hits: every word of the query in a harness's name or an external conversation's
+// title or turns, the words marked; no words: the external ones worked on in [from, to].
+function searchHits(machine, query, from, to) {
+  const words = String(query || '').toLowerCase().split(/\s+/).filter((w) => w.length > 1)
+  const mark = (text) => words.reduce((t, w) => t.replace(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), (m) => `\u0002${m}\u0003`), text)
+  const hits = []
+  const pool = machine === LOCAL ? EXTERNAL : []
+  for (const x of pool) {
+    const text = [x.title, ...x.turns.flat()].join(' ').toLowerCase()
+    if (words.length ? !words.every((w) => text.includes(w)) : (from && x.lastAt < from) || (to && x.lastAt > to)) continue
+    const turn = words.length ? x.turns.findIndex(([a, b]) => words.some((w) => (a + ' ' + b).toLowerCase().includes(w))) : -1
+    const snippet = turn >= 0 ? mark(x.turns[turn].join(' — ')) : mark(x.title)
+    hits.push({ sessionId: x.sessionId, agentId: '', engine: x.engine, turn, at: x.lastAt, lastAt: x.lastAt, field: turn >= 0 ? 'ask' : 'name', snippet, together: true, score: 0.5,
+      external: { title: x.title, cwd: x.cwd, origin: x.origin, open: x.open } })
+  }
+  if (words.length) for (const a of agents[machine] || []) {
+    const text = `${a.name} ${(RECAPS[a.name] || []).join(' ')}`.toLowerCase()
+    if (!words.every((w) => text.includes(w))) continue
+    hits.push({ sessionId: a.sessionId, agentId: a.id, engine: a.engine, turn: 0, at: Date.now() - HOUR, lastAt: Date.now() - HOUR, field: 'ask', snippet: mark(RECAPS[a.name]?.[1] || a.name), together: true, score: 0.8 })
+  }
+  return hits
+}
+
 // MOCK_FLEET=N: N more harnesses across both machines, for a fleet the size people run — each
 // working, idle or finishing turns on its own clock.
 const FLEET = Number(process.env.MOCK_FLEET || 0)
@@ -95,7 +129,13 @@ const desk = DEMO ? { revision: 1, tabs: [
 // The dial's side of the daemon, for the e2e: what the windows told it (the ring, the tabs, the
 // focus, spoken-task replies, messages sent), and every local window to push dial frames at.
 const dial = { said: {}, replies: [], messages: [], daemon: [], acts: [], zooOps: [], zooReads: 0 }
+// How many of each request the windows made (GET /test/counts), for tests of what hn asks.
+const counts = {}
 const windows = new Set()
+// The questions open on this computer, as the daemon keeps them: replayed to a window as it
+// connects, then their ids (commander_questions_open).
+const openQs = new Map()
+let demoAsked = false
 
 // The account's zoo (daemons/README.md, "The zoo"), as backend/src/lib/zoo.ts keeps it — just enough
 // of its rules for hn: habits grant the first egg, a hatch draws MOCK_HATCH (tim) with serial 42, a
@@ -187,11 +227,21 @@ const handler = (req, res) => {
     for (const a of fleet) { a.tokenUsage = { totalTokens: (a.tokenUsage?.totalTokens || 0) + 1000, updatedAt: at }; a.finishedAway = true }
     return json(res, { finished: fleet.map((a) => a.name) })
   }
+  if (req.url === '/test/counts') return json(res, counts)
   if (req.url === '/test/dial' && req.method === 'GET') return json(res, { ...dial, agents: Object.values(agents).flat().map((a) => ({ id: a.id, name: a.name, sessionId: a.sessionId })) })
   if (req.url === '/test/dial' && req.method === 'POST') {
     let body = ''
     req.on('data', (c) => { body += c })
-    req.on('end', () => { for (const ws of windows) ws.send(body); json(res, { windows: windows.size }) })
+    req.on('end', () => {
+      try {
+        const f = JSON.parse(body)
+        const rid = f?.payload?.requestId
+        if (f?.type === 'commander_question' && rid) openQs.set(rid, f)
+        if (f?.type === 'commander_question_close' && rid) openQs.delete(rid)
+      } catch {}
+      for (const ws of windows) ws.send(body)
+      json(res, { windows: windows.size })
+    })
     return
   }
   if (req.url === '/api/desk' && req.method === 'GET') return json(res, desk)
@@ -203,6 +253,11 @@ const handler = (req, res) => {
       let ops = []
       try { ops = JSON.parse(body || '{}').ops || [] } catch {}
       if (process.env.MOCK_DESK === 'fixed') ops = []
+      // MOCK_DESK=strict: a layout with a key the backend's schema does not know is refused
+      // whole (400), as a backend from before layout.tmux refuses it.
+      if (process.env.MOCK_DESK === 'strict' && ops.some((o) => o.op === 'tab.layout' && Object.keys(o.layout || {}).some((k) => !['presets', 'sizes'].includes(k)))) {
+        res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'invalid body' })); return
+      }
       const tab = (id) => desk.tabs.find((t) => t.id === id)
       for (const op of ops) {
         if (op.op === 'tab.create' && !tab(op.id)) desk.tabs.splice(Math.min(op.index ?? desk.tabs.length, desk.tabs.length), 0, { id: op.id, name: op.name, nameIsCustom: !!op.nameIsCustom, panes: [], layout: {} })
@@ -214,6 +269,8 @@ const handler = (req, res) => {
         if (op.op === 'pane.remove') { const t = tab(op.tabId); if (t) t.panes = t.panes.filter((p) => p.agentId !== op.agentId) }
       }
       desk.revision++
+      // Every window told, as the daemon tells them (they fetch the desk again).
+      if (ops.length) for (const ws of windows) { try { ws.send(JSON.stringify({ type: 'desk_changed', payload: { revision: desk.revision } })) } catch {} }
       json(res, desk)
     })
     return
@@ -306,9 +363,13 @@ wss.on('connection', (ws, req, trusted) => {
         windows.add(ws)
         ws.on('close', () => windows.delete(ws))
         send('dial_status', { attached: true, fw: '1.0.0-mock' })
+        // The open questions in the same tick, as the daemon hands them over (d0047d1c).
+        if (DEMO && !openQs.size && !demoAsked) { const asked = question(LOCAL); if (asked) openQs.set(asked.payload.requestId, asked); demoAsked = true }
+        for (const f of openQs.values()) ws.send(JSON.stringify(f))
+        send('commander_questions_open', { requestIds: [...openQs.keys()] })
       }
       if (DEMO) {
-        const asked = question(machine)
+        const asked = machine === LOCAL ? null : question(machine)
         if (asked) setTimeout(() => ws.send(JSON.stringify(asked)), 300)
         const ev = (x, type, payload = {}) => ws.send(JSON.stringify({ type, agentId: x.id, dbSessionId: x.sessionId, payload: { agentId: x.id, sessionId: x.sessionId, ...payload } }))
         // Of the fleet, about half work; the rest are idle. Each working one steps through a turn.
@@ -338,6 +399,7 @@ wss.on('connection', (ws, req, trusted) => {
       return
     }
     const reply = (body) => send(`${type}_result`, { requestId: payload.requestId, ...body })
+    counts[type] = (counts[type] || 0) + 1
     switch (type) {
       case 'agents_list': return reply({ agents: agents[machine].filter((a) => payload.includeStopped || a.status !== 'stopped') })
       case 'models_list': return reply({ models: [{ id: 'runtime-v1:x:claude:opus@high', displayName: 'Opus / High' }, { id: 'runtime-v1:x:claude:sonnet@high', displayName: 'Sonnet / High' }] })
@@ -363,8 +425,27 @@ wss.on('connection', (ws, req, trusted) => {
       // The e2e reads which harnesses were deleted (a killed pane's shell goes with it).
       case 'agent_delete': dial.deleted = [...(dial.deleted || []), payload.agentId]; return reply({ agent: agents[machine][0], deleted: true })
       case 'agent_update': case 'agent_resume': case 'agent_restart': return reply({ agent: agents[machine][0], deleted: true })
+      case 'session_search': return reply({ hits: searchHits(machine, payload.query, payload.from, payload.to), indexed: 12, pending: 0, tookMs: 3 })
+      case 'session_tail': {
+        const x = EXTERNAL.find((e) => e.sessionId === payload.sessionId)
+        const a = (agents[machine] || []).find((e) => e.sessionId === payload.sessionId)
+        if (!x && !a) return reply({ error: 'NOT_INDEXED', sessionId: payload.sessionId })
+        const turns = x ? x.turns : [[a.name, (RECAPS[a.name] || ['Working on it.'])[0]]]
+        const rows = turns.map(([ask, answer], turn) => ({ turn, at: Date.now() - (turns.length - turn) * HOUR, ask, answer, tools: turn === 0 ? 'Read src/main.ts\nBash npm test' : '' }))
+        return reply({ sessionId: payload.sessionId, rows, hasMore: false, total: rows.length, lastAt: x ? x.lastAt : Date.now(), lastAsk: rows[rows.length - 1], ...(x ? { external: { title: x.title, cwd: x.cwd, origin: x.origin, open: x.open } } : {}) })
+      }
       case 'agent_create': {
         dial.created = [...(dial.created || []), payload]
+        // Resuming a conversation Harness did not start: refused while it is open elsewhere.
+        if (payload.resumeSessionId) {
+          const x = EXTERNAL.find((e) => e.sessionId === payload.resumeSessionId)
+          if (!x) return reply({ error: 'SESSION_NOT_FOUND', detail: 'That conversation is no longer on this machine.' })
+          if (x.open) return reply({ error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal.' })
+          const resumed = { ...agent(randomUUID(), payload.name || x.title, x.engine), project: { name: x.cwd.split('/').pop(), cwd: x.cwd, root: x.cwd, branch: 'main' } }
+          agents[machine].push(resumed)
+          const at = EXTERNAL.indexOf(x); EXTERNAL.splice(at, 1)
+          return reply({ agent: resumed })
+        }
         const created = agent(randomUUID(), `Mock ${payload.engine}`, payload.engine)
         agents[machine].push(created)
         return reply({ agent: created })
@@ -385,6 +466,7 @@ wss.on('connection', (ws, req, trusted) => {
       case 'message': dial.messages.push({ machine, ...payload }); return
       // An answer: recorded, and the question closed, as the daemon closes it once it is keyed in.
       case 'question_response': {
+        openQs.delete(payload.requestId)
         dial.answers = [...(dial.answers || []), payload]
         const a = agents[machine].find((x) => x.id === payload.agentId)
         send('commander_question_close', { requestId: payload.requestId, agentId: payload.agentId, dbSessionId: a?.sessionId })

@@ -74,6 +74,9 @@ impl Row {
 pub struct Picker {
     /// Rows on screen, for PgUp/PgDn (a page is what you see).
     pub page_rows: std::cell::Cell<i64>,
+    /// The width a row's text had when last drawn (0 before): a live list's query matches what a
+    /// row shows at it (its right column only where there is room for it).
+    pub text_w: usize,
     /// The kill buffer (C-w, M-BSpace, M-d), for C-y.
     pub kill: String,
     /// How far the preview can scroll, its lines and its height (the preview sets them as it
@@ -123,6 +126,8 @@ pub struct Picker {
     /// whether it follows its end (follow, until scrolled up from it).
     pub preview_fresh: std::cell::Cell<bool>,
     pub preview_following: std::cell::Cell<bool>,
+    /// The row whose preview was last put at its end (a session's turns read bottom up).
+    pub preview_bottom: std::cell::RefCell<Option<String>>,
     /// fzf's --wrap, toggled by toggle-wrap (M-/): a long row goes on over the lines below it —
     /// and the columns it was last wrapped at (0 before it is drawn so), for the page keys.
     pub wrap: bool,
@@ -166,6 +171,36 @@ pub struct Picker {
     pub preview_alt: std::cell::Cell<bool>,
     pub pw_next: usize,
     pub sort_flipped: bool,
+    /// toggle-track: --track turned the other way.
+    pub track_flipped: bool,
+    /// --history: the queries read from its file, where C-p/C-n are among them (None: the
+    /// query being typed, kept in `history_draft`).
+    pub history_at: Option<usize>, pub history_draft: String,
+    /// jump (Some(false)) or jump-accept (Some(true)): the rows labelled, the next key picks one.
+    pub jumping: Option<bool>,
+    /// The question each row showed and since when (its request id): a key answers only a question
+    /// that has been on screen a moment — never one that just took another's place.
+    pub q_seen: HashMap<String, (String, Instant)>,
+    /// When the cursor last came onto a row by the list changing under it (the row it was on went,
+    /// answered elsewhere), not by a key.
+    pub landed: Option<Instant>,
+    /// C-b s: the order its rows had when it opened, which they keep while it is open.
+    pub hold: Option<Vec<String>>,
+    /// C-b s: the rows its query found by what was said in them (best first), and that query.
+    pub said: Vec<String>,
+    pub said_query: String,
+    /// change-header: the header row's text instead of the keys' hints.
+    pub header_text: Option<String>,
+    /// unbind / toggle-bind: keys that do nothing in this list now.
+    pub unbound: std::collections::HashSet<String>,
+    /// change-multi: marks taken (their limit; 0 none) whatever the list's own say.
+    pub multi_override: Option<usize>,
+    /// exclude / exclude-multi: rows out of the list for as long as it is open.
+    pub excluded: std::collections::HashSet<String>,
+    /// track-current: the item tracked until the cursor moves or it leaves the results (+t).
+    pub track_current: Option<String>,
+    /// search(…): what is searched for in place of the query, until the query changes.
+    pub search: Option<String>,
 }
 
 impl Picker {
@@ -184,6 +219,8 @@ impl Picker {
     }
 
     pub fn new(title: impl Into<String>, placeholder: impl Into<String>) -> Picker {
+        // A new list starts from FZF_DEFAULT_OPTS (what change-* actions did was the last one's).
+        crate::theme::fzf_reset();
         Picker {
             title: title.into(),
             heading: None,
@@ -221,9 +258,24 @@ impl Picker {
             preview_alt: Default::default(),
             pw_next: 0,
             sort_flipped: false,
+            track_flipped: false,
+            history_at: None, history_draft: String::new(),
+            jumping: None,
+            header_text: None,
+            hold: None,
+            q_seen: HashMap::new(),
+            landed: None,
+            said: Vec::new(),
+            said_query: String::new(),
+            unbound: Default::default(),
+            multi_override: None,
+            excluded: Default::default(),
+            track_current: None,
+            search: None,
             preview_of: None,
             preview_fresh: std::cell::Cell::new(true),
             preview_following: Default::default(),
+            preview_bottom: Default::default(),
             wrap: crate::theme::fzf_opts().wrap,
             wrap_width: Default::default(),
             line_cache: Default::default(),
@@ -236,6 +288,7 @@ impl Picker {
             preview_rows: Default::default(),
             kill: String::new(),
             page_rows: std::cell::Cell::new(10),
+            text_w: 0,
         }
     }
 
@@ -260,32 +313,49 @@ impl Picker {
     pub fn refilter(&mut self) {
         // The query as fzf's pattern reads it: leading blanks and trailing unescaped ones aside
         // (`pane\ ` keeps its escaped space).
-        let mut query = self.query.as_str();
+        let owned = self.search.clone();
+        let mut query = owned.as_deref().unwrap_or(self.query.as_str());
         if self.prefixed && scope_of(query).is_some() { query = &query.trim_start()[1..] }
         // fzf sorts only when a term asks for something (`!x` alone keeps the input order).
         let mut sorted = false;
+        // A conversation Harness did not start is listed only for the query that found it.
+        let found_now = self.said_query == query.trim();
+        let offered = |r: &Row| !r.id.starts_with("external:") || (found_now && self.said.contains(&r.id));
         if query.trim().is_empty() {
-            self.visible = self.rows.iter().enumerate().map(|(i, _)| (i, Vec::new())).collect();
+            self.visible = self.rows.iter().enumerate().filter(|(_, r)| !self.excluded.contains(&r.id) && offered(r)).map(|(i, _)| (i, Vec::new())).collect();
         } else {
             // fzf itself (fzf.rs, ported from fzf 0.67): the extended-search terms, FuzzyMatchV2's
             // scores and lit characters, the tiebreak — over the line as it is drawn.
             let o = crate::theme::fzf_opts();
             let case = match o.case { Some(true) => crate::fzf::Case::Respect, Some(false) => crate::fzf::Case::Ignore, None => crate::fzf::Case::Smart };
-            let q = crate::fzf::Query::parse(query, case, !o.exact, !o.literal).searching(&o.tiebreak);
+            let q = if o.no_extended { crate::fzf::Query::plain(query, case, !o.exact, !o.literal) } else { crate::fzf::Query::parse(query, case, !o.exact, !o.literal) }.searching(&o.tiebreak).v1(o.algo_v1);
             // (Each word's case read as fzf reads a term's: +i, -i, or smart — an upper-case letter.)
-            let words: Vec<(String, bool)> = query.split_whitespace().map(|w| {
+            // (Under +x there are no words: the query is one term, and no keyword answers it.)
+            let words: Vec<(String, bool)> = query.split_whitespace().filter(|_| !o.no_extended).map(|w| {
                 let w = w.trim_start_matches('\'');
                 let sensitive = o.case.unwrap_or(w != w.to_lowercase());
                 (if sensitive { w.to_string() } else { w.to_lowercase() }, sensitive)
             }).collect();
-            // `!word` (and `!'word`): not only a row whose line says it, but one whose keywords do.
-            let negated: Vec<(String, bool)> = words.iter().filter_map(|(w, s)| w.strip_prefix('!').map(|r| (r.trim_start_matches(['\'', '^']).trim_end_matches('$').to_string(), *s))).filter(|(w, _)| !w.is_empty()).collect();
+            // `!word` (and `!'word`) standing alone — unanchored (`^`, `$` are about the line as
+            // drawn) and in no `|` group (the group's other terms may answer): not only a row
+            // whose line says it, but one whose keywords do; and in a live list, where the line's
+            // changing parts are left out of matching (so a row does not come and go as they
+            // change), one whose line says it where you can see it. The rest are fzf.rs's alone.
+            let alone: Vec<(String, bool)> = words.iter().enumerate().filter(|(i, _)| {
+                let bar = |j: Option<usize>| j.and_then(|j| words.get(j)).map(|(w, _)| w == "|").unwrap_or(false);
+                !bar(i.checked_sub(1)) && !bar(Some(i + 1))
+            }).filter_map(|(_, (w, s))| w.strip_prefix('!').map(|r| (r.trim_start_matches('\'').to_string(), *s))).filter(|(w, _)| !w.is_empty() && !w.starts_with('^') && !w.ends_with('$')).collect();
+            let negated = alone.clone();
+            let unanchored = alone;
             let words: Vec<(String, bool)> = words.into_iter().filter(|(w, _)| !w.starts_with('!')).collect();
             // The keywords by fzf's OR groups (`webapp | api`: either).
             let mut groups: Vec<Vec<(String, bool)>> = Vec::new();
             let mut or_next = false;
             for (w, s) in words {
-                if w == "|" { or_next = true; continue }
+                // (A `|` with nothing before it is a term of its own, as fzf reads it — one no
+                // keyword answers.)
+                // (…and one right after another `|` is a term too, as in fzf: `login | | uber`.)
+                if w == "|" && !groups.is_empty() && !or_next { or_next = true; continue }
                 // (An anchored term is about the line as drawn: no keyword answers it.)
                 let w = if w.starts_with('^') || w.ends_with('$') { String::new() } else { w };
                 match groups.last_mut() { Some(g) if or_next => g.push((w, s)), _ => groups.push(vec![(w, s)]) }
@@ -293,16 +363,20 @@ impl Picker {
             }
             let live_tiebreak: Vec<crate::fzf::Tiebreak> = o.tiebreak.iter().copied().filter(|t| *t != crate::fzf::Tiebreak::Length).collect();
             let mut scored: Vec<(Vec<i64>, usize, Vec<u32>)> = Vec::new();
+            // Where the right column lines up (ui's right_edge): the widest line, at most the width.
+            let edge = { use unicode_width::UnicodeWidthStr; self.rows.iter().filter(|r| !r.disabled).map(|r| r.lead.iter().map(|s| s.content.width()).sum::<usize>() + line(r).width()).max().unwrap_or(0).min(self.text_w) };
             let mut hidden: Vec<usize> = Vec::new();
             for (index, row) in self.rows.iter().enumerate() {
-                if row.disabled { continue }
+                if row.disabled || self.excluded.contains(&row.id) || !offered(row) { continue }
                 let keywords = format!("{} {}", row.label, row.extra);
                 if negated.iter().any(|(w, s)| w.chars().count() >= 3 && names_word(&keywords, w, *s)) { continue }
-                let chars: Vec<char> = if self.live { steady_line(row) } else { line(row).chars().collect() };
+                let chars: Vec<char> = if self.live { steady_line(row, self.text_w, edge) } else { line(row).chars().collect() };
                 // (A keyword hit still has to keep out of what the query excludes from the line.)
                 let seen = if negated.is_empty() { String::new() } else { line(row) };
                 let clear = |w: &str, sensitive: bool| if sensitive { !seen.contains(w) } else { !seen.to_lowercase().contains(w) };
+                let shown = self.live && !unanchored.is_empty() && unanchored.iter().any(|(w, sensitive)| { let l = line(row); if *sensitive { l.contains(w.as_str()) } else { l.to_lowercase().contains(w.as_str()) } });
                 match q.matches(&chars) {
+                    Some(_) if shown => {}
                     Some(hit) => {
                         // A live list's rows are its order (by urgency), as fzf's are over lines
                         // drawn to one width: length decides nothing between them.
@@ -313,20 +387,43 @@ impl Picker {
                     }
                     // The keywords behind a row (engine, machine, branch): whole words of three
                     // letters or more find it, after everything that matched what you see.
-                    None if !groups.is_empty() && groups.iter().all(|g| g.iter().any(|(w, sensitive)| w.chars().count() >= 3 && names_word(&keywords, w, *sensitive))) && negated.iter().all(|(w, s)| clear(w, *s)) => hidden.push(index),
+                    None if !groups.is_empty() && groups.iter().all(|g| g.iter().any(|(w, sensitive)| (w.chars().count() >= 3 || STATE_WORDS.contains(&w.as_str())) && names_word(&keywords, w, *sensitive))) && negated.iter().all(|(w, s)| clear(w, *s)) => hidden.push(index),
                     None => {}
                 }
             }
             sorted = !self.keep_order && q.sortable() && (o.no_sort == self.sort_flipped);
             if sorted { scored.sort_by(|a, b| a.0.cmp(&b.0)) }
-            self.visible = scored.into_iter().map(|(_, i, hits)| (i, hits)).chain(hidden.into_iter().map(|i| (i, Vec::new()))).collect();
+            // Rows its keywords name (`codex`: the Codex harnesses) come before rows the query
+            // found only as letters scattered through the line (c…o…d…e…x in `gpu-box`).
+            let plain: Vec<String> = groups.iter().flatten().filter(|(w, _)| w.chars().count() >= 3).map(|(w, _)| w.to_lowercase()).collect();
+            let scattered = |i: usize| !plain.is_empty() && !plain.iter().any(|w| line(&self.rows[i]).to_lowercase().contains(w.as_str()));
+            let (weak, strong): (Vec<_>, Vec<_>) = if hidden.is_empty() { (Vec::new(), scored) } else { scored.into_iter().partition(|(_, i, _)| scattered(*i)) };
+            // Then what was said in them (session search, on the machines): rows no other way found,
+            // in the order the machines ranked them.
+            let taken: std::collections::HashSet<usize> = strong.iter().map(|(_, i, _)| *i).chain(hidden.iter().copied()).chain(weak.iter().map(|(_, i, _)| *i)).collect();
+            let said: Vec<usize> = if self.said_query == query.trim() { self.said.iter().filter_map(|id| self.rows.iter().position(|r| &r.id == id && !r.disabled && !self.excluded.contains(&r.id))).filter(|i| !taken.contains(i)).collect() } else { Vec::new() };
+            let mut seen = std::collections::HashSet::new();
+            let said: Vec<usize> = said.into_iter().filter(|i| seen.insert(*i)).collect();
+            self.visible = strong.into_iter().map(|(_, i, hits)| (i, hits)).chain(hidden.into_iter().map(|i| (i, Vec::new()))).chain(said.into_iter().map(|i| (i, Vec::new()))).chain(weak.into_iter().map(|(_, i, hits)| (i, hits))).collect();
         }
         // --tac: the input order reversed (wherever the order is the input's).
         if crate::theme::fzf_opts().tac && !sorted { self.visible.reverse() }
         // Keep the cursor on the same item across a rebuild.
         let keep = self.selected_id.as_ref().and_then(|id| self.visible.iter().position(|(i, _)| &self.rows[*i].id == id));
+        // Tracked, it keeps its row on the screen too (UpdateList: offset = cy − pos).
+        if keep.is_some() && self.tracking() { let slot = self.cursor.saturating_sub(self.scroll); self.scroll = keep.unwrap_or(0).saturating_sub(slot) }
+        // (track-current ends when its item has left the results.)
+        if keep.is_none() { self.track_current = None }
         self.cursor = keep.unwrap_or(self.cursor.min(self.visible.len().saturating_sub(1)));
         self.skip_disabled(1);
+    }
+
+    /// The cursor on the first result (and the view at its start).
+    pub fn to_top(&mut self) { self.cursor = 0; self.scroll = 0; self.skip_disabled(1) }
+
+    /// The cursor on the item [id], if it is in the results.
+    pub fn select(&mut self, id: &str) {
+        if let Some(at) = self.visible.iter().position(|(i, _)| self.rows[*i].id == id) { self.cursor = at; self.skip_disabled(1) }
     }
 
     fn skip_disabled(&mut self, direction: i64) {
@@ -370,6 +467,8 @@ impl Picker {
     }
 
     pub fn move_by(&mut self, delta: i64) {
+        // (Moved: track-current is over.)
+        if delta != 0 { self.track_current = None }
         if self.visible.is_empty() { return }
         let max = self.visible.len() as i64 - 1;
         let to = self.cursor as i64 + delta;
@@ -383,9 +482,21 @@ impl Picker {
     /// as it was changes nothing.
     fn changed(&mut self, before: &str) {
         if self.query == before { return }
-        self.selected_id = None;
+        // --no-input: there is no query to edit.
+        if crate::theme::fzf_opts().no_input { self.query = before.to_string(); self.qcursor = self.qcursor.min(self.qlen()); return }
+        // search(…) lasts until the query changes.
+        self.search = None;
+        // --track (or toggle-track, track-current): the item it was on, wherever it goes.
+        if let Some(id) = &self.track_current { self.selected_id = Some(id.clone()) }
+        else if !self.tracking() { self.selected_id = None }
         self.refilter();
     }
+
+    /// --track, as toggle-track last left it — or track-current's item.
+    pub fn tracking(&self) -> bool { self.tracking_all() || self.track_current.is_some() }
+
+    /// --track (+T), as toggle-track last left it.
+    pub fn tracking_all(&self) -> bool { crate::theme::fzf_opts().track != self.track_flipped }
 
     fn byte_at(&self, chars: usize) -> usize { self.query.char_indices().nth(chars).map(|(i, _)| i).unwrap_or(self.query.len()) }
 
@@ -500,7 +611,32 @@ impl Picker {
     }
 
     /// --multi=N: whether another row may be marked (fzf's selectItem).
-    pub fn room_to_mark(&self) -> bool { let n = crate::theme::fzf_opts().multi_limit; n == 0 || self.marked.len() < n }
+    pub fn room_to_mark(&self) -> bool {
+        match self.multi_override { Some(n) => self.marked.len() < n, None => { let n = crate::theme::fzf_opts().multi_limit; n == 0 || self.marked.len() < n } }
+    }
+
+    /// fzf's subword actions (its subWordRubout / subWordNext): back to a word's start or a
+    /// camelCase hump, on past one's end — [kill] taking what it passed (to be yanked back).
+    pub fn subword(&mut self, forward: bool, kill: bool) {
+        let before = self.query.clone();
+        let chars: Vec<char> = self.query.chars().collect();
+        let at = self.qcursor.min(chars.len());
+        let to = if forward {
+            let rest: String = chars[at..].iter().collect();
+            at as i64 + first_match(r"[a-z][A-Z]|[\pL\pN][^\pL\pN]|(.$)", &rest) + 1
+        } else {
+            let head: String = chars[..at].iter().collect();
+            last_match(r"[a-z][A-Z]|[^\pL\pN][\pL\pN]", &head) + 1
+        };
+        let to = (to.max(0) as usize).min(chars.len()).max(if forward { 0 } else { self.floor() });
+        if !kill { self.qcursor = to.max(self.floor()); return }
+        let (a, b) = if forward { (at, to) } else { (to, at) };
+        if b <= a { return }
+        self.kill = chars[a..b].iter().collect();
+        self.query = chars[..a].iter().chain(chars[b..].iter()).collect();
+        self.qcursor = a;
+        self.changed(&before);
+    }
 
     /// select / deselect: the current row marked, or not, whichever it was.
     pub fn set_mark(&mut self, on: bool) {
@@ -520,7 +656,42 @@ impl Picker {
 
     #[cfg_attr(not(test), allow(dead_code))]
     /// Replace the query outright (a mode switch, a history recall).
-    pub fn set_query(&mut self, text: &str) {
+/// --history's queries, oldest first (its file's lines, the last --history-size of them).
+    pub fn history_lines() -> Vec<String> {
+        let o = crate::theme::fzf_opts();
+        let Some(path) = &o.history else { return Vec::new() };
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let lines: Vec<String> = text.lines().map(str::to_string).collect();
+        let n = lines.len().saturating_sub(o.history_size);
+        lines[n..].to_vec()
+    }
+
+    /// prev-history / next-history: the query before (or after) this one in --history's file;
+    /// past the newest, the query that was being typed.
+    pub fn history_step(&mut self, back: bool) {
+        let lines = Self::history_lines();
+        if lines.is_empty() { return }
+        let at = self.history_at.unwrap_or(lines.len());
+        let to = if back { match at.checked_sub(1) { Some(t) => t, None => return } } else { if at >= lines.len() { return } at + 1 };
+        if self.history_at.is_none() { self.history_draft = self.query.clone() }
+        let text = if to >= lines.len() { self.history_draft.clone() } else { lines[to].clone() };
+        self.history_at = if to >= lines.len() { None } else { Some(to) };
+        self.set_query(&text);
+        self.qcursor = self.query.chars().count();
+    }
+
+    /// The query accepted: kept at the end of --history's file (not twice in a row), the file no
+    /// longer than --history-size.
+    pub fn history_add(&self) {
+        let o = crate::theme::fzf_opts();
+        let (Some(path), false) = (&o.history, self.query.is_empty()) else { return };
+        let mut lines = Self::history_lines();
+        if lines.last() != Some(&self.query) { lines.push(self.query.clone()) }
+        let n = lines.len().saturating_sub(o.history_size);
+        let _ = std::fs::write(path, lines[n..].join("\n") + "\n");
+    }
+
+        pub fn set_query(&mut self, text: &str) {
         let before = self.query.clone();
         self.query = text.to_string();
         self.qcursor = self.qlen();
@@ -586,6 +757,18 @@ pub fn line(row: &Row) -> String {
 }
 
 /// Where an alphanumeric word ends, going back or forward from `at` (readline's M-b / M-f).
+/// fzf's findLastMatch: where (in characters) the last match of [pattern] in [s] starts, -1 if none.
+fn last_match(pattern: &str, s: &str) -> i64 {
+    let Ok(rx) = regex::Regex::new(pattern) else { return -1 };
+    rx.find_iter(s).last().map(|m| s[..m.start()].chars().count() as i64).unwrap_or(-1)
+}
+
+/// fzf's findFirstMatch: where the first match starts, -1 if none.
+fn first_match(pattern: &str, s: &str) -> i64 {
+    let Ok(rx) = regex::Regex::new(pattern) else { return -1 };
+    rx.find(s).map(|m| s[..m.start()].chars().count() as i64).unwrap_or(-1)
+}
+
 fn word_edge(chars: &[char], mut at: usize, forward: bool) -> usize {
     let word = |c: char| c.is_alphanumeric();
     if forward {
@@ -609,15 +792,32 @@ pub fn scope_of(query: &str) -> Option<char> {
 
 /// A live row's line as a query sees it: as drawn (picker::line), its changing parts blanked —
 /// what it is doing now, how long it has been as it is — so hits light where the row shows them.
-fn steady_line(row: &Row) -> Vec<char> {
+/// The blanks between a row's text and its right column as fzf_row draws them at [text_w] with
+/// the column lined up at [edge] (two at least; two when the width is not known).
+pub fn right_gap(row: &Row, text_w: usize, edge: usize) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    let lead: usize = row.lead.iter().map(|s| s.content.width()).sum();
+    let detail: usize = row.detail.iter().map(|s| s.content.width()).sum();
+    let used = lead + row.label.width() + if detail > 0 { 2 + detail } else { 0 };
+    let right_w = row.right.width();
+    if text_w == 0 || used + right_w + 2 > text_w { return 2 }
+    edge.max(used + right_w + 2).min(text_w) - used - right_w
+}
+
+fn steady_line(row: &Row, text_w: usize, edge: usize) -> Vec<char> {
     const OUT: char = '\u{1}';
+    // The right column as drawn (ui's fzf_row): whole, where there is room for it beside the line.
+    use unicode_width::UnicodeWidthStr;
+    let lead: usize = row.lead.iter().map(|s| s.content.width()).sum();
+    let shown = text_w == 0 || (row.right_at(text_w) == row.right && text_w >= lead + row.right.width() + 14);
     let mut out: Vec<char> = row.label.chars().collect();
     let detail: String = row.detail.iter().map(|s| s.content.as_ref()).collect();
     if !detail.is_empty() { out.extend("  ".chars()); out.extend(detail.chars().map(|c| if row.volatile_detail { OUT } else { c })) }
     if !row.right.is_empty() {
-        out.extend("  ".chars());
+        // (As drawn: the blanks up to where the column lines up, which a fuzzy query's gaps count.)
+        out.extend(std::iter::repeat_n(' ', if shown { right_gap(row, text_w, edge) } else { 2 }));
         let n = row.right.chars().count();
-        out.extend(row.right.chars().enumerate().map(|(i, c)| if i + row.volatile_right >= n { OUT } else { c }));
+        out.extend(row.right.chars().enumerate().map(|(i, c)| if !shown || i + row.volatile_right >= n { OUT } else { c }));
     }
     out
 }

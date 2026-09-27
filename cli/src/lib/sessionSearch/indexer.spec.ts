@@ -60,6 +60,87 @@ describe('SessionSearchIndex', () => {
     expect(store.search('delta')[0].snippet).toContain('doubled')
   })
 
+  it('writes a long first pass in batches, and a pass stopped between them resumes at the next', async () => {
+    let transcript = ''
+    for (let i = 0; i < 70; i++) transcript += prompt(`step ${i} of the dial rewrite`, i % 60) + answer(`finished step${i}`, i % 60)
+    const { store, index, found } = setup(transcript)
+    const write = vi.spyOn(store, 'writeSession')
+    write.mockImplementationOnce(function (this: SessionSearchStore, ...args) {
+      index.stop()
+      return SessionSearchStore.prototype.writeSession.apply(this, args)
+    })
+    index.sweep()
+    await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+    // Stopped after the first batch: its rows are in, and the session resumes at the next one.
+    expect(store.counts().turns).toBe(32)
+    expect(store.session('s1')).toMatchObject({ resumeTurn: 32, mtime: 0 })
+    expect(store.session('s1')!.size).toBe(store.session('s1')!.resumeOffset)
+    write.mockRestore()
+
+    const resumed = new SessionSearchIndex({ store, sources: () => [{ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: store.session('s1')!.path, header: 'Dial firmware · harness', updatedAt: 1 }] })
+    cleanups.push(() => resumed.stop())
+    resumed.sweep()
+    await vi.waitFor(() => { expect((resumed as unknown as { running: boolean }).running).toBe(false) })
+    expect(store.counts()).toEqual({ sessions: 1, turns: 70 })
+    for (const i of [0, 31, 32, 33, 64, 69]) expect(found(`step${i}`)).toEqual(['s1'])
+    expect(store.session('s1')).toMatchObject({ resumeTurn: 69, turns: 70 })
+    expect(store.session('s1')!.mtime).toBeGreaterThan(0)
+  })
+
+  it('brings a session being written up to date before it answers for a preview', async () => {
+    const { path, index, settle } = setup(prompt('why does the dial scroll jump', 0) + answer('Looking at ui.c.', 1))
+    await settle()
+    // The turn goes on with no turn event yet: the index has not seen this.
+    appendFileSync(path, answer('Found it:\n\n- the delta is applied twice', 2))
+    const tail = await index.tail('s1')
+    expect(tail!.rows.at(-1)).toMatchObject({ ask: 'why does the dial scroll jump', answer: 'Looking at ui.c.\nFound it:\n\n- the delta is applied twice' })
+    // Older pages are read as they are: no pass for them.
+    expect((await index.tail('s1', { beforeTurn: 0 }))!.rows).toEqual([])
+    expect(await index.tail('unknown')).toBeNull()
+  })
+
+  it("indexes a conversation Harness did not start under its own title, says if it is open, and drops it with its file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-search-external-'))
+    dirs.push(dir)
+    const titled = (type: string, key: string, title: string) => JSON.stringify({ type, [key]: title, sessionId: 'e1' }) + '\n'
+    const claudeFile = join(dir, 'e1.jsonl')
+    writeFileSync(claudeFile, prompt('why does the dial scroll jump', 0) + titled('ai-title', 'aiTitle', 'Dial scroll jump')
+      + answer('The delta is doubled.', 1) + titled('custom-title', 'customTitle', 'Dial fix') + titled('ai-title', 'aiTitle', 'Later AI title'))
+    const untitledFile = join(dir, 'e2.jsonl')
+    writeFileSync(untitledFile, prompt('compare retention\nby cohort please', 0) + answer('Day-7 is 35%.', 1))
+    const store = SessionSearchStore.open(':memory:')!
+    const open = new Set(['e1'])
+    let sources: SearchSource[] = [
+      { agentId: '', sessionId: 'e1', engine: 'claude', transcriptPath: claudeFile, header: '', updatedAt: 2, external: { cwd: '/work/dial', origin: 'terminal', title: '' } },
+      { agentId: '', sessionId: 'e2', engine: 'claude', transcriptPath: untitledFile, header: '', updatedAt: 1, external: { cwd: '/work/cohorts', origin: 'claude-app', title: '' } },
+    ]
+    const index = new SessionSearchIndex({
+      store, sources: () => sources, agents: () => [],
+      openSessions: { known: () => open, fresh: async () => open },
+    })
+    cleanups.push(() => { index.stop(); store.close() })
+    const settle = async () => {
+      index.sweep()
+      await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+    }
+    await settle()
+    // The person's own title wins over Claude's; with none, the first ask, on one line.
+    expect(store.session('e1')).toMatchObject({ agentId: '', title: 'Dial fix', cwd: '/work/dial', origin: 'terminal' })
+    expect(store.session('e2')?.title).toBe('compare retention by cohort please')
+    // Found by its title, marked as not Harness's, and as open elsewhere.
+    const hit = index.search('dial fix').hits[0]
+    expect(hit).toMatchObject({ sessionId: 'e1', agentId: '', external: { title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true } })
+    expect(index.search('cohort').hits[0]).toMatchObject({ sessionId: 'e2', external: { origin: 'claude-app', open: false } })
+    const tail = await index.tail('e1')
+    expect(tail?.external).toEqual({ title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true })
+
+    // Its file gone, it leaves the index at the next sweep.
+    sources = sources.filter((source) => source.sessionId !== 'e2')
+    await settle()
+    expect(store.session('e2')).toBeUndefined()
+    expect(store.session('e1')).toBeDefined()
+  })
+
   it('starts over when the transcript was rewritten shorter', async () => {
     const { path, found, settle } = setup(prompt('first long conversation about cohorts and retention', 0) + answer('Done with the cohort table.', 1))
     await settle()

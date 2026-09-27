@@ -22,7 +22,31 @@ pub fn find(name: &str) -> Option<&'static Opt> {
     table::TABLE.iter().chain(table::HOOKS.iter()).find(|o| o.name == base)
 }
 
+/// tmux's options_match: a name as written, or the one option it is the start of (`stat` is
+/// ambiguous, `mou` is mouse); a user option is itself. Unknown names stay as they are.
+pub fn resolve(name: &str) -> Result<String, String> {
+    if name.starts_with('@') { return Ok(name.to_string()) }
+    let (base, rest) = match name.find('[') { Some(i) => (&name[..i], &name[i..]), None => (name, "") };
+    if base.is_empty() || find(base).is_some() { return Ok(name.to_string()) }
+    let mut hits = names().filter(|n| n.starts_with(base));
+    match (hits.next(), hits.next()) {
+        (Some(one), None) => Ok(format!("{one}{rest}")),
+        (Some(_), Some(_)) => Err(format!("ambiguous option: {name}")),
+        _ => Ok(name.to_string()),
+    }
+}
+
+/// tmux's checkshell: a full path to something that runs, and not tmux (hn) itself.
+fn suitable_shell(shell: &str) -> bool {
+    let base = shell.rsplit('/').next().unwrap_or(shell);
+    let Ok(c) = std::ffi::CString::new(shell) else { return false };
+    shell.starts_with('/') && !matches!(base, "hn" | "tmux") && unsafe { libc::access(c.as_ptr(), libc::X_OK) } == 0
+}
+
 /// A hook (set-hook's, show-hooks'), not an option.
+/// Every option's name (hooks too), in the table's order: what the prompt completes.
+pub fn names() -> impl Iterator<Item = &'static str> { table::TABLE.iter().chain(table::HOOKS.iter()).map(|o| o.name) }
+
 pub fn is_hook(name: &str) -> bool { let base = name.split('[').next().unwrap_or(name); table::HOOKS.iter().any(|o| o.name == base) }
 
 /// Where options_array_assign splits a value into items: the table's separator (" ," when it
@@ -250,6 +274,8 @@ impl Store {
         }
         // cmd_set_option: a user option needs a value.
         if name.starts_with('@') && value.is_none() { return Err("empty value".into()) }
+        // options_from_string: so does any but a flag or a choice (those toggle).
+        if value.is_none() && opt.is_some_and(|o| !matches!(o.kind, Kind::Flag | Kind::Choice(_))) { return Err("empty value".into()) }
         let here = self.map(scope, global, window, pane).and_then(|m| m.get(name).cloned());
         if f.only_if_unset && here.is_some() { return Err(format!("already set: {name}")) }
         let now = self.get(name, window, Some(pane));
@@ -285,6 +311,7 @@ impl Store {
                 let v = if f.append { format!("{}{v}", here.clone().or(now.clone()).unwrap_or_default()) } else { v.to_string() };
                 // options_from_string_check: a style option's value must parse as a style (formats aside).
                 if name.ends_with("-style") && !v.contains("#{") && !crate::draw::valid_style(&v) { return Err(format!("invalid style: {v}")) }
+                if name == "default-shell" && !suitable_shell(&v) { return Err(format!("not a suitable shell: {v}")) }
                 v
             }
             (Some(Kind::Flag), None | Some("")) => if now.as_deref() == Some("on") { "off".into() } else { "on".into() },
@@ -332,7 +359,8 @@ impl Store {
         let in_scope = |o: &Opt| match scope { Scope::Server => o.scope == Scope::Server, Scope::Session => o.scope == Scope::Session, Scope::Window => matches!(o.scope, Scope::Window | Scope::Pane), Scope::Pane => false };
         let mut rows: BTreeMap<String, String> = defaults().iter().filter(|(k, _)| find(k).map(in_scope).unwrap_or(false)).map(|(k, v)| (k.clone(), v.clone())).collect();
         for n in LOOK { if rows.contains_key(n) { if let Some(v) = self.default_of(n) { rows.insert(n.to_string(), v.clone()); } } }
-        for h in table::HOOKS.iter().filter(|o| in_scope(o)) { rows.insert(h.name.to_string(), String::new()); }
+        // (hn's own hooks, harness-*, only once set: the list is tmux's.)
+        for h in table::HOOKS.iter().filter(|o| in_scope(o) && !o.name.starts_with("harness-")) { rows.insert(h.name.to_string(), String::new()); }
         if let Some(map) = self.map(scope, true, "", 0) { overlay(&mut rows, map) }
         rows
     }

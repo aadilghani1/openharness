@@ -47,7 +47,8 @@ pub fn use_file(sessions: &std::path::Path) {
     let me = std::process::id() as u64;
     with_file(&path, |doc| {
         let others: Vec<u64> = doc["clients"].as_array().map(|a| a.iter().filter_map(Value::as_u64).filter(|p| *p != me && running(*p)).collect()).unwrap_or_default();
-        let fresh = others.is_empty() && !kept;
+        // (A server whose last terminal detached from the desk lives on, as tmux's does.)
+        let fresh = others.is_empty() && !kept && !doc["detached"].as_bool().unwrap_or(false);
         FRESH.store(fresh, std::sync::atomic::Ordering::Relaxed);
         if fresh { *doc = json!({}) }
         doc["clients"] = json!(others.into_iter().chain([me]).collect::<Vec<_>>());
@@ -55,11 +56,15 @@ pub fn use_file(sessions: &std::path::Path) {
     if let Ok(mut g) = IDS.lock() { g.get_or_insert_with(Ids::default).file = Some(path) }
 }
 
-/// This client numbers from the counters no more (it is going).
-pub fn leave() {
+/// This client numbers from the counters no more (it is going) — [lives_on]: the server with it
+/// (it detached from the desk; kill-server says no), for the next client to take up.
+pub fn leave(lives_on: Option<bool>) {
     let Some(path) = IDS.lock().ok().and_then(|g| g.as_ref().and_then(|i| i.file.clone())) else { return };
     let me = std::process::id() as u64;
-    with_file(&path, |doc| if let Some(a) = doc["clients"].as_array_mut() { a.retain(|p| p.as_u64() != Some(me)) });
+    with_file(&path, |doc| {
+        if let Some(a) = doc["clients"].as_array_mut() { a.retain(|p| p.as_u64() != Some(me)) }
+        if let Some(on) = lives_on { doc["detached"] = json!(on) }
+    });
 }
 
 /// Whether process [pid] is running (kill 0: there, or there and not ours to signal).
@@ -120,6 +125,19 @@ pub fn keep(kind: Kind, id: u64) {
         let next = doc["next"][kind.key()].as_u64().unwrap_or(kind.first());
         if id >= next { doc["next"][kind.key()] = json!(id + 1) }
     });
+}
+
+/// A desk thing this client made, by the id it gave it: every client calls it that (unless one
+/// was recorded for it first).
+pub fn desk_set(kind: Kind, key: &str, id: u64) {
+    let path = match IDS.lock() { Ok(g) => g.as_ref().and_then(|i| i.file.clone()), Err(_) => None };
+    let Some(path) = path else { return };
+    let id = with_file(&path, |doc| {
+        if let Some(had) = doc["desk"][kind.key()][key].as_u64() { return had }
+        doc["desk"][kind.key()][key] = json!(id);
+        id
+    });
+    if let Ok(mut g) = IDS.lock() { g.get_or_insert_with(Ids::default).desk.insert((kind, key.to_string()), id); }
 }
 
 /// The id every client gives a desk thing (a window by its tab id, a pane by its harness): the

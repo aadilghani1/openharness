@@ -68,7 +68,8 @@ pub enum PromptKind {
     Broadcast,
     LinkPassword { machine: String },
     /// A question's answer, typed: option numbers or your own words.
-    Answer { machine: String, agent: String },
+    /// The question's request id when M-a was pressed: a new one meanwhile is not answered.
+    Answer { machine: String, agent: String, request: String },
     /// A message to a harness (C-b s's M-s).
     Message { machine: String, agent: String },
     /// tmux `command-prompt`: with a template, the answers fill it (`%1` `%2` …, `%%` the first
@@ -86,6 +87,7 @@ pub enum PromptKind {
 }
 
 /// A line typed in the status line, tmux-style: `(rename-window) name`, `:split-window -h`.
+#[derive(Clone, Debug)]
 pub struct Prompt {
     pub kind: PromptKind,
     pub title: String,
@@ -131,7 +133,15 @@ pub struct Menu {
     pub no_mouse: bool,
     pub mouse: Option<crate::mouse::Event>,
     pub tree: Option<(u64, usize)>,
+    /// A prompt's completion menu (status_prompt_complete_list_menu): the prompt under it, back
+    /// when it closes, the chosen word put in it.
+    pub complete: Option<Box<Complete>>,
 }
+
+/// What a completion menu completes: the prompt, the words its items stand for, the flag they
+/// go after (-t, -s), and whether the prompt is a window target's (the word is the whole line).
+#[derive(Clone, Debug)]
+pub struct Complete { pub prompt: Prompt, pub list: Vec<String>, pub flag: Option<char>, pub window_target: bool }
 
 pub enum Modal {
     /// tmux's display-menu: a box of items, each with its key; Enter or the key runs one.
@@ -142,9 +152,9 @@ pub enum Modal {
     /// yes (-c), and with `enter_yes` (-y) so does Enter.
     Confirm { prompt: String, command: String, key: char, enter_yes: bool },
     /// tmux `display-panes` (C-b q): a big number on every pane; press one to go there.
-    DisplayPanes { until: std::time::Instant },
-    /// tmux `clock-mode` (C-b t).
-    Clock { pane: u64 },
+    /// display-panes: until when (none: until a key, -d 0), the command a number runs (%% its
+    /// pane), and whether keys choose at all (-N: not).
+    DisplayPanes { until: Option<std::time::Instant>, template: Option<String>, keys: bool },
     /// display-popup: a shell floating over the window; it goes when its program exits.
     /// display-popup: its program's pane, where it is, its border (lines: tmux's box lines,
     /// `none` for -B), title (a format drawn with its styles) and styles (-s, -S).
@@ -206,7 +216,11 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
     // The project in each row when the harnesses work in more than one.
     let projects = { let mut p: Vec<&str> = app.fleet.agents.values().map(|a| a.project.as_str()).filter(|p| !p.is_empty()).collect(); p.sort(); p.dedup(); p.len() > 1 };
     let open: Vec<(String, String)> = app.panes.values().map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect();
-    app.fleet.ranked().into_iter()
+    // As the desktop's Cmd-P lists them ("Recently active"): the one active last first — a query
+    // ranks by how well it matches, this order breaking ties. (C-b A lists those waiting on you.)
+    let mut agents: Vec<&crate::fleet::Agent> = app.fleet.agents.values().collect();
+    agents.sort_by(|a, b| b.recency().cmp(&a.recency()).then_with(|| a.name.cmp(&b.name)).then_with(|| a.id.cmp(&b.id)));
+    agents.into_iter()
         .filter(|a| machine.map(|m| a.machine_id == m).unwrap_or(true))
         .filter(|a| project.map(|p| a.project_root == p || a.cwd == p).unwrap_or(true))
         .filter(|a| filter.keeps(app.fleet.state_of(a)))
@@ -266,6 +280,27 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
                 .line_first(loud)
         })
         .collect()
+}
+
+/// The Claude Code and Codex conversations Harness did not start that C-b s's query found by what
+/// was said in them (never in the list as it opens): `not in Harness`, Enter resuming one as a
+/// harness; one open in another terminal or app is marked so, and not opened twice.
+pub fn external_rows(app: &App) -> Vec<Row> {
+    let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
+    app.said.iter().filter_map(|s| s.external.as_ref()).map(|x| {
+        let (mark, mark_color) = engine_mark(&x.engine);
+        let folder = x.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+        let title = if x.title.is_empty() { folder.clone() } else { x.title.clone() };
+        let note = if x.open { "open elsewhere" } else { "not in Harness" };
+        let right = [note.to_string(), if many { app.fleet.machine_name(&x.machine) } else { String::new() }, ago(x.last_at)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("  ");
+        Row::new(format!("external:{}:{}", x.machine, x.session_id), title)
+            .extra(format!("{} {} {} {}", x.cwd, x.engine, engine_label(&x.engine), app.fleet.machine_name(&x.machine)))
+            .group("Not in Harness")
+            .lead(vec![span("◌", fg(theme::MUTED)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
+            .detail(vec![span(folder, fg(theme::MUTED))])
+            .right(right)
+            .right_narrow(ago(x.last_at))
+    }).collect()
 }
 
 /// The sessions, when there is more than one: `work: 2 windows`, the one on screen `(attached)`.

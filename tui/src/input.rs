@@ -23,7 +23,7 @@ pub fn handle(app: &mut App, event: CEvent) {
     match event {
         // A key is the session's activity (session_update_activity): a script's command with no -t
         // goes to the session used last.
-        CEvent::Key(key) if key.kind != KeyEventKind::Release => { app.session_activity = crate::app::epoch_secs(); on_key(app, key) }
+        CEvent::Key(key) if key.kind != KeyEventKind::Release => { app.session_activity = crate::app::epoch_secs(); app.session_used = crate::app::use_order(); on_key(app, key) }
         CEvent::Paste(text) => on_paste(app, text),
         CEvent::Mouse(mouse) => { if app.mouse { on_mouse(app, mouse) } }
         CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.fit_panes(); crate::commands::notify(app, "client-resized", None, None) }
@@ -48,14 +48,39 @@ fn on_key(app: &mut App, key: KeyEvent) {
     // A message goes on the next key, as tmux's does; the daemons hear it (and their popup takes it).
     app.toast = None;
     if crate::daemon::hooks::on_key(app, &key) { app.status_redraws += 1; return }
+    // display-panes (cmd_display_panes_key), before any table: a number, or a letter for 10 on,
+    // runs its template for that pane (select-pane) and closes it — as does one no pane has;
+    // any other key (every key with -N) closes it and goes on as it would have.
+    if matches!(app.modal, Some(Modal::DisplayPanes { .. })) {
+        let Some(Modal::DisplayPanes { template, keys: takes, .. }) = app.modal.take() else { return };
+        let plain = !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        let index = match key.code { KeyCode::Char(c @ '0'..='9') if plain => Some(c as usize - '0' as usize), KeyCode::Char(c @ 'a'..='z') if plain => Some(10 + c as usize - 'a' as usize), _ => None };
+        if let (true, Some(i)) = (takes, index) {
+            let base = app.pane_base(app.active);
+            if let Some(id) = i.checked_sub(base).and_then(|k| app.tab().panes().get(k).copied()) {
+                if app.tab().zoomed { app.tab_mut().zoomed = false; app.fit_panes() }
+                let command = commands::template_replace(template.as_deref().unwrap_or("select-pane -t \"%%%\""), &crate::pane::tag(id), 1);
+                commands::execute(app, &command);
+            }
+            return;
+        }
+    }
     // A table of your own (switch-client -T): its key runs, and the client goes back to root
-    // (a -r key keeps the table); the prefix, or a key it does not have, goes on as from root.
+    // (a -r key keeps the table for repeat-time); the prefix wins as everywhere. A key it does
+    // not have is looked up in root — and, found in neither, goes nowhere: only a table kept for
+    // a -r key lets it through to the pane (server_client_key_callback).
+    if app.key_table_until.is_some_and(|t| Instant::now() >= t) { app.key_table = None; app.key_table_until = None }
     if let Some(table) = app.key_table.take() {
         app.status_redraws += 1;
+        let repeating = app.key_table_until.take().is_some();
         if chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2 { app.prefix = true; app.prefix_at = Some(std::time::Instant::now()); return }
         if let Some(b) = app.keymap.named.get(&table).and_then(|l| l.iter().rev().find(|b| b.chord == chord)).cloned() {
-            if b.repeat { app.key_table = Some(table) }
+            if b.repeat { app.key_table = Some(table); app.key_table_until = Some(Instant::now() + Duration::from_millis(app.keymap.repeat_ms)) }
             commands::execute_bound(app, &b.command);
+            return;
+        }
+        if !repeating {
+            if let Some(b) = app.keymap.root_command(&chord).cloned() { commands::execute_bound(app, &b.command) }
             return;
         }
     }
@@ -69,7 +94,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
         }
         if let Some(binding) = app.keymap.prefix_command(&chord).cloned() {
             // A list or view on screen gives way to the command, as tmux's choose modes do.
-            if matches!(app.modal, Some(Modal::Clock { .. }) | Some(Modal::DisplayPanes { .. }) | Some(Modal::Picker { .. })) { app.modal = None }
+            if matches!(app.modal, Some(Modal::DisplayPanes { .. }) | Some(Modal::Picker { .. })) { app.modal = None }
             app.repeat_until = binding.repeat.then(|| Instant::now() + Duration::from_millis(app.keymap.repeat_ms));
             commands::execute_bound(app, &binding.command);
         }
@@ -96,6 +121,17 @@ fn on_key(app: &mut App, key: KeyEvent) {
         app.prefix_at = Some(std::time::Instant::now());
         return;
     }
+    // key-table (a session's default table, root unless set — `off` for a nested tmux): its key
+    // runs; one it has not goes to the pane, root's bindings not this client's then.
+    let base = app.options.get("key-table", "", None).unwrap_or_else(|| "root".into());
+    if base != "root" && app.modal.is_none() {
+        if let Some(b) = app.keymap.named.get(&base).and_then(|l| l.iter().rev().find(|b| b.chord == chord)).cloned() {
+            app.status_redraws += 1;
+            commands::execute_bound(app, &b.command);
+            return;
+        }
+    }
+    let root_table = base == "root" || app.modal.is_some();
     // A pane in copy mode or view mode: its mode's table first, then root; a key in neither does
     // nothing — it never reaches the pane's program (server_client_key_callback).
     if let Some(Modal::Copy { pane }) = app.modal {
@@ -111,7 +147,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
             return crate::tree::key(app, pane, chord, None, true);
         }
     }
-    if !typing(app) {
+    if !typing(app) && root_table {
         if let Some(binding) = app.keymap.root_command(&chord).cloned() { app.status_redraws += 1; commands::execute_bound(app, &binding.command); return }
     }
     if app.modal.is_some() { modal_key(app, key); return }
@@ -120,6 +156,8 @@ fn on_key(app: &mut App, key: KeyEvent) {
         if let Some(bytes) = encode_key(&key, alacritty_terminal::term::TermMode::empty()) { buffer.push(bytes); return }
     }
     let Some(focus) = app.focused() else { home_key(app, key); return };
+    // Clock mode: any key that reaches the pane ends it (window_clock_key), and goes no further.
+    if let Some(p) = app.panes.get_mut(&focus).filter(|p| p.clock) { p.clock = false; app.redraw_all = true; return }
     let Some(pane) = app.panes.get(&focus) else { return };
     match &pane.phase {
         Phase::Card { title, .. } => {
@@ -162,7 +200,7 @@ fn send_to_focused(app: &mut App, bytes: Vec<u8>) {
 /// Keys into a pane (send-keys -t): a watcher's is taken over first, as typing takes it.
 pub fn send_to_pane(app: &mut App, focus: u64, bytes: Vec<u8>) {
     // attach -r: a session only watched takes no keys.
-    if app.mirror.as_ref().is_some_and(|m| m.readonly) && app.tabs.iter().any(|t| t.panes().contains(&focus)) { return }
+    if app.read_only() && app.tabs.iter().any(|t| t.panes().contains(&focus)) { return }
     let Some(pane) = app.panes.get_mut(&focus) else { return };
     if pane.read_only || matches!(pane.phase, Phase::Watching(_)) || pane.stream.is_none() {
         pane.queued.push(bytes);
@@ -195,11 +233,7 @@ fn on_paste(app: &mut App, text: String) {
 fn on_mouse(app: &mut App, mouse: MouseEvent) {
     // tmux asks the terminal for bare motion only when a pane here wants it (or a menu opened by
     // the mouse): the rest of the motion hn is sent never happened, as far as tmux is concerned.
-    if matches!(mouse.kind, MouseEventKind::Moved) {
-        let menu = matches!(&app.modal, Some(Modal::Menu(m)) if !m.no_mouse);
-        let wanted = app.rects.iter().any(|(id, _)| app.panes.get(id).map(|p| p.mode().contains(alacritty_terminal::term::TermMode::MOUSE_MOTION)).unwrap_or(false));
-        if !menu && !wanted { return }
-    }
+    if matches!(mouse.kind, MouseEventKind::Moved) && !app.wants_motion() { return }
     // hn's lists and prompts keep the mouse as they have it; copy mode and a menu are tmux's.
     if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. }) | Some(Modal::Menu(_))) { return modal_mouse(app, mouse) }
     crate::mouse::on_event(app, mouse);
@@ -209,12 +243,14 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
 /// preview, whichever it is over; a click takes a row, a second one opens it; in the preview a
 /// drag scrolls it and a drag on its border resizes it; a click outside the box closes it.
 fn modal_mouse(app: &mut App, mouse: MouseEvent) {
+    // --no-mouse: a list the mouse does nothing to.
+    if theme::fzf_opts().no_mouse && matches!(app.modal, Some(Modal::Picker { .. })) { return }
     let inside = |r: ratatui::layout::Rect| mouse.column >= r.x && mouse.column < r.x + r.width && mouse.row >= r.y && mouse.row < r.y + r.height;
     let (list, preview) = match &app.modal { Some(Modal::Picker { picker, .. }) => (picker.list_area.get(), picker.preview_area.get().filter(|_| picker.preview)), _ => (Default::default(), None) };
     let in_preview = preview.map(|(r, _)| inside(r)).unwrap_or(false);
     // Shift with a click or the wheel marks as it goes (fzf's shift-left-click, shift-scroll).
     let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
-    let multi = matches!(&app.modal, Some(Modal::Picker { kind: PickerKind::Open { .. }, picker }) if crate::picker::scope_of(&picker.query).is_none());
+    let multi = matches!(&app.modal, Some(Modal::Picker { kind: PickerKind::Open { .. } | PickerKind::Inbox, picker }) if crate::picker::scope_of(&picker.query).is_none());
     match mouse.kind {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
             let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
@@ -250,9 +286,13 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
         MouseEventKind::Down(MouseButton::Right) if !inside(list) => {}
         MouseEventKind::Down(MouseButton::Right) => {
             if let Some(Modal::Picker { kind, picker }) = &mut app.modal {
-                let multi = matches!(kind, PickerKind::Open { .. }) && crate::picker::scope_of(&picker.query).is_none();
+                let multi = matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) && crate::picker::scope_of(&picker.query).is_none();
                 if picker.click(mouse.row) && multi { picker.toggle_mark(); }
             }
+        }
+        // fzf: a middle click puts the cursor on the row, nothing more.
+        MouseEventKind::Down(MouseButton::Middle) if inside(list) => {
+            if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.click(mouse.row); }
         }
         MouseEventKind::Down(MouseButton::Left) => {
             // fzf's scrollbar: pressed, the list follows the mouse while it is held.
@@ -365,26 +405,77 @@ fn copy_scroll(app: &mut App, pane: u64, up: bool, n: u32) {
 
 // ── home: the empty tab ─────────────────────────────────────────────────────
 
-pub fn home_agents(app: &App) -> Vec<(String, String)> {
-    let ranked: Vec<(String, String)> = app.fleet.ranked().into_iter()
-        .filter(|a| !matches!(app.fleet.state_of(a), crate::fleet::State::Paused | crate::fleet::State::Offline))
-        .map(|a| a.key())
+/// A row of the home page: a harness, or a conversation Harness did not start (resumed as one).
+#[derive(Clone, Debug)]
+pub enum HomeRow { Harness(String, String), External(crate::app::External) }
+
+impl HomeRow {
+    /// Its key in the home page's order: (machine, agent), or (machine, "x:" session).
+    fn key(&self) -> (String, String) {
+        match self { HomeRow::Harness(m, a) => (m.clone(), a.clone()), HomeRow::External(x) => (x.machine.clone(), format!("x:{}", x.session_id)) }
+    }
+}
+
+/// The home page's nine, as the desktop's welcome page lists them: by when each was last active,
+/// the latest first — harnesses (paused ones too) and the Claude Code and Codex conversations from
+/// the last 30 days that Harness did not start, on every connected machine.
+pub fn home_rows(app: &App) -> Vec<HomeRow> {
+    let mut all: Vec<(u64, HomeRow)> = app.fleet.agents.values()
+        .filter(|a| app.fleet.state_of(a) != crate::fleet::State::Offline)
+        .map(|a| (a.recency(), HomeRow::Harness(a.key().0, a.key().1)))
         .collect();
+    all.extend(app.home_external.iter().map(|x| (x.last_at, HomeRow::External(x.clone()))));
+    // (Ties by name, so two alike keep their places between readings.)
+    let name = |r: &HomeRow| match r { HomeRow::Harness(m, a) => app.fleet.agent(m, a).map(|x| x.name.clone()).unwrap_or_default(), HomeRow::External(x) => x.title.clone() };
+    all.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| name(&a.1).cmp(&name(&b.1))));
+    let ranked: Vec<HomeRow> = all.into_iter().map(|(_, r)| r).collect();
     // Numbers are for fingers: a row keeps its number while you look at the list, however the
     // harnesses' activity reorders them (the order is fresh each time the window is entered).
     let mut order = app.home_order.borrow_mut();
-    let mut out: Vec<(String, String)> = order.iter().filter(|k| ranked.contains(k)).cloned().collect();
-    for k in &ranked { if out.len() >= 9 { break } if !out.contains(k) { out.push(k.clone()) } }
+    let mut out: Vec<HomeRow> = order.iter().filter_map(|k| ranked.iter().find(|r| &r.key() == k).cloned()).collect();
+    for r in &ranked { if out.len() >= 9 { break } if !out.iter().any(|o| o.key() == r.key()) { out.push(r.clone()) } }
     out.truncate(9);
-    *order = out.clone();
+    *order = out.iter().map(|r| r.key()).collect();
     out
+}
+
+/// A conversation Harness did not start, opened as a harness that resumes it — in its own folder,
+/// named for its title — in the window here when it is empty (else a new one). Its machine says
+/// why when it will not (open elsewhere, already a harness, its folder gone).
+pub fn resume_external(app: &mut App, x: &crate::app::External) {
+    let placement = if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab };
+    resume_external_as(app, x, placement)
+}
+
+/// resume_external, placed as asked (a new window, beside, below, here).
+pub fn resume_external_as(app: &mut App, x: &crate::app::External, placement: Placement) {
+    let Some(link) = app.link(&x.machine) else { app.say("That machine is not connected", theme::DANGER); return };
+    let mut payload = json!({ "engine": x.engine, "cwd": x.cwd, "bypassPermission": true, "resumeSessionId": x.session_id, "creationId": uuid::Uuid::new_v4().to_string() });
+    if !x.title.is_empty() { payload["name"] = json!(x.title) }
+    app.say(format!("Resuming {} on {}…", if x.title.is_empty() { "the conversation" } else { &x.title }, app.fleet.machine_name(&x.machine)), theme::SOFT);
+    app.modal = None;
+    let machine = x.machine.clone();
+    app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(180)).await }, move |app, reply| match reply {
+        Ok(reply) => {
+            if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
+                app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+                app.open_agent(&machine, id, placement);
+                app.toast = None;
+            } else { app.say("The machine opened no harness", theme::DANGER) }
+        }
+        Err(e) => app.say(format!("Could not open it: {e}"), theme::DANGER),
+    });
 }
 
 /// A window with no harness in it has no pane to take keys from, so plain letters work here.
 fn home_key(app: &mut App, key: KeyEvent) {
-    let rows = home_agents(app);
+    let rows = home_rows(app);
     let open = |app: &mut App, index: usize| {
-        if let Some((m, a)) = rows.get(index).cloned() { app.open_agent(&m, &a, Placement::Auto(None)) }
+        match rows.get(index).cloned() {
+            Some(HomeRow::Harness(m, a)) => app.open_agent(&m, &a, Placement::Auto(None)),
+            Some(HomeRow::External(x)) => resume_external(app, &x),
+            None => {}
+        }
     };
     match key.code {
         KeyCode::Char(c @ '1'..='9') => open(app, c as usize - '1' as usize),
@@ -394,7 +485,9 @@ fn home_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('p') => run(app, "open"),
         KeyCode::Char('o') | KeyCode::Char('#') => run(app, "projects"),
         KeyCode::Char('n') => run(app, "new"),
-        KeyCode::Char('t') => run(app, "terminal"),
+        // A shell here, as tmux's C-b c makes one: in the machine and folder of the pane you came
+        // from, gone with its window.
+        KeyCode::Char('t') => { let from = app.home_from.take(); new_shell_from(app, from, Placement::Auto(None), None, None) }
         KeyCode::Char('i') | KeyCode::Char(':') => run(app, "models"),
         KeyCode::Char('I') => run(app, "inbox"),
         KeyCode::Char('m') | KeyCode::Char('@') => run(app, "machines"),
@@ -417,8 +510,39 @@ pub fn picker(app: &mut App, kind: PickerKind, title: &str, placeholder: &str) {
     app.modal = Some(Modal::Picker { kind, picker });
 }
 
+/// The question each harness row shows, and since when it has (a new request id is new).
+fn note_questions(app: &App, picker: &mut Picker) {
+    let now = Instant::now();
+    let rows: Vec<String> = picker.rows.iter().map(|r| r.id.clone()).collect();
+    for id in rows {
+        let Some((m, a)) = split_key(&id) else { continue };
+        match app.fleet.agent(&m, &a).and_then(|x| x.question.as_ref()).map(|q| q.request_id.clone()) {
+            Some(req) => { if picker.q_seen.get(&id).map(|(r, _)| r != &req).unwrap_or(true) { picker.q_seen.insert(id, (req, now)); } }
+            None => { picker.q_seen.remove(&id); }
+        }
+    }
+}
+
+/// Whether M-1…9 / M-a may answer [row]'s question now: it has been on screen a moment (0.6 s),
+/// and the cursor did not just land on it by the list changing under it — else what to say.
+fn answerable(app: &App, picker: &Picker, row: &str) -> Result<String, &'static str> {
+    const LOOK: Duration = Duration::from_millis(600);
+    if picker.landed.is_some_and(|t| t.elapsed() < LOOK) { return Err("That row just changed under the cursor — look again") }
+    let (m, a) = split_key(row).ok_or("No question here")?;
+    let req = app.fleet.agent(&m, &a).and_then(|x| x.question.as_ref()).map(|q| q.request_id.clone()).ok_or("That question is no longer open")?;
+    match picker.q_seen.get(row) {
+        Some((r, at)) if *r == req && at.elapsed() >= LOOK => Ok(req),
+        _ => Err("That question just changed — look again"),
+    }
+}
+
 /// (Re)build an overlay's rows from the fleet — called on open and whenever the fleet moves.
 pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
+    fill_rows(app, kind, picker);
+    if matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) { note_questions(app, picker) }
+}
+
+fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
     // Its spinner turns while what it lists is still coming in, as fzf's does while it reads.
     let busy = match kind {
         PickerKind::Store => is_loading(&format!("dsh {}", app.fleet.local_id)),
@@ -435,6 +559,17 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             // With more than one session, they are in the list too (Enter goes to one), after the
             // harnesses: tmux's C-b s is its sessions.
             if machine.is_none() && project.is_none() && *filter == Filter::All { rows.extend(modal::session_rows(app)) }
+            // What the query found by what was said in them: the conversations Harness did not
+            // start among the rows, and every hit's row in the list whatever its line says.
+            if machine.is_none() && project.is_none() { rows.extend(modal::external_rows(app)) }
+            // The list holds still while it is open: a row keeps the place it had when the list
+            // opened, whatever its harness does meanwhile (new ones come after) — typing re-ranks.
+            match &picker.hold {
+                Some(order) => { let at = |id: &str| order.iter().position(|o| o == id).unwrap_or(usize::MAX); rows.sort_by_key(|r| at(&r.id)) }
+                None => picker.hold = Some(rows.iter().map(|r| r.id.clone()).collect()),
+            }
+            picker.said = app.said.iter().map(|s| if s.external.is_some() { format!("external:{}:{}", s.machine, s.session_id) } else { format!("{}:{}", s.machine, s.agent_id) }).collect();
+            picker.said_query = app.said_for.clone();
             picker.set_rows(rows);
             picker.status = modal::open_status(app, *filter);
             picker.hints = vec![("enter", "go"), ("M-1..9", "answer"), ("M-m", "read"), ("C-v", "beside"), ("C-x", "below"), ("M-enter", "here"), ("M-a", "type an answer"), ("M-s", "message"), ("M-r", "restart"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
@@ -465,7 +600,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             harness_preview(picker);
             picker.set_rows(modal::inbox_rows(app));
             picker.status = format!("{} waiting", app.fleet.waiting());
-            picker.hints = vec![("M-1..9", "answer"), ("M-a", "type an answer"), ("enter", "go"), ("C-o", "open")];
+            picker.hints = vec![("M-1..9", "answer"), ("M-a", "type an answer"), ("enter", "go"), ("C-o", "open"), ("tab", "mark")];
             picker.empty = "Nobody is waiting on you.".into();
         }
         PickerKind::Machines => {
@@ -584,6 +719,8 @@ pub fn launch(app: &mut App, prefix: &str, filter: Filter) {
         if same_mode { app.modal = None; return }
     }
     let kind = match prefix { "" => PickerKind::Open { filter, machine: None, project: None }, p => modal::launcher_kind(p, &PickerKind::Palette) };
+    // C-b s reads afresh each time it opens: what was said, and the sessions' latest turns.
+    if matches!(kind, PickerKind::Open { .. }) { app.said.clear(); app.said_for.clear(); app.said_want.clear(); app.said_due = None; app.tails.clear(); app.tails_asked.clear() }
     let (title, placeholder) = modal::launcher_title(app, &kind);
     let mut picker = Picker::new(title, placeholder);
     picker.prefixed = true;
@@ -591,6 +728,8 @@ pub fn launch(app: &mut App, prefix: &str, filter: Filter) {
     picker.qcursor = prefix.chars().count();
     prepare(app, &kind);
     fill(app, &kind, &mut picker);
+    // As choose-tree starts on the current session: on this window's harness, so Enter stays.
+    if prefix.is_empty() { if let Some((machine, agent)) = focused_agent(app) { picker.select(&format!("{machine}:{agent}")) } }
     app.modal = Some(Modal::Picker { kind, picker });
 }
 
@@ -672,7 +811,7 @@ pub fn run(app: &mut App, command: &str) {
         "clone" => {
             let Some((machine, agent)) = focused_agent(app) else { app.say("This pane has no harness in it", theme::MUTED); return };
             let Some(link) = app.link(&machine) else { return };
-            app.say("Cloning…", theme::SOFT);
+            if app.capture.is_none() { app.say("Cloning…", theme::SOFT) }
             app.spawn(async move { link.rpc("agent_fork", json!({ "agentId": agent, "creationId": uuid::Uuid::new_v4().to_string() }), Duration::from_secs(120)).await }, move |app, reply| match reply {
                 Ok(reply) => if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
                     app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
@@ -779,6 +918,48 @@ fn is_loading(what: &str) -> bool { LOADING.with(|l| l.borrow().iter().any(|w| w
 
 fn agent_rpc(app: &mut App, ty: &'static str, done: &'static str) {
     let Some((machine, agent)) = focused_agent(app) else { app.say("This pane has no harness in it", theme::MUTED); return };
+    agent_rpc_on(app, machine, agent, ty, done)
+}
+
+/// A harness's verb from a command with its target (restart-harness -t …): restart, pause,
+/// clone, resume or rename that one — one mid-turn restarted or paused only with [yes].
+pub fn harness_verb(app: &mut App, verb: &str, (machine, agent): (String, String), yes: bool, name: &str) {
+    let Some(a) = app.fleet.agent(&machine, &agent) else { return app.error("can't find harness") };
+    let working = matches!(app.fleet.state_of(a), crate::fleet::State::Working | crate::fleet::State::Starting);
+    let who = a.name.clone();
+    if app.link(&machine).is_none() { return app.error(format!("{who}'s machine is not connected")) }
+    match verb {
+        "restart-harness" | "pause-harness" if working && !yes => app.error(format!("{who} is working (-y to {} it anyway)", if verb == "restart-harness" { "restart" } else { "pause" })),
+        "restart-harness" => agent_rpc_on(app, machine, agent, "agent_restart", "Restarted"),
+        "pause-harness" => agent_rpc_on(app, machine, agent, "agent_delete", "Paused — the conversation is saved"),
+        "resume-harness" => match app.find_pane_anywhere(&machine, &agent).map(|(_, _, p)| p) {
+            Some(pane) => app.resume(pane),
+            None => agent_rpc_on(app, machine, agent, "agent_resume", "Resumed"),
+        },
+        "clone-harness" => clone_on(app, machine, agent),
+        _ => {
+            let Some(link) = app.link(&machine) else { return };
+            let name = name.to_string();
+            app.spawn(async move { link.rpc("agent_update", json!({ "agentId": agent, "name": name }), Duration::from_secs(20)).await }, move |app, r| {
+                if let Err(e) = r { app.say(format!("{e}"), theme::DANGER) } else { app.relist(&machine) }
+            });
+        }
+    }
+}
+
+fn clone_on(app: &mut App, machine: String, agent: String) {
+    let Some(link) = app.link(&machine) else { return };
+    if app.capture.is_none() { app.say("Cloning…", theme::SOFT) }
+    app.spawn(async move { link.rpc("agent_fork", json!({ "agentId": agent, "creationId": uuid::Uuid::new_v4().to_string() }), Duration::from_secs(120)).await }, move |app, reply| match reply {
+        Ok(reply) => if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
+            app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+            app.open_agent(&machine, id, Placement::Auto(None));
+        },
+        Err(e) => app.say(format!("Clone failed: {e}"), theme::DANGER),
+    });
+}
+
+fn agent_rpc_on(app: &mut App, machine: String, agent: String, ty: &'static str, done: &'static str) {
     let Some(link) = app.link(&machine) else { return };
     app.spawn(async move { link.rpc(ty, json!({ "agentId": agent }), Duration::from_secs(120)).await }, move |app, reply| match reply {
         Ok(_) => { app.say(done, theme::ONLINE); app.relist(&machine) }
@@ -809,14 +990,23 @@ fn harness_preview(picker: &mut Picker) {
     if picker.preview_window.is_some() { return }
     let mut pw = crate::theme::PreviewWindow::default();
     theme::parse_preview_window(&mut pw, "right,50%,<90(down,40%)");
-    for spec in &theme::fzf_opts().preview_window_specs { theme::parse_preview_window(&mut pw, spec) }
+    for spec in &theme::fzf_opts().preview_window_specs {
+        theme::parse_preview_window(&mut pw, spec);
+        // …and its look (a border, info, a scroll offset) over the narrow layout too; where
+        // the preview goes and its size are that layout's own.
+        let look: Vec<&str> = spec.split(',').filter(|t| { let t = t.trim(); !(matches!(t, "up" | "down" | "left" | "right" | "top" | "bottom") || t.starts_with('<') || t.trim_end_matches('%').parse::<f64>().is_ok()) }).collect();
+        if let (Some(alt), false) = (pw.alternative.as_deref_mut(), look.is_empty()) { theme::parse_preview_window(alt, &look.join(",")) }
+    }
     picker.preview_window = Some(pw);
 }
 
 /// Rebuild the open overlay's rows (the fleet or a catalog moved under it).
 pub fn refill(app: &mut App) {
     if let Some(Modal::Picker { kind, mut picker }) = app.modal.take() {
+        let was = picker.current_id();
         if !matches!(kind, PickerKind::Route { .. } | PickerKind::Palette | PickerKind::Help | PickerKind::Layout) { fill(app, &kind, &mut picker) }
+        // (The cursor put on another row by the list, not by a key: a moment before it answers.)
+        if was.is_some() && picker.current_id() != was { picker.landed = Some(Instant::now()) }
         app.modal = Some(Modal::Picker { kind, picker });
     }
 }
@@ -922,7 +1112,11 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
     app.starting_shell = Some(command.map(|c| vec![format!(" clear; exec \"${{SHELL:-sh}}\" -c {}\r", quoted(&c)).into_bytes()]).unwrap_or_default());
     // The session it was asked for in (a command's `-t work:` puts another in front for a moment):
     // where it goes when it comes, in front again for as long as that takes.
-    let session = app.session_id;
+    // (A window's own: the session that has it — new -d's new session is not the one in front.)
+    let session = match &placement {
+        Placement::Fill(tab) if !app.tabs.iter().any(|t| &t.id == tab) => app.sessions.iter().find(|s| s.tabs.iter().any(|t| &t.id == tab)).map(|s| s.id).unwrap_or(app.session_id),
+        _ => app.session_id,
+    };
     app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(60)).await }, move |app, reply| {
         if session != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|s| s.id == session) {
             let back = app.session_id;
@@ -941,6 +1135,12 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
 
 /// A shell the machine made (agent_create's reply): into its place.
 fn shell_made(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>) {
+    shell_placed(app, machine, placement, reply);
+    // What waited for it (the rest of a chain) goes on, its pane there — or not, if it failed.
+    for tx in std::mem::take(&mut app.shell_waiters) { let _ = tx.send(()); }
+}
+
+fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>) {
         let typed = app.starting_shell.take().unwrap_or_default();
         match reply {
             Ok(reply) => {
@@ -969,6 +1169,25 @@ fn shell_made(app: &mut App, machine: String, placement: Placement, reply: Resul
                         match app.held_reply.take() { Some(tx) => { let _ = tx.send((vec![line], Vec::new(), 0)); } None => app.say(line, theme::WARN) }
                     }
                 }
+                // -P for a pane made in a session not in front (new -d -s x -P, libtmux's every
+                // session): printed from there. The shell waiting on it is always answered — every
+                // command after it waits behind it.
+                if let Some(fmt) = app.print_new.take() {
+                    let line = match app.find_pane_anywhere(&machine, id) {
+                        Some((sid, _, pane)) if sid != app.session_id => {
+                            let (back, before) = (app.session_id, app.swap_back);
+                            app.swap_back = Some(back);
+                            let line = if app.swap_session(sid) {
+                                app.tabs.iter().position(|t| t.panes().contains(&pane)).map(|w| crate::format::spans_for_pane(app, &fmt, w, pane, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect::<String>()).unwrap_or_default()
+                            } else { String::new() };
+                            app.swap_session(back);
+                            app.swap_back = before;
+                            line
+                        }
+                        _ => String::new(),
+                    };
+                    match app.held_reply.take() { Some(tx) => { let _ = tx.send((vec![line], Vec::new(), 0)); } None => app.say(line, theme::WARN) }
+                }
             }
             Err(e) => {
                 if let Some(tx) = app.held_reply.take() { let _ = tx.send((Vec::new(), vec![format!("create pane failed: {e}")], 1)); }
@@ -983,8 +1202,10 @@ fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, messa
 /// agent_create: a harness on [machine] in [cwd] (none: a new project; [worktree]: a new git
 /// worktree of it, on a branch of its own the daemon names), in the permission mode
 /// @hn-permission-mode says (auto unless you set it: acceptEdits, plan, ask, full …).
-fn create_in(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool) {
-    let Some(link) = app.link(&machine) else { app.say("That machine is not connected", theme::DANGER); return };
+fn create_in(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool) { create_opts(app, machine, what, cwd, message, worktree, NewOpts::default()) }
+
+fn create_opts(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool, opts: NewOpts) {
+    let Some(link) = app.link(&machine) else { return app.error("That machine is not connected") };
     let terminal = what.engine == "terminal";
     let mut payload = json!({ "engine": what.engine, "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": !terminal });
     if let Some(dsh) = &what.dsh { payload["dsh"] = json!(dsh) }
@@ -996,19 +1217,40 @@ fn create_in(app: &mut App, machine: String, what: What, cwd: Option<String>, me
     }
     if !terminal { payload["permissionMode"] = json!(app.options.get("@hn-permission-mode", "", None).filter(|m| !m.is_empty()).unwrap_or_else(|| "auto".into())) }
     if let Some(message) = message.filter(|m| !m.trim().is_empty()) { payload["prompt"] = json!(message.trim()) }
-    app.say(format!("Starting {} on {}…", what.label, app.fleet.machine_name(&machine)), theme::SOFT);
+    if let Some(name) = opts.name.as_ref().filter(|n| !n.is_empty()) { payload["name"] = json!(name) }
+    // (From a shell: nothing said on the way — a message there is the command's error.)
+    if app.capture.is_none() { app.say(format!("Starting {} on {}…", what.label, app.fleet.machine_name(&machine)), theme::SOFT) }
     app.modal = None;
+    // -P: the shell that asked waits for it, and is told where it is (as new-window -P).
+    if opts.print.is_some() { app.print_new = opts.print.clone() }
+    let session = app.session_id;
     app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(180)).await }, move |app, reply| match reply {
         Ok(reply) => {
             if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
                 app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
-                // A new harness is a new window (as C-b c's shell is), or the empty one here.
+                // A new harness is a new window (as C-b c's shell is), or the empty one here —
+                // in the session it was asked for; -d: not gone to.
+                let back = (app.session_id, app.tab().id.clone());
+                let swapped = session != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|s| s.id == session) && { app.swap_back = Some(back.0); app.swap_session(session) };
+                let before = app.tab().id.clone();
                 let placement = if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab };
                 app.open_agent(&machine, id, placement);
+                if opts.detached { if let Some(i) = app.tabs.iter().position(|t| t.id == before) { app.select_tab(i) } }
+                if let Some(fmt) = opts.print.as_ref().and(app.print_new.take()) {
+                    let line = app.find_pane(&machine, id).map(|(w, p)| crate::format::spans_for_pane(app, &fmt, w, p, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect::<String>()).unwrap_or_default();
+                    if let Some(tx) = app.held_reply.take() { let _ = tx.send((vec![line], Vec::new(), 0)); }
+                }
+                if swapped { app.swap_back = None; app.swap_session(back.0); app.fit_panes(); app.save_sessions() }
                 app.toast = None;
-            } else { app.say("The machine created no harness", theme::DANGER) }
+            } else {
+                if let Some(tx) = app.held_reply.take().filter(|_| opts.print.is_some()) { app.print_new = None; let _ = tx.send((Vec::new(), vec!["the machine created no harness".into()], 1)); return }
+                app.say("The machine created no harness", theme::DANGER)
+            }
         }
-        Err(e) => app.say(format!("Could not start it: {e}"), theme::DANGER),
+        Err(e) => {
+            if let Some(tx) = app.held_reply.take().filter(|_| opts.print.is_some()) { app.print_new = None; let _ = tx.send((Vec::new(), vec![format!("create harness failed: {e}")], 1)); return }
+            app.say(format!("Could not start it: {e}"), theme::DANGER)
+        }
     });
 }
 
@@ -1019,19 +1261,25 @@ fn modal_key(app: &mut App, key: KeyEvent) {
             // tmux: the confirm key (y, or -c's) runs it, Enter too with -y; any other says no.
             if key.code == KeyCode::Char(yes) || (enter_yes && key.code == KeyCode::Enter) { commands::execute(app, &command) }
         }
-        Modal::DisplayPanes { .. } => {
-            if let KeyCode::Char(c @ '0'..='9') = key.code {
-                let n = (c as usize) - ('0' as usize);
-                app.select_pane_index(n.saturating_sub(app.pane_base(app.active)));
-            }
-        }
-        Modal::Clock { .. } => {}
+        Modal::DisplayPanes { .. } => {}
         // tmux's menu (menu_key_cb): an item's key chooses it; ↑ k ↓ j move (round the ends,
         // past rules and disabled items), PPage C-b and NPage by five, g Home / G End the first
         // and last, Enter the chosen one, Escape C-c C-g q leave.
         Modal::Menu(mut menu) => {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
             let name = keys::name(&keys::of(&key));
+            // MENU_TAB (a prompt's completions): BSpace closes it, Tab moves down (past the last,
+            // closes it).
+            if menu.complete.is_some() {
+                let last = menu.items.len().saturating_sub(1);
+                let close = key.code == KeyCode::Backspace || (key.code == KeyCode::Tab && menu.choice == Some(last));
+                if close { if let Some(c) = menu.complete.take() { complete_chosen(app, *c, None) } return }
+                if key.code == KeyCode::Tab { menu.choice = Some(menu.choice.map(|c| (c + 1) % menu.items.len()).unwrap_or(0)); app.modal = Some(Modal::Menu(menu)); return }
+                if matches!(key.code, KeyCode::Esc) || (matches!(key.code, KeyCode::Char('q')) && !ctrl) || (ctrl && matches!(key.code, KeyCode::Char('c' | 'g'))) {
+                    if let Some(c) = menu.complete.take() { complete_chosen(app, *c, None) }
+                    return;
+                }
+            }
             if let Some(i) = menu.items.iter().position(|it| !it.disabled && !it.separator && !it.key.is_empty() && it.key == name) {
                 menu.choice = Some(i);
                 return menu_chosen(app, menu);
@@ -1150,14 +1398,10 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
             submit_prompt(app, p);
             return;
         }
-        KeyCode::Backspace | KeyCode::Char('h') if key.code == KeyCode::Backspace || ctrl => {
-            if alt {
-                let mut from = at;
-                while from > 0 && chars[from - 1] == ' ' { from -= 1 }
-                while from > 0 && chars[from - 1] != ' ' { from -= 1 }
-                let mut v = chars.clone(); v.drain(from..at); set(&mut p, v, from); changed = true;
-            } else if at > 0 { let mut v = chars.clone(); v.remove(at - 1); set(&mut p, v, at - 1); changed = true }
-            else if p.value.is_empty() && !incremental { return } // backspace on an empty prompt closes it
+        // BSpace and C-h: the character before the cursor (none, and the prompt stays, at its
+        // start); M-BSpace is no key of tmux's prompt.
+        KeyCode::Backspace | KeyCode::Char('h') if (key.code == KeyCode::Backspace || ctrl) && !alt => {
+            if at > 0 { let mut v = chars.clone(); v.remove(at - 1); set(&mut p, v, at - 1); changed = true }
         }
         KeyCode::Delete => { if at < size { let mut v = chars.clone(); v.remove(at); set(&mut p, v, at); changed = true } }
         KeyCode::Char('d') if ctrl => { if at < size { let mut v = chars.clone(); v.remove(at); set(&mut p, v, at); changed = true } }
@@ -1215,20 +1459,13 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
             if p.value.is_empty() { prefix = '='; if let PromptKind::Command { last, .. } = &p.kind { let l = last.clone(); let n = l.chars().count(); set(&mut p, l.chars().collect(), n) } } else { prefix = '+' }
             changed = true;
         }
-        KeyCode::Tab if matches!(p.kind, PromptKind::Command { template: None, .. }) => {
-            // Complete the command name: the only match, or the part every match shares.
-            if !p.value.contains(' ') {
-                let typed = p.value.clone();
-                let matches: Vec<&str> = commands::COMMANDS.iter().map(|(n, _, _)| *n).filter(|n| n.starts_with(&typed)).collect();
-                if matches.len() == 1 { p.value = format!("{} ", matches[0]) }
-                else if !matches.is_empty() {
-                    let mut common = matches[0].to_string();
-                    for m in &matches[1..] { while !m.starts_with(&common) { common.pop(); } }
-                    p.value = common;
-                    p.hint = matches.join("  ");
-                }
-                p.cursor = p.value.chars().count();
-                changed = true;
+        // status_prompt_replace_complete: the word at the cursor completed — the only match and
+        // a space, else the part every match shares; when that is the word already, a menu of
+        // them (Tab or its key picks one).
+        KeyCode::Tab if matches!(p.kind, PromptKind::Command { .. } | PromptKind::Tree { .. }) => {
+            match complete_prompt(app, &mut p, ptype) {
+                Some(menu) => { app.modal = Some(Modal::Menu(menu)); return }
+                None => changed = true,
             }
         }
         KeyCode::Char(c) if !ctrl && !alt => { let mut v = chars.clone(); v.insert(at, c); set(&mut p, v, at + 1); p.hint.clear(); appended = true; changed = true }
@@ -1241,6 +1478,172 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
         return;
     }
     if changed && incremental { prompt_changed(app, &p, prefix) }
+    app.modal = Some(Modal::Prompt(p));
+}
+
+/// status_prompt_replace_complete's word: where the one at the cursor starts and ends.
+fn prompt_word(chars: &[char], cursor: usize) -> Option<(usize, usize)> {
+    let at = |i: usize| chars.get(i).copied();
+    let space = |i: usize| at(i) == Some(' ');
+    let idx = cursor.saturating_sub(1);
+    let mut first = idx;
+    while first > 0 && !space(first) { first -= 1 }
+    while at(first).is_some() && space(first) { first += 1 }
+    let mut last = idx;
+    while at(last).is_some() && !space(last) { last += 1 }
+    while last > 0 && space(last) { last -= 1 }
+    if at(last).is_some() { last += 1 }
+    (last >= first).then_some((first, last))
+}
+
+/// The word at the cursor made [s], the cursor after it.
+fn prompt_replace(p: &mut Prompt, s: &str) -> bool {
+    let chars: Vec<char> = p.value.chars().collect();
+    let Some((first, last)) = prompt_word(&chars, p.cursor) else { return false };
+    let mut v: Vec<char> = chars[..first].to_vec();
+    v.extend(s.chars());
+    v.extend(&chars[last..]);
+    p.value = v.into_iter().collect();
+    p.cursor = first + s.chars().count();
+    true
+}
+
+/// status_prompt_complete_list: the commands and their aliases, command-alias's names; past the
+/// first word, every option and layout too — each once.
+fn complete_list(app: &App, s: &str, at_start: bool) -> Vec<String> {
+    let mut list: Vec<String> = Vec::new();
+    let mut add = |w: &str| if !list.iter().any(|x| x == w) { list.push(w.to_string()) };
+    for e in crate::cmd::TABLE.iter() {
+        if e.name.starts_with(s) { add(e.name) }
+        if !e.alias.is_empty() && e.alias.starts_with(s) { add(e.alias) }
+    }
+    for a in app.options.array("command-alias") {
+        if let Some((name, _)) = a.split_once('=') { if s.len() <= name.len() && name.starts_with(s) { add(name) } }
+    }
+    if at_start { return list }
+    for name in crate::options::names() { if name.starts_with(s) { add(name) } }
+    for l in ["even-horizontal", "even-vertical", "main-horizontal", "main-horizontal-mirrored", "main-vertical", "main-vertical-mirrored", "tiled"] { if l.starts_with(s) { add(l) } }
+    list
+}
+
+/// status_prompt_complete_prefix: what every word of [list] starts with.
+fn complete_prefix(list: &[String]) -> Option<String> {
+    let mut out: Vec<char> = list.first()?.chars().collect();
+    for w in &list[1..] {
+        let w: Vec<char> = w.chars().collect();
+        let mut j = w.len().min(out.len());
+        out.truncate(j);
+        while j > 0 { if out[j - 1] != w[j - 1] { out.truncate(j - 1) } j -= 1 }
+    }
+    Some(out.into_iter().collect())
+}
+
+/// Tab in a prompt (status_prompt_complete): the word at the cursor completed in [p], or a menu
+/// of the words it could be (the prompt inside it).
+fn complete_prompt(app: &App, p: &mut Prompt, ptype: usize) -> Option<crate::modal::Menu> {
+    let chars: Vec<char> = p.value.chars().collect();
+    let (first, last) = prompt_word(&chars, p.cursor)?;
+    let word: String = chars[first..last].iter().collect();
+    let (target, window_target) = (ptype == 2 || ptype == 3, ptype == 3);
+    if word.is_empty() && !target { return None }
+    let mut offset = first;
+    let mut list: Vec<String> = Vec::new();
+    let mut flag = None;
+    let mut out: Option<String> = None;
+    if !target && !word.starts_with("-t") && !word.starts_with("-s") {
+        list = complete_list(app, &word, first == 0);
+        out = match list.len() { 0 => None, 1 => Some(format!("{} ", list[0])), _ => complete_prefix(&list) };
+    } else {
+        let s: String = if target { word.clone() } else { flag = word.chars().nth(1); offset += 2; word.chars().skip(2).collect() };
+        let menu_of = |app: &App, sid: u32, s: &str, list: &mut Vec<String>| -> Result<Option<String>, crate::modal::Menu> { window_menu(app, p, sid, s, offset, flag, window_target, list) };
+        if window_target {
+            match menu_of(app, app.session_id, &s, &mut list) { Ok(Some(w)) => { prompt_set(p, &w, window_target); return None } Ok(None) => return None, Err(m) => return Some(m) }
+        }
+        match s.find(':') {
+            // status_prompt_complete_session: `name:` (or `$N:`) of each session it starts.
+            None => {
+                for (id, name) in app.session_list() {
+                    if s.is_empty() || name.starts_with(&s) { list.push(format!("{name}:")) }
+                    else if let Some(n) = s.strip_prefix('$') { if id.to_string().starts_with(n) { list.push(format!("${id}:")) } }
+                }
+                out = complete_prefix(&list).map(|o| match flag { Some(f) => format!("-{f}{o}"), None => o });
+            }
+            Some(colon) if !s[colon + 1..].contains('.') => {
+                let sid = if s.starts_with(':') { Some(app.session_id) } else { app.session_list().into_iter().find(|(_, n)| *n == s[..colon]).map(|(i, _)| i) };
+                let Some(sid) = sid else { return None };
+                let mut windows = Vec::new();
+                match menu_of(app, sid, &s[colon + 1..], &mut windows) { Ok(Some(w)) => out = Some(w), Ok(None) => return None, Err(m) => return Some(m) }
+            }
+            _ => {}
+        }
+    }
+    list.sort();
+    if out.as_deref() == Some(word.as_str()) { out = None }
+    if let Some(o) = out { prompt_replace(p, &o); return None }
+    complete_menu(app, p, list, offset, flag, false)
+}
+
+/// The prompt's word made [s] — for a window target's prompt, the whole line.
+fn prompt_set(p: &mut Prompt, s: &str, window_target: bool) {
+    if window_target { p.value = s.to_string(); p.cursor = p.value.chars().count() } else { prompt_replace(p, s); }
+}
+
+/// status_prompt_complete_list_menu: the words (the last ten, as many as fit above the status
+/// line), each with its digit, over the prompt where the word starts; none for one word.
+fn complete_menu(app: &App, p: &Prompt, list: Vec<String>, offset: usize, flag: Option<char>, window_target: bool) -> Option<crate::modal::Menu> {
+    let size = list.len();
+    let lines = app.status_lines();
+    if size <= 1 || app.size.1.saturating_sub(lines) < 3 { return None }
+    let height = (app.size.1 - lines - 2).min(10).min(size as u16) as usize;
+    let start = size - height;
+    let items: Vec<crate::modal::MenuItem> = list[start..].iter().enumerate().map(|(i, w)| crate::modal::MenuItem { label: w.clone(), key: ((b'0' + i as u8) as char).to_string(), command: String::new(), disabled: false, separator: false }).collect();
+    Some(prompt_menu(app, p, items, list[start..].to_vec(), offset, flag, window_target))
+}
+
+/// A completion menu placed as tmux's: at the word's column (less the box's two), right above
+/// the status line (below it at the top), kept on the screen.
+fn prompt_menu(app: &App, p: &Prompt, items: Vec<crate::modal::MenuItem>, list: Vec<String>, offset: usize, flag: Option<char>, window_target: bool) -> crate::modal::Menu {
+    let lines = app.status_lines();
+    let width = items.iter().map(|it| crate::draw::format_width(&it.label) + it.key.chars().count() + 3).max().unwrap_or(0) as u16;
+    let height = items.len() as u16;
+    let y = if app.status_top { lines } else { app.size.1.saturating_sub(3 + height) };
+    let x = (offset + unicode_width::UnicodeWidthStr::width(p.label.as_str())).saturating_sub(2) as u16;
+    let x = x.min(app.size.0.saturating_sub(width + 4));
+    crate::modal::Menu { title: String::new(), items, choice: Some(0), x, y, width, stay_open: false, no_mouse: true, mouse: None, tree: None,
+        complete: Some(Box::new(crate::modal::Complete { prompt: p.clone(), list, flag, window_target })) }
+}
+
+/// status_prompt_complete_window_menu: session [sid]'s windows whose number starts [word] —
+/// the one there is (Ok(Some)), none (Ok(None)), else a menu of up to ten.
+#[allow(clippy::too_many_arguments)]
+fn window_menu(app: &App, p: &Prompt, sid: u32, word: &str, offset: usize, flag: Option<char>, window_target: bool, list: &mut Vec<String>) -> Result<Option<String>, crate::modal::Menu> {
+    let lines = app.status_lines();
+    if app.size.1.saturating_sub(lines) < 3 { return Ok(None) }
+    let height = (app.size.1 - lines - 2).min(10) as usize;
+    let name = app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| n).unwrap_or_default();
+    let mut items = Vec::new();
+    for (num, wname, _) in app.session_windows(sid) {
+        if !word.is_empty() && !num.to_string().starts_with(word) { continue }
+        let (label, w) = if window_target { (format!("{num} ({wname})"), num.to_string()) } else { (format!("{name}:{num} ({wname})"), format!("{name}:{num}")) };
+        items.push(crate::modal::MenuItem { label, key: ((b'0' + list.len() as u8) as char).to_string(), command: String::new(), disabled: false, separator: false });
+        list.push(w);
+        if list.len() == height { break }
+    }
+    match list.len() {
+        0 => Ok(None),
+        1 => Ok(Some(match flag { Some(f) => format!("-{f}{}", list[0]), None => list[0].clone() })),
+        _ => Err(prompt_menu(app, p, items, list.clone(), offset, flag, window_target)),
+    }
+}
+
+/// A completion menu's item chosen (status_prompt_menu_callback): its word into the prompt,
+/// which is back; closed without one, the prompt as it was.
+fn complete_chosen(app: &mut App, c: crate::modal::Complete, choice: Option<usize>) {
+    let mut p = c.prompt;
+    if let Some(w) = choice.and_then(|i| c.list.get(i)) {
+        let s = match c.flag { Some(f) => format!("-{f}{w}"), None => w.clone() };
+        prompt_set(&mut p, &s, c.window_target);
+    }
     app.modal = Some(Modal::Prompt(p));
 }
 
@@ -1416,8 +1819,26 @@ fn end_word(chars: &[char], at: usize, ws: &str) -> usize {
 /// fzf's keys: ↑ C-k C-p away from the prompt, ↓ C-j C-n toward it (the list reads bottom-up);
 /// Tab marks; C-t/C-x/C-v open in a new window / below / beside (fzf.vim); C-/ the preview.
 fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker) {
+    // A row a key goes to is one you chose to look at (the list moving it there is not).
+    let was = picker.current_id();
+    let key_moves = matches!(key.code, KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Tab | KeyCode::BackTab)
+        || (key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('j' | 'k' | 'n' | 'p')));
+    if key_moves { picker.landed = None }
+    let _ = was;
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    // Jump mode: a row's label goes to it (jump-accept: and picks it); any other key ends it.
+    if let Some(accept) = picker.jumping.take() {
+        if let KeyCode::Char(c) = key.code {
+            let rows = picker.page_rows.get().max(0) as usize;
+            if let Some(k) = theme::fzf_opts().jump_labels.chars().position(|l| l == c).filter(|k| !ctrl && !alt && *k < rows && picker.scroll + k < picker.visible.len()) {
+                picker.vset((picker.scroll + k) as i64, 1);
+                if accept { return choose(app, kind, picker, Choice::Enter) }
+            }
+        }
+        app.modal = Some(Modal::Picker { kind, picker });
+        return;
+    }
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     // Inside a machine or a project, esc (or ⌫ on an empty query) steps back out to the list
     // it was chosen from; anywhere else it closes.
@@ -1430,13 +1851,18 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         return;
     }
     let before = picker.query.clone();
-    let multi = matches!(kind, PickerKind::Open { .. }) && crate::picker::scope_of(&picker.query).is_none();
+    // (--multi in FZF_DEFAULT_OPTS: every list takes marks, as fzf's do.)
+    let multi = (matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) || theme::fzf_opts().multi) && crate::picker::scope_of(&picker.query).is_none();
+    // change-multi: the list takes marks, or not, as it said.
+    let multi = picker.multi_override.map(|n| n > 0).unwrap_or(multi);
+    // unbind / toggle-bind: that key does nothing in this list now.
+    if picker.unbound.contains(&fzf_key_name(&key)) { app.modal = Some(Modal::Picker { kind, picker }); return }
     let up: i64 = if theme::fzf().reverse { -1 } else { 1 };
     // FZF_DEFAULT_OPTS --bind: your key:action pairs come first (the last bind for a key wins,
     // as in fzf). A key bound only to what hn does not run (execute, become, reload …) keeps this
     // list's own meaning of it; one with an action hn runs never falls back to it.
     let name = fzf_key_name(&key);
-    let bound = theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| a.clone()).filter(|a| runs_here(a));
+    let bound = theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| a.clone()).filter(|a| !falls_back(&name, a));
     if let Some(actions) = bound {
         match bound_actions(&mut picker, &actions, up, multi) {
             End::Accept => { choose(app, kind, picker, Choice::Enter); return }
@@ -1452,6 +1878,9 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             // Up is toward the top of the screen: further down the list, unless it is reversed.
             KeyCode::Up => picker.move_by(up),
             KeyCode::Down => picker.move_by(-up),
+            // --history: C-p and C-n go back and forth through its queries (fzf binds them so).
+            KeyCode::Char('p') if ctrl && theme::fzf_opts().history.is_some() => picker.history_step(true),
+            KeyCode::Char('n') if ctrl && theme::fzf_opts().history.is_some() => picker.history_step(false),
             KeyCode::Char('k' | 'p') if ctrl => picker.move_by(up),
             KeyCode::Char('j' | 'n') if ctrl => picker.move_by(-up),
             KeyCode::PageUp => crate::ui::page(&mut picker, up, false),
@@ -1527,10 +1956,13 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             KeyCode::Char('a') if alt && matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) => {
                 if let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) {
                     if let Some(q) = app.fleet.agent(&machine, &agent).and_then(|a| a.question.clone()) {
+                        let row = format!("{machine}:{agent}");
+                        let row = picker.current_id().unwrap_or(row);
+                        let request = match answerable(app, &picker, &row) { Ok(r) => r, Err(why) => { picker.say(why); app.modal = Some(Modal::Picker { kind, picker }); return } };
                         let how = if q.multi { format!("1–{} (several: 1,3) or your own words", q.options.len()) } else if q.options.is_empty() { "your answer".to_string() } else { format!("1–{} or your own words", q.options.len()) };
                         // Who asks and what, while you type (the list is gone behind the prompt).
                         let name = app.fleet.agent(&machine, &agent).map(|a| crate::format::short_name(&a.name, 24)).unwrap_or_default();
-                        let mut p = Prompt::status(PromptKind::Answer { machine, agent }, &format!("({name}) "), "");
+                        let mut p = Prompt::status(PromptKind::Answer { machine, agent, request }, &format!("({name}) "), "");
                         p.title = "Answer".into();
                         p.hint = format!("{} — {how}", q.prompt);
                         app.back_to_list = Some(Box::new((kind, picker)));
@@ -1557,6 +1989,13 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         }
     }
     let mut kind = kind;
+    // C-b s: what was said, searched on every machine a moment after the last key.
+    if picker.query != before && matches!(kind, PickerKind::Open { machine: None, project: None, .. }) && crate::picker::scope_of(&picker.query).is_none() {
+        let q = picker.query.trim().to_string();
+        app.said_want = q.clone();
+        if q.chars().filter(|c| c.is_alphanumeric()).count() >= 2 { app.said_due = Some(Instant::now() + Duration::from_millis(150)) }
+        else { app.said_due = None; app.said.clear(); app.said_for.clear() }
+    }
     if picker.query != before {
         // Marks belong to one list: switching scope (> commands, @ machines…) drops them.
         let scope = |q: &str| crate::picker::scope_of(q);
@@ -1607,12 +2046,31 @@ enum End { Stay, Accept, Abort }
 /// An fzf action chain (`up+up`, `toggle+down`) split where a `+` is not inside an action's (…).
 fn split_chain(actions: &str) -> Vec<String> {
     let (mut depth, mut out, mut cur) = (0i32, Vec::new(), String::new());
-    for c in actions.chars() {
-        match c { '(' | '[' | '{' => depth += 1, ')' | ']' | '}' => depth -= 1, '+' if depth == 0 => { out.push(std::mem::take(&mut cur)); continue } _ => {} }
+    let chars: Vec<char> = actions.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        // `action:argument`: the argument is the rest of the line, `+` and all (fzf's form
+        // without brackets).
+        if c == ':' && depth == 0 && !cur.is_empty() && cur.chars().all(|x| x.is_ascii_lowercase() || x == '-') {
+            cur.extend(&chars[i..]);
+            break;
+        }
+        match c { '(' | '[' | '{' => depth += 1, ')' | ']' | '}' => depth -= 1, '+' if depth == 0 => { out.push(std::mem::take(&mut cur)); i += 1; continue } _ => {} }
         cur.push(c);
+        i += 1;
     }
     out.push(cur);
     out
+}
+
+/// An action's argument: `name(arg)` (or `[…]`, `{…}` …) or `name:arg`.
+fn action_arg<'a>(a: &'a str, name: &str) -> Option<&'a str> {
+    let rest = a.strip_prefix(name)?;
+    if let Some(r) = rest.strip_prefix(':') { return Some(r) }
+    let open = rest.chars().next()?;
+    let close = match open { '(' => ')', '[' => ']', '{' => '}', '<' => '>', '~' => '~', '!' => '!', '@' => '@', '#' => '#', '$' => '$', '%' => '%', '^' => '^', '&' => '&', '*' => '*', ';' => ';', '/' => '/', '|' => '|', _ => return None };
+    rest[open.len_utf8()..].strip_suffix(close)
 }
 
 /// A bound key's (or event's) actions, in order: the ones this list knows, as fzf does them; the
@@ -1622,13 +2080,26 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
     for action in split_chain(actions) {
         match action.as_str() {
             "half-page-up" => crate::ui::page(picker, up, true), "half-page-down" => crate::ui::page(picker, -up, true),
-            "top" | "first" => picker.move_by(-len), "last" => picker.move_by(len),
+            "top" | "first" | "best" => picker.move_by(-len), "last" => picker.move_by(len),
+            // close: the preview if it shows, else the list.
+            "close" => { if picker.preview { picker.show_preview(Some(false)) } else { return End::Abort } }
+            // replace-query: the query made the current row's text.
+            "replace-query" => { if let Some(t) = picker.current().map(|r| r.label.clone()) { picker.set_query(&t) } }
+            // up-selected / down-selected: to the next marked row up (or down) the screen.
+            "up-selected" => picker.to_marked(up > 0), "down-selected" => picker.to_marked(up < 0),
+            // exclude: the current row out of the list (exclude-multi: the marked ones, else it).
+            "exclude" | "exclude-multi" => {
+                let gone: Vec<String> = if action == "exclude-multi" && !picker.marked.is_empty() { picker.marked.clone() } else { picker.current_id().into_iter().collect() };
+                picker.marked.retain(|m| !gone.contains(m));
+                picker.excluded.extend(gone);
+                picker.refilter();
+            }
             // fzf's older names: toggle+up, toggle+down.
             // In a list that takes no marks (C-b =) the toggle is nothing and the move still is.
             // The toggles move on only when they toggled (fzf's actToggleDown/Up): not in a list
             // that takes no marks (C-b =), nor when --multi=N is full.
-            "toggle-up" => { if multi && picker.toggle_mark() { picker.move_by(up) } }
-            "toggle-down" => { if multi && picker.toggle_mark() { picker.move_by(-up) } }
+            "toggle-up" => { if multi { picker.toggle_mark(); } picker.move_by(up) }
+            "toggle-down" => { if multi { picker.toggle_mark(); } picker.move_by(-up) }
             // toggle-in: toggle+down, or toggle+up under --layout=reverse — toward the list's first
             // row either way; toggle-out the other way.
             "toggle-in" => { if multi && picker.toggle_mark() { picker.move_by(-1) } }
@@ -1653,9 +2124,21 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
                 pw.wrap = Some(!pw.wrap.unwrap_or(false));
                 picker.preview_window = Some(pw);
             }
+            "toggle-track" => { picker.track_flipped = !picker.track_flipped }
+            "jump" => picker.jumping = Some(false), "jump-accept" => picker.jumping = Some(true),
+            "prev-history" => picker.history_step(true), "next-history" => picker.history_step(false),
+            // track-current: this item until the cursor moves (or it leaves) — none under --track;
+            // untrack-current ends that only.
+            "track-current" => { if !picker.tracking_all() { picker.track_current = picker.current_id() } }
+            "untrack-current" => picker.track_current = None,
+            "toggle-track-current" => { if picker.track_current.is_some() { picker.track_current = None } else if !picker.tracking_all() { picker.track_current = picker.current_id() } }
+            // search(…): the list searched for it, the query left as it is.
+            a if action_arg(a, "search").is_some() => { picker.search = action_arg(a, "search").map(str::to_string); picker.refilter() }
             "toggle-sort" => { picker.sort_flipped = !picker.sort_flipped; picker.refilter() }
             // change-preview-window(a|b|…): each time the next of them, over the --preview-window
             // it started with (an empty one is that one).
+            // change-query(…) / change-query:…
+            a if action_arg(a, "change-query").is_some() => { let q = action_arg(a, "change-query").unwrap_or("").to_string(); picker.set_query(&q) }
             a if a.starts_with("change-preview-window(") && a.ends_with(')') => {
                 let specs: Vec<&str> = a["change-preview-window(".len()..a.len() - 1].split('|').collect();
                 let spec = specs[picker.pw_next % specs.len()];
@@ -1668,6 +2151,43 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
                 picker.preview_window = Some(pw);
             }
             "yank" => picker.yank(),
+            // up-match / down-match: up and down (the rows are all matches without --raw).
+            "up-match" => picker.move_by(up), "down-match" => picker.move_by(-up),
+            // The subword ones (fzf's camelCase-aware words).
+            "backward-subword" => picker.subword(false, false), "forward-subword" => picker.subword(true, false),
+            "backward-kill-subword" => picker.subword(false, true), "kill-subword" => picker.subword(true, true),
+            // The input shown or hidden (--no-input's).
+            "hide-input" => theme::opts_change(|o| o.no_input = true), "show-input" => theme::opts_change(|o| o.no_input = false),
+            "toggle-input" => { let on = theme::fzf_opts().no_input; theme::opts_change(|o| o.no_input = !on) }
+            // change-multi: marks taken (no limit), change-multi(N): up to N (0: none) — the marks
+            // dropped when that changes a list that took them.
+            a if a == "change-multi" || action_arg(a, "change-multi").is_some() => {
+                let n = match action_arg(a, "change-multi") { Some(v) => match v.trim().parse::<usize>() { Ok(n) => n, Err(_) => continue }, None => usize::MAX };
+                let was = picker.multi_override.unwrap_or(if multi { usize::MAX } else { 0 });
+                if was > 0 && n != was { picker.marked.clear() }
+                picker.multi_override = Some(n);
+            }
+            // unbind(keys) / rebind(keys) / toggle-bind(keys): keys that do nothing here, or again.
+            a if action_arg(a, "unbind").is_some() => { for k in action_arg(a, "unbind").unwrap_or("").split(',') { picker.unbound.insert(k.trim().to_string()); } }
+            a if action_arg(a, "rebind").is_some() => { for k in action_arg(a, "rebind").unwrap_or("").split(',') { picker.unbound.remove(k.trim()); } }
+            a if action_arg(a, "toggle-bind").is_some() => { for k in action_arg(a, "toggle-bind").unwrap_or("").split(',') { let k = k.trim().to_string(); if !picker.unbound.remove(&k) { picker.unbound.insert(k); } } }
+            // The look, for this list: the prompt, the pointer, the ghost text, the header, the
+            // footer, each section's label.
+            a if action_arg(a, "change-prompt").is_some() => { let v = action_arg(a, "change-prompt").unwrap_or("").to_string(); theme::fzf_change(|f| f.prompt_text = v) }
+            a if action_arg(a, "change-pointer").is_some() => {
+                let v = action_arg(a, "change-pointer").unwrap_or("").to_string();
+                // (fzf takes one of at most two columns.)
+                if unicode_width::UnicodeWidthStr::width(v.as_str()) <= 2 { theme::fzf_change(|f| f.pointer_char = v) }
+            }
+            a if action_arg(a, "change-ghost").is_some() => { let v = action_arg(a, "change-ghost").unwrap_or("").to_string(); theme::opts_change(|o| o.ghost = Some(v)) }
+            a if action_arg(a, "change-header").is_some() => picker.header_text = action_arg(a, "change-header").map(str::to_string),
+            a if action_arg(a, "change-footer").is_some() => { let v: Vec<String> = action_arg(a, "change-footer").unwrap_or("").split('\n').map(str::to_string).collect(); theme::opts_change(|o| o.footer = v) }
+            a if action_arg(a, "change-border-label").is_some() => { let v = action_arg(a, "change-border-label").unwrap_or("").to_string(); theme::opts_change(|o| o.border_label = v) }
+            a if action_arg(a, "change-list-label").is_some() => { let v = theme::strip_ansi(action_arg(a, "change-list-label").unwrap_or("")); theme::opts_change(|o| o.list_label = v) }
+            a if action_arg(a, "change-input-label").is_some() => { let v = theme::strip_ansi(action_arg(a, "change-input-label").unwrap_or("")); theme::opts_change(|o| o.input_label = v) }
+            a if action_arg(a, "change-header-label").is_some() => { let v = theme::strip_ansi(action_arg(a, "change-header-label").unwrap_or("")); theme::opts_change(|o| o.header_label = v) }
+            a if action_arg(a, "change-footer-label").is_some() => { let v = theme::strip_ansi(action_arg(a, "change-footer-label").unwrap_or("")); theme::opts_change(|o| o.footer_label = v) }
+            a if action_arg(a, "change-preview-label").is_some() => { let v = action_arg(a, "change-preview-label").unwrap_or("").to_string(); theme::opts_change(|o| o.preview_label = Some(v)) }
             "accept-non-empty" => { if !picker.visible.is_empty() { return End::Accept } }
             "accept" => return End::Accept,
             "abort" => return End::Abort,
@@ -1678,7 +2198,14 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             // more than --multi=N marked.
             "select-all" => { if multi { for (i, _) in picker.visible.clone() { let id = picker.rows[i].id.clone(); if !picker.marked.contains(&id) && picker.room_to_mark() { picker.marked.push(id) } } } }
             "deselect-all" => { let shown: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); picker.marked.retain(|m| !shown.contains(m)) }
-            "toggle-all" => { if multi { let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); for id in all { if let Some(at) = picker.marked.iter().position(|m| *m == id) { picker.marked.remove(at); } else if picker.room_to_mark() { picker.marked.push(id) } } } }
+            // actToggleAll: the shown rows that were marked unmarked first, then the others marked
+            // from the top while --multi=N has room.
+            "toggle-all" => { if multi {
+                let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect();
+                let was: Vec<String> = all.iter().filter(|id| picker.marked.contains(id)).cloned().collect();
+                picker.marked.retain(|m| !was.contains(m));
+                for id in all.into_iter().filter(|id| !was.contains(id)) { if picker.room_to_mark() { picker.marked.push(id) } }
+            } }
             "toggle-preview" => picker.show_preview(None), "toggle-wrap" => picker.toggle_wrap(),
             "preview-up" => picker.preview_by(-1), "preview-down" => picker.preview_by(1),
             "clear-query" => picker.set_query(""),
@@ -1697,27 +2224,38 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
     End::Stay
 }
 
-/// The --bind actions hn runs (bound_actions); the rest (execute, become, reload, print …) are
-/// the shell's side of fzf, which a list in hn has not.
-fn known_action(a: &str) -> bool {
-    matches!(a, "half-page-up" | "half-page-down" | "top" | "first" | "last" | "toggle-up" | "toggle-down" | "toggle-in" | "toggle-out" | "select" | "deselect"
-        | "clear-selection" | "next-selected" | "prev-selected" | "preview-page-up" | "preview-page-down" | "preview-half-page-up" | "preview-half-page-down"
-        | "preview-top" | "preview-bottom" | "unix-word-rubout" | "kill-line" | "backward-char" | "forward-char" | "backward-word" | "forward-word"
-        | "backward-delete-char" | "delete-char" | "delete-char/eof" | "backward-delete-char/eof" | "cancel" | "accept-or-print-query" | "hide-preview"
-        | "show-preview" | "toggle-preview-wrap" | "toggle-sort" | "yank" | "accept-non-empty" | "accept" | "abort" | "up" | "down" | "page-up" | "page-down"
-        | "toggle" | "select-all" | "deselect-all" | "toggle-all" | "toggle-preview" | "toggle-wrap" | "preview-up" | "preview-down" | "clear-query"
-        | "backward-kill-word" | "kill-word" | "unix-line-discard" | "beginning-of-line" | "end-of-line")
-        || (a.starts_with("change-preview-window(") && a.ends_with(')')) || (a.starts_with("pos(") && a.ends_with(')'))
+/// An action's name, its argument aside (`change-preview-window:down|hidden`, `reload(…)`).
+fn action_name(a: &str) -> &str { a.split([':', '(']).next().unwrap_or(a) }
+
+/// The shell's side of fzf: what a list in hn has not (it runs no command for a row).
+fn shell_side(a: &str) -> bool {
+    matches!(action_name(a), "execute" | "execute-silent" | "execute-multi" | "become" | "reload" | "reload-sync" | "print" | "print-query" | "transform" | "transform-query" | "transform-prompt" | "transform-header" | "transform-preview-label" | "transform-border-label" | "preview")
 }
 
-/// Whether a bind's chain has an action hn runs.
-fn runs_here(actions: &str) -> bool { split_chain(actions).iter().any(|a| known_action(a)) }
+/// The keys whose own meaning in the harness lists acts on a harness — pause, restart, answer,
+/// send, mark read, open here: never taken for a key you bound to something else.
+fn acts_on_harness(key: &str) -> bool {
+    matches!(key, "alt-p" | "alt-r" | "alt-a" | "alt-s" | "alt-m" | "alt-M" | "alt-enter") || key.strip_prefix("alt-").map(|d| d.len() == 1 && d.chars().all(|c| c.is_ascii_digit() && c != '0')).unwrap_or(false)
+}
+
+/// Whether a key bound in FZF_DEFAULT_OPTS keeps the list's own meaning: when everything bound to
+/// it is the shell's side of fzf (execute, become, reload …), for a key whose meaning does not act
+/// on a harness. Anything else bound to it — an action hn runs, or one it does not know — is the
+/// key's now (nothing, where hn does not run it).
+fn falls_back(key: &str, actions: &str) -> bool {
+    !acts_on_harness(key) && split_chain(actions).iter().all(|a| shell_side(a))
+}
+
+/// What a hint's key does in the lists without a bind: rebinding it to that keeps the hint.
+fn default_action(key: &str) -> Option<&'static str> {
+    match key { "ctrl-/" => Some("toggle-preview"), "tab" => Some("toggle+down"), "btab" => Some("toggle+up"), "enter" => Some("accept"), _ => None }
+}
 
 /// Whether a hint's key (`C-v`, `M-a`, `enter`, `tab`) is bound in FZF_DEFAULT_OPTS to something
-/// hn runs — it no longer does what the hint says.
+/// else — it no longer does what the hint says.
 pub fn rebound(hint: &str) -> bool {
     let name = if let Some(k) = hint.strip_prefix("C-") { format!("ctrl-{}", k.to_lowercase()) } else if let Some(k) = hint.strip_prefix("M-") { format!("alt-{}", k.to_lowercase()) } else { hint.to_lowercase() };
-    theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| runs_here(a)).unwrap_or(false)
+    theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| !falls_back(&name, a) && default_action(&name) != Some(a.as_str())).unwrap_or(false)
 }
 
 /// A key as fzf's --bind names it: ctrl-j, alt-a, enter, btab, f1, ctrl-/ …
@@ -1738,6 +2276,8 @@ fn fzf_key_name(key: &KeyEvent) -> String {
     if alt && !ctrl && key.code == KeyCode::Backspace { return "alt-bs".into() }
     // C-/ arrives as ctrl-/ or as its control character.
     if ctrl && matches!(key.code, KeyCode::Char('/') | KeyCode::Char('7') | KeyCode::Char('_')) { return "ctrl-/".into() }
+    // …and C-] C-^ C-\ as the control characters crossterm reads as C-5 C-6 C-4.
+    if ctrl && !alt { match key.code { KeyCode::Char(']' | '5') => return "ctrl-]".into(), KeyCode::Char('^' | '6') => return "ctrl-^".into(), KeyCode::Char('\\' | '4') => return "ctrl-\\".into(), _ => {} } }
     match (ctrl, alt) {
         (true, true) => format!("ctrl-alt-{base}"),
         (true, false) => format!("ctrl-{base}"),
@@ -1756,8 +2296,34 @@ fn split_key(id: &str) -> Option<(String, String)> {
 
 fn answer_from(app: &mut App, kind: &PickerKind, picker: &mut Picker, option: usize) {
     if !matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) { return }
-    let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) else { return };
-    if answer(app, &machine, &agent, option) { picker.say("Answered") }
+    // fzf --multi: the marked rows the query shows — never one it hides (an answer is not a
+    // printed line: it approves what that harness asks) — each given its own choice N (those
+    // asking with fewer choices left marked); with none shown, the current row.
+    let shown: std::collections::HashSet<&str> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.as_str()).collect();
+    let marked: Vec<(String, String)> = picker.marked.iter().filter(|m| shown.contains(m.as_str())).filter_map(|m| split_key(m)).collect();
+    if marked.is_empty() {
+        let Some(row) = picker.current_id() else { return };
+        let Some((machine, agent)) = split_key(&row) else { return };
+        if let Err(why) = answerable(app, picker, &row) { picker.say(why); return }
+        let (who, choice) = app.fleet.agent(&machine, &agent).map(|a| (a.name.clone(), a.question.as_ref().and_then(|q| q.options.get(option).cloned()).unwrap_or_default())).unwrap_or_default();
+        if answer(app, &machine, &agent, option) { picker.say(&format!("Answered {who}: {choice}")) }
+        return;
+    }
+    let (mut done, mut left) = (0, 0);
+    let hidden = picker.marked.len().saturating_sub(marked.len());
+    for (m, a) in &marked {
+        // (A marked row whose question just changed keeps its mark, unanswered.)
+        let row = picker.marked.iter().find(|id| split_key(id).as_ref() == Some(&(m.clone(), a.clone()))).cloned().unwrap_or_default();
+        if answerable(app, picker, &row).is_ok() && answer(app, m, a, option) { done += 1 } else { left += 1 }
+    }
+    picker.marked.retain(|id| split_key(id).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.question.is_some())).unwrap_or(false));
+    let n = option + 1;
+    let also = if hidden > 0 { format!(" · {hidden} marked out of view left as they were") } else { String::new() };
+    picker.say(&match (done, left) {
+        (0, _) => format!("No choice {n} to give{also}"),
+        (d, 0) => format!("{d} answered{also}"),
+        (d, l) => format!("{d} answered · {l} without a choice {n}, still marked{also}"),
+    });
 }
 
 /// Answer an open question with its [option]th choice, from anywhere — no need to open the pane.
@@ -1793,7 +2359,7 @@ fn mark_read(app: &mut App, key: (String, String)) -> bool {
 
 /// question_response with [value]: an option's words, several joined with ", ", or free text
 /// (the daemon keys each into the agent's own dialog).
-fn answer_with(app: &mut App, machine: &str, agent: &str, value: &str) -> bool {
+pub fn answer_with(app: &mut App, machine: &str, agent: &str, value: &str) -> bool {
     let Some(a) = app.fleet.agent(machine, agent) else { return false };
     let Some(q) = a.question.clone() else { return false };
     let session = a.session_id.clone();
@@ -1805,15 +2371,34 @@ fn answer_with(app: &mut App, machine: &str, agent: &str, value: &str) -> bool {
 }
 
 fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
+    // --history: the query kept for C-p to bring back.
+    if choice == Choice::Enter { picker.history_add() }
     let id = picker.current_id();
     // fzf's accept with nothing matched: the list goes.
     if id.is_none() && picker.visible.is_empty() && choice == Choice::Enter { SPLIT.with(|s| s.set(None)); return }
     let keep = |app: &mut App, kind: PickerKind, picker: Picker| app.modal = Some(Modal::Picker { kind, picker });
+    // A list of keys, buffers, commands or text: only Enter picks — the harness lists' keys (C-v
+    // beside, C-x below, M-p pause …) do nothing here, as keys fzf has no action for.
+    if choice != Choice::Enter && matches!(kind, PickerKind::Keys | PickerKind::Buffers | PickerKind::Palette | PickerKind::Help | PickerKind::Messages | PickerKind::Output { .. }) { return keep(app, kind, picker) }
     match kind.clone() {
         PickerKind::Open { .. } if id.as_deref().map(|i| i.starts_with("session:")).unwrap_or(false) => {
             let sid = id.as_deref().and_then(|i| i.strip_prefix("session:")).and_then(|n| n.parse().ok()).unwrap_or(app.session_id);
             SPLIT.with(|s| s.set(None));
             app.switch_session(sid);
+        }
+        // A conversation Harness did not start: resumed as a harness (a new window, or where C-v,
+        // C-x, M-enter say); one open in another terminal or app is not opened twice.
+        PickerKind::Open { .. } if id.as_deref().map(|i| i.starts_with("external:")).unwrap_or(false) => {
+            let found = id.as_deref().and_then(|i| i.strip_prefix("external:")).and_then(|r| r.split_once(':'))
+                .and_then(|(m, s)| app.said.iter().filter_map(|h| h.external.as_ref()).find(|x| x.machine == m && x.session_id == s).cloned());
+            let Some(x) = found else { return keep(app, kind, picker) };
+            if x.open { picker.say("It is open in another terminal or app — close it there first"); return keep(app, kind, picker) }
+            let placement = match choice {
+                Choice::SplitRight => Placement::Split(Dir::Horizontal), Choice::SplitDown => Placement::Split(Dir::Vertical), Choice::Here => Placement::Replace,
+                _ => if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab },
+            };
+            SPLIT.with(|s| s.set(None));
+            resume_external_as(app, &x, placement);
         }
         PickerKind::Open { .. } => {
             let Some((machine, agent)) = id.as_deref().and_then(split_key) else { return keep(app, kind, picker) };
@@ -1863,7 +2448,11 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             let Some((machine, agent)) = split_key(&id) else { return };
             let option = id.split('#').nth(1).and_then(|s| s.parse::<usize>().ok());
             match (choice, option) {
-                (Choice::Enter, Some(option)) => { if answer(app, &machine, &agent, option) { picker.say("Answered") } return keep(app, kind, picker) }
+                (Choice::Enter, Some(option)) => {
+                    if let Err(why) = answerable(app, &picker, &id) { picker.say(why); return keep(app, kind, picker) }
+                    if answer(app, &machine, &agent, option) { picker.say("Answered") }
+                    return keep(app, kind, picker)
+                }
                 _ => app.open_agent(&machine, &agent, Placement::Tab),
             }
         }
@@ -2072,8 +2661,11 @@ fn submit_prompt(app: &mut App, p: Prompt) {
                 app.say(format!("Sent to {name}"), theme::ONLINE);
             }
         }
-        PromptKind::Answer { machine, agent } => {
-            let text = app.fleet.agent(&machine, &agent).and_then(|a| a.question.clone()).and_then(|q| crate::fleet::answer_text(&q, &value));
+        PromptKind::Answer { machine, agent, request } => {
+            // Only the question you were answering: one that took its place while you typed is not.
+            let q = app.fleet.agent(&machine, &agent).and_then(|a| a.question.clone());
+            if q.as_ref().is_some_and(|q| q.request_id != request) { return app.say("That question changed while you typed — not sent; look again", theme::WARN) }
+            let text = q.and_then(|q| crate::fleet::answer_text(&q, &value));
             match text {
                 Some(t) => { if answer_with(app, &machine, &agent, &t) { app.say(format!("Answered: {t}"), theme::ONLINE) } }
                 None => app.say("That question is no longer open", theme::WARN),
@@ -2295,20 +2887,56 @@ fn inject_mode_key(app: &mut App, pane: u64, chord: keys::Chord) {
 }
 
 /// `new-harness claude @office ~/src/api`: the words `harness new` takes.
-pub fn new_harness_from(app: &mut App, args: &str) {
-    let mut engine = "claude".to_string();
+/// What new-harness asks beyond which and where (a script's): made in the background (-d), its
+/// name (-n), and what to print once it is there (-P, -F: new-window's).
+#[derive(Default, Clone)]
+pub struct NewOpts { pub detached: bool, pub name: Option<String>, pub print: Option<String> }
+
+/// `new-harness [-dP] [-e engine] [-c folder] [-n name] [-F format] [engine] [@machine] [folder]
+/// [task …]`: the engine a known one (else -e's, else Claude Code), the folder a path, and the
+/// words after them the first message it is given.
+pub fn new_harness_words(app: &mut App, words: &[String]) {
+    let mut opts = NewOpts::default();
+    let (mut engine, mut format, mut print) = (None::<String>, None::<String>, false);
     let mut machine = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.machine_id.clone()).unwrap_or(app.fleet.local_id.clone());
     let mut cwd: Option<String> = None;
-    for word in args.split_whitespace() {
-        if let Some(m) = word.strip_prefix('@') {
-            match app.fleet.machines.iter().find(|x| x.name.to_lowercase().starts_with(&m.to_lowercase()) || x.id == m) { Some(x) => machine = x.id.clone(), None => { app.say(format!("no machine called {m}"), theme::WARN); return } }
-        } else if word.starts_with('/') || word.starts_with('~') || word.starts_with('.') {
-            let home = app.homes.get(&machine).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
-            cwd = Some(if word == "~" { home } else if let Some(r) = word.strip_prefix("~/") { format!("{home}/{r}") } else { word.to_string() });
-        } else { engine = word.to_string() }
+    let mut task: Vec<String> = Vec::new();
+    let (mut i, mut flags) = (0, true);
+    let path = |app: &App, machine: &str, word: &str| {
+        let home = app.homes.get(machine).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
+        if word == "~" { home } else if let Some(r) = word.strip_prefix("~/") { format!("{home}/{r}") } else { word.to_string() }
+    };
+    while i < words.len() {
+        let w = words[i].clone();
+        i += 1;
+        if flags && w == "--" { flags = false; continue }
+        if flags && w.len() > 1 && w.starts_with('-') {
+            let mut value = || { i += 1; words.get(i - 1).cloned() };
+            match w.as_str() {
+                "-d" => opts.detached = true,
+                "-P" => print = true,
+                "-F" => format = value(),
+                "-n" => opts.name = value(),
+                "-e" => engine = value(),
+                "-c" => { let c = value().unwrap_or_default(); cwd = Some(path(app, &machine, &c)) }
+                _ => return app.error(format!("unknown flag {w}")),
+            }
+            continue;
+        }
+        flags = false;
+        if let Some(m) = w.strip_prefix('@').filter(|_| task.is_empty()) {
+            match app.fleet.machines.iter().find(|x| x.name.to_lowercase().starts_with(&m.to_lowercase()) || x.id == m) { Some(x) => machine = x.id.clone(), None => return app.error(format!("can't find machine: {m}")) }
+        } else if task.is_empty() && (w.starts_with('/') || w.starts_with('~') || w.starts_with("./") || w.starts_with("../") || w == ".") {
+            cwd = Some(path(app, &machine, &w));
+        } else if task.is_empty() && engine.is_none() && (theme::engine_label(&w) != w || w == "terminal") {
+            engine = Some(w);
+        } else { task.push(w) }
     }
+    if print { opts.print = Some(format.unwrap_or_else(|| "#{session_name}:#{window_index}.#{pane_index}".into())) }
+    let engine = engine.unwrap_or_else(|| "claude".into());
     let label = theme::engine_label(&engine).to_string();
-    create(app, machine, What { engine, dsh: None, label }, cwd, None);
+    let task = (!task.is_empty()).then(|| task.join(" "));
+    create_opts(app, machine, What { engine, dsh: None, label }, cwd, task, false, opts);
 }
 
 pub fn rename_focused(app: &mut App, name: &str) {
@@ -2328,11 +2956,9 @@ pub fn broadcast(app: &mut App, text: &str) {
     submit_prompt(app, Prompt::status(PromptKind::Broadcast, "", text));
 }
 
-pub fn message_focused(app: &mut App, text: &str) {
-    if text.trim().is_empty() { return }
-    let Some((machine, agent)) = focused_agent(app) else { return };
-    if let Some(link) = app.link(&machine) { link.send("message", json!({ "agentId": agent, "content": text })); }
-}
+/// The focused pane's harness, when it shows one.
+pub fn focused_key(app: &App) -> Option<(String, String)> { focused_agent(app) }
+
 
 /// Fetch a harness's recent asks and recaps for the preview, once (then on each open of the list).
 pub fn ensure_recent(app: &mut App, id: &str) {
@@ -2371,6 +2997,7 @@ fn menu_chosen(app: &mut App, menu: crate::modal::Menu) {
         return;
     }
     if let Some((pane, line)) = menu.tree { return crate::tree::menu_chosen(app, pane, line, &it.key) }
+    if let Some(comp) = menu.complete { return complete_chosen(app, *comp, Some(c)) }
     let command = it.command.clone();
     commands::execute_in(app, &command, menu.mouse.clone());
 }
@@ -2384,7 +3011,7 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
     if menu.no_mouse {
         // (tmux asks the terminal for no bare motion then: none reaches it.)
         let motion = is_drag(m.sgr_b) && is_release(m.sgr_b);
-        if !motion && (m.b & 195) != 0 { return }
+        if !motion && (m.b & 195) != 0 { if let Some(c) = menu.complete.take() { complete_chosen(app, *c, None) } return }
         app.modal = Some(Modal::Menu(menu));
         return;
     }

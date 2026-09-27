@@ -23,7 +23,7 @@ use crate::modal::{Modal, PickerKind, PromptKind};
 use crate::pane::{Pane, Phase};
 use crate::picker::Picker;
 use crate::theme::{self, bold, fg, engine_mark, state_mark};
-use crate::input::home_agents;
+use crate::input::{home_rows, HomeRow};
 
 /// screen_write_box_border_set: a box's corners, sides and its rule's joins, for tmux's box
 /// lines (single, double, heavy, simple, rounded, padded, none).
@@ -41,6 +41,7 @@ fn box_set(lines: &str) -> (&'static str, &'static str, &'static str, &'static s
 pub fn draw(frame: &mut Frame, app: &mut App) {
     app.renumber();
     let (usstyle, links) = crate::term_out::outer_features(&app.options.array("terminal-features"));
+    crate::term_out::set_colours(crate::term_out::colours_for(&std::env::var("TERM").unwrap_or_default(), &std::env::var("COLORTERM").unwrap_or_default(), &app.options.array("terminal-features"), &app.options.array("terminal-overrides")));
     crate::term_out::begin_frame(usstyle, links);
     let area = frame.area();
     if area.width == 0 || area.height == 0 { return }
@@ -48,6 +49,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let lines = app.status_lines().max(1).min(area.height);
     let status = Rect::new(0, if app.status_top { 0 } else { area.height - lines }, area.width, lines);
     let body = app.body();
+    // The window in front at the terminal's size, whatever brought it there.
+    if app.tab().root.as_ref().is_some_and(|r| r.size() != (body.width, body.height)) { app.fit_panes() }
     let buf = frame.buffer_mut();
     let mut cursor: Option<Position> = None;
     // A list takes the window (with --height, only its bottom rows: the panes stay in view).
@@ -56,23 +59,23 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         if app.tab().root.is_none() { empty_window(buf, app, body) }
         else { cursor = window(buf, app, body) }
     }
-    match &app.modal {
-        Some(Modal::DisplayPanes { .. }) => display_panes(buf, app),
-        Some(Modal::Clock { pane }) => {
-            let rect = app.rects.iter().find(|(id, _)| id == pane).map(|(_, r)| *r).unwrap_or(body);
-            clock(buf, rect);
-            cursor = None;
-        }
-        _ => {}
+    // Panes in clock mode: the time over each (its cursor hidden).
+    if !full_screen && app.tab().root.is_some() {
+        let clocks: Vec<Rect> = app.rects.iter().filter(|(id, _)| app.panes.get(id).map(|p| p.clock).unwrap_or(false)).map(|(id, r)| { if Some(*id) == app.focused() { cursor = None } app.content_of(app.tab(), *r) }).collect();
+        for rect in clocks { clock(buf, app, rect) }
     }
+    if let Some(Modal::DisplayPanes { .. }) = &app.modal { display_panes(buf, app) }
     if let Some(modal) = &mut app.modal {
         match modal {
-            Modal::Picker { kind, picker } => { cursor = Some(fzf(buf, body, picker, kind, &*app_preview_placeholder())) }
+            // (--no-input: no prompt, no cursor.)
+            // (Too small to hold a list — a window being dragged, a drop-down terminal opening: none
+            // drawn until it has the room, as fzf clamps and tmux draws what fits; never a crash.)
+            Modal::Picker { kind, picker } if body.height >= 5 && body.width >= 8 => { let at = fzf(buf, body, picker, kind, &*app_preview_placeholder()); cursor = (!theme::fzf_opts().no_input).then_some(at) }
             _ => {}
         }
     }
     // The picker drew with a placeholder preview; a live pane preview needs the whole app.
-    if let Some(Modal::Picker { kind, picker }) = &app.modal {
+    if let Some(Modal::Picker { kind, picker }) = app.modal.as_ref().filter(|_| body.height >= 5 && body.width >= 8) {
         if let (_, Some(pbox), _) = fzf_split(fzf_frame(body, picker).inner, picker) { preview(buf, app, kind, picker, &pbox) }
     }
     let popup = match &app.modal { Some(Modal::Popup { pane, x, y, width, height, border, title, look }) => Some((*pane, *x, *y, *width, *height, *border, title.clone(), look.clone())), _ => None };
@@ -105,7 +108,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             if let Some(p) = app.panes.get_mut(&pane) { cursor = pane_body(buf, p, inner, true, colours); }
         }
     }
-    if app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
+    // (Not under @hn-look tmux unless @hn-hint-time asks for it: tmux shows nothing after the prefix.)
+    let hints = !(app.options.tmux_look() && app.options.get("@hn-hint-time", "", None).is_none());
+    if hints && app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
     let hidden = app.status_lines() == 0;
     let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false)
@@ -123,8 +128,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// third column, each item from the third column in menu-style — menu-selected-style when chosen,
 /// dim when disabled — its key right-aligned as (k); '' a rule across, joined to the sides.
 fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
-    let tab_id = app.tab().id.clone();
-    let opt = |name: &str, default: &str| app.options.get(name, &tab_id, None).unwrap_or_else(|| default.to_string());
+    let opt = |name: &str, default: &str| Some(app.style_spec(name, app.active, app.focused())).filter(|s| !s.is_empty()).unwrap_or_else(|| default.to_string());
     let base = Style::default();
     let style = crate::draw::style_over(&opt("menu-style", "default"), base);
     let selected = crate::draw::style_over(&opt("menu-selected-style", "bg=yellow,fg=black"), base);
@@ -153,8 +157,10 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
             put(buf, x1, y, rj, border);
             continue;
         }
-        let st = if m.choice == Some(i) && !it.disabled { selected } else if it.disabled { style.add_modifier(Modifier::DIM) } else { style };
-        for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", st) }
+        // screen_write_menu: the row padded first, then a disabled item's words drawn dim.
+        let pad = if m.choice == Some(i) && !it.disabled { selected } else { style };
+        for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", pad) }
+        let st = if it.disabled { style.add_modifier(Modifier::DIM) } else { pad };
         let text = if it.key.is_empty() { it.label.clone() } else { format!("{}#[default] #[align=right]({})", it.label, it.key) };
         draw_at(buf, x0 + 2, y, &text, st, m.width);
     }
@@ -163,6 +169,7 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
 /// A pause after the prefix: every key that can come next, from the live table (your binds too),
 /// in a box over the bottom of the window — tmux's keys, with the hint zellij users praise.
 fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
+    if body.width < 16 || body.height < 4 { return }
     let mut items: Vec<(String, String)> = Vec::new();
     let mut digits = false;
     for b in &app.keymap.prefix_table {
@@ -172,11 +179,16 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
         items.push((key, what));
     }
     if digits { items.insert(0, ("0-9".into(), "Select window 0 to 9".into())) }
+    // The keys a tmux user reaches for every day first (what fits of a small window is those),
+    // then the rest in the table's order.
+    const FIRST: &[&str] = &["c", "n", "p", "l", "0-9", "w", "s", "d", "%", "\"", "x", "z", "o", ";", "[", "]", ":", "?", "&", ",", "$", "!", "q", "t", "{", "}", "Space"];
+    items.sort_by_key(|(k, _)| FIRST.iter().position(|f| f == k).unwrap_or(FIRST.len()));
     let key_w = items.iter().map(|(k, _)| k.width()).max().unwrap_or(1).min(8);
     let col_w: usize = key_w + if body.width >= 150 { 44 } else { 32 };
     let cols = ((body.width as usize).saturating_sub(4) / col_w).max(1);
     let rows_needed = items.len().div_ceil(cols);
-    let height = (rows_needed as u16 + 2).min(body.height);
+    // (A third of the window at most: the panes stay in view above it.)
+    let height = (rows_needed as u16 + 2).min((body.height / 3).max(4)).min(body.height);
     let area = Rect::new(body.x, body.y + body.height - height, body.width, height);
     for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
     let border = Style::default();
@@ -302,7 +314,7 @@ fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) {
 const WORDMARK: [&str; 2] = ["█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀", "█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█"];
 
 fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
-    let rows = home_agents(app);
+    let rows = home_rows(app);
     let width = area.width.min(84).saturating_sub(4);
     let left = area.x + (area.width.saturating_sub(width)) / 2;
     let compact = area.height < 22;
@@ -325,17 +337,29 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
         lines.push(Line::from(vec![Span::styled("n", bold(theme::ACCENT)), Span::styled(" starts a harness · ", fg(theme::MUTED)), Span::styled("o", bold(theme::ACCENT)), Span::styled(" opens a paused one", fg(theme::MUTED))]));
     } else {
         let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
-        for (index, (m, a)) in rows.iter().enumerate() {
-            let Some(agent) = app.fleet.agent(m, a) else { continue };
-            let state = app.fleet.state_of(agent);
-            let (dot, _, color) = state_mark(state, app.tick);
-            let (mark, mark_color) = engine_mark(&agent.engine);
+        for (index, row) in rows.iter().enumerate() {
+            // A harness as its state says; a conversation Harness did not start as a paused one
+            // would be (nothing running), its folder where the project goes.
+            let (m, dot, color, engine, title, recency, detail) = match row {
+                HomeRow::Harness(m, a) => {
+                    let Some(agent) = app.fleet.agent(m, a) else { continue };
+                    let (dot, _, color) = state_mark(app.fleet.state_of(agent), app.tick);
+                    let detail = agent.question.as_ref().map(|q| (q.prompt.clone(), theme::ATTENTION)).unwrap_or((if agent.project.is_empty() { agent.cwd.clone() } else { agent.project.clone() }, theme::MUTED));
+                    (m.clone(), dot, color, agent.engine.clone(), agent.name.clone(), agent.recency(), detail)
+                }
+                HomeRow::External(x) => {
+                    let (dot, _, color) = state_mark(crate::fleet::State::Paused, app.tick);
+                    let folder = x.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+                    (x.machine.clone(), dot, color, x.engine.clone(), if x.title.is_empty() { folder.clone() } else { x.title.clone() }, x.last_at, (folder, theme::MUTED))
+                }
+            };
+            let m = &m;
+            let (mark, mark_color) = engine_mark(&engine);
             // Narrow: the machine goes before the title gives way (then the age).
-            let right = if width < 56 { String::new() } else { format!("{}{}", if many && width >= 70 { format!("{}  ", app.fleet.machine_name(m)) } else { String::new() }, ago(agent.recency())) };
-            let detail = agent.question.as_ref().map(|q| (q.prompt.clone(), theme::ATTENTION)).unwrap_or((if agent.project.is_empty() { agent.cwd.clone() } else { agent.project.clone() }, theme::MUTED));
+            let right = if width < 56 { String::new() } else { format!("{}{}", if many && width >= 70 { format!("{}  ", app.fleet.machine_name(m)) } else { String::new() }, ago(recency)) };
             let name_w = if width < 56 { (width as usize).saturating_sub(10).min(28) } else { 28 };
             // Widths are display widths: a CJK or emoji title keeps the columns straight.
-            let name = clip(&agent.name, name_w);
+            let name = clip(&title, name_w);
             let name = format!("{name}{}", " ".repeat(name_w.saturating_sub(name.width())));
             let detail_room = (width as usize).saturating_sub(name_w + right.width() + 12);
             let detail_text = clip(&detail.0, detail_room);
@@ -388,12 +412,14 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
 fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> {
     // NO_COLOR (and no colours of your own): reverse video carries the status line and messages.
     let yellow = app.message_style();
-    let prompt_like: Option<(String, String, usize, String, bool)> = match &app.modal {
-        Some(Modal::Prompt(p)) => {
+    // (A prompt's completion menu keeps the prompt on the status line under it.)
+    let under_menu = match &app.modal { Some(Modal::Menu(m)) => m.complete.as_ref().map(|c| &c.prompt), _ => None };
+    let prompt_like: Option<(String, String, usize, String, bool)> = match (&app.modal, under_menu) {
+        (_, Some(p)) | (Some(Modal::Prompt(p)), _) => {
             let shown: String = if p.secret { "*".repeat(p.value.chars().count()) } else { p.value.clone() };
             Some((p.label.clone(), shown, p.cursor, p.hint.clone(), p.vi_normal))
         }
-        Some(Modal::Confirm { prompt, .. }) => Some((format!("{prompt} "), String::new(), 0, String::new(), false)),
+        (Some(Modal::Confirm { prompt, .. }), _) => Some((format!("{prompt} "), String::new(), 0, String::new(), false)),
         _ => None,
     };
     if let Some((mut label, value, cursor, hint, command_mode)) = prompt_like {
@@ -402,7 +428,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
         // after it at the end; scrolled to keep the cursor in view. The terminal's own cursor is
         // hidden, as tmux hides it.
         if !label.ends_with(' ') && label != ":" { label.push(' ') }
-        let gc = if command_mode && !app.plain_status() { app.style_of("message-command-style", app.active, None) } else { yellow };
+        let gc = if command_mode { app.style_of("message-command-style", app.active, None) } else { yellow };
         let cursorgc = if gc.add_modifier.contains(Modifier::REVERSED) { gc.remove_modifier(Modifier::REVERSED) } else { gc.add_modifier(Modifier::REVERSED) };
         for x in rect.x..rect.x + rect.width { if let Some(c) = buf.cell_mut((x, rect.y)) { c.reset(); c.set_symbol(" "); c.set_style(gc); } }
         let sx = rect.width as usize;
@@ -440,7 +466,8 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     if let Some((text, _, at)) = &app.toast {
         if at.elapsed() < Duration::from_millis(app.toast_ms()) {
             buf.set_style(rect, yellow);
-            buf.set_stringn(rect.x, rect.y, clip(text, rect.width as usize), rect.width as usize, yellow);
+            // Cut at the edge, as tmux's (no … in the last cell).
+            buf.set_stringn(rect.x, rect.y, text, rect.width as usize, yellow);
             return None;
         }
     }
@@ -511,7 +538,15 @@ fn border_sides() -> (bool, bool, bool, bool) {
 /// with --no-separator).
 fn no_separator_line() -> bool {
     let o = theme::fzf_opts();
-    match o.info_mode.as_str() { "inline" => true, "hidden" | "inline-right" => !o.separator, _ => false }
+    if o.no_input { return true }
+    match o.info_mode.as_str() { "inline" => true, "hidden" | "inline-right" => !separator_on(), _ => false }
+}
+
+/// Whether the separator's rule shows: --separator's (or --no-separator's) say, else yes — unless
+/// an input border is set (fzf leaves the rule out inside one).
+fn separator_on() -> bool {
+    let o = theme::fzf_opts();
+    if o.separator_set || !o.separator { o.separator } else { section_shape(&o.input_border, false).is_none() }
 }
 
 /// fzf's --height over a screen [h] rows tall: at least its minimum, no more than the screen
@@ -615,6 +650,152 @@ fn border_glyphs(style: &str) -> (&'static str, &'static str, &'static str, &'st
     }
 }
 
+/// fzf's section borders (--list-border, --input-border, --header-border, --footer-border): a
+/// shape that shows (`line` shows as a rule on the side toward the list: top, or bottom under
+/// --layout=reverse; a list's `line` shows nothing).
+fn section_shape(shape: &Option<String>, rule_down: bool) -> Option<String> {
+    let s = shape.as_deref()?;
+    match s { "none" => None, "line" => Some(if rule_down { "bottom".into() } else { "top".into() }), _ => Some(s.to_string()) }
+}
+
+/// fzf's resizeWindows, the sections' half: inside [area] the list's window (its border's box and
+/// what is inside it), and the input's (prompt and info), the header's and the footer's windows
+/// when they have one — each a box and its inside.
+#[derive(Default, Clone, Copy)]
+struct Sections { list_box: Option<Rect>, list: Rect, input_box: Option<Rect>, input: Option<Rect>, header_box: Option<Rect>, header: Option<Rect>, footer_box: Option<Rect>, footer: Option<Rect> }
+
+fn sections(area: Rect, has_header: bool, prompt_top: bool, reverse: bool) -> (Sections, [Option<String>; 4]) {
+    let o = theme::fzf_opts();
+    let layout_reverse = prompt_top;
+    let list_shape = o.list_border.as_deref().filter(|s| *s != "none" && *s != "line").map(str::to_string);
+    let input_shape = section_shape(&o.input_border, layout_reverse);
+    let header_shape = section_shape(&o.header_border, layout_reverse);
+    // (fzf's footer border is a rule unless set otherwise.)
+    let footer_shape = if o.footer.is_empty() { None } else { match o.footer_border.as_deref() { Some("line") | None => Some(if layout_reverse { "top".to_string() } else { "bottom".to_string() }), Some("none") => None, Some(s) => Some(s.to_string()) } };
+    let lines = |s: &Option<String>| s.as_deref().map(|s| { let (t, _, b, _) = shape_sides(s); t as i64 + b as i64 }).unwrap_or(0);
+    let has_header_window = has_header && (header_shape.is_some() || input_shape.is_some());
+    let has_input_window = input_shape.is_some() || has_header_window;
+    let input_window_h = if no_separator_line() { 1 } else { 2 };
+    let mut avail = area.height as i64;
+    let input_h = if has_input_window { (lines(&input_shape) + input_window_h).clamp(0, avail) } else { 0 };
+    avail -= input_h;
+    let header_h = if has_header_window { (lines(&header_shape) + 1).clamp(0, avail) } else { 0 };
+    avail -= header_h;
+    let footer_h = if o.footer.is_empty() { 0 } else { (lines(&footer_shape) + o.footer.len() as i64).clamp(0, avail) };
+    let shrink = input_h + header_h + footer_h;
+    let shift = if layout_reverse { input_h + header_h } else { footer_h };
+    let rect = |x: i64, y: i64, w: i64, h: i64| Rect::new(x.max(0) as u16, y.max(0) as u16, w.max(0) as u16, h.max(0) as u16);
+    let (ax, ay, aw) = (area.x as i64, area.y as i64, area.width as i64);
+    // The list's window: its border's box, what is inside.
+    let whole = rect(ax, ay + shift, aw, area.height as i64 - shrink);
+    let mut sec = Sections { list: whole, ..Default::default() };
+    if let Some(shape) = &list_shape {
+        let (t, r, b, l) = shape_sides(shape);
+        sec.list_box = Some(whole);
+        sec.list = rect(ax + if l { 2 } else { 0 }, whole.y as i64 + t as i64, aw - if l { 2 } else { 0 } - r as i64, whole.height as i64 - t as i64 - b as i64);
+    }
+    let w = sec.list_box.unwrap_or(sec.list);
+    let (wt, wh) = (w.y as i64, w.height as i64);
+    // createInnerWindow: a box's inside (no wider than the list's).
+    let inner = |b: Rect, shape: &Option<String>, shift: i64| {
+        let (t, r, bo, l) = shape.as_deref().map(shape_sides).unwrap_or((false, false, false, false));
+        let cols = if l { 2 } else { 0 } + if r { 2 } else { 0 };
+        let width = (b.width as i64 - cols - shift + r as i64).min(sec.list.width as i64);
+        rect(b.x as i64 + shift + if l { 2 } else { 0 }, b.y as i64 + t as i64, width, b.height as i64 - t as i64 - bo as i64)
+    };
+    let header_first = o.header_first;
+    if has_input_window {
+        let btop = match (header_first && has_header_window, layout_reverse, reverse) {
+            (true, false, _) => wt + wh,
+            (true, true, _) => wt - input_h,
+            (false, true, _) => wt - shrink + footer_h,
+            (false, false, _) => wt + wh + header_h,
+        };
+        let b = rect(w.x as i64, btop, w.width as i64, input_h);
+        let (_, _, _, il) = input_shape.as_deref().map(shape_sides).unwrap_or((false, false, false, false));
+        let lshift = if !il && list_shape.as_deref().map(|s| shape_sides(s).3).unwrap_or(false) { 2 } else { 0 };
+        sec.input_box = Some(b);
+        sec.input = Some(inner(b, &input_shape, lshift));
+    }
+    if has_header_window {
+        let btop = match (header_first && has_input_window, layout_reverse) {
+            (true, true) => wt - shrink + footer_h,
+            (true, false) => wt + wh + input_h,
+            (false, true) => wt - header_h,
+            (false, false) => wt + wh,
+        };
+        let b = rect(w.x as i64, btop, w.width as i64, header_h);
+        sec.header_box = Some(b);
+        sec.header = Some(inner(b, &header_shape, 0));
+    }
+    if footer_h > 0 {
+        let btop = if layout_reverse { wt + wh } else { wt - footer_h };
+        let b = rect(w.x as i64, btop, w.width as i64, footer_h);
+        sec.footer_box = Some(b);
+        sec.footer = Some(inner(b, &footer_shape, 0));
+    }
+    (sec, [list_shape, input_shape, header_shape, footer_shape])
+}
+
+/// --info-command's output (its first line, escapes taken out), run again only when what it is
+/// given changes.
+fn info_command(cmd: &str, info: &str, query: &str, matched: usize, total: usize) -> String {
+    thread_local! { static LAST: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) }; }
+    let key = format!("{cmd}\0{info}\0{query}\0{matched}\0{total}");
+    if let Some(out) = LAST.with(|l| l.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, o)| o.clone())) { return out }
+    let out = std::process::Command::new("sh").arg("-c").arg(cmd)
+        .env("FZF_INFO", info).env("FZF_QUERY", query).env("FZF_MATCH_COUNT", matched.to_string()).env("FZF_TOTAL_COUNT", total.to_string())
+        .stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").to_string()).unwrap_or_default();
+    let out = crate::theme::strip_ansi(&out);
+    LAST.with(|l| *l.borrow_mut() = Some((key, out.clone())));
+    out
+}
+
+/// [text] with its SGR codes read, at (x, y): each part in its own colours over [base] (fzf's
+/// ansiToColorPair), no wider than [max].
+fn put_ansi(buf: &mut Buffer, x: u16, y: u16, text: &str, base: Style, max: usize) -> usize {
+    let line = crate::preview::ansi_line(text, 8);
+    let mut used = 0usize;
+    for sp in &line.spans {
+        if used >= max { break }
+        let st = if sp.style == Style::default() { base } else { base.patch(sp.style) };
+        let (_, end) = buf.set_stringn(x + used as u16, y, sp.content.as_ref(), max - used, st);
+        used = (end - x) as usize;
+    }
+    used
+}
+
+/// headerIndentImpl: a header's (or footer's) indent in a window of its own — the rows' gutter,
+/// and the list box's left side, less its own box's.
+fn section_indent(list: &Option<String>, own: &Option<String>) -> u16 {
+    let left = |s: &Option<String>| s.as_deref().map(|s| shape_sides(s).3).unwrap_or(false);
+    (gutter_width() + if left(list) { 2 } else { 0 }).saturating_sub(if left(own) { 2 } else { 0 })
+}
+
+/// A section's box (LightWindow.drawBorder): its shape's sides in the pair, the column inside a
+/// left side in it too; its label on the top (or bottom) edge, centred.
+fn section_box(buf: &mut Buffer, b: Rect, shape: &str, st: Style, label: &str) {
+    if b.width < 2 || b.height == 0 { return }
+    let (top_c, bottom_c, left_c, right_c, tl, tr, bl, br) = border_glyphs(shape);
+    let (top, right, bottom, left) = shape_sides(shape);
+    let (x1, y1) = (b.x + b.width - 1, b.y + b.height - 1);
+    if top { for x in b.x..=x1 { buf.set_string(x, b.y, top_c, st) } }
+    if bottom { for x in b.x..=x1 { buf.set_string(x, y1, bottom_c, st) } }
+    let (y0, yn) = (b.y + top as u16, y1.saturating_sub(bottom as u16));
+    if left { for y in b.y..=y1 { buf.set_string(b.x, y, left_c, st) } if y0 <= yn { for y in y0..=yn { buf.set_string(b.x + 1, y, " ", st) } } }
+    if right { for y in b.y..=y1 { buf.set_string(x1, y, right_c, st) } }
+    if top && left { buf.set_string(b.x, b.y, tl, st) }
+    if top && right { buf.set_string(x1, b.y, tr, st) }
+    if bottom && left { buf.set_string(b.x, y1, bl, st) }
+    if bottom && right { buf.set_string(x1, y1, br, st) }
+    if label.is_empty() || !(top || bottom) { return }
+    let (w, len) = (b.width as i64, label.width() as i64);
+    let col = ((w - len) / 2).max(0) as u16;
+    let row = if top { b.y } else { y1 };
+    buf.set_stringn(b.x + col, row, label, b.width.saturating_sub(col) as usize, theme::fzf().pal.border_label.style());
+}
+
 fn fzf_border(buf: &mut Buffer, body: Rect) {
     let Some(style) = theme::fzf_opts().border.clone() else { return };
     let st = theme::fzf().border_style();
@@ -636,18 +817,20 @@ fn fzf_border(buf: &mut Buffer, body: Rect) {
     if bottom && left { buf.set_string(body.x, y1, bl, st) }
     if bottom && right { buf.set_string(x1, y1, br, st) }
     let o = theme::fzf_opts();
-    if o.border_label.is_empty() || !(top || bottom) { return }
+    // (Measured without its colour codes; drawn with them when it fits whole.)
+    let plain = theme::strip_ansi(&o.border_label);
+    if plain.is_empty() || !(top || bottom) { return }
     let w = body.width as i64;
-    let len = o.border_label.width() as i64;
+    let len = plain.width() as i64;
     let (column, at_bottom) = o.border_label_pos;
     let col = if column == 0 { ((w - len) / 2).max(0) } else if column < 0 { (w + column + 1 - len).max(0) } else { (column - 1).min(w - len) };
     let row = if style == "bottom" || at_bottom { y1 } else { body.y };
     // ansiLabelPrinter: the whole label when it fits, else as much as fits and the ellipsis.
     let text = if len > w {
         let ell: String = { let mut used = 0; o.ellipsis.chars().take_while(|c| { used += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0) as i64; used <= w }).collect() };
-        trim_right(&o.border_label, (w - ell.width() as i64) as i32) + &ell
+        trim_right(&plain, (w - ell.width() as i64) as i32) + &ell
     } else { o.border_label.clone() };
-    if col >= 0 { buf.set_stringn(body.x + col as u16, row, &text, (w - col).max(0) as usize, theme::fzf().pal.border_label.style()); }
+    if col >= 0 { put_ansi(buf, body.x + col as u16, row, &text, theme::fzf().pal.border_label.style(), (w - col).max(0) as usize); }
 }
 
 /// The preview's box (its border, its shape) and what is inside it: the text, and the column of
@@ -684,6 +867,11 @@ fn o_sorts(picker: &Picker) -> bool { theme::fzf_opts().no_sort == picker.sort_f
 fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
     let o = theme::fzf_opts();
     let (_, outer_right, _, _) = border_sides();
+    // listStickToRight: only when no inner box (the list's, the input's, a shown header's) has a
+    // right side of its own — one that does keeps a blank column before the outer border.
+    let right = |s: &Option<String>| s.as_deref().map(|s| shape_sides(s).1).unwrap_or(false);
+    let header_shown = picker.header_text.as_deref().map(|h| !h.is_empty()).unwrap_or(!picker.hints.is_empty() || picker.heading.is_some());
+    let outer_right = outer_right && !right(&o.list_border) && !right(&o.input_border) && !(header_shown && right(&o.header_border));
     let (x, y) = (inner.x as i64, inner.y as i64);
     let (width, height) = (inner.width as i64, inner.height as i64);
     let rect = |x: i64, y: i64, w: i64, h: i64| Rect::new(x.max(0) as u16, y.max(0) as u16, w.max(0) as u16, h.max(0) as u16);
@@ -757,20 +945,47 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     if right_border {
         // The outer border's margin on the right: the list's column now (listStickToRight), blank
         // until it draws there, or cleared between the border and a preview with a side of its own.
-        let (bg, rows) = if stick { (pal.normal.bg, area.y..area.y + area.height) } else { (pal.border.bg, body.y..body.y + body.height) };
-        let plain = theme::fzfcolor::P { fg: theme::fzfcolor::Col::Default, bg, attr: 0 }.style();
-        for y in rows { buf.set_string(body.x + body.width, y, " ", plain) }
+        // (Cleared, it is the border window's: its colour on a blank, as fzf's is.)
+        // (…right of the padding: the border's own column, the height of the window inside it.)
+        if stick {
+            let plain = theme::fzfcolor::P { fg: theme::fzfcolor::Col::Default, bg: pal.normal.bg, attr: 0 }.style();
+            for y in area.y..area.y + area.height { buf.set_string(body.x + body.width, y, " ", plain) }
+        }
+        let edge = frame.padded.x + frame.padded.width;
+        if !stick || edge != body.x + body.width {
+            let plain = theme::fzfcolor::P { fg: pal.border.fg, bg: pal.border.bg, attr: 0 }.style();
+            for y in frame.padded.y..frame.padded.y + frame.padded.height { buf.set_string(edge, y, " ", plain) }
+        }
     }
     let preview = pbox.as_ref().map(|p| p.rect).filter(|p| p.x > area.x);
     if let Some(bg) = pal.normal.style().bg { buf.set_style(area, Style::default().bg(bg)) }
     let width = area.width as usize;
-    let bottom = area.y + area.height;
     // Prompt, then info, then the header (the keys), then the list above — or, with
     // `--layout=reverse` in FZF_DEFAULT_OPTS, all of it top-down.
     let reverse = theme::fzf().reverse;
     let o = theme::fzf_opts();
     // --layout=reverse puts the prompt on top; reverse-list keeps it at the bottom, rows top-down.
     let prompt_top = o.prompt_top;
+    // The sections (--list-border, --input-border, --header-border, --footer, --style): their
+    // boxes drawn, and from here on the list's window is what is inside its box.
+    let has_hdr = area.height >= 6 && header_line(picker, kind, width.saturating_sub(1)).is_some();
+    let (sec, shapes) = sections(area, has_hdr, prompt_top, reverse);
+    let sectioned = sec.list_box.is_some() || sec.input.is_some() || sec.header.is_some() || sec.footer.is_some();
+    if sectioned {
+        let bst = pal.border.style();
+        if let (Some(b), Some(sh)) = (sec.list_box, &shapes[0]) { section_box(buf, b, sh, pal.list_border.style(), &o.list_label) }
+        if let (Some(b), Some(sh)) = (sec.input_box, &shapes[1]) { section_box(buf, b, sh, bst, &o.input_label) }
+        if let (Some(b), Some(sh)) = (sec.header_box, &shapes[2]) { section_box(buf, b, sh, bst, &o.header_label) }
+        if let (Some(b), Some(sh)) = (sec.footer_box, &shapes[3]) { section_box(buf, b, sh, bst, &o.footer_label) }
+        // The footer's lines indented as the header's (headerIndentImpl).
+        let footer_indent = section_indent(&shapes[0], &shapes[3]);
+        if let Some(f) = sec.footer { for (i, l) in o.footer.iter().enumerate().take(f.height as usize) { buf.set_stringn(f.x + footer_indent, f.y + i as u16, l, f.width.saturating_sub(footer_indent) as usize, pal.header.style()); } }
+    }
+    let area = if sectioned { sec.list } else { area };
+    let width = area.width as usize;
+    let bottom = area.y + area.height;
+    let in_input = sec.input.filter(|_| sectioned);
+    let ia = in_input.unwrap_or(area);
     // --info: default (its own line), inline (after the query), inline-right (right of the
     // prompt, the rule on its own line), right (its own line, the count at the right), hidden.
     let mode = o.info_mode.as_str();
@@ -786,22 +1001,39 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let (prompt_y, info_y) = match (header_first, prompt_top) { (true, true) => (prompt_y + 1, info_y + 1), (true, false) => (prompt_y - 1, info_y - 1), _ => (prompt_y, info_y) };
     let edge = if prompt_top { prompt_y.max(info_y) } else { prompt_y.min(info_y) };
     let header_y = match (header_first, prompt_top) { (true, true) => area.y, (true, false) => bottom - 1, _ => if header.is_some() { if prompt_top { edge + 1 } else { edge.saturating_sub(1) } } else { edge } };
+    // In windows of their own: the prompt and info in the input's, the header in the header's.
+    let (prompt_y, info_y) = match in_input {
+        Some(i) => { let last = i.y + i.height.saturating_sub(1); if prompt_top { (i.y, if info_own_line { i.y + 1 } else { i.y }) } else { (last, if info_own_line { last.saturating_sub(1) } else { last }) } }
+        None => (prompt_y, info_y),
+    };
+    let in_header = sec.header.filter(|_| sectioned);
+    let header = match in_header { Some(h) => header_line_at(picker, (h.width as usize).saturating_sub(1), section_indent(&shapes[0], &shapes[2]) as usize), None => header };
+    let header_y = in_header.map(|h| h.y).unwrap_or(header_y);
+    // --no-input: the prompt and the info are drawn nowhere (the list and the header take their lines).
+    let mut scratch = Buffer::empty(buf.area);
+    let pbuf: &mut Buffer = if o.no_input { &mut scratch } else { &mut *buf };
     let prompt = theme::fzf().prompt_style();
     let prompt_text = theme::fzf().prompt_text.clone();
     // The prompt in its pair (bold as fzf makes it, unless --no-bold or prompt:regular); its
     // trailing blanks in the pair's colours without the attributes — parsePrompt's AttrClear, laid
     // on the characters at the blanks' byte offsets, as fzf lays it (after `❯` it misses them); a
     // tab out to the next --tabstop.
-    let blank_from = prompt_text.trim_end_matches([' ', '\t', '\n', '\x0c', '\r']).len();
+    // Its SGR codes read (a coloured --prompt, as fzf renders one): each part in its own colours
+    // over the prompt's pair, the prompt's attributes kept; tabs to the next --tabstop.
+    let pline = crate::preview::ansi_line(&prompt_text, o.tabstop);
+    let pchars: Vec<(char, Style)> = pline.spans.iter().flat_map(|sp| sp.content.chars().map(|c| (c, sp.style)).collect::<Vec<_>>()).collect();
+    let plain: String = pchars.iter().map(|c| c.0).collect();
+    let blank_from = plain.trim_end_matches([' ', '\t', '\n', '\x0c', '\r']).len();
     let clear = theme::fzfcolor::P { attr: 0, ..pal.prompt }.style();
     let mut pw = 0u16;
-    for (i, c) in prompt_text.chars().enumerate() {
-        let st = if i >= blank_from && i < prompt_text.len() { clear } else { prompt };
-        let (text, w) = if c == '\t' { let n = o.tabstop - pw as usize % o.tabstop; (" ".repeat(n), n) } else { (c.to_string(), unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)) };
-        buf.set_string(area.x + pw, prompt_y, text, st);
+    for (i, (c, own)) in pchars.iter().enumerate() {
+        let base = if i >= blank_from && i < plain.len() { clear } else { prompt };
+        let st = if *own == Style::default() { base } else { base.patch(*own) };
+        let w = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+        pbuf.set_string(ia.x + pw, prompt_y, c.to_string(), st);
         pw += w as u16;
     }
-    let q_room = width.saturating_sub(pw as usize + 1).max(1);
+    let q_room = (ia.width as usize).saturating_sub(pw as usize + 1).max(1);
     // A query longer than the line (updatePromptOffset): its offset kept between the one that
     // shows the cursor and half the room past it, so moving the cursor moves the cursor, not the
     // text; what is before the cursor, then as much after it as fits.
@@ -823,27 +1055,36 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let mut after_w = 0;
     let after: Vec<char> = chars[cx..].iter().take_while(|c| { after_w += cw(c); after_w <= q_room - before_w }).cloned().collect();
     let shown: String = chars[before_from..cx].iter().chain(after.iter()).collect();
-    buf.set_stringn(area.x + pw, prompt_y, &shown, q_room, pal.input.style());
+    pbuf.set_stringn(ia.x + pw, prompt_y, &shown, q_room, pal.input.style());
     let mut typed_w = shown.width().min(q_room) as u16;
     // What an inline count keeps clear of: the query and a margin, or the ghost, as fzf shifts it.
     let mut shift = typed_w as i32 + 1;
-    if picker.query.is_empty() && !picker.placeholder.is_empty() {
+    if let Some(ghost) = o.ghost.as_ref().filter(|g| picker.query.is_empty() && !g.is_empty()) {
+        // --ghost: yours, cut at the edge as fzf cuts it.
+        pbuf.set_stringn(ia.x + pw, prompt_y, ghost, q_room, pal.ghost.style());
+        typed_w = ghost.width().min(q_room) as u16;
+        shift = typed_w as i32;
+    } else if picker.query.is_empty() && !picker.placeholder.is_empty() {
         // The placeholder (fzf's --ghost), whole scopes only, leaving an inline count its place.
         let room = if mode.starts_with("inline") { q_room.saturating_sub(16) } else { q_room };
         let mut text = String::new();
         for part in picker.placeholder.split("   ") { if text.width() + part.width() + 3 > room { break } if !text.is_empty() { text.push_str("   ") } text.push_str(part) }
-        buf.set_stringn(area.x + pw, prompt_y, &text, q_room, pal.ghost.style());
+        pbuf.set_stringn(ia.x + pw, prompt_y, &text, q_room, pal.ghost.style());
         typed_w = text.width() as u16;
         if !text.is_empty() { shift = typed_w as i32 }
     }
-    let cursor = Position::new(area.x + pw + before_w as u16, prompt_y);
-    picker.prompt_at.set((prompt_y, area.x + pw));
+    let cursor = Position::new(ia.x + pw + before_w as u16, prompt_y);
+    picker.prompt_at.set((prompt_y, ia.x + pw));
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
     let mut count = format!("{}/{}", picker.visible.len(), total);
     // A toggle-sort binding: whether it sorts (+S) or not (-S), as fzf's info says.
     if theme::fzf_opts().binds.iter().any(|(_, a)| a.split('+').any(|x| x == "toggle-sort")) { count.push_str(if o_sorts(picker) { " +S" } else { " -S" }) }
-    let limit = theme::fzf_opts().multi_limit;
-    if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) || limit > 0 { count.push_str(&if limit > 0 { format!(" ({}/{limit})", picker.marked.len()) } else { format!(" ({})", picker.marked.len()) }) }
+    // --track: +T.
+    if picker.tracking_all() { count.push_str(" +T") } else if picker.track_current.is_some() { count.push_str(" +t") }
+    // The marks, while the list takes them (change-multi's say, else the list's own).
+    let limit = match picker.multi_override { Some(n) if n != usize::MAX => n, Some(_) => 0, None => theme::fzf_opts().multi_limit };
+    let takes = picker.multi_override.map(|n| n > 0).unwrap_or(matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) || theme::fzf_opts().multi);
+    if !picker.marked.is_empty() || takes { count.push_str(&if limit > 0 { format!(" ({}/{limit})", picker.marked.len()) } else { format!(" ({})", picker.marked.len()) }) }
     // fzf's printInfoImpl, each --info laid out as it lays it out: the count in the info pair, cut
     // with `..` when the room runs out (trimMessage); the separator's line filled with its string
     // (RepeatToFill) after a blank in its pair; the last column left blank. A list still loading
@@ -855,31 +1096,34 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     const ASCII_SPINNER: [&str; 8] = ["-", "\\", "|", "/", "-", "\\", "|", "/"];
     let frames: &[&str] = if theme::fzf().unicode { &SPINNER } else { &ASCII_SPINNER };
     let spinner = frames[(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 100) as usize % frames.len()];
-    let w = area.width as i32;
-    let put = |buf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { buf.set_stringn(area.x + x as u16, y, s, (w - x) as usize, st); } };
-    let bar = |buf: &mut Buffer, x: i32, y: u16, n: i32| { if o.separator && n > 0 { put(buf, x, y, &repeat_to_fill(&o.separator_char, n as usize), sep_style) } };
+    let w = ia.width as i32;
+    let put = |pbuf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { pbuf.set_stringn(ia.x + x as u16, y, s, (w - x) as usize, st); } };
+    let bar = |pbuf: &mut Buffer, x: i32, y: u16, n: i32| { if separator_on() && n > 0 { put(pbuf, x, y, &repeat_to_fill(&o.separator_char, n as usize), sep_style) } };
     // printInfoPrefix: the prefix at [pos] (what fits of it), in the prompt's pair.
-    let prefix = |buf: &mut Buffer, pos: i32, y: u16| -> i32 {
+    let prefix = |pbuf: &mut Buffer, pos: i32, y: u16| -> i32 {
         let room = w - pos;
         let (text, width) = if o.info_prefix.width() as i32 > room { (trim_right(&o.info_prefix, room), room) } else { (o.info_prefix.clone(), o.info_prefix.width() as i32) };
-        put(buf, pos, y, &text, if reading { spin_style } else { prompt });
+        put(pbuf, pos, y, &text, if reading { spin_style } else { prompt });
         pos + width
     };
-    let len = count.len() as i32;
+    // --info-command: its output in place of the count (run as fzf runs it: at once, when what it
+    // is told changes — $FZF_INFO, the query, the counts).
+    let count = match o.info_command.as_deref() { Some(cmd) => info_command(cmd, &count, &picker.query, picker.visible.len(), total), None => count };
+    let len = count.width() as i32;
     if w > 1 {
         match mode {
             // Hidden: no count, but the rule keeps its line (only --no-separator takes it away).
-            "hidden" => bar(buf, 0, info_y, w - 1),
+            "hidden" => bar(pbuf, 0, info_y, w - 1),
             // `> query  < 3/6 (0) ────`
             "inline" => {
-                let pos = prefix(buf, pw as i32 + shift, info_y);
+                let pos = prefix(pbuf, pw as i32 + shift, info_y);
                 let max = w - pos - 1;
                 let out = trim_message(&count, max);
-                put(buf, pos, info_y, &out, info_style);
+                put(pbuf, pos, info_y, &out, info_style);
                 let (mut x, mut len) = (pos + out.width() as i32, len);
-                if len < max - 1 && reading { put(buf, x + 1, info_y, spinner, spin_style); x += 2; len += 2 }
+                if len < max - 1 && reading { put(pbuf, x + 1, info_y, spinner, spin_style); x += 2; len += 2 }
                 let fill = max - len - 1;
-                if fill > 0 { put(buf, x, info_y, " ", sep_style); bar(buf, x + 1, info_y, fill) }
+                if fill > 0 { put(pbuf, x, info_y, " ", sep_style); bar(pbuf, x + 1, info_y, fill) }
             }
             // The count at the right of the prompt line, a column short of the edge (the spinner
             // two before it, or the prefix just before); the rule on a line of its own.
@@ -887,13 +1131,13 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
                 let mut pos = pw as i32 + shift;
                 if o.info_prefix.is_empty() {
                     pos = pos.max(w - len - 3);
-                    if pos < w { if reading { put(buf, pos, prompt_y, spinner, spin_style) } pos += 1 }
+                    if pos < w { if reading { put(pbuf, pos, prompt_y, spinner, spin_style) } pos += 1 }
                     if pos < w - 1 { pos += 1 }
                 } else {
-                    pos = prefix(buf, pos.max(w - len - o.info_prefix.width() as i32 - 1), prompt_y);
+                    pos = prefix(pbuf, pos.max(w - len - o.info_prefix.width() as i32 - 1), prompt_y);
                 }
-                put(buf, pos, prompt_y, &trim_message(&count, w - pos - 1), info_style);
-                bar(buf, 0, info_y, w - 1);
+                put(pbuf, pos, prompt_y, &trim_message(&count, w - pos - 1), info_style);
+                bar(pbuf, 0, info_y, w - 1);
             }
             // `──────── 3/6 (0) `: the rule from the first column (the spinner after it), the count.
             "right" => {
@@ -901,32 +1145,35 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
                 let fill = w - out.len() as i32 - 2;
                 let mut x = 0;
                 if reading {
-                    if fill >= 2 { bar(buf, 0, info_y, fill - 2); x = fill - 1 }
-                    put(buf, x, info_y, spinner, spin_style);
+                    if fill >= 2 { bar(pbuf, 0, info_y, fill - 2); x = fill - 1 }
+                    put(pbuf, x, info_y, spinner, spin_style);
                     x += 2;
-                } else if fill >= 0 { bar(buf, 0, info_y, fill); x = fill + 1 }
-                put(buf, x, info_y, &out, info_style);
+                } else if fill >= 0 { bar(pbuf, 0, info_y, fill); x = fill + 1 }
+                put(pbuf, x, info_y, &out, info_style);
             }
             // `⠋ 3/6 (0) ────`: the spinner's cell, a margin, the count, a blank, the rule.
             _ => {
-                if reading { put(buf, 0, info_y, spinner, spin_style) }
+                if reading { put(pbuf, 0, info_y, spinner, spin_style) }
                 let max = w - 3;
                 let out = trim_message(&count, max);
-                put(buf, 2, info_y, &out, info_style);
+                put(pbuf, 2, info_y, &out, info_style);
                 let fill = max - len - 1;
-                if fill > 0 { let x = 2 + out.width() as i32; put(buf, x, info_y, " ", sep_style); bar(buf, x + 1, info_y, fill) }
+                if fill > 0 { let x = 2 + out.width() as i32; put(pbuf, x, info_y, " ", sep_style); bar(pbuf, x + 1, info_y, fill) }
             }
         }
     }
     if let Some(flash) = picker.flash.as_ref().map(|f| f.0.clone()) {
         let text = format!(" {flash} ");
-        let fx = (area.x + area.width).saturating_sub(text.width() as u16 + 1);
+        let fx = (ia.x + ia.width).saturating_sub(text.width() as u16 + 1);
         buf.set_string(fx, info_y, &text, Style::default().fg(Color::Black).bg(Color::Yellow));
     }
-    if let Some(h) = &header { buf.set_line(area.x, header_y, h, area.width); }
+    let header_y = if !o.no_input { header_y } else if prompt_top { area.y } else { bottom.saturating_sub(1) };
+    if let Some(h) = &header { let (hx, hw) = in_header.map(|r| (r.x, r.width)).unwrap_or((area.x, area.width)); buf.set_line(hx, header_y, h, hw); }
     // The list: bottom-up (default), or top-down — under the prompt (reverse) or from the top
     // with the prompt below (reverse-list).
-    let (list_top, list_bottom) = if prompt_top { (if header.is_some() && !header_first { header_y + 1 } else { edge + 1 }, bottom) } else { (area.y, if header.is_some() && !header_first { header_y } else { edge }) };
+    let (list_top, list_bottom) = if o.no_input {
+        if prompt_top { (area.y + header.is_some() as u16, bottom) } else { (area.y, bottom - header.is_some() as u16) }
+    } else if in_input.is_some() { (area.y, bottom) } else if prompt_top { (if header.is_some() && !header_first { header_y + 1 } else { edge + 1 }, bottom) } else { (area.y, if header.is_some() && !header_first { header_y } else { edge }) };
     picker.page_rows.set(list_bottom.saturating_sub(list_top).max(1) as i64);
     // The box's rows: the prompt's side through the rows' (the list's rows are added as drawn).
     let edge_rows = [prompt_y, info_y, header_y];
@@ -944,6 +1191,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // scrollbar whenever there is one (shown or not), or for whatever is on the right edge.
     let bar_col = theme::fzf_opts().scrollbar.is_some() || right_border || preview.is_some();
     let text_w = width.saturating_sub(gutter_width() as usize + bar_col as usize);
+    // A live list matches what its rows show at this width: another width, matched again.
+    if picker.text_w != text_w { picker.text_w = text_w; if picker.live && !picker.query.is_empty() { picker.refilter() } }
     picker.row_at.clear();
     if picker.wrap || theme::fzf_opts().gap > 0 { fzf_wrapped(buf, picker, area, list_top, list_bottom, text_w, reverse); return cursor }
     // Scroll so the cursor row is in view (scroll = first visible index from the bottom), with
@@ -985,7 +1234,10 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     let pal = theme::fzf().pal;
     let (base, matched, current, marked, alt) = row_gutter(buf, picker, vi, x, y, None);
     let base_style = base.style();
-    let cell = |part: Option<Style>, on: bool| paint(base, matched, part, on);
+    // A row with no colours of its own is fzf's item without ANSI: its hits in the match pair
+    // alone (colorOffsets), none of the row's attributes on them.
+    let plain = row.lead.iter().all(|s| s.content.is_empty()) && row.label_dim == 0 && row.detail.iter().all(|s| s.content.is_empty() || s.style == Style::default());
+    let cell = |part: Option<Style>, on: bool| if plain && on { matched.style() } else { paint(base, matched, part, on) };
     let mut spans: Vec<Span> = Vec::new();
     for s in &row.lead { spans.push(Span::styled(s.content.clone(), cell(Some(s.style), false))) }
     let lead_w: usize = row.lead.iter().map(|s| s.content.width()).sum();
@@ -1024,8 +1276,10 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     let fill = if current { base_style } else { pal.normal.style() };
     if show_right {
         let end = right_edge.clamp(used + right_w + 2, text_w);
-        spans.push(Span::styled(" ".repeat(end.saturating_sub(used + right_w)), fill));
-        let right_at = label_len + if detail_len > 0 { 2 + detail_len } else { 0 } + 2;
+        let pad = end.saturating_sub(used + right_w);
+        spans.push(Span::styled(" ".repeat(pad), fill));
+        // (Its characters where the line matched counts them: after the blanks drawn.)
+        let right_at = label_len + if detail_len > 0 { 2 + detail_len } else { 0 } + pad;
         // The right column is dim text of the line's own.
         let dim = Style::default().add_modifier(Modifier::DIM);
         for (i, c) in right.chars().enumerate() {
@@ -1063,7 +1317,11 @@ fn row_gutter(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, mark
     let z = theme::fzf();
     let pal = z.pal;
     let pw = pointer_w();
-    if pw > 0 && current { buf.set_string(x, y, format!("{:<pw$}", z.pointer_char), pal.current_cursor.style()) }
+    // Jump mode: each row shown its label where the pointer goes, in the pointer's colours.
+    let slot = vi.saturating_sub(picker.scroll);
+    let jump_label = picker.jumping.and_then(|_| theme::fzf_opts().jump_labels.chars().nth(slot));
+    if let (Some(l), true) = (jump_label, pw > 0) { buf.set_string(x, y, format!("{:<pw$}", l), if current { pal.current_cursor.style() } else { pal.cursor.style() }) }
+    else if pw > 0 && current { buf.set_string(x, y, format!("{:<pw$}", z.pointer_char), pal.current_cursor.style()) }
     else if pw > 0 {
         // The gutter: --gutter's character, `▌`, or under --no-unicode a blank in reverse.
         let o = theme::fzf_opts();
@@ -1085,8 +1343,12 @@ fn row_gutter(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, mark
         (false, true) => (pal.selected, pal.selected_match),
         (false, false) => (pal.normal, pal.matched),
     };
-    let alt = !(marked && pal.selected.bg != pal.normal.bg) && pal.alt_bg.col != theme::fzfcolor::Col::Undef && vi.saturating_sub(picker.scroll) % 2 == 1;
-    let (base, matched) = if alt && !current { (base.with_bg(pal.alt_bg), matched.with_bg(pal.alt_bg)) } else { (base, matched) };
+    let undefined = pal.alt_bg.col == theme::fzfcolor::Col::Undef;
+    // (Striped in jump mode — on bg+ from the first row when there is no alt-bg — as fzf does.)
+    let (alt, alt_bg) = if jump_label.is_some() {
+        (if undefined { slot % 2 == 0 } else { slot % 2 == 1 }, if undefined { theme::fzfcolor::CA { col: pal.current.bg, attr: 0 } } else { pal.alt_bg })
+    } else { (!(marked && pal.selected.bg != pal.normal.bg) && !undefined && slot % 2 == 1, pal.alt_bg) };
+    let (base, matched) = if alt && !current { (base.with_bg(alt_bg), matched.with_bg(alt_bg)) } else { (base, matched) };
     (base, matched, current, marked, alt)
 }
 
@@ -1372,7 +1634,7 @@ fn fzf_wrapped(buf: &mut Buffer, picker: &mut Picker, area: Rect, list_top: u16,
             buf.set_string(area.x, y, format!("{:<pw$}", gutter), st.style());
         }
         let width = (area.width as usize).saturating_sub(pw + mw + 1);
-        if draw && !gap_line.is_empty() { buf.set_string(area.x + (pw + mw) as u16, y, repeat_to_fill(&gap_line, width), pal.list_border.style()); }
+        if draw && !gap_line.is_empty() { buf.set_string(area.x + (pw + mw) as u16, y, repeat_to_fill(&gap_line, width), pal.gap_line.style()); }
     }
     // getScrollbar(avgNumLines, …): the thumb and its start from the prompt's side.
     let (total, h) = (n * per_line.max(1), max_lines);
@@ -1402,9 +1664,10 @@ fn fzf_row_part(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, te
         spans.push(Span::styled(sign, base.style().add_modifier(Modifier::DIM)));
     }
     let (mut run, mut run_style) = (String::new(), None::<Style>);
+    let plain = cells.iter().all(|(_, part, _)| part.is_none());
     for (c, part, on) in cells {
         if !run.is_empty() && unicode_width::UnicodeWidthChar::width(*c) == Some(0) { run.push(*c); continue }
-        let st = paint(base, matched, *part, *on);
+        let st = if plain && *on { matched.style() } else { paint(base, matched, *part, *on) };
         if run_style != Some(st) && !run.is_empty() { spans.push(Span::styled(std::mem::take(&mut run), run_style.unwrap_or_default())) }
         run_style = Some(st);
         run.push(*c);
@@ -1456,7 +1719,7 @@ fn repeat_to_fill(s: &str, limit: usize) -> String {
 /// in view with --hscroll-off columns after it, the ellipsis where it was cut on either side.
 fn hscroll(cells: Vec<Cell>, room: usize, ellipsis: &str, scroll: bool, scroll_off: usize, keep_right: bool) -> Vec<Cell> {
     let cw = |c: char| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-    let w = |c: &[Cell]| -> usize { c.iter().map(|x| cw(x.0)).sum() };
+    let w = |c: &[Cell]| -> usize { cell_widths(c).iter().sum() };
     if w(&cells) <= room { return cells }
     // util.Truncate(ellipsis, maxWidth): as much of it as the room takes.
     let mut ew = 0;
@@ -1465,7 +1728,7 @@ fn hscroll(cells: Vec<Cell>, room: usize, ellipsis: &str, scroll: bool, scroll_o
     let trim_right = |c: &[Cell], width: usize| -> Vec<Cell> {
         let mut out = Vec::new();
         let mut used = 0;
-        for x in c { if used + cw(x.0) > width { break } used += cw(x.0); out.push(*x) }
+        for (x, cw) in c.iter().zip(cell_widths(c)) { if used + cw > width { break } used += cw; out.push(*x) }
         out
     };
     // --keep-right, a row the query did not light: its end in view, the ellipsis before it (trimLeft).
@@ -1506,9 +1769,11 @@ fn hscroll(cells: Vec<Cell>, room: usize, ellipsis: &str, scroll: bool, scroll_o
     if w(&cells[maxe..]) > ew { cells.truncate(maxe); cells.extend(ell.iter().map(plain)) }
     // Trim from the left until it fits beside the leading ellipsis.
     let width = room.saturating_sub(ew);
-    let mut current = w(&cells);
+    let widths = cell_widths(&cells);
+    let mut current: usize = widths.iter().sum();
     let mut from = 0;
-    while current > width && from < cells.len() { current -= cw(cells[from].0); from += 1 }
+    // (A cluster's marks go with it.)
+    while (current > width || widths.get(from) == Some(&0)) && from < cells.len() { current -= widths[from]; from += 1 }
     let mut out: Vec<Cell> = ell.iter().map(plain).collect();
     out.extend(cells[from..].iter().cloned());
     out
@@ -1517,6 +1782,20 @@ fn hscroll(cells: Vec<Cell>, room: usize, ellipsis: &str, scroll: bool, scroll_o
 /// A character of a row's line: its own colours if it has them (hn's glyphs, a dim detail — an
 /// --ansi part to fzf), and whether the query lit it.
 type Cell = (char, Option<Style>, bool);
+
+/// Each cell's columns as fzf counts them (uniseg, by grapheme cluster): the cluster's width on
+/// its first character, none on the rest — a family emoji's ZWJ-joined people are two columns,
+/// not six.
+fn cell_widths(cells: &[Cell]) -> Vec<usize> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let s: String = cells.iter().map(|c| c.0).collect();
+    let mut out = Vec::with_capacity(cells.len());
+    for g in s.graphemes(true) {
+        out.push(unicode_width::UnicodeWidthStr::width(g));
+        out.extend(std::iter::repeat_n(0, g.chars().count() - 1));
+    }
+    out
+}
 
 /// The pointer's cells (fzf pads every row to it) and the pointer and marker together.
 fn pointer_w() -> usize { theme::fzf().pointer_char.width() }
@@ -1551,10 +1830,15 @@ fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
 }
 
 /// fzf's `--header`: the keys this list answers to, in the header colour.
-fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'static>> {
-    if picker.hints.is_empty() && picker.heading.is_none() { return None }
-    // Indented to the rows' text (past the pointer and marker).
-    let indent = gutter_width() as usize;
+fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'static>> { header_line_at(picker, width, gutter_width() as usize) }
+
+/// header_line indented [indent] columns (in a header box with a left side, none: its margin
+/// stands for the indent).
+fn header_line_at(picker: &Picker, width: usize, indent: usize) -> Option<Line<'static>> {
+    // change-header: its text in place of the hints.
+    if let Some(h) = &picker.header_text { if h.is_empty() { return None } return Some(Line::from(vec![Span::raw(" ".repeat(indent)), Span::styled(clip(h, width.saturating_sub(indent)), theme::fzf().header_style())])) }
+    // (No row at all when every hint's key is bound to something else and there is no heading.)
+    if picker.heading.is_none() && picker.hints.iter().all(|(k, _)| crate::input::rebound(k)) { return None }
     let mut spans = vec![Span::raw(" ".repeat(indent))];
     let mut used = indent;
     // What the list is for, first (a task about to be sent).
@@ -1570,7 +1854,8 @@ fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'st
         // long header (··).
         let piece = if i > 0 { 3 } else { 0 } + k.width() + 1 + w.width();
         if used + piece > width {
-            if used + 2 <= width { spans.push(Span::styled("··", theme::fzf().header_style())) }
+            let dots = if theme::fzf_opts().unicode { "··" } else { ".." };
+            if used + 2 <= width { spans.push(Span::styled(dots, theme::fzf().header_style())) }
             break;
         }
         used += piece;
@@ -1716,12 +2001,16 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: 
     // harness, a machine or a command do, where nothing says otherwise.
     let lines: Vec<Line> = match pw.wrap { None if !matches!(kind, PickerKind::Buffers) => text.into_iter().flat_map(|l| wrap_line(l, iw)).collect(), _ => text };
     let total = lines.len();
-    // A new row's preview starts where follow or +N says.
+    // A new row's preview starts where follow or +N says — a session's latest turns at their end
+    // (the newest at the bottom, as its terminal has them), once they have come.
+    let bottom_up = crate::preview::bottom_up(app, kind, &id);
     if picker.preview_fresh.replace(false) {
+        *picker.preview_bottom.borrow_mut() = None;
         picker.preview_following.set(pw.follow);
         if !pw.follow { if let Some(n) = scroll_offset(&pw.scroll, height) { picker.preview_scroll.set(n.min(total.saturating_sub(1)).min(u16::MAX as usize) as u16) } }
     }
-    if pw.follow && picker.preview_following.get() { picker.preview_scroll.set(picker.preview_scroll.get().max(total.saturating_sub(height).min(u16::MAX as usize) as u16)) }
+    if bottom_up && picker.preview_bottom.borrow().as_deref() != Some(id.as_str()) { *picker.preview_bottom.borrow_mut() = Some(id.clone()); picker.preview_following.set(true) }
+    if (pw.follow || bottom_up) && picker.preview_following.get() { picker.preview_scroll.set(picker.preview_scroll.get().max(total.saturating_sub(height).min(u16::MAX as usize) as u16)) }
     // The rows it fills from its offset (fzf: a wrapped line takes as many as it needs).
     let draw_from = |offset: usize| -> (Vec<Line<'static>>, bool) {
         let mut rows = Vec::new();
@@ -1843,34 +2132,16 @@ pub fn screen_preview(buf: &mut Buffer, pane: &Pane, x: u16, y: u16, nx: u16, ny
 }
 
 /// tmux's big digits (clock-mode, display-panes): 5 wide, 5 tall, drawn as coloured blocks.
-const DIGITS: [[&str; 5]; 11] = [
+const DIGITS: [[&str; 5]; 14] = [
     ["xxxxx", "x...x", "x...x", "x...x", "xxxxx"], ["....x", "....x", "....x", "....x", "....x"],
     ["xxxxx", "....x", "xxxxx", "x....", "xxxxx"], ["xxxxx", "....x", "xxxxx", "....x", "xxxxx"],
     ["x...x", "x...x", "xxxxx", "....x", "....x"], ["xxxxx", "x....", "xxxxx", "....x", "xxxxx"],
     ["xxxxx", "x....", "xxxxx", "x...x", "xxxxx"], ["xxxxx", "....x", "....x", "....x", "....x"],
     ["xxxxx", "x...x", "xxxxx", "x...x", "xxxxx"], ["xxxxx", "x...x", "xxxxx", "....x", "xxxxx"],
     [".....", "..x..", ".....", "..x..", "....."],
+    ["xxxxx", "x...x", "xxxxx", "x...x", "x...x"], ["xxxxx", "x...x", "xxxxx", "x....", "x...."],
+    ["x...x", "xx.xx", "x.x.x", "x...x", "x...x"],
 ];
-
-fn big(buf: &mut Buffer, text: &str, area: Rect, color: Color) {
-    let glyphs: Vec<usize> = text.chars().filter_map(|c| c.to_digit(10).map(|d| d as usize).or((c == ':').then_some(10))).collect();
-    let w = glyphs.len() as u16 * 6;
-    if area.width < w || area.height < 5 {
-        // Too small for blocks: the plain text, as tmux does.
-        let x = area.x + area.width.saturating_sub(text.len() as u16) / 2;
-        buf.set_string(x, area.y + area.height / 2, text, Style::default().fg(color));
-        return;
-    }
-    let x0 = area.x + (area.width - w) / 2;
-    let y0 = area.y + (area.height - 5) / 2;
-    for (i, g) in glyphs.iter().enumerate() {
-        for (r, row) in DIGITS[*g].iter().enumerate() {
-            for (c, bit) in row.chars().enumerate() {
-                if bit == 'x' { if let Some(cell) = buf.cell_mut((x0 + i as u16 * 6 + c as u16, y0 + r as u16)) { cell.set_symbol(" ").set_style(Style::default().bg(color)); } }
-            }
-        }
-    }
-}
 
 /// display-panes (C-b q), as cmd_display_panes_draw_pane draws it: each pane's index in the
 /// middle of its content (below its title row), in blocks of display-panes-colour (the active
@@ -1921,11 +2192,32 @@ fn display_panes(buf: &mut Buffer, app: &App) {
     }
 }
 
-/// clock-mode (C-b t): the time, big, in blue, on a cleared pane.
-fn clock(buf: &mut Buffer, rect: Rect) {
+/// clock-mode (C-b t), as window_clock_draw_screen draws it: the pane cleared, the time
+/// (clock-mode-style 12: `%l:%M AM`) in blocks of clock-mode-colour from the middle — as plain
+/// text when the pane is too small for them.
+fn clock(buf: &mut Buffer, app: &App, rect: Rect) {
     for y in rect.y..rect.y + rect.height { for x in rect.x..rect.x + rect.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
-    let (time, _) = local_time(crate::app::utc_offset());
-    big(buf, &time, rect, Color::Blue);
+    let tab_id = app.tab().id.clone();
+    let colour = app.options.get("clock-mode-colour", &tab_id, None).and_then(|c| crate::tmuxconf::colour(&c)).unwrap_or(Color::Blue);
+    let (hm, _) = local_time(crate::app::utc_offset());
+    let tim = if app.options.get("clock-mode-style", &tab_id, None).as_deref() == Some("12") {
+        let h: u32 = hm.get(..2).and_then(|h| h.parse().ok()).unwrap_or(0);
+        format!("{:>2}:{} {}", if h % 12 == 0 { 12 } else { h % 12 }, hm.get(3..5).unwrap_or("00"), if h >= 12 { "PM" } else { "AM" })
+    } else { hm };
+    let (sx, sy, len) = (rect.width as i32, rect.height as i32, tim.len() as i32);
+    let put = |buf: &mut Buffer, x: i32, y: i32, style: Style, text: &str| { if x >= 0 && y >= 0 && x < sx && y < sy { buf.set_string(rect.x + x as u16, rect.y + y as u16, text, style); } };
+    if sx < 6 * len || sy < 6 {
+        if sx >= len && sy != 0 { put(buf, sx / 2 - len / 2, sy / 2, Style::default().fg(colour), &tim) }
+        return;
+    }
+    let (mut x, y) = (sx / 2 - 3 * len, sy / 2 - 3);
+    for ch in tim.chars() {
+        let idx = match ch { '0'..='9' => ch as usize - '0' as usize, ':' => 10, 'A' => 11, 'P' => 12, 'M' => 13, _ => { x += 6; continue } };
+        for (j, row) in DIGITS[idx].iter().enumerate() {
+            for (i, bit) in row.chars().enumerate() { if bit == 'x' { put(buf, x + i as i32, y + j as i32, Style::default().bg(colour), " ") } }
+        }
+        x += 6;
+    }
 }
 
 fn clip(text: &str, cols: usize) -> String {
@@ -1982,7 +2274,9 @@ pub(crate) fn map_color(color: AColor, colors: &alacritty_terminal::term::color:
 fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window: (Option<Color>, Option<Color>)) -> Option<Position> {
     if let Some(bg) = window.1 { buf.set_style(area, Style::default().bg(bg)) }
     match &pane.phase {
-        Phase::Connecting(note) => { card(buf, area, &[(note.clone(), Style::default().add_modifier(Modifier::DIM))]); return None }
+        // Opening: nothing to show yet. Lost (the machine's link down), the last screen is kept, as
+        // ssh and mosh keep it — below.
+        Phase::Connecting(note) if pane.last_seq.is_none() => { card(buf, area, &[(note.clone(), Style::default().add_modifier(Modifier::DIM))]); return None }
         Phase::Card { title, detail, keys } => {
             let mut lines = vec![(title.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))];
             for row in detail.lines() { lines.push((row.to_string(), Style::default())) }
@@ -2047,13 +2341,27 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
                 let mut s = String::with_capacity(8);
                 s.push(cell.c);
                 s.extend(extra.iter());
+                // A narrow character with VS16 (⚠️ ✔️ ❤️): one cell in the pane's grid, as the
+                // program's terminal placed what follows — drawn as its one-cell self, so the
+                // cell after it (a space, a pane's border) is not taken by a two-cell emoji.
+                if s.contains('\u{FE0F}') && unicode_width::UnicodeWidthChar::width(cell.c) == Some(1) && !cell.flags.contains(Flags::WIDE_CHAR) {
+                    s.retain(|c| c != '\u{FE0F}');
+                }
                 target.set_symbol(&s).set_style(style);
             }
             _ => { target.set_char(cell.c).set_style(style); }
         }
     }
+    // The link down: the last screen dimmed, and mosh's one row at the top saying so.
+    if let Phase::Connecting(note) = &pane.phase {
+        buf.set_style(area, Style::default().add_modifier(Modifier::DIM));
+        let row = Rect::new(area.x, area.y, area.width, 1);
+        buf.set_style(row, Style::default().remove_modifier(Modifier::DIM).add_modifier(Modifier::REVERSED));
+        buf.set_stringn(area.x, area.y, format!("{:w$}", format!(" {note}"), w = area.width as usize), area.width as usize, Style::default().remove_modifier(Modifier::DIM).add_modifier(Modifier::REVERSED));
+        return None;
+    }
     // Local echo, drawn over the grid: underlined until the far side confirms it.
-    for (col, row, c, _) in &pane.predictions {
+    for (col, row, c, _) in pane.shown_predictions() {
         let row = (*row as i32 - shift).max(0) as u16;
         let Some(col) = &col.checked_sub(hshift) else { continue };
         if let Some(cell) = buf.cell_mut((area.x + col, area.y + row)) {
@@ -2061,7 +2369,7 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
         }
     }
     if pane.scrolled() > 0 || !active { return None }
-    if let Some((col, row, _, _)) = pane.predictions.last() {
+    if let Some((col, row, _, _)) = pane.shown_predictions().last() {
         let row = (*row as i32 - shift).max(0) as u16;
         let col = &col.saturating_sub(hshift);
         if col + 1 < area.width && row < area.height { return Some(Position::new(area.x + col + 1, area.y + row)) }

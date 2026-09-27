@@ -16,5 +16,6 @@ tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "sync", "
 tokio-tungstenite = "0.30.0"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 unicode-width = "0.2.2"
+unicode-segmentation = "1.13"
 libc = "0.2"
 uuid = { version = "1.26.1", features = ["v4"] }

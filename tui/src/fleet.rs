@@ -57,6 +57,9 @@ pub struct Agent {
     pub project: String,
     pub branch: String,
     pub created_at: u64,
+    /// When its conversation last moved (the daemon's `updatedAt`: dated work in its transcript,
+    /// else its engine's last word, else its creation) — what the desktop and phone sort by.
+    pub updated_at: u64,
     /// When this client first had it (a list's row, or one it just made).
     pub known_at: Instant,
     pub active_at: u64,
@@ -209,7 +212,9 @@ impl Agent {
         State::Ready
     }
 
-    pub fn recency(&self) -> u64 { self.active_at.max(self.created_at).max(self.usage_at) }
+    /// When it was last active: its conversation's time (updatedAt), or later what this client saw
+    /// it do — never a bookkeeping stamp (its token count's refresh moves every harness at once).
+    pub fn recency(&self) -> u64 { let t = self.updated_at.max(self.active_at); if t > 0 { t } else { self.created_at } }
 
     /// When it came to be as it is (ms since the epoch): waiting on you since its question, working
     /// since its turn began, done or failed since it ended; idle, paused or offline since it last
@@ -271,6 +276,7 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         project: s(&project, "name"),
         branch: s(&project, "branch"),
         created_at: time(row, "createdAt"),
+        updated_at: time(row, "updatedAt"),
         known_at: previous.map(|p| p.known_at).unwrap_or_else(Instant::now),
         // Not `updatedAt`: the daemon restamps every row on each reconcile.
         active_at: previous.map(|p| p.active_at).unwrap_or(0),
@@ -381,6 +387,24 @@ pub fn tidy_error(line: &str) -> String {
         }
     }
     line.to_string()
+}
+
+/// An answer given by its choices' numbers (`2`; `1,3` for a question that takes several): the
+/// choices' words — anything else is refused, never sent as words (answer -l for words).
+pub fn choices(q: &Question, typed: &str) -> Result<String, String> {
+    let parts: Vec<&str> = typed.split([',', ' ']).filter(|s| !s.is_empty()).collect();
+    let n = q.options.len();
+    if n == 0 { return Err("this question has no choices: answer -l with words".into()) }
+    let mut picked = Vec::new();
+    for p in &parts {
+        match p.parse::<usize>() {
+            Ok(k) if k >= 1 && k <= n => picked.push(q.options[k - 1].clone()),
+            _ => return Err(format!("{p} is not a choice (1–{n}; -l for words)")),
+        }
+    }
+    if picked.is_empty() { return Err("no choice given".into()) }
+    if picked.len() > 1 && !q.multi { return Err(format!("one choice only (1–{n})")) }
+    Ok(picked.join(", "))
 }
 
 pub fn answer_text(q: &Question, typed: &str) -> Option<String> {

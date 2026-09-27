@@ -729,6 +729,11 @@ pub fn arrange(named: Named, ids: &[u64], sx: u16, sy: u16, status: Status, main
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Toward { Left, Right, Up, Down }
 
+/// layout_parse's check: `csum,` in front, and the rest adds up to it.
+pub fn checksum_ok(text: &str) -> bool {
+    match text.split_once(',') { Some((c, rest)) if c.len() == 4 => u16::from_str_radix(c, 16).map(|c| c == checksum(rest)).unwrap_or(false), _ => false }
+}
+
 /// tmux's layout checksum.
 fn checksum(s: &str) -> u16 {
     let mut c: u16 = 0;

@@ -19,8 +19,8 @@ pub fn ctx(app: &App, pane: u64) -> Ctx {
 
 /// The looks copy mode draws [pane] with.
 pub fn styles(app: &App, pane: u64) -> Styles {
-    let (_, tab) = tab_of(app, pane);
-    Styles::of(|n| app.options.get(n, &tab, Some(pane)).unwrap_or_default())
+    let (w, _) = tab_of(app, pane);
+    Styles::of(|n| app.style_spec(n, w, Some(pane)))
 }
 
 /// The mode's screen for [pane]: its tile's cells, or its terminal's when it is not on screen.
@@ -53,7 +53,7 @@ pub fn enter(app: &mut App, pane: u64, source: u64, scroll_exit: bool, hide_posi
     let (sx, sy) = screen_size(app, pane);
     let c = ctx(app, pane);
     let Some(src) = app.panes.get(&source) else { return true };
-    let grid = from_term(&src.term, &src.times, source != pane);
+    let grid = from_term(&src.term, &src.times, (&src.hist_marks, &src.screen_marks), source != pane);
     let cur = src.term.grid().cursor.point;
     let cursor = (cur.column.0 as u32, cur.line.0.max(0) as u32);
     let ps = app.panes.get(&pane).map(|p| p.search.clone()).unwrap_or_default();
@@ -149,6 +149,11 @@ fn parse_line(line: &str, sx: u32, template: &mut Option<alacritty_terminal::ter
 /// run-shell's output is. False when there is no pane to show them in.
 pub fn print(app: &mut App, lines: &[String], parse: bool) -> bool {
     let Some(pane) = app.focused() else { return false };
+    print_to(app, pane, lines, parse)
+}
+
+/// print, into [pane]'s view mode (run-shell -t's).
+pub fn print_to(app: &mut App, pane: u64, lines: &[String], parse: bool) -> bool {
     if !app.panes.contains_key(&pane) { return false }
     let top_view = app.panes.get(&pane).and_then(|p| p.modes.last()).map(|m| m.view).unwrap_or(false);
     if !top_view {
@@ -270,7 +275,7 @@ fn apply(app: &mut App, pane: u64, out: Out, m: Option<&crate::mouse::Event>) {
         Out::Refresh => {
             let c = ctx(app, pane);
             let Some(p) = app.panes.get(&pane) else { return };
-            let grid = from_term(&p.term, &p.times, false);
+            let grid = from_term(&p.term, &p.times, (&p.hist_marks, &p.screen_marks), false);
             if let Some(m) = app.panes.get_mut(&pane).and_then(|p| p.modes.last_mut()) { m.refresh(grid, &c) }
         }
     }

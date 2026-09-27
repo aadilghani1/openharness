@@ -56,39 +56,39 @@ pub mod fzfcolor {
         pub selected_fg: CA, pub selected_bg: CA, pub selected_match: CA, pub dark_bg: CA, pub gutter: CA, pub prompt: CA,
         pub input_bg: CA, pub matched: CA, pub current: CA, pub current_match: CA, pub spinner: CA, pub info: CA,
         pub cursor: CA, pub marker: CA, pub header: CA, pub header_bg: CA, pub separator: CA, pub scrollbar: CA,
-        pub border: CA, pub border_label: CA, pub list_border: CA,
+        pub border: CA, pub border_label: CA, pub list_border: CA, pub gap_line: CA,
         pub preview_fg: CA, pub preview_bg: CA, pub preview_border: CA, pub preview_scrollbar: CA, pub preview_label: CA,
     }
 
     pub const NO_COLOR: Theme = Theme {
         colored: false, input: D, ghost: U, fg: D, bg: D, list_fg: D, list_bg: D, alt_bg: U, selected_fg: D, selected_bg: D,
         selected_match: D, dark_bg: D, gutter: U, prompt: D, input_bg: D, matched: D, current: U, current_match: U, spinner: D,
-        info: D, cursor: D, marker: D, header: D, header_bg: D, separator: D, scrollbar: D, border: U, border_label: D, list_border: D,
+        info: D, cursor: D, marker: D, header: D, header_bg: D, separator: D, scrollbar: D, border: U, border_label: D, list_border: D, gap_line: D,
         preview_fg: D, preview_bg: D, preview_border: D, preview_scrollbar: D, preview_label: D,
     };
     pub const EMPTY: Theme = Theme {
         colored: true, input: U, ghost: U, fg: U, bg: U, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: U, gutter: U, prompt: U, input_bg: U, matched: U, current: U, current_match: U, spinner: U,
-        info: U, cursor: U, marker: U, header: U, header_bg: U, separator: U, scrollbar: U, border: U, border_label: U, list_border: U,
+        info: U, cursor: U, marker: U, header: U, header_bg: U, separator: U, scrollbar: U, border: U, border_label: U, list_border: U, gap_line: U,
         preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const DEFAULT16: Theme = Theme {
         colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(8), gutter: U, prompt: c(4), input_bg: U, matched: c(2), current: c(15), current_match: c(10),
         spinner: c(2), info: c(3), cursor: c(1), marker: c(5), header: c(6), header_bg: U, separator: U, scrollbar: U, border: U,
-        border_label: D, list_border: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
+        border_label: D, list_border: U, gap_line: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const DARK256: Theme = Theme {
         colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(236), gutter: U, prompt: c(110), input_bg: U, matched: c(108), current: c(254), current_match: c(151),
         spinner: c(148), info: c(144), cursor: c(161), marker: c(168), header: c(109), header_bg: U, separator: U, scrollbar: U,
-        border: c(59), border_label: c(145), list_border: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
+        border: c(59), border_label: c(145), list_border: U, gap_line: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const LIGHT256: Theme = Theme {
         colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(251), gutter: U, prompt: c(25), input_bg: U, matched: c(66), current: c(237), current_match: c(23),
         spinner: c(65), info: c(101), cursor: c(161), marker: c(168), header: c(31), header_bg: U, separator: U, scrollbar: U,
-        border: c(145), border_label: c(59), list_border: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
+        border: c(145), border_label: c(59), list_border: U, gap_line: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
 
     /// A --color value's colour: -1, 0–255, #rrggbb, a name.
@@ -118,7 +118,7 @@ pub mod fzfcolor {
                 "selected-bg" => &mut theme.selected_bg, "gutter" => &mut theme.gutter, "hl" => &mut theme.matched,
                 "current-hl" | "hl+" => &mut theme.current_match, "selected-hl" => &mut theme.selected_match, "border" => &mut theme.border,
                 "separator" => &mut theme.separator, "scrollbar" => &mut theme.scrollbar, "label" => &mut theme.border_label,
-                "list-border" => &mut theme.list_border, "prompt" => &mut theme.prompt, "input-bg" => &mut theme.input_bg,
+                "list-border" => &mut theme.list_border, "gap-line" => &mut theme.gap_line, "prompt" => &mut theme.prompt, "input-bg" => &mut theme.input_bg,
                 "spinner" => &mut theme.spinner, "info" => &mut theme.info, "pointer" => &mut theme.cursor, "marker" => &mut theme.marker,
                 "header" | "header-fg" => &mut theme.header, "header-bg" => &mut theme.header_bg,
                 "preview-fg" => &mut theme.preview_fg, "preview-bg" => &mut theme.preview_bg, "preview-border" => &mut theme.preview_border,
@@ -208,7 +208,7 @@ pub mod fzfcolor {
         pub prompt: P, pub normal: P, pub selected: P, pub input: P, pub ghost: P, pub matched: P, pub selected_match: P,
         pub cursor: P, pub cursor_empty: P, pub cursor_empty_char: P, pub marker: P, pub current: P, pub current_match: P, pub current_cursor: P,
         pub current_cursor_empty: P, pub current_marker: P, pub current_selected_empty: P, pub spinner: P, pub info: P,
-        pub separator: P, pub scrollbar: P, pub border: P, pub header: P, pub list_border: P, pub border_label: P,
+        pub separator: P, pub scrollbar: P, pub border: P, pub header: P, pub list_border: P, pub gap_line: P, pub border_label: P,
         pub preview: P, pub preview_border: P, pub preview_label: P, pub preview_scrollbar: P,
         /// --color=alt-bg: every other row's background (undefined: no stripes).
         pub alt_bg: CA,
@@ -291,6 +291,7 @@ pub mod fzfcolor {
         t.preview_label = over(t.border_label, t.preview_label);
         t.preview_border = over(t.border, t.preview_border);
         t.list_border = over(t.border, t.list_border);
+        t.gap_line = over(t.list_border, t.gap_line);
         t.separator = over(t.list_border, t.separator);
         t.scrollbar = over(t.list_border, t.scrollbar);
         t.preview_scrollbar = if scrollbar_defined && !preview_border_defined { over(t.scrollbar, t.preview_scrollbar) } else { over(t.preview_border, t.preview_scrollbar) };
@@ -308,7 +309,7 @@ pub mod fzfcolor {
             current_cursor_empty: pair(blank, t.dark_bg), current_marker: pair(t.marker, t.dark_bg), current_selected_empty: pair(blank, t.dark_bg),
             spinner: pair(t.spinner, t.input_bg), info: pair(t.info, t.input_bg), separator: pair(t.separator, t.input_bg),
             scrollbar: pair(t.scrollbar, t.list_bg), border: pair(t.border, t.bg), header: pair(t.header, t.header_bg),
-            list_border: pair(t.list_border, t.list_bg), border_label: pair(t.border_label, t.bg),
+            list_border: pair(t.list_border, t.list_bg), gap_line: pair(t.gap_line, t.list_bg), border_label: pair(t.border_label, t.bg),
             preview: pair(t.preview_fg, t.preview_bg), preview_border: pair(t.preview_border, t.preview_bg),
             preview_label: pair(t.preview_label, t.preview_bg), preview_scrollbar: pair(t.preview_scrollbar, t.preview_bg), alt_bg: t.alt_bg, colored: base.colored,
         }
@@ -389,6 +390,7 @@ pub const TEXT: Color = Color::Reset;
 
 /// fzf's colours — its dark256 default, or what `--color=light|16|bw` in `$FZF_DEFAULT_OPTS` asks
 /// for (and bw under NO_COLOR), so a list here looks like fzf does on this terminal.
+#[derive(Clone)]
 pub struct Fzf { pub reverse: bool, pub unicode: bool, pub pointer_char: String, pub marker_char: String, pub marker_multi: [String; 3], pub prompt_text: String, pub bg_plus: Color, pub hl: Color, pub prompt: Color, pub bw: bool, pub pal: fzfcolor::Palette }
 
 impl Fzf {
@@ -424,7 +426,39 @@ pub fn fzf_spec(v: &str) -> (Option<Color>, Modifier) {
     (colour, attrs)
 }
 
+/// What a list's change-* actions made of the look and the options (change-prompt, change-ghost,
+/// hide-input …): in force until the next list opens (fzf starts from its options each time).
+static FZF_LIVE: std::sync::atomic::AtomicPtr<Fzf> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static OPTS_LIVE: std::sync::atomic::AtomicPtr<FzfOpts> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// The look changed for this list (the one before stays: a reference to it may be held).
+pub fn fzf_change(f: impl FnOnce(&mut Fzf)) {
+    let mut c = fzf().clone();
+    f(&mut c);
+    FZF_LIVE.store(Box::into_raw(Box::new(c)), std::sync::atomic::Ordering::Release);
+}
+
+/// The options changed for this list.
+pub fn opts_change(f: impl FnOnce(&mut FzfOpts)) {
+    let mut c = fzf_opts().clone();
+    f(&mut c);
+    OPTS_LIVE.store(Box::into_raw(Box::new(c)), std::sync::atomic::Ordering::Release);
+}
+
+/// A new list: the look and options as FZF_DEFAULT_OPTS has them.
+pub fn fzf_reset() {
+    FZF_LIVE.store(std::ptr::null_mut(), std::sync::atomic::Ordering::Release);
+    OPTS_LIVE.store(std::ptr::null_mut(), std::sync::atomic::Ordering::Release);
+}
+
 pub fn fzf() -> &'static Fzf {
+    let live = FZF_LIVE.load(std::sync::atomic::Ordering::Acquire);
+    // SAFETY: set only from a leaked Box, never freed.
+    if !live.is_null() { return unsafe { &*live } }
+    fzf_base()
+}
+
+fn fzf_base() -> &'static Fzf {
     static FZF: std::sync::OnceLock<Fzf> = std::sync::OnceLock::new();
     FZF.get_or_init(|| {
         use fzfcolor::*;
@@ -439,6 +473,11 @@ pub fn fzf() -> &'static Fzf {
             let mut take = || value.clone().or_else(|| { i += 1; opts.get(i).cloned() });
             match flag.as_str() {
                 "--color" => { match take() { Some(v) if !v.is_empty() => { if let Some(b) = parse(&mut theme, &v) { base = Some(b) } } _ => theme = EMPTY } }
+                // applyPreset's gutter: the terminal's own colour under minimal, the theme's otherwise.
+                "--style" => { if let Some(v) = take() {
+                    use fzfcolor::{CA, Col};
+                    match v.split(':').next().unwrap_or("").to_lowercase().as_str() { "minimal" => theme.gutter = CA { col: Col::Default, attr: 0 }, "default" | "full" => theme.gutter = CA { col: Col::Undef, attr: 0 }, _ => {} }
+                } }
                 "+c" | "--no-color" => { theme = NO_COLOR; base = Some(NO_COLOR) }
                 "+2" | "--no-256" => theme = DEFAULT16,
                 "--bold" => bold = true, "--no-bold" => bold = false,
@@ -615,7 +654,7 @@ pub fn parse_preview_window(pw: &mut PreviewWindow, input: &str) {
 }
 
 /// A label's text without its ANSI colours.
-fn strip_ansi(s: &str) -> String {
+pub fn strip_ansi(s: &str) -> String {
     let mut out = String::new();
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
@@ -627,15 +666,45 @@ fn strip_ansi(s: &str) -> String {
 
 /// The rest of FZF_DEFAULT_OPTS that shapes a list: --cycle, --exact, -i/+i, --no-separator,
 /// --ellipsis, fg:/bg: colours, and --bind key:action pairs.
-pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_prefix: String, pub separator_char: String, pub scrollbar: Option<String>, pub preview_scrollbar: Option<String>, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize, pub tabstop: usize, pub wrap: bool, pub wrap_sign: String, pub height: Option<Height>, pub min_height: i64, pub margin: [Size; 4], pub padding: [Size; 4], pub border_label: String, pub border_label_pos: (i64, bool), pub unicode: bool, pub gutter: Option<String>, pub keep_right: bool, pub gap: usize, pub gap_line: Option<String>, pub preview_window: PreviewWindow, pub preview_label: Option<String>, pub preview_label_pos: (i64, bool), pub literal: bool, pub multi_limit: usize, pub preview_window_set: bool,
+#[derive(Clone)]
+pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_prefix: String, pub separator_char: String, pub scrollbar: Option<String>, pub preview_scrollbar: Option<String>, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize, pub tabstop: usize, pub wrap: bool, pub wrap_sign: String, pub height: Option<Height>, pub min_height: i64, pub margin: [Size; 4], pub padding: [Size; 4], pub border_label: String, pub border_label_pos: (i64, bool), pub unicode: bool, pub gutter: Option<String>, pub keep_right: bool, pub gap: usize, pub gap_line: Option<String>, pub preview_window: PreviewWindow, pub preview_label: Option<String>, pub preview_label_pos: (i64, bool), pub literal: bool, pub multi_limit: usize, pub multi: bool, pub preview_window_set: bool,
     /// Each --preview-window as written, in order (a list with a look of its own lays them over it).
-    pub preview_window_specs: Vec<String> }
+    pub preview_window_specs: Vec<String>,
+    /// --ghost: what an empty query shows (else the list's own placeholder); --track.
+    pub ghost: Option<String>, pub track: bool,
+    /// The sections' borders (--list-border, --input-border, --header-border, --footer-border; None:
+    /// not set), --footer's lines, and each section's label (--list-label …).
+    pub list_border: Option<String>, pub input_border: Option<String>, pub header_border: Option<String>, pub footer_border: Option<String>,
+    pub footer: Vec<String>, pub list_label: String, pub input_label: String, pub header_label: String, pub footer_label: String,
+    /// --separator given (fzf's opts.Separator not nil): an input border leaves the rule out otherwise.
+    pub separator_set: bool,
+    /// --no-input: no prompt, no info, no query.
+    pub no_input: bool,
+    /// --info-command: what the info line says (its output; $FZF_INFO the count it replaces).
+    pub info_command: Option<String>,
+    /// --algo=v1.
+    pub algo_v1: bool,
+    /// +x / --no-extended: no search syntax.
+    pub no_extended: bool,
+    /// --history=FILE and --history-size: the queries C-p and C-n go back through.
+    pub history: Option<String>, pub history_size: usize,
+    /// --jump-labels: the characters jump mode puts on the rows.
+    pub jump_labels: String,
+    /// --no-mouse: the list takes no mouse.
+    pub no_mouse: bool }
 
 pub fn fzf_opts() -> &'static FzfOpts {
+    let live = OPTS_LIVE.load(std::sync::atomic::Ordering::Acquire);
+    // SAFETY: set only from a leaked Box, never freed.
+    if !live.is_null() { return unsafe { &*live } }
+    fzf_opts_base()
+}
+
+fn fzf_opts_base() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = default_opts();
-        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None, keep_right: false, gap: 0, gap_line: None, preview_window: PreviewWindow::default(), preview_label: None, preview_label_pos: (0, false), literal: false, multi_limit: 0, preview_window_set: false, preview_window_specs: Vec::new() };
+        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None, keep_right: false, gap: 0, gap_line: None, preview_window: PreviewWindow::default(), preview_label: None, preview_label_pos: (0, false), literal: false, multi_limit: 0, multi: false, preview_window_set: false, preview_window_specs: Vec::new(), ghost: None, track: false, list_border: None, input_border: None, header_border: None, footer_border: None, footer: Vec::new(), list_label: String::new(), input_label: String::new(), header_label: String::new(), footer_label: String::new(), separator_set: false, no_input: false, info_command: None, algo_v1: false, no_extended: false, history: None, history_size: 1000, jump_labels: "asdfghjklqwertyuiopzxcvbnm1234567890ASDFGHJKLQWERTYUIOPZXCVBNM`~;:,<.>/?'\"!@#$%^&*()[{]}-_=+".into(), no_mouse: false };
         let (mut sep_set, mut bar_set, mut ell_set, mut sign_set) = (false, false, false, false);
         let mut i = 0;
         while i < opts.len() {
@@ -646,13 +715,15 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 "--cycle" => o.cycle = true, "--no-cycle" => o.cycle = false,
                 // --multi[=N]: at most N marked (the info then says (1/N)).
                 // (fzf's optional number: --multi=2, --multi 2, -m 2, -m2.)
+                "--no-multi" | "+m" => { o.multi = false; o.multi_limit = 0 }
                 "--multi" | "-m" => {
+                    o.multi = true;
                     o.multi_limit = match value.as_deref() {
                         Some(v) => v.parse().unwrap_or(0),
                         None => match opts.get(i + 1).and_then(|n| n.parse::<usize>().ok()) { Some(n) => { i += 1; n } None => 0 },
                     }
                 }
-                m if m.starts_with("-m") && m.len() > 2 && m[2..].chars().all(|c| c.is_ascii_digit()) => o.multi_limit = m[2..].parse().unwrap_or(0),
+                m if m.starts_with("-m") && m.len() > 2 && m[2..].chars().all(|c| c.is_ascii_digit()) => { o.multi = true; o.multi_limit = m[2..].parse().unwrap_or(0) }
                 "--hscroll" => o.hscroll = true, "--no-hscroll" => o.hscroll = false,
                 "--hscroll-off" => { if let Some(v) = take() { o.hscroll_off = v.parse().unwrap_or(10) } }
                 "--highlight-line" => o.highlight_line = true, "--no-highlight-line" => o.highlight_line = false,
@@ -681,6 +752,65 @@ pub fn fzf_opts() -> &'static FzfOpts {
                     o.border = Some(next.unwrap_or_else(|| "rounded".into()))
                 }
                 "--no-border" => o.border = None,
+                // The sections' borders: a shape (rounded when none is given), or none.
+                "--list-border" | "--input-border" | "--header-border" | "--footer-border" => {
+                    let next = value.clone().or_else(|| opts.get(i + 1).filter(|w| !w.starts_with('-') && !w.starts_with('+')).cloned().inspect(|_| i += 1));
+                    let shape = Some(next.unwrap_or_else(|| "rounded".into()));
+                    match flag.as_str() { "--list-border" => o.list_border = shape, "--input-border" => o.input_border = shape, "--header-border" => o.header_border = shape, _ => o.footer_border = shape }
+                }
+                "--no-list-border" => o.list_border = None, "--no-input-border" => o.input_border = None,
+                "--no-header-border" => o.header_border = None, "--no-footer-border" => o.footer_border = None,
+                "--footer" => { if let Some(v) = take() { o.footer = v.split('\n').map(str::to_string).collect() } }
+                "--no-footer" => o.footer.clear(),
+                "--no-input" => o.no_input = true, "--input" => o.no_input = false,
+                "--info-command" => { if let Some(v) = take() { o.info_command = Some(v).filter(|v| !v.is_empty()) } }
+                "--no-info-command" => o.info_command = None,
+                "--algo" => { if let Some(v) = take() { o.algo_v1 = v == "v1" } }
+                "+x" | "--no-extended" => o.no_extended = true, "-x" | "--extended" => o.no_extended = false,
+                "--history" => { if let Some(v) = take() { o.history = Some(v).filter(|v| !v.is_empty()) } }
+                "--no-history" => o.history = None,
+                "--history-size" => { if let Some(v) = take() { o.history_size = v.parse().unwrap_or(1000).max(1) } }
+                "--jump-labels" => { if let Some(v) = take() { if !v.is_empty() { o.jump_labels = v } } }
+                "--no-mouse" => o.no_mouse = true, "--mouse" => o.no_mouse = false,
+                "--list-label" => { if let Some(v) = take() { o.list_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
+                "--input-label" => { if let Some(v) = take() { o.input_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
+                "--header-label" => { if let Some(v) = take() { o.header_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
+                "--footer-label" => { if let Some(v) = take() { o.footer_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
+                // applyPreset: default, minimal, full[:BORDER_STYLE].
+                "--style" => {
+                    if let Some(v) = take() {
+                        let (name, shape) = v.split_once(':').map(|(n, s)| (n.to_lowercase(), Some(s.to_string()))).unwrap_or((v.to_lowercase(), None));
+                        let reset_separator = |o: &mut FzfOpts, sep_set: &mut bool| { o.separator = true; o.separator_char = "─".into(); o.separator_set = false; *sep_set = false };
+                        match name.as_str() {
+                            "default" => {
+                                (o.list_border, o.input_border, o.header_border, o.footer_border) = (None, None, None, None);
+                                o.preview_window.border = "rounded".into(); o.info_mode = "default".into();
+                                reset_separator(&mut o, &mut sep_set);
+                                o.scrollbar = Some("│".into()); o.preview_scrollbar = Some("│".into()); bar_set = false;
+                                o.highlight_line = false;
+                            }
+                            "minimal" => {
+                                (o.list_border, o.input_border, o.header_border, o.footer_border) = (None, None, None, Some("line".into()));
+                                o.preview_window.border = "line".into(); o.info_mode = "default".into();
+                                o.separator = false; o.separator_char = String::new(); o.separator_set = true; sep_set = true;
+                                o.scrollbar = None; o.preview_scrollbar = None; bar_set = true;
+                                o.highlight_line = false;
+                            }
+                            "full" => {
+                                let shape = shape.filter(|s| !s.is_empty()).unwrap_or_else(|| "rounded".into());
+                                if shape != "line" { o.list_border = Some(shape.clone()) }
+                                (o.input_border, o.header_border, o.footer_border) = (Some(shape.clone()), Some(shape.clone()), Some(shape.clone()));
+                                o.preview_window.border = shape.clone();
+                                if shape == "line" { o.border = Some("line".into()) }
+                                o.info_mode = "inline-right".into();
+                                reset_separator(&mut o, &mut sep_set);
+                                o.scrollbar = Some("│".into()); o.preview_scrollbar = Some("│".into()); bar_set = false;
+                                o.highlight_line = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 // --height=[~][-]HEIGHT[%] (100% or 0: the whole screen), --min-height=N[+].
                 "--height" => { if let Some(v) = take() { o.height = parse_height(&v) } }
                 "--no-height" => o.height = None,
@@ -690,11 +820,15 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 "--padding" => { if let Some(v) = take() { if let Some(m) = parse_margin(&v) { o.padding = m } } }
                 "--no-padding" => o.padding = [Size::default(); 4],
                 // Its first line, the ANSI colours in it aside.
-                "--border-label" => { if let Some(v) = take() { o.border_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
+                // (Its colours kept: drawn as fzf draws an ANSI label.)
+                "--border-label" => { if let Some(v) = take() { o.border_label = v.split('\n').next().unwrap_or("").to_string() } }
                 "--no-border-label" => o.border_label.clear(),
                 "--border-label-pos" => { if let Some(v) = take() { o.border_label_pos = parse_label_pos(&v) } }
                 "--no-sort" | "+s" => o.no_sort = true,
                 "--tac" => o.tac = true,
+                "--ghost" => o.ghost = take().map(|g| g.split('\n').next().unwrap_or("").to_string()),
+                "--track" => o.track = true,
+                "--no-track" => o.track = false,
                 // --tiebreak=length,begin,…: after the score, in that order (index: the input's).
                 "--tiebreak" => {
                     if let Some(v) = take() {
@@ -702,7 +836,7 @@ pub fn fzf_opts() -> &'static FzfOpts {
                         o.tiebreak = v.split(',').filter_map(|c| match c.trim().to_lowercase().as_str() { "length" => Some(Length), "chunk" => Some(Chunk), "pathname" => Some(Pathname), "begin" => Some(Begin), "end" => Some(End), _ => None }).collect();
                     }
                 }
-                "--separator" => { if let Some(v) = take() { o.separator_char = v; o.separator = !o.separator_char.is_empty(); sep_set = true } }
+                "--separator" => { if let Some(v) = take() { o.separator_char = v; o.separator = !o.separator_char.is_empty(); sep_set = true; o.separator_set = true } }
                 "--unicode" => o.unicode = true, "--no-unicode" => o.unicode = false,
                 "--keep-right" => o.keep_right = true, "--no-keep-right" => o.keep_right = false,
                 // --gap[=N] (1 alone), --gap-line[=STR] (┈ alone, - under --no-unicode).
@@ -750,9 +884,16 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 "--bind" => {
                     if let Some(v) = take() {
                         // Commas inside an action's (…) belong to it.
-                        let (mut depth, mut start) = (0, 0);
+                        // (Only an action's brackets count: `ctrl-]` is a key's name.)
+                        let (mut depth, mut start, mut action) = (0, 0, false);
                         let mut parts = Vec::new();
-                        for (i, c) in v.char_indices() { match c { '(' | '[' | '{' => depth += 1, ')' | ']' | '}' => depth -= 1, ',' if depth == 0 => { parts.push(&v[start..i]); start = i + 1 } _ => {} } }
+                        for (i, c) in v.char_indices() { match c {
+                            ':' => action = true,
+                            '(' | '[' | '{' if action => depth += 1,
+                            ')' | ']' | '}' if action => depth -= 1,
+                            ',' if depth == 0 && action => { parts.push(&v[start..i]); start = i + 1; action = false }
+                            _ => {}
+                        } }
                         parts.push(&v[start..]);
                         // fzf's other names for a key, as the one it reports.
                         let alias = |k: &str| -> String {
@@ -761,6 +902,8 @@ pub fn fzf_opts() -> &'static FzfOpts {
                             match k.as_str() {
                                 "page-up" => "pgup".into(), "page-down" => "pgdn".into(), "backspace" | "bs" => "bspace".into(),
                                 "alt-bspace" | "alt-backspace" => "alt-bs".into(), "delete" => "del".into(), "shift-tab" => "btab".into(),
+                                // The control characters fzf names by the key they are.
+                                "ctrl-m" => "enter".into(), "ctrl-i" => "tab".into(), "ctrl-_" => "ctrl-/".into(),
                                 _ => k,
                             }
                         };

@@ -44,25 +44,28 @@ use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange, EnableMouseCapture,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-use crossterm::terminal::{self, BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::{cursor, execute, queue};
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::{cursor, execute};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use crate::event::Event;
 
-/// A notification on the computer the person is at, through their terminal — OSC 9 (iTerm2,
-/// WezTerm, Ghostty, kitty) and OSC 777 (foot, Ghostty, rxvt). Over SSH it still lands locally.
+/// A notification on the computer the person is at, through their terminal: OSC 777 where it is
+/// the terminal's (foot, rxvt, VTE's), else OSC 9 (iTerm2, WezTerm, Ghostty, kitty) — one, as a
+/// terminal that reads both would show two. Over SSH it still lands locally.
 /// `HARNESS_TUI_NOTIFY=off` silences it.
 pub fn notify(title: &str, body: &str) {
     if std::env::var("HARNESS_TUI_NOTIFY").as_deref() == Ok("off") { return }
     let clean = |t: &str| t.chars().filter(|c| !c.is_control() && *c != ';').collect::<String>();
     let (title, body) = (clean(title), clean(body));
+    let term = std::env::var("TERM").unwrap_or_default();
+    let seven = std::env::var_os("VTE_VERSION").is_some() || term.starts_with("foot") || term.starts_with("rxvt");
     let mut out = io::stdout();
-    let _ = write!(out, "\x1b]9;{title}: {body}\x07\x1b]777;notify;{title};{body}\x07");
+    let _ = if seven { write!(out, "\x1b]777;notify;{title};{body}\x07") } else { write!(out, "\x1b]9;{title}: {body}\x07") };
     let _ = out.flush();
 }
 
@@ -77,13 +80,18 @@ unsafe extern "C" { fn raise(sig: i32) -> i32; }
 /// SIGTSTP, as a shell's job control expects of a program that suspends itself.
 unsafe fn libc_raise_tstp() { unsafe { raise(if cfg!(target_os = "linux") { 20 } else { 18 }); } }
 
+/// The terminal's title saved on its stack as tmux saves it at attach (XTWINOPS 22), and given
+/// back when hn leaves (23): the shell's own title returns.
+const TITLE_PUSH: &str = "\x1b[22;0;0t";
+const TITLE_POP: &str = "\x1b[23;0;0t";
+
 struct Restore { enhanced: bool }
 
 impl Drop for Restore {
     fn drop(&mut self) {
         let mut out = io::stdout();
         if self.enhanced { let _ = execute!(out, PopKeyboardEnhancementFlags); }
-        let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape);
+        let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape, crossterm::style::Print(TITLE_POP));
         let _ = terminal::disable_raw_mode();
     }
 }
@@ -115,7 +123,13 @@ fn main() -> io::Result<()> {
     let config = config::load();
     // SAFETY: once, before any other thread, with a valid C string.
     unsafe { libc::setlocale(libc::LC_TIME, c"".as_ptr()); }
-    tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?.block_on(run(config))
+    // A terminal hn cannot use: tmux's words for it, not a program's error dump.
+    if let Err(e) = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?.block_on(run(config)) {
+        let _ = crossterm::terminal::disable_raw_mode();
+        eprintln!("open terminal failed: {e}");
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 /// hn with no terminal (--headless): tmux's server when no client is attached. It keeps the
@@ -142,38 +156,46 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     if config.prefix_set { app.keymap.prefix = config.prefix }
     // The server's options, keys, buffers and environment: this client's if it is the first.
     server::join(&mut app);
+    // When each harness was last looked at (seen.json): what finished while no one looked is
+    // done, as a terminal says it.
+    app.load_seen();
     app.boot();
     app.load_sessions();
     app.update_environment();
     app.notify_changes();
-    let mut busy = Instant::now();
+    let busy = Instant::now();
     loop {
         let first = tokio::select! {
             event = rx.recv() => event,
             _ = tokio::time::sleep(Duration::from_millis(500)) => None,
         };
-        let mut apply = |app: &mut app::App, event: Event| match event {
+        let apply = |app: &mut app::App, event: Event| match event {
             Event::Input(_) => {}
             Event::Machine { machine_id, generation, event } => app.on_machine(machine_id, generation, event),
-            Event::Apply(f) => { f(app); busy = Instant::now() }
+            Event::Apply(f) => f(app),
             Event::Tick => app.on_tick(),
         };
         if let Some(event) = first { apply(&mut app, event) }
         while let Ok(event) = rx.try_recv() { apply(&mut app, event) }
         app.notify_changes();
+        app.sync_links();
         app.save_if_changed();
         server::publish(&mut app);
         commands::run_pending_hooks(&mut app);
         app.flush_acks();
         if app.quit { break }
         // No session of its own left (or none came): gone, as tmux's server goes.
-        if !app.holds_sessions() && busy.elapsed() > Duration::from_secs(2) { break }
+        // (What its own work brings back — a harness's lines — is not a reason to stay.)
+        // (Harness hooks set: it stays to run them, as tmux's server runs hooks with no client.)
+        // (exit-empty off: it stays with none, as tmux's server does.)
+        if !app.holds_sessions() && !app.harness_hooks() && app.options.get("exit-empty", "", None).as_deref() != Some("off") && app.cli_held.is_empty() && busy.elapsed() > Duration::from_secs(2) && app.last_cli.elapsed() > Duration::from_secs(2) { break }
     }
     app.fleet.save_cache();
     app.write_sessions(app::Save::Leave);
     mirror::tell_mirrors_now(&app);
     ipc::gone(&socket);
-    ids::leave();
+    // (hn with no terminal going leaves the server's say as it was.)
+    ids::leave(None);
     Ok(())
 }
 
@@ -208,7 +230,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         let settings = tmuxconf::load(&mut km);
         if config.prefix_set { km.prefix = config.prefix }
         let mut text = String::new();
-        if let Some(p) = &settings.path { text += &format!("read {}\n", p.display()) }
+        for p in &settings.paths { text += &format!("read {}\n", p.display()) }
         text += &format!("prefix {}\n\n", keys::name(&km.prefix));
         for b in &km.prefix_table { text += &format!("bind-key {}{:<8} {}\n", if b.repeat { "-r " } else { "   " }, keys::name(&b.chord), b.command) }
         for b in &km.root_table { text += &format!("bind-key -n {:<8} {}\n", keys::name(&b.chord), b.command) }
@@ -225,7 +247,13 @@ async fn run(config: config::Config) -> io::Result<()> {
         let status = std::process::Command::new(shell).arg("-c").arg(c).status();
         std::process::exit(status.ok().and_then(|s| s.code()).unwrap_or(1))
     }
-    let explicit = f.port.or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok()));
+    // $PORT (as the daemon reads it): set but not a port is an error — never the default
+    // daemon's port in its place, which is someone's real one.
+    let from_env = match std::env::var("PORT") {
+        Ok(p) => match p.trim().parse::<u16>() { Ok(n) if n > 0 => Some(n), _ => { eprintln!("hn: PORT is not a port number: '{p}'"); std::process::exit(1) } },
+        Err(_) => None,
+    };
+    let explicit = f.port.or(from_env);
     let port = explicit.unwrap_or(18473u16);
     // tmux's server with no client attached: sessions held for a script's commands.
     if f.headless {
@@ -237,21 +265,37 @@ async fn run(config: config::Config) -> io::Result<()> {
     // -L name, starting a client: its socket's name.
     if let Some(n) = &f.name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } }
     // hn new -s work / hn attach -t work: the session this client starts in.
-    let start = cli::start_session(&f.rest);
+    // `hn new … \; split-window …`: the command that starts this client, then the chain after it
+    // (run in the client once its session is there, as tmux runs the rest of the command line).
+    let cut = f.rest.iter().position(|w| w == ";").unwrap_or(f.rest.len());
+    let then: Vec<String> = f.rest.get(cut + 1..).map(|r| r.to_vec()).unwrap_or_default();
+    let start = cli::start_session(&f.rest[..cut]);
 
     // attach with nothing to attach to (no client, no session kept; the desk's is always there):
     // tmux's words, before it would look for a terminal — `hn attach || hn new` makes one.
     let deskless = std::env::var("HARNESS_TUI_DESK").as_deref() == Ok("off");
     let attaching = f.rest.first().and_then(|c| cmd::find(c).ok()).map(|e| e.name == "attach-session").unwrap_or(false);
     if attaching && deskless && !ipc::alive(f.socket.as_deref(), f.name.as_deref()) && !cli::has_sessions(f.name.as_deref()) { eprintln!("no sessions"); std::process::exit(1) }
+    // attach -t for a session there is none of: tmux finds the target before it wants a terminal.
+    if attaching && !io::IsTerminal::is_terminal(&io::stdout()) {
+        if let Some(t) = start.as_ref().and_then(|s| s.name.clone()) {
+            let found = if ipc::alive(f.socket.as_deref(), f.name.as_deref()) {
+                ipc::call(&["has-session".into(), "-t".into(), t.clone()], f.socket.as_deref(), f.name.as_deref()).await == 0
+            } else { cli::has_session_named(f.name.as_deref(), &t) };
+            if !found { if !ipc::alive(f.socket.as_deref(), f.name.as_deref()) { eprintln!("can't find session: {t}") } std::process::exit(1) }
+        }
+    }
     if !io::IsTerminal::is_terminal(&io::stdout()) { eprintln!("open terminal failed: not a terminal"); std::process::exit(1) }
+    // A terminal that cannot clear its screen (dumb, or none named) is refused as tmux refuses it.
+    // (A name hn does not know is used anyway: it writes what every terminal since xterm reads.)
+    if matches!(std::env::var("TERM").as_deref(), Err(_) | Ok("") | Ok("dumb")) { eprintln!("open terminal failed: terminal does not support clear"); std::process::exit(1) }
 
     // NO_COLOR is about a program's own output; the panes mirror OTHER programs' screens, whose
     // colours are content. crossterm would otherwise drop every colour, theirs included.
     crossterm::style::force_color_output(true);
     terminal::enable_raw_mode()?;
     let mut out = io::stdout();
-    execute!(out, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste, EnableFocusChange)?;
+    execute!(out, crossterm::style::Print(TITLE_PUSH), EnterAlternateScreen, term_out::Mouse(1), EnableBracketedPaste, EnableFocusChange)?;
     // The kitty keyboard protocol, where the terminal has it: ⌘ arrives as SUPER, and ^I is not Tab.
     // Pushed without asking first: the capability query waits for an answer that terminals without
     // the protocol never send (half a second of blank screen), and those terminals ignore the push.
@@ -262,12 +306,12 @@ async fn run(config: config::Config) -> io::Result<()> {
     std::panic::set_hook(Box::new(move |info| {
         let mut out = io::stdout();
         if enhanced { let _ = execute!(out, PopKeyboardEnhancementFlags); }
-        let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape);
+        let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape, crossterm::style::Print(TITLE_POP));
         let _ = terminal::disable_raw_mode();
         default_hook(info);
     }));
 
-    let backend = term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, io::stdout()));
+    let backend = term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, term_out::Counted(io::stdout())));
     let mut term = Terminal::new(backend)?;
     term.clear()?;
     let size = terminal::size()?;
@@ -325,18 +369,27 @@ async fn run(config: config::Config) -> io::Result<()> {
     // When you last looked at each harness (what finished while hn was closed shows as done).
     app.load_seen();
     app.boot();
-    // The sessions a client left (C-b d), and the one asked for.
+    // The sessions a client left (C-b d), and the one asked for; attach's client flags.
+    app.client_flags = start.as_ref().map(|s| s.flags.clone()).unwrap_or_default();
     app.start_session = start;
+    app.start_then = then;
     app.load_sessions();
+    // The client is attached to it now (server_client_set_session).
+    app.session_last_attached = app::epoch_secs();
     // update-environment (as tmux.conf set it): this client's variables into its session's.
     app.update_environment();
-    // The client is attached: the hooks' first look, then client-attached.
+    // The client is attached: the hooks' first look, then as tmux's attach says it —
+    // client-session-changed, client-attached, client-resized.
     app.notify_changes();
+    commands::notify(&mut app, "client-session-changed", None, None);
     commands::notify(&mut app, "client-attached", None, None);
+    commands::notify(&mut app, "client-resized", None, None);
 
     let frame_budget = Duration::from_millis(6);
     let mut last_draw = Instant::now() - frame_budget;
     let mut need_draw = true;
+    let mut mouse_all = false;
+    let mut cursor_colour: Option<String> = None;
     loop {
         // Wait for something — or for the frame we owe to come due.
         let wait = if need_draw { frame_budget.saturating_sub(last_draw.elapsed()) } else { Duration::from_secs(3600) };
@@ -363,6 +416,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         // is a pane to show them in.
         app.notify_changes();
         // What another terminal's client sees of this one's sessions, kept up to date.
+        app.sync_links();
         app.save_if_changed();
         server::publish(&mut app);
         commands::run_pending_hooks(&mut app);
@@ -370,35 +424,47 @@ async fn run(config: config::Config) -> io::Result<()> {
         app.mark_seen();
         if app.quit { break }
         if std::mem::take(&mut app.mouse_changed) {
-            if app.mouse { execute!(term.backend_mut(), EnableMouseCapture)?; } else { execute!(term.backend_mut(), DisableMouseCapture)?; }
+            execute!(term.backend_mut(), term_out::Mouse(app.mouse as u8))?;
+            mouse_all = false;
         }
         if std::mem::take(&mut app.suspend) {
             // C-z: give the shell its terminal back, stop, and pick up where we were on `fg`.
             if enhanced { execute!(term.backend_mut(), PopKeyboardEnhancementFlags)?; }
-            execute!(term.backend_mut(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape)?;
+            if cursor_colour.take().is_some() { execute!(term.backend_mut(), crossterm::style::Print("\x1b]112\x07"))?; }
+            execute!(term.backend_mut(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape, crossterm::style::Print(TITLE_POP))?;
             terminal::disable_raw_mode()?;
             unsafe { libc_raise_tstp() };
             terminal::enable_raw_mode()?;
-            execute!(term.backend_mut(), EnterAlternateScreen, EnableBracketedPaste, EnableFocusChange, terminal::Clear(terminal::ClearType::All))?;
+            app.title.clear();
+            execute!(term.backend_mut(), crossterm::style::Print(TITLE_PUSH), EnterAlternateScreen, EnableBracketedPaste, EnableFocusChange, terminal::Clear(terminal::ClearType::All))?;
             if enhanced { execute!(term.backend_mut(), PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?; }
-            if app.mouse { execute!(term.backend_mut(), EnableMouseCapture)?; }
+            if app.mouse { execute!(term.backend_mut(), term_out::Mouse(1))?; }
+            mouse_all = false;
             app.cursor_shape.clear();
             // A fresh Terminal repaints everything (ratatui's clear() asks the terminal where its
             // cursor is, and the input reader would eat the answer).
-            term = Terminal::new(term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, io::stdout())))?;
+            term = Terminal::new(term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, term_out::Counted(io::stdout()))))?;
             need_draw = true;
         }
+        // Every motion asked for only while something wants it.
+        let all = app.mouse && app.wants_motion();
+        if all != mouse_all { execute!(term.backend_mut(), term_out::Mouse(if all { 2 } else { 1 }))?; mouse_all = all }
         app.flush_acks();
         if refill && matches!(app.modal, Some(modal::Modal::Picker { .. })) { input::refill(&mut app) }
         if need_draw && last_draw.elapsed() >= frame_budget {
-            let backend = term.backend_mut();
-            queue!(backend, BeginSynchronizedUpdate)?;
+            // (The backend makes each frame's changes one synchronized update, and writes nothing
+            // for a frame that changed nothing.)
             term.draw(|frame| ui::draw(frame, &mut app))?;
-            execute!(term.backend_mut(), EndSynchronizedUpdate)?;
             // The focused program's cursor shape (vim's block and bar), passed through as tmux does.
             let shape = app.focused().filter(|_| app.modal.is_none()).and_then(|f| app.panes.get(&f)).map(|p| p.cursor_style()).unwrap_or(cursor::SetCursorStyle::DefaultUserShape);
             let code = format!("{shape:?}");
             if code != app.cursor_shape { execute!(term.backend_mut(), shape)?; app.cursor_shape = code }
+            // Its cursor colour (OSC 12) too, and the terminal's own back (OSC 112) when it has none.
+            let colour = app.focused().filter(|_| app.modal.is_none()).and_then(|f| app.panes.get(&f)).and_then(|p| p.cursor_colour());
+            if colour != cursor_colour {
+                match &colour { Some(c) => execute!(term.backend_mut(), crossterm::style::Print(format!("\x1b]12;{c}\x07")))?, None => execute!(term.backend_mut(), crossterm::style::Print("\x1b]112\x07"))? }
+                cursor_colour = colour;
+            }
             if !app.fleet.agents.is_empty() && !app.fleet_marked { app.fleet_marked = true; mark("first frame with harnesses") }
             if !app.first_frame { app.first_frame = true; mark("first frame") }
             last_draw = Instant::now();
@@ -409,6 +475,25 @@ async fn run(config: config::Config) -> io::Result<()> {
             }
         }
     }
+    // The terminal's own cursor colour back.
+    if cursor_colour.is_some() { let _ = execute!(term.backend_mut(), crossterm::style::Print("\x1b]112\x07")); }
+    let session = app.session_name();
+    // A detach: the sessions no client shows now, with destroy-unattached, go; and with
+    // exit-unattached, the server when no other client is attached (server_loop).
+    let detaching = !app.exited && !app.forget_sessions && app.start_failed.is_none();
+    if detaching {
+        commands::destroy_unattached(&mut app, true);
+        let exit = app.options.get("exit-unattached", "", None).as_deref() == Some("on");
+        let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
+        if exit && ipc::others_of(&name).is_empty() { app.sessions.clear(); app.session_alias = None; app.forget_sessions = true; app.exited = false }
+    }
+    // client-detached (a detach, not an exit or kill-server), what it changes kept for the server.
+    if detaching {
+        commands::notify(&mut app, "client-detached", None, None);
+        commands::run_pending_hooks(&mut app);
+        app.server_dirty = true;
+        server::publish(&mut app);
+    }
     app.fleet.save_cache();
     app.mark_seen();
     app.save_seen();
@@ -418,14 +503,33 @@ async fn run(config: config::Config) -> io::Result<()> {
     mirror::tell_mirrors_now(&app);
     mirror::leave(&app);
     if let Some(path) = &socket { ipc::gone(path) }
-    ids::leave();
-    let session = app.session_name();
+    // The last terminal going, with harness hooks set: hn stays with no terminal to run them
+    // (tmux's server keeps running hooks after its last client detaches).
+    if app.harness_hooks() && app.start_failed.is_none() && !app.forget_sessions {
+        let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty());
+        // (Its own sockets still answer until it has gone: not counted.)
+        if ipc::others_of(name.as_deref().unwrap_or("default")).is_empty() { cli::spawn_headless(name.as_deref(), Some(app.port)).await; }
+    }
+    // (A server with the desk lives on past its last terminal, until kill-server.)
+    ids::leave(Some(app.desk_mode != app::DeskMode::Off && !app.forget_sessions));
     drop(term);
     drop(restore);
     // `hn attach -t nosuch`: tmux's error, and no client.
     if let Some(e) = &app.start_failed { eprintln!("{e}"); std::process::exit(1) }
     // As tmux says it: the harnesses are still running, and `hn` comes back to them — or the
     // last window went, and the session with it.
-    if app.exited { println!("[exited]") } else if app.forget_sessions { println!("[server exited]") } else { println!("[detached (from session {session})]") }
+    // detach-client -E: the client becomes the command, run by default-shell (client_exec).
+    if let Some(cmd) = app.exec_after.take() {
+        use std::os::unix::process::CommandExt;
+        let shell = app.options.get("default-shell", "", None).filter(|s| !s.is_empty()).or_else(|| std::env::var("SHELL").ok().filter(|s| !s.is_empty())).unwrap_or_else(|| "/bin/sh".into());
+        let e = std::process::Command::new(&shell).arg("-c").arg(&cmd).env("SHELL", &shell).exec();
+        eprintln!("execl failed: {e}");
+        std::process::exit(1);
+    }
+    if app.exited { println!("[exited]") } else if app.forget_sessions && !detaching { println!("[server exited]") }
+    else if app.hup_parent { println!("[detached and SIGHUP (from session {session})]") }
+    else { println!("[detached (from session {session})]") }
+    // detach-client -P: the shell that started the client is sent SIGHUP.
+    if app.hup_parent { let ppid = unsafe { libc::getppid() }; if ppid > 1 { unsafe { libc::kill(ppid, libc::SIGHUP); } } }
     Ok(())
 }

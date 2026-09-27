@@ -126,6 +126,7 @@ import { createRetainExitedSession } from './lib/retainExitedSession.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from './lib/sessionSearch/indexer.js'
+import { ExternalSessions, OpenSessions } from './lib/sessionSearch/external.js'
 import { SessionSearchStore } from './lib/sessionSearch/store.js'
 import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.js'
 import { sweepWorktrees } from './lib/worktreeSweep.js'
@@ -153,7 +154,7 @@ import { ApiConnections } from './lib/apiConnections.js'
 import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { prepareApiInstructions } from './lib/apiInstructions.js'
 import type { AgentDshContext } from './lib/agentFrame.js'
-import { basename } from 'node:path'
+import { basename, dirname as parentDir } from 'node:path'
 import {
   bypassPermissionActive,
   permissionModeFromArgv,
@@ -271,6 +272,7 @@ import { RuntimeProfileManager, parseRuntimeProfile } from './lib/runtimeProfile
 import { RuntimeProfileController, inspectRuntimePane } from './lib/runtimeProfileController.js'
 import { deviceErrorText } from './lib/deviceErrors.js'
 import { correlateAgentEvent, turnHeartbeatFrame } from './lib/agentEvent.js'
+import { transcriptIsFirstTurn } from './lib/firstTurnReplay.js'
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()
@@ -2261,7 +2263,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    */
   const neverFoldedHistory = new Set<string>()
   /**
-   * Sessions whose first turn has already been replayed live by an attach.
+   * Sessions whose first turn has already been replayed live by an attach, or whose transcript an attach
+   * has already folded.
    *
    * NOT the same question as `neverFoldedHistory` above, which is why they stay two sets: that one asks
    * "where should the watcher start reading?", this one asks "has this session's file already been
@@ -2585,7 +2588,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // `reset` attach (claude fires `SessionStart` on compact, which resets) would fold the by-then
     // complete transcript and emit it live on top of everything the watcher had already streamed. That
     // is the same duplicate-turn class this whole change exists to remove.
-    if (replayLive) replayedFirstTurn.add(session.sessionId)
+    // Any fold of a transcript with content counts too: the watcher now tails it from the end, so a later
+    // replay could only send history out again as if it were live.
+    if (replayLive || lines.length) replayedFirstTurn.add(session.sessionId)
     if (initialEvents.length) {
       emitSessionEvents(session.sessionId, initialEvents)
       console.log(`[agent] ${sid(session.agentId)} replayed the first turn its transcript already held · ${initialEvents.length} events`)
@@ -2770,6 +2775,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   /** The transcript's open tool calls for a session (CommanderMirror.openTools), bound once the mirror exists. */
   let openToolsOf: (sessionId: string) => Array<{ name: string; input: unknown }> = () => []
+  // What is still being asked, by session — handed to a window that connects later (openQuestions below).
+  const openQuestions = new Map<string, Record<string, unknown>>()
   const questionWatcher = new QuestionWatcher({
     getSession: (id) => registry.resolve(id),
     capture: captureTerminal,
@@ -2802,6 +2809,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // and the transcript's open tool calls, so it reads the exact command rather than its wrapped paint.
       pairSensor.question(agentIdFor(sessionId), requestId, shaped, detail ? { ...detail, tools: openToolsOf(sessionId) } : detail)
       pairRules(agentIdFor(sessionId), requestId)
+      openQuestions.set(sessionId, asked)
       console.log(`[question] ${sid(sessionId)} asking the user · "${preview(shaped[0]?.q ?? '')}" · req=${requestId}`)
     },
     // Answered somewhere else — the app, or the pane by hand. Every client drawing it is told to stop
@@ -2821,6 +2829,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // this very computer, so the dial and this window are always the same machine's audience.
       backend.sendLocal(closed)
       pairSensor.questionGone(agentIdFor(sessionId), requestId)
+      openQuestions.delete(sessionId)
       console.log(`[question] ${sid(sessionId)} answered elsewhere · closing on every client · req=${requestId}`)
     },
   })
@@ -2939,6 +2948,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Session search: every turn of every conversation on this machine, live and stopped, indexed from
   // its transcript and searched by `session_search` (lib/sessionSearch/). Nothing leaves the machine
   // but the hits for a query. A Node without `node:sqlite` has no index; the RPC then says so.
+  // Claude Code and Codex conversations on this machine that Harness did not start, found on disk
+  // so Cmd-P can find them and open one here; and which sessions a process has open right now.
+  const externalSessions = new ExternalSessions({ claudeProjectsDir: env.CLAUDE_PROJECTS_DIR, codexHome: env.CODEX_HOME })
+  const openSessions = new OpenSessions({ claudeHome: parentDir(env.CLAUDE_PROJECTS_DIR) })
   const sessionSearch = (() => {
     try {
       const store = SessionSearchStore.open(join(env.ADAPTER_DATA_DIR, SESSION_SEARCH_FILE))
@@ -2948,22 +2961,38 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       const index = new SessionSearchIndex({
         store,
-        sources: () => [...registry.list(), ...stoppedAgents.list()].flatMap((s): SearchSource[] => {
-          const readHistory = s.transcriptPath ? undefined : databaseHistory(s)
-          if (!s.sessionId || (!s.transcriptPath && !readHistory)) return []
-          return [{
-            agentId: s.agentId,
-            sessionId: s.sessionId,
-            engine: s.engine,
-            transcriptPath: s.transcriptPath || null,
-            header: [projectDisplayName(s), s.title, folderWords(s.cwd)].filter(Boolean).join(' · '),
-            // Conversation stamps only (lib/agentFrame.ts lastActivityAt): the registry's own
-            // updatedAt moves on every discovery pass.
-            updatedAt: Math.max(s.lastTranscriptAt || 0, s.lastHookAt || 0) || s.boundAt || s.registeredAt || 0,
-            readHistory,
-          }]
-        }),
+        sources: () => {
+          const own = [...registry.list(), ...stoppedAgents.list()]
+          const sources = own.flatMap((s): SearchSource[] => {
+            const readHistory = s.transcriptPath ? undefined : databaseHistory(s)
+            if (!s.sessionId || (!s.transcriptPath && !readHistory)) return []
+            return [{
+              agentId: s.agentId,
+              sessionId: s.sessionId,
+              engine: s.engine,
+              transcriptPath: s.transcriptPath || null,
+              header: [projectDisplayName(s), s.title, folderWords(s.cwd)].filter(Boolean).join(' · '),
+              // Conversation stamps only (lib/agentFrame.ts lastActivityAt): the registry's own
+              // updatedAt moves on every discovery pass.
+              updatedAt: Math.max(s.lastTranscriptAt || 0, s.lastHookAt || 0) || s.boundAt || s.registeredAt || 0,
+              readHistory,
+            }]
+          })
+          // Conversations Harness did not start — any Harness agent's, earlier ones included, are not.
+          const known = store.ownedSessionIds()
+          for (const s of own) if (s.sessionId) known.add(s.sessionId)
+          for (const e of externalSessions.list()) {
+            if (known.has(e.sessionId)) continue
+            sources.push({
+              agentId: '', sessionId: e.sessionId, engine: e.engine, transcriptPath: e.transcriptPath,
+              header: '', updatedAt: e.mtime, external: { cwd: e.cwd, origin: e.origin, title: e.title },
+            })
+          }
+          return sources
+        },
         agents: () => [...registry.list(), ...stoppedAgents.list()].map((s) => s.agentId),
+        discover: () => externalSessions.scan(),
+        openSessions,
         log: (line) => console.log(line),
       })
       index.start()
@@ -2974,6 +3003,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     }
   })()
   backend.sessionSearchProvider = sessionSearch ? (query, options) => sessionSearch.search(query, options) : null
+  backend.sessionTailProvider = sessionSearch ? (sessionId, options) => sessionSearch.tail(sessionId, options) : null
 
   const runtimeController = new RuntimeProfileController({
     manager: runtimeProfiles,
@@ -3365,10 +3395,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // so the birth-vs-`registeredAt` comparison stays, and comparing against `boundAt` instead — the
     // obvious-looking alternative, since `boundAt` is when this session was bound — does not work: the
     // transcript is created a moment BEFORE the hook binds it.
-    const bornAfterAgent = !meta.rebound && entry.boundAt !== null
-      && entry.boundAt - entry.registeredAt > 0
-      && !!entry.transcriptPath
-      && await statBirthMs(entry.transcriptPath) >= entry.registeredAt
+    //
+    // And only while the file is new (`transcriptIsFirstTurn`): a long session's transcript was born after
+    // its agent too, and after a daemon restart its next SessionStart replayed the whole history live.
+    const bornAfterAgent = transcriptIsFirstTurn(
+      entry,
+      entry.transcriptPath ? await statBirthMs(entry.transcriptPath) : 0,
+      { rebound: !!meta.rebound, now: Date.now() },
+    )
     const attached = await attachSession(entry, reset, entry.engine === 'cursor', bornAfterAgent)
     if (!attached) {
       registry.unbindSession(entry.sessionId)
@@ -4875,6 +4909,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // one the dial has been using for every voice turn.
     // A window that connects after the dial did has missed the `dial_status` that announced it.
     dialStatus: () => cableHostRef?.currentDialStatus() ?? { attached: false },
+    openQuestions: () => [...openQuestions.values()],
     onRouteSend: (agentId, text) => {
       const sent = cableHostRef?.sendTurn(agentId, text) ?? { ok: false as const, machine: '', reason: 'no agent list yet' }
       console.log(`[route] ⌘K → ${sid(agentId)} · bytes=${Buffer.byteLength(text, 'utf8')}`
@@ -5524,8 +5559,37 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     }
   }
 
-  backend.onCreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent }) => {
+  /**
+   * Whether a conversation Harness did not start can be opened here as a harness: one discovery found
+   * (looked for again if it is new), on this engine, not already a harness, and not open in a running
+   * process — a terminal or the engine's app that still has it would write it too.
+   */
+  const adoptableSession = async (sessionId: string, engine: AgentEngine): Promise<{ ok: true; cwd: string; title: string } | { ok: false; error: string; detail: string }> => {
+    if (registry.bySession(sessionId) || stoppedAgents.list().some((s) => s.sessionId === sessionId)) {
+      return { ok: false, error: 'SESSION_IN_HARNESS', detail: 'This conversation is already a harness here.' }
+    }
+    const found = externalSessions.get(sessionId) ?? (await externalSessions.scan(), externalSessions.get(sessionId))
+    if (!found) return { ok: false, error: 'SESSION_NOT_FOUND', detail: 'This conversation is no longer on this machine.' }
+    if (found.engine !== engine) return { ok: false, error: 'INVALID_ENGINE', detail: `This is a ${found.engine} conversation.` }
+    if ((await openSessions.fresh()).has(sessionId)) {
+      return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app. Close it there, then open it here.' }
+    }
+    // The Codex app keeps a thread in a folder of its own, which people tidy away.
+    if (!existsSync(found.cwd)) {
+      return { ok: false, error: 'SESSION_FOLDER_GONE', detail: `The folder it ran in is gone: ${found.cwd}` }
+    }
+    return { ok: true, cwd: found.cwd, title: found.title || sessionSearch?.session(sessionId)?.title || '' }
+  }
+
+  backend.onCreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
+    // A conversation Harness did not start opens in its own folder, under its own title.
+    if (resumeSessionId) {
+      const adopted = await adoptableSession(resumeSessionId, engine)
+      if (!adopted.ok) return adopted
+      cwd = adopted.cwd
+      name = name ?? (adopted.title || null)
+    }
     try {
       if (!statSync(cwd).isDirectory()) return { ok: false, error: 'CWD_NOT_FOUND' }
     } catch {
@@ -5667,7 +5731,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent) : [])]
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
-    const launchOptions = { bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(prompt ? { firstPrompt: prompt } : {}), terminalHint: { machineName: terminalHintMachineName() } }
+    const launchOptions = { bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(prompt ? { firstPrompt: prompt } : {}), ...(resumeSessionId ? { resumeSessionId } : {}), terminalHint: { machineName: terminalHintMachineName() } }
     const command = buildEngineCommandArgv(engine, launchOptions)
     const argv = buildEngineLaunchArgv(engine, launchOptions)
     // A tmux route is enough to stream its screen. Register it before looking for a process so both

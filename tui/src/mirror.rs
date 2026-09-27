@@ -16,6 +16,15 @@ use crate::app::{live_owner, read_sessions, App, Mirror, Stash, Tab};
 use crate::layout::Node;
 
 /// Session [name]'s row in the sessions file, read now.
+/// Session [id]'s row (its $N is kept wherever it goes, whatever it is named now), else by
+/// [name] (a row from before ids were kept).
+fn row_of(id: u32, name: &str) -> Option<Value> {
+    let doc = read_sessions(&crate::app::sessions_path(None));
+    let rows = doc["sessions"].as_array()?;
+    let live = |r: &&Value| !r.get("desk").and_then(Value::as_bool).unwrap_or(false);
+    rows.iter().filter(live).find(|r| r.get("id").and_then(Value::as_u64) == Some(id as u64)).or_else(|| rows.iter().filter(live).find(|r| r.get("name").and_then(Value::as_str) == Some(name))).cloned()
+}
+
 fn row_named(name: &str) -> Option<Value> {
     let doc = read_sessions(&crate::app::sessions_path(None));
     doc["sessions"].as_array()?.iter().find(|r| r.get("name").and_then(Value::as_str) == Some(name) && !r.get("desk").and_then(Value::as_bool).unwrap_or(false)).cloned()
@@ -38,8 +47,8 @@ pub fn show(app: &mut App, id: u32, readonly: bool) -> bool {
     let Some(owner) = r.owner.clone() else { return false };
     let Some(row) = row_named(&r.name) else { return false };
     let (w, h) = (app.body().width, app.body().height);
-    let mut stash = Stash { id, alias: Some(r.name.clone()), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
-        created: r.created, activity: r.activity, options: crate::app::options_from(&row), env: crate::app::env_from(&row), mirror: Some(Mirror { owner: owner.clone(), readonly }) };
+    let mut stash = Stash { id, used: 0, alias: Some(r.name.clone()), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
+        created: r.created, activity: r.activity, last_attached: r.last_attached, options: crate::app::options_from(&row), env: crate::app::env_from(&row), path: row.get("path").and_then(serde_json::Value::as_str).map(str::to_string), group: row.get("group").and_then(serde_json::Value::as_str).map(str::to_string), mirror: Some(Mirror { owner: owner.clone(), readonly }) };
     if !fill(app, &mut stash, &row, Vec::new(), (w, h)) { return false }
     app.sessions.push(stash);
     register(&owner, id, true);
@@ -77,6 +86,7 @@ fn fill(app: &mut App, stash: &mut Stash, row: &Value, mut old: Vec<Tab>, size: 
         tab.order = ids.clone();
         tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
         tab.zoomed = win.get("zoomed").and_then(Value::as_bool).unwrap_or(false) && ids.len() > 1;
+        app.take_window_options(&mut tab, &win);
         if let Some(n) = win.get("num").and_then(Value::as_u64) { nums.insert(tab.id.clone(), n as usize); }
         tabs.push(tab);
     }
@@ -97,13 +107,16 @@ fn fill(app: &mut App, stash: &mut Stash, row: &Value, mut old: Vec<Tab>, size: 
 pub fn refresh(app: &mut App) {
     let Some(m) = app.mirror.clone() else { return };
     let name = app.session_name();
-    let Some(row) = row_named(&name) else { return gone(app) };
+    let Some(row) = row_of(app.session_id, &name) else { return gone(app) };
+    // Renamed where it is kept (rename-session, C-b $): named so here too.
+    if let Some(now) = row.get("name").and_then(Value::as_str).filter(|n| *n != name) { app.session_alias = Some(now.to_string()) }
+    let name = app.session_name();
     match live_owner(&row) {
         // The owner detached: this client has the session now.
         None => {
             let path = crate::app::sessions_path(None);
             let lock = crate::ipc::lock(&path);
-            let row = row_named(&name).filter(|r| live_owner(r).is_none());
+            let row = row_of(app.session_id, &name).filter(|r| live_owner(r).is_none());
             if let Some(row) = row {
                 rebuild(app, &row);
                 for p in row.get("windows").and_then(Value::as_array).cloned().unwrap_or_default().iter().flat_map(|w| w.get("panes").and_then(Value::as_array).cloned().unwrap_or_default()) {
@@ -129,8 +142,8 @@ pub fn refresh(app: &mut App) {
 fn rebuild(app: &mut App, row: &Value) {
     let body = app.body();
     let current = app.tabs.get(app.active).map(|t| t.id.clone());
-    let mut stash = Stash { id: app.session_id, alias: app.session_alias.clone(), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
-        created: app.session_created, activity: app.session_activity, options: Default::default(), env: Default::default(), mirror: app.mirror.clone() };
+    let mut stash = Stash { id: app.session_id, used: app.session_used, alias: app.session_alias.clone(), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
+        created: app.session_created, activity: app.session_activity, last_attached: app.session_last_attached, options: Default::default(), env: Default::default(), path: app.session_path.clone(), group: app.session_group.clone(), mirror: app.mirror.clone() };
     let old = std::mem::take(&mut app.tabs);
     if !fill(app, &mut stash, row, old, (body.width, body.height)) { return gone(app) }
     app.tabs = stash.tabs;
@@ -139,6 +152,8 @@ fn rebuild(app: &mut App, row: &Value) {
     app.lastw = stash.lastw;
     app.options.session = crate::app::options_from(row);
     app.session_env = crate::app::env_from(row);
+    // Its clients: the owner (when it shows it) and every one showing it as it has it.
+    app.mirror_attached = row.get("front").and_then(Value::as_bool).unwrap_or(false) as u32 + row.get("mirrors").and_then(Value::as_u64).unwrap_or(1) as u32;
     // What the owner did is the owner's to hook: nothing fires here for it.
     app.hooks_seen_now();
     if current != app.tabs.get(app.active).map(|t| t.id.clone()) { if let Some(f) = app.tabs[app.active].focus { app.seen(f) } }
@@ -159,7 +174,9 @@ fn gone(app: &mut App) {
 /// A mirror left behind (switch-client elsewhere): its terminals closed, the owner told.
 pub fn drop_stash(app: &mut App, s: Stash) {
     if let Some(m) = &s.mirror { register(&m.owner, s.id, false) }
-    for t in s.tabs { for p in t.panes() { app.forget_pane(p) } }
+    // (A pane still in a session here — a group's windows are in each of its sessions — stays.)
+    let kept: HashSet<u64> = app.tabs.iter().chain(app.sessions.iter().flat_map(|x| x.tabs.iter())).flat_map(|t| t.panes()).collect();
+    for t in s.tabs { for p in t.panes() { if !kept.contains(&p) { app.forget_pane(p) } } }
 }
 
 /// This client goes (detach, exit): the owner told at once.
@@ -201,7 +218,7 @@ pub fn route(app: &mut App, words: &[String]) -> bool {
 
 /// [words] with -t and -s as ids: what they name here (or, with none, what the command would
 /// take here) is the same thing to every client.
-fn absolute(app: &App, entry: &crate::cmd::Entry, words: &[String]) -> Vec<String> {
+pub fn absolute(app: &App, entry: &crate::cmd::Entry, words: &[String]) -> Vec<String> {
     let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).ok();
     let sid = app.session_id;
     let mut out = words.to_vec();
@@ -213,9 +230,12 @@ fn absolute(app: &App, entry: &crate::cmd::Entry, words: &[String]) -> Vec<Strin
         let Ok(found) = crate::cmd::resolve(app, given.as_deref(), spec) else { continue };
         let wid = |w: Option<usize>| w.and_then(|w| app.tabs.get(w)).map(|t| format!("@{}", t.wid()));
         let id = match spec.kind {
-            crate::cmd::Kind::Pane => found.pane.map(crate::pane::tag).or_else(|| wid(found.window)),
+            // (With its session and window: a pane is in every session of a group, and a session's
+            // option set through it is that session's.)
+            crate::cmd::Kind::Pane => found.pane.map(|p| match wid(found.window) { Some(w) => format!("${sid}:{w}.{}", crate::pane::tag(p)), None => crate::pane::tag(p) }).or_else(|| wid(found.window).map(|w| format!("${sid}:{w}"))),
             crate::cmd::Kind::Window if spec.window_index => Some(match (given.is_some(), found.idx) { (true, Some(i)) => format!("${sid}:{i}"), _ => format!("${sid}:") }),
-            crate::cmd::Kind::Window => wid(found.window),
+            // (In its session: a window may be in several — link-window, a group.)
+            crate::cmd::Kind::Window => wid(found.window).map(|w| format!("${sid}:{w}")),
             crate::cmd::Kind::Session => Some(format!("${sid}")),
         };
         let Some(id) = id else { continue };

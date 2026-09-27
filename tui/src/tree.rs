@@ -117,6 +117,8 @@ pub struct Start {
     pub sort: Option<String>,
     pub reversed: bool,
     pub no_preview: bool,
+    /// -G: every session of a group (else one each: squash_groups).
+    pub groups: bool,
     pub zoom: bool,
 }
 
@@ -140,6 +142,7 @@ pub struct Tree {
     no_matches: bool,
     search_back: bool,
     sort: usize,
+    groups: bool,
     reversed: bool,
     format: String,
     key_format: String,
@@ -166,6 +169,10 @@ pub struct Tree {
 /// Each item's tag (tmux's is the session, winlink or pane pointer): a session's, a window's in
 /// that session, a pane's.
 fn session_tag(sid: u32) -> u64 { (3u64 << 56) | sid as u64 }
+/// Another client's window in the tree: `remote:<number>` for its tab, its number past every @id.
+const REMOTE: &str = "remote:";
+const REMOTE_WINDOW: u64 = 1 << 31;
+
 fn window_tag(sid: u32, wid: u64) -> u64 { (1u64 << 56) | ((sid as u64) << 32) | wid }
 fn pane_tag(id: u64) -> u64 { (2u64 << 56) | id }
 
@@ -225,6 +232,7 @@ impl Tree {
             no_matches: false,
             search_back: false,
             sort,
+            groups: a.groups,
             reversed: a.reversed,
             format: a.format.clone().unwrap_or_else(|| format.to_string()),
             key_format: a.key_format.clone().unwrap_or_else(|| DEFAULT_KEY_FORMAT.to_string()),
@@ -307,18 +315,29 @@ impl Tree {
     fn build_items(&mut self, app: &mut App, saved: &HashMap<u64, (bool, bool)>, tag: &mut u64, filter: Option<&str>) {
         if self.flavour == Flavour::Buffer { return self.build_buffers(app, saved, filter) }
         let front = app.session_id;
-        let mut order: Vec<(u32, String, i64)> = app.session_list().into_iter().map(|(id, name)| {
-            // The session on screen is the one in use now; another, when it was last.
+        let mut order: Vec<(u32, String, i64, u64)> = app.session_list().into_iter().map(|(id, name)| {
+            // The session on screen is the one in use now; another, when it was last — within
+            // one second, the later used (or made) first, as tmux's microseconds have it.
             let used = if id == front { i64::MAX } else { app.stash_value(id, "session_activity").and_then(|v| v.parse().ok()).unwrap_or(0) };
-            (id, name, used)
+            let order = app.sessions.iter().find(|s| s.id == id).map(|s| s.used).unwrap_or(0);
+            (id, name, used, order)
         }).collect();
         let (field, reversed) = (self.sort, self.reversed);
         order.sort_by(|a, b| {
             let by_name = || a.1.as_bytes().cmp(b.1.as_bytes());
-            let r = match field { 0 => a.0.cmp(&b.0), 2 => b.2.cmp(&a.2).then_with(by_name), _ => by_name() };
+            let r = match field { 0 => a.0.cmp(&b.0), 2 => b.2.cmp(&a.2).then(b.3.cmp(&a.3)).then_with(by_name), _ => by_name() };
             if reversed { r.reverse() } else { r }
         });
+        // squash_groups (no -G): one session of each group — the one in front for its own group,
+        // the first to join it for another.
+        let current_group = app.group_of(self.fs.0);
         for (sid, ..) in order {
+            if !self.groups {
+                if let Some(g) = app.group_of(sid) {
+                    let first = app.group_sessions(&g).first().map(|x| x.0);
+                    if (Some(&g) == current_group.as_ref() && sid != self.fs.0) || (Some(&g) != current_group.as_ref() && Some(sid) != first) { continue }
+                }
+            }
             // Another client's session: listed as its own row, as tmux's tree lists every session.
             if in_session(app, sid, |app| self.build_session(app, saved, filter, sid)).is_none() { self.build_remote(app, saved, filter, sid) }
         }
@@ -340,7 +359,19 @@ impl Tree {
         app.format_type = Some(FORMAT_SESSION);
         let text = crate::format::expand_session(app, &self.format, sid);
         app.format_type = None;
-        self.add(saved, None, What::Session(sid), session_tag(sid), name, Some(text), 0);
+        let expanded = if self.kind == Kind::Session { 0 } else { 1 };
+        let s = self.add(saved, None, What::Session(sid), session_tag(sid), name, Some(text), expanded);
+        // Its windows, as the client that has it keeps them (by number: chosen, they are shown
+        // as that client has them).
+        let mut windows: Vec<(usize, (usize, String, usize))> = app.session_windows(sid).into_iter().enumerate().collect();
+        let (field, reversed) = (self.sort, self.reversed);
+        windows.sort_by(|a, b| { let r = match field { 1 => a.1.1.as_bytes().cmp(b.1.1.as_bytes()), _ => a.1.0.cmp(&b.1.0) }; if reversed { r.reverse() } else { r } });
+        for (k, (num, _, _)) in windows {
+            app.format_type = Some(FORMAT_WINDOW);
+            let text = crate::format::expand_session_window(app, &self.format, sid, k);
+            app.format_type = None;
+            self.add(saved, Some(s), What::Window(sid, format!("{REMOTE}{num}")), window_tag(sid, REMOTE_WINDOW | num as u64), num.to_string(), Some(text), 0);
+        }
     }
 
     /// window_buffer_build: every paste buffer, sorted (by time the newest first, by size the
@@ -401,7 +432,8 @@ impl Tree {
             let by_name = || ta.name.as_bytes().cmp(tb.name.as_bytes());
             let r = match field {
                 0 => app.win_num(*a).cmp(&app.win_num(*b)),
-                2 => tb.activity.cmp(&ta.activity).then_with(by_name),
+                // (Within one second: the one active last first, as by tmux's microseconds.)
+                2 => tb.activity.cmp(&ta.activity).then(tb.last_output.cmp(&ta.last_output)).then(tb.wid().cmp(&ta.wid())).then_with(by_name),
                 _ => by_name(),
             };
             if reversed { r.reverse() } else { r }
@@ -484,8 +516,9 @@ impl Tree {
             return keys::parse(&s).ok();
         }
         let ftype = match self.items[id].what { What::Session(_) => FORMAT_SESSION, What::Window(..) => FORMAT_WINDOW, _ => FORMAT_PANE };
-        // Another client's session: its key by its line alone.
-        if let What::Session(sid) = self.items[id].what { if app.remote_owner(sid).is_some() {
+        // Another client's session (or window): its key by its line alone.
+        let remote_window = matches!(&self.items[id].what, What::Window(_, tab) if tab.starts_with(REMOTE));
+        if let What::Session(sid) | What::Window(sid, _) = self.items[id].what { if remote_window || (matches!(self.items[id].what, What::Session(_)) && app.remote_owner(sid).is_some()) {
             app.format_line = Some(line);
             let s = crate::format::expand_session(app, &self.key_format, sid);
             app.format_line = None;
@@ -700,8 +733,8 @@ impl Tree {
     pub fn draw(&mut self, app: &App, buf: &mut Buffer, area: Rect, plan: &Plan) {
         for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
         if self.lines.is_empty() { return }
-        let tab = app.tabs.iter().find(|t| t.panes().contains(&self.pane)).map(|t| t.id.clone()).unwrap_or_default();
-        let mode = crate::draw::style_over(&app.options.get("mode-style", &tab, Some(self.pane)).unwrap_or_default(), Style::default());
+        let window = app.tabs.iter().position(|t| t.panes().contains(&self.pane)).unwrap_or(app.active);
+        let mode = crate::draw::style_over(&app.style_spec("mode-style", window, Some(self.pane)), Style::default());
         let (w, h) = (self.width.min(area.width as u32), self.height.min(area.height as u32));
         let keylen = self.lines.iter().filter_map(|l| self.items[l.item].keystr.as_ref()).map(|k| k.len() + 3).max().unwrap_or(0);
         for i in self.offset..self.lines.len() {
@@ -846,8 +879,12 @@ impl Tree {
     /// `=session:1.%3`, with its own session's name.
     fn target(&self, app: &mut App, id: usize) -> Option<String> {
         if let What::Buffer(name) = &self.items[id].what { return app.paste.get(name).map(|_| name.clone()) }
-        // Another client's session: by its name (switch-client takes it from that client).
+        // Another client's session, or one of its windows: by its name (switch-client shows it
+        // as that client has it).
         if let What::Session(sid) = self.items[id].what { if app.remote_owner(sid).is_some() { return app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| format!("={n}:")) } }
+        if let What::Window(sid, tab) = &self.items[id].what {
+            if let Some(num) = tab.strip_prefix(REMOTE) { return app.session_list().into_iter().find(|(i, _)| i == sid).map(|(_, n)| format!("={n}:{num}.")) }
+        }
         self.pulled(app, id, |app, Pulled { window, pane }| {
             let s = app.session_name();
             Some(match &self.items[id].what {
@@ -1228,7 +1265,7 @@ fn display_menu(app: &mut App, t: &Tree, pane: u64, x: u32, y: u32, outside: boo
     let mut y = y;
     if x + w > sx { x = sx - w }
     if y + h > sy { y = sy - h }
-    app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice: None, x: x as u16, y: y as u16, width, stay_open: false, no_mouse: false, mouse: None, tree: Some((pane, line)) }));
+    app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice: None, x: x as u16, y: y as u16, width, stay_open: false, no_mouse: false, mouse: None, tree: Some((pane, line)), complete: None }));
 }
 
 /// mode_tree_menu_callback and window_tree_menu: the menu's line made current, its item's key
@@ -1292,7 +1329,7 @@ fn run_command(app: &mut App, target: Option<(u32, String, u64)>, template: &str
     let command = crate::commands::template_replace(template, name, 1);
     if command.trim().is_empty() { return }
     let run = |app: &mut App, current: Option<(String, u64)>| {
-        let saved = std::mem::replace(&mut app.hook_state, current.map(|t| std::sync::Arc::new(crate::commands::HookState { formats: Vec::new(), target: Some(t) })));
+        let saved = std::mem::replace(&mut app.hook_state, current.map(|t| std::sync::Arc::new(crate::commands::HookState { formats: Vec::new(), target: Some(t), session: None })));
         crate::commands::execute(app, &command);
         app.hook_state = saved;
     };

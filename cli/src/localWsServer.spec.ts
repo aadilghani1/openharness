@@ -112,6 +112,23 @@ describe('local CLI WebSocket', () => {
     expect(status).toBe(403)
   })
 
+  it('hands a window that connects late the questions still open', async () => {
+    const asked = { type: 'commander_question', agentId: 'a1', dbSessionId: 's1', payload: { requestId: 'q_1', questions: [] } }
+    const ws = new WebSocket(await start(new FakeBackend(), { openQuestions: () => [asked] }))
+    await onceOpen(ws)
+    const frames: Frame[] = []
+    const got = new Promise<void>((resolve) => ws.on('message', (raw) => {
+      frames.push(JSON.parse(raw.toString()) as Frame)
+      if (frames.length === 3) resolve()
+    }))
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await got
+    expect(frames.map((f) => f.type)).toEqual(['connected', 'commander_question', 'commander_questions_open'])
+    expect(frames[1]).toEqual(asked)
+    expect(frames[2]).toEqual({ type: 'commander_questions_open', payload: { requestIds: ['q_1'] } })
+    ws.close()
+  })
+
   it('consumes validated preparation UI acknowledgements locally', async () => {
     const backend = new FakeBackend(), opened = vi.fn()
     const ws = new WebSocket(await start(backend, { onDevicePrepareOpened: opened }))
