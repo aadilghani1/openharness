@@ -284,6 +284,10 @@ impl Picker {
             }).collect();
             // `!word` (and `!'word`): not only a row whose line says it, but one whose keywords do.
             let negated: Vec<(String, bool)> = words.iter().filter_map(|(w, s)| w.strip_prefix('!').map(|r| (r.trim_start_matches(['\'', '^']).trim_end_matches('$').to_string(), *s))).filter(|(w, _)| !w.is_empty()).collect();
+            // …and in a live list, where the line's changing parts are left out of matching (so a
+            // row does not come and go as they change), an unanchored `!word` still keeps out a row
+            // whose line says it where you can see it.
+            let unanchored: Vec<(String, bool)> = words.iter().filter_map(|(w, s)| w.strip_prefix('!').map(|r| (r.trim_start_matches('\'').to_string(), *s))).filter(|(w, _)| !w.is_empty() && !w.starts_with('^') && !w.ends_with('$')).collect();
             let words: Vec<(String, bool)> = words.into_iter().filter(|(w, _)| !w.starts_with('!')).collect();
             // The keywords by fzf's OR groups (`webapp | api`: either).
             let mut groups: Vec<Vec<(String, bool)>> = Vec::new();
@@ -306,7 +310,9 @@ impl Picker {
                 // (A keyword hit still has to keep out of what the query excludes from the line.)
                 let seen = if negated.is_empty() { String::new() } else { line(row) };
                 let clear = |w: &str, sensitive: bool| if sensitive { !seen.contains(w) } else { !seen.to_lowercase().contains(w) };
+                let shown = self.live && !unanchored.is_empty() && unanchored.iter().any(|(w, sensitive)| { let l = line(row); if *sensitive { l.contains(w.as_str()) } else { l.to_lowercase().contains(w.as_str()) } });
                 match q.matches(&chars) {
+                    Some(_) if shown => {}
                     Some(hit) => {
                         // A live list's rows are its order (by urgency), as fzf's are over lines
                         // drawn to one width: length decides nothing between them.
@@ -323,7 +329,12 @@ impl Picker {
             }
             sorted = !self.keep_order && q.sortable() && (o.no_sort == self.sort_flipped);
             if sorted { scored.sort_by(|a, b| a.0.cmp(&b.0)) }
-            self.visible = scored.into_iter().map(|(_, i, hits)| (i, hits)).chain(hidden.into_iter().map(|i| (i, Vec::new()))).collect();
+            // Rows its keywords name (`codex`: the Codex harnesses) come before rows the query
+            // found only as letters scattered through the line (c…o…d…e…x in `gpu-box`).
+            let plain: Vec<String> = groups.iter().flatten().filter(|(w, _)| w.chars().count() >= 3).map(|(w, _)| w.to_lowercase()).collect();
+            let scattered = |i: usize| !plain.is_empty() && !plain.iter().any(|w| line(&self.rows[i]).to_lowercase().contains(w.as_str()));
+            let (weak, strong): (Vec<_>, Vec<_>) = if hidden.is_empty() { (Vec::new(), scored) } else { scored.into_iter().partition(|(_, i, _)| scattered(*i)) };
+            self.visible = strong.into_iter().map(|(_, i, hits)| (i, hits)).chain(hidden.into_iter().map(|i| (i, Vec::new()))).chain(weak.into_iter().map(|(_, i, hits)| (i, hits))).collect();
         }
         // --tac: the input order reversed (wherever the order is the input's).
         if crate::theme::fzf_opts().tac && !sorted { self.visible.reverse() }
