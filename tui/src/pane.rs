@@ -115,6 +115,10 @@ pub struct Pane {
     /// Characters typed but not yet echoed, drawn where they will land — the local echo that makes a
     /// far machine feel near. (col, row, char, when).
     pub predictions: Vec<(u16, u16, char, Instant)>,
+    /// mosh's epochs: after Enter or any other control key (and after a prediction the far side
+    /// never echoed) nothing typed is shown until the far side has echoed one of this epoch's
+    /// characters — so a prompt that does not echo (a password) never shows one.
+    pub epoch_confirmed: bool,
     /// Bumped on every open; a reply carrying an older one is stale.
     pub open_token: u64,
     /// The pane's modes, the one in front last: copy mode and view mode (tmux's wp->modes).
@@ -235,6 +239,7 @@ impl Pane {
             input_at: None,
             echo_us: Vec::new(),
             predictions: Vec::new(),
+            epoch_confirmed: false,
             open_token: 0,
             modes: Vec::new(),
             tree: None,
@@ -425,7 +430,7 @@ impl Pane {
     }
 
     pub fn predict_char(&mut self, c: char) {
-        if c.is_control() || unicode_width::UnicodeWidthChar::width(c) != Some(1) { self.predictions.clear(); return }
+        if c.is_control() || unicode_width::UnicodeWidthChar::width(c) != Some(1) { self.predictions.clear(); self.epoch_confirmed = false; return }
         let (col, row) = match self.predictions.last() {
             Some((col, row, _, _)) => (col + 1, *row),
             None => {
@@ -443,8 +448,13 @@ impl Pane {
     }
 
     pub fn clear_predictions(&mut self) {
+        // (A key not predicted — Enter, an arrow, a control key: a new epoch.)
+        self.epoch_confirmed = false;
         if !self.predictions.is_empty() { self.predictions.clear(); self.dirty = true }
     }
+
+    /// The typed characters to show now: this epoch's, once the far side has echoed one of them.
+    pub fn shown_predictions(&self) -> &[(u16, u16, char, Instant)] { if self.epoch_confirmed { &self.predictions } else { &[] } }
 
     /// Drop what the far side has now confirmed (the grid shows that character there), and give up
     /// on anything it has not echoed well past a round trip — a password prompt, say.
@@ -455,11 +465,17 @@ impl Pane {
         let grid = self.term.grid();
         let rows = grid.screen_lines() as u16;
         let before = self.predictions.len();
+        let (mut confirmed, mut expired) = (false, false);
         self.predictions.retain(|(col, row, c, at)| {
             if *row >= rows || *col as usize >= grid.columns() { return false }
             let cell = &grid[Line(*row as i32)][Column(*col as usize)];
-            cell.c != *c && at.elapsed() < patience
+            if cell.c == *c { confirmed = true; return false }
+            if at.elapsed() >= patience { expired = true; return false }
+            true
         });
+        // Echoed: this epoch's typing shows from now. Never echoed: a new epoch, nothing shown.
+        if confirmed { self.epoch_confirmed = true }
+        if expired { self.epoch_confirmed = false; self.predictions.clear() }
         // A confirmed character with an unconfirmed one BEFORE it means the line went elsewhere.
         if self.predictions.len() != before { self.dirty = true }
     }
@@ -800,6 +816,25 @@ mod osc7_tests {
         assert_eq!(super::osc7_unfinished(b"ab\x1b]7;file:///t"), b"\x1b]7;file:///t");
         assert_eq!(super::osc7_unfinished(b"ab\x1b]"), b"\x1b]");
         assert_eq!(super::osc7_unfinished(b"\x1b]7;file:///tmp\x07"), b"");
+    }
+
+    #[test]
+    fn predictions_show_once_an_epoch_is_confirmed() {
+        // mosh's rule: typing after Enter is not shown until the far side echoes some of it — a
+        // prompt that never echoes (a password) never shows what is typed.
+        let mut p = super::Pane::new(1, "m", "a", 20, 5);
+        p.feed(b"$ ");
+        p.predict_char('l');
+        assert!(p.shown_predictions().is_empty(), "nothing shown before an echo");
+        p.feed(b"l");
+        p.settle_predictions();
+        assert!(p.epoch_confirmed);
+        p.predict_char('s');
+        assert_eq!(p.shown_predictions().len(), 1, "shown once this epoch echoed");
+        p.predict_char('\r');
+        assert!(!p.epoch_confirmed, "Enter starts a new epoch");
+        p.predict_char('x');
+        assert!(p.shown_predictions().is_empty());
     }
 
     #[test]

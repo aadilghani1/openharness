@@ -2343,7 +2343,7 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
         }
     }
     // Local echo, drawn over the grid: underlined until the far side confirms it.
-    for (col, row, c, _) in &pane.predictions {
+    for (col, row, c, _) in pane.shown_predictions() {
         let row = (*row as i32 - shift).max(0) as u16;
         let Some(col) = &col.checked_sub(hshift) else { continue };
         if let Some(cell) = buf.cell_mut((area.x + col, area.y + row)) {
@@ -2351,7 +2351,7 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
         }
     }
     if pane.scrolled() > 0 || !active { return None }
-    if let Some((col, row, _, _)) = pane.predictions.last() {
+    if let Some((col, row, _, _)) = pane.shown_predictions().last() {
         let row = (*row as i32 - shift).max(0) as u16;
         let col = &col.saturating_sub(hshift);
         if col + 1 < area.width && row < area.height { return Some(Position::new(area.x + col + 1, area.y + row)) }
