@@ -321,6 +321,12 @@ Enter opens one as a harness resuming it (`lib/sessionSearch/external.ts`).
   tidy away). An open one is refused with `SESSION_OPEN_IN_TERMINAL` or
   `SESSION_BUSY_IN_TERMINAL` until `takeOver` (`idle`, `now` or `wait`) says how to take it over,
   or with `SESSION_OPEN_ELSEWHERE` when an app has it.
+- **Only what was asked.** The Codex app and the editor extensions send a message with context
+  in front of it: the files attached (`# Files mentioned by the user:`), the page open in the app's
+  browser (`# In app browser:`), and the editor's open tabs (`# Context from my IDE setup:`). Each
+  block ends at a `## My request:` heading (`## My request for Codex:` in older versions). The index
+  drops those blocks, so asks, titles and snippets read as the person wrote them. This is schema 9,
+  and the index rebuilds once.
 - ChatGPT conversations and Codex cloud tasks are not on disk, so they cannot be found.
 - **The welcome page lists them too.** An empty tab shows up to nine rows beside its shortcuts,
   numbered like the terminal client's home: the harnesses you were just with and these
