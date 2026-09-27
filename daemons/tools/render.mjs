@@ -89,16 +89,40 @@ export function renderBanner(banner, word) {
 }
 
 /**
- * The nest while the first egg incubates: which of rules.nest to show for the habits done. Habits count
- * up to firstEgg.need; until every required habit (a finished turn) is among them, at most need - 1
- * count. With need 3 each habit moves the egg one stage; any need maps onto the four stages evenly.
+ * How far along the first egg is: habits count up to firstEgg.need, and until every required habit
+ * (a finished turn) is among them at most need - 1 count. Unknown and repeated habits count nothing.
+ * The setup egg counts every known habit toward setupEgg.need the same way, without a requirement.
  */
-export function nestStage(roster, habitsDone) {
-  const { need, require = [] } = roster.rules.firstEgg
-  const known = new Set(roster.rules.firstEgg.habits.map(h => h.key))
+export function habitProgress(roster, habitsDone, kind = 'first') {
+  const { firstEgg, setupEgg } = roster.rules
+  const known = new Set(firstEgg.habits.map(h => h.key))
   const done = [...new Set(habitsDone)].filter(k => known.has(k))
-  const required = require.every(k => done.includes(k))
-  const counted = required ? Math.min(done.length, need) : Math.min(done.length, need - 1)
-  const last = roster.rules.nest.length - 1
-  return counted >= need ? last : Math.floor((counted * last) / need)
+  if (kind === 'setup') return { done: Math.min(done.length, setupEgg.need), need: setupEgg.need }
+  const required = (firstEgg.require ?? []).every(k => done.includes(k))
+  return { done: Math.min(done.length, required ? firstEgg.need : firstEgg.need - 1), need: firstEgg.need }
+}
+
+/**
+ * The stage an egg shows while it is earned (daemons/plates.json eggs[kind][size][stage], and
+ * rules.eggLine): p4 once it is earned and waits to be opened; otherwise by done / need, p0 at none,
+ * p1 below a third, p2 below two thirds, p3 from there until it is earned.
+ */
+export function eggStage(done, need, ready = false) {
+  if (ready) return 'p4'
+  const f = need > 0 ? done / need : 0
+  if (!(f > 0)) return 'p0'
+  return f < 1 / 3 ? 'p1' : f < 2 / 3 ? 'p2' : 'p3'
+}
+
+/**
+ * An egg in the status line, 8 cells at most (rules.eggLine). `{k}` is the kind's mark; a ready egg
+ * (p4, or rocking as it opens) blinks with `lid`. Once the shell is open, stage `hatchling` shows the
+ * hatchling's 0.1 sprite between the halves, `)` + sprite + `(`, or the sprite alone when that does
+ * not fit.
+ */
+export function eggLine(roster, kind, stage, { lid = null, sprite = '' } = {}) {
+  const { eggLine: lines, eggs, statusCells } = roster.rules
+  if (stage === 'hatchling') return sprite.length + 2 <= statusCells ? `)${sprite}(` : sprite
+  const line = lid && (stage === 'p4' || stage === 'rock') ? lines.blink : lines[stage]
+  return line.replace('{k}', eggs[kind]?.mark ?? ' ')
 }

@@ -164,7 +164,17 @@ const daemonRosterJson = r'''
     },
     "eggs": {
       "first": {
-        "look": "\\_O_/",
+        "mark": " ",
+        "gradient": {
+          "top": {
+            "xterm": 230,
+            "hex": "#ffffd7"
+          },
+          "bottom": {
+            "xterm": 187,
+            "hex": "#d7d7af"
+          }
+        },
         "weights": {
           "common": 60,
           "rare": 27,
@@ -176,7 +186,17 @@ const daemonRosterJson = r'''
         }
       },
       "setup": {
-        "look": "\\_$_/",
+        "mark": "$",
+        "gradient": {
+          "top": {
+            "xterm": 189,
+            "hex": "#d7d7ff"
+          },
+          "bottom": {
+            "xterm": 104,
+            "hex": "#8787d7"
+          }
+        },
         "weights": {
           "common": 60,
           "rare": 27,
@@ -185,7 +205,17 @@ const daemonRosterJson = r'''
         }
       },
       "turn": {
-        "look": "\\_O_/",
+        "mark": ".",
+        "gradient": {
+          "top": {
+            "xterm": 255,
+            "hex": "#eeeeee"
+          },
+          "bottom": {
+            "xterm": 248,
+            "hex": "#a8a8a8"
+          }
+        },
         "weights": {
           "common": 60,
           "rare": 27,
@@ -194,7 +224,17 @@ const daemonRosterJson = r'''
         }
       },
       "week": {
-        "look": "\\_0_/",
+        "mark": "7",
+        "gradient": {
+          "top": {
+            "xterm": 159,
+            "hex": "#afffff"
+          },
+          "bottom": {
+            "xterm": 73,
+            "hex": "#5fafaf"
+          }
+        },
         "weights": {
           "common": 45,
           "rare": 35,
@@ -203,7 +243,17 @@ const daemonRosterJson = r'''
         }
       },
       "marathon": {
-        "look": "\\_@_/",
+        "mark": "@",
+        "gradient": {
+          "top": {
+            "xterm": 223,
+            "hex": "#ffd7af"
+          },
+          "bottom": {
+            "xterm": 173,
+            "hex": "#d7875f"
+          }
+        },
         "weights": {
           "common": 25,
           "rare": 40,
@@ -212,7 +262,21 @@ const daemonRosterJson = r'''
         }
       },
       "night": {
-        "look": "*\\_O_/",
+        "mark": "*",
+        "gradient": {
+          "top": {
+            "xterm": 104,
+            "hex": "#8787d7"
+          },
+          "bottom": {
+            "xterm": 60,
+            "hex": "#5f5f87"
+          }
+        },
+        "stars": {
+          "xterm": 230,
+          "hex": "#ffffd7"
+        },
         "weights": {
           "common": 50,
           "rare": 30,
@@ -224,7 +288,17 @@ const daemonRosterJson = r'''
         }
       },
       "history": {
-        "look": "\\_47_/",
+        "mark": "#",
+        "gradient": {
+          "top": {
+            "xterm": 180,
+            "hex": "#d7af87"
+          },
+          "bottom": {
+            "xterm": 95,
+            "hex": "#875f5f"
+          }
+        },
         "weights": {
           "common": 60,
           "rare": 27,
@@ -233,7 +307,17 @@ const daemonRosterJson = r'''
         }
       },
       "easter": {
-        "look": "\\_?_/",
+        "mark": "?",
+        "gradient": {
+          "top": {
+            "xterm": 218,
+            "hex": "#ffafd7"
+          },
+          "bottom": {
+            "xterm": 133,
+            "hex": "#af5faf"
+          }
+        },
         "weights": {
           "common": 0,
           "rare": 0,
@@ -275,20 +359,18 @@ const daemonRosterJson = r'''
     "easterHashes": [
       "184858a00fd7971f810848266ebcecee5e8b69972c5ffaed622f5ee078671aed"
     ],
-    "nest": [
-      "\\_O_/",
-      "~\\_O_/~",
-      "\\_.._/",
-      "\\_o.o_/"
-    ],
-    "egg": [
-      "       .--.",
-      "      /    \\",
-      "     |      |",
-      "     |      |",
-      "      \\    /",
-      "   \\___'--'___/"
-    ],
+    "eggLine": {
+      "p0": "\\_({k} )_/",
+      "p1": "\\_({k}')_/",
+      "p2": "\\_(/\\)_/",
+      "p3": "\\_(*')_/",
+      "p4": "\\_(oo)_/",
+      "blink": "\\_(--)_/",
+      "rock": "\\_(oo)_/",
+      "burst": "'*(oo)*'",
+      "tumble": "')_^^_('",
+      "open": ")\\_^^_/("
+    },
     "lineSlots": [
       "who",
       "q",
@@ -327,6 +409,40 @@ const daemonRosterJson = r'''
         "%": 1,
         "#": 1,
         "@": 1.35
+      },
+      "light": {
+        "plain": {
+          "xterm": 230,
+          "hex": "#ffffd7"
+        },
+        "common": {
+          "xterm": 255,
+          "hex": "#eeeeee"
+        },
+        "rare": {
+          "xterm": 81,
+          "hex": "#5fd7ff"
+        },
+        "legendary": {
+          "xterm": 221,
+          "hex": "#ffd75f"
+        },
+        "secret": {
+          "xterm": 141,
+          "hex": "#af87ff"
+        },
+        "peek": {
+          "xterm": 231,
+          "hex": "#ffffff"
+        }
+      },
+      "eggMs": {
+        "loop": 190,
+        "rock": 65,
+        "burstHold": 420,
+        "burst": 150,
+        "tumble": 75,
+        "open": 380
       }
     }
   },

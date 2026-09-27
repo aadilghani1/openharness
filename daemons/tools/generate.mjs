@@ -4,9 +4,10 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { renderSprite, renderPortrait, statusCell, baseWidth, renderBanner, nestStage } from './render.mjs'
+import { renderSprite, renderPortrait, statusCell, baseWidth, renderBanner, eggStage, eggLine, habitProgress } from './render.mjs'
 import { cardLines } from './card.mjs'
-import { bakePlates, plateColor } from './bake.mjs'
+import { bakePlates, plateColor, eggColor } from './bake.mjs'
+import { KINDS as EGG_KINDS, STAGES as EGG_STAGES } from '../plates/egg.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const check = process.argv.includes('--check')
@@ -33,6 +34,9 @@ function xtermHex(n) {
   const level = [0, 0x5f, 0x87, 0xaf, 0xd7, 0xff], i = n - 16
   return `#${hex(level[Math.floor(i / 36)])}${hex(level[Math.floor(i / 6) % 6])}${hex(level[i % 6])}`
 }
+
+// A colour as the roster writes it: { xterm, hex }, an xterm-256 index from 16 with the hex a terminal shows.
+const xtermColor = c => c && Number.isInteger(c.xterm) && c.xterm >= 16 && c.xterm <= 255 && c.hex === xtermHex(c.xterm)
 
 const ids = new Set()
 const drops = new Set(roster.drops.map(d => d.id))
@@ -150,11 +154,43 @@ for (const [kind, egg] of Object.entries(rules.eggs)) {
   for (const r of rules.rarities) if (typeof egg.weights[r] !== 'number') fail(`egg ${kind}: no weight for ${r}`)
   for (const id of Object.keys(egg.boost || {})) if (!ids.has(id)) fail(`egg ${kind}: boosts unknown daemon ${id}`)
 }
-// The nest and the eggs sit in the same status line and panel as the daemons.
-for (const s of [...rules.nest, ...rules.egg, ...Object.values(rules.eggs).map(e => e.look)]) {
-  if (!printable(s)) fail(`egg art "${s}" is not printable ASCII`)
-  if (ligature(s)) fail(`egg art "${s}" has "${ligature(s)}", which fonts draw as one glyph`)
+// Eggs (README, "Eggs"): every kind is drawn by daemons/plates/egg.mjs, runs down its own gradient, and
+// shows in the status line as rules.eggLine with its mark. The one-line looks, the line-art egg and the
+// nest stages they replace are gone.
+if ('nest' in rules || 'egg' in rules) fail('rules.nest and rules.egg are gone: eggs are drawn by daemons/plates/egg.mjs and shown in one line by rules.eggLine')
+for (const [kind, egg] of Object.entries(rules.eggs)) {
+  if ('look' in egg) fail(`egg ${kind}: look is gone: the status line shows rules.eggLine with the kind's mark`)
+  if (!EGG_KINDS[kind]) fail(`egg ${kind}: daemons/plates/egg.mjs does not draw it`)
+  if (typeof egg.mark !== 'string' || egg.mark.length !== 1 || !printable(egg.mark)) fail(`egg ${kind}: mark must be one printable character`)
+  for (const stop of ['top', 'bottom']) if (!xtermColor(egg.gradient?.[stop])) fail(`egg ${kind}: gradient.${stop} must be an xterm-256 index from 16 with its hex`)
+  if (EGG_KINDS[kind]?.stars ? !xtermColor(egg.stars) : 'stars' in egg) fail(`egg ${kind}: stars must be an xterm colour exactly when the egg draws stars`)
 }
+const eggLineStages = ['p0', 'p1', 'p2', 'p3', 'p4', 'blink', 'rock', 'burst', 'tumble', 'open']
+for (const stage of eggLineStages) {
+  const tpl = rules.eggLine?.[stage]
+  if (typeof tpl !== 'string') { fail(`rules.eggLine.${stage} is missing`); continue }
+  if (/\{(?!k\})[^}]*\}/.test(tpl)) fail(`rules.eggLine.${stage}: the only placeholder is {k}, the kind's mark`)
+}
+for (const stage of Object.keys(rules.eggLine ?? {})) if (!eggLineStages.includes(stage)) fail(`rules.eggLine.${stage}: not a stage`)
+const eggArt = (what, s) => {
+  if (s.length > rules.statusCells) fail(`${what}: "${s}" is wider than ${rules.statusCells} cells`)
+  if (!printable(s)) fail(`${what}: "${s}" is not printable ASCII`)
+  if (ligature(s)) fail(`${what}: "${s}" has "${ligature(s)}", which fonts draw as one glyph`)
+}
+if (!problems.length) {
+  for (const kind of Object.keys(rules.eggs)) {
+    for (const stage of eggLineStages.filter(s => s !== 'blink')) {
+      for (const lid of [null, '-', '_']) eggArt(`egg ${kind} ${stage}`, eggLine(roster, kind, stage, { lid }))
+    }
+  }
+  // The hatchling between the halves of its shell, in its 0.1 sprite, eyes open and blinking.
+  for (const d of roster.daemons) {
+    for (const lid of [null, '-', '_']) eggArt(`${d.id} hatching`, eggLine(roster, 'first', 'hatchling', { sprite: renderSprite(roster, d, 0, 'idle', { lid }) }))
+  }
+}
+// The light through an egg's cracks: plain while it is earned, the rarity's once it is opened.
+for (const key of ['plain', ...rules.rarities, 'peek']) if (!xtermColor(rules.plate?.light?.[key])) fail(`rules.plate.light.${key} must be an xterm-256 index from 16 with its hex`)
+for (const key of ['loop', 'rock', 'burstHold', 'burst', 'tumble', 'open']) if (!whole(rules.plate?.eggMs?.[key])) fail(`rules.plate.eggMs.${key} must be a whole number of ms`)
 const habitKeys = rules.firstEgg.habits.map(h => h.key)
 if (rules.firstEgg.need > habitKeys.length) fail('first egg needs more habits than exist')
 for (const k of rules.firstEgg.require ?? []) if (!habitKeys.includes(k)) fail(`firstEgg.require names unknown habit ${k}`)
@@ -241,6 +277,35 @@ for (const d of plates ? roster.daemons.filter(d => d.plate) : []) {
             if (off) fail(`${d.id} ${size} ${v} ${mood}: plate glyph "${off}" has no ink level`)
           }
         }
+      }
+    }
+  }
+}
+// Every egg kind at both widths: every stage with its frames, one size for all of them, in its box,
+// printable and ligature-free, and a material row for every row (g glow, s star, p peek, . none).
+for (const kind of plates ? Object.keys(rules.eggs) : []) {
+  for (const size of ['portrait', 'reveal']) {
+    const byStage = plates.eggs?.[kind]?.[size]
+    if (!byStage) { fail(`egg ${kind}: no ${size} plate`); continue }
+    let box = null
+    for (const [stage, list] of Object.entries(EGG_STAGES)) {
+      if (byStage[stage]?.length !== list.length) fail(`egg ${kind} ${size}: ${stage} has ${byStage[stage]?.length ?? 0} frames, not ${list.length}`)
+      for (const frame of byStage[stage] ?? []) {
+        const rows = frame.rows.split('\n'), mats = frame.mats.split('\n')
+        const dims = `${rows.length}x${rows[0].length}`
+        if (box && dims !== box) fail(`egg ${kind} ${size}: frames differ in size (${dims}, ${box})`)
+        box ??= dims
+        if (rows.length > plateRules.maxRows[size]) fail(`egg ${kind} ${size}: ${rows.length} rows, more than ${plateRules.maxRows[size]}`)
+        if (mats.length !== rows.length) fail(`egg ${kind} ${size} ${stage}: material rows do not match its rows`)
+        rows.forEach((row, r) => {
+          if (row.length > plateRules.cols[size]) fail(`egg ${kind} ${size}: a row is ${row.length} columns`)
+          if (!printable(row)) fail(`egg ${kind} ${size} ${stage}: a row is not printable ASCII`)
+          if (ligature(row)) fail(`egg ${kind} ${size} ${stage}: a row has "${ligature(row)}", which fonts draw as one glyph`)
+          const off = [...row].find(ch => ch !== ' ' && plateRules.ink[ch] === undefined)
+          if (off) fail(`egg ${kind} ${size} ${stage}: glyph "${off}" has no ink level`)
+          const m = mats[r] ?? ''
+          if (m.length !== row.length || /[^.gsp]/.test(m) || [...row].some((ch, c) => ch === ' ' && m[c] !== '.')) fail(`egg ${kind} ${size} ${stage}: material row "${m}" does not fit its row`)
+        })
       }
     }
   }
@@ -366,11 +431,42 @@ for (const c of frames.cells) {
   if (c.out.length !== rules.statusCells + 2) fail(`${c.id} ${c.v} ${c.mood}: status cell is ${c.out.length} wide, not ${rules.statusCells + 2}`)
   if (c.out.trimEnd().length > rules.statusCells + 2) fail(`${c.id} ${c.v} ${c.mood}: status cell content overflows`)
 }
-// Nest stages for habits done (every client shows the same egg for the same progress).
-const nestHabits = rules.firstEgg.habits.map(h => h.key)
-const nestCases = [[], ['turn'], ['split'], ['split', 'find'], ['split', 'find', 'store'], ['turn', 'split'],
-  ['turn', 'split', 'find'], nestHabits, ['turn', 'turn', 'bogus']]
-frames.nests = nestCases.map(habits => ({ habits, stage: nestStage(roster, habits), out: rules.nest[nestStage(roster, habits)] }))
+// Eggs: the stage for progress, the first egg over its habits, and every one-line look (every client
+// shows the same egg for the same progress).
+frames.eggStages = [[0, 40, false], [1, 40, false], [13, 40, false], [14, 40, false], [26, 40, false], [27, 40, false], [39, 40, false],
+  [40, 40, false], [40, 40, true], [0, 3, true], [1, 3, false], [2, 3, false], [0, 1, false], [0, 0, false]]
+  .map(([done, need, ready]) => ({ done, need, ready, stage: eggStage(done, need, ready) }))
+const habitCases = [[], ['turn'], ['split'], ['split', 'find'], ['split', 'find', 'store'], ['turn', 'split'],
+  ['turn', 'split', 'find'], habitKeys, ['turn', 'turn', 'bogus']]
+frames.firstEgg = habitCases.flatMap(habits => ['first', 'setup'].map(kind => {
+  const { done, need } = habitProgress(roster, habits, kind)
+  const stage = eggStage(done, need)
+  return { habits, kind, done, need, stage, out: eggLine(roster, kind, stage) }
+}))
+frames.eggLines = []
+for (const kind of Object.keys(rules.eggs)) {
+  for (const stage of eggLineStages.filter(s => s !== 'blink')) {
+    for (const lid of [null, '-']) frames.eggLines.push({ kind, stage, lid, out: eggLine(roster, kind, stage, { lid }) })
+  }
+}
+for (const d of roster.daemons) {
+  const sprite = renderSprite(roster, d, 0, 'idle')
+  frames.eggLines.push({ kind: 'first', stage: 'hatchling', id: d.id, sprite, out: eggLine(roster, 'first', 'hatchling', { sprite }) })
+}
+// Egg colours every client must reproduce: the ready egg (plain light, the eyes peeking), and the
+// opening's light in each rarity's colour, a secret's dimmed; every material cell and every 7th other.
+frames.eggColors = []
+for (const kind of plates ? ['first', 'night'] : []) {
+  for (const [stage, frame, light, dim] of [['p4', 0, 'plain', false], ...rules.rarities.map(r => ['burst', 3, r, r === 'secret'])]) {
+    const { rows: text, mats: matText } = plates.eggs[kind].reveal[stage][frame]
+    const rows = text.split('\n'), mats = matText.split('\n')
+    const cells = []
+    rows.forEach((row, r) => [...row].forEach((ch, c) => {
+      if (ch !== ' ' && (mats[r][c] !== '.' || (c + r) % 7 === 0)) cells.push({ r, c, ch, mat: mats[r][c], hex: eggColor(roster, kind, rows.length, r, ch, mats[r][c], { light, dim }) })
+    }))
+    frames.eggColors.push({ kind, size: 'reveal', stage, frame, light, dim, bg: '#0c0c0c', rows: rows.length, cells })
+  }
+}
 frames.banners = roster.daemons.map(d => ({ id: d.id, out: renderBanner(banner, d.id) }))
 output('daemons/frames.json', JSON.stringify(frames) + '\n')
 
