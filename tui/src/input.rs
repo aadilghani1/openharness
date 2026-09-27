@@ -1492,6 +1492,8 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             KeyCode::Char('r') if alt && matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) => {
                 if let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) {
                     let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
+                    // A working one's turn would be lost: its key again says so (as C-b R asks y/n).
+                    if confirmed(app, &mut picker, 'r', &machine, &agent, &format!("M-r again restarts {name} — it is working")) {
                     if let Some(link) = app.link(&machine) {
                         picker.say(format!("Restarting {name}…"));
                         let m = machine.clone();
@@ -1499,6 +1501,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
                             if let Err(e) = reply { app.say(format!("Could not restart it: {e}"), theme::DANGER) }
                             app.relist(&m);
                         });
+                    }
                     }
                 }
             }
@@ -1719,6 +1722,19 @@ fn answer(app: &mut App, machine: &str, agent: &str, option: usize) -> bool {
     answer_with(app, machine, agent, &choice)
 }
 
+/// Whether an action on a harness may go ahead: at once for one that isn't working; for a working
+/// one (its turn would be cut short), when its key comes again within three seconds — the first
+/// press says so.
+fn confirmed(app: &App, picker: &mut Picker, key: char, machine: &str, agent: &str, warning: &str) -> bool {
+    let working = app.fleet.agent(machine, agent).map(|a| matches!(app.fleet.state_of(a), crate::fleet::State::Working | crate::fleet::State::Starting)).unwrap_or(false);
+    if !working { picker.armed_key = None; return true }
+    let id = format!("{machine}:{agent}");
+    if picker.armed_key.as_ref().map(|(k, i, at)| *k == key && *i == id && at.elapsed() < Duration::from_secs(3)).unwrap_or(false) { picker.armed_key = None; return true }
+    picker.armed_key = Some((key, id, std::time::Instant::now()));
+    picker.say(warning);
+    false
+}
+
 /// A harness read without opening it: its ✓ (or an error's ✗) gone, and seen now.
 fn mark_read(app: &mut App, key: (String, String)) -> bool {
     let Some(a) = app.fleet.agents.get_mut(&key) else { return false };
@@ -1759,6 +1775,8 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             let state = app.fleet.agent(&machine, &agent).map(|a| app.fleet.state_of(a));
             if choice == Choice::Pause {
                 let paused = state == Some(crate::fleet::State::Paused);
+                let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
+                if !paused && !confirmed(app, &mut picker, 'p', &machine, &agent, &format!("M-p again pauses {name} — it is working")) { return keep(app, kind, picker) }
                 let Some(link) = app.link(&machine) else { return keep(app, kind, picker) };
                 picker.say(if paused { "Resuming…" } else { "Pausing…" });
                 let (m, a) = (machine.clone(), agent.clone());

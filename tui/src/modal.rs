@@ -251,9 +251,11 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
                 State::NeedsInput => "waiting needs-you", State::Failed => "failed", State::Done => "done finished", State::Working => "working",
                 State::Starting => "starting", State::Ready => "idle", State::Paused => "paused", State::Offline => "offline",
             };
+            // Its pull request's state in words too: 'pr, 'open, 'merged.
+            let pr_words = a.pr.as_ref().map(|p| format!("pr {}", p.state.to_lowercase())).unwrap_or_default();
             Row::new(format!("{}:{}", a.machine_id, a.id), a.name.clone())
                 .boost(if state == State::NeedsInput { 60 } else if live { 30 } else { 0 })
-                .extra(format!("{} {} {} {} {} {} {} {}", a.project, a.branch, app.fleet.machine_name(&a.machine_id), a.engine, engine_label(&a.engine), a.dsh, pr, words))
+                .extra(format!("{} {} {} {} {} {} {} {} {}", a.project, a.branch, app.fleet.machine_name(&a.machine_id), a.engine, engine_label(&a.engine), a.dsh, pr, pr_words, words))
                 .group(group)
                 .lead(vec![span(dot, fg(color)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
                 .detail(detail)

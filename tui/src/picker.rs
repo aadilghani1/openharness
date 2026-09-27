@@ -79,6 +79,8 @@ pub struct Picker {
     pub keep_order: bool,
     pub busy: Option<String>,
     pub flash: Option<(String, Instant)>,
+    /// An action on a working harness waiting for its key again (M-r, M-p): which, on which row, when.
+    pub armed_key: Option<(char, String, Instant)>,
     pub empty: String,
     pub scroll: usize,
     /// Where the terminal cursor goes: the end of the query.
@@ -175,7 +177,7 @@ impl Picker {
             hints: Vec::new(),
             keep_order: false,
             busy: None,
-            flash: None,
+            flash: None, armed_key: None,
             empty: String::new(),
             scroll: 0,
             prefixed: false,
@@ -561,7 +563,9 @@ fn word_edge(chars: &[char], mut at: usize, forward: bool) -> usize {
 /// A hidden keyword this word names from its start (`codex`, `gpu-box`).
 fn names_word(hidden: &str, word: &str, case_sensitive: bool) -> bool {
     let hidden = if case_sensitive { hidden.to_string() } else { hidden.to_lowercase() };
-    hidden.split(|c: char| c.is_whitespace() || c == '/' || c == '·').any(|w| w.starts_with(word))
+    // A keyword whole (a branch with its slash: feat/rate-limit), without its `#` (a pull request's
+    // number: 4807), or each part of it (rate-limit).
+    hidden.split_whitespace().any(|w| w.starts_with(word) || w.trim_start_matches('#').starts_with(word) || w.split(['/', '·']).any(|p| p.starts_with(word)))
 }
 
 #[cfg(test)]
@@ -580,6 +584,14 @@ mod tests {
         assert_eq!(ids(&p), ["b"]);
         p.set_query("studio !flaky");
         assert_eq!(ids(&p), ["a"]);
+        // A branch with its slash, a pull request's number without its #.
+        p.set_rows(vec![Row::new("a", "Add rate limiting").extra("api feat/rate-limit #4807 draft"), Row::new("b", "Fix flaky test").extra("webapp fix/login-flake")]);
+        p.set_query("feat/rate-limit");
+        assert_eq!(ids(&p), ["a"]);
+        p.set_query("'4807");
+        assert_eq!(ids(&p), ["a"]);
+        p.set_query("login-flake");
+        assert_eq!(ids(&p), ["b"]);
     }
 
     #[test]
