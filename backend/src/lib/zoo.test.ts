@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  applyZooOps, drawWeights, easterHash, emptyZoo, parseZoo, zooOpSchema, zooOpsBodySchema,
+  applyZooOps, drawWeights, easterHash, emptyZoo, parseZoo, zooOpSchema, zooOpsBodySchema, zooShownChanged,
   ZOO_MAX_DAEMONS, ZOO_MAX_EGGS, type Rng, type Zoo, type ZooDaemon, type ZooOp,
 } from './zoo.js'
 import { DAEMON_ROSTER } from './daemonRoster.g.js'
@@ -574,5 +574,42 @@ describe('the document', () => {
     const r = apply(zoo, [{ op: 'zoo.easter', word: 'xyzzy' }], scripted(Array(10).fill(0), seeded(3)))
     expect(r.zoo.eggs).toHaveLength(2)
     expect(r.zoo.eggs[1].id).not.toBe('aaaaaaaaaa')
+  })
+})
+
+describe('what a client draws (zoo_changed goes out only when it moves)', () => {
+  const tim: ZooDaemon = { id: 'tim', hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 5, version: '0.1' }
+  const base = (): Zoo => ({ ...emptyZoo(), daemons: [{ ...tim }], pair: 'tim' })
+
+  it('ignores a tally: progress, batch ids, lesson ids, pity, easter hashes, xp short of a level', () => {
+    const after = base()
+    after.progress = { ...after.progress, turns: 12, days: { '2026-09-26': 12 }, batches: ['b1'], lessons: ['l1'], held: [] }
+    after.daemons[0]!.xp = 30
+    after.pity = 3
+    after.easter = ['abc']
+    expect(zooShownChanged(base(), after)).toBe(false)
+  })
+
+  it('sees what a window, the phone or hn draws', () => {
+    const changes: Array<(z: Zoo) => void> = [
+      (z) => { z.daemons[0]!.bond = 1 },
+      (z) => { z.daemons[0]!.version = '1.0' },
+      (z) => { z.daemons[0]!.nickname = 'timmy' },
+      (z) => { z.daemons[0]!.shiny = true },
+      (z) => { z.daemons[0]!.dupes = 1 },
+      (z) => { z.daemons.push({ ...tim, id: 'vim' }) },
+      (z) => { z.eggs.push({ id: 'e1', kind: 'turn', grantedAt: '2026-09-26T00:00:00.000Z' }) },
+      (z) => { z.pair = null },
+      (z) => { z.autonomy = 'suggest' },
+      (z) => { z.consent = { watching: true, at: '2026-09-26T00:00:00.000Z' } },
+      (z) => { z.habits = ['split'] },
+      (z) => { z.firstEgg = true },
+      (z) => { z.setupEgg = true },
+    ]
+    for (const change of changes) {
+      const after = base()
+      change(after)
+      expect(zooShownChanged(base(), after), change.toString()).toBe(true)
+    }
   })
 })

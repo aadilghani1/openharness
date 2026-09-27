@@ -9,8 +9,10 @@
  * The desk's write discipline (routes/desk.ts), on its own document: a write that lost a race is
  * retried from the fresh zoo, since the ops are idempotent and drop-on-missing. A hatch that lost the
  * race draws again against the fresh zoo; only the draw that was written is answered, and the same for
- * the eggs granted and the levels reached. After a change every adapter socket of the user hears
- * `zoo_changed` (lib/adapterAccountPushes.ts), and so does every web and phone socket (lib/webWs.ts).
+ * the eggs granted and the levels reached. After a change a client would draw (lib/zoo.ts `shownZoo`:
+ * daemons, eggs, pair, dial, consent, habits — not a tally of turns or xp short of a level) every adapter
+ * socket of the user hears `zoo_changed` (lib/adapterAccountPushes.ts), and so does every web and phone
+ * socket (lib/webWs.ts). The revision moves with every write either way.
  *
  * Every hatch of a daemon the account did not own takes that daemon's next serial (`DaemonMint`, an
  * atomic increment shared by every account) before the write; a duplicate takes none. A serial minted
@@ -28,7 +30,7 @@ import type { z } from 'zod'
 import { prisma } from '../lib/prisma.js'
 import { publishZooChanged } from '../lib/bus.js'
 import { daemonsFor, DAEMONS_DARK, type DaemonsSwitch } from '../lib/daemonsSwitch.js'
-import { applyZooOps, emptyZoo, parseZoo, zooOpsBodySchema, type Hatched, type Zoo, type ZooContext, type ZooDoc, type ZooOp } from '../lib/zoo.js'
+import { applyZooOps, emptyZoo, parseZoo, zooOpsBodySchema, zooShownChanged, type Hatched, type Zoo, type ZooContext, type ZooDoc, type ZooOp } from '../lib/zoo.js'
 import { validateBody } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 
@@ -141,7 +143,9 @@ export async function zooRoutes(app: FastifyInstance, opts: ZooRouteOptions = {}
             throw error
           }
         }
-        void publishZooChanged(userId, { revision: next.revision })
+        // Everyone else hears it only when something they draw changed: a report that only tallied (a
+        // `zoo.turn` short of an egg or a level) is read on their next natural fetch, not every minute.
+        if (zooShownChanged(current.zoo, applied.zoo)) void publishZooChanged(userId, { revision: next.revision })
         return sendSuccess(reply, { ...next, hatched: applied.hatched, grants: applied.grants, levelUps: applied.levelUps })
       }
       return sendError(reply, 'The zoo is changing too quickly; try again.', 'ZOO_BUSY', 409)

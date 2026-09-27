@@ -207,6 +207,42 @@ describe('zoo routes', () => {
     }
   })
 
+  it('tells the other clients only about what they draw: a report that only tallied publishes nothing', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-26T12:00:00.000Z'))
+    try {
+      const tim = { id: 'tim', hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 5, version: '0.1' }
+      mocks.prisma.zoo.findUnique.mockResolvedValue({ revision: 5, state: { ...emptyZoo(), daemons: [tim], pair: 'tim', progress: { turns: 3, days: { '2026-09-26': 3 } } } })
+      mocks.prisma.zoo.updateMany.mockResolvedValue({ count: 1 })
+      mocks.prisma.machine.findMany.mockResolvedValue([{ machineId: 'mac-1' }])
+      // Two turns: progress and xp move, no egg, no level. Written (the revision moves), not published.
+      const tally = await post([{ op: 'zoo.turn', batchId: 'b1', n: 2, day: '2026-09-26', hour: 10, machineId: 'mac-1' }])
+      expect(tally.statusCode).toBe(200)
+      expect(tally.json().data).toMatchObject({ revision: 6, grants: [], levelUps: [] })
+      expect(tally.json().data.zoo.daemons[0]).toMatchObject({ xp: 7, bond: 0 })
+      expect(mocks.prisma.zoo.updateMany).toHaveBeenCalledOnce()
+      expect(mocks.changed).not.toHaveBeenCalled()
+      // An approved lesson short of a level: the same.
+      const lesson = await post([{ op: 'zoo.lesson', lessonId: 'l1', daemonId: 'tim' }])
+      expect(lesson.json().data.levelUps).toEqual([])
+      expect(mocks.changed).not.toHaveBeenCalled()
+      // Enough to level up: a client draws that (its bond), so it is published.
+      mocks.prisma.zoo.findUnique.mockResolvedValue({ revision: 7, state: { ...emptyZoo(), daemons: [{ ...tim, xp: 45 }], pair: 'tim' } })
+      const level = await post([{ op: 'zoo.turn', batchId: 'b2', n: 5, day: '2026-09-26', hour: 11, machineId: 'mac-1' }])
+      expect(level.json().data.levelUps).toEqual([{ id: 'tim', level: 1, version: '0.1' }])
+      expect(mocks.changed).toHaveBeenCalledExactlyOnceWith('u1', { revision: 8 })
+      // A habit, the dial, a nickname: all drawn, all published.
+      mocks.changed.mockClear()
+      mocks.prisma.zoo.findUnique.mockResolvedValue({ revision: 8, state: { ...emptyZoo(), daemons: [tim], pair: 'tim' } })
+      for (const op of [{ op: 'zoo.habit', key: 'split' }, { op: 'zoo.autonomy', level: 'suggest' }, { op: 'zoo.nickname', id: 'tim', nickname: 'timmy' }]) {
+        await post([op])
+      }
+      expect(mocks.changed).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('credits an approved lesson once, to the daemon that found it, and answers its level', async () => {
     const tim = { id: 'tim', hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 40, version: '0.1' }
     mocks.prisma.zoo.findUnique.mockResolvedValue({ revision: 3, state: { ...emptyZoo(), daemons: [tim], pair: 'tim' } })

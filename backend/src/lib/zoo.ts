@@ -300,6 +300,24 @@ export interface Grant { kind: string; eggId?: string; xp?: number }
 /** A daemon whose bond reached a new level during this request, and the version it is now. */
 export interface LevelUp { id: string; level: number; version: string }
 
+/**
+ * What a client DRAWS from the zoo, as one comparable string: every daemon (its level and version, never
+ * its xp alone), the eggs, the pair, the dial, consent, the habits and the first and setup eggs. The route
+ * publishes `zoo_changed` only when this moved (routes/zoo.ts): a `zoo.turn` or `zoo.lesson` that only
+ * tallied — progress, batch ids, xp short of a level — reaches clients on their next natural read, instead
+ * of pulling every daemon, window and phone back to `GET /api/zoo` every active minute.
+ */
+export function shownZoo(zoo: Zoo): string {
+  return JSON.stringify({
+    daemons: zoo.daemons.map(({ xp: _xp, ...shown }) => shown),
+    eggs: zoo.eggs, pair: zoo.pair, autonomy: zoo.autonomy, consent: zoo.consent,
+    habits: zoo.habits, firstEgg: zoo.firstEgg, setupEgg: zoo.setupEgg,
+  })
+}
+
+/** Whether a client would draw `after` differently from `before` (see `shownZoo`). */
+export const zooShownChanged = (before: Zoo, after: Zoo): boolean => shownZoo(before) !== shownZoo(after)
+
 export const emptyProgress = (): ZooProgress =>
   ({ turns: 0, days: {}, weeks: [], nights: [], machines: [], marathon: [], history: [], held: [], batches: [], lessons: [] })
 export const emptyZoo = (): Zoo =>
