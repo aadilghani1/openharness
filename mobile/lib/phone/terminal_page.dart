@@ -899,7 +899,7 @@ class _TerminalPageState extends State<TerminalPage>
       _flash('no other harness yet', error: true);
       return;
     }
-    _flash('← ${_windowName(last.agent.displayName)}');
+    HapticFeedback.selectionClick();
     openAgent(context, widget.notifier, last.machineId, last.agent.id);
   }
 
@@ -915,7 +915,8 @@ class _TerminalPageState extends State<TerminalPage>
   final _barMessage = ValueNotifier<({String text, bool error})?>(null);
   Timer? _barMessageTimer;
 
-  /// Says [text] on the command line for two seconds, the way tmux's `display-message` does.
+  /// Says what went wrong, above the mic for two seconds, the way tmux's `display-message` does.
+  /// Nothing that went right is said: its effect is on screen, and a tap is felt.
   void _flash(String text, {bool error = false}) {
     _barMessageTimer?.cancel();
     _barMessage.value = (text: text, error: error);
@@ -1011,21 +1012,18 @@ class _TerminalPageState extends State<TerminalPage>
     if (session == null) return;
     session.terminal.textInput(key.number);
     if (view.enterSubmits) session.terminal.keyInput(TerminalKey.enter);
-    _flash('✓ ${key.number} ${key.label}');
   }
 
-  /// Where a voice take goes: to the agent's prompt, echoed on the status line once it has landed —
-  /// or, while the agent's question is open, to that question, as its answer or not at all.
+  /// Where a voice take goes: to the agent's prompt — or, while the agent's question is open, to
+  /// that question, as its answer or not at all. Nothing is echoed when it lands: the words appear
+  /// in the prompt, and a tap is felt. Only what went wrong is said (see [_flash]).
   Future<bool> _deliverVoice(String text) async {
     final session = await _sessionForInput();
     if (session == null) return false;
     if (_questionWatcher?.view != null) return _answerByVoice(session, text);
     final sent = await session.sendComposerText(text);
-    // After the send is acknowledged, never before: an echo that shows first is a promise.
-    if (sent && mounted) {
-      HapticFeedback.lightImpact();
-      _flash('✓ ${_windowName(session.agentName)}  ${_clip(text.trim(), 28)}');
-    }
+    // After the send is acknowledged, never before: a tap felt first would be a promise.
+    if (sent && mounted) HapticFeedback.lightImpact();
     return sent;
   }
 
@@ -1047,10 +1045,6 @@ class _TerminalPageState extends State<TerminalPage>
     appLog.warn('voice', 'terminal not back in 6s — take kept');
     return null;
   }
-
-  /// [text] cut to [cells], the way the chrome cuts a name: `··` where it stops.
-  static String _clip(String text, int cells) =>
-      text.length <= cells ? text : '${text.substring(0, cells - 2)}··';
 
   /// A voice take while the agent's question is open: it answers the question or it is not sent.
   Future<bool> _answerByVoice(TerminalSession session, String text) async {
@@ -2255,10 +2249,7 @@ class _TerminalPageState extends State<TerminalPage>
                                 child: _EscChip(
                                   semanticsLabel:
                                       'Escape — throw the take away',
-                                  onTap: () {
-                                    widget.voice.clear();
-                                    _flash('✗ not sent');
-                                  },
+                                  onTap: widget.voice.clear,
                                 ),
                               ),
                             ],
@@ -2282,10 +2273,8 @@ class _TerminalPageState extends State<TerminalPage>
                             _Keycap.slop,
                         bottom: _micCenter - _Keycap.touch / 2,
                         child: _EscChip(
-                          onTap: () {
-                            session.terminal.keyInput(TerminalKey.escape);
-                            _flash('✓ esc');
-                          },
+                          onTap: () =>
+                              session.terminal.keyInput(TerminalKey.escape),
                         ),
                       ),
                     // The sample, done: what it was, and the way to the real thing. Once.
@@ -2490,7 +2479,6 @@ class _TerminalPageState extends State<TerminalPage>
     } else {
       session.terminal.paste(text);
     }
-    if (mounted) _flash('✓ pasted');
   }
 
   List<PhoneSheetAction> _agentActions(Agent agent) => [
@@ -2511,7 +2499,6 @@ class _TerminalPageState extends State<TerminalPage>
               .paneOfAgent(widget.machineId, widget.agentId)
               ?.session;
           session?.terminal.keyInput(TerminalKey.escape);
-          _flash('✓ interrupted ${_windowName(agent.displayName)}');
         },
       ),
     // Where this agent runs, above the actions that act ON it: the desktop
