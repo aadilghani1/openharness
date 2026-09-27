@@ -146,6 +146,15 @@ password or signed in twice.
 
 ## Decided (2026-09-27)
 
+- **The welcome screen is your sessions.** When a computer joins, the first screen is "Pick up where
+  you left off": the Claude Code and Codex sessions already on it, newest first, including ones
+  started outside Harness. Tap one to resume it. Only an account with no sessions sees New.
+- **A QR skips the email.** A device you have shows "Add your phone" (or a new Mac shows a QR); the
+  other scans it and is signed in and approved in one step. Email is typed only on the first device.
+- **Spam-proof approvals:** the approver picks the new device's number from three, not just Approve
+  (number matching, so a flood can't be tapped through). Requests are rate-limited per account and
+  expire in 2 minutes. The prompt names the device and city, with "Not me" to block it.
+
 1. **Approval:** compare six digits everywhere; a QR where a phone camera is in hand.
 2. **Unapproved devices get nothing.** Only the account's first device signs in on an email code.
 3. **Sign-in is your email, never a password,** on the phone, the desktop and the CLI: approve on a
