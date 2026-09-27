@@ -55,6 +55,10 @@ void main() {
     await waitFor(find.text('Continue with email'));
     await tester.tap(find.text('Try it first'));
     await wait(3000);
+    // It opens on the sessions to pick up, as a new phone does.
+    await shot('pick-up');
+    await tester.tap(find.text('fix-login', findRichText: true).first);
+    await wait(3000);
     await shot('focus');
 
     // Typing: only a tap on the prompt's rows, at the foot of the screen, raises the keyboard —

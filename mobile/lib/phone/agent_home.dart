@@ -18,6 +18,7 @@ import 'machines_tab.dart';
 import 'tty_controls.dart';
 import 'tty.dart';
 import 'welcome/connect_computer.dart';
+import 'welcome/pick_up_page.dart';
 
 import 'package:harness_mobile/demo/sample_mode.dart';
 
@@ -189,11 +190,16 @@ class _AgentHomeState extends State<AgentHome> {
   /// the machine's agent list, and dropping the request then would leave the screen on the old one.
   ({String machineId, String agentId})? _requestedAgent;
 
+  /// The welcome ([PickUpPage]) in place of a guessed session: set when this phone has nothing to
+  /// remember, or a computer was just linked; spent the moment a session is picked.
+  bool _welcome = false;
+
   void _onAgentRequested() {
     final requested = widget.openAgent?.value;
     // Null is the shell resetting before it writes, not a request.
     if (requested == null) return;
     setState(() {
+      _welcome = false;
       _requestedAgent = requested;
       // A choice made by hand supersedes a jump still pending for a machine.
       _awaitingMachine = null;
@@ -207,7 +213,12 @@ class _AgentHomeState extends State<AgentHome> {
     // Null is the notifier at rest, not a request to stop waiting for anything — a jump already
     // pending stands.
     if (requested == null || requested == _awaitingMachine) return;
-    setState(() => _awaitingMachine = requested);
+    // A computer just linked: its sessions, and every other, to pick from — not one of them opened
+    // for you.
+    setState(() {
+      _awaitingMachine = requested;
+      _welcome = true;
+    });
   }
 
   Future<void> _readLast() async {
@@ -230,6 +241,15 @@ class _AgentHomeState extends State<AgentHome> {
       // the screen gave up waiting and opened an agent on its own. Taking the record then would move
       // somebody off a terminal they are already looking at, seconds after it opened.
       if (last != null && _neighboursFor == null) _showing = last;
+      // Nothing remembered on this phone, not even a tab: open on the sessions to pick from, not a
+      // guessed one. A phone that remembers its tab has been used here before, and gets that tab's
+      // first agent as it always has ([_firstOfLastTab]).
+      if (last == null &&
+          tabId == null &&
+          _neighboursFor == null &&
+          _requestedAgent == null) {
+        _welcome = true;
+      }
     });
     _restoreDeadline = Timer(_restoreTimeout, () {
       if (!mounted) return;
@@ -670,6 +690,10 @@ class _AgentHomeState extends State<AgentHome> {
         }
         _openNewAgentAfterLastOneWent();
         return _AgentHomeEmpty(notifier: widget.notifier);
+      }
+      // Nothing remembered, nothing picked: the sessions, each a tap from its terminal.
+      if (_welcome && _neighboursFor == null && _requestedAgent == null) {
+        return PickUpPage(notifier: widget.notifier);
       }
       final chosen = (machineId: target.machineId, agentId: target.agent.id);
       // ⚠️ **A swipe stays inside one tab, and this is where that happens.** The

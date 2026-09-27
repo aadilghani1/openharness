@@ -44,6 +44,10 @@ void main() {
     );
     await tester.tap(find.text('Try a sample'));
     await settle(tester, const Duration(seconds: 2));
+    // It opens on its sessions to pick from, as a new phone does: the working one is picked.
+    expect(find.byKey(const ValueKey('pick-up-title')), findsOneWidget);
+    await tester.tap(find.text('fix-login', findRichText: true).first);
+    await settle(tester, const Duration(seconds: 2));
     return tester.widget<PhoneShell>(find.byType(PhoneShell)).notifier;
   }
 

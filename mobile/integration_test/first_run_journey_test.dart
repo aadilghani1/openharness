@@ -46,6 +46,10 @@ void main() {
 
     // The sample: no account, no computer.
     await tester.tap(find.text('Try it first'));
+    await wait(2000);
+    // "Pick up where you left off": the sessions, a tap from their terminals.
+    await shot('sample-pick-up');
+    await tester.tap(find.text('fix-login', findRichText: true).first);
     await wait(1500);
     await shot('sample-first-time-hints');
     // The hints go on the first touch, which also does what it touched.

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/agent_swipe.dart';
+import 'package:harness_mobile/phone/welcome/pick_up_page.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/desk_sync.dart';
@@ -92,21 +93,24 @@ void main() {
       await tester.pump(const Duration(seconds: 11));
     });
 
-    testWidgets('or, with none remembered, the first tab with an agent', (
-      tester,
-    ) async {
-      await pumpHome(
-        tester,
-        tabs: [
-          deskTab('t1', 'Empty', ['gone']),
-          deskTab('t2', 'Docker', ['c', 'd']),
-        ],
-      );
+    testWidgets(
+      'or, with nothing remembered at all, the sessions to pick from',
+      (tester) async {
+        await pumpHome(
+          tester,
+          tabs: [
+            deskTab('t1', 'Empty', ['gone']),
+            deskTab('t2', 'Docker', ['c', 'd']),
+          ],
+        );
 
-      // Never `a` or `b`, which no tab holds — the most recent harness on the account is no
-      // longer what a launch lands on while tabs exist.
-      expect(pager(tester).agentId, 'c');
-      expect(pager(tester).neighbours, isNull);
-    });
+        // A new phone opens on "Pick up where you left off", not on a session guessed for it.
+        expect(find.byType(PickUpPage), findsOneWidget);
+        expect(find.byType(AgentSwipeHost), findsNothing);
+        // Its list reaches the machines as Find does (`reachAllMachines`): let the timers run out.
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump(const Duration(seconds: 30));
+      },
+    );
   });
 }
