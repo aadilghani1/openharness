@@ -2141,31 +2141,6 @@ class _TerminalPageState extends State<TerminalPage>
                               ),
                       ),
                     ),
-                    // The ground under the mic's row: the output fades out behind esc, the mic and
-                    // what sits beside them, the way content fades under a toolbar — only ever
-                    // seen while the history is read back, since the live end sits above it.
-                    if (!_ownsInput)
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        height: _statusBottom + 24,
-                        child: IgnorePointer(
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  Tty.of(context).ground.withValues(alpha: 0),
-                                  Tty.of(context).ground,
-                                ],
-                                stops: const [0, 0.3],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
                     // The line above the mic: what is going on, in a few words — see [_statusLine].
                     if (!_ownsInput)
                       Positioned(
