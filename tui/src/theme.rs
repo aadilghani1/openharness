@@ -750,9 +750,16 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 "--bind" => {
                     if let Some(v) = take() {
                         // Commas inside an action's (…) belong to it.
-                        let (mut depth, mut start) = (0, 0);
+                        // (Only an action's brackets count: `ctrl-]` is a key's name.)
+                        let (mut depth, mut start, mut action) = (0, 0, false);
                         let mut parts = Vec::new();
-                        for (i, c) in v.char_indices() { match c { '(' | '[' | '{' => depth += 1, ')' | ']' | '}' => depth -= 1, ',' if depth == 0 => { parts.push(&v[start..i]); start = i + 1 } _ => {} } }
+                        for (i, c) in v.char_indices() { match c {
+                            ':' => action = true,
+                            '(' | '[' | '{' if action => depth += 1,
+                            ')' | ']' | '}' if action => depth -= 1,
+                            ',' if depth == 0 && action => { parts.push(&v[start..i]); start = i + 1; action = false }
+                            _ => {}
+                        } }
                         parts.push(&v[start..]);
                         // fzf's other names for a key, as the one it reports.
                         let alias = |k: &str| -> String {
@@ -761,6 +768,8 @@ pub fn fzf_opts() -> &'static FzfOpts {
                             match k.as_str() {
                                 "page-up" => "pgup".into(), "page-down" => "pgdn".into(), "backspace" | "bs" => "bspace".into(),
                                 "alt-bspace" | "alt-backspace" => "alt-bs".into(), "delete" => "del".into(), "shift-tab" => "btab".into(),
+                                // The control characters fzf names by the key they are.
+                                "ctrl-m" => "enter".into(), "ctrl-i" => "tab".into(), "ctrl-_" => "ctrl-/".into(),
                                 _ => k,
                             }
                         };

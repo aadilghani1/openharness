@@ -115,7 +115,10 @@ most people's fingers already know it. Its layout options apply too (`--layout`,
 view above it, where fzf would draw it under a prompt at the bottom of a terminal. The preview is
 hn's own text about the row, so two of its defaults are hn's: its label is the row's name (unless
 `--preview-label` gives one), and it wraps its text at spaces (unless `--preview-window` says
-`wrap`, fzf's way with `↳`, or `nowrap`).
+`wrap`, fzf's way with `↳`, or `nowrap`). `C-b s` lays its preview out as
+`right,50%,<90(down,40%)`, your `--preview-window` after it — so, as fzf does with such an
+alternative, `hidden` hides it from 180 columns up but not below; add `<90(hidden)` to hide it
+at every width.
 
 Colours are the terminal's 16, as tmux's are, so hn reads on dark, light and Solarized themes.
 

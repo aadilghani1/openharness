@@ -255,6 +255,10 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
                 if picker.click(mouse.row) && multi { picker.toggle_mark(); }
             }
         }
+        // fzf: a middle click puts the cursor on the row, nothing more.
+        MouseEventKind::Down(MouseButton::Middle) if inside(list) => {
+            if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.click(mouse.row); }
+        }
         MouseEventKind::Down(MouseButton::Left) => {
             // fzf's scrollbar: pressed, the list follows the mouse while it is held.
             if let Some(Modal::Picker { picker, .. }) = &mut app.modal { if picker.drag_bar(mouse.column, mouse.row, true) { picker.bar_drag = true; return } }
@@ -1930,6 +1934,8 @@ fn fzf_key_name(key: &KeyEvent) -> String {
     if alt && !ctrl && key.code == KeyCode::Backspace { return "alt-bs".into() }
     // C-/ arrives as ctrl-/ or as its control character.
     if ctrl && matches!(key.code, KeyCode::Char('/') | KeyCode::Char('7') | KeyCode::Char('_')) { return "ctrl-/".into() }
+    // …and C-] C-^ C-\ as the control characters crossterm reads as C-5 C-6 C-4.
+    if ctrl && !alt { match key.code { KeyCode::Char(']' | '5') => return "ctrl-]".into(), KeyCode::Char('^' | '6') => return "ctrl-^".into(), KeyCode::Char('\\' | '4') => return "ctrl-\\".into(), _ => {} } }
     match (ctrl, alt) {
         (true, true) => format!("ctrl-alt-{base}"),
         (true, false) => format!("ctrl-{base}"),
