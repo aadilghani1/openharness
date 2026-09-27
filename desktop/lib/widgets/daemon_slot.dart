@@ -1,9 +1,13 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../daemons/daemon_brain.dart';
 import '../daemons/daemon_face.dart';
+import '../daemons/individuals.dart';
 import '../daemons/plates.dart';
+import '../daemons/render.dart' show cardWidth;
 import '../daemons/roster.dart';
 import '../shared/theme/app_theme.dart';
 import '../shared/theme/workspace_bar_style.dart';
@@ -110,16 +114,95 @@ PlateInk? daemonPlateInk(
   );
 }
 
+/// How an individual's plate is coloured on [background] (README,
+/// "Individuals": "Colour"): its colour family ([traits]; a shiny one's is
+/// the species' shiny gradient), its markings in its accent, its extra in the
+/// extra's colour, its odd eye. On a light background each stop is darkened
+/// until it reads (4.5:1) and a burning glyph goes toward black. Null for a
+/// species drawn in line art or without traits.
+IndividualInk? daemonIndividualInk(
+  DaemonRoster roster,
+  DaemonDef def,
+  DaemonTraits? traits,
+  TerminalTheme theme, {
+  bool shiny = false,
+  Color? background,
+}) {
+  final catalogue = def.traits;
+  if (!def.plate || catalogue == null) return null;
+  final colour = traitColour(def, traits) ?? catalogue.colours.first;
+  final gradient = shiny && def.shinyGradient != null
+      ? def.shinyGradient!
+      : colour.gradient;
+  final accent = traits == null ? null : plateHexColor(traits.accent);
+  final extra = catalogue.extra(traits?.extra)?.colour;
+  final bg = background ?? daemonBackdrop(def) ?? theme.background;
+  if (bg.computeLuminance() < .4) {
+    return IndividualInk(
+      roster,
+      gradient,
+      accent: accent,
+      extra: extra,
+      background: bg,
+    );
+  }
+  Color read(Color c) => readableInk(c, bg, minimum: 4.5);
+  return IndividualInk(
+    roster,
+    DaemonGradient(read(gradient.top), read(gradient.bottom)),
+    accent: accent == null ? null : read(accent),
+    extra: extra == null ? null : read(extra),
+    background: bg,
+    burn: const Color(0xff000000),
+  );
+}
+
+/// How an egg plate is coloured on [background] (bake.mjs `eggColor`): its
+/// kind's gradient, the light inside ([light]: `plain` while it is earned, a
+/// rarity's once it opens), a secret's opening [dim]. On a light background
+/// the shell is darkened until it reads and a burning glyph goes toward
+/// black; the light keeps its colour.
+EggInk daemonEggInk(
+  DaemonRoster roster,
+  String kind,
+  TerminalTheme theme, {
+  String light = 'plain',
+  bool dim = false,
+  Color? background,
+}) {
+  final bg = background ?? theme.background;
+  if (bg.computeLuminance() < .4) {
+    return EggInk(roster, kind, light: light, dim: dim, background: bg);
+  }
+  final g = roster.rules.eggs[kind]?.gradient;
+  return EggInk(
+    roster,
+    kind,
+    light: light,
+    dim: dim,
+    background: bg,
+    gradient: g == null
+        ? null
+        : DaemonGradient(
+            readableInk(g.top, bg, minimum: 3),
+            readableInk(g.bottom, bg, minimum: 3),
+          ),
+    burn: const Color(0xff000000),
+  );
+}
+
 /// One row of a plate as spans: row [r] of a plate [rows] tall, each glyph
-/// in [ink]'s colour. Spaces draw nothing, so they ride along in whichever
-/// run they fall in; a run of one colour is one span.
+/// in [ink]'s colour for its material ([mats], the row's material cells;
+/// `.` without). Spaces draw nothing, so they ride along in whichever run
+/// they fall in; a run of one colour is one span.
 List<InlineSpan> plateRowSpans(
   String row,
   int rows,
   int r,
-  PlateInk ink,
-  TextStyle style,
-) {
+  PlateCellInk ink,
+  TextStyle style, {
+  String? mats,
+}) {
   final spans = <InlineSpan>[];
   final text = StringBuffer();
   Color? colour;
@@ -134,8 +217,9 @@ List<InlineSpan> plateRowSpans(
     text.clear();
   }
 
-  for (final ch in row.split('')) {
-    final glyph = ch == ' ' ? null : ink.glyph(rows, r, ch);
+  for (final (c, ch) in row.split('').indexed) {
+    final mat = mats != null && c < mats.length ? mats[c] : '.';
+    final glyph = ch == ' ' ? null : ink.cell(rows, r, ch, mat);
     if (glyph != null && colour != null && glyph != colour) flush();
     if (glyph != null) colour = glyph;
     text.write(ch);
@@ -144,14 +228,23 @@ List<InlineSpan> plateRowSpans(
   return spans;
 }
 
-/// A whole plate as spans, row by row ([plateRowSpans]).
+/// A whole plate as spans, row by row ([plateRowSpans]), with its material
+/// rows when it has them.
 List<InlineSpan> plateSpans(
   List<String> rows,
-  PlateInk ink,
-  TextStyle style,
-) => [
+  PlateCellInk ink,
+  TextStyle style, {
+  List<String>? mats,
+}) => [
   for (final (r, row) in rows.indexed) ...[
-    ...plateRowSpans(row, rows.length, r, ink, style),
+    ...plateRowSpans(
+      row,
+      rows.length,
+      r,
+      ink,
+      style,
+      mats: mats != null && r < mats.length ? mats[r] : null,
+    ),
     if (r < rows.length - 1) TextSpan(text: '\n', style: style),
   ],
 ];
@@ -486,13 +579,18 @@ class DaemonCardText extends StatelessWidget {
     required this.colour,
     this.backdrop,
     this.plate,
+    this.mats,
   });
   final List<String> lines;
   final int portraitRows;
   final TextStyle style;
   final Color colour;
   final Color? backdrop;
-  final PlateInk? plate;
+  final PlateCellInk? plate;
+
+  /// The portrait's material rows (an individual's own plate), so its
+  /// markings, extra and odd eye take their colours.
+  final List<String>? mats;
 
   @override
   Widget build(BuildContext context) {
@@ -500,6 +598,15 @@ class DaemonCardText extends StatelessWidget {
     // the inside of those rows takes the daemon's colour; the frame stays ink.
     final art = style.copyWith(color: colour, backgroundColor: backdrop);
     final plate = this.plate;
+    final mats = this.mats;
+    // The portrait sits centred in the card's inner 38 columns (card.mjs).
+    final width = mats?.fold<int>(0, (w, m) => max(w, m.length)) ?? 0;
+    final pad = max(0, (cardWidth - 4 - width) ~/ 2);
+    String? matsAt(int r) {
+      if (mats == null || r >= mats.length) return null;
+      return '${'.' * pad}${mats[r]}';
+    }
+
     return SelectableText.rich(
       TextSpan(
         children: [
@@ -515,6 +622,7 @@ class DaemonCardText extends StatelessWidget {
                   i - 3,
                   plate,
                   style,
+                  mats: matsAt(i - 3),
                 ),
               TextSpan(text: line.substring(line.length - 2), style: style),
             ] else

@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../daemons/daemon_lines.dart';
+import '../daemons/daemon_plate_client.dart';
+import '../daemons/individuals.dart';
 import '../daemons/plates.dart';
 import '../daemons/render.dart';
 import '../daemons/roster.dart';
@@ -20,27 +22,44 @@ import 'daemon_slot.dart';
 
 /// Where the reveal is. Exposed so render checks can draw any moment of it.
 enum HatchStage {
-  /// Wobbling while harnessd answers: nothing is known yet.
+  /// The ready egg (`p4`), its eyes peeking, while harnessd answers: nothing
+  /// is known yet.
   egg,
 
-  /// Cracking, with the rarity told on the shell: a rare glows cyan; a
-  /// secret's stage has already gone black.
-  crack,
+  /// Two big rocks (`rock`).
+  rock,
 
-  /// The top pops off: a legendary throws yellow sparks.
-  pop,
+  /// The top lifts and light pours out, in the rarity's light (`burst`). A
+  /// secret's stage goes black and its shell dims: only the violet light.
+  burst,
+
+  /// The top breaks in two, the halves land either side (`tumble`).
+  tumble,
+
+  /// The bottom half (`open`).
+  open,
+
+  /// The hatchling rises out of the bottom half a row at a time, as `#` in
+  /// the faint colour.
+  rise,
 
   /// A secret: "It is pitch black."
   pitch,
 
-  /// The portrait as `#`, in the faint colour.
+  /// Risen, still as `#`: it holds a moment.
   silhouette,
+
+  /// It fills with its colour (an individual's own colour family) and
+  /// blinks.
   colour,
   banner,
   card,
 
-  /// A duplicate: no reveal of a new name. It merged into yours:
-  /// `tim x2 · +150 xp`.
+  /// The card, and the question: what to call it (optional; `zoo.nickname`).
+  name,
+
+  /// A server from before individuals drew a species you own: no reveal of
+  /// a new name. It merged into yours: `+150 xp`.
   merged,
 
   /// ... and yours grew a level: its portrait morphs to the new version in
@@ -55,6 +74,20 @@ enum HatchStage {
   /// Only after a yes, its own step: "Let it suggest answers?"
   suggest,
 }
+
+/// The status slot's egg line for a moment of the reveal (`rules.eggLine`).
+String? hatchSlotStage(HatchStage stage) => switch (stage) {
+  HatchStage.egg => 'p4',
+  HatchStage.rock => 'rock',
+  HatchStage.burst || HatchStage.pitch => 'burst',
+  HatchStage.tumble => 'tumble',
+  HatchStage.open => 'open',
+  HatchStage.rise ||
+  HatchStage.silhouette ||
+  HatchStage.colour ||
+  HatchStage.banner => 'hatchling',
+  _ => null,
+};
 
 /// How wide the reveal floats, in terminal cells: a plate at the reveal size
 /// (56 columns) and the stage's padding either side.
@@ -115,34 +148,41 @@ List<String> morphPortrait(
 class HatchFrame {
   const HatchFrame({
     required this.stage,
-    this.egg,
+    this.frame = 0,
+    this.risen,
     this.bannerRows = 0,
     this.morph,
   });
   final HatchStage stage;
 
-  /// The egg's frame, for the egg, crack and pop stages.
-  final String? egg;
+  /// The egg stage's frame (`p4`, `rock`, `burst`, `tumble`).
+  final int frame;
+
+  /// On `rise`: how many rows of the hatchling are out (null: all of them).
+  final int? risen;
   final int bannerRows;
 
   /// On `grew`: the morph's frame (1–3), or null for the new version held.
   final int? morph;
 }
 
-/// The hatch reveal (`daemons/README.md`, Hatching): the egg wobbles twice
-/// (and keeps wobbling while harnessd answers), then tells its rarity as it
-/// cracks: a rare's shell glows cyan, a legendary's pop throws yellow `*'.`
-/// sparks, and a secret's stage goes black before the crack. The hatchling's
-/// portrait appears as `#` in the faint colour for 1200 ms, fills with its
-/// colour and blinks; its name types in as a banner; the rarity stamp, its
-/// first words and the card follow. The card copies as a fenced code block.
-/// A filled daemon shows its plate at the reveal size (56 columns, up to 24
-/// rows), looping idle until the card. Reduce Motion goes straight to the
-/// card. From the fourth hatch on, any key skips to the card.
+/// The hatch reveal (`daemons/README.md`, "Eggs": "Opening", and
+/// "Hatching"): the ready egg's eyes peek (and keep peeking while harnessd
+/// answers), it rocks twice, bursts in its rarity's light (a secret's stage
+/// goes black and its shell dims, only the violet light showing), the top
+/// tumbles off, and the hatchling rises out of the bottom half a row at a
+/// time as `#` in the faint colour, holds 850 ms, fills with its colour (an
+/// individual's own colour family, or its own plate once harnessd has drawn
+/// it) and blinks; its name types in as a banner; the rarity stamp, its
+/// flags and `1 in N`, its first words and the card follow, and then it asks
+/// for a name (optional). The card copies as a fenced code block. Reduce
+/// Motion goes straight to the card. From the fourth hatch on, any key
+/// skips to the card.
 ///
 /// It floats beside the status slot, takes keyboard focus while it is open,
 /// and Escape dismisses it at any point. [onRevealed] runs once, when the
 /// daemon may be named elsewhere (the card is up, or the reveal was closed).
+/// [onStage] hears each moment, for the status slot's egg line.
 class DaemonHatchReveal extends StatefulWidget {
   const DaemonHatchReveal({
     super.key,
@@ -159,6 +199,9 @@ class DaemonHatchReveal extends StatefulWidget {
     this.needsConsent = false,
     this.onConsent,
     this.onSuggest,
+    this.plates,
+    this.onName,
+    this.onStage,
   });
 
   final DaemonRoster roster;
@@ -177,7 +220,8 @@ class DaemonHatchReveal extends StatefulWidget {
   /// Draw one fixed moment instead of running (render checks only).
   final HatchFrame? still;
 
-  /// The zoo before this hatch: a duplicate's level-up is told against it.
+  /// The zoo before this hatch: a merged duplicate's level-up is told
+  /// against it.
   final Zoo? before;
 
   /// Nobody has answered the first-day consent: after the card, `[ next ]`
@@ -187,12 +231,30 @@ class DaemonHatchReveal extends StatefulWidget {
   final ValueChanged<bool>? onConsent;
   final VoidCallback? onSuggest;
 
+  /// The individual's own plates, from the harness process.
+  final DaemonPlateClient? plates;
+
+  /// Name the new individual (`zoo.nickname { uid, name }`): false for a
+  /// name the rules refuse. Without it, nothing asks for a name.
+  final bool Function(String uid, String name)? onName;
+
+  /// Each moment of the reveal, as the status slot shows it: an egg line's
+  /// stage, and at `hatchling` the hatchling's 0.1 sprite.
+  final void Function(String stage, {String? sprite})? onStage;
+
   @override
   State<DaemonHatchReveal> createState() => _DaemonHatchRevealState();
 }
 
 class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
-  static const silhouetteFor = 1200;
+  /// How long the risen silhouette holds before it fills with colour.
+  static const silhouetteFor = 850;
+
+  /// Each row of the rise.
+  static const riseRow = 55;
+
+  /// How deep the hatchling stands in the bottom half once it is out.
+  static const sunk = 2;
 
   /// Each of the morph's three frames.
   static const morphFrame = 160;
@@ -200,8 +262,14 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
   final _focus = FocusNode(debugLabel: 'Hatch reveal');
   final _copyFocus = FocusNode(debugLabel: 'Copy card');
   final _nextFocus = FocusNode(debugLabel: 'Hatch next');
+  final _nameFocus = FocusNode(debugLabel: 'Hatchling name');
+  final _name = TextEditingController();
+  String? _nameError;
   HatchStage _stage = HatchStage.egg;
-  late String _egg = eggFrame(widget.roster);
+  int _frame = 0;
+  int? _risen;
+  int _loopTick = 0;
+  Timer? _loopTimer;
   String? _lid;
   int _bannerRows = 0;
   int? _morph;
@@ -211,27 +279,55 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
   Completer<void>? _waitDone;
   String? _copyNote;
 
+  /// The hatchling's reveal plate, chosen once as it starts to rise (its own
+  /// when harnessd has drawn it by then), so nothing jumps.
+  _Hatchling? _hatchling;
+
   DaemonRoster get roster => widget.roster;
   DaemonDef? get _def => roster.byId(_hatch?.daemonId);
   bool get _alive => !_closed && mounted;
+  String get _kind => widget.egg.kind;
 
-  /// A secret's stage is black from the crack on.
+  /// The light the egg opens in: its hatchling's rarity, from the burst on.
+  String get _light {
+    final rarity = _def?.rarity;
+    final opened = switch (_stage) {
+      HatchStage.egg || HatchStage.rock || HatchStage.failed => false,
+      _ => true,
+    };
+    if (!opened || rarity == null) return 'plain';
+    return roster.rules.plate?.light.containsKey(rarity) == true
+        ? rarity
+        : 'common';
+  }
+
+  /// A secret's stage is black from the burst on, its shell dimmed; the
+  /// grue's is black too.
   bool get _pitch =>
       (_def?.secret == true || _def?.darkOnly == true) &&
       _stage != HatchStage.failed &&
-      _stage != HatchStage.egg;
+      _stage != HatchStage.egg &&
+      _stage != HatchStage.rock;
+
+  bool get _dim => _pitch && _def?.secret == true;
 
   @override
   void initState() {
     super.initState();
     if (widget.still case final still?) {
       _stage = still.stage;
-      _egg = still.egg ?? _egg;
+      _frame = still.frame;
+      _risen = still.risen;
       _bannerRows = still.bannerRows;
       _morph = still.morph;
       unawaited(
         widget.result.then((hatch) {
-          if (mounted) setState(() => _hatch = hatch);
+          if (mounted) {
+            setState(() {
+              _hatch = hatch;
+              _hatchling = _pickHatchling();
+            });
+          }
         }),
       );
       return;
@@ -246,10 +342,13 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
   void dispose() {
     _closed = true;
     _waitTimer?.cancel();
+    _loopTimer?.cancel();
     if (_waitDone case final done? when !done.isCompleted) done.complete();
     _focus.dispose();
     _copyFocus.dispose();
     _nextFocus.dispose();
+    _nameFocus.dispose();
+    _name.dispose();
     super.dispose();
   }
 
@@ -268,7 +367,33 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
 
   void _show(VoidCallback change) {
     if (!_alive) return;
+    final was = _stage;
     setState(change);
+    if (_stage != was) _tellSlot();
+  }
+
+  /// The status slot follows the reveal.
+  void _tellSlot() {
+    final stage = hatchSlotStage(_stage);
+    if (stage == null) return;
+    widget.onStage?.call(
+      stage,
+      sprite: stage == 'hatchling' ? _hatchlingSprite : null,
+    );
+  }
+
+  /// The hatchling's 0.1 sprite, as an individual shows it (its extra).
+  String? get _hatchlingSprite {
+    final hatch = _hatch;
+    if (hatch == null || roster.byId(hatch.daemonId) == null) return null;
+    return renderIndividualSprite(
+      roster,
+      hatch.daemonId,
+      rollTraits(roster, hatch.daemonId, hatch.seed),
+      0,
+      DaemonMood.idle,
+      motion: false,
+    );
   }
 
   /// Any key after the third hatch: straight to the card.
@@ -279,78 +404,97 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     if (_waitDone case final done? when !done.isCompleted) done.complete();
   }
 
-  Future<void> _run() async {
-    var answered = false;
-    ZooHatch? hatch;
-    unawaited(
-      widget.result.then((value) {
-        answered = true;
-        hatch = value;
-      }, onError: (_) => answered = true),
-    );
-    // The egg wobbles twice, and keeps wobbling while harnessd answers.
-    var wobbles = 0;
-    while (!widget.reduceMotion && !_skip && (wobbles < 2 || !answered)) {
-      for (final offset in const [-1, 0, 1, 0]) {
-        _show(() => _egg = eggFrame(roster, offset: offset));
-        if (!await _wait(90)) return;
+  List<PlateFrame> _eggFrames(String stage) =>
+      daemonPlates.egg(_kind, PlateSize.reveal, stage);
+
+  /// Step through an egg stage's frames: [first] ms for the first, [each]
+  /// for the rest, [times] through.
+  Future<bool> _play(
+    HatchStage stage,
+    String name, {
+    required int each,
+    int? first,
+    int times = 1,
+  }) async {
+    final frames = _eggFrames(name).length;
+    for (var round = 0; round < times; round++) {
+      for (var i = 0; i < max(1, frames); i++) {
+        _show(() {
+          _stage = stage;
+          _frame = i;
+        });
+        if (!await _wait(i == 0 && round == 0 ? first ?? each : each)) {
+          return false;
+        }
       }
-      if (!await _wait(420)) return;
-      wobbles++;
-      if (wobbles > 40) break;
     }
+    return true;
+  }
+
+  Future<void> _run() async {
+    _tellSlot();
+    var answered = false;
+    unawaited(
+      widget.result.then(
+        (_) => answered = true,
+        onError: (_) => answered = true,
+      ),
+    );
+    final ms = roster.rules.plate?.eggMs;
+    // The ready egg peeks through its loop, and keeps at it while harnessd
+    // answers.
+    var loops = 0;
+    while (!widget.reduceMotion && !_skip && (loops < 1 || !answered)) {
+      if (!await _play(HatchStage.egg, 'p4', each: ms?.loop ?? 190)) return;
+      loops++;
+      if (loops > 40) break;
+    }
+    ZooHatch? hatch;
     try {
       hatch = await widget.result;
     } catch (_) {
       hatch = null;
     }
     if (!_alive) return;
-    final result = hatch;
-    if (result == null || roster.byId(result.daemonId) == null) {
+    if (hatch == null || roster.byId(hatch.daemonId) == null) {
       _show(() => _stage = HatchStage.failed);
       return;
     }
-    _hatch = result;
+    _hatch = hatch;
     final def = _def!;
-    final grew = result.duplicate && _grew != null;
+    // Its own plates are drawn on this computer as it hatches: ask now.
+    final owned = _owned;
+    if (owned != null && !hatch.duplicate) widget.plates?.prefetch(owned);
+    final grew = hatch.duplicate && _grew != null;
     if (!widget.reduceMotion && !_skip) {
-      // A secret: the stage goes black before the crack.
-      if (def.secret || def.darkOnly) {
-        _show(() {
-          _stage = HatchStage.crack;
-          _egg = eggFrame(roster);
-        });
-        if (!await _wait(700)) return;
+      if (!await _play(HatchStage.rock, 'rock', each: ms?.rock ?? 65, times: 2)) {
+        return;
       }
-      // Crack (a rare's shell glows), shake, crack wider, pop.
-      _show(() {
-        _stage = HatchStage.crack;
-        _egg = eggFrame(roster, crack: 1);
-      });
-      if (!await _wait(450)) return;
-      for (final offset in const [-1, 1, -1, 1, 0]) {
-        _show(() => _egg = eggFrame(roster, offset: offset, crack: 1));
-        if (!await _wait(60)) return;
+      if (!await _play(
+        HatchStage.burst,
+        'burst',
+        first: ms?.burstHold ?? 420,
+        each: ms?.burst ?? 150,
+      )) {
+        return;
       }
-      _show(() => _egg = eggFrame(roster, crack: 2));
-      if (!await _wait(520)) return;
-      _show(() {
-        _stage = HatchStage.pop;
-        _egg = eggPopFrame(roster, sparks: def.rarity == 'legendary');
-      });
-      if (!await _wait(def.rarity == 'legendary' ? 900 : 480)) return;
-      if (def.darkOnly && !_skip && !result.duplicate) {
+      if (!await _play(HatchStage.tumble, 'tumble', each: ms?.tumble ?? 75)) {
+        return;
+      }
+      if (!await _play(HatchStage.open, 'open', each: ms?.open ?? 380)) {
+        return;
+      }
+      if (def.darkOnly && !_skip && !hatch.duplicate) {
         _show(() => _stage = HatchStage.pitch);
         if (!await _wait(1600)) return;
       }
     }
-    if (result.duplicate) {
-      // Another of one you have: it merges into yours, then yours may grow.
+    if (hatch.duplicate) {
+      // A server from before individuals merged it into yours.
       _show(() => _stage = HatchStage.merged);
       _markRevealed();
       if (grew) {
         if (!await _wait(1400)) return;
-        // Three frames of the old version turning into the new, then held.
         for (var step = 1; step <= 3 && !widget.reduceMotion && !_skip; step++) {
           _show(() {
             _stage = HatchStage.grew;
@@ -366,17 +510,30 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       _focusNext();
       return;
     }
+    _hatchling = _pickHatchling();
     if (!widget.reduceMotion && !_skip) {
-      _show(() => _stage = HatchStage.silhouette);
+      final rows = _hatchling?.rows.length ?? 0;
+      for (var risen = 1; risen <= rows && !_skip; risen++) {
+        _show(() {
+          _stage = HatchStage.rise;
+          _risen = risen;
+        });
+        if (!await _wait(riseRow)) return;
+      }
+      _show(() {
+        _stage = HatchStage.silhouette;
+        _risen = null;
+      });
       if (!await _wait(silhouetteFor)) return;
       _show(() => _stage = HatchStage.colour);
+      _startLoop();
       if (!await _wait(320)) return;
       _show(() => _lid = def.lid ?? '-');
       if (!await _wait(120)) return;
       _show(() => _lid = null);
       if (!await _wait(220)) return;
-      final rows = bannerRows(def.id).length;
-      for (var row = 1; row <= rows && !_skip; row++) {
+      final rows2 = bannerRows(def.id).length;
+      for (var row = 1; row <= rows2 && !_skip; row++) {
         _show(() {
           _stage = HatchStage.banner;
           _bannerRows = row;
@@ -384,16 +541,78 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         if (!await _wait(90)) return;
       }
     }
+    _loopTimer?.cancel();
+    _loopTimer = null;
+    final naming = widget.onName != null && _owned != null;
     _show(() {
-      _stage = HatchStage.card;
+      _stage = naming ? HatchStage.name : HatchStage.card;
       _lid = null;
+      _risen = null;
       _bannerRows = bannerRows(def.id).length;
     });
     _markRevealed();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_focus.hasFocus) return;
-      (widget.needsConsent ? _nextFocus : _copyFocus).requestFocus();
+      if (naming) {
+        _nameFocus.requestFocus();
+      } else {
+        (widget.needsConsent ? _nextFocus : _copyFocus).requestFocus();
+      }
     });
+  }
+
+  /// The hatchling's idle loop steps while it stands in the shell, before
+  /// the card, unless nothing may move.
+  void _startLoop() {
+    final h = _hatchling;
+    if (widget.reduceMotion || h == null || h.frames.length < 2) return;
+    _loopTimer?.cancel();
+    _loopTimer = Timer.periodic(Duration(milliseconds: h.frameMs), (_) {
+      if (!_alive) return;
+      setState(() => _loopTick++);
+    });
+  }
+
+  /// The plate the hatchling rises as: its own reveal plate when harnessd
+  /// has drawn it, else its species' painted in its colour family; line art
+  /// for a daemon without a plate.
+  _Hatchling? _pickHatchling() {
+    final hatch = _hatch, def = _def;
+    if (hatch == null || def == null) return null;
+    final version = roster.rules.versions.first;
+    final traits = rollTraits(roster, def.id, hatch.seed);
+    if (!def.plate) {
+      final rows = renderPortrait(
+        roster,
+        def,
+        version,
+        DaemonMood.idle,
+        motion: false,
+      );
+      return _Hatchling([PlateFrame(rows, [for (final r in rows) '.' * r.length])], 170, traits);
+    }
+    final owned = _owned;
+    final art = owned == null
+        ? null
+        : widget.plates?.art(owned, PlateSize.reveal, version, DaemonMood.idle);
+    if (art != null && art.frames.isNotEmpty) {
+      return _Hatchling(art.frames, art.frameMs, traits);
+    }
+    final loop = daemonPlates.loop(
+      def.id,
+      PlateSize.reveal,
+      version,
+      DaemonMood.idle,
+    );
+    if (loop.isEmpty) return null;
+    return _Hatchling(
+      [
+        for (final rows in loop)
+          PlateFrame(rows, [for (final r in rows) '.' * r.length]),
+      ],
+      daemonPlates.frameMs,
+      traits,
+    );
   }
 
   /// With consent to ask, `[ next ]` takes the keyboard once it shows.
@@ -406,6 +625,31 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
 
   /// After the card (or a merge): what the daemon sees, and the question.
   void _toConsent() => _show(() => _stage = HatchStage.consent);
+
+  /// The name typed at the hatch: saved when the rules take it; empty skips.
+  void _saveName() {
+    final uid = _owned?.uid;
+    final text = _name.text.trim();
+    if (uid != null && text.isNotEmpty) {
+      final ok = widget.onName?.call(uid, text) ?? false;
+      if (!ok) {
+        setState(() => _nameError = '1–24 printable ASCII characters.');
+        return;
+      }
+    }
+    _endNaming();
+  }
+
+  void _endNaming() {
+    _show(() {
+      _stage = HatchStage.card;
+      _nameError = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      (widget.needsConsent ? _nextFocus : _copyFocus).requestFocus();
+    });
+  }
 
   void _markRevealed() {
     if (_revealed) return;
@@ -420,8 +664,45 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     widget.onClose();
   }
 
-  /// The hatchling's card (card.mjs): at 0.1, with the day it hatched, the
-  /// egg it came from and its serial (`#0042`) when the server minted one.
+  /// Escape: out of the name prompt (skipping it), else closed.
+  void _escape() {
+    if (_stage == HatchStage.name) {
+      _endNaming();
+      return;
+    }
+    _close();
+  }
+
+  /// The hatchling as it stands in your zoo: its name, serial and date.
+  ZooDaemon? get _owned {
+    final hatch = _hatch;
+    if (hatch == null) return null;
+    final zoo = widget.zoo();
+    return zoo.byUid(hatch.uid) ??
+        (hatch.duplicate ? zoo.ofSpecies(hatch.daemonId).firstOrNull : null);
+  }
+
+  DaemonTraits? get _traits {
+    final hatch = _hatch;
+    return hatch == null ? null : rollTraits(roster, hatch.daemonId, hatch.seed);
+  }
+
+  /// Its own portrait plate, once harnessd has drawn it (for the card).
+  DaemonIndividualArt? get _portraitArt {
+    final owned = _owned;
+    if (owned == null) return null;
+    return widget.plates?.art(
+      owned,
+      PlateSize.portrait,
+      roster.rules.versions.first,
+      DaemonMood.idle,
+    );
+  }
+
+  /// The hatchling's card (card.mjs): at 0.1, its name when it has one, its
+  /// flags and `1 in N`, the day it hatched, the egg it came from and its
+  /// serial (`#0042`) when the server minted one; its own portrait once
+  /// harnessd has drawn it.
   List<String>? get _card {
     final def = _def, hatch = _hatch;
     if (def == null || hatch == null) return null;
@@ -431,29 +712,25 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       def,
       version: roster.rules.versions.first,
       shiny: hatch.shiny,
-      hatchedAt: owned?.hatchedAt ?? DateTime.now().toUtc().toIso8601String(),
+      name: owned?.name,
+      traits: _traits,
+      hatched: owned?.hatched ?? DateTime.now().toUtc().toIso8601String(),
       egg: widget.egg.kind,
       serial: owned?.serial ?? hatch.serial,
+      plate: _portraitArt?.frames.first.rows,
     );
   }
 
-  /// The daemon as you have it now (a duplicate merged into it).
-  ZooDaemon? get _owned =>
-      widget.zoo().daemons.where((d) => d.id == _def?.id).firstOrNull;
-
-  /// A duplicate's level-up: the level and version yours reached, when it
-  /// reached a new one, and the version it was.
+  /// A merged duplicate's level-up: the level and version yours reached,
+  /// when it reached a new one.
   (int, String)? get _grew {
     final now = _owned;
-    final was = widget.before?.daemons.where((d) => d.id == now?.id).firstOrNull;
+    final was = widget.before?.byUid(now?.uid);
     if (now == null || was == null || now.bond <= was.bond) return null;
     return (now.bond, now.version);
   }
 
-  String? get _grewFrom => widget.before?.daemons
-      .where((d) => d.id == _owned?.id)
-      .firstOrNull
-      ?.version;
+  String? get _grewFrom => widget.before?.byUid(_owned?.uid)?.version;
 
   Future<void> _copy() async {
     final card = _card;
@@ -470,6 +747,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     if (event is! KeyDownEvent ||
         !widget.skippable ||
         _stage == HatchStage.card ||
+        _stage == HatchStage.name ||
         _stage == HatchStage.failed ||
         _stage == HatchStage.consent ||
         _stage == HatchStage.suggest ||
@@ -504,6 +782,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         terminalFontStore,
         terminalThemeStore,
         AppTheme.palette,
+        ?widget.plates,
       ]),
       builder: (context, _) {
         final theme = currentTerminalTheme();
@@ -517,7 +796,9 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         ).copyWith(fontFeatures: daemonTextFeatures);
         final muted = fg.withValues(alpha: .6);
         return CallbackShortcuts(
-          bindings: {const SingleActivator(LogicalKeyboardKey.escape): _close},
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.escape): _escape,
+          },
           child: Focus(
             focusNode: _focus,
             onKeyEvent: _onKey,
@@ -538,8 +819,9 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
                     horizontal: cell.width * 2,
                     vertical: cell.height,
                   ),
-                  // A steady stage: the egg, the portrait and the banner all
-                  // fit, so the reveal never jumps before the card.
+                  // A steady stage: the egg, the hatchling standing in it
+                  // and the banner all fit, so the reveal never jumps before
+                  // the card.
                   child: ConstrainedBox(
                     constraints: BoxConstraints(
                       minHeight: cell.height * _stageRows,
@@ -559,29 +841,213 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     );
   }
 
-  /// Rows the stage keeps before the card: the tallest hatchling (a line
-  /// portrait's 8 rows, or a 0.1 plate at the reveal size, up to 24) at the
-  /// portrait's line height, with its banner under it.
-  double get _stageRows {
-    var tallest = roster.rules.portraitMaxRows;
-    for (final d in roster.daemons) {
+  /// The rows every moment of the egg is drawn on: the egg at the reveal
+  /// size, with room above its bottom half for the tallest hatchling of the
+  /// released drops to stand in it.
+  int get _canvasRows {
+    final egg = _eggFrames('open').firstOrNull;
+    if (egg == null) return 0;
+    final rim = _rim(egg);
+    var tallest = _hatchling?.rows.length ?? 0;
+    for (final d in roster.released(DateTime.now())) {
       if (!d.plate) continue;
-      final rows = daemonPlates
-          .frame(
-            d.id,
-            PlateSize.reveal,
-            roster.rules.versions.first,
-            DaemonMood.idle,
-          )
-          .length;
-      tallest = max(tallest, rows);
+      tallest = max(
+        tallest,
+        daemonPlates
+            .frame(
+              d.id,
+              PlateSize.reveal,
+              roster.rules.versions.first,
+              DaemonMood.idle,
+            )
+            .length,
+      );
     }
-    return max(14, (tallest + 5) * 1.15 + 1);
+    return egg.rows.length + max(0, tallest - rim - sunk);
   }
 
-  /// A hatchling's portrait on the stage: a plate at the reveal size (it
-  /// loops while the reveal runs, still under Reduce Motion or in a render
-  /// check), or its line portrait.
+  /// The first row of the bottom half the hatchling rises out of.
+  static int _rim(PlateFrame open) {
+    final at = open.rows.indexWhere((r) => r.trim().isNotEmpty);
+    return at < 0 ? 0 : at;
+  }
+
+  /// Rows the stage keeps before the card: the egg's canvas at the
+  /// portrait's line height, with its banner under it.
+  double get _stageRows => max(14, (_canvasRows + 5) * 1.15 + 1);
+
+  /// The egg at this moment, as rows on the stage's canvas and the colour of
+  /// each cell: the shell in its kind's gradient, the light inside in the
+  /// rarity's colour once it opens (a secret's dimmed), and from the rise on
+  /// the hatchling standing in the bottom half, as `#` in the faint colour
+  /// until it fills with its own.
+  Widget _eggStage(TerminalTheme theme, TextStyle ink) {
+    final egg = _eggFrames(switch (_stage) {
+      HatchStage.egg => 'p4',
+      HatchStage.rock => 'rock',
+      HatchStage.burst => 'burst',
+      HatchStage.tumble => 'tumble',
+      _ => 'open',
+    });
+    if (egg.isEmpty) return const SizedBox.shrink();
+    final frame = egg[_frame % egg.length];
+    final background = _pitch ? daemonPitch : theme.background;
+    final eggInk = daemonEggInk(
+      roster,
+      _kind,
+      theme,
+      light: _light,
+      dim: _dim,
+      background: background,
+    );
+    final canvasRows = max(_canvasRows, frame.rows.length);
+    final top = canvasRows - frame.rows.length;
+    final hatchling = switch (_stage) {
+      HatchStage.rise ||
+      HatchStage.silhouette ||
+      HatchStage.colour ||
+      HatchStage.banner => _hatchling,
+      _ => null,
+    };
+    final def = _def;
+    final silhouetted =
+        _stage == HatchStage.rise || _stage == HatchStage.silhouette;
+    final hFrame = hatchling == null
+        ? null
+        : hatchling.frames[silhouetted ? 0 : _loopTick % hatchling.frames.length];
+    final hRows = hFrame?.rows.length ?? 0;
+    final risen = min(_risen ?? hRows, hRows);
+    final rim = top + _rim(frame);
+    // The hatchling's top row: out of sight in the bottom half at first,
+    // then a row higher each step, until it stands [sunk] rows deep.
+    final hTop = rim + sunk - risen;
+    final width = max(
+      frame.rows.first.length,
+      hFrame?.rows.fold<int>(0, (w, r) => max(w, r.length)) ?? 0,
+    );
+    final eggLeft = (width - frame.rows.first.length) ~/ 2;
+    final hWidth = hFrame?.rows.fold<int>(0, (w, r) => max(w, r.length)) ?? 0;
+    final hLeft = (width - hWidth) ~/ 2;
+    final faint = ink.color!.withValues(alpha: .35);
+    final shiny = _hatch?.shiny == true;
+    final PlateCellInk? bodyInk = def == null || hatchling == null
+        ? null
+        : !def.plate
+        ? null
+        : daemonIndividualInk(
+                roster,
+                def,
+                hatchling.traits,
+                theme,
+                shiny: shiny,
+                background: background,
+              ) ??
+              daemonPlateInk(
+                roster,
+                def,
+                theme,
+                shiny: shiny,
+                background: background,
+              );
+    final lineColour = def == null ? faint : daemonColor(def, theme, shiny: shiny);
+    final rows = <String>[];
+    final colours = <List<Color?>>[];
+    for (var r = 0; r < canvasRows; r++) {
+      final er = r - top;
+      final hr = r - hTop;
+      final row = StringBuffer();
+      final rowColours = <Color?>[];
+      for (var c = 0; c < width; c++) {
+        final ec = c - eggLeft;
+        final eggCh = er >= 0 && er < frame.rows.length && ec >= 0 &&
+                ec < frame.rows[er].length
+            ? frame.rows[er][ec]
+            : ' ';
+        final hc = c - hLeft;
+        final hCh = hFrame != null &&
+                hr >= 0 &&
+                hr < hRows &&
+                r < rim + sunk &&
+                hc >= 0 &&
+                hc < hFrame.rows[hr].length
+            ? hFrame.rows[hr][hc]
+            : ' ';
+        // Above the rim the hatchling is in front; from the rim down the
+        // shell hides what is still inside.
+        final shellFirst = r >= rim;
+        final useShell = eggCh != ' ' && (shellFirst || hCh == ' ');
+        if (useShell) {
+          row.write(eggCh);
+          rowColours.add(
+            eggInk.cell(frame.rows.length, er, eggCh, frame.mat(er, ec)),
+          );
+        } else if (hCh != ' ') {
+          if (silhouetted) {
+            row.write('#');
+            rowColours.add(faint);
+          } else {
+            row.write(hCh);
+            rowColours.add(
+              bodyInk?.cell(hRows, hr, hCh, hFrame!.mat(hr, hc)) ?? lineColour,
+            );
+          }
+        } else {
+          row.write(' ');
+          rowColours.add(null);
+        }
+      }
+      rows.add(row.toString());
+      colours.add(rowColours);
+    }
+    final size = ink.fontSize ?? 13;
+    final style = ink.copyWith(
+      height: 1.15,
+      shadows: [
+        Shadow(
+          color: eggInk.glow.withValues(alpha: _dim ? .3 : .4),
+          blurRadius: size * .8,
+        ),
+      ],
+    );
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      child: RepaintBoundary(
+        child: Text.rich(
+          TextSpan(
+            children: [
+              for (final (r, row) in rows.indexed) ...[
+                ...canvasRowSpans(row, colours[r], style),
+                if (r < rows.length - 1) TextSpan(text: '\n', style: style),
+              ],
+            ],
+          ),
+          key: ValueKey(switch (_stage) {
+            HatchStage.egg => 'daemon-hatch-egg',
+            HatchStage.rock => 'daemon-hatch-egg-rock',
+            HatchStage.burst => 'daemon-hatch-egg-burst-$_light',
+            HatchStage.tumble => 'daemon-hatch-egg-tumble',
+            HatchStage.open => 'daemon-hatch-egg-open',
+            HatchStage.rise => 'daemon-hatch-rise',
+            HatchStage.silhouette => 'daemon-hatch-silhouette',
+            _ => 'daemon-hatch-portrait',
+          }),
+          semanticsLabel: switch (_stage) {
+            HatchStage.egg || HatchStage.rock => 'An egg, hatching',
+            HatchStage.burst || HatchStage.tumble || HatchStage.open =>
+              'The egg opens',
+            HatchStage.rise || HatchStage.silhouette => 'A silhouette',
+            _ => def == null
+                ? 'A hatchling'
+                : '${def.id} ${roster.rules.versions.first}',
+          },
+          style: style,
+        ),
+      ),
+    );
+  }
+
+  /// A portrait on the stage (a merged duplicate's): a plate at the reveal
+  /// size, or its line portrait.
   Widget _portrait(
     DaemonDef def,
     String version,
@@ -591,7 +1057,6 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     required String label,
     DaemonMood mood = DaemonMood.idle,
     bool shiny = false,
-    bool silhouetted = false,
     List<String>? rows,
   }) => FittedBox(
     fit: BoxFit.scaleDown,
@@ -599,14 +1064,11 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       roster: roster,
       def: def,
       version: version,
-      style: silhouetted
-          ? ink.copyWith(color: ink.color!.withValues(alpha: .35), height: 1.15)
-          : ink.copyWith(height: 1.15),
+      style: ink.copyWith(height: 1.15),
       theme: theme,
       size: PlateSize.reveal,
       mood: mood,
       shiny: shiny,
-      silhouette: silhouetted,
       rows: rows,
       background: daemonBackdrop(def) ?? theme.background,
       animate: !widget.reduceMotion && widget.still == null,
@@ -615,58 +1077,6 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       semanticsLabel: label,
     ),
   );
-
-  /// The egg's frame, told by the hatchling's rarity while it cracks: a
-  /// rare's shell glows cyan, a legendary's pop throws yellow sparks.
-  Widget _eggText(TerminalTheme theme, TextStyle ink) {
-    final def = _def;
-    final telling = _stage == HatchStage.crack || _stage == HatchStage.pop;
-    final rare = telling && def?.rarity == 'rare';
-    final legendary = _stage == HatchStage.pop && def?.rarity == 'legendary';
-    final shell = rare
-        ? ink.copyWith(
-            color: theme.cyan,
-            shadows: [
-              Shadow(color: theme.cyan.withValues(alpha: .9), blurRadius: 6),
-              Shadow(color: theme.cyan.withValues(alpha: .5), blurRadius: 14),
-            ],
-          )
-        : ink;
-    final rows = _egg.split('\n');
-    final sparks = legendary
-        ? {for (final (r, c, _) in eggSparks) (r, c)}
-        : const <(int, int)>{};
-    final spark = ink.copyWith(
-      color: theme.yellow,
-      shadows: [Shadow(color: theme.yellow, blurRadius: 6)],
-    );
-    return Text.rich(
-      TextSpan(
-        children: [
-          for (final (r, row) in rows.indexed) ...[
-            if (sparks.isEmpty)
-              TextSpan(text: row, style: shell)
-            else
-              for (final (c, ch) in row.split('').indexed)
-                TextSpan(
-                  text: ch,
-                  style: sparks.contains((r, c)) ? spark : shell,
-                ),
-            if (r < rows.length - 1) const TextSpan(text: '\n'),
-          ],
-        ],
-      ),
-      key: ValueKey(
-        rare
-            ? 'daemon-hatch-egg-rare'
-            : legendary
-            ? 'daemon-hatch-egg-legendary'
-            : 'daemon-hatch-egg',
-      ),
-      semanticsLabel: 'An egg, hatching',
-      style: ink,
-    );
-  }
 
   List<Widget> _children(
     TerminalTheme theme,
@@ -677,7 +1087,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
   ) {
     final def = _def;
     if (_stage == HatchStage.consent || _stage == HatchStage.suggest) {
-      final name = _owned?.nickname ?? def?.id ?? 'it';
+      final name = _owned?.name ?? def?.id ?? 'it';
       return [
         Align(
           alignment: Alignment.centerLeft,
@@ -720,20 +1130,20 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         _button('[ close ]', _close, theme, ink),
       ];
     }
-    if (_stage == HatchStage.egg ||
-        _stage == HatchStage.crack ||
-        _stage == HatchStage.pop ||
-        def == null) {
-      return [_eggText(theme, ink)];
+    if (def == null ||
+        _stage == HatchStage.egg ||
+        _stage == HatchStage.rock ||
+        _stage == HatchStage.burst ||
+        _stage == HatchStage.tumble ||
+        _stage == HatchStage.open) {
+      return [_eggStage(theme, ink)];
     }
     if (_stage == HatchStage.merged || _stage == HatchStage.grew) {
       return _merged(def, theme, cell, ink, muted);
     }
     final shiny = _hatch?.shiny == true;
-    final colour = daemonColor(def, theme, shiny: shiny);
-    final backdrop = daemonBackdrop(def);
+    final traits = _traits;
     final version = roster.rules.versions.first;
-    final silhouetted = _stage == HatchStage.silhouette;
     final rarity = switch (def.rarity) {
       'rare' => theme.cyan,
       'legendary' => theme.yellow,
@@ -741,10 +1151,19 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       _ => ink.color ?? theme.foreground,
     };
     final rows = bannerRows(def.id);
-    final card = _stage == HatchStage.card ? _card : null;
+    final carded = _stage == HatchStage.card || _stage == HatchStage.name;
+    final card = carded ? _card : null;
     // The shared banner face (daemons/banner.json), monospace, at a line
     // height that keeps its rows from touching.
     final banner = ink.copyWith(height: 1.15);
+    final cardGround = pitch
+        ? const Color(0xff0c0c0c)
+        : Color.lerp(theme.background, theme.foreground, .04)!;
+    final art = _portraitArt;
+    final flags = traits != null && traits.seed != 0 && def.traits != null
+        ? '${individualFlags(roster, def.id, traits)}  ·  '
+              '${oneInText(oneIn(roster, def.id, traits))}'
+        : null;
     return [
       if (_stage == HatchStage.pitch)
         Padding(
@@ -756,20 +1175,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
             style: ink.copyWith(color: const Color(0xff949494)),
           ),
         ),
-      if (_stage != HatchStage.pitch && card == null)
-        Container(
-          color: silhouetted ? null : backdrop,
-          child: _portrait(
-            def,
-            version,
-            theme,
-            ink,
-            key: const ValueKey('daemon-hatch-portrait'),
-            label: silhouetted ? 'A silhouette' : '${def.id} $version',
-            shiny: shiny,
-            silhouetted: silhouetted,
-          ),
-        ),
+      if (_stage != HatchStage.pitch && card == null) _eggStage(theme, ink),
       if (_bannerRows > 0) ...[
         SizedBox(height: cell.height / 2),
         Text(
@@ -779,13 +1185,22 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
           style: banner,
         ),
       ],
-      if (_stage == HatchStage.card) ...[
+      if (carded) ...[
         SizedBox(height: cell.height / 2),
         Text(
           rarityStamp(roster, def, shiny: shiny),
           key: const ValueKey('daemon-hatch-stamp'),
           style: ink.copyWith(color: rarity, letterSpacing: 1),
         ),
+        if (flags != null) ...[
+          SizedBox(height: cell.height / 2),
+          Text(
+            flags,
+            key: const ValueKey('daemon-hatch-flags'),
+            textAlign: TextAlign.center,
+            style: ink,
+          ),
+        ],
         SizedBox(height: cell.height / 2),
         Text(
           "fork() returned 0. it's a ${def.id}.",
@@ -798,9 +1213,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
           Container(
             padding: EdgeInsets.all(cell.width),
             decoration: BoxDecoration(
-              color: pitch
-                  ? const Color(0xff0c0c0c)
-                  : Color.lerp(theme.background, theme.foreground, .04),
+              color: cardGround,
               border: Border.all(color: ink.color!.withValues(alpha: .2)),
             ),
             child: FittedBox(
@@ -808,63 +1221,149 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
               child: DaemonCardText(
                 key: const ValueKey('daemon-hatch-card'),
                 lines: card,
-                portraitRows: cardPortrait(roster, def, version).length,
+                portraitRows:
+                    art?.frames.first.rows.length ??
+                    cardPortrait(roster, def, version).length,
                 style: ink.copyWith(fontSize: (ink.fontSize ?? 13) * .92),
-                colour: colour,
-                backdrop: backdrop,
-                plate: daemonPlateInk(
-                  roster,
-                  def,
-                  theme,
-                  shiny: shiny,
-                  background: pitch
-                      ? const Color(0xff0c0c0c)
-                      : Color.lerp(theme.background, theme.foreground, .04),
-                ),
+                colour: daemonColor(def, theme, shiny: shiny),
+                backdrop: daemonBackdrop(def),
+                mats: art?.frames.first.mats,
+                plate:
+                    daemonIndividualInk(
+                      roster,
+                      def,
+                      traits,
+                      theme,
+                      shiny: shiny,
+                      background: cardGround,
+                    ) ??
+                    daemonPlateInk(
+                      roster,
+                      def,
+                      theme,
+                      shiny: shiny,
+                      background: cardGround,
+                    ),
               ),
             ),
           ),
           SizedBox(height: cell.height / 2),
-          Row(
-            children: [
-              _button(
-                '[ copy ]',
-                _copy,
-                theme,
-                ink,
-                focusNode: _copyFocus,
-                key: const ValueKey('daemon-hatch-copy'),
-              ),
-              SizedBox(width: cell.width),
-              if (widget.needsConsent)
+          if (_stage == HatchStage.name)
+            ..._namePrompt(def, theme, cell, ink, muted)
+          else
+            Row(
+              children: [
                 _button(
-                  '[ next ]',
-                  _toConsent,
+                  '[ copy ]',
+                  _copy,
                   theme,
                   ink,
-                  focusNode: _nextFocus,
-                  key: const ValueKey('daemon-hatch-next'),
-                )
-              else
-                _button('[ close ]', _close, theme, ink),
-              SizedBox(width: cell.width * 2),
-              Expanded(
-                child: Text(
-                  _copyNote ?? 'esc closes',
-                  style: ink.copyWith(color: muted),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  focusNode: _copyFocus,
+                  key: const ValueKey('daemon-hatch-copy'),
                 ),
-              ),
-            ],
-          ),
+                SizedBox(width: cell.width),
+                if (widget.needsConsent)
+                  _button(
+                    '[ next ]',
+                    _toConsent,
+                    theme,
+                    ink,
+                    focusNode: _nextFocus,
+                    key: const ValueKey('daemon-hatch-next'),
+                  )
+                else
+                  _button('[ close ]', _close, theme, ink),
+                SizedBox(width: cell.width * 2),
+                Expanded(
+                  child: Text(
+                    _copyNote ?? 'esc closes',
+                    style: ink.copyWith(color: muted),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
         ],
       ],
     ];
   }
 
-  /// A duplicate: yours, at its version and in its colour (shiny now, if the
-  /// duplicate was), `tim x2 · +150 xp`, then how it grew.
+  /// `name > _`: what to call it. Enter names it (empty skips), Escape or
+  /// `[ skip ]` goes on without a name; it can be named later in the zoo.
+  List<Widget> _namePrompt(
+    DaemonDef def,
+    TerminalTheme theme,
+    Size cell,
+    TextStyle ink,
+    Color muted,
+  ) => [
+    Text(
+      'what will you call it?',
+      key: const ValueKey('daemon-hatch-name-question'),
+      style: ink,
+    ),
+    TextField(
+      key: const ValueKey('daemon-hatch-name'),
+      controller: _name,
+      focusNode: _nameFocus,
+      maxLength: 24,
+      style: ink,
+      cursorWidth: cell.width,
+      cursorHeight: cell.height,
+      cursorColor: theme.cursor,
+      decoration: InputDecoration(
+        prefixText: 'name > ',
+        prefixStyle: ink.copyWith(color: muted),
+        hintText: individualName(
+          def.id,
+          serial: _owned?.serial ?? _hatch?.serial,
+        ),
+        hintStyle: ink.copyWith(color: muted.withValues(alpha: .35)),
+        counterText: '',
+        errorText: _nameError,
+        errorStyle: ink.copyWith(color: theme.red),
+        isDense: true,
+        border: InputBorder.none,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
+        contentPadding: EdgeInsets.zero,
+      ),
+      onSubmitted: (_) => _saveName(),
+    ),
+    Row(
+      children: [
+        _button(
+          '[ name it ]',
+          _saveName,
+          theme,
+          ink,
+          key: const ValueKey('daemon-hatch-name-save'),
+        ),
+        SizedBox(width: cell.width),
+        _button(
+          '[ skip ]',
+          _endNaming,
+          theme,
+          ink,
+          key: const ValueKey('daemon-hatch-name-skip'),
+        ),
+        SizedBox(width: cell.width * 2),
+        Expanded(
+          child: Text(
+            'enter names it · esc skips',
+            style: ink.copyWith(color: muted),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    ),
+  ];
+
+  /// A merged duplicate (a server from before individuals): yours, at its
+  /// version and in its colour (shiny now, if the duplicate was), `tim ·
+  /// +150 xp`, then how it grew.
   List<Widget> _merged(
     DaemonDef def,
     TerminalTheme theme,
@@ -874,11 +1373,10 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
   ) {
     final hatch = _hatch!;
     final owned = _owned;
-    final count = owned?.count ?? 2;
     final grew = _stage == HatchStage.grew ? _grew : null;
     final version = grew?.$2 ?? owned?.version ?? roster.rules.versions.first;
     final shiny = owned?.shiny ?? hatch.shiny;
-    final name = owned?.nickname ?? def.id;
+    final name = owned?.name ?? def.id;
     final from = _grewFrom;
     // A level-up: the old version turns into the new in three frames, then
     // the new one holds, on one canvas so nothing jumps. A plate turns at the
@@ -917,7 +1415,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       ),
       SizedBox(height: cell.height / 2),
       Text(
-        '$name x$count · +${hatch.xp} xp',
+        '$name · +${hatch.xp} xp',
         key: const ValueKey('daemon-hatch-merged'),
         style: ink.copyWith(color: theme.yellow, letterSpacing: 1),
       ),
@@ -1005,4 +1503,45 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       style: ink.copyWith(color: _pitch ? ink.color : theme.cursor),
     ),
   );
+}
+
+/// The plate a hatchling rises as: its idle loop's frames (material rows
+/// with them), how long each shows, and its traits.
+class _Hatchling {
+  const _Hatchling(this.frames, this.frameMs, this.traits);
+  final List<PlateFrame> frames;
+  final int frameMs;
+  final DaemonTraits? traits;
+  List<String> get rows => frames.first.rows;
+}
+
+/// One row of a drawn canvas as spans, each cell in its own colour (null:
+/// nothing is drawn there, so a space rides along in the run it falls in).
+List<InlineSpan> canvasRowSpans(
+  String row,
+  List<Color?> colours,
+  TextStyle style,
+) {
+  final spans = <InlineSpan>[];
+  final text = StringBuffer();
+  Color? colour;
+  void flush() {
+    if (text.isEmpty) return;
+    spans.add(
+      TextSpan(
+        text: text.toString(),
+        style: colour == null ? style : style.copyWith(color: colour),
+      ),
+    );
+    text.clear();
+  }
+
+  for (var c = 0; c < row.length; c++) {
+    final glyph = c < colours.length ? colours[c] : null;
+    if (glyph != null && colour != null && glyph != colour) flush();
+    if (glyph != null) colour = glyph;
+    text.write(row[c]);
+  }
+  flush();
+  return spans;
 }

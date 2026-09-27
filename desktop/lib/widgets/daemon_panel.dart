@@ -11,6 +11,8 @@ import '../daemons/daemon_lessons.dart';
 import '../daemons/daemon_lines.dart';
 import '../daemons/daemon_settings.dart';
 import '../daemons/pair_rules_file.dart';
+import '../daemons/individuals.dart';
+import '../daemons/plates.dart';
 import '../daemons/render.dart';
 import '../daemons/roster.dart';
 import '../daemons/zoo.dart';
@@ -242,7 +244,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
   }
 
   void _beginRename(ZooDaemon daemon) {
-    final name = daemon.nickname ?? daemon.id;
+    final name = daemon.name ?? daemon.id;
     _name.value = TextEditingValue(
       text: name,
       selection: TextSelection(baseOffset: 0, extentOffset: name.length),
@@ -259,7 +261,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
   void _rename(ZooDaemon daemon) {
     final text = _name.text.trim();
     final ok = face.zoo.nickname(
-      daemon.id,
+      daemon.uid,
       text.isEmpty || text == daemon.id ? null : text,
     );
     if (!ok) {
@@ -491,6 +493,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
   List<Widget> _nest(List<String> order) {
     final done = zoo.habits.toSet();
     final egg = face.zoo.readyEgg;
+    final shown = face.nearestEgg;
     final need = face.zoo.habitsNeeded;
     final left = need - face.zoo.habitsCounted;
     final habits = _habitsHereFirst;
@@ -507,6 +510,29 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     return [
       _title(egg != null ? 'Your egg is ready' : 'Your first egg'),
       SizedBox(height: _cell.height),
+      // The egg itself, filled, at its stage: it cracks as habits count.
+      if (shown != null && daemonPlates.hasEgg(shown.kind))
+        Center(
+          child: SizedBox(
+            width: _cell.width * 20,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: DaemonEggPlate(
+                roster: roster,
+                kind: shown.kind,
+                stage: shown.stage,
+                style: _ink().copyWith(height: 1.0),
+                theme: _theme,
+                animate: face.motionEnabled,
+                textKey: const ValueKey('daemon-panel-egg-plate'),
+                semanticsLabel: egg != null
+                    ? 'Your egg, ready to hatch'
+                    : 'Your egg, ${_stageWords(shown.stage)}',
+              ),
+            ),
+          ),
+        ),
+      if (shown != null) SizedBox(height: _cell.height / 2),
       Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -633,23 +659,17 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
 
   List<Widget> _daemon(List<String> order) {
     final paired = face.daemon ?? zoo.paired;
-    final viewingId = _viewing != null && zoo.owns(_viewing!)
-        ? _viewing!
-        : paired?.id;
-    final viewing =
-        zoo.daemons.where((d) => d.id == viewingId).firstOrNull ?? paired;
+    final viewing = zoo.byUid(_viewing) ?? paired;
     final def = roster.byId(viewing?.id);
     if (viewing == null || def == null) return [_title('Daemon')];
     final pairedDef = roster.byId(paired?.id) ?? def;
-    final pairedName = paired?.nickname ?? pairedDef.id;
+    final pairedName = paired?.name ?? pairedDef.id;
     final tab = _tab;
     return [
       _title(
         tab == 'zoo'
-            ? viewing.nickname == null
-                  ? def.id
-                  : '${viewing.nickname} (${def.id})'
-            : paired?.nickname == null
+            ? individualName(def.id, name: viewing.name, serial: viewing.serial)
+            : paired?.name == null
             ? pairedDef.id
             : '$pairedName (${pairedDef.id})',
         badge: _autonomyBadge(),
@@ -730,6 +750,14 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     ];
   }
 
+  static String _stageWords(String stage) => switch (stage) {
+    'p0' => 'whole',
+    'p1' => 'cracking',
+    'p2' => 'cracked',
+    'p3' => 'splitting, light inside',
+    _ => 'ready',
+  };
+
   List<Widget> _nowTab(List<String> order, DaemonDef def, String name) => [
     ..._lineRows(def, name),
     if (_eggKinds.isNotEmpty) ...[
@@ -752,12 +780,34 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
   ];
 
   List<Widget> _zooTab(List<String> order, ZooDaemon viewing, DaemonDef def) {
-    final isPair = viewing.id == zoo.pair || zoo.pair == null;
+    final isPair = viewing.uid == zoo.pair || zoo.pair == null;
     final mood = isPair ? face.mood : DaemonMood.idle;
     final colour = daemonColor(def, _theme, shiny: viewing.shiny);
     final backdrop = daemonBackdrop(def);
-    final name = viewing.nickname ?? def.id;
-    final portraitRows = cardPortrait(roster, def, viewing.version).length;
+    final name = individualName(
+      def.id,
+      name: viewing.name,
+      serial: viewing.serial,
+    );
+    final traits = face.zoo.traitsOf(viewing);
+    final plates = face.plates;
+    // Its own plates, once harnessd has drawn them; the species plate in its
+    // colour family until then.
+    final art = plates?.art(
+      viewing,
+      PlateSize.portrait,
+      viewing.version,
+      mood,
+    );
+    final cardArt = plates?.art(
+      viewing,
+      PlateSize.portrait,
+      viewing.version,
+      DaemonMood.idle,
+    );
+    final portraitRows =
+        cardArt?.frames.first.rows.length ??
+        cardPortrait(roster, def, viewing.version).length;
     // The portrait's ground, and the card's: faint glyphs mix from it.
     final ground =
         backdrop ?? Color.lerp(_theme.background, _theme.foreground, .03)!;
@@ -766,27 +816,32 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       def,
       version: viewing.version,
       shiny: viewing.shiny,
-      nickname: viewing.nickname,
-      hatchedAt: viewing.hatchedAt,
+      name: viewing.name,
+      traits: traits,
+      hatched: viewing.hatched,
       egg: viewing.egg,
       serial: viewing.serial,
+      plate: cardArt?.frames.first.rows,
     );
+    final cardGround = Color.lerp(_theme.background, _theme.foreground, .03)!;
+    final flags = traits != null && traits.seed != 0 && def.traits != null
+        ? individualFlags(roster, def.id, traits)
+        : null;
     for (final d in _shelfOrder) {
       if (zoo.owns(d.id)) order.add('zoo:${d.id}');
-    }
-    for (final kind in _eggKinds) {
-      order.add('egg:$kind');
     }
     if (!isPair) order.add('pair');
     order
       ..add('rename')
       ..add('card');
     if (_showCard) order.add('copy');
+    final individuals = _individualRows(order, viewing);
+    final eggs = _eggPlates(order);
     return [
       if (_showCard)
         Container(
           width: double.infinity,
-          color: Color.lerp(_theme.background, _theme.foreground, .03),
+          color: cardGround,
           alignment: Alignment.center,
           child: FittedBox(
             fit: BoxFit.scaleDown,
@@ -797,17 +852,23 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
               style: _ink(),
               colour: colour,
               backdrop: backdrop,
-              plate: daemonPlateInk(
-                roster,
-                def,
-                _theme,
-                shiny: viewing.shiny,
-                background: Color.lerp(
-                  _theme.background,
-                  _theme.foreground,
-                  .03,
-                ),
-              ),
+              mats: cardArt?.frames.first.mats,
+              plate:
+                  daemonIndividualInk(
+                    roster,
+                    def,
+                    traits,
+                    _theme,
+                    shiny: viewing.shiny,
+                    background: cardGround,
+                  ) ??
+                  daemonPlateInk(
+                    roster,
+                    def,
+                    _theme,
+                    shiny: viewing.shiny,
+                    background: cardGround,
+                  ),
             ),
           ),
         )
@@ -817,8 +878,8 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           color: ground,
           padding: EdgeInsets.symmetric(vertical: _cell.height / 2),
           alignment: Alignment.center,
-          // A plate is at most 28 columns by 12 rows; nothing here assumes
-          // the line portraits' 8.
+          // A plate is at most 28 columns by 12 rows (15 with an
+          // individual's hat); nothing here assumes the line portraits' 8.
           child: FittedBox(
             fit: BoxFit.scaleDown,
             child: DaemonPortrait(
@@ -830,6 +891,8 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
               mood: mood,
               shiny: viewing.shiny,
               background: ground,
+              traits: traits,
+              art: art,
               // The plate loops its mood (idle by default) while the face
               // may move; the line portrait's parts step with agent events.
               animate: face.motionEnabled,
@@ -850,6 +913,12 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
         key: const ValueKey('daemon-panel-identity'),
         style: _ink(),
       ),
+      if (flags != null)
+        Text(
+          '$flags\n${oneInText(oneIn(roster, def.id, traits!))}',
+          key: const ValueKey('daemon-panel-flags'),
+          style: _ink(),
+        ),
       Text(
         _bondLine(viewing),
         key: const ValueKey('daemon-panel-bond'),
@@ -896,9 +965,9 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           children: [
             if (!isPair)
               _action('pair', '[ pair ]', () {
-                face.zoo.pair(viewing.id);
+                face.zoo.pair(viewing.uid);
                 setState(() => _viewing = null);
-              }, tooltip: 'Put ${def.id} in your status line'),
+              }, tooltip: 'Put $name in your status line'),
             _action('rename', '[ rename ]', () => _beginRename(viewing)),
             _action(
               'card',
@@ -922,14 +991,206 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       SizedBox(height: _cell.height),
       ..._shelf(viewing.id),
       SizedBox(height: _cell.height / 2),
+      ...individuals,
+      SizedBox(height: _cell.height / 2),
+      ...eggs,
+      SizedBox(height: _cell.height / 2),
       ..._meters(),
-      if (_eggKinds.isNotEmpty) ...[
-        SizedBox(height: _cell.height / 2),
-        Wrap(
-          spacing: _cell.width * 2,
-          children: [for (final kind in _eggKinds) _eggButton(kind)],
+    ];
+  }
+
+  // ── the zoo: individuals by species, and what each species has shown ──────
+
+  /// Every individual you have, grouped by species in the drop's order: a
+  /// species line with how many, the traits seen among them (colours,
+  /// markings and extras, of how many there are), then one row each: its
+  /// name, version and whether it is paired, its flags and `1 in N`.
+  List<Widget> _individualRows(List<String> order, ZooDaemon viewing) {
+    final species = [
+      for (final d in _shelfOrder)
+        if (zoo.owns(d.id)) d,
+      // Anything owned but not on a shelf that shows (a drop since held).
+      for (final d in roster.daemons)
+        if (zoo.owns(d.id) && !_shelfOrder.contains(d)) d,
+    ];
+    if (species.isEmpty) return const [];
+    final out = <Widget>[
+      Text(
+        'individuals · ${zoo.daemons.length}',
+        key: const ValueKey('daemon-panel-individuals'),
+        style: _ink(_muted),
+      ),
+    ];
+    for (final def in species) {
+      final all = zoo.ofSpecies(def.id);
+      out
+        ..add(SizedBox(height: _cell.height / 2))
+        ..add(
+          Text(
+            '${cardNumber(roster, def).split('/').first} ${def.id}'
+            '  x${all.length}',
+            key: ValueKey('daemon-species-${def.id}'),
+            style: _ink(daemonColor(def, _theme)),
+          ),
+        );
+      final log = _traitLog(def, all);
+      if (log != null) {
+        out.add(
+          Text(
+            log,
+            key: ValueKey('daemon-traitlog-${def.id}'),
+            style: _ink(_muted),
+          ),
+        );
+      }
+      for (final d in all) {
+        order.add('who:${d.uid}');
+        out.add(_individualRow(d, def, selected: d.uid == viewing.uid));
+      }
+    }
+    return out;
+  }
+
+  /// The traits seen among [all] of species [def], of how many there are:
+  /// `  colours 2/6 magenta coral`, `  marks 1/4 spots`, `  extras 0/3`.
+  String? _traitLog(DaemonDef def, List<ZooDaemon> all) {
+    final t = def.traits;
+    if (t == null) return null;
+    final rolled = [for (final d in all) ?face.zoo.traitsOf(d)];
+    List<String> seen(Iterable<String?> names, Iterable<String?> order) {
+      final have = {...names.whereType<String>()};
+      return [
+        for (final n in order)
+          if (n != null && have.contains(n)) n,
+      ];
+    }
+
+    final colours = seen(
+      rolled.map((r) => r.colour),
+      t.colours.map((c) => c.name),
+    );
+    final marks = seen(rolled.map((r) => r.marks), t.marks.map((m) => m.$1));
+    final extras = seen(rolled.map((r) => r.extra), t.extras.map((e) => e.name));
+    String line(String label, List<String> names, int of) =>
+        '  ${label.padRight(8)}${'${names.length}/$of'.padRight(5)} '
+        '${names.join(' ')}'.trimRight();
+    return [
+      line('colours', colours, t.colours.length),
+      line('marks', marks, t.marks.where((m) => m.$1 != null).length),
+      line('extras', extras, t.extras.where((e) => e.name != null).length),
+    ].join('\n');
+  }
+
+  /// One individual: `* pip the tim 1.0 · paired`, then `  -c coral --spots
+  /// · 1 in 644`. Enter or a click shows it above.
+  Widget _individualRow(ZooDaemon d, DaemonDef def, {required bool selected}) {
+    final traits = face.zoo.traitsOf(d);
+    final paired = d.uid == zoo.pair;
+    final flags = traits != null && traits.seed != 0 && def.traits != null
+        ? individualFlags(roster, def.id, traits)
+        : null;
+    final rest = flags == null
+        ? null
+        : '  ${flags.substring(flags.indexOf(' ') + 1)}'
+              ' · ${oneInText(oneIn(roster, def.id, traits!))}';
+    return TextButton(
+      key: ValueKey('daemon-who-${d.uid}'),
+      focusNode: _node('who:${d.uid}'),
+      onPressed: () => setState(() => _viewing = d.uid),
+      style: _buttonStyle.copyWith(
+        fixedSize: const WidgetStatePropertyAll(null),
+        backgroundColor: WidgetStatePropertyAll(
+          selected ? _theme.selection.withValues(alpha: .35) : null,
         ),
-      ],
+      ),
+      child: Text(
+        '${d.shiny ? '*' : ' '} '
+        '${individualName(def.id, name: d.name, serial: d.serial)} '
+        '${d.version}${paired ? ' · paired' : ''}'
+        '${rest == null ? '' : '\n$rest'}',
+        style: _ink(selected ? _theme.foreground : null),
+      ),
+    );
+  }
+
+  // ── eggs: each being earned at its stage, each waiting ready ─────────────
+
+  /// Every egg as a small filled plate: the ones waiting to be opened
+  /// (`p4`, a click hatches), then each being earned, cracked as far as it
+  /// has come, with how far (`turn 12/40`).
+  List<Widget> _eggPlates(List<String> order) {
+    final waiting = [
+      for (final kind in _eggKinds)
+        (kind, zoo.eggs.where((e) => e.kind == kind).toList()),
+    ];
+    final earning = face.zoo.eggsBeingEarned;
+    if (waiting.isEmpty && earning.isEmpty) return const [];
+    Widget plate(String kind, String stage, String label, {Key? key}) =>
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: _cell.width * 9,
+              height: _cell.height * 3.4,
+              child: FittedBox(
+                fit: BoxFit.contain,
+                child: DaemonEggPlate(
+                  roster: roster,
+                  kind: kind,
+                  stage: stage,
+                  style: _ink().copyWith(height: 1.0),
+                  theme: _theme,
+                  animate: face.motionEnabled,
+                  textKey: key,
+                  semanticsLabel: '${eggName(kind)}, $label',
+                ),
+              ),
+            ),
+            Text(label, style: _ink(_muted), maxLines: 1),
+          ],
+        );
+    return [
+      Text(
+        'eggs',
+        key: const ValueKey('daemon-panel-eggs'),
+        style: _ink(_muted),
+      ),
+      SizedBox(height: _cell.height / 4),
+      Wrap(
+        spacing: _cell.width * 2,
+        runSpacing: _cell.height / 2,
+        children: [
+          for (final (kind, eggs) in waiting)
+            () {
+              order.add('egg:$kind');
+              return Tooltip(
+                message:
+                    'Open a ${eggName(kind)} (${eggs.length} waiting)',
+                child: TextButton(
+                  key: ValueKey('daemon-egg:$kind'),
+                  focusNode: _node('egg:$kind'),
+                  onPressed: () => widget.onHatch(eggs.first),
+                  style: _buttonStyle.copyWith(
+                    fixedSize: const WidgetStatePropertyAll(null),
+                  ),
+                  child: plate(
+                    kind,
+                    'p4',
+                    '$kind x${eggs.length}',
+                    key: ValueKey('daemon-egg-plate-$kind-ready'),
+                  ),
+                ),
+              );
+            }(),
+          for (final e in earning)
+            plate(
+              e.kind,
+              e.stage,
+              '${e.kind} ${e.done}/${e.need}',
+              key: ValueKey('daemon-egg-plate-${e.kind}'),
+            ),
+        ],
+      ),
     ];
   }
 
@@ -1124,9 +1385,10 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
         ]),
       );
     }
-    final first = owned.first;
-    // One record per daemon; its duplicates are counted in it.
-    final count = owned.fold<int>(0, (n, z) => n + z.count);
+    // The paired one of this species when it is, else the first hatched.
+    final first = owned.where((z) => z.uid == zoo.pair).firstOrNull ??
+        owned.first;
+    final count = owned.length;
     final selected = d.id == viewing;
     final sprite = renderSprite(
       roster,
@@ -1138,15 +1400,16 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     final backdrop = daemonBackdrop(d);
     return Tooltip(
       message:
-          '${first.nickname ?? d.id} ${first.version}'
+          '${individualName(d.id, name: first.name, serial: first.serial)} '
+          '${first.version}'
           '${count > 1 ? ' · x$count' : ''}'
-          '${d.id == zoo.pair ? ' · paired' : ''}',
+          '${first.uid == zoo.pair ? ' · paired' : ''}',
       child: SizedBox(
         width: _cell.width * _slotCells,
         child: TextButton(
           key: ValueKey('daemon-zoo-${d.id}'),
           focusNode: _node('zoo:${d.id}'),
-          onPressed: () => setState(() => _viewing = d.id),
+          onPressed: () => setState(() => _viewing = first.uid),
           style: _buttonStyle.copyWith(
             fixedSize: WidgetStatePropertyAll(
               Size(_cell.width * (_slotCells - 1), _cell.height * 3),
@@ -1178,8 +1441,8 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     );
   }
 
-  /// Toward the next earned egg: counted turns to the next turn egg, and
-  /// today's count against the daily cap.
+  /// Today's counted turns against the daily cap (the eggs show how far
+  /// each has come), and the setup egg's habits until it has come.
   List<Widget> _meters() {
     final earn = roster.rules.earn;
     final progress = zoo.progress;
@@ -1199,7 +1462,6 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     return [
       Text(
         [
-          row('next egg', into, earn.turnEvery),
           row('today', today.clamp(0, earn.dailyCap), earn.dailyCap),
           if (setup != null) row('setup egg', setup.$1, setup.$2),
           if (today >= earn.dailyCap)
@@ -1228,7 +1490,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     final eggs = zoo.eggs.where((e) => e.kind == kind).toList();
     return _action(
       'egg:$kind',
-      '${face.eggLook(eggs.first)} x${eggs.length}',
+      '${face.eggLineFor(eggs.first)} x${eggs.length}',
       () => widget.onHatch(eggs.first),
       color: _theme.foreground,
       tooltip: 'Open a ${eggName(kind)} (${eggs.length} waiting)',

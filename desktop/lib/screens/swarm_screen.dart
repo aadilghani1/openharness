@@ -100,6 +100,7 @@ import '../state/workspace_learning.dart';
 import '../state/workspace_onboarding.dart';
 import '../daemons/daemon_brain.dart';
 import '../daemons/daemon_face.dart';
+import '../daemons/daemon_plate_client.dart';
 import '../daemons/daemon_habits.dart';
 import '../daemons/daemon_settings.dart';
 import '../daemons/daemons_preview.dart';
@@ -233,6 +234,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
   late final _brain = DaemonBrain(
     send: _sendDaemonFrame,
     storage: kUnderTest ? null : HarnessFileStore.shared,
+    now: widget.daemonClock,
+  );
+
+  /// Individuals' own plates, drawn by this computer's harnessd and asked
+  /// for over its local socket (`daemon_plate_get`).
+  late final _plates = DaemonPlateClient(
+    send: _sendDaemonFrame,
+    roster: _zoo.roster,
     now: widget.daemonClock,
   );
   final _brainSubscriptions = <StreamSubscription<Object?>>[];
@@ -449,8 +458,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _brain.addListener(_brainChanged);
     // A look at the `+n` clears the brain's count too.
     _face.onSeen = () => unawaited(_brain.doneSeen());
+    _face.plates = _plates;
     _brainSubscriptions.addAll([
-      app.daemonFrames.listen((f) => _brain.receive(f.type, f.payload)),
+      app.daemonFrames.listen((f) {
+        if (f.type == 'daemon_plate') {
+          _plates.receive(f.type, f.payload);
+          return;
+        }
+        _brain.receive(f.type, f.payload);
+      }),
       // Heard, but nothing of it shows until daemons are on here.
       _brain.said.listen((say) {
         if (_zoo.loaded) _face.sayFromBrain(say);
@@ -566,6 +582,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     _brain.removeListener(_brainChanged);
     _brain.dispose();
+    _plates.dispose();
     GestureBinding.instance.pointerRouter.removeGlobalRoute(_notePointer);
     _idleTimer?.cancel();
     app.agentPulse.removeListener(_face.pulse);
@@ -3360,6 +3377,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _closeHatch(restoreFocus: false);
       _face.dismissVoice();
       _brain.reset();
+      _plates.reset();
       if (_native) _sendDaemonState();
     }
     if (_native) _syncNative();
@@ -3428,7 +3446,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// away, and (for a guest, whose zoo is local) which daemon it pairs with.
   Future<void> _sendPresence({Duration? away, Duration? idle}) async {
     if (!_zoo.loaded || !_brain.active) return;
-    final pair = app.isGuest ? _zoo.zoo.pair : null;
+    // harnessd knows the pair by its species.
+    final pair = app.isGuest ? _zoo.zoo.byUid(_zoo.zoo.pair)?.id : null;
     _presencePair = pair;
     final pane = app.focusedPane;
     final agentId = pane?.agentId;
@@ -3532,10 +3551,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // hears of a change.
     if (app.isGuest &&
         _brain.active &&
-        (_zoo.zoo.pair != _presencePair ||
+        (_zoo.zoo.byUid(_zoo.zoo.pair)?.id != _presencePair ||
             _zoo.zoo.autonomy != _presenceAutonomy ||
             _zoo.zoo.watching != _presenceConsent)) {
-      _presencePair = _zoo.zoo.pair;
+      _presencePair = _zoo.zoo.byUid(_zoo.zoo.pair)?.id;
       _presenceAutonomy = _zoo.zoo.autonomy;
       _presenceConsent = _zoo.zoo.watching;
       unawaited(
@@ -3809,7 +3828,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final skippable = _zoo.zoo.daemons.length >= 3;
     // A duplicate's level-up is told against the zoo before the hatch.
     final before = _zoo.zoo;
-    _face.beginReveal();
+    _face.beginReveal(kind: egg.kind);
     final result = _zoo.hatch(egg.id);
     _preparePaneFocus();
     _hatchOverlay = OverlayEntry(
@@ -3829,6 +3848,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
           needsConsent: before.consent == null,
           onConsent: (watching) => _zoo.consent(watching: watching),
           onSuggest: () => _zoo.autonomy('suggest'),
+          plates: _plates,
+          // The name it is given at the hatch (`zoo.nickname { uid, name }`).
+          onName: _zoo.nickname,
+          onStage: _face.revealAt,
           onRevealed: _face.endReveal,
           onClose: _closeHatch,
         ),

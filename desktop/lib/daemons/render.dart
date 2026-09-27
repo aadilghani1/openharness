@@ -7,14 +7,15 @@
 ///   `{<part>}`     a moving part (d.parts): its `rest` glyph, or a frame of `work` every `ms` while working
 ///   `{<moodPart>}` a mood-driven part (d.moodParts): its value for the mood, else its idle value
 ///
-/// The rest of this file draws what the lookbook draws around a daemon: the
-/// nest, the egg while it hatches, the banner name and the copyable card.
+/// The rest of this file draws what the lookbook draws around a daemon: an
+/// egg's stage and its one line, the banner name and the copyable card.
 /// A filled daemon (`plate: true`) has no line portrait: its portrait is a
 /// baked plate (`plates.dart`), and its card shows that.
 library;
 
 import 'dart:math';
 
+import 'individuals.dart';
 import 'plates.dart';
 import 'roster.dart';
 
@@ -128,83 +129,72 @@ int baseWidth(DaemonRoster roster, DaemonDef d, int versionIndex) =>
 /// The hatchling before it has colour: every drawn cell becomes `#`.
 String silhouette(String sprite) => sprite.replaceAll(RegExp(r'[^ ]'), '#');
 
-/// Which nest stage the first egg shows for the habits done (render.mjs
-/// `nestStage`): habits count up to the egg's need, and until every required
-/// habit (a finished turn) is done at most need - 1 count; the count maps
-/// evenly onto the stages.
-int nestStage(DaemonRoster roster, Iterable<String> habitsDone) {
+// ── eggs (README, "Eggs") ────────────────────────────────────────────────────
+
+/// How far along a habit egg is (render.mjs `habitProgress`): for the first
+/// egg, habits count up to `firstEgg.need`, and until every required habit
+/// (a finished turn) is among them at most need - 1 count; the setup egg
+/// counts every known habit toward `setupEgg.need`. Unknown and repeated
+/// habits count nothing. `(done, need)`.
+(int, int) habitProgress(
+  DaemonRoster roster,
+  Iterable<String> habitsDone, {
+  String kind = 'first',
+}) {
   final rules = roster.rules;
   final known = {for (final h in rules.habits) h.key};
   final done = {
     for (final k in habitsDone)
       if (known.contains(k)) k,
   };
+  if (kind == 'setup') {
+    final need = rules.setupEggNeed ?? 0;
+    return (min(done.length, need), need);
+  }
   final need = rules.firstEggNeed;
   final required = rules.firstEggRequire.every(done.contains);
-  final counted = min(done.length, required ? need : need - 1);
-  final last = rules.nest.length - 1;
-  return counted >= need ? last : (counted * last) ~/ need;
+  return (min(done.length, required ? need : need - 1), need);
 }
 
-/// The nest glyph for the habits done.
-String nestFor(DaemonRoster roster, Iterable<String> habitsDone) =>
-    roster.rules.nest[nestStage(roster, habitsDone)];
-
-// ── the egg, as the hatch reveal draws it ────────────────────────────────────
-
-const _eggWidth = 18;
-
-List<String> _eggRows(DaemonRoster roster) => [
-  for (final row in roster.rules.egg) row.padRight(_eggWidth),
-];
-
-/// One frame of the egg: [offset] -1, 0 or 1 cell of wobble, [crack] 0–2.
-String eggFrame(DaemonRoster roster, {int offset = 0, int crack = 0}) {
-  final all = _eggRows(roster);
-  final rows = all.sublist(0, all.length - 1);
-  final nest = all.last;
-  if (crack == 1) rows[2] = r'     | /\/  |     ';
-  if (crack == 2) rows[2] = r'     |/\/\/\|     ';
-  String shift(String r) => offset < 0
-      ? '${r.substring(1)} '
-      : offset > 0
-      ? ' ${r.substring(0, r.length - 1)}'
-      : r;
-  return [' ' * _eggWidth, ...rows.map(shift), nest].join('\n');
+/// The stage an egg shows while it is earned (render.mjs `eggStage`): `p4`
+/// once it is earned and waits to be opened; otherwise by done / need, `p0`
+/// at none, `p1` below a third, `p2` below two thirds, `p3` from there.
+String eggStage(num done, num need, {bool ready = false}) {
+  if (ready) return 'p4';
+  final f = need > 0 ? done / need : 0;
+  if (!(f > 0)) return 'p0';
+  return f < 1 / 3
+      ? 'p1'
+      : f < 2 / 3
+      ? 'p2'
+      : 'p3';
 }
 
-/// Where a legendary's sparks fly around the pop: row, column and glyph.
-const eggSparks = <(int, int, String)>[
-  (0, 1, '*'),
-  (0, 16, '*'),
-  (1, 2, "'"),
-  (1, 15, '.'),
-  (2, 4, '.'),
-  (2, 13, '*'),
-  (3, 1, "'"),
-  (3, 16, "'"),
-  (4, 2, '*'),
-  (4, 15, '.'),
-];
+/// The stages an egg is baked at, in order (`plates/egg.mjs` `STAGES`):
+/// earning, then opening.
+const eggEarningStages = ['p0', 'p1', 'p2', 'p3', 'p4'];
+const eggOpeningStages = ['rock', 'burst', 'tumble', 'open'];
 
-/// The top pops off; a legendary's pop throws [eggSparks] around it.
-String eggPopFrame(DaemonRoster roster, {bool sparks = false}) {
-  final rows = [
-    "    '  .--.  .    ",
-    r'      /\/\/\      ',
-    "         '        ",
-    r'     |\/\/\/|     ',
-    '     |      |     ',
-    r'      \    /      ',
-    _eggRows(roster).last,
-  ];
-  if (sparks) {
-    for (final (row, col, glyph) in eggSparks) {
-      final r = rows[row];
-      rows[row] = '${r.substring(0, col)}$glyph${r.substring(col + 1)}';
-    }
+/// An egg in the status line, eight cells at most (render.mjs `eggLine`):
+/// `{k}` is the kind's mark; a ready egg (`p4`, or rocking as it opens)
+/// blinks with [lid]. Stage `hatchling` shows the hatchling's 0.1 [sprite]
+/// between the halves of its shell, `)` + sprite + `(`, or the sprite alone
+/// when that does not fit.
+String eggLine(
+  DaemonRoster roster,
+  String kind,
+  String stage, {
+  String? lid,
+  String sprite = '',
+}) {
+  final rules = roster.rules;
+  if (stage == 'hatchling') {
+    return sprite.length + 2 <= rules.statusCells ? ')$sprite(' : sprite;
   }
-  return rows.join('\n');
+  final blinking =
+      lid != null && lid.isNotEmpty && (stage == 'p4' || stage == 'rock');
+  final line = (blinking ? rules.eggLine['blink'] : rules.eggLine[stage]) ?? '';
+  return line.replaceFirst('{k}', rules.eggs[kind]?.mark ?? ' ');
 }
 
 // ── the banner: a daemon's name in the face from daemons/banner.json ──────────
@@ -281,17 +271,21 @@ List<String> cardPortrait(DaemonRoster roster, DaemonDef d, String version) {
 }
 
 /// The card as lines of printable ASCII, 42 columns wide: the portrait at its
-/// version (a filled daemon's portrait [plate], by default its baked one), the
-/// number (secrets `#S/09`), the rarity, the name with a nickname and serial
-/// when there are any, the family, the first words and the hatched line.
-/// Never a live mood: a card is a portrait, not a presence indicator.
+/// version (a filled daemon's portrait [plate], by default its baked one; an
+/// individual's own once harnessd has drawn it), the number (secrets
+/// `#S/09`), the rarity, the name with the [name] given at the hatch and the
+/// serial when there are any, an individual's flags and how rare it is (with
+/// its [traits]), the family, the first words and the hatched line. Never a
+/// live mood: a card is a portrait, not a presence indicator.
 List<String> cardLines(
   DaemonRoster roster,
   DaemonDef d, {
   String? version,
   bool shiny = false,
   int? serial,
+  String? name,
   String? nickname,
+  DaemonTraits? traits,
   String? hatched,
   String? egg,
   List<String>? plate,
@@ -307,8 +301,9 @@ List<String> cardLines(
       '${cardNumber(roster, d)}  DROP ${drop?.n ?? 1}: '
       '${(drop?.name ?? d.drop).toUpperCase()}';
   final rarity = '${shiny ? 'SHINY ' : ''}${d.rarity.toUpperCase()}';
-  final name =
-      '${nickname != null && nickname.isNotEmpty ? '$nickname the ' : ''}'
+  final called = name ?? nickname;
+  final title =
+      '${called != null && called.isNotEmpty ? '$called the ' : ''}'
       '${d.id} $v'
       '${serial != null ? '  #${serial.toString().padLeft(4, '0')}' : ''}';
   final portrait = plate ?? cardPortrait(roster, d, v);
@@ -322,7 +317,15 @@ List<String> cardLines(
     row(''),
     for (final l in portrait) row('${' ' * pad}$l'),
     row(''),
-    row('  $name'),
+    row('  $title'),
+    if (traits != null && d.traits != null) ...[
+      for (final l in flagLines(
+        individualFlags(roster, d.id, traits),
+        _cardInner - 2,
+      ))
+        row('  $l'),
+      row('  ${oneInText(oneIn(roster, d.id, traits))}'),
+    ],
     row('  ${d.familyLine}'),
     row(''),
     for (final l in wrapWords('"${d.first}"', _cardInner - 2)) row('  $l'),
@@ -338,29 +341,35 @@ List<String> cardLines(
   ];
 }
 
-/// The card for a daemon in the zoo: at its version, with its nickname, the
-/// day it hatched, the egg it came from, and its serial (`#0042`) when the
-/// server minted one (a guest's daemon has none).
+/// The card for an individual in the zoo: at its version, with the name it
+/// was given, its flags and `1 in N` (from its [traits]; none for seed 0,
+/// the species as it was before individuals), the day it hatched, the egg it
+/// came from, and its serial (`#0042`) when the server minted one (a guest's
+/// has none). [plate] is its own portrait once harnessd has drawn it.
 List<String> zooCardLines(
   DaemonRoster roster,
   DaemonDef d, {
   required String version,
   bool shiny = false,
-  String? nickname,
-  String? hatchedAt,
+  String? name,
+  DaemonTraits? traits,
+  String? hatched,
   String? egg,
   int? serial,
+  List<String>? plate,
 }) => cardLines(
   roster,
   d,
   version: version,
   shiny: shiny,
   serial: serial,
-  nickname: nickname,
-  hatched: hatchedAt == null || hatchedAt.length < 10
+  name: name,
+  traits: traits != null && traits.seed != 0 ? traits : null,
+  hatched: hatched == null || hatched.length < 10
       ? null
-      : hatchedAt.substring(0, 10),
+      : hatched.substring(0, 10),
   egg: egg,
+  plate: plate,
 );
 
 /// A card as it copies: a fenced code block.

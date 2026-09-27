@@ -24,8 +24,11 @@ import 'package:flutter/foundation.dart';
 
 import '../api/api_client.dart';
 import '../core/local_key_value_store.dart';
+import 'individuals.dart';
+import 'render.dart' show habitProgress;
 import 'roster.dart';
 import 'zoo.dart';
+import 'zoo.dart' as zoo_rules show eggsBeingEarned, nearestEgg;
 
 abstract interface class ZooTransport {
   /// `{revision, zoo}`, or null when daemons are off: a 404 (switched off on
@@ -62,7 +65,7 @@ class ZooEggArrived extends ZooEvent {
   final ZooEgg egg;
 }
 
-/// A daemon's bond reached a new level (and maybe a new version).
+/// An individual's bond reached a new level (and maybe a new version).
 class ZooDaemonGrew extends ZooEvent {
   const ZooDaemonGrew(this.daemon, {required this.versionChanged});
   final ZooDaemon daemon;
@@ -165,16 +168,10 @@ class ZooController extends ChangeNotifier {
   int get habitsDone => _zoo.habits.length;
   int get habitsNeeded => roster.rules.firstEggNeed;
 
-  /// Habits that count toward the first egg now (render.mjs `nestStage`'s
-  /// count): up to [habitsNeeded], and one short of it until every required
-  /// habit (a finished turn) is among them.
-  int get habitsCounted {
-    final rules = roster.rules;
-    final known = {for (final h in rules.habits) h.key};
-    final done = _zoo.habits.where(known.contains).toSet();
-    final required = rules.firstEggRequire.every(done.contains);
-    return min(done.length, required ? habitsNeeded : habitsNeeded - 1);
-  }
+  /// Habits that count toward the first egg now (render.mjs
+  /// `habitProgress`): up to [habitsNeeded], and one short of it until every
+  /// required habit (a finished turn) is among them.
+  int get habitsCounted => habitProgress(roster, _zoo.habits).$1;
 
   /// The habits the first egg cannot come without, still to do.
   List<DaemonHabit> get habitsRequiredLeft => [
@@ -200,19 +197,38 @@ class ZooController extends ChangeNotifier {
   /// Habits done toward the setup egg (the second habit egg), and how many
   /// it takes; null once it has come or when the roster has none.
   (int, int)? get setupProgress {
-    final need = roster.rules.setupEggNeed;
-    if (need == null || _zoo.setupEgg) return null;
-    final known = {for (final h in roster.rules.habits) h.key};
-    return (min(_zoo.habits.where(known.contains).toSet().length, need), need);
+    if (roster.rules.setupEggNeed == null || _zoo.setupEgg) return null;
+    return habitProgress(roster, _zoo.habits, kind: 'setup');
   }
+
+  /// Every egg being earned now, each at its stage (README, "Eggs").
+  List<ZooEggProgress> get eggsBeingEarned =>
+      zoo_rules.eggsBeingEarned(roster, _zoo, now: _now());
+
+  /// The egg nearest to hatching: a waiting one (`p4`), else the one being
+  /// earned furthest along. What the status line shows as an egg.
+  ZooEggProgress? get nearestEgg =>
+      zoo_rules.nearestEgg(roster, _zoo, now: _now());
 
   static String _lower(String label) => label.isEmpty
       ? label
       : '${label[0].toLowerCase()}${label.substring(1)}';
 
-  /// The daemon in the status line, with its roster entry.
+  /// The individual in the status line, with its species' roster entry.
   ZooDaemon? get paired => _zoo.paired;
   DaemonDef? get pairedDef => roster.byId(paired?.id);
+
+  /// An individual's traits, rolled once per species and seed.
+  DaemonTraits? traitsOf(ZooDaemon? daemon) {
+    if (daemon == null) return null;
+    return _traits['${daemon.id} ${daemon.seed}'] ??= rollTraits(
+      roster,
+      daemon.id,
+      daemon.seed,
+    );
+  }
+
+  final _traits = <String, DaemonTraits?>{};
 
   /// The first egg waiting to be hatched.
   ZooEgg? get readyEgg => _zoo.eggs.firstOrNull;
@@ -346,10 +362,8 @@ class ZooController extends ChangeNotifier {
         _events.add(ZooEggArrived(egg));
       }
     }
-    final seen = <String>{};
     for (final daemon in next.daemons) {
-      if (!seen.add(daemon.id)) continue;
-      final was = before.daemons.where((d) => d.id == daemon.id).firstOrNull;
+      final was = before.byUid(daemon.uid);
       if (was != null && daemon.bond > was.bond) {
         _events.add(
           ZooDaemonGrew(daemon, versionChanged: daemon.version != was.version),
@@ -451,8 +465,8 @@ class ZooController extends ChangeNotifier {
             next = next.copyWith(habits: [...next.habits, key]);
           }
         case 'zoo.pair':
-          if (next.owns(op['id'] as String)) {
-            next = next.copyWith(pair: op['id'] as String);
+          if (next.byUid(op['uid'] as String?) != null) {
+            next = next.copyWith(pair: op['uid'] as String);
           }
         case 'zoo.nickname' || 'zoo.autonomy' || 'zoo.consent':
           next = applyZooOps(
@@ -524,14 +538,17 @@ class ZooController extends ChangeNotifier {
     _sendLater(op);
   }
 
-  void pair(String id) {
-    if (!loaded || !_zoo.owns(id) || _zoo.pair == id) return;
-    final op = {'op': 'zoo.pair', 'id': id};
+  /// Pair the individual [uid] (`zoo.pair { uid }`). The species id rides
+  /// along for a server from before individuals, which pairs by species.
+  void pair(String uid) {
+    final daemon = _zoo.byUid(uid);
+    if (!loaded || daemon == null || _zoo.pair == uid) return;
+    final op = {'op': 'zoo.pair', 'uid': uid, 'id': daemon.id};
     if (!isAccount) {
       _applyLocal([op]);
       return;
     }
-    _show(_zoo.copyWith(pair: id));
+    _show(_zoo.copyWith(pair: uid));
     _sendLater(op);
   }
 
@@ -562,17 +579,24 @@ class ZooController extends ChangeNotifier {
     _sendLater(op);
   }
 
-  /// Rename, or clear with null. Answers false for a name the rules refuse.
-  bool nickname(String id, String? nickname) {
-    if (!loaded || !_zoo.owns(id)) return false;
-    final value = nickname?.trim();
+  /// Name the individual [uid] (`zoo.nickname { uid, name }`: 1-24
+  /// printable characters, trimmed), or clear it with null. Answers false for
+  /// a name the rules refuse. The species id and `nickname` ride along for a
+  /// server from before individuals.
+  bool nickname(String uid, String? name) {
+    final daemon = _zoo.byUid(uid);
+    if (!loaded || daemon == null) return false;
+    final value = name?.trim();
     if (value != null && value.isNotEmpty && !validNickname(value)) {
       return false;
     }
+    final named = value == null || value.isEmpty ? null : value;
     final op = {
       'op': 'zoo.nickname',
-      'id': id,
-      'nickname': value == null || value.isEmpty ? null : value,
+      'uid': uid,
+      'name': named,
+      'id': daemon.id,
+      'nickname': named,
     };
     if (!isAccount) {
       _applyLocal([op]);
@@ -636,11 +660,13 @@ class ZooController extends ChangeNotifier {
         _goOff(generation);
         return null;
       }
+      final before = _zoo;
       _adopt(answer);
-      return [
+      final hatch = [
         for (final h in answer['hatched'] as List? ?? const [])
           ?ZooHatch.fromJson(h),
       ].where((h) => h.eggId == eggId).firstOrNull;
+      return hatch == null ? null : _withIndividual(hatch, before);
     } catch (error) {
       debugPrint('zoo: hatch failed: $error');
       return null;
@@ -650,6 +676,42 @@ class ZooController extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  /// A hatch answered without the new individual's uid or seed (a server
+  /// from before individuals): the individual of its species that was not
+  /// there before, else the species' first.
+  ZooHatch _withIndividual(ZooHatch hatch, Zoo before) {
+    final own = _zoo.byUid(hatch.uid);
+    if (own != null) {
+      return hatch.uid != null && hatch.seed == own.seed
+          ? hatch
+          : ZooHatch(
+              eggId: hatch.eggId,
+              daemonId: hatch.daemonId,
+              uid: own.uid,
+              seed: own.seed,
+              shiny: hatch.shiny,
+              duplicate: hatch.duplicate,
+              xp: hatch.xp,
+              serial: hatch.serial ?? own.serial,
+            );
+    }
+    final species = _zoo.ofSpecies(hatch.daemonId);
+    final found =
+        species.where((d) => before.byUid(d.uid) == null).lastOrNull ??
+        species.firstOrNull;
+    if (found == null) return hatch;
+    return ZooHatch(
+      eggId: hatch.eggId,
+      daemonId: hatch.daemonId,
+      uid: found.uid,
+      seed: found.seed,
+      shiny: hatch.shiny,
+      duplicate: hatch.duplicate,
+      xp: hatch.xp,
+      serial: hatch.serial ?? found.serial,
+    );
   }
 
   List<ZooHatch> _applyLocal(List<Map<String, dynamic>> ops) {
