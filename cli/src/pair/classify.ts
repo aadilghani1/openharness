@@ -24,7 +24,7 @@
  */
 import { lstatSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { parseShell, type ShellCommand, type ShellWord } from './shell.js'
 
 const DENY_PATTERNS: RegExp[] = [
@@ -36,10 +36,8 @@ const DENY_PATTERNS: RegExp[] = [
   /\bclean\s+-[a-zA-Z]*f/i,                                               // git clean -f, -fd, -fdx
   /\bsudo\b|\bdoas\b/i,
   /\|\s*(sudo\s+)?(ba|z|da|k|c|tc|fi)?sh\b/i,                             // | sh, | bash
-  /\b(curl|wget|fetch)\b[^\n]*\|/i,                                        // a download piped anywhere
   /\bch(mod|own|grp)\s+(-[a-zA-Z]*R|--recursive)/,
   /\bmkfs(\.\w+)?\b/i,
-  /\bdd\s+[^\n]*\bif=/i,
   /\bdeploy(s|ed|ing|ment)?\b/i,
   /\bpublish(es|ed|ing)?\b/i,
   /\bdrop\s+(table|database|schema|index|column|collection|view)\b|\bdropdb\b|\bdrop\b(?!down)/i,
@@ -47,10 +45,23 @@ const DENY_PATTERNS: RegExp[] = [
   /\bmerge(s|d)?\b/i,
 ]
 
+/** `first` somewhere in `text`, and `then` true of the text from there on (across lines too: it leans wide). */
+const after = (text: string, first: RegExp, then: (rest: string) => boolean): boolean => {
+  const at = first.exec(text)
+  return !!at && then(text.slice(at.index))
+}
+
+/** Deny checks that one regex would make slow — two runs that can both take blanks backtrack for every start
+ *  (`dd` and 200,000 blanks took 19 s) — scanned in linear time instead. */
+const DENY_SCANS: Array<(text: string) => boolean> = [
+  (text) => after(text, /\b(curl|wget|fetch)\b/i, (rest) => rest.includes('|')),   // a download piped anywhere
+  (text) => after(text, /\bdd\s/i, (rest) => /\bif=/i.test(rest)),                 // dd reading a device or file
+]
+
 /** A deny-class dialog: never approved by anything but the person's own hands in the pane. */
 export function isDenyClass(dialog: string, options: readonly string[] = []): boolean {
   const text = [dialog, ...options].join('\n')
-  return DENY_PATTERNS.some((pattern) => pattern.test(text))
+  return DENY_PATTERNS.some((pattern) => pattern.test(text)) || DENY_SCANS.some((scan) => scan(text))
 }
 
 /** Options that answer for more than this once, and the one-time yes (pair/floor.ts, where the floor uses them). */
@@ -68,21 +79,33 @@ export interface PathContext {
 /** Folders no daemon key ever approves a read or an edit in, wherever they sit: the daemon's own data, git's
  *  internals (hooks, config) and the engines' settings (their hooks run commands). */
 const PROTECTED_SEGMENTS = new Set(['.harness', '.git', '.claude', '.codex'])
+/** A name as a case- and Unicode-folding file system (APFS, NTFS) matches it: `.GIT`, `.Claude` and `.harneſs`
+ *  open `.git`, `.claude` and `.harness` there, so they are compared folded. */
+const folded = (segment: string): string => segment.normalize('NFKC').toLowerCase()
 
-/** `path` with every symlink resolved: the longest part of it that exists through realpath, the rest appended. */
+/** A path longer than this cannot be opened (ENAMETOOLONG on macOS and Linux): nothing past it is read with certainty. */
+const PATH_MAX = 4096
+
+/**
+ * `path` as the kernel resolves it: the longest part of it that exists through realpath(3) — every symlink, and a
+ * `..` after one taken from where the link really points (never folded away before the links are read: `link/..`
+ * is the parent of the link's target) — and the part that does not exist yet appended as written. Null (not
+ * certain) when that part holds a `..`, or starts at a symlink whose target is missing (a write would follow it).
+ */
 function realResolve(path: string): string | null {
-  let head = path
-  const tail: string[] = []
-  for (;;) {
-    try {
-      return join(realpathSync(head), ...[...tail].reverse())
-    } catch {
-      const parent = dirname(head)
-      if (parent === head) return null
-      tail.push(basename(head))
-      head = parent
-    }
+  if (path.length > PATH_MAX || !isAbsolute(path)) return null
+  const parts = path.split(sep).filter((part) => part && part !== '.')
+  let at = parts.length
+  let real: string | null = null
+  while (real === null && at >= 0) {
+    try { real = realpathSync.native(sep + parts.slice(0, at).join(sep)) } catch { at-- }
   }
+  if (real === null) return null
+  const rest = parts.slice(at)
+  if (!rest.length) return real
+  if (rest.includes('..')) return null
+  try { if (lstatSync(join(real, rest[0]!)).isSymbolicLink()) return null } catch { /* truly absent */ }
+  return join(real, ...rest)
 }
 
 /**
@@ -98,22 +121,23 @@ export function inProject(path: string, cwd?: string | null, opts: { home?: stri
   let target: string
   if (p === '~' || p.startsWith('~/')) {
     if (!home) return false
-    target = join(home, p.slice(1))
+    target = `${resolve(home)}${sep}${p.slice(1)}`
   } else if (p.startsWith('~')) {
     return false                                                  // ~someone
   } else {
-    target = resolve(cwd, p)
+    // Joined as written, never normalized: `link/../x` is resolved by realResolve as the kernel would.
+    target = isAbsolute(p) ? p : `${cwd}${sep}${p}`
   }
-  const realCwd = realResolve(resolve(cwd))
-  const realTarget = realResolve(normalize(target))
+  const realCwd = realResolve(cwd)
+  const realTarget = realResolve(target)
   if (!realCwd || !realTarget) return false
   const rel = relative(realCwd, realTarget)
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false
-  if (rel.split(sep).some((segment) => PROTECTED_SEGMENTS.has(segment))) return false
-  const realHome = home ? realResolve(home) : null
+  if (rel.split(sep).some((segment) => PROTECTED_SEGMENTS.has(folded(segment)))) return false
+  const realHome = home ? realResolve(resolve(home)) : null
   if (realHome) {
     const fromHome = relative(realHome, realTarget)
-    if (fromHome && fromHome !== '..' && !fromHome.startsWith(`..${sep}`) && !isAbsolute(fromHome) && fromHome.split(sep)[0]!.startsWith('.')) return false
+    if (fromHome && fromHome !== '..' && !fromHome.startsWith(`..${sep}`) && !isAbsolute(fromHome) && folded(fromHome.split(sep)[0]!).startsWith('.')) return false
   }
   // A second hard link: an edit here lands in another file too (a link to ~/.bashrc, say).
   try {
@@ -149,7 +173,7 @@ const MAKE_TARGETS = new Set(['test', 'tests', 'check', 'build', 'lint', 'fmt', 
 const GIT_READS = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'ls-tree', 'blame', 'describe', 'shortlog', 'grep'])
 const GIT_BRANCH_LIST = new Set(['-a', '-r', '-v', '-vv', '--all', '--remotes', '--list', '--show-current'])
 /** git options that write a file, run a pager or a driver, or point git somewhere else. */
-const GIT_REFUSED = /^(--output|--open-files-in-pager|--ext-diff|--exec-path|--git-dir|--work-tree|--config-env|--upload-pack|--receive-pack)(=|$)|^-O/
+const GIT_REFUSED_LONG = ['--output', '--open-files-in-pager', '--ext-diff', '--exec-path', '--git-dir', '--work-tree', '--config-env', '--upload-pack', '--receive-pack']
 const FIND_ACTIONS = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'])
 const FIND_VALUE_ARGS = new Set(['-name', '-iname', '-path', '-ipath', '-regex', '-iregex', '-wholename', '-iwholename', '-type',
   '-maxdepth', '-mindepth', '-size', '-mtime', '-mmin', '-newermt', '-perm', '-user', '-group'])
@@ -157,10 +181,19 @@ const FIND_VALUE_ARGS = new Set(['-name', '-iname', '-path', '-ipath', '-regex',
 const SED_PRINT = /^((\d+|\$|\/[^/\\]*\/)(,(\d+|\$|\/[^/\\]*\/))?)?p$/
 
 const isFlag = (w: ShellWord): boolean => w.text.startsWith('-') && w.text !== '-'
-/** A short-option cluster (`-uo`) that carries one of `letters`, or one of the long options (with or without `=`). */
+/** The letters of a short-option cluster, up to the value one of them may carry in the same word: `-uo/tmp/x` → `uo`. */
+const shortLetters = (text: string): string => /^-([A-Za-z0-9]+)/.exec(text)?.[1] ?? ''
+/** One of `longs`, spelled out or abbreviated (getopt_long and git take any unique prefix: `--out=x` is `--output`). */
+const isLong = (text: string, longs: readonly string[]): boolean => {
+  if (!text.startsWith('--')) return false
+  const name = text.split('=')[0]!
+  return name.length > 2 && longs.some((long) => long.startsWith(name))
+}
+/** A short-option cluster (`-uo`, `-o./out`) that carries one of `letters`, or one of the long options (with or without `=`). */
 const hasOption = (words: ShellWord[], letters: string, longs: string[] = []): boolean => words.some((w) =>
-  (/^-[A-Za-z0-9]+$/.test(w.text) && [...letters].some((l) => w.text.slice(1).includes(l)))
-  || longs.some((long) => w.text === long || w.text.startsWith(`${long}=`)))
+  [...letters].some((l) => shortLetters(w.text).includes(l)) || isLong(w.text, longs))
+/** A git option that writes, runs a pager or a driver, or points git elsewhere — abbreviated too, and `-O` in a cluster. */
+const gitRefused = (w: ShellWord): boolean => isLong(w.text, GIT_REFUSED_LONG) || shortLetters(w.text).includes('O')
 
 /** A path-like argument (or the value of a `--flag=value`) must resolve inside the project. */
 function pathOk(w: ShellWord, ctx: Ctx): boolean {
@@ -169,8 +202,8 @@ function pathOk(w: ShellWord, ctx: Ctx): boolean {
   let text = w.text
   if (isFlag(w)) {
     const eq = text.indexOf('=')
-    if (eq < 0) return true
-    text = text.slice(eq + 1)
+    // `--file=/x`, or a short option with its value attached (`-f/x`): the value names a path when it looks like one.
+    text = eq >= 0 ? text.slice(eq + 1) : text.startsWith('--') ? '' : text.slice(1 + shortLetters(text).length)
     if (!(text.startsWith('/') || text.startsWith('~') || text.split('/').includes('..'))) return true
   }
   if (!w.tilde && text.startsWith('~')) return false            // a quoted `~`: a folder named `~`, or not — refused
@@ -212,7 +245,8 @@ function allowedSimple(cmd: ShellCommand, ctx: Ctx): boolean {
     case 'date':
       return !hasOption(args, 's', ['--set'])
     case 'sort':
-      return noGlobs && !hasOption(args, 'oT', ['--output', '--compress-program', '--temporary-directory']) && argsInProject(args, ctx)
+      // --files0-from reads the names of the files to print from a file: a path this cannot check.
+      return noGlobs && !hasOption(args, 'oT', ['--output', '--compress-program', '--temporary-directory', '--files0-from']) && argsInProject(args, ctx)
     case 'uniq':
       return noGlobs && args.filter((w) => !isFlag(w)).length <= 1 && argsInProject(args, ctx)
     case 'tree':
@@ -240,7 +274,7 @@ function allowedSimple(cmd: ShellCommand, ctx: Ctx): boolean {
       while (rest[0]?.text === '--no-pager') rest = rest.slice(1)
       const sub = rest[0]?.text ?? ''
       const tail = rest.slice(1)
-      if (tail.some((w) => GIT_REFUSED.test(w.text))) return false
+      if (tail.some(gitRefused)) return false
       if (GIT_READS.has(sub)) return argsInProject(tail, ctx, sub === 'grep' ? patternFirst(tail) : 0)
       if (sub === 'reflog') return tail.length === 0 || (tail[0]!.text === 'show' && argsInProject(tail.slice(1), ctx))
       if (sub === 'stash') return tail.length === 1 && tail[0]!.text === 'list'
@@ -297,12 +331,18 @@ function redirectOk(r: { op: string; fd: number | null; target: string }, ctx: C
   return false
 }
 
+/** The most of a command read at all: DIALOG_MAX, the most a dialog shows in full (protocol.ts, which re-exports
+ *  from this file — so the number is kept here rather than imported). */
+const COMMAND_MAX = 16_000
+
 /**
  * One command line is allowed when it reads with certainty and EVERY simple command in it is allowed.
  * Paths are resolved against `opts.cwd`: without one, a command that names any path is not allowed.
  */
 export function isAllowedCommand(command: string, opts: PathContext = {}): boolean {
-  if (!command.trim() || isDenyClass(command)) return false
+  // Longer than a dialog shows in full, it cannot be read before a key approves it — and every path in it
+  // costs a realpath: a bound on the time one command can take.
+  if (!command.trim() || command.length > COMMAND_MAX || isDenyClass(command)) return false
   const parsed = parseShell(command)
   if (!parsed.ok) return false
   const ctx: Ctx = { cwd: opts.cwd ?? null, home: opts.home === undefined ? homedir() : opts.home }

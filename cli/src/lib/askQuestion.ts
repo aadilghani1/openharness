@@ -657,8 +657,10 @@ export function pickAnswer(
 ): { key: string; value: string } | null {
   const entries = Object.entries(answers)
   const q = norm(question)
+  // A prefix names a question only when BOTH sides are long enough to mean something: a key that normalises
+  // to '' (or one word) is a prefix of every question, and would answer whatever is on screen.
   const byText = entries.find(([k]) => norm(k) === q)
-    ?? (q.length >= 6 ? entries.find(([k]) => norm(k).startsWith(q) || q.startsWith(norm(k))) : undefined)
+    ?? (q.length >= 6 ? entries.find(([k]) => norm(k).length >= 6 && (norm(k).startsWith(q) || q.startsWith(norm(k)))) : undefined)
   if (byText && !used.has(byText[0])) return { key: byText[0], value: byText[1] }
   if (!opts.positional) return null
   const next = entries.find(([k]) => !used.has(k))
