@@ -290,7 +290,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         default_hook(info);
     }));
 
-    let backend = term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, io::stdout()));
+    let backend = term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, term_out::Counted(io::stdout())));
     let mut term = Terminal::new(backend)?;
     term.clear()?;
     let size = terminal::size()?;
@@ -414,7 +414,7 @@ async fn run(config: config::Config) -> io::Result<()> {
             app.cursor_shape.clear();
             // A fresh Terminal repaints everything (ratatui's clear() asks the terminal where its
             // cursor is, and the input reader would eat the answer).
-            term = Terminal::new(term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, io::stdout())))?;
+            term = Terminal::new(term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, term_out::Counted(io::stdout()))))?;
             need_draw = true;
         }
         app.flush_acks();

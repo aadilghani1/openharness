@@ -128,6 +128,21 @@ impl<W: Write> TmuxBackend<W> {
     }
 }
 
+/// What has been written to the terminal, in bytes (#{client_written}).
+pub static WRITTEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The terminal's writer, its bytes counted.
+pub struct Counted<W: Write>(pub W);
+
+impl<W: Write> Write for Counted<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.0.write(buf)?;
+        WRITTEN.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+        Ok(n)
+    }
+    fn flush(&mut self) -> io::Result<()> { self.0.flush() }
+}
+
 impl<W: Write> Write for TmuxBackend<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> { self.inner.write(buf) }
     fn flush(&mut self) -> io::Result<()> { Write::flush(&mut self.inner) }

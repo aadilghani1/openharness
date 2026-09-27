@@ -381,9 +381,15 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
         }
         v
     } else if f.clients {
-        // One client (this one).
+        // format_loop_clients: this client, then the other terminals of this name, each expanding
+        // it as its own (asked for a command's output — never while drawing, which must not wait).
         let mut next = es.at(es.app.active, None);
-        let v = expand1(&mut next, copy);
+        let mut v = expand1(&mut next, copy);
+        if es.app.capture.is_some() && !crate::ipc::forwarded() {
+            for other in crate::commands::other_clients() {
+                if let Some((out, _, 0)) = crate::ipc::ask(&other, &["hn-list-clients".into(), "-F".into(), copy.to_string()]) { v.push_str(&out.concat()) }
+            }
+        }
         v
     } else if f.windows && es.session.is_some() {
         // format_loop_windows in a session not in front (a #{S:} loop's): its own windows.
@@ -1180,6 +1186,9 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_silence_flag" => flags(app, window).contains('~').then_some("1").unwrap_or("0").into(),
         "session_grouped" | "window_linked" | "window_bigger" | "window_offset_x" | "window_offset_y"
         | "client_control_mode" => "0".into(),
+        // What went to the terminal (bytes), and what was dropped (none: hn never drops output).
+        "client_written" if !app.headless => crate::term_out::WRITTEN.load(std::sync::atomic::Ordering::Relaxed).to_string(),
+        "client_discarded" if !app.headless => "0".into(),
         // attach -r: read-only (and its size ignored, as tmux flags it).
         "client_readonly" => app.read_only().then_some("1").unwrap_or("0").into(),
         "pane_pipe" => pane.map(|p| app.pipes.contains_key(&p.id)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
@@ -1262,7 +1271,20 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_active_sessions" => "1".into(),
         "window_active_sessions_list" | "window_linked_sessions_list" => app.session_name(),
         "window_linked_sessions" => "1".into(),
-        "window_cell_width" | "window_cell_height" | "client_cell_width" | "client_cell_height" => "0".into(),
+        // A cell's pixels (TIOCGWINSZ's over its cells, as tty_resize has them): the client's (0
+        // when the terminal does not say; none with no terminal), the window's (16x32, tmux's
+        // DEFAULT_XPIXEL/YPIXEL, then).
+        "window_cell_width" | "window_cell_height" | "client_cell_width" | "client_cell_height" => {
+            let cell = (!app.headless).then(|| crossterm::terminal::window_size().ok()).flatten()
+                .map(|w| (if w.columns > 0 { w.width / w.columns } else { 0 }, if w.rows > 0 { w.height / w.rows } else { 0 }));
+            let wide = name.ends_with("width");
+            match (name.starts_with("client"), cell) {
+                (true, None) => return Some(Val::Str(String::new())),
+                (true, Some((x, y))) => if wide { x } else { y }.to_string(),
+                (false, Some((x, y))) if x > 0 && y > 0 => if wide { x } else { y }.to_string(),
+                (false, _) => if wide { "16".into() } else { "32".into() },
+            }
+        }
         "cursor_x" | "cursor_y" => pane.map(|p| { let c = p.term.grid().cursor.point; if name == "cursor_x" { c.column.0.to_string() } else { c.line.0.to_string() } }).unwrap_or_default(),
         // Times: when this client started, and when a window last had something happen.
         "session_created" => return Some(Val::Time(app.session_created)),
