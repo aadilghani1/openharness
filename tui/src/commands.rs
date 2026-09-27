@@ -1214,7 +1214,7 @@ fn find_harness(app: &App, t: &str) -> Result<(String, String), String> {
 fn other_client_target(words: &[String]) -> Option<String> {
     let entry = crate::cmd::find(words.first()?).ok()?;
     let flag = match entry.name {
-        "display-message" | "switch-client" | "display-menu" | "display-popup" => 'c',
+        "display-message" | "switch-client" | "display-menu" | "display-popup" | "send-keys" => 'c',
         "refresh-client" | "show-messages" | "display-panes" | "command-prompt" | "confirm-before" | "lock-client" | "suspend-client" => 't',
         _ => return None,
     };
@@ -2974,6 +2974,18 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 }
                 if app.panes.get(&pane).map(|p| p.in_mode()).unwrap_or(false) || m.wp != Some(pane) { return }
                 return crate::mouse::input_key_mouse(app, pane, &m);
+            }
+            // -K: the keys as if typed at the client — its key tables, its bindings, then the pane
+            // (server_client_handle_key); nothing where no terminal is attached.
+            if flag(words, "-K") {
+                let Some(args) = words.args.clone() else { return };
+                if app.headless { return }
+                for word in &args.values {
+                    let parsed = (args.has('l') == 0).then(|| crate::keys::parse(word).ok()).flatten();
+                    let chords = match parsed { Some(c) => vec![c], None => word.chars().map(|c| crate::keys::Chord::normal(crossterm::event::KeyCode::Char(c), crossterm::event::KeyModifiers::NONE)).collect() };
+                    for c in chords { input::handle(app, crossterm::event::Event::Key(crossterm::event::KeyEvent::new(c.code, c.mods))) }
+                }
+                return;
             }
             let (Some(args), Some((_, pane))) = (words.args.clone(), target_pane(app, words)) else { return };
             input::send_keys(app, pane, &args);
