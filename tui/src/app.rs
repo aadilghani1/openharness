@@ -1285,12 +1285,15 @@ impl App {
                     // focused. A visible pane beside the one you type in is not being read.
                     let key = agent.key();
                     let hook_key = key.clone();
+                    // A turn that failed says so (its error), not that it finished — and is not done.
+                    let failed = agent.errored && !aborted;
+                    let what = if failed { format!("{name} failed{}", agent.did.as_ref().filter(|d| !d.is_empty()).map(|d| format!(": {d}")).unwrap_or_default()) } else { format!("{name} finished") };
                     if !replay && !subagent && looking.as_ref() != Some(&key) {
                         agent.unread = true;
-                        if mine && !visible.contains(&key) { self.say(format!("{name} finished"), theme::ONLINE) }
+                        if mine && !visible.contains(&key) { self.say(what.clone(), if failed { theme::DANGER } else { theme::ONLINE }) }
                     } else if looking.as_ref() == Some(&key) { self.mark_seen_key(key) }
-                    if mine && !self.terminal_focused && !replay && !subagent { crate::notify("Harness", &format!("{name} finished")) }
-                    if !replay && !subagent { crate::commands::notify_harness(self, "harness-done", &hook_key) }
+                    if mine && !self.terminal_focused && !replay && !subagent { crate::notify("Harness", &what) }
+                    if !replay && !subagent && !failed { crate::commands::notify_harness(self, "harness-done", &hook_key) }
                 }
             }
             "done" => {

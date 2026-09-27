@@ -86,7 +86,7 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
         if let Some(did) = a.did.as_ref().filter(|d| crate::fleet::first_line(d).unwrap_or_default() != first) { said.push(Line::from(vec![dim("⏺ "), Span::raw(did.clone())])) }
         if !a.last_text.is_empty() {
             if !said.is_empty() { said.push(Line::raw("")) }
-            for l in a.last_text.lines().take(40) { let mut spans = vec![dim("  ")]; spans.extend(markdown(l)); said.push(Line::from(spans)) }
+            said.extend(message(&a.last_text));
         }
         if !said.is_empty() { out.push(Line::raw("")); out.append(&mut said) }
     }
@@ -126,7 +126,7 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     // Waiting on you: the message it stopped at, below its plan.
     if state == State::NeedsInput && !a.last_text.is_empty() {
         out.push(Line::raw(""));
-        for l in a.last_text.lines().take(40) { let mut spans = vec![dim("  ")]; spans.extend(markdown(l)); out.push(Line::from(spans)) }
+        out.extend(message(&a.last_text));
     }
     if let Some(recent) = app.recent.get(&(machine_id.to_string(), agent_id.to_string())) {
         let asks: Vec<String> = recent.get("asks").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(str::to_string).or_else(|| v.get("text").and_then(Value::as_str).map(str::to_string))).collect()).unwrap_or_default();
@@ -410,5 +410,18 @@ fn textwrap(text: &str, width: usize) -> Vec<String> {
         line.push_str(word);
     }
     if !line.is_empty() { out.push(line) }
+    out
+}
+
+/// A final message, indented, as markdown — all of it (the preview scrolls; its end is often the
+/// question), or for a very long one its start and its end with how much is left out between.
+fn message(text: &str) -> Vec<Line<'static>> {
+    let lines: Vec<&str> = text.lines().collect();
+    let line = |l: &str| { let mut spans = vec![dim("  ")]; spans.extend(markdown(l)); Line::from(spans) };
+    if lines.len() <= 240 { return lines.iter().map(|l| line(l)).collect() }
+    let (head, tail) = (&lines[..20], &lines[lines.len() - 200..]);
+    let mut out: Vec<Line<'static>> = head.iter().map(|l| line(l)).collect();
+    out.push(Line::from(vec![dim(format!("  … {} lines …", lines.len() - 220))]));
+    out.extend(tail.iter().map(|l| line(l)));
     out
 }

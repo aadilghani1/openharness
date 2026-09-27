@@ -812,7 +812,7 @@ pub fn run(app: &mut App, command: &str) {
         "clone" => {
             let Some((machine, agent)) = focused_agent(app) else { app.say("This pane has no harness in it", theme::MUTED); return };
             let Some(link) = app.link(&machine) else { return };
-            app.say("Cloning…", theme::SOFT);
+            if app.capture.is_none() { app.say("Cloning…", theme::SOFT) }
             app.spawn(async move { link.rpc("agent_fork", json!({ "agentId": agent, "creationId": uuid::Uuid::new_v4().to_string() }), Duration::from_secs(120)).await }, move |app, reply| match reply {
                 Ok(reply) => if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
                     app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
@@ -950,7 +950,7 @@ pub fn harness_verb(app: &mut App, verb: &str, (machine, agent): (String, String
 
 fn clone_on(app: &mut App, machine: String, agent: String) {
     let Some(link) = app.link(&machine) else { return };
-    app.say("Cloning…", theme::SOFT);
+    if app.capture.is_none() { app.say("Cloning…", theme::SOFT) }
     app.spawn(async move { link.rpc("agent_fork", json!({ "agentId": agent, "creationId": uuid::Uuid::new_v4().to_string() }), Duration::from_secs(120)).await }, move |app, reply| match reply {
         Ok(reply) => if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
             app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
@@ -1203,8 +1203,10 @@ fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, messa
 /// agent_create: a harness on [machine] in [cwd] (none: a new project; [worktree]: a new git
 /// worktree of it, on a branch of its own the daemon names), in the permission mode
 /// @hn-permission-mode says (auto unless you set it: acceptEdits, plan, ask, full …).
-fn create_in(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool) {
-    let Some(link) = app.link(&machine) else { app.say("That machine is not connected", theme::DANGER); return };
+fn create_in(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool) { create_opts(app, machine, what, cwd, message, worktree, NewOpts::default()) }
+
+fn create_opts(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool, opts: NewOpts) {
+    let Some(link) = app.link(&machine) else { return app.error("That machine is not connected") };
     let terminal = what.engine == "terminal";
     let mut payload = json!({ "engine": what.engine, "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": !terminal });
     if let Some(dsh) = &what.dsh { payload["dsh"] = json!(dsh) }
@@ -1216,19 +1218,40 @@ fn create_in(app: &mut App, machine: String, what: What, cwd: Option<String>, me
     }
     if !terminal { payload["permissionMode"] = json!(app.options.get("@hn-permission-mode", "", None).filter(|m| !m.is_empty()).unwrap_or_else(|| "auto".into())) }
     if let Some(message) = message.filter(|m| !m.trim().is_empty()) { payload["prompt"] = json!(message.trim()) }
-    app.say(format!("Starting {} on {}…", what.label, app.fleet.machine_name(&machine)), theme::SOFT);
+    if let Some(name) = opts.name.as_ref().filter(|n| !n.is_empty()) { payload["name"] = json!(name) }
+    // (From a shell: nothing said on the way — a message there is the command's error.)
+    if app.capture.is_none() { app.say(format!("Starting {} on {}…", what.label, app.fleet.machine_name(&machine)), theme::SOFT) }
     app.modal = None;
+    // -P: the shell that asked waits for it, and is told where it is (as new-window -P).
+    if opts.print.is_some() { app.print_new = opts.print.clone() }
+    let session = app.session_id;
     app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(180)).await }, move |app, reply| match reply {
         Ok(reply) => {
             if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
                 app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
-                // A new harness is a new window (as C-b c's shell is), or the empty one here.
+                // A new harness is a new window (as C-b c's shell is), or the empty one here —
+                // in the session it was asked for; -d: not gone to.
+                let back = (app.session_id, app.tab().id.clone());
+                let swapped = session != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|s| s.id == session) && { app.swap_back = Some(back.0); app.swap_session(session) };
+                let before = app.tab().id.clone();
                 let placement = if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab };
                 app.open_agent(&machine, id, placement);
+                if opts.detached { if let Some(i) = app.tabs.iter().position(|t| t.id == before) { app.select_tab(i) } }
+                if let Some(fmt) = opts.print.as_ref().and(app.print_new.take()) {
+                    let line = app.find_pane(&machine, id).map(|(w, p)| crate::format::spans_for_pane(app, &fmt, w, p, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect::<String>()).unwrap_or_default();
+                    if let Some(tx) = app.held_reply.take() { let _ = tx.send((vec![line], Vec::new(), 0)); }
+                }
+                if swapped { app.swap_back = None; app.swap_session(back.0); app.fit_panes(); app.save_sessions() }
                 app.toast = None;
-            } else { app.say("The machine created no harness", theme::DANGER) }
+            } else {
+                if let Some(tx) = app.held_reply.take().filter(|_| opts.print.is_some()) { app.print_new = None; let _ = tx.send((Vec::new(), vec!["the machine created no harness".into()], 1)); return }
+                app.say("The machine created no harness", theme::DANGER)
+            }
         }
-        Err(e) => app.say(format!("Could not start it: {e}"), theme::DANGER),
+        Err(e) => {
+            if let Some(tx) = app.held_reply.take().filter(|_| opts.print.is_some()) { app.print_new = None; let _ = tx.send((Vec::new(), vec![format!("create harness failed: {e}")], 1)); return }
+            app.say(format!("Could not start it: {e}"), theme::DANGER)
+        }
     });
 }
 
@@ -2863,20 +2886,56 @@ fn inject_mode_key(app: &mut App, pane: u64, chord: keys::Chord) {
 }
 
 /// `new-harness claude @office ~/src/api`: the words `harness new` takes.
-pub fn new_harness_from(app: &mut App, args: &str) {
-    let mut engine = "claude".to_string();
+/// What new-harness asks beyond which and where (a script's): made in the background (-d), its
+/// name (-n), and what to print once it is there (-P, -F: new-window's).
+#[derive(Default, Clone)]
+pub struct NewOpts { pub detached: bool, pub name: Option<String>, pub print: Option<String> }
+
+/// `new-harness [-dP] [-e engine] [-c folder] [-n name] [-F format] [engine] [@machine] [folder]
+/// [task …]`: the engine a known one (else -e's, else Claude Code), the folder a path, and the
+/// words after them the first message it is given.
+pub fn new_harness_words(app: &mut App, words: &[String]) {
+    let mut opts = NewOpts::default();
+    let (mut engine, mut format, mut print) = (None::<String>, None::<String>, false);
     let mut machine = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.machine_id.clone()).unwrap_or(app.fleet.local_id.clone());
     let mut cwd: Option<String> = None;
-    for word in args.split_whitespace() {
-        if let Some(m) = word.strip_prefix('@') {
-            match app.fleet.machines.iter().find(|x| x.name.to_lowercase().starts_with(&m.to_lowercase()) || x.id == m) { Some(x) => machine = x.id.clone(), None => { app.say(format!("no machine called {m}"), theme::WARN); return } }
-        } else if word.starts_with('/') || word.starts_with('~') || word.starts_with('.') {
-            let home = app.homes.get(&machine).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
-            cwd = Some(if word == "~" { home } else if let Some(r) = word.strip_prefix("~/") { format!("{home}/{r}") } else { word.to_string() });
-        } else { engine = word.to_string() }
+    let mut task: Vec<String> = Vec::new();
+    let (mut i, mut flags) = (0, true);
+    let path = |app: &App, machine: &str, word: &str| {
+        let home = app.homes.get(machine).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
+        if word == "~" { home } else if let Some(r) = word.strip_prefix("~/") { format!("{home}/{r}") } else { word.to_string() }
+    };
+    while i < words.len() {
+        let w = words[i].clone();
+        i += 1;
+        if flags && w == "--" { flags = false; continue }
+        if flags && w.len() > 1 && w.starts_with('-') {
+            let mut value = || { i += 1; words.get(i - 1).cloned() };
+            match w.as_str() {
+                "-d" => opts.detached = true,
+                "-P" => print = true,
+                "-F" => format = value(),
+                "-n" => opts.name = value(),
+                "-e" => engine = value(),
+                "-c" => { let c = value().unwrap_or_default(); cwd = Some(path(app, &machine, &c)) }
+                _ => return app.error(format!("unknown flag {w}")),
+            }
+            continue;
+        }
+        flags = false;
+        if let Some(m) = w.strip_prefix('@').filter(|_| task.is_empty()) {
+            match app.fleet.machines.iter().find(|x| x.name.to_lowercase().starts_with(&m.to_lowercase()) || x.id == m) { Some(x) => machine = x.id.clone(), None => return app.error(format!("can't find machine: {m}")) }
+        } else if task.is_empty() && (w.starts_with('/') || w.starts_with('~') || w.starts_with("./") || w.starts_with("../") || w == ".") {
+            cwd = Some(path(app, &machine, &w));
+        } else if task.is_empty() && engine.is_none() && (theme::engine_label(&w) != w || w == "terminal") {
+            engine = Some(w);
+        } else { task.push(w) }
     }
+    if print { opts.print = Some(format.unwrap_or_else(|| "#{session_name}:#{window_index}.#{pane_index}".into())) }
+    let engine = engine.unwrap_or_else(|| "claude".into());
     let label = theme::engine_label(&engine).to_string();
-    create(app, machine, What { engine, dsh: None, label }, cwd, None);
+    let task = (!task.is_empty()).then(|| task.join(" "));
+    create_opts(app, machine, What { engine, dsh: None, label }, cwd, task, false, opts);
 }
 
 pub fn rename_focused(app: &mut App, name: &str) {

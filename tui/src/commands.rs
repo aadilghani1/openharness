@@ -3240,7 +3240,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             app.modal = Some(Modal::Confirm { prompt, command, key, enter_yes: flag(words, "-y") });
             app.wait_cli = app.capture.is_some() && !flag(words, "-b");
         }
-        "new-harness" => { let args = rest(words); if args.is_empty() { input::run(app, "new") } else { input::new_harness_from(app, &args) } }
+        "new-harness" => { if words.len() < 2 { input::run(app, "new") } else { input::new_harness_words(app, &words[1..]) } }
         "new-terminal" => input::run(app, "terminal"),
         // A harness's verbs, on -t's harness (the hook's in a harness-* hook), else the focused
         // pane's; from a shell -t is needed, and one mid-turn is restarted or paused only with -y
