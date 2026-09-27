@@ -3743,10 +3743,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   /// The panel and the hatch reveal float beside the status slot, at the top
-  /// right, with a barrier that closes them.
+  /// right, with a barrier that closes them: [cells] terminal cells wide at
+  /// most (the reveal is wider, for a plate's 56 columns).
   Widget _anchoredBesideSlot({
     required Widget child,
     required VoidCallback onBarrierTap,
+    int cells = 46,
   }) => LayoutBuilder(
     builder: (context, constraints) {
       final top = _native ? 0.0 : _tabBarHeight;
@@ -3765,7 +3767,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
             right: 10,
             width: (constraints.maxWidth - 20).clamp(
               0,
-              terminalCellSizeOf(context).width * 46,
+              terminalCellSizeOf(context).width * cells,
             ),
             child: ConstrainedBox(
               constraints: BoxConstraints(
@@ -3818,6 +3820,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _hatchOverlay = OverlayEntry(
       builder: (context) => _anchoredBesideSlot(
         onBarrierTap: _closeHatch,
+        cells: daemonRevealCells,
         child: DaemonHatchReveal(
           roster: _zoo.roster,
           egg: egg,

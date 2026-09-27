@@ -3,6 +3,7 @@ import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../daemons/daemon_brain.dart';
 import '../daemons/daemon_face.dart';
+import '../daemons/plates.dart';
 import '../daemons/roster.dart';
 import '../shared/theme/app_theme.dart';
 import '../shared/theme/workspace_bar_style.dart';
@@ -79,6 +80,81 @@ Color daemonColor(DaemonDef def, TerminalTheme theme, {bool shiny = false}) {
   return (shiny ? null : def.lightColor) ??
       readableInk(base, theme.background, minimum: 4.5);
 }
+
+/// How a filled daemon is coloured on [background] (the terminal's own, or
+/// its backdrop, by default): the plate colour rule down its gradient (the
+/// shiny one when [shiny]). On a light background the rule holds, but each
+/// stop is darkened until it reads (4.5:1) and a burning glyph (`@`) goes
+/// toward black, not white. Null for a daemon drawn in line art.
+PlateInk? daemonPlateInk(
+  DaemonRoster roster,
+  DaemonDef def,
+  TerminalTheme theme, {
+  bool shiny = false,
+  Color? background,
+}) {
+  final gradient = plateGradient(def, shiny: shiny);
+  if (!def.plate || gradient == null) return null;
+  final bg = background ?? daemonBackdrop(def) ?? theme.background;
+  if (bg.computeLuminance() < .4) {
+    return PlateInk(roster, gradient, background: bg);
+  }
+  return PlateInk(
+    roster,
+    DaemonGradient(
+      readableInk(gradient.top, bg, minimum: 4.5),
+      readableInk(gradient.bottom, bg, minimum: 4.5),
+    ),
+    background: bg,
+    burn: const Color(0xff000000),
+  );
+}
+
+/// One row of a plate as spans: row [r] of a plate [rows] tall, each glyph
+/// in [ink]'s colour. Spaces draw nothing, so they ride along in whichever
+/// run they fall in; a run of one colour is one span.
+List<InlineSpan> plateRowSpans(
+  String row,
+  int rows,
+  int r,
+  PlateInk ink,
+  TextStyle style,
+) {
+  final spans = <InlineSpan>[];
+  final text = StringBuffer();
+  Color? colour;
+  void flush() {
+    if (text.isEmpty) return;
+    spans.add(
+      TextSpan(
+        text: text.toString(),
+        style: colour == null ? style : style.copyWith(color: colour),
+      ),
+    );
+    text.clear();
+  }
+
+  for (final ch in row.split('')) {
+    final glyph = ch == ' ' ? null : ink.glyph(rows, r, ch);
+    if (glyph != null && colour != null && glyph != colour) flush();
+    if (glyph != null) colour = glyph;
+    text.write(ch);
+  }
+  flush();
+  return spans;
+}
+
+/// A whole plate as spans, row by row ([plateRowSpans]).
+List<InlineSpan> plateSpans(
+  List<String> rows,
+  PlateInk ink,
+  TextStyle style,
+) => [
+  for (final (r, row) in rows.indexed) ...[
+    ...plateRowSpans(row, rows.length, r, ink, style),
+    if (r < rows.length - 1) TextSpan(text: '\n', style: style),
+  ],
+];
 
 /// The slot's ink: the status line's own text colour, whatever the daemon.
 /// Daemon colours fail contrast on a status bar and on the message line; they
@@ -398,7 +474,9 @@ class DaemonKeys extends StatelessWidget {
 }
 
 /// A card (card.mjs's lines) as selectable text: the portrait rows in the
-/// daemon's colour, on its backdrop when it brings one (the grue's black).
+/// daemon's colour, on its backdrop when it brings one (the grue's black). A
+/// filled daemon's portrait plate takes the plate colour instead, glyph by
+/// glyph down its gradient ([plate]).
 class DaemonCardText extends StatelessWidget {
   const DaemonCardText({
     super.key,
@@ -407,25 +485,37 @@ class DaemonCardText extends StatelessWidget {
     required this.style,
     required this.colour,
     this.backdrop,
+    this.plate,
   });
   final List<String> lines;
   final int portraitRows;
   final TextStyle style;
   final Color colour;
   final Color? backdrop;
+  final PlateInk? plate;
 
   @override
   Widget build(BuildContext context) {
     // card.mjs: the border, the head and a blank row, then the portrait. Only
     // the inside of those rows takes the daemon's colour; the frame stays ink.
     final art = style.copyWith(color: colour, backgroundColor: backdrop);
+    final plate = this.plate;
     return SelectableText.rich(
       TextSpan(
         children: [
           for (final (i, line) in lines.indexed) ...[
             if (i >= 3 && i < 3 + portraitRows && line.length > 4) ...[
               TextSpan(text: line.substring(0, 2), style: style),
-              TextSpan(text: line.substring(2, line.length - 2), style: art),
+              if (plate == null)
+                TextSpan(text: line.substring(2, line.length - 2), style: art)
+              else
+                ...plateRowSpans(
+                  line.substring(2, line.length - 2),
+                  portraitRows,
+                  i - 3,
+                  plate,
+                  style,
+                ),
               TextSpan(text: line.substring(line.length - 2), style: style),
             ] else
               TextSpan(text: line, style: style),

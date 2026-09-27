@@ -114,7 +114,10 @@ class DaemonRules {
             e.key as String: '${e.value}',
       },
       nest = [for (final n in raw['nest'] as List) n as String],
-      egg = [for (final n in raw['egg'] as List) n as String];
+      egg = [for (final n in raw['egg'] as List) n as String],
+      plate = raw['plate'] is Map
+          ? DaemonPlateRules._(raw['plate'] as Map)
+          : null;
 
   final List<String> moods;
   final Map<String, String> eyes;
@@ -165,8 +168,36 @@ class DaemonRules {
   final List<String> nest;
   final List<String> egg;
 
+  /// How filled daemons are baked and coloured (`rules.plate`); null in a
+  /// roster without them.
+  final DaemonPlateRules? plate;
+
   Duration hold(DaemonMood mood) =>
       Duration(milliseconds: holdMs[mood.name] ?? 0);
+}
+
+/// `rules.plate` (README, "Plates"): the two widths a plate is baked at, the
+/// rows each may take, the loop's frame time, and each glyph's brightness.
+class DaemonPlateRules {
+  DaemonPlateRules._(Map raw)
+    : portraitCols = _size(raw, 'cols', 'portrait', 28),
+      revealCols = _size(raw, 'cols', 'reveal', 56),
+      portraitRows = _size(raw, 'maxRows', 'portrait', 12),
+      revealRows = _size(raw, 'maxRows', 'reveal', 24),
+      frameMs = (raw['frameMs'] as num? ?? 170).toInt(),
+      ink = {
+        for (final e in (raw['ink'] as Map? ?? const {}).entries)
+          e.key as String: (e.value as num).toDouble(),
+      };
+
+  static int _size(Map raw, String group, String key, int fallback) =>
+      ((raw[group] as Map?)?[key] as num?)?.toInt() ?? fallback;
+
+  final int portraitCols, revealCols, portraitRows, revealRows, frameMs;
+
+  /// A glyph's brightness: at most 1 mixes from the background toward the
+  /// row's colour, above 1 on toward white. A glyph not listed is not drawn.
+  final Map<String, double> ink;
 }
 
 /// How work earns eggs (`rules.earn`).
@@ -202,7 +233,14 @@ class DaemonEarn {
 }
 
 class DaemonDrop {
-  const DaemonDrop(this.id, this.n, this.name, {this.announce, this.release});
+  const DaemonDrop(
+    this.id,
+    this.n,
+    this.name, {
+    this.announce,
+    this.release,
+    this.hold = false,
+  });
   final String id;
   final int n;
   final String name;
@@ -211,12 +249,18 @@ class DaemonDrop {
   /// from [release] on. Absent: always out.
   final String? announce, release;
 
+  /// On hold: kept in the roster without dates, and never drawn, seeded,
+  /// hatched or shown, whatever its dates would say.
+  final bool hold;
+
   static DateTime? _day(String? day) =>
       day == null ? null : DateTime.tryParse('${day}T00:00:00.000Z');
 
   /// `released` (its daemons hatch), `announced` (silhouettes on shelves)
-  /// or `hidden`, at [now] (card.mjs `dropState`).
+  /// or `hidden`, at [now] (card.mjs `dropState`). A drop on hold is hidden
+  /// before its dates are even looked at.
   String state(DateTime now) {
+    if (hold) return 'hidden';
     final release = _day(this.release);
     if (release == null || !release.isAfter(now.toUtc())) return 'released';
     final announce = _day(this.announce);
@@ -226,6 +270,23 @@ class DaemonDrop {
   }
 
   bool releasedAt(DateTime now) => state(now) == 'released';
+
+  /// Whether anything of it may show at [now]: released, or announced.
+  bool shownAt(DateTime now) => state(now) != 'hidden';
+}
+
+/// The two stops a filled daemon's colour runs between, top row to bottom.
+class DaemonGradient {
+  const DaemonGradient(this.top, this.bottom);
+  final Color top, bottom;
+
+  static DaemonGradient? _parse(Object? raw) {
+    if (raw is! Map) return null;
+    Color? stop(String key) =>
+        DaemonDef._color(DaemonDef._hex((raw[key] as Map?)?['hex']));
+    final top = stop('top'), bottom = stop('bottom');
+    return top == null || bottom == null ? null : DaemonGradient(top, bottom);
+  }
 }
 
 class DaemonDef {
@@ -260,8 +321,11 @@ class DaemonDef {
       sprites = Map<String, String>.from(raw['sprites'] as Map),
       work = [for (final w in raw['work'] as List) w as String],
       workMs = (raw['workMs'] as num).toInt(),
+      plate = raw['plate'] == true,
+      gradient = DaemonGradient._parse(raw['gradient']),
+      shinyGradient = DaemonGradient._parse(raw['shinyGradient']),
       portraits = {
-        for (final e in (raw['portraits'] as Map).entries)
+        for (final e in (raw['portraits'] as Map? ?? const {}).entries)
           e.key as String: [for (final l in e.value as List) l as String],
       },
       parts = {
@@ -298,6 +362,12 @@ class DaemonDef {
   final Map<String, String> sprites;
   final List<String> work;
   final int workMs;
+
+  /// Drawn filled (README, "Plates"): its portrait is a baked plate
+  /// (`plates.dart`), coloured down [gradient] ([shinyGradient] when shiny),
+  /// and it has no line [portraits]. Its status line sprite is line art.
+  final bool plate;
+  final DaemonGradient? gradient, shinyGradient;
   final Map<String, List<String>> portraits;
   final Map<String, DaemonPart> parts;
   final Map<String, Map<String, String>> moodParts;
@@ -337,6 +407,7 @@ class DaemonRoster {
             d['name'] as String,
             announce: d['announce'] as String?,
             release: d['release'] as String?,
+            hold: d['hold'] == true,
           ),
       ],
       daemons = [for (final d in raw['daemons'] as List) DaemonDef._(d as Map)];
@@ -359,6 +430,13 @@ class DaemonRoster {
       if (drop(d.drop)?.releasedAt(now) ?? false) d,
   ];
   int dropSize(String id) => daemons.where((d) => d.drop == id).length;
+
+  /// The drops that may show at [now], in order: released and announced.
+  /// One on hold, or not yet announced, shows nowhere.
+  List<DaemonDrop> shownDrops(DateTime now) => [
+    for (final d in drops)
+      if (d.shownAt(now)) d,
+  ];
 
   /// 0, 1 or 2 for `0.1`, `1.0`, `2.0`; unknown versions draw as the first.
   int versionIndex(String? version) {

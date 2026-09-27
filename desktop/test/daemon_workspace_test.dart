@@ -450,7 +450,7 @@ void main() {
         daemons: [
           ZooDaemon(id: 'tim', hatchedAt: '2026-09-26T09:00:00Z', egg: 'first'),
           ZooDaemon(
-            id: 'fzf',
+            id: 'tux',
             hatchedAt: '2026-09-26T10:00:00Z',
             egg: 'turn',
             version: '2.0',
@@ -463,7 +463,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(glyph(tester), '[o o]');
+    expect(glyph(tester), '(o o)');
     await tester.tap(slot);
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-panel')), findsOneWidget);
@@ -482,22 +482,22 @@ void main() {
     // secret marked.
     expect(find.text('[ ? ]'), findsNWidgets(7));
     expect(find.text('[ ! ]'), findsOneWidget);
-    expect(find.text('#08 fzf'), findsOneWidget);
-    // Move to fzf and pair it.
+    expect(find.text('#08 tux'), findsOneWidget);
+    // Move to tux and pair it.
     await key(tester, LogicalKeyboardKey.keyJ);
     await tester.pump();
     await key(tester, LogicalKeyboardKey.enter);
     await tester.pump();
     expect(
-      find.text(daemonRoster.byId('fzf')!.lore),
+      find.text(daemonRoster.byId('tux')!.lore),
       findsOneWidget,
-      reason: 'the panel now shows fzf',
+      reason: 'the panel now shows tux',
     );
     await tester.tap(find.byKey(const ValueKey('daemon-pair')));
     await tester.pump();
-    expect(zoo.zoo.pair, 'fzf');
+    expect(zoo.zoo.pair, 'tux');
     await zoo.flush();
-    expect(remote.zoo.pair, 'fzf');
+    expect(remote.zoo.pair, 'tux');
     // Rename it.
     await tester.tap(find.byKey(const ValueKey('daemon-rename')));
     await tester.pump();
@@ -509,14 +509,14 @@ void main() {
     await tester.pump();
     await zoo.flush();
     expect(remote.zoo.daemons.last.nickname, 'Scout');
-    expect(find.text('Scout (fzf)'), findsOneWidget);
+    expect(find.text('Scout (tux)'), findsOneWidget);
     // Nap is a setting, then Escape closes and the slot shows the nap.
     await tester.tap(find.byKey(const ValueKey('daemon-tab-settings')));
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('daemon-nap')));
     // The click that opened the panel was a boop; it wins for 900 ms.
     await tester.pump(const Duration(seconds: 1));
-    expect(glyph(tester), '> ;-;-;z');
+    expect(glyph(tester), r'<(- -)/z');
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-panel')), findsNothing);
@@ -567,7 +567,7 @@ void main() {
     });
     await tester.pump();
     await tester.pump();
-    expect(glyph(tester), '[o o]');
+    expect(glyph(tester), '(o o)');
     await tester.tap(slot);
     await tester.pump();
     await key(tester, LogicalKeyboardKey.escape);
@@ -577,7 +577,7 @@ void main() {
       findsOneWidget,
       reason: "the boop's line, after the typing pause",
     );
-    expect(find.text("tim: hey. that's my status line."), findsOneWidget);
+    expect(find.text("tim: hey. that's my status line. (ink)"), findsOneWidget);
     await tester.pump(const Duration(seconds: 6));
     expect(find.byKey(const ValueKey('daemon-voice')), findsNothing);
     await unmount(tester);
@@ -640,7 +640,7 @@ void main() {
     app.adoptSessionForTest(terminal('a0', []));
     app.notifyListeners();
     await tester.pump();
-    expect(glyph(tester), '[o o]', reason: 'not x eyes');
+    expect(glyph(tester), '(o o)', reason: 'not x eyes');
     await tester.tap(slot);
     await tester.pump();
     expect(
@@ -668,21 +668,21 @@ void main() {
       'payload': {'error': 'exit 1'},
     });
     await tester.pump();
-    expect(glyph(tester), '[x x]');
+    expect(glyph(tester), '(x x)');
     await tester.pump(const Duration(seconds: 5));
-    expect(glyph(tester), '[x x]', reason: 'its last turn failed');
+    expect(glyph(tester), '(x x)', reason: 'its last turn failed');
     await app.handleMachineEventForTest('m', {
       'type': 'turn_started',
       'agentId': 'a0',
     });
     await tester.pump();
-    expect(glyph(tester), startsWith('[= =]'), reason: 'a new turn');
+    expect(glyph(tester), startsWith('(= =)'), reason: 'a new turn');
     await app.handleMachineEventForTest('m', {
       'type': 'turn_ended',
       'agentId': 'a0',
     });
     await tester.pump();
-    expect(glyph(tester), '[^ ^]', reason: 'it ended well');
+    expect(glyph(tester), '(^ ^)', reason: 'it ended well');
     await unmount(tester);
   });
 
@@ -700,7 +700,7 @@ void main() {
     });
     await tester.pump();
     final first = glyph(tester);
-    expect(first, startsWith('[= =]'));
+    expect(first, startsWith('(= =)'));
     await tester.pump(const Duration(seconds: 3));
     expect(glyph(tester), first, reason: 'no events, no motion');
     await app.handleMachineEventForTest('m', {
@@ -834,8 +834,8 @@ void main() {
       seed: const Zoo(
         daemons: [
           ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first'),
-          ZooDaemon(id: 'fish', hatchedAt: '', egg: 'turn'),
-          ZooDaemon(id: 'ping', hatchedAt: '', egg: 'turn'),
+          ZooDaemon(id: 'gnu', hatchedAt: '', egg: 'turn'),
+          ZooDaemon(id: 'lynx', hatchedAt: '', egg: 'turn'),
         ],
         pair: 'tim',
         habits: _habits5,
@@ -900,7 +900,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(states.last['cell'], '* [o o]   ');
+    expect(states.last['cell'], '* (o o)   ');
     expect(states.last['tally'], '+1 egg');
     expect(states.last['patch'], isNull, reason: 'a dark theme');
     await unmount(tester);
@@ -1109,7 +1109,7 @@ void main() {
           ],
         ),
       );
-      expect(glyph(tester), '[? ?]', reason: 'it asks you something');
+      expect(glyph(tester), '(? ?)', reason: 'it asks you something');
       await frame(tester, 'daemon_say', {
         'id': 'need:m:e:1',
         'about': {'machineId': 'm', 'agentId': 'a1', 'requestId': 'r1'},
@@ -1199,7 +1199,7 @@ void main() {
             .data,
         '+3',
       );
-      expect(glyph(tester), '[o o]', reason: 'asleep is never a failure');
+      expect(glyph(tester), '(o o)', reason: 'asleep is never a failure');
       // It acted within rules: drawn like done.
       await frame(tester, 'daemon_say', {
         'id': 'auto:o:e:2',
@@ -1209,7 +1209,7 @@ void main() {
         'actions': [],
         'ttlMs': 5200,
       });
-      expect(glyph(tester), '[^ ^]');
+      expect(glyph(tester), '(^ ^)');
       await openPanel(tester);
       expect(
         frames.where((f) => f.$2['doneSeen'] == true),
@@ -1848,7 +1848,7 @@ void main() {
     ) async {
       await mount(tester, seed: zooWithTim);
       await tester.pump();
-      expect(glyph(tester), '[o o]');
+      expect(glyph(tester), '(o o)');
       await frame(tester, 'daemon_state', {
         'pair': 'tim',
         'needs': [
@@ -1866,7 +1866,7 @@ void main() {
         'asks': [],
         'acted': [],
       });
-      expect(glyph(tester), '[? ?]', reason: 'a harness on another machine');
+      expect(glyph(tester), '(? ?)', reason: 'a harness on another machine');
       expect(frames.first.$1, 'daemon_presence');
       expect(frames.first.$2['active'], isTrue);
       expect(frames.first.$2['desk'], isA<String>());

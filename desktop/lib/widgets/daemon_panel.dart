@@ -19,6 +19,7 @@ import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart';
 import 'daemon_consent.dart';
+import 'daemon_portrait.dart';
 import 'daemon_slot.dart';
 
 part 'daemon_panel_pair.dart';
@@ -66,8 +67,13 @@ class DaemonPanel extends StatefulWidget {
     this.onOpenRules,
     this.talkShortcut,
     this.focusTalk = false,
+    this.now,
   });
   final DaemonFace face;
+
+  /// What a drop's state is judged at (released, announced, on hold): the
+  /// wall clock unless a test gives one.
+  final DateTime Function()? now;
 
   /// This computer's pair brain, when harnessd has one: its asks, brief,
   /// journal, talk and lessons.
@@ -751,16 +757,10 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
     final colour = daemonColor(def, _theme, shiny: viewing.shiny);
     final backdrop = daemonBackdrop(def);
     final name = viewing.nickname ?? def.id;
-    final portrait = renderPortrait(
-      roster,
-      def,
-      viewing.version,
-      mood,
-      t: isPair ? face.portraitT : 0,
-      lid: isPair ? face.lid : null,
-      motion: isPair && face.motionEnabled,
-    );
-    final portraitRows = portraitFor(roster, def, viewing.version).length;
+    final portraitRows = cardPortrait(roster, def, viewing.version).length;
+    // The portrait's ground, and the card's: faint glyphs mix from it.
+    final ground =
+        backdrop ?? Color.lerp(_theme.background, _theme.foreground, .03)!;
     final card = zooCardLines(
       roster,
       def,
@@ -797,23 +797,49 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
               style: _ink(),
               colour: colour,
               backdrop: backdrop,
+              plate: daemonPlateInk(
+                roster,
+                def,
+                _theme,
+                shiny: viewing.shiny,
+                background: Color.lerp(
+                  _theme.background,
+                  _theme.foreground,
+                  .03,
+                ),
+              ),
             ),
           ),
         )
       else
         Container(
           width: double.infinity,
-          color:
-              backdrop ??
-              Color.lerp(_theme.background, _theme.foreground, .03),
+          color: ground,
           padding: EdgeInsets.symmetric(vertical: _cell.height / 2),
           alignment: Alignment.center,
-          child: Text(
-            portrait.join('\n'),
-            key: const ValueKey('daemon-portrait'),
-            semanticsLabel:
-                '$name ${viewing.version}, ${DaemonFace.moodWords[mood]}',
-            style: _ink(colour).copyWith(height: 1.15),
+          // A plate is at most 28 columns by 12 rows; nothing here assumes
+          // the line portraits' 8.
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: DaemonPortrait(
+              roster: roster,
+              def: def,
+              version: viewing.version,
+              style: _ink().copyWith(height: 1.15),
+              theme: _theme,
+              mood: mood,
+              shiny: viewing.shiny,
+              background: ground,
+              // The plate loops its mood (idle by default) while the face
+              // may move; the line portrait's parts step with agent events.
+              animate: face.motionEnabled,
+              t: isPair ? face.portraitT : 0,
+              lid: isPair ? face.lid : null,
+              motion: isPair && face.motionEnabled,
+              textKey: const ValueKey('daemon-portrait'),
+              semanticsLabel:
+                  '$name ${viewing.version}, ${DaemonFace.moodWords[mood]}',
+            ),
           ),
         ),
       SizedBox(height: _cell.height),
@@ -973,33 +999,61 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
 
   // ── the zoo: a box back ─────────────────────────────────────────────────────
 
-  /// The drop's numbered slots in order, then its secrets.
-  List<DaemonDef> get _shelfOrder {
-    final drop = roster.drops.first.id;
-    return [
-      for (final d in roster.daemons)
-        if (d.drop == drop && !d.secret) d,
-      for (final d in roster.daemons)
-        if (d.drop == drop && d.secret) d,
-    ];
-  }
+  /// The drops that show (README, "Drops"): released ones as box backs, an
+  /// announced one as silhouettes and its date. A drop on hold, or not yet
+  /// announced, shows nowhere: no shelf, no silhouettes, no count.
+  DateTime get _now => (widget.now ?? DateTime.now)();
+
+  List<DaemonDrop> get _shelfDrops => roster.shownDrops(_now);
+
+  /// A drop's numbered slots in order, then its secrets.
+  List<DaemonDef> _dropOrder(String drop) => [
+    for (final d in roster.daemons)
+      if (d.drop == drop && !d.secret) d,
+    for (final d in roster.daemons)
+      if (d.drop == drop && d.secret) d,
+  ];
+
+  /// Every slot that can be chosen: the released drops' daemons.
+  List<DaemonDef> get _shelfOrder => [
+    for (final drop in _shelfDrops)
+      if (drop.releasedAt(_now)) ..._dropOrder(drop.id),
+  ];
 
   static const _slotCells = 10, _perRow = 4;
 
   /// Like the back of a blind box: `#01`…`#09` and `#S`, each owned one as
   /// its sprite at its version in its colour (`x2` for a duplicate), each
-  /// empty one `[ ? ]`, a secret `[ ! ]`.
+  /// empty one `[ ? ]`, a secret `[ ! ]`. A drop announced but not out yet
+  /// shows its regulars as `#` silhouettes and the day it comes out.
   List<Widget> _shelf(String viewing) {
-    final order = _shelfOrder;
+    final now = _now;
+    return [
+      for (final (n, drop) in _shelfDrops.indexed) ...[
+        if (n > 0) SizedBox(height: _cell.height / 2),
+        ..._dropShelf(drop, viewing, announced: !drop.releasedAt(now)),
+      ],
+    ];
+  }
+
+  List<Widget> _dropShelf(
+    DaemonDrop drop,
+    String viewing, {
+    required bool announced,
+  }) {
+    final order = _dropOrder(drop.id);
     final regulars = order.where((d) => !d.secret).toList();
     final have = regulars.where((d) => zoo.owns(d.id)).length;
     final secret = order.any((d) => d.secret && zoo.owns(d.id));
-    final drop = roster.drops.first;
+    final first = _shelfDrops.first == drop;
     return [
       Text(
-        'zoo · drop ${drop.n} ${drop.name}  $have/${regulars.length}'
-        '${secret ? '  +secret' : ''}',
-        key: const ValueKey('daemon-panel-zoo'),
+        'zoo · drop ${drop.n} ${drop.name}  '
+        '${announced ? 'out ${drop.release}' : '$have/${regulars.length}'}'
+        '${!announced && secret ? '  +secret' : ''}',
+        key: ValueKey(
+          first ? 'daemon-panel-zoo' : 'daemon-panel-zoo-${drop.id}',
+        ),
         style: _ink(_muted),
       ),
       SizedBox(height: _cell.height / 2),
@@ -1008,11 +1062,39 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           padding: EdgeInsets.only(bottom: _cell.height / 2),
           child: Row(
             children: [
-              for (final d in order.skip(i).take(_perRow)) _slot(d, viewing),
+              for (final d in order.skip(i).take(_perRow))
+                announced ? _teaser(d) : _slot(d, viewing),
             ],
           ),
         ),
     ];
+  }
+
+  /// A daemon of a drop announced but not out: its 0.1 sprite as `#`, faint
+  /// (a secret stays `[ ! ]`).
+  Widget _teaser(DaemonDef d) {
+    final faint = _theme.foreground.withValues(alpha: .35);
+    return SizedBox(
+      width: _cell.width * _slotCells,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(cardNumber(roster, d).split('/').first, style: _ink(faint)),
+          Text(
+            d.secret
+                ? '[ ! ]'
+                : silhouette(
+                    renderSprite(roster, d, 0, DaemonMood.idle, motion: false),
+                  ),
+            key: ValueKey('daemon-zoo-${d.id}'),
+            semanticsLabel: d.secret ? 'A secret' : 'Not out yet',
+            style: _ink(faint),
+          ),
+          Text('', style: _ink()),
+        ],
+      ),
+    );
   }
 
   Widget _slot(DaemonDef d, String viewing) {

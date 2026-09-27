@@ -9,10 +9,13 @@
 ///
 /// The rest of this file draws what the lookbook draws around a daemon: the
 /// nest, the egg while it hatches, the banner name and the copyable card.
+/// A filled daemon (`plate: true`) has no line portrait: its portrait is a
+/// baked plate (`plates.dart`), and its card shows that.
 library;
 
 import 'dart:math';
 
+import 'plates.dart';
 import 'roster.dart';
 
 final _placeholder = RegExp(r'\{([a-zA-Z]+)\}');
@@ -76,10 +79,14 @@ String renderSprite(
   return s;
 }
 
-/// The portrait for a version, falling back to the nearest one drawn.
+/// The portrait for a version, falling back to the nearest one drawn. A
+/// filled daemon has none: its portrait plate stands in (idle, frame 0), as
+/// on its card.
 List<String> portraitFor(DaemonRoster roster, DaemonDef d, String version) {
   final own = d.portraits[version];
   if (own != null) return own;
+  if (d.plate) return cardPortrait(roster, d, version);
+  if (d.portraits.isEmpty) return const [];
   final versions = roster.rules.versions;
   final drawn = versions.where(d.portraits.containsKey).toList();
   final at = versions.indexOf(version);
@@ -258,10 +265,26 @@ List<String> wrapWords(String text, int width) {
 
 String eggName(String kind) => '$kind egg';
 
+/// What a card shows as its portrait (card.mjs `cardLines`): a filled
+/// daemon's portrait plate at the version, idle, frame 0; anyone else's line
+/// portrait, idle and still.
+List<String> cardPortrait(DaemonRoster roster, DaemonDef d, String version) {
+  if (d.plate) {
+    return daemonPlates.frame(
+      d.id,
+      PlateSize.portrait,
+      version,
+      DaemonMood.idle,
+    );
+  }
+  return renderPortrait(roster, d, version, DaemonMood.idle, motion: false);
+}
+
 /// The card as lines of printable ASCII, 42 columns wide: the portrait at its
-/// version, the number (secrets `#S/09`), the rarity, the name with a nickname
-/// and serial when there are any, the family, the first words and the hatched
-/// line. Never a live mood: a card is a portrait, not a presence indicator.
+/// version (a filled daemon's portrait [plate], by default its baked one), the
+/// number (secrets `#S/09`), the rarity, the name with a nickname and serial
+/// when there are any, the family, the first words and the hatched line.
+/// Never a live mood: a card is a portrait, not a presence indicator.
 List<String> cardLines(
   DaemonRoster roster,
   DaemonDef d, {
@@ -271,6 +294,7 @@ List<String> cardLines(
   String? nickname,
   String? hatched,
   String? egg,
+  List<String>? plate,
 }) {
   final v = version ?? roster.rules.versions.first;
   final drop = roster.drop(d.drop);
@@ -287,7 +311,7 @@ List<String> cardLines(
       '${nickname != null && nickname.isNotEmpty ? '$nickname the ' : ''}'
       '${d.id} $v'
       '${serial != null ? '  #${serial.toString().padLeft(4, '0')}' : ''}';
-  final portrait = renderPortrait(roster, d, v, DaemonMood.idle, motion: false);
+  final portrait = plate ?? cardPortrait(roster, d, v);
   final width = portrait.fold(0, (w, l) => max(w, l.length));
   final pad = max(0, ((_cardInner - width) / 2).floor());
   final hasHatched = (hatched != null && hatched.isNotEmpty) ||

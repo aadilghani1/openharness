@@ -1,8 +1,9 @@
 // Real-font review captures of the daemon: the status slot in every mood and
 // nest stage (with its tally, a shiny `*`, alerts and replies), the hatch
-// reveal's frames and rarity tells, and the panel (the zoo's box back, the
-// card, a calm unreachable machine, light themes). Always checks that nothing
-// overflows; writes PNGs only when asked:
+// reveal's frames and rarity tells (drop init's plates at the reveal size),
+// and the panel (the zoo's box back with a portrait plate, the card, a calm
+// unreachable machine, light themes). Always checks that nothing overflows;
+// writes PNGs only when asked:
 //
 //   HARNESS_DAEMON_CAPTURE_DIR=/private/tmp/daemon-review \
 //     flutter test test/daemon_review_render_test.dart
@@ -17,6 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/daemons/daemon_brain.dart';
 import 'package:harness/daemons/daemon_face.dart';
+import 'package:harness/daemons/plates.dart';
 import 'package:harness/daemons/render.dart';
 import 'package:harness/daemons/roster.dart';
 import 'package:harness/daemons/zoo.dart';
@@ -103,9 +105,9 @@ Zoo _paired(
         id: other,
         hatchedAt: '2026-09-26T10:00:00Z',
         egg: 'turn',
-        // A duplicate grows on its own: the second fzf has reached 1.0.
-        xp: other == 'fzf' ? 150 : 0,
-        version: other == 'fzf' ? '1.0' : '0.1',
+        // A duplicate grows on its own: the second tux has reached 1.0.
+        xp: other == 'tux' ? 150 : 0,
+        version: other == 'tux' ? '1.0' : '0.1',
       ),
   ],
   pair: id,
@@ -340,16 +342,16 @@ void main() {
       version: '0.1',
     );
     working.pulse();
-    await mood('fish', 'fish work', const DaemonWatch(working: true));
-    await mood('vim', 'vim fail', const DaemonWatch(failing: true));
-    await mood('fzf', 'fzf idle', const DaemonWatch());
-    final bat = await _face(tester, _paired('bat'));
-    bat.nap();
-    rows.add(('bat nap', bat));
-    await mood('grue', 'grue (dark)', const DaemonWatch());
+    await mood('gnu', 'gnu work', const DaemonWatch(working: true));
+    await mood('yak', 'yak fail', const DaemonWatch(failing: true));
+    await mood('tux', 'tux idle', const DaemonWatch());
+    final mutt = await _face(tester, _paired('mutt'));
+    mutt.nap();
+    rows.add(('mutt nap', mutt));
+    await mood('beastie', 'beastie (secret)', const DaemonWatch());
     rows.add((
-      'zsh shiny',
-      await _face(tester, _paired('zsh', shiny: true)),
+      'gopher shiny',
+      await _face(tester, _paired('gopher', shiny: true)),
     ));
     // Finished turns: a count beside the slot, never a line.
     final done = await _face(tester, _paired('tim'));
@@ -358,19 +360,19 @@ void main() {
       ..sync(const DaemonWatch(turns: {'m': 3}));
     rows.add(('tim +3 done', done));
     rows.add((
-      'ping +1 egg',
+      'lynx +1 egg',
       await _face(
         tester,
         _paired(
-          'ping',
+          'lynx',
           eggs: const [ZooEgg(id: 'e1', kind: 'week', grantedAt: '')],
         ),
       ),
     ));
     // A need takes over in the message yellow; a boop's reply is dim.
     await mood(
-      'vim',
-      'vim need (alert)',
+      'yak',
+      'yak need (alert)',
       const DaemonWatch(
         needIds: {'office/a1#r1'},
         needs: {
@@ -382,9 +384,9 @@ void main() {
         },
       ),
     );
-    final biff = await _face(tester, _paired('biff'));
-    biff.boop();
-    rows.add(('biff boop (reply)', biff));
+    final auk = await _face(tester, _paired('auk'));
+    auk.boop();
+    rows.add(('auk boop (reply)', auk));
     await _capture(
       tester,
       'status-slot',
@@ -413,8 +415,8 @@ void main() {
     final rows = <(String, DaemonFace)>[
       ('nest 2/5', await _face(tester, const Zoo(habits: ['turn', 'split']))),
       ('tim 2.0', await _face(tester, _paired('tim'))),
-      ('ping 2.0', await _face(tester, _paired('ping'))),
-      ('grue (light)', await _face(tester, _paired('grue'))),
+      ('lynx 2.0', await _face(tester, _paired('lynx'))),
+      ('bug (light)', await _face(tester, _paired('bug'))),
       ('tim +2 done', done),
     ];
     await _capture(
@@ -488,13 +490,13 @@ void main() {
     // The rarity, told at the crack.
     (
       'hatch-tell-rare-crack',
-      'vim',
+      'yak',
       HatchFrame(stage: HatchStage.crack, egg: eggFrame(_roster, crack: 2)),
       Brightness.dark,
     ),
     (
       'hatch-tell-legendary-pop',
-      'fzf',
+      'tux',
       HatchFrame(
         stage: HatchStage.pop,
         egg: eggPopFrame(_roster, sparks: true),
@@ -503,43 +505,37 @@ void main() {
     ),
     (
       'hatch-tell-secret-dark-before-crack',
-      'grue',
+      'beastie',
       HatchFrame(stage: HatchStage.crack, egg: eggFrame(_roster)),
       Brightness.dark,
     ),
     (
       'hatch-tell-secret-crack-light-theme',
-      'grue',
+      'beastie',
       HatchFrame(stage: HatchStage.crack, egg: eggFrame(_roster, crack: 1)),
       Brightness.light,
     ),
     (
-      'hatch-secret-pitch',
-      'grue',
-      const HatchFrame(stage: HatchStage.pitch),
-      Brightness.dark,
-    ),
-    (
       'hatch-secret-silhouette',
-      'grue',
+      'beastie',
       const HatchFrame(stage: HatchStage.silhouette),
       Brightness.dark,
     ),
     (
       'hatch-secret-card',
-      'grue',
+      'beastie',
       const HatchFrame(stage: HatchStage.card, bannerRows: 5),
       Brightness.dark,
     ),
     (
       'hatch-legendary-card',
-      'fzf',
+      'tux',
       const HatchFrame(stage: HatchStage.card, bannerRows: 5),
       Brightness.dark,
     ),
     (
       'hatch-rare-card-light',
-      'zsh',
+      'gopher',
       const HatchFrame(stage: HatchStage.card, bannerRows: 5),
       Brightness.light,
     ),
@@ -549,14 +545,14 @@ void main() {
       await _capture(
         tester,
         name,
-        const Size(520, 760),
+        const Size(520, 820),
         brightness: brightness,
         (context) => Align(
           alignment: Alignment.topRight,
           child: Padding(
             padding: const EdgeInsets.all(10),
             child: SizedBox(
-              width: terminalCellSizeOf(context).width * 46,
+              width: terminalCellSizeOf(context).width * daemonRevealCells,
               child: DaemonHatchReveal(
                 roster: _roster,
                 egg: egg,
@@ -574,6 +570,25 @@ void main() {
       if (frame.stage == HatchStage.card) {
         expect(find.byKey(const ValueKey('daemon-hatch-card')), findsOneWidget);
       }
+      // Drop init hatches plates: at the reveal size, still in a capture.
+      if (frame.stage == HatchStage.colour ||
+          frame.stage == HatchStage.silhouette) {
+        final plate = daemonPlates.frame(
+          id,
+          PlateSize.reveal,
+          '0.1',
+          DaemonMood.idle,
+        );
+        final shown = tester.widget<Text>(
+          find.byKey(const ValueKey('daemon-hatch-portrait')),
+        );
+        expect(
+          shown.textSpan?.toPlainText() ?? shown.data,
+          frame.stage == HatchStage.silhouette
+              ? plate.map(silhouette).join('\n')
+              : plate.join('\n'),
+        );
+      }
       await tester.pumpWidget(const SizedBox());
     });
   }
@@ -582,20 +597,20 @@ void main() {
     await _capture(
       tester,
       'hatch-shiny-card',
-      const Size(520, 760),
+      const Size(520, 820),
       (context) => Align(
         alignment: Alignment.topRight,
         child: Padding(
           padding: const EdgeInsets.all(10),
           child: SizedBox(
-            width: terminalCellSizeOf(context).width * 46,
+            width: terminalCellSizeOf(context).width * daemonRevealCells,
             child: DaemonHatchReveal(
               roster: _roster,
               egg: egg,
               result: Future.value(
-                const ZooHatch(eggId: 'egg1', daemonId: 'bat', shiny: true),
+                const ZooHatch(eggId: 'egg1', daemonId: 'tim', shiny: true),
               ),
-              zoo: () => _paired('bat', shiny: true),
+              zoo: () => _paired('tim', shiny: true),
               onClose: () {},
               still: const HatchFrame(stage: HatchStage.card, bannerRows: 5),
             ),
@@ -638,7 +653,7 @@ void main() {
       'panel-tim-zoo-box',
       _paired(
         'tim',
-        more: ['fzf', 'fzf', 'grue', 'vim'],
+        more: ['tux', 'tux', 'beastie', 'yak'],
         eggs: const [
           ZooEgg(id: 'e1', kind: 'turn', grantedAt: ''),
           ZooEgg(id: 'e2', kind: 'turn', grantedAt: ''),
@@ -651,8 +666,8 @@ void main() {
       null,
     ),
     (
-      'panel-vim-need',
-      _paired('vim', more: ['tim']),
+      'panel-yak-need',
+      _paired('yak', more: ['tim']),
       Brightness.dark,
       const DaemonWatch(
         needIds: {'office/a1#r1'},
@@ -679,36 +694,29 @@ void main() {
       null,
     ),
     (
-      'panel-grue',
-      _paired('grue'),
-      Brightness.dark,
-      const DaemonWatch(),
-      null,
-    ),
-    (
-      'panel-grue-light',
-      _paired('grue', more: ['tim']),
+      'panel-gnu-light',
+      _paired('gnu', more: ['tim']),
       Brightness.light,
       const DaemonWatch(),
       null,
     ),
     (
-      'panel-bat-light',
-      _paired('bat', more: ['tim', 'zsh']),
+      'panel-mutt-light',
+      _paired('mutt', more: ['tim', 'gopher']),
       Brightness.light,
       const DaemonWatch(),
       null,
     ),
     (
       'panel-card',
-      _paired('zsh', shiny: true, serial: 42, more: ['tim']),
+      _paired('yak', shiny: true, serial: 42, more: ['tim']),
       Brightness.dark,
       const DaemonWatch(),
       'daemon-card',
     ),
   ];
   // The now tab tells what is going on; the rest show the zoo.
-  const nowPanels = {'panel-vim-need', 'panel-away-calm'};
+  const nowPanels = {'panel-yak-need', 'panel-away-calm'};
   for (final (name, zoo, brightness, watch, tap) in panels) {
     testWidgets('panel: $name', (tester) async {
       final face = await _face(tester, zoo);
@@ -759,6 +767,25 @@ void main() {
         expect(find.text('[ ? ]'), findsNWidgets(6));
         expect(find.text('1.0 x2'), findsOneWidget);
         expect(find.textContaining('28/40'), findsOneWidget);
+        // Drop init only: unix and tty are on hold, so no shelf, silhouette
+        // or count of theirs shows.
+        expect(
+          find.textContaining('drop 1 init  3/9  +secret'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('unix'), findsNothing);
+        expect(find.textContaining('tty'), findsNothing);
+        expect(find.byKey(const ValueKey('daemon-zoo-tmux')), findsNothing);
+        // tim 2.0's portrait plate, frame 0 (a capture has Reduce Motion).
+        final shown = tester.widget<Text>(
+          find.byKey(const ValueKey('daemon-portrait')),
+        );
+        expect(
+          shown.textSpan!.toPlainText(),
+          daemonPlates
+              .frame('tim', PlateSize.portrait, '2.0', DaemonMood.idle)
+              .join('\n'),
+        );
       }
       if (name == 'panel-away-calm') {
         expect(face.mood, DaemonMood.idle, reason: 'asleep is not a failure');
@@ -1169,7 +1196,7 @@ void main() {
   }) async {
     final face = await _face(
       tester,
-      watching(zoo ?? _paired('tim', more: ['vim', 'fzf'])),
+      watching(zoo ?? _paired('tim', more: ['yak', 'tux'])),
     );
     face.settings.tab = tab;
     final brain = pairBrain(
@@ -1246,7 +1273,7 @@ void main() {
       'zoo',
       zoo: _paired(
         'tim',
-        more: ['vim', 'fzf'],
+        more: ['yak', 'tux'],
         eggs: const [
           ZooEgg(id: 'e1', kind: 'turn', grantedAt: ''),
           ZooEgg(id: 'e2', kind: 'week', grantedAt: ''),
@@ -1653,7 +1680,7 @@ void main() {
           child: Padding(
             padding: const EdgeInsets.all(10),
             child: SizedBox(
-              width: terminalCellSizeOf(context).width * 46,
+              width: terminalCellSizeOf(context).width * daemonRevealCells,
               child: DaemonHatchReveal(
                 roster: _roster,
                 egg: egg,
@@ -1683,37 +1710,39 @@ void main() {
     });
   }
 
-  for (final (name, morph) in [
-    ('hatch-levelup-morph-1', 1),
-    ('hatch-levelup-morph-2', 2),
-    ('hatch-levelup-morph-3', 3),
-    ('hatch-levelup-held', null),
+  for (final (name, morph, from, to) in [
+    ('hatch-levelup-morph-1', 1, '0.1', '1.0'),
+    ('hatch-levelup-morph-2', 2, '0.1', '1.0'),
+    ('hatch-levelup-morph-3', 3, '0.1', '1.0'),
+    ('hatch-levelup-held', null, '0.1', '1.0'),
+    // tim 2.0 at the reveal size: the grown octopus, held.
+    ('hatch-levelup-tim-2.0', null, '1.0', '2.0'),
   ]) {
     testWidgets('level-up in the reveal: $name', (tester) async {
-      final before = _paired('tim', version: '0.1');
+      final before = _paired('tim', version: from);
       final after = before.copyWith(
         daemons: [
-          const ZooDaemon(
+          ZooDaemon(
             id: 'tim',
             hatchedAt: '2026-09-26T09:42:00Z',
             egg: 'first',
             dupes: 1,
-            xp: 150,
-            bond: 2,
-            version: '1.0',
+            xp: to == '2.0' ? 600 : 150,
+            bond: to == '2.0' ? 4 : 2,
+            version: to,
           ),
         ],
       );
       await _capture(
         tester,
         name,
-        const Size(520, 480),
+        Size(520, to == '2.0' ? 700 : 560),
         (context) => Align(
           alignment: Alignment.topRight,
           child: Padding(
             padding: const EdgeInsets.all(10),
             child: SizedBox(
-              width: terminalCellSizeOf(context).width * 46,
+              width: terminalCellSizeOf(context).width * daemonRevealCells,
               child: DaemonHatchReveal(
                 roster: _roster,
                 egg: egg,
@@ -1749,13 +1778,36 @@ void main() {
         find.byKey(const ValueKey('daemon-hatch-changelog')),
         morph == null ? findsOneWidget : findsNothing,
       );
-      if (morph == null) {
+      if (morph == null && to == '1.0') {
         expect(
           find.text(
             'tim 1.0: split-window -h: a second pane; learned your agents '
             'by name',
           ),
           findsOneWidget,
+        );
+      }
+      if (to == '2.0') {
+        expect(
+          find.text(
+            'tim 2.0: added arms, for waving; in-jokes from your logbook',
+          ),
+          findsOneWidget,
+        );
+        // The held frame is tim 2.0's reveal plate (done), on the morph's
+        // canvas.
+        final shown = tester.widget<Text>(
+          find.byKey(const ValueKey('daemon-hatch-portrait')),
+        );
+        final plate = daemonPlates.frame(
+          'tim',
+          PlateSize.reveal,
+          '2.0',
+          DaemonMood.done,
+        );
+        expect(
+          shown.textSpan!.toPlainText().split('\n').map((r) => r.trim()),
+          plate.map((r) => r.trim()),
         );
       }
       await tester.pumpWidget(const SizedBox());
@@ -1767,12 +1819,12 @@ void main() {
     ('hatch-duplicate-grew', HatchStage.grew),
   ]) {
     testWidgets('hatch reveal: $name', (tester) async {
-      final before = _paired('tim', version: '0.1', more: ['vim']);
+      final before = _paired('tim', version: '0.1', more: ['yak']);
       final after = before.copyWith(
         daemons: [
           before.daemons.first,
           const ZooDaemon(
-            id: 'vim',
+            id: 'yak',
             hatchedAt: '2026-09-26T10:00:00Z',
             egg: 'turn',
             dupes: 1,
@@ -1786,20 +1838,20 @@ void main() {
       await _capture(
         tester,
         name,
-        const Size(520, 420),
+        const Size(520, 600),
         (context) => Align(
           alignment: Alignment.topRight,
           child: Padding(
             padding: const EdgeInsets.all(10),
             child: SizedBox(
-              width: terminalCellSizeOf(context).width * 46,
+              width: terminalCellSizeOf(context).width * daemonRevealCells,
               child: DaemonHatchReveal(
                 roster: _roster,
                 egg: egg,
                 result: Future.value(
                   const ZooHatch(
                     eggId: 'egg1',
-                    daemonId: 'vim',
+                    daemonId: 'yak',
                     shiny: true,
                     duplicate: true,
                     xp: 150,
@@ -1814,8 +1866,8 @@ void main() {
           ),
         ),
       );
-      expect(find.text('vim x2 · +150 xp'), findsOneWidget);
-      expect(find.text('another vim. +150 xp. yours is shiny now.'), findsOneWidget);
+      expect(find.text('yak x2 · +150 xp'), findsOneWidget);
+      expect(find.text('another yak. +150 xp. yours is shiny now.'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('daemon-hatch-grew')),
         stage == HatchStage.grew ? findsOneWidget : findsNothing,

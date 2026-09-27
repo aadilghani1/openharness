@@ -64,6 +64,8 @@ daemons are on.
 | roster (generated, never edited) | `lib/daemons/roster.g.dart` |
 | roster and banner face as Dart values | `lib/daemons/roster.dart` |
 | renderer, status cell, nest, egg frames, banner, card | `lib/daemons/render.dart` (a port of `daemons/tools/render.mjs` and `card.mjs`) |
+| baked plates (generated `plates.g.dart`, parsed once, on first use) and the plate colour rule | `lib/daemons/plates.dart` (a port of `bake.mjs` `plateColor`) |
+| a portrait wherever one shows: a plate's loop in colour, or line art | `lib/widgets/daemon_portrait.dart` |
 | line templates and their slots | `lib/daemons/daemon_lines.dart` |
 | Motion, Quiet and the panel's last tab, kept per computer | `lib/daemons/daemon_settings.dart` (`daemons.settings.v1`) |
 | zoo shape, rules, local draw | `lib/daemons/zoo.dart` |
@@ -81,7 +83,9 @@ daemons are on.
 | native status slot and voice line | `macos/Runner/SwarmTitlebar.swift` (`SwarmSymbolButton`, `SwarmVoiceLabel`) |
 
 `test/daemons/render_frames_test.dart` checks every sprite, portrait, status
-cell, card, nest and banner in `daemons/frames.json` byte for byte. Change the
+cell, card, nest and banner in `daemons/frames.json` byte for byte, and
+`test/daemons/plates_test.dart` every plate, `plateColors` cell and plate
+card, and that drops on hold show nowhere. Change the
 roster, run `node daemons/tools/generate.mjs`, and that test tells you whether
 the Dart port still draws what the reference draws.
 `test/daemon_review_render_test.dart` draws the slot, the reveal and the panel
@@ -101,7 +105,8 @@ A guest who turned on Daemons (preview) keeps a local zoo
 with the same shape and rules (economy v2, `backend/src/lib/zoo.ts`), drawn on
 the client: regulars first and secrets only from eggs whose `weights.secret`
 is above 0 (drop 1: night and easter), the pity counting only those eggs and
-guaranteeing the secret at `secretGuaranteeAt`; only released drops draw; a
+guaranteeing the secret at `secretGuaranteeAt`; only released drops draw (a
+drop on hold is hidden whatever its dates, and a seed keeps none of it); a
 duplicate merges into the one you have (`+duplicateXp`, `dupes`, a shiny one
 makes yours shiny, never pairs); a guest's daemons are `origin: local` and
 carry no serial; easter words are kept as their sha256; a zoo stored with two
@@ -426,12 +431,14 @@ The egg wobbles until harnessd answers, then tells the rarity at the crack: a
 rare's shell glows cyan, a legendary's pop throws yellow `*'.` sparks, and a
 secret's stage goes black before the crack (light ink on it, on any theme).
 A duplicate (`hatched[].duplicate`) has no reveal of a new name: after the pop
-it shows yours, `vim x2 · +150 xp`, `another vim. +150 xp.` (and `yours is
-shiny now.` for a shiny one), then, if it grew, `vim grew: bond 2 · 1.0` at
+it shows yours, `yak x2 · +150 xp`, `another yak. +150 xp.` (and `yours is
+shiny now.` for a shiny one), then, if it grew, `yak grew: bond 2 · 1.0` at
 its new version; no new card. A new daemon's card carries the server's serial
 (`#0042`); a guest's has none. The
 0.1 **portrait** appears as `#` in the faint colour for 1200 ms, fills with its
-colour and blinks; the name types in, in the shared face from
+colour and blinks (a filled daemon of drop init shows its plate at the reveal
+size, 56 columns and up to 24 rows, looping idle; the reveal floats 60 cells
+wide for it); the name types in, in the shared face from
 `daemons/banner.json` (`renderBanner`) at a line height of 1.15 so its rows
 never touch; then the rarity stamp, `fork() returned 0.`, and the card. From
 the person's fourth hatch on, any key skips to the card; Escape closes at any
@@ -462,11 +469,17 @@ daemon's name, with the autonomy badge above `suggest`.
   failed), a calm line for each machine not there, waiting eggs, the consent
   screen until it is answered, then with a pair brain: what waits for you,
   the brief, what tim did, and the talk (its cost note under the box).
-- **zoo**: the viewed daemon's live portrait (or `[ card ]`, with `[ copy ]`
-  as a fenced code block), identity (`#01/09 tim 2.0 · common · paired`),
-  bond, family, lore, `[ pair ]` and `[ rename ]`; the box back: `#01`..`#09`
-  and `#S`, each owned daemon as its sprite at its version in its colour with
-  `x2` for duplicates, each empty slot `[ ? ]` (a secret `[ ! ]`); the meters
+- **zoo**: the viewed daemon's live portrait (a plate at the portrait size,
+  28 columns and up to 12 rows, looping its mood a frame every 170 ms; frame 0
+  under Reduce Motion, in a background window or with Motion off; each glyph
+  in the plate colour with a soft glow in its bottom colour), or `[ card ]`
+  (the portrait plate, idle, frame 0), with `[ copy ]` as a fenced code block;
+  identity (`#01/09 tim 2.0 · common · paired`), bond, family, lore, `[ pair ]`
+  and `[ rename ]`; the box back of every drop that shows: `#01`..`#09` and
+  `#S`, each owned daemon as its sprite at its version in its colour with
+  `x2` for duplicates, each empty slot `[ ? ]` (a secret `[ ! ]`), a drop
+  announced but not out as `#` silhouettes and its date, a drop on hold not
+  at all; the meters
   toward the next earned egg; the waiting eggs, one look per kind with a
   count.
 - **lessons**: the proposed lesson in full with its keys, then pending and

@@ -58,7 +58,7 @@ class FakeZooTransport implements ZooTransport {
       zoo,
       ops,
       random: random,
-      now: DateTime.utc(2026, 9, 26, 9, 42),
+      now: DateTime.utc(2026, 9, 28, 9, 42),
     );
     zoo = result.zoo;
     revision++;
@@ -76,7 +76,8 @@ Map<String, dynamic> habit(String key) => {'op': 'zoo.habit', 'key': key};
 
 void main() {
   final roster = daemonRoster;
-  final now = DateTime.utc(2026, 9, 26);
+  // After drop init's release (2026-09-27): only released drops hatch.
+  final now = DateTime.utc(2026, 9, 28);
   ZooOpsResult apply(Zoo zoo, List<Map<String, dynamic>> ops, [int seed = 1]) =>
       applyZooOps(roster, zoo, ops, random: Random(seed), now: now);
 
@@ -119,7 +120,7 @@ void main() {
       expect(d.id, result.hatched.single.daemonId);
       expect(zoo.pair, d.id);
       expect([d.version, d.egg, d.origin, d.serial], ['0.1', 'first', 'local', null]);
-      expect(zoo.pity, 0, reason: 'a first egg can never be the grue');
+      expect(zoo.pity, 0, reason: 'a first egg can never be beastie');
       final night = apply(
         zoo.copyWith(
           eggs: const [ZooEgg(id: 'n1', kind: 'night', grantedAt: '')],
@@ -130,7 +131,7 @@ void main() {
       );
       expect(
         night.zoo.pity,
-        night.hatched.single.daemonId == 'grue' ? 0 : 1,
+        night.hatched.single.daemonId == 'beastie' ? 0 : 1,
       );
     });
 
@@ -139,7 +140,7 @@ void main() {
       final random = Random(3);
       final seen = <String>[];
       final regulars = [
-        for (final d in roster.daemons)
+        for (final d in roster.released(now))
           if (!d.secret) d.id,
       ];
       for (var i = 0; i < regulars.length; i++) {
@@ -153,18 +154,18 @@ void main() {
           ],
         );
       }
-      expect(seen.toSet(), regulars.toSet(), reason: 'never the grue');
-      // Every regular owned: duplicates again, still never the grue from a
+      expect(seen.toSet(), regulars.toSet(), reason: 'never beastie');
+      // Every regular owned: duplicates again, still never beastie from a
       // marathon egg; a night egg can still give it.
       for (var i = 0; i < 200; i++) {
         expect(
           drawDaemon(roster, zoo, 'marathon', random, now: now),
-          isNot('grue'),
+          isNot('beastie'),
         );
       }
       expect(
         drawWeights(roster, zoo, 'night', now: now).map((w) => w.$1.id),
-        [...regulars, 'grue'],
+        [...regulars, 'beastie'],
       );
       expect(
         drawWeights(roster, Zoo.empty, 'first', now: now)
@@ -200,18 +201,23 @@ void main() {
       expect(counts['rare']! / draws, closeTo(27 / 144, .015));
       expect(counts['legendary']! / draws, closeTo(12 / 144, .01));
       expect(counts['secret'], isNull);
-      // A night egg boosts bat fourfold among the commons.
+      // A night egg boosts bug fourfold among the rares.
       final night = <String, int>{};
       for (var i = 0; i < draws; i++) {
         final id = drawDaemon(roster, Zoo.empty, 'night', random, now: now)!;
         night[id] = (night[id] ?? 0) + 1;
       }
-      expect(night['bat']! / night['tim']!, closeTo(4, .6));
+      expect(night['bug']! / night['yak']!, closeTo(4, .6));
+      // Only drop init hatches: unix and tty are on hold.
+      expect(
+        {...ids.keys, ...night.keys}.map((id) => roster.byId(id)!.drop).toSet(),
+        {'init'},
+      );
     });
 
     test('pity raises the secret; the eighth egg that could hold it is it', () {
       final random = Random(5);
-      var grue = 0;
+      var secret = 0;
       for (var i = 0; i < 4000; i++) {
         if (drawDaemon(
               roster,
@@ -220,12 +226,12 @@ void main() {
               random,
               now: now,
             ) ==
-            'grue') {
-          grue++;
+            'beastie') {
+          secret++;
         }
       }
       // (10 + 5) against 90 of legendaries.
-      expect(grue / 4000, closeTo(15 / 105, .03));
+      expect(secret / 4000, closeTo(15 / 105, .03));
       expect(
         drawWeights(
           roster,
@@ -233,14 +239,14 @@ void main() {
           'night',
           now: now,
         ).map((w) => w.$1.id),
-        ['grue'],
+        ['beastie'],
       );
     });
 
     test('a duplicate merges: +150 xp, x2, a shiny one makes yours shiny, '
         'and it never pairs', () {
       final regulars = [
-        for (final d in roster.daemons)
+        for (final d in roster.released(now))
           if (!d.secret) d.id,
       ];
       final zoo = Zoo(
@@ -267,9 +273,9 @@ void main() {
       // A zoo stored with two records of one daemon reads as one.
       final folded = Zoo.fromJson({
         'daemons': [
-          {'id': 'fzf', 'hatchedAt': '', 'egg': 'turn'},
-          {'id': 'fzf', 'hatchedAt': '', 'egg': 'week', 'shiny': true},
-          {'id': 'fzf', 'hatchedAt': '', 'egg': 'week', 'dupes': 2},
+          {'id': 'tux', 'hatchedAt': '', 'egg': 'turn'},
+          {'id': 'tux', 'hatchedAt': '', 'egg': 'week', 'shiny': true},
+          {'id': 'tux', 'hatchedAt': '', 'egg': 'week', 'dupes': 2},
         ],
       }, roster);
       expect(folded.daemons.single.dupes, 4);
@@ -281,21 +287,21 @@ void main() {
       var zoo = const Zoo(
         daemons: [
           ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first'),
-          ZooDaemon(id: 'vim', hatchedAt: '', egg: 'turn'),
+          ZooDaemon(id: 'gnu', hatchedAt: '', egg: 'turn'),
         ],
         pair: 'tim',
       );
       zoo = apply(zoo, [
-        {'op': 'zoo.pair', 'id': 'fzf'},
-        {'op': 'zoo.pair', 'id': 'vim'},
-        {'op': 'zoo.nickname', 'id': 'vim', 'nickname': 'x' * 25},
-        {'op': 'zoo.nickname', 'id': 'vim', 'nickname': 'café'},
+        {'op': 'zoo.pair', 'id': 'tux'},
+        {'op': 'zoo.pair', 'id': 'gnu'},
+        {'op': 'zoo.nickname', 'id': 'gnu', 'nickname': 'x' * 25},
+        {'op': 'zoo.nickname', 'id': 'gnu', 'nickname': 'café'},
         {'op': 'zoo.nickname', 'id': 'tim', 'nickname': ' Pip '},
         {'op': 'zoo.easter', 'word': 'plugh'},
         {'op': 'zoo.easter', 'word': ' XYZZY '},
         {'op': 'zoo.easter', 'word': 'xyzzy'},
       ]).zoo;
-      expect(zoo.pair, 'vim');
+      expect(zoo.pair, 'gnu');
       expect(zoo.daemons[1].nickname, isNull);
       expect(zoo.daemons[0].nickname, 'Pip');
       expect(zoo.eggs.single.kind, 'easter');
@@ -391,7 +397,7 @@ void main() {
       ]).zoo;
       expect(zoo.watching, isTrue);
       expect(zoo.autonomy, 'watch', reason: 'suggest is a second step');
-      expect(zoo.consent!.at, startsWith('2026-09-26T'));
+      expect(zoo.consent!.at, startsWith('2026-09-28T'));
       final read = Zoo.fromJson(zoo.toJson(), roster);
       expect(read.consent!.watching, isTrue);
       expect(read.consent!.at, zoo.consent!.at);
@@ -495,7 +501,13 @@ void main() {
         [40, 20, 3, 500],
       );
       expect(roster.rules.bondLevels, [0, 50, 150, 300, 600]);
-      expect(roster.rules.historyDates.keys, ['04-01', '09-09', '10-31']);
+      expect(roster.rules.historyDates.keys, [
+        '04-01',
+        '08-25',
+        '09-09',
+        '09-27',
+        '10-31',
+      ]);
       expect(roster.rules.eggs['history']!.look, r'\_47_/');
       expect(
         [
@@ -722,7 +734,7 @@ void main() {
     ZooController controller() => ZooController(
       storage: storage,
       random: Random(2),
-      now: () => DateTime(2026, 9, 26, 9, 42),
+      now: () => DateTime(2026, 9, 28, 9, 42),
     );
 
     test(
@@ -880,21 +892,21 @@ void main() {
       expect(remote.fetches, 1);
       remote
         ..zoo = const Zoo(
-          daemons: [ZooDaemon(id: 'fzf', hatchedAt: '', egg: 'first')],
-          pair: 'fzf',
+          daemons: [ZooDaemon(id: 'tux', hatchedAt: '', egg: 'first')],
+          pair: 'tux',
         )
         ..revision = 4;
       zoo.pushed(4);
       await pumpEventQueue();
       expect(remote.fetches, 2);
-      expect(zoo.paired?.id, 'fzf');
+      expect(zoo.paired?.id, 'tux');
       // An older answer never replaces a newer one.
       remote
         ..zoo = Zoo.empty
         ..revision = 2;
       zoo.pushed(null);
       await pumpEventQueue();
-      expect(zoo.paired?.id, 'fzf');
+      expect(zoo.paired?.id, 'tux');
     });
 
     test(
@@ -982,8 +994,8 @@ void main() {
       () async {
         final remote = FakeZooTransport()
           ..zoo = const Zoo(
-            daemons: [ZooDaemon(id: 'vim', hatchedAt: '', egg: 'first')],
-            pair: 'vim',
+            daemons: [ZooDaemon(id: 'gnu', hatchedAt: '', egg: 'first')],
+            pair: 'gnu',
           );
         final zoo = controller();
         addTearDown(zoo.dispose);
@@ -1203,14 +1215,14 @@ void main() {
     test('a new scope forgets the previous account at once', () async {
       final remote = FakeZooTransport()
         ..zoo = const Zoo(
-          daemons: [ZooDaemon(id: 'vim', hatchedAt: '', egg: 'first')],
-          pair: 'vim',
+          daemons: [ZooDaemon(id: 'gnu', hatchedAt: '', egg: 'first')],
+          pair: 'gnu',
         );
       final zoo = controller();
       addTearDown(zoo.dispose);
       zoo.bind('account:u1', remote: remote);
       await pumpEventQueue();
-      expect(zoo.paired?.id, 'vim');
+      expect(zoo.paired?.id, 'gnu');
       zoo.bind('account:u2', remote: FakeZooTransport()..gate = Completer());
       expect(zoo.loaded, isFalse);
       expect(zoo.paired, isNull);

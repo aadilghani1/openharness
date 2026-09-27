@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../daemons/daemon_lines.dart';
+import '../daemons/plates.dart';
 import '../daemons/render.dart';
 import '../daemons/roster.dart';
 import '../daemons/zoo.dart';
@@ -14,6 +15,7 @@ import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart';
 import 'daemon_consent.dart';
+import 'daemon_portrait.dart';
 import 'daemon_slot.dart';
 
 /// Where the reveal is. Exposed so render checks can draw any moment of it.
@@ -53,6 +55,10 @@ enum HatchStage {
   /// Only after a yes, its own step: "Let it suggest answers?"
   suggest,
 }
+
+/// How wide the reveal floats, in terminal cells: a plate at the reveal size
+/// (56 columns) and the stage's padding either side.
+const daemonRevealCells = 60;
 
 /// Ordered dithering (Bayer 4x4): which cells of a morph have turned by each
 /// quarter. Crisp in a terminal, the same every time.
@@ -130,8 +136,9 @@ class HatchFrame {
 /// portrait appears as `#` in the faint colour for 1200 ms, fills with its
 /// colour and blinks; its name types in as a banner; the rarity stamp, its
 /// first words and the card follow. The card copies as a fenced code block.
-/// Reduce Motion goes straight to the card. From the fourth hatch on, any key
-/// skips to the card.
+/// A filled daemon shows its plate at the reveal size (56 columns, up to 24
+/// rows), looping idle until the card. Reduce Motion goes straight to the
+/// card. From the fourth hatch on, any key skips to the card.
 ///
 /// It floats beside the status slot, takes keyboard focus while it is open,
 /// and Escape dismisses it at any point. [onRevealed] runs once, when the
@@ -534,7 +541,9 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
                   // A steady stage: the egg, the portrait and the banner all
                   // fit, so the reveal never jumps before the card.
                   child: ConstrainedBox(
-                    constraints: BoxConstraints(minHeight: cell.height * 14),
+                    constraints: BoxConstraints(
+                      minHeight: cell.height * _stageRows,
+                    ),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -549,6 +558,63 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       },
     );
   }
+
+  /// Rows the stage keeps before the card: the tallest hatchling (a line
+  /// portrait's 8 rows, or a 0.1 plate at the reveal size, up to 24) at the
+  /// portrait's line height, with its banner under it.
+  double get _stageRows {
+    var tallest = roster.rules.portraitMaxRows;
+    for (final d in roster.daemons) {
+      if (!d.plate) continue;
+      final rows = daemonPlates
+          .frame(
+            d.id,
+            PlateSize.reveal,
+            roster.rules.versions.first,
+            DaemonMood.idle,
+          )
+          .length;
+      tallest = max(tallest, rows);
+    }
+    return max(14, (tallest + 5) * 1.15 + 1);
+  }
+
+  /// A hatchling's portrait on the stage: a plate at the reveal size (it
+  /// loops while the reveal runs, still under Reduce Motion or in a render
+  /// check), or its line portrait.
+  Widget _portrait(
+    DaemonDef def,
+    String version,
+    TerminalTheme theme,
+    TextStyle ink, {
+    required Key key,
+    required String label,
+    DaemonMood mood = DaemonMood.idle,
+    bool shiny = false,
+    bool silhouetted = false,
+    List<String>? rows,
+  }) => FittedBox(
+    fit: BoxFit.scaleDown,
+    child: DaemonPortrait(
+      roster: roster,
+      def: def,
+      version: version,
+      style: silhouetted
+          ? ink.copyWith(color: ink.color!.withValues(alpha: .35), height: 1.15)
+          : ink.copyWith(height: 1.15),
+      theme: theme,
+      size: PlateSize.reveal,
+      mood: mood,
+      shiny: shiny,
+      silhouette: silhouetted,
+      rows: rows,
+      background: daemonBackdrop(def) ?? theme.background,
+      animate: !widget.reduceMotion && widget.still == null,
+      lid: _lid,
+      textKey: key,
+      semanticsLabel: label,
+    ),
+  );
 
   /// The egg's frame, told by the hatchling's rarity while it cracks: a
   /// rare's shell glows cyan, a legendary's pop throws yellow sparks.
@@ -667,14 +733,6 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     final colour = daemonColor(def, theme, shiny: shiny);
     final backdrop = daemonBackdrop(def);
     final version = roster.rules.versions.first;
-    final portrait = renderPortrait(
-      roster,
-      def,
-      version,
-      DaemonMood.idle,
-      lid: _lid,
-      motion: false,
-    );
     final silhouetted = _stage == HatchStage.silhouette;
     final rarity = switch (def.rarity) {
       'rare' => theme.cyan,
@@ -701,14 +759,15 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       if (_stage != HatchStage.pitch && card == null)
         Container(
           color: silhouetted ? null : backdrop,
-          child: Text(
-            (silhouetted ? portrait.map(silhouette) : portrait).join('\n'),
+          child: _portrait(
+            def,
+            version,
+            theme,
+            ink,
             key: const ValueKey('daemon-hatch-portrait'),
-            semanticsLabel: silhouetted ? 'A silhouette' : '${def.id} $version',
-            style: ink.copyWith(
-              color: silhouetted ? ink.color!.withValues(alpha: .35) : colour,
-              height: 1.15,
-            ),
+            label: silhouetted ? 'A silhouette' : '${def.id} $version',
+            shiny: shiny,
+            silhouetted: silhouetted,
           ),
         ),
       if (_bannerRows > 0) ...[
@@ -749,10 +808,19 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
               child: DaemonCardText(
                 key: const ValueKey('daemon-hatch-card'),
                 lines: card,
-                portraitRows: portraitFor(roster, def, version).length,
+                portraitRows: cardPortrait(roster, def, version).length,
                 style: ink.copyWith(fontSize: (ink.fontSize ?? 13) * .92),
                 colour: colour,
                 backdrop: backdrop,
+                plate: daemonPlateInk(
+                  roster,
+                  def,
+                  theme,
+                  shiny: shiny,
+                  background: pitch
+                      ? const Color(0xff0c0c0c)
+                      : Color.lerp(theme.background, theme.foreground, .04),
+                ),
               ),
             ),
           ),
@@ -813,35 +881,38 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     final name = owned?.nickname ?? def.id;
     final from = _grewFrom;
     // A level-up: the old version turns into the new in three frames, then
-    // the new one holds, on one canvas so nothing jumps.
-    final portrait = grew != null && from != null && from != version
-        ? morphPortrait(
-            renderPortrait(roster, def, from, DaemonMood.idle, motion: false),
-            renderPortrait(roster, def, version, DaemonMood.done, motion: false),
-            _morph ?? 4,
-          )
-        : renderPortrait(
-            roster,
-            def,
-            version,
-            grew == null ? DaemonMood.idle : DaemonMood.done,
-            motion: false,
-          );
+    // the new one holds, on one canvas so nothing jumps. A plate turns at the
+    // reveal size, from its old idle to its new done.
+    List<String> still(String v, DaemonMood mood) => def.plate
+        ? daemonPlates.frame(def.id, PlateSize.reveal, v, mood)
+        : renderPortrait(roster, def, v, mood, motion: false);
+    final morphing = grew != null && from != null && from != version;
+    final mood = grew == null ? DaemonMood.idle : DaemonMood.done;
     return [
       Container(
         color: daemonBackdrop(def),
-        child: Text(
-          portrait.join('\n'),
+        child: _portrait(
+          def,
+          version,
+          theme,
+          ink,
           key: ValueKey(
             _morph == null || grew == null
                 ? 'daemon-hatch-portrait'
                 : 'daemon-hatch-morph-$_morph',
           ),
-          semanticsLabel: '${def.id} $version',
-          style: ink.copyWith(
-            color: daemonColor(def, theme, shiny: shiny),
-            height: 1.15,
-          ),
+          label: '${def.id} $version',
+          mood: mood,
+          shiny: shiny,
+          rows: morphing
+              ? morphPortrait(
+                  still(from, DaemonMood.idle),
+                  still(version, DaemonMood.done),
+                  _morph ?? 4,
+                )
+              : def.plate
+              ? null
+              : still(version, mood),
         ),
       ),
       SizedBox(height: cell.height / 2),

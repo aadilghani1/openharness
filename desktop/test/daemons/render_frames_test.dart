@@ -147,12 +147,13 @@ void main() {
       ], reason: '${f['id']} ${f['version']} shiny=${f['shiny']}');
       expect(out.every((l) => l.length == cardWidth), isTrue);
     }
-    // Secrets sit outside the numbered set.
+    // Secrets sit outside the numbered set; every drop numbers its own.
     expect(cardNumber(roster, roster.byId('tim')!), '#01/09');
-    expect(cardNumber(roster, roster.byId('tldr')!), '#09/09');
-    expect(cardNumber(roster, roster.byId('grue')!), '#S/09');
+    expect(cardNumber(roster, roster.byId('auk')!), '#09/09');
+    expect(cardNumber(roster, roster.byId('beastie')!), '#S/09');
+    expect(cardNumber(roster, roster.byId('tmux')!), '#01/09');
     expect(
-      rarityStamp(roster, roster.byId('vim')!, shiny: true),
+      rarityStamp(roster, roster.byId('yak')!, shiny: true),
       '[ SHINY RARE ]  #05/09',
     );
     // The zoo's card reads its date from hatchedAt and its egg kind.
@@ -190,9 +191,16 @@ void main() {
       ], reason: f['id'] as String);
       expect(bannerRows(f['id'] as String), f['out']);
     }
-    // Every row fits the reveal's 42 columns at its own size.
+    // Every row fits the reveal's 56 columns (a plate's width) at its own
+    // size.
     for (final d in roster.daemons) {
-      expect(bannerRows(d.id).every((r) => r.length <= 42), isTrue);
+      expect(
+        bannerRows(
+          d.id,
+        ).every((r) => r.length <= roster.rules.plate!.revealCols),
+        isTrue,
+        reason: d.id,
+      );
     }
     expect(silhouette('[oo]'), '####');
     expect(silhouette('o   o'), '#   #');

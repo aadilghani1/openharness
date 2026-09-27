@@ -135,14 +135,14 @@ void main() {
   testWidgets('moods follow the README precedence', (tester) async {
     await mount(tester);
     expect(face.mood, DaemonMood.idle);
-    expect(face.glyph, r'\[o|o]/');
+    expect(face.glyph, '~(o o)~');
     face.sync(const DaemonWatch(failing: true));
     expect(face.mood, DaemonMood.fail);
     face.sync(const DaemonWatch(failing: true, working: true));
     expect(face.mood, DaemonMood.work);
     face.nap();
     expect(face.mood, DaemonMood.nap);
-    expect(face.glyph, r'\[-|-]/z');
+    expect(face.glyph, '~(- -)~z');
     face.sync(const DaemonWatch(working: true, needIds: {'m/a#1'}));
     expect(face.mood, DaemonMood.need, reason: 'need wins and wakes a nap');
     expect(face.napping, isFalse);
@@ -270,7 +270,7 @@ void main() {
     expect(face.lid, isNull);
     await pass(tester, const Duration(milliseconds: 170));
     expect(face.lid, '-');
-    expect(face.glyph, r'\[-|-]/');
+    expect(face.glyph, '~(- -)~');
     await pass(tester, const Duration(milliseconds: 130));
     expect(face.lid, isNull);
     await pass(tester, const Duration(seconds: 3));
@@ -333,7 +333,7 @@ void main() {
       ),
     );
     expect(face.mood, DaemonMood.fail);
-    expect(face.glyph, r'\[x|x]/');
+    expect(face.glyph, '~(x x)~');
     // No recap is known: its clause goes, never a made-up one.
     expect(face.voice, 'tim: claude@m exited.');
     expect(face.voiceAlert, isTrue);
@@ -380,24 +380,24 @@ void main() {
       'second, and never on their own', (tester) async {
     await mount(tester);
     face.sync(const DaemonWatch(working: true, workingCount: 2));
-    expect(face.glyph, r'\[=|=]/');
+    expect(face.glyph, '~(= =)~');
     await pass(tester, const Duration(seconds: 2));
-    expect(face.glyph, r'\[=|=]/', reason: 'no events, no motion');
+    expect(face.glyph, '~(= =)~', reason: 'no events, no motion');
     face.pulse();
-    expect(face.glyph, '|[=|=]|', reason: 'one event, one step');
+    expect(face.glyph, 'S(= =)~', reason: 'one event, one step');
     face.pulse();
     await pass(tester, const Duration(milliseconds: 100));
-    expect(face.glyph, '|[=|=]|', reason: 'at most two steps a second');
+    expect(face.glyph, 'S(= =)~', reason: 'at most two steps a second');
     for (var i = 0; i < 10; i++) {
       face.pulse();
     }
     await pass(tester, const Duration(milliseconds: 400));
-    expect(face.glyph, r'/[=|=]\', reason: 'a burst is one step');
+    expect(face.glyph, 'S(= =)S', reason: 'a burst is one step');
     await pass(tester, const Duration(seconds: 2));
-    expect(face.glyph, r'/[=|=]\', reason: 'a stalled agent: a still baton');
+    expect(face.glyph, 'S(= =)S', reason: 'a stalled agent: a still baton');
     expect(face.steps, 2);
-    // The portrait's parts step with it.
-    expect(face.portraitT, 2 * face.def!.parts.values.first.ms);
+    // A line portrait's parts step with it (tim's plate loops on its own).
+    expect(face.portraitT, 2 * face.def!.workMs);
     // Reduce Motion, a background window and the Motion setting stop steps;
     // the face still changes.
     face.setEnvironment(foreground: true, reduceMotion: true);
@@ -415,7 +415,7 @@ void main() {
     face.pulse();
     expect(face.steps, 1);
     face.sync(const DaemonWatch());
-    expect(face.glyph, r'\[o|o]/', reason: 'rest when work ends');
+    expect(face.glyph, '~(o o)~', reason: 'rest when work ends');
     expect(face.steps, 0);
     await pass(tester, const Duration(seconds: 3));
   });
@@ -426,13 +426,13 @@ void main() {
     await mount(tester, version: '0.1');
     final idle = face.cell;
     face.sync(const DaemonWatch(working: true));
-    expect(face.glyph, '[= =] |');
+    expect(face.glyph, '(= =) |');
     face.pulse();
-    expect(face.glyph, '[= =] /');
-    expect(face.cell.indexOf('['), idle.indexOf('['));
+    expect(face.glyph, '(= =) /');
+    expect(face.cell.indexOf('('), idle.indexOf('('));
     expect(face.cell.length, 10);
     face.sync(const DaemonWatch());
-    expect(face.glyph, '[o o]');
+    expect(face.glyph, '(o o)');
   });
 
   testWidgets('a shiny daemon wears a * in the gutter', (tester) async {
@@ -440,7 +440,7 @@ void main() {
     expect(face.shiny, isTrue);
     expect(face.cell, startsWith('*'));
     expect(face.cell.length, 10);
-    expect(face.cell.substring(1).trim(), r'\[o|o]/');
+    expect(face.cell.substring(1).trim(), '~(o o)~');
   });
 
   testWidgets('coming back after 15 minutes: the wave, then a slow blink, '
@@ -484,7 +484,7 @@ void main() {
     face.sync(const DaemonWatch(working: true));
     face.look();
     expect(face.lid, isNull);
-    expect(face.glyph, r'\[=|=]/');
+    expect(face.glyph, '~(= =)~');
     face.sync(const DaemonWatch());
     await pass(tester, const Duration(milliseconds: 200));
   });
@@ -528,7 +528,7 @@ void main() {
     await mount(tester);
     face.noteKey();
     face.boop();
-    expect(face.voice, "tim: hey. that's my status line.");
+    expect(face.voice, "tim: hey. that's my status line. (ink)");
     expect(face.voiceAlert, isFalse, reason: 'a reply is not the alert yellow');
     await pass(tester, const Duration(milliseconds: 5200));
     expect(face.voice, isNull);
@@ -609,7 +609,7 @@ void main() {
   testWidgets('nap lasts 15 minutes or until a boop', (tester) async {
     await mount(tester);
     face.nap();
-    expect(face.glyph, r'\[-|-]/z');
+    expect(face.glyph, '~(- -)~z');
     await pass(tester, const Duration(minutes: 15));
     expect(face.napping, isFalse);
     face.nap();
@@ -631,6 +631,8 @@ void main() {
     );
     expect(face.eggReady, isTrue);
     expect(face.glyph, r'\_o.o_/');
+    // Drop init is out from 2026-09-27 (UTC): only then can an egg hatch.
+    clock.value = DateTime(2026, 9, 28, 12);
     face.beginReveal();
     final hatched = await zoo.hatch('egg1');
     expect(hatched, isNotNull);
@@ -668,11 +670,12 @@ void main() {
     // At 1.0 (150 xp), two days of turns (200 xp) stay below the next level.
     await mount(tester, version: '1.0');
     // A guest's 40th counted turn earns a turn egg; two days at the cap
-    // (after drop 1's release, so it can hatch).
-    clock.value = DateTime(2026, 9, 27, 12);
+    // (after drop 1's release, so it can hatch, and clear of 09-27's history
+    // egg, open for a week).
+    clock.value = DateTime(2026, 10, 5, 12);
     zoo.recordTurns(20, machineId: 'm');
     await tester.pump(const Duration(seconds: 6));
-    clock.value = DateTime(2026, 9, 28, 12);
+    clock.value = DateTime(2026, 10, 6, 12);
     zoo.recordTurns(20, machineId: 'm');
     expect(zoo.zoo.eggs.single.kind, 'turn');
     expect(face.glyph, r'\_O_/');
@@ -680,7 +683,7 @@ void main() {
     expect(face.tally, '+1 egg');
     expect(face.tooltip, contains(r'\_O_/ x1 waiting'));
     await pass(tester, const Duration(seconds: 3));
-    expect(face.glyph, '[o|o]', reason: 'the daemon comes back');
+    expect(face.glyph, ',(o o),', reason: 'the daemon comes back');
     expect(face.tally, '+1 egg', reason: 'the egg still waits');
     await zoo.hatch(zoo.zoo.eggs.single.id);
     expect(face.tally, '', reason: 'opened');
@@ -707,7 +710,7 @@ void main() {
       await pass(tester, const Duration(seconds: 6));
     }
     expect(zoo.paired!.version, '1.0');
-    expect(face.glyph, '[o|o]');
+    expect(face.glyph, ',(o o),');
     await pass(tester, const Duration(seconds: 6));
   });
 

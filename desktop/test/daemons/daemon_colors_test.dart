@@ -7,6 +7,7 @@ import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/daemons/daemon_face.dart';
+import 'package:harness/daemons/plates.dart';
 import 'package:harness/daemons/roster.dart';
 import 'package:harness/daemons/roster.g.dart';
 import 'package:harness/daemons/zoo.dart';
@@ -96,15 +97,56 @@ void main() {
     final custom = DaemonRoster.parse(jsonEncode(raw)).byId('tim')!;
     expect(daemonColor(custom, _light), const Color(0xff2e6b2e));
     expect(daemonColor(custom, dark, shiny: true), const Color(0xffafff5f));
-    // Every daemon in the roster now has its own shiny colour: tim a
-    // brighter cyan-green, the grue a deep violet on its black.
+    // Every daemon in the roster now has its own shiny colour: every shiny
+    // in drop init is gold, tim's too; the grue a deep violet on its black.
     for (final d in daemonRoster.daemons) {
       expect(d.shinyColor, isNotNull, reason: d.id);
     }
-    expect(daemonRoster.byId('tim')!.shinyColor, const Color(0xff00ffaf));
+    expect(daemonRoster.byId('tim')!.shinyColor, const Color(0xffd7af00));
     expect(
       daemonColor(daemonRoster.byId('tim')!, dark, shiny: true),
-      const Color(0xff00ffaf),
+      const Color(0xffd7af00),
+    );
+    expect(daemonRoster.byId('tmux')!.shinyColor, const Color(0xff00ffaf));
+  });
+
+  test('a plate is coloured by the plate rule on a dark theme, and kept '
+      'legible on a light one', () {
+    for (final d in roster.daemons) {
+      if (!d.plate) {
+        expect(daemonPlateInk(roster, d, dark), isNull, reason: d.id);
+        continue;
+      }
+      for (final shiny in [false, true]) {
+        final gradient = plateGradient(d, shiny: shiny)!;
+        final onDark = daemonPlateInk(roster, d, dark, shiny: shiny)!;
+        expect(onDark.gradient.top, gradient.top);
+        expect(onDark.gradient.bottom, gradient.bottom);
+        expect(onDark.background, dark.background);
+        expect(onDark.burn, const Color(0xffffffff));
+        expect(onDark.glow, gradient.bottom);
+        final onLight = daemonPlateInk(roster, d, _light, shiny: shiny)!;
+        for (final stop in [onLight.gradient.top, onLight.gradient.bottom]) {
+          expect(
+            contrastRatio(stop, _light.background),
+            greaterThanOrEqualTo(4.5),
+            reason: '${d.id} shiny=$shiny',
+          );
+        }
+        // `@` burns toward the far end: black on a light theme.
+        expect(onLight.burn, const Color(0xff000000));
+        expect(
+          onLight.glyph(3, 0, '@')!.computeLuminance(),
+          lessThan(onLight.row(3, 0).computeLuminance() + 1e-9),
+        );
+      }
+    }
+    // A card or panel ground is what faint glyphs mix from.
+    final tim = roster.byId('tim')!;
+    const ground = Color(0xff202020);
+    expect(
+      daemonPlateInk(roster, tim, dark, background: ground)!.glyph(5, 2, '.'),
+      plateColor(roster, tim, 5, 2, '.', background: ground),
     );
   });
 

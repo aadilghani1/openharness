@@ -965,10 +965,13 @@ class _ZooRules {
         final seed = Zoo.fromJson(op['zoo'], roster);
         final fresh = turns == 0 && batches.isEmpty;
         // A guest's daemons hatched on a client: marked local, never with a
-        // serial (only the server mints).
+        // serial (only the server mints). One of a drop not out (on hold, or
+        // not yet released) could not have hatched anywhere: it stays out.
         daemons = [
           for (final d in seed.daemons)
-            d.copyWith(origin: 'local', clearSerial: true),
+            if (roster.drop(roster.byId(d.id)?.drop ?? '')?.releasedAt(now) ??
+                false)
+              d.copyWith(origin: 'local', clearSerial: true),
         ];
         eggs = [];
         for (final e in seed.eggs) {
@@ -982,7 +985,9 @@ class _ZooRules {
             ),
           ];
         }
-        pair = seed.pair ?? seed.daemons.firstOrNull?.id;
+        pair = daemons.any((d) => d.id == seed.pair)
+            ? seed.pair
+            : daemons.firstOrNull?.id;
         // The guest's dial, if it set a real one; else the account's stays.
         final raw = op['zoo'];
         if (raw is Map && isZooAutonomy(raw['autonomy'])) {
