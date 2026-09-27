@@ -116,7 +116,7 @@ pub fn tmux_defaults() -> &'static BTreeMap<String, String> {
 }
 
 /// hn's look, where its defaults differ from tmux's: what `set -g @hn-look tmux` puts back.
-pub const LOOK: [&str; 10] = ["pane-border-status", "pane-border-format", "status-left", "status-right", "status-left-length", "status-right-length", "window-status-format", "window-status-current-format", "set-titles", "set-titles-string"];
+pub const LOOK: [&str; 11] = ["pane-border-status", "pane-border-format", "status-left", "status-right", "status-left-length", "status-right-length", "window-status-format", "window-status-current-format", "set-titles", "set-titles-string", "allow-set-title"];
 
 /// Where a `set` lands, as tmux's flags choose it.
 #[derive(Default, Clone, Debug)]

@@ -878,7 +878,13 @@ pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
     let tab_id = app.tabs.get(window).map(|t| t.id.clone()).unwrap_or_default();
     if !p.osc_title.is_empty() && app.options.get("allow-set-title", &tab_id, Some(pane)).as_deref() == Some("on") { return p.osc_title.clone() }
     if !p.title.is_empty() { return p.title.clone() }
-    app.fleet.agent(&p.machine_id, &p.agent_id).map(|a| a.name.clone()).unwrap_or_else(|| p.agent_id.chars().take(8).collect())
+    let agent = app.fleet.agent(&p.machine_id, &p.agent_id);
+    // tmux's look: a plain shell's title is tmux's own — its host's name (a program's own title,
+    // allow-set-title on there, above).
+    if app.options.tmux_look() && agent.map(|a| a.engine == "terminal").unwrap_or(false) {
+        return if p.machine_id == app.fleet.local_id { crate::app::full_hostname() } else { app.fleet.machine_name(&p.machine_id) };
+    }
+    agent.map(|a| a.name.clone()).unwrap_or_else(|| p.agent_id.chars().take(8).collect())
 }
 
 /// The pane's own cells, from its window's top-left corner: tmux's pane_left/top/width/height.
