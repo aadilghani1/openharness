@@ -308,6 +308,8 @@ void main() {
       const session = '01a0c4ad-de5e-7000-8000-000000000001';
       const busy = '01a0c4ad-de5e-7000-8000-000000000002';
       const movable = '01a0c4ad-de5e-7000-8000-000000000003';
+      const binding = '01a0c4ad-de5e-7000-8000-000000000004';
+      const inApp = '01a0c4ad-de5e-7000-8000-000000000005';
       Map<String, dynamic> external(
         String id, {
         required bool open,
@@ -338,6 +340,8 @@ void main() {
             external(session, open: false),
             external(busy, open: true),
             external(movable, open: true, openIn: 'terminal'),
+            external(binding, open: true, openIn: 'harness'),
+            external(inApp, open: true, openIn: 'app'),
           ],
         },
         tail: (payload) => {
@@ -423,6 +427,16 @@ void main() {
       );
       expect(search.sessionUnavailable(inTerminal), isNull);
       expect(search.canSubmit(inTerminal), isTrue);
+      // One of Harness's own panes has it (an agent still being bound), or an app does: not here.
+      final bound = search.rows.firstWhere(
+        (row) => row.external?.sessionId == binding,
+      );
+      expect(search.sessionUnavailable(bound), 'Already in Harness');
+      expect(search.canSubmit(bound), isFalse);
+      final heldByApp = search.rows.firstWhere(
+        (row) => row.external?.sessionId == inApp,
+      );
+      expect(search.sessionUnavailable(heldByApp), 'Open in an app');
 
       // Previewed like any session: what it is, where it ran, its latest turn.
       while (search.selected?.id != row.id) {

@@ -45,8 +45,9 @@ export function claudeProvider(options: { projectsDir: string; home: string }): 
         const folder = join(options.projectsDir, project.name)
         // Only the project's own files: a sub-agent's are in a folder beneath it.
         for (const file of await entries(folder)) {
-          if (!file.isFile() || !file.name.endsWith('.jsonl')) continue
+          if (!file.name.endsWith('.jsonl')) continue
           const path = join(folder, file.name)
+          // A file, or a link to one; not a folder, not a broken link.
           const stamp = await fileStamp(path)
           if (!stamp) continue
           // A transcript's first lines never change: its head is read once, however it grows.

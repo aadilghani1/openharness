@@ -9,10 +9,9 @@
  * owner; the rollout's last turn event says whether a turn is running.
  */
 
-import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { absoluteFolder, entries, fileStamp, firstLine, parseLine, readTail, record, text } from './support.js'
+import { absoluteFolder, entries, fileStamp, firstLine, parseLine, readTail, readText, record, text } from './support.js'
 import type { ExternalOrigin, ExternalProvider, ExternalSession, OwnerClaim, ProcessView, ScanContext } from './types.js'
 
 /** How much of a rollout is read for its first line: `session_meta` carries the base instructions. */
@@ -42,7 +41,7 @@ export async function codexTitles(path: string, ctx: ScanContext): Promise<Map<s
   if (!stamp) return new Map()
   return ctx.memo(`codex:titles:${path}`, stamp.stamp, async () => {
     const titles = new Map<string, string>()
-    for (const line of (await readFile(path, 'utf8').catch(() => '')).split('\n')) {
+    for (const line of (await readText(path)).split('\n')) {
       const row = record(parseLine(line))
       const name = text(row?.thread_name).trim()
       if (text(row?.id) && name) titles.set(text(row?.id), name)
@@ -58,7 +57,8 @@ export async function rollouts(dir: string): Promise<string[]> {
     for (const entry of await entries(at)) {
       const path = join(at, entry.name)
       if (entry.isDirectory() && depth < 4) await walk(path, depth + 1)
-      else if (entry.isFile() && entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) out.push(path)
+      // A file or a link to one; the scan's stat drops a broken link.
+      else if (!entry.isDirectory() && entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) out.push(path)
     }
   }
   await walk(dir, 0)

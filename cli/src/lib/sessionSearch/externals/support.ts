@@ -52,6 +52,11 @@ export async function firstLine(path: string, bytes: number): Promise<string | n
   return newline < 0 ? null : text.slice(0, newline)
 }
 
+/** A file's text, or '' when it is missing or unreadable. */
+export async function readText(path: string): Promise<string> {
+  return readFile(path, 'utf8').catch(() => '')
+}
+
 /** A JSON file's value, or null when it is missing, unreadable or being written. */
 export async function readJson(path: string): Promise<unknown> {
   try {
@@ -160,7 +165,7 @@ type Run = (command: string, args: readonly string[], timeout: number) => Promis
 /** A command's output; what it printed even when it exits non-zero (lsof does, for a gone pid). */
 export const run: Run = (command, args, timeout) => new Promise((resolve) => {
   execFile(command, [...args], { timeout, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
-    resolve(error && !stdout ? null : String(stdout ?? ''))
+    resolve(error && !stdout ? null : String(stdout))
   })
 })
 
@@ -190,9 +195,10 @@ export function parseTtys(stdout: string): Map<number, string | null> {
   return ttys
 }
 
-/** The machine's processes, as the daemon's own process scan reads them (it repairs rewritten rows). */
-async function listProcesses(): Promise<RunningProcess[]> {
-  const rows = await processRows()
+/** The machine's processes, as the daemon's own process scan reads them (it repairs rewritten rows);
+ *  none when `ps` could not be read. */
+export async function listProcesses(read: typeof processRows = processRows): Promise<RunningProcess[]> {
+  const rows = await read()
   return (rows ?? []).map((row) => ({ pid: row.pid, ppid: row.parentPid, executable: row.executable, args: row.args }))
 }
 

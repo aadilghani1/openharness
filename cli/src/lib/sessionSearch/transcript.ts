@@ -49,11 +49,13 @@ export function lineNormalizer(engine: string, sessionId: string): LineNormalize
       const normalizer = new CursorNormalizer('live', sessionId)
       return (line) => normalizer.ingest(line)
     }
-    case 'muse': return ingestWith(new MuseNormalizer())
+    // A Muse session log mirrors its sub-agents' and reminders' streams: only its own is the conversation.
+    case 'muse': return kept(ingestWith(new MuseNormalizer()), (line) => museOwnStream(line, sessionId))
     case 'amp': return ingestWith(new AmpNormalizer())
     case 'grok': return ingestWith(new GrokNormalizer())
     case 'agy': return ingestWith(new AgyNormalizer())
-    case 'copilot': return ingestWith(new CopilotNormalizer())
+    // A Copilot session file holds its sub-agents' events too, and prompts nobody typed.
+    case 'copilot': return kept(ingestWith(new CopilotNormalizer()), copilotOwnLine)
     case 'pi': return ingestWith(new PiNormalizer('live'))
     case 'commandcode': return ingestWith(new CommandCodeNormalizer('live'))
     default: return null
@@ -104,6 +106,33 @@ function promptText(prompt: unknown): string | null {
 
 function ingestWith(normalizer: { ingest(line: string): LiveEvent[] }): LineNormalizer {
   return (line) => normalizer.ingest(line)
+}
+
+/** [normalize], for the lines [keep] accepts only. */
+function kept(normalize: LineNormalizer, keep: (line: string) => boolean): LineNormalizer {
+  return (line) => keep(line) ? normalize(line) : []
+}
+
+const MUSE_STREAM = /"stream"\s*:\s*\{[^{}]*"id"\s*:\s*"([^"]+)"/
+
+/** Whether a Muse record belongs to [sessionId]'s own stream (a record naming none is kept). */
+export function museOwnStream(line: string, sessionId: string): boolean {
+  const stream = MUSE_STREAM.exec(line)?.[1]
+  return !stream || stream === sessionId
+}
+
+/**
+ * Whether a Copilot event is the conversation's own: not a sub-agent's (those carry `agentId`), and not
+ * a prompt nobody typed (a skill's or another agent's, which say where they came from in `source`,
+ * or an autopilot continuation).
+ */
+export function copilotOwnLine(line: string): boolean {
+  if (!line.includes('"agentId"') && !line.includes('"source"') && !line.includes('isAutopilotContinuation')) return true
+  let event: { agentId?: unknown; type?: unknown; data?: { source?: unknown; isAutopilotContinuation?: unknown } }
+  try { event = JSON.parse(line) } catch { return true }
+  if (typeof event.agentId === 'string' && event.agentId) return false
+  if (event.type !== 'user.message') return true
+  return !(typeof event.data?.source === 'string' && event.data.source) && event.data?.isAutopilotContinuation !== true
 }
 
 /**
