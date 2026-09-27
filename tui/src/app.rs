@@ -855,10 +855,11 @@ impl App {
                 app.sync_titles();
             }
         });
+        let asked = Instant::now();
         self.spawn(async move { link.rpc("agents_list", json!({ "includeStopped": true }), Duration::from_secs(20)).await }, move |app, reply| {
             if let Ok(reply) = reply {
                 let rows = reply.get("agents").and_then(Value::as_array).cloned().unwrap_or_default();
-                app.fleet.replace_roster(&id, &rows);
+                app.fleet.replace_roster(&id, &rows, asked);
                 app.catch_up(&id);
                 app.sync_titles();
             }

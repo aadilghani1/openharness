@@ -57,6 +57,8 @@ pub struct Agent {
     pub project: String,
     pub branch: String,
     pub created_at: u64,
+    /// When this client first had it (a list's row, or one it just made).
+    pub known_at: Instant,
     pub active_at: u64,
     pub working: bool,
     pub last_beat: Option<Instant>,
@@ -269,6 +271,7 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         project: s(&project, "name"),
         branch: s(&project, "branch"),
         created_at: time(row, "createdAt"),
+        known_at: previous.map(|p| p.known_at).unwrap_or_else(Instant::now),
         // Not `updatedAt`: the daemon restamps every row on each reconcile.
         active_at: previous.map(|p| p.active_at).unwrap_or(0),
         working: previous.map(|p| p.working).unwrap_or(false),
@@ -394,7 +397,9 @@ impl Fleet {
     pub fn state_of(&self, agent: &Agent) -> State { agent.state(self.machine(&agent.machine_id)) }
 
     /// Replace one machine's roster from an `agents_list` reply, keeping live state on survivors.
-    pub fn replace_roster(&mut self, machine_id: &str, rows: &[Value]) {
+    /// A machine's roster from an `agents_list` reply asked for at [asked]: one this client made
+    /// after it was asked (a shell just started) stays, though the list could not have it.
+    pub fn replace_roster(&mut self, machine_id: &str, rows: &[Value], asked: Instant) {
         let mut next = HashMap::new();
         for row in rows {
             let id = s(row, "id");
@@ -403,7 +408,7 @@ impl Fleet {
             let agent = agent_from(machine_id, row, self.agents.get(&key));
             next.insert(key, agent);
         }
-        self.agents.retain(|(m, _), _| m != machine_id);
+        self.agents.retain(|(m, _), a| m != machine_id || a.known_at > asked);
         self.agents.extend(next);
     }
 
