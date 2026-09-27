@@ -4,7 +4,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:collection/collection.dart' show compareNatural;
-import 'package:flutter/foundation.dart' show listEquals, setEquals;
+import 'package:flutter/foundation.dart' show immutable, listEquals, setEquals;
 
 import '../core/fuzzy_match.dart';
 import '../core/local_key_value_store.dart';
@@ -239,6 +239,42 @@ class SwarmNavigationHistory {
   }
 }
 
+/// A Claude Code or Codex conversation Harness did not start, on one machine:
+/// run in a terminal or in the engine's own app, found on disk by that
+/// machine's daemon (cli/src/lib/sessionSearch/external.ts). Cmd-P shows one
+/// when a search matches it, and opens it as a new harness resuming it.
+@immutable
+class ExternalSessionRef {
+  const ExternalSessionRef({
+    required this.sessionId,
+    required this.engine,
+    required this.cwd,
+    required this.origin,
+    this.title = '',
+    this.open = false,
+  });
+
+  final String sessionId, engine, cwd, title;
+
+  /// `terminal`, `claude-app`, `codex-app` or `editor`.
+  final String origin;
+
+  /// Open in a running process elsewhere: opening it here too would have two
+  /// processes writing one conversation.
+  final bool open;
+
+  /// Where it ran, as a person says it.
+  String get originLabel => switch (origin) {
+    'claude-app' => 'Claude app',
+    'codex-app' => 'Codex app',
+    'editor' => 'editor',
+    _ => 'terminal',
+  };
+}
+
+String externalDestinationId(String machineId, String sessionId) =>
+    'external:$machineId:$sessionId';
+
 /// A searchable snapshot. Resolving a result again at activation prevents live
 /// discovery or a closed tab from redirecting an action to unrelated work.
 class SwarmDestination {
@@ -249,7 +285,7 @@ class SwarmDestination {
     this.detailBranchOffset,
     this.terminalDetail,
     this.promptContext,
-    this.lastUsedAt,
+    this.lastActivityAt,
     required this.swarmId,
     required this.current,
     this.machineId,
@@ -270,6 +306,7 @@ class SwarmDestination {
     this.isStore = false,
     this.isCreate = false,
     this.task,
+    this.external,
     Iterable<String?> searchFields = const [],
     int titleFields = 1,
   }) : fields = [
@@ -293,10 +330,10 @@ class SwarmDestination {
   final String? terminalDetail;
   final PromptContext? promptContext;
 
-  /// When the harness was last used — the later of its activity and of a
-  /// person last opening it in any client ([Agent.lastUsedAt]). What Open
-  /// Harness sorts by, and the age it prints beside the row.
-  final DateTime? lastUsedAt;
+  /// When the harness's conversation last moved ([Agent.lastActivityAt]) — the
+  /// true time, not when someone last opened it. What Open Harness sorts by,
+  /// and the age it prints beside the row.
+  final DateTime? lastActivityAt;
   final String? swarmId, machineId, agentId, engine;
   final String? modelId;
   bool get isModel => modelId != null;
@@ -327,11 +364,18 @@ class SwarmDestination {
 
   /// What the create row would start the new harness on: what was typed.
   final String? task;
+
+  /// A conversation Harness did not start; opening it resumes it as a harness.
+  final ExternalSessionRef? external;
   final bool current;
   final List<String> fields;
   bool get isProject => projectId != null;
   bool get isMachine =>
-      agentId == null && machineId != null && !isProject && !isModel;
+      agentId == null &&
+      machineId != null &&
+      !isProject &&
+      !isModel &&
+      external == null;
   bool get isGroup => isProject || isMachine;
   bool get isSwarm =>
       agentId == null &&
@@ -340,7 +384,8 @@ class SwarmDestination {
       !isCreate &&
       !isModel &&
       !isStoreEntry &&
-      pickerQuery == null;
+      pickerQuery == null &&
+      external == null;
   bool get hasView => swarmId != null;
 }
 
@@ -692,7 +737,7 @@ class SwarmLocationCatalog {
       agentId: pane.agentId,
       previewKey: agent == null ? null : app.previewKey(pane.machineId, agent),
       engine: engine,
-      lastUsedAt: agent?.lastUsedAt,
+      lastActivityAt: agent?.lastActivityAt,
       current: swarm.id == app.activeSwarmId && pane.id == app.focusedPaneId,
       // The agent's own title first, ranked like the name: "board fab check"
       // finds the agent whose work that is, not whichever recap mentions fab.
@@ -720,7 +765,9 @@ List<SwarmDestination> rankSwarmDestinationsByActivity(
   List<String> recent = const [],
   SessionPreviewStore? previews,
   Map<String, SessionContentHit>? contentHits,
+  DateTime? Function(SwarmDestination row)? activityOf,
 }) {
+  final activity = activityOf ?? (SwarmDestination row) => row.lastActivityAt;
   final matches = _matchSwarmDestinations(
     all,
     query,
@@ -738,14 +785,14 @@ List<SwarmDestination> rankSwarmDestinationsByActivity(
       final said = b.said.compareTo(a.said);
       if (said != 0) return said;
     }
-    final aTime = a.entry.lastUsedAt;
-    final bTime = b.entry.lastUsedAt;
-    final activity = aTime == null
+    final aTime = activity(a.entry);
+    final bTime = activity(b.entry);
+    final byTime = aTime == null
         ? (bTime == null ? 0 : 1)
         : bTime == null
         ? -1
         : bTime.compareTo(aTime);
-    if (activity != 0) return activity;
+    if (byTime != 0) return byTime;
     final visit = (visits[a.entry.id] ?? recent.length).compareTo(
       visits[b.entry.id] ?? recent.length,
     );
@@ -797,6 +844,23 @@ Future<bool> activateSwarmSearchSelection(
   HarnessPlacement? placement,
 }) async {
   final destination = selection.destination;
+  if (destination.external case final external?) {
+    final machineId = destination.machineId;
+    if (machineId == null || split != null) return false;
+    // A new harness that resumes it, in its own folder: the machine refuses one
+    // that is open elsewhere, or already a harness, and says so.
+    final error = await app.resumeConversation(
+      machineId,
+      engine: external.engine,
+      folder: external.cwd,
+      sessionId: external.sessionId,
+      name: external.title.isEmpty ? null : external.title,
+      swarmId: destinationSwarmId,
+      placement: placement ?? HarnessPlacement.currentTab,
+    );
+    if (error != null) throw SwarmResumeFailure(destination, error);
+    return true;
+  }
   if (placement != null) {
     final machineId = destination.machineId;
     final agentId = destination.agentId;
@@ -1280,7 +1344,7 @@ List<SwarmDestination> swarmDestinations(
         agentId: agentId,
         previewKey: row == null ? null : app.previewKey(machineId, row.$2),
         engine: engine,
-        lastUsedAt: row?.$2.lastUsedAt,
+        lastActivityAt: row?.$2.lastActivityAt,
         current:
             owner?.id == app.activeSwarmId && pane?.id == app.focusedPaneId,
         // The agent's own title is ranked like its name (see titleFields):

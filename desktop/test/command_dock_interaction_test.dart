@@ -76,8 +76,8 @@ void main() {
           terminalAvailable: true,
           lastActivityAt: DateTime.now().subtract(const Duration(minutes: 33)),
         ),
-        // Quiet for hours, but opened a moment ago in some client: the age is
-        // the one the list sorts by, so it reads as used five minutes ago.
+        // Quiet for hours, though opened a moment ago in some client: an open
+        // is not work, so the age is the conversation's — three hours.
         () {
           final quiet = app.machineStates['m']!.agents[1];
           return Agent(
@@ -105,7 +105,7 @@ void main() {
       );
       final opened = find.byKey(ValueKey(agentDestinationId('m', 'a1')));
       expect(
-        find.descendant(of: opened, matching: find.text('5m')),
+        find.descendant(of: opened, matching: find.text('3h')),
         findsOneWidget,
       );
       expect(
@@ -114,7 +114,7 @@ void main() {
               find.descendant(of: opened, matching: find.byType(Tooltip)),
             )
             .message,
-        startsWith('Last used '),
+        startsWith('Last active '),
       );
       expect(
         find.descendant(of: row, matching: find.byType(SearchResultText)),

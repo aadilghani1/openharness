@@ -280,6 +280,35 @@ socket, about 0.4 s from another machine over the relay.
   dropped: they were never said in the conversation. Schema 7 rebuilds each index once.
 - Group rows, and machines whose CLI predates `session_tail`, keep the excerpt preview.
 
+## Conversations Harness did not start
+
+⌘P also finds Claude Code and Codex conversations run in a terminal or in the engines' own apps, and
+Enter opens one as a harness resuming it (`lib/sessionSearch/external.ts`).
+
+- **Found on disk.** Every local Codex session, whether from the terminal, the Codex app or a
+  script, is a rollout under `~/.codex/sessions/YYYY/MM/DD/`. Its first line says who wrote it:
+  `source` `cli` (terminal) or `vscode` (the Codex app, `originator` "Codex Desktop", and the
+  editors). Thread names are in `~/.codex/session_index.jsonl`. Claude Code's are under
+  `~/.claude/projects/<folder>/`, with `entrypoint` `cli` or `claude-desktop`. Claude's title is
+  the latest `ai-title` in the transcript, unless the person renamed it (`custom-title`).
+- **Only what a person started.** Codex `exec` runs (scripts), sub-agent threads, and Claude's
+  `sdk-cli` sessions (programs, Harness's own summaries among them) are left out. On one machine:
+  about 210 of 1,227 files, plus a session any Harness agent already has is skipped.
+- **Shown only when a search matches one**, marked `not in Harness`, and previewed like any session.
+- **Open elsewhere** is known exactly. A running Claude Code keeps `~/.claude/sessions/<pid>.json`
+  naming its session, and a running Codex holds its rollout open (`lsof`). ⌘P will not open one
+  that is still open, and the daemon checks again before it resumes.
+- **Resuming** is `agent_create` with `resumeSessionId`: a new pane runs `claude --resume <id>` or
+  `codex resume <id>` in the session's own folder, named after its title. It is refused if the
+  session is open elsewhere, is already a harness, or its folder is gone (Codex app threads live in
+  folders people tidy away).
+- ChatGPT conversations and Codex cloud tasks are not on disk, so they cannot be found.
+
+Checked on one machine's real folders through a sandboxed daemon: the Codex app's threads and
+terminal sessions were found by what was said in them. A session open in a terminal was refused.
+Stand-in engines confirmed the resume launch (`codex resume <id>`, `claude --resume <id>`, each in
+its session's folder); no real conversation was touched.
+
 ## Protocol
 
 `session_search { query, limit, from?, to? }` → `{ hits: [{ agentId, sessionId, engine, turn, at,
@@ -304,8 +333,6 @@ index the daemon owns.
 
 ## Not yet
 
-- **Sessions started outside Harness** (plain `claude`, `codex`) could be indexed too, so any past
-  conversation on the machine can be found and resumed.
 - **Untitled sessions** ("Claude harness 9-26 13:41") are now found by their content, but a
   generated title from the first ask would help the name match as well.
 - **A natural-language "ask" mode** for fuzzy memory ("the one last week where we fixed dial

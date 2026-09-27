@@ -740,10 +740,14 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           final canSubmit = search.canSubmit(row);
           final unavailableReason = search.sessionUnavailable(row);
           final alreadyHere = search.alreadyHere(row);
-          // The time the rows are sorted by, so the ages read in order.
-          final activityAge = widget.bios && row.lastUsedAt != null
-              ? harnessActivityAge(row.lastUsedAt, DateTime.now())
-              : null;
+          // As of this opening, like the order: the list does not move while
+          // it is open. Under a minute is "now", not "0m".
+          final activity = widget.bios ? search.activityOf(row) : null;
+          final activityAge = activity == null
+              ? null
+              : search.openedAt.difference(activity).inMinutes < 1
+              ? 'now'
+              : harnessActivityAge(activity, search.openedAt);
           final presentation = (
             row,
             selected,
@@ -1415,10 +1419,16 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                       ),
                     ] else if (widget.unavailableReason case final reason?) ...[
                       SizedBox(width: cell.width * 2),
-                      Text(
-                        reason,
-                        maxLines: 1,
-                        style: terminalContentStyle(color: muted),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: constraints.maxWidth * .4,
+                        ),
+                        child: Text(
+                          reason,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: terminalContentStyle(color: muted),
+                        ),
                       ),
                     ] else if (row.shortcut case final shortcut?) ...[
                       SizedBox(width: cell.width * 2),
@@ -1437,7 +1447,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                     ] else if (widget.activityAge case final age?) ...[
                       SizedBox(width: cell.width * 2),
                       Tooltip(
-                        message: 'Last used ${row.lastUsedAt!.toLocal()}',
+                        message: 'Last active ${row.lastActivityAt!.toLocal()}',
                         child: Text(
                           age,
                           maxLines: 1,

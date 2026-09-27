@@ -94,7 +94,7 @@ void main() {
       current: false,
       agentId: id,
       machineId: 'm',
-      lastUsedAt: DateTime.utc(2026, 9, 26, hour),
+      lastActivityAt: DateTime.utc(2026, 9, 26, hour),
       searchFields: [cwd],
     );
     final catalog = [

@@ -52,6 +52,7 @@ class SessionTail {
     required this.total,
     required this.fetchedAt,
     this.lastAsk,
+    this.openElsewhere = false,
   });
 
   final List<SessionTailRow> rows;
@@ -63,6 +64,10 @@ class SessionTail {
   /// rows up, and it is what the session is doing now.
   final SessionTailRow? lastAsk;
 
+  /// For a conversation Harness did not start: open in a running process
+  /// elsewhere, as its machine found when it answered.
+  final bool openElsewhere;
+
   static SessionTail? fromReply(Map<String, dynamic> reply, DateTime now) {
     final rows = reply['rows'];
     if (rows is! List) return null;
@@ -72,6 +77,9 @@ class SessionTail {
       total: reply['total'] is int ? reply['total'] as int : rows.length,
       fetchedAt: now,
       lastAsk: SessionTailRow.fromJson(reply['lastAsk']),
+      openElsewhere:
+          reply['external'] is Map &&
+          (reply['external'] as Map)['open'] == true,
     );
   }
 }
@@ -173,6 +181,7 @@ class SessionTails extends ChangeNotifier {
         total: page.total,
         fetchedAt: page.fetchedAt,
         lastAsk: page.lastAsk,
+        openElsewhere: page.openElsewhere,
       ),
     );
   }
@@ -207,6 +216,7 @@ class SessionTails extends ChangeNotifier {
           total: current.total,
           fetchedAt: current.fetchedAt,
           lastAsk: current.lastAsk,
+          openElsewhere: current.openElsewhere,
         ),
       );
     } finally {

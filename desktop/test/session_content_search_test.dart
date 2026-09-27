@@ -99,6 +99,53 @@ void main() {
       expect(SessionContentHit.listFromReply('m', {'error': 'X'}), isEmpty);
     });
 
+    test('reads a conversation Harness did not start, and refuses one it cannot resume', () {
+      final hits = SessionContentHit.listFromReply('m', {
+        'hits': [
+          {
+            'agentId': '',
+            'sessionId': '01a0c4ad-de5e-7000-8000-000000000001',
+            'engine': 'codex',
+            'field': 'ask',
+            'snippet': 'compare ${_o}retention$_c',
+            'score': .8,
+            'lastAt': 1790000000000,
+            'external': {
+              'title': 'Retention cohorts',
+              'cwd': '/work/cohorts',
+              'origin': 'codex-app',
+              'open': true,
+            },
+          },
+          // No folder to resume in, and no engine to resume with: not a row.
+          {
+            'agentId': '',
+            'sessionId': 's2',
+            'engine': 'claude',
+            'external': {'title': 'x'},
+          },
+          {
+            'agentId': '',
+            'sessionId': 's3',
+            'external': {'cwd': '/work'},
+          },
+          {'agentId': '', 'sessionId': 's4'},
+        ],
+      });
+      expect(hits, hasLength(1));
+      final hit = hits.single;
+      expect(
+        hit.destinationId,
+        externalDestinationId('m', '01a0c4ad-de5e-7000-8000-000000000001'),
+      );
+      expect(hit.lastAt, DateTime.fromMillisecondsSinceEpoch(1790000000000));
+      expect(hit.external!.engine, 'codex');
+      expect(hit.external!.cwd, '/work/cohorts');
+      expect(hit.external!.title, 'Retention cohorts');
+      expect(hit.external!.originLabel, 'Codex app');
+      expect(hit.external!.open, isTrue);
+    });
+
     test('snippet runs bold exactly the marked words', () {
       expect(snippetRuns('a ${_o}dial$_c and ${_o}scroll$_c.'), [
         (text: 'a ', matched: false),
@@ -281,7 +328,7 @@ void main() {
       current: false,
       agentId: id,
       machineId: 'm',
-      lastUsedAt: DateTime.utc(2026, 9, 26, hour),
+      lastActivityAt: DateTime.utc(2026, 9, 26, hour),
     );
 
     test(
@@ -329,7 +376,7 @@ void main() {
             current: false,
             agentId: id,
             machineId: machine,
-            lastUsedAt: DateTime.utc(2026, 9, 26, hour),
+            lastActivityAt: DateTime.utc(2026, 9, 26, hour),
           );
       final rows = [on('m', 'm1', 1), on('m', 'm2', 9), on('n', 'n1', 5)];
       final hits = {

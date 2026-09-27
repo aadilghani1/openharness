@@ -497,6 +497,10 @@ export class BackendSocket {
     /** A mode from `PERMISSION_MODES` for this engine; null when the client sent only
      *  `bypassPermission`, which then decides. Validated here (`INVALID_PERMISSION_MODE`). */
     permissionMode: string | null
+    /** A conversation Harness did not start, to open this harness ON: the engine resumes it, in its own
+     *  folder (lib/sessionSearch/external.ts). Null for a new conversation. Shape-checked here; cli.ts
+     *  checks it is one it found, not open elsewhere, and not already a harness. */
+    resumeSessionId?: string | null
   }) =>
     Promise<{ ok: true; session: RegisteredSession } | { ok: false; error: string; detail?: string }>) | null = null
   /** Called on `dsh_install` — cli.ts clones/sets up/doctors the harness and reports each phase. */
@@ -2370,6 +2374,18 @@ export class BackendSocket {
             }
             permissionMode = payload.permissionMode
           }
+          // Opening a conversation Harness did not start: the engine resumes it, as it was. Nothing a new
+          // conversation is created with applies to it.
+          let resumeSessionId: string | null = null
+          if (payload.resumeSessionId !== undefined && payload.resumeSessionId !== null) {
+            if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9-]{8,80}$/.test(payload.resumeSessionId)) {
+              reply(type, requestId, { error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
+            }
+            if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || dsh || prompt || agent) {
+              reply(type, requestId, { error: 'INVALID_SESSION', detail: 'a resumed conversation takes no new folder, grid, harness, prompt or agent' }); return
+            }
+            resumeSessionId = payload.resumeSessionId
+          }
           const input = {
             engine,
             cwd: typeof cwd === 'string' ? cwd : terminal ? homedir() : '',
@@ -2382,6 +2398,7 @@ export class BackendSocket {
             prompt,
             name,
             agent,
+            resumeSessionId,
           }
           const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input
           if (creationId !== undefined) {
