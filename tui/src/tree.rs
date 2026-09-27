@@ -720,8 +720,8 @@ impl Tree {
     pub fn draw(&mut self, app: &App, buf: &mut Buffer, area: Rect, plan: &Plan) {
         for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
         if self.lines.is_empty() { return }
-        let tab = app.tabs.iter().find(|t| t.panes().contains(&self.pane)).map(|t| t.id.clone()).unwrap_or_default();
-        let mode = crate::draw::style_over(&app.options.get("mode-style", &tab, Some(self.pane)).unwrap_or_default(), Style::default());
+        let window = app.tabs.iter().position(|t| t.panes().contains(&self.pane)).unwrap_or(app.active);
+        let mode = crate::draw::style_over(&app.style_spec("mode-style", window, Some(self.pane)), Style::default());
         let (w, h) = (self.width.min(area.width as u32), self.height.min(area.height as u32));
         let keylen = self.lines.iter().filter_map(|l| self.items[l.item].keystr.as_ref()).map(|k| k.len() + 3).max().unwrap_or(0);
         for i in self.offset..self.lines.len() {

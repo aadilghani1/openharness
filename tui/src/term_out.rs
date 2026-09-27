@@ -182,16 +182,20 @@ pub fn set_colours(n: u32) { COLOURS.store(n, std::sync::atomic::Ordering::Relax
 
 /// The terminal's colours from its name and what it says of itself, and what the config says of
 /// it: 24-bit with COLORTERM truecolor or 24bit, a `-direct` terminal, or terminal-features' RGB
-/// (terminal-overrides' Tc or RGB) for its name; else 256 for a 256-colour one, 16 for a
-/// 16-colour one, 8 for xterm, screen, linux and their kin, none for vt100 and dumb.
+/// (terminal-overrides' Tc or RGB) for its name — and for a 256-colour one, which tmux asks what
+/// it is (XDA) and finds 24-bit in every such terminal it knows (iTerm2, kitty, WezTerm, Ghostty,
+/// foot, tmux…); hn cannot ask, so takes it at that, except Terminal.app, which does not answer
+/// and gets the 256. Else 16 for a 16-colour one, 8 for xterm, screen, linux and their kin, none
+/// for vt100 and dumb.
 pub fn colours_for(term: &str, colorterm: &str, features: &[String], overrides: &[String]) -> u32 {
+    let apple = std::env::var("TERM_PROGRAM").as_deref() == Ok("Apple_Terminal");
     let says = |list: &[String], caps: &[&str]| list.iter().any(|f| {
         let mut parts = f.split(':');
         let pat = parts.next().unwrap_or("");
         crate::cmd::fnmatch(pat, term) && parts.any(|c| caps.contains(&c.split('=').next().unwrap_or(c)))
     });
     if matches!(colorterm, "truecolor" | "24bit") || term.ends_with("-direct") || says(features, &["RGB"]) || says(overrides, &["Tc", "RGB"]) { return 1 << 24 }
-    if term.contains("256color") || matches!(term, "xterm-kitty" | "xterm-ghostty" | "alacritty" | "wezterm" | "foot" | "tmux-256color") { return 256 }
+    if term.contains("256color") || matches!(term, "xterm-kitty" | "xterm-ghostty" | "alacritty" | "wezterm" | "foot") { return if apple { 256 } else { 1 << 24 } }
     if term.contains("16color") { return 16 }
     if term.is_empty() { return 256 }
     if matches!(term, "vt100" | "vt102" | "vt220" | "dumb") { return 0 }
@@ -379,7 +383,7 @@ mod tests {
         assert_eq!(super::find_rgb(255, 128, 0), 208);
         assert_eq!(super::find_rgb(0, 64, 128), 24);
         assert_eq!(super::TO16[208], 9);
-        assert_eq!(super::colours_for("xterm-256color", "", &[], &[]), 256);
+        assert_eq!(super::colours_for("xterm-16color", "", &[], &[]), 16);
         assert_eq!(super::colours_for("xterm-256color", "truecolor", &[], &[]), 1 << 24);
         assert_eq!(super::colours_for("xterm-256color", "", &["xterm*:RGB".to_string()], &[]), 1 << 24);
         assert_eq!(super::colours_for("xterm", "", &[], &[]), 8);

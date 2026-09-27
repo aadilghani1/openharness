@@ -19,8 +19,8 @@ pub fn ctx(app: &App, pane: u64) -> Ctx {
 
 /// The looks copy mode draws [pane] with.
 pub fn styles(app: &App, pane: u64) -> Styles {
-    let (_, tab) = tab_of(app, pane);
-    Styles::of(|n| app.options.get(n, &tab, Some(pane)).unwrap_or_default())
+    let (w, _) = tab_of(app, pane);
+    Styles::of(|n| app.style_spec(n, w, Some(pane)))
 }
 
 /// The mode's screen for [pane]: its tile's cells, or its terminal's when it is not on screen.

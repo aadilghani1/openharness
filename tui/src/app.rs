@@ -933,8 +933,9 @@ impl App {
     /// A message in the status line (tmux `display-message`), kept for `show-messages`.
     pub fn say(&mut self, text: impl Into<String>, color: Color) {
         let text = text.into();
-        // A config's command: its errors say where it was read (file:line:), as tmux's do.
-        let text = match &self.origin { Some((file, line)) => format!("{file}:{line}: {text}"), None => text };
+        // A command of the config read at start: where it was read (file:line:), as tmux's causes
+        // say. Later, from a key or a shell, a message is the client's as any other is.
+        let text = match &self.origin { Some((file, line)) if !self.cfg_finished => format!("{file}:{line}: {text}"), _ => text };
         // Run from a shell: a message is the command's error, printed there.
         if let Some(err) = self.capture_err.as_mut() { err.push(text); return }
         self.add_message(format!("{} message: {text}", tty_name()));
@@ -1002,11 +1003,13 @@ impl App {
     pub fn error(&mut self, text: impl Into<String>) {
         self.errors += 1;
         let mut text = text.into();
-        // A config file's command (cfg_add_cause): kept, with its file and line, for view mode.
-        if self.capture_err.is_none() {
+        // A config file's command with no client (cmdq_error's cfg_add_cause: the config read at
+        // start, or where no terminal is): kept, with its file and line, for view mode. With a
+        // client — a key, a prompt, a shell — it is that client's error as any other is.
+        if self.capture_err.is_none() && (!self.cfg_finished || self.headless) {
             if let Some((file, line)) = &self.origin { self.config_causes.push(format!("{file}:{line}: {text}")); return }
         }
-        if self.capture_err.is_none() && self.origin.is_none() {
+        if self.capture_err.is_none() {
             if let Some(c) = text.chars().next() { text = c.to_uppercase().collect::<String>() + &text[c.len_utf8()..] }
         }
         self.say(text, theme::WARN)
@@ -3163,10 +3166,14 @@ impl App {
     /// there, a format in it expanded first (options_string_to_style), parsed over no colours —
     /// its attributes and background included.
     pub fn style_of(&self, name: &str, window: usize, pane: Option<u64>) -> Style {
+        crate::draw::style_over(&self.style_spec(name, window, pane), Style::default())
+    }
+
+    /// A *-style option's value in force for a window (and a pane), a format in it expanded.
+    pub fn style_spec(&self, name: &str, window: usize, pane: Option<u64>) -> String {
         let id = self.tabs.get(window).map(|t| t.id.as_str()).unwrap_or("");
         let raw = self.options.get(name, id, pane).unwrap_or_default();
-        let spec = if raw.contains("#{") { crate::format::expand(self, &raw, window, pane, false) } else { raw };
-        crate::draw::style_over(&spec, Style::default())
+        if raw.contains("#{") { crate::format::expand(self, &raw, window, pane, false) } else { raw }
     }
 
     /// The status line's colours (status_redraw): status-style, then status-fg and status-bg

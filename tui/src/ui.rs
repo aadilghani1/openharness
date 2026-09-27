@@ -128,8 +128,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// third column, each item from the third column in menu-style — menu-selected-style when chosen,
 /// dim when disabled — its key right-aligned as (k); '' a rule across, joined to the sides.
 fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
-    let tab_id = app.tab().id.clone();
-    let opt = |name: &str, default: &str| app.options.get(name, &tab_id, None).unwrap_or_else(|| default.to_string());
+    let opt = |name: &str, default: &str| Some(app.style_spec(name, app.active, app.focused())).filter(|s| !s.is_empty()).unwrap_or_else(|| default.to_string());
     let base = Style::default();
     let style = crate::draw::style_over(&opt("menu-style", "default"), base);
     let selected = crate::draw::style_over(&opt("menu-selected-style", "bg=yellow,fg=black"), base);
