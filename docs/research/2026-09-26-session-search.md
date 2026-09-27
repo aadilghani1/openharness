@@ -266,13 +266,14 @@ so a preview reads no transcript: 0.4 ms for a real session's last page, 1–20 
 socket, about 0.4 s from another machine over the relay.
 
 - **The last ~16,000 characters**, about five screens, then 16,000 more each time the list nears
-  its top. The app keeps the last 20 sessions previewed, refreshes a working agent's every 2 s,
+  its top. A session is fetched once per ⌘P opening, when its row is selected; nothing refreshes
+  while ⌘P stays open, not even for a working agent. The app keeps the last 20 sessions previewed
   and warms the next two rows while one is selected.
 - **The latest ask stays in view.** After a long autonomous turn it is many rows up, so it is
   pinned above the turns whenever its own line is not showing.
 - **An older match says where it was** ("Matched earlier · 1d ago") above the turns, and the
   searched words are bold in them.
-- **A working agent's current turn** is included: the request brings that session's index up to
+- **A working agent's turn so far** is included: the request brings that session's index up to
   date first, waiting at most 400 ms. A question waiting on the person sits below the latest turn.
 - **Stored text keeps its line breaks and indentation** so answers read as written; search folds
   them. Claude Code's label and 800-character instruction around another agent's message are

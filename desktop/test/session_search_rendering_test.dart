@@ -161,6 +161,8 @@ void main() {
                 )
               : agent,
       ];
+      // At work: its preview is still fetched once, never refreshed.
+      machine.processingAgentIds.add('a7');
       final map = MemoryKeymap();
       final projects = SwarmProjectStore();
       addTearDown(map.dispose);
@@ -194,6 +196,9 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump(const Duration(milliseconds: 50));
       expect(tails, [null]);
+      await tester.pump(const Duration(seconds: 10));
+      expect(tails, [null], reason: 'nothing refreshes while Cmd-P is open');
+      expect(find.text('Working'), findsOneWidget);
 
       final list = find.byKey(const ValueKey('session-tail:m:s7'));
       expect(list, findsOneWidget);

@@ -86,9 +86,10 @@ typedef SessionTailFetch = Future<Map<String, dynamic>?> Function(
   int? beforeTurn,
 });
 
-/// Cmd-P's preview of a session's end. Fetched when its row is selected, kept
-/// for the last [capacity] sessions so arrowing back and forth does not ask
-/// again, refreshed while its agent works, and paged up on demand.
+/// Cmd-P's preview of a session's end. Fetched once per Cmd-P opening, when
+/// its row is selected: arrowing back to it reuses that copy, and nothing is
+/// refreshed while Cmd-P stays open. Kept for the last [capacity] sessions and
+/// paged up on demand.
 class SessionTails extends ChangeNotifier {
   SessionTails(this._fetch, {DateTime Function()? now, this.capacity = 20})
     : _now = now ?? DateTime.now;
@@ -101,13 +102,10 @@ class SessionTails extends ChangeNotifier {
   final _latest = <SessionTailKey, Future<void>>{};
   final _older = <SessionTailKey>{};
   final _unavailable = <SessionTailKey, DateTime>{};
+
+  /// Sessions fetched since Cmd-P last opened.
+  final _fetched = <SessionTailKey>{};
   bool _disposed = false;
-
-  /// How old a working session's tail may be before it is asked again.
-  static const liveAge = Duration(seconds: 2);
-
-  /// How old an idle one's may be: a finished session changes rarely.
-  static const idleAge = Duration(seconds: 30);
 
   /// How long a machine that could not answer is left alone: a CLI that
   /// predates `session_tail` stays silent until its request times out.
@@ -128,17 +126,19 @@ class SessionTails extends ChangeNotifier {
 
   bool loadingOlder(SessionTailKey key) => _older.contains(key);
 
-  /// Fetches the session's last rows unless a fresh enough copy is cached.
-  /// Older pages already loaded are kept beneath the new last page.
-  Future<void> want(SessionTailKey key, {bool live = false}) {
+  /// Cmd-P opened: each session is fetched again the first time it is
+  /// selected, so the preview shows it as it is now. Until then the copy it
+  /// had is shown.
+  void opened() => _fetched.clear();
+
+  /// Fetches the session's last rows, once per Cmd-P opening. Older pages
+  /// already loaded are kept beneath the new last page.
+  Future<void> want(SessionTailKey key) {
     final pending = _latest[key];
     if (pending != null) return pending;
-    final cached = _tails[key];
-    if (cached != null &&
-        _now().difference(cached.fetchedAt) < (live ? liveAge : idleAge)) {
-      return Future.value();
-    }
-    if (cached == null && unavailable(key)) return Future.value();
+    if (_fetched.contains(key)) return Future.value();
+    if (!_tails.containsKey(key) && unavailable(key)) return Future.value();
+    _fetched.add(key);
     // A block, not an arrow: `remove` returns this very future, and
     // `whenComplete` would wait for it — for itself, forever.
     final future = _fetchLatest(key).whenComplete(() {
@@ -219,6 +219,7 @@ class SessionTails extends ChangeNotifier {
   void clear() {
     _tails.clear();
     _unavailable.clear();
+    _fetched.clear();
     notifyListeners();
   }
 

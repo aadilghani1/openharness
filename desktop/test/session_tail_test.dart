@@ -64,7 +64,7 @@ void main() {
   });
 
   test(
-    'asks once, answers from the cache while fresh, and again when stale',
+    'asks once per Cmd-P opening, and never refreshes while it stays open',
     () async {
       final store = tails();
       addTearDown(store.dispose);
@@ -72,11 +72,13 @@ void main() {
       expect(asked, [null]);
       expect(store.read(key)!.rows.map((row) => row.turn), [37, 38, 39]);
 
-      now = now.add(const Duration(seconds: 5));
+      now = now.add(const Duration(minutes: 5));
       await store.want(key);
-      expect(asked, [null], reason: 'an idle session is fresh for 30 s');
-      await store.want(key, live: true);
-      expect(asked, [null, null], reason: 'a working one for 2 s');
+      expect(asked, [null], reason: 'nothing refreshes while Cmd-P is open');
+      store.opened();
+      expect(store.read(key), isNotNull, reason: 'shown until the answer');
+      await store.want(key);
+      expect(asked, [null, null], reason: 'a new opening asks again');
     },
   );
 
@@ -105,7 +107,7 @@ void main() {
 
       // The open turn grew into a continuation.
       answer = (_) => page([38, 39, 40]);
-      now = now.add(const Duration(minutes: 1));
+      store.opened();
       await store.want(key);
       expect(store.read(key)!.rows.map((row) => row.turn), [
         34,
@@ -126,10 +128,12 @@ void main() {
     answer = (_) => null;
     await store.want(key);
     expect(store.unavailable(key), isTrue);
+    store.opened();
     await store.want(key);
-    expect(asked, [null]);
+    expect(asked, [null], reason: 'not asked again for a minute');
     now = now.add(const Duration(minutes: 2));
     expect(store.unavailable(key), isFalse);
+    store.opened();
     answer = (_) => page([39]);
     await store.want(key);
     expect(store.read(key)!.rows.single.turn, 39);
@@ -171,7 +175,7 @@ void main() {
       expect(store.read(key)!.lastAsk!.ask, 'rebuild the dial');
       answer = (_) =>
           page([38, 39, 40])..['lastAsk'] = {'turn': 40, 'ask': 'now flash it'};
-      now = now.add(const Duration(minutes: 1));
+      store.opened();
       await store.want(key);
       expect(store.read(key)!.lastAsk!.ask, 'now flash it');
     },

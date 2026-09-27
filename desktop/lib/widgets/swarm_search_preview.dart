@@ -82,7 +82,7 @@ SessionTailKey? _tailKey(_PreviewAgent item) => switch (item.agent.sessionId) {
 
 class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   Timer? _warm;
-  Timer? _tail, _live;
+  Timer? _tail;
   String? _selectedId;
   SessionContentHit? _found;
   late SwarmPreviewScrollController _scroll;
@@ -92,6 +92,8 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   void initState() {
     super.initState();
     _scroll = _scrollController();
+    // Each opening shows the sessions as they are now.
+    app.sessionTails.opened();
     widget.search.addListener(_changed);
     _changed();
   }
@@ -125,16 +127,11 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
     setState(() {});
     _warm?.cancel();
     _tail?.cancel();
-    _live?.cancel();
     if (row?.isCommand == true || row?.pickerQuery != null) return;
     // A row passed over while arrowing is not asked for; one that stays
-    // selected is, and again every few seconds while its agent works.
+    // selected is, once per Cmd-P opening. Nothing refreshes it after that.
     _tail = Timer(const Duration(milliseconds: 60), () {
-      if (!mounted || row == null) return;
-      _wantTail(row);
-      _live = Timer.periodic(SessionTails.liveAge, (_) {
-        if (mounted) _wantTail(row);
-      });
+      if (mounted && row != null) _wantTail(row);
     });
     _warm = Timer(const Duration(milliseconds: 140), () {
       if (!mounted || row == null) return;
@@ -162,12 +159,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
     final items = _agents(app, row);
     if (row.isGroup || items.length != 1) return;
     final item = items.single;
-    final key = _tailKey(item);
-    if (key == null) return;
-    app.sessionTails.want(
-      key,
-      live: item.machine.processingAgentIds.contains(item.agent.id),
-    );
+    if (_tailKey(item) case final key?) app.sessionTails.want(key);
   }
 
   /// One agent's preview: its session's latest turns from the bottom up when
@@ -288,7 +280,6 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   void dispose() {
     _warm?.cancel();
     _tail?.cancel();
-    _live?.cancel();
     widget.search.removeListener(_changed);
     _scroll.dispose();
     super.dispose();
@@ -569,17 +560,11 @@ class _AgentPreview extends StatelessWidget {
             ),
           );
     if (part == _Part.footer) {
-      // Below the latest turn: the question waiting on the person, else what
-      // the agent is doing this moment — the turn it is in may not be written
-      // to its transcript yet.
+      // Below the latest turn: the question waiting on the person, or that
+      // the agent is still at work on this turn.
       if (waitingBox != null) return waitingBox;
       if (!working) return const SizedBox.shrink();
-      return Text(
-        ['Working', ?record?.activity].join(' · '),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: muted.copyWith(color: color),
-      );
+      return Text('Working', style: muted.copyWith(color: color));
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
