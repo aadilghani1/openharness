@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { ExternalSessions, OpenSessions, stopSessionOwner, TERMINAL_RESTORE, writeTty } from './external.js'
+import { ExternalSessions, foregroundJob, OpenSessions, stopSessionOwner, TERMINAL_RESTORE, writeTty } from './external.js'
 import type { ExternalEngine, ExternalProvider, ExternalSession, OwnerClaim, ProcessView } from './externals/types.js'
 
 const dirs: string[] = []
@@ -36,6 +36,18 @@ describe('ExternalSessions', () => {
     grokFails = true
     expect((await sessions.scan()).map((s) => s.sessionId)).toEqual(['g', 'a', 'dup'])
     expect(log).toContain('[search] grok sessions not read: store locked')
+  })
+
+  it('finds a conversation by an older id it carried on from, never over another conversation', async () => {
+    const sessions = new ExternalSessions({ providers: [
+      { engine: 'hermes', scan: async () => [
+        session('tip', 'hermes', 5, { aliases: ['root', 'taken'] }),
+        session('taken', 'hermes', 1),
+      ] },
+    ] })
+    await sessions.scan()
+    expect(sessions.get('root')?.sessionId).toBe('tip')
+    expect(sessions.get('taken')?.sessionId).toBe('taken')
   })
 
   it('shares one scan between callers, and finds nothing with no engines', async () => {
@@ -81,6 +93,25 @@ describe('OpenSessions', () => {
     expect(await sessions.owner('leader')).toMatchObject({ tty: null })
     expect(await sessions.owner('mine')).toMatchObject({ harness: true })
     expect(await sessions.owner('none')).toBeNull()
+  })
+
+  it("calls one only its arguments name 'maybe', and lets harder evidence of the same session win", async () => {
+    const { sessions } = open([
+      { engine: 'opencode', scan: async () => [], owners: async () => [
+        { sessionId: 'guess', pid: 1, record: '/r/1', fromArgs: true },
+        { sessionId: 'both', pid: 2, record: '/r/argv', fromArgs: true },
+        { sessionId: 'both', pid: 3, record: '/r/lock' },
+        { sessionId: 'lockfirst', pid: 4, record: '/r/lock' },
+        { sessionId: 'lockfirst', pid: 5, record: '/r/argv', fromArgs: true },
+        { sessionId: 'twice', pid: 6, record: '/r/a' },
+        { sessionId: 'twice', pid: 1, record: '/r/b' },
+      ] },
+    ])
+    expect(Object.fromEntries(await sessions.fresh())).toMatchObject({ guess: 'maybe', both: 'terminal', lockfirst: 'terminal', twice: 'terminal' })
+    expect(await sessions.owner('guess')).toMatchObject({ pid: 1, fromArgs: true })
+    expect((await sessions.owner('both'))?.pid).toBe(3)
+    expect((await sessions.owner('lockfirst'))?.pid).toBe(4)
+    expect((await sessions.owner('twice'))?.pid).toBe(6)
   })
 
   it('reuses an answer for a while, looks again after, and looks now when asked who owns one', async () => {
@@ -159,6 +190,7 @@ describe('stopSessionOwner', () => {
     let slept = 0
     const opts = {
       alive: () => living,
+      job: async () => null,
       kill: (_pid: number, signal: NodeJS.Signals) => { signals.push(signal); if (signal === 'SIGTERM' && slept === 0) return; living = false },
       sleep: async (ms: number) => { slept += ms },
       writeTty: async (tty: string, text: string) => { written.push(`${tty} ${JSON.stringify(text)}`) },
@@ -176,6 +208,24 @@ describe('stopSessionOwner', () => {
     // A terminal that cannot be written to is left as it is.
     living = true; slept = 1
     expect(await stopSessionOwner({ pid: 7, tty: '/dev/gone' }, { ...opts, writeTty: async () => { throw new Error('ENOENT') } })).toBe(true)
+  })
+
+  it("signals the whole foreground job an engine leads, and only the engine otherwise", async () => {
+    const targets: number[] = []
+    let living = true
+    const opts = { alive: () => living, sleep: async () => undefined, kill: (pid: number) => { targets.push(pid); living = false } }
+    expect(await stopSessionOwner({ pid: 40, tty: null }, { ...opts, job: async () => 40 })).toBe(true)
+    living = true
+    expect(await stopSessionOwner({ pid: 41, tty: null }, { ...opts, job: async () => { throw new Error('ps failed') } })).toBe(true)
+    expect(targets).toEqual([-40, 41])
+    // Leading its group, and that group in front: the job. Anything else: none.
+    const ps = (out: string | null) => async () => out
+    expect(await foregroundJob(40, ps('  40   40\n'))).toBe(40)
+    expect(await foregroundJob(40, ps('  12   40\n'))).toBeNull()
+    expect(await foregroundJob(40, ps('  40   -1\n'))).toBeNull()
+    expect(await foregroundJob(40, ps(null))).toBeNull()
+    // This process leads no foreground job of a terminal.
+    expect(await foregroundJob(process.pid)).toBeNull()
   })
 
   it('stops a real process, and writes the terminal back to a real file', async () => {

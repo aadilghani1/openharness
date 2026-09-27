@@ -103,7 +103,7 @@ export interface SessionSearchIndexOptions {
    * Which sessions are open in a running process right now (external.ts `OpenSessions`), so a
    * conversation Harness did not start says whether a terminal still has it. `known` never waits.
    */
-  openSessions?: { known(): ReadonlyMap<string, 'terminal' | 'app' | 'harness'>; fresh(): Promise<ReadonlyMap<string, 'terminal' | 'app' | 'harness'>> }
+  openSessions?: { known(): ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>; fresh(): Promise<ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>> }
   /** Looks again for conversations Harness did not start, before each sweep lists its sources. */
   discover?: () => Promise<unknown>
   /** Between full sweeps. */

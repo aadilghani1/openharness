@@ -10,7 +10,7 @@
 import { join } from 'node:path'
 
 import { absoluteFolder, entries, fileStamp, readHead, readJson, record, text } from './support.js'
-import type { ExternalOrigin, ExternalProvider, ExternalSession, OwnerClaim, ProcessView, ScanContext } from './types.js'
+import { type ExternalOrigin, type ExternalProvider, type ExternalSession, type OwnerClaim, type ProcessView, type ScanContext, UNSETTLED } from './types.js'
 
 /** How much of a transcript is read to classify it: the first lines may carry no entrypoint. */
 const HEAD_BYTES = 256 * 1024
@@ -18,8 +18,11 @@ const SESSION_ID = /^[A-Za-z0-9-]{8,80}$/
 
 export interface ClaudeHead { sessionId: string; cwd: string; origin: ExternalOrigin }
 
-/** A transcript's session, folder and entrypoint, from the first line that has them. */
-export async function readClaudeHead(path: string): Promise<ClaudeHead | null> {
+/**
+ * A transcript's session, folder and entrypoint, from the first line that has them. UNSETTLED when no
+ * such line is there yet in a file shorter than what is read: Claude may still be writing it.
+ */
+export async function readClaudeHead(path: string): Promise<ClaudeHead | null | typeof UNSETTLED> {
   const head = await readHead(path, HEAD_BYTES)
   for (const line of head.split('\n')) {
     if (!line.includes('"entrypoint"')) continue
@@ -32,7 +35,7 @@ export async function readClaudeHead(path: string): Promise<ClaudeHead | null> {
     if (!origin || !SESSION_ID.test(text(row.sessionId)) || !cwd) return null
     return { sessionId: text(row.sessionId), cwd, origin }
   }
-  return null
+  return Buffer.byteLength(head) < HEAD_BYTES ? UNSETTLED : null
 }
 
 export function claudeProvider(options: { projectsDir: string; home: string }): ExternalProvider {
@@ -51,7 +54,7 @@ export function claudeProvider(options: { projectsDir: string; home: string }): 
           const stamp = await fileStamp(path)
           if (!stamp) continue
           // A transcript's first lines never change: its head is read once, however it grows.
-          const head = await ctx.memo(`claude:${path}`, 'head', () => readClaudeHead(path))
+          const head = await ctx.head(`claude:${path}`, stamp.stamp, () => readClaudeHead(path))
           await ctx.pace()
           if (!head || ctx.excluded(head.cwd)) continue
           found.push({ ...head, engine: 'claude', title: '', mtime: stamp.mtime, transcriptPath: path })

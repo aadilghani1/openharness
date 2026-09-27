@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { claudeProvider, readClaudeHead } from './claude.js'
 import { scanMemo } from './support.js'
-import type { ProcessView } from './types.js'
+import { type ProcessView, UNSETTLED } from './types.js'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -42,8 +42,11 @@ describe('readClaudeHead', () => {
     expect(await readClaudeHead(file('x', [line(A, 'cli', { isSidechain: true })]))).toBeNull()
     expect(await readClaudeHead(file('r', [line(A, 'cli', { cwd: 'relative/path' })]))).toBeNull()
     expect(await readClaudeHead(file('i', [line('short', 'cli')]))).toBeNull()
-    expect(await readClaudeHead(file('n', ['["entrypoint"]']))).toBeNull()
-    expect(await readClaudeHead(file('e', [{ type: 'summary', summary: 'nothing else' }]))).toBeNull()
+    // No line says yet: Claude may still be writing it, so it is not judged — unless the file is too
+    // long for that.
+    expect(await readClaudeHead(file('n', ['["entrypoint"]']))).toBe(UNSETTLED)
+    expect(await readClaudeHead(file('e', [{ type: 'summary', summary: 'nothing else' }]))).toBe(UNSETTLED)
+    expect(await readClaudeHead(file('big', [{ type: 'summary', summary: 'x'.repeat(300 * 1024) }]))).toBeNull()
   })
 })
 
@@ -68,6 +71,17 @@ describe('claudeProvider', () => {
     expect(found[0].mtime).toBeGreaterThan(0)
     // Nothing where nothing is.
     expect(await claudeProvider({ projectsDir: join(root, 'none'), home: root }).scan(memo.context())).toEqual([])
+  })
+
+  it('finds a conversation it first saw half-written once Claude has written its first lines', async () => {
+    const root = home()
+    const projects = join(root, 'projects')
+    const path = write(join(projects, '-work-dial', `${B}.jsonl`), [{ type: 'permission-mode' }])
+    const provider = claudeProvider({ projectsDir: projects, home: root })
+    const memo = scanMemo()
+    expect(await provider.scan(memo.context())).toEqual([])
+    write(path, [{ type: 'permission-mode' }, line(B, 'cli')])
+    expect((await provider.scan(memo.context())).map((s) => s.sessionId)).toEqual([B])
   })
 
   it('knows its owners from their live process records, and whether they are between turns', async () => {
