@@ -2240,9 +2240,27 @@ impl App {
             "window_name" => name,
             "window_panes" => panes.to_string(),
             "window_active" => (current as u8).to_string(),
-            "window_flags" | "window_raw_flags" => if current { "*".into() } else { String::new() },
+            "window_flags" | "window_raw_flags" => if current { "*".into() } else if self.session_last_window(id).is_some_and(|l| l == k) { "-".into() } else { String::new() },
+            "window_id" => self.session_wids(id).get(k).map(|w| format!("@{w}")).unwrap_or_default(),
+            "window_last_flag" => (self.session_last_window(id) == Some(k) && !current).then_some("1").unwrap_or("0").into(),
             _ => return None,
         })
+    }
+
+    /// A session's windows' ids (@N), in session_windows' order.
+    pub fn session_wids(&self, id: u32) -> Vec<u64> {
+        let of = |tabs: &[Tab]| tabs.iter().filter(|t| t.root.is_some()).map(|t| t.wid()).collect();
+        if id == self.session_id { return of(&self.tabs) }
+        if let Some(s) = self.sessions.iter().find(|s| s.id == id) { return of(&s.tabs) }
+        self.remote_rows().into_iter().find(|r| r.id == id).map(|r| r.wids).unwrap_or_default()
+    }
+
+    /// Which of a session's windows (session_windows' order) is its last one, where this client
+    /// keeps it.
+    fn session_last_window(&self, id: u32) -> Option<usize> {
+        let (tabs, lastw) = if id == self.session_id { (&self.tabs, &self.lastw) } else { let s = self.sessions.iter().find(|s| s.id == id)?; (&s.tabs, &s.lastw) };
+        let last = lastw.iter().find(|id| tabs.iter().any(|t| &t.id == *id && t.root.is_some()))?;
+        tabs.iter().filter(|t| t.root.is_some()).position(|t| &t.id == last)
     }
 
     /// A session's window not in front (a #{S:} loop's; the `k`th of its windows, else its
@@ -2316,8 +2334,17 @@ impl App {
             let alerts: HashMap<String, u8> = s.tabs.iter().map(|t| (t.id.clone(), t.alerts)).collect();
             // (A session in front with no window left is going: its group keeps theirs.)
             if group.is_some() && s.group == group && !tabs.is_empty() {
+                // Its own windows with no pane yet (one made there, its shell on the way; its home
+                // page) are its own until they have one: kept, at their numbers.
+                let pending: Vec<(Tab, Option<usize>)> = s.tabs.iter().filter(|t| t.root.is_none() && !killed.contains(&t.id)).map(|t| (t.clone(), s.nums.get(&t.id).copied())).collect();
                 s.tabs = tabs.iter().map(|t| { let mut c = t.clone(); c.alerts = alerts.get(&t.id).copied().unwrap_or(0); c }).collect();
                 s.nums = tabs.iter().filter_map(|t| nums.get(&t.id).map(|n| (t.id.clone(), *n))).collect();
+                for (t, n) in pending {
+                    let Some(n) = n.filter(|n| !s.nums.values().any(|m| m == n)) else { continue };
+                    let at = s.tabs.iter().position(|x| s.nums.get(&x.id).map(|m| *m > n).unwrap_or(false)).unwrap_or(s.tabs.len());
+                    s.nums.insert(t.id.clone(), n);
+                    s.tabs.insert(at, t);
+                }
             } else {
                 s.tabs.retain(|t| !killed.contains(&t.id));
                 for t in s.tabs.iter_mut() {

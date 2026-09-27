@@ -228,7 +228,9 @@ pub fn absolute(app: &App, entry: &crate::cmd::Entry, words: &[String]) -> Vec<S
         let Ok(found) = crate::cmd::resolve(app, given.as_deref(), spec) else { continue };
         let wid = |w: Option<usize>| w.and_then(|w| app.tabs.get(w)).map(|t| format!("@{}", t.wid()));
         let id = match spec.kind {
-            crate::cmd::Kind::Pane => found.pane.map(crate::pane::tag).or_else(|| wid(found.window)),
+            // (With its session and window: a pane is in every session of a group, and a session's
+            // option set through it is that session's.)
+            crate::cmd::Kind::Pane => found.pane.map(|p| match wid(found.window) { Some(w) => format!("${sid}:{w}.{}", crate::pane::tag(p)), None => crate::pane::tag(p) }).or_else(|| wid(found.window).map(|w| format!("${sid}:{w}"))),
             crate::cmd::Kind::Window if spec.window_index => Some(match (given.is_some(), found.idx) { (true, Some(i)) => format!("${sid}:{i}"), _ => format!("${sid}:") }),
             // (In its session: a window may be in several — link-window, a group.)
             crate::cmd::Kind::Window => wid(found.window).map(|w| format!("${sid}:{w}")),
