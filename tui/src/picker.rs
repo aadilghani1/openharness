@@ -74,6 +74,9 @@ impl Row {
 pub struct Picker {
     /// Rows on screen, for PgUp/PgDn (a page is what you see).
     pub page_rows: std::cell::Cell<i64>,
+    /// The width a row's text had when last drawn (0 before): a live list's query matches what a
+    /// row shows at it (its right column only where there is room for it).
+    pub text_w: usize,
     /// The kill buffer (C-w, M-BSpace, M-d), for C-y.
     pub kill: String,
     /// How far the preview can scroll, its lines and its height (the preview sets them as it
@@ -236,6 +239,7 @@ impl Picker {
             preview_rows: Default::default(),
             kill: String::new(),
             page_rows: std::cell::Cell::new(10),
+            text_w: 0,
         }
     }
 
@@ -298,7 +302,7 @@ impl Picker {
                 if row.disabled { continue }
                 let keywords = format!("{} {}", row.label, row.extra);
                 if negated.iter().any(|(w, s)| w.chars().count() >= 3 && names_word(&keywords, w, *s)) { continue }
-                let chars: Vec<char> = if self.live { steady_line(row) } else { line(row).chars().collect() };
+                let chars: Vec<char> = if self.live { steady_line(row, self.text_w) } else { line(row).chars().collect() };
                 // (A keyword hit still has to keep out of what the query excludes from the line.)
                 let seen = if negated.is_empty() { String::new() } else { line(row) };
                 let clear = |w: &str, sensitive: bool| if sensitive { !seen.contains(w) } else { !seen.to_lowercase().contains(w) };
@@ -609,15 +613,19 @@ pub fn scope_of(query: &str) -> Option<char> {
 
 /// A live row's line as a query sees it: as drawn (picker::line), its changing parts blanked —
 /// what it is doing now, how long it has been as it is — so hits light where the row shows them.
-fn steady_line(row: &Row) -> Vec<char> {
+fn steady_line(row: &Row, text_w: usize) -> Vec<char> {
     const OUT: char = '\u{1}';
+    // The right column as drawn (ui's fzf_row): whole, where there is room for it beside the line.
+    use unicode_width::UnicodeWidthStr;
+    let lead: usize = row.lead.iter().map(|s| s.content.width()).sum();
+    let shown = text_w == 0 || (row.right_at(text_w) == row.right && text_w >= lead + row.right.width() + 14);
     let mut out: Vec<char> = row.label.chars().collect();
     let detail: String = row.detail.iter().map(|s| s.content.as_ref()).collect();
     if !detail.is_empty() { out.extend("  ".chars()); out.extend(detail.chars().map(|c| if row.volatile_detail { OUT } else { c })) }
     if !row.right.is_empty() {
         out.extend("  ".chars());
         let n = row.right.chars().count();
-        out.extend(row.right.chars().enumerate().map(|(i, c)| if i + row.volatile_right >= n { OUT } else { c }));
+        out.extend(row.right.chars().enumerate().map(|(i, c)| if !shown || i + row.volatile_right >= n { OUT } else { c }));
     }
     out
 }

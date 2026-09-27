@@ -939,6 +939,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // scrollbar whenever there is one (shown or not), or for whatever is on the right edge.
     let bar_col = theme::fzf_opts().scrollbar.is_some() || right_border || preview.is_some();
     let text_w = width.saturating_sub(gutter_width() as usize + bar_col as usize);
+    // A live list matches what its rows show at this width: another width, matched again.
+    if picker.text_w != text_w { picker.text_w = text_w; if picker.live && !picker.query.is_empty() { picker.refilter() } }
     picker.row_at.clear();
     if picker.wrap || theme::fzf_opts().gap > 0 { fzf_wrapped(buf, picker, area, list_top, list_bottom, text_w, reverse); return cursor }
     // Scroll so the cursor row is in view (scroll = first visible index from the bottom), with
@@ -1565,7 +1567,8 @@ fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'st
         // long header (··).
         let piece = if i > 0 { 3 } else { 0 } + k.width() + 1 + w.width();
         if used + piece > width {
-            if used + 2 <= width { spans.push(Span::styled("··", theme::fzf().header_style())) }
+            let dots = if theme::fzf_opts().unicode { "··" } else { ".." };
+            if used + 2 <= width { spans.push(Span::styled(dots, theme::fzf().header_style())) }
             break;
         }
         used += piece;

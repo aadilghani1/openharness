@@ -810,7 +810,13 @@ fn harness_preview(picker: &mut Picker) {
     if picker.preview_window.is_some() { return }
     let mut pw = crate::theme::PreviewWindow::default();
     theme::parse_preview_window(&mut pw, "right,50%,<90(down,40%)");
-    for spec in &theme::fzf_opts().preview_window_specs { theme::parse_preview_window(&mut pw, spec) }
+    for spec in &theme::fzf_opts().preview_window_specs {
+        theme::parse_preview_window(&mut pw, spec);
+        // …and its look (a border, info, a scroll offset) over the narrow layout too; where
+        // the preview goes and its size are that layout's own.
+        let look: Vec<&str> = spec.split(',').filter(|t| { let t = t.trim(); !(matches!(t, "up" | "down" | "left" | "right" | "top" | "bottom") || t.starts_with('<') || t.trim_end_matches('%').parse::<f64>().is_ok()) }).collect();
+        if let (Some(alt), false) = (pw.alternative.as_deref_mut(), look.is_empty()) { theme::parse_preview_window(alt, &look.join(",")) }
+    }
     picker.preview_window = Some(pw);
 }
 
@@ -1437,7 +1443,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     // as in fzf). A key bound only to what hn does not run (execute, become, reload …) keeps this
     // list's own meaning of it; one with an action hn runs never falls back to it.
     let name = fzf_key_name(&key);
-    let bound = theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| a.clone()).filter(|a| runs_here(a));
+    let bound = theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| a.clone()).filter(|a| !falls_back(&name, a));
     if let Some(actions) = bound {
         match bound_actions(&mut picker, &actions, up, multi) {
             End::Accept => { choose(app, kind, picker, Choice::Enter); return }
@@ -1628,8 +1634,8 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             // In a list that takes no marks (C-b =) the toggle is nothing and the move still is.
             // The toggles move on only when they toggled (fzf's actToggleDown/Up): not in a list
             // that takes no marks (C-b =), nor when --multi=N is full.
-            "toggle-up" => { if multi && picker.toggle_mark() { picker.move_by(up) } }
-            "toggle-down" => { if multi && picker.toggle_mark() { picker.move_by(-up) } }
+            "toggle-up" => { if multi { picker.toggle_mark(); } picker.move_by(up) }
+            "toggle-down" => { if multi { picker.toggle_mark(); } picker.move_by(-up) }
             // toggle-in: toggle+down, or toggle+up under --layout=reverse — toward the list's first
             // row either way; toggle-out the other way.
             "toggle-in" => { if multi && picker.toggle_mark() { picker.move_by(-1) } }
@@ -1698,27 +1704,38 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
     End::Stay
 }
 
-/// The --bind actions hn runs (bound_actions); the rest (execute, become, reload, print …) are
-/// the shell's side of fzf, which a list in hn has not.
-fn known_action(a: &str) -> bool {
-    matches!(a, "half-page-up" | "half-page-down" | "top" | "first" | "last" | "toggle-up" | "toggle-down" | "toggle-in" | "toggle-out" | "select" | "deselect"
-        | "clear-selection" | "next-selected" | "prev-selected" | "preview-page-up" | "preview-page-down" | "preview-half-page-up" | "preview-half-page-down"
-        | "preview-top" | "preview-bottom" | "unix-word-rubout" | "kill-line" | "backward-char" | "forward-char" | "backward-word" | "forward-word"
-        | "backward-delete-char" | "delete-char" | "delete-char/eof" | "backward-delete-char/eof" | "cancel" | "accept-or-print-query" | "hide-preview"
-        | "show-preview" | "toggle-preview-wrap" | "toggle-sort" | "yank" | "accept-non-empty" | "accept" | "abort" | "up" | "down" | "page-up" | "page-down"
-        | "toggle" | "select-all" | "deselect-all" | "toggle-all" | "toggle-preview" | "toggle-wrap" | "preview-up" | "preview-down" | "clear-query"
-        | "backward-kill-word" | "kill-word" | "unix-line-discard" | "beginning-of-line" | "end-of-line")
-        || (a.starts_with("change-preview-window(") && a.ends_with(')')) || (a.starts_with("pos(") && a.ends_with(')'))
+/// An action's name, its argument aside (`change-preview-window:down|hidden`, `reload(…)`).
+fn action_name(a: &str) -> &str { a.split([':', '(']).next().unwrap_or(a) }
+
+/// The shell's side of fzf: what a list in hn has not (it runs no command for a row).
+fn shell_side(a: &str) -> bool {
+    matches!(action_name(a), "execute" | "execute-silent" | "execute-multi" | "become" | "reload" | "reload-sync" | "print" | "print-query" | "transform" | "transform-query" | "transform-prompt" | "transform-header" | "transform-preview-label" | "transform-border-label" | "preview")
 }
 
-/// Whether a bind's chain has an action hn runs.
-fn runs_here(actions: &str) -> bool { split_chain(actions).iter().any(|a| known_action(a)) }
+/// The keys whose own meaning in the harness lists acts on a harness — pause, restart, answer,
+/// send, mark read, open here: never taken for a key you bound to something else.
+fn acts_on_harness(key: &str) -> bool {
+    matches!(key, "alt-p" | "alt-r" | "alt-a" | "alt-s" | "alt-m" | "alt-M" | "alt-enter") || key.strip_prefix("alt-").map(|d| d.len() == 1 && d.chars().all(|c| c.is_ascii_digit() && c != '0')).unwrap_or(false)
+}
+
+/// Whether a key bound in FZF_DEFAULT_OPTS keeps the list's own meaning: when everything bound to
+/// it is the shell's side of fzf (execute, become, reload …), for a key whose meaning does not act
+/// on a harness. Anything else bound to it — an action hn runs, or one it does not know — is the
+/// key's now (nothing, where hn does not run it).
+fn falls_back(key: &str, actions: &str) -> bool {
+    !acts_on_harness(key) && split_chain(actions).iter().all(|a| shell_side(a))
+}
+
+/// What a hint's key does in the lists without a bind: rebinding it to that keeps the hint.
+fn default_action(key: &str) -> Option<&'static str> {
+    match key { "ctrl-/" => Some("toggle-preview"), "tab" => Some("toggle+down"), "btab" => Some("toggle+up"), "enter" => Some("accept"), _ => None }
+}
 
 /// Whether a hint's key (`C-v`, `M-a`, `enter`, `tab`) is bound in FZF_DEFAULT_OPTS to something
-/// hn runs — it no longer does what the hint says.
+/// else — it no longer does what the hint says.
 pub fn rebound(hint: &str) -> bool {
     let name = if let Some(k) = hint.strip_prefix("C-") { format!("ctrl-{}", k.to_lowercase()) } else if let Some(k) = hint.strip_prefix("M-") { format!("alt-{}", k.to_lowercase()) } else { hint.to_lowercase() };
-    theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| runs_here(a)).unwrap_or(false)
+    theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| !falls_back(&name, a) && default_action(&name) != Some(a.as_str())).unwrap_or(false)
 }
 
 /// A key as fzf's --bind names it: ctrl-j, alt-a, enter, btab, f1, ctrl-/ …
