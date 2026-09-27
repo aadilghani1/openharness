@@ -2236,6 +2236,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 let (cap, origin) = (app.capture_err.take(), app.origin.take());
                 app.say(out, theme::WARN);
                 (app.capture_err, app.origin) = (cap, origin);
+                // -d: this long (0: until a key), whatever display-time says.
+                if let Some(d) = opt(words, "-d").and_then(|d| d.trim().parse::<u64>().ok()) { app.toast_exact = Some(d) }
             }
         }
         // -T the terminals, -J the jobs, in place of the messages.
@@ -2277,7 +2279,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 i += 1;
             }
             let only = match &key { Some(k) => match crate::keys::parse(k) { Ok(c) => Some(c), Err(_) => return app.error(format!("invalid key: {k}")) }, None => None };
-            let tables = app.keymap.tables();
+            let mut tables = app.keymap.tables();
+            // (From a script: tmux's keys and yours, not hn's own — see keys::hn_added.)
+            if app.capture.is_some() { for (_, list) in tables.iter_mut() { list.retain(|b| !crate::keys::hn_added(b)) } }
             if let Some(t) = &table { if !tables.iter().any(|(n, _)| n == t) { return app.error(format!("table {t} doesn't exist")) } }
             let width = |s: &str| unicode_width::UnicodeWidthStr::width(s);
             let keyname = |b: &crate::keys::Binding| crate::keys::name(&b.chord);

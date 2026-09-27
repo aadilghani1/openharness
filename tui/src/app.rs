@@ -405,6 +405,8 @@ pub struct App {
     /// How long hn's own notice stays (a harness waiting on you: longer than display-time's
     /// 750 ms, which is for tmux's messages); none for any other message.
     pub toast_hold: Option<u64>,
+    /// display-message -d: how long this message stays, exactly (0: until a key).
+    pub toast_exact: Option<u64>,
     /// tmux `display-time`: how long a message holds the status line.
     pub display_ms: u64,
     pub display_panes_ms: u64,
@@ -766,6 +768,7 @@ impl App {
             toast: None,
             display_ms: 750,
             toast_hold: None,
+            toast_exact: None,
             display_panes_ms: 1000,
             nums: HashMap::new(),
             cursor_shape: String::new(),
@@ -964,10 +967,15 @@ impl App {
         self.add_message(format!("{} message: {text}", tty_name()));
         self.toast = Some((text, color, Instant::now()));
         self.toast_hold = None;
+        self.toast_exact = None;
     }
 
     /// How long the message on the status line stays: display-time, or longer for hn's notice.
-    pub fn toast_ms(&self) -> u64 { self.toast_hold.unwrap_or(0).max(self.display_ms) }
+    pub fn toast_ms(&self) -> u64 {
+        // display-message -d, else display-time (0 either way: until a key, as tmux's).
+        let ms = self.toast_exact.unwrap_or_else(|| self.toast_hold.unwrap_or(0).max(self.display_ms));
+        if ms == 0 { u64::MAX } else { ms }
+    }
 
     /// The fleet in counts: needs you, failed, done and unread.
     pub fn fleet_counts(&self) -> (usize, usize, usize) {
@@ -1934,7 +1942,7 @@ impl App {
     pub fn apply_settings(&mut self, s: &crate::tmuxconf::Settings) {
         if let Some(m) = s.mouse { self.mouse = m; self.mouse_changed = true }
         if let Some(t) = s.status_top { self.status_top = t; self.fit_panes() }
-        if let Some(ms) = s.display_ms { self.display_ms = ms.max(300) }
+        if let Some(ms) = s.display_ms { self.display_ms = if ms == 0 { 0 } else { ms.max(300) } }
         if let Some(ms) = s.display_panes_ms { self.display_panes_ms = ms }
         let (l, n) = (&mut self.look, &s.look);
         for (to, from) in [(&mut l.status_bg, n.status_bg), (&mut l.status_fg, n.status_fg), (&mut l.message_bg, n.message_bg), (&mut l.message_fg, n.message_fg),
@@ -5076,7 +5084,7 @@ impl App {
         if self.tick % 20 == 10 { self.save_seen() }
         if self.tick % 8 == 4 { self.reread_seen() }
         if self.tick % 240 == 0 { let ids: Vec<String> = self.links.keys().cloned().collect(); for id in ids { self.relist(&id) } }
-        if self.toast.as_ref().map(|t| now.duration_since(t.2) > Duration::from_millis(self.toast_ms().max(4000))).unwrap_or(false) { self.toast = None }
+        if self.toast.as_ref().map(|t| now.duration_since(t.2).as_millis() > self.toast_ms().max(4000) as u128).unwrap_or(false) { self.toast = None }
         if let Some(Modal::Picker { picker, .. }) = &mut self.modal {
             if picker.flash.as_ref().map(|f| now.duration_since(f.1) > Duration::from_secs(4)).unwrap_or(false) { picker.flash = None }
         }

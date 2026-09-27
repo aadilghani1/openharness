@@ -21,6 +21,14 @@ pub struct Binding {
     pub note: String,
 }
 
+/// One of hn's own keys (a harness's, on a key tmux leaves free): hidden from a script's
+/// `list-keys`, so a plugin that binds only a free key (tmux-sensible's `R` reload, `a` with a
+/// C-a prefix) binds it as it would in tmux — and replaces hn's.
+pub fn hn_added(b: &Binding) -> bool {
+    const OWN: &[&str] = &["new-harness", "choose-tree -m", "new-terminal", "next-harness", "choose-tree -a", "choose-tree -i", "choose-tree -S", "send-task", "broadcast", "restart-harness", "pause-harness", "clone-harness"];
+    OWN.iter().any(|c| b.command.contains(c))
+}
+
 /// tmux 3.5a's window menu (C-b <), as `list-keys` prints it.
 pub const WINDOW_MENU: &str = r##"display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }"##;
 
