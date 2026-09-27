@@ -88,9 +88,13 @@ fn on_key(app: &mut App, key: KeyEvent) {
     if app.prefix {
         app.prefix = false;
         app.status_redraws += 1;
-        if chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2 {
-            // `send-prefix`: C-b C-b gives the prefix key to what has the keyboard.
-            return send_prefix_key(app, key);
+        // The prefix again: what the prefix table binds to it (tmux's default `send-prefix`, the
+        // key given to what has the keyboard; screen's `bind C-a last-window`) — and, bound to
+        // nothing, the prefix again (server_client_key_callback re-arms the table).
+        if (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) && app.keymap.prefix_command(&chord).is_none() {
+            app.prefix = true;
+            app.prefix_at = Some(std::time::Instant::now());
+            return;
         }
         if let Some(binding) = app.keymap.prefix_command(&chord).cloned() {
             // A list or view on screen gives way to the command, as tmux's choose modes do.

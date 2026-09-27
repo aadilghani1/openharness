@@ -211,7 +211,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
     // hn's command line, read as tmux reads its own.
-    let f = match cli::flags(&args) {
+    let mut f = match cli::flags(&args) {
         Ok(f) => f,
         Err(e) => { eprintln!("hn: {e}"); eprintln!("{}", cli::USAGE); std::process::exit(1) }
     };
@@ -262,6 +262,19 @@ async fn run(config: config::Config) -> io::Result<()> {
     if f.headless {
         if let Some(n) = &f.name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } }
         return run_headless(config, port).await;
+    }
+    // `hn new -d -s w … \; split-window -t w \; attach -t w`: the commands before the one that
+    // attaches run as a shell's (the first to fail ends the line, as tmux's queue does), then
+    // this client starts with that one and the rest.
+    let attaches = |ws: &[String]| ws.first().and_then(|c| crate::cmd::find(c).ok()).map(|e| e.name == "attach-session" || (e.name == "new-session" && !crate::cmd::parse(e, ws).map(|a| a.has('d') > 0).unwrap_or(false))).unwrap_or(false);
+    let starts: Vec<usize> = std::iter::once(0).chain(f.rest.iter().enumerate().filter(|(_, w)| w.as_str() == ";").map(|(i, _)| i + 1)).collect();
+    if starts.len() > 1 && !attaches(&f.rest) {
+        let end = |k: usize| starts.get(k + 1).map(|s| s - 1).unwrap_or(f.rest.len());
+        if let Some(k) = (1..starts.len()).find(|&k| attaches(&f.rest[starts[k]..end(k)])) {
+            let before = f.rest[..starts[k] - 1].to_vec();
+            match cli::run(&before, explicit, f.socket.as_deref(), f.name.as_deref()).await { Some(0) | None => {}, Some(code) => std::process::exit(code) }
+            f.rest = f.rest[starts[k]..].to_vec();
+        }
     }
     // hn <command>: answered from here (hn ls) or by the running client (a tmux command).
     if let Some(code) = cli::run(&f.rest, explicit, f.socket.as_deref(), f.name.as_deref()).await { std::process::exit(code) }
