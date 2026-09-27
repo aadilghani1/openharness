@@ -13,6 +13,11 @@
  *             `daemon_confirm { kind: 'rules', nonce }`; until then the file confirmed before applies
  *             (nothing, the first time). A file with nothing in it (or a broken one) applies at once.
  *
+ * A confirmed level holds only under the consent it was given in (the zoo's `consent.at`, the `epoch`): once
+ * the person has answered the consent question again — withdrawn it and given it back, even while this
+ * daemon was not reading — the old yes is void, whatever raised the dial since, and the daemon steps down to
+ * `suggest` until they confirm again. A level they took back is never raised again by the yes that follows.
+ *
  * Every change is announced (`onEvent`, spoken as a daemon_say). What was confirmed is kept in
  * `ADAPTER_DATA_DIR/pair/confirmed.json` (0600) so a daemon restart does not ask again. A same-user process
  * can write that file too; it can also drive tmux directly — the gate keeps the daemon from being the way
@@ -87,19 +92,22 @@ export function configSummary(c: PairConfig): string {
  * window's presence. Nothing is watched until the person said yes on the first-day consent screen: until
  * then there is no pair (the sensor stays off) and the dial asks for `watch`.
  */
-export function pairingFrom(zoo: { known: boolean; pair: string | null; autonomy: Autonomy; consent: boolean },
-  guest: { pair: string | null; autonomy: Autonomy | null; consent: boolean }, fallback: Autonomy): { pair: string | null; autonomy: Autonomy; consented: boolean } {
+export function pairingFrom(zoo: { known: boolean; pair: string | null; autonomy: Autonomy; consent: boolean; consentAt?: string | null },
+  guest: { pair: string | null; autonomy: Autonomy | null; consent: boolean }, fallback: Autonomy): { pair: string | null; autonomy: Autonomy; consented: boolean; epoch: string | null } {
   const consented = zoo.known ? zoo.consent : guest.consent
-  if (!consented) return { pair: null, autonomy: 'watch', consented }
-  return zoo.known ? { pair: zoo.pair, autonomy: zoo.autonomy, consented } : { pair: guest.pair, autonomy: guest.autonomy ?? fallback, consented }
+  // The consent a confirmation belongs to: the zoo's answer's time. A guest window's has none.
+  const epoch = zoo.known ? zoo.consentAt ?? null : null
+  if (!consented) return { pair: null, autonomy: 'watch', consented, epoch }
+  return zoo.known ? { pair: zoo.pair, autonomy: zoo.autonomy, consented, epoch } : { pair: guest.pair, autonomy: guest.autonomy ?? fallback, consented, epoch }
 }
 
-interface Saved { autonomy: Autonomy | null; rules: string | null }
+/** What was confirmed, and under which consent (`epoch`: the zoo's `consent.at` when it was given). */
+interface Saved { autonomy: Autonomy | null; rules: string | null; epoch: string | null }
 
 export class PairGate {
   private requested: Autonomy
   private level: Autonomy
-  private saved: Saved = { autonomy: null, rules: null }
+  private saved: Saved = { autonomy: null, rules: null, epoch: null }
   private pending = new Map<ConfirmKind, ConfirmRequest & { config?: PairConfig; hash?: string }>()
   private active: PairConfig = EMPTY_PAIR_CONFIG
   private activeHash: string | null = null
@@ -131,10 +139,12 @@ export class PairGate {
   /**
    * The zoo's (or a guest window's) level changed, or was read again. `keepConfirmed`: the level is held
    * down by something other than the person's dial (no consent yet, the zoo unreadable for a moment), so
-   * what they confirmed before still stands when it comes back.
+   * what they confirmed before still stands when it comes back. `epoch`: the consent this level is asked
+   * under (pairingFrom); a different one from the consent a yes was given in voids that yes.
    */
-  setRequested(level: Autonomy, opts: { keepConfirmed?: boolean } = {}): void {
+  setRequested(level: Autonomy, opts: { keepConfirmed?: boolean; epoch?: string | null } = {}): void {
     this.requested = level
+    if (!opts.keepConfirmed && opts.epoch !== undefined && opts.epoch !== this.saved.epoch) this.newConsent(opts.epoch, level)
     const waiting = this.pending.get('autonomy')
     if (rank(level) <= rank(this.level) || rank(level) <= SUGGEST || this.saved.autonomy === level) {
       if (waiting) this.drop('autonomy', 'replaced')
@@ -156,6 +166,19 @@ export class PairGate {
     }
     this.pending.set('autonomy', request)
     this.deps.onEvent({ type: 'asked', request })
+  }
+
+  /**
+   * The person answered the consent question again since what was confirmed here (or this is the first
+   * consent seen): every yes to a level, and every request still waiting, belonged to the old answer. The
+   * daemon steps down to what needs no yes (`level` itself when that is what is asked); setRequested then
+   * asks again for anything above it.
+   */
+  private newConsent(epoch: string | null, level: Autonomy): void {
+    this.saved = { ...this.saved, autonomy: null, epoch }
+    this.save()
+    if (this.pending.has('autonomy')) this.drop('autonomy', 'replaced')
+    if (rank(this.level) > SUGGEST) this.apply(rank(level) <= SUGGEST ? level : 'suggest')
   }
 
   private apply(level: Autonomy): void {
@@ -244,6 +267,7 @@ export class PairGate {
       this.saved = {
         autonomy: isAutonomy(value.autonomy) ? value.autonomy : null,
         rules: typeof value.rules === 'string' && /^([a-f0-9]{64}|missing)$/.test(value.rules) ? value.rules : null,
+        epoch: typeof value.epoch === 'string' && value.epoch.length <= 64 ? value.epoch : null,
       }
     } catch { /* nothing confirmed yet */ }
   }
