@@ -6,6 +6,12 @@
 //! for `terminal_open`, `route_result` for `route_task`). Everything else the machine pushes — turns,
 //! questions, agents appearing — goes to the app as an event, as do binary terminal frames.
 
+// The daemons — the creatures in the status line (daemons/README.md), not harnessd — live under
+// daemon/: the roster and its renderer, the zoo, the face, the pair brain's lines and the hatch.
+pub mod card;
+pub mod render;
+pub mod roster;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
