@@ -1844,12 +1844,31 @@ enum End { Stay, Accept, Abort }
 /// An fzf action chain (`up+up`, `toggle+down`) split where a `+` is not inside an action's (…).
 fn split_chain(actions: &str) -> Vec<String> {
     let (mut depth, mut out, mut cur) = (0i32, Vec::new(), String::new());
-    for c in actions.chars() {
-        match c { '(' | '[' | '{' => depth += 1, ')' | ']' | '}' => depth -= 1, '+' if depth == 0 => { out.push(std::mem::take(&mut cur)); continue } _ => {} }
+    let chars: Vec<char> = actions.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        // `action:argument`: the argument is the rest of the line, `+` and all (fzf's form
+        // without brackets).
+        if c == ':' && depth == 0 && !cur.is_empty() && cur.chars().all(|x| x.is_ascii_lowercase() || x == '-') {
+            cur.extend(&chars[i..]);
+            break;
+        }
+        match c { '(' | '[' | '{' => depth += 1, ')' | ']' | '}' => depth -= 1, '+' if depth == 0 => { out.push(std::mem::take(&mut cur)); i += 1; continue } _ => {} }
         cur.push(c);
+        i += 1;
     }
     out.push(cur);
     out
+}
+
+/// An action's argument: `name(arg)` (or `[…]`, `{…}` …) or `name:arg`.
+fn action_arg<'a>(a: &'a str, name: &str) -> Option<&'a str> {
+    let rest = a.strip_prefix(name)?;
+    if let Some(r) = rest.strip_prefix(':') { return Some(r) }
+    let open = rest.chars().next()?;
+    let close = match open { '(' => ')', '[' => ']', '{' => '}', '<' => '>', '~' => '~', '!' => '!', '@' => '@', '#' => '#', '$' => '$', '%' => '%', '^' => '^', '&' => '&', '*' => '*', ';' => ';', '/' => '/', '|' => '|', _ => return None };
+    rest[open.len_utf8()..].strip_suffix(close)
 }
 
 /// A bound key's (or event's) actions, in order: the ones this list knows, as fzf does them; the
@@ -1859,7 +1878,20 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
     for action in split_chain(actions) {
         match action.as_str() {
             "half-page-up" => crate::ui::page(picker, up, true), "half-page-down" => crate::ui::page(picker, -up, true),
-            "top" | "first" => picker.move_by(-len), "last" => picker.move_by(len),
+            "top" | "first" | "best" => picker.move_by(-len), "last" => picker.move_by(len),
+            // close: the preview if it shows, else the list.
+            "close" => { if picker.preview { picker.show_preview(Some(false)) } else { return End::Abort } }
+            // replace-query: the query made the current row's text.
+            "replace-query" => { if let Some(t) = picker.current().map(|r| r.label.clone()) { picker.set_query(&t) } }
+            // up-selected / down-selected: to the next marked row up (or down) the screen.
+            "up-selected" => picker.to_marked(up > 0), "down-selected" => picker.to_marked(up < 0),
+            // exclude: the current row out of the list (exclude-multi: the marked ones, else it).
+            "exclude" | "exclude-multi" => {
+                let gone: Vec<String> = if action == "exclude-multi" && !picker.marked.is_empty() { picker.marked.clone() } else { picker.current_id().into_iter().collect() };
+                picker.marked.retain(|m| !gone.contains(m));
+                picker.excluded.extend(gone);
+                picker.refilter();
+            }
             // fzf's older names: toggle+up, toggle+down.
             // In a list that takes no marks (C-b =) the toggle is nothing and the move still is.
             // The toggles move on only when they toggled (fzf's actToggleDown/Up): not in a list
@@ -1893,11 +1925,18 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             "toggle-track" => { picker.track_flipped = !picker.track_flipped }
             "jump" => picker.jumping = Some(false), "jump-accept" => picker.jumping = Some(true),
             "prev-history" => picker.history_step(true), "next-history" => picker.history_step(false),
-            "track-current" if !picker.tracking() => { picker.track_flipped = !picker.track_flipped }
-            "untrack-current" if picker.tracking() => { picker.track_flipped = !picker.track_flipped }
+            // track-current: this item until the cursor moves (or it leaves) — none under --track;
+            // untrack-current ends that only.
+            "track-current" => { if !picker.tracking_all() { picker.track_current = picker.current_id() } }
+            "untrack-current" => picker.track_current = None,
+            "toggle-track-current" => { if picker.track_current.is_some() { picker.track_current = None } else if !picker.tracking_all() { picker.track_current = picker.current_id() } }
+            // search(…): the list searched for it, the query left as it is.
+            a if action_arg(a, "search").is_some() => { picker.search = action_arg(a, "search").map(str::to_string); picker.refilter() }
             "toggle-sort" => { picker.sort_flipped = !picker.sort_flipped; picker.refilter() }
             // change-preview-window(a|b|…): each time the next of them, over the --preview-window
             // it started with (an empty one is that one).
+            // change-query(…) / change-query:…
+            a if action_arg(a, "change-query").is_some() => { let q = action_arg(a, "change-query").unwrap_or("").to_string(); picker.set_query(&q) }
             a if a.starts_with("change-preview-window(") && a.ends_with(')') => {
                 let specs: Vec<&str> = a["change-preview-window(".len()..a.len() - 1].split('|').collect();
                 let spec = specs[picker.pw_next % specs.len()];

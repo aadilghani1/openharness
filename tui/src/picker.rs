@@ -176,6 +176,12 @@ pub struct Picker {
     pub history_at: Option<usize>, pub history_draft: String,
     /// jump (Some(false)) or jump-accept (Some(true)): the rows labelled, the next key picks one.
     pub jumping: Option<bool>,
+    /// exclude / exclude-multi: rows out of the list for as long as it is open.
+    pub excluded: std::collections::HashSet<String>,
+    /// track-current: the item tracked until the cursor moves or it leaves the results (+t).
+    pub track_current: Option<String>,
+    /// search(…): what is searched for in place of the query, until the query changes.
+    pub search: Option<String>,
 }
 
 impl Picker {
@@ -234,6 +240,9 @@ impl Picker {
             track_flipped: false,
             history_at: None, history_draft: String::new(),
             jumping: None,
+            excluded: Default::default(),
+            track_current: None,
+            search: None,
             preview_of: None,
             preview_fresh: std::cell::Cell::new(true),
             preview_following: Default::default(),
@@ -274,12 +283,13 @@ impl Picker {
     pub fn refilter(&mut self) {
         // The query as fzf's pattern reads it: leading blanks and trailing unescaped ones aside
         // (`pane\ ` keeps its escaped space).
-        let mut query = self.query.as_str();
+        let owned = self.search.clone();
+        let mut query = owned.as_deref().unwrap_or(self.query.as_str());
         if self.prefixed && scope_of(query).is_some() { query = &query.trim_start()[1..] }
         // fzf sorts only when a term asks for something (`!x` alone keeps the input order).
         let mut sorted = false;
         if query.trim().is_empty() {
-            self.visible = self.rows.iter().enumerate().map(|(i, _)| (i, Vec::new())).collect();
+            self.visible = self.rows.iter().enumerate().filter(|(_, r)| !self.excluded.contains(&r.id)).map(|(i, _)| (i, Vec::new())).collect();
         } else {
             // fzf itself (fzf.rs, ported from fzf 0.67): the extended-search terms, FuzzyMatchV2's
             // scores and lit characters, the tiebreak — over the line as it is drawn.
@@ -324,7 +334,7 @@ impl Picker {
             let edge = { use unicode_width::UnicodeWidthStr; self.rows.iter().filter(|r| !r.disabled).map(|r| r.lead.iter().map(|s| s.content.width()).sum::<usize>() + line(r).width()).max().unwrap_or(0).min(self.text_w) };
             let mut hidden: Vec<usize> = Vec::new();
             for (index, row) in self.rows.iter().enumerate() {
-                if row.disabled { continue }
+                if row.disabled || self.excluded.contains(&row.id) { continue }
                 let keywords = format!("{} {}", row.label, row.extra);
                 if negated.iter().any(|(w, s)| w.chars().count() >= 3 && names_word(&keywords, w, *s)) { continue }
                 let chars: Vec<char> = if self.live { steady_line(row, self.text_w, edge) } else { line(row).chars().collect() };
@@ -361,6 +371,10 @@ impl Picker {
         if crate::theme::fzf_opts().tac && !sorted { self.visible.reverse() }
         // Keep the cursor on the same item across a rebuild.
         let keep = self.selected_id.as_ref().and_then(|id| self.visible.iter().position(|(i, _)| &self.rows[*i].id == id));
+        // Tracked, it keeps its row on the screen too (UpdateList: offset = cy − pos).
+        if keep.is_some() && self.tracking() { let slot = self.cursor.saturating_sub(self.scroll); self.scroll = keep.unwrap_or(0).saturating_sub(slot) }
+        // (track-current ends when its item has left the results.)
+        if keep.is_none() { self.track_current = None }
         self.cursor = keep.unwrap_or(self.cursor.min(self.visible.len().saturating_sub(1)));
         self.skip_disabled(1);
     }
@@ -406,6 +420,8 @@ impl Picker {
     }
 
     pub fn move_by(&mut self, delta: i64) {
+        // (Moved: track-current is over.)
+        if delta != 0 { self.track_current = None }
         if self.visible.is_empty() { return }
         let max = self.visible.len() as i64 - 1;
         let to = self.cursor as i64 + delta;
@@ -421,13 +437,19 @@ impl Picker {
         if self.query == before { return }
         // --no-input: there is no query to edit.
         if crate::theme::fzf_opts().no_input { self.query = before.to_string(); self.qcursor = self.qcursor.min(self.qlen()); return }
-        // --track (or toggle-track): the item it was on, wherever it goes.
-        if !self.tracking() { self.selected_id = None }
+        // search(…) lasts until the query changes.
+        self.search = None;
+        // --track (or toggle-track, track-current): the item it was on, wherever it goes.
+        if let Some(id) = &self.track_current { self.selected_id = Some(id.clone()) }
+        else if !self.tracking() { self.selected_id = None }
         self.refilter();
     }
 
-    /// --track, as toggle-track last left it.
-    pub fn tracking(&self) -> bool { crate::theme::fzf_opts().track != self.track_flipped }
+    /// --track, as toggle-track last left it — or track-current's item.
+    pub fn tracking(&self) -> bool { self.tracking_all() || self.track_current.is_some() }
+
+    /// --track (+T), as toggle-track last left it.
+    pub fn tracking_all(&self) -> bool { crate::theme::fzf_opts().track != self.track_flipped }
 
     fn byte_at(&self, chars: usize) -> usize { self.query.char_indices().nth(chars).map(|(i, _)| i).unwrap_or(self.query.len()) }
 
