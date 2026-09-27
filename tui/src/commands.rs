@@ -1358,6 +1358,15 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
         match entry.name {
             "move-window" | "link-window" => {
                 let i = match src_t.as_deref() { Some(t) => window_target(app, t).ok_or_else(|| format!("can't find window: {t}"))?, None => app.active };
+                // server_link_window: an index -t names that is taken (without -k) is an error
+                // before anything moves.
+                if args.has('k') == 0 && args.has('a') == 0 && args.has('b') == 0 {
+                    app.swap_session(dst);
+                    let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: true, default_marked: false };
+                    let taken = crate::cmd::resolve(app, dst_t.as_deref(), spec).ok().and_then(|f| f.idx).filter(|n| app.tab_by_num(*n).is_some());
+                    app.swap_session(src);
+                    if let Some(n) = taken { return Err(format!("index in use: {n}")) }
+                }
                 // link-window: the same window in both (its copy here, its alerts its own).
                 let link = entry.name == "link-window";
                 let tab = if link { let mut t = app.tabs[i].clone(); t.alerts = 0; t } else { app.take_tab(i) };
@@ -1613,22 +1622,27 @@ fn other_session(app: &App, words: &[String]) -> Option<u32> {
 /// — gone as kill-session takes them.
 pub fn destroy_unattached(app: &mut App, leaving: bool) {
     let me = app.session_id;
+    // server_check_unattached: on, or keep-last (only one of a group with others left in it), or
+    // keep-group (any but the last of its group) — each looked at after the one before went.
     let doomed = |app: &App, id: u32| -> bool {
         if app.mirrors.values().any(|m| *m == id) { return false }
         let own = if id == me { app.options.session.get("destroy-unattached").cloned() } else { app.sessions.iter().find(|s| s.id == id).and_then(|s| s.options.get("destroy-unattached").cloned()) };
         let v = own.or_else(|| app.options.global_session.get("destroy-unattached").cloned()).unwrap_or_default();
-        matches!(v.as_str(), "on" | "keep-group")
+        let in_group = app.group_of(id).map(|g| app.group_sessions(&g).len());
+        match v.as_str() { "on" => true, "keep-last" => in_group.map(|n| n > 1).unwrap_or(false), "keep-group" => in_group.map(|n| n != 1).unwrap_or(true), _ => false }
     };
-    let ids: Vec<u32> = app.sessions.iter().filter(|s| !s.desk && s.mirror.is_none() && s.id != me).map(|s| s.id).filter(|id| doomed(app, *id)).collect();
-    let front = leaving && !app.session_desk && app.mirror.is_none() && doomed(app, me);
-    if ids.is_empty() && !front { return }
+    let ids: Vec<u32> = app.sessions.iter().filter(|s| !s.desk && s.mirror.is_none() && s.id != me).map(|s| s.id).collect();
+    // (The session in front is attached here — unless it is leaving, or there is no terminal.)
+    let front_free = (leaving || app.headless) && !app.session_desk && app.mirror.is_none();
+    if !ids.iter().any(|id| doomed(app, *id)) && !(front_free && doomed(app, me)) { return }
     let (quit, exited, back) = (std::mem::replace(&mut app.quit, false), app.exited, app.swap_back);
     for id in ids {
+        if !doomed(app, id) { continue }
         app.swap_back = Some(me);
         if app.swap_session(id) { kill_windows(app); app.swap_session(me); }
     }
     app.swap_back = back;
-    if front { kill_windows(app) }
+    if front_free && doomed(app, me) { kill_windows(app) }
     // (Leaving: the client says it detached, whatever the session's going did to it.)
     app.quit = quit || app.quit;
     if leaving { app.exited = exited }
@@ -2840,7 +2854,23 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // -t: a session in that one's group, sharing its windows (no shell of its own).
             if let Some(t) = opt(words, "-t") {
                 if !positional(words).is_empty() || opt(words, "-n").is_some() { return app.error("command or window name given with target") }
-                let Some(target) = app.find_session(&t) else { return app.error(format!("can't find session: {t}")) };
+                // -t names a session (or a window or pane of one), else a group (session_group_find):
+                // one of its sessions — or, none yet, a new group of that name the new session starts.
+                let target = app.find_session(&t).or_else(|| target_session(app, &t)).or_else(|| app.group_member(&t));
+                let Some(target) = target else {
+                    let Some(g) = crate::app::session_check_name(&t) else { return app.error(format!("invalid session group name: {t}")) };
+                    let cwd = opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty());
+                    match app.new_session(name.as_deref(), None, cwd, None, flag(words, "-d")) {
+                        Ok(id) => {
+                            if id == app.session_id { app.session_group = Some(g) } else if let Some(s) = app.sessions.iter_mut().find(|s| s.id == id) { s.group = Some(g) }
+                            if app.headless || flag(words, "-d") { let size = app.default_size(); app.size_session(id, size) }
+                            app.save_sessions();
+                            if flag(words, "-P") { let line = crate::format::expand_session(app, &opt(words, "-F").unwrap_or_else(|| "#{session_name}:".into()), id); app.print("new-session", vec![line]) }
+                        }
+                        Err(e) => app.error(e),
+                    }
+                    return;
+                };
                 match app.group_session(target, name.as_deref(), flag(words, "-d")) {
                     Ok(id) => if flag(words, "-P") {
                         let line = crate::format::expand_session(app, &opt(words, "-F").unwrap_or_else(|| "#{session_name}:".into()), id);

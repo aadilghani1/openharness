@@ -1789,6 +1789,9 @@ impl App {
         let code = if self.cli_code != 0 { self.cli_code } else if err.is_empty() { 0 } else { 1 };
         if std::mem::take(&mut self.wait_cli) && self.waiting_open() { self.waiting_reply = Some((tx, (out, err, code))); return }
         let _ = tx.send((out, err, code));
+        // The shell's client gone (server_client_lost): an unattached session with
+        // destroy-unattached goes now.
+        crate::commands::destroy_unattached(self, false);
     }
 
     fn waiting_open(&self) -> bool { matches!(self.modal, Some(Modal::Menu(_)) | Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) | Some(Modal::DisplayPanes { .. })) }
@@ -2282,11 +2285,15 @@ impl App {
     }
 
     /// The sessions of group [g] (the one in front too), by name.
+    /// A session of the group named [g] (new -t's group, when [g] names no session).
+    pub fn group_member(&self, g: &str) -> Option<u32> { self.group_sessions(g).first().map(|(id, _)| *id) }
+
     pub fn group_sessions(&self, g: &str) -> Vec<(u32, String)> {
         let mut v: Vec<(u32, String)> = Vec::new();
         if self.session_group.as_deref() == Some(g) { v.push((self.session_id, self.session_name())) }
         for s in self.sessions.iter().filter(|s| s.group.as_deref() == Some(g)) { v.push((s.id, self.stash_name(s))) }
-        v.sort_by(|a, b| a.1.cmp(&b.1));
+        // In the order they joined it (tmux's sg->sessions): the order they were made.
+        v.sort_by_key(|a| a.0);
         v
     }
 
@@ -2848,7 +2855,14 @@ impl App {
                     (None, true) if start.group.is_some() => {
                         self.start_session = None;
                         let t = start.group.clone().unwrap_or_default();
-                        let Some(target) = self.find_session(&t) else { self.start_error(format!("can't find session: {t}")); return };
+                        // -t names a session (or a window or pane of one), else a group: one of its
+                        // sessions — or, none yet, a new group of that name this session starts.
+                        let Some(target) = self.find_session(&t).or_else(|| self.group_member(&t)) else {
+                            let Some(g) = session_check_name(&t) else { self.start_error(format!("invalid session group name: {t}")); return };
+                            self.session_group = Some(g);
+                            self.session_alias = start.name.as_deref().and_then(session_check_name);
+                            return;
+                        };
                         match self.remote_owner(target) {
                             Some(owner) => {
                                 let mut ask: Vec<String> = vec!["new-session".into(), "-d".into(), "-P".into(), "-F".into(), "#{session_name}".into(), "-t".into(), format!("${target}")];
