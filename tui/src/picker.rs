@@ -178,6 +178,12 @@ pub struct Picker {
     pub history_at: Option<usize>, pub history_draft: String,
     /// jump (Some(false)) or jump-accept (Some(true)): the rows labelled, the next key picks one.
     pub jumping: Option<bool>,
+    /// The question each row showed and since when (its request id): a key answers only a question
+    /// that has been on screen a moment — never one that just took another's place.
+    pub q_seen: HashMap<String, (String, Instant)>,
+    /// When the cursor last came onto a row by the list changing under it (the row it was on went,
+    /// answered elsewhere), not by a key.
+    pub landed: Option<Instant>,
     /// C-b s: the order its rows had when it opened, which they keep while it is open.
     pub hold: Option<Vec<String>>,
     /// C-b s: the rows its query found by what was said in them (best first), and that query.
@@ -257,6 +263,8 @@ impl Picker {
             jumping: None,
             header_text: None,
             hold: None,
+            q_seen: HashMap::new(),
+            landed: None,
             said: Vec::new(),
             said_query: String::new(),
             unbound: Default::default(),

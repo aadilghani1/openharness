@@ -68,7 +68,8 @@ pub enum PromptKind {
     Broadcast,
     LinkPassword { machine: String },
     /// A question's answer, typed: option numbers or your own words.
-    Answer { machine: String, agent: String },
+    /// The question's request id when M-a was pressed: a new one meanwhile is not answered.
+    Answer { machine: String, agent: String, request: String },
     /// A message to a harness (C-b s's M-s).
     Message { machine: String, agent: String },
     /// tmux `command-prompt`: with a template, the answers fill it (`%1` `%2` …, `%%` the first

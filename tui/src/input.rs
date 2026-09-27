@@ -505,8 +505,39 @@ pub fn picker(app: &mut App, kind: PickerKind, title: &str, placeholder: &str) {
     app.modal = Some(Modal::Picker { kind, picker });
 }
 
+/// The question each harness row shows, and since when it has (a new request id is new).
+fn note_questions(app: &App, picker: &mut Picker) {
+    let now = Instant::now();
+    let rows: Vec<String> = picker.rows.iter().map(|r| r.id.clone()).collect();
+    for id in rows {
+        let Some((m, a)) = split_key(&id) else { continue };
+        match app.fleet.agent(&m, &a).and_then(|x| x.question.as_ref()).map(|q| q.request_id.clone()) {
+            Some(req) => { if picker.q_seen.get(&id).map(|(r, _)| r != &req).unwrap_or(true) { picker.q_seen.insert(id, (req, now)); } }
+            None => { picker.q_seen.remove(&id); }
+        }
+    }
+}
+
+/// Whether M-1…9 / M-a may answer [row]'s question now: it has been on screen a moment (0.6 s),
+/// and the cursor did not just land on it by the list changing under it — else what to say.
+fn answerable(app: &App, picker: &Picker, row: &str) -> Result<String, &'static str> {
+    const LOOK: Duration = Duration::from_millis(600);
+    if picker.landed.is_some_and(|t| t.elapsed() < LOOK) { return Err("That row just changed under the cursor — look again") }
+    let (m, a) = split_key(row).ok_or("No question here")?;
+    let req = app.fleet.agent(&m, &a).and_then(|x| x.question.as_ref()).map(|q| q.request_id.clone()).ok_or("That question is no longer open")?;
+    match picker.q_seen.get(row) {
+        Some((r, at)) if *r == req && at.elapsed() >= LOOK => Ok(req),
+        _ => Err("That question just changed — look again"),
+    }
+}
+
 /// (Re)build an overlay's rows from the fleet — called on open and whenever the fleet moves.
 pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
+    fill_rows(app, kind, picker);
+    if matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) { note_questions(app, picker) }
+}
+
+fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
     // Its spinner turns while what it lists is still coming in, as fzf's does while it reads.
     let busy = match kind {
         PickerKind::Store => is_loading(&format!("dsh {}", app.fleet.local_id)),
@@ -965,7 +996,10 @@ fn harness_preview(picker: &mut Picker) {
 /// Rebuild the open overlay's rows (the fleet or a catalog moved under it).
 pub fn refill(app: &mut App) {
     if let Some(Modal::Picker { kind, mut picker }) = app.modal.take() {
+        let was = picker.current_id();
         if !matches!(kind, PickerKind::Route { .. } | PickerKind::Palette | PickerKind::Help | PickerKind::Layout) { fill(app, &kind, &mut picker) }
+        // (The cursor put on another row by the list, not by a key: a moment before it answers.)
+        if was.is_some() && picker.current_id() != was { picker.landed = Some(Instant::now()) }
         app.modal = Some(Modal::Picker { kind, picker });
     }
 }
@@ -1727,6 +1761,12 @@ fn end_word(chars: &[char], at: usize, ws: &str) -> usize {
 /// fzf's keys: ↑ C-k C-p away from the prompt, ↓ C-j C-n toward it (the list reads bottom-up);
 /// Tab marks; C-t/C-x/C-v open in a new window / below / beside (fzf.vim); C-/ the preview.
 fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker) {
+    // A row a key goes to is one you chose to look at (the list moving it there is not).
+    let was = picker.current_id();
+    let key_moves = matches!(key.code, KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Tab | KeyCode::BackTab)
+        || (key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('j' | 'k' | 'n' | 'p')));
+    if key_moves { picker.landed = None }
+    let _ = was;
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     // Jump mode: a row's label goes to it (jump-accept: and picks it); any other key ends it.
@@ -1858,10 +1898,13 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             KeyCode::Char('a') if alt && matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) => {
                 if let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) {
                     if let Some(q) = app.fleet.agent(&machine, &agent).and_then(|a| a.question.clone()) {
+                        let row = format!("{machine}:{agent}");
+                        let row = picker.current_id().unwrap_or(row);
+                        let request = match answerable(app, &picker, &row) { Ok(r) => r, Err(why) => { picker.say(why); app.modal = Some(Modal::Picker { kind, picker }); return } };
                         let how = if q.multi { format!("1–{} (several: 1,3) or your own words", q.options.len()) } else if q.options.is_empty() { "your answer".to_string() } else { format!("1–{} or your own words", q.options.len()) };
                         // Who asks and what, while you type (the list is gone behind the prompt).
                         let name = app.fleet.agent(&machine, &agent).map(|a| crate::format::short_name(&a.name, 24)).unwrap_or_default();
-                        let mut p = Prompt::status(PromptKind::Answer { machine, agent }, &format!("({name}) "), "");
+                        let mut p = Prompt::status(PromptKind::Answer { machine, agent, request }, &format!("({name}) "), "");
                         p.title = "Answer".into();
                         p.hint = format!("{} — {how}", q.prompt);
                         app.back_to_list = Some(Box::new((kind, picker)));
@@ -2201,14 +2244,20 @@ fn answer_from(app: &mut App, kind: &PickerKind, picker: &mut Picker, option: us
     let shown: std::collections::HashSet<&str> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.as_str()).collect();
     let marked: Vec<(String, String)> = picker.marked.iter().filter(|m| shown.contains(m.as_str())).filter_map(|m| split_key(m)).collect();
     if marked.is_empty() {
-        let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) else { return };
+        let Some(row) = picker.current_id() else { return };
+        let Some((machine, agent)) = split_key(&row) else { return };
+        if let Err(why) = answerable(app, picker, &row) { picker.say(why); return }
         let (who, choice) = app.fleet.agent(&machine, &agent).map(|a| (a.name.clone(), a.question.as_ref().and_then(|q| q.options.get(option).cloned()).unwrap_or_default())).unwrap_or_default();
         if answer(app, &machine, &agent, option) { picker.say(&format!("Answered {who}: {choice}")) }
         return;
     }
     let (mut done, mut left) = (0, 0);
     let hidden = picker.marked.len().saturating_sub(marked.len());
-    for (m, a) in &marked { if answer(app, m, a, option) { done += 1 } else { left += 1 } }
+    for (m, a) in &marked {
+        // (A marked row whose question just changed keeps its mark, unanswered.)
+        let row = picker.marked.iter().find(|id| split_key(id).as_ref() == Some(&(m.clone(), a.clone()))).cloned().unwrap_or_default();
+        if answerable(app, picker, &row).is_ok() && answer(app, m, a, option) { done += 1 } else { left += 1 }
+    }
     picker.marked.retain(|id| split_key(id).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.question.is_some())).unwrap_or(false));
     let n = option + 1;
     let also = if hidden > 0 { format!(" · {hidden} marked out of view left as they were") } else { String::new() };
@@ -2339,7 +2388,11 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             let Some((machine, agent)) = split_key(&id) else { return };
             let option = id.split('#').nth(1).and_then(|s| s.parse::<usize>().ok());
             match (choice, option) {
-                (Choice::Enter, Some(option)) => { if answer(app, &machine, &agent, option) { picker.say("Answered") } return keep(app, kind, picker) }
+                (Choice::Enter, Some(option)) => {
+                    if let Err(why) = answerable(app, &picker, &id) { picker.say(why); return keep(app, kind, picker) }
+                    if answer(app, &machine, &agent, option) { picker.say("Answered") }
+                    return keep(app, kind, picker)
+                }
                 _ => app.open_agent(&machine, &agent, Placement::Tab),
             }
         }
@@ -2548,8 +2601,11 @@ fn submit_prompt(app: &mut App, p: Prompt) {
                 app.say(format!("Sent to {name}"), theme::ONLINE);
             }
         }
-        PromptKind::Answer { machine, agent } => {
-            let text = app.fleet.agent(&machine, &agent).and_then(|a| a.question.clone()).and_then(|q| crate::fleet::answer_text(&q, &value));
+        PromptKind::Answer { machine, agent, request } => {
+            // Only the question you were answering: one that took its place while you typed is not.
+            let q = app.fleet.agent(&machine, &agent).and_then(|a| a.question.clone());
+            if q.as_ref().is_some_and(|q| q.request_id != request) { return app.say("That question changed while you typed — not sent; look again", theme::WARN) }
+            let text = q.and_then(|q| crate::fleet::answer_text(&q, &value));
             match text {
                 Some(t) => { if answer_with(app, &machine, &agent, &t) { app.say(format!("Answered: {t}"), theme::ONLINE) } }
                 None => app.say("That question is no longer open", theme::WARN),
