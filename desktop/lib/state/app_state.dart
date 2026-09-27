@@ -72,6 +72,7 @@ import 'pending_question.dart';
 import 'search_when.dart';
 import 'session_content_search.dart';
 import 'session_preview.dart';
+import 'session_tail.dart';
 import '../usage/models_menu_controller.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
@@ -601,6 +602,11 @@ class AppNotifier extends ChangeNotifier {
       timeout: const Duration(seconds: 6),
     ),
   );
+
+  /// The end of the session a Cmd-P row previews, from its machine's index
+  /// (`session_tail`, cli/src/lib/sessionSearch/). Apart from
+  /// [sessionPreviews], whose excerpts come from the live agent.
+  late final sessionTails = SessionTails(readSessionTail);
 
   SessionPreviewKey previewKey(String machineId, Agent agent) =>
       (machineId: machineId, agentId: agent.id, sessionId: agent.sessionId);
@@ -3109,6 +3115,7 @@ class AppNotifier extends ChangeNotifier {
     machinesAreStale = false;
     machineStates.clear();
     sessionPreviews.clear();
+    sessionTails.clear();
     gridPictures.clear();
     _stopWakeFollowers();
     expandedMachines.clear();
@@ -3450,6 +3457,7 @@ class AppNotifier extends ChangeNotifier {
     machinesAreStale = false;
     machineStates.clear();
     sessionPreviews.clear();
+    sessionTails.clear();
     gridPictures.clear();
     _stopWakeFollowers();
     expandedMachines.clear();
@@ -7013,6 +7021,29 @@ class AppNotifier extends ChangeNotifier {
       );
       if (reply['error'] != null) return null;
       return SessionContentHit.listFromReply(machineId, reply);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The rows of [sessionId] on [machineId] before [beforeTurn], or its last
+  /// rows (`session_tail`, the same index as [searchSessions]). Null when the
+  /// machine cannot answer: offline, a CLI that predates the request, or a
+  /// session its index does not hold.
+  Future<Map<String, dynamic>?> readSessionTail(
+    String machineId,
+    String sessionId, {
+    int? beforeTurn,
+  }) async {
+    if (!searchableMachineIds.contains(machineId)) return null;
+    try {
+      final reply = await _conn(machineId).request(
+        'session_tail',
+        payload: {'sessionId': sessionId, 'beforeTurn': ?beforeTurn},
+        timeout: const Duration(seconds: 4),
+      );
+      if (reply['error'] != null) return null;
+      return reply;
     } catch (_) {
       return null;
     }
@@ -11529,6 +11560,7 @@ class AppNotifier extends ChangeNotifier {
     terminalThemeStore.removeListener(_announceTerminalThemeEverywhere);
     _localGitProjects.dispose();
     sessionPreviews.dispose();
+    sessionTails.dispose();
     gridPictures.dispose();
     _stopWakeFollowers();
     modelStarts.dispose();

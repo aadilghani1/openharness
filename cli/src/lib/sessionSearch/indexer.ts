@@ -17,7 +17,7 @@ import { performance } from 'node:perf_hooks'
 import type { LiveEvent } from '../normalize.js'
 import { forEachLine, lineNormalizer, lineTime, skipPredicate } from './transcript.js'
 import { TurnCollector } from './turns.js'
-import type { IndexedSession, SearchHit, SessionSearchStore } from './store.js'
+import type { IndexedSession, SearchHit, SessionSearchStore, SessionTail } from './store.js'
 
 export interface SearchSource {
   agentId: string
@@ -89,6 +89,8 @@ export class SessionSearchIndex {
   private stopped = false
   private sweepTimer: NodeJS.Timeout | null = null
   private sliceStart = 0
+  /** Callers waiting for a session's next pass (`tail`). */
+  private readonly waiters = new Map<string, Array<() => void>>()
 
   constructor(private readonly opts: SessionSearchIndexOptions) {}
 
@@ -110,6 +112,7 @@ export class SessionSearchIndex {
     for (const timer of this.touches.values()) clearTimeout(timer)
     this.touches.clear()
     this.queue.clear()
+    for (const id of [...this.waiters.keys()]) this.settle(id)
   }
 
   /** A turn started or ended in this session: index it shortly. */
@@ -123,10 +126,7 @@ export class SessionSearchIndex {
       this.refreshSources()
       if (!this.sources.has(sessionId)) this.refreshSources(true)
       // Ahead of a sweep's backlog: what somebody just said is what they are likeliest to look for.
-      const rest = [...this.queue].filter((id) => id !== sessionId)
-      this.queue.clear()
-      this.queue.add(sessionId)
-      for (const id of rest) this.queue.add(id)
+      this.front(sessionId)
       void this.drain()
     }, this.opts.touchDelayMs ?? 1_500)
     timer.unref?.()
@@ -155,6 +155,46 @@ export class SessionSearchIndex {
     return { hits, indexed, pending: this.queue.size, tookMs: Math.round((performance.now() - started) * 10) / 10 }
   }
 
+  /**
+   * The end of one session, for a preview. The last page is brought up to date first: a working
+   * agent's current turn otherwise reaches the index only at its next turn event. That pass is waited
+   * for at most `freshMs`; after that the preview gets what the index holds.
+   */
+  async tail(sessionId: string, options: { beforeTurn?: number; maxChars?: number; freshMs?: number } = {}): Promise<SessionTail | null> {
+    if (options.beforeTurn === undefined && !this.stopped) {
+      this.refreshSources()
+      if (!this.sources.has(sessionId)) this.refreshSources(true)
+      if (this.sources.has(sessionId)) {
+        const passed = new Promise<void>((resolve) => {
+          const waiting = this.waiters.get(sessionId) ?? []
+          waiting.push(resolve)
+          this.waiters.set(sessionId, waiting)
+        })
+        this.front(sessionId)
+        void this.drain()
+        let timer: NodeJS.Timeout | undefined
+        await Promise.race([passed, new Promise<void>((resolve) => { timer = setTimeout(resolve, options.freshMs ?? 400) })])
+        clearTimeout(timer)
+      }
+    }
+    return this.opts.store.tail(sessionId, options)
+  }
+
+  /** Moves a session to the head of the queue. */
+  private front(sessionId: string): void {
+    const rest = [...this.queue].filter((id) => id !== sessionId)
+    this.queue.clear()
+    this.queue.add(sessionId)
+    for (const id of rest) this.queue.add(id)
+  }
+
+  private settle(sessionId: string): void {
+    const waiting = this.waiters.get(sessionId)
+    if (!waiting) return
+    this.waiters.delete(sessionId)
+    for (const resolve of waiting) resolve()
+  }
+
   /** Runs queued passes one at a time until the queue is empty. */
   async drain(): Promise<void> {
     if (this.running) return
@@ -164,12 +204,13 @@ export class SessionSearchIndex {
         const sessionId = this.queue.values().next().value as string
         this.queue.delete(sessionId)
         const source = this.sources.get(sessionId)
-        if (!source) continue
+        if (!source) { this.settle(sessionId); continue }
         try {
           await this.pass(source)
         } catch (error) {
           this.opts.log?.(`[search] ${sessionId.slice(0, 8)} index pass failed: ${error instanceof Error ? error.message : String(error)}`)
         }
+        this.settle(sessionId)
       }
     } finally {
       this.running = false

@@ -16,7 +16,7 @@ import { chmodSync, existsSync, rmSync } from 'node:fs'
 import { builtinSqlite } from '../sqliteRead.js'
 import type { IndexedTurn } from './turns.js'
 
-const SCHEMA_VERSION = '6'
+const SCHEMA_VERSION = '7'
 
 /** The row that holds a session's name, title and folder: searchable beside its turns. */
 export const HEADER_TURN = -1
@@ -89,8 +89,40 @@ const OPENING_TURNS = 2
 const OPENING_BOOST = 1.2
 /** The start of what was asked, for a hit found by time alone. */
 function clipAsk(ask: string): string {
-  return ask.length > 160 ? ask.slice(0, 160).trimEnd() + '…' : ask
+  const line = ask.replace(/\s+/g, ' ').trim()
+  return line.length > 160 ? line.slice(0, 160).trimEnd() + '…' : line
 }
+
+/** One row of a session as a preview shows it: a turn, or a long turn's continuation (no ask). */
+export interface TailRow {
+  turn: number
+  at: number | null
+  ask: string
+  answer: string
+  /** Tool calls, one per line: the paths, commands and queries they named. */
+  tools: string
+}
+
+/** The end of a session, oldest row first. */
+export interface SessionTail {
+  sessionId: string
+  rows: TailRow[]
+  /** Whether rows older than the first one here exist. */
+  hasMore: boolean
+  /** Rows in the whole session. */
+  total: number
+  lastAt: number | null
+  /**
+   * With the last page: the latest row that has an ask. After a long autonomous turn it is many
+   * continuation rows up, and it is what the session is doing now.
+   */
+  lastAsk?: TailRow
+}
+
+/** What one preview page holds, and what a caller may ask for. */
+export const TAIL_CHARS = 16_000
+const TAIL_CHARS_MAX = 64_000
+const TAIL_BATCH = 16
 
 export interface SearchOptions {
   limit?: number
@@ -170,7 +202,8 @@ export function makeSnippet(text: string, patterns: RegExp[]): string | null {
   const to = Math.min(words.length - 1, from + SNIPPET_WORDS - 1)
   const start = from === 0 && regionStart === 0 ? 0 : words[from].index!
   const end = to === words.length - 1 && regionEnd === text.length ? text.length : words[to].index! + words[to][0].length
-  const window = text.slice(start, end)
+  // One line: stored text keeps its line breaks for the preview.
+  const window = text.slice(start, end).replace(/\s+/g, ' ')
   const marks: Array<[number, number]> = []
   for (const pattern of patterns) {
     pattern.lastIndex = 0
@@ -350,6 +383,54 @@ export class SessionSearchStore {
   session(sessionId: string): IndexedSession | undefined {
     const row = this.statement('SELECT * FROM sessions WHERE session_id = ?').get(sessionId)
     return row ? toSession(row) : undefined
+  }
+
+  /**
+   * The rows before `beforeTurn` (the last rows, without it), newest last, as many as fit in
+   * `maxChars` — never fewer than one. A preview shows them from the bottom and pages up with the
+   * first row's turn. Null for a session the index does not hold.
+   */
+  tail(sessionId: string, options: { beforeTurn?: number; maxChars?: number } = {}): SessionTail | null {
+    const session = this.session(sessionId)
+    if (!session) return null
+    const maxChars = Math.min(Math.max(options.maxChars ?? TAIL_CHARS, 1_000), TAIL_CHARS_MAX)
+    const before = this.statement(`SELECT turn, at, ask, answer, tools FROM turns
+      WHERE session_id = ? AND turn >= 0 AND turn < CAST(? AS INTEGER) ORDER BY turn DESC LIMIT ${TAIL_BATCH}`)
+    const rows: TailRow[] = []
+    let used = 0
+    let cursor = options.beforeTurn ?? Number.MAX_SAFE_INTEGER
+    let full = false
+    while (!full) {
+      const batch = before.all(sessionId, cursor)
+      for (const row of batch) {
+        const next: TailRow = {
+          turn: Number(row.turn), at: row.at === null ? null : Number(row.at),
+          ask: String(row.ask ?? ''), answer: String(row.answer ?? ''), tools: String(row.tools ?? ''),
+        }
+        const size = next.ask.length + next.answer.length + next.tools.length
+        if (rows.length && used + size > maxChars) { full = true; break }
+        rows.push(next)
+        used += size
+        cursor = next.turn
+      }
+      if (batch.length < TAIL_BATCH) break
+    }
+    rows.reverse()
+    const hasMore = rows.length > 0 && !!this.statement(
+      'SELECT 1 AS found FROM turns WHERE session_id = ? AND turn >= 0 AND turn < CAST(? AS INTEGER) LIMIT 1',
+    ).get(sessionId, rows[0].turn)
+    const tail: SessionTail = { sessionId, rows, hasMore, total: session.turns, lastAt: session.lastAt }
+    if (options.beforeTurn === undefined) {
+      const asked = this.statement(`SELECT turn, at, ask FROM turns
+        WHERE session_id = ? AND turn >= 0 AND ask != '' ORDER BY turn DESC LIMIT 1`).get(sessionId)
+      if (asked) {
+        tail.lastAsk = {
+          turn: Number(asked.turn), at: asked.at === null ? null : Number(asked.at),
+          ask: String(asked.ask), answer: '', tools: '',
+        }
+      }
+    }
+    return tail
   }
 
   sessionIds(): string[] {

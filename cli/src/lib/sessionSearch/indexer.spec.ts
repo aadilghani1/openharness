@@ -87,6 +87,18 @@ describe('SessionSearchIndex', () => {
     expect(store.session('s1')!.mtime).toBeGreaterThan(0)
   })
 
+  it('brings a session being written up to date before it answers for a preview', async () => {
+    const { path, index, settle } = setup(prompt('why does the dial scroll jump', 0) + answer('Looking at ui.c.', 1))
+    await settle()
+    // The turn goes on with no turn event yet: the index has not seen this.
+    appendFileSync(path, answer('Found it:\n\n- the delta is applied twice', 2))
+    const tail = await index.tail('s1')
+    expect(tail!.rows.at(-1)).toMatchObject({ ask: 'why does the dial scroll jump', answer: 'Looking at ui.c.\nFound it:\n\n- the delta is applied twice' })
+    // Older pages are read as they are: no pass for them.
+    expect((await index.tail('s1', { beforeTurn: 0 }))!.rows).toEqual([])
+    expect(await index.tail('unknown')).toBeNull()
+  })
+
   it('starts over when the transcript was rewritten shorter', async () => {
     const { path, found, settle } = setup(prompt('first long conversation about cohorts and retention', 0) + answer('Done with the cohort table.', 1))
     await settle()

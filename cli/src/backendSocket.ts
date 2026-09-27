@@ -114,6 +114,7 @@ import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from './lib/
 import { parseRuntimeProfile, type RuntimeModelOption } from './lib/runtimeProfile.js'
 import { sid, preview, logFrame } from './lib/log.js'
 import type { SessionSearchResult } from './lib/sessionSearch/indexer.js'
+import type { SessionTail } from './lib/sessionSearch/store.js'
 import {
   TerminalP2pResponderPool,
   TERMINAL_P2P_DOWN_TYPES,
@@ -622,6 +623,8 @@ export class BackendSocket {
   /** Answers `session_search` from this machine's transcript index (lib/sessionSearch/). Null when
    *  this Node has no `node:sqlite`. */
   sessionSearchProvider: ((query: string, options: { limit?: number; from?: number; to?: number }) => SessionSearchResult) | null = null
+  /** The end of one session from the same index, for Cmd-P's preview (`session_tail`). */
+  sessionTailProvider: ((sessionId: string, options: { beforeTurn?: number; maxChars?: number }) => Promise<SessionTail | null>) | null = null
   /** Runtime Model/Effort integration, wired by cli.ts for registered tmux sessions. */
   runtimeModelsProvider: ((sessionId?: string) => Promise<RuntimeModelOption[]>) | null = null
   /** Answers `usage_read` — this machine's own agent-account usage (lib/accountUsage.ts). A field
@@ -2746,6 +2749,19 @@ export class BackendSocket {
           // `from`/`to`: only sessions worked on in that window (epoch ms) — "the dial one from last
           // week". The client reads the time words, so every machine searches the same window.
           reply(type, requestId, { ...this.sessionSearchProvider(query, { limit: number(payload.limit), from: number(payload.from), to: number(payload.to) }) })
+          return
+        }
+
+        // A session's latest rows, newest last; `beforeTurn` pages up from the first row the client
+        // has. The same index as `session_search`, so it reads no transcript for a preview.
+        case 'session_tail': {
+          if (!this.sessionTailProvider) { reply(type, requestId, { error: 'SEARCH_UNAVAILABLE' }); return }
+          const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.slice(0, 200) : ''
+          if (!sessionId) { reply(type, requestId, { error: 'BAD_SESSION' }); return }
+          const integer = (value: unknown) => typeof value === 'number' && Number.isInteger(value) ? value : undefined
+          const tail = await this.sessionTailProvider(sessionId, { beforeTurn: integer(payload.beforeTurn), maxChars: integer(payload.maxChars) })
+          if (!tail) { reply(type, requestId, { error: 'NOT_INDEXED', sessionId }); return }
+          reply(type, requestId, { ...tail })
           return
         }
 

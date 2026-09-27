@@ -64,10 +64,25 @@ export function askKind(text: string): AskKind {
 // A paste's markers: what was pasted is the person's, and searchable; the tags around it are not.
 // Nor are the tags around another agent's message.
 const PASTE_TAGS = /<\/?(?:pasted_content|agent-message)\b[^>]*>/g
+/**
+ * What Claude Code puts around another agent's message: a label before it, and after it an
+ * instruction to the model about trusting it. Neither was said in the conversation, and the
+ * instruction ran to 800 characters in every hand-back.
+ */
+const AGENT_NOTES = /^Another \w+ session sent a message:[^\S\n]*|That "other \w+ session" is an agent working inside this same session[\s\S]*?permission laundering\.?/gm
 
-/** Text as it is stored and searched: wrappers out, whitespace folded, secrets blanked, bounded. */
+/**
+ * Text as it is stored and searched: wrappers out, secrets blanked, bounded. Line breaks and each
+ * line's indentation stay, so a preview can show it as it was written; any other run of spaces is
+ * one space, and blank lines are at most one.
+ */
 export function searchableText(text: string, max: number): string {
-  const folded = redactSecretsInText(text.replace(WRAPPERS, ' ').replace(PASTE_TAGS, ' ')).replace(/\s+/g, ' ').trim()
+  const folded = redactSecretsInText(text.replace(WRAPPERS, ' ').replace(PASTE_TAGS, ' ').replace(AGENT_NOTES, ''))
+    .replace(/\r\n?/g, '\n')
+    .replace(/(\S)[^\S\n]+/g, '$1 ')
+    .replace(/[^\S\n]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
   return folded.length > max ? folded.slice(0, max) : folded
 }
 

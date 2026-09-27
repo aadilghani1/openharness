@@ -257,6 +257,28 @@ events from the 346 MB rollout). The replay was meant only for a first turn anno
 file existed. This machine's log has 28 out-of-memory crashes since 2026-09-23, on every build
 including the v0.3.1 release. It is fixed separately.
 
+## The preview
+
+⌘P's preview shows the selected session the way its terminal does: bottom-anchored, newest turn at
+the bottom, scrolled up for older ones (shift-↑/↓, page up/down), like fzf's `--preview` showing
+the file itself rather than a summary. The daemon serves it from the same index (`session_tail`),
+so a preview reads no transcript: 0.4 ms for a real session's last page, 1–20 ms over the local
+socket, about 0.4 s from another machine over the relay.
+
+- **The last ~16,000 characters**, about five screens, then 16,000 more each time the list nears
+  its top. The app keeps the last 20 sessions previewed, refreshes a working agent's every 2 s,
+  and warms the next two rows while one is selected.
+- **The latest ask stays in view.** After a long autonomous turn it is many rows up, so it is
+  pinned above the turns whenever its own line is not showing.
+- **An older match says where it was** ("Matched earlier · 1d ago") above the turns, and the
+  searched words are bold in them.
+- **A working agent's current turn** is included: the request brings that session's index up to
+  date first, waiting at most 400 ms. A question waiting on the person sits below the latest turn.
+- **Stored text keeps its line breaks and indentation** so answers read as written; search folds
+  them. Claude Code's label and 800-character instruction around another agent's message are
+  dropped: they were never said in the conversation. Schema 7 rebuilds each index once.
+- Group rows, and machines whose CLI predates `session_tail`, keep the excerpt preview.
+
 ## Protocol
 
 `session_search { query, limit, from?, to? }` → `{ hits: [{ agentId, sessionId, engine, turn, at,
@@ -268,6 +290,12 @@ ms.
   `desktop/lib/e2ee/envelope.dart`). That **re-pins the interop keystone**, so the browser client
   and the device must re-derive from the new `core.ts`.
 - A Node without `node:sqlite` answers `SEARCH_UNAVAILABLE`.
+
+`session_tail { sessionId, beforeTurn?, maxChars? }` → `{ sessionId, rows: [{ turn, at, ask,
+answer, tools }], hasMore, total, lastAt, lastAsk? }`: a session's latest rows, oldest first, up to
+16,000 characters (64,000 at most). `beforeTurn` pages up from the first row the client has, and
+`lastAsk` (the latest row with an ask) comes with the last page. It is in the same E2EE sets, which
+re-pinned the keystone again. `NOT_INDEXED` for a session the index does not hold.
 
 `harness search <words> [--limit N] [--json]` reads the same index from a shell, and reads the same
 time phrases (`harness search dial last week`). It is read-only: it never migrates or deletes the

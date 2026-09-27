@@ -522,6 +522,43 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('answers session_tail from the index, sealed to the requester, and says what it cannot', async () => {
+    const socket = new BackendSocket('token')
+    const asked: Array<[string, number | undefined, number | undefined]> = []
+    const tail = { sessionId: 'sess-1', rows: [{ turn: 4, at: 1, ask: 'fix the dial', answer: 'Done.', tools: '' }], hasMore: true, total: 5, lastAt: 1 }
+    socket.sessionTailProvider = async (sessionId, options) => {
+      asked.push([sessionId, options.beforeTurn, options.maxChars])
+      return sessionId === 'sess-1' ? tail : null
+    }
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    const unwrap = vi.spyOn(socket.e2ee, 'unwrapDown')
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
+    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+      type: 'session_tail_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
+    })
+    const envelope = { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } }
+    const ask = (payload: Record<string, unknown>) => {
+      unwrap.mockReturnValueOnce({ type: 'session_tail', payload })
+      ws.message({ t: 'down', connId: 'web-1', frame: { type: 'session_tail', payload: envelope } })
+    }
+    ask({ requestId: 't-1', sessionId: 'sess-1', beforeTurn: 9, maxChars: 8000 })
+    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_tail_result', 't-1', tail))
+    // Only whole numbers page; anything else asks for the last rows.
+    ask({ requestId: 't-2', sessionId: 'sess-1', beforeTurn: '9', maxChars: 1.5 })
+    await vi.waitFor(() => expect(asked).toHaveLength(2))
+    expect(asked).toEqual([['sess-1', 9, 8000], ['sess-1', undefined, undefined]])
+    ask({ requestId: 't-3', sessionId: 'nope' })
+    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_tail_result', 't-3', { error: 'NOT_INDEXED', sessionId: 'nope' }))
+    ask({ requestId: 't-4' })
+    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_tail_result', 't-4', { error: 'BAD_SESSION' }))
+    socket.sessionTailProvider = null
+    ask({ requestId: 't-5', sessionId: 'sess-1' })
+    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_tail_result', 't-5', { error: 'SEARCH_UNAVAILABLE' }))
+    await socket.stop()
+  })
+
   it('hands theme_set to the host-theme sink and acknowledges it to the requester', async () => {
     const socket = new BackendSocket('token')
     const received: unknown[] = []
