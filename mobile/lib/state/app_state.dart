@@ -3428,6 +3428,40 @@ class AppNotifier extends ChangeNotifier {
     return null;
   }
 
+  /// A code scanned from a desktop app's "Add phone" QR, held across sign-in: once its machine shows
+  /// up locked, the phone pairs with the code ([connectWithCode]) instead of asking for a password.
+  /// See `phone/welcome/connect_code.dart`. Null the rest of the time.
+  ({String machineId, String code})? pendingPairing;
+
+  /// The scanned code is spent (it failed, or the person chose the password): the computer's
+  /// password form is what the home screen shows next.
+  void dropPendingPairing() {
+    if (pendingPairing == null) return;
+    pendingPairing = null;
+    notifyListeners();
+  }
+
+  /// Pairs with [machineId] by the one-time code its desktop app showed, then reconnects it — the
+  /// QR's way in, where [connectWithPassword] is the password's. Null on success, or what to show.
+  Future<String?> connectWithCode(String machineId, String code) async {
+    final result = await peerLinks.connectWithCode(
+      machineId,
+      code,
+      label: phoneClientDescriptor().name,
+      displayName: machineStates[machineId]?.machine.displayName,
+    );
+    if (result.error != null) return result.error;
+    final state = machineStates[result.linkedMachineId ?? machineId];
+    if (state != null) {
+      state.needsLink = false;
+      state.agentLoadStatus = AgentLoadStatus.idle;
+      notifyListeners();
+      await _pool?.closeMachine(state.machine.machineId);
+      _connectMachine(state);
+    }
+    return null;
+  }
+
   List<LinkedMachine> linkedMachines = [];
   bool linkedMachinesLoading = false;
   String? linkedMachinesError;
@@ -5933,6 +5967,7 @@ class AppNotifier extends ChangeNotifier {
   Future<void> selectAgent(
     String machineId,
     String agentId, {
+
     /// [AttachIntent.automatic] shows the agent without claiming its
     /// terminal — the road `_showAgentFromDevice` and recovery take.
     AttachIntent intent = AttachIntent.person,

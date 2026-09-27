@@ -8,6 +8,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import '../tty.dart';
 import '../tty_controls.dart';
+import 'how_it_works_video.dart';
 
 /// Where the desktop app is downloaded — what "Send link to my Mac" carries.
 const kDesktopDownloadUrl = 'https://harness.autonomous.ai/download';
@@ -180,6 +181,23 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
                         onPressed: _copy,
                       ),
                     ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 32),
+              // Not at the computer: what it is like, in 30 seconds.
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Transform.translate(
+                  offset: const Offset(-12, 0),
+                  child: TtyTextButton(
+                    label: 'See how it works ▶',
+                    color: tty.faint,
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const HowItWorksVideoPage(),
+                      ),
+                    ),
                   ),
                 ),
               ),

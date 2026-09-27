@@ -27,13 +27,13 @@ void main() {
     });
 
     test('ignores codes that are not ours', () {
-      expect(ConnectCode.parse('https://example.com/connect#e=a@b.co'), isNull);
+      expect(ConnectCode.parse('https://example.com/pair#e=a@b.co'), isNull);
       expect(
-        ConnectCode.parse('http://harness.autonomous.ai/connect#e=a@b.co'),
+        ConnectCode.parse('http://harness.autonomous.ai/pair#e=a@b.co'),
         isNull,
       );
       expect(
-        ConnectCode.parse('https://harness.autonomous.ai/connect#m=m1'),
+        ConnectCode.parse('https://harness.autonomous.ai/pair#m=m1'),
         isNull,
       );
       expect(ConnectCode.parse('not a link'), isNull);

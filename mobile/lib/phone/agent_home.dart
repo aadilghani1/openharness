@@ -18,6 +18,7 @@ import 'machines_tab.dart';
 import 'tty_controls.dart';
 import 'tty.dart';
 import 'welcome/connect_computer.dart';
+import 'welcome/pairing_with_code.dart';
 import 'welcome/pick_up_page.dart';
 
 import 'package:harness_mobile/demo/sample_mode.dart';
@@ -631,6 +632,19 @@ class _AgentHomeState extends State<AgentHome> {
     listenable: widget.notifier,
     builder: (context, _) {
       AppTheme.watch(context);
+      // Signed in from a scanned "Add phone" QR: once its computer is here and locked, pair with
+      // the QR's code — no password. See `welcome/connect_code.dart`.
+      if (widget.notifier.pendingPairing case final pending?) {
+        final machine = widget.notifier.machineStates[pending.machineId];
+        if (machine != null && machine.needsLink) {
+          return PairingWithCode(
+            key: ValueKey('pairing-${pending.machineId}'),
+            notifier: widget.notifier,
+            machineId: pending.machineId,
+            code: pending.code,
+          );
+        }
+      }
       final entries = visibleAgents(agentIndex(widget.notifier));
       _openNewAgentIfUnlockedMachineIsEmpty(entries);
       _dropPagerIfShownAgentWasDeleted(entries);

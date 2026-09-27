@@ -101,12 +101,13 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
   }
 
   /// A code the desktop app showed: its account's email is filled in and the code sent, so signing
-  /// in is the four digits.
-  ///
-  /// ⚠️ Its pairing code ([ConnectCode.pairCode]) is not used yet: pairing with it — the daemon's
-  /// live-code CPace — replaces the remote password once the phone speaks it. Until then, a locked
-  /// computer still asks for its password after sign-in.
+  /// in is the four digits — and its pairing code is held until its computer shows up, when the
+  /// phone pairs with it instead of asking for a password (`AppNotifier.pendingPairing`).
   void _onScanned(ConnectCode code) {
+    final machineId = code.machineId, pairCode = code.pairCode;
+    if (machineId != null && pairCode != null) {
+      widget.notifier.pendingPairing = (machineId: machineId, code: pairCode);
+    }
     _email.text = code.email;
     unawaited(_sendCode());
   }

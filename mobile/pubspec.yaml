@@ -79,6 +79,10 @@ dependencies:
   # "Send link to my Mac": the system share sheet, so AirDrop, Messages or email carry the
   # download link to the computer (`phone/welcome/set_up_computer.dart`).
   share_plus: ^13.3.0
+  # "See how it works": the 30-second recording of the app the set-up page plays
+  # (`phone/welcome/how_it_works_video.dart`, `assets/video/how_it_works.mp4`) — in place of an
+  # interactive demo.
+  video_player: ^2.14.0
 
 dev_dependencies:
   flutter_test:
@@ -111,3 +115,6 @@ flutter:
     # NOT listed: Flutter cannot draw an SVG without a package this app does not
     # depend on, so bundling it would only add its weight to every install.
     - assets/app_icon.png
+    # "See how it works" — recorded from the sample on a simulator by
+    # `integration_test/demo_video_test.dart`, trimmed and encoded at 604px, ~630 KB.
+    - assets/video/how_it_works.mp4

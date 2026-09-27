@@ -151,8 +151,12 @@ class HarnessApp extends StatelessWidget {
       // one name, and telling them apart otherwise means reading `dumpsys` over
       // a cable — by which point a bug has already been reported against the
       // wrong build. Flutter draws it in DEBUG ONLY, so a release ships clean
-      // without anyone having to remember to switch this back.
-      debugShowCheckedModeBanner: true,
+      // without anyone having to remember to switch this back. Off only for a
+      // recording of the app (`--dart-define=HARNESS_RECORDING=true`), which a
+      // simulator can only make from a debug build.
+      debugShowCheckedModeBanner: !const bool.fromEnvironment(
+        'HARNESS_RECORDING',
+      ),
       // The design system's own `buildAppTheme` — see the note where a second,
       // hand-written `ThemeData` used to shadow it, in `lib/theme/app_theme.dart`.
       // Harness Desktop is dark-only: one theme, no `darkTheme`/`themeMode` to
