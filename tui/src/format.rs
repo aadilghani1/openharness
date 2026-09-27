@@ -916,6 +916,15 @@ pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
 }
 
 /// The pane's own cells, from its window's top-left corner: tmux's pane_left/top/width/height.
+/// The clients showing the session in front: this one (not hn with no terminal, nor while a
+/// command has another session in front) and those showing it as this one has it — or, for a
+/// session shown here as another client has it, that client's count.
+fn attached(app: &App) -> usize {
+    if app.mirror.is_some() && app.swap_back.is_none() { return app.mirror_attached.max(1) as usize }
+    let here = !(app.swap_back.is_some() || app.headless) as usize;
+    here + app.mirrors.values().filter(|m| **m == app.session_id).count()
+}
+
 pub fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect> {
     let r = tab_rect(app, window, pane)?;
     let body = app.window_area(app.tabs.get(window)?);
@@ -990,12 +999,10 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "session_windows" => app.tabs.len().to_string(),
         // The session in front is this client's; one a command reaches for a moment is not.
         // The client's own session is attached to it (hn with no terminal is no client).
-        "session_attached" => {
-            // This client, when it shows the session (hn with no terminal is no client), and the
-            // clients showing it as this one has it (mirror.rs).
-            let here = !(app.swap_back.is_some() || app.headless) as usize;
-            (here + app.mirrors.values().filter(|m| **m == app.session_id).count()).to_string()
-        }
+        // This client, when it shows the session (hn with no terminal is no client), and the
+        // clients showing it as this one has it (mirror.rs).
+        "session_attached" => attached(app).to_string(),
+        "session_many_attached" => ((attached(app) > 1) as u8).to_string(),
         "client_width" => app.size.0.to_string(),
         "client_height" => app.size.1.to_string(),
         "window_width" => tab.map(|t| app.window_area(t).width).unwrap_or(app.body().width).to_string(),
@@ -1152,7 +1159,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_input_off" => pane.map(|p| p.input_off).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "window_activity_flag" => flags(app, window).contains('#').then_some("1").unwrap_or("0").into(),
         "window_silence_flag" => flags(app, window).contains('~').then_some("1").unwrap_or("0").into(),
-        "session_grouped" | "session_many_attached" | "window_linked" | "window_bigger" | "window_offset_x" | "window_offset_y"
+        "session_grouped" | "window_linked" | "window_bigger" | "window_offset_x" | "window_offset_y"
         | "client_readonly" => "0".into(),
         "pane_pipe" => pane.map(|p| app.pipes.contains_key(&p.id)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "server_sessions" => app.session_list().len().to_string(),
@@ -1217,7 +1224,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "session_stack" => std::iter::once(app.win_num(app.active)).chain(app.lastw.iter().filter_map(|id| app.tabs.iter().position(|t| &t.id == id)).map(|p| app.win_num(p))).map(|n| n.to_string()).collect::<Vec<_>>().join(","),
         // Where the window is on the lastw stack, from 1; 0 when it isn't (the current one).
         "window_stack_index" => tab.and_then(|t| app.lastw.iter().position(|id| *id == t.id)).map(|i| (i + 1).to_string()).unwrap_or_else(|| "0".into()),
-        "window_active_clients" => (window == app.active).then_some("1").unwrap_or("0").into(),
+        // Every client of the session shows its current window.
+        "window_active_clients" => if window == app.active { attached(app).to_string() } else { "0".into() },
         "window_active_sessions" => "1".into(),
         "window_active_sessions_list" | "window_linked_sessions_list" => app.session_name(),
         "window_linked_sessions" => "1".into(),

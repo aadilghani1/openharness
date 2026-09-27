@@ -2101,6 +2101,15 @@ fn run_words_in(app: &mut App, words: &[String]) {
             for sid in order {
             // Another client's session: its row made here (list-sessions), else its lines asked
             // of that client (a client's own line is its own, whoever has its session).
+            // The session in front is another terminal's (shown here as it has it): list-panes and
+            // list-windows as they were asked, answered there (its targets made absolute).
+            if sid == app.session_id && !all && app.mirror.is_some() && matches!(command, "list-panes" | "list-windows") {
+                if let (Some(m), Ok(entry)) = (app.mirror.clone(), crate::cmd::find(command)) {
+                    let w = crate::mirror::absolute(app, &entry, words);
+                    if let Some((out, err, _)) = crate::ipc::ask(std::path::Path::new(&m.owner), &w) { lines.extend(out); for e in err { app.error(e) } }
+                    continue;
+                }
+            }
             if let Some(owner) = app.remote_owner(sid).filter(|_| command != "list-clients") {
                 let template = opt(words, "-F");
                 if command == "list-sessions" {

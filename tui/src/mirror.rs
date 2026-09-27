@@ -86,6 +86,7 @@ fn fill(app: &mut App, stash: &mut Stash, row: &Value, mut old: Vec<Tab>, size: 
         tab.order = ids.clone();
         tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
         tab.zoomed = win.get("zoomed").and_then(Value::as_bool).unwrap_or(false) && ids.len() > 1;
+        app.take_window_options(&mut tab, &win);
         if let Some(n) = win.get("num").and_then(Value::as_u64) { nums.insert(tab.id.clone(), n as usize); }
         tabs.push(tab);
     }
@@ -151,6 +152,8 @@ fn rebuild(app: &mut App, row: &Value) {
     app.lastw = stash.lastw;
     app.options.session = crate::app::options_from(row);
     app.session_env = crate::app::env_from(row);
+    // Its clients: the owner (when it shows it) and every one showing it as it has it.
+    app.mirror_attached = row.get("front").and_then(Value::as_bool).unwrap_or(false) as u32 + row.get("mirrors").and_then(Value::as_u64).unwrap_or(1) as u32;
     // What the owner did is the owner's to hook: nothing fires here for it.
     app.hooks_seen_now();
     if current != app.tabs.get(app.active).map(|t| t.id.clone()) { if let Some(f) = app.tabs[app.active].focus { app.seen(f) } }
@@ -213,7 +216,7 @@ pub fn route(app: &mut App, words: &[String]) -> bool {
 
 /// [words] with -t and -s as ids: what they name here (or, with none, what the command would
 /// take here) is the same thing to every client.
-fn absolute(app: &App, entry: &crate::cmd::Entry, words: &[String]) -> Vec<String> {
+pub fn absolute(app: &App, entry: &crate::cmd::Entry, words: &[String]) -> Vec<String> {
     let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).ok();
     let sid = app.session_id;
     let mut out = words.to_vec();

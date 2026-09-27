@@ -471,6 +471,8 @@ pub struct App {
     /// showing sessions of this one's (their sockets, and which session).
     pub mirror: Option<Mirror>,
     pub mirrors: HashMap<String, u32>,
+    /// The clients showing the session this one shows as another has it (its row's count).
+    pub mirror_attached: u32,
     /// No terminal (--headless): tmux's server with no client attached, holding sessions for
     /// the commands of a script until a client takes them.
     pub headless: bool,
@@ -657,6 +659,7 @@ impl App {
             server_dirty: false,
             mirror: None,
             mirrors: HashMap::new(),
+            mirror_attached: 0,
             swap_back: None,
             start_session: None,
             start_failed: None,
@@ -2181,10 +2184,11 @@ impl App {
         let mut sig = String::new();
         // (Each window's active pane, zoom and layout, and the current window: what the clients
         // showing the session show.)
+        let options = &self.options;
         let mut add = |name: String, tabs: &[Tab], nums: &HashMap<String, usize>, active: usize| {
             sig.push_str(&format!("{name}@{active}"));
             for t in tabs.iter().filter(|t| t.root.is_some()) {
-                sig.push_str(&format!("|{}:{}:{}:{:?}:{:?}:{}:{}", t.id, t.name, nums.get(&t.id).copied().unwrap_or(0), t.panes(), t.focus, t.zoomed, t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default()))
+                sig.push_str(&format!("|{}:{}:{}:{:?}:{:?}:{}:{}:{:?}", t.id, t.name, nums.get(&t.id).copied().unwrap_or(0), t.panes(), t.focus, t.zoomed, t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), options.windows.get(&t.id)))
             }
             sig.push('\n');
         };
@@ -2268,7 +2272,21 @@ impl App {
     pub fn window_json(&self, t: &Tab, num: Option<usize>) -> Value {
         let panes: Vec<Value> = t.panes().iter().filter_map(|p| self.panes.get(p)).map(|p| json!([p.machine_id, p.agent_id, self.shells.contains(&(p.machine_id.clone(), p.agent_id.clone())), p.id])).collect();
         let focus = t.focus.and_then(|f| t.panes().iter().position(|p| *p == f)).unwrap_or(0);
-        json!({ "name": t.name, "named": t.named, "num": num, "wid": t.wid(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus, "zoomed": t.zoomed && panes.len() > 1 })
+        // Its own options (set -w) and its panes' (set -p), kept with it wherever it goes.
+        let options = self.options.windows.get(&t.id).cloned().unwrap_or_default();
+        let pane_options: serde_json::Map<String, Value> = t.panes().iter().filter_map(|p| self.options.panes.get(p).map(|m| (p.to_string(), json!(m)))).collect();
+        json!({ "name": t.name, "named": t.named, "num": num, "wid": t.wid(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus, "zoomed": t.zoomed && panes.len() > 1, "options": options, "pane_options": pane_options })
+    }
+
+    /// A window's own options and its panes', as window_json keeps them, taken on for [tab].
+    pub fn take_window_options(&mut self, tab: &mut Tab, win: &Value) {
+        let options = options_from(&json!({ "options": win.get("options").cloned().unwrap_or(Value::Null) }));
+        tab.sync = options.get("synchronize-panes").map(|v| v == "on").unwrap_or(tab.sync);
+        if options.is_empty() { self.options.windows.remove(&tab.id); } else { self.options.windows.insert(tab.id.clone(), options); }
+        for (p, m) in win.get("pane_options").and_then(Value::as_object).cloned().unwrap_or_default() {
+            let Ok(p) = p.parse::<u64>() else { continue };
+            self.options.panes.insert(p, options_from(&json!({ "options": m })));
+        }
     }
 
     /// A window made again from window_json (its panes' harnesses, ids and shells taken on here),
@@ -2294,6 +2312,7 @@ impl App {
         tab.order = ids.clone();
         tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
         tab.zoomed = win.get("zoomed").and_then(Value::as_bool).unwrap_or(false) && ids.len() > 1;
+        self.take_window_options(&mut tab, win);
         let num = win.get("num").and_then(Value::as_u64).map(|n| n as usize);
         Some((tab, num))
     }
