@@ -21,12 +21,19 @@
 /// once per 2.5 s), `slow` when you meet it or it grows — and never while
 /// working or booped. Reduce Motion and the background stop every frame and
 /// blink; the face still changes.
+///
+/// The paired daemon is an individual (README "Individuals"): its sprite is
+/// its own one-liner (a rare extra's variant, `renderIndividualSprite`), and a
+/// fidgety one turns two work frames a step, its `workMs` halved. Before any
+/// daemon the chip is the egg nearest to hatching, in one line (`eggLine`): a
+/// ready egg that peeks and blinks, else the egg furthest along.
 library;
 
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'eggs.dart';
 import 'plates.dart';
 import 'render.dart';
 import 'roster.dart';
@@ -59,7 +66,7 @@ class DaemonFace extends ChangeNotifier {
     : _now = now ?? DateTime.now {
     zoo.addListener(_zooChanged);
     _events = zoo.events.listen(_zooEvent);
-    _pairKey = zoo.paired?.id;
+    _pairKey = zoo.paired?.uid;
   }
 
   final ZooClient zoo;
@@ -96,6 +103,7 @@ class DaemonFace extends ChangeNotifier {
   /// Whether a hatch reveal is running: the chip keeps the egg until it ends,
   /// so nothing names the hatchling before the reveal does.
   bool _revealing = false;
+  String? _revealKind;
 
   // ── what it shows ──────────────────────────────────────────────────────────
 
@@ -104,12 +112,30 @@ class DaemonFace extends ChangeNotifier {
   bool get reduceMotion => _reduceMotion;
   bool get revealing => _revealing;
 
-  /// The paired daemon, withheld while its hatch reveal runs.
+  /// The paired individual, withheld while its hatch reveal runs.
   ZooDaemon? get daemon => _revealing ? null : zoo.paired;
+
+  /// Its species.
   DaemonDef? get def => roster.byId(daemon?.id);
 
-  /// The nickname when it has one, else its id.
-  String get name => daemon?.nickname ?? def?.id ?? '';
+  /// Its traits, rolled from its seed; null for a species without a
+  /// catalogue.
+  DaemonTraits? get traits => daemon?.traits(roster);
+
+  /// The species as this individual shows it in the status line: its extra's
+  /// sprites, its temper's pace.
+  DaemonDef? get individualDef {
+    final d = daemon;
+    if (d == null || def == null) return null;
+    return individualDaemon(roster, d.id, traits);
+  }
+
+  /// What it is called in a sentence: its name when it has one, else its
+  /// species.
+  String get name => daemon?.called ?? '';
+
+  /// What it is called where it is listed: `pip the tim`, `tim #0042`.
+  String get title => daemon?.title ?? '';
 
   /// The paired daemon is shiny: it wears its shiny colour, and the chip
   /// marks it `*`.
@@ -122,6 +148,9 @@ class DaemonFace extends ChangeNotifier {
 
   /// An egg is waiting and no daemon has hatched yet.
   bool get eggReady => daemon == null && zoo.readyEgg != null;
+
+  /// The egg the chip shows before any daemon: the one nearest to hatching.
+  EggProgress? get nearest => nearestEgg(roster, zoo.zoo, _now());
 
   DaemonMood get mood {
     if (_booped) return DaemonMood.boop;
@@ -139,8 +168,9 @@ class DaemonFace extends ChangeNotifier {
   /// Work steps taken, for the frame drawn now.
   int get step => _step;
 
-  /// The sprite's clock: one step is one frame of the 2.0 work cycle, or one
-  /// turn of a younger version's borrowed baton.
+  /// The sprite's clock: one step is one frame of the species' 2.0 work
+  /// cycle (two of a fidgety individual's), or one turn of a younger
+  /// version's borrowed baton.
   int get spriteT {
     final d = def;
     if (d == null) return 0;
@@ -156,21 +186,19 @@ class DaemonFace extends ChangeNotifier {
     return _step * ms;
   }
 
-  /// How an egg looks in the nest: the first egg's ready face, or its kind's.
-  String eggLook(ZooEgg egg) => egg.kind == 'first'
-      ? roster.rules.nest.last
-      : roster.rules.eggs[egg.kind]?.look ?? roster.rules.nest.last;
-
-  /// What the chip draws: the sprite, or before any daemon the ready egg or
-  /// the nest at its stage.
+  /// What the chip draws: the individual's sprite, or before any daemon the
+  /// egg nearest to hatching in one line — ready, it peeks and blinks; while
+  /// the reveal runs, the egg being opened.
   String get glyph {
     if (!visible) return '';
-    final d = def;
+    final d = individualDef;
     if (d == null) {
-      if (_revealing) return roster.rules.nest.last;
-      final egg = zoo.readyEgg;
-      if (egg != null) return eggLook(egg);
-      return nestFor(roster, zoo.habits);
+      if (_revealing) {
+        return eggLine(roster, _revealKind ?? 'first', 'rock');
+      }
+      final egg = nearest;
+      if (egg == null) return eggLine(roster, 'first', 'p0');
+      return eggLine(roster, egg.kind, egg.stage, lid: _lid);
     }
     return renderSprite(
       roster,
@@ -186,7 +214,7 @@ class DaemonFace extends ChangeNotifier {
   /// The glyph in its slot: eight cells and a gutter each side, the sprite
   /// centred on its base width so a baton never shifts the face.
   String get cell {
-    final d = def;
+    final d = individualDef;
     final g = glyph;
     if (d == null) return statusCell(roster, g);
     return statusCell(roster, g, baseWidth(roster, d, versionIndex));
@@ -237,13 +265,16 @@ class DaemonFace extends ChangeNotifier {
     final d = def;
     if (d != null) {
       final eggs = zoo.zoo.eggs.length;
-      return '$name, ${d.id} ${daemon!.version}${shiny ? ', shiny' : ''}, '
+      return '$title, ${d.id} ${daemon!.version}${shiny ? ', shiny' : ''}, '
           '${moodWords[mood]}'
           '${eggs == 0 ? '' : ', $eggs ${eggs == 1 ? 'egg' : 'eggs'} waiting'}';
     }
     if (eggReady) return 'An egg, ready to hatch';
-    return 'A daemon is incubating: ${zoo.habitsDone} of '
-        '${zoo.habitsNeeded} habits';
+    final egg = nearest;
+    if (egg == null) return 'A daemon is incubating';
+    return egg.kind == 'first' || egg.kind == 'setup'
+        ? 'A daemon is incubating: ${egg.done} of ${egg.need} habits'
+        : 'A ${egg.kind} egg is incubating: ${egg.done} of ${egg.need}';
   }
 
   // ── inputs ─────────────────────────────────────────────────────────────────
@@ -320,19 +351,22 @@ class DaemonFace extends ChangeNotifier {
     _update();
   }
 
-  /// "I see you": its sheet opening. At most once per 2.5 s.
+  /// "I see you": its sheet opening. At most once per 2.5 s. A ready egg
+  /// looks back too: its eyes peek from the chip.
   void look() {
-    if (_disposed || def == null) return;
+    if (_disposed || (def == null && !eggReady)) return;
     final now = _now();
     if (_lastLook != null && now.difference(_lastLook!) < lookEvery) return;
     _lastLook = now;
     _blink('look', delay: const Duration(milliseconds: 250));
   }
 
-  /// The hatch reveal is running: the chip keeps the egg until [endReveal].
-  void beginReveal() {
+  /// The hatch reveal is running: the chip keeps the egg (of [kind]) until
+  /// [endReveal].
+  void beginReveal({String? kind}) {
     if (_disposed || _revealing) return;
     _revealing = true;
+    _revealKind = kind;
     _update();
   }
 
@@ -341,7 +375,7 @@ class DaemonFace extends ChangeNotifier {
   void endReveal() {
     if (_disposed || !_revealing) return;
     _revealing = false;
-    _pairKey = daemon?.id;
+    _pairKey = daemon?.uid;
     _baselined = false;
     sync(_watch);
     _blink('slow', delay: const Duration(milliseconds: 300));
@@ -350,7 +384,7 @@ class DaemonFace extends ChangeNotifier {
 
   void _zooChanged() {
     if (_disposed) return;
-    final key = daemon?.id;
+    final key = daemon?.uid;
     if (key != _pairKey) {
       // A different pair: what it watches starts again from a baseline.
       _pairKey = key;
@@ -368,7 +402,7 @@ class DaemonFace extends ChangeNotifier {
         _blink('ack', delay: ackAfter);
       case ZooDaemonGrew(:final daemon):
         // "I trust you": a slow blink when the pair grows.
-        if (daemon.id == this.daemon?.id) {
+        if (daemon.uid == this.daemon?.uid) {
           _blink('slow', delay: const Duration(milliseconds: 200));
         }
     }
@@ -378,7 +412,7 @@ class DaemonFace extends ChangeNotifier {
 
   void _blink(String kind, {Duration? delay}) {
     final steps = roster.rules.blinks[kind];
-    if (steps == null || !motionEnabled || def == null) return;
+    if (steps == null || !motionEnabled || (def == null && !eggReady)) return;
     _stopBlink();
     var index = 0;
     void step() {

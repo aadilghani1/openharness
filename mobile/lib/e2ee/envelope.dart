@@ -77,6 +77,9 @@ const Set<String> encryptedDownTypes = {
   'p2p_ice_candidate',
   'p2p_abort',
   'p2p_promote',
+  // An individual daemon's plates, asked of harnessd (daemons/README.md, "Individual art"): one of the
+  // pair brain's machine-to-machine frames (`PAIR_REQUESTS` in applicationFrames.ts), always sealed.
+  'pair_plate_get',
 };
 
 /// Requests an older CLI took in the clear and a current one refuses unsealed — applicationFrames.ts

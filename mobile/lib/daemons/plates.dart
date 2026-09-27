@@ -17,7 +17,10 @@ library;
 import 'dart:convert';
 import 'dart:ui' show Color;
 
+import 'package:flutter/foundation.dart' show immutable;
+
 import 'plates.g.dart';
+import 'render.dart' show DaemonTraits;
 import 'roster.dart';
 
 /// The two widths a plate is baked at (`rules.plate.cols`): `portrait`, 28
@@ -25,11 +28,45 @@ import 'roster.dart';
 /// `reveal`, 56 columns and at most 24 rows, for the hatch reveal.
 enum PlateSize { portrait, reveal }
 
+/// One frame of a plate with its materials: [rows] of glyphs, and [mats], a
+/// letter per cell (`g` glow, `s` star, `p` peek on an egg; `m` a marking,
+/// `a` a rare extra, `e` the odd eye on an individual; `.` none).
+@immutable
+class PlateFrame {
+  const PlateFrame(this.rows, this.mats);
+
+  /// A frame as plates.json and harnessd write it: rows joined by newlines.
+  /// Material rows that do not match the rows in shape are dropped, so every
+  /// cell is plain.
+  factory PlateFrame.parse(String rows, String? mats) {
+    final r = rows.split('\n');
+    final m = mats?.split('\n');
+    final fits =
+        m != null &&
+        m.length == r.length &&
+        [for (var i = 0; i < r.length; i++) m[i].length == r[i].length]
+            .every((ok) => ok);
+    return PlateFrame(
+      List.unmodifiable(r),
+      List.unmodifiable(fits ? m : [for (final row in r) '.' * row.length]),
+    );
+  }
+
+  final List<String> rows, mats;
+
+  /// The material of the cell at row [r], column [c]; `.` outside.
+  String mat(int r, int c) =>
+      r >= 0 && c >= 0 && r < mats.length && c < mats[r].length
+      ? mats[r][c]
+      : '.';
+}
+
 class DaemonPlates {
   DaemonPlates._(Map raw)
     : source = raw['source'] as String? ?? '',
       frameMs = (raw['frameMs'] as num).toInt(),
-      _daemons = raw['daemons'] as Map;
+      _daemons = raw['daemons'] as Map,
+      _eggs = raw['eggs'] as Map? ?? const {};
 
   factory DaemonPlates.parse(String json) =>
       DaemonPlates._(jsonDecode(json) as Map);
@@ -41,7 +78,31 @@ class DaemonPlates {
   final int frameMs;
 
   final Map _daemons;
+  final Map _eggs;
   final _loops = <String, List<List<String>>>{};
+  final _eggLoops = <String, List<PlateFrame>>{};
+
+  /// Every frame of [kind]'s egg at [size] and [stage] (plates.json
+  /// `eggs[kind][size][stage]`), with its materials. `p0` and `p4` loop 8
+  /// frames, `p1` to `p3` hold 1, opening `rock` 8, `burst` 6, `tumble` 8 and
+  /// `open` 1; every stage of one kind and size shares one crop. Empty for a
+  /// kind or stage not baked.
+  List<PlateFrame> egg(String kind, PlateSize size, String stage) =>
+      _eggLoops.putIfAbsent('$kind ${size.name} $stage', () {
+        final list =
+            ((_eggs[kind] as Map?)?[size.name] as Map?)?[stage] as List?;
+        if (list == null) return const [];
+        return List.unmodifiable([
+          for (final f in list)
+            PlateFrame.parse(
+              (f as Map)['rows'] as String,
+              f['mats'] as String?,
+            ),
+        ]);
+      });
+
+  /// Whether [kind] has baked eggs.
+  bool hasEgg(String kind) => _eggs.containsKey(kind);
 
   /// Whether [id] has baked plates.
   bool has(String? id) => _daemons.containsKey(id);
@@ -186,4 +247,173 @@ class PlatePalette {
 
   /// The colour of [ch] on row [r]; null for a space.
   Color? at(int r, String ch) => r < _rows.length ? _rows[r][ch] : null;
+}
+
+
+/// One glyph of ink over a base colour (bake.mjs `inked`): at most 1 bright
+/// mixes from [ground] toward it, above 1 on toward white by the excess. Null
+/// for a character that is not ink.
+String? _inked(DaemonRoster roster, List<int> base, String ch, Color ground) {
+  final level = roster.rules.plate?.ink[ch];
+  if (level == null) return null;
+  return _hex(
+    level > 1
+        ? _mix(base, const [255, 255, 255], level - 1)
+        : _mix(_groundRgb(ground), base, level),
+  );
+}
+
+Color _colour(String hex) =>
+    Color(0xff000000 | int.parse(hex.substring(1), radix: 16));
+
+/// The colour of one glyph of an egg plate, `#rrggbb` (bake.mjs `eggColor`).
+/// The shell runs down its kind's gradient a row at a time, like a daemon's
+/// plate; a glow cell (`g`, the light inside) is `rules.plate.light[light]`,
+/// `plain` while it is earned and the rarity's once it opens; a peek cell
+/// (`p`) is `light.peek`; a star (`s`) the kind's stars. [dim], a secret's
+/// opening, takes the shell down to 0.22 of its colour and the stars to 0.3;
+/// the light stays. Null for a character that is not ink.
+String? eggHex(
+  DaemonRoster roster,
+  String kind,
+  int rows,
+  int r,
+  String ch,
+  String mat, {
+  Color ground = plateGround,
+  String light = 'plain',
+  bool dim = false,
+}) {
+  final egg = roster.rules.eggs[kind];
+  final plate = roster.rules.plate;
+  if (egg == null || plate == null) return null;
+  final bg = _groundRgb(ground);
+  final List<int> base;
+  if (mat == 'g') {
+    base = _rgb(plate.light[light] ?? plate.light['plain'] ?? '#ffffd7');
+  } else if (mat == 'p') {
+    base = _rgb(plate.light['peek'] ?? '#ffffff');
+  } else if (mat == 's' && egg.stars != null) {
+    base = dim ? _mix(bg, _rgb(egg.stars!), 0.3) : _rgb(egg.stars!);
+  } else {
+    final row = _mix(
+      _rgb(egg.gradient.top),
+      _rgb(egg.gradient.bottom),
+      rows > 1 ? r / (rows - 1) : 0,
+    );
+    base = dim ? _mix(bg, row, 0.22) : row;
+  }
+  return _inked(roster, base, ch, ground);
+}
+
+/// The colour of one glyph of an individual's plate, `#rrggbb` (bake.mjs
+/// `individualColor`). Its body runs down its colour family ([traits]
+/// `colour`; a shiny one's is the species' shiny gradient); a marking (`m`) is
+/// its accent, an extra's cell (`a`) the extra's colour, the odd eye (`e`)
+/// `rules.plate.oddEye`. A species plate has no materials: painted this way it
+/// is the individual's colour family, which is what a phone shows until the
+/// individual's own art arrives. Null for a character that is not ink.
+String? individualHex(
+  DaemonRoster roster,
+  DaemonDef d,
+  DaemonTraits traits,
+  int rows,
+  int r,
+  String ch,
+  String mat, {
+  Color ground = plateGround,
+  bool shiny = false,
+}) {
+  final catalogue = d.traits;
+  final List<int> base;
+  final extra = catalogue?.extra(traits.extra)?.hex;
+  if (mat == 'm') {
+    base = _rgb(traits.accent);
+  } else if (mat == 'a' && extra != null) {
+    base = _rgb(extra);
+  } else if (mat == 'e') {
+    base = _rgb(roster.rules.plate?.oddEye ?? '#5fffd7');
+  } else {
+    final family = catalogue?.colour(traits.colour);
+    final shinyStops = shiny ? d.shinyGradient : null;
+    final top = shinyStops?.top ?? family?.top ?? d.gradient?.top;
+    final bottom = shinyStops?.bottom ?? family?.bottom ?? d.gradient?.bottom;
+    if (top == null || bottom == null) return null;
+    base = _mix(_rgb(top), _rgb(bottom), rows > 1 ? r / (rows - 1) : 0);
+  }
+  return _inked(roster, base, ch, ground);
+}
+
+/// Every colour a plate's cells take, worked out once per row, glyph and
+/// material and kept: a frame repaints from here, not from the colour rules.
+class CellPalette {
+  CellPalette(this._hexAt);
+
+  final String? Function(int r, String ch, String mat) _hexAt;
+  final _cells = <int, Map<String, Color?>>{};
+
+  /// The colour of [ch] (made of [mat]) on row [r]; null for a space.
+  Color? at(int r, String ch, [String mat = '.']) {
+    final row = _cells.putIfAbsent(r, () => {});
+    final key = '$ch$mat';
+    if (row.containsKey(key)) return row[key];
+    final hex = _hexAt(r, ch, mat);
+    return row[key] = hex == null ? null : _colour(hex);
+  }
+
+  static final _eggs = <String, CellPalette>{};
+  static final _individuals = <String, CellPalette>{};
+
+  /// An egg plate of [rows] rows of [kind] in [light] ([dim] for a secret's
+  /// opening) on [ground].
+  factory CellPalette.egg(
+    DaemonRoster roster,
+    String kind,
+    int rows, {
+    Color ground = plateGround,
+    String light = 'plain',
+    bool dim = false,
+  }) => _eggs.putIfAbsent(
+    '$kind $rows $light $dim ${ground.toARGB32()} ${identityHashCode(roster)}',
+    () => CellPalette(
+      (r, ch, mat) => eggHex(
+        roster,
+        kind,
+        rows,
+        r,
+        ch,
+        mat,
+        ground: ground,
+        light: light,
+        dim: dim,
+      ),
+    ),
+  );
+
+  /// An individual's plate of [rows] rows (its own art, or the species plate
+  /// recoloured) on [ground].
+  factory CellPalette.individual(
+    DaemonRoster roster,
+    DaemonDef d,
+    DaemonTraits traits,
+    int rows, {
+    Color ground = plateGround,
+    bool shiny = false,
+  }) => _individuals.putIfAbsent(
+    '${d.id} ${traits.colour} ${traits.accent} ${traits.extra} $rows $shiny '
+    '${ground.toARGB32()} ${identityHashCode(roster)}',
+    () => CellPalette(
+      (r, ch, mat) => individualHex(
+        roster,
+        d,
+        traits,
+        rows,
+        r,
+        ch,
+        mat,
+        ground: ground,
+        shiny: shiny,
+      ),
+    ),
+  );
 }

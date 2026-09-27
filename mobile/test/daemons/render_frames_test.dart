@@ -34,7 +34,24 @@ void main() {
     expect(roster.rules.setupEggNeed, (rules['setupEgg'] as Map)['need']);
     expect(roster.rules.duplicateXp, rules['duplicateXp']);
     expect(roster.rules.overflowXp, rules['overflowXp']);
-    expect(roster.rules.eggs['setup']!.look, r'\_$_/');
+    // Eggs: a mark per kind for the one-line egg, a gradient for its plate.
+    expect(roster.rules.eggs['setup']!.mark, r'$');
+    expect(roster.rules.eggs['first']!.mark, ' ');
+    expect(roster.rules.eggs['night']!.stars, '#ffffd7');
+    expect(roster.rules.eggs['week']!.gradient.top, '#afffff');
+    expect(roster.rules.eggLine['blink'], r'\_(--)_/');
+    for (final e in (rules['eggs'] as Map).entries) {
+      final kind = roster.rules.eggs[e.key]!;
+      final raw = e.value as Map;
+      expect(kind.mark, raw['mark'], reason: e.key as String);
+      expect(kind.gradient.top, (raw['gradient'] as Map)['top']['hex']);
+      expect(kind.gradient.bottom, (raw['gradient'] as Map)['bottom']['hex']);
+    }
+    final plateRules = rules['plate'] as Map;
+    expect(roster.rules.plate!.room, plateRules['room']);
+    expect(roster.rules.plate!.oddEye, (plateRules['oddEye'] as Map)['hex']);
+    expect(roster.rules.plate!.light['rare'], '#5fd7ff');
+    expect(roster.rules.plate!.eggMs.burstHold, 420);
     for (final (i, raw) in (source['daemons'] as List).indexed) {
       final shiny = (raw as Map)['shiny'] as Map;
       expect(roster.daemons[i].shinyHex, shiny['hex']);
@@ -237,28 +254,44 @@ void main() {
     }
   });
 
-  test('every card matches card.mjs', () {
+  test('every card matches card.mjs, an individual\'s too', () {
     final cards = frames['cards'] as List;
-    expect(cards, hasLength(roster.daemons.length * 6));
+    final individuals = roster.daemons.where((d) => d.traits != null).length;
+    expect(cards, hasLength(roster.daemons.length * 6 + individuals));
+    var seeded = 0;
     for (final raw in cards) {
       final f = raw as Map;
       final d = roster.byId(f['id'] as String)!;
+      final seed = f['seed'] as int?;
+      if (seed != null) seeded++;
       final out = cardLines(
         roster,
         d,
         version: f['version'] as String,
         shiny: f['shiny'] == true,
         serial: f['serial'] as int?,
+        name: f['name'] as String?,
         nickname: f['nickname'] as String?,
+        traits: seed == null ? null : rollTraits(roster, d.id, seed),
         hatched: f['hatched'] as String?,
         egg: f['egg'] as String?,
       );
       expect(out, [
         for (final l in f['out'] as List) l as String,
-      ], reason: '${f['id']} ${f['version']} shiny=${f['shiny']}');
+      ], reason: '${f['id']} ${f['version']} shiny=${f['shiny']} seed=$seed');
       expect(out.every((l) => l.length == cardWidth), isTrue);
       expect(out.every(printable.hasMatch), isTrue);
     }
+    expect(seeded, individuals);
+    // The flags wrap as a long command does; the rarity has its commas.
+    expect(flagLines('tim -c coral --spots', 36), ['tim -c coral --spots']);
+    expect(
+      flagLines('tim -c lilac --freckles --big-head --long-arms --curly', 36),
+      ['tim -c lilac --freckles --big-head \\', '  --long-arms --curly'],
+    );
+    expect(oneInText(34), '1 in 34');
+    expect(oneInText(2130), '1 in 2,130');
+    expect(oneInText(1234567), '1 in 1,234,567');
     // Secrets sit outside the numbered set.
     expect(cardNumber(roster, roster.byId('tim')!), '#01/09');
     expect(cardNumber(roster, roster.byId('beastie')!), '#S/09');
@@ -418,28 +451,7 @@ void main() {
     },
   );
 
-  test('nest stages follow habits done, as render.mjs nestStage', () {
-    final nests = (frames['nests'] as List).cast<Map>();
-    expect(nests, isNotEmpty);
-    expect(
-      [
-        for (final n in nests)
-          nestFor(roster, (n['habits'] as List).cast<String>()),
-      ],
-      [for (final n in nests) n['out'] as String],
-    );
-  });
-
   test('the reveal pieces keep their shape', () {
-    for (final frame in [
-      eggFrame(roster),
-      eggFrame(roster, offset: -1),
-      eggFrame(roster, offset: 1, crack: 1),
-      eggFrame(roster, crack: 2),
-      eggPopFrame(roster),
-    ]) {
-      expect(frame.split('\n').every((r) => r.length == 18), isTrue);
-    }
     expect(silhouette('[oo]'), '####');
     expect(silhouette('o   o'), '#   #');
     expect(
@@ -607,5 +619,310 @@ void main() {
       tim.shinyGradient!.bottom,
     );
     expect(tim.shinyGradient!.bottom, '#d7af00');
+  });
+
+  // ── eggs ───────────────────────────────────────────────────────────────────
+
+  test('every egg stage matches render.mjs eggStage', () {
+    final cases = (frames['eggStages'] as List).cast<Map>();
+    expect(cases, isNotEmpty);
+    for (final c in cases) {
+      expect(
+        eggStage(c['done'] as int, c['need'] as int, ready: c['ready'] == true),
+        c['stage'],
+        reason: '$c',
+      );
+    }
+  });
+
+  test('the first and setup eggs follow habits, as habitProgress', () {
+    final cases = (frames['firstEgg'] as List).cast<Map>();
+    expect(cases, isNotEmpty);
+    for (final c in cases) {
+      final habits = (c['habits'] as List).cast<String>();
+      final kind = c['kind'] as String;
+      final p = habitProgress(roster, habits, kind: kind);
+      final why = '$kind $habits';
+      expect(p.done, c['done'], reason: why);
+      expect(p.need, c['need'], reason: why);
+      final stage = eggStage(p.done, p.need);
+      expect(stage, c['stage'], reason: why);
+      expect(eggLine(roster, kind, stage), c['out'], reason: why);
+    }
+  });
+
+  test('every egg line matches render.mjs eggLine', () {
+    final cases = (frames['eggLines'] as List).cast<Map>();
+    expect(cases, hasLength(greaterThan(100)));
+    final unsafe = [
+      for (final p in (jsonDecode(
+                File('../daemons/roster.json').readAsStringSync(),
+              )['rules']['ligatureUnsafe']
+              as List))
+        p as String,
+    ];
+    for (final c in cases) {
+      final out = c['stage'] == 'hatchling'
+          ? eggLine(roster, 'first', 'hatchling', sprite: c['sprite'] as String)
+          : eggLine(
+              roster,
+              c['kind'] as String,
+              c['stage'] as String,
+              lid: c['lid'] as String?,
+            );
+      final why = '${c['kind']} ${c['stage']} ${c['lid']} ${c['id']}';
+      expect(out, c['out'], reason: why);
+      expect(out.length, lessThanOrEqualTo(roster.rules.statusCells));
+      expect(printable.hasMatch(out), isTrue, reason: why);
+      for (final pair in unsafe) {
+        expect(out.contains(pair), isFalse, reason: '$why has $pair');
+      }
+    }
+    // Every hatchling line is its 0.1 sprite between the halves of its shell.
+    expect(eggLine(roster, 'first', 'hatchling', sprite: '(o o)'), ')(o o)(');
+    expect(eggLine(roster, 'first', 'hatchling', sprite: '1234567'), '1234567');
+  });
+
+  test('the baked eggs: every kind, stage and size, one crop each', () {
+    final source =
+        jsonDecode(File('../daemons/plates.json').readAsStringSync()) as Map;
+    final eggs = source['eggs'] as Map;
+    expect(eggs.keys.toSet(), roster.rules.eggs.keys.toSet());
+    const counts = {
+      'p0': 8,
+      'p1': 1,
+      'p2': 1,
+      'p3': 1,
+      'p4': 8,
+      'rock': 8,
+      'burst': 6,
+      'tumble': 8,
+      'open': 1,
+    };
+    for (final kind in roster.rules.eggs.keys) {
+      expect(daemonPlates.hasEgg(kind), isTrue);
+      for (final size in PlateSize.values) {
+        int? width, height;
+        for (final stage in eggStages) {
+          final list = daemonPlates.egg(kind, size, stage);
+          final why = '$kind ${size.name} $stage';
+          expect(list, hasLength(counts[stage]), reason: why);
+          final raw = ((eggs[kind] as Map)[size.name] as Map)[stage] as List;
+          for (final (i, f) in list.indexed) {
+            expect(f.rows.join('\n'), (raw[i] as Map)['rows'], reason: why);
+            expect(f.mats.join('\n'), raw[i]['mats'], reason: why);
+            width ??= f.rows.first.length;
+            height ??= f.rows.length;
+            expect(f.rows, hasLength(height), reason: why);
+            for (final (r, row) in f.rows.indexed) {
+              expect(row.length, width, reason: why);
+              expect(printable.hasMatch(row), isTrue, reason: why);
+              expect(f.mats[r].length, row.length, reason: why);
+            }
+          }
+        }
+        expect(width, lessThanOrEqualTo(roster.rules.plate!.cols[size.name]!));
+      }
+    }
+    // Loops are split once and kept; a kind not baked has nothing.
+    expect(
+      daemonPlates.egg('first', PlateSize.portrait, 'p4'),
+      same(daemonPlates.egg('first', PlateSize.portrait, 'p4')),
+    );
+    expect(daemonPlates.egg('nope', PlateSize.portrait, 'p4'), isEmpty);
+  });
+
+  test('every egg colour matches bake.mjs eggColor', () {
+    final cases = (frames['eggColors'] as List).cast<Map>();
+    expect(cases, isNotEmpty);
+    var cells = 0;
+    for (final f in cases) {
+      final kind = f['kind'] as String;
+      final list = daemonPlates.egg(
+        kind,
+        PlateSize.values.byName(f['size'] as String),
+        f['stage'] as String,
+      );
+      final frame = list[f['frame'] as int];
+      expect(frame.rows, hasLength(f['rows']));
+      final bg = f['bg'] as String;
+      final ground = Color(0xff000000 | int.parse(bg.substring(1), radix: 16));
+      final light = f['light'] as String, dim = f['dim'] == true;
+      final palette = CellPalette.egg(
+        roster,
+        kind,
+        frame.rows.length,
+        ground: ground,
+        light: light,
+        dim: dim,
+      );
+      for (final c in (f['cells'] as List).cast<Map>()) {
+        final r = c['r'] as int, col = c['c'] as int;
+        final ch = c['ch'] as String, mat = c['mat'] as String;
+        expect(frame.rows[r][col], ch);
+        expect(frame.mat(r, col), mat);
+        final why = '$kind ${f['stage']} $light r=$r c=$col $ch $mat';
+        final hex = eggHex(
+          roster,
+          kind,
+          frame.rows.length,
+          r,
+          ch,
+          mat,
+          ground: ground,
+          light: light,
+          dim: dim,
+        );
+        expect(hex, c['hex'], reason: why);
+        expect(
+          palette.at(r, ch, mat),
+          Color(0xff000000 | int.parse(hex!.substring(1), radix: 16)),
+          reason: why,
+        );
+        cells++;
+      }
+    }
+    expect(cells, greaterThan(500));
+    expect(eggHex(roster, 'first', 12, 0, ' ', '.'), isNull);
+  });
+
+  // ── individuals ────────────────────────────────────────────────────────────
+
+  test('the rng is mulberry32, as plate.mjs rng', () {
+    // node -e "import('./daemons/tools/plate.mjs').then(m => {
+    //   const r = m.rng(1); console.log(r(), r(), r()) })"
+    final r = plateRng(1);
+    expect([r(), r(), r()], [
+      0.6270739405881613,
+      0.002735721180215478,
+      0.5274470399599522,
+    ]);
+    // The top of the range wraps as JavaScript's unsigned 32 bits do.
+    final top = plateRng(4294967295);
+    expect([top(), top()], [0.8964226141106337, 0.189478256739676]);
+  });
+
+  test('every trait roll, its flags and rarity match render.mjs', () {
+    final cases = (frames['traitRolls'] as List).cast<Map>();
+    expect(cases, hasLength(greaterThan(200)));
+    for (final c in cases) {
+      final id = c['id'] as String, seed = c['seed'] as int;
+      final traits = rollTraits(roster, id, seed)!;
+      final why = '$id $seed';
+      expect(traits.toJson(), c['traits'], reason: why);
+      expect(
+        traits.toJson().keys.toList(),
+        (c['traits'] as Map).keys.toList(),
+        reason: why,
+      );
+      expect(individualFlags(roster, id, traits), c['flags'], reason: why);
+      expect(oneIn(roster, id, traits), c['oneIn'], reason: why);
+    }
+    // Every plate species has a catalogue; a line-art one has none to roll.
+    expect(rollTraits(roster, 'tmux', 42), isNull);
+    final zero = rollTraits(roster, 'tim', 0)!;
+    expect(zero.colour, roster.byId('tim')!.traits!.colours.first.name);
+    expect(zero.props.values.every((v) => v == 1), isTrue);
+    expect(zero.fidgety, isFalse);
+  });
+
+  test('every individual sprite matches renderIndividualSprite', () {
+    final cases = (frames['individualSprites'] as List).cast<Map>();
+    expect(cases, hasLength(greaterThan(1000)));
+    for (final c in cases) {
+      final id = c['id'] as String, seed = c['seed'] as int;
+      final traits = rollTraits(roster, id, seed);
+      final vi = roster.versionIndex(c['v'] as String);
+      final mood = daemonMoodNamed(c['mood'] as String)!;
+      final out = renderIndividualSprite(
+        roster,
+        id,
+        traits,
+        vi,
+        mood,
+        t: c['t'] as int,
+        lid: c['lid'] as String?,
+      );
+      final why = '$id $seed ${c['v']} ${c['mood']} t=${c['t']} lid=${c['lid']}';
+      expect(out, c['out'], reason: why);
+      final d = individualDaemon(roster, id, traits);
+      expect(statusCell(roster, out, baseWidth(roster, d, vi)), c['cell'],
+          reason: why);
+    }
+    // No extra and calm: the species itself.
+    final plain = rollTraits(roster, 'tim', 0);
+    expect(individualDaemon(roster, 'tim', plain), same(roster.byId('tim')));
+  });
+
+  test('every individual colour matches bake.mjs individualColor', () {
+    final cases = (frames['individualColors'] as List).cast<Map>();
+    expect(cases, hasLength(20));
+    var cells = 0;
+    for (final f in cases) {
+      final d = roster.byId(f['id'] as String)!;
+      final t = f['traits'] as Map;
+      final traits = DaemonTraits(
+        seed: t['seed'] as int,
+        colour: t['colour'] as String,
+        marks: t['marks'] as String?,
+        extra: t['extra'] as String?,
+        oddEye: t['oddEye'] == true,
+        accent: t['accent'] as String,
+      );
+      final frame = PlateFrame.parse(f['rows'] as String, f['mats'] as String);
+      final shiny = f['shiny'] == true;
+      final bg = f['bg'] as String;
+      final ground = Color(0xff000000 | int.parse(bg.substring(1), radix: 16));
+      final palette = CellPalette.individual(
+        roster,
+        d,
+        traits,
+        frame.rows.length,
+        ground: ground,
+        shiny: shiny,
+      );
+      for (final c in (f['cells'] as List).cast<Map>()) {
+        final r = c['r'] as int, col = c['c'] as int;
+        final ch = c['ch'] as String, mat = c['mat'] as String;
+        expect(frame.rows[r][col], ch);
+        expect(frame.mat(r, col), mat);
+        final why = '${d.id} shiny=$shiny r=$r c=$col $ch $mat';
+        final hex = individualHex(
+          roster,
+          d,
+          traits,
+          frame.rows.length,
+          r,
+          ch,
+          mat,
+          ground: ground,
+          shiny: shiny,
+        );
+        expect(hex, c['hex'], reason: why);
+        expect(
+          palette.at(r, ch, mat),
+          Color(0xff000000 | int.parse(hex!.substring(1), radix: 16)),
+          reason: why,
+        );
+        cells++;
+      }
+    }
+    expect(cells, greaterThan(400));
+    // The species' own colour family (seed 0) paints the species plate
+    // exactly as the species' gradient does.
+    final tim = roster.byId('tim')!;
+    final zero = rollTraits(roster, 'tim', 0)!;
+    for (final ch in ['.', '%', '#', '@']) {
+      for (final r in [0, 5, 11]) {
+        expect(
+          individualHex(roster, tim, zero, 12, r, ch, '.'),
+          plateHex(roster, tim, 12, r, ch),
+        );
+        expect(
+          individualHex(roster, tim, zero, 12, r, ch, '.', shiny: true),
+          plateHex(roster, tim, 12, r, ch, shiny: true),
+        );
+      }
+    }
   });
 }
