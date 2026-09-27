@@ -3,6 +3,9 @@
  * read on EVERY machine, for that machine's harnesses — at `$XDG_CONFIG_HOME/harness/pair.jsonc`,
  * `~/.config/harness/pair.jsonc` when that is unset. JSON with comments and trailing commas.
  *
+ *   daemons false turns every daemon off on this machine, whatever the server says: no sensor, brain,
+ *           learning, pair harness or zoo reports (lib/daemonsSwitch.ts, the local kill switch). Read on its
+ *           own, never waiting for a confirmation: switching off needs nobody's yes.
  *   model   true to let the daemon ask one small model for better status-line words (off by default).
  *   learn   Learning L2 (daemons/LEARNING.md), every part off by default:
  *             borrow  true: what Hermes, Claude Code and Codex learned on their own becomes lesson candidates
@@ -268,6 +271,7 @@ export class PairConfigFile {
 /** A commented starting point, for the docs and for anyone writing their first rule. */
 export const PAIR_CONFIG_EXAMPLE = `// ~/.config/harness/pair.jsonc — your paired daemon's settings on this machine.
 {
+  // "daemons": false turns every daemon off on this machine, whatever the account says.
   // Better status-line words from one small model call per question (off by default).
   "model": false,
   // Learning (off by default): borrow what Hermes, Claude Code and Codex learned on their own as lesson

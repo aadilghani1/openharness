@@ -63,6 +63,7 @@ import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from
 import { AuthSessionError, AuthSessionManager, clearAuthSession, readAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { LocalPresence, PAIR_HARNESS_DSH, ZooTurnCounter, ZooTurnReporter } from './lib/zooTurns.js'
 import { ZooLessonReporter } from './lib/zooLessons.js'
+import { DAEMONS_OFF, DAEMONS_OFF_DETAIL, DaemonsSwitch, localKillSwitch, zooPassthrough, type ZooRead } from './lib/daemonsSwitch.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { ensureGridInstalled, type GridInstallResult } from './lib/gridInstall.js'
 import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
@@ -1803,12 +1804,29 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // NB: hooks are installed AFTER the hook server binds (below), with the port it actually got — the
   // server may fall back to a free port if env.PORT is taken, and the hooks must point at the real one.
 
+  // THE DAEMONS SWITCH (lib/daemonsSwitch.ts, daemons/README.md "Off switches"). Every daemon deploy ships
+  // dark: until the account's zoo answers 200 — or, signed out, a guest window says its person consented —
+  // nothing daemon-related runs here: no sensor or journal, no brain, no learning, no pair harness, no zoo
+  // reports, no timers, and one backend request, the probe. HARNESS_DAEMONS=0 in this environment or
+  // "daemons": false in pair.jsonc keeps all of it off whatever the server says. What it switches is bound
+  // further down (onDaemonsChanged, onZooRead), and it starts once all of that is wired.
+  let onDaemonsChanged: (on: boolean) => void = () => {}
+  let onZooRead: (read: ZooRead) => void = () => {}
+  const daemonsKilled = localKillSwitch({ file: pairConfigPath() })
+  const daemons = new DaemonsSwitch({
+    read: () => proxyBackend('GET', '/api/zoo'),
+    signedIn: () => readAuthSession() !== null,
+    killed: daemonsKilled,
+    onChange: (on) => onDaemonsChanged(on),
+    onRead: (read) => onZooRead(read),
+  })
+  /** The hook server's `/api/zoo` passthrough for windows: DAEMONS_OFF when killed here, else the backend's answer. */
+  const zooProxy = zooPassthrough({ proxy: (method, path, body) => proxyBackend(method, path, body), killed: daemonsKilled, observe: (read) => daemons.observe(read) })
   // THE PAIR SENSOR (pair/sensor.ts, daemons/BRAIN.md). Every daemon runs one for its own harnesses:
   // no model, just turns, questions and recaps, journaled for whichever computer you sit down at. Off
-  // until the account's zoo has a paired daemon — see refreshPairFromZoo, bound once the backend proxy
-  // exists. `onPairToggled` is bound the same way, to things declared further down.
+  // until daemons are on and the account's zoo has a paired daemon — see onZooRead, bound once the backend
+  // proxy exists. `onPairToggled` is bound the same way, to things declared further down.
   let onPairToggled: (on: boolean) => void = () => {}
-  let refreshPairFromZoo: () => void = () => {}
   /** The thinking half (pair/brain.ts), built once the relay pool exists. */
   let pairBrain: PairBrain | null = null
   /**
@@ -1860,8 +1878,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     home: homedir(),
     onSignal: (signal) => pairLearner?.signal(signal),
   })
-  /** The approved lesson skills a harness session in `workspace` loads (the Store runtime path). Never throws. */
+  /** The approved lesson skills a harness session in `workspace` loads (the Store runtime path). Never throws.
+   *  None while daemons are off: a launch is exactly what it was before them. */
   const lessonsFor = (workspace: string) => {
+    if (!daemons.on()) return null
     try { return runtimeLessons(lessonStore, workspace) } catch { return null }
   }
   const syncSession = (s: RegisteredSession, opts: { device?: boolean } = {}): void => {
@@ -2116,8 +2136,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // While an attempt is running AND within its ceiling, the RPCs that need the grid name wait
   // briefly on it; otherwise they read the name directly.
   backend.gridReadyProbe = () => gridAttach.probe()
-  // Re-read the zoo on every reconnect as well: a `zoo_changed` sent while the link was down is lost.
-  onBackendConnected = () => { gridAttach.run(); refreshPairFromZoo() }
+  // Re-read the zoo on every reconnect as well, while daemons are on: a `zoo_changed` sent while the link
+  // was down is lost. Off, a reconnect asks nothing (lib/daemonsSwitch.ts).
+  onBackendConnected = () => { gridAttach.run(); daemons.connected() }
   gridAttach.run()
 
   /**
@@ -2997,16 +3018,24 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     away: () => zooPresence.away(),
   })
+  // Both only while daemons are on; a 404 on their POST is a server with daemons off, which the switch learns.
+  const postZooOps = async (body: unknown): Promise<ZooRead> => {
+    const answer = await proxyBackend('POST', '/api/zoo/ops', body)
+    daemons.observe(answer)
+    return answer
+  }
   const zooTurnReporter = new ZooTurnReporter({
-    post: (body) => proxyBackend('POST', '/api/zoo/ops', body),
+    post: (body) => postZooOps(body),
     signedIn: () => readAuthSession() !== null,
+    enabled: () => daemons.on(),
     machineId: () => backend.machineId,
   })
   // Bond for a lesson the person approved (lib/zooLessons.ts, the learner's `credit`): `zoo.lesson` through the
   // same signed-in path. A guest's approval is only journaled (`learned`).
   const zooLessonReporter = new ZooLessonReporter({
-    post: (body) => proxyBackend('POST', '/api/zoo/ops', body),
+    post: (body) => postZooOps(body),
     signedIn: () => readAuthSession() !== null,
+    enabled: () => daemons.on(),
   })
 
   emitSessionEvents = (sessionId: string, events: ReturnType<CursorNormalizer['ingest']>, opts?: { resumed?: boolean; replay?: boolean }): void => {
@@ -3046,7 +3075,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         pairSensor.turnEnded(agentId, { replay: frame.replay === true, subagent: frame.subagent === true, aborted: event.payload.aborted === true })
       }
       if (event.type === 'turn_started') {
-        zooTurnCounter.started(sessionId, { replay: !!(opts?.resumed || opts?.replay) })
+        if (daemons.on()) zooTurnCounter.started(sessionId, { replay: !!(opts?.resumed || opts?.replay) })
         turnStartedAt.set(sessionId, Date.now())
         console.log(`[turn] ${sid(sessionId)} started · engine=${registry.bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
         input.onTurnStarted(agentIdFor(sessionId), event.payload.userMessage)
@@ -3091,8 +3120,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       lessonSignals.ingest({ agentId: learnFrom.agentId, sessionId, engine: learnFrom.engine, cwd: learnFrom.cwd ?? null }, events,
         { replay: !!(opts?.resumed || opts?.replay) })
     }
-    // A session reading a lesson is its use (the curator's clock), pairing or not; never a replay or a terminal.
-    if (learnFrom && !isTerminalEngine(learnFrom.engine)) {
+    // A session reading a lesson is its use (the curator's clock), pairing or not — daemons on — never a
+    // replay or a terminal.
+    if (learnFrom && daemons.on() && !isTerminalEngine(learnFrom.engine)) {
       lessonUsage.ingest({ cwd: learnFrom.cwd ?? null }, events, { replay: !!(opts?.resumed || opts?.replay) })
     }
     mirror.ingest(events, sessionId)
@@ -3687,11 +3717,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     return { status: res.status, body: json }
   }
 
-  // PAIRING IS ON only while the account's zoo has a paired daemon (daemons/README.md, "The zoo"). The zoo
-  // is account state, read through the same proxy the window uses and re-read on `zoo_changed` and on
-  // every reconnect. Signed out there is no account zoo: a guest's window keeps its own and says which
-  // daemon is paired in `daemon_presence` (pair/brain.ts), which is what `guestPair` holds. A backend that
-  // cannot be reached keeps the last answer rather than switching pairing off on a blip.
+  // PAIRING IS ON only while daemons are on (lib/daemonsSwitch.ts) and the account's zoo has a paired daemon
+  // (daemons/README.md, "The zoo"). The zoo is account state, read through the same proxy the window uses —
+  // the switch's probe is that read — and re-read on `zoo_changed` and on every reconnect. Signed out there
+  // is no account zoo: a guest's window keeps its own and says which daemon is paired in `daemon_presence`
+  // (pair/brain.ts), which is what `guestPair` holds. A backend that cannot be reached keeps the last answer
+  // rather than switching pairing off on a blip.
   let zooPair: { known: boolean; pair: string | null; autonomy: Autonomy; consent: boolean } = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY, consent: false }
   let guestPair: string | null = null
   let guestAutonomy: Autonomy | null = null
@@ -3700,29 +3731,31 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Nothing is watched until the person said yes on the first-day consent screen (zoo `consent.watching`,
   // or a guest window's `consent`): until then the sensor stays off and the dial stays at watch.
   const applyPair = (): void => {
+    // Daemons off: nothing is paired, and the dial is left as it was (nothing reads it).
+    if (!daemons.on()) { pairSensor.setPair(null); return }
     const pairing = pairingFrom(zooPair, { pair: guestPair, autonomy: guestAutonomy, consent: guestConsent }, DEFAULT_AUTONOMY)
     // A request: a step above `suggest` waits for the person's yes at a window (pair/gate.ts).
     pairGate.setRequested(pairing.autonomy, { keepConfirmed: !pairing.consented })
     pairSensor.setPair(pairing.pair)
   }
-  refreshPairFromZoo = () => {
-    void proxyBackend('GET', '/api/zoo').then((result) => {
-      if (result.status === 200) {
-        const zoo = (result.body.data as { zoo?: { pair?: unknown; autonomy?: unknown; consent?: { watching?: unknown } | null } } | undefined)?.zoo
-        const pair = zoo?.pair
-        zooPair = { known: true, pair: isRosterDaemon(pair) ? pair : null, autonomy: isAutonomy(zoo?.autonomy) ? zoo.autonomy : DEFAULT_AUTONOMY, consent: zoo?.consent?.watching === true }
-      } else if (result.status === 401) {
-        zooPair = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY, consent: false }
-      }
-      applyPair()
-    }).catch(() => {})
+  onZooRead = (result) => {
+    if (result.status === 200) {
+      const zoo = (result.body.data as { zoo?: { pair?: unknown; autonomy?: unknown; consent?: { watching?: unknown } | null } } | undefined)?.zoo
+      const pair = zoo?.pair
+      zooPair = { known: true, pair: isRosterDaemon(pair) ? pair : null, autonomy: isAutonomy(zoo?.autonomy) ? zoo.autonomy : DEFAULT_AUTONOMY, consent: zoo?.consent?.watching === true }
+    } else if (result.status === 401) {
+      zooPair = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY, consent: false }
+    }
+    applyPair()
   }
-  backend.onZooChanged = () => refreshPairFromZoo()
+  // Only a server with the zoo on sends it: the switch asks at once, whatever it had cached.
+  backend.onZooChanged = () => daemons.zooChanged()
   backend.pairService = pairSensor
+  // `harness pair` and the MCP server: DAEMONS_OFF while off, before any verb runs.
+  backend.daemonsOn = () => daemons.on()
   // An open question the watcher already announced before pairing came on is announced again, so the
   // sensor hears it too (clients dedupe a repeated push by requestId).
   onPairToggled = (on) => { if (on) questionWatcher.reset(); pairBrain?.refresh() }
-  refreshPairFromZoo()
 
   // Built HERE rather than beside the cable stack that also uses it (further down), because the hook
   // server starts long before that point and agent restore can sit between the two. A cache bound late
@@ -4141,6 +4174,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // logout restarts the daemon, and the window between the file changing and the restart landing
       // is exactly when the app asks — the answer it needs is the file's.
       signedIn: readAuthSession() !== null,
+      // Whether this daemon runs its daemons (lib/daemonsSwitch.ts): the server's answer and the kill switch.
+      daemons: (({ on, server, killed }) => ({ on, server, killed: killed !== null }))(daemons.state()),
       version: VERSION,
       localWs: {
         path: LOCAL_WS_PATH,
@@ -4226,8 +4261,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The account's zoo — see backend routes/zoo.ts. Same shape as the desk: read and ops proxied,
     // everyone else's changes heard as `zoo_changed`. Signed out, proxyBackend answers 401 NOT_SIGNED_IN
     // and a guest keeps its zoo locally until it seeds this one.
-    onZooRead: () => proxyBackend('GET', '/api/zoo'),
-    onZooOps: (body) => proxyBackend('POST', '/api/zoo/ops', body),
+    // Killed on this computer (lib/daemonsSwitch.ts): a 404 DAEMONS_OFF without asking, which a window reads
+    // exactly as the server's own 404 — daemons hidden. Otherwise verbatim, and the switch learns from it.
+    onZooRead: () => zooProxy.read(),
+    onZooOps: (body) => zooProxy.ops(body),
     onStore: (method, path, body) => proxyBackend(method, path, body),
   }, { socketPath: localSocketPath(env.ADAPTER_DATA_DIR, env.PORT) })
   // Claim the pid file for OURSELVES, and only now that the control port is bound. It used to be
@@ -4436,7 +4473,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     now: Date.now,
   })
   pairTalk = (text) => pairHarness.talk(text)
-  pairHarnessActivity = (agentId) => pairHarness.activity(agentId)
+  pairHarnessActivity = (agentId) => { if (daemons.on()) pairHarness.activity(agentId) }
   // THE LEARNER (pair/learn/propose.ts): distills what this machine noticed while nothing is working — a model
   // only with pair.jsonc "model": true — and, when you are at this computer, proposes one lesson at a time.
   const lessonProjects = (): string[] =>
@@ -4488,7 +4525,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     now: Date.now,
     log: (line) => console.log(line),
   })
-  setInterval(() => { void pairLearner?.tick().catch((err) => console.warn(`[learn] tick failed: ${err instanceof Error ? err.message : err}`)) }, 60_000).unref()
   pairBrain = new PairBrain({
     pairing: { enabled: () => pairSensor.enabled(), pairedDaemon: () => pairSensor.pairedDaemon() },
     fleet: pairFleet,
@@ -4515,14 +4551,40 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     talk: (text) => pairTalk(text),
     now: Date.now,
   })
-  // pair.jsonc is read when something needs it, and on this tick: a change asks for the person's yes soon.
-  pairRulesConfig()
-  setInterval(() => { pairRulesConfig() }, 30_000).unref()
+  // DAEMONS ON AND OFF (lib/daemonsSwitch.ts): the only timers the pair keeps whatever happens — the learner's
+  // tick and the pair.jsonc re-read — run only while daemons are on. Off takes everything back to idle: no
+  // pairing (the sensor, brain and learner stop with it), nothing waiting to be reported, the pair harness
+  // paused if it was live (its conversation kept).
+  let learnTick: ReturnType<typeof setInterval> | null = null
+  let pairConfigTick: ReturnType<typeof setInterval> | null = null
+  onDaemonsChanged = (on) => {
+    if (on) {
+      // pair.jsonc is read when something needs it, and on this tick: a "daemons": false in it switches
+      // everything off within the tick (before the rest of the file is read), and any other change asks for
+      // the person's yes soon.
+      pairRulesConfig()
+      learnTick ??= setInterval(() => { void pairLearner?.tick().catch((err) => console.warn(`[learn] tick failed: ${err instanceof Error ? err.message : err}`)) }, 60_000)
+      learnTick.unref?.()
+      pairConfigTick ??= setInterval(() => { daemons.recheck(); if (daemons.on()) pairRulesConfig() }, 30_000)
+      pairConfigTick.unref?.()
+    } else {
+      if (learnTick) { clearInterval(learnTick); learnTick = null }
+      if (pairConfigTick) { clearInterval(pairConfigTick); pairConfigTick = null }
+      zooTurnCounter.clear()
+      zooTurnReporter.clear()
+      zooLessonReporter.clear()
+      void pairHarness.off().catch(() => {})
+    }
+    applyPair()
+    pairBrain?.refresh()
+  }
   backend.onLocalClient = (connId, attached) => {
     if (attached) { zooPresence.attached(connId); pairBrain?.clientAttached(connId) }
     else { zooPresence.detached(connId); pairBrain?.clientDetached(connId) }
   }
   for (const connId of backend.localClientIds()) { zooPresence.attached(connId); pairBrain.clientAttached(connId) }
+  // Everything the switch turns on is wired: the one probe (or, signed out, nothing until a guest window asks).
+  daemons.start()
   // Spoken tasks go to the WINDOW to be routed, not to the copy of the router in this process.
   //
   // Built here because both ends need it: the local socket hands it the window's replies, and the cable
@@ -4755,23 +4817,35 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onVoiceRouteReply: (voiceId, reply) => windowRouter.reply(voiceId, reply),
     // A key from a window: it counts only if this window was shown the line (pair/shown.ts, BRAIN.md Security),
     // and a lesson's only if it is the person's too (the brain's `lessonKey`).
+    // While daemons are off (lib/daemonsSwitch.ts) every one of these is answered DAEMONS_OFF — a result the
+    // window reads as "hide daemons", never an error that breaks it — and nothing else happens.
     onDaemonAct: (connId, payload, reply) => {
-      if (!pairBrain) { reply({ type: 'daemon_act_result', payload: { requestId: payload.requestId, id: payload.id, ok: false, error: 'UNSUPPORTED' } }); return }
-      void pairBrain.onKey(connId, payload, (frame) => { reply(frame) })
+      const off = !daemons.on() ? DAEMONS_OFF : !pairBrain ? 'UNSUPPORTED' : null
+      if (off) { reply({ type: 'daemon_act_result', payload: { requestId: payload.requestId, id: payload.id, ok: false, error: off, ...(off === DAEMONS_OFF ? { detail: DAEMONS_OFF_DETAIL } : {}) } }); return }
+      void pairBrain!.onKey(connId, payload, (frame) => { reply(frame) })
     },
-    onDaemonShown: (connId, payload) => pairBrain?.onShown(connId, payload),
+    onDaemonShown: (connId, payload) => { if (daemons.on()) pairBrain?.onShown(connId, payload) },
     // The person's yes (or no) to a setting the gate holds back, from a window that showed it.
     onDaemonConfirm: (connId, payload, reply) => {
-      if (!pairBrain) { reply({ type: 'daemon_confirm_result', payload: { requestId: payload.requestId, kind: payload.kind, nonce: payload.nonce, ok: false, error: 'UNSUPPORTED' } }); return }
-      pairBrain.onConfirm(connId, payload, (frame) => { reply(frame) })
+      const off = !daemons.on() ? DAEMONS_OFF : !pairBrain ? 'UNSUPPORTED' : null
+      if (off) { reply({ type: 'daemon_confirm_result', payload: { requestId: payload.requestId, kind: payload.kind, nonce: payload.nonce, ok: false, error: off, ...(off === DAEMONS_OFF ? { detail: DAEMONS_OFF_DETAIL } : {}) } }); return }
+      pairBrain!.onConfirm(connId, payload, (frame) => { reply(frame) })
     },
     // The person talking to their daemon, from a window: forwarded to the pair harness (which starts or
     // wakes for it), rate-limited, with what it costs.
     onDaemonTalk: (connId, payload, reply) => {
-      if (!pairBrain) { reply({ type: 'daemon_talk_result', payload: { requestId: payload.requestId, ok: false, error: 'UNSUPPORTED' } }); return }
-      void pairBrain.onTalk(connId, payload, (frame) => { reply(frame) })
+      const off = !daemons.on() ? DAEMONS_OFF : !pairBrain ? 'UNSUPPORTED' : null
+      if (off) { reply({ type: 'daemon_talk_result', payload: { requestId: payload.requestId, ok: false, error: off, ...(off === DAEMONS_OFF ? { detail: DAEMONS_OFF_DETAIL } : {}) } }); return }
+      void pairBrain!.onTalk(connId, payload, (frame) => { reply(frame) })
     },
-    onDaemonPresence: (connId, payload, meta) => { zooPresence.presence(connId, payload); pairBrain?.onPresence(connId, payload, meta) },
+    // Presence: whether the person is here (the zoo's away turns) always; the rest only while daemons are
+    // on. Signed out, a window bound to this machine saying its guest zoo has the person's consent is what
+    // turns them on (guests keep working as before, but only when a window asks).
+    onDaemonPresence: (connId, payload, meta) => {
+      zooPresence.presence(connId, payload)
+      if (meta.ui && 'consent' in payload) daemons.guestConsent(payload.consent === true)
+      if (daemons.on()) pairBrain?.onPresence(connId, payload, meta)
+    },
     machineId: backend.machineId,
     backend,
     relayPool,
@@ -6311,6 +6385,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await dshVerdicts.stop()
     autonomousDeviceDirect?.stop()
     // The last minute's turns, best effort: an update restart should not lose them, nor wait on them.
+    daemons.stop()
     zooTurnReporter.stop()
     zooLessonReporter.stop()
     await Promise.race([Promise.all([zooTurnReporter.flush(), zooLessonReporter.flush()]), new Promise((resolve) => setTimeout(resolve, 2000).unref())])

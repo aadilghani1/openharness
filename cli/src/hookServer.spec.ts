@@ -251,6 +251,17 @@ describe('the zoo proxy', () => {
     expect(write.status).toBe(401)
   })
 
+  it('passes a daemons-off answer through as it came: the window hides daemons on the 404', async () => {
+    const off = { status: 404, body: { success: false, error: { code: 'DAEMONS_OFF', message: 'Daemons are off for this account or on this computer.' } } }
+    const { base } = await start({ onZooRead: async () => off, onZooOps: async () => off })
+    const read = await fetch(`${base}/api/zoo`)
+    expect(read.status).toBe(404)
+    expect(await read.json()).toEqual(off.body)
+    const write = await fetch(`${base}/api/zoo/ops`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"ops":[{"op":"zoo.habit","key":"turn"}]}' })
+    expect(write.status).toBe(404)
+    expect(await write.json()).toEqual(off.body)
+  })
+
   it('answers 503 on a daemon built without the zoo', async () => {
     const { base } = await start()
     expect((await fetch(`${base}/api/zoo`)).status).toBe(503)
