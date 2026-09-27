@@ -963,17 +963,7 @@ pub fn source_text(app: &mut App, file: &str, text: &str, parse_only: bool, verb
 /// The config at start, as tmux reads it: ~/.tmux.conf and the XDG ones that exist (or -f's);
 /// a missing one is no error. Its commands then run in order.
 pub fn load_config(app: &mut App) -> Vec<String> {
-    let files: Vec<String> = match std::env::var("HARNESS_TUI_TMUX_CONF") {
-        Ok(v) if v == "off" => Vec::new(),
-        Ok(v) => vec![v],
-        Err(_) => {
-            let home = std::env::var("HOME").unwrap_or_default();
-            let xdg = std::env::var("XDG_CONFIG_HOME").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| format!("{home}/.config"));
-            let mut all = vec!["/etc/tmux.conf".to_string(), format!("{home}/.tmux.conf"), format!("{xdg}/tmux/tmux.conf")];
-            if xdg != format!("{home}/.config") { all.push(format!("{home}/.config/tmux/tmux.conf")) }
-            all.into_iter().filter(|f| std::path::Path::new(f).exists()).collect()
-        }
-    };
+    let files = crate::tmuxconf::files();
     let (mut queue, mut read) = (Queue::new(), Vec::new());
     for file in files {
         match source(app, &file, false, false) {

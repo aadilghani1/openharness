@@ -215,7 +215,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         let settings = tmuxconf::load(&mut km);
         if config.prefix_set { km.prefix = config.prefix }
         let mut text = String::new();
-        if let Some(p) = &settings.path { text += &format!("read {}\n", p.display()) }
+        for p in &settings.paths { text += &format!("read {}\n", p.display()) }
         text += &format!("prefix {}\n\n", keys::name(&km.prefix));
         for b in &km.prefix_table { text += &format!("bind-key {}{:<8} {}\n", if b.repeat { "-r " } else { "   " }, keys::name(&b.chord), b.command) }
         for b in &km.root_table { text += &format!("bind-key -n {:<8} {}\n", keys::name(&b.chord), b.command) }

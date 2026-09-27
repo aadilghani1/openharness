@@ -76,15 +76,23 @@ pub struct Settings {
     pub display_panes_ms: Option<u64>,
     pub look: Look,
     pub problems: Vec<String>,
-    pub path: Option<PathBuf>,
+    pub paths: Vec<PathBuf>,
 }
 
-pub fn find() -> Option<PathBuf> {
-    if std::env::var("HARNESS_TUI_TMUX_CONF").as_deref() == Ok("off") { return None }
-    if let Ok(p) = std::env::var("HARNESS_TUI_TMUX_CONF") { return Some(PathBuf::from(p)) }
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    let xdg = std::env::var("XDG_CONFIG_HOME").ok().filter(|s| !s.is_empty()).map(PathBuf::from).unwrap_or_else(|| home.join(".config"));
-    [home.join(".tmux.conf"), xdg.join("tmux").join("tmux.conf")].into_iter().find(|p| p.exists())
+/// The config files tmux reads (TMUX_CONF: /etc/tmux.conf, ~/.tmux.conf, $XDG_CONFIG_HOME's and
+/// ~/.config's tmux/tmux.conf), every one there is, in order — or -f's alone.
+pub fn files() -> Vec<String> {
+    match std::env::var("HARNESS_TUI_TMUX_CONF") {
+        Ok(v) if v == "off" => Vec::new(),
+        Ok(v) => vec![v],
+        Err(_) => {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let xdg = std::env::var("XDG_CONFIG_HOME").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| format!("{home}/.config"));
+            let mut all = vec!["/etc/tmux.conf".to_string(), format!("{home}/.tmux.conf"), format!("{xdg}/tmux/tmux.conf")];
+            if xdg != format!("{home}/.config") { all.push(format!("{home}/.config/tmux/tmux.conf")) }
+            all.into_iter().filter(|f| std::path::Path::new(f).exists()).collect()
+        }
+    }
 }
 
 /// A tmux colour: a name, `colourN`/`colorN`, `#rrggbb`, `default`.
@@ -293,10 +301,11 @@ pub fn shell_true(cond: &str) -> bool {
 
 pub fn load(keymap: &mut Keymap) -> Settings {
     let mut settings = Settings::default();
-    let Some(path) = find() else { return settings };
-    let Ok(text) = std::fs::read_to_string(&path) else { return settings };
-    settings.path = Some(path.clone());
-    apply(&text, keymap, &mut settings);
+    for path in files() {
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        settings.paths.push(PathBuf::from(&path));
+        apply(&text, keymap, &mut settings);
+    }
     settings
 }
 
