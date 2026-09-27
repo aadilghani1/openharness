@@ -48,8 +48,8 @@ use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange, EnableMouseCapture,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-use crossterm::terminal::{self, BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::{cursor, execute, queue};
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::{cursor, execute};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
@@ -116,7 +116,13 @@ fn main() -> io::Result<()> {
     let config = config::load();
     // SAFETY: once, before any other thread, with a valid C string.
     unsafe { libc::setlocale(libc::LC_TIME, c"".as_ptr()); }
-    tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?.block_on(run(config))
+    // A terminal hn cannot use: tmux's words for it, not a program's error dump.
+    if let Err(e) = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?.block_on(run(config)) {
+        let _ = crossterm::terminal::disable_raw_mode();
+        eprintln!("open terminal failed: {e}");
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 /// hn with no terminal (--headless): tmux's server when no client is attached. It keeps the
@@ -427,10 +433,9 @@ async fn run(config: config::Config) -> io::Result<()> {
         app.flush_acks();
         if refill && matches!(app.modal, Some(modal::Modal::Picker { .. })) { input::refill(&mut app) }
         if need_draw && last_draw.elapsed() >= frame_budget {
-            let backend = term.backend_mut();
-            queue!(backend, BeginSynchronizedUpdate)?;
+            // (The backend makes each frame's changes one synchronized update, and writes nothing
+            // for a frame that changed nothing.)
             term.draw(|frame| ui::draw(frame, &mut app))?;
-            execute!(term.backend_mut(), EndSynchronizedUpdate)?;
             // The focused program's cursor shape (vim's block and bar), passed through as tmux does.
             let shape = app.focused().filter(|_| app.modal.is_none()).and_then(|f| app.panes.get(&f)).map(|p| p.cursor_style()).unwrap_or(cursor::SetCursorStyle::DefaultUserShape);
             let code = format!("{shape:?}");

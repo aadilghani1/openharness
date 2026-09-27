@@ -2337,6 +2337,12 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
                 let mut s = String::with_capacity(8);
                 s.push(cell.c);
                 s.extend(extra.iter());
+                // A narrow character with VS16 (⚠️ ✔️ ❤️): one cell in the pane's grid, as the
+                // program's terminal placed what follows — drawn as its one-cell self, so the
+                // cell after it (a space, a pane's border) is not taken by a two-cell emoji.
+                if s.contains('\u{FE0F}') && unicode_width::UnicodeWidthChar::width(cell.c) == Some(1) && !cell.flags.contains(Flags::WIDE_CHAR) {
+                    s.retain(|c| c != '\u{FE0F}');
+                }
                 target.set_symbol(&s).set_style(style);
             }
             _ => { target.set_char(cell.c).set_style(style); }

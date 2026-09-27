@@ -14,7 +14,16 @@ use ratatui::style::{Color, Modifier};
 
 /// [shadow]: every cell as last written, row by row — so a row whose width the terminal may
 /// count otherwise can be written again whole.
-pub struct TmuxBackend<W: Write> { inner: CrosstermBackend<W>, shadow: Vec<Vec<Cell>> }
+pub struct TmuxBackend<W: Write> {
+    inner: CrosstermBackend<W>,
+    shadow: Vec<Vec<Cell>>,
+    /// A frame's changes are one synchronized update (?2026), closed at its flush.
+    syncing: bool,
+    /// The cursor as last written: a frame that changes nothing writes nothing (an idle hn is
+    /// silent, as tmux is — a terminal's or an outer tmux's activity mark stays clear).
+    cursor_at: Option<Position>,
+    cursor_shown: Option<bool>,
+}
 
 /// A cluster whose width terminals may count otherwise than hn does: several code points (a
 /// base and its marks, ZWJ emoji, a keycap, VS16), or a script whose vowels some count as
@@ -112,7 +121,7 @@ pub fn outer_features(features: &[String]) -> (bool, bool) {
 }
 
 impl<W: Write> TmuxBackend<W> {
-    pub fn new(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new() } }
+    pub fn new(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), syncing: false, cursor_at: None, cursor_shown: None } }
 
     fn row_risky(&self, y: u16) -> bool { self.shadow.get(y as usize).map(|r| r.iter().any(|c| risky(c.symbol()))).unwrap_or(false) }
 
@@ -193,6 +202,11 @@ impl<W: Write> Backend for TmuxBackend<W> {
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
         let cells: Vec<(u16, u16, Cell)> = content.map(|(x, y, c)| (x, y, c.clone())).collect();
+        // Nothing changed: nothing written.
+        if cells.is_empty() { return Ok(()) }
+        if !self.syncing { self.inner.write_all(b"\x1b[?2026h")?; self.syncing = true }
+        // (The cells move the terminal's cursor: where it is must be said again after them.)
+        self.cursor_at = None;
         // A row that holds (or held) a cluster the terminal may count otherwise is written again
         // whole from its first column, as fzf writes a line: a cell-by-cell update there would
         // leave a stale character where the two counts part (a Thai vowel beside a keycap).
@@ -234,16 +248,26 @@ impl<W: Write> Backend for TmuxBackend<W> {
         w.write_all(b"\x1b[39m\x1b[49m\x1b[59m\x1b[0m")
     }
 
-    fn hide_cursor(&mut self) -> io::Result<()> { self.inner.hide_cursor() }
-    fn show_cursor(&mut self) -> io::Result<()> { self.inner.show_cursor() }
-    fn get_cursor_position(&mut self) -> io::Result<Position> { self.inner.get_cursor_position() }
-    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> { self.inner.set_cursor_position(position) }
-    fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.inner.clear() }
+    fn hide_cursor(&mut self) -> io::Result<()> { if self.cursor_shown == Some(false) { return Ok(()) } self.cursor_shown = Some(false); self.inner.hide_cursor() }
+    fn show_cursor(&mut self) -> io::Result<()> { if self.cursor_shown == Some(true) { return Ok(()) } self.cursor_shown = Some(true); self.inner.show_cursor() }
+    // (Never asked of the terminal — \e[6n and a wait for its answer: hn draws the whole screen,
+    // and a terminal slow to answer, or one that never does, must not stop it starting.)
+    fn get_cursor_position(&mut self) -> io::Result<Position> { Ok(Position::ORIGIN) }
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+        let p = position.into();
+        if self.cursor_at == Some(p) { return Ok(()) }
+        self.cursor_at = Some(p);
+        self.inner.set_cursor_position(p)
+    }
+    fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.cursor_at = None; self.cursor_shown = None; self.inner.clear() }
     fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> { if matches!(clear_type, ClearType::All) { self.shadow.clear() } self.inner.clear_region(clear_type) }
     fn append_lines(&mut self, n: u16) -> io::Result<()> { self.inner.append_lines(n) }
     fn size(&self) -> io::Result<Size> { self.inner.size() }
     fn window_size(&mut self) -> io::Result<WindowSize> { self.inner.window_size() }
-    fn flush(&mut self) -> io::Result<()> { Backend::flush(&mut self.inner) }
+    fn flush(&mut self) -> io::Result<()> {
+        if std::mem::take(&mut self.syncing) { self.inner.write_all(b"\x1b[?2026l")? }
+        Backend::flush(&mut self.inner)
+    }
 }
 
 #[cfg(test)]

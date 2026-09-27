@@ -1415,13 +1415,15 @@ impl App {
             let belled = std::mem::replace(&mut pane.bell, false);
             let copied = std::mem::take(&mut pane.copied);
             let id = pane.id;
-            // set-clipboard (input.c's OSC 52): external passes it to the terminal's clipboard,
-            // on a paste buffer too, off neither.
+            // set-clipboard (input.c's input_osc_52): a program's OSC 52 only with `on` — a paste
+            // buffer, and the terminal's clipboard; `external` (the default) is for hn's own copies
+            // alone, so a pane (a harness on another machine) never sets your clipboard unasked.
             for text in copied {
-                let how = self.options.get("set-clipboard", "", None).unwrap_or_default();
-                if how == "off" { continue }
+                if self.options.get("set-clipboard", "", None).as_deref() != Some("on") { continue }
                 crate::clipboard::store(&text);
-                if how == "on" { let limit = self.buffer_limit(); self.paste.add(text, limit); self.server_dirty = true }
+                let limit = self.buffer_limit();
+                self.paste.add(text, limit);
+                self.server_dirty = true;
             }
             // alerts.c: output is activity; a BEL is a bell.
             if let Some(t) = self.tabs.iter().position(|t| t.panes().contains(&id)) {
