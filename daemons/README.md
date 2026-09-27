@@ -560,7 +560,7 @@ its SVG runs down the daemon's gradient, a row at a time.
 ```
 node daemons/tools/card.mjs tim --version 2.0 --serial 42          # a card as text
 node daemons/tools/card.mjs tim --version 2.0 --shiny --svg > tim.svg   # a shiny card as SVG
-node daemons/tools/card.mjs --shelf 'tim*x2,vim,grue' --svg > zoo.svg   # a shelf: shiny tim, two of it
+node daemons/tools/card.mjs --shelf 'tim*x2,yak,beastie' --svg > zoo.svg   # a shelf: shiny tim, two of it
 node --test daemons/tools/card.test.mjs
 ```
 
