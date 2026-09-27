@@ -270,7 +270,7 @@ pub fn fnmatch(pattern: &str, text: &str) -> bool {
 
 /// cmd_find_get_session: this session by `$0`, its name, the start of it, or a pattern.
 fn session_matches(app: &App, s: &str, exact: bool) -> bool {
-    if let Some(id) = s.strip_prefix('$') { return id == "0" }
+    if let Some(id) = s.strip_prefix('$') { return id.parse::<u32>().ok() == Some(app.session_id) }
     let name = app.session_name();
     if s == name { return true }
     if exact { return false }
@@ -282,7 +282,7 @@ fn session_matches(app: &App, s: &str, exact: bool) -> bool {
 fn window_in_session(app: &App, window: &str, exact: bool, index_ok: bool, f: &mut Found) -> bool {
     let order = by_index(app);
     if let Some(id) = window.strip_prefix('@') {
-        let Some(w) = id.parse::<u64>().ok().and_then(|n| app.tabs.iter().position(|t| t.wid == n)) else { return false };
+        let Some(w) = id.parse::<u64>().ok().and_then(|n| app.tabs.iter().position(|t| t.is_wid(n))) else { return false };
         f.window = Some(w); f.idx = Some(app.win_num(w));
         return true;
     }

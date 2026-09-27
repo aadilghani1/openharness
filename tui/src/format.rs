@@ -959,7 +959,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_in_mode" => pane.map(|p| p.mode_count().to_string()).unwrap_or_else(|| "0".into()),
         "session_windows" => app.tabs.len().to_string(),
         // The session in front is this client's; one a command reaches for a moment is not.
-        "session_attached" => if app.swap_back.is_some() { "0".into() } else { "1".into() },
+        // The client's own session is attached to it (hn with no terminal is no client).
+        "session_attached" => if app.swap_back.is_some() || app.headless { "0".into() } else { "1".into() },
         "client_width" => app.size.0.to_string(),
         "client_height" => app.size.1.to_string(),
         "window_width" => app.body().width.to_string(),
@@ -987,7 +988,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "client_user" | "user" => { let pw = unsafe { libc::getpwuid(libc::getuid()) }; if pw.is_null() { String::new() } else { unsafe { std::ffi::CStr::from_ptr((*pw).pw_name) }.to_string_lossy().into_owned() } }
         "pane_marked" => (focus.is_some() && app.marked == focus).then_some("1").unwrap_or("0").into(),
         "pane_marked_set" => app.marked.is_some().then_some("1").unwrap_or("0").into(),
-        "window_id" => tab.map(|t| format!("@{}", t.wid)).unwrap_or_default(),
+        "window_id" => tab.map(|t| format!("@{}", t.wid())).unwrap_or_default(),
         "pane_synchronized" => tab.map(|t| t.sync).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         // The tmux level hn speaks (version-gated configs ask); hn's own is #{hn_version}.
         "version" => crate::tmuxconf::TMUX_VERSION.into(),
@@ -1053,9 +1054,10 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // colour, needs you reversed and bold, idle dim.
         "pane_agent_mark" => pane.and_then(|p| app.pane_state(p.id)).map(|s| agent_mark(s, app.tick)).unwrap_or_default(),
         // Where the harness works, as zsh's robbyrussell prompt writes it: `project git:(branch)`,
-        // else `git:(branch)`, else the branch — the longest that fits beside the pane's title.
+        // else `git:(branch)`, else the branch — the longest that fits beside the pane's title (a
+        // folder with no git: its name).
         "pane_where" => pane.zip(agent).and_then(|(p, a)| {
-            if a.branch.is_empty() { return None }
+            if a.branch.is_empty() && a.project.is_empty() { return None }
             let room = content_rect(app, window, p.id)?.width.saturating_sub(4) as usize;
             let width = |s: &str| unicode_width::UnicodeWidthStr::width(s);
             let mut left = 1 + width(&pane_title(app, window, p.id)) + 1;
@@ -1065,6 +1067,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             // A pane on another machine says which (scp's way, as the status line: gpu-box:ml-lab).
             let far = (p.machine_id != app.fleet.local_id && !a.project.is_empty()).then(|| format!("{}:", app.fleet.machine_name(&p.machine_id))).filter(|m| m.len() > 1);
             let far_project = far.as_ref().map(|m| format!("{m}{}", a.project));
+            // A folder that is not a git repository: its name alone (and the machine's).
+            if a.branch.is_empty() { return [far_project, Some(a.project.clone())].into_iter().flatten().find(|c| room >= left + width(c) + 2 + 4) }
             [far_project.as_ref().filter(|_| !pr.is_empty()).map(|fp| format!("{fp} git:({}){pr}", a.branch)), far_project.as_ref().map(|fp| format!("{fp} git:({})", a.branch)),
                 (!a.project.is_empty() && !pr.is_empty()).then(|| format!("{} git:({}){pr}", a.project, a.branch)), (!a.project.is_empty()).then(|| format!("{} git:({})", a.project, a.branch)),
                 (!pr.is_empty()).then(|| format!("git:({}){pr}", a.branch)), Some(format!("git:({})", a.branch)), Some(a.branch.clone())]
@@ -1117,7 +1121,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         | "client_readonly" => "0".into(),
         "pane_pipe" => pane.map(|p| app.pipes.contains_key(&p.id)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "server_sessions" => app.session_list().len().to_string(),
-        "session_attached_list" | "client_utf8" => "1".into(),
+        "client_utf8" => "1".into(),
+        "session_attached_list" => if app.swap_back.is_some() || app.headless { String::new() } else { crate::app::tty_name() },
         "window_start_flag" => (window == 0).then_some("1").unwrap_or("0").into(),
         "window_end_flag" => (window.checked_add(1) == Some(app.tabs.len())).then_some("1").unwrap_or("0").into(),
         "client_termname" => std::env::var("TERM").unwrap_or_default(),
@@ -1165,7 +1170,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "session_marked" => "0".into(),
         "active_window_index" => app.win_num(app.active).to_string(),
         "last_window_index" => (0..app.tabs.len()).map(|i| app.win_num(i)).max().map(|n| n.to_string()).unwrap_or_default(),
-        "next_session_id" => "$1".into(),
+        "next_session_id" => format!("${}", crate::ids::peek(crate::ids::Kind::Session)),
         "buffer_mode_format" => "#{t/p:buffer_created}: #{buffer_sample}".into(),
         "client_mode_format" => "#{t/p:client_activity}: session #{session_name}".into(),
         "tree_mode_format" => "#{?pane_format,#{?pane_marked,#[reverse],}#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,}#{?#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}},: \"#{pane_title}\",},#{?window_format,#{?window_marked_flag,#[reverse],}#{window_name}#{window_flags}#{?#{&&:#{==:#{window_panes},1},#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}}},: \"#{pane_title}\",},#{session_windows} windows#{?session_grouped, (group #{session_group}: #{session_group_list}),}#{?session_attached, (attached),}}}".into(),

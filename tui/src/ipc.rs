@@ -74,7 +74,8 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
                 // From a shell outside hn (not its jobs', not another client's): no client's.
                 let outside = !passed && !request.get("inside").and_then(Value::as_bool).unwrap_or(false);
                 let (tx, rx) = oneshot::channel::<crate::app::Reply>();
-                let _ = sink.send(Event::Apply(Box::new(move |app: &mut crate::app::App| {
+                let asked = words.clone();
+                let job: Box<dyn FnOnce(&mut crate::app::App) + Send> = Box::new(move |app: &mut crate::app::App| {
                     app.capture = Some(Vec::new());
                     app.capture_err = Some(Vec::new());
                     app.cli_tx = Some(tx);
@@ -87,7 +88,8 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
                     FORWARDED.store(false, std::sync::atomic::Ordering::Relaxed);
                     // Still waiting on a job (run-shell, if-shell): it answers when it is done.
                     if app.capture.is_some() { app.finish_cli() }
-                })));
+                });
+                let _ = sink.send(Event::Apply(Box::new(move |app: &mut crate::app::App| app.run_cli(&asked, job))));
                 let (mut out, err, code) = rx.await.unwrap_or_default();
                 // A last line marked bare (show-buffer's data without a newline) is printed bare.
                 let bare = out.last().map(|l| l.ends_with(crate::app::BARE)).unwrap_or(false);

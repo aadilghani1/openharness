@@ -604,6 +604,16 @@ fn run_queue(app: &mut App, mut queue: Queue) {
 
 /// The commands a hook holds, as queue items run with [state] — each item of the hook array,
 /// looked up as notify_insert_hook looks (the pane's, the window's, the session's, globally).
+/// Whether hook [name] has a command set anywhere it could be looked up (globally, for the
+/// session, the window [window], its pane [pane] or its active one): its formats are made only
+/// then (they number a window that has no number yet).
+fn hooked(app: &App, name: &str, window: Option<usize>, pane: Option<u64>) -> bool {
+    let w = window.filter(|w| *w < app.tabs.len()).unwrap_or(app.active);
+    let tab_id = app.tabs.get(w).map(|t| t.id.clone()).unwrap_or_default();
+    let panes: Vec<Option<u64>> = [pane, app.tabs.get(w).and_then(|t| t.focus), None].into_iter().collect();
+    panes.into_iter().any(|p| (0..64).any(|i| app.options.get(&format!("{name}[{i}]"), &tab_id, p).is_some()))
+}
+
 fn hook_items(app: &mut App, name: &str, target: Option<(usize, u64)>, state: HookState) -> Queue {
     let (tab_id, pane) = match target { Some((w, p)) => (app.tabs.get(w).map(|t| t.id.clone()).unwrap_or_default(), p), None => (String::new(), 0) };
     let values: Vec<String> = (0..64).filter_map(|i| app.options.get(&format!("{name}[{i}]"), &tab_id, Some(pane))).collect();
@@ -639,10 +649,11 @@ fn command_hooks(app: &mut App, words: &[String], failed: bool) -> Queue {
 /// window's #{hook_window} and #{hook_window_name} and the pane's #{hook_pane}.
 pub fn notify(app: &mut App, name: &str, window: Option<usize>, pane: Option<u64>) {
     if app.hook_state.is_some() && name.starts_with("after-") { return }
+    if !hooked(app, name, window, pane) { return }
     let mut formats = vec![
         ("hook".to_string(), name.to_string()),
         ("hook_client".to_string(), crate::format::expand(app, "#{client_name}", app.active, None, false)),
-        ("hook_session".to_string(), "$0".to_string()),
+        ("hook_session".to_string(), format!("${}", app.session_id)),
         ("hook_session_name".to_string(), app.session_name()),
     ];
     let w = window.filter(|w| *w < app.tabs.len());
@@ -663,6 +674,7 @@ pub fn notify(app: &mut App, name: &str, window: Option<usize>, pane: Option<u64
 /// notify_session_window: window-linked and -unlinked of a session not in front) — its $id and
 /// name, and the window's @number and name.
 pub fn notify_session(app: &mut App, name: &str, sid: u32, session_name: &str, window: Option<(u64, String)>) {
+    if !hooked(app, name, None, None) { return }
     let mut formats = vec![
         ("hook".to_string(), name.to_string()),
         ("hook_client".to_string(), crate::format::expand(app, "#{client_name}", app.active, None, false)),
@@ -678,10 +690,11 @@ pub fn notify_session(app: &mut App, name: &str, sid: u32, session_name: &str, w
 
 /// An event about a window that is gone (window-unlinked): its @number and name, as it was.
 pub fn notify_gone(app: &mut App, name: &str, wid: u64, window_name: &str) {
+    if !hooked(app, name, None, None) { return }
     let formats = vec![
         ("hook".to_string(), name.to_string()),
         ("hook_client".to_string(), crate::format::expand(app, "#{client_name}", app.active, None, false)),
-        ("hook_session".to_string(), "$0".to_string()),
+        ("hook_session".to_string(), format!("${}", app.session_id)),
         ("hook_session_name".to_string(), app.session_name()),
         ("hook_window".to_string(), format!("@{wid}")),
         ("hook_window_name".to_string(), window_name.to_string()),
@@ -1065,8 +1078,8 @@ fn session_targets(app: &App, words: &[String]) -> Vec<String> {
 
 /// The session a target names, when it names one: `sess:…`, `$N`, a `%pane`'s or an `@window`'s.
 fn target_session(app: &App, t: &str) -> Option<u32> {
-    if let Some(p) = t.strip_prefix('%') { return crate::pane::from_tag(p.split(['.', ':']).next().unwrap_or("")).and_then(|p| app.session_of_pane(p)) }
-    if let Some(w) = t.strip_prefix('@') { return w.split(['.', ':']).next().and_then(|n| n.parse().ok()).and_then(|w| app.session_of_window(w)) }
+    if let Some(p) = t.strip_prefix('%') { return crate::pane::from_tag(p.split(['.', ':']).next().unwrap_or("")).and_then(|p| app.session_of_pane(p).or_else(|| app.remote_session_of(Some(p), None))) }
+    if let Some(w) = t.strip_prefix('@') { return w.split(['.', ':']).next().and_then(|n| n.parse().ok()).and_then(|w| app.session_of_window(w).or_else(|| app.remote_session_of(None, Some(w)))) }
     if let Some((s, _)) = t.split_once(':') { return (!s.is_empty()).then(|| app.find_session(s)).flatten() }
     if t.starts_with('$') { return app.find_session(t) }
     None
@@ -1108,30 +1121,45 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
             "move-window" => {
                 let i = match src_t.as_deref() { Some(t) => window_target(app, t).ok_or_else(|| format!("can't find window: {t}"))?, None => app.active };
                 let tab = app.take_tab(i);
-                let wid = tab.wid;
+                let wid = tab.wid();
                 app.swap_session(dst);
                 app.put_tab(tab, None);
                 run_words_in(app, &with(words, "-s", format!("@{wid}")));
                 // Its number, if the move there failed (the index taken): the first free one.
-                if let Some(w) = app.tabs.iter().position(|t| t.wid == wid) {
+                if let Some(w) = app.tabs.iter().position(|t| t.is_wid(wid)) {
                     let id = app.tabs[w].id.clone();
                     if app.nums.get(&id).copied() == Some(usize::MAX / 2) { app.nums.remove(&id); app.renumber() }
                 }
             }
             "swap-window" => {
+                // Each window takes the other's number (its winlink): what tmux keeps on the
+                // winlink stays with the number — which one is current, where it is in the last
+                // windows (the - flag), its alerts. -d selects the swapped numbers instead, as
+                // cmd-swap-window.c's session_select does (whatever its manual says).
                 let i = match src_t.as_deref() { Some(t) => window_target(app, t).ok_or_else(|| format!("can't find window: {t}"))?, None => app.active };
-                let na = app.win_num(i);
-                let a = app.take_tab(i);
+                let (na, cur_src) = (app.win_num(i), app.win_num(app.active));
+                let last_src = app.lastw.iter().position(|x| *x == app.tabs[i].id);
+                let mut a = app.take_tab(i);
                 app.swap_session(dst);
                 let j = match dst_t.as_deref() { Some(t) => window_target(app, t).ok_or_else(|| format!("can't find window: {t}"))?, None => app.active };
-                let nb = app.win_num(j);
-                let b = app.take_tab(j);
-                // Each takes the other's number, and is its session's current window (-d: not).
-                let at = app.put_tab(a, Some((j, nb)));
-                if !detached { app.active = at }
+                let (nb, cur_dst) = (app.win_num(j), app.win_num(app.active));
+                let last_dst = app.lastw.iter().position(|x| *x == app.tabs[j].id);
+                let mut b = app.take_tab(j);
+                std::mem::swap(&mut a.alerts, &mut b.alerts);
+                let (a_id, b_id) = (a.id.clone(), b.id.clone());
+                // The current number kept (the window swapped in shown, if it was that one); -d:
+                // the swapped number chosen, the one it leaves the last window.
+                let current = |app: &mut App, keep: usize, choose: Option<usize>| {
+                    if let Some(at) = app.tab_by_num(keep) { app.active = at }
+                    if let Some(at) = choose.and_then(|n| app.tab_by_num(n)).filter(|at| *at != app.active) { app.select_tab(at) }
+                };
+                app.put_tab(a, Some((j, nb)));
+                if let Some(k) = last_dst { let k = k.min(app.lastw.len()); app.lastw.insert(k, a_id) }
+                current(app, cur_dst, detached.then_some(nb));
                 app.swap_session(src);
-                let at = app.put_tab(b, Some((i, na)));
-                if !detached { app.active = at }
+                app.put_tab(b, Some((i, na)));
+                if let Some(k) = last_src { let k = k.min(app.lastw.len()); app.lastw.insert(k, b_id) }
+                current(app, cur_src, detached.then_some(na));
             }
             "join-pane" | "move-pane" => {
                 let (_, p) = match src_t.as_deref() { Some(t) => pane_target(app, t).ok_or_else(|| format!("can't find pane: {t}"))?, None => pane_target(app, "{marked}").or_else(|| app.current()).ok_or("can't find pane")? };
@@ -1199,8 +1227,8 @@ fn other_session(app: &App, words: &[String]) -> Option<u32> {
     let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).ok()?;
     for (spec, flag) in [(entry.target, 't'), (entry.source, 's')] {
         let (Some(spec), Some(t)) = (spec, args.get(flag)) else { continue };
-        let id = if let Some(p) = t.strip_prefix('%') { crate::pane::from_tag(p.split(['.', ':']).next().unwrap_or("")).and_then(|p| app.session_of_pane(p)) }
-            else if let Some(w) = t.strip_prefix('@') { w.split(['.', ':']).next().and_then(|n| n.parse().ok()).and_then(|w| app.session_of_window(w)) }
+        let id = if let Some(p) = t.strip_prefix('%') { crate::pane::from_tag(p.split(['.', ':']).next().unwrap_or("")).and_then(|p| app.session_of_pane(p).or_else(|| app.remote_session_of(Some(p), None))) }
+            else if let Some(w) = t.strip_prefix('@') { w.split(['.', ':']).next().and_then(|n| n.parse().ok()).and_then(|w| app.session_of_window(w).or_else(|| app.remote_session_of(None, Some(w)))) }
             else if let Some((s, _)) = t.split_once(':') { (!s.is_empty()).then(|| app.find_session(s)).flatten() }
             else if spec.kind == crate::cmd::Kind::Session || t.starts_with('$') { app.find_session(t) }
             else { None };
@@ -1813,6 +1841,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
                     windows.into_iter().flat_map(|w| app.tabs[w].panes().into_iter().map(move |p| (w, Some(p)))).collect()
                 }
                 "list-windows" => (0..app.tabs.len()).map(|w| (w, None)).collect(),
+                // hn with no terminal is tmux's server, not a client of it.
+                "list-clients" if app.headless => Vec::new(),
                 _ => vec![(app.active, None)],
             };
             let history = "[#{pane_width}x#{pane_height}] [history #{history_size}/#{history_limit}, #{history_bytes} bytes] #{pane_id}#{?pane_active, (active),}#{?pane_dead, (dead),}";

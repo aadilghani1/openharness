@@ -550,7 +550,8 @@ impl Node {
             let c = &n.c[i];
             out.push_str(&format!("{}x{},{},{}", c.sx, c.sy, c.xoff, c.yoff));
             match c.dir {
-                None => out.push_str(&format!(",{}", c.pane)),
+                // The pane's number as tmux writes it (%N: pane::tag).
+                None => out.push_str(&format!(",{}", c.pane.saturating_sub(1))),
                 Some(dir) => {
                     out.push(if dir == Dir::Horizontal { '{' } else { '[' });
                     for (k, kid) in c.cells.iter().enumerate() { if k > 0 { out.push(',') } body(n, *kid, out) }

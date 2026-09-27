@@ -165,8 +165,19 @@ fn owner_of_target(args: &[String], name: Option<&str>) -> Option<std::path::Pat
     let doc = crate::app::read_sessions(&crate::app::sessions_path(name));
     let rows: Vec<Value> = doc["sessions"].as_array()?.iter().filter(|r| !r.get("desk").and_then(Value::as_bool).unwrap_or(false)).cloned().collect();
     let named = |r: &Value| r.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+    let id_of = |r: &Value| r.get("id").and_then(Value::as_u64);
+    let has = |r: &Value, pane: Option<u64>, wid: Option<u64>| r.get("windows").and_then(Value::as_array).map(|ws| ws.iter().any(|w|
+        wid.map(|x| w.get("wid").and_then(Value::as_u64) == Some(x)).unwrap_or(false)
+        || pane.map(|x| w.get("panes").and_then(Value::as_array).map(|ps| ps.iter().any(|p| p.get(3).and_then(Value::as_u64) == Some(x))).unwrap_or(false)).unwrap_or(false))).unwrap_or(false);
     for flag in ['t', 's'] {
         let Some(t) = a.get(flag) else { continue };
+        // An id ($N, @N, %N) is one thing among every client's: the client that has it.
+        let head = t.split(['.', ':']).next().unwrap_or(t);
+        let by_id = if let Some(n) = head.strip_prefix('$').and_then(|n| n.parse::<u64>().ok()) { rows.iter().find(|r| id_of(r) == Some(n)) }
+            else if let Some(n) = head.strip_prefix('@').and_then(|n| n.parse::<u64>().ok()) { rows.iter().find(|r| has(r, None, Some(n))) }
+            else if let Some(n) = head.strip_prefix('%').and_then(crate::pane::from_tag) { rows.iter().find(|r| has(r, Some(n), None)) }
+            else { None };
+        if let Some(owner) = by_id.and_then(crate::app::live_owner) { return Some(owner.into()) }
         if t.starts_with(['%', '@', '$']) || (!t.contains(':') && t.contains('.')) { continue }
         let s = t.split(':').next().unwrap_or(t);
         let (exact, s) = match s.strip_prefix('=') { Some(s) => (true, s), None => (false, s) };

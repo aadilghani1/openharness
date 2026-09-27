@@ -323,7 +323,7 @@ impl Tree {
             if in_session(app, sid, |app| self.build_session(app, saved, filter, sid)).is_none() { self.build_remote(app, saved, filter, sid) }
         }
         let (fsid, ftab, fpane) = self.fs.clone();
-        let fs_window = session_tabs(app, fsid).and_then(|(tabs, _)| tabs.iter().find(|t| t.id == ftab).map(|t| (t.wid, t.panes().len())));
+        let fs_window = session_tabs(app, fsid).and_then(|(tabs, _)| tabs.iter().find(|t| t.id == ftab).map(|t| (t.wid(), t.panes().len())));
         match self.kind {
             Kind::None => {}
             Kind::Session => *tag = session_tag(fsid),
@@ -421,7 +421,7 @@ impl Tree {
     /// its panes.
     #[allow(clippy::too_many_arguments)]
     fn build_window(&mut self, app: &mut App, saved: &HashMap<u64, (bool, bool)>, parent: usize, w: usize, filter: Option<&str>, sid: u32) -> bool {
-        let (id, wid, focus, panes) = { let t = &app.tabs[w]; (t.id.clone(), t.wid, t.focus, t.panes()) };
+        let (id, wid, focus, panes) = { let t = &app.tabs[w]; (t.id.clone(), t.wid(), t.focus, t.panes()) };
         let text = expand(app, &self.format, FORMAT_WINDOW, w, focus);
         let name = app.win_num(w).to_string();
         let expanded = if matches!(self.kind, Kind::Session | Kind::Window) { 0 } else { 1 };
@@ -1007,7 +1007,7 @@ pub fn key(app: &mut App, pane: u64, chord: Chord, m: Option<&crate::mouse::Even
         // To where the tree was opened: its session and window expanded, its pane (else window).
         let (fsid, ftab) = (t.fs.0, t.fs.1.clone());
         t.expand_tag(app, session_tag(fsid), sx, sy);
-        let wid = session_tabs(app, fsid).and_then(|(tabs, _)| tabs.iter().find(|x| x.id == ftab).map(|x| x.wid));
+        let wid = session_tabs(app, fsid).and_then(|(tabs, _)| tabs.iter().find(|x| x.id == ftab).map(|x| x.wid()));
         if let Some(w) = wid { t.expand_tag(app, window_tag(fsid, w), sx, sy) }
         if !t.set_current(pane_tag(pane)) { if let Some(w) = wid { t.set_current(window_tag(fsid, w)); } }
     } else if is_char(&k, 'm') {
@@ -1270,7 +1270,7 @@ fn window_mouse(app: &mut App, t: &mut Tree, k: Chord, x: u32, item: Option<usiz
             let wid = in_session(app, sid, |app| {
                 let mut order: Vec<usize> = (0..app.tabs.len()).collect();
                 order.sort_by_key(|w| app.win_num(*w));
-                order.get(at).map(|w| app.tabs[*w].wid)
+                order.get(at).map(|w| app.tabs[*w].wid())
             }).flatten();
             if let Some(wid) = wid { t.set_current(window_tag(sid, wid)); }
             enter
