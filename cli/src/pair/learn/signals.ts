@@ -216,10 +216,14 @@ export class LessonSignals {
   private readonly tracks = new Map<string, Track>()
   /** Prompts the daemon typed (a pair tool, a rule): never the person correcting anything. */
   private readonly sent = new Map<string, string[]>()
-  private state: SignalsState
+  private loaded: SignalsState | null = null
 
-  constructor(private readonly deps: LessonSignalsDeps) {
-    this.state = this.load()
+  /** Read on first use (a signal to notice), never at construction: with daemons off nothing is read. */
+  constructor(private readonly deps: LessonSignalsDeps) {}
+
+  private get state(): SignalsState {
+    this.loaded ??= this.load()
+    return this.loaded
   }
 
   /** The daemon itself sent this prompt (pair/owner.ts send). */

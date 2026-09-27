@@ -652,6 +652,11 @@ export class BackendSocket {
   pairControl: { verbs: ReadonlySet<string>; local: (payload: Record<string, unknown>, connId: string) => Promise<Record<string, unknown>> } | null = null
   /** The account's zoo changed (a `zoo_changed` from the backend) — cli.ts re-reads which daemon is paired. */
   onZooChanged: ((revision: number) => void) | null = null
+  /**
+   * Whether daemons run at all (lib/daemonsSwitch.ts). Off, the loopback `pair` request (`harness pair`, the
+   * MCP server) is answered DAEMONS_OFF before any verb runs. Null: always on, as before the switch.
+   */
+  daemonsOn: (() => boolean) | null = null
   runtimeProfileProvider: ((session: RegisteredSession) => string | null) | null = null
   onRuntimeProfileUpdate: ((sessionId: string, selectedModel: string) => Promise<void>) | null = null
   /** Web↔adapter E2EE: group-encrypts user events, runs the CPace pairing, holds per-conn sessions. */
@@ -1490,6 +1495,7 @@ export class BackendSocket {
     }
     if (type === 'pair') {
       if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Ask the pair brain on this computer.' }); return }
+      if (this.daemonsOn && !this.daemonsOn()) { reply(type, requestId, { error: 'DAEMONS_OFF', detail: 'Daemons are off for this account or on this computer.' }); return }
       const verb = typeof payload.verb === 'string' ? payload.verb : ''
       const control = this.pairControl
       if (control && control.verbs.has(verb)) { detached(control.local(payload, connId)); return }

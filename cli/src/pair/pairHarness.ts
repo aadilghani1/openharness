@@ -249,6 +249,17 @@ export class PairHarness {
 
   stopWatching(): void { this.unwatch() }
 
+  /**
+   * Daemons went off (lib/daemonsSwitch.ts): no idle timer, and the pair harness paused if it is live —
+   * through the same guarded stop as an idle pause, its conversation kept for when they are back on.
+   */
+  async off(): Promise<void> {
+    this.unwatch()
+    const agentId = this.saved()?.agentId
+    if (!agentId || this.deps.find().find((r) => r.agentId === agentId)?.status !== 'live') return
+    await this.deps.stop(agentId)
+  }
+
   private touch(): void { this.lastActivity = this.deps.now() }
 
   private watchIdle(): void {

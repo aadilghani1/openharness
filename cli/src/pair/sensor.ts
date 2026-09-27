@@ -58,13 +58,15 @@ export class PairSensor implements PairService {
   private rev = 0
   private readonly watchers = new Map<string, (event: PairEvent) => boolean>()
   private readonly listeners = new Set<(event: PairEvent) => void>()
-  /** Questions open when this daemon started (journaled, never answered). Seeing one again is a baseline. */
-  private readonly carried: Set<string>
+  /**
+   * Questions open when pairing first came on (journaled, never answered). Seeing one again is a baseline.
+   * Read then, not at construction: with daemons off (lib/daemonsSwitch.ts) the journal is never opened.
+   */
+  private carried: Set<string> | null = null
   private readonly now: () => number
 
   constructor(private readonly deps: PairSensorDeps) {
     this.now = deps.now ?? Date.now
-    this.carried = new Set(deps.journal.openQuestions().keys())
   }
 
   // ── the switch ────────────────────────────────────────────────────────────────────────────────────
@@ -75,6 +77,7 @@ export class PairSensor implements PairService {
     const on = daemonId !== null
     if (on === this.on) return
     this.on = on
+    if (on) this.carried ??= new Set(this.deps.journal.openQuestions().keys())
     if (!on) {
       // Nothing about a harness survives pairing being switched off: the next time it is on, state is
       // rebuilt from what happens, and the brain on the other end is told PAIR_OFF on its next request.
@@ -131,7 +134,7 @@ export class PairSensor implements PairService {
     const painted = (detail?.dialog || first?.q || '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
     const whole = painted.length > DIALOG_MAX ? `${painted.slice(0, DIALOG_MAX)}\n[cut: the dialog is longer than ${DIALOG_MAX} characters]` : painted
     h.question = { requestId, text, options, multi: first?.multi === true, deny, allow: allow && painted.length <= DIALOG_MAX, permission, since: this.now(), dialog: whole }
-    const baseline = this.carried.delete(requestId)
+    const baseline = this.carried?.delete(requestId) ?? false
     this.change(h, baseline ? null : { kind: 'question', requestId, text, options, deny }, baseline)
   }
 

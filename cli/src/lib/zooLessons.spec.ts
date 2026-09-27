@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ZOO_LESSON_RETRY_MS, ZooLessonReporter, type ZooLessonPost } from './zooLessons.js'
 
-function harness(opts: { signedIn?: boolean; answers?: Array<number | Error> } = {}) {
+function harness(opts: { signedIn?: boolean; answers?: Array<number | Error>; enabled?: boolean } = {}) {
   let signedIn = opts.signedIn ?? true
+  // Daemons on (lib/daemonsSwitch.ts) unless a test says otherwise.
+  const enabled = opts.enabled ?? true
   const answers = [...(opts.answers ?? [])]
   const sent: Array<Array<{ lessonId: string; daemonId: string }>> = []
   const timers: Array<{ fn: () => void; ms: number }> = []
@@ -14,7 +16,7 @@ function harness(opts: { signedIn?: boolean; answers?: Array<number | Error> } =
   })
   const log: string[] = []
   const reporter = new ZooLessonReporter({
-    post, signedIn: () => signedIn, log: (line) => log.push(line),
+    post, signedIn: () => signedIn, enabled: () => enabled, log: (line) => log.push(line),
     setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length }, clearTimer: () => {},
   })
   return { reporter, post, sent, timers, log, signOut: () => { signedIn = false } }
@@ -78,5 +80,23 @@ describe('ZooLessonReporter — bond for an approved lesson', () => {
     await out.reporter.flush()
     expect(out.reporter.waiting).toBe(0)
     expect(out.sent).toHaveLength(1)
+  })
+
+  it('credits nothing while daemons are off, drops a 404, and forgets what waited when they go off', async () => {
+    const off = harness({ enabled: false })
+    expect(off.reporter.credit('a1', 'tim')).toBe(false)
+    await off.reporter.flush()
+    expect(off.post).not.toHaveBeenCalled()
+    const gone = harness({ answers: [404] })
+    gone.reporter.credit('a1', 'tim')
+    await gone.reporter.idle()
+    expect(gone.reporter.waiting).toBe(0)
+    expect(gone.timers).toHaveLength(0)
+    const waiting = harness({ answers: [503] })
+    waiting.reporter.credit('a2', 'tim')
+    await waiting.reporter.idle()
+    expect(waiting.reporter.waiting).toBe(1)
+    waiting.reporter.clear()
+    expect(waiting.reporter.waiting).toBe(0)
   })
 })

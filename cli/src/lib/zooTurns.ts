@@ -25,7 +25,8 @@
  *    local (day, hour), through the daemon's authenticated backend path — signed in only; a guest's
  *    turns are counted by the desktop client in its local zoo, never here. Each op carries a batch id;
  *    a send that failed is retried with the SAME ids, so a send that landed but whose answer was lost
- *    is dropped by the server rather than counted twice.
+ *    is dropped by the server rather than counted twice. Only while daemons are on (lib/daemonsSwitch.ts):
+ *    off, nothing is counted, no timer is armed and nothing is sent.
  */
 import { randomBytes } from 'node:crypto'
 import { PAIR_ROSTER } from '../pair/roster.g.js'
@@ -98,6 +99,11 @@ export class ZooTurnCounter {
   forget(sessionId: string): void {
     this.open.delete(sessionId)
   }
+
+  /** Daemons went off (lib/daemonsSwitch.ts): no open turn carries over to when they come back. */
+  clear(): void {
+    this.open.clear()
+  }
 }
 
 // ── Whether the person is here ───────────────────────────────────────────────────────────────────
@@ -160,6 +166,8 @@ export interface ZooTurnReporterDeps {
   post: ZooPost
   /** Only a signed-in daemon reports. */
   signedIn: () => boolean
+  /** Daemons are on (lib/daemonsSwitch.ts). Off, nothing is counted, armed or sent. Absent: on. */
+  enabled?: () => boolean
   /** This computer's machine id, as the backend knows it. */
   machineId: () => string
   now?: () => Date
@@ -193,7 +201,7 @@ export class ZooTurnReporter {
 
   /** One counted turn, finished now. */
   count(turn: ZooCountedTurn = { minutes: 0, away: false }): void {
-    if (this.stopped || !this.deps.signedIn()) return
+    if (this.stopped || !this.on() || !this.deps.signedIn()) return
     const { day, hour } = localDayHour(this.now())
     const key = `${day}T${hour}`
     const bucket = this.buckets.get(key) ?? { day, hour, n: 0, minutes: 0, away: 0 }
@@ -230,12 +238,22 @@ export class ZooTurnReporter {
     if (this.timer !== null) { this.clearTimer(this.timer); this.timer = null }
   }
 
+  /** Daemons went off: nothing waits, nothing is armed. Counting resumes when they are on again. */
+  clear(): void {
+    if (this.timer !== null) { this.clearTimer(this.timer); this.timer = null }
+    this.buckets.clear()
+    this.pending = []
+  }
+
+  private on(): boolean { return this.deps.enabled?.() ?? true }
+
   private arm(): void {
     if (this.timer !== null || this.stopped) return
     this.timer = this.setTimer(() => { this.timer = null; void this.flush() }, ZOO_TURN_FLUSH_MS)
   }
 
   private async send(): Promise<void> {
+    if (!this.on()) { this.buckets.clear(); this.pending = []; return }
     if (!this.deps.signedIn()) {
       // Signed out since: these were the account's turns, but there is no account to send them to now,
       // and a guest's zoo is the desktop's to count. Nothing is kept for a later sign-in.
@@ -283,9 +301,9 @@ export class ZooTurnReporter {
       this.log(`[zoo] reported ${turns} turn${turns === 1 ? '' : 's'} (${ops.length} batch${ops.length === 1 ? '' : 'es'})`)
       return
     }
-    if (status === 401 || status === 400 || status === 403) {
-      // Signed out (the backend's own answer), or a report this server will never take: dropping it is
-      // the only way it stops being sent.
+    if (status === 401 || status === 400 || status === 403 || status === 404) {
+      // Signed out (the backend's own answer), or a report this server will never take — a 404 is a
+      // server with daemons off for this account: dropping it is the only way it stops being sent.
       this.pending = this.pending.filter((op) => !sent.has(op.batchId))
       this.log(`[zoo] dropped ${turns} turn${turns === 1 ? '' : 's'}: ${status} ${String(code ?? '')}`.trimEnd())
       return

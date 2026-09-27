@@ -244,4 +244,30 @@ describe('the daemon answering another machine\'s brain', () => {
     await socket.unregisterLocalClient('local:window')
     await socket.stop()
   })
+
+  it('the `pair` request answers DAEMONS_OFF while daemons are off, before the control interface or the sensor', async () => {
+    const service = fakeService()
+    const local = vi.spyOn(service, 'local')
+    const { socket } = harness(service)
+    const control = vi.fn(async (payload: Record<string, unknown>) => ({ ok: true, verb: payload.verb }))
+    socket.pairControl = { verbs: new Set(['list_harnesses', 'lessons']), local: control }
+    let on = false
+    socket.daemonsOn = () => on
+    const sent: Array<{ connId: string; frame: Frame }> = []
+    vi.spyOn(socket, 'sendTo').mockImplementation((to: string, frame: Frame) => { sent.push({ connId: to, frame }) })
+    socket.registerLocalClient('local:tool', { sendFrame: () => true, sendBinary: () => true }, { tool: true })
+    for (const [requestId, verb] of [['p1', 'status'], ['p2', 'list_harnesses'], ['p3', 'lessons']]) {
+      socket.handleLocalFrame('local:tool', { type: 'pair', payload: { requestId, verb } })
+    }
+    await vi.waitFor(() => expect(sent).toHaveLength(3))
+    for (const { frame } of sent) expect((frame.payload as Frame).error).toBe('DAEMONS_OFF')
+    expect(local).not.toHaveBeenCalled()
+    expect(control).not.toHaveBeenCalled()
+    // On again: the verbs run as they always did.
+    on = true
+    socket.handleLocalFrame('local:tool', { type: 'pair', payload: { requestId: 'p4', verb: 'list_harnesses' } })
+    await vi.waitFor(() => expect(sent).toContainEqual({ connId: 'local:tool', frame: { type: 'pair_result', payload: { requestId: 'p4', ok: true, verb: 'list_harnesses' } } }))
+    await socket.unregisterLocalClient('local:tool')
+    await socket.stop()
+  })
 })

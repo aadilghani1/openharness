@@ -46,6 +46,15 @@ describe('ZooTurnCounter — which finished turns count', () => {
     expect(['sub-agent', 'terminal', 'pair', 'mine'].map((id) => c.ended(id, { replay: false, aborted: false }))).toEqual([null, null, null, COUNTED])
   })
 
+  it('forgets every open turn when daemons go off', () => {
+    const c = counter()
+    c.started('s1', { replay: false })
+    c.started('s2', { replay: false })
+    c.clear()
+    expect(c.ended('s1', { replay: false, aborted: false })).toBeNull()
+    expect(c.ended('s2', { replay: false, aborted: false })).toBeNull()
+  })
+
   it('forgets a session that went away mid-turn', () => {
     const c = counter()
     c.started('s1', { replay: false })
@@ -165,9 +174,11 @@ describe('localDayHour', () => {
 })
 
 /** A reporter on a fake clock, fake timers and a fake backend. */
-function harness(opts: { answers?: Array<{ status: number; body?: Record<string, unknown> } | Error>; signedIn?: boolean } = {}) {
+function harness(opts: { answers?: Array<{ status: number; body?: Record<string, unknown> } | Error>; signedIn?: boolean; enabled?: boolean } = {}) {
   let now = new Date(2026, 8, 26, 10, 0, 0)
   let signedIn = opts.signedIn ?? true
+  // Daemons on (lib/daemonsSwitch.ts) unless a test says otherwise: what every test before the switch relied on.
+  let enabled = opts.enabled ?? true
   const timers: Array<{ fn: () => void; ms: number; cleared: boolean }> = []
   const answers = [...(opts.answers ?? [])]
   const posts: ZooTurnOp[][] = []
@@ -182,6 +193,7 @@ function harness(opts: { answers?: Array<{ status: number; body?: Record<string,
   const reporter = new ZooTurnReporter({
     post,
     signedIn: () => signedIn,
+    enabled: () => enabled,
     machineId: () => 'mac-1',
     now: () => now,
     setTimer: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t },
@@ -194,6 +206,7 @@ function harness(opts: { answers?: Array<{ status: number; body?: Record<string,
     reporter, post, posts, log,
     at: (d: Date) => { now = d },
     signOut: () => { signedIn = false },
+    switchOff: () => { enabled = false },
     armed,
     /** Let the minute pass: fire the armed timer and wait for the report it starts. */
     async tick() {
@@ -293,6 +306,37 @@ describe('ZooTurnReporter — reporting counted turns', () => {
     await h.tick()
     expect(h.post).not.toHaveBeenCalled()
     expect(h.reporter.waiting).toEqual({ counted: 0, pending: 0 })
+  })
+
+  it('counts, arms and sends nothing while daemons are off, and drops what waited when they go off', async () => {
+    const off = harness({ enabled: false })
+    for (let i = 0; i < 30; i++) off.reporter.count({ minutes: 4, away: false })
+    expect(off.armed()).toHaveLength(0)
+    expect(off.reporter.waiting).toEqual({ counted: 0, pending: 0 })
+    await off.reporter.flush()
+    expect(off.post).not.toHaveBeenCalled()
+    // On, then off with a minute gathering and a failed report waiting: nothing is kept, nothing is armed.
+    const h = harness({ answers: [{ status: 502 }] })
+    h.reporter.count()
+    await h.tick()
+    h.reporter.count()
+    expect(h.reporter.waiting).toEqual({ counted: 1, pending: 1 })
+    h.switchOff()
+    h.reporter.clear()
+    expect(h.reporter.waiting).toEqual({ counted: 0, pending: 0 })
+    expect(h.armed()).toHaveLength(0)
+    h.reporter.count()
+    expect(h.armed()).toHaveLength(0)
+    expect(h.post).toHaveBeenCalledOnce()
+  })
+
+  it('drops a report answered 404 — a server with daemons off — rather than retry it every minute', async () => {
+    const h = harness({ answers: [{ status: 404, body: { message: 'Route POST:/api/zoo/ops not found', error: 'Not Found', statusCode: 404 } }] })
+    h.reporter.count()
+    await h.tick()
+    expect(h.reporter.waiting).toEqual({ counted: 0, pending: 0 })
+    expect(h.armed()).toHaveLength(0)
+    expect(h.log).toHaveBeenCalledWith('[zoo] dropped 1 turn: 404')
   })
 
   it('retries a report that failed with the same batch ids, beside the next minute\'s turns', async () => {

@@ -168,6 +168,19 @@ describe('talking to it', () => {
     expect(w.deps.create).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'vim' }))
   })
 
+  it('daemons going off pause it if it is live (conversation kept), and stop its idle timer', async () => {
+    const w = world()
+    await w.harness.talk('hi')
+    expect(vi.getTimerCount()).toBe(1)                     // the idle check
+    await w.harness.off()
+    expect(w.deps.stop).toHaveBeenCalledExactlyOnceWith('pair-1')
+    expect(w.rows).toEqual([{ agentId: 'pair-1', status: 'stopped' }])
+    expect(vi.getTimerCount()).toBe(0)
+    await w.harness.off()                                  // already paused: nothing more
+    expect(w.deps.stop).toHaveBeenCalledOnce()
+    await world().harness.off()                            // never started: nothing to pause
+  })
+
   it('says why it cannot: nothing paired, no engine, nothing said', async () => {
     expect(await world({ pair: null }).harness.talk('hi')).toMatchObject({ ok: false, error: 'PAIR_OFF' })
     expect(await world({ engine: null }).harness.talk('hi')).toMatchObject({ ok: false, error: 'NO_ENGINE' })

@@ -7,7 +7,8 @@
  * Signed in only. A guest's approval is journaled on this machine (`learned`, pair/sensor.ts) and nothing is
  * sent: a guest's zoo is the desktop's. The server counts a lesson id once, so a send that failed is
  * retried a minute later with the same id, and one that landed but whose answer was lost grows nothing
- * the second time. A 400, 401 or 403 drops it (a report this server will never take, or signed out).
+ * the second time. A 400, 401, 403 or 404 drops it (a report this server will never take — a 404 is a server
+ * with daemons off — or signed out). Only while daemons are on (lib/daemonsSwitch.ts).
  */
 
 /** How long a failed credit waits before it is sent again. */
@@ -25,6 +26,8 @@ export interface ZooLessonReporterDeps {
   post: ZooLessonPost
   /** Only a signed-in daemon reports. */
   signedIn: () => boolean
+  /** Daemons are on (lib/daemonsSwitch.ts). Off, nothing is credited or retried. Absent: on. */
+  enabled?: () => boolean
   setTimer?: (fn: () => void, ms: number) => unknown
   clearTimer?: (handle: unknown) => void
   log?: (line: string) => void
@@ -49,7 +52,7 @@ export class ZooLessonReporter {
    * out (a guest: the journal is the record) or ids the server would refuse.
    */
   credit(lessonId: string, daemonId: string): boolean {
-    if (!this.deps.signedIn() || !LESSON_ID.test(lessonId) || !DAEMON_ID.test(daemonId)) return false
+    if (!this.on() || !this.deps.signedIn() || !LESSON_ID.test(lessonId) || !DAEMON_ID.test(daemonId)) return false
     if (this.pending.some((op) => op.lessonId === lessonId)) return true     // already on its way
     this.pending = [...this.pending, { op: 'zoo.lesson' as const, lessonId, daemonId }].slice(-MAX_PENDING)
     void this.flush()
@@ -75,9 +78,17 @@ export class ZooLessonReporter {
     if (this.timer !== null) { this.clearTimer(this.timer); this.timer = null }
   }
 
+  /** Daemons went off: nothing waits, nothing is armed. */
+  clear(): void {
+    this.stop()
+    this.pending = []
+  }
+
+  private on(): boolean { return this.deps.enabled?.() ?? true }
+
   private async send(): Promise<void> {
     if (!this.pending.length) return
-    if (!this.deps.signedIn()) { this.pending = []; return }
+    if (!this.on() || !this.deps.signedIn()) { this.pending = []; return }
     const ops = [...this.pending]
     let status: number
     let body: Record<string, unknown> = {}
@@ -90,7 +101,7 @@ export class ZooLessonReporter {
     }
     const sent = new Set(ops.map((op) => op.lessonId))
     const names = ops.map((op) => `${op.lessonId} (${op.daemonId})`).join(', ')
-    if ((status >= 200 && status < 300) || status === 400 || status === 401 || status === 403) {
+    if ((status >= 200 && status < 300) || status === 400 || status === 401 || status === 403 || status === 404) {
       this.pending = this.pending.filter((op) => !sent.has(op.lessonId))
       if (status >= 200 && status < 300) {
         const levelUps = ((body.data as { levelUps?: unknown } | undefined)?.levelUps ?? []) as Array<{ id?: unknown; level?: unknown }>
