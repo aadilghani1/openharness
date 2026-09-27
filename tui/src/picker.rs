@@ -401,6 +401,8 @@ impl Picker {
     /// as it was changes nothing.
     fn changed(&mut self, before: &str) {
         if self.query == before { return }
+        // --no-input: there is no query to edit.
+        if crate::theme::fzf_opts().no_input { self.query = before.to_string(); self.qcursor = self.qcursor.min(self.qlen()); return }
         // --track (or toggle-track): the item it was on, wherever it goes.
         if !self.tracking() { self.selected_id = None }
         self.refilter();

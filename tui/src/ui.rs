@@ -69,7 +69,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if let Some(modal) = &mut app.modal {
         match modal {
-            Modal::Picker { kind, picker } => { cursor = Some(fzf(buf, body, picker, kind, &*app_preview_placeholder())) }
+            // (--no-input: no prompt, no cursor.)
+            Modal::Picker { kind, picker } => { let at = fzf(buf, body, picker, kind, &*app_preview_placeholder()); cursor = (!theme::fzf_opts().no_input).then_some(at) }
             _ => {}
         }
     }
@@ -512,6 +513,7 @@ fn border_sides() -> (bool, bool, bool, bool) {
 /// with --no-separator).
 fn no_separator_line() -> bool {
     let o = theme::fzf_opts();
+    if o.no_input { return true }
     match o.info_mode.as_str() { "inline" => true, "hidden" | "inline-right" => !separator_on(), _ => false }
 }
 
@@ -938,6 +940,9 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let in_header = sec.header.filter(|_| sectioned);
     let header = match in_header { Some(h) => header_line_at(picker, (h.width as usize).saturating_sub(1), section_indent(&shapes[0], &shapes[2]) as usize), None => header };
     let header_y = in_header.map(|h| h.y).unwrap_or(header_y);
+    // --no-input: the prompt and the info are drawn nowhere (the list and the header take their lines).
+    let mut scratch = Buffer::empty(buf.area);
+    let pbuf: &mut Buffer = if o.no_input { &mut scratch } else { &mut *buf };
     let prompt = theme::fzf().prompt_style();
     let prompt_text = theme::fzf().prompt_text.clone();
     // The prompt in its pair (bold as fzf makes it, unless --no-bold or prompt:regular); its
@@ -950,7 +955,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     for (i, c) in prompt_text.chars().enumerate() {
         let st = if i >= blank_from && i < prompt_text.len() { clear } else { prompt };
         let (text, w) = if c == '\t' { let n = o.tabstop - pw as usize % o.tabstop; (" ".repeat(n), n) } else { (c.to_string(), unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)) };
-        buf.set_string(ia.x + pw, prompt_y, text, st);
+        pbuf.set_string(ia.x + pw, prompt_y, text, st);
         pw += w as u16;
     }
     let q_room = (ia.width as usize).saturating_sub(pw as usize + 1).max(1);
@@ -975,13 +980,13 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let mut after_w = 0;
     let after: Vec<char> = chars[cx..].iter().take_while(|c| { after_w += cw(c); after_w <= q_room - before_w }).cloned().collect();
     let shown: String = chars[before_from..cx].iter().chain(after.iter()).collect();
-    buf.set_stringn(ia.x + pw, prompt_y, &shown, q_room, pal.input.style());
+    pbuf.set_stringn(ia.x + pw, prompt_y, &shown, q_room, pal.input.style());
     let mut typed_w = shown.width().min(q_room) as u16;
     // What an inline count keeps clear of: the query and a margin, or the ghost, as fzf shifts it.
     let mut shift = typed_w as i32 + 1;
     if let Some(ghost) = o.ghost.as_ref().filter(|g| picker.query.is_empty() && !g.is_empty()) {
         // --ghost: yours, cut at the edge as fzf cuts it.
-        buf.set_stringn(ia.x + pw, prompt_y, ghost, q_room, pal.ghost.style());
+        pbuf.set_stringn(ia.x + pw, prompt_y, ghost, q_room, pal.ghost.style());
         typed_w = ghost.width().min(q_room) as u16;
         shift = typed_w as i32;
     } else if picker.query.is_empty() && !picker.placeholder.is_empty() {
@@ -989,7 +994,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         let room = if mode.starts_with("inline") { q_room.saturating_sub(16) } else { q_room };
         let mut text = String::new();
         for part in picker.placeholder.split("   ") { if text.width() + part.width() + 3 > room { break } if !text.is_empty() { text.push_str("   ") } text.push_str(part) }
-        buf.set_stringn(ia.x + pw, prompt_y, &text, q_room, pal.ghost.style());
+        pbuf.set_stringn(ia.x + pw, prompt_y, &text, q_room, pal.ghost.style());
         typed_w = text.width() as u16;
         if !text.is_empty() { shift = typed_w as i32 }
     }
@@ -1015,30 +1020,30 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let frames: &[&str] = if theme::fzf().unicode { &SPINNER } else { &ASCII_SPINNER };
     let spinner = frames[(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 100) as usize % frames.len()];
     let w = ia.width as i32;
-    let put = |buf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { buf.set_stringn(ia.x + x as u16, y, s, (w - x) as usize, st); } };
-    let bar = |buf: &mut Buffer, x: i32, y: u16, n: i32| { if separator_on() && n > 0 { put(buf, x, y, &repeat_to_fill(&o.separator_char, n as usize), sep_style) } };
+    let put = |pbuf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { pbuf.set_stringn(ia.x + x as u16, y, s, (w - x) as usize, st); } };
+    let bar = |pbuf: &mut Buffer, x: i32, y: u16, n: i32| { if separator_on() && n > 0 { put(pbuf, x, y, &repeat_to_fill(&o.separator_char, n as usize), sep_style) } };
     // printInfoPrefix: the prefix at [pos] (what fits of it), in the prompt's pair.
-    let prefix = |buf: &mut Buffer, pos: i32, y: u16| -> i32 {
+    let prefix = |pbuf: &mut Buffer, pos: i32, y: u16| -> i32 {
         let room = w - pos;
         let (text, width) = if o.info_prefix.width() as i32 > room { (trim_right(&o.info_prefix, room), room) } else { (o.info_prefix.clone(), o.info_prefix.width() as i32) };
-        put(buf, pos, y, &text, if reading { spin_style } else { prompt });
+        put(pbuf, pos, y, &text, if reading { spin_style } else { prompt });
         pos + width
     };
     let len = count.len() as i32;
     if w > 1 {
         match mode {
             // Hidden: no count, but the rule keeps its line (only --no-separator takes it away).
-            "hidden" => bar(buf, 0, info_y, w - 1),
+            "hidden" => bar(pbuf, 0, info_y, w - 1),
             // `> query  < 3/6 (0) ────`
             "inline" => {
-                let pos = prefix(buf, pw as i32 + shift, info_y);
+                let pos = prefix(pbuf, pw as i32 + shift, info_y);
                 let max = w - pos - 1;
                 let out = trim_message(&count, max);
-                put(buf, pos, info_y, &out, info_style);
+                put(pbuf, pos, info_y, &out, info_style);
                 let (mut x, mut len) = (pos + out.width() as i32, len);
-                if len < max - 1 && reading { put(buf, x + 1, info_y, spinner, spin_style); x += 2; len += 2 }
+                if len < max - 1 && reading { put(pbuf, x + 1, info_y, spinner, spin_style); x += 2; len += 2 }
                 let fill = max - len - 1;
-                if fill > 0 { put(buf, x, info_y, " ", sep_style); bar(buf, x + 1, info_y, fill) }
+                if fill > 0 { put(pbuf, x, info_y, " ", sep_style); bar(pbuf, x + 1, info_y, fill) }
             }
             // The count at the right of the prompt line, a column short of the edge (the spinner
             // two before it, or the prefix just before); the rule on a line of its own.
@@ -1046,13 +1051,13 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
                 let mut pos = pw as i32 + shift;
                 if o.info_prefix.is_empty() {
                     pos = pos.max(w - len - 3);
-                    if pos < w { if reading { put(buf, pos, prompt_y, spinner, spin_style) } pos += 1 }
+                    if pos < w { if reading { put(pbuf, pos, prompt_y, spinner, spin_style) } pos += 1 }
                     if pos < w - 1 { pos += 1 }
                 } else {
-                    pos = prefix(buf, pos.max(w - len - o.info_prefix.width() as i32 - 1), prompt_y);
+                    pos = prefix(pbuf, pos.max(w - len - o.info_prefix.width() as i32 - 1), prompt_y);
                 }
-                put(buf, pos, prompt_y, &trim_message(&count, w - pos - 1), info_style);
-                bar(buf, 0, info_y, w - 1);
+                put(pbuf, pos, prompt_y, &trim_message(&count, w - pos - 1), info_style);
+                bar(pbuf, 0, info_y, w - 1);
             }
             // `──────── 3/6 (0) `: the rule from the first column (the spinner after it), the count.
             "right" => {
@@ -1060,20 +1065,20 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
                 let fill = w - out.len() as i32 - 2;
                 let mut x = 0;
                 if reading {
-                    if fill >= 2 { bar(buf, 0, info_y, fill - 2); x = fill - 1 }
-                    put(buf, x, info_y, spinner, spin_style);
+                    if fill >= 2 { bar(pbuf, 0, info_y, fill - 2); x = fill - 1 }
+                    put(pbuf, x, info_y, spinner, spin_style);
                     x += 2;
-                } else if fill >= 0 { bar(buf, 0, info_y, fill); x = fill + 1 }
-                put(buf, x, info_y, &out, info_style);
+                } else if fill >= 0 { bar(pbuf, 0, info_y, fill); x = fill + 1 }
+                put(pbuf, x, info_y, &out, info_style);
             }
             // `⠋ 3/6 (0) ────`: the spinner's cell, a margin, the count, a blank, the rule.
             _ => {
-                if reading { put(buf, 0, info_y, spinner, spin_style) }
+                if reading { put(pbuf, 0, info_y, spinner, spin_style) }
                 let max = w - 3;
                 let out = trim_message(&count, max);
-                put(buf, 2, info_y, &out, info_style);
+                put(pbuf, 2, info_y, &out, info_style);
                 let fill = max - len - 1;
-                if fill > 0 { let x = 2 + out.width() as i32; put(buf, x, info_y, " ", sep_style); bar(buf, x + 1, info_y, fill) }
+                if fill > 0 { let x = 2 + out.width() as i32; put(pbuf, x, info_y, " ", sep_style); bar(pbuf, x + 1, info_y, fill) }
             }
         }
     }
@@ -1082,10 +1087,13 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         let fx = (ia.x + ia.width).saturating_sub(text.width() as u16 + 1);
         buf.set_string(fx, info_y, &text, Style::default().fg(Color::Black).bg(Color::Yellow));
     }
+    let header_y = if !o.no_input { header_y } else if prompt_top { area.y } else { bottom.saturating_sub(1) };
     if let Some(h) = &header { let (hx, hw) = in_header.map(|r| (r.x, r.width)).unwrap_or((area.x, area.width)); buf.set_line(hx, header_y, h, hw); }
     // The list: bottom-up (default), or top-down — under the prompt (reverse) or from the top
     // with the prompt below (reverse-list).
-    let (list_top, list_bottom) = if in_input.is_some() { (area.y, bottom) } else if prompt_top { (if header.is_some() && !header_first { header_y + 1 } else { edge + 1 }, bottom) } else { (area.y, if header.is_some() && !header_first { header_y } else { edge }) };
+    let (list_top, list_bottom) = if o.no_input {
+        if prompt_top { (area.y + header.is_some() as u16, bottom) } else { (area.y, bottom - header.is_some() as u16) }
+    } else if in_input.is_some() { (area.y, bottom) } else if prompt_top { (if header.is_some() && !header_first { header_y + 1 } else { edge + 1 }, bottom) } else { (area.y, if header.is_some() && !header_first { header_y } else { edge }) };
     picker.page_rows.set(list_bottom.saturating_sub(list_top).max(1) as i64);
     // The box's rows: the prompt's side through the rows' (the list's rows are added as drawn).
     let edge_rows = [prompt_y, info_y, header_y];
