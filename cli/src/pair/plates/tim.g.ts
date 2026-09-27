@@ -1,4 +1,6 @@
-import { ellipse, circle, tube, path, blend, seg, meet, union, part, eye, rng, headroom } from '../tools/plate.mjs'
+// Generated from daemons/plates/tim.mjs by daemons/tools/generate.mjs. Do not edit.
+// @ts-nocheck
+import { ellipse, circle, tube, path, blend, seg, meet, union, part, eye, rng, headroom } from './plate.g.js'
 
 // tim, the octopus: tmux improved, the way vim is vi improved. Eight arms, eight panes. It will do
 // git's octopus merge too, which takes more than two branches at once.

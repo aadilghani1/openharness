@@ -1,4 +1,6 @@
-import { ellipse, circle, box, seg, tube, path, union, meet, blend, mirror, part, eye, rng } from '../tools/plate.mjs'
+// Generated from daemons/plates/gnu.mjs by daemons/tools/generate.mjs. Do not edit.
+// @ts-nocheck
+import { ellipse, circle, box, seg, tube, path, union, meet, blend, mirror, part, eye, rng } from './plate.g.js'
 
 // gnu: GNU's Not Unix (Richard Stallman, 1983), the recursive acronym; the gnu is a wildebeest.
 //

@@ -15,18 +15,20 @@ clients and the server build against.
 |---|---|
 | `roster.json` | The source of truth: rules, odds, drops (with announce and release dates), and every daemon's art, colours, lore and lines. |
 | `tools/render.mjs` | The reference renderer. Every client port draws exactly what it draws. |
-| `tools/generate.mjs` | Checks the roster against the art, colour, egg and drop rules and writes the copies below. `--check` in CI. |
+| `tools/generate.mjs` | Checks the roster against the art, colour, egg, trait and drop rules and writes the copies below. `--check` in CI. |
 | `tools/card.mjs` | Cards and shelves as text and SVG (see "Cards and shelves"). |
 | `frames.json` | Generated. Frames every port must reproduce, byte for byte. |
 | `desktop/lib/daemons/roster.g.dart` | Generated. The roster as a Dart raw string. |
 | `mobile/lib/daemons/roster.g.dart` | Generated. The same raw string for the phone, which depends on no other package here. |
-| `backend/src/lib/daemonRoster.g.ts` | Generated. Only what decides a draw, a grant or a level: ids, rarities, drops and their dates, egg, earn and bond rules, easter hashes. |
-| `plates/<id>.mjs` | A filled daemon's model: shapes, in every mood, version and animation frame (see "Plates"). |
-| `tools/plate.mjs` | The shader that prints a model as characters, at any width. |
-| `tools/bake.mjs` | Bakes every plate a client shows, and the colour rule every client follows. |
-| `plates.json` | Generated (by `generate.mjs`, through `bake.mjs`). Every plate frame, as text. Baked again only when a model, the shader or `rules.plate` changes; a bake takes minutes. |
+| `backend/src/lib/daemonRoster.g.ts` | Generated. Only what decides a draw, a grant or a level: ids, rarities, drops and their dates, egg, earn and bond rules, easter hashes; and each plate species' trait catalogue, for naming an individual's traits from its seed. |
+| `plates/<id>.mjs` | A filled daemon's model: shapes, in every mood, version and animation frame, for the species and for every individual's traits (see "Plates", "Individuals"). |
+| `plates/egg.mjs` | The egg's model: every kind's shell through every stage, from whole to open (see "Eggs"). |
+| `tools/plate.mjs` | The shader that prints a model as characters, at any width, with each cell's material when asked; and `bakeModel`, every frame of one model (bake.mjs, and harnessd for individuals). |
+| `tools/bake.mjs` | Bakes every plate a client shows, daemons' and eggs', and the colour rules every client follows (`plateColor`, `eggColor`, `individualColor`). |
+| `plates.json` | Generated (by `generate.mjs`, through `bake.mjs`). Every species plate frame, as text, and every egg frame with its material rows. Baked again only when a model, the shader, the egg kinds or what `rules.plate` says about frames changes; a bake takes minutes. |
 | `desktop/lib/daemons/plates.g.dart`, `mobile/lib/daemons/plates.g.dart` | Generated. `plates.json` as a Dart raw string. |
 | `cli/src/pair/roster.g.ts` | Generated. Ids, line templates, lore, first words and family: the pair brain's voice and the pair harness's persona ([BRAIN.md](BRAIN.md)); and `awayMinutes`, how long an absence makes a finished turn an away turn. |
+| `cli/src/pair/plates/*.g.ts` | Generated. The shader, every plate species' model and the reference renderer, copied as they are (type checks off), with `PLATE_MODELS`, `PLATE_ROSTER` and `PLATE_SOURCE`: harnessd draws each individual with them (see "Individual art"). |
 
 `hn` (the Rust terminal client) reads `roster.json` and `plates.json` with `include_str!` and tests against `frames.json`.
 
@@ -34,6 +36,7 @@ clients and the server build against.
 
 - **daemon**: the creature. User-facing text calls the background service `harnessd` so the word is free.
 - **zoo**: your daemons and eggs. `hn zoo`.
+- **individual**: one hatch of a species, with its own seed, traits and name (`pip the tim`). See "Individuals".
 - **hatch**: opening an egg. The reveal says `fork() returned 0.`
 - **pair**: the one daemon in your status line.
 - **drop**: a set of daemons released together. Drop 1 is `init`: `init(8)` is PID 1, the first process
@@ -51,10 +54,10 @@ is impossible (a terminal's own font):
 - **No ligature pairs.** Many people keep ligatures on, so no frame may contain a pair that programming
   fonts (Fira Code, JetBrains Mono, Cascadia) draw as one glyph: `rules.ligatureUnsafe` lists them
   (`==` `??` `!=` `::` `~~` `->` `=>` `<=` `>=` `<>` `||` `&&` `++` `//` `^=` `~=` `:=`), and
-  `generate.mjs` renders every sprite, portrait, nest and egg in every mood, frame and blink and fails on
-  any of them. So two eyes never touch (tim's `[o o]`, not `[oo]`, or working would draw `[==]` as one
-  glyph), and an eye never touches a face character that pairs with a mood's eye (`=` `?` `-` beside `>`,
-  `<`, `!`, `^`, `~` or `:`). Put a nose, a mouth, a pane `|` or a space between.
+  `generate.mjs` renders every sprite, portrait, egg line and rare extra's sprite in every mood, frame and
+  blink and fails on any of them. So two eyes never touch (tim's `[o o]`, not `[oo]`, or working would
+  draw `[==]` as one glyph), and an eye never touches a face character that pairs with a mood's eye (`=`
+  `?` `-` beside `>`, `<`, `!`, `^`, `~` or `:`). Put a nose, a mouth, a pane `|` or a space between.
 - **Sprite**: one line, at most 8 cells, centred in the status line with one cell of gutter each side.
   Three versions: `0.1`, `1.0`, `2.0`. Every 0.1 sprite has its own silhouette characters, so ten
   hatchlings never read alike at a glance.
@@ -64,10 +67,10 @@ is impossible (a terminal's own font):
   version uses the nearest one drawn.
 - **Plates** (drop `init`): a daemon with `plate: true` is drawn filled, the way line printers shaded
   the Mona Lisa: denser characters for more light, from `rules.plate.ink` (`` .,:;ox%#@``). It is not
-  drawn by hand. Its model, `plates/<id>.mjs`, is a set of shapes with a `model({ t, mood, age })`, and
-  `tools/plate.mjs` shades it into characters: light from the upper left, round volumes, a dark line
-  where a part crosses the parts behind it, and each cell's glyph picked by where its light falls in
-  the cell. `::` is broken as `:;`; `generate.mjs` checks every frame against every ligature pair
+  drawn by hand. Its model, `plates/<id>.mjs`, is a set of shapes with a `model({ t, mood, age, traits })`
+  (no traits: the species plate; see "Individuals"), and `tools/plate.mjs` shades it into characters:
+  light from the upper left, round volumes, a dark line where a part crosses the parts behind it, and
+  each cell's glyph picked by where its light falls in the cell. `::` is broken as `:;`; `generate.mjs` checks every frame against every ligature pair
   anyway. `bake.mjs` prints each plate at two widths, `rules.plate.cols`: `portrait` (28 columns, at
   most 12 rows) where a portrait shows, and `reveal` (56 columns, at most 24 rows) for the hatch reveal
   and anywhere with room. Every version and mood gets a loop (`idle` 8 frames, the others 4, a frame
@@ -75,7 +78,10 @@ is impossible (a terminal's own font):
   between moods. Clients never run a model: they print the baked text. The versions grow as NetHack's
   pets do, the same animal throughout: the hatchling is mostly head. The status line still takes the
   8-cell sprite, in the same line-art rules as everyone else (a filled daemon cannot be eight
-  characters wide). A plate daemon needs no line portrait; its card shows its portrait plate.
+  characters wide). A plate daemon needs no line portrait; its card shows its portrait plate. A part may
+  say what it is made of (`mat`), and `plate()` then prints a second set of rows, a letter per cell: `g`
+  glow, `s` star, `p` peek (eggs), `m` marks, `a` a rare extra, `e` the odd eye (individuals), `.` none.
+  A cell takes a material when at least half its lit samples are made of it; a blank cell never does.
 - **Eyes carry the mood.** The body stays still; a mood changes at most two cells of the sprite. A
   portrait may add one or two lore-true mood parts, never more. A daemon may give its own `eyes` per mood
   (and a `lid`): the grue's glow in the dark, tty's are upper case (a Model 33 printed nothing else), and
@@ -211,7 +217,8 @@ Every daemon deploy ships dark: until daemons are turned on, nothing here change
 ## The zoo (server contract)
 
 The zoo is account state, the same on every client, like the desk but separate from it: a desk
-change never re-fetches the zoo and the other way round.
+change never re-fetches the zoo and the other way round. It is moving to individuals, one record per
+hatch (see "Individuals", "In the zoo"); below is the zoo as built today.
 
 ```
 GET  /api/zoo        -> { revision, zoo }
@@ -511,35 +518,216 @@ pool (the same weights as a turn egg). Each client reports the ones it sees with
 | `days` | You use Harness on three different days. |
 
 The first egg leans toward tim (`eggs.first.boost` tim x4: about 42%, four times any other common), so
-most people meet tim first and get the joke. While it incubates, the status line shows the nest:
-`\_O_/` `~\_O_/~` `\_.._/` `\_o.o_/` as 0, 1, 2 and 3 habits count toward it; without a finished
-turn, at most 2 count (`render.mjs` `nestStage`, pinned in `frames.json` `nests`). An egg never
-hatches on its own; clicking a ready egg hatches it.
+most people meet tim first and get the joke. While it incubates it cracks as habits count toward it
+(see "Eggs"): `render.mjs` `habitProgress` counts them, and without a finished turn at most 2 count;
+`eggStage` turns the count into a stage (`frames.json` `firstEgg`). An egg never hatches on its own;
+clicking a ready egg opens it.
+
+## Eggs
+
+Every egg is drawn filled, like drop `init`: a shaded shell (`plates/egg.mjs`) in its kind's pattern and
+colour, so each kind looks different the way a blind box's art tells you the series. It cracks as you
+earn it and cracks open when you open it. Its rarity shows only then: while you earn it, the light
+inside is plain.
+
+**Stages.** While you earn it: `p0` whole; `p1` a crack part way across; `p2` all the way, with a chip
+knocked out; `p3` split a little, light inside; `p4` ready: it rocks in the nest and two eyes peek out
+of the chip. Opening it: `rock` (two big rocks), `burst` (the top lifts and light pours out), `tumble`
+(the top breaks in two, the halves land either side, bits of shell scatter) and `open` (the bottom
+half; the hatchling then rises out of it).
+
+**Which stage** (`render.mjs` `eggStage(done, need, ready)`, pinned in `frames.json` `eggStages`): `p4`
+once the egg is earned and waits in the nest; otherwise by `done / need`, `p0` at none, `p1` below a
+third, `p2` below two thirds, `p3` from there. What counts toward each kind:
+
+| egg | done / need |
+|---|---|
+| first | habits (`habitProgress`: until a finished turn is among them, at most `need - 1` count) / `firstEgg.need` |
+| setup | habits / `setupEgg.need` |
+| turn | `progress.turns % earn.turn.every` / `earn.turn.every` |
+| week | local days of this ISO week with a counted turn / `earn.week.days` |
+| night | `progress.nights` / `earn.night.nights` |
+| marathon | `progress.turns` / `earn.marathon.turns`, until it is earned |
+
+Easter and history eggs arrive earned. The status line shows one egg, the nearest to hatching: an
+earned egg waiting in the nest (`p4`) if there is one, else the egg being earned with the highest
+`done / need`.
+
+**One line.** In the status line an egg is one line of at most 8 cells, in the bar's own colour
+(`rules.eggLine`, `render.mjs` `eggLine`, pinned in `frames.json` `eggLines`). `{k}` is the kind's
+`rules.eggs[kind].mark`: first a space, setup `$`, turn `.`, week `7`, marathon `@`, night `*`, easter
+`?`, history `#`.
+
+| stage | line | stage | line |
+|---|---|---|---|
+| `p0` | `\_({k} )_/` | `rock` | `\_(oo)_/` |
+| `p1` | `\_({k}')_/` | `burst` | `'*(oo)*'` |
+| `p2` | `\_(/\)_/` | `tumble` | `')_^^_('` |
+| `p3` | `\_(*')_/` | `open` | `)\_^^_/(` |
+| `p4` | `\_(oo)_/`, blinking `\_(--)_/` | `hatchling` | `)` + its 0.1 sprite + `(`: `)(o o)(` |
+
+A ready egg blinks when a daemon would (`rules.blinks`). The hatchling line is the hatchling's 0.1
+sprite between the halves of its shell when that fits 8 cells, else the sprite alone; an individual
+with a rare extra shows that extra's sprite (see "Individuals"). `generate.mjs` checks every line with
+every mark and blink, and every hatchling's, against printable ASCII, 8 cells and
+`rules.ligatureUnsafe`.
+
+**Opening** (`rules.plate.eggMs`): the ready egg's `p4` frames, then `rock` twice through (65 ms a
+frame), `burst` (the first frame holds 420 ms, then 150 ms each), `tumble` (75 ms each), `open` (380
+ms), and the hatchling's reveal plate rises out of the bottom half a row at a time. While it waits in
+the nest, `p0` and `p4` loop a frame every 190 ms (`eggMs.loop`); `p1` to `p3` hold still. Reduce
+Motion shows each stage's first frame and goes straight to the card.
+
+**Colour** (`bake.mjs` `eggColor`, pinned in `frames.json` `eggColors`). The shell runs down its kind's
+`rules.eggs[kind].gradient { top, bottom }`, a row at a time, each glyph's brightness from
+`rules.plate.ink`, exactly as a daemon's plate does:
+
+| egg | top | bottom |
+|---|---|---|
+| first | cream `#ffffd7` | `#d7d7af` |
+| setup | lavender `#d7d7ff` | `#8787d7` |
+| turn | white `#eeeeee` | `#a8a8a8` |
+| week | robin's egg `#afffff` | `#5fafaf` |
+| marathon | orange `#ffd7af` | `#d7875f` |
+| night | `#8787d7`, with pale `#ffffd7` stars (`rules.eggs.night.stars`) | `#5f5f87` |
+| easter | pink `#ffafd7` | `#af5faf` |
+| history | sepia `#d7af87` | `#875f5f` |
+
+A glow cell (`g`, the light inside) is `rules.plate.light.plain` (`#ffffd7`) while the egg is earned
+and the rarity's light once it is opened (`light.common` `#eeeeee`, `rare` `#5fd7ff`, `legendary`
+`#ffd75f`, `secret` `#af87ff`); a peek cell (`p`) is `light.peek`, white; a star (`s`) is the kind's
+stars. A secret's opening goes dark: the stage turns black, the shell dims to 0.22 of its colour and
+the stars to 0.3, and only the violet light shows. Every hex is the xterm-256 index it names
+(`generate.mjs` checks). A soft glow in the bottom colour, or in the light once it is opened, is welcome
+where a client can draw one.
+
+**Baked** into `plates.json` as `eggs[kind][size][stage] = [{ rows, mats }]`, each its rows joined by
+newlines: `portrait` 28 columns and `reveal` 56 (`rules.plate.cols`); `p0` and `p4` 8 frames, `p1` to
+`p3` 1, `rock` 8, `burst` 6, `tumble` 8, `open` 1 (`plates/egg.mjs` `STAGES`). Every stage of one kind
+and width shares one crop, so nothing jumps as it opens. `mats` holds each cell's material: `g` glow,
+`s` star, `p` peek, `.` shell or nothing. `generate.mjs` checks every frame like a daemon's plate, and
+its material rows against its rows. These replace the one-line looks (`rules.eggs[kind].look`), the
+line-art egg (`rules.egg`) and the nest (`rules.nest`, `nestStage`).
+
+## Individuals
+
+A species (tim, the octopus) is a type. Every hatch is its own individual: a seed the server draws, the
+traits that follow from it, a serial, and the name the person gives it at the hatch. Duplicates of a
+species are normal, and two identical individuals practically never happen; people collect species
+and traits. Traits read as command-line flags, `tim -c coral --spots --glasses --fidgety`, and a card
+says how rare that look is: `1 in 515`.
+
+**The catalogue** (`roster.json` `daemons[].traits`, for every plate species):
+
+```
+traits: {
+  colours: [[name, weight, top, bottom]],     // colour families; the first is the species' gradient
+  marks:   [[name | null, weight]],           // markings; null is none
+  extras:  [[name | null, weight, hex, { sprites: { 0.1, 1.0, 2.0 }, work: [...] }]],
+                                              // rare extras: their colour and status-line variant
+  props:   { key: [lo, hi] },                 // proportions, each a range around 1
+  flags:   { key: { high?, low? } },          // a proportion's flag near an end of its range
+  accents: [hex],                             // the colours markings are painted in
+  oddEye:  0.02,                              // the chance of an odd eye
+  fidgety: 0.3,                               // the chance of a fidgety temper
+}
+```
+
+Six colour families (the rarest about 6%), four markings, three to five proportions and three
+rare extras per species (together 12%, each 3 to 5%), lore-true: tim's beanie and headset, gnu's
+mortarboard, mutt's mail bag, bug's lamp to circle, auk's top hat. `generate.mjs` checks that every hex
+is an xterm-256 colour, the weights whole, every name a short lowercase flag meaning one thing, every
+range around 1 and the first colour the species' gradient; and that the model takes every trait: its
+`DEFAULT` holds every proportion at 1, and every marking, extra and the odd eye paints cells of its own.
+
+**The roll** (`render.mjs` `rollTraits(roster, id, seed)`, pinned in `frames.json` `traitRolls`, which
+every port matches exactly, the server's TypeScript first). The seed is a whole number from 1 to
+4294967295, drawn with `crypto` at the hatch and stored; traits are derived from it, never stored as
+truth. One stream of mulberry32 on the seed (`plate.mjs` `rng`) is drawn in this order: the colour,
+the markings, the extra (each a weighted pick: `r * total weight`, walked down the list until it drops
+below 0), the odd eye (`r < oddEye`), each proportion in the catalogue's key order (`lo + (hi - lo) *
+r`, rounded half up to hundredths), and the temper (`r < fidgety`). The accent is `accents[seed %
+accents.length]`. Seed 0 is the species as it was drawn before individuals: the first colour, no
+markings, no extra, every proportion 1, calm. The result:
+
+```
+{ seed, colour, marks, extra, oddEye, <each proportion>, temper: 'calm' | 'fidgety', accent }
+```
+
+**Flags** (`individualFlags`): the species, `-c` and the colour, then `--` and the markings, the extra,
+`--odd-eye`, each proportion's `high` flag when it falls in the top fifth of its range (`v >= hi - (hi -
+lo) * 0.2`) and its `low` flag in the bottom fifth, in catalogue order, and `--fidgety`.
+
+**Rarity** (`oneIn`): `round(1 / p)`, p the chance of its colour, its markings, its extra and its eyes
+(odd or not) together. Proportions and temper do not count. Shown as `1 in 2,130`.
+
+**Status line** (`renderIndividualSprite`, `individualDaemon`, pinned in `frames.json`
+`individualSprites`). Eight cells in the bar's own colour, so traits show only in characters: an
+individual with a rare extra uses that extra's sprites and work frames, in the species' sprite
+contract (`generate.mjs` checks them like every sprite: width, printable, ligatures after every eye and
+blink, unlike any other daemon's); a fidgety one steps its work frames at half `workMs`. Colour,
+markings and the odd eye do not show there. Centre it on `baseWidth` of `individualDaemon`.
+
+**Individual art.** An individual's plates are drawn on the person's machine by harnessd, with the
+same shader and models (`generate.mjs` copies them into `cli/src/pair/plates`): `bakeModel(
+PLATE_MODELS[id].model, PLATE_ROSTER.rules, { traits: rollTraits(PLATE_ROSTER, id, seed), mats: true
+})` has the shape of a species plate, `[size][version][mood]`, each frame `{ rows, mats }`: `m` a
+marking, `a` the extra, `e` the odd eye, `.` the body. harnessd caches them per individual (species,
+seed and `PLATE_SOURCE`) under the adapter's data folder and serves them on request. An individual's
+canvas may have room above its species' for a hat or long tufts, whole portrait rows and at most
+`rules.plate.room` (3) of them, so its plates stay within `rules.plate.maxRows` plus that: 15 rows at
+the portrait, 30 at the reveal. Until its art arrives, a client shows the species plate painted in the
+individual's colour family.
+
+**Colour** (`bake.mjs` `individualColor`, pinned in `frames.json` `individualColors`): the body runs down
+its colour family (a shiny one's runs down the species' `shinyGradient`), a marking is its `accent`, an
+extra its catalogue colour, the odd eye `rules.plate.oddEye` (`#5fffd7`); every glyph's brightness from
+`rules.plate.ink`, as a daemon's plate.
+
+**In the zoo** (the server builds this next, in `backend/src/lib/zoo.ts`). A zoo holds individuals,
+`{ uid, id (species), seed, serial, name?, shiny, xp, bond, version, hatched, egg }`, and `pair` names a
+uid. A hatch mints the species' serial (`DaemonMint`, per species) and draws the seed. The draw keeps
+the species weights; duplicates are allowed; the first 4 hatches of an account are always a species it
+does not own, and after 8 hatches in a row with no new species the next is a new one, while an unowned
+released regular exists. Secrets as before. Ops address a uid: `pair { uid }`, `zoo.nickname { uid,
+name }` (the name given at the hatch). A zoo from before (one record per species, `dupes`) reads as
+individuals with seed 0, one per record. At most 256 individuals.
 
 ## Hatching
 
-Crack, silhouette, name, card, in about 4 s (Reduce Motion: straight to the card):
-the egg wobbles twice, cracks, the top pops; the hatchling's 0.1 sprite appears as `#` in the faint
-colour, holds 850 ms, fills with its colour, blinks; its name types in as a banner in the face from `banner.json` (`renderBanner`); the rarity
-stamp and first words appear. A secret's reveal starts pitch black. The card copies as a fenced code
-block:
+Open, silhouette, name, card (Reduce Motion: straight to the card): the ready egg rocks, bursts in its
+rarity's light and the top tumbles off (see "Eggs"); the hatchling rises out of the bottom half as `#`
+in the faint colour, holds 850 ms, fills with its colour (an individual's own colour family), blinks;
+its name types in as a banner in the face from `banner.json` (`renderBanner`); the rarity stamp, the
+individual's flags and `1 in N`, and first words appear, and the person names it. A secret's reveal
+starts pitch black. The card copies as a fenced code block:
 
 ```
 .----------------------------------------.
-| #01/09  DROP 1: UNIX            COMMON |
+| #01/09  DROP 1: INIT            COMMON |
 |                                        |
-|  [o o]   tim 0.1                       |
-|  screen -> tmux -> tim                 |
+|                   .,                   |
+|                 x####x                 |
+|                %####%%;                |
+|                x%;%%;;x                |
+|                :%x%%x%,                |
+|                :;:;:;:;                |
 |                                        |
-|  "oh hi. i'm tim. tmux, improved.      |
-|  what are we building?"                |
+|   pip the tim 0.1  #0042               |
+|   tim -c coral --spots --beanie        |
+|   1 in 644                             |
+|   screen -> tmux -> tim                |
 |                                        |
-|  hatched 2026-09-26, first egg         |
+|   "oh hi. i'm tim. tmux, improved.     |
+|   what are we building?"               |
+|                                        |
+|   hatched 2026-09-27, turn egg         |
 '----------------------------------------'
 ```
 
-A duplicate has no reveal of its own name: it says it merged (`another tim. +150 xp.`), and a shiny
-one says yours is shiny now. A shiny hatch fills with the daemon's shiny colour.
+Until the zoo holds individuals, a duplicate has no reveal of its own name: it says it merged
+(`another tim. +150 xp.`), and a shiny one says yours is shiny now. A shiny hatch fills with the
+daemon's shiny colour.
 
 ## Cards and shelves
 
@@ -553,12 +741,18 @@ in their colours (shiny ones in their shiny colour), `x2` beside a daemon with o
 shows its regulars as `#` silhouettes of their 0.1 sprites and its release date; one not yet announced
 shows nothing. Cards and shelves never show a live mood, so they never reveal whether you are working.
 
+An individual's card (`cardLines` with its `traits` and `name`) says `pip the tim 2.0  #0042`, then its
+flags wrapped as a long command is (` \` at the end of a line, the next indented two), then how rare it
+is (`1 in 2,130`); it shows the individual's own portrait plate once harnessd has drawn it, else the
+species plate. Its SVG runs down its colour family.
+
 Secrets sit outside the numbered set, and every drop numbers its own: drop 1 is tim `#01/09` to auk
 `#09/09`, and beastie is `#S/09`. A plate daemon's card shows its portrait plate (idle, first frame);
 its SVG runs down the daemon's gradient, a row at a time.
 
 ```
 node daemons/tools/card.mjs tim --version 2.0 --serial 42          # a card as text
+node daemons/tools/card.mjs tim --version 0.1 --seed 13 --name pip   # an individual, drawn by its model
 node daemons/tools/card.mjs tim --version 2.0 --shiny --svg > tim.svg   # a shiny card as SVG
 node daemons/tools/card.mjs --shelf 'tim*x2,yak,beastie' --svg > zoo.svg   # a shelf: shiny tim, two of it
 node --test daemons/tools/card.test.mjs
@@ -583,3 +777,6 @@ node --test daemons/tools/card.test.mjs
 5. **The rest of the zoo**: turn/week/marathon/night/history eggs, bond and versions, serials,
    duplicates and drop dates (the server and harnessd: see "Earning eggs and growing" and "Serials and
    duplicates"; the clients follow), logbooks, more drops.
+6. **Eggs that crack and individuals with traits**: the contract is here ("Eggs", "Individuals", the
+   references in `render.mjs` and `bake.mjs`, `frames.json`); next, in parallel, the server's zoo of
+   individuals, harnessd's individual art, the desktop, the phone and `hn`.

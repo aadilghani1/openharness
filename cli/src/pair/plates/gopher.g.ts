@@ -1,4 +1,6 @@
-import { circle, ellipse, box, seg, tube, path, union, meet, blend, part, eye, headroom } from '../tools/plate.mjs'
+// Generated from daemons/plates/gopher.mjs by daemons/tools/generate.mjs. Do not edit.
+// @ts-nocheck
+import { circle, ellipse, box, seg, tube, path, union, meet, blend, part, eye, headroom } from './plate.g.js'
 
 // gopher: the Gopher protocol (University of Minnesota, 1991), named after the campus mascot; for a moment it was bigger than the web.
 // The state's own "gopher" is the thirteen-lined ground squirrel, and a burrow is a mine: hence

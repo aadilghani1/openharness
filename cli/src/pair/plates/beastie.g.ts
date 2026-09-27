@@ -1,4 +1,6 @@
-import { circle, ellipse, box, seg, tube, path, union, cut, meet, blend, part, eye } from '../tools/plate.mjs'
+// Generated from daemons/plates/beastie.mjs by daemons/tools/generate.mjs. Do not edit.
+// @ts-nocheck
+import { circle, ellipse, box, seg, tube, path, union, cut, meet, blend, part, eye } from './plate.g.js'
 
 // beastie: say "BSD" fast and you get "beastie", the Berkeley daemon; the whole collection is named
 // after daemons, Unix's background processes, and this is the first one.

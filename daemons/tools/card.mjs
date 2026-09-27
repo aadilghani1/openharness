@@ -3,14 +3,17 @@
 // previews and a GitHub profile README, where a code block does not travel). Never shows a live mood:
 // a card is a portrait, not a presence indicator.
 //
-//   node daemons/tools/card.mjs tim [--version 1.0] [--shiny] [--serial 42] [--nickname pip] [--svg]
+//   node daemons/tools/card.mjs tim [--version 1.0] [--shiny] [--serial 42] [--name pip] [--seed 1363] [--svg]
 //   node daemons/tools/card.mjs --shelf tim*x2,vim,grue [--drop unix] [--svg]
+//
+// With --seed the card is that individual (render.mjs rollTraits): its own portrait, its flags and how
+// rare it is.
 //
 // A shelf entry is a daemon id, `*` when it is shiny, and `xN` for N of it (the original and N-1
 // duplicates merged into it).
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { renderPortrait, renderSprite } from './render.mjs'
+import { renderPortrait, renderSprite, rollTraits, individualFlags, oneIn } from './render.mjs'
 
 const W = 42
 const INNER = W - 4
@@ -34,14 +37,43 @@ function wrap(text, width) {
   return out
 }
 
-/** The card as lines of printable ASCII, 42 columns wide. A filled daemon passes its portrait plate
- *  (daemons/plates.json: portrait, the version, idle, frame 0) as `plate`, in place of line art. */
-export function cardLines(roster, d, { version = roster.rules.versions[0], shiny = false, serial = null, nickname = null, hatched = null, egg = null, plate = null } = {}) {
+/**
+ * An individual's flags as card lines, `width` at most: wrapped at spaces as a long command is, every
+ * line but the last ending in ` \` and the lines after the first indented two.
+ */
+export function flagLines(flags, width) {
+  const words = flags.split(' ')
+  const out = []
+  let line = ''
+  words.forEach((word, i) => {
+    const indent = out.length ? '  ' : ''
+    const next = indent + line + ' ' + word
+    // A line that breaks keeps room for its ` \`; the last line may run to the edge.
+    if (!line) line = word
+    else if (next.length <= width - 2 || (i === words.length - 1 && next.length <= width)) line += ' ' + word
+    else { out.push(indent + line + ' \\'); line = word }
+  })
+  out.push((out.length ? '  ' : '') + line)
+  return out
+}
+
+/** `1 in 2,130`: a rarity's N with a comma every three digits. */
+export const oneInText = n => `1 in ${String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`
+
+/**
+ * The card as lines of printable ASCII, 42 columns wide. A filled daemon passes its portrait plate
+ * (daemons/plates.json: portrait, the version, idle, frame 0; an individual's own when harnessd has
+ * drawn it) as `plate`, in place of line art. An individual passes its `traits` (render.mjs
+ * rollTraits) and the `name` it was given at the hatch: the card says `pip the tim`, then its flags and
+ * how rare it is.
+ */
+export function cardLines(roster, d, { version = roster.rules.versions[0], shiny = false, serial = null, name = null, nickname = null, traits = null, hatched = null, egg = null, plate = null } = {}) {
   const drop = roster.drops.find(x => x.id === d.drop) ?? { n: 1, name: d.drop }
   const L = s => '| ' + s.padEnd(INNER).slice(0, INNER) + ' |'
   const head = `${cardNumber(roster, d)}  DROP ${drop.n}: ${drop.name.toUpperCase()}`
   const rarity = (shiny ? 'SHINY ' : '') + d.rarity.toUpperCase()
-  const name = `${nickname ? `${nickname} the ` : ''}${d.id} ${version}${serial != null ? `  #${String(serial).padStart(4, '0')}` : ''}`
+  const called = name ?? nickname
+  const title = `${called ? `${called} the ` : ''}${d.id} ${version}${serial != null ? `  #${String(serial).padStart(4, '0')}` : ''}`
   if (d.plate && !plate) throw new Error(`${d.id} is drawn filled: pass its portrait plate`)
   const portrait = plate ?? renderPortrait(roster, d, version, 'idle', { motion: false })
   const width = Math.max(...portrait.map(l => l.length))
@@ -52,7 +84,8 @@ export function cardLines(roster, d, { version = roster.rules.versions[0], shiny
     L(''),
     ...portrait.map(l => L(' '.repeat(pad) + l)),
     L(''),
-    L('  ' + name),
+    L('  ' + title),
+    ...(traits ? [...flagLines(individualFlags(roster, d.id, traits), INNER - 2).map(l => L('  ' + l)), L('  ' + oneInText(oneIn(roster, d.id, traits)))] : []),
     L('  ' + d.family.map(f => f[0]).join(' -> ')),
     L(''),
     ...wrap(`"${d.first}"`, INNER - 2).map(l => L('  ' + l)),
@@ -135,8 +168,10 @@ export function cardSvg(roster, d, opts = {}) {
   const portraitRows = opts.plate ? opts.plate.length : renderPortrait(roster, d, opts.version ?? roster.rules.versions[0], 'idle', { motion: false }).length
   const color = opts.shiny && d.shiny ? d.shiny.hex : d.color.hex
   const colors = {}
-  // A plate runs down its gradient, a row at a time.
-  const g = opts.plate && (opts.shiny ? d.shinyGradient : d.gradient)
+  // A plate runs down its gradient, a row at a time: an individual's own colour family (a shiny one's
+  // is the shiny gradient).
+  const family = opts.traits && d.traits?.colours.find(c => c[0] === opts.traits.colour)
+  const g = opts.plate && (opts.shiny ? d.shinyGradient : family ? { top: { hex: family[2] }, bottom: { hex: family[3] } } : d.gradient)
   const rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16))
   const rowColor = r => '#' + rgb(g.top.hex).map((v, i) => Math.round(v + (rgb(g.bottom.hex)[i] - v) * (portraitRows > 1 ? r / (portraitRows - 1) : 0)).toString(16).padStart(2, '0')).join('')
   for (let i = 3; i < 3 + portraitRows; i++) colors[i] = g ? rowColor(i - 3) : color
@@ -183,10 +218,18 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.stdout.write(svg ? shelfSvg(roster, owned, opts) : shelfLines(roster, owned, opts).join('\n') + '\n')
   } else {
     const d = roster.daemons.find(x => x.id === args[0])
-    if (!d) { console.error(`usage: card.mjs <${roster.daemons.map(x => x.id).join('|')}> [--version v] [--shiny] [--serial n] [--nickname s] [--svg]`); process.exit(2) }
+    if (!d) { console.error(`usage: card.mjs <${roster.daemons.map(x => x.id).join('|')}> [--version v] [--shiny] [--serial n] [--name s] [--seed n] [--svg]`); process.exit(2) }
     const version = flag('--version') ?? roster.rules.versions[0]
-    const plate = d.plate ? JSON.parse(readFileSync(new URL('../plates.json', import.meta.url), 'utf8')).daemons[d.id].portrait[version].idle[0].split('\n') : null
-    const opts = { version, plate, shiny: args.includes('--shiny'), serial: flag('--serial'), nickname: flag('--nickname') }
+    const seed = flag('--seed')
+    const traits = seed != null && d.traits ? rollTraits(roster, d.id, Number(seed)) : null
+    let plate = d.plate ? JSON.parse(readFileSync(new URL('../plates.json', import.meta.url), 'utf8')).daemons[d.id].portrait[version].idle[0].split('\n') : null
+    if (traits) {
+      // The individual's own portrait, as harnessd bakes it (one crop over every mood of the version).
+      const { bakeModel } = await import('./plate.mjs')
+      const { model } = await import(`../plates/${d.id}.mjs`)
+      plate = bakeModel(model, { ...roster.rules, versions: [version] }, { traits }).portrait[version].idle[0].split('\n')
+    }
+    const opts = { version, plate, traits, shiny: args.includes('--shiny'), serial: flag('--serial'), name: flag('--name') ?? flag('--nickname') }
     process.stdout.write(svg ? cardSvg(roster, d, opts) : cardLines(roster, d, opts).join('\n') + '\n')
   }
 }
