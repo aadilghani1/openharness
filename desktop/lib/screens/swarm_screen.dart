@@ -265,6 +265,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Widget _startGuide() => WorkspaceWelcome(
     key: ValueKey('welcome:${app.activeSwarmId}'),
     onCommand: _runShortcut,
+    // What to pick up, opened into this tab the way Cmd-P opens it: a harness
+    // as itself, a conversation Harness did not start as a harness resuming it.
+    app: app,
+    projects: _projects.projects,
+    onOpen: (row) => unawaited(
+      _activateSearch(
+        SwarmSearchSelection(row),
+        app.activeSwarmId,
+        placement: HarnessPlacement.currentTab,
+      ),
+    ),
   );
 
   void _showKeyboardShortcuts() {
@@ -2450,19 +2461,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(failure.message),
-        action: SnackBarAction(
-          label: 'Start New Conversation',
-          onPressed: () => _openNewHarness(
-            machineId: row.machineId!,
-            engine: agent?.dsh ?? agent?.engine,
-            folder: agent?.project?.cwd,
-            swarmId: app.swarms.any((tab) => tab.id == target)
-                ? target
-                : app.activeSwarmId,
-            placement: placement,
-            task: '',
-          ),
-        ),
+        // A conversation Harness did not start says what stopped it (open in
+        // a terminal, gone); a new, empty one is not what was asked for.
+        action: row.external != null
+            ? null
+            : SnackBarAction(
+                label: 'Start New Conversation',
+                onPressed: () => _openNewHarness(
+                  machineId: row.machineId!,
+                  engine: agent?.dsh ?? agent?.engine,
+                  folder: agent?.project?.cwd,
+                  swarmId: app.swarms.any((tab) => tab.id == target)
+                      ? target
+                      : app.activeSwarmId,
+                  placement: placement,
+                  task: '',
+                ),
+              ),
       ),
     );
   }

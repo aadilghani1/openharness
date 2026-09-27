@@ -489,6 +489,76 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('answers session_search from the index, sealed to the requester', async () => {
+    const socket = new BackendSocket('token')
+    const asked: Array<[string, number | undefined]> = []
+    socket.sessionSearchProvider = (query, options) => {
+      asked.push([query, options.limit])
+      return { hits: [], indexed: 3, pending: 0, tookMs: 1 }
+    }
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    const unwrap = vi.spyOn(socket.e2ee, 'unwrapDown')
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
+    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+      type: 'session_search_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
+    })
+    const envelope = { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } }
+    unwrap.mockReturnValueOnce({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 } })
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'session_search', payload: envelope } })
+    await vi.waitFor(() => {
+      expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-1', { hits: [], indexed: 3, pending: 0, tookMs: 1 })
+    })
+    expect(asked).toEqual([['dial scroll', 12]])
+
+    // A machine whose Node has no node:sqlite says so rather than going silent.
+    socket.sessionSearchProvider = null
+    unwrap.mockReturnValueOnce({ type: 'session_search', payload: { requestId: 's-2', query: 'dial' } })
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'session_search', payload: envelope } })
+    await vi.waitFor(() => {
+      expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-2', { error: 'SEARCH_UNAVAILABLE' })
+    })
+    await socket.stop()
+  })
+
+  it('answers session_tail from the index, sealed to the requester, and says what it cannot', async () => {
+    const socket = new BackendSocket('token')
+    const asked: Array<[string, number | undefined, number | undefined]> = []
+    const tail = { sessionId: 'sess-1', rows: [{ turn: 4, at: 1, ask: 'fix the dial', answer: 'Done.', tools: '' }], hasMore: true, total: 5, lastAt: 1 }
+    socket.sessionTailProvider = async (sessionId, options) => {
+      asked.push([sessionId, options.beforeTurn, options.maxChars])
+      return sessionId === 'sess-1' ? tail : null
+    }
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    const unwrap = vi.spyOn(socket.e2ee, 'unwrapDown')
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
+    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+      type: 'session_tail_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
+    })
+    const envelope = { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } }
+    const ask = (payload: Record<string, unknown>) => {
+      unwrap.mockReturnValueOnce({ type: 'session_tail', payload })
+      ws.message({ t: 'down', connId: 'web-1', frame: { type: 'session_tail', payload: envelope } })
+    }
+    ask({ requestId: 't-1', sessionId: 'sess-1', beforeTurn: 9, maxChars: 8000 })
+    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_tail_result', 't-1', tail))
+    // Only whole numbers page; anything else asks for the last rows.
+    ask({ requestId: 't-2', sessionId: 'sess-1', beforeTurn: '9', maxChars: 1.5 })
+    await vi.waitFor(() => expect(asked).toHaveLength(2))
+    expect(asked).toEqual([['sess-1', 9, 8000], ['sess-1', undefined, undefined]])
+    ask({ requestId: 't-3', sessionId: 'nope' })
+    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_tail_result', 't-3', { error: 'NOT_INDEXED', sessionId: 'nope' }))
+    ask({ requestId: 't-4' })
+    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_tail_result', 't-4', { error: 'BAD_SESSION' }))
+    socket.sessionTailProvider = null
+    ask({ requestId: 't-5', sessionId: 'sess-1' })
+    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_tail_result', 't-5', { error: 'SEARCH_UNAVAILABLE' }))
+    await socket.stop()
+  })
+
   it('hands theme_set to the host-theme sink and acknowledges it to the requester', async () => {
     const socket = new BackendSocket('token')
     const received: unknown[] = []
@@ -1002,6 +1072,36 @@ describe('BackendSocket outbound queue', () => {
     finishProbe()
     await vi.waitFor(() => expect(frames.some((frame) => frame.type === 'engines_probe_result')).toBe(true))
     await socket.unregisterLocalClient('local:create')
+    await socket.stop()
+  })
+
+  it('opens a harness on a conversation Harness did not start, and refuses what a resume cannot take', async () => {
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:resume', {
+      sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true,
+    })
+    const inputs: Array<{ resumeSessionId?: string | null; cwd: string }> = []
+    socket.onCreateAgent = async (input) => {
+      inputs.push(input)
+      return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app.' }
+    }
+    const create = (requestId: string, extra: Record<string, unknown>) => socket.handleLocalFrame('local:resume', {
+      type: 'agent_create', payload: { requestId, engine: 'codex', cwd: '/work/cohorts', ...extra },
+    })
+    const reply = (requestId: string) => frames.find((frame) => (frame.payload as { requestId?: string }).requestId === requestId)?.payload
+    create('ok', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001' })
+    await vi.waitFor(() => expect(reply('ok')).toBeDefined())
+    expect(inputs[0]).toMatchObject({ resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', cwd: '/work/cohorts' })
+    // What cli.ts said about it reaches the client as it was said.
+    expect(reply('ok')).toMatchObject({ error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app.' })
+    create('shape', { resumeSessionId: '../../etc/passwd' })
+    create('prompt', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', prompt: 'and then this' })
+    await vi.waitFor(() => expect(reply('prompt')).toBeDefined())
+    expect(reply('shape')).toMatchObject({ error: 'INVALID_SESSION' })
+    expect(reply('prompt')).toMatchObject({ error: 'INVALID_SESSION' })
+    expect(inputs).toHaveLength(1)
+    await socket.unregisterLocalClient('local:resume')
     await socket.stop()
   })
 

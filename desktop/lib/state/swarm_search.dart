@@ -14,6 +14,8 @@ import 'pane_arrangement.dart';
 import 'swarm_catalog.dart';
 import 'swarm_navigation.dart';
 import 'harness_sessions.dart';
+import 'search_when.dart';
+import 'session_content_search.dart';
 
 const kSwarmSearchHint = 'Search harnesses';
 const kHarnessPickerHint = kSwarmSearchHint;
@@ -71,6 +73,13 @@ class SwarmSearchController extends ChangeNotifier {
        _locations = locations ?? SwarmLocationCatalog(),
        targetId = app.activeSwarmId,
        targetName = app.activeSwarm.name {
+    if (activityFirst && history == null && !navigating) {
+      _content = SessionContentSearch(
+        machines: () => app.searchableMachineIds,
+        ask: (machineId, words, when) =>
+            app.searchSessions(machineId, words, when: when),
+      )..addListener(_contentChanged);
+    }
     _refresh();
     app.addListener(_refresh);
     projects?.addListener(_refresh);
@@ -191,6 +200,17 @@ class SwarmSearchController extends ChangeNotifier {
 
   /// Open Harness filters by latest activity; commands and splits keep relevance order.
   final bool activityFirst;
+
+  /// When this opening began: the list's ages are measured from it.
+  final DateTime openedAt = DateTime.now();
+  final _activity = <String, DateTime?>{};
+
+  /// A row's last activity as it was when this opening first listed it. The
+  /// list keeps the order and ages it opened with while agents work on:
+  /// rows moving under the cursor as someone arrowed through them was the
+  /// confusing part. The next opening reads activity afresh.
+  DateTime? activityOf(SwarmDestination row) =>
+      _activity.putIfAbsent(row.id, () => row.lastActivityAt);
 
   /// Cmd-P starts without a choice; typing or navigating activates a result.
   final bool selectOnEmptyQuery;
@@ -395,6 +415,53 @@ class SwarmSearchController extends ChangeNotifier {
   }
 
   final bool commandsOnly;
+
+  /// Open Harness also asks every machine's session index what was said in
+  /// each conversation; its hits join the ranking as they arrive.
+  SessionContentSearch? _content;
+
+  /// Whether somebody moved through the results since the query changed:
+  /// until then, rows arriving from a machine keep the best one selected.
+  bool _chosen = false;
+
+  /// The query the machines' session indexes last answered, or null before
+  /// any answer: whether what was said has been searched yet.
+  String? get contentAnswered => _content?.answered;
+
+  /// What a machine's session index found in this row's conversation for the
+  /// current query, when that is how the row matched.
+  SessionContentHit? contentHitFor(String rowId) =>
+      _contentQuery.isEmpty ? null : _content?.hitsFor(_contentQuery)[rowId];
+
+  /// When the query says to look ("dial last week"), and its words without
+  /// that: Open Harness only, where a time narrows to what was worked on then.
+  ({String words, SearchWhen? when}) get _read {
+    final content = _content;
+    final query = _contentQuery;
+    return content == null || query.isEmpty
+        ? (words: matchQuery, when: null)
+        : content.read(query);
+  }
+
+  /// The words matched against names and highlighted: the query less any time.
+  String get wordsQuery => _read.words;
+
+  /// The words sent to the session indexes: plain harness search only.
+  String get _contentQuery =>
+      isCommandMode || isHelpMode || isGroupMode || isModelMode || isStoreMode
+      ? ''
+      : matchQuery;
+
+  void _contentChanged() {
+    if (_disposed) return;
+    if (!_chosen) {
+      cursor = 0;
+      _selectedId = null;
+    }
+    _filter();
+    notifyListeners();
+  }
+
   SessionFilter sessionFilter = SessionFilter.all;
   SessionSort sessionSort = SessionSort.recent;
   final machineResources = <String, MachineResources>{};
@@ -536,6 +603,7 @@ class SwarmSearchController extends ChangeNotifier {
     cursor = 0;
     _selectedId = null;
     _filter();
+    _content?.search(_contentQuery);
     notifyListeners();
     return true;
   }
@@ -659,6 +727,7 @@ class SwarmSearchController extends ChangeNotifier {
     _selectedId = draft.selectedId;
     cursor = 0;
     _filter();
+    _content?.search(_contentQuery);
     notifyListeners();
   }
 
@@ -899,6 +968,20 @@ class SwarmSearchController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// With a time in the query, the rows worked on then: last active in it, or
+  /// vouched for by a machine that saw a turn in it.
+  List<SwarmDestination> _within(List<SwarmDestination> rows) {
+    final when = _read.when;
+    if (when == null) return rows;
+    final hits = _content?.hitsFor(_contentQuery) ?? const {};
+    bool then(DateTime? at) =>
+        at != null && !at.isBefore(when.from) && !at.isAfter(when.to);
+    return [
+      for (final row in rows)
+        if (hits.containsKey(row.id) || then(activityOf(row))) row,
+    ];
+  }
+
   void refreshCommands() {
     if (!isCommandMode) return;
     _filter();
@@ -1093,6 +1176,29 @@ class SwarmSearchController extends ChangeNotifier {
         ..._heldRows.values.where((row) => !present.contains(row.id)),
       ];
     }
+    // Conversations Harness did not start, found by what was said in them: a
+    // row only while a search matches one, never in the list as it opens.
+    if (byActivity &&
+        _contentQuery.isNotEmpty &&
+        scopedBranch == null &&
+        _groupScope == null &&
+        split == null) {
+      final present = {for (final row in candidates) row.id};
+      candidates = [
+        ...candidates,
+        for (final hit
+            in _content?.hitsFor(_contentQuery).values ??
+                const <SessionContentHit>[])
+          if (hit.external case final external?
+              when !present.contains(hit.destinationId))
+            externalSessionDestination(
+              hit,
+              external,
+              machineLabel:
+                  app.stateOf(hit.machineId)?.machine.displayName ?? '',
+            ),
+      ];
+    }
     total = candidates.length;
     rows = isCommandMode
         ? _recentFirst(rankSwarmDestinations(availableCommands, commandQuery))
@@ -1107,10 +1213,14 @@ class SwarmSearchController extends ChangeNotifier {
           )
         : byActivity
         ? rankSwarmDestinationsByActivity(
-            candidates,
-            matchQuery,
+            _within(candidates),
+            wordsQuery,
             recent: recent,
             previews: app.sessionPreviews,
+            activityOf: activityOf,
+            contentHits: _contentQuery.isEmpty
+                ? null
+                : _content?.hitsFor(_contentQuery),
           )
         : rankSwarmDestinations(
             candidates,
@@ -1321,7 +1431,9 @@ class SwarmSearchController extends ChangeNotifier {
     if (isStoreMode) _refreshStore();
     cursor = 0;
     _selectedId = null;
+    _chosen = false;
     _filter();
+    _content?.search(_contentQuery);
     notifyListeners();
   }
 
@@ -1338,6 +1450,7 @@ class SwarmSearchController extends ChangeNotifier {
     if (rows.isEmpty) return;
     cursor = ((cursor < 0 && delta < 0 ? 0 : cursor) + delta) % rows.length;
     _selectedId = selected!.id;
+    _chosen = true;
     notifyListeners();
   }
 
@@ -1418,6 +1531,23 @@ class SwarmSearchController extends ChangeNotifier {
 
   /// Read live state at activation too: a rendered row can outlive a disconnect.
   String? sessionUnavailable(SwarmDestination? row) {
+    if (row?.external case final external?) {
+      // Short: it is a row's note. The preview says what to do about it. Its
+      // preview's answer is the fresher, when there is one.
+      final previewed = app.sessionTails.read((
+        machineId: row!.machineId ?? '',
+        sessionId: external.sessionId,
+      ));
+      if (external.open || previewed?.openElsewhere == true) {
+        return external.origin == 'terminal'
+            ? 'Open in another terminal'
+            : 'Open in the ${external.originLabel}';
+      }
+      final machine = app.stateOf(row.machineId ?? '');
+      return machine == null || machine.nodeOnline == false
+          ? 'Its machine is offline.'
+          : null;
+    }
     if (!setupLayout || row?.agentId == null) return null;
     final machine = app.stateOf(row!.machineId!);
     final agent = machine?.agents
@@ -1464,29 +1594,43 @@ class SwarmSearchController extends ChangeNotifier {
   bool alreadyHere(SwarmDestination row) =>
       adding && row.agentId != null && _presentIds.contains(row.id);
 
-  bool canAdd(SwarmDestination? row) =>
-      !navigating &&
-      history == null &&
-      row != null &&
-      sessionUnavailable(row) == null &&
-      !row.isCommand &&
-      !row.isModel &&
-      !row.isStoreEntry &&
-      row.closedId == null &&
-      (placement == null || row.agentId != null) &&
-      (placement != null && alreadyHere(row) ||
-          _hasMissing(row) &&
-              (split == null || row.agentId != null) &&
-              (split == null || app.isPaneSplitCurrent(split!)) &&
-              (placement == HarnessPlacement.newTab ||
-                  app.swarms.any(
-                    (swarm) =>
-                        swarm.id == targetId &&
-                        !swarm.isStore &&
-                        !swarm.isOrchestrator &&
-                        swarm.panes.length + _missingCount(row) <=
-                            AppNotifier.maxPanes,
-                  )));
+  bool canAdd(SwarmDestination? row) => row?.external != null
+      // A conversation Harness did not start becomes a new harness: room for
+      // one more pane, or a tab of its own.
+      ? !navigating &&
+            history == null &&
+            split == null &&
+            sessionUnavailable(row) == null &&
+            (placement == HarnessPlacement.newTab ||
+                app.swarms.any(
+                  (swarm) =>
+                      swarm.id == targetId &&
+                      !swarm.isStore &&
+                      !swarm.isOrchestrator &&
+                      swarm.panes.length < AppNotifier.maxPanes,
+                ))
+      : !navigating &&
+            history == null &&
+            row != null &&
+            sessionUnavailable(row) == null &&
+            !row.isCommand &&
+            !row.isModel &&
+            !row.isStoreEntry &&
+            row.closedId == null &&
+            (placement == null || row.agentId != null) &&
+            (placement != null && alreadyHere(row) ||
+                _hasMissing(row) &&
+                    (split == null || row.agentId != null) &&
+                    (split == null || app.isPaneSplitCurrent(split!)) &&
+                    (placement == HarnessPlacement.newTab ||
+                        app.swarms.any(
+                          (swarm) =>
+                              swarm.id == targetId &&
+                              !swarm.isStore &&
+                              !swarm.isOrchestrator &&
+                              swarm.panes.length + _missingCount(row) <=
+                                  AppNotifier.maxPanes,
+                        )));
 
   SwarmSearchSelection? addHere() => adding || isGroupMode || isHelpMode
       ? submit()
@@ -1511,6 +1655,8 @@ class SwarmSearchController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _content?.removeListener(_contentChanged);
+    _content?.dispose();
     _modelUseTimer?.cancel();
     if (_modelUseWait?.isCompleted == false) _modelUseWait!.complete();
     app.removeListener(_refresh);
@@ -1523,4 +1669,44 @@ class SwarmSearchController extends ChangeNotifier {
     _resultPage.dispose();
     super.dispose();
   }
+}
+
+/// A Cmd-P row for a conversation Harness did not start, from the hit that
+/// found it: its title (or what was first asked), the engine and where it ran.
+SwarmDestination externalSessionDestination(
+  SessionContentHit hit,
+  ExternalSessionRef external, {
+  String machineLabel = '',
+}) {
+  final engine = switch (external.engine) {
+    'claude' => 'Claude Code',
+    'codex' => 'Codex',
+    final other => other,
+  };
+  final folder =
+      external.cwd.split('/').where((part) => part.isNotEmpty).lastOrNull ??
+      external.cwd;
+  final detail = [
+    engine,
+    external.originLabel,
+    folder,
+    'not in Harness',
+  ].join(' · ');
+  return SwarmDestination(
+    id: hit.destinationId,
+    title: external.title.isEmpty ? 'Untitled conversation' : external.title,
+    detail: detail,
+    terminalDetail: [
+      detail,
+      if (machineLabel.isNotEmpty) machineLabel,
+    ].join(' · '),
+    lastActivityAt: hit.lastAt ?? hit.at,
+    swarmId: null,
+    current: false,
+    machineId: hit.machineId,
+    machineLabel: machineLabel,
+    engine: external.engine,
+    external: external,
+    searchFields: [folder, external.cwd, engine],
+  );
 }
