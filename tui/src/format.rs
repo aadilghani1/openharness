@@ -131,12 +131,15 @@ fn job_get(es: &mut Es, cmd: &str) -> String {
     };
     if run {
         let key = cmd.to_string();
-        let env = crate::ipc::job_env();
+        let env = crate::ipc::job_environ(&app.global_env, &app.session_env);
         app.spawn(async move {
-            // As tmux runs one: /bin/sh -c, nothing on stdin, the client's folder; HN_SOCKET (and
-            // a `tmux` that is hn) so a command inside it talks to this client.
-            tokio::process::Command::new("/bin/sh").arg("-c").arg(&expanded).envs(env)
-                .stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+            // As tmux runs one: /bin/sh -c, nothing on stdin, the client's folder, the server's
+            // environment; HN_SOCKET (and a `tmux` that is hn) so a command inside it talks to
+            // this client.
+            let mut c = tokio::process::Command::new("/bin/sh");
+            c.arg("-c").arg(&expanded);
+            crate::ipc::set_job_env(&mut c, &env);
+            c.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null())
                 .output().await.map(|o| o.stdout).unwrap_or_default()
         }, move |app, stdout| {
             let text = String::from_utf8_lossy(&stdout);

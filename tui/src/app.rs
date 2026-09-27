@@ -3552,7 +3552,8 @@ impl App {
         use std::process::Stdio;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut c = tokio::process::Command::new("/bin/sh");
-        c.arg("-c").arg(command).envs(crate::ipc::job_env())
+        crate::ipc::set_job_env(&mut c, &crate::ipc::job_environ(&self.global_env, &self.session_env));
+        c.arg("-c").arg(command)
             .stdin(if output { Stdio::piped() } else { Stdio::null() })
             .stdout(if input { Stdio::piped() } else { Stdio::null() })
             .stderr(Stdio::null());

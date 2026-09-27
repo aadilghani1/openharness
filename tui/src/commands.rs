@@ -573,6 +573,7 @@ fn run_queue(app: &mut App, mut queue: Queue) {
         app.origin = None;
         // What the job chooses to run next keeps the item's mouse event.
         let mouse = std::mem::replace(&mut app.mouse_ev, saved);
+        let jenv = crate::ipc::job_environ(&app.global_env, &app.session_env);
         let run = async move {
             if let Some(w) = wait { let _ = w.await; return Outcome::default() }
             if delay > 0.0 { tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await }
@@ -580,7 +581,7 @@ fn run_queue(app: &mut App, mut queue: Queue) {
             let mut c = tokio::process::Command::new("/bin/sh");
             // tmux's job: the shell's output read, its errors to /dev/null.
             c.arg("-c").arg(&command).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-            c.envs(crate::ipc::job_env());
+            crate::ipc::set_job_env(&mut c, &jenv);
             if let Some(d) = cwd { c.current_dir(d); }
             match c.output().await {
                 Ok(o) => {

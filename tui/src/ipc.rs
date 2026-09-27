@@ -158,16 +158,34 @@ pub fn notify_now(peer: &std::path::Path, words: &[String]) {
 /// What hn's jobs (run-shell, if-shell, #(), copy-pipe) run with, as tmux's run with TMUX set:
 /// HN_SOCKET naming this client, TMUX saying they run under one, and a `tmux` on the PATH that
 /// is hn — so a script's (or a plugin's) `tmux …` reaches this client, never a tmux server.
-pub fn job_env() -> Vec<(String, String)> {
+pub fn job_env() -> Vec<(String, String)> { job_env_with(&std::env::var("PATH").unwrap_or_default()) }
+
+/// job_env over the PATH [path] (the server's, set-environment's).
+pub fn job_env_with(path: &str) -> Vec<(String, String)> {
     let mut env = Vec::new();
     let Some(sock) = here() else { return env };
     env.push(("HN_SOCKET".into(), sock.display().to_string()));
     env.push(("TMUX".into(), format!("{},{},0", sock.display(), std::process::id())));
-    if let Some(bin) = shim() {
-        let path = std::env::var("PATH").unwrap_or_default();
-        env.push(("PATH".into(), format!("{}:{path}", bin.display())));
-    }
+    if let Some(bin) = shim() { env.push(("PATH".into(), format!("{}:{path}", bin.display()))); }
     env
+}
+
+/// A job's whole environment, as tmux's job_run gives one (environ_for_session): the server's
+/// global environment with the session's over it (a variable marked to go, gone), and job_env's
+/// on top. None while the global environment is not known (the process's is used then).
+pub fn job_environ(global: &std::collections::BTreeMap<String, crate::app::EnvVar>, session: &std::collections::BTreeMap<String, crate::app::EnvVar>) -> Option<Vec<(String, String)>> {
+    if global.is_empty() { return None }
+    let mut m: std::collections::BTreeMap<String, Option<String>> = global.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect();
+    for (k, v) in session { m.insert(k.clone(), v.value.clone()); }
+    let path = m.get("PATH").cloned().flatten().unwrap_or_default();
+    let mut out: Vec<(String, String)> = m.into_iter().filter_map(|(k, v)| v.map(|v| (k, v))).collect();
+    for (k, v) in job_env_with(&path) { out.retain(|(x, _)| *x != k); out.push((k, v)) }
+    Some(out)
+}
+
+/// A job's command given its environment: the whole of [env] when known, else job_env over hn's.
+pub fn set_job_env(c: &mut tokio::process::Command, env: &Option<Vec<(String, String)>>) {
+    match env { Some(e) => { c.env_clear(); c.envs(e.iter().cloned()); } None => { c.envs(job_env()); } }
 }
 
 /// The folder holding hn's `tmux` (made once): a script running this hn as tmux.
