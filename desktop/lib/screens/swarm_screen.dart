@@ -265,6 +265,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Widget _startGuide() => WorkspaceWelcome(
     key: ValueKey('welcome:${app.activeSwarmId}'),
     onCommand: _runShortcut,
+    // What to pick up, opened into this tab the way Cmd-P opens it: a harness
+    // as itself, a conversation Harness did not start as a harness resuming it.
+    app: app,
+    projects: _projects.projects,
+    onOpen: (row) => unawaited(
+      _activateSearch(
+        SwarmSearchSelection(row),
+        app.activeSwarmId,
+        placement: HarnessPlacement.currentTab,
+      ),
+    ),
   );
 
   void _showKeyboardShortcuts() {
