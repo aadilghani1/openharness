@@ -8,7 +8,8 @@
  *   separators   `;`  `&`  `&&`  `||`  `|`  `|&`   — each side is its own simple command
  *   quoting      '…' (literal), "…" (only \" \\ \$ \` escapes; any $ or ` inside refuses), \x outside quotes
  *   redirection  [n]> [n]>> [n]>| [n]< &> &>> [n]>&m — the target is the next word
- *   refused      newline, $, `, <( >(, <<, <<<, <>, ( ) { }, # at a word start, ! at a word start, control chars
+ *   refused      newline, $, `, <( >(, <<, <<<, <>, ( ) { }, # at a word start, ! at a word start, control chars,
+ *                invisible or look-alike characters (zero-width, bidi, no-break space, a fullwidth ；)
  */
 
 export interface ShellWord {
@@ -41,6 +42,22 @@ export type ShellParse = { ok: true; commands: ShellCommand[] } | { ok: false; r
 
 const REFUSE = (reason: string): ShellParse => ({ ok: false, reason })
 
+/** Shell syntax and blanks: what a look-alike character normalizes to. */
+const SHELL_CHARS = /[\s;&|<>()$`{}#!'"\\*?[\]~=]/
+
+/**
+ * What the person reads is not what runs: a character outside ASCII that is invisible or a control (zero-width,
+ * bidi, BOM, C1, private or unassigned), a blank or line separator (no-break space, U+2028), or a look-alike of
+ * a shell character (a fullwidth `；`, the Greek question mark that is `;`). Ordinary text (`café`, `✓`) is not.
+ */
+function unreadable(src: string): boolean {
+  for (const ch of src) {
+    if (ch <= '\x7f') continue
+    if (/[\p{C}\p{Z}]/u.test(ch) || SHELL_CHARS.test(ch.normalize('NFKC'))) return true
+  }
+  return false
+}
+
 /** Split a ONE-LINE command. Anything this cannot read with certainty is `{ ok: false }`. */
 export function parseShell(source: string): ShellParse {
   const src = source.replace(/[ \t]+$/, '').replace(/^[ \t]+/, '')
@@ -48,6 +65,7 @@ export function parseShell(source: string): ShellParse {
   if (/[\r\n]/.test(src)) return REFUSE('multi-line')
   // eslint-disable-next-line no-control-regex
   if (/[\x00-\x08\x0b-\x1f\x7f]/.test(src)) return REFUSE('control character')
+  if (unreadable(src)) return REFUSE('an invisible or look-alike character')
 
   const commands: ShellCommand[] = []
   let words: ShellWord[] = []
