@@ -9,7 +9,8 @@ import { DAEMON_ROSTER } from './daemonRoster.g.js'
 /** Earning eggs from work and growing a daemon (daemons/README.md, "Earning eggs and growing"). */
 
 const RULES = DAEMON_ROSTER.rules
-const REGULARS = DAEMON_ROSTER.daemons.filter((d) => d.rarity !== 'secret').map((d) => d.id)
+/** Drop 1's regulars: the only ones out on the days these tests draw (drop 2, tty, is out 2026-10-11). */
+const REGULARS = DAEMON_ROSTER.daemons.filter((d) => d.drop === 'unix' && d.rarity !== 'secret').map((d) => d.id)
 
 function seeded(seed = 1): Rng {
   let a = seed >>> 0

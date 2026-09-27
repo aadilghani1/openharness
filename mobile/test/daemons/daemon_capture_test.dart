@@ -498,7 +498,7 @@ void main() {
     );
   });
 
-  testWidgets('reveal: every name fits a 320pt screen at full size', (
+  testWidgets('reveal: every name fits a 320pt screen, drop 1 at full size', (
     tester,
   ) async {
     if (!_realMono) {
@@ -528,11 +528,21 @@ void main() {
           ),
         ),
       );
-      // Drawn at its own size: not scaled down, and inside the margins.
+      // Inside the margins, and never wrapped: a banner wider than the 280pt
+      // between them (drop 2's longer names, up to fortune's 43 columns)
+      // scales down whole. Drop 1's names are drawn at their own size.
       final drawn = tester.getRect(banner);
-      expect(drawn.width, closeTo(tester.getSize(banner).width, .01));
-      expect(drawn.left, greaterThanOrEqualTo(20));
-      expect(drawn.right, lessThanOrEqualTo(300));
+      final natural = tester.getSize(banner);
+      expect(drawn.left, greaterThanOrEqualTo(20), reason: d.id);
+      expect(drawn.right, lessThanOrEqualTo(300), reason: d.id);
+      expect(
+        drawn.height * natural.width,
+        closeTo(natural.height * drawn.width, 1),
+        reason: d.id,
+      );
+      if (natural.width <= 280 || d.drop == 'unix') {
+        expect(drawn.width, closeTo(natural.width, .01), reason: d.id);
+      }
     }
   });
 

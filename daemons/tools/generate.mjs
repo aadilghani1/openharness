@@ -6,6 +6,7 @@ import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { renderSprite, renderPortrait, statusCell, baseWidth, renderBanner, nestStage } from './render.mjs'
 import { cardLines } from './card.mjs'
+import { bakePlates, plateColor } from './bake.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const check = process.argv.includes('--check')
@@ -14,6 +15,7 @@ const roster = JSON.parse(text)
 const { rules } = roster
 
 const problems = []
+const whole = (v, min = 1) => Number.isInteger(v) && v >= min
 const fail = msg => { if (!problems.includes(msg)) problems.push(msg) }
 const printable = s => /^[\x20-\x7e]*$/.test(s)
 // Programming fonts (Fira Code, JetBrains Mono, Cascadia) merge these pairs into one glyph, so two eyes
@@ -37,9 +39,25 @@ const drops = new Set(roster.drops.map(d => d.id))
 // A drop is announced 14 days before it is released; only released drops hatch, announced ones show as
 // silhouettes (README, "The draw", "Cards and shelves").
 const isoDay = s => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s
+// A drop on hold is kept but has no dates: never announced, never drawn, until it gets them.
 for (const drop of roster.drops) {
-  if (!isoDay(drop.announce) || !isoDay(drop.release)) fail(`drop ${drop.id}: announce and release must be YYYY-MM-DD dates`)
+  if (drop.hold) {
+    if (drop.hold !== true || 'announce' in drop || 'release' in drop) fail(`drop ${drop.id}: a drop on hold has hold: true and no dates`)
+  } else if (!isoDay(drop.announce) || !isoDay(drop.release)) fail(`drop ${drop.id}: announce and release must be YYYY-MM-DD dates`)
   else if (Date.parse(drop.release) - Date.parse(drop.announce) !== 14 * 86_400_000) fail(`drop ${drop.id}: announce must be 14 days before release`)
+}
+if (roster.drops.every(d => d.hold)) fail('every drop is on hold: nothing could ever hatch')
+// Plates (README, "Plates"): filled daemons are baked at these widths, with these frame counts.
+const plateRules = rules.plate
+if (roster.daemons.some(d => d.plate)) {
+  if (!plateRules || !whole(plateRules.frameMs) || !whole(plateRules.frames?.idle) || !whole(plateRules.frames?.other)) fail('rules.plate needs frameMs and frames.idle and frames.other')
+  else {
+    for (const size of ['portrait', 'reveal']) {
+      if (!whole(plateRules.cols?.[size]) || !whole(plateRules.maxRows?.[size])) fail(`rules.plate needs cols.${size} and maxRows.${size}`)
+    }
+    const ink = plateRules.ink ?? {}
+    if (!Object.keys(ink).length || Object.entries(ink).some(([ch, v]) => ch.length !== 1 || !printable(ch) || ch === ' ' || !(v > 0 && v <= 2))) fail('rules.plate.ink maps each printed glyph to a brightness above 0 and at most 2')
+  }
 }
 for (const d of roster.daemons) {
   if (ids.has(d.id)) fail(`${d.id}: duplicate id`)
@@ -47,6 +65,17 @@ for (const d of roster.daemons) {
   if (!/^[a-z][a-z0-9-]{0,15}$/.test(d.id)) fail(`${d.id}: id must be a short lowercase command name`)
   if (!rules.rarities.includes(d.rarity)) fail(`${d.id}: unknown rarity ${d.rarity}`)
   if (!drops.has(d.drop)) fail(`${d.id}: unknown drop ${d.drop}`)
+  // A filled daemon: its model is daemons/plates/<id>.mjs, and its colour runs top to bottom.
+  if (d.plate != null) {
+    if (d.plate !== true) fail(`${d.id}: plate must be true or absent`)
+    else if (!existsSync(resolve(root, `daemons/plates/${d.id}.mjs`))) fail(`${d.id}: plate daemon has no model daemons/plates/${d.id}.mjs`)
+    for (const [what, g] of [['gradient', d.gradient], ['shinyGradient', d.shinyGradient]]) {
+      for (const stop of ['top', 'bottom']) {
+        const c = g?.[stop]
+        if (!c || !Number.isInteger(c.xterm) || c.xterm < 16 || c.xterm > 255 || c.hex !== xtermHex(c.xterm)) fail(`${d.id}: ${what}.${stop} must be an xterm-256 index from 16 with its hex`)
+      }
+    }
+  }
   // Colours are xterm-256 indices with the hex a terminal shows for them. A shiny daemon wears its own.
   for (const [what, c] of [['color', d.color], ['shiny', d.shiny]]) {
     if (!c || !Number.isInteger(c.xterm) || c.xterm < 16 || c.xterm > 255) fail(`${d.id}: ${what}.xterm must be an xterm-256 index from 16 to 255`)
@@ -72,7 +101,22 @@ for (const d of roster.daemons) {
     else if (!printable(d.lines[mood])) fail(`${d.id}: line for ${mood} is not ASCII`)
   }
   for (const v of rules.versions) if (!d.sprites?.[v]) fail(`${d.id}: no sprite for ${v}`)
-  if (!d.portraits?.['2.0']) fail(`${d.id}: no 2.0 portrait`)
+  if (!d.plate && !d.portraits?.['2.0']) fail(`${d.id}: no 2.0 portrait`)
+  // A daemon may draw with fewer characters, as its lore did (tty: only what a Teletype Model 33 could
+  // print; lp0: a line printer's density ramp). Eyes aside: every template, part and mood part keeps to it.
+  if (d.charset != null) {
+    if (typeof d.charset !== 'string' || !d.charset || !printable(d.charset)) fail(`${d.id}: charset must be a string of printable ASCII`)
+    else {
+      const drawn = [...Object.values(d.sprites ?? {}), ...(d.work ?? []), ...Object.values(d.portraits ?? {}).flat(),
+        ...Object.values(d.parts ?? {}).flatMap(p => [p.rest, ...p.work]), ...Object.values(d.moodParts ?? {}).flatMap(m => Object.values(m))]
+      for (const tpl of drawn) {
+        const off = [...tpl.replace(/\{[a-zA-Z]+\}/g, '')].find(ch => !d.charset.includes(ch))
+        if (off) fail(`${d.id}: "${off}" in "${tpl}" is outside its charset`)
+      }
+    }
+  }
+  // A line that types out, a character every typeMs (tty: a Model 33's ten characters a second).
+  if (d.typeMs != null && !(Number.isInteger(d.typeMs) && d.typeMs >= 10 && d.typeMs <= 1000)) fail(`${d.id}: typeMs must be a whole number of ms from 10 to 1000`)
   // Every mood, every version, every frame of motion, plus both blink lids.
   const times = [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]
   for (const mood of rules.moods) {
@@ -118,7 +162,6 @@ if ((rules.firstEgg.require ?? []).length > rules.firstEgg.need) fail('firstEgg 
 if (!(rules.setupEgg?.need > rules.firstEgg.need) || rules.setupEgg.need > habitKeys.length) fail('setupEgg.need must be more than firstEgg.need and at most every habit')
 // Earning and growing (README, "Earning eggs and growing"): whole positive numbers, an egg rule for every
 // kind the server grants, levels that climb from 0, and a version for every level a daemon can reach.
-const whole = (v, min = 1) => Number.isInteger(v) && v >= min
 for (const kind of ['first', 'setup', 'easter', 'turn', 'week', 'marathon', 'night', 'history']) if (!rules.eggs[kind]) fail(`egg ${kind} is granted but has no egg rule`)
 // Secrets sit outside the set: only an egg with a secret weight can hold one, so some egg must.
 if (roster.daemons.some(d => d.rarity === 'secret') && !Object.values(rules.eggs).some(e => e.weights.secret > 0)) fail('a secret exists but no egg can hold one')
@@ -172,6 +215,36 @@ for (const d of roster.daemons) {
   }
 }
 if (bannerText.includes("'''")) fail("banner.json may not contain '''")
+// Bake the plates (or reuse the baked file when nothing it came from changed), then check every frame:
+// in its box, printable, no ligature pair, and one size for every mood and frame of a version.
+const plates = roster.daemons.some(d => d.plate) && !problems.length ? await bakePlates(root, roster) : null
+for (const d of plates ? roster.daemons.filter(d => d.plate) : []) {
+  for (const size of ['portrait', 'reveal']) {
+    for (const v of rules.versions) {
+      const byMood = plates.daemons[d.id]?.[size]?.[v]
+      if (!byMood) { fail(`${d.id}: no ${size} plate for ${v}`); continue }
+      let box = null
+      for (const mood of rules.moods) {
+        const want = mood === 'idle' ? plateRules.frames.idle : plateRules.frames.other
+        if (byMood[mood]?.length !== want) fail(`${d.id} ${size} ${v}: ${mood} has ${byMood[mood]?.length ?? 0} frames, not ${want}`)
+        for (const frame of byMood[mood] ?? []) {
+          const rows = frame.split('\n')
+          const dims = `${rows.length}x${rows[0].length}`
+          if (box && dims !== box) fail(`${d.id} ${size} ${v}: frames differ in size (${dims}, ${box})`)
+          box ??= dims
+          if (rows.length > plateRules.maxRows[size]) fail(`${d.id} ${size} ${v}: plate has ${rows.length} rows, more than ${plateRules.maxRows[size]}`)
+          for (const row of rows) {
+            if (row.length > plateRules.cols[size]) fail(`${d.id} ${size} ${v}: plate row is ${row.length} columns`)
+            if (!printable(row)) fail(`${d.id} ${size} ${v} ${mood}: plate row is not printable ASCII`)
+            if (ligature(row)) fail(`${d.id} ${size} ${v} ${mood}: plate row has "${ligature(row)}", which fonts draw as one glyph`)
+            const off = [...row].find(ch => ch !== ' ' && plateRules.ink[ch] === undefined)
+            if (off) fail(`${d.id} ${size} ${v} ${mood}: plate glyph "${off}" has no ink level`)
+          }
+        }
+      }
+    }
+  }
+}
 if (problems.length) {
   console.error(problems.map(p => '  ' + p).join('\n'))
   console.error(`daemons/roster.json: ${problems.length} problem(s)`)
@@ -197,6 +270,15 @@ const header = '// Generated from daemons/roster.json by daemons/tools/generate.
 const dartRoster = `${header}// ignore_for_file: prefer_single_quotes\nconst daemonRosterJson = r'''\n${text}''';\nconst daemonBannerJson = r'''\n${bannerText}''';\n`
 output('desktop/lib/daemons/roster.g.dart', dartRoster)
 output('mobile/lib/daemons/roster.g.dart', dartRoster)
+// Baked plates: the canonical file here (hn reads it at build time), and a raw-string copy per Dart client.
+if (plates) {
+  const platesText = JSON.stringify(plates) + '\n'
+  if (platesText.includes("'''")) fail("plates.json may not contain '''")
+  output('daemons/plates.json', platesText)
+  const dartPlates = `${header}// ignore_for_file: prefer_single_quotes\nconst daemonPlatesJson = r'''\n${platesText}''';\n`
+  output('desktop/lib/daemons/plates.g.dart', dartPlates)
+  output('mobile/lib/daemons/plates.g.dart', dartPlates)
+}
 
 // The server needs only what decides a draw, a grant or a level: who exists, how rare, the egg rules,
 // what earns an egg and how bond grows. Art stays in the clients.
@@ -220,7 +302,7 @@ const server = {
     earn: rules.earn,
     historyDates: rules.historyDates,
   },
-  drops: roster.drops.map(d => ({ id: d.id, announce: d.announce, release: d.release })),
+  drops: roster.drops.map(d => d.hold ? { id: d.id, hold: true } : { id: d.id, announce: d.announce, release: d.release }),
   daemons: roster.daemons.map(d => ({ id: d.id, n: d.n, drop: d.drop, rarity: d.rarity })),
 }
 output('backend/src/lib/daemonRoster.g.ts', `${header}export const DAEMON_ROSTER = ${JSON.stringify(server, null, 2)} as const\n`)
@@ -241,7 +323,7 @@ for (const d of roster.daemons) {
     for (const t of [0, 300]) {
       for (const [vi, v] of rules.versions.entries()) {
         for (const lid of [null, '-']) frames.sprites.push({ id: d.id, v, mood, t, lid, out: renderSprite(roster, d, vi, mood, { t, lid }) })
-        frames.portraits.push({ id: d.id, v, mood, t, out: renderPortrait(roster, d, v, mood, { t }) })
+        if (!d.plate) frames.portraits.push({ id: d.id, v, mood, t, out: renderPortrait(roster, d, v, mood, { t }) })
       }
     }
   }
@@ -259,11 +341,25 @@ for (const d of roster.daemons) {
   }
 }
 // Cards every client draws the same way (daemons/tools/card.mjs).
+// A filled daemon's card shows its portrait plate, idle, first frame.
+const cardPlate = (d, version) => d.plate ? plates.daemons[d.id].portrait[version].idle[0].split('\n') : null
 frames.cards = []
 for (const d of roster.daemons) {
   for (const version of rules.versions) {
-    frames.cards.push({ id: d.id, version, out: cardLines(roster, d, { version }) })
-    frames.cards.push({ id: d.id, version, shiny: true, serial: 42, nickname: 'pip', hatched: '2026-09-26', egg: 'first', out: cardLines(roster, d, { version, shiny: true, serial: 42, nickname: 'pip', hatched: '2026-09-26', egg: 'first' }) })
+    frames.cards.push({ id: d.id, version, out: cardLines(roster, d, { version, plate: cardPlate(d, version) }) })
+    frames.cards.push({ id: d.id, version, shiny: true, serial: 42, nickname: 'pip', hatched: '2026-09-26', egg: 'first', out: cardLines(roster, d, { version, plate: cardPlate(d, version), shiny: true, serial: 42, nickname: 'pip', hatched: '2026-09-26', egg: 'first' }) })
+  }
+}
+// Plate colours every client must reproduce: each row's colour, and every distinct glyph of one frame.
+frames.plateColors = []
+for (const d of plates ? roster.daemons.filter(d => d.plate) : []) {
+  for (const shiny of [false, true]) {
+    const rows = plates.daemons[d.id].reveal['2.0'].idle[0].split('\n')
+    const cells = []
+    rows.forEach((row, r) => [...row].forEach((ch, c) => {
+      if (ch !== ' ' && (c + r) % 7 === 0) cells.push({ r, c, ch, hex: plateColor(roster, d, rows.length, r, ch, { shiny }) })
+    }))
+    frames.plateColors.push({ id: d.id, size: 'reveal', v: '2.0', mood: 'idle', frame: 0, shiny, bg: '#0c0c0c', rows: rows.length, cells })
   }
 }
 for (const c of frames.cells) {
@@ -288,7 +384,7 @@ if (existsSync(lookbookPath)) {
     console.error('daemons/lookbook.html has no roster markers')
     process.exit(1)
   }
-  const data = JSON.stringify({ ...roster, banner }).replace(/</g, '\\u003c')
+  const data = JSON.stringify({ ...roster, banner, plates }).replace(/</g, '\\u003c')
   output('daemons/lookbook.html', page.slice(0, a + start.length) + `\n<script type="application/json" id="roster-data">${data}</script>\n` + page.slice(b))
 }
 console.log(check ? 'daemons: roster and copies are current' : `daemons: ${roster.daemons.length} daemons checked, copies written`)
