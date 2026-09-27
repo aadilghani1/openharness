@@ -1597,7 +1597,7 @@ fn fzf_wrapped(buf: &mut Buffer, picker: &mut Picker, area: Rect, list_top: u16,
             buf.set_string(area.x, y, format!("{:<pw$}", gutter), st.style());
         }
         let width = (area.width as usize).saturating_sub(pw + mw + 1);
-        if draw && !gap_line.is_empty() { buf.set_string(area.x + (pw + mw) as u16, y, repeat_to_fill(&gap_line, width), pal.list_border.style()); }
+        if draw && !gap_line.is_empty() { buf.set_string(area.x + (pw + mw) as u16, y, repeat_to_fill(&gap_line, width), pal.gap_line.style()); }
     }
     // getScrollbar(avgNumLines, …): the thumb and its start from the prompt's side.
     let (total, h) = (n * per_line.max(1), max_lines);

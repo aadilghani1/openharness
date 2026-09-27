@@ -56,39 +56,39 @@ pub mod fzfcolor {
         pub selected_fg: CA, pub selected_bg: CA, pub selected_match: CA, pub dark_bg: CA, pub gutter: CA, pub prompt: CA,
         pub input_bg: CA, pub matched: CA, pub current: CA, pub current_match: CA, pub spinner: CA, pub info: CA,
         pub cursor: CA, pub marker: CA, pub header: CA, pub header_bg: CA, pub separator: CA, pub scrollbar: CA,
-        pub border: CA, pub border_label: CA, pub list_border: CA,
+        pub border: CA, pub border_label: CA, pub list_border: CA, pub gap_line: CA,
         pub preview_fg: CA, pub preview_bg: CA, pub preview_border: CA, pub preview_scrollbar: CA, pub preview_label: CA,
     }
 
     pub const NO_COLOR: Theme = Theme {
         colored: false, input: D, ghost: U, fg: D, bg: D, list_fg: D, list_bg: D, alt_bg: U, selected_fg: D, selected_bg: D,
         selected_match: D, dark_bg: D, gutter: U, prompt: D, input_bg: D, matched: D, current: U, current_match: U, spinner: D,
-        info: D, cursor: D, marker: D, header: D, header_bg: D, separator: D, scrollbar: D, border: U, border_label: D, list_border: D,
+        info: D, cursor: D, marker: D, header: D, header_bg: D, separator: D, scrollbar: D, border: U, border_label: D, list_border: D, gap_line: D,
         preview_fg: D, preview_bg: D, preview_border: D, preview_scrollbar: D, preview_label: D,
     };
     pub const EMPTY: Theme = Theme {
         colored: true, input: U, ghost: U, fg: U, bg: U, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: U, gutter: U, prompt: U, input_bg: U, matched: U, current: U, current_match: U, spinner: U,
-        info: U, cursor: U, marker: U, header: U, header_bg: U, separator: U, scrollbar: U, border: U, border_label: U, list_border: U,
+        info: U, cursor: U, marker: U, header: U, header_bg: U, separator: U, scrollbar: U, border: U, border_label: U, list_border: U, gap_line: U,
         preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const DEFAULT16: Theme = Theme {
         colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(8), gutter: U, prompt: c(4), input_bg: U, matched: c(2), current: c(15), current_match: c(10),
         spinner: c(2), info: c(3), cursor: c(1), marker: c(5), header: c(6), header_bg: U, separator: U, scrollbar: U, border: U,
-        border_label: D, list_border: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
+        border_label: D, list_border: U, gap_line: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const DARK256: Theme = Theme {
         colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(236), gutter: U, prompt: c(110), input_bg: U, matched: c(108), current: c(254), current_match: c(151),
         spinner: c(148), info: c(144), cursor: c(161), marker: c(168), header: c(109), header_bg: U, separator: U, scrollbar: U,
-        border: c(59), border_label: c(145), list_border: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
+        border: c(59), border_label: c(145), list_border: U, gap_line: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const LIGHT256: Theme = Theme {
         colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(251), gutter: U, prompt: c(25), input_bg: U, matched: c(66), current: c(237), current_match: c(23),
         spinner: c(65), info: c(101), cursor: c(161), marker: c(168), header: c(31), header_bg: U, separator: U, scrollbar: U,
-        border: c(145), border_label: c(59), list_border: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
+        border: c(145), border_label: c(59), list_border: U, gap_line: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
 
     /// A --color value's colour: -1, 0–255, #rrggbb, a name.
@@ -118,7 +118,7 @@ pub mod fzfcolor {
                 "selected-bg" => &mut theme.selected_bg, "gutter" => &mut theme.gutter, "hl" => &mut theme.matched,
                 "current-hl" | "hl+" => &mut theme.current_match, "selected-hl" => &mut theme.selected_match, "border" => &mut theme.border,
                 "separator" => &mut theme.separator, "scrollbar" => &mut theme.scrollbar, "label" => &mut theme.border_label,
-                "list-border" => &mut theme.list_border, "prompt" => &mut theme.prompt, "input-bg" => &mut theme.input_bg,
+                "list-border" => &mut theme.list_border, "gap-line" => &mut theme.gap_line, "prompt" => &mut theme.prompt, "input-bg" => &mut theme.input_bg,
                 "spinner" => &mut theme.spinner, "info" => &mut theme.info, "pointer" => &mut theme.cursor, "marker" => &mut theme.marker,
                 "header" | "header-fg" => &mut theme.header, "header-bg" => &mut theme.header_bg,
                 "preview-fg" => &mut theme.preview_fg, "preview-bg" => &mut theme.preview_bg, "preview-border" => &mut theme.preview_border,
@@ -208,7 +208,7 @@ pub mod fzfcolor {
         pub prompt: P, pub normal: P, pub selected: P, pub input: P, pub ghost: P, pub matched: P, pub selected_match: P,
         pub cursor: P, pub cursor_empty: P, pub cursor_empty_char: P, pub marker: P, pub current: P, pub current_match: P, pub current_cursor: P,
         pub current_cursor_empty: P, pub current_marker: P, pub current_selected_empty: P, pub spinner: P, pub info: P,
-        pub separator: P, pub scrollbar: P, pub border: P, pub header: P, pub list_border: P, pub border_label: P,
+        pub separator: P, pub scrollbar: P, pub border: P, pub header: P, pub list_border: P, pub gap_line: P, pub border_label: P,
         pub preview: P, pub preview_border: P, pub preview_label: P, pub preview_scrollbar: P,
         /// --color=alt-bg: every other row's background (undefined: no stripes).
         pub alt_bg: CA,
@@ -291,6 +291,7 @@ pub mod fzfcolor {
         t.preview_label = over(t.border_label, t.preview_label);
         t.preview_border = over(t.border, t.preview_border);
         t.list_border = over(t.border, t.list_border);
+        t.gap_line = over(t.list_border, t.gap_line);
         t.separator = over(t.list_border, t.separator);
         t.scrollbar = over(t.list_border, t.scrollbar);
         t.preview_scrollbar = if scrollbar_defined && !preview_border_defined { over(t.scrollbar, t.preview_scrollbar) } else { over(t.preview_border, t.preview_scrollbar) };
@@ -308,7 +309,7 @@ pub mod fzfcolor {
             current_cursor_empty: pair(blank, t.dark_bg), current_marker: pair(t.marker, t.dark_bg), current_selected_empty: pair(blank, t.dark_bg),
             spinner: pair(t.spinner, t.input_bg), info: pair(t.info, t.input_bg), separator: pair(t.separator, t.input_bg),
             scrollbar: pair(t.scrollbar, t.list_bg), border: pair(t.border, t.bg), header: pair(t.header, t.header_bg),
-            list_border: pair(t.list_border, t.list_bg), border_label: pair(t.border_label, t.bg),
+            list_border: pair(t.list_border, t.list_bg), gap_line: pair(t.gap_line, t.list_bg), border_label: pair(t.border_label, t.bg),
             preview: pair(t.preview_fg, t.preview_bg), preview_border: pair(t.preview_border, t.preview_bg),
             preview_label: pair(t.preview_label, t.preview_bg), preview_scrollbar: pair(t.preview_scrollbar, t.preview_bg), alt_bg: t.alt_bg, colored: base.colored,
         }
