@@ -1672,6 +1672,9 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             // Up is toward the top of the screen: further down the list, unless it is reversed.
             KeyCode::Up => picker.move_by(up),
             KeyCode::Down => picker.move_by(-up),
+            // --history: C-p and C-n go back and forth through its queries (fzf binds them so).
+            KeyCode::Char('p') if ctrl && theme::fzf_opts().history.is_some() => picker.history_step(true),
+            KeyCode::Char('n') if ctrl && theme::fzf_opts().history.is_some() => picker.history_step(false),
             KeyCode::Char('k' | 'p') if ctrl => picker.move_by(up),
             KeyCode::Char('j' | 'n') if ctrl => picker.move_by(-up),
             KeyCode::PageUp => crate::ui::page(&mut picker, up, false),
@@ -1874,6 +1877,7 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
                 picker.preview_window = Some(pw);
             }
             "toggle-track" => { picker.track_flipped = !picker.track_flipped }
+            "prev-history" => picker.history_step(true), "next-history" => picker.history_step(false),
             "track-current" if !picker.tracking() => { picker.track_flipped = !picker.track_flipped }
             "untrack-current" if picker.tracking() => { picker.track_flipped = !picker.track_flipped }
             "toggle-sort" => { picker.sort_flipped = !picker.sort_flipped; picker.refilter() }
@@ -2068,6 +2072,8 @@ pub fn answer_with(app: &mut App, machine: &str, agent: &str, value: &str) -> bo
 }
 
 fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
+    // --history: the query kept for C-p to bring back.
+    if choice == Choice::Enter { picker.history_add() }
     let id = picker.current_id();
     // fzf's accept with nothing matched: the list goes.
     if id.is_none() && picker.visible.is_empty() && choice == Choice::Enter { SPLIT.with(|s| s.set(None)); return }

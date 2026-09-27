@@ -171,6 +171,9 @@ pub struct Picker {
     pub sort_flipped: bool,
     /// toggle-track: --track turned the other way.
     pub track_flipped: bool,
+    /// --history: the queries read from its file, where C-p/C-n are among them (None: the
+    /// query being typed, kept in `history_draft`).
+    pub history_at: Option<usize>, pub history_draft: String,
 }
 
 impl Picker {
@@ -227,6 +230,7 @@ impl Picker {
             pw_next: 0,
             sort_flipped: false,
             track_flipped: false,
+            history_at: None, history_draft: String::new(),
             preview_of: None,
             preview_fresh: std::cell::Cell::new(true),
             preview_following: Default::default(),
@@ -555,7 +559,42 @@ impl Picker {
 
     #[cfg_attr(not(test), allow(dead_code))]
     /// Replace the query outright (a mode switch, a history recall).
-    pub fn set_query(&mut self, text: &str) {
+/// --history's queries, oldest first (its file's lines, the last --history-size of them).
+    pub fn history_lines() -> Vec<String> {
+        let o = crate::theme::fzf_opts();
+        let Some(path) = &o.history else { return Vec::new() };
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let lines: Vec<String> = text.lines().map(str::to_string).collect();
+        let n = lines.len().saturating_sub(o.history_size);
+        lines[n..].to_vec()
+    }
+
+    /// prev-history / next-history: the query before (or after) this one in --history's file;
+    /// past the newest, the query that was being typed.
+    pub fn history_step(&mut self, back: bool) {
+        let lines = Self::history_lines();
+        if lines.is_empty() { return }
+        let at = self.history_at.unwrap_or(lines.len());
+        let to = if back { match at.checked_sub(1) { Some(t) => t, None => return } } else { if at >= lines.len() { return } at + 1 };
+        if self.history_at.is_none() { self.history_draft = self.query.clone() }
+        let text = if to >= lines.len() { self.history_draft.clone() } else { lines[to].clone() };
+        self.history_at = if to >= lines.len() { None } else { Some(to) };
+        self.set_query(&text);
+        self.qcursor = self.query.chars().count();
+    }
+
+    /// The query accepted: kept at the end of --history's file (not twice in a row), the file no
+    /// longer than --history-size.
+    pub fn history_add(&self) {
+        let o = crate::theme::fzf_opts();
+        let (Some(path), false) = (&o.history, self.query.is_empty()) else { return };
+        let mut lines = Self::history_lines();
+        if lines.last() != Some(&self.query) { lines.push(self.query.clone()) }
+        let n = lines.len().saturating_sub(o.history_size);
+        let _ = std::fs::write(path, lines[n..].join("\n") + "\n");
+    }
+
+        pub fn set_query(&mut self, text: &str) {
         let before = self.query.clone();
         self.query = text.to_string();
         self.qcursor = self.qlen();

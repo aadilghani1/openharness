@@ -650,13 +650,15 @@ pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_fir
     /// --algo=v1.
     pub algo_v1: bool,
     /// +x / --no-extended: no search syntax.
-    pub no_extended: bool }
+    pub no_extended: bool,
+    /// --history=FILE and --history-size: the queries C-p and C-n go back through.
+    pub history: Option<String>, pub history_size: usize }
 
 pub fn fzf_opts() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = default_opts();
-        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None, keep_right: false, gap: 0, gap_line: None, preview_window: PreviewWindow::default(), preview_label: None, preview_label_pos: (0, false), literal: false, multi_limit: 0, preview_window_set: false, preview_window_specs: Vec::new(), ghost: None, track: false, list_border: None, input_border: None, header_border: None, footer_border: None, footer: Vec::new(), list_label: String::new(), input_label: String::new(), header_label: String::new(), footer_label: String::new(), separator_set: false, no_input: false, info_command: None, algo_v1: false, no_extended: false };
+        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None, keep_right: false, gap: 0, gap_line: None, preview_window: PreviewWindow::default(), preview_label: None, preview_label_pos: (0, false), literal: false, multi_limit: 0, preview_window_set: false, preview_window_specs: Vec::new(), ghost: None, track: false, list_border: None, input_border: None, header_border: None, footer_border: None, footer: Vec::new(), list_label: String::new(), input_label: String::new(), header_label: String::new(), footer_label: String::new(), separator_set: false, no_input: false, info_command: None, algo_v1: false, no_extended: false, history: None, history_size: 1000 };
         let (mut sep_set, mut bar_set, mut ell_set, mut sign_set) = (false, false, false, false);
         let mut i = 0;
         while i < opts.len() {
@@ -717,6 +719,9 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 "--no-info-command" => o.info_command = None,
                 "--algo" => { if let Some(v) = take() { o.algo_v1 = v == "v1" } }
                 "+x" | "--no-extended" => o.no_extended = true, "-x" | "--extended" => o.no_extended = false,
+                "--history" => { if let Some(v) = take() { o.history = Some(v).filter(|v| !v.is_empty()) } }
+                "--no-history" => o.history = None,
+                "--history-size" => { if let Some(v) = take() { o.history_size = v.parse().unwrap_or(1000).max(1) } }
                 "--list-label" => { if let Some(v) = take() { o.list_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
                 "--input-label" => { if let Some(v) = take() { o.input_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
                 "--header-label" => { if let Some(v) = take() { o.header_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
