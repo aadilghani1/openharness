@@ -340,8 +340,10 @@ export class LessonSignals {
   }
 
   private failure(ctx: LearnContext, t: Track, failure: { what: 'test' | 'command'; name: string }, evidence: string, mayEmit: boolean): boolean {
+    // Two harnesses whose folders are unknown are not known to share a project: nothing to pair.
+    if (!t.project) return false
     const now = this.deps.now()
-    const key = `${failure.what}:${t.project ?? '-'}:${failure.name}`
+    const key = `${failure.what}:${t.project}:${failure.name}`
     const from = this.provenance(ctx, t)
     this.state.failures = this.state.failures.filter((f) => now - f.from.at < FAILURE_WINDOW_MS)
     const other = this.state.failures.find((f) => f.key === key && (f.from.engine !== from.engine || f.from.agentId !== from.agentId))
