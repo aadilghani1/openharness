@@ -457,6 +457,8 @@ pub struct App {
     pub home_cursor: usize,
     /// The home page's selection moved by you (until then Enter, like any key, starts a shell).
     pub home_moved: bool,
+    /// More commands of the same line or binding wait behind the one running.
+    pub chain_follows: bool,
     /// The Claude Code and Codex conversations Harness did not start that the home page offers
     /// (each machine's session index, asked once each time the page shows), and the machines
     /// asked so far.
@@ -886,6 +888,7 @@ impl App {
             tick: 0,
             home_cursor: 0,
             home_moved: false,
+            chain_follows: false,
             home_external: Vec::new(),
             home_asked: HashSet::new(),
             home_shown: false,

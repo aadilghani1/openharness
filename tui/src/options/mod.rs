@@ -307,7 +307,8 @@ impl Store {
                     }
                     return Ok(Some(v.to_string()));
                 }
-                let v = if f.append { format!("{}{v}", here.clone().or(now.clone()).unwrap_or_default()) } else { v.to_string() };
+                // (-a joins with the option's separator: a style's `,`, as options_set_string does.)
+                let v = if f.append { let old = here.clone().or(now.clone()).unwrap_or_default(); let sep = if name.ends_with("-style") && !name.starts_with('@') && !old.is_empty() { "," } else { "" }; format!("{old}{sep}{v}") } else { v.to_string() };
                 // options_from_string_check: a style option's value must parse as a style (formats aside).
                 if name.ends_with("-style") && !v.contains("#{") && !crate::draw::valid_style(&v) { return Err(format!("invalid style: {v}")) }
                 if name == "default-shell" && !suitable_shell(&v) { return Err(format!("not a suitable shell: {v}")) }

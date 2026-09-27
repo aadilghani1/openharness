@@ -566,6 +566,7 @@ fn run_queue(app: &mut App, mut queue: Queue) {
         let job = match wait_job(app, &words).unwrap_or_else(|| shell_job(app, &words)) { Ok(j) => j, Err(e) => { app.error(e); app.origin = None; app.mouse_ev = saved; app.hook_state = saved_hook; continue } };
         let Some(Job { command, cwd, delay, background, done, wait }) = job else {
             let errors = app.errors;
+            app.chain_follows = !queue.is_empty();
             // A hook about a session not in front (its own after- hook): run there.
             let there = hook.as_ref().and_then(|h| h.session).filter(|s| *s != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|x| x.id == *s && x.mirror.is_none()));
             match there {
@@ -1764,7 +1765,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // its recent harnesses and conversations to pick from, `t` a shell — as the desktop's
             // new tab. From a script, or with anything asked of it (-c, -n, a command…), a shell as
             // tmux makes; `set -g @hn-new-window shell` makes the key tmux's too.
-            let bare = app.capture.is_none() && !app.headless && command.is_none() && cwd.is_none() && name.is_none() && opt(words, "-t").is_none()
+            // (Not when commands follow it in the same line or binding — `new-window \; split-window
+            // -h` — which want its pane, as tmux's has one.)
+            let bare = app.capture.is_none() && !app.headless && !app.chain_follows && command.is_none() && cwd.is_none() && name.is_none() && opt(words, "-t").is_none()
                 && !["-d", "-a", "-b", "-k", "-P"].iter().any(|f| flag(words, f)) && opt(words, "-e").is_none()
                 && app.options.get("@hn-new-window", "", None).as_deref() != Some("shell")
                 // (tmux's look is tmux's C-b c too.)
@@ -2432,7 +2435,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let tab_id = app.tabs[tab].id.clone();
             let now = match app.options.set(&name, value.as_deref(), &f, &tab_id, pane) {
                 Ok(now) => now,
-                Err(e) if quiet && e.starts_with("invalid option") => return,
+                // (-q: quiet about an option it does not know, and one -o finds already set.)
+                Err(e) if quiet && (e.starts_with("invalid option") || e.starts_with("already set")) => return,
                 Err(e) => return app.error(e),
             };
             after_set(app, &name, now, f.global, Some(tab));

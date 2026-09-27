@@ -192,6 +192,7 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
         // (exit-empty off: it stays with none, as tmux's server does.)
         if !app.holds_sessions() && !app.harness_hooks() && app.options.get("exit-empty", "", None).as_deref() != Some("off") && app.cli_held.is_empty() && busy.elapsed() > Duration::from_secs(2) && app.last_cli.elapsed() > Duration::from_secs(2) { break }
     }
+    format::kill_jobs(&app);
     app.fleet.save_cache();
     app.write_sessions(app::Save::Leave);
     mirror::tell_mirrors_now(&app);
@@ -493,6 +494,8 @@ async fn run(config: config::Config) -> io::Result<()> {
             }
         }
     }
+    // Its #() jobs ended, as tmux's server ends its jobs.
+    format::kill_jobs(&app);
     // The terminal's own cursor colour back.
     if cursor_colour.is_some() { let _ = execute!(term.backend_mut(), crossterm::style::Print("\x1b]112\x07")); }
     let session = app.session_name();

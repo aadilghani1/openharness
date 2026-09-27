@@ -97,13 +97,24 @@ impl<'a> Es<'a> {
 
 // ── #() ─────────────────────────────────────────────────────────────────────
 
-/// A `#()` command: its last output, and the run in flight (tmux's format_job).
+/// A `#()` command: its last output, and the run in flight (tmux's format_job): the process
+/// group running it (killed when it is run again for new text, or when hn goes), whether it has
+/// said anything yet.
 #[derive(Default)]
-pub struct Job { expanded: String, out: Option<String>, running: bool, started: i64, last: i64, generation: u64 }
+pub struct Job { expanded: String, out: Option<String>, running: bool, started: i64, last: i64, generation: u64, pub pid: Option<i32>, updated: bool }
 
-/// The output of `cmd` (first line), running it if it is due: the first time, when its expanded
-/// text changes, and every status-interval after the last run — tmux reruns a job each time the
-/// status line is redrawn, which its timer does every status-interval.
+unsafe extern "C" { fn kill(pid: i32, sig: i32) -> i32; }
+
+/// Every `#()` job still running, ended (job_free's SIGTERM, to its process group), as tmux's
+/// server ends its jobs when it goes.
+pub fn kill_jobs(app: &crate::app::App) {
+    for job in app.jobs.borrow_mut().values_mut() { if let Some(pid) = job.pid.take() { unsafe { kill(-pid, 15); } } }
+}
+
+/// The output of `cmd` (its latest line), running it if it is due: the first time, when its
+/// expanded text changes, and every status-interval after the last run — tmux reruns a job each
+/// time the status line is redrawn, which its timer does every status-interval; one still running
+/// (a `while :; do …; sleep 60; done`) is not run again, its lines shown as they come.
 fn job_get(es: &mut Es, cmd: &str) -> String {
     let app = es.app;
     let (saved_time, saved_jobs) = (es.time, es.nojobs);
@@ -119,8 +130,11 @@ fn job_get(es: &mut Es, cmd: &str) -> String {
         let due = !job.running && job.last != now && (job.generation == 0 || (interval > 0 && now - job.last >= interval));
         let run = force || due;
         if run {
+            // (New text for it: the run before ends, as format_job_get frees it.)
+            if force { if let Some(pid) = job.pid.take() { unsafe { kill(-pid, 15); } } }
             job.expanded = expanded.clone();
             job.running = true;
+            job.updated = false;
             job.started = now;
             job.last = now;
             job.generation += 1;
@@ -132,26 +146,54 @@ fn job_get(es: &mut Es, cmd: &str) -> String {
     if run {
         let key = cmd.to_string();
         let env = crate::ipc::job_environ(&app.global_env, &app.session_env);
-        app.spawn(async move {
-            // As tmux runs one: /bin/sh -c, nothing on stdin, the client's folder, the server's
-            // environment; HN_SOCKET (and a `tmux` that is hn) so a command inside it talks to
-            // this client.
-            let mut c = tokio::process::Command::new("/bin/sh");
-            c.arg("-c").arg(&expanded);
-            crate::ipc::set_job_env(&mut c, &env);
-            c.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null())
-                .output().await.map(|o| o.stdout).unwrap_or_default()
-        }, move |app, stdout| {
-            let text = String::from_utf8_lossy(&stdout);
-            // The first line (tmux's evbuffer_readline), else all of it.
-            let line = text.split(['\n', '\r']).next().unwrap_or("").to_string();
-            let line = if text.contains(['\n', '\r']) { line } else { text.to_string() };
-            if let Some(job) = app.jobs.borrow_mut().get_mut(&key) {
-                if job.generation != generation { return }
-                job.running = false;
-                if !line.is_empty() || job.out.as_deref().map(|o| o.starts_with("<'")).unwrap_or(true) { job.out = Some(line) }
+        let sink = app.sink.clone();
+        // As tmux runs one: /bin/sh -c, nothing on stdin, the client's folder, the server's
+        // environment; HN_SOCKET (and a `tmux` that is hn) so a command inside it talks to
+        // this client. A group of its own, so ending it ends what it started.
+        let mut c = tokio::process::Command::new("/bin/sh");
+        c.arg("-c").arg(&expanded);
+        crate::ipc::set_job_env(&mut c, &env);
+        c.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).process_group(0).kill_on_drop(false);
+        match c.spawn() {
+            Ok(mut child) => {
+                if let Some(job) = app.jobs.borrow_mut().get_mut(&key) { job.pid = child.id().map(|p| p as i32) }
+                let stdout = child.stdout.take();
+                tokio::spawn(async move {
+                    use tokio::io::AsyncReadExt;
+                    // format_job_update: each time whole lines come, the last of them; at the end
+                    // (format_job_complete) what is left after them, if anything or nothing came.
+                    let mut buf: Vec<u8> = Vec::new();
+                    if let Some(mut out) = stdout {
+                        let mut chunk = [0u8; 4096];
+                        loop {
+                            let n = match out.read(&mut chunk).await { Ok(0) | Err(_) => break, Ok(n) => n };
+                            buf.extend_from_slice(&chunk[..n]);
+                            let Some(end) = buf.iter().rposition(|b| *b == b'\n') else { continue };
+                            let lines: Vec<u8> = buf.drain(..=end).collect();
+                            let text = String::from_utf8_lossy(&lines[..lines.len() - 1]).to_string();
+                            let line = text.rsplit('\n').next().unwrap_or("").trim_end_matches('\r').to_string();
+                            let key = key.clone();
+                            let _ = sink.send(crate::event::Event::Apply(Box::new(move |app: &mut crate::app::App| {
+                                if let Some(job) = app.jobs.borrow_mut().get_mut(&key) { if job.generation == generation { job.out = Some(line); job.updated = true } }
+                                app.status_redraws += 1;
+                            })));
+                        }
+                    }
+                    let _ = child.wait().await;
+                    let rest = String::from_utf8_lossy(&buf).trim_end_matches('\r').to_string();
+                    let _ = sink.send(crate::event::Event::Apply(Box::new(move |app: &mut crate::app::App| {
+                        if let Some(job) = app.jobs.borrow_mut().get_mut(&key) {
+                            if job.generation != generation { return }
+                            job.running = false;
+                            job.pid = None;
+                            if !rest.is_empty() || !job.updated { job.out = Some(rest) }
+                        }
+                        app.status_redraws += 1;
+                    })));
+                });
             }
-        });
+            Err(_) => { if let Some(job) = app.jobs.borrow_mut().get_mut(&key) { job.running = false; job.out = Some(format!("<'{cmd}' didn't start>")) } }
+        }
     }
     // The output is itself a format (a script may print `#[fg=red]`), without jobs or the time.
     let result = out.map(|o| expand1(es, &o)).unwrap_or_default();
@@ -1292,6 +1334,9 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "client_mode_format" => "#{t/p:client_activity}: session #{session_name}".into(),
         "tree_mode_format" => "#{?pane_format,#{?pane_marked,#[reverse],}#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,}#{?#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}},: \"#{pane_title}\",},#{?window_format,#{?window_marked_flag,#[reverse],}#{window_name}#{window_flags}#{?#{&&:#{==:#{window_panes},1},#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}}},: \"#{pane_title}\",},#{session_windows} windows#{?session_grouped, (group #{session_group}: #{session_group_list}),}#{?session_attached, (attached),}}}".into(),
         "config_files" => app.config_files.join(","),
+        // The file whose commands are running (cfg.c's current_file): a sourced file's, as its
+        // `source -F "#{d:current_file}/…"` reads it.
+        "current_file" => app.origin.as_ref().map(|(f, _)| f.to_string()).unwrap_or_default(),
         // format_cb_session_alerts: each window with an alert, its number and its # ! ~.
         "session_alerts" => (0..app.tabs.len()).filter_map(|i| { let f: String = flags(app, i).chars().filter(|c| matches!(c, '#' | '!' | '~')).collect(); (!f.is_empty()).then(|| format!("{}{f}", app.win_num(i))) }).collect::<Vec<_>>().join(","),
         // The session's windows in the order they were last current (the current first).
