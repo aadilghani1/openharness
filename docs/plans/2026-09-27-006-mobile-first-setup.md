@@ -78,7 +78,8 @@ A new device (the phone app, the desktop app, or the CLI) asks for one thing, yo
 
 **The terminal path (the 1%):** `curl -fsSL https://cdn.autonomous.ai/harness/desktop/install.sh | bash`
 installs the same desktop app (macOS or Linux) and opens it; the app does the rest. A server over SSH,
-with no desktop, is `harness login`, which prints the same code and a QR and waits for your approval. The phone's setup page offers it second, under *"Using a terminal or Linux?"*.
+with no desktop, gets the CLI alone: `curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash`,
+`harness login`, `harness start`. The phone's set-up page shows both, each with its own Copy. The phone's setup page offers it second, under *"Using a terminal or Linux?"*.
 
 ## How one approval is enough
 

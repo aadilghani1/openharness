@@ -101,6 +101,10 @@ void main() {
   testWidgets(
     'not yet: the app\'s link to send to the Mac, and the terminal last',
     (tester) async {
+      // A phone's height, so the whole page is on screen.
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(430, 1400);
+      addTearDown(tester.view.reset);
       await pump(tester);
       await tester.tap(find.text('Not yet — set it up'));
       await tester.pump();
@@ -113,6 +117,16 @@ void main() {
         ),
         findsOneWidget,
       );
+      // And the CLI alone, for a computer with no desktop.
+      expect(
+        find.textContaining('https://harness.autonomous.ai/cli/install.sh'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Copy').last);
+      await tester.pump();
+      expect(find.text('Copied'), findsOneWidget);
+      expect(find.text('Copy'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 2));
       // Back is the first screen.
       await tester.tap(find.bySemanticsLabel('Back'));
       await tester.pump();

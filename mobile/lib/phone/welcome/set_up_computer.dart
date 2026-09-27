@@ -14,11 +14,21 @@ import 'how_it_works_video.dart';
 /// download page; a shorter `/download` waits on a website release.
 const kDesktopDownloadUrl = 'https://harness.autonomous.ai/desktop';
 
-/// The terminal way: the same desktop app, installed from a terminal instead of a browser (macOS or
-/// Linux). The installer opens the app when it is done, and the app signs in and sets up the rest —
-/// so there is nothing to type after it.
-const kTerminalSetUp = [
+/// The terminal ways, one for each kind of computer.
+///
+/// [kAppTerminalSetUp] is the same desktop app, installed from a terminal instead of a browser
+/// (macOS or Linux). The installer opens the app when it is done, and the app signs in and sets up
+/// the rest, so there is nothing to type after it.
+const kAppTerminalSetUp = [
   'curl -fsSL https://cdn.autonomous.ai/harness/desktop/install.sh | bash',
+];
+
+/// [kCliTerminalSetUp] is the `harness` command alone, for a computer with no desktop (a server,
+/// over SSH): install, sign in, start, in the installer's own order.
+const kCliTerminalSetUp = [
+  'curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash',
+  'harness login',
+  'harness start',
 ];
 
 /// **Not yet — set it up**: getting Harness onto the computer, from the phone.
@@ -40,9 +50,16 @@ const kTerminalSetUp = [
 ///            Scan to connect
 ///
 /// Using a terminal?
+/// The app, on a Mac or Linux:
 /// ┌─────────────────────────────────┐
 /// │ curl -fsSL https://cdn.auto…    │
 /// │                         [ Copy ]│
+/// └─────────────────────────────────┘
+/// Just the CLI, on a server:
+/// ┌─────────────────────────────────┐
+/// │ curl -fsSL https://harness…     │
+/// │ harness login                   │
+/// │ harness start           [ Copy ]│
 /// └─────────────────────────────────┘
 /// ```
 ///
@@ -63,7 +80,8 @@ class SetUpComputerPage extends StatefulWidget {
 }
 
 class _SetUpComputerPageState extends State<SetUpComputerPage> {
-  bool _copied = false;
+  /// The block just copied, which says so for two seconds.
+  List<String>? _copied;
   Timer? _copiedTimer;
   final _sendKey = GlobalKey();
 
@@ -88,17 +106,49 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
     );
   }
 
-  void _copy() {
-    unawaited(
-      Clipboard.setData(ClipboardData(text: kTerminalSetUp.join('\n'))),
-    );
+  void _copy(List<String> lines) {
+    unawaited(Clipboard.setData(ClipboardData(text: lines.join('\n'))));
     HapticFeedback.selectionClick();
     _copiedTimer?.cancel();
-    setState(() => _copied = true);
+    setState(() => _copied = lines);
     _copiedTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _copied = false);
+      if (mounted) setState(() => _copied = null);
     });
   }
+
+  /// One way to install from a terminal: what it is for, then the lines and their Copy.
+  List<Widget> _commands(Tty tty, String label, List<String> lines) => [
+    Text(
+      label,
+      style: tty.style(color: tty.faint, size: TtySize.meta),
+    ),
+    const SizedBox(height: 6),
+    DecoratedBox(
+      decoration: BoxDecoration(
+        color: ttyRaised(tty),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: SelectableText(
+                lines.join('\n'),
+                style: tty.style(size: TtySize.meta),
+              ),
+            ),
+            TtyTextButton(
+              label: identical(_copied, lines) ? 'Copied' : 'Copy',
+              color: identical(_copied, lines) ? tty.green : tty.text,
+              onPressed: () => _copy(lines),
+            ),
+          ],
+        ),
+      ),
+    ),
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -156,32 +206,18 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
                 ),
               ),
               const SizedBox(height: 32),
-              Text('Using a terminal?', style: faint),
-              const SizedBox(height: 8),
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: ttyRaised(tty),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Expanded(
-                        child: SelectableText(
-                          kTerminalSetUp.join('\n'),
-                          style: tty.style(size: TtySize.meta),
-                        ),
-                      ),
-                      TtyTextButton(
-                        label: _copied ? 'Copied' : 'Copy',
-                        color: _copied ? tty.green : tty.text,
-                        onPressed: _copy,
-                      ),
-                    ],
-                  ),
-                ),
+              Text('Using a terminal?', style: tty.style(size: TtySize.row)),
+              const SizedBox(height: 12),
+              ..._commands(
+                tty,
+                'The app, on a Mac or Linux:',
+                kAppTerminalSetUp,
+              ),
+              const SizedBox(height: 16),
+              ..._commands(
+                tty,
+                'Just the CLI, on a server:',
+                kCliTerminalSetUp,
               ),
               const SizedBox(height: 32),
               // Not at the computer: what it is like, in 30 seconds.
