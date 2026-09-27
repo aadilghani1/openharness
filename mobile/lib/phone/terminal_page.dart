@@ -922,32 +922,43 @@ class _TerminalPageState extends State<TerminalPage>
   }
 
   /// The prompt bar's keys for [view]: its first answers, and ` more ` for the rest in a menu.
-  List<({String label, VoidCallback onTap})> _answerKeys(
-    QuestionPaneView view,
-  ) {
+  /// The two answers beside the mic while a question is open — its first (`1 yes`) and its last
+  /// (`3 no`). The ones between are a tap on their own line in the terminal, where what they
+  /// mean is written in full ([_onLineTap]). Null when there is nothing to press: a question
+  /// that takes several answers, or one only partly on screen.
+  (QuestionKey, QuestionKey?)? _answerKeys(QuestionPaneView view) {
+    if (!view.answerable || view.multi) return null;
     final keys = questionKeys(view);
-    ({String label, VoidCallback onTap}) key(QuestionKey key) =>
-        (label: '${key.number} ${key.label}', onTap: () => _answer(view, key));
-    if (keys.length <= 4) return [for (final k in keys) key(k)];
-    return [
-      for (final k in keys.take(3)) key(k),
-      (
-        label: 'more',
-        onTap: () => showPhoneSheet(
-          context,
-          title: view.question,
-          actions: [
-            for (final k in keys)
-              PhoneSheetAction(
-                icon: LucideIcons.cornerDownLeft300,
-                label: '${k.number}  ${k.label}',
-                onTap: () => _answer(view, k),
-              ),
-          ],
-        ),
-      ),
-    ];
+    if (keys.isEmpty) return null;
+    return (keys.first, keys.length > 1 ? keys.last : null);
   }
+
+  /// [_answerKeys] while they can be pressed here: not over the keyboard, nor while recording.
+  (QuestionKey, QuestionKey?)? get _answersBesideMic {
+    final view = _questionWatcher?.view;
+    if (view == null || _ownsInput || _keyBarUp) return null;
+    if (VoiceBarLine.shows(widget.voice)) return null;
+    return _answerKeys(view);
+  }
+
+  /// A tap on a row of the terminal while a question is open: on an answer's own line —
+  /// `❯ 1. Yes`, `  2. Yes, and don't ask again` — it presses that answer.
+  bool _onLineTap(String line) {
+    final view = _questionWatcher?.view;
+    if (view == null || !view.answerable || view.multi) return false;
+    final number = _optionLine.firstMatch(line)?.group(1);
+    if (number == null) return false;
+    for (final key in questionKeys(view)) {
+      if (key.number == number) {
+        HapticFeedback.selectionClick();
+        _answer(view, key);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static final _optionLine = RegExp(r'^\s*(?:[❯›>]\s*)?(\d{1,2})[.)]\s');
 
   /// Presses an answer: its digit, and Return only where the dialog asks for one (Codex's
   /// `request_user_input`) — a chosen Return, never a blind one.
@@ -1893,6 +1904,7 @@ class _TerminalPageState extends State<TerminalPage>
                                                                 session,
                                                               ),
                                                             ),
+                                                      onLineTap: _onLineTap,
                                                       showHeader: false,
                                                       // tmux's copy-mode position while
                                                       // reading back — see [_CopyModePosition].
@@ -2076,16 +2088,14 @@ class _TerminalPageState extends State<TerminalPage>
                                 slop: slop,
                               );
                             }
+                            // The answers are keycaps beside the mic (see [_answerKeys]); the line
+                            // only says so when there are none to offer.
                             final view = _questionWatcher?.view;
-                            final prompt =
-                                view == null || !view.answerable || view.multi
-                                ? null
-                                : _answerKeys(view);
                             return CommandLine(
                               slop: slop,
                               message: _barMessage.value,
-                              prompt: prompt,
-                              promptNote: view != null && prompt == null
+                              promptNote:
+                                  view != null && _answerKeys(view) == null
                                   ? 'answer on screen'
                                   : null,
                             );
@@ -2143,6 +2153,41 @@ class _TerminalPageState extends State<TerminalPage>
                           ),
                         ),
                       ),
+                    // An agent's question: its first and last answers, `1 yes` and `3 no`, as keys
+                    // either side of the mic — which never moves. The rest are a tap on their line.
+                    if (_answersBesideMic case (final first, final last)?) ...[
+                      Positioned(
+                        right:
+                            MediaQuery.sizeOf(context).width / 2 +
+                            VoiceMicButton.extent / 2 +
+                            20 -
+                            _Keycap.slop,
+                        bottom:
+                            _windowBottomInset +
+                            4 * Tty.of(context).row -
+                            _Keycap.touch / 2,
+                        child: _AnswerKeycap(
+                          answer: first,
+                          onTap: () => _answer(_questionWatcher!.view!, first),
+                        ),
+                      ),
+                      if (last != null)
+                        Positioned(
+                          left:
+                              MediaQuery.sizeOf(context).width / 2 +
+                              VoiceMicButton.extent / 2 +
+                              20 -
+                              _Keycap.slop,
+                          bottom:
+                              _windowBottomInset +
+                              4 * Tty.of(context).row -
+                              _Keycap.touch / 2,
+                          child: _AnswerKeycap(
+                            answer: last,
+                            onTap: () => _answer(_questionWatcher!.view!, last),
+                          ),
+                        ),
+                    ],
                     // The sample's guide: one faint line 12pt above the mic, what to try next.
                     if ((_ownsInput ? null : _sampleGuide()) case final guide?)
                       Positioned(
@@ -2164,6 +2209,7 @@ class _TerminalPageState extends State<TerminalPage>
                     // terminal person reaches for most, and the one a phone keyboard does not have.
                     if (!_ownsInput &&
                         session != null &&
+                        _answersBesideMic == null &&
                         (_agentWorking ||
                             _questionWatcher?.view != null ||
                             (_questionWatcher?.interruptible ?? false)))
@@ -2171,9 +2217,12 @@ class _TerminalPageState extends State<TerminalPage>
                         right:
                             MediaQuery.sizeOf(context).width / 2 +
                             VoiceMicButton.extent / 2 +
-                            8,
+                            20 -
+                            _Keycap.slop,
                         bottom:
-                            _windowBottomInset + 4 * Tty.of(context).row - 22,
+                            _windowBottomInset +
+                            4 * Tty.of(context).row -
+                            _Keycap.touch / 2,
                         child: _EscChip(
                           onTap: () {
                             session.terminal.keyInput(TerminalKey.escape);
@@ -3289,35 +3338,119 @@ class _EscChip extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
+  Widget build(BuildContext context) => _Keycap(
+    semanticsLabel: 'Escape — interrupt the agent',
+    haptic: HapticFeedback.mediumImpact,
+    onTap: onTap,
+    child: TtyText('esc', size: TtySize.meta, weight: FontWeight.w500),
+  );
+}
+
+/// One of a question's answers beside the mic: `1 yes`, its digit in the asking yellow.
+class _AnswerKeycap extends StatelessWidget {
+  const _AnswerKeycap({required this.answer, required this.onTap});
+
+  final QuestionKey answer;
+  final VoidCallback onTap;
+
+  @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
+    return _Keycap(
+      semanticsLabel: 'Answer ${answer.number} ${answer.label}',
+      minWidth: 88,
+      haptic: HapticFeedback.selectionClick,
+      onTap: onTap,
+      child: ConstrainedBox(
+        // Room for `2 always`; a longer answer ends in an ellipsis — its line says it in full.
+        constraints: const BoxConstraints(maxWidth: 120),
+        child: Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(
+                text: '${answer.number} ',
+                style: tty.style(
+                  size: TtySize.row,
+                  color: tty.yellow,
+                  weight: FontWeight.w600,
+                ),
+              ),
+              TextSpan(
+                text: answer.label,
+                style: tty.style(size: TtySize.row),
+              ),
+            ],
+          ),
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+  }
+}
+
+/// A key on the raised plane: 6pt corners, no outline, darker under the finger on the way down.
+/// Drawn [height] tall inside a 44pt touch that reaches [slop] past it on every side.
+class _Keycap extends StatefulWidget {
+  const _Keycap({
+    required this.semanticsLabel,
+    required this.onTap,
+    required this.child,
+    required this.haptic,
+    this.minWidth = 48,
+  });
+
+  final String semanticsLabel;
+  final VoidCallback onTap;
+  final Widget child;
+  final Future<void> Function() haptic;
+  final double minWidth;
+
+  static const double height = 36;
+  static const double touch = 52;
+  static const double slop = (touch - height) / 2;
+
+  @override
+  State<_Keycap> createState() => _KeycapState();
+}
+
+class _KeycapState extends State<_Keycap> {
+  bool _down = false;
+
+  void _set(bool down) {
+    if (_down != down) setState(() => _down = down);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final raised = ttyRaised(tty);
     return Semantics(
       button: true,
-      label: 'Escape — interrupt the agent',
+      label: widget.semanticsLabel,
       excludeSemantics: true,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
+        onTapDown: (_) => _set(true),
+        onTapCancel: () => _set(false),
+        onTapUp: (_) => _set(false),
         onTap: () {
-          HapticFeedback.mediumImpact();
-          onTap();
+          unawaited(widget.haptic());
+          widget.onTap();
         },
-        child: SizedBox(
-          width: 56,
-          height: 44,
-          child: Center(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: tty.ground,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: tty.dim),
-              ),
-              child: TtyText(
-                'esc',
-                size: TtySize.meta,
-                weight: FontWeight.w600,
-              ),
+        child: Padding(
+          padding: const EdgeInsets.all(_Keycap.slop),
+          child: Container(
+            height: _Keycap.height,
+            constraints: BoxConstraints(minWidth: widget.minWidth),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: _down ? Color.lerp(raised, tty.ground, 0.5) : raised,
+              borderRadius: BorderRadius.circular(6),
             ),
+            child: widget.child,
           ),
         ),
       ),

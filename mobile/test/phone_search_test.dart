@@ -16,6 +16,7 @@ import 'package:harness_mobile/phone/phone_search_field.dart';
 import 'package:harness_mobile/phone/phone_search_groups.dart';
 import 'package:harness_mobile/phone/phone_search_page.dart';
 import 'package:harness_mobile/phone/phone_search_rank.dart';
+import 'package:harness_mobile/phone/phone_search_results.dart';
 import 'package:harness_mobile/phone/resume_agent.dart';
 import 'package:harness_mobile/phone/terminal_search.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
@@ -1162,6 +1163,50 @@ void main() {
     expect(top('work · 3188'), lessThan(top('work · 2312')));
     expect(top('work · 2312'), lessThan(top('work · 9999')));
   });
+
+  testWidgets(
+    'Find holds the order it opened with: a harness that asks stays put',
+    (tester) async {
+      final machine = _machine('box', [
+        _agent('3188', minutesAgo: 4),
+        _agent('2312', minutesAgo: 30),
+        _agent('9999', minutesAgo: 90),
+      ]);
+      final app = _app([machine]);
+      addTearDown(app.dispose);
+      final search = PhoneSearchController(notifier: app);
+      addTearDown(search.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PhoneSearchResults(
+              notifier: app,
+              controller: search,
+              fzf: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      double top(String name) => tester.getTopLeft(find.text(name)).dy;
+      final was = {
+        for (final id in ['3188', '2312', '9999']) id: top('work · $id'),
+      };
+      expect(find.text('needs you'), findsNothing);
+
+      // The bottom one starts asking, and another one does something new, while Find is open.
+      _markWaiting(machine, '9999');
+      machine.agentActivityAt['2312'] = DateTime.now();
+      app.notifyListeners();
+      await tester.pump();
+
+      // Nothing moved: no `needs you` pushed in above, and every row is where it was.
+      expect(find.text('needs you'), findsNothing);
+      for (final MapEntry(key: id, value: dy) in was.entries) {
+        expect(top('work · $id'), dy, reason: id);
+      }
+    },
+  );
 
   testWidgets('opening search warms content; the matching line is quoted', (
     tester,

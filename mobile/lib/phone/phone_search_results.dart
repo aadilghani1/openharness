@@ -113,6 +113,13 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
   /// person who only meant to open one.
   String? _resuming;
 
+  /// The order Find opened with — each row's section (needs you, recent, the one on screen,
+  /// paused) and place in it, by id. Held while Find is open: a harness that starts or stops
+  /// asking, pauses, or does something new keeps its place and only its words change, so the row
+  /// under your finger is the row you meant. Rows that arrive later — a machine answering —
+  /// join the end of their section. Null until the first rows are drawn.
+  Map<String, (int, int)>? _openedOrder;
+
   /// ⚠️ **Three sources, and they answer different questions.**
   ///
   /// The controller says WHICH rows and in what order. The other two are what
@@ -218,10 +225,10 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
 
     // Paused work has its own place at the end: last used lately, it is still not what is running.
     bool paused(PhoneDestination row) => row.entry?.agent.isStopped ?? false;
-    final List<PhoneDestination> needsYou;
-    final List<PhoneDestination> rest;
+    List<PhoneDestination> needsYou;
+    List<PhoneDestination> rest;
     var pausedRows = const <PhoneDestination>[];
-    final PhoneDestination? current;
+    PhoneDestination? current;
     if (!typed && plain) {
       current = showing == null
           ? null
@@ -242,6 +249,37 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       current = null;
       needsYou = const [];
       rest = rows;
+    }
+    if (!typed && plain) {
+      final frozen = _openedOrder ??= rows.isEmpty
+          ? null
+          : {
+              for (final (i, row) in needsYou.indexed) row.id: (0, i),
+              for (final (i, row) in rest.indexed) row.id: (1, i),
+              if (current != null) current.id: (2, 0),
+              for (final (i, row) in pausedRows.indexed) row.id: (3, i),
+            };
+      if (frozen != null) {
+        // Back into the sections they opened in, in the order they opened in; newcomers after.
+        final live = [
+          for (final (i, row) in needsYou.indexed) (row, 0, i),
+          for (final (i, row) in rest.indexed) (row, 1, i),
+          if (current != null) (current, 2, 0),
+          for (final (i, row) in pausedRows.indexed) (row, 3, i),
+        ];
+        final sections = List.generate(4, (_) => <(PhoneDestination, int)>[]);
+        for (final (row, section, i) in live) {
+          final (at, place) = frozen[row.id] ?? (section, 1 << 20 | i);
+          sections[at].add((row, place));
+        }
+        for (final section in sections) {
+          section.sort((a, b) => a.$2.compareTo(b.$2));
+        }
+        needsYou = [for (final (row, _) in sections[0]) row];
+        rest = [for (final (row, _) in sections[1]) row];
+        current = sections[2].firstOrNull?.$1;
+        pausedRows = [for (final (row, _) in sections[3]) row];
+      }
     }
     final ordered = [...needsYou, ...rest, ?current, ...pausedRows];
     final selectedAt = typed ? ordered.indexWhere(search.canSubmit) : -1;

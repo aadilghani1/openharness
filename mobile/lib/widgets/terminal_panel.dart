@@ -117,6 +117,10 @@ class TerminalPanel extends StatefulWidget {
   /// jumping up would cover half of what they were reading.
   final VoidCallback? onInputTap;
 
+  /// A tap on a row of output, with that row's text — before [onInputTap] is considered. True
+  /// when the host took it: on the phone, an answer's own line while a question is open.
+  final bool Function(String line)? onLineTap;
+
   /// Whether this tile's composer textbox is showing. Only consulted for a remote machine.
   final bool composerVisible;
   final bool readOnly;
@@ -149,6 +153,7 @@ class TerminalPanel extends StatefulWidget {
     this.scrollback,
     this.jumpToEndRequest = 0,
     this.onInputTap,
+    this.onLineTap,
     this.composerVisible = false,
     this.readOnly = false,
     this.notice,
@@ -1336,7 +1341,13 @@ class _TerminalPanelState extends State<TerminalPanel>
       return;
     }
     _inputTapClaimed = false;
-    if (!isPromptTap(_viewTerminal.buffer, cell.y)) return;
+    final buffer = _viewTerminal.buffer;
+    if (cell.y >= 0 &&
+        cell.y < buffer.lines.length &&
+        (widget.onLineTap?.call(buffer.lines[cell.y].getText()) ?? false)) {
+      return;
+    }
+    if (!isPromptTap(buffer, cell.y)) return;
     widget.onInputTap?.call();
   }
 
@@ -1560,7 +1571,9 @@ class _TerminalPanelState extends State<TerminalPanel>
                           // edge and the gap travelled with the content rather
                           // than staying put like a margin. The sides are
                           // margins beside chrome, not under it, and stay.
-                          padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: Tty.origin,
+                          ),
                           textStyle: terminalFontStore.value,
                           // ⚠️ The terminal is NOT app chrome, and the user said so:
                           // it carries its own font settings (Settings ▸ Terminal,
