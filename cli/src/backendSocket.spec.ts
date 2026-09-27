@@ -795,7 +795,7 @@ describe('BackendSocket outbound queue', () => {
       cliVersion: null,
       processIdentity: null,
       registeredAt: 1,
-      updatedAt: 1,
+      touchedAt: 1,
       lastHookAt: 1,
       lastTranscriptAt: 1,
     }
@@ -1054,7 +1054,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
       runtimes: [{ backend: 'tmux', paneId: '%9' }], primaryRuntimeKey: 'tmux/%9', tmuxPane: '%9',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     }
     socket.onCreateAgent = async () => ({ ok: true, session: pending })
 
@@ -1122,7 +1122,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
       runtimes: [{ backend: 'tmux', paneId: '%9' }], primaryRuntimeKey: 'tmux/%9', tmuxPane: '%9',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     })
     const create = vi.fn(async (input: { bypassPermission: boolean; permissionMode: string | null }) => ({ ok: true as const, session: pending(`b-${create.mock.calls.length}`) }))
     socket.onCreateAgent = create
@@ -1164,7 +1164,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'nqhieu84', cwd: homedir(),
       runtimes: [{ backend: 'tmux', paneId: '%9' }], primaryRuntimeKey: 'tmux/%9', tmuxPane: '%9',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     }
     const create = vi.fn(async (_input: { engine: string; cwd: string }) => ({ ok: true as const, session: pending }))
     socket.onCreateAgent = create
@@ -1201,7 +1201,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
       runtimes: [{ backend: 'tmux', paneId: '%receipt' }], primaryRuntimeKey: 'tmux/%receipt', tmuxPane: '%receipt',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     }
     const lookup = vi.spyOn(registry, 'byAgent').mockReturnValue(pending)
     let finish!: () => void
@@ -1716,7 +1716,7 @@ describe('agent_fork RPC', () => {
     forkedFrom: { agentId: 'agent-1', name: 'Agent one' },
     transcriptPath: null, projectDir: 'workspace', cwd: '/tmp/workspace', runtimes: [], primaryRuntimeKey: '',
     tmuxPane: '%2', source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-    registeredAt: 2, updatedAt: 2, lastHookAt: 2, lastTranscriptAt: 2,
+    registeredAt: 2, touchedAt: 2, lastHookAt: 2, lastTranscriptAt: 2,
   }
 
   function localSocket(): { socket: BackendSocket; frames: Array<Record<string, unknown>> } {
@@ -1861,7 +1861,7 @@ describe('agent_restart RPC', () => {
     cliVersion: null,
     processIdentity: null,
     registeredAt: 1,
-    updatedAt: 1,
+    touchedAt: 1,
     lastHookAt: 1,
     lastTranscriptAt: 1,
   }
@@ -2269,7 +2269,7 @@ describe('agent_create with a prompt, a name and a named agent', () => {
     transcriptPath: null, projectDir: 'home', cwd: '/home/someone', defaultName: 'Local model',
     runtimes: [{ backend: 'tmux', paneId: '%11' }], primaryRuntimeKey: 'tmux/%11', tmuxPane: '%11',
     source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-    registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 
   async function create(choices: Record<string, unknown>) {

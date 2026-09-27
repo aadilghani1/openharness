@@ -224,9 +224,19 @@ export interface RegisteredSession {
   cliVersion: string | null
   processIdentity: ProcessIdentity | null
   registeredAt: number
-  updatedAt: number
+  /**
+   * When the daemon last changed this row: housekeeping (a reconcile pass, an attach, a rename),
+   * never when the conversation moved. That is `lastActivityAt` (agentFrame.ts), which is what
+   * clients get as `updatedAt`. Rows saved before 2026-09-27 call this `updatedAt` ([savedTouchedAt]).
+   */
+  touchedAt: number
   lastHookAt: number
   lastTranscriptAt: number
+}
+
+/** A saved row's `touchedAt`, which rows saved before 2026-09-27 call `updatedAt`. */
+function savedTouchedAt(row: { touchedAt?: unknown; updatedAt?: unknown }): number | null {
+  return typeof row.touchedAt === 'number' ? row.touchedAt : typeof row.updatedAt === 'number' ? row.updatedAt : null
 }
 
 export interface RegisterInput {
@@ -515,7 +525,7 @@ export function strictPersistedRow(value: unknown): RegisteredSession | null {
     processIdentity: row.processIdentity ?? null,
     ...(row.terminalHost === true || row.engine === 'terminal' ? { terminalHost: true } : {}),
     registeredAt: typeof row.registeredAt === 'number' ? row.registeredAt : Date.now(),
-    updatedAt: typeof row.updatedAt === 'number' ? row.updatedAt : Date.now(),
+    touchedAt: savedTouchedAt(row) ?? Date.now(),
     lastHookAt: typeof row.lastHookAt === 'number' ? row.lastHookAt : Date.now(),
     lastTranscriptAt: typeof row.lastTranscriptAt === 'number' ? row.lastTranscriptAt : Date.now(),
   }
@@ -941,9 +951,9 @@ class Registry {
           model: modelString(raw.model),
           processIdentity: !rebooted && validProcessIdentity(raw.processIdentity) ? raw.processIdentity : null,
           registeredAt: typeof raw.registeredAt === 'number' ? raw.registeredAt : now,
-          updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : now,
-          lastHookAt: typeof raw.lastHookAt === 'number' ? raw.lastHookAt : (raw.updatedAt ?? now),
-          lastTranscriptAt: typeof raw.lastTranscriptAt === 'number' ? raw.lastTranscriptAt : (raw.updatedAt ?? now),
+          touchedAt: savedTouchedAt(raw) ?? now,
+          lastHookAt: typeof raw.lastHookAt === 'number' ? raw.lastHookAt : (savedTouchedAt(raw) ?? now),
+          lastTranscriptAt: typeof raw.lastTranscriptAt === 'number' ? raw.lastTranscriptAt : (savedTouchedAt(raw) ?? now),
         }
         if (
           raw.engine !== engine
@@ -1083,7 +1093,7 @@ class Registry {
       if (input.codexHome && !existing.codexHome) existing.codexHome = input.codexHome
       if (input.hermesHome && !existing.hermesHome) existing.hermesHome = input.hermesHome
       if (input.dsh && !existing.dsh) existing.dsh = input.dsh
-      existing.updatedAt = Date.now()
+      existing.touchedAt = Date.now()
       this.index(existing)
       this.terminalAvailableAgents.add(existing.agentId)
       this.save()
@@ -1142,7 +1152,7 @@ class Registry {
       cliVersion: null,
       processIdentity,
       registeredAt: now,
-      updatedAt: now,
+      touchedAt: now,
       lastHookAt: now,
       lastTranscriptAt: now,
     }
@@ -1217,7 +1227,7 @@ class Registry {
       cliVersion: null,
       processIdentity: null,
       registeredAt: now,
-      updatedAt: now,
+      touchedAt: now,
       lastHookAt: now,
       lastTranscriptAt: now,
     }
@@ -1245,7 +1255,7 @@ class Registry {
       runtimes: routes,
       primaryRuntimeKey: selectedRuntimeKey(routes, ''),
       tmuxPane: tmuxProjection(routes),
-      updatedAt: Date.now(),
+      touchedAt: Date.now(),
     }
     this.index(entry)
     this.terminalAvailableAgents.add(entry.agentId)
@@ -1277,7 +1287,7 @@ class Registry {
 
   /**
    * Upsert a session. Idempotent — a re-register (e.g. from the UserPromptSubmit catch hook) just
-   * refreshes `updatedAt`. Deduped by tmux pane: one session per pane, so a `/clear` rotation
+   * refreshes `touchedAt`. Deduped by tmux pane: one session per pane, so a `/clear` rotation
    * (SessionEnd of the old id → SessionStart of a new id, same pane) evicts the old one instead of
    * showing two tiles. Returns { entry, isNew, evicted } — isNew=false on a re-register (so callers
    * can skip re-announcing), evicted = the sessionId displaced from this pane (caller removes it).
@@ -1476,7 +1486,7 @@ class Registry {
       ...(existing?.terminalHost ? { terminalHost: true } : {}),
       processIdentity: validProcessIdentity(input.processIdentity) ? input.processIdentity : existing?.processIdentity ?? null,
       registeredAt: existing?.registeredAt ?? now,
-      updatedAt: now,
+      touchedAt: now,
       lastHookAt: now,
       lastTranscriptAt: existing?.lastTranscriptAt ?? now,
     }
@@ -1506,7 +1516,7 @@ class Registry {
     const entry = this.bySession(sessionId)
     if (!entry) return false
     this.releaseBinding(entry)
-    entry.updatedAt = Date.now()
+    entry.touchedAt = Date.now()
     this.save()
     return true
   }
@@ -1573,7 +1583,7 @@ class Registry {
     entry.launch = { state: 'ready' }
     entry.active = true
     if (validProcessIdentity(processIdentity)) entry.processIdentity = processIdentity
-    entry.updatedAt = Date.now()
+    entry.touchedAt = Date.now()
     this.index(entry)
     this.terminalAvailableAgents.add(entry.agentId)
     this.save()
@@ -1619,7 +1629,7 @@ class Registry {
     entry.subscriptionModel = null
     entry.model = null
     entry.title = null
-    entry.updatedAt = Date.now()
+    entry.touchedAt = Date.now()
     this.index(entry)
     this.terminalAvailableAgents.add(entry.agentId)
     this.save()
@@ -1635,7 +1645,7 @@ class Registry {
     entry.tmuxPane = tmuxProjection(normalized)
     entry.primaryRuntimeKey = selectedRuntimeKey(normalized, primaryRuntimeKey)
     entry.active = true
-    entry.updatedAt = Date.now()
+    entry.touchedAt = Date.now()
     this.index(entry)
     this.terminalAvailableAgents.add(entry.agentId)
     this.save()
@@ -1646,7 +1656,7 @@ class Registry {
     const entry = this.agents.get(agentId)
     if (!entry || entry.active === active) return !!entry
     entry.active = active
-    entry.updatedAt = Date.now()
+    entry.touchedAt = Date.now()
     this.save()
     return true
   }
@@ -1673,7 +1683,7 @@ class Registry {
     const before = entry.launch
     entry.launch = normalizedLaunch(launch)
     entry.active = launch.state !== 'failed'
-    entry.updatedAt = Date.now()
+    entry.touchedAt = Date.now()
     this.traceLaunch(agentId, before, entry.launch, `setLaunch${launch.state === 'failed' ? ` (${launch.error})` : ''}`)
     this.save()
     return entry
@@ -1717,7 +1727,7 @@ class Registry {
     // The grid is read from the same environment and follows the same rule. It matters most right
     // after a retarget: the respawned pane is a new pid, and this is where its new grid lands.
     if (grid !== undefined) session.grid = grid
-    session.updatedAt = Date.now()
+    session.touchedAt = Date.now()
     this.index(session)
     this.save()
     return true
@@ -1730,7 +1740,7 @@ class Registry {
     if (!session.processIdentity) return true
     this.drop(session)
     session.processIdentity = null
-    session.updatedAt = Date.now()
+    session.touchedAt = Date.now()
     this.index(session)
     this.save()
     return true
@@ -1742,7 +1752,7 @@ class Registry {
     if ((session.bypassPermission === true) === bypassPermission) return true
     if (bypassPermission) session.bypassPermission = true
     else delete session.bypassPermission
-    session.updatedAt = Date.now()
+    session.touchedAt = Date.now()
     this.save()
     return true
   }
@@ -1756,7 +1766,7 @@ class Registry {
     if (!session || !permissionModeName(permissionMode)) return false
     if (session.permissionMode) return session.permissionMode === permissionMode
     session.permissionMode = permissionMode
-    session.updatedAt = Date.now()
+    session.touchedAt = Date.now()
     this.save()
     return true
   }
@@ -1769,7 +1779,7 @@ class Registry {
     const session = this.agents.get(agentId)
     if (!session || session.cwd === cwd) return false
     session.cwd = cwd
-    session.updatedAt = Date.now()
+    session.touchedAt = Date.now()
     this.save()
     return true
   }
@@ -1778,7 +1788,7 @@ class Registry {
     const session = this.agents.get(agentId)
     if (!session || session.engine !== 'codex' || session.codexHome) return false
     session.codexHome = codexHome
-    session.updatedAt = Date.now()
+    session.touchedAt = Date.now()
     this.save()
     return true
   }
@@ -1790,7 +1800,7 @@ class Registry {
     const session = this.agents.get(agentId)
     if (!session || session.engine !== 'hermes' || session.hermesHome) return false
     session.hermesHome = hermesHome
-    session.updatedAt = Date.now()
+    session.touchedAt = Date.now()
     this.save()
     return true
   }
@@ -1801,7 +1811,7 @@ class Registry {
     const session = this.agents.get(agentId)
     if (!session || session.dsh || !DSH_ID_RE.test(dsh)) return false
     session.dsh = dsh
-    session.updatedAt = Date.now()
+    session.touchedAt = Date.now()
     this.save()
     return true
   }
@@ -1817,7 +1827,7 @@ class Registry {
     if (!session) return false
     session.gridLaunch = launch?.override ?? null
     session.gridWebSearch = launch?.webSearch ?? null
-    session.updatedAt = Date.now()
+    session.touchedAt = Date.now()
     this.save()
     return true
   }
@@ -1828,7 +1838,7 @@ class Registry {
     const session = this.agents.get(agentId)
     if (!session) return false
     session.subscriptionModel = model
-    session.updatedAt = Date.now()
+    session.touchedAt = Date.now()
     this.save()
     return true
   }
@@ -1837,7 +1847,7 @@ class Registry {
     const session = this.bySession(sessionId)
     if (!session) return false
     session.lastTranscriptAt = at
-    session.updatedAt = Math.max(session.updatedAt, at)
+    session.touchedAt = Math.max(session.touchedAt, at)
     this.save()
     return true
   }
@@ -1849,7 +1859,7 @@ class Registry {
     const current = titleDisplayName(session.title)
     if (next === current) return session
     session.title = next
-    session.updatedAt = Date.now()
+    session.touchedAt = Date.now()
     this.save()
     return session
   }

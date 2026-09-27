@@ -31,7 +31,7 @@ export interface SearchSource {
    * registry's bookkeeping time. Newest sessions are indexed first, and a database-backed history
    * is read again when this moves.
    */
-  updatedAt: number
+  changedAt: number
   /**
    * The whole history, for an engine that keeps it in a database rather than a transcript file
    * (OpenCode, Kilo, Hermes, Devin). Read in full when the session changed: there is no offset to
@@ -201,7 +201,7 @@ export class SessionSearchIndex {
       const indexed = this.opts.store.session(sessionId)
       if (indexed && !agents.has(indexed.agentId) && !this.sources.has(sessionId)) this.opts.store.removeSession(sessionId)
     }
-    const newest = [...this.sources.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+    const newest = [...this.sources.values()].sort((a, b) => b.changedAt - a.changedAt)
     for (const source of newest) this.queue.add(source.sessionId)
     void this.drain()
   }
@@ -305,7 +305,7 @@ export class SessionSearchIndex {
       if (!source.sessionId) continue
       const known = next.get(source.sessionId)
       // One session can be listed live and stopped at once: the fresher record wins.
-      if (!known || source.updatedAt > known.updatedAt) next.set(source.sessionId, source)
+      if (!known || source.changedAt > known.changedAt) next.set(source.sessionId, source)
     }
     this.sources = next
     this.sourcesReadAt = Date.now()
@@ -329,7 +329,7 @@ export class SessionSearchIndex {
         path: existing?.path ?? source.transcriptPath ?? '', header,
         size: existing?.size ?? 0, mtime: existing?.mtime ?? 0,
         resumeOffset: existing?.resumeOffset ?? 0, resumeTurn: existing?.resumeTurn ?? 0,
-        lastAt: existing?.lastAt ?? (source.updatedAt || null), turns: 0,
+        lastAt: existing?.lastAt ?? (source.changedAt || null), turns: 0,
         ...externalFields(source, knownTitle),
       }, NO_TURN_DELETE, [])
       return
@@ -402,7 +402,7 @@ export class SessionSearchIndex {
    */
   private async historyPass(source: SearchSource, existing: IndexedSession | undefined, dirty: boolean): Promise<void> {
     const store = this.opts.store
-    const stamp = source.updatedAt
+    const stamp = source.changedAt
     if (existing && !dirty && existing.mtime === stamp) {
       if (existing.header !== source.header || existing.agentId !== source.agentId) {
         store.writeSession({ ...existing, header: source.header, agentId: source.agentId }, NO_TURN_DELETE, [])

@@ -229,7 +229,7 @@ import {
 } from './engines/commandcode/normalizer.js'
 import { probeGatewayRuntime } from './lib/gatewayRuntime.js'
 import { probeGridAssignment, sameGridAssignment } from './lib/gridAssignment.js'
-import { agentFrame, type AgentFrame } from './lib/agentFrame.js'
+import { agentFrame, lastActivityAt, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { SessionInputController } from './lib/sessionInput.js'
 import { DeviceResultJournal } from './lib/autonomous-device/resultJournal.js'
@@ -2832,9 +2832,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
               engine: s.engine,
               transcriptPath: s.transcriptPath || null,
               header: [projectDisplayName(s), s.title, folderWords(s.cwd)].filter(Boolean).join(' · '),
-              // Conversation stamps only (lib/agentFrame.ts lastActivityAt): the registry's own
-              // updatedAt moves on every discovery pass.
-              updatedAt: Math.max(s.lastTranscriptAt || 0, s.lastHookAt || 0) || s.boundAt || s.registeredAt || 0,
+              // Conversation stamps only: the row's `touchedAt` moves on every discovery pass.
+              changedAt: Math.max(s.lastTranscriptAt || 0, s.lastHookAt || 0) || s.boundAt || s.registeredAt || 0,
               readHistory,
             }]
           })
@@ -2845,7 +2844,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
             if (known.has(e.sessionId)) continue
             sources.push({
               agentId: '', sessionId: e.sessionId, engine: e.engine, transcriptPath: e.transcriptPath,
-              header: '', updatedAt: e.mtime, external: { cwd: e.cwd, origin: e.origin, title: e.title },
+              header: '', changedAt: e.mtime, external: { cwd: e.cwd, origin: e.origin, title: e.title },
             })
           }
           return sources
@@ -4023,7 +4022,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onRemotePasswordStatus: () => ({ status: 200, body: backend.remotePasswordStatus() }),
     // Local dashboard (GET /api/status): adapter health + computer fingerprint + local pairings. It
     // deliberately does NOT expose chat/transcripts — those live in the cloud web (WEB_URL/commander).
-    onStatus: () => ({
+    onStatus: async () => ({
       machineId: backend.machineId,
       computerId: computerId(),
       // Whether this daemon booted with an account. Read LIVE, not from the boot session: a login or
@@ -4081,7 +4080,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         dataDir: tildify(env.ADAPTER_DATA_DIR),
         port: daemonPort(),
       },
-      sessions: registry.advertised().map((s) => ({
+      sessions: await Promise.all(registry.advertised().map(async (s) => ({
         id: s.agentId,
         sessionId: s.sessionId,
         name: projectDisplayName(s),
@@ -4089,8 +4088,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         cwd: tildify(s.cwd ?? ''),
         tmuxPane: s.tmuxPane || null,
         terminal: { available: registry.terminalAvailable(s.agentId), primary: s.primaryRuntimeKey, runtimes: s.runtimes },
-        updatedAt: s.updatedAt,
-      })),
+        // When the conversation last moved, as in every agent frame — not the row's `touchedAt`.
+        updatedAt: await lastActivityAt(s),
+      }))),
       pairs: backend.listPairs(),
       pending: backend.pendingPair(),
     }),

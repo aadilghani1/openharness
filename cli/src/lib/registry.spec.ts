@@ -271,12 +271,17 @@ describe('registry remote display names', () => {
       tmuxPane: '%17',
       runtimes: [{ backend: 'tmux', paneId: '%17' }],
       schemaVersion: 2,
+      // Saved as `updatedAt` before the row's bookkeeping time was named for what it is.
+      touchedAt: 20,
     })
-    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))[0]).toMatchObject({
+    const saved = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))[0]
+    expect(saved).toMatchObject({
       agentId: 'stable-agent',
       tmuxPane: '%17',
       runtimes: [{ backend: 'tmux', paneId: '%17' }],
+      touchedAt: 20,
     })
+    expect(saved).not.toHaveProperty('updatedAt')
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.pre-v2.json'), 'utf8'))[0]).toMatchObject({
       agentId: 'stable-agent', sessionId: 'legacy-session', tmuxPane: '%17',
     })

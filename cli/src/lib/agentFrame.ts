@@ -133,7 +133,7 @@ export interface AgentFrameContext {
  * When the conversation last moved, in epoch ms: dated work in the transcript, else the last time the engine
  * reported in (a hook, or a session bind — the agent's creation at the latest).
  *
- * ⚠️ Never the registry's `updatedAt`. That is bookkeeping: discovery rewrites it on every pass
+ * ⚠️ Never the registry row's `touchedAt`. That is bookkeeping: discovery rewrites it on every pass
  * (`updateRuntimes`), so falling back to it stamped every agent without a readable transcript "now"
  * — and a client sorting by recency put exactly those agents above the ones just used. File mtime is
  * bookkeeping too: an idle transcript can be rewritten without a new conversation event.
