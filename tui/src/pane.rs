@@ -98,6 +98,10 @@ pub struct Pane {
     pub queued: Vec<Vec<u8>>,
     /// The folder the shell says it is in (OSC 7), for #{pane_current_path} and new splits.
     pub cwd: Option<String>,
+    /// That OSC 7 as it came (`file://host/path`): tmux's screen path, #{pane_path}.
+    pub osc7_url: Option<String>,
+    /// The start of an OSC 7 a chunk ended in the middle of, for the next one.
+    osc_carry: Vec<u8>,
     /// What tmux on the pane's machine says it runs, and where (the daemon's terminal_info):
     /// #{pane_current_command}, #{pane_current_path}, #{pane_pid}, #{pane_tty}.
     pub fg_command: Option<String>,
@@ -126,17 +130,36 @@ pub struct Pane {
     /// When each history line went into the history (0: not known), oldest first — while the
     /// history is not full; after that they are not known.
     pub times: std::collections::VecDeque<i64>,
+    /// OSC 133's marks (tmux's GRID_LINE_START_PROMPT / _OUTPUT) of the history's lines, oldest
+    /// first, and of the screen's rows — on the line the cursor was on when each came.
+    pub hist_marks: std::collections::VecDeque<u8>,
+    pub screen_marks: Vec<u8>,
+    /// The start of an OSC 133 a chunk ended in the middle of.
+    mark_carry: Vec<u8>,
     /// Inside screen's `ESC k … ESC \` title (split across chunks).
     in_screen_title: bool,
     /// An ESC ended the last chunk; the next byte decides what it was.
     pending_esc: bool,
 }
 
-/// The last `ESC ] 7 ; file://host/path` (BEL or ST) in a chunk: the shell's current folder.
-fn osc7(bytes: &[u8]) -> Option<String> {
-    let start = bytes.windows(4).rposition(|w| w == b"\x1b]7;")?;
+/// The end of a chunk that may be the start of an OSC 7 still to come.
+fn osc7_unfinished(bytes: &[u8]) -> &[u8] { unfinished(bytes, b"\x1b]7;") }
+
+/// The end of a chunk that may be the start of an OSC still to come: [intro] and what follows
+/// with no BEL or ESC yet, or the first bytes of [intro].
+fn unfinished<'a>(bytes: &'a [u8], intro: &[u8]) -> &'a [u8] {
+    if let Some(start) = bytes.windows(intro.len()).rposition(|w| w == intro) {
+        let rest = &bytes[start + intro.len()..];
+        if !rest.iter().any(|b| *b == 0x07 || *b == 0x1b) && rest.len() < 4096 { return &bytes[start..] }
+    }
+    (1..intro.len()).rev().find(|n| bytes.ends_with(&intro[..*n])).map(|n| &bytes[bytes.len() - n..]).unwrap_or(&[])
+}
+
+/// The last `ESC ] 7 ; file://host/path` (BEL or ST) in a chunk: as it came, and the shell's
+/// current folder it names.
+fn osc7(bytes: &[u8]) -> Option<(String, String)> {
+    let (start, end) = bytes.windows(4).enumerate().rev().filter(|(_, w)| *w == b"\x1b]7;").find_map(|(s, _)| bytes[s + 4..].iter().position(|b| *b == 0x07 || *b == 0x1b).map(|e| (s, e)))?;
     let rest = &bytes[start + 4..];
-    let end = rest.iter().position(|b| *b == 0x07 || *b == 0x1b)?;
     let url = std::str::from_utf8(&rest[..end]).ok()?;
     let path = url.strip_prefix("file://").map(|r| r.find('/').map(|i| &r[i..]).unwrap_or("")).unwrap_or(url);
     // Percent-decoding (a space arrives as %20).
@@ -148,7 +171,7 @@ fn osc7(bytes: &[u8]) -> Option<String> {
         out.push(b[i]);
         i += 1;
     }
-    String::from_utf8(out).ok().filter(|p| p.starts_with('/'))
+    String::from_utf8(out).ok().filter(|p| p.starts_with('/')).map(|p| (url.to_string(), p))
 }
 
 // A hollow block marks "the program never chose a cursor": the user's own shape stays.
@@ -207,6 +230,8 @@ impl Pane {
             remote_tty: None,
             in_screen_title: false,
             pending_esc: false,
+            osc7_url: None,
+            osc_carry: Vec::new(),
             input_at: None,
             echo_us: Vec::new(),
             predictions: Vec::new(),
@@ -217,6 +242,9 @@ impl Pane {
             search: Default::default(),
             unseen: false,
             times: Default::default(),
+            hist_marks: Default::default(),
+            screen_marks: Vec::new(),
+            mark_carry: Vec::new(),
         }
     }
 
@@ -232,6 +260,9 @@ impl Pane {
         self.predictions.clear();
         // The history the keyframe brings is from before: when its lines went there is not known.
         self.times.clear();
+        self.hist_marks.clear();
+        self.screen_marks.clear();
+        self.mark_carry.clear();
         self.feed_at(bytes, 0);
     }
 
@@ -261,21 +292,22 @@ impl Pane {
     /// Output into the terminal; the lines it pushes into the history went there at [when] (0:
     /// not known). Output while in a mode is unseen there (tmux's PANE_UNSEENCHANGES).
     fn feed_at(&mut self, bytes: &[u8], when: i64) {
-        if let Some(dir) = osc7(bytes) { self.cwd = Some(dir) }
+        // (An OSC 7 may come in pieces — a shell's writes, a terminal's echo — so an unfinished
+        // one is kept for the next chunk.)
+        let scan: std::borrow::Cow<[u8]> = if self.osc_carry.is_empty() { bytes.into() } else { [std::mem::take(&mut self.osc_carry).as_slice(), bytes].concat().into() };
+        if let Some((url, dir)) = osc7(&scan) { self.osc7_url = Some(url); self.cwd = Some(dir) }
+        self.osc_carry = osc7_unfinished(&scan).to_vec();
         if !self.modes.is_empty() && !bytes.is_empty() { self.unseen = true }
         let clean = self.strip_screen_titles(bytes);
-        let before = self.term.grid().history_size();
-        self.parser.advance(&mut self.term, &clean);
-        let after = self.term.grid().history_size();
-        let full = after == HISTORY.load(std::sync::atomic::Ordering::Relaxed).clamp(100, 200_000);
-        if after < before || self.times.len() != before || (full && after == before) {
-            // Cleared, or full (lines scroll off the top unseen): which time is whose is no
-            // longer known.
-            self.times.clear();
-            self.times.resize(after, 0);
-        } else {
-            for _ in before..after { self.times.push_back(when) }
+        // OSC 133 (input_osc_133): the output up to each one, then its mark on the cursor's line.
+        let mut at = 0;
+        for (end, flag) in self.osc133_cuts(&clean) {
+            self.advance(&clean[at..end], when);
+            let row = self.term.grid().cursor.point.line.0.max(0) as usize;
+            if !self.term.mode().contains(TermMode::ALT_SCREEN) { if let Some(m) = self.screen_marks.get_mut(row) { *m |= flag } }
+            at = end;
         }
+        self.advance(&clean[at..], when);
         self.dirty = true;
         let events: Vec<AlacEvent> = std::mem::take(&mut *self.listener.0.lock().unwrap());
         for event in events {
@@ -288,6 +320,57 @@ impl Pane {
                 _ => {}
             }
         }
+    }
+
+    /// Output into the terminal, the history's times and marks kept with its lines.
+    fn advance(&mut self, bytes: &[u8], when: i64) {
+        if bytes.is_empty() { return }
+        let before = self.term.grid().history_size();
+        self.parser.advance(&mut self.term, bytes);
+        let after = self.term.grid().history_size();
+        let rows = self.term.screen_lines();
+        if self.screen_marks.len() != rows { self.screen_marks.resize(rows, 0) }
+        let full = after == HISTORY.load(std::sync::atomic::Ordering::Relaxed).clamp(100, 200_000);
+        if after < before || self.times.len() != before || (full && after == before) {
+            // Cleared, or full (lines scroll off the top unseen): which time is whose is no
+            // longer known.
+            self.times.clear();
+            self.times.resize(after, 0);
+        } else {
+            for _ in before..after { self.times.push_back(when) }
+        }
+        if after < before || self.hist_marks.len() != before || (full && after == before) {
+            self.hist_marks.clear();
+            self.hist_marks.resize(after, 0);
+        } else {
+            // The screen's top rows went into the history, their marks with them.
+            for _ in before..after {
+                let m = if self.screen_marks.is_empty() { 0 } else { self.screen_marks.remove(0) };
+                self.hist_marks.push_back(m);
+                self.screen_marks.push(0);
+            }
+        }
+    }
+
+    /// Where each whole OSC 133 (`ESC ] 133 ; A` … BEL or ST) in [bytes] ends, and its mark (A a
+    /// prompt, C output) — one begun in the chunk before counted too.
+    fn osc133_cuts(&mut self, bytes: &[u8]) -> Vec<(usize, u8)> {
+        const INTRO: &[u8] = b"\x1b]133;";
+        let carried = self.mark_carry.len();
+        let scan: Vec<u8> = [std::mem::take(&mut self.mark_carry).as_slice(), bytes].concat();
+        let mut cuts = Vec::new();
+        let mut i = 0;
+        while let Some(s) = scan[i..].windows(INTRO.len()).position(|w| w == INTRO).map(|p| p + i) {
+            let body = s + INTRO.len();
+            let Some(t) = scan[body..].iter().position(|b| *b == 0x07 || *b == 0x1b).map(|p| p + body) else { break };
+            // BEL ends it; ESC \ does (its backslash may be in the next chunk: the cut is after ESC).
+            let end = if scan[t] == 0x1b && scan.get(t + 1) == Some(&b'\\') { t + 2 } else { t + 1 };
+            let flag = match scan.get(body) { Some(b'A') => crate::copy::LINE_START_PROMPT, Some(b'C') => crate::copy::LINE_START_OUTPUT, _ => 0 };
+            if flag != 0 && end > carried { cuts.push((end - carried, flag)) }
+            i = end;
+        }
+        self.mark_carry = unfinished(&scan[i..], INTRO).to_vec();
+        cuts
     }
 
     /// Drop screen's window-title sequence, `ESC k <title> ESC \\`. Shells set it for tmux (which
@@ -711,8 +794,20 @@ mod tests {
 mod osc7_tests {
     #[test]
     fn reads_the_folder() {
-        assert_eq!(super::osc7(b"x\x1b]7;file://mac.lan/Users/me/my%20code\x07y").as_deref(), Some("/Users/me/my code"));
-        assert_eq!(super::osc7(b"\x1b]7;file:///tmp\x1b\\").as_deref(), Some("/tmp"));
+        assert_eq!(super::osc7(b"x\x1b]7;file://mac.lan/Users/me/my%20code\x07y").map(|p| p.1).as_deref(), Some("/Users/me/my code"));
+        assert_eq!(super::osc7(b"\x1b]7;file:///tmp\x1b\\"), Some(("file:///tmp".to_string(), "/tmp".to_string())));
         assert_eq!(super::osc7(b"plain"), None);
+        assert_eq!(super::osc7_unfinished(b"ab\x1b]7;file:///t"), b"\x1b]7;file:///t");
+        assert_eq!(super::osc7_unfinished(b"ab\x1b]"), b"\x1b]");
+        assert_eq!(super::osc7_unfinished(b"\x1b]7;file:///tmp\x07"), b"");
+    }
+
+    #[test]
+    fn osc133_marks_in_pieces() {
+        // A prompt mark typed a byte at a time (a terminal's echo): its line marked all the same.
+        let mut p = super::Pane::new(1, "m", "a", 20, 5);
+        for b in b"out\r\n\x1b]133;A\x07$ ls\r\n" { p.feed(&[*b]) }
+        assert_eq!(p.screen_marks.get(1).copied(), Some(crate::copy::LINE_START_PROMPT));
+        assert_eq!(p.screen_marks.first().copied(), Some(0));
     }
 }

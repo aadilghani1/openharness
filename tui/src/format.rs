@@ -1237,7 +1237,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_unseen_changes" => pane.map(|p| if p.unseen { "1" } else { "0" }.to_string()).unwrap_or_default(),
         "window_marked_flag" => tab.map(|t| app.marked.map(|m| t.panes().contains(&m)).unwrap_or(false)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "pane_fg" | "pane_bg" => pane.map(|_| "default".to_string()).unwrap_or_default(),
-        "pane_path" => pane.and_then(|p| p.cwd.clone()).unwrap_or_default(),
+        "pane_path" => pane.and_then(|p| p.osc7_url.clone()).unwrap_or_default(),
         // format_defaults' type: a pane's format, a window's or a session's (choose-tree's items).
         "pane_format" => match app.format_type { Some(t) => (t == crate::tree::FORMAT_PANE).then_some("1").unwrap_or("0").into(), None => (pane_id.is_some() || focus.is_some()).then_some("1").unwrap_or("0").into() },
         "window_format" => (app.format_type == Some(crate::tree::FORMAT_WINDOW)).then_some("1").unwrap_or("0").into(),

@@ -117,7 +117,7 @@ impl Grid {
 
 /// A terminal's history and screen as a grid (grid_duplicate_lines): its lines' cells with their
 /// colours, which ones wrapped, and [times] for the history's (0 for one not known).
-pub fn from_term<L: alacritty_terminal::event::EventListener>(term: &alacritty_terminal::Term<L>, times: &std::collections::VecDeque<i64>, trim: bool) -> Grid {
+pub fn from_term<L: alacritty_terminal::event::EventListener>(term: &alacritty_terminal::Term<L>, times: &std::collections::VecDeque<i64>, marks: (&std::collections::VecDeque<u8>, &[u8]), trim: bool) -> Grid {
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line as ALine};
     use alacritty_terminal::term::cell::Flags;
@@ -152,7 +152,8 @@ pub fn from_term<L: alacritty_terminal::event::EventListener>(term: &alacritty_t
         }
         if !wrapped { while cells.last() == Some(&Cell::DEFAULT) && !extra.iter().any(|(x, _)| *x as usize == cells.len() - 1) { cells.pop(); } }
         let time = if y < hsize && known { times[y as usize] } else { 0 };
-        lines.push(Line { cells, extra, links, wrapped, time, flags: 0 });
+        let flags = if y < hsize { if marks.0.len() as u32 == hsize { marks.0[y as usize] } else { 0 } } else { marks.1.get((y - hsize) as usize).copied().unwrap_or(0) };
+        lines.push(Line { cells, extra, links, wrapped, time, flags });
     }
     let mut total = hsize + sy;
     // copy-mode -s: the other pane's empty lines at the bottom are left out.

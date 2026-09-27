@@ -53,7 +53,7 @@ pub fn enter(app: &mut App, pane: u64, source: u64, scroll_exit: bool, hide_posi
     let (sx, sy) = screen_size(app, pane);
     let c = ctx(app, pane);
     let Some(src) = app.panes.get(&source) else { return true };
-    let grid = from_term(&src.term, &src.times, source != pane);
+    let grid = from_term(&src.term, &src.times, (&src.hist_marks, &src.screen_marks), source != pane);
     let cur = src.term.grid().cursor.point;
     let cursor = (cur.column.0 as u32, cur.line.0.max(0) as u32);
     let ps = app.panes.get(&pane).map(|p| p.search.clone()).unwrap_or_default();
@@ -275,7 +275,7 @@ fn apply(app: &mut App, pane: u64, out: Out, m: Option<&crate::mouse::Event>) {
         Out::Refresh => {
             let c = ctx(app, pane);
             let Some(p) = app.panes.get(&pane) else { return };
-            let grid = from_term(&p.term, &p.times, false);
+            let grid = from_term(&p.term, &p.times, (&p.hist_marks, &p.screen_marks), false);
             if let Some(m) = app.panes.get_mut(&pane).and_then(|p| p.modes.last_mut()) { m.refresh(grid, &c) }
         }
     }
