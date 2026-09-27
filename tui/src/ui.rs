@@ -855,6 +855,11 @@ fn o_sorts(picker: &Picker) -> bool { theme::fzf_opts().no_sort == picker.sort_f
 fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
     let o = theme::fzf_opts();
     let (_, outer_right, _, _) = border_sides();
+    // listStickToRight: only when no inner box (the list's, the input's, a shown header's) has a
+    // right side of its own — one that does keeps a blank column before the outer border.
+    let right = |s: &Option<String>| s.as_deref().map(|s| shape_sides(s).1).unwrap_or(false);
+    let header_shown = picker.header_text.as_deref().map(|h| !h.is_empty()).unwrap_or(!picker.hints.is_empty() || picker.heading.is_some());
+    let outer_right = outer_right && !right(&o.list_border) && !right(&o.input_border) && !(header_shown && right(&o.header_border));
     let (x, y) = (inner.x as i64, inner.y as i64);
     let (width, height) = (inner.width as i64, inner.height as i64);
     let rect = |x: i64, y: i64, w: i64, h: i64| Rect::new(x.max(0) as u16, y.max(0) as u16, w.max(0) as u16, h.max(0) as u16);
@@ -928,9 +933,17 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     if right_border {
         // The outer border's margin on the right: the list's column now (listStickToRight), blank
         // until it draws there, or cleared between the border and a preview with a side of its own.
-        let (bg, rows) = if stick { (pal.normal.bg, area.y..area.y + area.height) } else { (pal.border.bg, body.y..body.y + body.height) };
-        let plain = theme::fzfcolor::P { fg: theme::fzfcolor::Col::Default, bg, attr: 0 }.style();
-        for y in rows { buf.set_string(body.x + body.width, y, " ", plain) }
+        // (Cleared, it is the border window's: its colour on a blank, as fzf's is.)
+        // (…right of the padding: the border's own column, the height of the window inside it.)
+        if stick {
+            let plain = theme::fzfcolor::P { fg: theme::fzfcolor::Col::Default, bg: pal.normal.bg, attr: 0 }.style();
+            for y in area.y..area.y + area.height { buf.set_string(body.x + body.width, y, " ", plain) }
+        }
+        let edge = frame.padded.x + frame.padded.width;
+        if !stick || edge != body.x + body.width {
+            let plain = theme::fzfcolor::P { fg: pal.border.fg, bg: pal.border.bg, attr: 0 }.style();
+            for y in frame.padded.y..frame.padded.y + frame.padded.height { buf.set_string(edge, y, " ", plain) }
+        }
     }
     let preview = pbox.as_ref().map(|p| p.rect).filter(|p| p.x > area.x);
     if let Some(bg) = pal.normal.style().bg { buf.set_style(area, Style::default().bg(bg)) }
