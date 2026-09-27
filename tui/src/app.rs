@@ -402,8 +402,6 @@ pub struct App {
     /// tmux `display-time`: how long a message holds the status line.
     pub display_ms: u64,
     pub display_panes_ms: u64,
-    /// tmux `base-index` / `pane-base-index`.
-    pub base_index: usize,
     /// Everything said in the status line, for `show-messages` (C-b ~).
     pub messages: Vec<(std::time::SystemTime, String)>,
     /// Paste buffers, newest first (copy mode's `y`, and `paste-buffer`).
@@ -751,7 +749,6 @@ impl App {
             display_ms: 750,
             toast_hold: None,
             display_panes_ms: 1000,
-            base_index: 0,
             nums: HashMap::new(),
             cursor_shape: String::new(),
             suspend: false,
@@ -1889,7 +1886,6 @@ impl App {
 
     /// What a tmux.conf (or `set`, `source-file`) said, over what is set now.
     pub fn apply_settings(&mut self, s: &crate::tmuxconf::Settings) {
-        if let Some(n) = s.base_index { self.base_index = n }
         if let Some(m) = s.mouse { self.mouse = m; self.mouse_changed = true }
         if let Some(t) = s.status_top { self.status_top = t; self.fit_panes() }
         if let Some(ms) = s.display_ms { self.display_ms = ms.max(300) }
@@ -2457,7 +2453,7 @@ impl App {
             self.options.windows.entry(tab.id.clone()).or_default().insert("automatic-rename".into(), "off".into());
         }
         let tab_id = tab.id.clone();
-        let base = self.base_index;
+        let base = self.base_index();
         let linked = (tab.wid(), tab.name.clone());
         // Its directory: -c, else the folder of the shell that asked (tmux's client cwd).
         let path = cwd.clone().or_else(|| self.cli_cwd.clone()).or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string()));
@@ -2514,7 +2510,7 @@ impl App {
     pub fn empty_session(&mut self, name: &str) -> u32 {
         let id = self.alloc_session_id();
         let tab = Tab::home();
-        let base = self.base_index;
+        let base = self.base_index();
         self.sessions.push(Stash { id, used: use_order(), mirror: None, alias: Some(name.to_string()), desk: false, nums: HashMap::from([(tab.id.clone(), base)]), tabs: vec![tab], active: 0, lastw: Vec::new(),
             created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: self.environ_update(), path: None, group: None });
         crate::commands::notify_session(self, "session-created", id, name, None);
@@ -3001,7 +2997,7 @@ impl App {
 
     /// move-window -r: every window numbered in order from base-index.
     pub fn renumber_all(&mut self) {
-        for (i, t) in self.tabs.iter().enumerate() { self.nums.insert(t.id.clone(), i + self.base_index); }
+        for (i, t) in self.tabs.iter().enumerate() { self.nums.insert(t.id.clone(), i + self.base_index()); }
         self.fit_panes();
     }
 
@@ -3016,7 +3012,7 @@ impl App {
         if std::mem::take(&mut self.window_gone) && self.options.get("renumber-windows", "", None).as_deref() == Some("on") {
             let mut order: Vec<(usize, String)> = self.tabs.iter().enumerate().filter_map(|(i, t)| self.nums.get(&t.id).map(|n| (*n, t.id.clone())).or(Some((usize::MAX - self.tabs.len() + i, t.id.clone())))).collect();
             order.sort();
-            for (k, (_, id)) in order.into_iter().enumerate() { self.nums.insert(id, k + self.base_index); }
+            for (k, (_, id)) in order.into_iter().enumerate() { self.nums.insert(id, k + self.base_index()); }
         }
         for i in 0..self.tabs.len() {
             if self.nums.contains_key(&self.tabs[i].id) { continue }
@@ -3027,12 +3023,12 @@ impl App {
 
     fn free_num(&self) -> usize {
         let used: HashSet<usize> = self.nums.values().copied().collect();
-        (self.base_index..).find(|n| !used.contains(n)).unwrap_or(self.base_index)
+        (self.base_index()..).find(|n| !used.contains(n)).unwrap_or(self.base_index())
     }
 
     /// The window index tmux would show for the tab at `index`.
     pub fn win_num(&self, index: usize) -> usize {
-        self.tabs.get(index).and_then(|t| self.nums.get(&t.id).copied()).unwrap_or(index + self.base_index)
+        self.tabs.get(index).and_then(|t| self.nums.get(&t.id).copied()).unwrap_or(index + self.base_index())
     }
 
     pub fn tab_by_num(&self, n: usize) -> Option<usize> { (0..self.tabs.len()).find(|i| self.win_num(*i) == n) }
@@ -3158,6 +3154,9 @@ impl App {
     /// buffer-limit: how many automatic paste buffers are kept.
     pub fn buffer_limit(&self) -> usize { self.options.get("buffer-limit", "", None).and_then(|v| v.parse().ok()).unwrap_or(50) }
 
+
+    /// base-index of the session in front: the number its first window takes.
+    pub fn base_index(&self) -> usize { self.options.get("base-index", "", None).and_then(|v| v.parse().ok()).unwrap_or(0) }
 
     /// pane-base-index for a window: the number its first pane has.
     pub fn pane_base(&self, window: usize) -> usize {
