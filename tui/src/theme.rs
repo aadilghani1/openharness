@@ -57,38 +57,40 @@ pub mod fzfcolor {
         pub input_bg: CA, pub matched: CA, pub current: CA, pub current_match: CA, pub spinner: CA, pub info: CA,
         pub cursor: CA, pub marker: CA, pub header: CA, pub header_bg: CA, pub separator: CA, pub scrollbar: CA,
         pub border: CA, pub border_label: CA, pub list_border: CA, pub gap_line: CA,
+        pub input_border: CA, pub header_border: CA, pub footer_border: CA,
+        pub list_label: CA, pub input_label: CA, pub header_label: CA, pub footer_label: CA, pub footer: CA,
         pub preview_fg: CA, pub preview_bg: CA, pub preview_border: CA, pub preview_scrollbar: CA, pub preview_label: CA,
     }
 
     pub const NO_COLOR: Theme = Theme {
         colored: false, input: D, ghost: U, fg: D, bg: D, list_fg: D, list_bg: D, alt_bg: U, selected_fg: D, selected_bg: D,
         selected_match: D, dark_bg: D, gutter: U, prompt: D, input_bg: D, matched: D, current: U, current_match: U, spinner: D,
-        info: D, cursor: D, marker: D, header: D, header_bg: D, separator: D, scrollbar: D, border: U, border_label: D, list_border: D, gap_line: D,
+        info: D, cursor: D, marker: D, header: D, header_bg: D, separator: D, scrollbar: D, border: U, border_label: D, list_border: D, gap_line: D, input_border: D, header_border: D, footer_border: D, list_label: D, input_label: D, header_label: D, footer_label: D, footer: D,
         preview_fg: D, preview_bg: D, preview_border: D, preview_scrollbar: D, preview_label: D,
     };
     pub const EMPTY: Theme = Theme {
         colored: true, input: U, ghost: U, fg: U, bg: U, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: U, gutter: U, prompt: U, input_bg: U, matched: U, current: U, current_match: U, spinner: U,
-        info: U, cursor: U, marker: U, header: U, header_bg: U, separator: U, scrollbar: U, border: U, border_label: U, list_border: U, gap_line: U,
+        info: U, cursor: U, marker: U, header: U, header_bg: U, separator: U, scrollbar: U, border: U, border_label: U, list_border: U, gap_line: U, input_border: U, header_border: U, footer_border: U, list_label: U, input_label: U, header_label: U, footer_label: U, footer: U,
         preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const DEFAULT16: Theme = Theme {
         colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(8), gutter: U, prompt: c(4), input_bg: U, matched: c(2), current: c(15), current_match: c(10),
         spinner: c(2), info: c(3), cursor: c(1), marker: c(5), header: c(6), header_bg: U, separator: U, scrollbar: U, border: U,
-        border_label: D, list_border: U, gap_line: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
+        border_label: D, list_border: U, gap_line: U, input_border: U, header_border: U, footer_border: U, list_label: U, input_label: U, header_label: U, footer_label: U, footer: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const DARK256: Theme = Theme {
         colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(236), gutter: U, prompt: c(110), input_bg: U, matched: c(108), current: c(254), current_match: c(151),
         spinner: c(148), info: c(144), cursor: c(161), marker: c(168), header: c(109), header_bg: U, separator: U, scrollbar: U,
-        border: c(59), border_label: c(145), list_border: U, gap_line: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
+        border: c(59), border_label: c(145), list_border: U, gap_line: U, input_border: U, header_border: U, footer_border: U, list_label: U, input_label: U, header_label: U, footer_label: U, footer: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const LIGHT256: Theme = Theme {
         colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(251), gutter: U, prompt: c(25), input_bg: U, matched: c(66), current: c(237), current_match: c(23),
         spinner: c(65), info: c(101), cursor: c(161), marker: c(168), header: c(31), header_bg: U, separator: U, scrollbar: U,
-        border: c(145), border_label: c(59), list_border: U, gap_line: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
+        border: c(145), border_label: c(59), list_border: U, gap_line: U, input_border: U, header_border: U, footer_border: U, list_label: U, input_label: U, header_label: U, footer_label: U, footer: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
 
     /// A --color value's colour: -1, 0–255, #rrggbb, a name.
@@ -118,7 +120,10 @@ pub mod fzfcolor {
                 "selected-bg" => &mut theme.selected_bg, "gutter" => &mut theme.gutter, "hl" => &mut theme.matched,
                 "current-hl" | "hl+" => &mut theme.current_match, "selected-hl" => &mut theme.selected_match, "border" => &mut theme.border,
                 "separator" => &mut theme.separator, "scrollbar" => &mut theme.scrollbar, "label" => &mut theme.border_label,
-                "list-border" => &mut theme.list_border, "gap-line" => &mut theme.gap_line, "prompt" => &mut theme.prompt, "input-bg" => &mut theme.input_bg,
+                "list-border" => &mut theme.list_border, "gap-line" => &mut theme.gap_line,
+                "input-border" => &mut theme.input_border, "header-border" => &mut theme.header_border, "footer-border" => &mut theme.footer_border,
+                "list-label" => &mut theme.list_label, "input-label" => &mut theme.input_label, "header-label" => &mut theme.header_label, "footer-label" => &mut theme.footer_label,
+                "footer" | "footer-fg" => &mut theme.footer, "prompt" => &mut theme.prompt, "input-bg" => &mut theme.input_bg,
                 "spinner" => &mut theme.spinner, "info" => &mut theme.info, "pointer" => &mut theme.cursor, "marker" => &mut theme.marker,
                 "header" | "header-fg" => &mut theme.header, "header-bg" => &mut theme.header_bg,
                 "preview-fg" => &mut theme.preview_fg, "preview-bg" => &mut theme.preview_bg, "preview-border" => &mut theme.preview_border,
@@ -210,6 +215,9 @@ pub mod fzfcolor {
         pub current_cursor_empty: P, pub current_marker: P, pub current_selected_empty: P, pub spinner: P, pub info: P,
         pub separator: P, pub scrollbar: P, pub border: P, pub header: P, pub list_border: P, pub gap_line: P, pub border_label: P,
         pub preview: P, pub preview_border: P, pub preview_label: P, pub preview_scrollbar: P,
+        /// The sections' own (InitTheme): their borders, their labels, the footer's text.
+        pub input_border: P, pub header_border: P, pub footer_border: P,
+        pub list_label: P, pub input_label: P, pub header_label: P, pub footer_label: P, pub footer: P,
         /// --color=alt-bg: every other row's background (undefined: no stripes).
         pub alt_bg: CA,
         /// Whether the base theme has colours (not bw / NO_COLOR).
@@ -292,6 +300,14 @@ pub mod fzfcolor {
         t.preview_border = over(t.border, t.preview_border);
         t.list_border = over(t.border, t.list_border);
         t.gap_line = over(t.list_border, t.gap_line);
+        t.input_border = over(t.border, t.input_border);
+        t.header_border = over(t.border, t.header_border);
+        t.footer_border = over(t.border, t.footer_border);
+        t.list_label = over(t.border_label, t.list_label);
+        t.input_label = over(t.border_label, t.input_label);
+        t.header_label = over(t.border_label, t.header_label);
+        t.footer_label = over(t.border_label, t.footer_label);
+        t.footer = over(t.header, t.footer);
         t.separator = over(t.list_border, t.separator);
         t.scrollbar = over(t.list_border, t.scrollbar);
         t.preview_scrollbar = if scrollbar_defined && !preview_border_defined { over(t.scrollbar, t.preview_scrollbar) } else { over(t.preview_border, t.preview_scrollbar) };
@@ -312,6 +328,9 @@ pub mod fzfcolor {
             list_border: pair(t.list_border, t.list_bg), gap_line: pair(t.gap_line, t.list_bg), border_label: pair(t.border_label, t.bg),
             preview: pair(t.preview_fg, t.preview_bg), preview_border: pair(t.preview_border, t.preview_bg),
             preview_label: pair(t.preview_label, t.preview_bg), preview_scrollbar: pair(t.preview_scrollbar, t.preview_bg), alt_bg: t.alt_bg, colored: base.colored,
+            input_border: pair(t.input_border, t.bg), header_border: pair(t.header_border, t.bg), footer_border: pair(t.footer_border, t.bg),
+            list_label: pair(t.list_label, t.bg), input_label: pair(t.input_label, t.bg), header_label: pair(t.header_label, t.bg), footer_label: pair(t.footer_label, t.bg),
+            footer: pair(t.footer, t.header_bg),
         }
     }
 
@@ -758,6 +777,15 @@ fn fzf_opts_base() -> &'static FzfOpts {
                     let shape = Some(next.unwrap_or_else(|| "rounded".into()));
                     match flag.as_str() { "--list-border" => o.list_border = shape, "--input-border" => o.input_border = shape, "--header-border" => o.header_border = shape, _ => o.footer_border = shape }
                 }
+                // The preview's border (--preview-border[=STYLE], its --preview-window border-STYLE):
+                // kept in order with the --preview-window specs, the later one winning.
+                "--preview-border" => {
+                    let next = value.clone().or_else(|| opts.get(i + 1).filter(|w| !w.starts_with('-') && !w.starts_with('+')).cloned().inspect(|_| i += 1));
+                    let shape = next.unwrap_or_else(|| "rounded".into());
+                    parse_preview_window(&mut o.preview_window, &format!("border-{shape}"));
+                    o.preview_window_specs.push(format!("border-{shape}"));
+                }
+                "--no-preview-border" => { o.preview_window.border = "none".into(); o.preview_window_specs.push("border-none".into()) }
                 "--no-list-border" => o.list_border = None, "--no-input-border" => o.input_border = None,
                 "--no-header-border" => o.header_border = None, "--no-footer-border" => o.footer_border = None,
                 "--footer" => { if let Some(v) = take() { o.footer = v.split('\n').map(str::to_string).collect() } }
@@ -772,10 +800,10 @@ fn fzf_opts_base() -> &'static FzfOpts {
                 "--history-size" => { if let Some(v) = take() { o.history_size = v.parse().unwrap_or(1000).max(1) } }
                 "--jump-labels" => { if let Some(v) = take() { if !v.is_empty() { o.jump_labels = v } } }
                 "--no-mouse" => o.no_mouse = true, "--mouse" => o.no_mouse = false,
-                "--list-label" => { if let Some(v) = take() { o.list_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
-                "--input-label" => { if let Some(v) = take() { o.input_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
-                "--header-label" => { if let Some(v) = take() { o.header_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
-                "--footer-label" => { if let Some(v) = take() { o.footer_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
+                "--list-label" => { if let Some(v) = take() { o.list_label = v.split('\n').next().unwrap_or("").to_string() } }
+                "--input-label" => { if let Some(v) = take() { o.input_label = v.split('\n').next().unwrap_or("").to_string() } }
+                "--header-label" => { if let Some(v) = take() { o.header_label = v.split('\n').next().unwrap_or("").to_string() } }
+                "--footer-label" => { if let Some(v) = take() { o.footer_label = v.split('\n').next().unwrap_or("").to_string() } }
                 // applyPreset: default, minimal, full[:BORDER_STYLE].
                 "--style" => {
                     if let Some(v) = take() {
@@ -785,6 +813,7 @@ fn fzf_opts_base() -> &'static FzfOpts {
                             "default" => {
                                 (o.list_border, o.input_border, o.header_border, o.footer_border) = (None, None, None, None);
                                 o.preview_window.border = "rounded".into(); o.info_mode = "default".into();
+                                o.preview_window_specs.push("border-rounded".into());
                                 reset_separator(&mut o, &mut sep_set);
                                 o.scrollbar = Some("│".into()); o.preview_scrollbar = Some("│".into()); bar_set = false;
                                 o.highlight_line = false;
@@ -792,6 +821,7 @@ fn fzf_opts_base() -> &'static FzfOpts {
                             "minimal" => {
                                 (o.list_border, o.input_border, o.header_border, o.footer_border) = (None, None, None, Some("line".into()));
                                 o.preview_window.border = "line".into(); o.info_mode = "default".into();
+                                o.preview_window_specs.push("border-line".into());
                                 o.separator = false; o.separator_char = String::new(); o.separator_set = true; sep_set = true;
                                 o.scrollbar = None; o.preview_scrollbar = None; bar_set = true;
                                 o.highlight_line = false;
@@ -801,6 +831,7 @@ fn fzf_opts_base() -> &'static FzfOpts {
                                 if shape != "line" { o.list_border = Some(shape.clone()) }
                                 (o.input_border, o.header_border, o.footer_border) = (Some(shape.clone()), Some(shape.clone()), Some(shape.clone()));
                                 o.preview_window.border = shape.clone();
+                                o.preview_window_specs.push(format!("border-{shape}"));
                                 if shape == "line" { o.border = Some("line".into()) }
                                 o.info_mode = "inline-right".into();
                                 reset_separator(&mut o, &mut sep_set);

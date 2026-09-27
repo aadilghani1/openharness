@@ -70,12 +70,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             // (--no-input: no prompt, no cursor.)
             // (Too small to hold a list — a window being dragged, a drop-down terminal opening: none
             // drawn until it has the room, as fzf clamps and tmux draws what fits; never a crash.)
-            Modal::Picker { kind, picker } if body.height >= 5 && body.width >= 8 => { let at = fzf(buf, body, picker, kind, &*app_preview_placeholder()); cursor = (!theme::fzf_opts().no_input).then_some(at) }
+            Modal::Picker { kind, picker } if body.height >= 1 && body.width >= 2 => { let at = fzf(buf, body, picker, kind, &*app_preview_placeholder()); cursor = (!theme::fzf_opts().no_input).then_some(at) }
             _ => {}
         }
     }
     // The picker drew with a placeholder preview; a live pane preview needs the whole app.
-    if let Some(Modal::Picker { kind, picker }) = app.modal.as_ref().filter(|_| body.height >= 5 && body.width >= 8) {
+    if let Some(Modal::Picker { kind, picker }) = app.modal.as_ref().filter(|_| body.height >= 1 && body.width >= 2) {
         if let (_, Some(pbox), _) = fzf_split(fzf_frame(body, picker).inner, picker) { preview(buf, app, kind, picker, &pbox) }
     }
     let popup = match &app.modal { Some(Modal::Popup { pane, x, y, width, height, border, title, look }) => Some((*pane, *x, *y, *width, *height, *border, title.clone(), look.clone())), _ => None };
@@ -755,8 +755,8 @@ fn put_ansi(buf: &mut Buffer, x: u16, y: u16, text: &str, base: Style, max: usiz
     for sp in &line.spans {
         if used >= max { break }
         let st = if sp.style == Style::default() { base } else { base.patch(sp.style) };
-        let (_, end) = buf.set_stringn(x + used as u16, y, sp.content.as_ref(), max - used, st);
-        used = (end - x) as usize;
+        let (end, _) = buf.set_stringn(x + used as u16, y, sp.content.as_ref(), max - used, st);
+        used = end.saturating_sub(x) as usize;
     }
     used
 }
@@ -770,7 +770,7 @@ fn section_indent(list: &Option<String>, own: &Option<String>) -> u16 {
 
 /// A section's box (LightWindow.drawBorder): its shape's sides in the pair, the column inside a
 /// left side in it too; its label on the top (or bottom) edge, centred.
-fn section_box(buf: &mut Buffer, b: Rect, shape: &str, st: Style, label: &str) {
+fn section_box(buf: &mut Buffer, b: Rect, shape: &str, st: Style, label: &str, label_style: Style) {
     if b.width < 2 || b.height == 0 { return }
     let (top_c, bottom_c, left_c, right_c, tl, tr, bl, br) = border_glyphs(shape);
     let (top, right, bottom, left) = shape_sides(shape);
@@ -785,10 +785,10 @@ fn section_box(buf: &mut Buffer, b: Rect, shape: &str, st: Style, label: &str) {
     if bottom && left { buf.set_string(b.x, y1, bl, st) }
     if bottom && right { buf.set_string(x1, y1, br, st) }
     if label.is_empty() || !(top || bottom) { return }
-    let (w, len) = (b.width as i64, label.width() as i64);
+    let (w, len) = (b.width as i64, theme::strip_ansi(label).width() as i64);
     let col = ((w - len) / 2).max(0) as u16;
     let row = if top { b.y } else { y1 };
-    buf.set_stringn(b.x + col, row, label, b.width.saturating_sub(col) as usize, theme::fzf().pal.border_label.style());
+    put_ansi(buf, b.x + col, row, label, label_style, b.width.saturating_sub(col) as usize);
 }
 
 fn fzf_border(buf: &mut Buffer, body: Rect) {
@@ -963,18 +963,19 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let prompt_top = o.prompt_top;
     // The sections (--list-border, --input-border, --header-border, --footer, --style): their
     // boxes drawn, and from here on the list's window is what is inside its box.
-    let has_hdr = area.height >= 6 && header_line(picker, kind, width.saturating_sub(1)).is_some();
+    let has_hdr = area.height >= 3 && header_line(picker, kind, width.saturating_sub(1)).is_some();
     let (sec, shapes) = sections(area, has_hdr, prompt_top, reverse);
     let sectioned = sec.list_box.is_some() || sec.input.is_some() || sec.header.is_some() || sec.footer.is_some();
     if sectioned {
-        let bst = pal.border.style();
-        if let (Some(b), Some(sh)) = (sec.list_box, &shapes[0]) { section_box(buf, b, sh, pal.list_border.style(), &o.list_label) }
-        if let (Some(b), Some(sh)) = (sec.input_box, &shapes[1]) { section_box(buf, b, sh, bst, &o.input_label) }
-        if let (Some(b), Some(sh)) = (sec.header_box, &shapes[2]) { section_box(buf, b, sh, bst, &o.header_label) }
-        if let (Some(b), Some(sh)) = (sec.footer_box, &shapes[3]) { section_box(buf, b, sh, bst, &o.footer_label) }
-        // The footer's lines indented as the header's (headerIndentImpl).
+        // Each section's box and label in its own colours (list-border, input-label …).
+        if let (Some(b), Some(sh)) = (sec.list_box, &shapes[0]) { section_box(buf, b, sh, pal.list_border.style(), &o.list_label, pal.list_label.style()) }
+        if let (Some(b), Some(sh)) = (sec.input_box, &shapes[1]) { section_box(buf, b, sh, pal.input_border.style(), &o.input_label, pal.input_label.style()) }
+        if let (Some(b), Some(sh)) = (sec.header_box, &shapes[2]) { section_box(buf, b, sh, pal.header_border.style(), &o.header_label, pal.header_label.style()) }
+        if let (Some(b), Some(sh)) = (sec.footer_box, &shapes[3]) { section_box(buf, b, sh, pal.footer_border.style(), &o.footer_label, pal.footer_label.style()) }
+        // The footer's lines indented as the header's (headerIndentImpl), in the footer's colour,
+        // their ANSI colours read (fzf reads a footer's even without --ansi).
         let footer_indent = section_indent(&shapes[0], &shapes[3]);
-        if let Some(f) = sec.footer { for (i, l) in o.footer.iter().enumerate().take(f.height as usize) { buf.set_stringn(f.x + footer_indent, f.y + i as u16, l, f.width.saturating_sub(footer_indent) as usize, pal.header.style()); } }
+        if let Some(f) = sec.footer { for (i, l) in o.footer.iter().enumerate().take(f.height as usize) { put_ansi(buf, f.x + footer_indent, f.y + i as u16, l, pal.footer.style(), f.width.saturating_sub(footer_indent) as usize); } }
     }
     let area = if sectioned { sec.list } else { area };
     let width = area.width as usize;
@@ -989,7 +990,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let info_own_line = !no_separator_line();
     let (prompt_y, info_y) = if prompt_top { (area.y, if info_own_line { area.y + 1 } else { area.y }) } else { (bottom - 1, if info_own_line { bottom.saturating_sub(2) } else { bottom - 1 }) };
     // Rows come first in a short window, as in fzf: the key hints go before any row does.
-    let header = if area.height >= 6 { header_line(picker, kind, width.saturating_sub(1)) } else { None };
+    let header = if area.height >= 3 { header_line(picker, kind, width.saturating_sub(1)) } else { None };
     // --header-first: the header on the prompt's other side — above it with the prompt on top,
     // on the last line below it otherwise.
     let header_first = o.header_first && header.is_some();
@@ -1093,7 +1094,16 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let spinner = frames[(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 100) as usize % frames.len()];
     let w = ia.width as i32;
     let put = |pbuf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { pbuf.set_stringn(ia.x + x as u16, y, s, (w - x) as usize, st); } };
-    let bar = |pbuf: &mut Buffer, x: i32, y: u16, n: i32| { if separator_on() && n > 0 { put(pbuf, x, y, &repeat_to_fill(&o.separator_char, n as usize), sep_style) } };
+    let bar = |pbuf: &mut Buffer, x: i32, y: u16, n: i32| {
+        if !separator_on() || n <= 0 { return }
+        // A separator with ANSI colours: repeated, its colours its own over the separator's.
+        if o.separator_char.contains('\x1b') {
+            let vw = theme::strip_ansi(&o.separator_char).width().max(1);
+            if x >= 0 && x < w { put_ansi(pbuf, ia.x + x as u16, y, &o.separator_char.repeat(n as usize / vw + 1), sep_style, (n.min(w - x)) as usize); }
+            return;
+        }
+        put(pbuf, x, y, &repeat_to_fill(&o.separator_char, n as usize), sep_style)
+    };
     // printInfoPrefix: the prefix at [pos] (what fits of it), in the prompt's pair.
     let prefix = |pbuf: &mut Buffer, pos: i32, y: u16| -> i32 {
         let room = w - pos;
@@ -1207,7 +1217,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // Scrollbar on the right edge, like fzf's: only the thumb, in the border colour.
     // fzf's getScrollbar: the thumb's length and its start from the prompt's side, both floored.
     picker.bar.set(None);
-    if let (true, Some(bar)) = (n > list_h && list_h > 2, theme::fzf_opts().scrollbar.clone()) {
+    if let (true, Some(bar)) = (n > list_h && list_h >= 1, theme::fzf_opts().scrollbar.clone()) {
         let thumb = ((list_h * list_h) / n).max(1);
         picker.bar.set(Some((area.x + area.width - 1, list_top, list_bottom, reverse, thumb, 1)));
         let start = ((list_h - thumb) * picker.scroll.min(n - list_h) / (n - list_h)).min(list_h - thumb);
@@ -1634,7 +1644,7 @@ fn fzf_wrapped(buf: &mut Buffer, picker: &mut Picker, area: Rect, list_top: u16,
     // getScrollbar(avgNumLines, …): the thumb and its start from the prompt's side.
     let (total, h) = (n * per_line.max(1), max_lines);
     picker.bar.set(None);
-    if let (true, Some(bar)) = (total > h && h > 2, o.scrollbar.clone()) {
+    if let (true, Some(bar)) = (total > h && h >= 1, o.scrollbar.clone()) {
         let thumb = (h * h / total).max(1);
         picker.bar.set(Some((area.x + area.width - 1, list_top, list_bottom, reverse, thumb, per_line.max(1))));
         let start = if n == h { 0 } else { ((h * per_line - thumb) * offset / (total - h)).min(h - thumb) };
