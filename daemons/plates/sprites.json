@@ -1,0 +1,62 @@
+{
+  "octopus": {
+    "sprites": { "0.1": "({e} {e})", "1.0": ",({e} {e}),", "2.0": "~({e} {e})~" },
+    "work": ["~({e} {e})~", "S({e} {e})~", "S({e} {e})S", "~({e} {e})S"],
+    "workMs": 200,
+    "turn": "arms, curling in turn"
+  },
+  "tux": {
+    "sprites": { "0.1": "<({e} {e})", "1.0": "<({e} {e})\\", "2.0": "<({e} {e})/" },
+    "work": ["<({e} {e})/", "<({e} {e})-", "<({e} {e})\\", "<({e} {e})-"],
+    "workMs": 180,
+    "turn": "a flipper, waving"
+  },
+  "yak": {
+    "sprites": { "0.1": "\"{e}\"{e}\"", "1.0": "(\"{e}\"{e}\")", "2.0": "~\"{e}\"{e}\"~" },
+    "work": ["~\"{e}\"{e}\"~", "~\"{e}m{e}\"~"],
+    "workMs": 300,
+    "turn": "jaw, chewing it over"
+  },
+  "gopher": {
+    "sprites": { "0.1": "_{e}\"{e}_", "1.0": "({e}\"{e})", "2.0": "_({e}\"{e})_" },
+    "work": ["_({e}\"{e})_", "'({e}\"{e})_", "_({e}\"{e})_", "_({e}\"{e})'"],
+    "workMs": 200,
+    "turn": "dirt, flying out of the burrow"
+  },
+  "bug": {
+    "sprites": { "0.1": "}{e}{", "1.0": "}}{e}{{", "2.0": "* }}{e}{{" },
+    "work": ["* }}{e}{{", "* )}{e}{("],
+    "workMs": 150,
+    "turn": "wings, fluttering at the light"
+  },
+  "gnu": {
+    "sprites": { "0.1": ",{e}U{e},", "1.0": "\\{e}U{e}/", "2.0": "\\_{e}U{e}_/" },
+    "work": ["\\_{e}U{e}_/", "-_{e}U{e}_/", "\\_{e}U{e}_/", "\\_{e}U{e}_-"],
+    "workMs": 250,
+    "turn": "horns, tossing"
+  },
+  "lynx": {
+    "sprites": { "0.1": "){e}Y{e}(", "1.0": "'){e}Y{e}('", "2.0": "^){e}Y{e}(^" },
+    "work": ["^){e}Y{e}(^", "^){e}Y{e}('", "^){e}Y{e}(^", "'){e}Y{e}(^"],
+    "workMs": 250,
+    "turn": "ears, flicking"
+  },
+  "mutt": {
+    "sprites": { "0.1": "V({e}u{e})", "1.0": "V({e}u{e})U", "2.0": "V({e}u{e})U/" },
+    "work": ["V({e}u{e})U/", "V({e}u{e})U\\"],
+    "workMs": 130,
+    "turn": "tail, wagging flat out"
+  },
+  "auk": {
+    "sprites": { "0.1": "<]{e})", "1.0": "<]({e} )", "2.0": "<]({e} )__" },
+    "work": ["<]({e} )__", "<]({e} )/_", "<]({e} )__", "<]({e} )\\_"],
+    "workMs": 300,
+    "turn": "wings, rowing underwater"
+  },
+  "beastie": {
+    "sprites": { "0.1": "({e}W{e})", "1.0": "}{e}W{e}{", "2.0": "}{e}W{e}{ -E" },
+    "work": ["}{e}W{e}{ -E", "}{e}W{e}{ _E"],
+    "workMs": 220,
+    "turn": "the trident, tapping"
+  }
+}
