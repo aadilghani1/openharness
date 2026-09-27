@@ -760,7 +760,10 @@ void main() {
       expect(find.byKey(const ValueKey('daemon-panel')), findsOneWidget);
       if (name == 'panel-card') {
         expect(find.byKey(const ValueKey('daemon-card-text')), findsOneWidget);
-        expect(find.textContaining('SHINY RARE', findRichText: true), findsWidgets);
+        expect(
+          find.textContaining('SHINY RARE', findRichText: true),
+          findsWidgets,
+        );
         expect(find.textContaining('#0042', findRichText: true), findsWidgets);
       }
       if (name == 'panel-tim-zoo-box') {
@@ -867,8 +870,7 @@ void main() {
           const DaemonSay(
             id: 'lesson:l1:1',
             about: DaemonAbout('m', 'a7'),
-            line:
-                '[y/n/s] teach your agents "run-migrations-safely"? you corrected codex.',
+            line: '[y/n/s] teach your agents "run-migrations-safely"? you corrected codex.',
             mood: DaemonSayMood.ask,
             actions: [
               (key: 'y', label: 'teach', choice: 'y'),
@@ -1177,10 +1179,7 @@ void main() {
       );
 
   Zoo watching(Zoo zoo) => zoo.copyWith(
-    consent: const ZooConsent(
-      watching: true,
-      at: '2026-09-26T09:00:00.000Z',
-    ),
+    consent: const ZooConsent(watching: true, at: '2026-09-26T09:00:00.000Z'),
   );
 
   /// A face whose brain lines, talk and tabs are live.
@@ -1257,7 +1256,10 @@ void main() {
     expect(find.text('1:now*'), findsOneWidget);
     expect(find.text('<tim> start codex in ~/code/api?'), findsOneWidget);
     expect(find.text('codex@laptop'), findsOneWidget, reason: 'the harness');
-    expect(find.textContaining('first prompt: run the migrations'), findsOneWidget);
+    expect(
+      find.textContaining('first prompt: run the migrations'),
+      findsOneWidget,
+    );
     expect(find.text('web@laptop: Which branch should I use?'), findsOneWidget);
     expect(find.text('what tim did'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-talk-cost')), findsOneWidget);
@@ -1314,7 +1316,10 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('npm run db:restore'), findsOneWidget);
-    expect(find.textContaining('harness pair lessons approve l2'), findsOneWidget);
+    expect(
+      find.textContaining('harness pair lessons approve l2'),
+      findsOneWidget,
+    );
     await _capture(
       tester,
       'panel-tab-3-lessons',
@@ -1326,7 +1331,10 @@ void main() {
       },
       (context) => panelFor(context, face, brain),
     );
-    expect(find.byKey(const ValueKey('daemon-key-lesson-ask:$id-y')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('daemon-key-lesson-ask:$id-y')),
+      findsOneWidget,
+    );
     expect(find.textContaining('Start docker before'), findsWidgets);
     await tester.pumpWidget(const SizedBox());
     face.sync(const DaemonWatch());
@@ -1393,9 +1401,7 @@ void main() {
     );
     expect(find.text('(~) act on key  waits for your yes'), findsOneWidget);
     expect(
-      find.byKey(
-        const ValueKey('daemon-key-confirm:confirm:autonomy:k1-y'),
-      ),
+      find.byKey(const ValueKey('daemon-key-confirm:confirm:autonomy:k1-y')),
       findsOneWidget,
     );
     await tester.pumpWidget(const SizedBox());
@@ -1546,29 +1552,23 @@ void main() {
         ),
       ],
     );
-    await _capture(
-      tester,
-      'status-detail-arming',
-      const Size(900, 360),
-      scene,
+    await _capture(tester, 'status-detail-arming', const Size(900, 360), scene);
+    expect(
+      find.byKey(const ValueKey('daemon-answer-y-arming')),
+      findsOneWidget,
     );
-    expect(find.byKey(const ValueKey('daemon-answer-y-arming')), findsOneWidget);
     expect(brain.wasShown(say.id), isTrue);
     await tester.pump(DaemonBrain.armAfter);
-    await _capture(
-      tester,
-      'status-detail-armed',
-      const Size(900, 360),
-      scene,
-    );
+    await _capture(tester, 'status-detail-armed', const Size(900, 360), scene);
     expect(find.byKey(const ValueKey('daemon-answer-y')), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     face.sync(const DaemonWatch());
     await tester.pump(const Duration(minutes: 3));
   });
 
-  testWidgets('the pair speaking: its nick, no keys; its proposal keys first',
-      (tester) async {
+  testWidgets('the pair speaking: its nick, no keys; its proposal keys first', (
+    tester,
+  ) async {
     final brain = pairBrain(tester, brief: false);
     Future<DaemonFace> saying(Map<String, dynamic> raw) async {
       final face = await _face(tester, watching(_paired('tim')));
@@ -1597,7 +1597,8 @@ void main() {
           'about': {'machineId': 'm', 'agentId': ''},
           'mood': 'say',
           'from': 'daemon',
-          'line': 'autonomy suggest -> act-on-key: it drives harnesses it '
+          'line':
+              'autonomy suggest -> act-on-key: it drives harnesses it '
               'started.',
           'actions': [],
           'ttlMs': 30000,
@@ -1781,7 +1782,7 @@ void main() {
       if (morph == null && to == '1.0') {
         expect(
           find.text(
-            'tim 1.0: split-window -h: a second pane; learned your agents '
+            'tim 1.0: arms long enough to split a window; learned your agents '
             'by name',
           ),
           findsOneWidget,
@@ -1790,7 +1791,7 @@ void main() {
       if (to == '2.0') {
         expect(
           find.text(
-            'tim 2.0: added arms, for waving; in-jokes from your logbook',
+            'tim 2.0: eight arms, one per pane; in-jokes from your logbook',
           ),
           findsOneWidget,
         );
@@ -1867,7 +1868,10 @@ void main() {
         ),
       );
       expect(find.text('yak x2 · +150 xp'), findsOneWidget);
-      expect(find.text('another yak. +150 xp. yours is shiny now.'), findsOneWidget);
+      expect(
+        find.text('another yak. +150 xp. yours is shiny now.'),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const ValueKey('daemon-hatch-grew')),
         stage == HatchStage.grew ? findsOneWidget : findsNothing,

@@ -42,14 +42,17 @@ bool daemonAutonomyAboveSuggest(String? level) =>
 /// says the bond it reached.
 const _changelogs = <String, Map<String, List<String>>>{
   'tim': {
-    '0.1': ['one pane', 'says hello'],
-    '1.0': ['split-window -h: a second pane', 'learned your agents by name'],
-    '2.0': ['added arms, for waving', 'in-jokes from your logbook'],
+    '0.1': ['a head and eight stubs', 'says hello'],
+    '1.0': [
+      'arms long enough to split a window',
+      'learned your agents by name',
+    ],
+    '2.0': ['eight arms, one per pane', 'in-jokes from your logbook'],
   },
 };
 
-/// The changelog line a level-up shows: `tim 1.0: split-window -h: a second
-/// pane; learned your agents by name`.
+/// The changelog line a level-up shows: `tim 1.0: arms long enough to split a
+/// window; learned your agents by name`.
 String daemonChangelog(
   DaemonDef def,
   String version, {
@@ -91,8 +94,7 @@ bool isDaemonTemplate(String line) => _slot.hasMatch(line);
 String? fillDaemonLine(String template, Map<String, String?> values) {
   if (!_slot.hasMatch(template)) return template;
   bool known(String name) => (values[name]?.isNotEmpty ?? false);
-  bool missing(String text) =>
-      _slot.allMatches(text).any((m) => !known(m[1]!));
+  bool missing(String text) => _slot.allMatches(text).any((m) => !known(m[1]!));
   String fill(String text) =>
       text.replaceAllMapped(_slot, (m) => values[m[1]!] ?? '');
 
@@ -153,11 +155,7 @@ String? _dropClauses(String sentence, bool Function(String) missing) {
 
 /// The daemon's line for [mood], filled from [values]; the neutral line when
 /// its own words cannot be filled.
-String daemonLine(
-  DaemonDef def,
-  DaemonMood mood,
-  Map<String, String?> values,
-) {
+String daemonLine(DaemonDef def, DaemonMood mood, Map<String, String?> values) {
   final template = def.line(mood);
   if (template.isEmpty) return neutralDaemonLines[mood]!;
   return fillDaemonLine(template, values) ?? neutralDaemonLines[mood]!;
