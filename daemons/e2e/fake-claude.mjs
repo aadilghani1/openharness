@@ -28,6 +28,7 @@
  *   {"op":"prompt","text":"…"}          as if the person typed it and pressed Enter
  *   {"op":"change","command":"…"}       the open dialog now asks about another command (a new tool call)
  *   {"op":"cursor","dir":"down"|"up"}   move the dialog's highlight, as a person's arrow key would
+ *   {"op":"key","key":"3"}              a key the person pressed in the pane (logged like any other)
  *   {"op":"exit"}
  *
  * Every key that reaches the pane is logged to <cwd>/.fake-claude/keys.jsonl with what was on screen, and every
@@ -321,7 +322,8 @@ function interactive() {
   process.stdin.on('data', (chunk) => { for (const key of splitKeys(chunk)) onKey(key) })
 
   // ── the control file ───────────────────────────────────────────────────────────────────────────────
-  let ctlRead = 0
+  // Only what is appended from now on: another session in the same folder may have left ops behind.
+  let ctlRead = (() => { try { return statSync(ctlFile).size } catch { return 0 } })()
   const ctlTimer = setInterval(() => {
     let size = 0
     try { size = statSync(ctlFile).size } catch { return }
@@ -347,7 +349,8 @@ function interactive() {
         dialog.highlight = op.dir === 'up' ? Math.max(0, dialog.highlight - 1) : Math.min(2, dialog.highlight + 1)
         redraw()
         event({ kind: 'cursor', highlight: dialog.highlight })
-      } else if (op.op === 'exit') cleanup()
+      } else if (op.op === 'key' && typeof op.key === 'string') onKey(op.key)   // the person, at the pane
+      else if (op.op === 'exit') cleanup()
     }
   }, 100)
   // The ticking timer: only the timer line changes, as it does on Hermes and Muse.

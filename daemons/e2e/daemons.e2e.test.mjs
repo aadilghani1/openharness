@@ -84,8 +84,8 @@ function jsonl(file) { try { return readFileSync(file, 'utf8').split('\n').filte
 const keysOf = (project, since = 0) => jsonl(join(project, '.fake-claude', 'keys.jsonl')).filter((k) => k.at >= since)
 const eventsOf = (project, since = 0) => jsonl(join(project, '.fake-claude', 'events.jsonl')).filter((e) => e.at >= since)
 
-async function harness(win, name, extra = {}) {
-  const project = projectDir(name)
+async function harness(win, name, extra = {}, cwd = null) {
+  const project = cwd ?? projectDir(name)
   let created
   // A harnessd still booting answers agent_create UNSUPPORTED_ON_REMOTE (the handler is wired late): ask again.
   for (let tries = 0; ; tries++) {
@@ -104,10 +104,15 @@ async function harness(win, name, extra = {}) {
   return { name, agentId, project, pane: created.agent.tmuxPane }
 }
 
-/** One prompt, and the turn it starts, to its end. */
+/**
+ * One prompt, and the turn it starts, to its end — and past harnessd's Stop-hook grace (1.5 s): a prompt sent
+ * sooner can be force-closed by the previous turn's Stop hook (see A13).
+ */
 async function turn(h, text, since = Date.now()) {
   ctl(h.project, { op: 'prompt', text })
-  return until(`turn "${text}" ended`, () => eventsOf(h.project, since).find((e) => e.kind === 'turn-end' && e.text === text), 30_000)
+  const ended = await until(`turn "${text}" ended`, () => eventsOf(h.project, since).find((e) => e.kind === 'turn-end' && e.text === text), 30_000)
+  await sleep(2_000)
+  return ended
 }
 
 // ── the zoo, read through harnessd as a window reads it, and seeded in the sandbox database ──────────
@@ -163,9 +168,10 @@ async function question(win, h, since) {
  */
 async function answerLikeTheDial(win, h, q, choice) {
   const since = Date.now()
-  const result = win.waitFor((f) => f.type === 'question_response_result' && f.payload?.requestId === q.requestId, 20_000, since)
+  const result = win.waitFor((f) => f.type === 'question_response_result' && f.payload?.requestId === q.requestId, 15_000, since)
   win.send('question_response', { requestId: q.requestId, agentId: h.agentId, answers: { [q.key]: choice } })
-  return (await result).payload
+  // A harnessd from before STALE_QUESTION (origin/main) answers nothing: the pane is the proof then.
+  try { return (await result).payload } catch { return { noReply: true } }
 }
 const lessonDir = () => join(E2E, 'home', '.harness', 'lessons')
 function harnessCli(cliDir, ...argv) {
@@ -221,7 +227,7 @@ if (!ON) {
     after(async () => { await win?.close() })
 
     scenario('A1', 'harnessd probes GET /api/zoo at start and switches daemons on', async (note) => {
-      const since = S().harnessd.startedAt - 1000
+      const since = S().harnessd.spawnAt
       await sleep(3000)
       const reads = zooReads(since)
       // The probe, then (once on) the zoo is re-read on every backend connect, the first one included.
@@ -494,7 +500,8 @@ if (!ON) {
       // Published: a Store harness launched now gets a read-only copy in its runtime, listed in CONTEXT.md.
       const install = harnessCli(join(REPO, 'cli'), 'dsh', 'install', join(REPO, 'store', 'starter'), '--link')
       note(`dsh install starter → ${install.status}`)
-      const store = await harness(win, 'storeharness', { dsh: 'autonomous/starter', permissionMode: 'ask' })
+      // A lesson from a correction belongs to its project: a Store harness in that folder gets it.
+      const store = await harness(win, 'storeharness', { dsh: 'autonomous/starter', permissionMode: 'ask' }, alpha.project)
       const copies = spawnSync('/usr/bin/find', [store.project, join(E2E, 'home', '.harness'), '-path', '*lessons/run-migrations-safely/SKILL.md', '-not', '-path', `${lessonDir()}/*`], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean)
       note(`runtime copies: ${copies.length}`)
       assert.ok(copies.length >= 1, 'the skill was copied into the Store harness runtime')
@@ -549,12 +556,44 @@ if (!ON) {
     })
   })
 
+  describe('found on the way', { concurrency: false }, () => {
+    scenario('A13', 'a prompt queued right behind a turn: its permission question is still announced (pre-existing race, also on main)', async (note) => {
+      const win = await connect(S())
+      try {
+        const h = await harness(win, 'queued')
+        const tries = 6
+        let missed = 0
+        for (let i = 0; i < tries; i++) {
+          const since = Date.now()
+          // Claude submits a prompt typed while it worked as soon as the turn ends, right after the Stop hook.
+          ctl(h.project, { op: 'prompt', text: `a quick one ${i}` })
+          ctl(h.project, { op: 'prompt', text: 'e2e:bash npm test' })
+          await until('the dialog is up', () => eventsOf(h.project, since).some((e) => e.kind === 'dialog'), 15_000)
+          let announced = null
+          try { announced = await win.waitFor((f) => f.type === 'commander_question' && f.agentId === h.agentId, 6_000, since) } catch { missed++ }
+          // Close the dialog from the pane, whatever happened, and let the Stop-hook grace pass.
+          ctl(h.project, { op: 'key', key: '3' })
+          await until('closed', () => eventsOf(h.project, since).some((e) => e.kind === 'declined'), 10_000)
+          await sleep(2_500)
+          void announced
+        }
+        note(`${tries - missed} of ${tries} queued questions announced${missed ? '; the others were force-closed by the previous turn\'s Stop hook after its grace, and the question watcher stopped with them' : ''}`)
+        assert.equal(missed, 0, 'every queued turn\'s question reached the window')
+      } finally { await win.close() }
+    })
+  })
+
   describe('daemons off', { concurrency: false }, () => {
     scenario('B1', 'server off: one probe (404) per harnessd start, no zoo traffic over many turns, DAEMONS_OFF, no daemon_* frames', async (note) => {
       sandbox('backend', '--daemons', 'off', '--backend', join(REPO, 'backend'))
-      const since = Date.now()
+      let since = Date.now()
       sandbox('harnessd', 'restart', '--cli', join(REPO, 'cli'))
       refresh()
+      // The harnessd that stopped (daemons on) flushed its last minute of turns on the way out, into a server
+      // that had just been switched off.
+      const flushed = zooOps(since).filter((r) => r.at < S().harnessd.spawnAt)
+      if (flushed.length) note(`the stopping harnessd's shutdown flush: ${flushed.map((r) => `${r.ops.join('+')} → ${r.status}`).join(', ')}`)
+      since = S().harnessd.spawnAt
       const win = await connect(S())
       try {
         const status = (await http(S(), 'GET', '/api/status')).body
@@ -598,9 +637,10 @@ if (!ON) {
 
     scenario('B2', 'local kill switch: HARNESS_DAEMONS=0 asks nothing, answers DAEMONS_OFF, even with the server on', async (note) => {
       sandbox('backend', '--daemons', 'on', '--backend', join(REPO, 'backend'))
-      const since = Date.now()
+      let since = Date.now()
       sandbox('harnessd', 'restart', '--cli', join(REPO, 'cli'), '--kill')
       refresh()
+      since = S().harnessd.spawnAt   // the harnessd that stopped flushed its own last reports
       const win = await connect(S())
       try {
         await sleep(10_000)
@@ -640,15 +680,16 @@ if (!ON) {
       const q = await question(win, h, since)
       const answered = await answerLikeTheDial(win, h, q, 'Yes')
       await until('approved', () => eventsOf(h.project, since).some((e) => e.kind === 'approved'), 10_000)
-      note(`desk read+ops, agents_list, a turn, a question answered (${answered.ok ? 'ok' : JSON.stringify(answered)})`)
+      note(`desk read+ops, agents_list, a turn, a question answered (${answered.ok ? 'ok' : answered.noReply ? 'typed; no question_response_result from this harnessd' : JSON.stringify(answered)})`)
       return h
     }
 
     scenario('C1', 'new harnessd + old backend (origin/main): the probe gets 404, daemons stay idle, the rest works', async (note) => {
       sandbox('backend', '--daemons', 'on', '--backend', OLD_BACKEND)
-      const since = Date.now()
+      let since = Date.now()
       sandbox('harnessd', 'restart', '--cli', join(REPO, 'cli'))
       refresh()
+      since = S().harnessd.spawnAt   // the harnessd that stopped flushed its own last reports
       const win = await connect(S())
       try {
         await existingFlows(win, 'oldbackend', note)
@@ -665,9 +706,10 @@ if (!ON) {
 
     scenario('C2', 'old harnessd (origin/main) + new backend: desk, agent list and question answers are unaffected', async (note) => {
       sandbox('backend', '--daemons', 'on', '--backend', join(REPO, 'backend'))
-      const since = Date.now()
+      let since = Date.now()
       sandbox('harnessd', 'restart', '--cli', OLD_CLI)
       refresh()
+      since = S().harnessd.spawnAt   // the harnessd that stopped flushed its own last reports
       const win = await connect(S())
       try {
         await existingFlows(win, 'oldharnessd', note)

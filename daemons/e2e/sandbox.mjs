@@ -250,10 +250,12 @@ async function startHarnessd(state, cliDir, opts = {}) {
   await stopHarnessd(state)
   signIn(state)
   if (!existsSync(cliJs(cliDir))) throw new Error(`${cliJs(cliDir)} is missing: build the cli first (node build.mjs)`)
-  // `start`, not `start -f`: the daemon detaches, and a tool's teardown cannot SIGTERM it.
+  // `start`, not `start -f`: the daemon detaches, and a tool's teardown cannot SIGTERM it. `spawnAt` is after
+  // the previous harnessd is gone (its shutdown flush is its own), before this one can ask anything.
+  const spawnAt = Date.now()
   const r = spawnSync(process.execPath, [cliJs(cliDir), 'start'], { cwd: join(E2E, 'run'), env: harnessdEnv(state, opts), encoding: 'utf8', timeout: 60_000 })
   writeFileSync(join(E2E, 'logs', `harnessd-start-${Date.now()}.log`), `${r.stdout}\n${r.stderr}`)
-  state.harnessd = { dir: cliDir, kill: !!opts.kill, startedAt: Date.now() }
+  state.harnessd = { dir: cliDir, kill: !!opts.kill, spawnAt, startedAt: Date.now() }
   writeState(state)
   // Ready means discovery ran: before that a window's agent_create is answered UNSUPPORTED_ON_REMOTE.
   await until('harnessd ready', async () => {
