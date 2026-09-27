@@ -1044,6 +1044,8 @@ pub fn hn_owned(name: &str) -> bool {
 /// runs in it, as tmux's commands act on any session: that session in front while it runs, the
 /// one on screen back after.
 fn run_words(app: &mut App, words: &[String]) {
+    // A command for another terminal (-c its tty, or -t where the target is a client): run there.
+    if let Some(tty) = other_client_target(words) { return to_client(app, &tty, words) }
     let words = &session_targets(app, words);
     if cross_session(app, words) { return }
     match other_session(app, words).or_else(|| best_session(app, words)) {
@@ -1127,6 +1129,34 @@ fn find_harness(app: &App, t: &str) -> Result<(String, String), String> {
     if let Some(r) = one(agents.iter().filter(|a| a.name.starts_with(t)).map(|a| a.key()).collect()) { return r }
     if let Some(r) = one(agents.iter().filter(|a| crate::cmd::fnmatch(t, &a.name)).map(|a| a.key()).collect()) { return r }
     Err(format!("can't find harness: {t}"))
+}
+
+/// The client a command names that is not this one: display-message -c, switch-client -c,
+/// display-menu -c, display-popup -c; refresh-client -t, show-messages -t, display-panes -t,
+/// command-prompt -t, confirm-before -t (by its tty, `/dev/` or not).
+fn other_client_target(words: &[String]) -> Option<String> {
+    let entry = crate::cmd::find(words.first()?).ok()?;
+    let flag = match entry.name {
+        "display-message" | "switch-client" | "display-menu" | "display-popup" => 'c',
+        "refresh-client" | "show-messages" | "display-panes" | "command-prompt" | "confirm-before" | "lock-client" | "suspend-client" => 't',
+        _ => return None,
+    };
+    let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).ok()?;
+    let t = args.get(flag)?.trim_end_matches(':').to_string();
+    let me = crate::app::tty_name();
+    let bare = |s: &str| s.trim_start_matches("/dev/").to_string();
+    (bare(&t) != bare(&me)).then_some(t)
+}
+
+/// A command for the client whose tty is [tty]: run by it, its output here; tmux's error when no
+/// client of this server name has that tty.
+fn to_client(app: &mut App, tty: &str, words: &[String]) {
+    let bare = |s: &str| s.trim_start_matches("/dev/").to_string();
+    for other in other_clients() {
+        let Some((out, _, _)) = crate::ipc::ask(&other, &["hn-list-clients".into(), "-F".into(), "#{client_tty}".into()]) else { continue };
+        if out.iter().any(|l| bare(l) == bare(tty)) { return forward(app, &other.display().to_string(), words) }
+    }
+    app.error(format!("can't find client: {tty}"))
 }
 
 /// The other running clients of this server name (-L): their sockets.
@@ -1937,6 +1967,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 "list-windows" => (0..app.tabs.len()).map(|w| (w, None)).collect(),
                 // hn with no terminal is tmux's server, not a client of it.
                 "list-clients" if app.headless => Vec::new(),
+                // list-clients -t: only when this client shows that session.
+                "list-clients" if opt(words, "-t").map(|t| app.find_session(t.split(':').next().unwrap_or(&t)) != Some(app.swap_back.unwrap_or(app.session_id))).unwrap_or(false) => Vec::new(),
                 _ => vec![(app.active, None)],
             };
             let history = "[#{pane_width}x#{pane_height}] [history #{history_size}/#{history_limit}, #{history_bytes} bytes] #{pane_id}#{?pane_active, (active),}#{?pane_dead, (dead),}";
@@ -1965,6 +1997,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             if clients {
                 let mut ask: Vec<String> = vec!["hn-list-clients".into()];
                 if let Some(t) = opt(words, "-F") { ask.extend(["-F".to_string(), t]) }
+                if let Some(t) = opt(words, "-t") { ask.extend(["-t".to_string(), t]) }
                 if let Some(f) = &filter { ask.extend(["-f".to_string(), f.clone()]) }
                 for other in other_clients() { if let Some((out, _, _)) = crate::ipc::ask(&other, &ask) { lines.extend(out) } }
             }

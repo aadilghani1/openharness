@@ -59,6 +59,12 @@ pub fn expand_session(app: &App, fmt: &str, session: u32) -> String {
     expand1(&mut es, fmt)
 }
 
+/// A format for window [k] (of session_windows) of a session not in front (another client's).
+pub fn expand_session_window(app: &App, fmt: &str, session: u32, k: usize) -> String {
+    let mut es = Es { app, window: app.active, pane: None, time: true, nojobs: false, depth: 0, now: now_secs(), session: Some(session), window_of: Some(k) };
+    expand1(&mut es, fmt)
+}
+
 pub fn expand_nojobs(app: &App, fmt: &str) -> String {
     let mut es = Es { app, window: app.active, pane: app.focused(), time: true, nojobs: true, depth: 0, now: now_secs(), session: None, window_of: None };
     expand1(&mut es, fmt)
@@ -483,7 +489,8 @@ fn find(es: &mut Es, key: &str, f: &Flags, time_format: Option<&str>) -> Option<
     let app = es.app;
     let window_id = app.tabs.get(es.window).map(|t| t.id.clone()).unwrap_or_default();
     let mut found = es.session.and_then(|id| match es.window_of {
-        Some(k) if key.starts_with("window_") => Some(app.stash_window_value(id, k, key).unwrap_or_default()),
+        // (Which kind of line it is — window_format — is the tree's to say.)
+        Some(k) if key.starts_with("window_") && key != "window_format" => Some(app.stash_window_value(id, k, key).unwrap_or_default()),
         _ => app.stash_value(id, key),
     });
     if found.is_none() { found = app.options.format_value(key, &window_id, es.pane) }

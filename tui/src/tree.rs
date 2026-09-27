@@ -166,6 +166,10 @@ pub struct Tree {
 /// Each item's tag (tmux's is the session, winlink or pane pointer): a session's, a window's in
 /// that session, a pane's.
 fn session_tag(sid: u32) -> u64 { (3u64 << 56) | sid as u64 }
+/// Another client's window in the tree: `remote:<number>` for its tab, its number past every @id.
+const REMOTE: &str = "remote:";
+const REMOTE_WINDOW: u64 = 1 << 31;
+
 fn window_tag(sid: u32, wid: u64) -> u64 { (1u64 << 56) | ((sid as u64) << 32) | wid }
 fn pane_tag(id: u64) -> u64 { (2u64 << 56) | id }
 
@@ -340,7 +344,19 @@ impl Tree {
         app.format_type = Some(FORMAT_SESSION);
         let text = crate::format::expand_session(app, &self.format, sid);
         app.format_type = None;
-        self.add(saved, None, What::Session(sid), session_tag(sid), name, Some(text), 0);
+        let expanded = if self.kind == Kind::Session { 0 } else { 1 };
+        let s = self.add(saved, None, What::Session(sid), session_tag(sid), name, Some(text), expanded);
+        // Its windows, as the client that has it keeps them (by number: chosen, they are shown
+        // as that client has them).
+        let mut windows: Vec<(usize, (usize, String, usize))> = app.session_windows(sid).into_iter().enumerate().collect();
+        let (field, reversed) = (self.sort, self.reversed);
+        windows.sort_by(|a, b| { let r = match field { 1 => a.1.1.as_bytes().cmp(b.1.1.as_bytes()), _ => a.1.0.cmp(&b.1.0) }; if reversed { r.reverse() } else { r } });
+        for (k, (num, _, _)) in windows {
+            app.format_type = Some(FORMAT_WINDOW);
+            let text = crate::format::expand_session_window(app, &self.format, sid, k);
+            app.format_type = None;
+            self.add(saved, Some(s), What::Window(sid, format!("{REMOTE}{num}")), window_tag(sid, REMOTE_WINDOW | num as u64), num.to_string(), Some(text), 0);
+        }
     }
 
     /// window_buffer_build: every paste buffer, sorted (by time the newest first, by size the
@@ -484,8 +500,9 @@ impl Tree {
             return keys::parse(&s).ok();
         }
         let ftype = match self.items[id].what { What::Session(_) => FORMAT_SESSION, What::Window(..) => FORMAT_WINDOW, _ => FORMAT_PANE };
-        // Another client's session: its key by its line alone.
-        if let What::Session(sid) = self.items[id].what { if app.remote_owner(sid).is_some() {
+        // Another client's session (or window): its key by its line alone.
+        let remote_window = matches!(&self.items[id].what, What::Window(_, tab) if tab.starts_with(REMOTE));
+        if let What::Session(sid) | What::Window(sid, _) = self.items[id].what { if remote_window || (matches!(self.items[id].what, What::Session(_)) && app.remote_owner(sid).is_some()) {
             app.format_line = Some(line);
             let s = crate::format::expand_session(app, &self.key_format, sid);
             app.format_line = None;
@@ -846,8 +863,12 @@ impl Tree {
     /// `=session:1.%3`, with its own session's name.
     fn target(&self, app: &mut App, id: usize) -> Option<String> {
         if let What::Buffer(name) = &self.items[id].what { return app.paste.get(name).map(|_| name.clone()) }
-        // Another client's session: by its name (switch-client takes it from that client).
+        // Another client's session, or one of its windows: by its name (switch-client shows it
+        // as that client has it).
         if let What::Session(sid) = self.items[id].what { if app.remote_owner(sid).is_some() { return app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| format!("={n}:")) } }
+        if let What::Window(sid, tab) = &self.items[id].what {
+            if let Some(num) = tab.strip_prefix(REMOTE) { return app.session_list().into_iter().find(|(i, _)| i == sid).map(|(_, n)| format!("={n}:{num}.")) }
+        }
         self.pulled(app, id, |app, Pulled { window, pane }| {
             let s = app.session_name();
             Some(match &self.items[id].what {
