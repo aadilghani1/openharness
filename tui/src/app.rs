@@ -2719,7 +2719,14 @@ impl App {
             .and_then(|c| self.own_session(&c).or_else(|| if held(&c) && !self.headless { self.find_session(&format!("={c}")) } else { None }))
             .filter(|c| *c != self.session_id);
         match self.start_session.clone() {
-            None => if let Some(id) = current { self.switch_session(id) },
+            // No session asked for: the one in front when the last client left — or, when that one
+            // is gone (a terminal whose session was destroyed), the session used last
+            // (cmd_find_best_session), never an empty one of this client's own.
+            None => {
+                let fallback = || self.sessions.iter().filter(|s| !s.desk && s.mirror.is_none() && s.tabs.iter().any(|t| t.root.is_some())).max_by_key(|s| (s.activity, s.used)).map(|s| s.id);
+                let own_empty = !self.tabs.iter().any(|t| t.root.is_some());
+                if let Some(id) = current.or_else(|| if own_empty { fallback() } else { None }) { self.switch_session(id) }
+            }
             Some(start) => {
                 // attach -t finds a session as tmux does (its name, the only one it starts, a
                 // pattern); new -s is the exact name.
@@ -2778,7 +2785,11 @@ impl App {
                         None => {
                             self.start_session = None;
                             let last = doc.get("current").and_then(Value::as_str).and_then(|c| self.find_session(&format!("={c}"))).filter(|c| *c != self.session_id);
-                            if let Some(id) = current.or(last) { self.switch_session(id) }
+                            // (That one gone — its terminal's session destroyed: the session used last,
+                            // as tmux attaches to cmd_find_best_session's.)
+                            let best = self.sessions.iter().filter(|s| !s.desk && s.mirror.is_none() && s.tabs.iter().any(|t| t.root.is_some())).max_by_key(|s| (s.activity, s.used)).map(|s| s.id)
+                                .or_else(|| self.remote_rows().into_iter().max_by_key(|r| r.activity).map(|r| r.id));
+                            if let Some(id) = current.or(last).or(best) { self.switch_session(id) }
                         }
                     },
                 }
