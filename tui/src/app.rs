@@ -2663,6 +2663,12 @@ impl App {
     /// Everything but the status line (tmux `status-position`, bottom by default).
     pub fn body(&self) -> Rect {
         let n = self.status_lines();
+        // hn with no terminal: the window in front's own size (its session's -x/-y, default-size)
+        // — splits, resizes and layouts are worked out in it, as tmux's detached windows.
+        if self.headless {
+            let (w, h) = self.tabs.get(self.active).and_then(|t| t.root.as_ref().map(|r| r.size()).or(t.size)).unwrap_or_else(|| self.default_size());
+            return Rect::new(0, 0, w, h);
+        }
         Rect::new(0, if self.status_top { n } else { 0 }, self.size.0, self.size.1.saturating_sub(n))
     }
 

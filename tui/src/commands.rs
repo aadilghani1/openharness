@@ -2685,7 +2685,15 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 Ok(id) => if detached || app.headless {
                     let (dx, dy) = app.default_size();
                     let n = |f: &str, d: u16| opt(words, f).and_then(|v| v.parse::<u16>().ok()).filter(|v| *v > 0).unwrap_or(d);
-                    app.size_session(id, (n("-x", dx), n("-y", dy)));
+                    let size = (n("-x", dx), n("-y", dy));
+                    // -x/-y: the session's own default-size, as tmux keeps them (its next windows
+                    // that size too).
+                    if opt(words, "-x").is_some() || opt(words, "-y").is_some() {
+                        let v = format!("{}x{}", size.0, size.1);
+                        if id == app.session_id { app.options.session.insert("default-size".into(), v); }
+                        else if let Some(st) = app.sessions.iter_mut().find(|st| st.id == id) { st.options.insert("default-size".into(), v); }
+                    }
+                    app.size_session(id, size);
                 },
                 Err(e) => { app.print_new = None; app.error(e) }
             }
