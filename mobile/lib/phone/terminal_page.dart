@@ -14,6 +14,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:xterm/xterm.dart' show Terminal, TerminalKey, TerminalStyle;
 
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/core/models.dart' show Agent, AgentProject;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
@@ -1016,9 +1017,7 @@ class _TerminalPageState extends State<TerminalPage>
   /// Where a voice take goes: to the agent's prompt, echoed on the status line once it has landed —
   /// or, while the agent's question is open, to that question, as its answer or not at all.
   Future<bool> _deliverVoice(String text) async {
-    final session = widget.notifier
-        .paneOfAgent(widget.machineId, widget.agentId)
-        ?.session;
+    final session = await _sessionForInput();
     if (session == null) return false;
     if (_questionWatcher?.view != null) return _answerByVoice(session, text);
     final sent = await session.sendComposerText(text);
@@ -1028,6 +1027,25 @@ class _TerminalPageState extends State<TerminalPage>
       _flash('✓ ${_windowName(session.agentName)}  ${_clip(text.trim(), 28)}');
     }
     return sent;
+  }
+
+  /// The pane's session, able to take input — taken back first when another client took the
+  /// terminal (the desktop, on a click there) while the take was being spoken. Speaking to a
+  /// harness is as plain a claim on it as a tap or a scroll. Null when it cannot be had in 6s.
+  Future<TerminalSession?> _sessionForInput() async {
+    TerminalSession? current() =>
+        widget.notifier.paneOfAgent(widget.machineId, widget.agentId)?.session;
+    if (current() case final session? when session.acceptsInput) return session;
+    appLog.info('voice', 'terminal not ours at send — taking it back');
+    await _takeControl();
+    for (var waited = 0; waited < 60 && mounted; waited++) {
+      if (current() case final session? when session.acceptsInput) {
+        return session;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    appLog.warn('voice', 'terminal not back in 6s — take kept');
+    return null;
   }
 
   /// [text] cut to [cells], the way the chrome cuts a name: `··` where it stops.
@@ -2210,8 +2228,22 @@ class _TerminalPageState extends State<TerminalPage>
                                     MediaQuery.sizeOf(context).width / 2 +
                                     VoiceMicButton.extent / 2 +
                                     16,
-                                bottom: _micCenter - 9,
-                                child: VoiceTakeClock(voice: widget.voice),
+                                bottom: _micCenter - 14,
+                                // On the ground, not bare: the output runs under the mic while
+                                // it is read back, and the clock has to read over it.
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: Tty.of(context).ground,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 5,
+                                    ),
+                                    child: VoiceTakeClock(voice: widget.voice),
+                                  ),
+                                ),
                               ),
                               Positioned(
                                 right:

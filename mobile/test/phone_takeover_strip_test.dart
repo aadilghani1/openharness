@@ -19,6 +19,7 @@ void main() {
   late VoiceInputController voice;
   late ValueNotifier<String> language;
   late List<String> opens;
+  late List<(String, Map<String, dynamic>)> sent;
 
   setUp(() {
     notifier = AppNotifier(
@@ -27,13 +28,15 @@ void main() {
       configStore: null,
     );
     opens = [];
+    sent = [];
     session = TerminalSession(
       machineId: 'm',
       agentId: 'a',
       agentName: 'Agent',
       engineId: 'claude',
-      send: (type, _) async {
+      send: (type, payload) async {
         if (type == 'terminal_open') opens.add(type);
+        sent.add((type, payload));
         return true;
       },
       sendBinary: (_) async => true,
@@ -88,6 +91,38 @@ void main() {
       // reopens through the notifier's connection, absent here.
       await tester.tap(find.byType(TerminalView));
       await tester.pump(const Duration(milliseconds: 300));
+    },
+  );
+
+  testWidgets(
+    'a take finished after the desktop took the terminal takes it back and lands',
+    (tester) async {
+      await pump(tester);
+      // The desktop took it while the take was being spoken (the log of 2026-09-27: 14:17:43).
+      await session.handleFrame('terminal_closed', {
+        'streamId': 's',
+        'code': 'TERMINAL_TAKEN_OVER',
+        'reason': 'another client connected',
+        'takenBy': {'kind': 'desktop', 'name': 'M2'},
+      });
+      await tester.pump();
+      expect(session.acceptsInput, isFalse);
+
+      final delivered = session.voiceDeliver!('run the tests again');
+      await tester.pump(const Duration(milliseconds: 300));
+      // Not "not sent": it waits for the terminal it asked back for. Here the reopen is
+      // answered by hand — there is no machine behind this notifier.
+      session.status = TerminalSessionStatus.controlling;
+      session.streamId = 's2';
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(await delivered, isTrue);
+      expect(
+        sent
+            .where((frame) => frame.$1 == 'message')
+            .map((f) => f.$2['content']),
+        ['run the tests again'],
+      );
     },
   );
 }
