@@ -41,9 +41,33 @@ void main() {
     ));
   });
 
-  test('anything else matches nothing — it must never reach the dialog', () {
-    expect(matchSpokenAnswer('fix the login test', _permission), isNull);
-    expect(matchSpokenAnswer('seven', _permission), isNull);
+  test('replies that start like yes or no press yes or no', () {
+    String? press(String said) => matchSpokenAnswer(said, _permission)?.number;
+    expect(press('yeah do it'), '1');
+    expect(press('ship it'), '1');
+    expect(press('go for it'), '1');
+    expect(press('sounds good'), '1');
+    expect(press('no wait'), '3');
+    expect(press('hold on'), '3');
+  });
+
+  test('anything else is words for the agent — never dropped, never a blind Return', () {
+    expect(matchSpokenAnswer('use the staging database instead', _permission), (
+      number: '3',
+      rest: 'use the staging database instead',
+    ));
     expect(matchSpokenAnswer('', _permission), isNull);
+  });
+
+  test('a dialog with nowhere to put words sends nothing', () {
+    final choice = parseQuestionLines([
+      ' Which database?',
+      ' ❯ 1. Postgres',
+      '   2. SQLite',
+      '',
+      ' Esc to cancel · Enter to confirm',
+    ], QuestionEngine.claude)!;
+    expect(matchSpokenAnswer('the fast one', choice), isNull);
+    expect(matchSpokenAnswer('two', choice)?.number, '2');
   });
 }

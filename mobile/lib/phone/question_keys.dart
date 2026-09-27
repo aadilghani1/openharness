@@ -26,9 +26,13 @@ String _short(String label) {
 }
 
 /// What a spoken reply means to an open dialog: the key it presses, and anything said after it
-/// ("no, use dist/ instead" → key 3, then "use dist/ instead" once the dialog has closed). Null when
-/// it matches no answer — the caller then sends NOTHING: a reply that is not an answer must never
-/// reach the dialog as keystrokes and a Return.
+/// ("no, use dist/ instead" → key 3, then "use dist/ instead" once the dialog has closed).
+///
+/// ⚠️ **Every word lands somewhere.** A number or an answer's own word presses that answer; a reply
+/// that starts like yes or no ("yeah do it", "ship it", "no wait") presses yes or no; anything else
+/// is words for the agent — the dialog's "tell Claude what to do differently" answer, with what
+/// was said sent once the dialog has closed. Null only when the dialog has no such answer — then
+/// nothing is sent at all: a reply must never reach a dialog as keystrokes and a blind Return.
 ({String number, String? rest})? matchSpokenAnswer(
   String spoken,
   QuestionPaneView view,
@@ -38,11 +42,15 @@ String _short(String label) {
   final keys = questionKeys(view);
   String? numberWhere(bool Function(QuestionKey key) test) =>
       keys.where(test).firstOrNull?.number;
+  final words = [
+    for (final word in text.split(RegExp(r"[^a-z0-9'’]+")))
+      if (word.isNotEmpty) word,
+  ];
+  if (words.isEmpty) return null;
+  String? after(int count) => _nonEmpty(
+    words.skip(count).join(' ').replaceFirst(RegExp(r'^(and|but|then)\s+'), ''),
+  );
 
-  final head = text.split(RegExp(r'[,;]|\s+—\s+')).first.trim();
-  final rest = text.length > head.length
-      ? text.substring(head.length).replaceFirst(RegExp(r'^[,;\s—]+'), '')
-      : null;
   const ordinals = {
     'one': '1',
     'first': '1',
@@ -56,29 +64,99 @@ String _short(String label) {
     'fourth': '4',
     'five': '5',
   };
-  final digit =
-      RegExp(r'^(?:option\s+|number\s+)?(\d)$').firstMatch(head)?.group(1) ??
-      ordinals[head.replaceFirst(RegExp(r'^(?:option|number)\s+'), '')];
+  // "option two", "number 3", "2", "two".
+  var lead = 0;
+  if (words.length > 1 && (words[0] == 'option' || words[0] == 'number')) {
+    lead = 1;
+  }
+  final digit = RegExp(r'^\d$').hasMatch(words[lead])
+      ? words[lead]
+      : ordinals[words[lead]];
   if (digit != null && keys.any((key) => key.number == digit)) {
-    return (number: digit, rest: _nonEmpty(rest));
+    return (number: digit, rest: after(lead + 1));
   }
-  if (RegExp(r'^(always|yes always|allow all|always allow)$').hasMatch(head)) {
+  const alwaysWords = {'always'};
+  const yesPhrases = {
+    'go ahead',
+    'do it',
+    'ship it',
+    'go for',
+    'sounds good',
+    'looks good',
+    'let\'s go',
+    'lets go',
+    'why not',
+  };
+  const yesWords = {
+    'yes',
+    'yeah',
+    'yep',
+    'yup',
+    'yea',
+    'sure',
+    'ok',
+    'okay',
+    'alright',
+    'fine',
+    'go',
+    'approve',
+    'approved',
+    'proceed',
+    'continue',
+    'lgtm',
+    'ship',
+    'correct',
+    'right',
+    'affirmative',
+  };
+  const noWords = {
+    'no',
+    'nope',
+    'nah',
+    'stop',
+    'wait',
+    "don't",
+    'don’t',
+    'dont',
+    'cancel',
+    'deny',
+    'hold',
+    'never',
+    'negative',
+  };
+  final two = words.take(2).join(' ');
+  if (alwaysWords.contains(words.first) ||
+      two == 'yes always' ||
+      two == 'allow all') {
     final always = numberWhere((key) => key.label == 'always');
-    if (always != null) return (number: always, rest: _nonEmpty(rest));
+    if (always != null) return (number: always, rest: after(1));
   }
-  if (RegExp(r'^(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|approve)$')
-      .hasMatch(head)) {
+  if (yesPhrases.contains(two) || yesWords.contains(words.first)) {
     final yes = numberWhere((key) => key.label.startsWith('yes'));
-    if (yes != null) return (number: yes, rest: _nonEmpty(rest));
+    if (yes != null) {
+      final used = yesPhrases.contains(two) ? 2 : 1;
+      // "go for it" — the phrase's third word goes with it.
+      final extra = two == 'go for' && words.length > 2 && words[2] == 'it'
+          ? 1
+          : 0;
+      return (number: yes, rest: after(used + extra));
+    }
   }
-  if (RegExp(r'^(no|nope|nah|don.?t|stop|deny)$').hasMatch(head)) {
+  if (noWords.contains(words.first)) {
     final no = numberWhere((key) => key.label.startsWith('no'));
-    if (no != null) return (number: no, rest: _nonEmpty(rest));
+    if (no != null) return (number: no, rest: after(1));
   }
   // An answer said in its own words: "yes and don't ask again" / "no and tell claude".
   for (final key in keys) {
     if (key.label.length > 2 && text.startsWith(key.label)) {
       return (number: key.number, rest: null);
+    }
+  }
+  // Anything else is words for the agent: the dialog's "tell it what to do instead" answer, with
+  // everything said as the message.
+  for (final row in view.rows) {
+    if (row.label.toLowerCase().contains('tell')) {
+      return (number: row.number, rest: _nonEmpty(spoken.trim()));
     }
   }
   return null;
