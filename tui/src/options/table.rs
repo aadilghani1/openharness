@@ -200,4 +200,10 @@ pub static HOOKS: &[Opt] = &[
     Opt { name: "window-renamed", scope: Scope::Window, pane: false, kind: Kind::Command, array: true },
     Opt { name: "window-resized", scope: Scope::Window, pane: false, kind: Kind::Command, array: true },
     Opt { name: "window-unlinked", scope: Scope::Session, pane: false, kind: Kind::Command, array: true },
+    // hn's: a harness asks (harness-needs), ends a turn (harness-done), meets an error
+    // (harness-failed) — with #{hook_harness_name} #{hook_harness_id} #{hook_harness_machine}
+    // #{hook_harness_line} #{hook_harness_question}.
+    Opt { name: "harness-done", scope: Scope::Session, pane: false, kind: Kind::Command, array: true },
+    Opt { name: "harness-failed", scope: Scope::Session, pane: false, kind: Kind::Command, array: true },
+    Opt { name: "harness-needs", scope: Scope::Session, pane: false, kind: Kind::Command, array: true },
 ];

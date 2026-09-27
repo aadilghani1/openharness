@@ -1076,11 +1076,13 @@ impl App {
                     // that ended where you were not looking: the focused pane, with the terminal
                     // focused. A visible pane beside the one you type in is not being read.
                     let key = agent.key();
+                    let hook_key = key.clone();
                     if !replay && !subagent && looking.as_ref() != Some(&key) {
                         agent.unread = true;
                         if mine && !visible.contains(&key) { self.say(format!("{name} finished"), theme::ONLINE) }
                     } else if looking.as_ref() == Some(&key) { self.mark_seen_key(key) }
                     if mine && !self.terminal_focused && !replay && !subagent { crate::notify("Harness", &format!("{name} finished")) }
+                    if !replay && !subagent { crate::commands::notify_harness(self, "harness-done", &hook_key) }
                 }
             }
             "done" => {
@@ -1108,8 +1110,9 @@ impl App {
                     if let Some(l) = payload.get("message").and_then(Value::as_str).and_then(fleet::first_line) { agent.did = Some(format!("Error: {}", fleet::tidy_error(&l))) }
                     agent.errored = true;
                     let (key, line) = (agent.key(), agent.did.clone().unwrap_or_default());
-                    self.agent_errors.insert(key, (fleet::now_ms(), line));
+                    self.agent_errors.insert(key.clone(), (fleet::now_ms(), line));
                     self.seen_dirty = true;
+                    crate::commands::notify_harness(self, "harness-failed", &key);
                 }
             }
             "commander_question" => {
@@ -1119,12 +1122,14 @@ impl App {
                     let fresh = next.as_ref().map(|q| agent.question.as_ref().map(|p| p.request_id != q.request_id).unwrap_or(true)).unwrap_or(false);
                     if next.is_some() { agent.question = next }
                     let name = agent.name.clone();
+                    let hook_key = agent.key();
                     let prompt = agent.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default();
                     if fresh && !visible.contains(&agent.key()) {
                         { let k = self.keymap.hint("choose-tree -a").unwrap_or_default(); self.say(format!("{name} is waiting on you — {k}"), theme::ATTENTION); self.toast_hold = Some(4000) }
                         crate::bell();
                     }
                     if fresh && !self.terminal_focused { crate::notify(&format!("{name} needs input"), &prompt) }
+                    if fresh { crate::commands::notify_harness(self, "harness-needs", &hook_key) }
                 }
             }
             "commander_question_close" => {

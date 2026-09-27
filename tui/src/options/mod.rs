@@ -331,7 +331,8 @@ impl Store {
         let in_scope = |o: &Opt| match scope { Scope::Server => o.scope == Scope::Server, Scope::Session => o.scope == Scope::Session, Scope::Window => matches!(o.scope, Scope::Window | Scope::Pane), Scope::Pane => false };
         let mut rows: BTreeMap<String, String> = defaults().iter().filter(|(k, _)| find(k).map(in_scope).unwrap_or(false)).map(|(k, v)| (k.clone(), v.clone())).collect();
         for n in LOOK { if rows.contains_key(n) { if let Some(v) = self.default_of(n) { rows.insert(n.to_string(), v.clone()); } } }
-        for h in table::HOOKS.iter().filter(|o| in_scope(o)) { rows.insert(h.name.to_string(), String::new()); }
+        // (hn's own hooks, harness-*, only once set: the list is tmux's.)
+        for h in table::HOOKS.iter().filter(|o| in_scope(o) && !o.name.starts_with("harness-")) { rows.insert(h.name.to_string(), String::new()); }
         if let Some(map) = self.map(scope, true, "", 0) { overlay(&mut rows, map) }
         rows
     }

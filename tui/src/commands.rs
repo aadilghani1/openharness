@@ -693,6 +693,32 @@ pub fn notify_session(app: &mut App, name: &str, sid: u32, session_name: &str, w
     app.pending_hooks.extend(items);
 }
 
+/// A harness's event (harness-needs: it asks; harness-done: it ended a turn; harness-failed: an
+/// error): #{hook_harness_*} say which and what, and the commands run with its pane as the target
+/// when it is open here (else this one's).
+pub fn notify_harness(app: &mut App, name: &str, key: &(String, String)) {
+    let pane = app.find_pane(&key.0, &key.1);
+    if !hooked(app, name, pane.map(|(w, _)| w), pane.map(|(_, p)| p)) { return }
+    let Some(a) = app.fleet.agent(&key.0, &key.1) else { return };
+    let question = a.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default();
+    let line = if !question.is_empty() { question.clone() } else if !a.launch_error.is_empty() { a.launch_error.clone() } else { a.did.clone().unwrap_or_default() };
+    let formats = vec![
+        ("hook".to_string(), name.to_string()),
+        ("hook_client".to_string(), crate::format::expand(app, "#{client_name}", app.active, None, false)),
+        ("hook_session".to_string(), format!("${}", app.session_id)),
+        ("hook_session_name".to_string(), app.session_name()),
+        ("hook_harness_name".to_string(), a.name.clone()),
+        ("hook_harness_id".to_string(), format!("{}:{}", a.machine_id, a.id)),
+        ("hook_harness_machine".to_string(), app.fleet.machine_name(&a.machine_id)),
+        ("hook_harness_line".to_string(), line),
+        ("hook_harness_question".to_string(), question),
+    ];
+    let target = pane.or_else(|| app.focused().map(|p| (app.active, p)));
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))) };
+    let items = hook_items(app, name, target, state);
+    app.pending_hooks.extend(items);
+}
+
 /// An event about a window that is gone (window-unlinked): its @number and name, as it was.
 pub fn notify_gone(app: &mut App, name: &str, wid: u64, window_name: &str) {
     if !hooked(app, name, None, None) { return }

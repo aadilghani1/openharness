@@ -203,7 +203,13 @@ hn list-panes -F '#{pane_index} #{pane_title}'
 hn list-harnesses            # every harness on every machine and its state (hn ls is list-sessions, as in tmux)
 hn lsh -f '#{==:#{harness_state},needs}' -F '#{harness_name}: #{harness_question}'   # who is waiting, and on what
 hn send-message -t api 'run the tests'   # a message to a harness, as a turn (hn send is send-keys, as in tmux)
+hn answer -t 'Add rate' 2    # answer its question: the second choice (1,3 several; or your own words)
+hn open-harness -h -s billing   # a harness beside this pane (-v below; without either, a window of its own)
 ```
+
+Harnesses have hooks as windows do: `set-hook -g harness-needs 'run-shell "notify #{hook_harness_name}"'`
+runs when one asks, `harness-done` when one ends a turn, `harness-failed` on an error — with
+`#{hook_harness_name}` `#{hook_harness_line}` `#{hook_harness_question}` `#{hook_harness_machine}`.
 
 ## Copy mode
 
