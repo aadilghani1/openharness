@@ -712,6 +712,21 @@ fn sections(area: Rect, has_header: bool, prompt_top: bool, reverse: bool) -> (S
     (sec, [list_shape, input_shape, header_shape, footer_shape])
 }
 
+/// --info-command's output (its first line, escapes taken out), run again only when what it is
+/// given changes.
+fn info_command(cmd: &str, info: &str, query: &str, matched: usize, total: usize) -> String {
+    thread_local! { static LAST: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) }; }
+    let key = format!("{cmd}\0{info}\0{query}\0{matched}\0{total}");
+    if let Some(out) = LAST.with(|l| l.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, o)| o.clone())) { return out }
+    let out = std::process::Command::new("sh").arg("-c").arg(cmd)
+        .env("FZF_INFO", info).env("FZF_QUERY", query).env("FZF_MATCH_COUNT", matched.to_string()).env("FZF_TOTAL_COUNT", total.to_string())
+        .stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").to_string()).unwrap_or_default();
+    let out = crate::theme::strip_ansi(&out);
+    LAST.with(|l| *l.borrow_mut() = Some((key, out.clone())));
+    out
+}
+
 /// headerIndentImpl: a header's (or footer's) indent in a window of its own — the rows' gutter,
 /// and the list box's left side, less its own box's.
 fn section_indent(list: &Option<String>, own: &Option<String>) -> u16 {
@@ -1029,7 +1044,10 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         put(pbuf, pos, y, &text, if reading { spin_style } else { prompt });
         pos + width
     };
-    let len = count.len() as i32;
+    // --info-command: its output in place of the count (run as fzf runs it: at once, when what it
+    // is told changes — $FZF_INFO, the query, the counts).
+    let count = match o.info_command.as_deref() { Some(cmd) => info_command(cmd, &count, &picker.query, picker.visible.len(), total), None => count };
+    let len = count.width() as i32;
     if w > 1 {
         match mode {
             // Hidden: no count, but the rule keeps its line (only --no-separator takes it away).
