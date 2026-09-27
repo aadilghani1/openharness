@@ -624,6 +624,8 @@ pub struct App {
     /// The questions harness-needs was fired for, by this server name ("name\trequest" → when):
     /// a client that starts later (the headless left at a detach) does not fire them again.
     pub announced: HashMap<String, u64>,
+    /// Questions announced in a row (how many, the last when): a burst is said once.
+    pub asking_burst: Option<(usize, Instant)>,
     /// seen.json as this client last read or wrote it (its time and size): another terminal's
     /// write is read in.
     seen_stamp: Option<(std::time::SystemTime, u64)>,
@@ -814,6 +816,7 @@ impl App {
             seen_rostered: HashSet::new(),
             agent_errors: HashMap::new(),
             announced: HashMap::new(),
+            asking_burst: None,
             seen_stamp: None,
             back_from: None,
             marked: None,
@@ -1341,10 +1344,18 @@ impl App {
                     let prompt = agent.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default();
                     let rid = agent.question.as_ref().map(|q| q.request_id.clone()).unwrap_or_default();
                     if fresh && !visible.contains(&agent.key()) {
-                        { let k = self.keymap.hint("choose-tree -a").unwrap_or_default(); self.say(format!("{name} is waiting on you — {k}"), theme::ATTENTION); self.toast_hold = Some(4000) }
+                        // A burst (several asking at once, or a daemon's replay) said once: how many,
+                        // and one bell.
+                        let now = Instant::now();
+                        let burst = self.asking_burst.filter(|(_, at)| now.duration_since(*at) < Duration::from_millis(1500)).map(|(n, _)| n + 1).unwrap_or(1);
+                        self.asking_burst = Some((burst, now));
+                        let k = self.keymap.hint("choose-tree -a").unwrap_or_default();
+                        let text = if burst > 1 { format!("{burst} harnesses are waiting on you — {k}") } else { format!("{name} is waiting on you — {k}") };
+                        self.say(text, theme::ATTENTION);
+                        self.toast_hold = Some(4000);
                         // A bell as a window's is rung: not with bell-action none, nor visual-bell on.
                         let quiet = self.options.get("bell-action", "", None).as_deref() == Some("none") || self.options.get("visual-bell", "", None).as_deref() == Some("on");
-                        if !quiet { crate::bell() }
+                        if !quiet && burst == 1 { crate::bell() }
                     }
                     if fresh && !self.terminal_focused { crate::notify(&format!("{name} needs input"), &prompt) }
                     // harness-needs once a question, by this server name — not again from the client

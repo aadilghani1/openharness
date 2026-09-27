@@ -926,11 +926,13 @@ fn agent_rpc(app: &mut App, ty: &'static str, done: &'static str) {
 /// clone, resume or rename that one — one mid-turn restarted or paused only with [yes].
 pub fn harness_verb(app: &mut App, verb: &str, (machine, agent): (String, String), yes: bool, name: &str) {
     let Some(a) = app.fleet.agent(&machine, &agent) else { return app.error("can't find harness") };
-    let working = matches!(app.fleet.state_of(a), crate::fleet::State::Working | crate::fleet::State::Starting);
+    // (Waiting on you is mid-turn too: its question goes with a restart or a pause.)
+    let waiting = matches!(app.fleet.state_of(a), crate::fleet::State::NeedsInput);
+    let working = waiting || matches!(app.fleet.state_of(a), crate::fleet::State::Working | crate::fleet::State::Starting);
     let who = a.name.clone();
     if app.link(&machine).is_none() { return app.error(format!("{who}'s machine is not connected")) }
     match verb {
-        "restart-harness" | "pause-harness" if working && !yes => app.error(format!("{who} is working (-y to {} it anyway)", if verb == "restart-harness" { "restart" } else { "pause" })),
+        "restart-harness" | "pause-harness" if working && !yes => app.error(format!("{who} is {} (-y to {} it anyway)", if waiting { "waiting on you" } else { "working" }, if verb == "restart-harness" { "restart" } else { "pause" })),
         "restart-harness" => agent_rpc_on(app, machine, agent, "agent_restart", "Restarted"),
         "pause-harness" => agent_rpc_on(app, machine, agent, "agent_delete", "Paused — the conversation is saved"),
         "resume-harness" => match app.find_pane_anywhere(&machine, &agent).map(|(_, _, p)| p) {
@@ -2338,7 +2340,7 @@ fn answer(app: &mut App, machine: &str, agent: &str, option: usize) -> bool {
 /// one (its turn would be cut short), when its key comes again within three seconds — the first
 /// press says so.
 fn confirmed(app: &App, picker: &mut Picker, key: char, machine: &str, agent: &str, warning: &str) -> bool {
-    let working = app.fleet.agent(machine, agent).map(|a| matches!(app.fleet.state_of(a), crate::fleet::State::Working | crate::fleet::State::Starting)).unwrap_or(false);
+    let working = app.fleet.agent(machine, agent).map(|a| matches!(app.fleet.state_of(a), crate::fleet::State::Working | crate::fleet::State::Starting | crate::fleet::State::NeedsInput)).unwrap_or(false);
     if !working { picker.armed_key = None; return true }
     let id = format!("{machine}:{agent}");
     if picker.armed_key.as_ref().map(|(k, i, at)| *k == key && *i == id && at.elapsed() < Duration::from_secs(3)).unwrap_or(false) { picker.armed_key = None; return true }
@@ -2663,10 +2665,17 @@ fn submit_prompt(app: &mut App, p: Prompt) {
         PromptKind::Answer { machine, agent, request } => {
             // Only the question you were answering: one that took its place while you typed is not.
             let q = app.fleet.agent(&machine, &agent).and_then(|a| a.question.clone());
-            if q.as_ref().is_some_and(|q| q.request_id != request) { return app.say("That question changed while you typed — not sent; look again", theme::WARN) }
+            // Not answered (the question changed, or closed, while you typed): what you typed is
+            // kept, offered as a message to it — Enter sends it, Escape drops it.
+            let keep = |app: &mut App, why: &str| {
+                let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
+                prompt(app, PromptKind::Message { machine: machine.clone(), agent: agent.clone() }, "Message", &name, &format!("{why} — send it to {name} as a message?"), &value, false);
+            };
+            if q.as_ref().is_some_and(|q| q.request_id != request) { return keep(app, "That question changed while you typed") }
             let text = q.and_then(|q| crate::fleet::answer_text(&q, &value));
             match text {
                 Some(t) => { if answer_with(app, &machine, &agent, &t) { app.say(format!("Answered: {t}"), theme::ONLINE) } }
+                None if !value.trim().is_empty() => keep(app, "That question is no longer open"),
                 None => app.say("That question is no longer open", theme::WARN),
             }
         }
