@@ -9,6 +9,7 @@ vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma }))
 vi.mock('../lib/bus.js', () => ({ publishZooChanged: mocks.changed }))
 vi.mock('../lib/ssoAuth.js', async original => ({ ...await original<typeof import('../lib/ssoAuth.js')>(), authenticateAccessToken: mocks.auth }))
 import { zooRoutes } from './zoo.js'
+import { DAEMONS_EVERYONE, parseDaemonsSwitch, type DaemonsSwitch } from '../lib/daemonsSwitch.js'
 import { emptyZoo, type Zoo } from '../lib/zoo.js'
 import { DAEMON_ROSTER } from '../lib/daemonRoster.g.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
@@ -25,7 +26,8 @@ describe('zoo routes', () => {
     mocks.auth.mockResolvedValue(user)
     mocks.changed.mockResolvedValue(1)
     app = Fastify(); app.setErrorHandler(errorHandler); registerAuthMiddleware(app, mocks.auth)
-    await app.register(zooRoutes); await app.ready()
+    // The server's daemons switch on for everyone (lib/daemonsSwitch.ts): what these tests are about.
+    await app.register(zooRoutes, { daemons: DAEMONS_EVERYONE }); await app.ready()
   })
   afterEach(async () => { await app.close() })
   const auth = { authorization: 'Bearer fixture' }
@@ -246,5 +248,84 @@ describe('zoo routes', () => {
     expect(res.json().error.code).toBe('ZOO_BUSY')
     expect(mocks.prisma.zoo.updateMany).toHaveBeenCalledTimes(5)
     expect(mocks.changed).not.toHaveBeenCalled()
+  })
+})
+
+describe('zoo routes behind the daemons switch', () => {
+  const auth = { authorization: 'Bearer fixture' }
+  const apps: FastifyInstance[] = []
+  const build = async (daemons?: DaemonsSwitch): Promise<FastifyInstance> => {
+    const app = Fastify(); app.setErrorHandler(errorHandler); registerAuthMiddleware(app, mocks.auth)
+    await app.register(zooRoutes, daemons ? { daemons } : {}); await app.ready()
+    apps.push(app)
+    return app
+  }
+  beforeEach(() => {
+    vi.resetAllMocks()
+    mocks.auth.mockResolvedValue(user)
+    mocks.changed.mockResolvedValue(1)
+    mocks.prisma.zoo.findUnique.mockResolvedValue(null)
+    mocks.prisma.zoo.updateMany.mockResolvedValue({ count: 0 })
+    mocks.prisma.zoo.create.mockResolvedValue({})
+  })
+  afterEach(async () => { for (const app of apps.splice(0)) await app.close() })
+
+  /** What this server answers for a path it never registered: the 404 every client already knows. */
+  const ordinary404 = async (app: FastifyInstance, method: 'GET' | 'POST', url: string, payload?: unknown) => {
+    const res = await app.inject({ method, url, headers: auth, ...(payload !== undefined ? { payload: payload as any } : {}) })
+    return { status: res.statusCode, body: res.json() }
+  }
+  const nowhere = async (method: 'GET' | 'POST', url: string, payload?: unknown) => ordinary404(await build(), method, url.replace('/api/zoo', '/api/nothing-here'), payload)
+
+  it('registers nothing when the switch is off, which is the default: the ordinary 404, no read, no write, no push', async () => {
+    for (const app of [await build(), await build(parseDaemonsSwitch(undefined)), await build(parseDaemonsSwitch('false', 'u1'))]) {
+      const read = await ordinary404(app, 'GET', '/api/zoo')
+      const ops = await ordinary404(app, 'POST', '/api/zoo/ops', { ops: [{ op: 'zoo.habit', key: 'turn' }] })
+      const expected = await nowhere('GET', '/api/zoo')
+      expect(read).toEqual({ status: 404, body: { ...expected.body, message: 'Route GET:/api/zoo not found' } })
+      expect(ops.status).toBe(404)
+      expect(ops.body).toEqual({ ...expected.body, message: 'Route POST:/api/zoo/ops not found' })
+    }
+    expect(mocks.prisma.zoo.findUnique).not.toHaveBeenCalled()
+    expect(mocks.prisma.zoo.updateMany).not.toHaveBeenCalled()
+    expect(mocks.prisma.zoo.create).not.toHaveBeenCalled()
+    expect(mocks.changed).not.toHaveBeenCalled()
+  })
+
+  it('serves every account when on without an allowlist', async () => {
+    const app = await build(parseDaemonsSwitch('true', ''))
+    const res = await app.inject({ method: 'GET', url: '/api/zoo', headers: auth })
+    expect(res.json()).toEqual({ success: true, data: { revision: 0, zoo: emptyZoo() } })
+    const ops = await app.inject({ method: 'POST', url: '/api/zoo/ops', headers: auth, payload: { ops: [{ op: 'zoo.habit', key: 'turn' }] } })
+    expect(ops.statusCode).toBe(200)
+    expect(mocks.changed).toHaveBeenCalledWith('u1', { revision: 1 })
+  })
+
+  it('serves an allowlisted account, by id or by email in any case', async () => {
+    for (const users of ['u1', 'someone-else, D@Example.com']) {
+      const app = await build(parseDaemonsSwitch('true', users))
+      const res = await app.inject({ method: 'GET', url: '/api/zoo', headers: auth })
+      expect(res.statusCode).toBe(200)
+      expect(res.json().data).toEqual({ revision: 0, zoo: emptyZoo() })
+    }
+  })
+
+  it('answers any other account exactly as if the switch were off, before reading, validating or publishing anything', async () => {
+    const app = await build(parseDaemonsSwitch('1', 'founder-id,founder@example.com'))
+    const read = await ordinary404(app, 'GET', '/api/zoo')
+    const ops = await ordinary404(app, 'POST', '/api/zoo/ops', { ops: [{ op: 'zoo.habit', key: 'turn' }] })
+    const malformed = await ordinary404(app, 'POST', '/api/zoo/ops', { ops: 'not a list' })
+    const expected = await nowhere('GET', '/api/zoo')
+    expect(read).toEqual({ status: 404, body: { ...expected.body, message: 'Route GET:/api/zoo not found' } })
+    expect(ops).toEqual({ status: 404, body: { ...expected.body, message: 'Route POST:/api/zoo/ops not found' } })
+    expect(malformed.status).toBe(404)
+    expect(mocks.prisma.zoo.findUnique).not.toHaveBeenCalled()
+    expect(mocks.changed).not.toHaveBeenCalled()
+  })
+
+  it('still asks for a session first, like every other route', async () => {
+    const app = await build(parseDaemonsSwitch('true', 'u1'))
+    const res = await app.inject({ method: 'GET', url: '/api/zoo' })
+    expect(res.statusCode).toBe(401)
   })
 })

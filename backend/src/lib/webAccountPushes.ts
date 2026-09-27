@@ -13,14 +13,16 @@ import { subscribeDeskChanged, subscribeZooChanged } from './bus.js'
  * ⚠️ A phone holds one of these sockets PER MACHINE, so it hears each change once per machine. The
  * revision is what makes that harmless: an app already at that revision fetches nothing.
  *
+ * `zoo` is the server's daemons switch (lib/daemonsSwitch.ts): off, only the desk is listened on.
+ *
  * Resolves to the unsubscribe for both.
  */
-export async function relayWebDocumentPushes(userId: string, send: (frame: unknown) => unknown): Promise<() => void> {
+export async function relayWebDocumentPushes(userId: string, send: (frame: unknown) => unknown, opts: { zoo: boolean }): Promise<() => void> {
   const unsubs: Array<() => void> = []
   const stop = (): void => { for (const unsub of unsubs.splice(0)) unsub() }
   try {
     unsubs.push(await subscribeDeskChanged(userId, (msg) => { send({ type: 'desk_changed', payload: { revision: msg.revision } }) }))
-    unsubs.push(await subscribeZooChanged(userId, (msg) => { send({ type: 'zoo_changed', payload: { revision: msg.revision } }) }))
+    if (opts.zoo) unsubs.push(await subscribeZooChanged(userId, (msg) => { send({ type: 'zoo_changed', payload: { revision: msg.revision } }) }))
   } catch (err) {
     stop()
     throw err

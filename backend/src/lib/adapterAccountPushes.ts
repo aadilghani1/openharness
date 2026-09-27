@@ -15,18 +15,23 @@ import { subscribeDeskChanged, subscribeDeviceMachineListChanged, subscribeZooCh
  *    shared harness invited / taken back (routes/harnessShares.ts pokes the recipient). This is what
  *    lets the app discover invitations without polling `/api/machines` + `/api/harness-shares`.
  *
+ * `zoo` is the server's daemons switch (lib/daemonsSwitch.ts): off, the zoo channel is not even listened
+ * on, since nothing publishes it.
+ *
  * Resolves to the unsubscribe for all of them.
  */
-export async function relayAccountPushes(userId: string, send: (frame: unknown) => unknown): Promise<() => void> {
+export async function relayAccountPushes(userId: string, send: (frame: unknown) => unknown, opts: { zoo: boolean }): Promise<() => void> {
   const unsubs: Array<() => void> = []
   const stop = (): void => { for (const unsub of unsubs.splice(0)) unsub() }
   try {
     unsubs.push(await subscribeDeskChanged(userId, (msg) => {
       send({ t: 'down', connId: '', frame: { type: 'desk_changed', payload: { revision: msg.revision } } })
     }))
-    unsubs.push(await subscribeZooChanged(userId, (msg) => {
-      send({ t: 'down', connId: '', frame: { type: 'zoo_changed', payload: { revision: msg.revision } } })
-    }))
+    if (opts.zoo) {
+      unsubs.push(await subscribeZooChanged(userId, (msg) => {
+        send({ t: 'down', connId: '', frame: { type: 'zoo_changed', payload: { revision: msg.revision } } })
+      }))
+    }
     unsubs.push(await subscribeDeviceMachineListChanged(userId, (msg) => {
       send({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: msg.reason } } })
     }))

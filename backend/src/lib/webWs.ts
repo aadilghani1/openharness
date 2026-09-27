@@ -25,6 +25,7 @@ import { machineIdFromKey } from '../utils/crypto.js'
 import { prisma, machineAlive } from './prisma.js'
 import { getAgentPresence, getAgentPresenceMany, subscribeStatus, getDevicePresence, subscribeDeviceStatus, subscribeDeviceMachineListChanged, subscribeDeviceE2eePair } from './bus.js'
 import { relayWebDocumentPushes } from './webAccountPushes.js'
+import { DAEMONS } from '../config/env.js'
 import { attachHubClient, trackSocketLiveness, type HubClient } from './hub.js'
 import { authenticateAccessToken, SsoAuthError, type AuthUser } from './ssoAuth.js'
 import type { Frame } from './tunnel.js'
@@ -262,7 +263,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser): void {
     documentsUnsub = await relayWebDocumentPushes(user.sub, (frame) => {
       if (ws.readyState !== WebSocket.OPEN) return
       send(frame)
-    })
+    }, { zoo: DAEMONS.on })
     if (closed) { documentsUnsub(); documentsUnsub = null }
   })().catch((err) => logger.warn('web-ws desk/zoo watch failed', { userId: user.sub, error: String(err) }))
 

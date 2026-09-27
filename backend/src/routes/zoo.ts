@@ -16,12 +16,18 @@
  * atomic increment shared by every account) before the write; a duplicate takes none. A serial minted
  * for a write that lost the race is kept for the retry's hatch of the same daemon, so a race costs no
  * numbers; one the request never writes is a gap, never a number given twice.
+ *
+ * Dark unless the server's daemons switch is on (lib/daemonsSwitch.ts, `HARNESS_DAEMONS`): off, none of
+ * this is registered and both paths answer the server's ordinary 404; on with an allowlist
+ * (`HARNESS_DAEMONS_USERS`), an account outside it gets that same 404 before anything is read or written.
+ * A client reads the 404 as "daemons are off" and shows nothing of them.
  */
 import type { FastifyInstance } from 'fastify'
 import { Prisma } from '@prisma/client'
 import type { z } from 'zod'
 import { prisma } from '../lib/prisma.js'
 import { publishZooChanged } from '../lib/bus.js'
+import { daemonsFor, DAEMONS_DARK, type DaemonsSwitch } from '../lib/daemonsSwitch.js'
 import { applyZooOps, emptyZoo, parseZoo, zooOpsBodySchema, type Hatched, type Zoo, type ZooContext, type ZooDoc, type ZooOp } from '../lib/zoo.js'
 import { validateBody } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
@@ -89,7 +95,21 @@ function keepSerials(pool: SerialPool, used: Array<[string, number]>): void {
   for (const [id, serial] of used) pool.set(id, [...(pool.get(id) ?? []), serial].sort((a, b) => a - b))
 }
 
-export async function zooRoutes(app: FastifyInstance): Promise<void> {
+export interface ZooRouteOptions {
+  /** Whether this server has daemons, and for whom. Absent: dark, nothing registered. */
+  daemons?: DaemonsSwitch
+}
+
+export async function zooRoutes(app: FastifyInstance, opts: ZooRouteOptions = {}): Promise<void> {
+  const daemons = opts.daemons ?? DAEMONS_DARK
+  if (!daemons.on) return
+  // An account outside the allowlist hears exactly what it would with the switch off: the ordinary 404,
+  // ahead of the body's validation, so not even a malformed request tells it the route exists. Scoped to
+  // this plugin, so it guards these routes only.
+  app.addHook('preHandler', async (req, reply) => {
+    if (!daemonsFor(daemons, req.user)) return reply.callNotFound()
+  })
+
   app.get('/api/zoo', async (req, reply) => {
     sendSuccess(reply, await readZoo(req.user!.sub))
   })
