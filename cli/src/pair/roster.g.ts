@@ -50,10 +50,6 @@ export const PAIR_ROSTER = {
         [
           "GNU",
           1983
-        ],
-        [
-          "gnu",
-          2026
         ]
       ],
       "lines": {
@@ -77,12 +73,8 @@ export const PAIR_ROSTER = {
           1990
         ],
         [
-          "Lynx",
-          1992
-        ],
-        [
           "lynx",
-          2026
+          1992
         ]
       ],
       "lines": {
@@ -106,12 +98,8 @@ export const PAIR_ROSTER = {
           1986
         ],
         [
-          "Mutt",
-          1995
-        ],
-        [
           "mutt",
-          2026
+          1995
         ]
       ],
       "lines": {
@@ -160,12 +148,12 @@ export const PAIR_ROSTER = {
       "first": "(pops up) hi. i'm gopher. i go for things.",
       "family": [
         [
-          "Gopher",
-          1991
+          "FTP",
+          1971
         ],
         [
           "gopher",
-          2026
+          1991
         ]
       ],
       "lines": {
@@ -214,12 +202,8 @@ export const PAIR_ROSTER = {
           1991
         ],
         [
-          "Tux",
-          1996
-        ],
-        [
           "tux",
-          2026
+          1996
         ]
       ],
       "lines": {
