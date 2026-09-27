@@ -75,6 +75,11 @@ describe('lineTime', () => {
   it('reads the record time wherever the field sits', () => {
     expect(lineTime(claude.answer('hi', 3))).toBe(Date.parse(at(3)))
     expect(lineTime('{"type":"x"}')).toBeNull()
+    // Grok: epoch seconds; Muse: microseconds; Antigravity: an ISO created_at.
+    expect(lineTime('{"timestamp":1790500000,"method":"session/update"}')).toBe(1790500000000)
+    expect(lineTime('{"id":"r","recorded_at":1790500000123456,"sequence":1}')).toBe(1790500000123)
+    expect(lineTime('{"step":3,"created_at":"2026-09-27T10:00:00Z"}')).toBe(Date.parse('2026-09-27T10:00:00Z'))
+    expect(lineTime('{"timestamp":"not a date at all"}')).toBeNull()
   })
 })
 

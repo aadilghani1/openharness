@@ -65,8 +65,9 @@ export interface ExternalHit {
   origin: string
   /** Open in a running process elsewhere (a terminal, the engine's app): not to be opened twice. */
   open?: boolean
-  /** Where it is open: a terminal, which Harness can take it over from, or an app, which it cannot. */
-  openIn?: 'terminal' | 'app'
+  /** Where it is open: a terminal, which Harness can take it over from; an app, which it cannot; or
+   *  one of Harness's own panes, an agent the daemon is still binding. */
+  openIn?: 'terminal' | 'app' | 'harness'
 }
 
 export interface SearchHit {
