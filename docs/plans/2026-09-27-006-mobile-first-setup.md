@@ -60,8 +60,7 @@ A new device (the phone app, the desktop app, or the CLI) asks for one thing, yo
   starts your list of devices.
 - **With the phone in hand,** a desktop or the CLI also shows the code as a QR. Scanning it approves
   without comparing numbers.
-- **Email code only** (no trusted device nearby): you're signed in and see your computers, but can't
-  open a terminal until a device you have approves this one.
+- **No approval, no entry.** Only the account's first device gets in on an email code alone.
 
 ### The three orders
 
@@ -145,14 +144,15 @@ Hand a phone to someone with a Mac who has never heard of Harness. Within three 
 talking to one of their existing Claude Code sessions from the phone, and they haven't typed a
 password or signed in twice.
 
-## Decisions for you
+## Decided (2026-09-27)
 
-1. **The approval default.** Compare six digits everywhere, and offer the QR where a camera is in
-   hand (recommended). Or make the QR the default from phone to computer.
-2. **What an email-code-only device may do.** See your computers and sessions but not open terminals
-   (recommended). Or nothing until approved.
-3. **Desktop sign-in.** Move the desktop and CLI to email code plus approval, and retire the browser
-   sign-in (recommended: one way everywhere). Or keep the browser as an option.
-4. **Outside sessions.** Index them by default, or ask once on the computer ("Show my Claude Code and
+1. **Approval:** compare six digits everywhere; a QR where a phone camera is in hand.
+2. **Unapproved devices get nothing.** Only the account's first device signs in on an email code.
+3. **Sign-in is your email, never a password,** on the phone, the desktop and the CLI: approve on a
+   device you have, or a six-digit email code for your first. The browser sign-in retires.
+
+## Open
+
+1. **Outside sessions** (Claude Code or Codex started by hand, not through Harness). Index them by default, or ask once on the computer ("Show my Claude Code and
    Codex sessions on my phone?"). They never leave the machine except as sealed search hits and
    previews, as today.
