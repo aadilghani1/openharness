@@ -1,19 +1,23 @@
 // The daemon where a phone meets it: the chip in the header, its sheet, and
 // the full-screen hatch reveal — on a 320pt phone and with large text too —
 // and, round 4, the first-day consent after the first hatch, the sheet's
-// consent and dial, and a level-up's morph.
+// consent and dial, and a level-up's morph. Drop init: tim and the rest are
+// drawn filled, their plates looping in the sheet and the reveal while the
+// chip keeps the one-line sprite; drop 2 and 3 are on hold, shown nowhere.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/daemons/card.dart';
 import 'package:harness_mobile/daemons/daemon_face.dart';
 import 'package:harness_mobile/daemons/daemon_lines.dart';
+import 'package:harness_mobile/daemons/plates.dart';
 import 'package:harness_mobile/daemons/render.dart';
 import 'package:harness_mobile/daemons/roster.dart';
 import 'package:harness_mobile/daemons/zoo.dart';
 import 'package:harness_mobile/daemons/zoo_client.dart';
 import 'package:harness_mobile/phone/daemon_chip.dart';
 import 'package:harness_mobile/phone/daemon_hatch.dart';
+import 'package:harness_mobile/phone/daemon_plate.dart';
 import 'package:harness_mobile/phone/daemon_scope.dart';
 import 'package:harness_mobile/phone/daemon_sheet.dart';
 import 'package:harness_mobile/phone/daemon_style.dart';
@@ -127,6 +131,20 @@ Future<void> _toCard(WidgetTester tester) async {
   fail('the reveal never reached its card');
 }
 
+/// The text a plate view draws now: its frame's rows, or its `#` shape.
+String _plateText(WidgetTester tester, Finder plate) {
+  final text = tester.widget<Text>(
+    find.descendant(of: plate, matching: find.byType(Text)),
+  );
+  return text.data ?? text.textSpan!.toPlainText();
+}
+
+/// The portrait in the sheet: a filled daemon's plate view.
+final _portraitPlate = find.descendant(
+  of: find.byKey(const ValueKey('daemon-portrait')),
+  matching: find.byType(DaemonPlateView),
+);
+
 void main() {
   late FakeZooBackend backend;
   setUp(() => backend = FakeZooBackend());
@@ -137,7 +155,7 @@ void main() {
     await _pump(tester, backend);
     final chip = find.byKey(const ValueKey('daemon-chip'));
     expect(chip, findsOneWidget);
-    expect(find.text(r'  [o o]   '), findsOneWidget);
+    expect(find.text('  (o o)   '), findsOneWidget);
     expect(
       tester.getSemantics(chip).label,
       'tim, tim 0.1, content, 1 egg waiting',
@@ -169,20 +187,30 @@ void main() {
     expect(platform.haptics, contains('HapticFeedbackType.selectionClick'));
     expect(find.byKey(const ValueKey('daemon-sheet')), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-name')), findsOneWidget);
-    // Booped: the portrait's eyes are wide.
-    final portrait = tester.widget<Text>(
-      find.descendant(
-        of: find.byKey(const ValueKey('daemon-portrait')),
-        matching: find.byType(Text),
-      ),
+    // Booped: the portrait plate loops the boop's frames.
+    final plate = tester.widget<DaemonPlateView>(_portraitPlate);
+    expect(plate.mood, DaemonMood.boop);
+    expect(plate.size, PlateSize.portrait);
+    expect(plate.version, '0.1');
+    final boop = daemonPlates.frames(
+      'tim',
+      PlateSize.portrait,
+      '0.1',
+      DaemonMood.boop,
     );
-    expect(portrait.data, contains('O'));
+    expect([
+      for (final f in boop) f.join('\n'),
+    ], contains(_plateText(tester, _portraitPlate)));
     await tester.pump(const Duration(seconds: 1));
+    expect(
+      tester.widget<DaemonPlateView>(_portraitPlate).mood,
+      DaemonMood.idle,
+    );
     // The line is the truth: nothing is waiting on this phone, and tim's idle template has no slots.
     expect(find.byKey(const ValueKey('daemon-line')), findsOneWidget);
-    expect(find.textContaining('all quiet. no alerts.'), findsOneWidget);
+    expect(find.textContaining('all quiet. eight arms free.'), findsOneWidget);
     expect(find.textContaining('screen -> tmux -> tim'), findsOneWidget);
-    expect(find.textContaining('zoo: drop 1 unix  2/9'), findsOneWidget);
+    expect(find.textContaining('zoo: drop 1 init  2/9'), findsOneWidget);
     expect(find.text('Hatch'), findsOneWidget);
   });
 
@@ -237,32 +265,36 @@ void main() {
   testWidgets('the shelf pairs a daemon you own', (tester) async {
     final app = await _pump(tester, backend);
     await _openSheet(tester);
-    final vim = find.byKey(const ValueKey('daemon-shelf-vim'));
-    await tester.ensureVisible(vim);
+    final gnu = find.byKey(const ValueKey('daemon-shelf-gnu'));
+    await tester.ensureVisible(gnu);
     await tester.pumpAndSettle();
-    expect(tester.getSemantics(vim).label, 'vim');
-    await tester.tap(vim);
+    expect(tester.getSemantics(gnu).label, 'gnu');
+    await tester.tap(gnu);
     await tester.pump();
-    expect(app.zoo.paired!.id, 'vim');
+    expect(app.zoo.paired!.id, 'gnu');
     await app.zoo.settle();
     expect(backend.written, [
-      {'op': 'zoo.pair', 'id': 'vim'},
+      {'op': 'zoo.pair', 'id': 'gnu'},
     ]);
     await tester.pump();
-    expect(tester.getSemantics(vim).label, 'vim, paired');
+    expect(tester.getSemantics(gnu).label, 'gnu, paired');
     // Empty slots are numbered; the secret is a `[ ! ]`.
     expect(
       tester
-          .getSemantics(find.byKey(const ValueKey('daemon-shelf-unix-#03')))
+          .getSemantics(find.byKey(const ValueKey('daemon-shelf-init-#03')))
           .label,
       'Number 03, not hatched yet',
     );
     expect(
       tester
-          .getSemantics(find.byKey(const ValueKey('daemon-shelf-unix-secret')))
+          .getSemantics(find.byKey(const ValueKey('daemon-shelf-init-secret')))
           .label,
       'A secret, not found yet',
     );
+    // Drops 2 and 3 are on hold: no shelf, no silhouettes, no count.
+    expect(find.byKey(const ValueKey('daemon-shelf-drop-unix')), findsNothing);
+    expect(find.byKey(const ValueKey('daemon-shelf-drop-tty')), findsNothing);
+    expect(find.textContaining('drop 2'), findsNothing);
   });
 
   testWidgets('before any daemon the sheet is the nest and its habits', (
@@ -299,13 +331,20 @@ void main() {
     // The chip keeps the egg while the reveal runs.
     expect(app.zoo.paired!.id, 'tim');
 
-    var sawSilhouette = false, sawBanner = false;
+    var sawSilhouette = false, sawBanner = false, sawPlate = false;
     for (var i = 0; i < 80; i++) {
       await tester.pump(const Duration(milliseconds: 100));
-      final sprite = find.byKey(const ValueKey('daemon-hatch-sprite'));
-      if (sprite.evaluate().isNotEmpty &&
-          RegExp(r'^[# ]+$').hasMatch(tester.widget<Text>(sprite).data!)) {
+      // tim is drawn filled: first its plate's `#` shape, then the plate.
+      final shape = find.byKey(const ValueKey('daemon-hatch-sprite'));
+      if (shape.evaluate().isNotEmpty &&
+          RegExp(r'^[# \n]+$').hasMatch(_plateText(tester, shape))) {
         sawSilhouette = true;
+      }
+      if (find
+          .byKey(const ValueKey('daemon-hatch-plate'))
+          .evaluate()
+          .isNotEmpty) {
+        sawPlate = true;
       }
       if (find
           .byKey(const ValueKey('daemon-hatch-banner'))
@@ -321,8 +360,16 @@ void main() {
       }
     }
     expect(sawSilhouette, isTrue);
+    expect(sawPlate, isTrue);
     expect(sawBanner, isTrue);
     expect(platform.haptics, contains('HapticFeedbackType.mediumImpact'));
+    // The hatchling's plate: 0.1, in its shiny gradient, looping.
+    final plate = tester.widget<DaemonPlateView>(
+      find.byKey(const ValueKey('daemon-hatch-plate')),
+    );
+    expect(plate.version, '0.1');
+    expect(plate.shiny, isTrue);
+    expect(plate.animate, isTrue);
     expect(
       tester
           .widget<Text>(find.byKey(const ValueKey('daemon-hatch-stamp')))
@@ -363,7 +410,7 @@ void main() {
           )
           .last,
     );
-    expect(chipText.data, r'  [o o]   ');
+    expect(chipText.data, '  (o o)   ');
     // This one hatched shiny: its star before the slot.
     expect(find.byKey(const ValueKey('daemon-chip-shiny')), findsOneWidget);
   });
@@ -393,6 +440,47 @@ void main() {
     }
     expect(pitch, isTrue);
     await _toCard(tester);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('daemon-hatch-stamp')))
+          .data,
+      startsWith('[ * SHINY * SECRET ]  #S/09'),
+    );
+  });
+
+  testWidgets('beastie, a secret out of the dark, starts pitch black and then lights up', (tester) async {
+    backend.zoo = _nest(egg: true);
+    backend.nextDaemon = 'beastie';
+    await _pump(tester, backend);
+    await _openSheet(tester);
+    await tester.tap(find.text('Hatch'));
+    var pitch = false;
+    for (var i = 0; i < 60; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+      if (find
+          .byKey(const ValueKey('daemon-hatch-pitch'))
+          .evaluate()
+          .isNotEmpty) {
+        pitch = true;
+        // Nothing of it is shown yet: only the dark.
+        expect(find.byKey(const ValueKey('daemon-hatch-sprite')), findsNothing);
+        final scaffold = tester.widget<Scaffold>(
+          find.byKey(const ValueKey('daemon-hatch')),
+        );
+        expect(scaffold.backgroundColor, const Color(0xFF000000));
+        break;
+      }
+    }
+    expect(pitch, isTrue);
+    await _toCard(tester);
+    // Unlike the grue, it does not live in the dark: the lights come on.
+    expect(
+      tester
+          .widget<Scaffold>(find.byKey(const ValueKey('daemon-hatch')))
+          .backgroundColor,
+      isNot(const Color(0xFF000000)),
+    );
+    expect(find.byKey(const ValueKey('daemon-hatch-pitch')), findsNothing);
     expect(
       tester
           .widget<Text>(find.byKey(const ValueKey('daemon-hatch-stamp')))
@@ -436,12 +524,19 @@ void main() {
       backend.zoo = {
         ...backend.zoo,
         'daemons': [
-          for (final id in ['tim', 'vim', 'fzf', 'grue', 'zsh'])
-            {'id': id, 'hatchedAt': '2026-09-26T09:42:00Z', 'egg': 'turn'},
+          for (final id in ['tim', 'gnu', 'yak', 'beastie', 'gopher'])
+            {
+              'id': id,
+              'hatchedAt': '2026-09-26T09:42:00Z',
+              'egg': 'turn',
+              'xp': 600,
+            },
         ],
-        'pair': 'fzf',
+        'pair': 'yak',
       };
-      backend.nextDaemon = 'tldr';
+      // Some of the widest plates of the drop: yak paired at 2.0, tux
+      // hatching.
+      backend.nextDaemon = 'tux';
       await _pump(tester, backend, size: size, textScale: scale);
       await _openSheet(tester);
       expect(tester.takeException(), isNull);
@@ -563,23 +658,43 @@ void main() {
   testWidgets('a still of the reveal draws any moment', (tester) async {
     final app = pagerApp(PagerConn());
     addTearDown(app.dispose);
-    await tester.pumpWidget(
-      MaterialApp(
-        home: DaemonHatchReveal(
-          roster: daemonRoster,
-          egg: const ZooEgg(id: 'e', kind: 'night', grantedAt: ''),
-          result: Future.value(
-            const ZooHatch(eggId: 'e', daemonId: 'bat', shiny: false),
-          ),
-          zoo: app.zoo,
-          still: const HatchFrame(
-            stage: HatchStage.silhouette,
-            sprite: '#####',
+    Future<void> still(String id, HatchFrame frame) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DaemonHatchReveal(
+            key: ValueKey('$id ${frame.stage}'),
+            roster: daemonRoster,
+            egg: const ZooEgg(id: 'e', kind: 'night', grantedAt: ''),
+            result: Future.value(
+              ZooHatch(eggId: 'e', daemonId: id, shiny: false),
+            ),
+            zoo: app.zoo,
+            still: frame,
           ),
         ),
-      ),
+      );
+      await tester.pump();
+    }
+
+    // The night egg's moth: its plate's shape, from the plate, not the sprite.
+    await still(
+      'bug',
+      const HatchFrame(stage: HatchStage.silhouette, sprite: '#####'),
     );
-    await tester.pump();
+    final shape = find.byKey(const ValueKey('daemon-hatch-sprite'));
+    expect(
+      _plateText(tester, shape),
+      daemonPlates
+          .still('bug', tester.widget<DaemonPlateView>(shape).size, '0.1')
+          .map(silhouette)
+          .join('\n'),
+    );
+    expect(find.bySemanticsLabel('A silhouette'), findsOneWidget);
+    // A line-art daemon (drop unix, on hold) still draws the sprite given.
+    await still(
+      'tmux',
+      const HatchFrame(stage: HatchStage.silhouette, sprite: '#####'),
+    );
     expect(find.text('#####'), findsOneWidget);
   });
 
@@ -626,22 +741,51 @@ void main() {
     final star = find.byKey(const ValueKey('daemon-chip-shiny'));
     expect(tester.widget<Text>(star).data, '*');
     expect(tester.widget<Text>(star).style!.color, tim.colorFor(shiny: true));
-    expect(chipText(tester).data, r'  [o o]   ');
+    expect(chipText(tester).data, '  (o o)   ');
     expect(chipText(tester).style!.color, tim.colorFor(shiny: true));
-    expect(tim.colorFor(shiny: true), const Color(0xFF00FFAF));
+    // Every shiny of drop init is gold.
+    expect(tim.colorFor(shiny: true), const Color(0xFFD7AF00));
     expect(
       tester.getSemantics(find.byKey(const ValueKey('daemon-chip'))).label,
       'tim, tim 0.1, shiny, content',
     );
     await _openSheet(tester);
     await tester.pump(const Duration(seconds: 1));
-    final portrait = tester.widget<Text>(
-      find.descendant(
-        of: find.byKey(const ValueKey('daemon-portrait')),
-        matching: find.byType(Text),
-      ),
+    // The portrait plate runs down the shiny gradient.
+    expect(tester.widget<DaemonPlateView>(_portraitPlate).shiny, isTrue);
+    final plate = tester.widget<Text>(
+      find.descendant(of: _portraitPlate, matching: find.byType(Text)),
     );
-    expect(portrait.style!.color, tim.colorFor(shiny: true));
+    final rows = plate.textSpan!.toPlainText().split('\n');
+    final colours = <Color>{};
+    plate.textSpan!.visitChildren((span) {
+      final c = span.style?.color;
+      if (c != null) colours.add(c);
+      return true;
+    });
+    for (var r = 0; r < rows.length; r++) {
+      for (final ch in rows[r].split('')) {
+        if (ch == ' ') continue;
+        expect(
+          colours,
+          contains(
+            plateColor(
+              daemonRoster,
+              tim,
+              rows.length,
+              r,
+              ch,
+              ground: DaemonInk.deep,
+              shiny: true,
+            ),
+          ),
+        );
+      }
+    }
+    expect(
+      colours,
+      isNot(contains(plateColor(daemonRoster, tim, rows.length, 0, '#'))),
+    );
     expect(find.text('SHINY COMMON  #01/09'), findsOneWidget);
   });
 
@@ -652,7 +796,7 @@ void main() {
     backend.zoo = {
       'daemons': [
         daemon('tim', xp: 600, serial: 42, shiny: true),
-        daemon('vim', serial: 9, origin: 'local'),
+        daemon('gnu', serial: 9, origin: 'local'),
       ],
       'pair': 'tim',
       'firstEgg': true,
@@ -675,14 +819,42 @@ void main() {
       tester.getSemantics(card).label,
       'The card: tim, shiny common, #0042',
     );
-    // The portrait rows wear the shiny colour; the words stay ink.
+    // The portrait plate's glyphs wear the shiny gradient; their frame and
+    // the words stay ink.
     final rich = tester
         .widget<Text>(find.descendant(of: card, matching: find.byType(Text)))
         .textSpan!;
     final rows = (rich as TextSpan).children!.cast<TextSpan>();
     final tim = daemonRoster.byId('tim')!;
     final portrait = cardPortraitRows(daemonRoster, tim, '2.0');
-    expect(rows[portrait.from].style!.color, tim.colorFor(shiny: true));
+    final height = portrait.to - portrait.from;
+    for (var r = 0; r < height; r++) {
+      final row = rows[portrait.from + r];
+      expect(row.toPlainText(), '${view.lines[portrait.from + r]}\n');
+      for (final run in row.children!.cast<TextSpan>()) {
+        final glyphs = run.text!.replaceAll(RegExp(r'[ \n]'), '');
+        if (glyphs.isEmpty) continue;
+        if (glyphs.contains('|')) {
+          expect(run.style, isNull, reason: 'the frame stays ink');
+          continue;
+        }
+        // A run is one colour: glyphs of one brightness share it.
+        for (final ch in glyphs.split('')) {
+          expect(
+            run.style!.color,
+            plateColor(
+              daemonRoster,
+              tim,
+              height,
+              r,
+              ch,
+              ground: DaemonInk.deep,
+              shiny: true,
+            ),
+          );
+        }
+      }
+    }
     expect(rows[portrait.to].style, isNull);
     await tester.ensureVisible(find.byKey(const ValueKey('daemon-card-share')));
     await tester.pumpAndSettle();
@@ -692,7 +864,7 @@ void main() {
     expect(find.text('Copied as a code block.'), findsOneWidget);
 
     // A guest's daemon, seeded: no serial on its sheet or its card.
-    app.zoo.pair('vim');
+    app.zoo.pair('gnu');
     await tester.pump();
     expect(
       tester.widget<DaemonCardView>(card).text,
@@ -715,7 +887,7 @@ void main() {
     tester,
   ) async {
     backend.zoo = {
-      'daemons': [daemon('tim', dupes: 1, shiny: true), daemon('vim')],
+      'daemons': [daemon('tim', dupes: 1, shiny: true), daemon('gnu')],
       'pair': 'tim',
       'firstEgg': true,
       'setupEgg': true,
@@ -726,7 +898,7 @@ void main() {
     await tester.scrollUntilVisible(tim, 200, scrollable: _sheetScroll);
     expect(tester.getSemantics(tim).label, 'tim, shiny, 2 of it, paired');
     expect(find.text('> tim* x2'), findsOneWidget);
-    expect(find.text('vim'), findsOneWidget);
+    expect(find.text('gnu'), findsOneWidget);
     final sprite = tester.widget<Text>(
       find.descendant(of: tim, matching: find.byType(Text)).first,
     );
@@ -734,8 +906,9 @@ void main() {
       sprite.style!.color,
       daemonRoster.byId('tim')!.colorFor(shiny: true),
     );
-    // One shelf: drop 1 is the only drop, and it is out.
-    expect(find.textContaining('zoo: drop 1 unix  2/9'), findsOneWidget);
+    // One shelf: drop 1 is out, and drops 2 and 3 are on hold.
+    expect(find.textContaining('zoo: drop 1 init  2/9'), findsOneWidget);
+    expect(find.textContaining('zoo: drop'), findsOneWidget);
   });
 
   testWidgets('a drop announced but not released shows as silhouettes', (
@@ -779,53 +952,57 @@ void main() {
       await tester.pump();
     }
 
-    // Not announced yet: shown nowhere.
+    // Not announced yet: shown nowhere. Drop 3 stays on hold throughout.
     await sheetOn(DateTime.utc(2026, 9, 30));
     expect(
-      find.byKey(const ValueKey('daemon-shelf-drop-unix')),
+      find.byKey(const ValueKey('daemon-shelf-drop-init')),
       findsOneWidget,
     );
-    expect(find.byKey(const ValueKey('daemon-shelf-drop-bsd')), findsNothing);
+    expect(find.byKey(const ValueKey('daemon-shelf-drop-unix')), findsNothing);
+    expect(find.byKey(const ValueKey('daemon-shelf-drop-tty')), findsNothing);
 
     // Announced: its regulars as `#` silhouettes, its name and release date.
     await sheetOn(DateTime.utc(2026, 10, 5));
-    final bsd = find.byKey(const ValueKey('daemon-shelf-drop-bsd'));
-    await tester.scrollUntilVisible(bsd, 200, scrollable: _sheetScroll);
+    final unix = find.byKey(const ValueKey('daemon-shelf-drop-unix'));
+    await tester.scrollUntilVisible(unix, 200, scrollable: _sheetScroll);
     expect(
       find.descendant(
-        of: bsd,
-        matching: find.text('zoo: drop 2 bsd  out 2026-10-15'),
+        of: unix,
+        matching: find.text('zoo: drop 2 unix  out 2026-10-15'),
       ),
       findsOneWidget,
     );
+    // tmux's 0.1, `[o o]`, as its shape.
     expect(
-      find.descendant(of: bsd, matching: find.text('## ##')),
-      findsOneWidget,
+      find.descendant(of: unix, matching: find.text('## ##')),
+      findsWidgets,
     );
     expect(
       tester
-          .getSemantics(find.byKey(const ValueKey('daemon-shelf-bsd-#01')))
+          .getSemantics(find.byKey(const ValueKey('daemon-shelf-unix-#01')))
           .label,
-      'Number 01 of drop 2 bsd, out 2026-10-15',
+      'Number 01 of drop 2 unix, out 2026-10-15',
     );
     expect(
       tester
-          .getSemantics(find.byKey(const ValueKey('daemon-shelf-bsd-secret')))
+          .getSemantics(find.byKey(const ValueKey('daemon-shelf-unix-secret')))
           .label,
-      'A secret of drop 2 bsd, out 2026-10-15',
+      'A secret of drop 2 unix, out 2026-10-15',
     );
+    expect(find.byKey(const ValueKey('daemon-shelf-drop-tty')), findsNothing);
 
     // Released: empty slots like any other drop.
     await sheetOn(DateTime.utc(2026, 10, 15));
-    await tester.scrollUntilVisible(bsd, 200, scrollable: _sheetScroll);
+    await tester.scrollUntilVisible(unix, 200, scrollable: _sheetScroll);
     expect(
-      find.descendant(of: bsd, matching: find.text('zoo: drop 2 bsd  0/3')),
+      find.descendant(of: unix, matching: find.text('zoo: drop 2 unix  0/9')),
       findsOneWidget,
     );
     expect(
-      find.descendant(of: bsd, matching: find.text('## ##')),
+      find.descendant(of: unix, matching: find.text('## ##')),
       findsNothing,
     );
+    expect(find.byKey(const ValueKey('daemon-shelf-drop-tty')), findsNothing);
   });
 
   testWidgets('habits: the copy comes from the rules, then the setup egg', (
@@ -955,7 +1132,7 @@ void main() {
     expect(app.zoo.zoo.daemon('tim')!.dupes, 1);
     // The chip: the same daemon, grown and now shiny.
     await tester.pump(const Duration(seconds: 2));
-    expect(chipText(tester).data, r'  [o|o]   ');
+    expect(chipText(tester).data, ' ,(o o),  ');
     expect(find.byKey(const ValueKey('daemon-chip-shiny')), findsOneWidget);
   });
 
@@ -1226,16 +1403,26 @@ void main() {
     expect(find.text('tim: something failed.  (pane is dead)'), findsOneWidget);
   });
 
-  /// The reveal's sprite as drawn now, and whether it is faint.
+  /// The reveal's hatchling as drawn now, and whether it is faint: a line
+  /// sprite's text, or for a filled daemon `plate <version>` (in colour) and
+  /// `# <version>` (its shape).
   (String, bool) revealSprite(WidgetTester tester) {
-    final text = tester.widget<Text>(
-      find.byKey(const ValueKey('daemon-hatch-sprite')),
-    );
+    final plate = find.byKey(const ValueKey('daemon-hatch-plate'));
+    if (plate.evaluate().isNotEmpty) {
+      return ('plate ${tester.widget<DaemonPlateView>(plate).version}', false);
+    }
+    final sprite = find.byKey(const ValueKey('daemon-hatch-sprite'));
+    final widget = tester.widget(sprite);
+    if (widget is DaemonPlateView) {
+      expect(widget.asSilhouette, isTrue);
+      return ('# ${widget.version}', true);
+    }
+    final text = widget as Text;
     return (text.data!, (text.style!.color!.a) < 1);
   }
 
-  Map<String, dynamic> duplicateZoo({int xp = 0}) => {
-    'daemons': [daemon('tim', xp: xp)],
+  Map<String, dynamic> duplicateZoo({int xp = 0, String id = 'tim'}) => {
+    'daemons': [daemon(id, xp: xp)],
     'eggs': [
       {'id': 'e1', 'kind': 'turn', 'grantedAt': ''},
     ],
@@ -1261,19 +1448,20 @@ void main() {
       }
       final now = revealSprite(tester);
       if (seen.isEmpty || seen.last != now) seen.add(now);
-      if (now.$1 == '[o|o]') break;
+      if (now.$1 == 'plate 1.0') break;
     }
-    // The 0.1 it was, its shape, the 1.0 shape, then 1.0: three quick frames.
+    // The 0.1 plate it was, its shape, the 1.0 plate's shape, then the 1.0
+    // plate: three quick frames.
     expect(seen, [
-      ('[o o]', false),
-      ('## ##', true),
-      ('#####', true),
-      ('[o|o]', false),
+      ('plate 0.1', false),
+      ('# 0.1', true),
+      ('# 1.0', true),
+      ('plate 1.0', false),
     ]);
     expect(find.bySemanticsLabel('tim 1.0'), findsOneWidget);
     // It stays grown.
     await tester.pump(const Duration(seconds: 1));
-    expect(revealSprite(tester), ('[o|o]', false));
+    expect(revealSprite(tester), ('plate 1.0', false));
     // A duplicate is never asked about, even though it is a card's Done.
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.pumpAndSettle();
@@ -1293,9 +1481,15 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
     expect(find.byKey(const ValueKey('daemon-hatch-level')), findsOneWidget);
-    expect(revealSprite(tester), ('[o|o]', false));
+    expect(revealSprite(tester), ('plate 1.0', false));
     await tester.pump(const Duration(seconds: 2));
-    expect(revealSprite(tester), ('[o|o]', false));
+    expect(revealSprite(tester), ('plate 1.0', false));
+    // Reduce Motion: the plate holds its first frame.
+    final plate = find.byKey(const ValueKey('daemon-hatch-plate'));
+    expect(
+      _plateText(tester, plate),
+      tester.widget<DaemonPlateView>(plate).loop.first.join('\n'),
+    );
   });
 
   testWidgets('a duplicate is drawn at its version; no new one, no morph', (
@@ -1323,6 +1517,36 @@ void main() {
           .data,
       'level up · bond 3/4',
     );
-    expect(seen, {'[o|o]'});
+    expect(seen, {'plate 1.0'});
+  });
+
+  testWidgets('a line-art daemon still morphs its sprite', (tester) async {
+    // tmux, the tim that was, of drop unix (on hold): if a zoo from before
+    // ever pairs one, it grows as it always did.
+    backend.zoo = duplicateZoo(id: 'tmux');
+    backend.nextDaemon = 'tmux';
+    await _pump(tester, backend);
+    await _openSheet(tester);
+    await tester.tap(find.text('Hatch'));
+    final seen = <(String, bool)>[];
+    for (var i = 0; i < 500; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+      if (find.byKey(const ValueKey('daemon-hatch-level')).evaluate().isEmpty) {
+        continue;
+      }
+      final now = revealSprite(tester);
+      if (seen.isEmpty || seen.last != now) seen.add(now);
+      if (now.$1 == '[o|o]') break;
+    }
+    expect(seen, [
+      ('[o o]', false),
+      ('## ##', true),
+      ('#####', true),
+      ('[o|o]', false),
+    ]);
+    expect(find.byKey(const ValueKey('daemon-hatch-plate')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 1));
   });
 }

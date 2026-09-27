@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:harness_mobile/daemons/card.dart';
 import 'package:harness_mobile/daemons/daemon_face.dart';
 import 'package:harness_mobile/daemons/daemon_lines.dart';
+import 'package:harness_mobile/daemons/plates.dart';
 import 'package:harness_mobile/daemons/roster.dart';
 import 'package:harness_mobile/daemons/zoo.dart';
 import 'package:harness_mobile/daemons/zoo_client.dart';
@@ -13,6 +14,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart' show AppFont;
 
 import 'daemon_consent.dart';
 import 'daemon_hatch.dart';
+import 'daemon_plate.dart';
 import 'daemon_scope.dart';
 import 'daemon_style.dart';
 
@@ -44,8 +46,8 @@ Future<void> showDaemonSheet(BuildContext context, DaemonHostState host) {
 }
 
 /// The daemon's sheet: its portrait at its version and mood (in its shiny
-/// colour when it is shiny), its names and serial, the line it would say
-/// now, its lore and lineage, its bond, the eggs waiting, the zoo as shelves
+/// colour when it is shiny; a filled daemon's portrait plate, looping), its
+/// names and serial, the line it would say now, its lore and lineage, its bond, the eggs waiting, the zoo as shelves
 /// (tap one to pair it), the habits still to bring an egg, whether it may
 /// watch (and a way to give or withdraw that), the dial as the account has it
 /// (read here, turned at a computer) and its card. Before any daemon: the
@@ -111,7 +113,18 @@ class DaemonSheet extends StatelessWidget {
         semantics:
             '${def.id} ${daemon.version}${daemon.shiny ? ', shiny' : ''}, '
             '${DaemonFace.moodWords[mood]}',
-        child: _Art(face.portrait, colour: colour, size: 14),
+        child: def.plate
+            ? DaemonPlateView(
+                roster: roster,
+                def: def,
+                size: PlateSize.portrait,
+                version: daemon.version,
+                mood: mood,
+                shiny: daemon.shiny,
+                ground: def.darkOnly ? DaemonInk.pitch : DaemonInk.deep,
+                animate: face.motionEnabled,
+              )
+            : _Art(face.portrait, colour: colour, size: 14),
       ),
       const SizedBox(height: 14),
       Wrap(
@@ -726,6 +739,14 @@ class _Shelves extends StatelessWidget {
   Widget build(BuildContext context) {
     final owned = [for (final d in zoo.zoo.daemons) ShelfEntry.of(d)];
     final drops = shelfDrops(roster, now);
+    // Only what a shelf shows can be tapped: a daemon of a drop on hold (a
+    // zoo from before may hold one) has no shelf, and is counted nowhere.
+    final shown = {
+      for (final drop in drops)
+        if (drop.stateAt(now) == DropState.released)
+          for (final d in roster.daemons)
+            if (d.drop == drop.id) d.id,
+    };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -733,7 +754,7 @@ class _Shelves extends StatelessWidget {
           if (i > 0) const SizedBox(height: 16),
           _Shelf(zoo: zoo, roster: roster, drop: drop, owned: owned, now: now),
         ],
-        if (owned.length > 1) ...[
+        if (owned.where((o) => shown.contains(o.id)).length > 1) ...[
           const SizedBox(height: 10),
           Text(
             'Tap a daemon to pair it. The pair is the same on every device.',

@@ -1,9 +1,12 @@
 // The phone's face: boop > need > work > fail > idle, blinks that answer
 // something (and never while working or booped), work frames that step on
-// real agent events only, and nothing left running once it is at rest.
+// real agent events only, and nothing left running once it is at rest. tim,
+// the octopus of drop init, keeps a one-line sprite; its portrait is a plate.
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/daemons/daemon_face.dart';
+import 'package:harness_mobile/daemons/plates.dart';
+import 'package:harness_mobile/daemons/render.dart';
 import 'package:harness_mobile/daemons/roster.dart';
 import 'package:harness_mobile/daemons/zoo_client.dart';
 
@@ -76,7 +79,14 @@ void main() {
       expect(face.mood, DaemonMood.need);
       face.boop();
       expect(face.mood, DaemonMood.boop);
-      expect(face.glyph, r'\[O|O]/');
+      expect(face.glyph, '~(O O)~');
+      // Its portrait is its plate at the mood: the boop's first frame.
+      expect(
+        face.portrait,
+        daemonPlates
+            .frames('tim', PlateSize.portrait, '2.0', DaemonMood.boop)
+            .first,
+      );
       // The boop is held 900 ms, then the face is what the work says.
       elapse(async, const Duration(milliseconds: 899));
       expect(face.mood, DaemonMood.boop);
@@ -191,7 +201,7 @@ void main() {
       // The work ends: the face is at rest, and nothing is left running.
       face.sync(const DaemonWatch());
       expect(face.step, 0);
-      expect(face.glyph, r'\[o|o]/');
+      expect(face.glyph, '~(o o)~');
       face.pulse();
       expect(face.step, 0);
       elapse(async, const Duration(milliseconds: 400));
@@ -207,7 +217,7 @@ void main() {
       face.pulse();
       expect(face.step, 0);
       expect(face.mood, DaemonMood.work);
-      expect(face.glyph, r'\[=|=]/');
+      expect(face.glyph, '~(= =)~');
       face.sync(need);
       elapse(async, const Duration(seconds: 1));
       expect(face.mood, DaemonMood.need);
@@ -226,9 +236,10 @@ void main() {
       face.pulse();
       expect(face.glyph, endsWith('/'));
       // The cell centres on the base sprite: the baton grows to the right.
-      final idle = face.cell.indexOf('[');
+      final idle = face.cell.indexOf('(');
+      expect(idle, greaterThan(0));
       face.sync(const DaemonWatch());
-      expect(face.cell.indexOf('['), idle);
+      expect(face.cell.indexOf('('), idle);
     });
   });
 
@@ -297,6 +308,26 @@ void main() {
       elapse(async, const Duration(seconds: 2));
       expect(face.daemon!.version, '2.0');
       expect(lids.whereType<String>().toList(), ['_', '-', '_']);
+    });
+  });
+
+  test('a line-art daemon of a held drop still draws its line portrait', () {
+    fakeAsync((async) {
+      start(async, with_: _doc(daemons: const ['tmux']));
+      expect(face.def!.plate, isFalse);
+      expect(face.glyph, r'\[o|o]/');
+      expect(
+        face.portrait,
+        renderPortrait(
+          face.roster,
+          face.def!,
+          '2.0',
+          DaemonMood.idle,
+          motion: false,
+        ),
+      );
+      face.sync(working);
+      expect(face.glyph, r'\[=|=]/');
     });
   });
 }
