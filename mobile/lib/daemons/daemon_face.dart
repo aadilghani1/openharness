@@ -27,6 +27,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'plates.dart';
 import 'render.dart';
 import 'roster.dart';
 import 'zoo.dart';
@@ -191,10 +192,22 @@ class DaemonFace extends ChangeNotifier {
     return statusCell(roster, g, baseWidth(roster, d, versionIndex));
   }
 
-  /// The portrait at its version and mood.
+  /// The portrait at its version and mood. A daemon drawn filled has no line
+  /// portrait: this is then its portrait plate's first frame at the mood, and
+  /// the sheet runs the loop itself (`DaemonPlateView`), a frame every
+  /// `frameMs` — the one motion that is not a step of real work.
   List<String> get portrait {
     final d = def;
     if (d == null) return const [];
+    if (d.plate) {
+      final loop = daemonPlates.frames(
+        d.id,
+        PlateSize.portrait,
+        daemon!.version,
+        mood,
+      );
+      return loop.isEmpty ? const [] : loop.first;
+    }
     return renderPortrait(
       roster,
       d,

@@ -5,6 +5,7 @@
 /// A card never shows a live mood: it is a portrait, not a presence indicator.
 library;
 
+import 'plates.dart';
 import 'render.dart';
 import 'roster.dart';
 import 'zoo.dart';
@@ -39,8 +40,30 @@ List<String> wrapWords(String text, int width) {
   return out;
 }
 
+/// What a card shows of [d] at [version]: its line portrait at rest, or for a
+/// daemon drawn filled its portrait plate, `idle`, frame 0 (card.mjs
+/// `cardLines(..., { plate })`). A plate daemon with no baked plate — a roster
+/// newer than its plates — shows its one-line sprite rather than nothing.
+List<String> cardPortrait(DaemonRoster roster, DaemonDef d, String version) {
+  if (!d.plate) {
+    return renderPortrait(roster, d, version, DaemonMood.idle, motion: false);
+  }
+  final plate = daemonPlates.still(d.id, PlateSize.portrait, version);
+  if (plate.isNotEmpty) return plate;
+  return [
+    renderSprite(
+      roster,
+      d,
+      roster.versionIndex(version),
+      DaemonMood.idle,
+      motion: false,
+    ),
+  ];
+}
+
 /// The card as lines of printable ASCII, 42 columns wide: the portrait at its
-/// version, the number, rarity, name, lineage and first words.
+/// version (a filled daemon's portrait plate, [plate] when given), the number,
+/// rarity, name, lineage and first words.
 List<String> cardLines(
   DaemonRoster roster,
   DaemonDef d, {
@@ -50,6 +73,7 @@ List<String> cardLines(
   String? nickname,
   String? hatched,
   String? egg,
+  List<String>? plate,
 }) {
   final v = version ?? roster.rules.versions.first;
   final drop = roster.drop(d.drop) ?? DaemonDrop(d.drop, 1, d.drop);
@@ -66,7 +90,7 @@ List<String> cardLines(
   final name =
       '${nickname != null ? '$nickname the ' : ''}${d.id} $v'
       '${serial != null ? '  #${serial.toString().padLeft(4, '0')}' : ''}';
-  final portrait = renderPortrait(roster, d, v, DaemonMood.idle, motion: false);
+  final portrait = plate ?? cardPortrait(roster, d, v);
   final width = portrait.fold<int>(0, (w, l) => l.length > w ? l.length : w);
   final pad = ((_inner - width) / 2).floor();
   final left = ' ' * (pad < 0 ? 0 : pad);
@@ -103,18 +127,13 @@ List<String> ownedCardLines(DaemonRoster roster, DaemonDef d, ZooDaemon mine) =>
     );
 
 /// The rows of [cardLines] that hold the portrait, `[from, to)`: the rows a
-/// card colours with the daemon's colour (card.mjs `cardSvg`). Row 1 is the
-/// head, coloured by rarity.
+/// card colours with the daemon's colour, or a plate's down its gradient
+/// (card.mjs `cardSvg`). Row 1 is the head, coloured by rarity.
 ({int from, int to}) cardPortraitRows(
   DaemonRoster roster,
   DaemonDef d,
   String version,
-) => (
-  from: 3,
-  to:
-      3 +
-      renderPortrait(roster, d, version, DaemonMood.idle, motion: false).length,
-);
+) => (from: 3, to: 3 + cardPortrait(roster, d, version).length);
 
 /// `#0042`: a serial as the card writes it.
 String serialLabel(int serial) => '#${serial.toString().padLeft(4, '0')}';
@@ -139,7 +158,8 @@ List<ShelfEntry> shelfEntries(Iterable<String> ids) => [
 ];
 
 /// The drops a shelf shows at [now], in roster order: released ones, and
-/// announced ones as silhouettes. One not yet announced shows nowhere.
+/// announced ones as silhouettes. One not yet announced, or on hold, shows
+/// nowhere.
 List<DaemonDrop> shelfDrops(DaemonRoster roster, DateTime now) => [
   for (final drop in roster.drops)
     if (drop.stateAt(now) != DropState.hidden) drop,
@@ -189,7 +209,7 @@ Map<String, ShelfEntry> _byId(Iterable<ShelfEntry> owned) => {
 };
 
 /// The shelf's slots for a drop at [now], in roster order; none for a drop not
-/// announced yet.
+/// announced yet or on hold.
 List<ShelfCell> shelfCells(
   DaemonRoster roster,
   Iterable<ShelfEntry> owned, {

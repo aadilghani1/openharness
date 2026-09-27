@@ -41,7 +41,7 @@ void main() {
     expect(client.revision, 3);
     expect(client.paired!.id, 'tim');
     expect(client.readyEgg!.id, 'e1');
-    expect(client.zoo.ownedIds, ['tim', 'vim']);
+    expect(client.zoo.ownedIds, ['tim', 'gnu']);
     expect(events, isEmpty);
   });
 
@@ -79,15 +79,15 @@ void main() {
 
   test('a pair switch shows at once and is sent once', () async {
     await join();
-    client.pair('vim');
-    expect(client.paired!.id, 'vim');
+    client.pair('gnu');
+    expect(client.paired!.id, 'gnu');
     await client.settle();
     expect(backend.written, [
-      {'op': 'zoo.pair', 'id': 'vim'},
+      {'op': 'zoo.pair', 'id': 'gnu'},
     ]);
     // Pairing what is already paired, or what is not owned, sends nothing.
-    client.pair('vim');
-    client.pair('grue');
+    client.pair('gnu');
+    client.pair('beastie');
     await client.settle();
     expect(backend.written, hasLength(1));
   });
@@ -126,11 +126,11 @@ void main() {
     // One hatch at a time.
     expect(await client.hatch('e1'), isNull);
     final hatch = await future;
-    expect(hatch!.daemonId, 'fzf');
+    expect(hatch!.daemonId, 'tux');
     expect(hatch.shiny, isTrue);
     expect(client.hatchingEgg, isNull);
     expect(client.zoo.eggs, isEmpty);
-    expect(client.zoo.ownedIds, ['tim', 'vim', 'fzf']);
+    expect(client.zoo.ownedIds, ['tim', 'gnu', 'tux']);
     // An egg that is gone opens nothing.
     expect(await client.hatch('e1'), isNull);
   });
@@ -174,14 +174,14 @@ void main() {
     await pumpEventQueue();
     expect(app.zoo.paired!.id, 'tim');
 
-    backend.zoo['pair'] = 'vim';
+    backend.zoo['pair'] = 'gnu';
     backend.revision = 9;
     await app.handleEventForTest('m', {
       'type': 'zoo_changed',
       'payload': {'revision': 9},
     });
     await pumpEventQueue();
-    expect(app.zoo.paired!.id, 'vim');
+    expect(app.zoo.paired!.id, 'gnu');
     expect(app.zoo.revision, 9);
 
     // Back from a pocket: whatever was pushed while suspended is read now.
@@ -298,7 +298,7 @@ void main() {
     expect(hatch.duplicate, isFalse);
     expect(hatch.serial, 42);
     expect(hatch.count, 1);
-    expect(client.zoo.daemon('fzf')!.serial, 42);
+    expect(client.zoo.daemon('tux')!.serial, 42);
   });
 
   test('an egg that became xp is xp, never an egg', () async {

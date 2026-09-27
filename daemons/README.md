@@ -111,9 +111,10 @@ is impossible (a terminal's own font):
   the colour `mix(top, bottom, r / (R - 1))`, and each glyph its brightness from `rules.plate.ink`: at
   most 1 mixes from the background toward the row colour (`.` is faint, `#` is the colour itself), above
   1 mixes on toward white by the excess (`@` burns). `bake.mjs` has the reference `plateColor`, and
-  `frames.json` has `plateColors` for every port to match. A terminal (hn) may print the row colour in
-  truecolor, or its nearest xterm index, with SGR dim below 0.6 and bold above 1. A soft glow in the
-  bottom colour is welcome where a client can draw one.
+  `frames.json` has `plateColors` for every port to match. A terminal (hn) prints each glyph's exact
+  colour in truecolor; with 256 or 16 colours, the row colour's nearest index, with SGR dim below 0.6
+  and bold above 1; with `NO_COLOR`, plain text. A soft glow in the bottom colour is welcome where a
+  client can draw one.
 
 ## Moods
 

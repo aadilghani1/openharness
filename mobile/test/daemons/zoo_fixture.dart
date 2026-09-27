@@ -8,37 +8,25 @@ import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/daemons/roster.dart';
 
-/// The real roster plus a made-up second drop, `bsd`, announced 2026-10-01
-/// and released 2026-10-15: three regulars drawn as tim, fish and vim, and a
-/// secret drawn as the grue. Only the shelves' drop dates are under test;
-/// no such drop exists.
+/// The real roster with drop 2, `unix`, taken off hold the way it will come
+/// back: given dates, announced 2026-10-01 and released 2026-10-15. Only the
+/// shelves' drop dates are under test; `unix` has no dates yet.
 DaemonRoster rosterWithDropTwo() {
   final raw = jsonDecode(
     File('../daemons/roster.json').readAsStringSync(),
   ) as Map<String, dynamic>;
-  final daemons = raw['daemons'] as List;
-  Map<String, dynamic> copy(String from, String id, int n) => {
-    ...daemons.firstWhere((d) => (d as Map)['id'] == from) as Map,
-    'id': id,
-    'n': n,
-    'drop': 'bsd',
-  };
   raw['drops'] = [
-    ...raw['drops'] as List,
-    {
-      'id': 'bsd',
-      'n': 2,
-      'name': 'bsd',
-      'announce': '2026-10-01',
-      'release': '2026-10-15',
-    },
-  ];
-  raw['daemons'] = [
-    ...daemons,
-    copy('tim', 'jail', 11),
-    copy('fish', 'kqueue', 12),
-    copy('vim', 'pf', 13),
-    copy('grue', 'beastie', 14),
+    for (final d in raw['drops'] as List)
+      if ((d as Map)['id'] == 'unix')
+        {
+          'id': 'unix',
+          'n': d['n'],
+          'name': d['name'],
+          'announce': '2026-10-01',
+          'release': '2026-10-15',
+        }
+      else
+        d,
   ];
   return DaemonRoster.parse(jsonEncode(raw));
 }
@@ -58,7 +46,7 @@ class FakeZooBackend {
         'xp': 0,
       },
       {
-        'id': 'vim',
+        'id': 'gnu',
         'hatchedAt': '2026-09-27T09:42:00Z',
         'egg': 'turn',
         'xp': 0,
@@ -71,7 +59,7 @@ class FakeZooBackend {
     'habits': ['turn', 'split'],
     'firstEgg': true,
   };
-  String nextDaemon = 'fzf';
+  String nextDaemon = 'tux';
   bool nextShiny = true;
   int? nextSerial;
   List<Map<String, dynamic>> grants = [];
