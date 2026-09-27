@@ -1032,6 +1032,8 @@ fn other_clients() -> Vec<std::path::PathBuf> {
 /// A command for a session another client has, run by that client: what it prints printed here,
 /// its errors said here, its status this command's.
 fn forward(app: &mut App, owner: &str, words: &[String]) {
+    // Passed here by another client already: the two sessions are in two terminals.
+    if crate::ipc::forwarded() { return app.error("can't do that across terminals: the sessions are in two") }
     match crate::ipc::ask(std::path::Path::new(owner), words) {
         Some((out, err, code)) => {
             if !out.is_empty() { app.print(&words[0], out) }

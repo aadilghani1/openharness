@@ -19,6 +19,11 @@ unsafe extern "C" { fn getuid() -> u32; }
 /// This client's own socket, once it listens: what HN_SOCKET says to the commands it runs, and
 /// #{socket_path}.
 static HERE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Set while this client runs a command another client passed it: it asks no client in turn (two
+/// clients each waiting on the other would freeze both).
+static FORWARDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn forwarded() -> bool { FORWARDED.load(std::sync::atomic::Ordering::Relaxed) }
 pub fn here() -> Option<PathBuf> { HERE.get().cloned() }
 
 pub fn dir() -> PathBuf {
@@ -65,6 +70,7 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
                 let words: Vec<String> = request.get("argv").or(Some(&request)).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
                 let cwd = request.get("cwd").and_then(Value::as_str).map(str::to_string);
                 let stdin = request.get("stdin").and_then(Value::as_str).map(str::to_string);
+                let passed = request.get("forwarded").and_then(Value::as_bool).unwrap_or(false);
                 let (tx, rx) = oneshot::channel::<crate::app::Reply>();
                 let _ = sink.send(Event::Apply(Box::new(move |app: &mut crate::app::App| {
                     app.capture = Some(Vec::new());
@@ -73,7 +79,9 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
                     app.cli_code = 0;
                     app.cli_cwd = cwd;
                     app.cli_stdin = stdin;
+                    FORWARDED.store(passed, std::sync::atomic::Ordering::Relaxed);
                     crate::commands::execute_args(app, &words);
+                    FORWARDED.store(false, std::sync::atomic::Ordering::Relaxed);
                     // Still waiting on a job (run-shell, if-shell): it answers when it is done.
                     if app.capture.is_some() { app.finish_cli() }
                 })));
@@ -195,10 +203,12 @@ pub fn alive(socket: Option<&str>, name: Option<&str>) -> bool {
 /// none when it does not answer in time.
 pub fn ask(path: &std::path::Path, words: &[String]) -> Option<crate::app::Reply> {
     use std::io::{BufRead, Write};
+    // Serving another client's command: never wait on a client (it may be the one waiting).
+    if forwarded() { return None }
     let mut s = std::os::unix::net::UnixStream::connect(path).ok()?;
     s.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
     s.set_write_timeout(Some(std::time::Duration::from_secs(2))).ok()?;
-    writeln!(s, "{}", json!({ "argv": words, "cwd": find_cwd() })).ok()?;
+    writeln!(s, "{}", json!({ "argv": words, "cwd": find_cwd(), "forwarded": true })).ok()?;
     let mut line = String::new();
     std::io::BufReader::new(&s).read_line(&mut line).ok()?;
     let reply: Value = serde_json::from_str(line.trim()).ok()?;
