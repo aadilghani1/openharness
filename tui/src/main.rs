@@ -147,16 +147,16 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     app.load_sessions();
     app.update_environment();
     app.notify_changes();
-    let mut busy = Instant::now();
+    let busy = Instant::now();
     loop {
         let first = tokio::select! {
             event = rx.recv() => event,
             _ = tokio::time::sleep(Duration::from_millis(500)) => None,
         };
-        let mut apply = |app: &mut app::App, event: Event| match event {
+        let apply = |app: &mut app::App, event: Event| match event {
             Event::Input(_) => {}
             Event::Machine { machine_id, generation, event } => app.on_machine(machine_id, generation, event),
-            Event::Apply(f) => { f(app); busy = Instant::now() }
+            Event::Apply(f) => f(app),
             Event::Tick => app.on_tick(),
         };
         if let Some(event) = first { apply(&mut app, event) }
@@ -168,7 +168,8 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
         app.flush_acks();
         if app.quit { break }
         // No session of its own left (or none came): gone, as tmux's server goes.
-        if !app.holds_sessions() && busy.elapsed() > Duration::from_secs(2) { break }
+        // (What its own work brings back — a harness's lines — is not a reason to stay.)
+        if !app.holds_sessions() && app.cli_held.is_empty() && busy.elapsed() > Duration::from_secs(2) && app.last_cli.elapsed() > Duration::from_secs(2) { break }
     }
     app.fleet.save_cache();
     app.write_sessions(app::Save::Leave);

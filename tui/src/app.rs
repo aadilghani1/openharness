@@ -434,6 +434,8 @@ pub struct App {
     /// Commands from shells held while this client's machine is not connected yet (its first
     /// moments), the first of them one that opens a shell: run in order once it is (run_cli).
     pub cli_held: std::collections::VecDeque<Box<dyn FnOnce(&mut App) + Send>>,
+    /// When a command from a shell last came (hn with no terminal stays that long after it).
+    pub last_cli: Instant,
     /// The server's state (global options, key tables, buffers, global environment) as this
     /// client last wrote or took it, and whether a command ran since (server.rs).
     pub server_synced: Option<crate::server::Synced>,
@@ -615,6 +617,7 @@ impl App {
             headless: false,
             wait_channels: HashMap::new(),
             cli_held: std::collections::VecDeque::new(),
+            last_cli: Instant::now(),
             server_synced: None,
             server_dirty: false,
             mirror: None,
@@ -1561,16 +1564,28 @@ impl App {
     /// new -d` starting the server), once it is, or 5s on; the commands after it wait behind it.
     pub fn run_cli(&mut self, words: &[String], job: Box<dyn FnOnce(&mut App) + Send>) {
         let opens_shell = words.iter().any(|w| matches!(crate::cmd::find(w).map(|e| e.name), Ok("new-session" | "new-window" | "split-window" | "respawn-pane" | "respawn-window" | "display-popup")));
-        if !self.cli_held.is_empty() || (opens_shell && !self.cli_ready()) { self.cli_held.push_back(job); return }
+        // list-harnesses from a client just started (hn with no terminal, for a script): once
+        // every machine's harnesses are known, so it says what each one is doing.
+        let asks_fleet = matches!(words.first().map(String::as_str), Some("list-harnesses" | "lsh"));
+        self.last_cli = Instant::now();
+        if !self.cli_held.is_empty() || (opens_shell && !self.cli_ready()) || (asks_fleet && !self.fleet_ready()) { self.cli_held.push_back(job); return }
         job(self)
     }
 
     fn cli_ready(&self) -> bool { self.link(&self.fleet.local_id).is_some() || self.started.elapsed() > Duration::from_secs(5) }
 
+    /// Every connected machine's harnesses listed and read against seen.json (a moment for their
+    /// lines to come), or 6s on.
+    fn fleet_ready(&self) -> bool {
+        let listed = !self.fleet.local_id.is_empty() && self.seen_rostered.contains(&self.fleet.local_id)
+            && self.fleet.machines.iter().filter(|m| m.usable()).all(|m| self.seen_rostered.contains(&m.id));
+        (listed && self.started.elapsed() > Duration::from_millis(1500)) || self.started.elapsed() > Duration::from_secs(6)
+    }
+
     /// The commands held for the connection, run once it is up (one at a time: one still waiting
     /// on a job holds the rest).
     pub fn release_cli(&mut self) {
-        while self.capture.is_none() && !self.cli_held.is_empty() && self.cli_ready() {
+        while self.capture.is_none() && !self.cli_held.is_empty() && self.cli_ready() && (self.fleet_ready() || !self.headless) {
             if let Some(job) = self.cli_held.pop_front() { job(self) }
         }
     }
