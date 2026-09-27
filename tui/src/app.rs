@@ -398,6 +398,12 @@ pub struct App {
     pub seen_since: u64,
     pub seen_dirty: bool,
     pub seen_rostered: HashSet<String>,
+    /// The turns that ended in an error, not looked at since (when, and the error's line): kept
+    /// in seen.json, so a failure is still ✗ after hn starts again.
+    pub agent_errors: HashMap<(String, String), (u64, String)>,
+    /// seen.json as this client last read or wrote it (its time and size): another terminal's
+    /// write is read in.
+    seen_stamp: Option<(std::time::SystemTime, u64)>,
     /// select-pane -m: the marked pane (join-pane and swap-pane take it as their source).
     pub marked: Option<u64>,
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
@@ -541,6 +547,8 @@ impl App {
             seen_since: 0,
             seen_dirty: false,
             seen_rostered: HashSet::new(),
+            agent_errors: HashMap::new(),
+            seen_stamp: None,
             marked: None,
             return_to: None,
             held_reply: None,
@@ -796,6 +804,9 @@ impl App {
         match event {
             MachineEvent::Connected => {
                 if let Some(state) = self.links.get_mut(&machine_id) { state.attempts = 0 }
+                // What finished while the link was down (asleep, a network gone) is read against
+                // seen.json again when its list comes back.
+                self.seen_rostered.remove(&machine_id);
                 if let Some(machine) = self.fleet.machine_mut(&machine_id) { machine.reach = Reach::Ready }
                 if machine_id == self.fleet.local_id { self.daemon_down = false; crate::dial::reconnected(self) }
                 self.relist(&machine_id);
@@ -899,7 +910,11 @@ impl App {
                     agent.working = true;
                     agent.last_beat = Some(Instant::now());
                     agent.active_at = now;
-                    if ty == "turn_started" { agent.unread = false; agent.errored = false }
+                    if ty == "turn_started" {
+                        agent.unread = false; agent.errored = false;
+                        let key = agent.key();
+                        if self.agent_errors.remove(&key).is_some() { self.seen_dirty = true }
+                    }
                     let text = |k: &str| payload.get(k).and_then(Value::as_str).unwrap_or("");
                     // What it was asked (the turn's message; not a replay of an old one).
                     if ty == "turn_started" { if let Some(l) = fleet::first_line(text("userMessage")) { agent.asked = Some(l) } }
@@ -978,6 +993,9 @@ impl App {
                 if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
                     if let Some(l) = payload.get("message").and_then(Value::as_str).and_then(fleet::first_line) { agent.did = Some(format!("Error: {l}")) }
                     agent.errored = true;
+                    let (key, line) = (agent.key(), agent.did.clone().unwrap_or_default());
+                    self.agent_errors.insert(key, (fleet::now_ms(), line));
+                    self.seen_dirty = true;
                 }
             }
             "commander_question" => {
@@ -2304,10 +2322,17 @@ impl App {
         if !self.seen_rostered.insert(machine_id.to_string()) { return }
         let floor = self.seen_since;
         for agent in self.fleet.agents.values_mut().filter(|a| a.machine_id == machine_id && a.engine != "terminal") {
-            let seen = self.seen_at.get(&(agent.machine_id.clone(), agent.id.clone())).copied().unwrap_or(floor);
+            let key = (agent.machine_id.clone(), agent.id.clone());
+            let seen = self.seen_at.get(&key).copied().unwrap_or(floor);
             if agent.usage_at > seen && !agent.working && agent.question.is_none() && agent.status != "stopped" {
                 agent.unread = true;
                 if agent.since == 0 { agent.since = agent.usage_at }
+            }
+            // A turn that ended in an error, not looked at since: failed, with its error.
+            if let Some((at, line)) = self.agent_errors.get(&key).filter(|(at, _)| *at > seen && !agent.working) {
+                agent.errored = true;
+                if !line.is_empty() { agent.did = Some(line.clone()) }
+                if agent.since == 0 { agent.since = *at }
             }
         }
     }
@@ -2321,24 +2346,68 @@ impl App {
     pub fn load_seen(&mut self) {
         let doc: Value = std::fs::read_to_string(Self::seen_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
         self.seen_since = doc.get("since").and_then(Value::as_u64).unwrap_or_else(fleet::now_ms);
-        for (k, v) in doc.get("seen").and_then(Value::as_object).cloned().unwrap_or_default() {
-            if let (Some((m, a)), Some(t)) = (k.split_once(':'), v.as_u64()) { self.seen_at.insert((m.to_string(), a.to_string()), t); }
-        }
+        self.merge_seen(&doc);
+        self.seen_stamp = Self::seen_stamp_now();
         if doc.is_null() { self.seen_dirty = true }
+    }
+
+    fn seen_stamp_now() -> Option<(std::time::SystemTime, u64)> {
+        std::fs::metadata(Self::seen_path()).ok().map(|m| (m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len()))
+    }
+
+    /// Another client's seen.json folded into this one's: the later look at each harness, and
+    /// the errors neither has looked at since.
+    fn merge_seen(&mut self, doc: &Value) {
+        for (k, v) in doc.get("seen").and_then(Value::as_object).cloned().unwrap_or_default() {
+            if let (Some((m, a)), Some(t)) = (k.split_once(':'), v.as_u64()) {
+                let e = self.seen_at.entry((m.to_string(), a.to_string())).or_insert(0);
+                *e = (*e).max(t);
+            }
+        }
+        for (k, v) in doc.get("errors").and_then(Value::as_object).cloned().unwrap_or_default() {
+            let (Some((m, a)), Some(at)) = (k.split_once(':'), v.get("at").and_then(Value::as_u64)) else { continue };
+            let key = (m.to_string(), a.to_string());
+            let line = v.get("line").and_then(Value::as_str).unwrap_or("").to_string();
+            if self.agent_errors.get(&key).map(|(t, _)| *t < at).unwrap_or(true) { self.agent_errors.insert(key, (at, line)); }
+        }
+        let seen = &self.seen_at;
+        self.agent_errors.retain(|k, (at, _)| seen.get(k).map(|s| *s < *at).unwrap_or(true));
     }
 
     pub fn save_seen(&mut self) {
         if !self.seen_dirty { return }
         self.seen_dirty = false;
+        // Whatever another terminal wrote meanwhile, kept.
+        let doc: Value = std::fs::read_to_string(Self::seen_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+        self.merge_seen(&doc);
         let seen: serde_json::Map<String, Value> = self.seen_at.iter().map(|((m, a), t)| (format!("{m}:{a}"), json!(t))).collect();
+        let errors: serde_json::Map<String, Value> = self.agent_errors.iter().map(|((m, a), (at, line))| (format!("{m}:{a}"), json!({ "at": at, "line": line }))).collect();
         let path = Self::seen_path();
         if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
-        let temp = path.with_extension("json.tmp");
-        if std::fs::write(&temp, json!({ "since": self.seen_since, "seen": seen }).to_string()).is_ok() { let _ = std::fs::rename(temp, path); }
+        let temp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        if std::fs::write(&temp, json!({ "since": self.seen_since, "seen": seen, "errors": errors }).to_string()).is_ok() { let _ = std::fs::rename(temp, path); }
+        self.seen_stamp = Self::seen_stamp_now();
+    }
+
+    /// Read in what another terminal looked at (its seen.json write): those harnesses' ✓ and ✗
+    /// go here too.
+    pub fn reread_seen(&mut self) {
+        let stamp = Self::seen_stamp_now();
+        if stamp.is_none() || stamp == self.seen_stamp { return }
+        self.seen_stamp = stamp;
+        let doc: Value = std::fs::read_to_string(Self::seen_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+        self.merge_seen(&doc);
+        for agent in self.fleet.agents.values_mut() {
+            let key = (agent.machine_id.clone(), agent.id.clone());
+            let Some(seen) = self.seen_at.get(&key).copied() else { continue };
+            if agent.unread && seen >= agent.usage_at && seen >= agent.since { agent.unread = false }
+            if agent.errored && !self.agent_errors.contains_key(&key) { agent.errored = false }
+        }
     }
 
     /// You have looked at this harness now.
     pub fn mark_seen_key(&mut self, key: (String, String)) {
+        self.agent_errors.remove(&key);
         self.seen_at.insert(key, fleet::now_ms());
         self.seen_dirty = true;
     }
@@ -3606,8 +3675,9 @@ impl App {
         if self.tick % 120 == 0 { self.refresh_machines() }
         if self.tick % 80 == 40 { self.fleet.save_cache() }
         if self.tick % 20 == 10 { self.save_seen() }
+        if self.tick % 8 == 4 { self.reread_seen() }
         if self.tick % 240 == 0 { let ids: Vec<String> = self.links.keys().cloned().collect(); for id in ids { self.relist(&id) } }
-        if self.toast.as_ref().map(|t| now.duration_since(t.2) > Duration::from_secs(4)).unwrap_or(false) { self.toast = None }
+        if self.toast.as_ref().map(|t| now.duration_since(t.2) > Duration::from_millis(self.toast_ms().max(4000))).unwrap_or(false) { self.toast = None }
         if let Some(Modal::Picker { picker, .. }) = &mut self.modal {
             if picker.flash.as_ref().map(|f| now.duration_since(f.1) > Duration::from_secs(4)).unwrap_or(false) { picker.flash = None }
         }
