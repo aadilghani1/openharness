@@ -64,7 +64,6 @@ import '../widgets/grid_model_picker.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
 import '../widgets/harness_start_page.dart';
-import '../widgets/machines_panel.dart';
 import '../widgets/harness_session_manager.dart';
 import '../widgets/onboarding_card.dart';
 import '../state/toolbar_notices.dart';
@@ -163,7 +162,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   StreamSubscription<void>? _modelsRequests;
   final _shellFocus = FocusNode(debugLabel: 'Swarm shell');
   final _focusedModelController = GridModelPickerController();
-  MachinesPanelHandle? _machinesPanel;
   OverlayEntry? _modelsOverlay;
   VoidCallback? _unregisterModels;
   OverlayEntry? _harnessesOverlay;
@@ -395,7 +393,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.removeListener(_syncToolbarNotices);
     _toolbarNotices.removeListener(_toolbarNoticesChanged);
     _toolbarNotices.dispose();
-    _machinesPanel?.close(restoreFocus: false);
+    _dismissMachinePrompt();
     _unregisterModels?.call();
     _modelsOverlay?.remove();
     _modelsOverlay?.dispose();
@@ -497,8 +495,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   bool get _modelsVisible =>
       _modelsOverlay != null || _search?.isModelMode == true;
-  bool get _machinesVisible =>
-      _machinesPanel != null || _search?.isMachineMode == true;
+  bool get _machinesVisible => _search?.isMachineMode == true;
   bool get _harnessesVisible =>
       _harnessesOverlay != null || _search?.scopePrefix.isEmpty == true;
 
@@ -506,7 +503,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       mounted && _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen;
 
   void _runShortcut(String id) {
-    _machinesPanel?.close(restoreFocus: false);
     _closeModelsControls(restoreFocus: false);
     _closeHarnessControls(restoreFocus: false);
     if (id != 'navigation.command_bar') _closeCommandBar();
@@ -537,6 +533,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         id != 'models.list' &&
         id != 'machines.list' &&
         id != 'machine.link' &&
+        id != 'machines.connections' &&
         id != 'navigation.needs_input' &&
         id != 'swarm.new' &&
         id != 'agent.add' &&
@@ -709,7 +706,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _onboardingChanged() {
     if (!mounted) return;
-    _machinesPanel?.rebuild();
     _modelsOverlay?.markNeedsBuild();
     _harnessesOverlay?.markNeedsBuild();
     if (_native) _syncNative();
@@ -892,7 +888,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _paletteChanged() {
-    _machinesPanel?.rebuild();
     _modelsOverlay?.markNeedsBuild();
     _harnessesOverlay?.markNeedsBuild();
     _searchOverlay?.markNeedsBuild();
@@ -1256,7 +1251,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     if (call.method == 'machineControls') {
-      unawaited(_showMachinesControls());
+      unawaited(_openMachines());
       await WidgetsBinding.instance.endOfFrame;
       return;
     }
@@ -1266,7 +1261,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     if (call.method == 'linkMachine') {
-      unawaited(_showMachinesControls());
+      unawaited(_openMachines());
       await WidgetsBinding.instance.endOfFrame;
       return;
     }
@@ -1726,65 +1721,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
-  Future<void> _showMachinesControls({String? initialMachineId}) async {
-    if (_machinesPanel case final panel?) {
-      panel.close();
-      return;
-    }
-    if (!_shortcutsEnabled || _newHarness?.requestDismiss() == false) return;
-    _closeNewHarness(restoreFocus: false);
-    _closeSearch(restoreFocus: false);
-    _closeCommandBar(restoreFocus: false);
-    dismissTransientMenus();
-    _preparePaneFocus();
-    _onboarding.acknowledge(OnboardingStep.machines);
-    final panel = openMachinesPanel(
-      context,
-      app,
-      keymap: _keymap,
-      initialMachineId: initialMachineId,
-      onboarding: _onboarding,
-      toolbarHeight: _native ? 0 : _tabBarHeight,
-    );
-    _machinesPanel = panel;
-    _syncToolbarNotices();
-    if (_native) _syncNative();
-    setState(() {});
-    final destination = await panel.closed;
-    if (!mounted || !identical(_machinesPanel, panel)) return;
-    _machinesPanel = null;
-    _syncToolbarNotices();
-    if (_native) _syncNative();
-    setState(() {});
-    // Let the removed panel release its focus before opening work.
-    await WidgetsBinding.instance.endOfFrame;
-    if (!mounted) return;
-    final machine = destination == null ? null : app.stateOf(destination);
-    if (machine != null) {
-      if (machine.agents.isEmpty && !machine.machine.isShared) {
-        await _newAgent(
-          machineId: destination,
-          placement: HarnessPlacement.currentTab,
-        );
-      } else {
-        _openSearch(
-          adding: true,
-          query: '@',
-          placement: HarnessPlacement.currentTab,
-        );
-        final machineRow = _search?.rows
-            .where((row) => row.isMachine && row.machineId == destination)
-            .firstOrNull;
-        if (machineRow != null) _search!.submit(machineRow);
-      }
-    } else if (panel.restoreFocus && _shortcutsEnabled) {
-      _shellFocus.requestFocus();
-      final pane = app.focusedPane;
-      if (pane != null) app.focusPane(pane.id, reveal: true);
-      await _ensureEmptyEntry();
-    }
-  }
-
   Future<void> _openMachines({String? initialMachineId}) async {
     _onboarding.acknowledge(OnboardingStep.machines);
     _openResourcePicker('@');
@@ -1869,7 +1805,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         ? null
         : machine?.projectOf(agent);
     if (id == null) {
-      await _showMachinesControls();
+      await _openMachines();
       return;
     }
     await Future.wait([app.agentPreference.load(), app.projectHistory.load()]);
@@ -2389,7 +2325,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               app.machineStates.values.firstOrNull
         : app.stateOf(focused.machineId);
     if (machine == null) {
-      await _showMachinesControls();
+      await _openMachines();
       return;
     }
     final machineId = machine.machine.machineId;
@@ -3067,6 +3003,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _search!.removeListener(_syncSearch);
     _search!.dispose();
     _search = null;
+    _dismissMachinePrompt();
     _modelSelectionTarget = null;
     _modelSearchVisible = false;
     app.modelManager.setPanelVisible(false);
@@ -3607,12 +3544,20 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _linkDialogMachineId = machine.machine.machineId;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (mounted) {
-        await _showMachinesControls(
-          initialMachineId: machine.machine.machineId,
-        );
+        await _openMachines(initialMachineId: machine.machine.machineId);
       }
-      _linkDialogMachineId = null;
+      // Keep the prompt's identity until the picker closes. Otherwise Escape
+      // would immediately reopen it on the next workspace update.
+      if (_search?.isMachineMode != true) _linkDialogMachineId = null;
     });
+  }
+
+  void _dismissMachinePrompt() {
+    final id = _linkDialogMachineId;
+    _linkDialogMachineId = null;
+    if (id != null && app.stateOf(id)?.needsLink == true) {
+      app.dismissLinkPrompt(id);
+    }
   }
 
   // Keyboard actions and search commands execute the same callbacks.
@@ -3705,13 +3650,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
     },
     // `agent.restart` and `agent.clone` come from `_actionHandlers` above:
     // both carry a ShortcutAction, so the loop already binds them.
-    'machine.link': _showMachinesControls,
+    'machine.link': _openMachines,
     'machines.manage': _manageMachines,
     'machines.list': _openMachines,
     'models.list': _togglePaneModels,
     'harnesses.list': _toggleSessions,
     'harnesses.manage': _toggleHarnessControls,
-    'machines.connections': _showMachinesControls,
+    'machines.connections': _openMachines,
     'models.manage': _toggleModelsControls,
     'project.add': _addProject,
     'keyboard.open_config': () => openKeyboardConfig(context),

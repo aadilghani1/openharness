@@ -9296,7 +9296,7 @@ class AppNotifier extends ChangeNotifier {
   /// It has to be a tile like any other — the alternative of letting a machine
   /// take over the whole content area would blank three working terminals
   /// belonging to two other machines. The one exception is a machine that
-  /// already needs linking: selecting it brings up the Machines panel
+  /// already needs linking: selecting it brings up the Machines picker
   /// (`SwarmScreen._maybeLink`), so opening a tile here too would just be a
   /// redundant "not linked" pane sitting behind it. Selecting is still worth
   /// doing — it's what makes that gate notice this machine — the tile is not.

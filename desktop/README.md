@@ -32,6 +32,13 @@ support those files. For other hosts, configure the equivalent SPA fallback and
 revalidation of unversioned app files. Do not cache OAuth callbacks. The app uses
 JavaScript/CanvasKit; WebAssembly app compilation is not validated yet.
 
+The entry page inlines Flutter's generated bootstrap to start the app without
+an extra loader request. Keep entry pages and release metadata `no-store`.
+Serve static JavaScript, CanvasKit, fonts, and images with ETags and
+`Cache-Control: public, max-age=0, must-revalidate`: browsers reuse unchanged
+bytes while checking for every deployment. Do not use `no-store` for these
+assets or long-lived immutable caching with their unversioned filenames.
+
 The existing backend handles browser OAuth. Local previews on `127.0.0.1`,
 `localhost`, or `[::1]` use its existing loopback authorization endpoint, returning
 to the registered `/callback` path on the preview's own port without a server
@@ -79,7 +86,10 @@ For a local production build, run `bash scripts/build-web-release.sh X.Y.Z`.
   a full-page fleet diagram and prominent CTA, sharing the native login actions
   and their waiting, cancellation, and recovery states.
 - Workspace shortcuts use **Option/Alt** in the browser: Alt-P finds agents,
-  Alt-N starts an agent, and Alt-T opens a Harness tab. Text editing and terminal
+  Alt-N starts an agent, Alt-M opens machines, and Alt-T opens a Harness tab.
+  Machine connection commands and link requests use that same `@` picker,
+  with connection and setup forms inside its preview pane.
+  Text editing and terminal
   Control keys keep their usual behavior. The shared shortcut sheet and welcome
   hints show the active bindings.
 - Agent processes and files stay on their host machines. Local provisioning,

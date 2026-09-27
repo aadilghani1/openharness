@@ -18,6 +18,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/grid_pictures.dart';
 import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/widgets/web_download_button.dart';
+import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:web/web.dart' as web;
 
 void main() {
@@ -119,6 +120,114 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     app.dispose();
   });
+
+  testWidgets(
+    'machine commands and link requests use the same browser picker',
+    (tester) async {
+      final app = AppNotifier(config: AppConfig.dev, authSession: AuthSession())
+        ..currentUser = const CurrentUserProfile(email: 'browser@example.test')
+        ..newSwarm(newTabPage: true);
+      const machine = Machine(
+        machineId: 'browser-fixture',
+        name: 'Studio machine',
+        authMode: MachineAuthMode.remote,
+      );
+      app.machines = [machine];
+      app.machineStates[machine.machineId] = MachineState(machine)
+        ..nodeOnline = true
+        ..needsLink = true
+        ..agentLoadStatus = AgentLoadStatus.needsLink;
+      tester.view.physicalSize = const Size(1280, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: SwarmScreen(notifier: app),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      final input = find.byKey(const ValueKey('swarm-search-input'));
+      Future<void> machinesShortcut() async {
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyM);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+
+      void expectMachines() {
+        final search = tester
+            .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+            .search;
+        expect(search.scopePrefix, '@');
+        expect(search.rows.map((row) => row.title), contains('Studio machine'));
+        expect(search.rows.last.title, 'Add machine');
+        expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
+        expect(find.text('Starting Harness…'), findsNothing);
+      }
+
+      for (final command in [
+        'Machine connection settings',
+        'Connect another machine',
+      ]) {
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyP);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.enterText(input, '> $command');
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump(const Duration(milliseconds: 200));
+        expectMachines();
+        await machinesShortcut();
+        expect(input, findsNothing);
+        await machinesShortcut();
+        expectMachines();
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+      }
+
+      // A selected unlinked machine must use that picker too, and closing it
+      // must stay dismissed until the user deliberately revisits the machine.
+      app.showMachinePane(machine.machineId);
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+      expectMachines();
+      expect(
+        tester
+            .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+            .search
+            .selected
+            ?.machineId,
+        machine.machineId,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      app.notifyListeners();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(input, findsNothing);
+      expect(app.isLinkPromptDismissed(machine.machineId), isTrue);
+      app.showMachinePane(machine.machineId);
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+      expectMachines();
+      await tester.tap(
+        find.byKey(const ValueKey('resource-action:picker.resource_connect')),
+      );
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('remote-password-connect-field')),
+        findsOneWidget,
+      );
+      expect(input, findsOneWidget);
+      expect(find.byType(Dialog), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      app.dispose();
+    },
+  );
 
   testWidgets(
     'web landing keeps a large sign-in action and download visible on a phone',
