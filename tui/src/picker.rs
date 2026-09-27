@@ -313,7 +313,7 @@ impl Picker {
                     }
                     // The keywords behind a row (engine, machine, branch): whole words of three
                     // letters or more find it, after everything that matched what you see.
-                    None if !groups.is_empty() && groups.iter().all(|g| g.iter().any(|(w, sensitive)| w.chars().count() >= 3 && names_word(&keywords, w, *sensitive))) && negated.iter().all(|(w, s)| clear(w, *s)) => hidden.push(index),
+                    None if !groups.is_empty() && groups.iter().all(|g| g.iter().any(|(w, sensitive)| (w.chars().count() >= 3 || STATE_WORDS.contains(&w.as_str())) && names_word(&keywords, w, *sensitive))) && negated.iter().all(|(w, s)| clear(w, *s)) => hidden.push(index),
                     None => {}
                 }
             }

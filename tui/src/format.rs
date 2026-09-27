@@ -1293,6 +1293,7 @@ fn harness_value(app: &App, machine: &str, id: &str, key: &str) -> Option<Val> {
         "id" => a.id.clone(),
         "engine" => a.engine.clone(),
         "machine" => app.fleet.machine_name(&a.machine_id),
+        "machine_id" => a.machine_id.clone(),
         "project" => a.project.clone(),
         "branch" => a.branch.clone(),
         "cwd" => a.cwd.clone(),
@@ -1311,7 +1312,8 @@ fn harness_value(app: &App, machine: &str, id: &str, key: &str) -> Option<Val> {
         "options" => a.question.as_ref().map(|q| q.options.iter().enumerate().map(|(i, o)| format!("{}) {o}", i + 1)).collect::<Vec<_>>().join("  ")).unwrap_or_default(),
         "doing" => a.doing.clone().unwrap_or_default(),
         "did" => a.did.clone().unwrap_or_default(),
-        "error" => a.launch_error.clone(),
+        // Why it failed: to start, else its last turn's error (the ✗ line).
+        "error" => if !a.launch_error.is_empty() { a.launch_error.clone() } else if a.errored { a.did.clone().unwrap_or_default() } else { String::new() },
         "pr" => a.pr.as_ref().map(|p| format!("#{}", p.number)).unwrap_or_default(),
         "pr_state" => a.pr.as_ref().map(|p| p.state.to_lowercase()).unwrap_or_default(),
         "pr_url" => a.pr.as_ref().map(|p| p.url.clone()).unwrap_or_default(),

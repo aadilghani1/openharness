@@ -143,6 +143,9 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     if config.prefix_set { app.keymap.prefix = config.prefix }
     // The server's options, keys, buffers and environment: this client's if it is the first.
     server::join(&mut app);
+    // When each harness was last looked at (seen.json): what finished while no one looked is
+    // done, as a terminal says it.
+    app.load_seen();
     app.boot();
     app.load_sessions();
     app.update_environment();
@@ -169,7 +172,8 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
         if app.quit { break }
         // No session of its own left (or none came): gone, as tmux's server goes.
         // (What its own work brings back — a harness's lines — is not a reason to stay.)
-        if !app.holds_sessions() && app.cli_held.is_empty() && busy.elapsed() > Duration::from_secs(2) && app.last_cli.elapsed() > Duration::from_secs(2) { break }
+        // (Harness hooks set: it stays to run them, as tmux's server runs hooks with no client.)
+        if !app.holds_sessions() && !app.harness_hooks() && app.cli_held.is_empty() && busy.elapsed() > Duration::from_secs(2) && app.last_cli.elapsed() > Duration::from_secs(2) { break }
     }
     app.fleet.save_cache();
     app.write_sessions(app::Save::Leave);
@@ -426,6 +430,12 @@ async fn run(config: config::Config) -> io::Result<()> {
     mirror::tell_mirrors_now(&app);
     mirror::leave(&app);
     if let Some(path) = &socket { ipc::gone(path) }
+    // The last terminal going, with harness hooks set: hn stays with no terminal to run them
+    // (tmux's server keeps running hooks after its last client detaches).
+    if app.harness_hooks() && app.start_failed.is_none() && !app.forget_sessions {
+        let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty());
+        if ipc::clients_of(name.as_deref().unwrap_or("default")).is_empty() { cli::spawn_headless(name.as_deref(), Some(app.port)).await; }
+    }
     ids::leave();
     let session = app.session_name();
     drop(term);

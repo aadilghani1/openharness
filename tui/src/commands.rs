@@ -699,6 +699,8 @@ pub fn notify_session(app: &mut App, name: &str, sid: u32, session_name: &str, w
 pub fn notify_harness(app: &mut App, name: &str, key: &(String, String)) {
     let pane = app.find_pane(&key.0, &key.1);
     if !hooked(app, name, pane.map(|(w, _)| w), pane.map(|(_, p)| p)) { return }
+    // Once per server, not once per terminal: the oldest client runs it.
+    if !app.runs_agent_hooks() { return }
     let Some(a) = app.fleet.agent(&key.0, &key.1) else { return };
     let question = a.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default();
     let line = if !question.is_empty() { question.clone() } else if !a.launch_error.is_empty() { a.launch_error.clone() } else { a.did.clone().unwrap_or_default() };
@@ -1113,10 +1115,33 @@ pub fn option_changed(app: &mut App, name: &str) {
     after_set(app, name, now, true, None);
 }
 
-/// A harness a command names: `machine:agent` or its id, a pane that shows it (%N, a:1.0), or
-/// its name — exact, else the only one it starts, else the only one it matches as a pattern.
+/// The harness a harness-* hook is about (#{hook_harness_id}), in one.
+fn hook_harness(app: &App) -> Option<(String, String)> {
+    let id = app.hook_state.as_ref()?.formats.iter().find(|(k, _)| k == "hook_harness_id")?.1.clone();
+    let (m, a) = id.split_once(':')?;
+    Some((m.to_string(), a.to_string()))
+}
+
+/// A target that is a format (`-t "#{hook_harness_id}"`): expanded first.
+fn expand_target(app: &App, t: &str) -> String { if t.contains("#{") { expand(app, t) } else { t.to_string() } }
+
+/// The harness hn's harness commands mean: -t's (a format expanded), else the hook's in a
+/// harness-* hook; none said.
+fn harness_target(app: &App, words: &Words) -> Result<Option<(String, String)>, String> {
+    match opt(words, "-t") {
+        Some(t) => find_harness(app, &expand_target(app, &t)).map(Some),
+        None => Ok(hook_harness(app)),
+    }
+}
+
+/// A harness a command names: `machine:agent` (the machine by id or name) or its id, a pane that
+/// shows it (%N, a:1.0), or its name — exact, else the only one it starts, else the only one it
+/// matches as a pattern.
 fn find_harness(app: &App, t: &str) -> Result<(String, String), String> {
-    if let Some((m, a)) = t.split_once(':') { if app.fleet.agent(m, a).is_some() { return Ok((m.to_string(), a.to_string())) } }
+    if let Some((m, a)) = t.split_once(':') {
+        if app.fleet.agent(m, a).is_some() { return Ok((m.to_string(), a.to_string())) }
+        if let Some(machine) = app.fleet.machines.iter().find(|x| x.name == m) { if app.fleet.agent(&machine.id, a).is_some() { return Ok((machine.id.clone(), a.to_string())) } }
+    }
     if let Some(a) = app.fleet.agents.values().find(|a| a.id == t) { return Ok(a.key()) }
     if t.starts_with('%') || t.contains([':', '.']) {
         if let Some(p) = pane_target(app, t).and_then(|(_, p)| app.panes.get(&p)) { return Ok((p.machine_id.clone(), p.agent_id.clone())) }
@@ -2068,7 +2093,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // Every session's (list-sessions, and -a): each in front in turn while its lines are made.
             let all = command == "list-sessions" || flag(words, "-a");
             let me = app.session_id;
-            let order: Vec<u32> = if all { app.session_list().into_iter().map(|(id, _)| id).collect() } else { vec![me] };
+            // list-clients: this client's own session (not one a command has in front for a moment).
+            let client_sid = app.swap_back.unwrap_or(me);
+            let order: Vec<u32> = if all { app.session_list().into_iter().map(|(id, _)| id).collect() } else if command == "list-clients" { vec![client_sid] } else { vec![me] };
             let outer = app.swap_back;
             let mut lines = Vec::new();
             for sid in order {
@@ -2104,7 +2131,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 // hn with no terminal is tmux's server, not a client of it.
                 "list-clients" if app.headless => Vec::new(),
                 // list-clients -t: only when this client shows that session.
-                "list-clients" if opt(words, "-t").map(|t| app.find_session(t.split(':').next().unwrap_or(&t)) != Some(app.swap_back.unwrap_or(app.session_id))).unwrap_or(false) => Vec::new(),
+                "list-clients" if opt(words, "-t").map(|t| app.find_session(t.split(':').next().unwrap_or(&t)) != Some(client_sid)).unwrap_or(false) => Vec::new(),
                 _ => vec![(app.active, None)],
             };
             let history = "[#{pane_width}x#{pane_height}] [history #{history_size}/#{history_limit}, #{history_bytes} bytes] #{pane_id}#{?pane_active, (active),}#{?pane_dead, (dead),}";
@@ -2879,42 +2906,90 @@ fn run_words_in(app: &mut App, words: &[String]) {
         "rename-harness" => { let name = rest(words); if name.is_empty() { input::run(app, "rename") } else { input::rename_focused(app, &name) } }
         "send-task" => { let text = rest(words); if text.is_empty() { input::run(app, "send") } else { input::route_task(app, text) } }
         "broadcast" => { let text = rest(words); if text.is_empty() { input::run(app, "broadcast") } else { input::broadcast(app, &text) } }
-        "send-message" => { let text = rest(words); input::message_focused(app, &text) }
+        // send-message [-t harness] text: a turn for it — -t's, the hook's harness in a harness-*
+        // hook, else the focused pane's.
+        "send-message" => {
+            let text = positional(words).join(" ");
+            if text.trim().is_empty() { return app.error("usage: send-message [-t harness] text") }
+            let key = match harness_target(app, words) { Ok(Some(k)) => k, Ok(None) => match input::focused_key(app) { Some(k) => k, None => return app.error("no harness here (-t)") }, Err(e) => return app.error(e) };
+            let name = app.fleet.agent(&key.0, &key.1).map(|a| a.name.clone()).unwrap_or_default();
+            match app.link(&key.0) { Some(link) => { link.send("message", serde_json::json!({ "agentId": key.1, "content": text })); } None => app.error(format!("{name}'s machine is not connected")) }
+        }
         // answer-harness [-t harness] answer: its question answered — a choice's number (1 the
         // first; 1,3 several where it takes several) or your own words; without -t, the pane's
         // harness, else the first one waiting on you.
+        // answer-harness [-l] [-t harness] answer: its question answered — choices by number (2;
+        // 1,3 where it takes several), or with -l your own words. -t is a format (a hook's
+        // #{hook_harness_id}); in a harness-* hook the hook's harness, from the keys the focused
+        // pane's — from a shell, never a guess (an answer may approve a command).
         "answer-harness" => {
             let text = positional(words).join(" ");
-            if text.trim().is_empty() { return app.error("usage: answer-harness [-t harness] answer") }
-            let key = match opt(words, "-t") {
-                Some(t) => match find_harness(app, &t) { Ok(k) => k, Err(e) => return app.error(e) },
-                None => {
-                    let here = app.focused().and_then(|p| app.panes.get(&p)).map(|p| (p.machine_id.clone(), p.agent_id.clone())).filter(|(m, a)| app.fleet.agent(m, a).map(|x| x.question.is_some()).unwrap_or(false));
-                    match here.or_else(|| app.fleet.ranked().into_iter().find(|a| a.question.is_some()).map(|a| a.key())) { Some(k) => k, None => return app.error("nobody is waiting on you") }
-                }
+            if text.trim().is_empty() { return app.error("usage: answer-harness [-l] [-t harness] answer") }
+            let key = match harness_target(app, words) {
+                Ok(Some(k)) => k,
+                Ok(None) if app.capture.is_some() => return app.error("answer-harness: which harness? (-t)"),
+                Ok(None) => match input::focused_key(app) { Some(k) => k, None => return app.error("no harness here (-t)") },
+                Err(e) => return app.error(e),
             };
             let name = app.fleet.agent(&key.0, &key.1).map(|a| a.name.clone()).unwrap_or_default();
             let Some(q) = app.fleet.agent(&key.0, &key.1).and_then(|a| a.question.clone()) else { return app.error(format!("{name} is not asking anything")) };
-            let Some(value) = crate::fleet::answer_text(&q, &text) else { return };
+            let value = if flag(words, "-l") { text.trim().to_string() } else {
+                match crate::fleet::choices(&q, &text) { Ok(v) => v, Err(e) => return app.error(format!("answer-harness: {e}")) }
+            };
             if !input::answer_with(app, &key.0, &key.1, &value) { app.error(format!("{name}'s machine is not connected")) }
         }
         // open-harness [-bdfhv] [-s harness] [-t target]: a harness into a window of its own in
         // the session (-t's), or split into -t's pane (-h beside, -v below; -b before, -f across
         // the window) — -d not gone to. Open already: gone to.
         "open-harness" => {
-            let Some(who) = opt(words, "-s").or_else(|| positional(words).first().cloned()) else { return app.error("usage: open-harness [-bdfhv] [-s harness] [-t target]") };
-            let (m, a) = match find_harness(app, &who) { Ok(k) => k, Err(e) => return app.error(e) };
+            let hooked = hook_harness(app);
+            let who = opt(words, "-s").or_else(|| positional(words).first().cloned());
+            let (m, a) = match who {
+                Some(w) => match find_harness(app, &expand_target(app, &w)) { Ok(k) => k, Err(e) => return app.error(e) },
+                None => match hooked { Some(k) => k, None => return app.error("usage: open-harness [-bdfhv] [-s harness] [-t target]") },
+            };
             let detached = flag(words, "-d");
-            if flag(words, "-h") || flag(words, "-v") {
+            let target = opt(words, "-t").map(|t| expand_target(app, &t));
+            // -t's session (billing:, billing:3, billing:1.0; a pane's %N), else this one; another
+            // terminal's: done by that terminal.
+            let sid = match target.as_deref() {
+                Some(t) if t.starts_with('%') => crate::pane::from_tag(&t[1..]).and_then(|p| app.session_of_pane(p).or_else(|| app.remote_session_of(Some(p), None))),
+                Some(t) => { let s = t.split(':').next().unwrap_or(t); if s.is_empty() || !t.contains(':') && (flag(words, "-h") || flag(words, "-v")) { Some(app.session_id) } else { app.find_session(s) } }
+                None => Some(app.session_id),
+            };
+            let Some(sid) = sid else { return app.error(format!("can't find session: {}", target.unwrap_or_default())) };
+            if let Some(owner) = app.remote_owner(sid) {
+                let mut w: Vec<String> = words.iter().filter(|x| !x.starts_with("-s")).cloned().collect();
+                w.retain(|x| Some(x) != opt(words, "-s").as_ref());
+                w.extend(["-s".to_string(), format!("{m}:{a}")]);
+                return forward(app, &owner, &w);
+            }
+            let back = app.session_id;
+            if sid != back { app.swap_back = Some(back); app.swap_session(sid); }
+            let rest = target.as_deref().and_then(|t| t.split_once(':').map(|(_, r)| r.to_string()));
+            if let Some((w, p)) = app.find_pane(&m, &a) {
+                // Open in this session already: gone to (not opened twice).
+                if !detached { app.select_tab(w); app.focus_pane(w, p) }
+            } else if flag(words, "-h") || flag(words, "-v") {
                 let dir = if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical };
-                let Some((w, p)) = (match opt(words, "-t") { Some(t) => pane_target(app, &t), None => app.current() }) else { return app.error("can't find pane") };
+                let pane = match (target.as_deref(), rest.as_deref()) {
+                    (Some(t), _) if t.starts_with('%') => pane_target(app, t),
+                    (_, Some(r)) if !r.is_empty() => pane_target(app, &format!(":{r}")),
+                    (Some(t), None) => pane_target(app, t),
+                    _ => app.current(),
+                };
+                let Some((w, p)) = pane.or_else(|| app.current()) else { if sid != back { app.swap_session(back); app.swap_back = None } return app.error("can't find pane") };
                 let at = crate::app::At { tab: app.tabs[w].id.clone(), pane: Some(p), dir, before: flag(words, "-b"), full: flag(words, "-f"), size: None, detached, zoom: false };
                 app.open_agent(&m, &a, crate::app::Placement::At(at));
             } else {
-                let back = app.tabs.get(app.active).map(|t| t.id.clone());
+                let was = app.tabs.get(app.active).map(|t| t.id.clone());
                 app.open_agent(&m, &a, crate::app::Placement::Window);
-                if detached { if let Some(i) = back.and_then(|b| app.tabs.iter().position(|t| t.id == b)) { app.select_tab(i) } }
+                // At -t's index (billing:3), as new-window -t puts it.
+                let idx = rest.as_deref().and_then(|r| r.split('.').next()).and_then(|r| r.parse::<usize>().ok());
+                if let (Some(n), Some((w, _))) = (idx, app.find_pane(&m, &a)) { if let Err(e) = app.move_window(w, Some(n), false, !detached) { app.error(e) } }
+                if detached { if let Some(i) = was.and_then(|b| app.tabs.iter().position(|t| t.id == b)) { app.select_tab(i) } }
             }
+            if sid != back { app.renumber(); app.swap_session(back); app.swap_back = None; app.fit_panes(); app.save_sessions() }
         }
         "next-harness" => input::next_attention(app, flag(words, "-p")),
         // Harness-era command ids still work, for old configs and the palette.

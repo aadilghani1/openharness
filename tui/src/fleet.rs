@@ -383,6 +383,24 @@ pub fn tidy_error(line: &str) -> String {
     line.to_string()
 }
 
+/// An answer given by its choices' numbers (`2`; `1,3` for a question that takes several): the
+/// choices' words — anything else is refused, never sent as words (answer -l for words).
+pub fn choices(q: &Question, typed: &str) -> Result<String, String> {
+    let parts: Vec<&str> = typed.split([',', ' ']).filter(|s| !s.is_empty()).collect();
+    let n = q.options.len();
+    if n == 0 { return Err("this question has no choices: answer -l with words".into()) }
+    let mut picked = Vec::new();
+    for p in &parts {
+        match p.parse::<usize>() {
+            Ok(k) if k >= 1 && k <= n => picked.push(q.options[k - 1].clone()),
+            _ => return Err(format!("{p} is not a choice (1–{n}; -l for words)")),
+        }
+    }
+    if picked.is_empty() { return Err("no choice given".into()) }
+    if picked.len() > 1 && !q.multi { return Err(format!("one choice only (1–{n})")) }
+    Ok(picked.join(", "))
+}
+
 pub fn answer_text(q: &Question, typed: &str) -> Option<String> {
     let typed = typed.trim();
     if typed.is_empty() { return None }

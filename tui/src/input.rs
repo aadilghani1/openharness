@@ -2327,11 +2327,9 @@ pub fn broadcast(app: &mut App, text: &str) {
     submit_prompt(app, Prompt::status(PromptKind::Broadcast, "", text));
 }
 
-pub fn message_focused(app: &mut App, text: &str) {
-    if text.trim().is_empty() { return }
-    let Some((machine, agent)) = focused_agent(app) else { return };
-    if let Some(link) = app.link(&machine) { link.send("message", json!({ "agentId": agent, "content": text })); }
-}
+/// The focused pane's harness, when it shows one.
+pub fn focused_key(app: &App) -> Option<(String, String)> { focused_agent(app) }
+
 
 /// Fetch a harness's recent asks and recaps for the preview, once (then on each open of the list).
 pub fn ensure_recent(app: &mut App, id: &str) {

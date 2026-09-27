@@ -448,6 +448,8 @@ pub struct App {
     pub desk_layouts: HashSet<String>,
     /// The desk refused a layout's tmux form (a backend from before it): not sent again.
     pub desk_no_tmux: bool,
+    /// The harnesses that failed to start, as last looked (harness-failed for each new one).
+    pub launch_failed: Option<HashSet<(String, String)>>,
     pub unlinked_later: Vec<(u32, String, u64, String)>,
     /// The server's state (global options, key tables, buffers, global environment) as this
     /// client last wrote or took it, and whether a command ran since (server.rs).
@@ -636,6 +638,7 @@ impl App {
             prs_read: None,
             desk_layouts: HashSet::new(),
             desk_no_tmux: false,
+            launch_failed: None,
             unlinked_later: Vec::new(),
             server_synced: None,
             server_dirty: false,
@@ -1045,6 +1048,8 @@ impl App {
                     agent.active_at = now;
                     if ty == "turn_started" {
                         agent.unread = false; agent.errored = false;
+                        // What its last turn came to is not what this one does.
+                        agent.did = None;
                         let key = agent.key();
                         if self.agent_errors.remove(&key).is_some() { self.seen_dirty = true }
                     }
@@ -2006,6 +2011,31 @@ impl App {
         self.options.windows.entry(id).or_default().insert("automatic-rename".into(), "off".into());
     }
 
+    /// harness-failed for a harness that failed to start since the last look (not for those failed
+    /// already when this client first heard of its machines).
+    fn check_launches(&mut self) {
+        if self.seen_rostered.is_empty() { return }
+        let now: HashSet<(String, String)> = self.fleet.agents.values().filter(|a| a.launch == "failed").map(|a| a.key()).collect();
+        let fresh: Vec<(String, String)> = match &self.launch_failed { Some(before) => now.difference(before).cloned().collect(), None => Vec::new() };
+        self.launch_failed = Some(now);
+        for key in fresh { crate::commands::notify_harness(self, "harness-failed", &key) }
+    }
+
+    /// Whether harness hooks are set (harness-needs, -done, -failed): someone wants them run,
+    /// attached or not.
+    pub fn harness_hooks(&self) -> bool {
+        [&self.options.server, &self.options.global_session, &self.options.global_window].iter().any(|m| m.keys().any(|k| k.starts_with("harness-")))
+    }
+
+    /// Whether this process runs the harness hooks: one of a server name's does, as tmux runs a
+    /// hook once — the oldest running client (its socket made first).
+    pub fn runs_agent_hooks(&self) -> bool {
+        let Some(me) = crate::ipc::here() else { return true };
+        let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
+        let made = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        crate::ipc::clients_of(&name).into_iter().min_by_key(|p| made(p)).map(|oldest| oldest == me).unwrap_or(true)
+    }
+
     /// A session of this client's: its windows' ids and names, and its current window's id.
     pub fn windows_of(&self, sid: u32) -> (Vec<(u64, String)>, Option<u64>) {
         let (tabs, active) = if sid == self.session_id { (&self.tabs, self.active) } else { match self.sessions.iter().find(|s| s.id == sid) { Some(s) => (&s.tabs, s.active), None => return (Vec::new(), None) } };
@@ -2694,9 +2724,21 @@ impl App {
         if !self.seen_rostered.insert(machine_id.to_string()) { return }
         let local = machine_id == self.fleet.local_id;
         let floor = self.seen_since;
+        let mut ended = Vec::new();
         for agent in self.fleet.agents.values_mut().filter(|a| a.machine_id == machine_id && a.engine != "terminal") {
             let key = (agent.machine_id.clone(), agent.id.clone());
             let seen = self.seen_at.get(&key).copied().unwrap_or(floor);
+            // Working when the link went, its transcript changed since the last word from it: its
+            // turn ended while the link was down (a turn still running says so again at its next
+            // heartbeat). Its line asked for again.
+            if agent.working && agent.usage_at > agent.active_at {
+                agent.working = false;
+                agent.doing = None;
+                agent.did = None;
+                agent.recap_asked = false;
+                agent.since = agent.usage_at;
+                ended.push(key.clone());
+            }
             if agent.usage_at > seen && !agent.working && agent.question.is_none() && agent.status != "stopped" {
                 agent.unread = true;
                 if agent.since == 0 { agent.since = agent.usage_at }
@@ -2709,6 +2751,7 @@ impl App {
             }
         }
         if local && !self.headless { self.back_again() }
+        for key in ended { crate::commands::notify_harness(self, "harness-done", &key) }
     }
 
     /// seen.json's path.
@@ -4153,7 +4196,7 @@ impl App {
         self.release_waiting();
         self.release_cli();
         crate::dial::tick(self);
-        if self.tick % 4 == 0 { self.check_silence() }
+        if self.tick % 4 == 0 { self.check_silence(); self.check_launches() }
         // What the panes on screen run (vim? a build?) moves as you work: asked every two seconds.
         // …and every other window's active pane, which names that window (automatic-rename).
         if self.tick % 8 == 4 {
