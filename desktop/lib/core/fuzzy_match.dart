@@ -33,6 +33,14 @@ bool startsWord(String text, int index) {
         unit >= 0x41 && unit <= 0x5a ||
         unit >= 0x61 && unit <= 0x7a);
   }
+  // Separators every row carries ("·", "…", "—", no-break space) and emoji
+  // halves, without a regex per character.
+  if (unit == 0xa0 ||
+      unit == 0xb7 ||
+      unit >= 0x2000 && unit <= 0x206f ||
+      unit >= 0xd800 && unit <= 0xdfff) {
+    return true;
+  }
   return !_wordCharacter.hasMatch(text[index - 1]);
 }
 
@@ -60,7 +68,11 @@ int? wordSubsequenceSpread(
   void Function(int start, int end)? onMatch,
 }) {
   if (query.isEmpty) return 0;
-  final first = String.fromCharCode(query.runes.first);
+  final letters = _lettersOf(query);
+  // Two letters scattered match nearly everything ("hn" in every "harness"):
+  // they count only as initials, each starting a word ("ns" for New Split).
+  if (letters.length < 3) return _initials(text, letters, onMatch: onMatch);
+  final first = letters.first;
   final limit = query.length * 2;
   int? bestStart, bestSpread;
   for (
@@ -69,10 +81,10 @@ int? wordSubsequenceSpread(
     at = text.indexOf(first, at + first.length)
   ) {
     if (!startsWord(text, at)) continue;
-    final spread = subsequenceSpread(text, query, from: at);
+    final spread = _spreadWithin(text, letters, at, limit);
     // A later start sees less of the text, so it cannot match either.
-    if (spread == null) break;
-    if (spread <= limit && (bestSpread == null || spread < bestSpread)) {
+    if (spread == _absent) break;
+    if (spread != null && (bestSpread == null || spread < bestSpread)) {
       bestStart = at;
       bestSpread = spread;
       if (spread == query.length - 1) break;
@@ -82,4 +94,60 @@ int? wordSubsequenceSpread(
     subsequenceSpread(text, query, from: bestStart, onMatch: onMatch);
   }
   return bestSpread;
+}
+
+/// No subsequence at all from here on.
+const _absent = -1;
+
+/// The spread of [query] as a subsequence of [text] starting at [start],
+/// giving up as soon as it passes [limit] (null) rather than scanning on to the
+/// end of a long field; [_absent] when a letter never occurs again.
+int? _spreadWithin(String text, List<String> letters, int start, int limit) {
+  var at = start;
+  for (var index = 1; index < letters.length; index++) {
+    final found = text.indexOf(letters[index], at + 1);
+    if (found < 0) return _absent;
+    if (found - start > limit) return null;
+    at = found;
+  }
+  return at - start;
+}
+
+/// A query's letters, as strings: worked out once per query, not once per
+/// field of every row it is matched against.
+List<String> _lettersOf(String query) {
+  if (identical(query, _lettersQuery) || query == _lettersQuery) {
+    return _letters;
+  }
+  _lettersQuery = query;
+  return _letters = [for (final rune in query.runes) String.fromCharCode(rune)];
+}
+
+String? _lettersQuery;
+List<String> _letters = const [];
+
+int? _initials(
+  String text,
+  List<String> letters, {
+  void Function(int start, int end)? onMatch,
+}) {
+  var at = -1;
+  var first = -1;
+  final found = <(int, int)>[];
+  for (final character in letters) {
+    var next = text.indexOf(character, at + 1);
+    while (next >= 0 && !startsWord(text, next)) {
+      next = text.indexOf(character, next + 1);
+    }
+    if (next < 0) return null;
+    if (first < 0) first = next;
+    at = next;
+    found.add((next, next + character.length));
+  }
+  if (onMatch != null) {
+    for (final (start, end) in found) {
+      onMatch(start, end);
+    }
+  }
+  return at - first;
 }

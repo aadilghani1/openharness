@@ -59,11 +59,39 @@ describe('TurnCollector', () => {
   })
 })
 
+describe('what the person asked, and what they did not', () => {
+  it('files a sub-agent hand-back under the agent, and drops notices', () => {
+    const turns = new TurnCollector(0)
+    turns.feed([ask('Another Claude session sent a message: <agent-message from="a1">[Subagent hand-back] the dial audit found 3 bugs</agent-message>')], 0, null)
+    turns.feed([say('Fixing them now.')], 10, null)
+    turns.feed([ask('Your claude.ai usage limit has reset. Continue the task you were working on.')], 20, null)
+    turns.feed([ask('now flash it')], 30, null)
+    const { closed, open } = turns.finish()
+    // The notice leaves nothing behind; the hand-back is the agent's text, not an ask.
+    expect(closed).toHaveLength(1)
+    expect(closed[0].ask).toBe('')
+    expect(closed[0].answer).toContain('the dial audit found 3 bugs')
+    expect(closed[0].answer).toContain('Fixing them now.')
+    expect(open?.ask).toBe('now flash it')
+  })
+
+  it('counts a hand-back announced twice as one turn', () => {
+    const turns = new TurnCollector(0)
+    const report = 'Another Claude session sent a message: the audit is done'
+    turns.feed([ask(report), { type: 'user_message', payload: { content: report } }], 0, null)
+    turns.feed([ask('thanks, ship it')], 10, null)
+    const { closed } = turns.finish()
+    expect(closed).toHaveLength(1)
+  })
+})
+
 describe('searchableText', () => {
   it('drops harness wrappers, folds whitespace and blanks secrets', () => {
     expect(searchableText('<system-reminder>ignore\nthis</system-reminder>deploy   with\nsk-abcdefghijklmnop', 100))
       .toBe('deploy with sk-<redacted>')
     expect(searchableText('<command-name>/clear</command-name> hello', 100)).toBe('hello')
+    expect(searchableText('see <pasted_content id="c200"> https://github.com/x/y/issues/167 </pasted_content id="c200">', 100))
+      .toBe('see https://github.com/x/y/issues/167')
   })
 })
 

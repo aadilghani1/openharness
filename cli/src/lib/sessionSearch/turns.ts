@@ -39,9 +39,30 @@ const WRAPPER_TAGS = [
 ]
 const WRAPPERS = new RegExp(`<(${WRAPPER_TAGS.join('|')})>[\\s\\S]*?</\\1>`, 'g')
 
+/**
+ * Messages that arrive as the person's turn but were written by the harness or another agent: a
+ * sub-agent handing back its report, a notice that a limit reset. Searchable — a report says what
+ * was done — but as the agent's side, never as what the person asked.
+ */
+const AGENT_WRITTEN = /^(?:Another \w+ session sent a message|<agent-message\b|\[Subagent hand-back\])/
+/** Notices with nothing to find: dropped. */
+const NOTICE = /^(?:Your claude\.ai usage limit has reset|\[Request interrupted by user|\[SYSTEM NOTIFICATION)/
+
+export type AskKind = 'person' | 'agent' | 'notice'
+
+export function askKind(text: string): AskKind {
+  const start = text.trimStart()
+  if (NOTICE.test(start)) return 'notice'
+  if (AGENT_WRITTEN.test(start)) return 'agent'
+  return 'person'
+}
+
+// A paste's markers: what was pasted is the person's, and searchable; the tags around it are not.
+const PASTE_TAGS = /<\/?pasted_content\b[^>]*>/g
+
 /** Text as it is stored and searched: wrappers out, whitespace folded, secrets blanked, bounded. */
 export function searchableText(text: string, max: number): string {
-  const folded = redactSecretsInText(text.replace(WRAPPERS, ' ')).replace(/\s+/g, ' ').trim()
+  const folded = redactSecretsInText(text.replace(WRAPPERS, ' ').replace(PASTE_TAGS, ' ')).replace(/\s+/g, ' ').trim()
   return folded.length > max ? folded.slice(0, max) : folded
 }
 
@@ -101,6 +122,8 @@ export function toolText(tool: string, input: unknown): string {
 }
 
 interface Draft {
+  /** The message that opened the turn, as it arrived: a second announcement of it is the same turn. */
+  opener: string
   turn: number
   offset: number
   at: number | null
@@ -135,7 +158,7 @@ export class TurnCollector {
         case 'user_message': {
           const content = event.payload.content
           // The live normalizers announce a prompt twice (the turn, then the message): one turn.
-          if (this.draft && this.draft.ask === searchableText(content, ASK_MAX) && !this.draft.answer.length) break
+          if (this.draft && this.draft.opener === content && this.draft.answerLength === (askKind(content) === 'agent' ? content.length : 0)) break
           this.open(content, offset, at)
           break
         }
@@ -168,12 +191,20 @@ export class TurnCollector {
 
   private open(ask: string, offset: number, at: number | null): void {
     if (this.draft) this.close()
-    this.draft = { turn: this.nextTurn++, offset, at, ask: searchableText(ask, ASK_MAX), answer: [], answerLength: 0, tools: [], toolsLength: 0 }
+    const kind = askKind(ask)
+    this.draft = {
+      opener: ask,
+      turn: this.nextTurn++, offset, at,
+      ask: kind === 'person' ? searchableText(ask, ASK_MAX) : '',
+      answer: kind === 'agent' ? [ask] : [],
+      answerLength: kind === 'agent' ? ask.length : 0,
+      tools: [], toolsLength: 0,
+    }
   }
 
   /** Text or a tool call before any prompt: a turn the transcript picked up in the middle. */
   private current(offset: number, at: number | null): Draft {
-    if (!this.draft) this.draft = { turn: this.nextTurn++, offset, at, ask: '', answer: [], answerLength: 0, tools: [], toolsLength: 0 }
+    if (!this.draft) this.draft = { opener: '', turn: this.nextTurn++, offset, at, ask: '', answer: [], answerLength: 0, tools: [], toolsLength: 0 }
     return this.draft
   }
 

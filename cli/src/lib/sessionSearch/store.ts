@@ -16,7 +16,7 @@ import { chmodSync, existsSync, rmSync } from 'node:fs'
 import { builtinSqlite } from '../sqliteRead.js'
 import type { IndexedTurn } from './turns.js'
 
-const SCHEMA_VERSION = '3'
+const SCHEMA_VERSION = '5'
 
 /** The row that holds a session's name, title and folder: searchable beside its turns. */
 export const HEADER_TURN = -1
@@ -591,19 +591,24 @@ export class SessionSearchStore {
     for (const sid of this.sessionsWorkedOn(window)) {
       if (!latest.has(sid)) latest.set(sid, sessions.get(sid)?.lastAt ?? window.to)
     }
+    // The latest thing the person asked in the window, else the latest turn there: a turn an
+    // agent's report opened says less about the session than what was asked.
     const timedTurn = this.statement(`
-      SELECT id, turn, at, ask FROM turns WHERE session_id = ? AND turn >= 0 AND at = ? ORDER BY turn DESC LIMIT 1`)
+      SELECT id, turn, at, ask, answer FROM turns WHERE session_id = ? AND turn >= 0 AND at BETWEEN ? AND ?
+      ORDER BY (ask = '') ASC, at DESC, turn DESC LIMIT 1`)
     const lastTurn = this.statement(`
-      SELECT id, turn, at, ask FROM turns WHERE session_id = ? AND turn >= 0 ORDER BY turn DESC LIMIT 1`)
+      SELECT id, turn, at, ask, answer FROM turns WHERE session_id = ? AND turn >= 0 ORDER BY (ask = '') ASC, turn DESC LIMIT 1`)
     const hits: SearchHit[] = []
     for (const [sid, at] of [...latest].sort((a, b) => b[1] - a[1]).slice(0, limit)) {
       const session = sessions.get(sid)
-      const row = timedTurn.get(sid, at) ?? lastTurn.get(sid)
+      const row = timedTurn.get(sid, window.from, window.to) ?? lastTurn.get(sid)
       if (!session || !row) continue
+      // What was asked; a turn opened by an agent's report has only the agent's side.
+      const asked = String(row.ask ?? '')
       hits.push({
         sessionId: sid, agentId: session.agentId, engine: session.engine,
-        turn: row.turn as number, at, lastAt: session.lastAt, field: 'ask',
-        snippet: clipAsk(String(row.ask ?? '')),
+        turn: row.turn as number, at, lastAt: session.lastAt, field: asked ? 'ask' : 'answer',
+        snippet: clipAsk(asked || String(row.answer ?? '')),
         together: true,
         score: Math.round(Math.pow(0.5, Math.max(0, now - at) / 86_400_000 / RECENCY_HALF_LIFE_DAYS) * 1000) / 1000,
       })

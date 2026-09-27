@@ -192,6 +192,8 @@ describe('SessionSearchStore', () => {
     ])
     store.writeSession(session('b', 'B', NOW - 1 * DAY), 0, [turn(0, 'yesterday work', '', '', NOW - 1 * DAY)])
     store.writeSession(session('c', 'C', NOW - 9 * DAY), 0, [turn(0, 'long ago', '', '', NOW - 9 * DAY)])
+    // A later turn opened by an agent's report does not hide what the person asked.
+    store.writeSession(session('a', 'A', NOW - 2 * DAY), 2, [turn(2, '', 'Another session reported back', '', NOW - 2 * DAY + 60_000)])
     const hits = store.search('', { now: NOW, from: NOW - 4 * DAY, to: NOW })
     expect(hits.map((hit) => [hit.sessionId, hit.snippet, hit.field])).toEqual([
       ['b', 'yesterday work', 'ask'],

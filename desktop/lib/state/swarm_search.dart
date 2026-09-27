@@ -413,6 +413,10 @@ class SwarmSearchController extends ChangeNotifier {
   /// until then, rows arriving from a machine keep the best one selected.
   bool _chosen = false;
 
+  /// The query the machines' session indexes last answered, or null before
+  /// any answer: whether what was said has been searched yet.
+  String? get contentAnswered => _content?.answered;
+
   /// What a machine's session index found in this row's conversation for the
   /// current query, when that is how the row matched.
   SessionContentHit? contentHitFor(String rowId) =>

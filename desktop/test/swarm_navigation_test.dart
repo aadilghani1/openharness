@@ -109,7 +109,16 @@ void main() {
     ];
     expect(
       rankSwarmDestinationsByActivity(catalog, 'hn').map((row) => row.id),
-      ['named', 'newer word', 'word', 'folder', 'scattered'],
+      // Two letters scattered through "harness…" names and folders are noise.
+      ['named', 'newer word', 'word'],
+    );
+    // Two letters still work as initials.
+    expect(
+      rankSwarmDestinationsByActivity([
+        row('split', 'New Split', hour: 2),
+        row('other', 'Networks', hour: 3),
+      ], 'ns').map((row) => row.id),
+      ['split'],
     );
     // Scattered letters that wander across a folder path are no match at all.
     expect(rankSwarmDestinationsByActivity(catalog, 'auth'), isEmpty);
