@@ -1480,8 +1480,8 @@ fn best_session(app: &App, words: &[String]) -> Option<u32> {
     if entry.target.is_none() || matches!(entry.name, "switch-client" | "attach-session" | "new-session" | "detach-client" | "kill-server" | "list-sessions" | "has-session") { return None }
     let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).ok()?;
     if args.get('t').is_some() || args.get('s').is_some() { return None }
-    let best = app.sessions.iter().filter(|s| !s.desk && s.tabs.iter().any(|t| t.root.is_some())).max_by_key(|s| s.activity)?;
-    (best.activity >= app.session_activity).then_some(best.id)
+    let best = app.sessions.iter().filter(|s| !s.desk && s.tabs.iter().any(|t| t.root.is_some())).max_by_key(|s| s.used)?;
+    (best.used > app.session_used).then_some(best.id)
 }
 
 /// The session (not the one in front) a command's -t or -s names: the part before `:`, the whole

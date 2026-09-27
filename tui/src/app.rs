@@ -51,6 +51,9 @@ pub struct EnvVar { pub value: Option<String>, pub hidden: bool }
 /// it (`-t work:2`) runs. The session on screen keeps the same in App's own fields.
 pub struct Stash {
     pub id: u32,
+    /// When it was last used, in order (use_order): the session used last is the one a command
+    /// from a shell with no -t is for, whatever second two uses fell in.
+    pub used: u64,
     /// Another client's session, shown here as it has it (mirror.rs).
     pub mirror: Option<Mirror>,
     /// Its name; None for the desk's session while it is named for this computer.
@@ -77,6 +80,13 @@ pub struct StartSession { pub name: Option<String>, pub create: bool, pub attach
 impl StartSession {
     /// How it goes to a session another client has: -d takes it, -r watches it, else shared.
     pub fn attach_how(&self) -> Attach { if self.detach { Attach::Take } else if self.readonly { Attach::Watch } else { Attach::Share } }
+}
+
+/// The next in the order sessions are used in (a key, a switch, a new session): finer than
+/// #{session_activity}'s seconds, as tmux compares its activity times to the microsecond.
+pub fn use_order() -> u64 {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// A session another client of the server has, shown here as that client has it — tmux's second
@@ -420,6 +430,8 @@ pub struct App {
     /// When the session in front was last used: when the client last left it (the client's own
     /// is in use now).
     pub session_activity: i64,
+    /// Its place in the order sessions are used in (use_order).
+    pub session_used: u64,
     /// The session the client was in before this one (switch-client -l, C-b L).
     pub last_session: Option<u32>,
     /// The sessions this client does not have (other clients', or no client's), as the file said.
@@ -625,6 +637,7 @@ impl App {
             session_desk: desk_mode != DeskMode::Off,
             session_created: epoch_secs(),
             session_activity: epoch_secs(),
+            session_used: use_order(),
             last_session: None,
             remote: Default::default(),
             handed_over: false,
@@ -1741,7 +1754,7 @@ impl App {
     fn stash_current(&mut self) -> Stash {
         let activity = self.session_activity;
         Stash {
-            id: self.session_id, mirror: self.mirror.take(), alias: self.session_alias.take(), desk: self.session_desk,
+            id: self.session_id, used: self.session_used, mirror: self.mirror.take(), alias: self.session_alias.take(), desk: self.session_desk,
             tabs: std::mem::take(&mut self.tabs), active: self.active, lastw: std::mem::take(&mut self.lastw), nums: std::mem::take(&mut self.nums),
             created: self.session_created, activity, options: std::mem::take(&mut self.options.session), env: std::mem::take(&mut self.session_env),
         }
@@ -1749,6 +1762,7 @@ impl App {
 
     fn unstash(&mut self, s: Stash) {
         self.session_id = s.id;
+        self.session_used = s.used;
         self.mirror = s.mirror;
         self.session_alias = s.alias;
         self.session_desk = s.desk;
@@ -1798,6 +1812,7 @@ impl App {
         self.update_environment();
         // …and the one it goes to is in use from now (server_client_set_session).
         self.session_activity = epoch_secs();
+        self.session_used = use_order();
         self.last_session = Some(from);
         // A session left with no window (the one a client started in, before its shell came):
         // gone, as tmux has no session without a window.
@@ -2127,7 +2142,7 @@ impl App {
         let tab_id = tab.id.clone();
         let base = self.base_index;
         let linked = (tab.wid(), tab.name.clone());
-        self.sessions.push(Stash { id, mirror: None, alias: Some(name.clone()), desk: false, tabs: vec![tab], active: 0, lastw: Vec::new(), nums: HashMap::from([(tab_id.clone(), base)]),
+        self.sessions.push(Stash { id, used: use_order(), mirror: None, alias: Some(name.clone()), desk: false, tabs: vec![tab], active: 0, lastw: Vec::new(), nums: HashMap::from([(tab_id.clone(), base)]),
             created: epoch_secs(), activity: epoch_secs(), options: Default::default(), env: self.environ_update() });
         // cmd-new-session.c: its window linked (spawn_window), then the session created.
         crate::commands::notify_session(self, "window-linked", id, &name, Some(linked));
@@ -2146,7 +2161,7 @@ impl App {
         let id = self.alloc_session_id();
         let tab = Tab::home();
         let base = self.base_index;
-        self.sessions.push(Stash { id, mirror: None, alias: Some(name.to_string()), desk: false, nums: HashMap::from([(tab.id.clone(), base)]), tabs: vec![tab], active: 0, lastw: Vec::new(),
+        self.sessions.push(Stash { id, used: use_order(), mirror: None, alias: Some(name.to_string()), desk: false, nums: HashMap::from([(tab.id.clone(), base)]), tabs: vec![tab], active: 0, lastw: Vec::new(),
             created: epoch_secs(), activity: epoch_secs(), options: Default::default(), env: self.environ_update() });
         crate::commands::notify_session(self, "session-created", id, name, None);
         id
@@ -2195,7 +2210,7 @@ impl App {
         let me = crate::ipc::here().map(|p| p.display().to_string());
         let path = Self::sessions_path();
         let doc = read_sessions(&path);
-        let here = Stash { id: self.session_id, mirror: self.mirror.clone(), alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), options: self.options.session.clone(), env: self.session_env.clone() };
+        let here = Stash { id: self.session_id, used: self.session_used, mirror: self.mirror.clone(), alias: self.session_alias.clone(), desk: self.session_desk, tabs: Vec::new(), active: self.active, lastw: Vec::new(), nums: HashMap::new(), created: self.session_created, activity: epoch_secs(), options: self.options.session.clone(), env: self.session_env.clone() };
         let mut ours = Vec::new();
         let mut names = HashSet::new();
         let mut desk = None;
@@ -2298,7 +2313,7 @@ impl App {
         let active = row.get("active").and_then(Value::as_u64).unwrap_or(0) as usize;
         let created = row.get("created").and_then(Value::as_i64).unwrap_or_else(epoch_secs);
         let lastw: Vec<String> = row.get("last").and_then(Value::as_array).map(|l| l.iter().filter_map(|i| tabs.get(i.as_u64()? as usize).map(|t| t.id.clone())).collect()).unwrap_or_default();
-        Some(Stash { id, mirror: None, alias: Some(name), desk: false, active: active.min(tabs.len() - 1), tabs, lastw, nums,
+        Some(Stash { id, used: 0, mirror: None, alias: Some(name), desk: false, active: active.min(tabs.len() - 1), tabs, lastw, nums,
             created, activity: row.get("activity").and_then(Value::as_i64).unwrap_or(created), options: options_from(row), env: env_from(row) })
     }
 
@@ -4197,6 +4212,13 @@ impl App {
         self.release_cli();
         crate::dial::tick(self);
         if self.tick % 4 == 0 { self.check_silence(); self.check_launches() }
+        // The client whose session this one shows gone without a word (killed, its terminal
+        // closed): this one has the session now.
+        if self.tick % 8 == 2 {
+            if let Some(m) = self.mirror.clone() { if !crate::ipc::answers(std::path::Path::new(&m.owner)) { crate::mirror::refresh(self) } }
+            let owners: Vec<String> = self.mirrors.keys().filter(|m| !crate::ipc::answers(std::path::Path::new(m.as_str()))).cloned().collect();
+            for m in owners { self.mirrors.remove(&m); }
+        }
         // What the panes on screen run (vim? a build?) moves as you work: asked every two seconds.
         // …and every other window's active pane, which names that window (automatic-rename).
         if self.tick % 8 == 4 {

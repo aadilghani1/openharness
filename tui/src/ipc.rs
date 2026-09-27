@@ -195,6 +195,10 @@ fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
     if let Some(p) = socket { return Some(PathBuf::from(p)) }
     if let Some(n) = name { return Some(clients_of(n).into_iter().next().unwrap_or_else(|| dir().join(format!("{n}.sock")))) }
     if let Some(p) = std::env::var("HN_SOCKET").ok().filter(|s| !s.is_empty()) { return Some(PathBuf::from(p)) }
+    // $TMUX naming an hn socket (what hn's jobs run with; kept where $HN_SOCKET is not, by sudo
+    // or `env -i TMUX=…`): that client, as tmux takes its server from $TMUX. (A real tmux's
+    // socket is not hn's: hn's own are found as before.)
+    if let Some(p) = std::env::var("TMUX").ok().and_then(|t| t.split(',').next().map(PathBuf::from)).filter(|p| p.starts_with(dir())) { return Some(p) }
     let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty());
     if let Some(n) = name { return Some(clients_of(&n).into_iter().next().unwrap_or_else(|| dir().join(format!("{n}.sock")))) }
     if let Some(p) = clients_of("default").into_iter().next() { return Some(p) }

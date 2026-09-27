@@ -23,7 +23,7 @@ pub fn handle(app: &mut App, event: CEvent) {
     match event {
         // A key is the session's activity (session_update_activity): a script's command with no -t
         // goes to the session used last.
-        CEvent::Key(key) if key.kind != KeyEventKind::Release => { app.session_activity = crate::app::epoch_secs(); on_key(app, key) }
+        CEvent::Key(key) if key.kind != KeyEventKind::Release => { app.session_activity = crate::app::epoch_secs(); app.session_used = crate::app::use_order(); on_key(app, key) }
         CEvent::Paste(text) => on_paste(app, text),
         CEvent::Mouse(mouse) => { if app.mouse { on_mouse(app, mouse) } }
         CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.fit_panes(); crate::commands::notify(app, "client-resized", None, None) }

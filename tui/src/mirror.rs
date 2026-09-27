@@ -16,6 +16,15 @@ use crate::app::{live_owner, read_sessions, App, Mirror, Stash, Tab};
 use crate::layout::Node;
 
 /// Session [name]'s row in the sessions file, read now.
+/// Session [id]'s row (its $N is kept wherever it goes, whatever it is named now), else by
+/// [name] (a row from before ids were kept).
+fn row_of(id: u32, name: &str) -> Option<Value> {
+    let doc = read_sessions(&crate::app::sessions_path(None));
+    let rows = doc["sessions"].as_array()?;
+    let live = |r: &&Value| !r.get("desk").and_then(Value::as_bool).unwrap_or(false);
+    rows.iter().filter(live).find(|r| r.get("id").and_then(Value::as_u64) == Some(id as u64)).or_else(|| rows.iter().filter(live).find(|r| r.get("name").and_then(Value::as_str) == Some(name))).cloned()
+}
+
 fn row_named(name: &str) -> Option<Value> {
     let doc = read_sessions(&crate::app::sessions_path(None));
     doc["sessions"].as_array()?.iter().find(|r| r.get("name").and_then(Value::as_str) == Some(name) && !r.get("desk").and_then(Value::as_bool).unwrap_or(false)).cloned()
@@ -38,7 +47,7 @@ pub fn show(app: &mut App, id: u32, readonly: bool) -> bool {
     let Some(owner) = r.owner.clone() else { return false };
     let Some(row) = row_named(&r.name) else { return false };
     let (w, h) = (app.body().width, app.body().height);
-    let mut stash = Stash { id, alias: Some(r.name.clone()), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
+    let mut stash = Stash { id, used: 0, alias: Some(r.name.clone()), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
         created: r.created, activity: r.activity, options: crate::app::options_from(&row), env: crate::app::env_from(&row), mirror: Some(Mirror { owner: owner.clone(), readonly }) };
     if !fill(app, &mut stash, &row, Vec::new(), (w, h)) { return false }
     app.sessions.push(stash);
@@ -97,13 +106,16 @@ fn fill(app: &mut App, stash: &mut Stash, row: &Value, mut old: Vec<Tab>, size: 
 pub fn refresh(app: &mut App) {
     let Some(m) = app.mirror.clone() else { return };
     let name = app.session_name();
-    let Some(row) = row_named(&name) else { return gone(app) };
+    let Some(row) = row_of(app.session_id, &name) else { return gone(app) };
+    // Renamed where it is kept (rename-session, C-b $): named so here too.
+    if let Some(now) = row.get("name").and_then(Value::as_str).filter(|n| *n != name) { app.session_alias = Some(now.to_string()) }
+    let name = app.session_name();
     match live_owner(&row) {
         // The owner detached: this client has the session now.
         None => {
             let path = crate::app::sessions_path(None);
             let lock = crate::ipc::lock(&path);
-            let row = row_named(&name).filter(|r| live_owner(r).is_none());
+            let row = row_of(app.session_id, &name).filter(|r| live_owner(r).is_none());
             if let Some(row) = row {
                 rebuild(app, &row);
                 for p in row.get("windows").and_then(Value::as_array).cloned().unwrap_or_default().iter().flat_map(|w| w.get("panes").and_then(Value::as_array).cloned().unwrap_or_default()) {
@@ -129,7 +141,7 @@ pub fn refresh(app: &mut App) {
 fn rebuild(app: &mut App, row: &Value) {
     let body = app.body();
     let current = app.tabs.get(app.active).map(|t| t.id.clone());
-    let mut stash = Stash { id: app.session_id, alias: app.session_alias.clone(), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
+    let mut stash = Stash { id: app.session_id, used: app.session_used, alias: app.session_alias.clone(), desk: false, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
         created: app.session_created, activity: app.session_activity, options: Default::default(), env: Default::default(), mirror: app.mirror.clone() };
     let old = std::mem::take(&mut app.tabs);
     if !fill(app, &mut stash, row, old, (body.width, body.height)) { return gone(app) }
