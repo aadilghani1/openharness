@@ -338,40 +338,53 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
           );
         }
         final agents = _agents(app, row);
-        return Semantics(
-          container: true,
-          label: 'Agent preview',
-          child: Scrollbar(
-            controller: _scroll,
-            child: row.isGroup || agents.length != 1
-                ? ListView.builder(
-                    key: ValueKey('preview-content:${row.id}'),
-                    controller: _scroll,
-                    padding: padding,
-                    scrollCacheExtent: const ScrollCacheExtent.pixels(120),
-                    itemCount: agents.length + 1,
-                    itemBuilder: (context, index) => index == 0
-                        ? Padding(
-                            padding: EdgeInsets.only(
-                              bottom: widget.terminal ? cell.height : 24,
+        if (row.isGroup || agents.length != 1) _scroll.reversed = false;
+        final content = row.isGroup || agents.length != 1
+            ? ListView.builder(
+                key: ValueKey('preview-content:${row.id}'),
+                controller: _scroll,
+                padding: padding,
+                scrollCacheExtent: const ScrollCacheExtent.pixels(120),
+                itemCount: agents.length + 1,
+                itemBuilder: (context, index) => index == 0
+                    ? Padding(
+                        padding: EdgeInsets.only(
+                          bottom: widget.terminal ? cell.height : 24,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              row.title,
+                              // The list leads the eye; this confirms it.
+                              style: widget.terminal
+                                  ? terminalContentStyle(
+                                      color: theme.foreground,
+                                    )
+                                  : AppType.monoLabel(
+                                      fontWeight: FontWeight.w600,
+                                    ),
                             ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  row.title,
-                                  // The list leads the eye; this confirms it.
-                                  style: widget.terminal
-                                      ? terminalContentStyle(
-                                          color: theme.foreground,
-                                        )
-                                      : AppType.monoLabel(
-                                          fontWeight: FontWeight.w600,
-                                        ),
+                            if (!widget.terminal) const SizedBox(height: 6),
+                            Text(
+                              row.detail,
+                              style: widget.terminal
+                                  ? terminalContentStyle(
+                                      color: theme.foreground.withValues(
+                                        alpha: .54,
+                                      ),
+                                    )
+                                  : _muted,
+                            ),
+                            // Nothing exists yet behind the create row, so
+                            // there is no session to be missing text from.
+                            if (agents.isEmpty && !row.isCreate)
+                              Padding(
+                                padding: EdgeInsets.only(
+                                  top: widget.terminal ? cell.height : 24,
                                 ),
-                                if (!widget.terminal) const SizedBox(height: 6),
-                                Text(
-                                  row.detail,
+                                child: Text(
+                                  'No recent session text available.',
                                   style: widget.terminal
                                       ? terminalContentStyle(
                                           color: theme.foreground.withValues(
@@ -380,53 +393,45 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
                                         )
                                       : _muted,
                                 ),
-                                // Nothing exists yet behind the create row, so
-                                // there is no session to be missing text from.
-                                if (agents.isEmpty && !row.isCreate)
-                                  Padding(
-                                    padding: EdgeInsets.only(
-                                      top: widget.terminal ? cell.height : 24,
-                                    ),
-                                    child: Text(
-                                      'No recent session text available.',
-                                      style: widget.terminal
-                                          ? terminalContentStyle(
-                                              color: theme.foreground
-                                                  .withValues(alpha: .54),
-                                            )
-                                          : _muted,
-                                    ),
-                                  ),
-                              ],
+                              ),
+                          ],
+                        ),
+                      )
+                    : Padding(
+                        padding: EdgeInsets.only(
+                          top: index > 1
+                              ? widget.terminal
+                                    ? cell.height
+                                    : 20
+                              : 0,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _AgentPreview(
+                              app: app,
+                              item: agents[index - 1],
+                              compact: true,
+                              terminal: widget.terminal,
                             ),
-                          )
-                        : Padding(
-                            padding: EdgeInsets.only(
-                              top: index > 1
-                                  ? widget.terminal
-                                        ? cell.height
-                                        : 20
-                                  : 0,
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                _AgentPreview(
-                                  app: app,
-                                  item: agents[index - 1],
-                                  compact: true,
-                                  terminal: widget.terminal,
-                                ),
-                                if (index < agents.length)
-                                  SizedBox(
-                                    height: widget.terminal ? cell.height : 20,
-                                  ),
-                              ],
-                            ),
-                          ),
-                  )
-                : _single(row, agents.single, padding, cell, theme),
-          ),
+                            if (index < agents.length)
+                              SizedBox(
+                                height: widget.terminal ? cell.height : 20,
+                              ),
+                          ],
+                        ),
+                      ),
+              )
+            : _single(row, agents.single, padding, cell, theme);
+        return Semantics(
+          container: true,
+          label: 'Agent preview',
+          // A session's latest turns carry their list's own scrollbar, on the
+          // turns alone: one around the whole preview, header included, drew
+          // a second thumb beside it.
+          child: _scroll.reversed
+              ? content
+              : Scrollbar(controller: _scroll, child: content),
         );
       },
     );

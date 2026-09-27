@@ -98,6 +98,7 @@ void main() {
 
   testWidgets(
     'a session previews its latest turns from the bottom up, and pages up for older ones',
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
     (tester) async {
       final tails = <int?>[];
       Map<String, dynamic> row(int turn) => {
@@ -240,6 +241,20 @@ void main() {
         return true;
       });
       expect(bold, ['retention']);
+
+      // One scrollbar, on the turns alone: macOS gives every list its own,
+      // and none may wrap the whole preview besides.
+      expect(
+        find.descendant(
+          of: find.ancestor(of: list, matching: find.byType(Semantics)).first,
+          matching: find.byType(Scrollbar),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.ancestor(of: list, matching: find.byType(Scrollbar)),
+        findsNothing,
+      );
 
       // The latest ask is in view, so nothing is pinned above the turns.
       expect(find.byKey(const ValueKey('preview-last-ask')), findsNothing);
