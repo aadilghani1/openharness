@@ -4,7 +4,14 @@ import '../core/fuzzy_match.dart';
 import '../state/session_content_search.dart';
 import '../state/swarm_navigation.dart';
 
-typedef SearchFieldMatch = ({String field, String term, bool title});
+/// [strict]: the field was matched by [swarmFieldMatchScore]'s rules for
+/// harness rows, so scattered letters are emphasised the way they matched.
+typedef SearchFieldMatch = ({
+  String field,
+  String term,
+  bool title,
+  bool strict,
+});
 
 /// Match only the field that earns each query term's ranking score. Work is
 /// bounded to visible rows; discovery and ranking retain their existing path.
@@ -24,7 +31,7 @@ List<SearchFieldMatch> searchResultMatches(
         field,
         term,
         title: i < row.titleFieldCount,
-        initialsForShort: row.agentId != null,
+        strict: row.agentId != null,
       );
       if (score != null && (best == null || score < best)) {
         best = score;
@@ -37,6 +44,7 @@ List<SearchFieldMatch> searchResultMatches(
         field: row.fields[fieldIndex],
         term: term,
         title: fieldIndex == 0,
+        strict: row.agentId != null,
       ));
     }
   }
@@ -85,12 +93,11 @@ List<SearchTextRun> searchTextRuns(
       ));
     } else {
       final fuzzy = <({int start, int end})>[];
-      if (wordSubsequenceSpread(
-            match.field,
-            match.term,
-            onMatch: (start, end) =>
-                fuzzy.add((start: fieldAt + start, end: fieldAt + end)),
-          ) !=
+      void onMatch(int start, int end) =>
+          fuzzy.add((start: fieldAt + start, end: fieldAt + end));
+      if ((match.strict
+              ? wordSubsequenceSpread(match.field, match.term, onMatch: onMatch)
+              : subsequenceSpread(match.field, match.term, onMatch: onMatch)) !=
           null) {
         positions.addAll(fuzzy);
       }

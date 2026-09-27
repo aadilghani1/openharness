@@ -66,17 +66,12 @@ int? wordSubsequenceSpread(
   String text,
   String query, {
   void Function(int start, int end)? onMatch,
-  bool initialsForShort = false,
 }) {
   if (query.isEmpty) return 0;
   final letters = _lettersOf(query);
-  // Across hundreds of harness names two scattered letters match nearly
-  // everything ("hn" in every "harness"): there they count only as initials,
-  // each starting a word ("ns" for New Split). A short list of commands keeps
-  // its abbreviations ("kb" for keyboard).
-  if (initialsForShort && letters.length < 3) {
-    return _initials(text, letters, onMatch: onMatch);
-  }
+  // Two scattered letters match nearly everything ("hn" in every "harness"):
+  // they count only as initials, each starting a word ("ns" for New Split).
+  if (letters.length < 3) return _initials(text, letters, onMatch: onMatch);
   final first = letters.first;
   final limit = query.length * 2;
   int? bestStart, bestSpread;

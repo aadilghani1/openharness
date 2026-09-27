@@ -1313,11 +1313,17 @@ List<String> swarmQueryTerms(String query) {
 /// "port audit", a word of "windows port" and only a fragment of "support".
 /// Scattered letters must start a word and stay close together; loose, they
 /// matched nearly any folder ("auth" in ".../autonomous-harness/...").
+///
+/// [strict] is for harness rows: hundreds of names and long folder paths, where
+/// loose letters match nearly anything, so scattered letters must start a word
+/// and stay close, and two letters count only as initials. Commands, machines,
+/// projects and models are short curated lists that keep any scattered
+/// letters, so abbreviations like "kb" and "mbp" still work.
 int? swarmFieldMatchScore(
   String field,
   String term, {
   required bool title,
-  bool initialsForShort = false,
+  bool strict = false,
 }) {
   final offset = field.indexOf(term);
   final int score;
@@ -1326,11 +1332,9 @@ int? swarmFieldMatchScore(
   } else if (offset > 0) {
     score = wordStartIndexOf(field, term, offset) >= 0 ? 12 : 16;
   } else {
-    final spread = wordSubsequenceSpread(
-      field,
-      term,
-      initialsForShort: initialsForShort,
-    );
+    final spread = strict
+        ? wordSubsequenceSpread(field, term)
+        : subsequenceSpread(field, term);
     if (spread == null) return null;
     score = 128 + spread;
   }
@@ -1430,7 +1434,7 @@ List<_SwarmMatch> _matchSwarmDestinations(
           field,
           term,
           title: i < entry.titleFieldCount,
-          initialsForShort: entry.agentId != null,
+          strict: entry.agentId != null,
         );
         if (score == null) continue;
         if (best == null || score < best) best = score;
