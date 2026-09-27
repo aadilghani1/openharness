@@ -1691,7 +1691,8 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: 
     if matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) {
         let key = id.split('#').next().unwrap_or(&id);
         if let Some((m, a)) = key.split_once(':') {
-            if let Some((_, pane_id)) = app.find_pane(m, a) {
+            // Open in any of this client's sessions: its screen as that pane has it.
+            if let Some((_, _, pane_id)) = app.find_pane_anywhere(m, a) {
                 if let Some(pane) = app.panes.get(&pane_id) {
                     if matches!(pane.phase, Phase::Live | Phase::Watching(_)) { preview_grid(buf, pane, inner, picker.preview_scroll.get()); return }
                 }
