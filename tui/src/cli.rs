@@ -283,9 +283,11 @@ async fn offline(port: u16, args: &[String], name: Option<&str>) -> i32 {
     // The desk's session is there while the desk has windows (desk=off: there is none).
     let deskless = std::env::var("HARNESS_TUI_DESK").as_deref() == Ok("off");
     let mut sessions: Vec<(String, usize, i64, bool)> = Vec::new();
+    let mut groups: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     if !deskless && desk_windows > 0 { sessions.push((desk_name.clone(), desk_windows, desk_row.and_then(|r| r.get("created").and_then(Value::as_i64)).unwrap_or(now), true)) }
     for r in rows.iter().filter(|r| !r.get("desk").and_then(Value::as_bool).unwrap_or(false)) {
         let Some(n) = r.get("name").and_then(Value::as_str) else { continue };
+        if let Some(g) = r.get("group").and_then(Value::as_str) { groups.insert(n.to_string(), g.to_string()); }
         sessions.push((n.to_string(), r.get("windows").and_then(Value::as_array).map(|w| w.len()).unwrap_or(0), r.get("created").and_then(Value::as_i64).unwrap_or(now), false));
     }
     sessions.sort_by(|x, y| x.0.cmp(&y.0));
@@ -310,9 +312,18 @@ async fn offline(port: u16, args: &[String], name: Option<&str>) -> i32 {
     let save = |doc: &Value| { if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); } let _ = std::fs::write(&path, doc.to_string()); };
     match entry.name {
         "list-sessions" => {
-            let fmt = a.get('F').unwrap_or("#{session_name}: #{session_windows} windows (created #{t:session_created})");
+            let fmt = a.get('F').unwrap_or("#{session_name}: #{session_windows} windows (created #{t:session_created})#{?session_grouped, (group ,}#{session_group}#{?session_grouped,),}");
             for (n, w, c, _) in &sessions {
-                let line = fmt.replace("#{session_name}", n).replace("#S", n).replace("#{session_windows}", &w.to_string()).replace("#{t:session_created}", &crate::format::strftime_at("%a %b %e %H:%M:%S %Y", *c))
+                // Its group (new -t), and the group's sessions by name.
+                let g = groups.get(n).cloned();
+                let members: Vec<&String> = sessions.iter().map(|s| &s.0).filter(|m| g.is_some() && groups.get(*m) == g.as_ref()).collect();
+                let g = g.unwrap_or_default();
+                let grouped = if g.is_empty() { "0" } else { "1" };
+                let line = fmt.replace("#{?session_grouped, (group ,}#{session_group}#{?session_grouped,),}", &if g.is_empty() { String::new() } else { format!(" (group {g})") })
+                    .replace("#{session_group_size}", &if g.is_empty() { String::new() } else { members.len().to_string() })
+                    .replace("#{session_group_list}", &members.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(","))
+                    .replace("#{session_grouped}", grouped).replace("#{session_group}", &g)
+                    .replace("#{session_name}", n).replace("#S", n).replace("#{session_windows}", &w.to_string()).replace("#{t:session_created}", &crate::format::strftime_at("%a %b %e %H:%M:%S %Y", *c))
                     .replace("#{session_created}", &c.to_string()).replace("#{session_attached}", "0").replace("#{?session_attached, (attached),}", "");
                 if !out(&format!("{line}\n")) { break }
             }
