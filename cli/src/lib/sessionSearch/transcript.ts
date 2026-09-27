@@ -15,6 +15,7 @@ import { lineToEvents, newTurnState } from '../normalize.js'
 import { AgyNormalizer } from '../../engines/agy/normalizer.js'
 import { AmpNormalizer } from '../../engines/amp/normalizer.js'
 import { CodexNormalizer } from '../../engines/codex/normalizer.js'
+import { epochMs } from './externals/support.js'
 import { CommandCodeNormalizer } from '../../engines/commandcode/normalizer.js'
 import { CopilotNormalizer } from '../../engines/copilot/normalizer.js'
 import { CursorNormalizer } from '../../engines/cursor/normalizer.js'
@@ -128,13 +129,26 @@ export function skipPredicate(engine: string): ((head: string) => boolean) | nul
 }
 
 const TIMESTAMP = /"timestamp"\s*:\s*"([^"]{10,40})"/
+/** The fields other engines date their lines with: Grok's epoch seconds, Muse's microseconds,
+ *  Antigravity's ISO `created_at`. */
+const OTHER_TIMES = [
+  /"timestamp"\s*:\s*(\d{9,19}(?:\.\d+)?)[,}]/,
+  /"recorded_at"\s*:\s*(\d{9,19})[,}]/,
+  /"created_at"\s*:\s*"([^"]{10,40})"/,
+]
 
-/** When a transcript line was written, from its own `timestamp` field; null when it has none. */
+/** When a transcript line was written, from its own time field; null when it has none. */
 export function lineTime(line: string): number | null {
-  const match = TIMESTAMP.exec(line)
-  if (!match) return null
-  const at = Date.parse(match[1])
-  return Number.isFinite(at) ? at : null
+  const iso = TIMESTAMP.exec(line)
+  if (iso) {
+    const at = Date.parse(iso[1])
+    return Number.isFinite(at) ? at : null
+  }
+  for (const pattern of OTHER_TIMES) {
+    const match = pattern.exec(line)
+    if (match) return epochMs(match[1])
+  }
+  return null
 }
 
 export interface LineVisit {
