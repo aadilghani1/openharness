@@ -12,7 +12,7 @@ import 'tty_controls.dart';
 /// api-fix                               asking
 /// "Run the migration on the test db?"
 /// docs-rewrite                         working
-/// M2:site · docs-v2 · 2m
+/// M2:site ⑂ docs-v2 · 2m
 /// ```
 class FindRow extends StatelessWidget {
   const FindRow({
@@ -20,6 +20,8 @@ class FindRow extends StatelessWidget {
     required this.title,
     this.detail,
     this.detailColor,
+    this.branch,
+    this.tail,
     this.state,
     this.stateColor,
     this.terms = const [],
@@ -30,9 +32,15 @@ class FindRow extends StatelessWidget {
 
   final String title;
 
-  /// Line 2: `machine:folder · branch · age`, or a quoted question.
+  /// Line 2: `machine:folder`, or a quoted question.
   final String? detail;
   final Color? detailColor;
+
+  /// After [detail], behind the branch icon — see [ttyBranchMark].
+  final String? branch;
+
+  /// Last on line 2, after a `·`: the age, or `current`.
+  final String? tail;
 
   /// `asking`, `working`, `idle`, `exited` — one word, right-aligned on line 1.
   final String? state;
@@ -47,6 +55,21 @@ class FindRow extends StatelessWidget {
   final VoidCallback? onTap;
 
   static const double height = 60;
+
+  TextStyle _base(Tty tty) =>
+      tty.style(color: detailColor ?? tty.faint, size: TtySize.meta);
+
+  /// [text] with the typed words lit — only where they are there as typed: fzf's scattered
+  /// letters inside a question or a path read as noise.
+  List<InlineSpan> _lit(String text, Tty tty) => fzfHighlight(
+    text,
+    [
+      for (final term in terms)
+        if (text.toLowerCase().contains(term.toLowerCase())) term,
+    ],
+    base: _base(tty),
+    hit: tty.style(color: tty.green, size: TtySize.meta),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -109,21 +132,15 @@ class FindRow extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text.rich(
                   TextSpan(
-                    // Only where the words are there as typed: fzf's scattered letters inside a
-                    // question or a path read as noise.
-                    children: fzfHighlight(
-                      detail,
-                      [
-                        for (final term in terms)
-                          if (detail.toLowerCase().contains(term.toLowerCase()))
-                            term,
+                    children: [
+                      ..._lit(detail, tty),
+                      if (branch case final branch? when branch.isNotEmpty) ...[
+                        ttyBranchMark(tty, color: detailColor ?? tty.faint),
+                        ..._lit(branch, tty),
                       ],
-                      base: tty.style(
-                        color: detailColor ?? tty.faint,
-                        size: TtySize.meta,
-                      ),
-                      hit: tty.style(color: tty.green, size: TtySize.meta),
-                    ),
+                      if (tail case final tail? when tail.isNotEmpty)
+                        TextSpan(text: ' · $tail', style: _base(tty)),
+                    ],
                   ),
                   maxLines: 1,
                   softWrap: false,

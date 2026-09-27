@@ -368,17 +368,20 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     }
     final question = entry.machine.blockedAgents[entry.agent.id]?.prompt.trim();
     final state = _stateOf(entry, openable, tty, resuming: _resuming == row.id);
-    final place = [
-      '${entry.machineName}:${entry.agent.project?.label ?? entry.project?.name ?? ''}',
-      if (entry.agent.project?.branch case final branch? when branch.isNotEmpty)
-        branch,
-      if (onScreen) 'current' else fzfAge(entry.agent.lastUsedAt, now),
-    ].where((part) => part.isNotEmpty).join(' · ');
+    final asking = question != null && question.isNotEmpty && entry.isWaiting;
+    final branch = entry.agent.project?.branch;
     return FindRow(
       title: row.title,
-      detail: question != null && question.isNotEmpty && entry.isWaiting
+      // `M2:site ⑂ docs-v2 · 2m` — or, while it asks, its question.
+      detail: asking
           ? '"${question.split('\n').first}"'
-          : place,
+          : '${entry.machineName}:${entry.agent.project?.label ?? entry.project?.name ?? ''}',
+      branch: asking || branch == null || branch.isEmpty ? null : branch,
+      tail: asking
+          ? null
+          : onScreen
+          ? 'current'
+          : fzfAge(entry.agent.lastUsedAt, now),
       detailColor: question != null && entry.isWaiting ? tty.text : null,
       state: state.word,
       stateColor: state.color,

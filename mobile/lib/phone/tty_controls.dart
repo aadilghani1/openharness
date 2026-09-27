@@ -164,6 +164,26 @@ class TtyTextButton extends StatelessWidget {
   }
 }
 
+/// A branch, the one way it is written everywhere: the branch icon, then its name — never a `·`
+/// before it. The icon because `main` alone reads as a folder; the same glyph as Focus's title and
+/// the desktop's header. [lead] is the gap before it, when it follows something on its line.
+WidgetSpan ttyBranchMark(
+  Tty tty, {
+  Color? color,
+  double size = 12,
+  double lead = 8,
+}) => WidgetSpan(
+  alignment: PlaceholderAlignment.middle,
+  child: Padding(
+    padding: EdgeInsets.only(left: lead, right: 4),
+    child: Icon(
+      LucideIcons.gitBranch300,
+      size: size,
+      color: color ?? tty.faint,
+    ),
+  ),
+);
+
 /// Back, as iOS draws it on a pushed screen: a chevron and no word. A 44pt target whose glyph sits
 /// on the gutter, so it lines up with the title under it.
 class TtyBackButton extends StatelessWidget {

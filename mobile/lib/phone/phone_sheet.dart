@@ -113,6 +113,7 @@ Future<void> showPhoneSheet(
   List<String>? titleParts,
   Widget? titleDetail,
   Widget? titleLeading,
+  String? titleBranch,
 }) {
   assert(debugCheckHasMediaQuery(context));
   assert(debugCheckHasMaterialLocalizations(context));
@@ -141,6 +142,7 @@ Future<void> showPhoneSheet(
       builder: (sheetContext) => SafeArea(
         child: _TmuxMenu(
           title: title,
+          branch: titleBranch,
           actions: actions,
           sections: sections,
           onAction: (action) {
@@ -159,12 +161,16 @@ Future<void> showPhoneSheet(
 class _TmuxMenu extends StatefulWidget {
   const _TmuxMenu({
     required this.title,
+    this.branch,
     required this.actions,
     required this.sections,
     required this.onAction,
   });
 
   final String title;
+
+  /// Under the name, after where it runs, behind the branch icon — see [ttyBranchMark].
+  final String? branch;
   final List<PhoneSheetAction> actions;
   final List<PhoneSheetSection> sections;
   final void Function(PhoneSheetAction action) onAction;
@@ -219,7 +225,7 @@ class _TmuxMenuState extends State<_TmuxMenu> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 4, 6),
+          padding: const EdgeInsets.fromLTRB(Tty.origin, 10, 4, 6),
           child: Row(
             children: [
               Expanded(
@@ -236,9 +242,17 @@ class _TmuxMenuState extends State<_TmuxMenu> {
                         weight: FontWeight.w600,
                       ),
                     ),
-                    if (place != null)
-                      Text(
-                        place,
+                    if (place != null || widget.branch != null)
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            if (place != null) TextSpan(text: place),
+                            if (widget.branch case final branch?) ...[
+                              ttyBranchMark(tty, lead: place == null ? 0 : 8),
+                              TextSpan(text: branch),
+                            ],
+                          ],
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: tty.style(size: TtySize.meta, color: tty.faint),
