@@ -112,9 +112,9 @@ pub fn drop_state(drop: Option<&DropDef>, now_ms: i64) -> &'static str {
 /// The hatchling before it has colour: every drawn cell becomes `#`.
 pub fn silhouette(s: &str) -> String { s.chars().map(|c| if c == ' ' { ' ' } else { '#' }).collect() }
 
-/// A daemon on the shelf: owned, shiny, and how many duplicates were merged into it.
+/// A daemon on the shelf, and how many duplicates were merged into it.
 #[derive(Clone, Debug, Default)]
-pub struct Shelved { pub id: String, pub shiny: bool, pub dupes: u32 }
+pub struct Shelved { pub id: String, pub dupes: u32 }
 
 /// A shelf: the drop's sprites in order, `[ ? ]` for missing regulars, `[ ! ]` for a missing secret,
 /// `x2` beside a daemon with a duplicate merged into it.
@@ -211,7 +211,7 @@ mod tests {
     fn a_shelf_as_card_mjs_draws_it() {
         // node daemons/tools/card.mjs --shelf 'tim*x2,vim,grue'
         let r = roster();
-        let owned = [Shelved { id: "tim".into(), shiny: true, dupes: 1 }, Shelved { id: "vim".into(), ..Default::default() }, Shelved { id: "grue".into(), ..Default::default() }];
+        let owned = [Shelved { id: "tim".into(), dupes: 1 }, Shelved { id: "vim".into(), ..Default::default() }, Shelved { id: "grue".into(), ..Default::default() }];
         let now = day_number("2026-09-27").unwrap() * 86_400_000;
         let got = shelf_lines(r, &owned, None, now);
         assert_eq!(got[0], "zoo: drop 1 unix  2/9  +secret");

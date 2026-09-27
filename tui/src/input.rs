@@ -28,8 +28,8 @@ pub fn handle(app: &mut App, event: CEvent) {
         CEvent::Mouse(mouse) => { if app.mouse { on_mouse(app, mouse) } }
         CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.fit_panes(); crate::commands::notify(app, "client-resized", None, None) }
         // The terminal in front: the dial follows its pane again (and hears it is in front).
-        CEvent::FocusGained => { app.terminal_focused = true; app.welcome_back(); crate::dial::announce(app, false); app.announce_focus(); crate::commands::notify(app, "client-focus-in", None, None) }
-        CEvent::FocusLost => { app.terminal_focused = false; app.away = Some((Instant::now(), app.fleet_counts())); crate::dial::announce(app, false); crate::commands::notify(app, "client-focus-out", None, None) }
+        CEvent::FocusGained => { app.terminal_focused = true; crate::daemon::hooks::on_focus(app, true); app.welcome_back(); crate::dial::announce(app, false); app.announce_focus(); crate::commands::notify(app, "client-focus-in", None, None) }
+        CEvent::FocusLost => { app.terminal_focused = false; crate::daemon::hooks::on_focus(app, false); app.away = Some((Instant::now(), app.fleet_counts())); crate::dial::announce(app, false); crate::commands::notify(app, "client-focus-out", None, None) }
         _ => {}
     }
     app.sync_copy_modal();
@@ -45,9 +45,9 @@ fn typing(app: &App) -> bool {
 fn on_key(app: &mut App, key: KeyEvent) {
     let chord = keys::of(&key);
     app.key_name = Some(keys::name(&chord));
-    // A message goes on the next key, as tmux's does; and tim notices you are back.
+    // A message goes on the next key, as tmux's does; the daemons hear it (and their popup takes it).
     app.toast = None;
-    app.tim.touched = std::time::Instant::now();
+    if crate::daemon::hooks::on_key(app, &key) { app.status_redraws += 1; return }
     // A table of your own (switch-client -T): its key runs, and the client goes back to root
     // (a -r key keeps the table); the prefix, or a key it does not have, goes on as from root.
     if let Some(table) = app.key_table.take() {
@@ -193,7 +193,6 @@ fn on_paste(app: &mut App, text: String) {
 }
 
 fn on_mouse(app: &mut App, mouse: MouseEvent) {
-    app.tim.touched = std::time::Instant::now();
     // tmux asks the terminal for bare motion only when a pane here wants it (or a menu opened by
     // the mouse): the rest of the motion hn is sent never happened, as far as tmux is concerned.
     if matches!(mouse.kind, MouseEventKind::Moved) {
@@ -1827,12 +1826,14 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
                 picker.say(if paused { "Resuming…" } else { "Pausing…" });
                 let (m, a) = (machine.clone(), agent.clone());
                 app.spawn(async move { link.rpc(if paused { "agent_resume" } else { "agent_delete" }, json!({ "agentId": a }), Duration::from_secs(120)).await }, move |app, reply| {
+                    if paused && reply.is_ok() { crate::daemon::hooks::habit(app, "resume") }
                     if let Err(e) = reply { app.say(format!("{e}"), theme::DANGER) }
                     app.relist(&m);
                 });
                 return keep(app, kind, picker);
             }
             if state == Some(crate::fleet::State::Offline) { picker.say("That machine is offline"); return keep(app, kind, picker) }
+            crate::daemon::hooks::habit(app, "find");
             let split = SPLIT.with(|s| s.take());
             let placement = match (choice, split) {
                 (Choice::Tab, _) => Placement::Tab,

@@ -19,6 +19,7 @@ impl Default for Opts<'_> {
 
 impl<'a> Opts<'a> {
     pub fn still() -> Opts<'a> { Opts { t: 0, lid: None, motion: false } }
+    #[cfg(test)]
     pub fn at(t: u64) -> Opts<'a> { Opts { t, ..Default::default() } }
 }
 

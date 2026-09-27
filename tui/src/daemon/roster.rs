@@ -21,7 +21,6 @@ pub struct Roster {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Rules {
-    pub moods: Vec<String>,
     pub eyes: HashMap<String, String>,
     /// ack, look, slow: each a list of (lid, ms).
     pub blinks: HashMap<String, Vec<(String, u64)>>,
@@ -31,7 +30,6 @@ pub struct Rules {
     pub versions: Vec<String>,
     pub bond: Bond,
     pub status_cells: usize,
-    pub duplicate_xp: u64,
     pub first_egg: FirstEgg,
     pub setup_egg: SetupEgg,
     pub eggs: HashMap<String, EggDef>,
@@ -100,7 +98,6 @@ pub struct Daemon {
     pub family: Vec<(String, serde_json::Value)>,
     pub lore: String,
     pub first: String,
-    pub lines: HashMap<String, String>,
     pub sprites: HashMap<String, String>,
     pub work: Vec<String>,
     pub work_ms: u64,
@@ -140,9 +137,6 @@ impl Roster {
 
     /// The index of a version (`0.1` → 0), else the youngest.
     pub fn version_index(&self, version: &str) -> usize { self.rules.versions.iter().position(|v| v == version).unwrap_or(0) }
-
-    /// What a habit key is called in the checklist.
-    pub fn habit_label(&self, key: &str) -> Option<&str> { self.rules.first_egg.habits.iter().find(|h| h.key == key).map(|h| h.label.as_str()) }
 }
 
 impl Daemon {

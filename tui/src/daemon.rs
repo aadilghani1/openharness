@@ -8,10 +8,17 @@
 
 // The daemons — the creatures in the status line (daemons/README.md), not harnessd — live under
 // daemon/: the roster and its renderer, the zoo, the face, the pair brain's lines and the hatch.
+pub mod brain;
 pub mod card;
+pub mod hatch;
+pub mod hooks;
+pub mod overlay;
 pub mod render;
 pub mod roster;
+pub mod shell;
 pub mod socket;
+pub mod state;
+pub mod zoo;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
