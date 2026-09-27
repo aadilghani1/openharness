@@ -567,6 +567,22 @@ fn run_queue(app: &mut App, mut queue: Queue) {
             // What source-file read runs next, before the rest; the hooks before that.
             if !app.insert_next.is_empty() { let mut next = std::mem::take(&mut app.insert_next); next.extend(queue); queue = next }
             if !hooks.is_empty() { let mut next = hooks; next.extend(queue); queue = next }
+            // A shell on its way (new-session, new-window, split-window …): what comes after it
+            // waits for its pane, as tmux's queue has the pane before the next command runs —
+            // and so does the shell that ran the chain.
+            if !queue.is_empty() && app.starting_shell.is_some() {
+                let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+                app.shell_waiters.push(tx);
+                let waiting = (app.capture.take(), app.capture_err.take(), app.cli_tx.take(), app.cli_code, app.cli_cwd.clone());
+                app.spawn(async move { let _ = tokio::time::timeout(std::time::Duration::from_secs(90), rx).await; }, move |app, _| {
+                    let (cap, err, tx, code, cwd) = waiting;
+                    let from_shell = cap.is_some();
+                    if from_shell { app.capture = cap; app.capture_err = err; app.cli_tx = tx; app.cli_code = code; app.cli_cwd = cwd }
+                    run_queue(app, queue);
+                    if from_shell && app.capture.is_some() { app.finish_cli() }
+                });
+                return;
+            }
             continue;
         };
         app.hook_state = saved_hook;

@@ -700,6 +700,12 @@ pub struct App {
     pub shells: HashSet<(String, String)>,
     /// Keys typed while a split's shell starts, for it.
     pub starting_shell: Option<Vec<Vec<u8>>>,
+    /// Commands waiting for a shell on its way to have its pane (a chain after new-session,
+    /// new-window, split-window): told when it has come (or failed).
+    pub shell_waiters: Vec<tokio::sync::oneshot::Sender<()>>,
+    /// `hn new … \; cmd …` / `hn attach … \; cmd …`: the chain after the command that started this
+    /// client, run once its session is there (and its first shell, for new).
+    pub start_then: Vec<String>,
     /// tmux's status/window/border/copy options from tmux.conf or `set`.
     pub opts: crate::tmuxconf::Options,
     /// The home list's order while it is on screen (see `home_agents`).
@@ -835,6 +841,8 @@ impl App {
             tim: crate::tim::Tim::load(),
             shells: HashSet::new(),
             starting_shell: None,
+            shell_waiters: Vec::new(),
+            start_then: Vec::new(),
             opts: Default::default(),
             prefix_at: None,
             home_order: Default::default(),
@@ -4757,7 +4765,16 @@ impl App {
         self.fleet.agent(m, a).map(|x| (m.to_string(), x.session_id.clone()))
     }
 
+    /// The chain after the command that started this client, once its session is there (a new
+    /// one's first shell come).
+    fn run_start_then(&mut self) {
+        if self.start_then.is_empty() || self.start_session.is_some() || self.starting_shell.is_some() || !self.tabs.iter().any(|t| t.root.is_some()) { return }
+        let then = std::mem::take(&mut self.start_then);
+        crate::commands::execute_args(self, &then);
+    }
+
     pub fn on_tick(&mut self) {
+        self.run_start_then();
         self.ask_home_external();
         self.ask_said();
         self.ask_tails();

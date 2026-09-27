@@ -252,7 +252,11 @@ async fn run(config: config::Config) -> io::Result<()> {
     // -L name, starting a client: its socket's name.
     if let Some(n) = &f.name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } }
     // hn new -s work / hn attach -t work: the session this client starts in.
-    let start = cli::start_session(&f.rest);
+    // `hn new … \; split-window …`: the command that starts this client, then the chain after it
+    // (run in the client once its session is there, as tmux runs the rest of the command line).
+    let cut = f.rest.iter().position(|w| w == ";").unwrap_or(f.rest.len());
+    let then: Vec<String> = f.rest.get(cut + 1..).map(|r| r.to_vec()).unwrap_or_default();
+    let start = cli::start_session(&f.rest[..cut]);
 
     // attach with nothing to attach to (no client, no session kept; the desk's is always there):
     // tmux's words, before it would look for a terminal — `hn attach || hn new` makes one.
@@ -352,6 +356,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     // The sessions a client left (C-b d), and the one asked for; attach's client flags.
     app.client_flags = start.as_ref().map(|s| s.flags.clone()).unwrap_or_default();
     app.start_session = start;
+    app.start_then = then;
     app.load_sessions();
     // The client is attached to it now (server_client_set_session).
     app.session_last_attached = app::epoch_secs();

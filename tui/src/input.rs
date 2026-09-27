@@ -1128,6 +1128,12 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
 
 /// A shell the machine made (agent_create's reply): into its place.
 fn shell_made(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>) {
+    shell_placed(app, machine, placement, reply);
+    // What waited for it (the rest of a chain) goes on, its pane there — or not, if it failed.
+    for tx in std::mem::take(&mut app.shell_waiters) { let _ = tx.send(()); }
+}
+
+fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>) {
         let typed = app.starting_shell.take().unwrap_or_default();
         match reply {
             Ok(reply) => {
