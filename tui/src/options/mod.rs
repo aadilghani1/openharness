@@ -249,6 +249,8 @@ impl Store {
         }
         // cmd_set_option: a user option needs a value.
         if name.starts_with('@') && value.is_none() { return Err("empty value".into()) }
+        // options_from_string: so does any but a flag or a choice (those toggle).
+        if value.is_none() && opt.is_some_and(|o| !matches!(o.kind, Kind::Flag | Kind::Choice(_))) { return Err("empty value".into()) }
         let here = self.map(scope, global, window, pane).and_then(|m| m.get(name).cloned());
         if f.only_if_unset && here.is_some() { return Err(format!("already set: {name}")) }
         let now = self.get(name, window, Some(pane));

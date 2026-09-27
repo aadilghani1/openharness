@@ -508,7 +508,9 @@ fn pane_anywhere(app: &App, pane: &str, only: bool) -> Option<Found> {
     }
     let mut f = Found { window: Some(app.active), idx: Some(app.win_num(app.active)), pane: None };
     if pane_in_window(app, app.active, pane, &mut f) { return Some(f) }
-    if only { return None }
+    // (`=` is no pane's: cmd_find_target takes it off a session or a window only, so `=main`
+    // is looked for as it is written, and nothing is called that.)
+    if only || pane.starts_with('=') { return None }
     let mut g = Found::default();
     if window_anywhere(app, pane, false, false, false, &mut g) {
         g.pane = g.window.and_then(|w| app.tabs.get(w)).and_then(|t| t.focus);

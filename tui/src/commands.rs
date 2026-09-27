@@ -459,9 +459,20 @@ pub fn execute_in(app: &mut App, line: &str, mouse: Option<crate::mouse::Event>)
 /// argument ends with `;` — `display a \; display b` is two commands.
 pub fn execute_bound(app: &mut App, line: &str) {
     let q = bound_queue(app, line);
+    if read_only_refused(app, &q) { return }
     let saved = std::mem::replace(&mut app.key_run, app.key_name.clone());
     run_queue(app, q);
     app.key_run = saved;
+}
+
+/// key_bindings_dispatch: a read-only client's key runs only what a read-only client may
+/// (commands flagged CMD_READONLY: attach, detach, list-clients, switch-client); anything else is
+/// "client is read-only".
+fn read_only_refused(app: &mut App, q: &Queue) -> bool {
+    if !app.mirror.as_ref().is_some_and(|m| m.readonly) { return false }
+    let allowed = q.iter().all(|i| i.words.first().and_then(|w| crate::cmd::find(w).ok()).map(|e| matches!(e.name, "attach-session" | "detach-client" | "list-clients" | "switch-client")).unwrap_or(false));
+    if !allowed { app.error("client is read-only") }
+    !allowed
 }
 
 fn bound_queue(app: &mut App, line: &str) -> Queue {
@@ -477,6 +488,7 @@ pub fn execute_mouse(app: &mut App, line: &str, m: crate::mouse::Event) {
     let saved = app.mouse_ev.replace(m);
     let q = bound_queue(app, line);
     app.mouse_ev = saved;
+    if read_only_refused(app, &q) { return }
     run_queue(app, q);
 }
 
@@ -1226,11 +1238,14 @@ fn session_targets(app: &App, words: &[String]) -> Vec<String> {
     for (spec, flag) in [(entry.target, 't'), (entry.source, 's')] {
         let (Some(spec), Some(t)) = (spec, args.get(flag)) else { continue };
         if spec.kind == crate::cmd::Kind::Session || t.is_empty() || t.contains([':', '.']) || t.starts_with(['%', '@', '$', '{', '!', '+', '-', '~', '^']) { continue }
-        if crate::cmd::resolve(app, Some(t), spec).is_ok() || app.find_session(t).is_none() { continue }
+        // `=`: an exact window; the session tried after is the rest, not exact (cmd_find_target
+        // strips it from a window, never from a pane — `=web` is no pane's).
+        let bare = match t.strip_prefix('=') { Some(_) if spec.kind == crate::cmd::Kind::Pane => continue, Some(b) => b, None => t };
+        if crate::cmd::resolve(app, Some(t), spec).is_ok() || app.find_session(bare).is_none() { continue }
         // The word itself, where it stands (`-tmain` or `-t main`).
         let want = format!("-{flag}");
-        if let Some(i) = out.iter().position(|w| *w == want).filter(|i| out.get(i + 1).map(|v| v == t).unwrap_or(false)) { out[i + 1] = format!("{t}:") }
-        else if let Some(i) = out.iter().position(|w| *w == format!("{want}{t}")) { out[i] = format!("{want}{t}:") }
+        if let Some(i) = out.iter().position(|w| *w == want).filter(|i| out.get(i + 1).map(|v| v == t).unwrap_or(false)) { out[i + 1] = format!("{bare}:") }
+        else if let Some(i) = out.iter().position(|w| *w == format!("{want}{t}")) { out[i] = format!("{want}{bare}:") }
     }
     out
 }
@@ -2162,8 +2177,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 if command == "list-panes" && last_window != Some(w) { n = 0; last_window = Some(w) }
                 app.format_line = Some(n);
                 n += 1;
-                let keep = filter.as_ref().map(|f| { let v = crate::format::expand(app, f, w, p, true); !v.is_empty() && v != "0" }).unwrap_or(true);
-                if keep { lines.push(crate::format::expand(app, &template, w, p, true)) }
+                // format_expand, not format_expand_time: a % in -F is itself (cmd-list-*.c).
+                let keep = filter.as_ref().map(|f| { let v = crate::format::expand(app, f, w, p, false); !v.is_empty() && v != "0" }).unwrap_or(true);
+                if keep { lines.push(crate::format::expand(app, &template, w, p, false)) }
             }
             if sid != me { app.swap_session(me); app.swap_back = outer; }
             }

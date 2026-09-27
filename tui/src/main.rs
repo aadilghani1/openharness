@@ -256,6 +256,15 @@ async fn run(config: config::Config) -> io::Result<()> {
     let deskless = std::env::var("HARNESS_TUI_DESK").as_deref() == Ok("off");
     let attaching = f.rest.first().and_then(|c| cmd::find(c).ok()).map(|e| e.name == "attach-session").unwrap_or(false);
     if attaching && deskless && !ipc::alive(f.socket.as_deref(), f.name.as_deref()) && !cli::has_sessions(f.name.as_deref()) { eprintln!("no sessions"); std::process::exit(1) }
+    // attach -t for a session there is none of: tmux finds the target before it wants a terminal.
+    if attaching && !io::IsTerminal::is_terminal(&io::stdout()) {
+        if let Some(t) = start.as_ref().and_then(|s| s.name.clone()) {
+            let found = if ipc::alive(f.socket.as_deref(), f.name.as_deref()) {
+                ipc::call(&["has-session".into(), "-t".into(), t.clone()], f.socket.as_deref(), f.name.as_deref()).await == 0
+            } else { cli::has_session_named(f.name.as_deref(), &t) };
+            if !found { if !ipc::alive(f.socket.as_deref(), f.name.as_deref()) { eprintln!("can't find session: {t}") } std::process::exit(1) }
+        }
+    }
     if !io::IsTerminal::is_terminal(&io::stdout()) { eprintln!("open terminal failed: not a terminal"); std::process::exit(1) }
 
     // NO_COLOR is about a program's own output; the panes mirror OTHER programs' screens, whose

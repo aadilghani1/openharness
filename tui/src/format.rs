@@ -55,18 +55,18 @@ pub fn every(app: &App, window: usize, pane: Option<u64>) -> Vec<String> {
 /// A format for a session not in front (another client's, or a list's row): its session_*
 /// values its own, as a #{S:} loop expands them.
 pub fn expand_session(app: &App, fmt: &str, session: u32) -> String {
-    let mut es = Es { app, window: app.active, pane: None, time: true, nojobs: false, depth: 0, now: now_secs(), session: (session != app.session_id).then_some(session), window_of: None };
+    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: (session != app.session_id).then_some(session), window_of: None };
     expand1(&mut es, fmt)
 }
 
 /// A format for window [k] (of session_windows) of a session not in front (another client's).
 pub fn expand_session_window(app: &App, fmt: &str, session: u32, k: usize) -> String {
-    let mut es = Es { app, window: app.active, pane: None, time: true, nojobs: false, depth: 0, now: now_secs(), session: Some(session), window_of: Some(k) };
+    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: Some(session), window_of: Some(k) };
     expand1(&mut es, fmt)
 }
 
 pub fn expand_nojobs(app: &App, fmt: &str) -> String {
-    let mut es = Es { app, window: app.active, pane: app.focused(), time: true, nojobs: true, depth: 0, now: now_secs(), session: None, window_of: None };
+    let mut es = Es { app, window: app.active, pane: app.focused(), time: false, nojobs: true, depth: 0, now: now_secs(), session: None, window_of: None };
     expand1(&mut es, fmt)
 }
 
@@ -1160,7 +1160,9 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_activity_flag" => flags(app, window).contains('#').then_some("1").unwrap_or("0").into(),
         "window_silence_flag" => flags(app, window).contains('~').then_some("1").unwrap_or("0").into(),
         "session_grouped" | "window_linked" | "window_bigger" | "window_offset_x" | "window_offset_y"
-        | "client_readonly" => "0".into(),
+        | "client_control_mode" => "0".into(),
+        // attach -r: read-only (and its size ignored, as tmux flags it).
+        "client_readonly" => app.mirror.as_ref().is_some_and(|m| m.readonly).then_some("1").unwrap_or("0").into(),
         "pane_pipe" => pane.map(|p| app.pipes.contains_key(&p.id)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "server_sessions" => app.session_list().len().to_string(),
         "client_utf8" => "1".into(),
@@ -1170,7 +1172,11 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "client_termname" => std::env::var("TERM").unwrap_or_default(),
         "client_pid" => std::process::id().to_string(),
         "client_key_table" => app.key_table.clone().unwrap_or_else(|| if app.prefix { "prefix".into() } else { "root".into() }),
-        "client_flags" => if app.terminal_focused { "attached,focused,UTF-8".into() } else { "attached,UTF-8".into() },
+        // server_client_get_flags, in its order.
+        "client_flags" => {
+            let ro = app.mirror.as_ref().is_some_and(|m| m.readonly);
+            format!("attached,{}{}{}UTF-8", if app.terminal_focused { "focused," } else { "" }, if ro { "ignore-size," } else { "" }, if ro { "read-only," } else { "" })
+        }
         "pane_last" => (focus.is_some() && focus == tab.and_then(|t| t.last_focus())).then_some("1").unwrap_or("0").into(),
         "pane_dead" => pane.map(|p| matches!(p.phase, crate::pane::Phase::Card { .. })).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "pane_start_path" => agent.map(|a| a.cwd.clone()).unwrap_or_default(),

@@ -311,15 +311,17 @@ impl Tree {
     fn build_items(&mut self, app: &mut App, saved: &HashMap<u64, (bool, bool)>, tag: &mut u64, filter: Option<&str>) {
         if self.flavour == Flavour::Buffer { return self.build_buffers(app, saved, filter) }
         let front = app.session_id;
-        let mut order: Vec<(u32, String, i64)> = app.session_list().into_iter().map(|(id, name)| {
-            // The session on screen is the one in use now; another, when it was last.
+        let mut order: Vec<(u32, String, i64, u64)> = app.session_list().into_iter().map(|(id, name)| {
+            // The session on screen is the one in use now; another, when it was last — within
+            // one second, the later used (or made) first, as tmux's microseconds have it.
             let used = if id == front { i64::MAX } else { app.stash_value(id, "session_activity").and_then(|v| v.parse().ok()).unwrap_or(0) };
-            (id, name, used)
+            let order = app.sessions.iter().find(|s| s.id == id).map(|s| s.used).unwrap_or(0);
+            (id, name, used, order)
         }).collect();
         let (field, reversed) = (self.sort, self.reversed);
         order.sort_by(|a, b| {
             let by_name = || a.1.as_bytes().cmp(b.1.as_bytes());
-            let r = match field { 0 => a.0.cmp(&b.0), 2 => b.2.cmp(&a.2).then_with(by_name), _ => by_name() };
+            let r = match field { 0 => a.0.cmp(&b.0), 2 => b.2.cmp(&a.2).then(b.3.cmp(&a.3)).then_with(by_name), _ => by_name() };
             if reversed { r.reverse() } else { r }
         });
         for (sid, ..) in order {
@@ -417,7 +419,8 @@ impl Tree {
             let by_name = || ta.name.as_bytes().cmp(tb.name.as_bytes());
             let r = match field {
                 0 => app.win_num(*a).cmp(&app.win_num(*b)),
-                2 => tb.activity.cmp(&ta.activity).then_with(by_name),
+                // (Within one second: the newer window first, as by tmux's microseconds.)
+                2 => tb.activity.cmp(&ta.activity).then(tb.wid().cmp(&ta.wid())).then_with(by_name),
                 _ => by_name(),
             };
             if reversed { r.reverse() } else { r }

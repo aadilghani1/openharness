@@ -143,6 +143,17 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
 }
 
 /// Whether sessions are kept for this server name (no client has them, or one does).
+/// A session no client runs, kept in the sessions file, by its name (as -t takes it: exact, `=`
+/// exact, else the start of one name) or its id ($N).
+pub fn has_session_named(name: Option<&str>, t: &str) -> bool {
+    let doc = crate::app::read_sessions(&crate::app::sessions_path(name));
+    let rows: Vec<Value> = doc["sessions"].as_array().cloned().unwrap_or_default();
+    let names: Vec<String> = rows.iter().filter_map(|r| r.get("name").and_then(Value::as_str).map(str::to_string)).collect();
+    if let Some(id) = t.strip_prefix('$').and_then(|i| i.parse::<u64>().ok()) { return rows.iter().any(|r| r.get("id").and_then(Value::as_u64) == Some(id)) }
+    if let Some(exact) = t.strip_prefix('=') { return names.iter().any(|n| n == exact) }
+    names.iter().any(|n| n == t) || names.iter().filter(|n| n.starts_with(t)).count() == 1
+}
+
 pub fn has_sessions(name: Option<&str>) -> bool {
     let doc = crate::app::read_sessions(&crate::app::sessions_path(name));
     doc["sessions"].as_array().map(|rows| rows.iter().any(|r| !r.get("desk").and_then(Value::as_bool).unwrap_or(false))).unwrap_or(false)

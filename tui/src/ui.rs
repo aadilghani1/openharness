@@ -150,8 +150,10 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
             put(buf, x1, y, rj, border);
             continue;
         }
-        let st = if m.choice == Some(i) && !it.disabled { selected } else if it.disabled { style.add_modifier(Modifier::DIM) } else { style };
-        for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", st) }
+        // screen_write_menu: the row padded first, then a disabled item's words drawn dim.
+        let pad = if m.choice == Some(i) && !it.disabled { selected } else { style };
+        for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", pad) }
+        let st = if it.disabled { style.add_modifier(Modifier::DIM) } else { pad };
         let text = if it.key.is_empty() { it.label.clone() } else { format!("{}#[default] #[align=right]({})", it.label, it.key) };
         draw_at(buf, x0 + 2, y, &text, st, m.width);
     }
@@ -399,7 +401,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
         // after it at the end; scrolled to keep the cursor in view. The terminal's own cursor is
         // hidden, as tmux hides it.
         if !label.ends_with(' ') && label != ":" { label.push(' ') }
-        let gc = if command_mode && !app.plain_status() { app.style_of("message-command-style", app.active, None) } else { yellow };
+        let gc = if command_mode { app.style_of("message-command-style", app.active, None) } else { yellow };
         let cursorgc = if gc.add_modifier.contains(Modifier::REVERSED) { gc.remove_modifier(Modifier::REVERSED) } else { gc.add_modifier(Modifier::REVERSED) };
         for x in rect.x..rect.x + rect.width { if let Some(c) = buf.cell_mut((x, rect.y)) { c.reset(); c.set_symbol(" "); c.set_style(gc); } }
         let sx = rect.width as usize;

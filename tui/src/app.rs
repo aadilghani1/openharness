@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
@@ -2683,9 +2683,8 @@ impl App {
     }
 
     /// The status line's colours (status_redraw): status-style, then status-fg and status-bg
-    /// where they are not `default`; under NO_COLOR with tmux's own, reverse video.
+    /// where they are not `default` (NO_COLOR or not: tmux doesn't read it).
     pub fn status_style(&self) -> Style {
-        if self.plain_status() { return Style::default().add_modifier(Modifier::REVERSED) }
         let mut s = self.style_of("status-style", self.active, None);
         for (name, fg) in [("status-fg", true), ("status-bg", false)] {
             let c = self.options.get(name, "", None).and_then(|v| crate::tmuxconf::colour(&v)).filter(|c| *c != Color::Reset);
@@ -2694,16 +2693,8 @@ impl App {
         s
     }
 
-    /// message-style (tmux's yellow), for messages and prompts; reverse video under NO_COLOR.
-    pub fn message_style(&self) -> Style {
-        if self.plain_status() { return Style::default().add_modifier(Modifier::REVERSED) }
-        self.style_of("message-style", self.active, None)
-    }
-
-    /// NO_COLOR, with tmux's own status and message colours: those carry no colour.
-    pub fn plain_status(&self) -> bool {
-        crate::theme::no_color() && ["status-style", "status-fg", "status-bg", "message-style"].iter().all(|n| self.options.get(n, "", None).as_ref() == crate::options::tmux_defaults().get(*n))
-    }
+    /// message-style (tmux's yellow), for messages and prompts.
+    pub fn message_style(&self) -> Style { self.style_of("message-style", self.active, None) }
 
     /// mode-keys as it stands (tmux's default: emacs, unless $VISUAL or $EDITOR is a vi).
     pub fn mode_keys_emacs(&self) -> bool {
