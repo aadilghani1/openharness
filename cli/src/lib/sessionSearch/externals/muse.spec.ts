@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { museActivity, museOwnRun, museProvider, museTurnOpen, readMuseHead } from './muse.js'
 import { scanMemo } from './support.js'
-import type { ExternalProvider, ProcessView, RunningProcess } from './types.js'
+import { type ExternalProvider, type ProcessView, type RunningProcess, UNSETTLED } from './types.js'
 
 // Shapes follow the repo's recorded Muse session (lib/__fixtures__/muse-session.jsonl): one envelope a
 // record, `recorded_at` in microseconds, sub-agent streams mirrored into the parent. Values are made up.
@@ -81,7 +81,7 @@ describe('readMuseHead', () => {
   })
 
   it('says "not yet" while the first record is being written, and "never" past the bound', async () => {
-    await expect(head(metadata(ID, '/w'))).rejects.toThrow()
+    expect(await head(metadata(ID, '/w'))).toBe(UNSETTLED)
     expect(await head('x'.repeat(256 * 1024 + 1))).toBeNull()
     // A first record larger than the first read is read whole on a second.
     const long = rec(ID, 0, { kind: 'metadata', record: { workspace_root: '/w', notes: 'y'.repeat(40_000) } })

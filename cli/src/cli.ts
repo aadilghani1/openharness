@@ -5015,8 +5015,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const engineName = engineLabel(engine)
     // A process in one of Harness's own panes is an agent the daemon is still binding: never stopped.
     if (owner.harness) return { ok: false, error: 'SESSION_IN_HARNESS', detail: 'This conversation is already a harness here.' }
-    // Started on it, as its arguments say, and perhaps moved on since: not opened twice, never stopped.
-    if (owner.fromArgs) {
+    // Started on it, as its arguments say, and perhaps moved on since — or in a pane nobody could check
+    // was not Harness's own: not opened twice, never stopped.
+    if (owner.fromArgs || owner.unverified) {
       return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: `It may be open in ${engineName} in a terminal. Close it there, then open it here.` }
     }
     if (!owner.tty) {
@@ -5042,11 +5043,28 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     for (;;) {
       await new Promise<void>((resolve) => { const timer = setTimeout(resolve, 1_000); timer.unref?.() })
       if (registry.byAgent(agentId)?.launch?.state !== 'starting' || !processAlive(owner.pid)) return
+      // Moved on in that terminal (`/resume`, `/new`): its turn is another conversation's now, and it
+      // is left alone. The pane still waits for it to quit, and then opens this one.
+      if (await heldBy(sessionId, owner) !== 'same') {
+        console.log(`[agent] take over ${sid(sessionId)} · pid ${owner.pid} moved on · left running`)
+        return
+      }
       if (await openSessions.busy(owner)) continue
       const stopped = await stopSessionOwner(owner)
       console.log(`[agent] take over ${sid(sessionId)} · turn ended · pid ${owner.pid} ${stopped ? 'stopped' : 'did not stop'}`)
       return
     }
+  }
+
+  /**
+   * Who holds [sessionId] now, against the [owner] seen when the person chose: `same` (that process,
+   * still a terminal's, by hard evidence, not one of Harness's own), `free` (nobody), or `other`.
+   * Asked again right before anything is stopped: the terminal may have moved to other work since.
+   */
+  const heldBy = async (sessionId: string, owner: SessionOwner): Promise<'same' | 'free' | 'other'> => {
+    const now = await openSessions.owner(sessionId)
+    if (!now) return 'free'
+    return now.pid === owner.pid && !!now.tty && !now.fromArgs && !now.harness && !now.unverified ? 'same' : 'other'
   }
 
   backend.onCreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver }) => {
@@ -5215,11 +5233,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const argv = buildEngineLaunchArgv(engine, launchOptions)
     // The terminal's process goes last, once nothing here can refuse or fail the launch — the command
     // is built — stopped now, or, to wait for its turn, left running for the pane to wait on.
-    if (owner && !waitFor) {
-      if (!await stopSessionOwner(owner)) {
+    if (owner && !waitFor && resumeSessionId) {
+      const held = await heldBy(resumeSessionId, owner)
+      if (held === 'other') {
+        return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: 'It moved to another process just now. Close it there, then open it here.' }
+      }
+      // Quit in its terminal meanwhile: it is free, and nothing is stopped.
+      if (held === 'same' && !await stopSessionOwner(owner)) {
         return { ok: false, error: 'SESSION_STOP_FAILED', detail: 'The terminal that has it did not quit. Close it there, then open it here.' }
       }
-      console.log(`[agent] take over ${sid(resumeSessionId ?? '')} · pid ${owner.pid} stopped${ownerBusy ? ' mid-turn' : ''}`)
+      if (held === 'same') console.log(`[agent] take over ${sid(resumeSessionId)} · pid ${owner.pid} stopped${ownerBusy ? ' mid-turn' : ''}`)
     }
     // A tmux route is enough to stream its screen. Register it before looking for a process so both
     // loopback and relayed Desktop clients can attach while the login shell/installer is still busy.

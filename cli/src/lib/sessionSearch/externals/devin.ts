@@ -12,7 +12,7 @@
  * is Devin. `devin -r <id>` names the session a process started on in its arguments (`fromArgs`).
  */
 
-import { readFile } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { DevinErrorTail } from '../../../engines/devin/errorLog.js'
@@ -76,6 +76,21 @@ export function lockPid(content: string): number | null {
   const trimmed = content.trim()
   const value = /^\d+$/.test(trimmed) ? Number(trimmed) : record(parseLine(trimmed))?.pid
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
+}
+
+/** How much earlier than its process's start (`ps`, whole seconds) a lock may seem to be written. */
+const LOCK_SLACK_MS = 2_000
+
+/** A lock's pid and when it was written; null when it cannot be read. */
+async function readLock(path: string): Promise<{ pid: number | null; written: number } | null> {
+  const handle = await open(path, 'r').catch(() => null)
+  if (!handle) return null
+  try {
+    const [info, content] = await Promise.all([handle.stat(), handle.readFile('utf8')])
+    return { pid: lockPid(content), written: info.mtimeMs }
+  } finally {
+    await handle.close()
+  }
 }
 
 /** The last thing said, the system prompt aside (row order: Devin appends the chain it just persisted). */
@@ -150,11 +165,13 @@ export function devinProvider(options: DevinOptions): ExternalProvider & Countin
         if (!file.isFile() || !file.name.endsWith('.lock')) continue
         const sessionId = file.name.slice(0, -'.lock'.length)
         if (!isDevinSessionId(sessionId)) continue
-        const pid = lockPid(await readFile(join(locks, file.name), 'utf8').catch(() => ''))
-        if (pid === null) continue
-        // A lock outlives a crash, and its pid can be handed to anything after.
-        const row = byPid.get(pid)
-        if (!row || !view.alive(pid) || !isDevin(row)) continue
+        const lock = await readLock(join(locks, file.name))
+        if (lock?.pid == null) continue
+        // A lock outlives a crash, and its pid can be handed to anything after, another Devin among
+        // them: one written before the process under its pid began was that earlier process's.
+        const row = byPid.get(lock.pid)
+        if (!row || !view.alive(lock.pid) || !isDevin(row)) continue
+        if (row.started !== undefined && lock.written < row.started - LOCK_SLACK_MS) continue
         add(sessionId, row, false)
       }
       // The id a process was started on, where no lock says more: it may have moved on since.

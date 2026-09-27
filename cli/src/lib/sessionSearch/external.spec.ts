@@ -146,6 +146,14 @@ describe('OpenSessions', () => {
     expect(log).toEqual(['[search] codex owners not read: lsof failed', '[search] devin owners not read: odd'])
   })
 
+  it("calls a terminal's session 'maybe' when Harness's own panes could not be listed", async () => {
+    const { sessions } = open([{ engine: 'claude', scan: async () => [], owners: async () => [{ sessionId: 'a', pid: 1, record: '/r' }] }], {
+      harnessTtys: async () => null,
+    })
+    expect((await sessions.fresh()).get('a')).toBe('maybe')
+    expect(await sessions.owner('a')).toMatchObject({ tty: '/dev/ttys001', unverified: true })
+  })
+
   it('reads no terminal and no Harness pane when those lookups fail', async () => {
     const { sessions } = open([{ engine: 'claude', scan: async () => [], owners: async () => [{ sessionId: 'a', pid: 1, record: '/r' }] }], {
       ttys: async () => { throw new Error('ps failed') },

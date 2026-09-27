@@ -24,7 +24,7 @@ import type { AgentCommandOwnershipSnapshot } from '../../engineBin.js'
 import { engineProcessMatch, resumeSessionId } from '../../tmux.js'
 import { forEachLine } from '../transcript.js'
 import { absoluteFolder, entries, fileStamp, parseLine, readHead, readJson, readTail, record, text } from './support.js'
-import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView, ScanContext } from './types.js'
+import { type ExternalProvider, type ExternalSession, type OwnerClaim, type ProcessView, type ScanContext, UNSETTLED } from './types.js'
 
 /** How much of a file is read for its header first: headers are a few hundred bytes. */
 const FIRST_BYTES = 16 * 1024
@@ -48,16 +48,13 @@ const NO_FILE_OWNERS: AgentCommandOwnershipSnapshot = {
   agentCandidates: [], cursorAgentCandidates: [], grokCandidates: [],
 }
 
-/** Thrown from a memo's read while a file's first entry is still being written: nothing is kept. */
-class Unsettled extends Error {}
-
 export interface PiHead { sessionId: string; cwd: string }
 
 /**
  * A session file's id and folder, from its first entry. Blank and malformed lines before it are
  * skipped, as Pi skips them; any other first entry means the file is not a session.
  */
-export async function readPiHead(path: string): Promise<PiHead | null> {
+export async function readPiHead(path: string): Promise<PiHead | null | typeof UNSETTLED> {
   for (const bytes of [FIRST_BYTES, HEAD_BYTES]) {
     const head = await readHead(path, bytes)
     // The last piece has no newline: an entry still being written, or one cut by the read.
@@ -72,7 +69,7 @@ export async function readPiHead(path: string): Promise<PiHead | null> {
       return SESSION_ID.test(id) && !id.endsWith('.jsonl') && cwd ? { sessionId: id, cwd: resolve(cwd) } : null
     }
     // The whole file, and no entry in it yet: its first one is still being written.
-    if (Buffer.byteLength(head) < bytes) throw new Unsettled()
+    if (Buffer.byteLength(head) < bytes) return UNSETTLED
   }
   return null
 }
@@ -224,8 +221,8 @@ export function piProvider(options: PiOptions): ExternalProvider {
       for (const { path, folder } of layout ? await piFiles(layout) : []) {
         const stamp = await fileStamp(path)
         if (!stamp) continue
-        // What the header says never changes (a migration rewrites only its version): read once.
-        const head = await ctx.memo(`pi:${path}`, 'head', () => readPiHead(path)).catch(() => null)
+        // What the header says never changes (a migration rewrites only its version): read once it is whole.
+        const head = await ctx.head(`pi:${path}`, stamp.stamp, () => readPiHead(path))
         await ctx.pace()
         // In Pi's own tree an id resumes only from the folder its header's folder names; from any
         // other, Pi asks whether to fork it instead.

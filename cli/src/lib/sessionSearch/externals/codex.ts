@@ -12,10 +12,12 @@
 import { join } from 'node:path'
 
 import { absoluteFolder, entries, fileStamp, firstLine, parseLine, readHead, readTail, readText, record, text } from './support.js'
-import { type ExternalOrigin, type ExternalProvider, type ExternalSession, type OwnerClaim, type ProcessView, type ScanContext, UNSETTLED } from './types.js'
+import { argvTokens } from '../../tmux.js'
+import { type ExternalOrigin, type ExternalProvider, type ExternalSession, type OwnerClaim, type ProcessView, type RunningProcess, type ScanContext, UNSETTLED } from './types.js'
 
-/** How much of a rollout is read for its first line: `session_meta` carries the base instructions. */
-const HEAD_BYTES = 1024 * 1024
+/** How much of a rollout is read for its first line: a little first; `session_meta` can carry long
+ *  base instructions, so up to a megabyte when it has to. */
+const HEAD_BYTES = [16 * 1024, 1024 * 1024]
 const SESSION_ID = /^[A-Za-z0-9-]{8,80}$/
 const ROLLOUT_ID = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
 
@@ -26,8 +28,14 @@ export interface CodexHead { sessionId: string; cwd: string; origin: ExternalOri
  * yet in a file shorter than what is read: Codex is still writing it.
  */
 export async function readCodexHead(path: string): Promise<CodexHead | null | typeof UNSETTLED> {
-  const line = await firstLine(path, HEAD_BYTES)
-  if (line === null) return Buffer.byteLength(await readHead(path, HEAD_BYTES)) < HEAD_BYTES ? UNSETTLED : null
+  let line: string | null = null
+  for (const bytes of HEAD_BYTES) {
+    line = await firstLine(path, bytes)
+    if (line !== null) break
+    // The whole file was read and it has no line yet: Codex is still writing it.
+    if (Buffer.byteLength(await readHead(path, bytes)) < bytes) return UNSETTLED
+  }
+  if (line === null) return null
   const row = record(parseLine(line))
   const meta = record(row?.payload)
   if (row?.type !== 'session_meta' || !meta) return null
@@ -71,6 +79,17 @@ export async function rollouts(dir: string): Promise<string[]> {
 
 const TURN_MARK = /"(task_started|task_complete|turn_aborted)"/
 
+const SERVER_COMMANDS = new Set(['app-server', 'mcp-server', 'mcp', 'proto'])
+
+/** Whether a Codex process serves other clients rather than a person's terminal. */
+export function codexServer(row: RunningProcess | undefined): boolean {
+  if (!row) return false
+  if (/codex-acp$/.test(row.executable) || /(?:^|\/)codex-acp(?:\s|$)/.test(row.args)) return true
+  // The subcommand: the first argument that is not an option.
+  const subcommand = argvTokens(row.args).slice(1).find((token) => !token.startsWith('-'))
+  return !!subcommand && SERVER_COMMANDS.has(subcommand)
+}
+
 /**
  * Whether a rollout's last turn is still running: the last `task_started`, `task_complete` or
  * `turn_aborted` event near its end says. What was said can name the events; only events count.
@@ -112,10 +131,16 @@ export function codexProvider(options: { home: string }): ExternalProvider {
     },
     async owners(view: ProcessView): Promise<OwnerClaim[]> {
       const claims: OwnerClaim[] = []
-      for (const [pid, files] of await view.openFilesOf(['codex', 'Codex'])) {
+      const held = await view.openFilesOf(['codex', 'Codex'])
+      if (!held.size) return claims
+      const processes = new Map((await view.list()).map((row): [number, RunningProcess] => [row.pid, row]))
+      for (const [pid, files] of held) {
+        // A server Codex runs for other clients (the app, an editor, MCP) holds their threads: never
+        // stopped from here, even when a terminal started it.
+        const app = codexServer(processes.get(pid))
         for (const path of files) {
           const id = ROLLOUT_ID.exec(path)?.[1]
-          if (id && path.includes('rollout-')) claims.push({ sessionId: id, pid, record: path })
+          if (id && path.includes('rollout-')) claims.push({ sessionId: id, pid, record: path, ...(app ? { app: true } : {}) })
         }
       }
       return claims

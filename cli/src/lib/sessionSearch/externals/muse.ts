@@ -20,7 +20,7 @@ import type { AgentCommandOwnershipSnapshot } from '../../engineBin.js'
 import { engineProcessMatch, resumeSessionId } from '../../tmux.js'
 import { forEachLine } from '../transcript.js'
 import { absoluteFolder, entries, epochMs, fileStamp, parseLine, readHead, readTail, record, text, UUID } from './support.js'
-import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView, ScanContext } from './types.js'
+import { type ExternalProvider, type ExternalSession, type OwnerClaim, type ProcessView, type ScanContext, UNSETTLED } from './types.js'
 
 /** A log's first record is a few hundred bytes: this much is read first, and never more than the bound. */
 const FIRST_BYTES = 16 * 1024
@@ -37,13 +37,10 @@ const NO_FILE_OWNERS: AgentCommandOwnershipSnapshot = {
   agentCandidates: [], cursorAgentCandidates: [], grokCandidates: [],
 }
 
-/** Thrown from a memo's read while a log's first record is still being written: nothing is kept. */
-class Unsettled extends Error {}
-
 export interface MuseHead { sessionId: string; cwd: string }
 
 /** A log's session and folder, from its first record: the metadata of the stream its folder names. */
-export async function readMuseHead(path: string, folderId: string): Promise<MuseHead | null> {
+export async function readMuseHead(path: string, folderId: string): Promise<MuseHead | null | typeof UNSETTLED> {
   let first: string | undefined
   for (const bytes of [FIRST_BYTES, HEAD_BYTES]) {
     const head = await readHead(path, bytes)
@@ -53,7 +50,7 @@ export async function readMuseHead(path: string, folderId: string): Promise<Muse
       break
     }
     // The whole log, and no complete record in it yet: the first is still being written.
-    if (Buffer.byteLength(head) < bytes) throw new Unsettled()
+    if (Buffer.byteLength(head) < bytes) return UNSETTLED
   }
   if (first === undefined) return null
   const row = record(parseLine(first))
@@ -149,8 +146,8 @@ export function museProvider(options: MuseOptions): ExternalProvider {
       for (const { path, id } of await logs(join(options.home, 'sessions'))) {
         const stamp = await fileStamp(path)
         if (!stamp) continue
-        // The metadata record never changes: read once, however the log grows.
-        const head = await ctx.memo(`muse:${path}`, 'head', () => readMuseHead(path, id)).catch(() => null)
+        // The metadata record never changes: read once it is whole, however the log grows.
+        const head = await ctx.head(`muse:${path}`, stamp.stamp, () => readMuseHead(path, id))
         await ctx.pace()
         if (!head || ctx.excluded(head.cwd)) continue
         const info = await ctx.memo(`muse:info:${path}`, stamp.stamp, async () => ({

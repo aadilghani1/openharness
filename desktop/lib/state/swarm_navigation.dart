@@ -266,9 +266,10 @@ class ExternalSessionRef {
   final bool open;
 
   /// Where it is open: `terminal`, which Harness can take it over from; `app`,
-  /// which it cannot; or `harness`, one of Harness's own panes whose agent the
-  /// machine is still binding. Null when it is not open, or the machine
-  /// predates taking over.
+  /// which it cannot; `harness`, one of Harness's own panes whose agent the
+  /// machine is still binding; or `maybe` a terminal, whose process was started
+  /// on it and may have moved on (never stopped from here). Null when it is not
+  /// open, or the machine predates taking over.
   final String? openIn;
 
   /// Open, and only in a terminal: opening it here moves it, once asked.

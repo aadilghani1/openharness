@@ -239,14 +239,24 @@ export async function processTtys(pids: readonly number[], exec: Run = run): Pro
   return parseTtys(await exec('ps', ['-o', 'pid=,tty=', '-p', pids.join(',')], 3_000) ?? '')
 }
 
+type Ask = (command: string, args: readonly string[], timeout: number) => Promise<{ stdout: string; failed: boolean; stderr: string }>
+
+const ask: Ask = (command, args, timeout) => new Promise((resolve) => {
+  execFile(command, [...args], { timeout }, (error, stdout, stderr) => {
+    resolve({ stdout: String(stdout), failed: !!error, stderr: String(stderr) })
+  })
+})
+
 /**
  * The terminals of Harness's own panes: tmux sessions named `harness-…`. A process there is one of
- * Harness's agents, whatever its session looks like while the daemon is still binding it.
+ * Harness's agents, whatever its session looks like while the daemon is still binding it. None when
+ * no tmux server is running; null when tmux could not be asked (a timeout): then nobody can say.
  */
-export async function harnessTtys(exec: Run = run): Promise<Set<string>> {
-  const out = await exec('tmux', ['list-panes', '-a', '-F', '#{pane_tty}\t#{session_name}'], 3_000)
+export async function harnessTtys(exec: Ask = ask): Promise<Set<string> | null> {
+  const { stdout, failed, stderr } = await exec('tmux', ['list-panes', '-a', '-F', '#{pane_tty}\t#{session_name}'], 3_000)
+  if (failed && !/no server running|error connecting to/i.test(stderr)) return null
   const ttys = new Set<string>()
-  for (const line of (out ?? '').split('\n')) {
+  for (const line of stdout.split('\n')) {
     const [tty, session] = line.split('\t')
     if (tty && session && isHarnessSession(session)) ttys.add(tty)
   }

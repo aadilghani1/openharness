@@ -1543,6 +1543,7 @@ class SwarmSearchController extends ChangeNotifier {
         final where = previewed?.openIn ?? external.openIn;
         if (where == 'terminal') return null;
         if (where == 'harness') return 'Already in Harness';
+        if (where == 'maybe') return 'May be open in a terminal';
         if (external.origin == 'terminal') {
           // A machine that predates taking over; or no terminal holds it now.
           return where == null ? 'Open in another terminal' : 'Open in an app';

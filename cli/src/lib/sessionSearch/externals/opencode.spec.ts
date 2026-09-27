@@ -252,13 +252,10 @@ describe.each(READERS)('OpenCode discovery read through %s', (_name, reader) => 
     store.close()
     // The last connection closed: SQLite checkpointed and removed the log, as an idle engine leaves it.
     expect(existsSync(`${store.path}-wal`)).toBe(false)
-    if (reader) {
-      expect((await provider.scan(context().ctx)).map((s) => s.sessionId).sort()).toEqual(['ses_committed', 'ses_uncommitted'])
-    } else {
-      // Measured (macOS sqlite3 3.51.0): a read-only CLI cannot create the log it needs, so an idle
-      // WAL store is unreadable on this path. The scan throws and discovery keeps its last list.
-      await expect(provider.scan(context().ctx)).rejects.toThrow(/unable to open database file/)
-    }
+    expect((await provider.scan(context().ctx)).map((s) => s.sessionId).sort()).toEqual(['ses_committed', 'ses_uncommitted'])
+    // …and reading it created nothing in the engine's folder.
+    expect(existsSync(`${store.path}-wal`)).toBe(false)
+    expect(existsSync(`${store.path}-shm`)).toBe(false)
   })
 
   it('lists the newest 500 and counts the rest as older', async () => {

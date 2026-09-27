@@ -5,7 +5,8 @@
  * envelope. Beside the transcript sit `<id>.meta.json` (its title, and `entrypoint: 'print'` for a
  * headless `cmd -p` run, which Command Code keeps out of its own picker and so is left out here),
  * `.prompts.jsonl`, `.checkpoints.jsonl`, `.share.json` and `.v2.bak`. A file from before the v3
- * format has no header and so no folder: it is left out until Command Code opens and rewrites it.
+ * format has no header and so no folder: it is left out until Command Code opens and rewrites it,
+ * and read again then.
  * Read from command-code 1.66.0.
  *
  * Command Code holds no file open and writes no process record. Only an argv that names the session
@@ -20,7 +21,7 @@ import { join } from 'node:path'
 import type { AgentCommandOwnershipSnapshot } from '../../engineBin.js'
 import { engineProcessMatch, resumeSessionId } from '../../tmux.js'
 import { absoluteFolder, entries, fileStamp, parseLine, readHead, readJson, readTail, record, text } from './support.js'
-import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView, ScanContext } from './types.js'
+import { type ExternalProvider, type ExternalSession, type OwnerClaim, type ProcessView, type ScanContext, UNSETTLED } from './types.js'
 
 /** A header is a few hundred bytes: this much is read first, and never more than the bound. */
 const FIRST_BYTES = 16 * 1024
@@ -38,31 +39,29 @@ const NO_FILE_OWNERS: AgentCommandOwnershipSnapshot = {
   agentCandidates: [], cursorAgentCandidates: [], grokCandidates: [],
 }
 
-/** Thrown from a memo's read while a file's header is still being written: nothing is kept. */
-class Unsettled extends Error {}
-
 export interface CommandCodeHead { sessionId: string; cwd: string }
 
 /**
  * A transcript's folder, from its first line: Command Code's v3 header, naming the same id as the
- * file (Command Code resumes by the file's name). Any later format keeps the header's shape.
+ * file (Command Code resumes by the file's name). Any later format keeps the header's shape. A file
+ * from before v3 cannot be judged yet: Command Code rewrites it in place, with a header, when it
+ * next opens it.
  */
-export async function readCommandCodeHead(path: string, fileId: string): Promise<CommandCodeHead | null> {
+export async function readCommandCodeHead(path: string, fileId: string): Promise<CommandCodeHead | null | typeof UNSETTLED> {
   let line: string | undefined
   for (const bytes of [FIRST_BYTES, HEAD_BYTES]) {
     const head = await readHead(path, bytes)
     line = head.split('\n').slice(0, -1).find((piece) => piece.trim())
     if (line !== undefined) break
     // The whole file, and no line in it yet: its header is still being written.
-    if (Buffer.byteLength(head) < bytes) throw new Unsettled()
+    if (Buffer.byteLength(head) < bytes) return UNSETTLED
   }
   if (line === undefined) return null
   const row = record(parseLine(line))
   const version = row?.version
-  const cwd = absoluteFolder(row?.cwd)
-  if (row?.type !== 'session' || typeof version !== 'number' || version < 3 || typeof row.timestamp !== 'string'
-    || row.id !== fileId || !cwd) return null
-  return { sessionId: fileId, cwd }
+  if (row?.type !== 'session' || typeof version !== 'number' || version < 3) return UNSETTLED
+  const cwd = absoluteFolder(row.cwd)
+  return typeof row.timestamp === 'string' && row.id === fileId && cwd ? { sessionId: fileId, cwd } : null
 }
 
 export interface CommandCodeMeta { title: string; headless: boolean }
@@ -113,8 +112,8 @@ export function commandcodeProvider(options: CommandcodeOptions): ExternalProvid
       for (const { path, id } of await transcripts(join(options.home, 'projects'))) {
         const stamp = await fileStamp(path)
         if (!stamp) continue
-        // The header never changes: read once, however the transcript grows.
-        const head = await ctx.memo(`commandcode:${path}`, 'head', () => readCommandCodeHead(path, id)).catch(() => null)
+        // A v3 header never changes: read once, however the transcript grows.
+        const head = await ctx.head(`commandcode:${path}`, stamp.stamp, () => readCommandCodeHead(path, id))
         await ctx.pace()
         if (!head || ctx.excluded(head.cwd)) continue
         const metaPath = path.replace(/\.jsonl$/, '.meta.json')

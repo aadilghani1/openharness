@@ -13,7 +13,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from '../../sqliteRead.js'
 import {
   activeProfile, argvProfile, bestContinuation, compressionTip, hermesChains, hermesHomes, hermesKind, hermesLeases,
-  hermesListSql, hermesProvider, hermesRow, hermesTurnOpen, type HermesRow, type HermesSession,
+  hermesListSql, hermesProvider, hermesRow, hermesTurnOpen, leaseHeldBy, type HermesRow, type HermesSession,
 } from './hermes.js'
 import { LIST_LIMIT, ownerRecord, readSql, type SqlRead } from './opencode.js'
 import { scanMemo } from './support.js'
@@ -523,6 +523,35 @@ describe('Hermes owners', () => {
     main.close(); work.close()
   })
 
+  it('checks a lease against the start of the process now under its pid', async () => {
+    const { root, main, work } = homes()
+    const T = 1_790_000_000_000
+    mkdirSync(join(root, 'runtime'))
+    writeFileSync(join(root, 'runtime', 'active_sessions.json'), JSON.stringify({ entries: [
+      // Its REPL: psutil's create_time (float seconds) against ps's whole second.
+      { session_id: id(1), surface: 'cli', pid: 200, process_start_time: T / 1000 + 0.731 },
+      // A Hermes crashed and left this; its pid now belongs to a tool another live Hermes runs, and
+      // the walk up would have handed that Hermes a claim it could be stopped on.
+      { session_id: id(4), surface: 'cli', pid: 601, process_start_time: T / 1000 },
+      // No start recorded (Hermes without psutil): the pid is all there is.
+      { session_id: id(3), surface: 'cli', pid: 700, process_start_time: null },
+      // Alive but not in the process list: nothing to check, and no Hermes to own it.
+      { session_id: id(8), surface: 'cli', pid: 800, process_start_time: T / 1000 },
+    ] }))
+    const at = (row: RunningProcess, started?: number): RunningProcess => (started === undefined ? row : { ...row, started })
+    const claims = await hermesProvider({ root }).owners!(view([
+      at(py(200, 1, ''), T),
+      at(py(600, 1, ''), T - 86_400_000),
+      at(proc(601, 600, 'python3 tool.py'), T + 3_600_000),
+      at(py(700, 1, ''), T),
+    ]))
+    expect(claims).toEqual([
+      { sessionId: id(1), pid: 200, record: ownerRecord(main.path, id(1)) },
+      { sessionId: id(3), pid: 700, record: ownerRecord(main.path, id(3)) },
+    ])
+    main.close(); work.close()
+  })
+
   it('never offers to stop what serves another client', async () => {
     const { root, main, work } = homes()
     mkdirSync(join(root, 'runtime'))
@@ -614,6 +643,33 @@ describe('Hermes pieces', () => {
     expect(hermesRow({ id: 'x', source: 'cli', started: 1.5, branched: 0, parent: '', last_msg: 'NaN' }))
       .toMatchObject({ id: 'x', started: 1.5, branched: true, parent: null, lastMsg: null, title: '', displayName: '' })
     expect(hermesRow({ id: 'x', branched: null }).branched).toBe(false)
+  })
+
+  it('matches a lease to its process by start, within ps\'s whole second', () => {
+    const lease = { sessionId: id(1), pid: 5, started: 1_000_000 }
+    const row = (started?: number): RunningProcess => ({ pid: 5, ppid: 1, executable: 'hermes', args: 'hermes', ...(started === undefined ? {} : { started }) })
+    expect(leaseHeldBy(lease, row(999_000))).toBe(true)
+    expect(leaseHeldBy(lease, row(1_002_000))).toBe(true)
+    expect(leaseHeldBy(lease, row(997_999))).toBe(false)
+    expect(leaseHeldBy(lease, row(1_002_001))).toBe(false)
+    expect(leaseHeldBy(lease, row())).toBe(true)
+    expect(leaseHeldBy(lease, undefined)).toBe(true)
+    expect(leaseHeldBy({ sessionId: id(1), pid: 5 }, row(1))).toBe(true)
+  })
+
+  it('reads a lease\'s start in milliseconds, and only a real one', async () => {
+    const dir = tempDir()
+    mkdirSync(join(dir, 'runtime'))
+    writeFileSync(join(dir, 'runtime', 'active_sessions.json'), JSON.stringify({ entries: [
+      { session_id: id(1), surface: 'cli', pid: 1, process_start_time: 1_790_000_000.5 },
+      { session_id: id(2), surface: 'cli', pid: 2, process_start_time: 0 },
+      { session_id: id(3), surface: 'cli', pid: 3, process_start_time: '1790000000' },
+    ] }))
+    expect(await hermesLeases(dir)).toEqual([
+      { sessionId: id(1), pid: 1, started: 1_790_000_000_500 },
+      { sessionId: id(2), pid: 2 },
+      { sessionId: id(3), pid: 3 },
+    ])
   })
 
   it('reads leases only from what Hermes writes', async () => {
