@@ -1214,8 +1214,10 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     let fill = if current { base_style } else { pal.normal.style() };
     if show_right {
         let end = right_edge.clamp(used + right_w + 2, text_w);
-        spans.push(Span::styled(" ".repeat(end.saturating_sub(used + right_w)), fill));
-        let right_at = label_len + if detail_len > 0 { 2 + detail_len } else { 0 } + 2;
+        let pad = end.saturating_sub(used + right_w);
+        spans.push(Span::styled(" ".repeat(pad), fill));
+        // (Its characters where the line matched counts them: after the blanks drawn.)
+        let right_at = label_len + if detail_len > 0 { 2 + detail_len } else { 0 } + pad;
         // The right column is dim text of the line's own.
         let dim = Style::default().add_modifier(Modifier::DIM);
         for (i, c) in right.chars().enumerate() {

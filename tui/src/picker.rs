@@ -306,12 +306,14 @@ impl Picker {
             }
             let live_tiebreak: Vec<crate::fzf::Tiebreak> = o.tiebreak.iter().copied().filter(|t| *t != crate::fzf::Tiebreak::Length).collect();
             let mut scored: Vec<(Vec<i64>, usize, Vec<u32>)> = Vec::new();
+            // Where the right column lines up (ui's right_edge): the widest line, at most the width.
+            let edge = { use unicode_width::UnicodeWidthStr; self.rows.iter().filter(|r| !r.disabled).map(|r| r.lead.iter().map(|s| s.content.width()).sum::<usize>() + line(r).width()).max().unwrap_or(0).min(self.text_w) };
             let mut hidden: Vec<usize> = Vec::new();
             for (index, row) in self.rows.iter().enumerate() {
                 if row.disabled { continue }
                 let keywords = format!("{} {}", row.label, row.extra);
                 if negated.iter().any(|(w, s)| w.chars().count() >= 3 && names_word(&keywords, w, *s)) { continue }
-                let chars: Vec<char> = if self.live { steady_line(row, self.text_w) } else { line(row).chars().collect() };
+                let chars: Vec<char> = if self.live { steady_line(row, self.text_w, edge) } else { line(row).chars().collect() };
                 // (A keyword hit still has to keep out of what the query excludes from the line.)
                 let seen = if negated.is_empty() { String::new() } else { line(row) };
                 let clear = |w: &str, sensitive: bool| if sensitive { !seen.contains(w) } else { !seen.to_lowercase().contains(w) };
@@ -635,7 +637,19 @@ pub fn scope_of(query: &str) -> Option<char> {
 
 /// A live row's line as a query sees it: as drawn (picker::line), its changing parts blanked —
 /// what it is doing now, how long it has been as it is — so hits light where the row shows them.
-fn steady_line(row: &Row, text_w: usize) -> Vec<char> {
+/// The blanks between a row's text and its right column as fzf_row draws them at [text_w] with
+/// the column lined up at [edge] (two at least; two when the width is not known).
+pub fn right_gap(row: &Row, text_w: usize, edge: usize) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    let lead: usize = row.lead.iter().map(|s| s.content.width()).sum();
+    let detail: usize = row.detail.iter().map(|s| s.content.width()).sum();
+    let used = lead + row.label.width() + if detail > 0 { 2 + detail } else { 0 };
+    let right_w = row.right.width();
+    if text_w == 0 || used + right_w + 2 > text_w { return 2 }
+    edge.max(used + right_w + 2).min(text_w) - used - right_w
+}
+
+fn steady_line(row: &Row, text_w: usize, edge: usize) -> Vec<char> {
     const OUT: char = '\u{1}';
     // The right column as drawn (ui's fzf_row): whole, where there is room for it beside the line.
     use unicode_width::UnicodeWidthStr;
@@ -645,7 +659,8 @@ fn steady_line(row: &Row, text_w: usize) -> Vec<char> {
     let detail: String = row.detail.iter().map(|s| s.content.as_ref()).collect();
     if !detail.is_empty() { out.extend("  ".chars()); out.extend(detail.chars().map(|c| if row.volatile_detail { OUT } else { c })) }
     if !row.right.is_empty() {
-        out.extend("  ".chars());
+        // (As drawn: the blanks up to where the column lines up, which a fuzzy query's gaps count.)
+        out.extend(std::iter::repeat_n(' ', if shown { right_gap(row, text_w, edge) } else { 2 }));
         let n = row.right.chars().count();
         out.extend(row.right.chars().enumerate().map(|(i, c)| if !shown || i + row.volatile_right >= n { OUT } else { c }));
     }
