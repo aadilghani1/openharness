@@ -99,6 +99,29 @@ export function blend(k, ...ds) {
 }
 export const mirror = (cx, d) => (x, y) => d(cx - Math.abs(x - cx), y)
 
+// A small repeatable random stream from a seed (mulberry32), 0 <= r() < 1: where an individual's
+// markings fall. daemons/tools/render.mjs rolls the traits themselves with the same stream.
+export function rng(seed) {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+// Room above a model ({ w, h, parts }): its canvas `rows` text rows taller at `cols` columns, every
+// part set that much lower. A row at twice the columns is half as tall, so where a plate's reveal
+// has twice its portrait's rows the drawing prints cell for cell at both widths as it did before,
+// with room over it for a hat, long tufts or a hop.
+export function headroom(model, rows, cols = 28) {
+  const dy = (rows * model.h) / Math.max(1, Math.round((cols * model.h) / (2 * model.w)))
+  const lower = (f) => (x, y) => f(x, y - dy)
+  return { ...model, h: model.h + dy, parts: model.parts.map((p) => ({ ...p, d: lower(p.d), tex: p.tex && lower(p.tex) })) }
+}
+
 // ---- parts ---------------------------------------------------------------------------------
 // A part is { d, tone = 1, relief, flat, tex, ink = true, mat }, drawn back to front.
 //   d       the shape
