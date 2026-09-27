@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -44,6 +46,7 @@ class WorkspaceWelcome extends StatefulWidget {
 class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
   WelcomeSessions? _sessions;
   int _cursor = 0;
+  final _focus = FocusNode(debugLabel: 'Welcome sessions');
 
   ValueChanged<String> get onCommand => widget.onCommand;
 
@@ -56,7 +59,26 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
         ..addListener(_changed);
       _sessions!.load();
       app.addListener(_appChanged);
+      FocusManager.instance.addListener(_claimFocus);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _claimFocus());
     }
+  }
+
+  /// An empty tab gives its keys to the workspace around this page — on a new
+  /// tab, and again when Cmd-P or a dialog closes. Keys start at the focused
+  /// node and only go up, so that focus is taken here, where they are used.
+  /// Focus anywhere else (a field, a dialog, Cmd-P) is left alone, and the
+  /// app's shortcuts are read before any of this.
+  void _claimFocus() {
+    if (!mounted || _focus.hasPrimaryFocus || !_focus.canRequestFocus) return;
+    final primary = FocusManager.instance.primaryFocus;
+    if (primary != null && !_focus.ancestors.contains(primary)) return;
+    scheduleMicrotask(() {
+      final now = FocusManager.instance.primaryFocus;
+      if (mounted && (now == null || _focus.ancestors.contains(now))) {
+        _focus.requestFocus();
+      }
+    });
   }
 
   void _appChanged() => _sessions?.appChanged();
@@ -67,6 +89,8 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
 
   @override
   void dispose() {
+    FocusManager.instance.removeListener(_claimFocus);
+    _focus.dispose();
     if (_sessions != null) widget.app?.removeListener(_appChanged);
     _sessions
       ?..removeListener(_changed)
@@ -194,7 +218,9 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     );
     final footerInset = line + 52;
     return Focus(
-      autofocus: _sessions != null,
+      focusNode: _focus,
+      canRequestFocus: _sessions != null,
+      skipTraversal: true,
       onKeyEvent: _key,
       child: Material(
         key: const ValueKey('workspace-welcome'),
@@ -231,7 +257,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                               'Harness like a boss.',
                               key: const ValueKey('welcome-tagline'),
                             ),
-                            SizedBox(height: line),
+                            SizedBox(height: line * 2),
                             if (sessions == null)
                               _commands(
                                 rows,

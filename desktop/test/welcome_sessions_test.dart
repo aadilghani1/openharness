@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/welcome_sessions.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
 
+import 'keymap_host_test.dart' show key;
 import 'session_content_search_test.dart' show SearchConnection;
+import 'swarm_screen_test.dart' show mount;
 import 'swarm_state_test.dart' show createApp;
 
 final _now = DateTime(2026, 9, 27, 12);
@@ -170,6 +173,36 @@ void main() {
       expect(list, findsNothing);
       expect(rule, findsNothing);
       expect(start, findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'in the workspace an empty tab keys the list, and gets it back after Cmd-P',
+    (tester) async {
+      newHarnessOpensInBox = true;
+      addTearDown(() => newHarnessOpensInBox = false);
+      final (connection: _, :sessions) = _setup();
+      final app = sessions.app;
+      await mount(tester, app);
+      await tester.pump(const Duration(milliseconds: 50));
+      String? focused() => FocusManager.instance.primaryFocus?.debugLabel;
+      expect(find.byKey(const ValueKey('welcome-sessions')), findsOneWidget);
+      expect(focused(), 'Welcome sessions');
+
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(focused(), isNot('Welcome sessions'));
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(focused(), 'Welcome sessions');
+
+      // 1 Command palette (a1), 2 NFC chat, 3 Deploy latest firmware (a2).
+      await key(tester, LogicalKeyboardKey.arrowDown);
+      await key(tester, LogicalKeyboardKey.arrowDown);
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(app.panes.map((pane) => pane.agentId), ['a2']);
+      await tester.pumpWidget(const SizedBox());
     },
   );
 
