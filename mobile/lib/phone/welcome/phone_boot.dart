@@ -18,7 +18,7 @@ class PhoneBoot extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TtyText('harness', size: TtySize.title, weight: FontWeight.w700),
+            TtyText('harness', size: TtySize.title, weight: FontWeight.w600),
             Container(
               width: 9,
               height: 18,

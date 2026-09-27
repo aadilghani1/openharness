@@ -49,11 +49,16 @@ class MachinesTab extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                padding: const EdgeInsets.fromLTRB(
+                  Tty.origin,
+                  12,
+                  Tty.origin,
+                  4,
+                ),
                 child: TtyText(
                   'Computers',
                   size: large ? 24 : TtySize.title,
-                  weight: FontWeight.w700,
+                  weight: FontWeight.w600,
                 ),
               ),
               Expanded(child: _Body(notifier: notifier)),
@@ -115,7 +120,7 @@ class _Body extends StatelessWidget {
         ),
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            padding: const EdgeInsets.fromLTRB(Tty.origin, 0, Tty.origin, 8),
             child: Text(
               'Your harnesses run on these. Each one is unlocked with its own '
               'phone password.',

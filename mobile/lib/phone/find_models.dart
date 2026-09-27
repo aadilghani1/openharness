@@ -84,7 +84,7 @@ class _FindModelsState extends State<FindModels> {
           needle.isEmpty || text.toLowerCase().contains(needle);
       final rows = <Widget>[];
       Widget note(String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        padding: const EdgeInsets.fromLTRB(Tty.origin, 12, Tty.origin, 8),
         child: Text(
           text,
           style: tty.style(color: tty.faint, size: TtySize.meta),

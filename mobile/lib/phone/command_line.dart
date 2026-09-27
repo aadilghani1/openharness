@@ -183,7 +183,7 @@ class _AnswerKeyState extends State<_AnswerKey> {
           child: TtyText(
             widget.label,
             color: widget.ink,
-            weight: FontWeight.w700,
+            weight: FontWeight.w600,
           ),
         ),
       ),

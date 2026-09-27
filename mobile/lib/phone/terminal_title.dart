@@ -65,7 +65,7 @@ class TerminalTitle extends StatelessWidget {
     final tty = Tty.of(context);
     final height = heightOf(tty);
     final meta = tty.style(color: tty.faint, size: TtySize.meta);
-    return Semantics(
+    final title = Semantics(
       button: true,
       label: '$name — harness menu',
       child: GestureDetector(
@@ -82,14 +82,12 @@ class TerminalTitle extends StatelessWidget {
                 onHold!();
               },
         child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: tty.ground,
-            border: Border(bottom: BorderSide(color: tty.dim, width: 0.5)),
-          ),
+          // No rule under it: the output fades out beneath instead — see the gradient below.
+          decoration: BoxDecoration(color: tty.ground),
           child: SizedBox(
             height: height,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
               child: Row(
                 children: [
                   Expanded(
@@ -103,7 +101,7 @@ class TerminalTitle extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: tty.style(
                             size: TtySize.title,
-                            weight: FontWeight.w700,
+                            weight: FontWeight.w600,
                           ),
                         ),
                         if (place case final place? when place.isNotEmpty)
@@ -120,7 +118,7 @@ class TerminalTitle extends StatelessWidget {
                               Icon(
                                 LucideIcons.gitBranch300,
                                 size: 12,
-                                color: tty.magenta,
+                                color: tty.faint,
                               ),
                               const SizedBox(width: 5),
                               Flexible(
@@ -129,7 +127,7 @@ class TerminalTitle extends StatelessWidget {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: tty.style(
-                                    color: tty.magenta,
+                                    color: tty.faint,
                                     size: TtySize.meta,
                                   ),
                                 ),
@@ -184,6 +182,26 @@ class TerminalTitle extends StatelessWidget {
           ),
         ),
       ),
+    );
+    // The output fades out beneath the title rather than stopping at a rule.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        title,
+        IgnorePointer(
+          child: Container(
+            height: 12,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [tty.ground, tty.ground.withValues(alpha: 0)],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

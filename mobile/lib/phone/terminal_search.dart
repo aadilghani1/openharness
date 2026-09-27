@@ -455,7 +455,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                   // down until the field is tapped — the list is usually the answer.
                   // No Cancel: a swipe left is the way out, as it was the way in.
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
                     child: Row(
                       children: [
                         Expanded(

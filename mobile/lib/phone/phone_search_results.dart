@@ -265,7 +265,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     if (ordered.isEmpty) {
       children.add(
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+          padding: const EdgeInsets.fromLTRB(Tty.origin, 20, Tty.origin, 8),
           child: TtyText(
             search.total == 0 && !typed ? 'No harnesses running.' : 'No match.',
             color: tty.faint,

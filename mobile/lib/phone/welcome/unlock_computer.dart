@@ -112,9 +112,9 @@ class _UnlockComputerState extends State<UnlockComputer> {
     final tty = Tty.of(context);
     final name = widget.machineState.machine.displayName;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+      padding: const EdgeInsets.fromLTRB(Tty.origin, 12, Tty.origin, 24),
       children: [
-        TtyText('Unlock $name', size: 24, weight: FontWeight.w700),
+        TtyText('Unlock $name', size: 24, weight: FontWeight.w600),
         const SizedBox(height: 12),
         Text(
           'Enter the phone password you set on $name.',

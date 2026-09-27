@@ -63,7 +63,7 @@ class FindRow extends StatelessWidget {
       child: ColoredBox(
         color: selected ? ttyRaised(tty) : Colors.transparent,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 9, 16, 9),
+          padding: const EdgeInsets.fromLTRB(Tty.origin, 9, Tty.origin, 9),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
@@ -86,7 +86,7 @@ class FindRow extends StatelessWidget {
                           hit: tty.style(
                             color: tty.green,
                             size: TtySize.row,
-                            weight: FontWeight.w700,
+                            weight: FontWeight.w600,
                           ),
                         ),
                       ),
@@ -165,14 +165,14 @@ class FindAddRow extends StatelessWidget {
               onTap!();
             },
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 9, 16, 9),
+        padding: const EdgeInsets.fromLTRB(Tty.origin, 9, Tty.origin, 9),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
             TtyText(
               '+ $label',
-              color: onTap == null ? tty.faint : tty.cyan,
+              color: onTap == null ? tty.faint : tty.text,
               size: TtySize.row,
               weight: FontWeight.w600,
             ),
@@ -200,7 +200,7 @@ class FindHeader extends StatelessWidget {
     return SizedBox(
       height: 36,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        padding: const EdgeInsets.fromLTRB(Tty.origin, 12, Tty.origin, 0),
         child: TtyText(text, color: color ?? tty.faint, size: TtySize.meta),
       ),
     );

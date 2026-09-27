@@ -25,7 +25,6 @@ import 'welcome/how_it_works.dart';
 import 'welcome/focus_hints.dart';
 import 'tty_controls.dart';
 import 'tty.dart';
-import 'stats_entry.dart';
 import 'usage_entry.dart';
 import 'voice_language.dart';
 import 'voice_language_store.dart';
@@ -43,9 +42,8 @@ import 'voice_language_store.dart';
 /// **Usage** used to be on that list, for a reason that was true of the desktop reader and not of
 /// the setting: it counts by reading `~/.claude/projects`, `~/.codex` and OpenCode's SQLite file ON
 /// THIS DISK, and a phone has none of them. What a phone can do is ask the machine that does — so
-/// the section is kept, and its two rows come from elsewhere: `usage_entry.dart` reads each linked
-/// machine's rate limits over `usage_read`, and `stats_entry.dart` reads the counters this app keeps
-/// about itself.
+/// the section is kept, and its row comes from elsewhere: `usage_entry.dart` reads each linked
+/// machine's rate limits over `usage_read`.
 ///
 /// What a phone shows that the desktop splits across panes:
 ///
@@ -106,17 +104,21 @@ class SettingsPage extends StatelessWidget {
                   if (!large)
                     Align(
                       alignment: Alignment.centerLeft,
-                      child: TtyTextButton(
-                        label: '‹ Back',
+                      child: TtyBackButton(
                         onPressed: () => Navigator.of(context).maybePop(),
                       ),
                     ),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                    padding: const EdgeInsets.fromLTRB(
+                      Tty.origin,
+                      8,
+                      Tty.origin,
+                      0,
+                    ),
                     child: TtyText(
                       'Settings',
-                      size: 24,
-                      weight: FontWeight.w700,
+                      size: TtySize.display,
+                      weight: FontWeight.w600,
                     ),
                   ),
                   Expanded(child: _Body(notifier: notifier)),
@@ -138,12 +140,12 @@ class _Body extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ListView(
     padding: EdgeInsets.fromLTRB(
-      16,
+      Tty.origin,
       // Zero: the first caption brings its own 22pt top, and any padding here would stack on it —
       // the gap under the big "Settings" title would then be a header gap plus a between-groups
       // gap, wider than every other gap on the screen.
       0,
-      16,
+      Tty.origin,
       MediaQuery.paddingOf(context).bottom + 24,
     ),
     children: [
@@ -168,13 +170,14 @@ class _Body extends StatelessWidget {
       const SettingsCaption('Usage'),
       SettingsGroup(
         children: [
+          // No Stats row: counters this app keeps about itself are nobody's daily question.
           buildUsageSettingsRow(context, notifier),
-          buildStatsSettingsRow(context, notifier),
         ],
       ),
       const SettingsCaption('Terminal'),
       SettingsGroup(
         children: [
+          _FontPreview(),
           _PhoneNameRow(notifier: notifier),
           _FontRow(),
           _SizeRow(),
@@ -191,9 +194,6 @@ class _Body extends StatelessWidget {
       SettingsGroup(children: [_VoiceLanguageRow()]),
       const SettingsCaption('Appearance'),
       SettingsGroup(children: [_PaletteRow(), _TextSizeRow()]),
-      const SettingsNote(
-        'Harness is dark-only, so a palette picks the shade rather than the mode.',
-      ),
       const SettingsCaption('Help'),
       SettingsGroup(
         children: [
@@ -238,7 +238,6 @@ class _Body extends StatelessWidget {
       return SettingsRow(
         key: const ValueKey('settings-leave-sample'),
         title: 'Leave sample',
-        detail: 'Mock computers and harnesses — nothing here is real',
         onTap: () => sample.leave(),
       );
     }
@@ -423,6 +422,42 @@ class _PhoneNameDialogState extends State<_PhoneNameDialog> {
   }
 }
 
+/// One terminal line in the chosen face and size — what Font and Size change, live, above them.
+class _FontPreview extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder(
+    valueListenable: terminalFontStore,
+    builder: (context, font, _) {
+      AppTheme.watch(context);
+      final tty = Tty.of(context);
+      TextStyle ink(Color color) => TextStyle(
+        fontFamily: font.fontFamily,
+        fontFamilyFallback: font.fontFamilyFallback,
+        fontSize: font.fontSize,
+        height: 1.2,
+        color: color,
+      );
+      return ExcludeSemantics(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(13, 14, 13, 14),
+          child: Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(text: '~/web ', style: ink(tty.faint)),
+                TextSpan(text: '❯ ', style: ink(tty.green)),
+                TextSpan(text: 'claude "fix the login"', style: ink(tty.text)),
+              ],
+            ),
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.clip,
+          ),
+        ),
+      );
+    },
+  );
+}
+
 /// The terminal typeface. A sheet rather than a dropdown: a phone has room for the whole list.
 class _FontRow extends StatelessWidget {
   @override
@@ -489,9 +524,14 @@ class _TerminalThemeRow extends StatelessWidget {
         valueListenable: terminalThemeStore,
         builder: (context, choice, _) {
           AppTheme.watch(context);
+          // "Same as the app" names a rule; the palette it resolves to names a colour.
+          String label(TerminalThemeChoice option) =>
+              option == TerminalThemeChoice.matchApp
+              ? appearancePrefsStore.value.palette.label
+              : option.label;
           return SettingsRow(
             title: 'Colors',
-            value: choice.label,
+            value: label(choice),
             onTap: () => showPhoneSheet(
               context,
               title: 'Terminal colors',
@@ -501,7 +541,7 @@ class _TerminalThemeRow extends StatelessWidget {
                     icon: option == choice
                         ? LucideIcons.check300
                         : LucideIcons.palette300,
-                    label: option.label,
+                    label: label(option),
                     onTap: () => unawaited(terminalThemeStore.set(option)),
                   ),
               ],
@@ -536,7 +576,7 @@ class _PaletteRow extends StatelessWidget {
                 icon: palette == prefs.palette
                     ? LucideIcons.check300
                     : LucideIcons.swatchBook300,
-                label: '${palette.label} · ${palette.description}',
+                label: palette.label,
                 onTap: () =>
                     unawaited(appearancePrefsStore.setPalette(palette)),
               ),
@@ -580,7 +620,7 @@ class _VersionRow extends StatelessWidget {
     future: runningAppVersion(),
     builder: (context, snapshot) {
       AppTheme.watch(context);
-      return SettingsRow(title: 'Version', value: snapshot.data ?? '—');
+      return SettingsRow(title: 'Version', value: snapshot.data ?? '');
     },
   );
 }
@@ -613,14 +653,10 @@ class _BuildRow extends StatelessWidget {
     builder: (context, snapshot) {
       AppTheme.watch(context);
       final info = snapshot.data;
-      // Empty rather than missing on Linux/desktop dev builds, where nothing stamps it — the em
-      // dash covers both, so a blank string never renders as a row with no value.
+      // Empty on Linux/desktop dev builds, where nothing stamps it: the row says nothing rather
+      // than a dash.
       final build = info?.buildNumber ?? '';
-      return SettingsRow(
-        title: 'Build',
-        value: build.isEmpty ? '—' : build,
-        detail: info?.packageName,
-      );
+      return SettingsRow(title: 'Build', value: build);
     },
   );
 }

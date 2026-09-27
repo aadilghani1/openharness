@@ -1560,7 +1560,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                           // edge and the gap travelled with the content rather
                           // than staying put like a margin. The sides are
                           // margins beside chrome, not under it, and stay.
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
                           textStyle: terminalFontStore.value,
                           // ⚠️ The terminal is NOT app chrome, and the user said so:
                           // it carries its own font settings (Settings ▸ Terminal,

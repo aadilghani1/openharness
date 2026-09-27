@@ -67,7 +67,7 @@ class FzfRow extends StatelessWidget {
               child: TtyText(
                 cursor ? '▌' : (mark ?? ' '),
                 color: cursor ? tty.red : (markColor ?? tty.red),
-                weight: FontWeight.w700,
+                weight: FontWeight.w600,
               ),
             ),
           ),
@@ -80,9 +80,9 @@ class FzfRow extends StatelessWidget {
                     terms,
                     base: tty.style(
                       color: ink,
-                      weight: cursor ? FontWeight.w700 : FontWeight.w400,
+                      weight: cursor ? FontWeight.w600 : FontWeight.w400,
                     ),
-                    hit: tty.style(color: tty.green, weight: FontWeight.w700),
+                    hit: tty.style(color: tty.green, weight: FontWeight.w600),
                   ),
                   if (detail case final detail? when detail.isNotEmpty)
                     TextSpan(
@@ -237,7 +237,7 @@ class FzfPrompt extends StatelessWidget {
           SizedBox(
             width: 24,
             child: Center(
-              child: TtyText('>', color: tty.blue, weight: FontWeight.w700),
+              child: TtyText('>', color: tty.blue, weight: FontWeight.w600),
             ),
           ),
           Expanded(

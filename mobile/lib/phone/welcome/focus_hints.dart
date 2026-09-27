@@ -134,7 +134,7 @@ class _FocusHintsState extends State<FocusHints> {
             TtyText(
               big,
               size: TtySize.title,
-              weight: FontWeight.w700,
+              weight: FontWeight.w600,
               color: tty.green,
             ),
             const SizedBox(height: 2),

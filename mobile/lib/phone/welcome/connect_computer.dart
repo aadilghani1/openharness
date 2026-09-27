@@ -139,16 +139,21 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
             if (widget.onBack != null)
               Align(
                 alignment: Alignment.centerLeft,
-                child: TtyTextButton(label: '‹ Back', onPressed: widget.onBack),
+                child: TtyBackButton(onPressed: widget.onBack),
               ),
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                padding: const EdgeInsets.fromLTRB(
+                  Tty.origin,
+                  16,
+                  Tty.origin,
+                  24,
+                ),
                 children: [
                   TtyText(
                     'Set up your computer',
                     size: 24,
-                    weight: FontWeight.w700,
+                    weight: FontWeight.w600,
                   ),
                   const SizedBox(height: 12),
                   Text(
@@ -323,7 +328,7 @@ class _Choice extends StatelessWidget {
                     child: TtyText(
                       options[i],
                       size: TtySize.meta,
-                      weight: i == selected ? FontWeight.w700 : FontWeight.w400,
+                      weight: i == selected ? FontWeight.w600 : FontWeight.w400,
                       color: i == selected ? tty.text : tty.faint,
                     ),
                   ),

@@ -54,12 +54,15 @@ void main() {
 
     await app.main();
     await waitFor(find.text('Continue with email'));
-    await tester.tap(find.text('Try it — no computer needed'));
+    await tester.tap(find.text('Try it first'));
     await wait(3000);
     await shot('focus');
 
-    // Typing.
-    await tester.tap(find.byType(TerminalView).first);
+    // Typing: only a tap on the prompt's rows, at the terminal's foot, raises the keyboard.
+    await tester.tapAt(
+      tester.getBottomLeft(find.byType(TerminalView).first) +
+          const Offset(30, -12),
+    );
     await wait(1200);
     await shot('focus-keyboard');
     await tapIf(find.byKey(const ValueKey('terminal-key-Hide keyboard')));

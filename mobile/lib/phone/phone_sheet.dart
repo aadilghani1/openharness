@@ -185,7 +185,12 @@ class _TmuxMenuState extends State<_TmuxMenu> {
           [
             if (section.caption case final caption?)
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+                padding: const EdgeInsets.fromLTRB(
+                  Tty.origin,
+                  10,
+                  Tty.origin,
+                  2,
+                ),
                 child: TtyText(
                   caption.toLowerCase(),
                   color: tty.faint,
@@ -228,7 +233,7 @@ class _TmuxMenuState extends State<_TmuxMenu> {
                       overflow: TextOverflow.ellipsis,
                       style: tty.style(
                         size: TtySize.title,
-                        weight: FontWeight.w700,
+                        weight: FontWeight.w600,
                       ),
                     ),
                     if (place != null)
@@ -271,13 +276,11 @@ class _TmuxMenuState extends State<_TmuxMenu> {
   Widget _item(Tty tty, PhoneSheetAction action, {VoidCallback? onTap}) {
     if (action.quiet) {
       return TtyTap(
-        onTap: action.enabled
-            ? (onTap ?? () => widget.onAction(action))
-            : null,
+        onTap: action.enabled ? (onTap ?? () => widget.onAction(action)) : null,
         semanticsLabel: action.label,
         minHeight: 44,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
           child: TtyText(action.label, color: tty.faint, size: TtySize.meta),
         ),
       );
@@ -292,7 +295,7 @@ class _TmuxMenuState extends State<_TmuxMenu> {
       semanticsLabel: action.label,
       minHeight: 52,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
         child: Row(
           children: [
             Expanded(
@@ -434,7 +437,10 @@ class _ConfirmDialog extends StatelessWidget {
     return Dialog(
       // 16 from a phone's edges, as the rename dialog: the sentence gets the width, up to the 360
       // the card stops at on anything wider.
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      insetPadding: const EdgeInsets.symmetric(
+        horizontal: Tty.origin,
+        vertical: 24,
+      ),
       child: Semantics(
         scopesRoute: true,
         namesRoute: true,

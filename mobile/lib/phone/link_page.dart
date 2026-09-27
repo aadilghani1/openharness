@@ -118,8 +118,7 @@ class _LinkPageState extends State<LinkPage> {
             if (!widget.embedded)
               Align(
                 alignment: Alignment.centerLeft,
-                child: TtyTextButton(
-                  label: '‹ Back',
+                child: TtyBackButton(
                   onPressed: () => Navigator.of(context).maybePop(),
                 ),
               ),

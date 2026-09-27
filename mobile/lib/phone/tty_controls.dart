@@ -18,8 +18,16 @@ import 'tty.dart';
 /// the button, titles, Cancel; 13 for everything else, and nothing smaller. The terminal keeps its
 /// own size.
 abstract final class TtySize {
+  /// Page titles.
+  static const double display = 28;
+
+  /// Fields, values, the button, sheet titles.
   static const double title = 17;
-  static const double row = 17;
+
+  /// A row's name.
+  static const double row = 15;
+
+  /// Everything secondary — and nothing smaller.
   static const double meta = 13;
 }
 
@@ -85,7 +93,10 @@ class _TtyPrimaryButtonState extends State<TtyPrimaryButton> {
         child: Container(
           // At least this tall, and taller when the text is larger — never clipped.
           constraints: const BoxConstraints(minHeight: TtyPrimaryButton.height),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          padding: const EdgeInsets.symmetric(
+            horizontal: Tty.origin,
+            vertical: 10,
+          ),
           decoration: BoxDecoration(
             color: fill,
             borderRadius: BorderRadius.circular(6),
@@ -94,7 +105,7 @@ class _TtyPrimaryButtonState extends State<TtyPrimaryButton> {
           child: TtyText(
             widget.busy ? (widget.busyLabel ?? widget.label) : widget.label,
             color: ink,
-            weight: FontWeight.w700,
+            weight: FontWeight.w600,
             size: TtySize.title,
           ),
         ),
@@ -103,7 +114,7 @@ class _TtyPrimaryButtonState extends State<TtyPrimaryButton> {
   }
 }
 
-/// A plain text button: Cancel, Try again. Cyan — the terminal's colour for what can be tapped.
+/// A plain text button: Try again, Try it first. Text colour: the chrome keeps one accent, green.
 class TtyTextButton extends StatelessWidget {
   const TtyTextButton({
     super.key,
@@ -141,9 +152,52 @@ class TtyTextButton extends StatelessWidget {
               widthFactor: 1,
               child: TtyText(
                 label,
-                color: onPressed == null ? tty.dim : (color ?? tty.cyan),
+                color: onPressed == null ? tty.dim : (color ?? tty.text),
                 weight: weight,
                 size: TtySize.row,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Back, as iOS draws it on a pushed screen: a chevron and no word. A 44pt target whose glyph sits
+/// on the gutter, so it lines up with the title under it.
+class TtyBackButton extends StatelessWidget {
+  const TtyBackButton({super.key, required this.onPressed});
+
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      label: 'Back',
+      excludeSemantics: true,
+      child: GestureDetector(
+        key: const ValueKey('tty-back'),
+        behavior: HitTestBehavior.opaque,
+        onTap: onPressed == null
+            ? null
+            : () {
+                HapticFeedback.selectionClick();
+                onPressed!();
+              },
+        child: SizedBox(
+          width: 52,
+          height: 44,
+          child: Padding(
+            padding: const EdgeInsets.only(left: Tty.origin - 5),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Icon(
+                LucideIcons.chevronLeft300,
+                size: 26,
+                color: onPressed == null ? tty.dim : tty.text,
               ),
             ),
           ),
@@ -165,7 +219,7 @@ class TtySectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 20, 12, 6),
+      padding: const EdgeInsets.fromLTRB(Tty.origin, 20, Tty.origin, 6),
       child: Row(
         children: [
           Expanded(
@@ -240,7 +294,7 @@ class TtyFormRow extends StatelessWidget {
       semanticsLabel: '$label, $value',
       minHeight: 56,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+        padding: const EdgeInsets.fromLTRB(Tty.origin, 10, Tty.origin, 10),
         child: Row(
           children: [
             SizedBox(

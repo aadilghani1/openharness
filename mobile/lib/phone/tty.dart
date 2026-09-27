@@ -71,7 +71,7 @@ class Tty {
   double get cell => _cellWidth(fontFamily, fontFallback, fontSize);
 
   /// Where the terminal's text starts: the pane's own left padding. Column 0 of the chrome.
-  static const double origin = 10;
+  static const double origin = 12;
 
   /// The x of column [n].
   double col(int n) => origin + n * cell;

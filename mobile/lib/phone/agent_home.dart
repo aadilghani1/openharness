@@ -1047,7 +1047,7 @@ class _AgentHomeEmpty extends StatelessWidget {
       backgroundColor: tty.ground,
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+          padding: const EdgeInsets.fromLTRB(Tty.origin, 16, Tty.origin, 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -1060,7 +1060,7 @@ class _AgentHomeEmpty extends StatelessWidget {
               TtyText(
                 'Nothing running yet.',
                 size: 24,
-                weight: FontWeight.w700,
+                weight: FontWeight.w600,
               ),
               const SizedBox(height: 12),
               Text(

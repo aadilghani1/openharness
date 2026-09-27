@@ -120,7 +120,6 @@ class _ChooserState<T> extends State<_Chooser<T>> {
     Navigator.of(context).pop(item.value);
   }
 
-
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
@@ -163,7 +162,7 @@ class _ChooserState<T> extends State<_Chooser<T>> {
                       child: TtyText(
                         widget.title,
                         size: TtySize.title,
-                        weight: FontWeight.w700,
+                        weight: FontWeight.w600,
                       ),
                     ),
                     // No Cancel: a tap above the sheet, or a pull down, puts it away.
@@ -174,7 +173,12 @@ class _ChooserState<T> extends State<_Chooser<T>> {
               // Search where there is something to search: a long list that is not folded.
               if (widget.items.length > 8 && widget.fold == null)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                  padding: const EdgeInsets.fromLTRB(
+                    Tty.origin,
+                    4,
+                    Tty.origin,
+                    4,
+                  ),
                   child: TtyField(
                     controller: _controller,
                     focus: _focus,
@@ -218,7 +222,12 @@ class _ChooserState<T> extends State<_Chooser<T>> {
                       ),
                     if (matches.isEmpty)
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                        padding: const EdgeInsets.fromLTRB(
+                          Tty.origin,
+                          16,
+                          Tty.origin,
+                          8,
+                        ),
                         child: TtyText(
                           'No match.',
                           color: tty.faint,

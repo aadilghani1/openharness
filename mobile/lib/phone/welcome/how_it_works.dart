@@ -58,26 +58,30 @@ class HowItWorksPage extends StatelessWidget {
           children: [
             Align(
               alignment: Alignment.centerLeft,
-              child: TtyTextButton(
-                label: '‹ Back',
+              child: TtyBackButton(
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
             ),
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
+                padding: const EdgeInsets.fromLTRB(
+                  Tty.origin,
+                  8,
+                  Tty.origin,
+                  32,
+                ),
                 children: [
                   TtyText(
                     'How Harness works',
                     size: 24,
-                    weight: FontWeight.w700,
+                    weight: FontWeight.w600,
                   ),
                   const SizedBox(height: 20),
                   for (final (word, meaning) in _concepts) ...[
                     TtyText(
                       word,
                       size: TtySize.row,
-                      weight: FontWeight.w700,
+                      weight: FontWeight.w600,
                       color: tty.green,
                     ),
                     const SizedBox(height: 4),
@@ -91,7 +95,7 @@ class HowItWorksPage extends StatelessWidget {
                   TtyText(
                     'On the phone',
                     size: TtySize.row,
-                    weight: FontWeight.w700,
+                    weight: FontWeight.w600,
                   ),
                   const SizedBox(height: 10),
                   for (final (gesture, does) in _gestures)

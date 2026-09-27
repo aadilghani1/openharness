@@ -720,7 +720,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                         child: TtyText(
                           'New Harness',
                           size: TtySize.title,
-                          weight: FontWeight.w700,
+                          weight: FontWeight.w600,
                         ),
                       ),
                       // No Cancel: a swipe right goes back, the way a swipe left came in.
@@ -730,7 +730,12 @@ class _NewAgentPageState extends State<NewAgentPage> {
                 ),
                 if (nothingRunning)
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                    padding: const EdgeInsets.fromLTRB(
+                      Tty.origin,
+                      0,
+                      Tty.origin,
+                      4,
+                    ),
                     child: TtyText(
                       'Nothing running yet. Start your first harness.',
                       color: tty.faint,
@@ -756,7 +761,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                           value: _engine == null
                               ? 'Choose an agent'
                               : _engineName(_engine!),
-                          valueColor: _engine == null ? tty.cyan : null,
+                          valueColor: _engine == null ? tty.green : null,
                           detail: _engine == null
                               ? null
                               : _engineNote(_engine!),
@@ -770,7 +775,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                               ? 'Choose a project'
                               : _projectValue,
                           valueColor: _folder == null && _project == null
-                              ? tty.cyan
+                              ? tty.green
                               : null,
                           detail: _folder == null ? null : _tilde(_folder!),
                           onTap: _creating
@@ -833,7 +838,12 @@ class _NewAgentPageState extends State<NewAgentPage> {
                 if (typing) const Spacer(),
                 // The dock: the task, then Start. It rides the keyboard.
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
+                  padding: const EdgeInsets.fromLTRB(
+                    Tty.origin,
+                    20,
+                    Tty.origin,
+                    12,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -1493,7 +1503,7 @@ class _Suggestion extends StatelessWidget {
             borderRadius: BorderRadius.circular(18),
             border: Border.all(color: tty.dim),
           ),
-          child: TtyText(text, size: TtySize.meta, color: tty.cyan),
+          child: TtyText(text, size: TtySize.meta, color: tty.text),
         ),
       ),
     );

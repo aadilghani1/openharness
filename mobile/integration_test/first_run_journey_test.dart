@@ -45,7 +45,7 @@ void main() {
     await shot('welcome');
 
     // The sample: no account, no computer.
-    await tester.tap(find.text('Try it — no computer needed'));
+    await tester.tap(find.text('Try it first'));
     await wait(1500);
     await shot('sample-first-time-hints');
     // The hints go on the first touch, which also does what it touched.
@@ -100,7 +100,7 @@ void main() {
     await tester.tap(find.text('Set up my computer'));
     await wait(1500);
     await shot('set-up-after-sample');
-    await tester.tap(find.text('‹ Back'));
+    await tester.tap(find.bySemanticsLabel('Back'));
     await wait(800);
     await shot('back-to-welcome');
 

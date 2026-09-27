@@ -822,27 +822,30 @@ class _TerminalPageState extends State<TerminalPage>
     return '${_windowName(asking.single.agent.displayName)} asking';
   }
 
-  /// In the sample, the one thing to try next, as a step counter the way copy-mode counts —
-  /// `[1/3] refactor-db needs you — swipe right →` — following what has been done: go to the
-  /// harness that is asking, answer it, start one of your own. Null outside the sample, and once
-  /// the sample is done.
-  String? _sampleGuide() {
+  /// In the sample, the one thing to try next — `refactor-db needs you →` — following what has
+  /// been done: go to the harness that is asking, answer it, start one of your own. No counter:
+  /// the dot beside it glides the way the swipe goes. Null outside the sample, and once the sample
+  /// is done.
+  ({String text, int glide})? _sampleGuide() {
     final sample = SampleMode.maybeOf(context);
     if (sample == null || sample.endCardSeen) return null;
-    final (step, text) = switch (null) {
+    final (step, text, glide) = switch (null) {
       _ when widget.agentId.startsWith('sample-new-') => (
         4,
-        '✓ yours is running — watch it work',
+        '✓ yours is running',
+        0,
       ),
       _ when _questionWatcher?.view != null => (
         2,
-        '[2/3] tap an answer below — or say “yes”',
+        'say “yes”, or tap an answer',
+        0,
       ),
       _ when _askingElsewhere() != null => (
         1,
-        '[1/3] ${_askingElsewhere()!.replaceFirst(' asking', '')} needs you — swipe right →',
+        '${_askingElsewhere()!.replaceFirst(' asking', '')} needs you →',
+        1,
       ),
-      _ => (3, '[3/3] ← swipe left: start one of your own'),
+      _ => (3, '← start one of your own', -1),
     };
     if (step == 4) _scheduleEndCard(sample);
     // A step done: a tick you can feel, once.
@@ -850,7 +853,7 @@ class _TerminalPageState extends State<TerminalPage>
       HapticFeedback.mediumImpact();
     }
     _guideStep = step;
-    return text;
+    return (text: text, glide: glide);
   }
 
   int? _guideStep;
@@ -1774,15 +1777,7 @@ class _TerminalPageState extends State<TerminalPage>
                               child: Stack(
                                 children: [
                                   Positioned.fill(
-                                    // In the sample, while its guide shows, the terminal starts
-                                    // under the title and the guide rather than behind them: the
-                                    // guide is read with the rows it points at.
-                                    top: _sampleGuide() == null
-                                        ? 0
-                                        : TerminalTitle.heightOf(
-                                                Tty.of(context),
-                                              ) +
-                                              34,
+                                    top: 0,
                                     // Prompt mode: the terminal lifts four rows so
                                     // the dialog at its foot sits above the mic,
                                     // not under it. A translate, not a resize — a
@@ -1883,12 +1878,10 @@ class _TerminalPageState extends State<TerminalPage>
                                                       // xterm's and the keyboard stays.
                                                       //
                                                       // ⚠️ A tap on a pane that cannot take input
-                                                      // asks for the TERMINAL, not the keyboard:
-                                                      // raising one over a read-only pane offers
-                                                      // a prompt that silently swallows every
-                                                      // letter. The band above says why, so the
-                                                      // tap takes the person to its button. See
-                                                      // [_ControlBanner].
+                                                      // takes the TERMINAL first, not the
+                                                      // keyboard: raising one over a read-only
+                                                      // pane offers a prompt that silently
+                                                      // swallows every letter.
                                                       onInputTap: blocked
                                                           ? () => unawaited(
                                                               _takeControl(),
@@ -2051,9 +2044,6 @@ class _TerminalPageState extends State<TerminalPage>
                                 );
                               },
                             ),
-                            // The sample's guide: one line of what to try next.
-                            if (_sampleGuide() case final guide?)
-                              _SampleGuideLine(text: guide),
                             // ⚠️ No "take control" band: a tap or a scroll on a terminal held
                             // elsewhere takes it — see `onInputTap` and [_onScrollTakeControl].
                           ],
@@ -2150,6 +2140,23 @@ class _TerminalPageState extends State<TerminalPage>
                             onSearch: _openSearch,
                             unread: widget.notifier.agentNotices.unread,
                             working: _agentWorking,
+                          ),
+                        ),
+                      ),
+                    // The sample's guide: one faint line 12pt above the mic, what to try next.
+                    if ((_ownsInput ? null : _sampleGuide()) case final guide?)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom:
+                            _windowBottomInset +
+                            4 * Tty.of(context).row +
+                            VoiceMicButton.extent / 2 +
+                            6,
+                        child: IgnorePointer(
+                          child: _SampleGuideLine(
+                            text: guide.text,
+                            glide: guide.glide,
                           ),
                         ),
                       ),
@@ -3318,26 +3325,116 @@ class _EscChip extends StatelessWidget {
   }
 }
 
-/// The sample's guide, one line under the title: what to try next.
-class _SampleGuideLine extends StatelessWidget {
-  const _SampleGuideLine({required this.text});
+/// The sample's guide, one faint line above the mic: what to try next. A 6pt green dot glides
+/// 24pt the way the swipe goes ([glide] 1 right, -1 left) every 2.4s; 0 holds it still.
+class _SampleGuideLine extends StatefulWidget {
+  const _SampleGuideLine({required this.text, required this.glide});
 
   final String text;
+  final int glide;
+
+  @override
+  State<_SampleGuideLine> createState() => _SampleGuideLineState();
+}
+
+class _SampleGuideLineState extends State<_SampleGuideLine>
+    with SingleTickerProviderStateMixin {
+  late final _clock = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2400),
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(_SampleGuideLine old) {
+    super.didUpdateWidget(old);
+    if (old.glide != widget.glide) _sync();
+  }
+
+  void _sync() {
+    if (widget.glide == 0 ||
+        MediaQuery.maybeDisableAnimationsOf(context) == true) {
+      _clock
+        ..stop()
+        ..value = 0;
+    } else if (!_clock.isAnimating) {
+      unawaited(_clock.repeat());
+    }
+  }
+
+  @override
+  void dispose() {
+    _clock.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    return Container(
-      width: double.infinity,
-      // Green, the hints' colour: yellow already means "asking".
-      color: Color.alphaBlend(tty.green.withValues(alpha: 0.14), tty.ground),
+    final dot = Container(
+      width: 6,
+      height: 6,
+      decoration: BoxDecoration(color: tty.green, shape: BoxShape.circle),
+    );
+    // A band the width of the screen, the output fading out above it as it does under the title —
+    // a pill only as wide as its words cut the rows behind it in half.
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [tty.ground.withValues(alpha: 0), tty.ground, tty.ground],
+          stops: const [0, 0.4, 1],
+        ),
+      ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(Tty.origin, 7, Tty.origin, 7),
-        child: Text(
-          text,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: tty.style(size: TtySize.meta, color: tty.green),
+        padding: const EdgeInsets.fromLTRB(Tty.origin, 14, Tty.origin, 6),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 30,
+              height: 6,
+              child: AnimatedBuilder(
+                animation: _clock,
+                builder: (context, child) {
+                  // A glide over the first 60% of each beat, easing in and out, then a rest.
+                  final t = Curves.easeInOut.transform(
+                    (_clock.value / 0.6).clamp(0.0, 1.0),
+                  );
+                  final from = widget.glide < 0 ? 24.0 : 0.0;
+                  final x = widget.glide == 0
+                      ? 12.0
+                      : from + widget.glide * 24 * t;
+                  final fade = widget.glide == 0 ? 1.0 : 1 - (t * t);
+                  return Stack(
+                    children: [
+                      Positioned(
+                        left: x,
+                        top: 0,
+                        child: Opacity(opacity: fade, child: child),
+                      ),
+                    ],
+                  );
+                },
+                child: dot,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                widget.text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: tty.style(size: TtySize.meta, color: tty.faint),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -3386,7 +3483,7 @@ class _SampleEndCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Spacer(),
-              TtyText('That’s Harness.', size: 26, weight: FontWeight.w700),
+              TtyText('That’s Harness.', size: 26, weight: FontWeight.w600),
               const SizedBox(height: 20),
               tick('watched a harness work'),
               tick('answered its question'),

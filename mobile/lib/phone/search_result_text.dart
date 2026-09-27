@@ -170,7 +170,7 @@ class SearchResultText extends StatelessWidget {
     var offset = 0;
     for (final run in runs) {
       final emphasis = run.matched
-          ? const TextStyle(fontWeight: FontWeight.w700)
+          ? const TextStyle(fontWeight: FontWeight.w600)
           : null;
       if (insertIcon &&
           iconOffset >= offset &&

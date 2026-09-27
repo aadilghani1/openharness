@@ -290,15 +290,20 @@ class _Hello extends StatelessWidget {
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final hero = tty
-        .style(size: 26, weight: FontWeight.w700)
-        .copyWith(height: 1.2, letterSpacing: -0.5);
+        .style(size: TtySize.display, weight: FontWeight.w600)
+        .copyWith(height: 34 / 28, letterSpacing: -0.6);
     return LayoutBuilder(
       builder: (context, box) => SingleChildScrollView(
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: box.maxHeight),
           child: IntrinsicHeight(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+              padding: const EdgeInsets.fromLTRB(
+                Tty.origin,
+                24,
+                Tty.origin,
+                16,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -307,7 +312,7 @@ class _Hello extends StatelessWidget {
                       TtyText(
                         'harness',
                         size: TtySize.title,
-                        weight: FontWeight.w700,
+                        weight: FontWeight.w600,
                       ),
                       Container(
                         width: 9,
@@ -321,13 +326,7 @@ class _Hello extends StatelessWidget {
                   Text('Your coding agents,\nin your pocket.', style: hero),
                   const SizedBox(height: 28),
                   const _Glimpse(),
-                  const SizedBox(height: 28),
-                  Text(
-                    'Claude Code and Codex keep working on your computer. '
-                    'Watch them, answer them and start new ones — by voice, '
-                    'from anywhere.',
-                    style: tty.style(size: TtySize.row, color: tty.faint),
-                  ),
+                  // No paragraph: the glimpse already says what it does.
                   const Spacer(),
                   const SizedBox(height: 24),
                   TtyPrimaryButton(
@@ -338,7 +337,8 @@ class _Hello extends StatelessWidget {
                   if (onTrySample != null)
                     Center(
                       child: TtyTextButton(
-                        label: 'Try it — no computer needed',
+                        label: 'Try it first',
+                        color: tty.faint,
                         onPressed: onTrySample,
                       ),
                     ),
@@ -449,13 +449,13 @@ class _Form extends StatelessWidget {
       children: [
         Align(
           alignment: Alignment.centerLeft,
-          child: TtyTextButton(label: '‹ Back', onPressed: onBack),
+          child: TtyBackButton(onPressed: onBack),
         ),
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+            padding: const EdgeInsets.fromLTRB(Tty.origin, 12, Tty.origin, 16),
             children: [
-              TtyText(title, size: 24, weight: FontWeight.w700),
+              TtyText(title, size: 24, weight: FontWeight.w600),
               const SizedBox(height: 12),
               for (final line in lines)
                 Padding(
@@ -521,7 +521,7 @@ class _CodeField extends StatelessWidget {
         inputFormatters: [FilteringTextInputFormatter.digitsOnly],
         cursorColor: tty.green,
         style: tty
-            .style(size: 30, weight: FontWeight.w700)
+            .style(size: 30, weight: FontWeight.w600)
             .copyWith(letterSpacing: 18),
         onChanged: (value) {
           if (value.length == length) onFilled();
