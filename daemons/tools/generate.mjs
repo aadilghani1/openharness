@@ -524,6 +524,14 @@ for (const d of roster.daemons) {
     frames.cards.push({ id: d.id, version, shiny: true, serial: 42, nickname: 'pip', hatched: '2026-09-26', egg: 'first', out: cardLines(roster, d, { version, plate: cardPlate(d, version), shiny: true, serial: 42, nickname: 'pip', hatched: '2026-09-26', egg: 'first' }) })
   }
 }
+// An individual's card: its name, its flags (the longest line of them among the first thousand seeds,
+// so they wrap) and how rare it is, on its species' plate until harnessd has drawn its own.
+for (const d of roster.daemons.filter(d => d.traits)) {
+  let seed = 1
+  for (let s = 1; s <= 1000; s++) if (individualFlags(roster, d.id, rollTraits(roster, d.id, s)).length > individualFlags(roster, d.id, rollTraits(roster, d.id, seed)).length) seed = s
+  const traits = rollTraits(roster, d.id, seed)
+  frames.cards.push({ id: d.id, version: '2.0', seed, name: 'pip', serial: 42, hatched: '2026-09-27', egg: 'turn', out: cardLines(roster, d, { version: '2.0', plate: cardPlate(d, '2.0'), traits, name: 'pip', serial: 42, hatched: '2026-09-27', egg: 'turn' }) })
+}
 // Plate colours every client must reproduce: each row's colour, and every distinct glyph of one frame.
 frames.plateColors = []
 for (const d of plates ? roster.daemons.filter(d => d.plate) : []) {
