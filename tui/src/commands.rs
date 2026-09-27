@@ -1302,7 +1302,9 @@ fn target_session(app: &App, t: &str) -> Option<u32> {
 /// and the command runs there; a session it leaves with no window is gone. True when it was one.
 fn cross_session(app: &mut App, words: &[String]) -> bool {
     let Some(entry) = words.first().and_then(|w| crate::cmd::find(w).ok()) else { return false };
-    if !matches!(entry.name, "move-window" | "link-window" | "swap-window" | "join-pane" | "move-pane" | "break-pane") || app.swap_back.is_some() { return false }
+    if !matches!(entry.name, "move-window" | "link-window" | "swap-window" | "join-pane" | "move-pane" | "break-pane" | "swap-pane") || app.swap_back.is_some() { return false }
+    // swap-pane -U/-D stay in the target's window.
+    if entry.name == "swap-pane" && (words.iter().any(|w| w == "-U" || w == "-D")) { return false }
     let Ok(args) = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)) else { return false };
     // move-window -r only renumbers -t's session: nothing moves.
     if entry.name == "move-window" && args.has('r') > 0 { return false }
@@ -1403,6 +1405,24 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
                 if let Some(k) = last_src { let k = k.min(app.lastw.len()); app.lastw.insert(k, b_id) }
                 current(app, cur_src, detached.then_some(na));
             }
+            "swap-pane" => {
+                // Each pane in the other's place (cmd-swap-pane.c across two windows): its cell,
+                // its point; active in both unless -d.
+                let keep_zoom = args.has('Z') > 0;
+                let (sw, sp) = match src_t.as_deref() { Some(t) => pane_target(app, t).ok_or_else(|| format!("can't find pane: {t}"))?, None => pane_target(app, "{marked}").or_else(|| app.current()).ok_or("can't find pane")? };
+                let spoint = app.tabs[sw].points.remove(&sp);
+                app.swap_session(dst);
+                let (dw, dp) = match dst_t.as_deref() { Some(t) => pane_target(app, t).ok_or_else(|| format!("can't find pane: {t}"))?, None => app.current().ok_or("can't find pane")? };
+                let dpoint = app.tabs[dw].points.remove(&dp);
+                let dtab = app.tabs[dw].id.clone();
+                if let Some((m, a)) = app.panes.get(&dp).map(|x| (x.machine_id.clone(), x.agent_id.clone())) { app.desk_op(serde_json::json!({ "op": "pane.remove", "tabId": dtab, "machineId": m, "agentId": a })) }
+                app.pane_in_place(dw, dp, sp, spoint, detached, keep_zoom);
+                app.swap_session(src);
+                let stab = app.tabs[sw].id.clone();
+                if let Some((m, a)) = app.panes.get(&sp).map(|x| (x.machine_id.clone(), x.agent_id.clone())) { app.desk_op(serde_json::json!({ "op": "pane.remove", "tabId": stab, "machineId": m, "agentId": a })) }
+                app.pane_in_place(sw, sp, dp, dpoint, detached, keep_zoom);
+                app.sync_titles();
+            }
             "join-pane" | "move-pane" => {
                 let (_, p) = match src_t.as_deref() { Some(t) => pane_target(app, t).ok_or_else(|| format!("can't find pane: {t}"))?, None => pane_target(app, "{marked}").or_else(|| app.current()).ok_or("can't find pane")? };
                 app.take_pane(p);
@@ -1429,6 +1449,8 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
                 app.swap_session(dst);
                 let w = app.tab_of_pane(p, &label);
                 if args.get('n').is_some() { app.tabs[w].named = true }
+                // Named as tmux names it (automatic-rename: a shell by what runs in it).
+                app.sync_titles();
                 let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: true, default_marked: false };
                 let idx = crate::cmd::resolve(app, dst_t.as_deref(), spec).ok().and_then(|f| f.idx);
                 app.move_window(w, idx, false, !detached)?;

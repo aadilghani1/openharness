@@ -3707,6 +3707,7 @@ impl App {
         self.nums.insert(tab_id.clone(), n);
         let at = self.tabs.iter().position(|t| self.nums.get(&t.id).map(|m| *m > n).unwrap_or(false)).unwrap_or(self.tabs.len());
         self.tabs.insert(at, tab);
+        self.sync_titles();
         if detached {
             if let Some(i) = self.tabs.iter().position(|t| t.id == back) { self.active = i }
             // window_create: the new window is activity, flagged as it is not the current one.
@@ -4393,6 +4394,23 @@ impl App {
         self.fit_panes();
         self.layout_changed(sw);
         self.layout_changed(dw);
+    }
+
+    /// swap-pane between two sessions' windows, one side: [to] in [from]'s place in window [w]
+    /// (its cell, its place in the list, its point), active where [from] was — or, not -d, anyway.
+    pub fn pane_in_place(&mut self, w: usize, from: u64, to: u64, point: Option<u64>, detached: bool, keep_zoom: bool) {
+        let Some(tab) = self.tabs.get_mut(w) else { return };
+        if let Some(p) = point { tab.points.insert(to, p); }
+        let mut order = tab.panes();
+        for p in order.iter_mut() { if *p == from { *p = to } }
+        tab.order = order;
+        if let Some(root) = tab.root.as_mut() { root.replace(from, to); }
+        tab.last.retain(|p| *p != from);
+        if tab.focus == Some(from) { tab.focus = Some(to) } else if !detached { tab.set_active(to) }
+        tab.zoomed &= keep_zoom;
+        let tab_id = tab.id.clone();
+        if let Some((m, a)) = self.panes.get(&to).map(|x| (x.machine_id.clone(), x.agent_id.clone())) { self.desk_pane_added(&tab_id, &m, &a) }
+        self.layout_changed(w);
     }
 
     /// `rotate-window` (C-o): the list turns (the first pane to the end; -D the last to the
