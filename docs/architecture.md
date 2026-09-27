@@ -7,7 +7,8 @@ opening or closing a view does not determine whether that work runs.
 
 Conceptual architecture, recorded September 27, 2026. The founder identifies the TUI as part
 of current development; this diagram describes its intended client role. The web app is now
-a browser target of the existing desktop Flutter package, in development and not yet deployed.
+a browser target of the existing desktop Flutter package, available as a public preview at
+[harness.autonomous.ai](https://harness.autonomous.ai).
 [Public shared-session pages](product-direction.md#web-shared-sessions-as-an-acquisition-loop)
 remain the next acquisition experiment beyond authenticated workspace access and private invitations.
 The [product direction and roadmap](product-direction.md)
@@ -22,7 +23,7 @@ describe the larger bet and its proposed sequence.
           |                   |                   |
    +------+------+     +------+------+         +-----+
    | Desktop     |     | Mobile      |         | CLI |
-   | TUI (dev)   |     | Web (dev)   |         +--+--+
+   | TUI (dev)   |     | Web         |         +--+--+
    +------+------+     +------+------+            |
           |                   |                   |
           +-------------------+-------------------+
@@ -103,7 +104,7 @@ administration, and desktop work includes quick decisions. Actual connection pat
 | Mobile | Remote access, focused interaction, and decisions while away from the desktop. |
 | Device | Desk status, questions, and voice input through the host. |
 | TUI, in development | Interactive access inside a terminal, using the same operations. |
-| Web, in development | The shared desktop workspace in a browser, including private read-only invitations; public session pages for discovery and acquisition follow separately. |
+| Web, public preview | The shared desktop workspace in a browser, including private read-only invitations; public session pages for discovery and acquisition follow separately. |
 | Backend and relay | Identity, discovery, selected shared metadata, signaling, and encrypted forwarding. |
 | Domain packages | Instructions, skills, toolchain setup, project templates, checks, and viewers. |
 

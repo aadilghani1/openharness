@@ -7,7 +7,9 @@ planned and its runner is unexercised. Embedded harness viewers currently requir
 
 The browser target uses this same Flutter package and `lib/main.dart`: workspace,
 tabs, pickers, settings, state, and the patched xterm renderer are shared. Browser
-support is in development; there is no separate web UI to keep in sync.
+support is available as a public preview at
+[harness.autonomous.ai](https://harness.autonomous.ai); there is no separate web UI
+to keep in sync.
 
 ## Web development
 
