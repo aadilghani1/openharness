@@ -91,6 +91,9 @@ export interface LocalWsServerOptions {
   onRouteSend?: (agentId: string, text: string) => { ok: true } | { ok: false; machine: string; reason: string }
   /** The dial right now, sent to a window the moment it connects — it may have missed the announcement. */
   dialStatus?: () => { attached: boolean; fw?: string; updating?: string }
+  /** Questions still waiting on the user, as the `commander_question` frames that announced them. A window
+   *  that connects after one was asked is handed them, so a terminal opened late still sees who is blocked. */
+  openQuestions?: () => Frame[]
   /**
    * The window answering a `voice_route_request` — words spoken into the dial that IT was asked to route.
    *
@@ -336,6 +339,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             // Right after, not inside `connected`: the window's handshake parser is shared with the
             // relay path, and a field it does not expect is a field it has to learn to ignore.
             if (options.dialStatus) sink.sendFrame({ type: 'dial_status', payload: options.dialStatus() })
+            for (const asked of options.openQuestions?.() ?? []) sink.sendFrame(asked)
             return
           }
           // Not this daemon's own machine — relay to backend for the other machines this same
