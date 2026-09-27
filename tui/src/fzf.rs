@@ -428,6 +428,19 @@ impl Query {
         self
     }
 
+    /// +x (--no-extended): the whole query one term — its blanks and `^ $ ! ' |` its own
+    /// characters — fuzzy (exact under -e), its case and normalization read from all of it.
+    pub fn plain(query: &str, case: Case, fuzzy: bool, normalize: bool) -> Query {
+        let lower = query.to_lowercase();
+        let normalize = normalize && lower.chars().map(normalize_char).collect::<String>() == lower;
+        let case_sensitive = case == Case::Respect || (case == Case::Smart && lower != query);
+        let text = if case_sensitive { query.to_string() } else { lower };
+        let mut chars: Vec<char> = text.chars().collect();
+        if normalize { chars = chars.into_iter().map(normalize_char).collect() }
+        let sets = if chars.is_empty() { Vec::new() } else { vec![vec![Term { kind: if fuzzy { Kind::Fuzzy } else { Kind::Exact }, inv: false, text: chars, case_sensitive, normalize }]] };
+        Query { sets, forward: true, v1: false }
+    }
+
     /// --algo=v1: fuzzy terms matched by FuzzyMatchV1.
     pub fn v1(mut self, on: bool) -> Query { self.v1 = on; self }
 

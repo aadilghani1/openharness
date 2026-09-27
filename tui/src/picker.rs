@@ -278,19 +278,25 @@ impl Picker {
             // scores and lit characters, the tiebreak — over the line as it is drawn.
             let o = crate::theme::fzf_opts();
             let case = match o.case { Some(true) => crate::fzf::Case::Respect, Some(false) => crate::fzf::Case::Ignore, None => crate::fzf::Case::Smart };
-            let q = crate::fzf::Query::parse(query, case, !o.exact, !o.literal).searching(&o.tiebreak).v1(o.algo_v1);
+            let q = if o.no_extended { crate::fzf::Query::plain(query, case, !o.exact, !o.literal) } else { crate::fzf::Query::parse(query, case, !o.exact, !o.literal) }.searching(&o.tiebreak).v1(o.algo_v1);
             // (Each word's case read as fzf reads a term's: +i, -i, or smart — an upper-case letter.)
-            let words: Vec<(String, bool)> = query.split_whitespace().map(|w| {
+            // (Under +x there are no words: the query is one term, and no keyword answers it.)
+            let words: Vec<(String, bool)> = query.split_whitespace().filter(|_| !o.no_extended).map(|w| {
                 let w = w.trim_start_matches('\'');
                 let sensitive = o.case.unwrap_or(w != w.to_lowercase());
                 (if sensitive { w.to_string() } else { w.to_lowercase() }, sensitive)
             }).collect();
-            // `!word` (and `!'word`): not only a row whose line says it, but one whose keywords do.
-            let negated: Vec<(String, bool)> = words.iter().filter_map(|(w, s)| w.strip_prefix('!').map(|r| (r.trim_start_matches(['\'', '^']).trim_end_matches('$').to_string(), *s))).filter(|(w, _)| !w.is_empty()).collect();
-            // …and in a live list, where the line's changing parts are left out of matching (so a
-            // row does not come and go as they change), an unanchored `!word` still keeps out a row
-            // whose line says it where you can see it.
-            let unanchored: Vec<(String, bool)> = words.iter().filter_map(|(w, s)| w.strip_prefix('!').map(|r| (r.trim_start_matches('\'').to_string(), *s))).filter(|(w, _)| !w.is_empty() && !w.starts_with('^') && !w.ends_with('$')).collect();
+            // `!word` (and `!'word`) standing alone — unanchored (`^`, `$` are about the line as
+            // drawn) and in no `|` group (the group's other terms may answer): not only a row
+            // whose line says it, but one whose keywords do; and in a live list, where the line's
+            // changing parts are left out of matching (so a row does not come and go as they
+            // change), one whose line says it where you can see it. The rest are fzf.rs's alone.
+            let alone: Vec<(String, bool)> = words.iter().enumerate().filter(|(i, _)| {
+                let bar = |j: Option<usize>| j.and_then(|j| words.get(j)).map(|(w, _)| w == "|").unwrap_or(false);
+                !bar(i.checked_sub(1)) && !bar(Some(i + 1))
+            }).filter_map(|(_, (w, s))| w.strip_prefix('!').map(|r| (r.trim_start_matches('\'').to_string(), *s))).filter(|(w, _)| !w.is_empty() && !w.starts_with('^') && !w.ends_with('$')).collect();
+            let negated = alone.clone();
+            let unanchored = alone;
             let words: Vec<(String, bool)> = words.into_iter().filter(|(w, _)| !w.starts_with('!')).collect();
             // The keywords by fzf's OR groups (`webapp | api`: either).
             let mut groups: Vec<Vec<(String, bool)>> = Vec::new();
@@ -298,7 +304,8 @@ impl Picker {
             for (w, s) in words {
                 // (A `|` with nothing before it is a term of its own, as fzf reads it — one no
                 // keyword answers.)
-                if w == "|" && !groups.is_empty() { or_next = true; continue }
+                // (…and one right after another `|` is a term too, as in fzf: `login | | uber`.)
+                if w == "|" && !groups.is_empty() && !or_next { or_next = true; continue }
                 // (An anchored term is about the line as drawn: no keyword answers it.)
                 let w = if w.starts_with('^') || w.ends_with('$') { String::new() } else { w };
                 match groups.last_mut() { Some(g) if or_next => g.push((w, s)), _ => groups.push(vec![(w, s)]) }
