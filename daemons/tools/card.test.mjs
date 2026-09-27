@@ -2,7 +2,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { cardLines, cardNumber, dropState, shelfLines, cardSvg, shelfSvg, silhouette } from './card.mjs'
+import { cardLines, cardNumber, dropState, shelfLines, cardSvg, shelfSvg, silhouette, flagLines, oneInText } from './card.mjs'
+import { rollTraits, individualFlags, oneIn } from './render.mjs'
 
 const roster = JSON.parse(readFileSync(new URL('../roster.json', import.meta.url), 'utf8'))
 const plates = JSON.parse(readFileSync(new URL('../plates.json', import.meta.url), 'utf8'))
@@ -126,4 +127,48 @@ test('an announced drop shows as silhouettes until its release, and an unannounc
   assert.match(out[0], /1\/1$/)
   assert.ok(out.some(l => l.startsWith('rio')))
   for (const l of [...soon, ...out]) assert.ok(printable(l))
+})
+
+test('an individual\'s card shows its name, its flags and how rare it is, in 42 printable columns', () => {
+  for (const d of roster.daemons.filter(d => d.traits)) {
+    for (let seed = 0; seed < 400; seed++) {
+      const traits = rollTraits(roster, d.id, seed)
+      for (const version of roster.rules.versions) {
+        const lines = cardLines(roster, d, { version, plate: plate(d, version), traits, name: 'pip', serial: 42, hatched: '2026-09-27', egg: 'turn' })
+        for (const l of lines) {
+          assert.equal(l.length, 42, `${d.id} ${seed} ${version}: "${l}"`)
+          assert.ok(printable(l), `${d.id} ${seed}: not ASCII`)
+        }
+        const body = lines.map(l => l.slice(2, -2).trimEnd())
+        assert.ok(body.includes(`  pip the ${d.id} ${version}  #0042`), `${d.id} ${seed}: name line`)
+        // The flags read back whole: continued lines joined, as a shell would.
+        const at = body.findIndex(l => l.startsWith(`  ${d.id} -c `))
+        const until = body.findIndex((l, i) => i > at && !l.endsWith(' \\') && !body[i - 1].endsWith(' \\'))
+        const flags = body.slice(at, until).map(l => l.trim().replace(/ \\$/, '')).join(' ')
+        assert.equal(flags, individualFlags(roster, d.id, traits), `${d.id} ${seed}: flags`)
+        assert.equal(body[until], `  ${oneInText(oneIn(roster, d.id, traits))}`, `${d.id} ${seed}: 1 in N`)
+      }
+    }
+  }
+})
+
+test('flags wrap as a long command does, and a rarity has its commas', () => {
+  assert.deepEqual(flagLines('tim -c coral --spots --glasses --fidgety', 36), ['tim -c coral --spots --glasses \\', '  --fidgety'])
+  assert.deepEqual(flagLines('tim -c sunset --patches --big-head --long-arms --wide-eyes --fidgety', 36), ['tim -c sunset --patches --big-head \\', '  --long-arms --wide-eyes --fidgety'])
+  assert.deepEqual(flagLines('tim -c magenta', 36), ['tim -c magenta'])
+  assert.deepEqual([11, 242, 2130, 17857, 1234567].map(oneInText), ['1 in 11', '1 in 242', '1 in 2,130', '1 in 17,857', '1 in 1,234,567'])
+})
+
+test('a card without traits is the species card, and an individual\'s svg runs down its own colours', () => {
+  const tim = roster.daemons.find(d => d.id === 'tim')
+  const plain = cardLines(roster, tim, { version: '2.0', plate: plate(tim), nickname: 'pip' })
+  assert.ok(plain.some(l => l.includes('pip the tim 2.0')))
+  assert.ok(!plain.some(l => / -c |1 in /.test(l)))
+  const seed = Array.from({ length: 500 }, (_, i) => i + 1).find(s => rollTraits(roster, 'tim', s).colour === 'coral')
+  const traits = rollTraits(roster, 'tim', seed)
+  const coral = tim.traits.colours.find(c => c[0] === 'coral')
+  const svg = cardSvg(roster, tim, { version: '2.0', plate: plate(tim), traits })
+  assert.ok(svg.includes(`fill="${coral[2]}"`) && svg.includes(`fill="${coral[3]}"`))
+  assert.ok(!svg.includes(`fill="${tim.gradient.top.hex}"`))
+  assert.ok(cardSvg(roster, tim, { version: '2.0', plate: plate(tim), traits, shiny: true }).includes(`fill="${tim.shinyGradient.top.hex}"`))
 })

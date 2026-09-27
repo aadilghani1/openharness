@@ -1,4 +1,6 @@
-import { circle, ellipse, seg, tube, path, cut, blend, meet, part, eye, rng } from '../tools/plate.mjs'
+// Generated from daemons/plates/tux.mjs by daemons/tools/generate.mjs. Do not edit.
+// @ts-nocheck
+import { circle, ellipse, seg, tube, path, cut, blend, meet, part, eye, rng } from './plate.g.js'
 
 // tux: the Linux penguin. Linus Torvalds said a penguin bit him at a zoo in Canberra; Larry Ewing drew the mascot in the GIMP in 1996.
 //

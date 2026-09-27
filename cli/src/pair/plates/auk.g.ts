@@ -1,4 +1,6 @@
-import { circle, ellipse, box, seg, tube, path, blend, union, meet, part, eye, rng, headroom } from '../tools/plate.mjs'
+// Generated from daemons/plates/auk.mjs by daemons/tools/generate.mjs. Do not edit.
+// @ts-nocheck
+import { circle, ellipse, box, seg, tube, path, blend, union, meet, part, eye, rng, headroom } from './plate.g.js'
 
 // auk: awk (Aho, Weinberger and Kernighan, Bell Labs, 1977) and the great auk, the first bird ever
 // called a penguin, extinct since 1844; awk is still in every Unix.

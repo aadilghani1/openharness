@@ -1,4 +1,6 @@
-import { ellipse, circle, box, seg, tube, path, part, eye, meet, union, rng } from '../tools/plate.mjs'
+// Generated from daemons/plates/bug.mjs by daemons/tools/generate.mjs. Do not edit.
+// @ts-nocheck
+import { ellipse, circle, box, seg, tube, path, part, eye, meet, union, rng } from './plate.g.js'
 
 // bug: the moth found in relay 70 of the Harvard Mark II on 9 September 1947, taped into the
 // logbook: "First actual case of bug being found."

@@ -1,4 +1,6 @@
-import { ellipse, circle, box, seg, tube, path, union, blend, meet, part, eye, rng, headroom } from '../tools/plate.mjs'
+// Generated from daemons/plates/lynx.mjs by daemons/tools/generate.mjs. Do not edit.
+// @ts-nocheck
+import { ellipse, circle, box, seg, tube, path, union, blend, meet, part, eye, rng, headroom } from './plate.g.js'
 
 // lynx: Lynx, the text-mode web browser (University of Kansas, 1992), still maintained: the web with the pictures taken out.
 //

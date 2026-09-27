@@ -1,186 +1,55 @@
 // Generated from daemons/roster.json by daemons/tools/generate.mjs. Do not edit.
-export const DAEMON_ROSTER = {
-  "version": 1,
+import * as tim from './tim.g.js'
+import * as gnu from './gnu.g.js'
+import * as lynx from './lynx.g.js'
+import * as mutt from './mutt.g.js'
+import * as yak from './yak.g.js'
+import * as gopher from './gopher.g.js'
+import * as bug from './bug.g.js'
+import * as tux from './tux.g.js'
+import * as auk from './auk.g.js'
+import * as beastie from './beastie.g.js'
+
+export const PLATE_MODELS = { tim, gnu, lynx, mutt, yak, gopher, bug, tux, auk, beastie }
+
+export const PLATE_SOURCE = '8beb4ee30cb6ce610b6a61690afa0d1f32a71b821be29fcd898bb97572956401'
+
+export const PLATE_ROSTER = {
   "rules": {
-    "rarities": [
-      "common",
-      "rare",
-      "legendary",
-      "secret"
-    ],
-    "shinyOneIn": 256,
-    "pityPerMiss": 1,
-    "secretGuaranteeAt": 8,
-    "duplicateXp": 150,
-    "overflowXp": 50,
-    "lessonXp": 25,
-    "firstEgg": {
-      "need": 3,
-      "require": [
-        "turn"
-      ],
-      "habits": [
-        "turn",
-        "split",
-        "find",
-        "elsewhere",
-        "machine",
-        "store",
-        "resume",
-        "days"
-      ]
-    },
-    "setupEgg": {
-      "need": 6
-    },
-    "eggs": {
-      "first": {
-        "weights": {
-          "common": 60,
-          "rare": 27,
-          "legendary": 12,
-          "secret": 0
-        },
-        "boost": {
-          "tim": 4
-        }
-      },
-      "setup": {
-        "weights": {
-          "common": 60,
-          "rare": 27,
-          "legendary": 12,
-          "secret": 0
-        }
-      },
-      "turn": {
-        "weights": {
-          "common": 60,
-          "rare": 27,
-          "legendary": 12,
-          "secret": 0
-        }
-      },
-      "week": {
-        "weights": {
-          "common": 45,
-          "rare": 35,
-          "legendary": 18,
-          "secret": 0
-        }
-      },
-      "marathon": {
-        "weights": {
-          "common": 25,
-          "rare": 40,
-          "legendary": 32,
-          "secret": 0
-        }
-      },
-      "night": {
-        "weights": {
-          "common": 50,
-          "rare": 30,
-          "legendary": 12,
-          "secret": 8
-        },
-        "boost": {
-          "bug": 4
-        }
-      },
-      "history": {
-        "weights": {
-          "common": 60,
-          "rare": 27,
-          "legendary": 12,
-          "secret": 0
-        }
-      },
-      "easter": {
-        "weights": {
-          "common": 0,
-          "rare": 0,
-          "legendary": 90,
-          "secret": 10
-        }
-      }
-    },
-    "easterHashes": [
-      "184858a00fd7971f810848266ebcecee5e8b69972c5ffaed622f5ee078671aed"
-    ],
     "versions": [
       "0.1",
       "1.0",
       "2.0"
     ],
-    "bondForVersion": {
-      "0.1": 0,
-      "1.0": 2,
-      "2.0": 4
-    },
-    "bond": {
-      "xpPerTurn": 1,
-      "xpPerDay": 5,
-      "levels": [
-        0,
-        50,
-        150,
-        300,
-        600
-      ]
-    },
-    "earn": {
-      "turn": {
-        "every": 40,
-        "dailyCap": 20,
-        "minutesPerTurn": 10
+    "moods": [
+      "idle",
+      "work",
+      "need",
+      "done",
+      "fail",
+      "back",
+      "nap",
+      "boop"
+    ],
+    "plate": {
+      "cols": {
+        "portrait": 28,
+        "reveal": 56
       },
-      "week": {
-        "days": 3
+      "maxRows": {
+        "portrait": 12,
+        "reveal": 24
       },
-      "marathon": {
-        "turns": 500,
-        "machines": 2
-      },
-      "night": {
-        "nights": 3,
-        "fromHour": 22,
-        "toHour": 6,
-        "awayMinutes": 30
-      },
-      "history": {
-        "days": 7
+      "frameMs": 170,
+      "frames": {
+        "idle": 8,
+        "other": 4
       }
-    },
-    "historyDates": {
-      "04-01": "teapot",
-      "08-25": "tux",
-      "09-09": "bug",
-      "09-27": "gnu",
-      "10-31": "zombie"
     }
   },
-  "drops": [
-    {
-      "id": "init",
-      "announce": "2026-09-13",
-      "release": "2026-09-27"
-    },
-    {
-      "id": "unix",
-      "hold": true
-    },
-    {
-      "id": "tty",
-      "hold": true
-    }
-  ],
   "daemons": [
     {
       "id": "tim",
-      "n": 1,
-      "drop": "init",
-      "rarity": "common",
       "traits": {
         "colours": [
           [
@@ -313,9 +182,6 @@ export const DAEMON_ROSTER = {
     },
     {
       "id": "gnu",
-      "n": 2,
-      "drop": "init",
-      "rarity": "common",
       "traits": {
         "colours": [
           [
@@ -444,9 +310,6 @@ export const DAEMON_ROSTER = {
     },
     {
       "id": "lynx",
-      "n": 3,
-      "drop": "init",
-      "rarity": "common",
       "traits": {
         "colours": [
           [
@@ -575,9 +438,6 @@ export const DAEMON_ROSTER = {
     },
     {
       "id": "mutt",
-      "n": 4,
-      "drop": "init",
-      "rarity": "common",
       "traits": {
         "colours": [
           [
@@ -706,9 +566,6 @@ export const DAEMON_ROSTER = {
     },
     {
       "id": "yak",
-      "n": 5,
-      "drop": "init",
-      "rarity": "rare",
       "traits": {
         "colours": [
           [
@@ -831,9 +688,6 @@ export const DAEMON_ROSTER = {
     },
     {
       "id": "gopher",
-      "n": 6,
-      "drop": "init",
-      "rarity": "rare",
       "traits": {
         "colours": [
           [
@@ -962,9 +816,6 @@ export const DAEMON_ROSTER = {
     },
     {
       "id": "bug",
-      "n": 7,
-      "drop": "init",
-      "rarity": "rare",
       "traits": {
         "colours": [
           [
@@ -1086,9 +937,6 @@ export const DAEMON_ROSTER = {
     },
     {
       "id": "tux",
-      "n": 8,
-      "drop": "init",
-      "rarity": "legendary",
       "traits": {
         "colours": [
           [
@@ -1217,9 +1065,6 @@ export const DAEMON_ROSTER = {
     },
     {
       "id": "auk",
-      "n": 9,
-      "drop": "init",
-      "rarity": "legendary",
       "traits": {
         "colours": [
           [
@@ -1348,9 +1193,6 @@ export const DAEMON_ROSTER = {
     },
     {
       "id": "beastie",
-      "n": 10,
-      "drop": "init",
-      "rarity": "secret",
       "traits": {
         "colours": [
           [
@@ -1476,126 +1318,6 @@ export const DAEMON_ROSTER = {
         "oddEye": 0.02,
         "fidgety": 0.3
       }
-    },
-    {
-      "id": "tmux",
-      "n": 1,
-      "drop": "unix",
-      "rarity": "common"
-    },
-    {
-      "id": "fish",
-      "n": 2,
-      "drop": "unix",
-      "rarity": "common"
-    },
-    {
-      "id": "ping",
-      "n": 3,
-      "drop": "unix",
-      "rarity": "common"
-    },
-    {
-      "id": "bat",
-      "n": 4,
-      "drop": "unix",
-      "rarity": "common"
-    },
-    {
-      "id": "vim",
-      "n": 5,
-      "drop": "unix",
-      "rarity": "rare"
-    },
-    {
-      "id": "zsh",
-      "n": 6,
-      "drop": "unix",
-      "rarity": "rare"
-    },
-    {
-      "id": "biff",
-      "n": 7,
-      "drop": "unix",
-      "rarity": "rare"
-    },
-    {
-      "id": "fzf",
-      "n": 8,
-      "drop": "unix",
-      "rarity": "legendary"
-    },
-    {
-      "id": "tldr",
-      "n": 9,
-      "drop": "unix",
-      "rarity": "legendary"
-    },
-    {
-      "id": "grue",
-      "n": 10,
-      "drop": "unix",
-      "rarity": "secret"
-    },
-    {
-      "id": "xeyes",
-      "n": 1,
-      "drop": "tty",
-      "rarity": "common"
-    },
-    {
-      "id": "oneko",
-      "n": 2,
-      "drop": "tty",
-      "rarity": "common"
-    },
-    {
-      "id": "cowsay",
-      "n": 3,
-      "drop": "tty",
-      "rarity": "common"
-    },
-    {
-      "id": "fortune",
-      "n": 4,
-      "drop": "tty",
-      "rarity": "common"
-    },
-    {
-      "id": "rogue",
-      "n": 5,
-      "drop": "tty",
-      "rarity": "rare"
-    },
-    {
-      "id": "sl",
-      "n": 6,
-      "drop": "tty",
-      "rarity": "rare"
-    },
-    {
-      "id": "doctor",
-      "n": 7,
-      "drop": "tty",
-      "rarity": "rare"
-    },
-    {
-      "id": "hack",
-      "n": 8,
-      "drop": "tty",
-      "rarity": "legendary"
-    },
-    {
-      "id": "tty",
-      "n": 9,
-      "drop": "tty",
-      "rarity": "legendary"
-    },
-    {
-      "id": "lp0",
-      "n": 10,
-      "drop": "tty",
-      "rarity": "secret"
     }
   ]
-} as const
+}

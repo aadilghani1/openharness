@@ -1,4 +1,6 @@
-import { ellipse, circle, box, seg, tube, path, blend, union, meet, part, eye, rng } from '../tools/plate.mjs'
+// Generated from daemons/plates/yak.mjs by daemons/tools/generate.mjs. Do not edit.
+// @ts-nocheck
+import { ellipse, circle, box, seg, tube, path, blend, union, meet, part, eye, rng } from './plate.g.js'
 
 // yak: yacc, "Yet Another Compiler-Compiler" (Stephen Johnson, Bell Labs, 1975), and yak shaving,
 // the chain of side tasks between you and what you set out to do.
