@@ -2083,6 +2083,26 @@ impl App {
         })
     }
 
+    /// A session's window not in front (a #{S:} loop's; the `k`th of its windows, else its
+    /// current one): its panes, and the active one.
+    pub fn stash_panes(&self, id: u32, k: Option<usize>) -> Option<(Vec<u64>, Option<u64>, String)> {
+        let s = self.sessions.iter().find(|s| s.id == id)?;
+        let tabs: Vec<&Tab> = s.tabs.iter().filter(|t| t.root.is_some()).collect();
+        let t = match k { Some(k) => tabs.get(k).copied()?, None => s.tabs.get(s.active)? };
+        Some((t.panes(), t.focus, t.id.clone()))
+    }
+
+    /// A pane's own values there: its index (pane-base-index on), whether it is the active one.
+    pub fn stash_pane_value(&self, id: u32, k: Option<usize>, pane: u64, key: &str) -> Option<String> {
+        let (panes, focus, tab_id) = self.stash_panes(id, k)?;
+        let i = panes.iter().position(|p| *p == pane)?;
+        Some(match key {
+            "pane_index" => (i + self.options.get("pane-base-index", &tab_id, None).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0)).to_string(),
+            "pane_active" => ((focus == Some(pane)) as u8).to_string(),
+            _ => return None,
+        })
+    }
+
     /// A window named (-n): automatic-rename off, as tmux's window_set_name with it.
     pub fn name_window(&mut self, w: usize, name: &str) {
         let Some(tab) = self.tabs.get_mut(w) else { return };

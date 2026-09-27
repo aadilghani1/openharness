@@ -407,6 +407,17 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
             v.push_str(&expand1(&mut next, use_));
         }
         v
+    } else if f.panes && es.session.and_then(|id| es.app.stash_panes(id, es.window_of)).is_some() {
+        // format_loop_panes in a session not in front (a #{S:} loop's): its window's own panes.
+        let (all, active) = match choose(es, copy, false) { Some((a, b)) => (a, Some(b)), None => (copy.to_string(), None) };
+        let (panes, focus, _) = es.session.and_then(|id| es.app.stash_panes(id, es.window_of)).unwrap_or_default();
+        let mut v = String::new();
+        for p in panes {
+            let use_ = if Some(p) == focus { active.as_deref().unwrap_or(&all) } else { &all };
+            let mut next = es.at(es.window, Some(p));
+            v.push_str(&expand1(&mut next, use_));
+        }
+        v
     } else if f.panes {
         let (all, active) = match choose(es, copy, false) { Some((a, b)) => (a, Some(b)), None => (copy.to_string(), None) };
         let tab = es.app.tabs.get(es.window);
@@ -491,9 +502,11 @@ fn truthy(v: &str) -> bool { !v.is_empty() && v != "0" }
 fn find(es: &mut Es, key: &str, f: &Flags, time_format: Option<&str>) -> Option<String> {
     let app = es.app;
     let window_id = app.tabs.get(es.window).map(|t| t.id.clone()).unwrap_or_default();
-    let mut found = es.session.and_then(|id| match es.window_of {
+    let mut found = es.session.and_then(|id| match (es.window_of, es.pane) {
+        // A #{P:} loop's pane there: its index and whether it is active are its window's.
+        (k, Some(p)) if matches!(key, "pane_index" | "pane_active") => app.stash_pane_value(id, k, p, key),
         // (Which kind of line it is — window_format — is the tree's to say.)
-        Some(k) if key.starts_with("window_") && key != "window_format" => Some(app.stash_window_value(id, k, key).unwrap_or_default()),
+        (Some(k), _) if key.starts_with("window_") && key != "window_format" => Some(app.stash_window_value(id, k, key).unwrap_or_default()),
         _ => app.stash_value(id, key),
     });
     if found.is_none() { found = app.options.format_value(key, &window_id, es.pane) }
