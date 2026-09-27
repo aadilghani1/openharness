@@ -9,7 +9,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
-import { plate, crop, cropBox } from './plate.mjs'
+import { plate, crop, cropBox, bakeModel } from './plate.mjs'
 
 export function plateSource(root, roster) {
   const { cols, frames, frameMs } = roster.rules.plate
@@ -36,25 +36,7 @@ export async function bakePlates(root, roster) {
   const out = { source, frameMs: spec.frameMs, daemons: {} }
   for (const d of roster.daemons.filter(d => d.plate)) {
     const m = await import(pathToFileURL(resolve(root, `daemons/plates/${d.id}.mjs`)).href)
-    const entry = {}
-    for (const [size, cols] of Object.entries(spec.cols)) {
-      entry[size] = {}
-      for (const age of rules.versions) {
-        const keys = [], frames = []
-        for (const mood of rules.moods) {
-          const n = mood === 'idle' ? spec.frames.idle : spec.frames.other
-          for (let i = 0; i < n; i++) {
-            keys.push(mood)
-            frames.push(plate(m.model({ t: (i / n) * Math.PI * 2, mood, age }), cols))
-          }
-        }
-        const cropped = crop(frames)
-        const byMood = {}
-        cropped.forEach((rows, i) => (byMood[keys[i]] ??= []).push(rows.join('\n')))
-        entry[size][age] = byMood
-      }
-    }
-    out.daemons[d.id] = entry
+    out.daemons[d.id] = bakeModel(m.model, rules)
     process.stderr.write(`  baked ${d.id}\n`)
   }
   out.eggs = await bakeEggs(root, roster)

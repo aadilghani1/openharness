@@ -1,3 +1,5 @@
+// Generated from daemons/tools/plate.mjs by daemons/tools/generate.mjs. Do not edit.
+// @ts-nocheck
 // Plates: drop 3's filled art, in the line-printer tradition (the density ramp of the Mona Lisa
 // printouts). A drop-3 daemon is a model made of shapes, not a drawing: plate() shades the model
 // into characters at any size, so one model gives the portrait, the reveal and every animation

@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { renderSprite, renderPortrait, statusCell, baseWidth, renderBanner, eggStage, eggLine, habitProgress } from './render.mjs'
+import { renderSprite, renderPortrait, statusCell, baseWidth, renderBanner, eggStage, eggLine, habitProgress, rollTraits, individualFlags, oneIn, individualDaemon, renderIndividualSprite } from './render.mjs'
 import { cardLines } from './card.mjs'
 import { bakePlates, plateColor, eggColor } from './bake.mjs'
 import { KINDS as EGG_KINDS, STAGES as EGG_STAGES } from '../plates/egg.mjs'
@@ -191,6 +191,93 @@ if (!problems.length) {
 // The light through an egg's cracks: plain while it is earned, the rarity's once it is opened.
 for (const key of ['plain', ...rules.rarities, 'peek']) if (!xtermColor(rules.plate?.light?.[key])) fail(`rules.plate.light.${key} must be an xterm-256 index from 16 with its hex`)
 for (const key of ['loop', 'rock', 'burstHold', 'burst', 'tumble', 'open']) if (!whole(rules.plate?.eggMs?.[key])) fail(`rules.plate.eggMs.${key} must be a whole number of ms`)
+// Individuals (README, "Individuals"): every plate species has a trait catalogue, and the roll, the
+// flags and the rarity come from it alone. Colours are xterm-256 hexes; weights whole; every name is a
+// flag; a proportion's range holds 1 (the species plate); a rare extra carries its status-line variant,
+// checked like every sprite.
+const XTERM_HEXES = new Set(Array.from({ length: 240 }, (_, i) => xtermHex(i + 16)))
+const flagName = s => typeof s === 'string' && /^[a-z][a-z0-9-]{0,23}$/.test(s)
+if (roster.daemons.some(d => d.traits) && !xtermColor(rules.plate?.oddEye)) fail('rules.plate.oddEye must be an xterm-256 index from 16 with its hex')
+const spriteTimes = [0, 50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]
+for (const d of roster.daemons) {
+  const T = d.traits
+  if (!T) { if (d.plate) fail(`${d.id}: a plate species needs a traits catalogue`); continue }
+  if (!d.plate) { fail(`${d.id}: only a plate species has traits`); continue }
+  const named = []
+  const weighted = (what, list, nulls) => {
+    if (!Array.isArray(list) || list.length < 2) { fail(`${d.id}: traits.${what} needs at least two entries`); return }
+    for (const e of list) {
+      if (!Array.isArray(e) || !whole(e[1])) fail(`${d.id}: traits.${what} ${JSON.stringify(e?.[0])} needs a whole weight of at least 1`)
+      if (e?.[0] === null) continue
+      if (!flagName(e?.[0])) fail(`${d.id}: traits.${what} name ${JSON.stringify(e?.[0])} must be a short lowercase flag`)
+      named.push(e?.[0])
+    }
+    if (list.filter(e => e?.[0] === null).length !== nulls) fail(`${d.id}: traits.${what} must have ${nulls ? 'one null entry (none)' : 'no null entry'}`)
+  }
+  weighted('colours', T.colours, 0)
+  weighted('marks', T.marks, 1)
+  weighted('extras', T.extras, 1)
+  for (const [name, , top, bottom] of T.colours ?? []) if (!XTERM_HEXES.has(top) || !XTERM_HEXES.has(bottom)) fail(`${d.id}: colour ${name} must run between two xterm-256 hexes`)
+  if (T.colours?.[0]?.[2] !== d.gradient?.top?.hex || T.colours?.[0]?.[3] !== d.gradient?.bottom?.hex) fail(`${d.id}: the first colour must be the species' gradient`)
+  for (const [name, , hex, variant] of T.extras ?? []) {
+    if (name === null ? hex !== null || variant !== undefined : !XTERM_HEXES.has(hex)) fail(`${d.id}: extra ${name} must have an xterm-256 hex (none for null)`)
+    if (name !== null && variant !== undefined) {
+      for (const v of rules.versions) if (typeof variant.sprites?.[v] !== 'string') fail(`${d.id} --${name}: no sprite for ${v}`)
+      if (!Array.isArray(variant.work) || !variant.work.length || variant.work.some(w => typeof w !== 'string')) fail(`${d.id} --${name}: work must be a list of frames`)
+    }
+  }
+  if (!T.accents?.length || T.accents.some(h => !XTERM_HEXES.has(h))) fail(`${d.id}: traits.accents must be xterm-256 hexes`)
+  const props = Object.entries(T.props ?? {})
+  if (!props.length) fail(`${d.id}: traits.props needs a proportion`)
+  for (const [k, r] of props) {
+    if (!/^[a-z][a-zA-Z]*$/.test(k) || !Array.isArray(r) || r.length !== 2 || !(r[0] < r[1]) || r[0] > 1 || r[1] < 1) fail(`${d.id}: traits.props.${k} must be [lo, hi] around 1`)
+  }
+  for (const [k, f] of Object.entries(T.flags ?? {})) {
+    if (!T.props?.[k]) fail(`${d.id}: traits.flags.${k} names no proportion`)
+    if (!f || (!f.high && !f.low) || Object.keys(f).some(x => x !== 'high' && x !== 'low')) fail(`${d.id}: traits.flags.${k} is { high, low }`)
+    for (const x of [f?.high, f?.low].filter(Boolean)) { if (!flagName(x)) fail(`${d.id}: flag ${x} must be a short lowercase flag`); named.push(x) }
+  }
+  named.push('odd-eye', 'fidgety')
+  const twice = named.find((x, i) => named.indexOf(x) !== i)
+  if (twice) fail(`${d.id}: --${twice} means two things`)
+  for (const key of ['oddEye', 'fidgety']) if (!(T[key] > 0 && T[key] < 1)) fail(`${d.id}: traits.${key} is a chance between 0 and 1`)
+  // A fidgety individual works at half workMs, a whole number of ms.
+  if (!whole(d.workMs) || d.workMs % 2) fail(`${d.id}: workMs must be even, so a fidgety one's half is whole`)
+}
+// A rare extra's status-line variant, like every sprite: every version, mood, frame of motion and
+// blink, fidgety too, in 8 cells, printable, without a ligature; unlike its species' own and every
+// other daemon's at the same version; and between the halves of its shell as it hatches.
+if (!problems.length) {
+  for (const d of roster.daemons.filter(d => d.traits)) {
+    for (const [name, , , variant] of d.traits.extras) {
+      if (!variant) continue
+      for (const temper of ['calm', 'fidgety']) {
+        const traits = { extra: name, temper }
+        for (const mood of rules.moods) {
+          for (const [vi, v] of rules.versions.entries()) {
+            for (const t of spriteTimes) {
+              for (const lid of [null, '-', '_']) {
+                const s = renderIndividualSprite(roster, d.id, traits, vi, mood, { t, lid })
+                const what = `${d.id} --${name} ${v} ${mood}`
+                if (s.length > rules.statusCells) fail(`${what}: sprite "${s}" is wider than ${rules.statusCells} cells`)
+                if (!printable(s)) fail(`${what}: sprite "${s}" is not printable ASCII`)
+                if (ligature(s)) fail(`${what}: sprite "${s}" has "${ligature(s)}", which fonts draw as one glyph`)
+                if (/\{[a-zA-Z]+\}/.test(s)) fail(`${what}: unfilled placeholder in "${s}"`)
+              }
+            }
+          }
+        }
+      }
+      const variantD = individualDaemon(roster, d.id, { extra: name })
+      for (const [vi, v] of rules.versions.entries()) {
+        const mine = renderSprite(roster, variantD, vi, 'idle', { motion: false })
+        const clash = roster.daemons.find(o => renderSprite(roster, o, vi, 'idle', { motion: false }) === mine)
+        if (clash) fail(`${d.id} --${name} ${v}: sprite "${mine}" is ${clash.id}'s`)
+      }
+      for (const lid of [null, '-', '_']) eggArt(`${d.id} --${name} hatching`, eggLine(roster, 'first', 'hatchling', { sprite: renderSprite(roster, variantD, 0, 'idle', { lid }) }))
+    }
+  }
+}
 const habitKeys = rules.firstEgg.habits.map(h => h.key)
 if (rules.firstEgg.need > habitKeys.length) fail('first egg needs more habits than exist')
 for (const k of rules.firstEgg.require ?? []) if (!habitKeys.includes(k)) fail(`firstEgg.require names unknown habit ${k}`)
@@ -368,7 +455,9 @@ const server = {
     historyDates: rules.historyDates,
   },
   drops: roster.drops.map(d => d.hold ? { id: d.id, hold: true } : { id: d.id, announce: d.announce, release: d.release }),
-  daemons: roster.daemons.map(d => ({ id: d.id, n: d.n, drop: d.drop, rarity: d.rarity })),
+  // A plate species' trait catalogue, for the roll (render.mjs rollTraits): the server stores only the
+  // seed, and names an individual's traits from it. The extras' status-line variants stay with the art.
+  daemons: roster.daemons.map(d => ({ id: d.id, n: d.n, drop: d.drop, rarity: d.rarity, ...(d.traits ? { traits: { ...d.traits, extras: d.traits.extras.map(e => e.slice(0, 3)) } } : {}) })),
 }
 output('backend/src/lib/daemonRoster.g.ts', `${header}export const DAEMON_ROSTER = ${JSON.stringify(server, null, 2)} as const\n`)
 // The pair brain's template voice (cli/src/pair/voice.ts): who exists and what each says per mood, and —
@@ -381,6 +470,26 @@ const pair = {
   daemons: roster.daemons.map(d => ({ id: d.id, lore: d.lore, first: d.first, family: d.family, lines: d.lines })),
 }
 output('cli/src/pair/roster.g.ts', `${header}export const PAIR_ROSTER = ${JSON.stringify(pair, null, 2)} as const\n`)
+// harnessd draws each individual on the machine (README, "Individual art"): the shader, every plate
+// species' model and the reference roll, copied as they are (type-checking off: they are the reference
+// JavaScript), with what they read from the roster. PLATE_MODELS[id].model goes to bakeModel with
+// PLATE_ROSTER.rules and rollTraits(PLATE_ROSTER, id, seed).
+const copyHeader = source => `// Generated from ${source} by daemons/tools/generate.mjs. Do not edit.\n// @ts-nocheck\n`
+const plateIds = roster.daemons.filter(d => d.plate).map(d => d.id)
+output('cli/src/pair/plates/plate.g.ts', copyHeader('daemons/tools/plate.mjs') + readFileSync(resolve(root, 'daemons/tools/plate.mjs'), 'utf8'))
+output('cli/src/pair/plates/render.g.ts', copyHeader('daemons/tools/render.mjs') + readFileSync(resolve(root, 'daemons/tools/render.mjs'), 'utf8').replace("from './plate.mjs'", "from './plate.g.js'"))
+for (const id of plateIds) {
+  const src = readFileSync(resolve(root, `daemons/plates/${id}.mjs`), 'utf8')
+  if (!src.includes("from '../tools/plate.mjs'")) fail(`daemons/plates/${id}.mjs must import the shader from '../tools/plate.mjs'`)
+  output(`cli/src/pair/plates/${id}.g.ts`, copyHeader(`daemons/plates/${id}.mjs`) + src.replace("from '../tools/plate.mjs'", "from './plate.g.js'"))
+}
+const plateRoster = {
+  rules: { versions: rules.versions, moods: rules.moods, plate: { cols: rules.plate.cols, maxRows: rules.plate.maxRows, frameMs: rules.plate.frameMs, frames: rules.plate.frames } },
+  daemons: roster.daemons.filter(d => d.traits).map(d => ({ id: d.id, traits: { ...d.traits, extras: d.traits.extras.map(e => e.slice(0, 3)) } })),
+}
+output('cli/src/pair/plates/models.g.ts', `${header}${plateIds.map(id => `import * as ${id.replace(/-/g, '_')} from './${id}.g.js'`).join('\n')}\n\n` +
+  `export const PLATE_MODELS = { ${plateIds.map(id => (/^[a-z]+$/.test(id) ? id : `'${id}': ${id.replace(/-/g, '_')}`)).join(', ')} }\n\n` +
+  `export const PLATE_ROSTER = ${JSON.stringify(plateRoster, null, 2)}\n`)
 // Frames every port must reproduce exactly (desktop and hn tests read this file).
 const frames = { sprites: [], portraits: [] }
 for (const d of roster.daemons) {
@@ -465,6 +574,50 @@ for (const kind of plates ? ['first', 'night'] : []) {
       if (ch !== ' ' && (mats[r][c] !== '.' || (c + r) % 7 === 0)) cells.push({ r, c, ch, mat: mats[r][c], hex: eggColor(roster, kind, rows.length, r, ch, mats[r][c], { light, dim }) })
     }))
     frames.eggColors.push({ kind, size: 'reveal', stage, frame, light, dim, bg: '#0c0c0c', rows: rows.length, cells })
+  }
+}
+// Individuals: the roll, the flags and the rarity for a spread of seeds, and the first seed that rolls
+// each colour, marking, extra, odd eye and proportion flag. Every port (the server's first) must match
+// these exactly.
+frames.traitRolls = []
+for (const d of roster.daemons.filter(d => d.traits)) {
+  const T = d.traits, want = new Map()
+  for (const [c] of T.colours) want.set(`colour ${c}`, null)
+  for (const [m] of T.marks) if (m) want.set(`marks ${m}`, null)
+  for (const [x] of T.extras) if (x) want.set(`extra ${x}`, null)
+  want.set('odd-eye', null)
+  for (const f of Object.values(T.flags ?? {})) for (const x of [f.high, f.low].filter(Boolean)) want.set(`flag ${x}`, null)
+  for (let seed = 1; seed < 200000 && [...want.values()].includes(null); seed++) {
+    const tr = rollTraits(roster, d.id, seed), flags = individualFlags(roster, d.id, tr).split(' ')
+    const hits = [`colour ${tr.colour}`, `marks ${tr.marks}`, `extra ${tr.extra}`, ...(tr.oddEye ? ['odd-eye'] : []), ...flags.filter(f => f.startsWith('--')).map(f => `flag ${f.slice(2)}`)]
+    for (const h of hits) if (want.get(h) === null) want.set(h, seed)
+  }
+  for (const [what, seed] of want) if (seed === null) fail(`${d.id}: no seed below 200000 rolls ${what}`)
+  const seeds = [...new Set([0, 1, 2, 3, 42, 1000, 65535, 2147483648, 4294967295, ...want.values()])].filter(s => s !== null).sort((a, b) => a - b)
+  for (const seed of seeds) {
+    const traits = rollTraits(roster, d.id, seed)
+    frames.traitRolls.push({ id: d.id, seed, traits, flags: individualFlags(roster, d.id, traits), oneIn: oneIn(roster, d.id, traits) })
+  }
+}
+// An individual's status line: with each rare extra, fidgety, and plain; every version and mood, at
+// rest and 150 ms on (a fidgety one's work frames turn twice as fast), and the cell it sits in.
+frames.individualSprites = []
+for (const d of roster.daemons.filter(d => d.traits)) {
+  const rolls = frames.traitRolls.filter(r => r.id === d.id)
+  const picks = [rolls.find(r => !r.traits.extra && r.traits.temper === 'calm'), rolls.find(r => r.traits.temper === 'fidgety'),
+    ...d.traits.extras.filter(e => e[0]).map(([x]) => rolls.find(r => r.traits.extra === x))]
+  for (const { seed, traits } of [...new Set(picks.filter(Boolean))]) {
+    const base = vi => baseWidth(roster, individualDaemon(roster, d.id, traits), vi)
+    for (const [vi, v] of rules.versions.entries()) {
+      for (const mood of rules.moods) {
+        for (const t of [0, 150]) {
+          const out = renderIndividualSprite(roster, d.id, traits, vi, mood, { t })
+          frames.individualSprites.push({ id: d.id, seed, v, mood, t, lid: null, out, cell: statusCell(roster, out, base(vi)) })
+        }
+      }
+      const out = renderIndividualSprite(roster, d.id, traits, vi, 'idle', { lid: '-' })
+      frames.individualSprites.push({ id: d.id, seed, v, mood: 'idle', t: 0, lid: '-', out, cell: statusCell(roster, out, base(vi)) })
+    }
   }
 }
 frames.banners = roster.daemons.map(d => ({ id: d.id, out: renderBanner(banner, d.id) }))

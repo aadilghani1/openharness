@@ -1,6 +1,8 @@
+// Generated from daemons/tools/render.mjs by daemons/tools/generate.mjs. Do not edit.
+// @ts-nocheck
 // The reference renderer for daemons/roster.json. The desktop (Dart) and hn (Rust) ports must draw
 // exactly what this draws; daemons/frames.json pins the frames they are checked against.
-import { rng } from './plate.mjs'
+import { rng } from './plate.g.js'
 //
 // Placeholders in sprites and portraits:
 //   {e}          an eye: the mood's eye, or the lid while blinking (never in noBlinkMoods)
