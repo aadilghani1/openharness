@@ -23,6 +23,10 @@ static HERE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 /// Set while this client runs a command another client passed it: it asks no client in turn (two
 /// clients each waiting on the other would freeze both).
 static FORWARDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Where commands are handed to the app loop (claim_name's listener too), and whether this client
+/// has taken the name's socket.
+static SINK: std::sync::OnceLock<mpsc::UnboundedSender<Event>> = std::sync::OnceLock::new();
+static CLAIMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub fn forwarded() -> bool { FORWARDED.load(std::sync::atomic::Ordering::Relaxed) }
 pub fn here() -> Option<PathBuf> { HERE.get().cloned() }
 
@@ -57,6 +61,13 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
     // Which daemon this client talks to, beside its socket: `hn -L name list-harnesses` asks that
     // one, never another it happens to find on the default port.
     let _ = std::fs::write(path.with_extension("port"), port.to_string());
+    let _ = SINK.set(sink.clone());
+    accept(listener, sink);
+    Some(path)
+}
+
+/// Each connection's command run on the app loop, its output sent back.
+fn accept(listener: tokio::net::UnixListener, sink: mpsc::UnboundedSender<Event>) {
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
             let sink = sink.clone();
@@ -101,7 +112,28 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
             });
         }
     });
-    Some(path)
+}
+
+/// The name's socket (`work.sock`) when no client answers there any more — its client gone, or
+/// hn with no terminal handed over — taken by this one beside its own, so `-S …/work.sock` and
+/// `-L work` keep reaching the server, as tmux's one socket does. (Checked every two seconds.)
+pub fn claim_name() {
+    if CLAIMED.load(std::sync::atomic::Ordering::Relaxed) { return }
+    let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
+    let primary = dir().join(format!("{name}.sock"));
+    if here().as_deref() == Some(primary.as_path()) || answers(&primary) { return }
+    let Some(sink) = SINK.get().cloned() else { return };
+    let Some(_held) = lock(&primary) else { return };
+    // (Another client may have taken it while this one waited for the lock.)
+    if answers(&primary) { return }
+    let _ = std::fs::remove_file(&primary);
+    let Ok(std_listener) = std::os::unix::net::UnixListener::bind(&primary) else { return };
+    let _ = std_listener.set_nonblocking(true);
+    let Ok(listener) = tokio::net::UnixListener::from_std(std_listener) else { return };
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&primary, std::fs::Permissions::from_mode(0o600)); }
+    if let Some(port) = here().and_then(|h| std::fs::read_to_string(h.with_extension("port")).ok()) { let _ = std::fs::write(primary.with_extension("port"), port); }
+    CLAIMED.store(true, std::sync::atomic::Ordering::Relaxed);
+    accept(listener, sink);
 }
 
 /// Another client told something (hn-server-sync, hn-mirror-refresh): sent, and its answer

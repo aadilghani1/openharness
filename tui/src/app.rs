@@ -4274,6 +4274,7 @@ impl App {
         // The client whose session this one shows gone without a word (killed, its terminal
         // closed): this one has the session now.
         if self.tick % 8 == 2 {
+            crate::ipc::claim_name();
             if let Some(m) = self.mirror.clone() { if !crate::ipc::answers(std::path::Path::new(&m.owner)) { crate::mirror::refresh(self) } }
             let owners: Vec<String> = self.mirrors.keys().filter(|m| !crate::ipc::answers(std::path::Path::new(m.as_str()))).cloned().collect();
             for m in owners { self.mirrors.remove(&m); }
