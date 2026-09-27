@@ -1866,7 +1866,10 @@ impl App {
         let from = self.session_id;
         // The session the client leaves was in use until now (session_update_activity).
         let used = std::mem::replace(&mut self.session_activity, epoch_secs());
+        let mirrored = self.sessions.iter().any(|s| s.id == id && s.mirror.is_some());
         if !self.swap_session(id) { self.session_activity = used; return }
+        // (Another terminal's session: its hooks' snapshot is the owner's, so this client says it.)
+        if mirrored && self.hooks_seen.ready { crate::commands::notify(self, "client-session-changed", Some(self.active), None) }
         // attach-session and switch-client: update-environment's variables from this client.
         self.update_environment();
         // …and the one it goes to is in use from now, and attached now (server_client_set_session).

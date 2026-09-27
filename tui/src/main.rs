@@ -355,9 +355,12 @@ async fn run(config: config::Config) -> io::Result<()> {
     app.session_last_attached = app::epoch_secs();
     // update-environment (as tmux.conf set it): this client's variables into its session's.
     app.update_environment();
-    // The client is attached: the hooks' first look, then client-attached.
+    // The client is attached: the hooks' first look, then as tmux's attach says it —
+    // client-session-changed, client-attached, client-resized.
     app.notify_changes();
+    commands::notify(&mut app, "client-session-changed", None, None);
     commands::notify(&mut app, "client-attached", None, None);
+    commands::notify(&mut app, "client-resized", None, None);
 
     let frame_budget = Duration::from_millis(6);
     let mut last_draw = Instant::now() - frame_budget;
@@ -433,6 +436,13 @@ async fn run(config: config::Config) -> io::Result<()> {
                 app.title = title;
             }
         }
+    }
+    // client-detached (a detach, not an exit or kill-server), what it changes kept for the server.
+    if !app.exited && !app.forget_sessions && app.start_failed.is_none() {
+        commands::notify(&mut app, "client-detached", None, None);
+        commands::run_pending_hooks(&mut app);
+        app.server_dirty = true;
+        server::publish(&mut app);
     }
     app.fleet.save_cache();
     app.mark_seen();
