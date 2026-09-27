@@ -108,7 +108,9 @@ void main() {
       expect(find.text('Send link to my Mac'), findsOneWidget);
       expect(find.text('harness.autonomous.ai/desktop'), findsOneWidget);
       expect(
-        find.textContaining('https://harness.autonomous.ai/cli/install.sh'),
+        find.textContaining(
+          'https://cdn.autonomous.ai/harness/desktop/install.sh',
+        ),
         findsOneWidget,
       );
       // Back is the first screen.

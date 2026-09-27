@@ -14,12 +14,11 @@ import 'how_it_works_video.dart';
 /// download page; a shorter `/download` waits on a website release.
 const kDesktopDownloadUrl = 'https://harness.autonomous.ai/desktop';
 
-/// The terminal way, for a computer without the app (Linux, a server, over SSH): install, sign in,
-/// start — in the installer's own order.
+/// The terminal way: the same desktop app, installed from a terminal instead of a browser (macOS or
+/// Linux). The installer opens the app when it is done, and the app signs in and sets up the rest —
+/// so there is nothing to type after it.
 const kTerminalSetUp = [
-  'curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash',
-  'harness login',
-  'harness start',
+  'curl -fsSL https://cdn.autonomous.ai/harness/desktop/install.sh | bash',
 ];
 
 /// **Not yet — set it up**: getting Harness onto the computer, from the phone.
@@ -42,9 +41,8 @@ const kTerminalSetUp = [
 ///
 /// Using a terminal?
 /// ┌─────────────────────────────────┐
-/// │ curl -fsSL https://harness…     │
-/// │ harness login                   │
-/// │ harness start           [ Copy ]│
+/// │ curl -fsSL https://cdn.auto…    │
+/// │                         [ Copy ]│
 /// └─────────────────────────────────┘
 /// ```
 ///
