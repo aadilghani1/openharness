@@ -70,12 +70,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if let Some(modal) = &mut app.modal {
         match modal {
             // (--no-input: no prompt, no cursor.)
-            Modal::Picker { kind, picker } => { let at = fzf(buf, body, picker, kind, &*app_preview_placeholder()); cursor = (!theme::fzf_opts().no_input).then_some(at) }
+            // (Too small to hold a list — a window being dragged, a drop-down terminal opening: none
+            // drawn until it has the room, as fzf clamps and tmux draws what fits; never a crash.)
+            Modal::Picker { kind, picker } if body.height >= 5 && body.width >= 8 => { let at = fzf(buf, body, picker, kind, &*app_preview_placeholder()); cursor = (!theme::fzf_opts().no_input).then_some(at) }
             _ => {}
         }
     }
     // The picker drew with a placeholder preview; a live pane preview needs the whole app.
-    if let Some(Modal::Picker { kind, picker }) = &app.modal {
+    if let Some(Modal::Picker { kind, picker }) = app.modal.as_ref().filter(|_| body.height >= 5 && body.width >= 8) {
         if let (_, Some(pbox), _) = fzf_split(fzf_frame(body, picker).inner, picker) { preview(buf, app, kind, picker, &pbox) }
     }
     let popup = match &app.modal { Some(Modal::Popup { pane, x, y, width, height, border, title, look }) => Some((*pane, *x, *y, *width, *height, *border, title.clone(), look.clone())), _ => None };
@@ -108,7 +110,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             if let Some(p) = app.panes.get_mut(&pane) { cursor = pane_body(buf, p, inner, true, colours); }
         }
     }
-    if app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
+    // (Not under @hn-look tmux unless @hn-hint-time asks for it: tmux shows nothing after the prefix.)
+    let hints = !(app.options.tmux_look() && app.options.get("@hn-hint-time", "", None).is_none());
+    if hints && app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
     let hidden = app.status_lines() == 0;
     let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false);
@@ -165,6 +169,7 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
 /// A pause after the prefix: every key that can come next, from the live table (your binds too),
 /// in a box over the bottom of the window — tmux's keys, with the hint zellij users praise.
 fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
+    if body.width < 16 || body.height < 4 { return }
     let mut items: Vec<(String, String)> = Vec::new();
     let mut digits = false;
     for b in &app.keymap.prefix_table {
@@ -174,11 +179,16 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
         items.push((key, what));
     }
     if digits { items.insert(0, ("0-9".into(), "Select window 0 to 9".into())) }
+    // The keys a tmux user reaches for every day first (what fits of a small window is those),
+    // then the rest in the table's order.
+    const FIRST: &[&str] = &["c", "n", "p", "l", "0-9", "w", "s", "d", "%", "\"", "x", "z", "o", ";", "[", "]", ":", "?", "&", ",", "$", "!", "q", "t", "{", "}", "Space"];
+    items.sort_by_key(|(k, _)| FIRST.iter().position(|f| f == k).unwrap_or(FIRST.len()));
     let key_w = items.iter().map(|(k, _)| k.width()).max().unwrap_or(1).min(8);
     let col_w: usize = key_w + if body.width >= 150 { 44 } else { 32 };
     let cols = ((body.width as usize).saturating_sub(4) / col_w).max(1);
     let rows_needed = items.len().div_ceil(cols);
-    let height = (rows_needed as u16 + 2).min(body.height);
+    // (A third of the window at most: the panes stay in view above it.)
+    let height = (rows_needed as u16 + 2).min((body.height / 3).max(4)).min(body.height);
     let area = Rect::new(body.x, body.y + body.height - height, body.width, height);
     for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
     let border = Style::default();
