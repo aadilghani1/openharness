@@ -48,7 +48,11 @@ class PhoneWelcome extends StatefulWidget {
     this.signIn,
     this.signInWithScan,
     this.scanCamera,
+    this.loadDownloads,
   });
+
+  /// Stands in for the desktop release manifest on the set-up page, in tests and renders.
+  final DesktopDownloadsLoader? loadDownloads;
 
   /// Stands in for the camera on the scan page, in tests and renders. Null opens the real one.
   final Widget? scanCamera;
@@ -232,6 +236,7 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
             _Step.setUp => SetUpComputerPage(
               onScan: () => _go(_Step.scan),
               onBack: () => _go(_Step.hello),
+              loadDownloads: widget.loadDownloads,
             ),
             _Step.scan => ScanToConnectPage(
               camera: widget.scanCamera,

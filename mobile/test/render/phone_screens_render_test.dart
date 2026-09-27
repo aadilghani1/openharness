@@ -16,6 +16,8 @@ import 'package:harness_mobile/phone/link_page.dart';
 import 'package:harness_mobile/phone/machines_tab.dart';
 import 'package:harness_mobile/phone/welcome/connect_computer.dart';
 import 'package:harness_mobile/phone/welcome/phone_welcome.dart';
+import 'package:harness_mobile/phone/welcome/set_up_computer.dart';
+import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/phone/terminal_page.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
@@ -135,6 +137,14 @@ Future<void> _loadFonts() async {
         'LucideVariable-w$weight.ttf',
       ], dir: '$lucide/build_font');
     }
+  }
+  // Material's, for the Apple logo on the set-up page — from the Flutter SDK running the test.
+  final material =
+      '${Platform.environment['FLUTTER_ROOT']}/bin/cache/artifacts/material_fonts';
+  if (File('$material/MaterialIcons-Regular.otf').existsSync()) {
+    await _loadFont('MaterialIcons', [
+      'MaterialIcons-Regular.otf',
+    ], dir: material);
   }
 }
 
@@ -365,6 +375,25 @@ void main() {
       ConnectComputerPage(notifier: notifier, onTrySample: (_) async => null),
     );
     await shoot(tester, key, '0d-connect-computer');
+  });
+
+  testWidgets('set up, download menu', skip: skip, (tester) async {
+    final key = await pumpScreen(
+      tester,
+      Builder(
+        builder: (context) => Scaffold(
+          backgroundColor: Tty.of(context).ground,
+          body: SafeArea(
+            child: SetUpComputerPage(
+              onScan: () {},
+              onBack: () {},
+              loadDownloads: () async => const {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await shoot(tester, key, '0e-set-up');
   });
 
   void addOtherComputers() {

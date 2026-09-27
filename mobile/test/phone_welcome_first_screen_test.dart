@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
@@ -9,6 +10,8 @@ import 'package:harness_mobile/phone/welcome/phone_welcome.dart';
 import 'package:harness_mobile/phone/welcome/scan_to_connect.dart';
 import 'package:harness_mobile/phone/welcome/set_up_computer.dart';
 import 'package:harness_mobile/state/app_state.dart';
+
+import 'viewer/fake_http.dart';
 
 /// The first screen: what Harness is, one question, and its two answers — scan the code the
 /// desktop app shows, or get Harness onto the computer.
@@ -83,6 +86,7 @@ void main() {
             if (scanFails case final error?) throw error;
           },
           scanCamera: camera ?? const SizedBox(),
+          loadDownloads: () async => const {},
         ),
       ),
     );
@@ -99,7 +103,7 @@ void main() {
   });
 
   testWidgets(
-    'not yet: the app\'s link to send to the Mac, and the terminal last',
+    'not yet: the website\'s download menu, each row sent to the computer',
     (tester) async {
       // A phone's height, so the whole page is on screen.
       tester.view.devicePixelRatio = 1;
@@ -109,30 +113,88 @@ void main() {
       await tester.tap(find.text('Not yet — set it up'));
       await tester.pump();
       expect(find.byType(SetUpComputerPage), findsOneWidget);
-      expect(find.text('Send link to my Mac'), findsOneWidget);
-      expect(find.text('harness.autonomous.ai/desktop'), findsOneWidget);
+      for (final row in [
+        'Apple Silicon',
+        'Intel',
+        'Intel/AMD · Ubuntu, Omarchy and more',
+        'ARM · Raspberry Pi, ARM servers',
+        'curl -fsSL …/install.sh | bash',
+      ]) {
+        expect(find.text(row), findsOneWidget, reason: row);
+      }
+      expect(find.text('macOS'), findsNWidgets(2));
+      expect(find.text('Linux'), findsNWidgets(2));
       expect(
-        find.textContaining(
-          'https://cdn.autonomous.ai/harness/desktop/install.sh',
+        find.textContaining('harness.autonomous.ai/desktop'),
+        findsOneWidget,
+      );
+
+      // The CLI row copies the website's command, and says so.
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = (call.arguments as Map)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
         ),
-        findsOneWidget,
       );
-      // And the CLI alone, for a computer with no desktop.
-      expect(
-        find.textContaining('https://harness.autonomous.ai/cli/install.sh'),
-        findsOneWidget,
-      );
-      await tester.tap(find.text('Copy').last);
+      await tester.tap(find.text('curl -fsSL …/install.sh | bash'));
       await tester.pump();
-      expect(find.text('Copied'), findsOneWidget);
-      expect(find.text('Copy'), findsOneWidget);
+      expect(copied, kCliInstall);
+      expect(
+        kCliInstall,
+        'curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash',
+      );
+      expect(find.text('copied'), findsOneWidget);
       await tester.pump(const Duration(seconds: 2));
+      expect(find.text('copied'), findsNothing);
+
       // Back is the first screen.
       await tester.tap(find.bySemanticsLabel('Back'));
       await tester.pump();
       expect(find.text('Is Harness on your computer?'), findsOneWidget);
     },
   );
+
+  test('each row\'s file comes from the desktop release manifest', () async {
+    final manifest = FakeHttp({
+      kDesktopManifestUrl: (
+        status: 200,
+        body: {
+          'desktop-macos-arm64-dmg': {
+            'version': '1.2.6',
+            'url': 'https://cdn.autonomous.ai/harness/desktop/1.2.6/Harness-macos-arm64.dmg',
+          },
+          'desktop-linux-x64': {
+            'url': 'https://cdn.example/Harness-linux-x64.AppImage',
+          },
+          'broken': 'not an entry',
+        },
+      ),
+    });
+    final downloads = await loadDesktopDownloads(dio: manifest.dio());
+    expect(downloads, {
+      'desktop-macos-arm64-dmg': 'https://cdn.autonomous.ai/harness/desktop/1.2.6/Harness-macos-arm64.dmg',
+      'desktop-linux-x64': 'https://cdn.example/Harness-linux-x64.AppImage',
+    });
+    // Every row names a key the manifest publishes.
+    expect(kDesktopPlatforms.map((p) => p.key), [
+      'desktop-macos-arm64-dmg',
+      'desktop-macos-dmg',
+      'desktop-linux-x64',
+      'desktop-linux-arm64',
+    ]);
+    // Offline: no files, and every row falls back to the download page.
+    expect(await loadDesktopDownloads(dio: FakeHttp({}).dio()), isEmpty);
+  });
 
   testWidgets('a scanned code fills in the account and sends its code', (
     tester,
