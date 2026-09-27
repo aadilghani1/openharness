@@ -404,6 +404,9 @@ pub struct App {
     /// seen.json as this client last read or wrote it (its time and size): another terminal's
     /// write is read in.
     seen_stamp: Option<(std::time::SystemTime, u64)>,
+    /// When a harness was last looked at before this client started (seen.json), until it says
+    /// what is waiting.
+    back_from: Option<u64>,
     /// select-pane -m: the marked pane (join-pane and swap-pane take it as their source).
     pub marked: Option<u64>,
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
@@ -434,6 +437,8 @@ pub struct App {
     pub status_redraws: u64,
     /// The paste buffer a format is expanded for (list-buffers -F).
     pub format_buffer: Option<String>,
+    /// The list a message or an answer was typed from (M-s, M-a), to go back to after it.
+    pub back_to_list: Option<Box<(crate::modal::PickerKind, crate::picker::Picker)>>,
     /// The harness a format is about (list-harnesses -F): its #{harness_*} values.
     pub format_agent: Option<(String, String)>,
     /// What the shell running the command piped in (load-buffer -, source-file -).
@@ -549,6 +554,7 @@ impl App {
             seen_rostered: HashSet::new(),
             agent_errors: HashMap::new(),
             seen_stamp: None,
+            back_from: None,
             marked: None,
             return_to: None,
             held_reply: None,
@@ -560,6 +566,7 @@ impl App {
             origin: None,
             format_buffer: None,
             format_agent: None,
+            back_to_list: None,
             format_line: None,
             format_type: None,
             status_redraws: 0,
@@ -689,6 +696,26 @@ impl App {
         let away = if mins >= 60 { format!("{}h{:02}m", mins / 60, mins % 60) } else { format!("{mins}m") };
         let key = self.keymap.key_for_name("next-harness").unwrap_or_else(|| "C-b a".into());
         self.say(format!("While you were away ({away}): {} — {key} goes through them", parts.join(" · ")), crate::theme::ATTENTION);
+        self.toast_hold = Some(8000);
+    }
+
+    /// hn started again after a while (its last look at any harness, in seen.json, three minutes
+    /// or more ago): what is waiting, as `While you were away` says it when the terminal comes back.
+    fn back_again(&mut self) {
+        let Some(last) = self.back_from.take() else { return };
+        let gone = fleet::now_ms().saturating_sub(last) / 1000;
+        if gone < 180 { return }
+        let (needs, failed, done) = self.fleet_counts();
+        let mut parts = Vec::new();
+        if done > 0 { parts.push(format!("✓{done} finished")) }
+        if needs > 0 { parts.push(format!("?{needs} need you")) }
+        if failed > 0 { parts.push(format!("✗{failed} failed")) }
+        if parts.is_empty() { return }
+        let mins = gone / 60;
+        let away = if mins >= 60 * 48 { format!("{}d", mins / 60 / 24) } else if mins >= 60 { format!("{}h{:02}m", mins / 60, mins % 60) } else { format!("{mins}m") };
+        let key = self.keymap.key_for_name("next-harness").unwrap_or_else(|| "C-b a".into());
+        self.say(format!("Since you were here ({away}): {} — {key} goes through them", parts.join(" · ")), crate::theme::ATTENTION);
+        self.toast_hold = Some(8000);
     }
 
     /// server_add_message: a line into the message log (C-b ~), at most message-limit of them.
@@ -991,7 +1018,7 @@ impl App {
             // A failure the engine or the daemon reports (a message not delivered, an abort).
             "error" => {
                 if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
-                    if let Some(l) = payload.get("message").and_then(Value::as_str).and_then(fleet::first_line) { agent.did = Some(format!("Error: {l}")) }
+                    if let Some(l) = payload.get("message").and_then(Value::as_str).and_then(fleet::first_line) { agent.did = Some(format!("Error: {}", fleet::tidy_error(&l))) }
                     agent.errored = true;
                     let (key, line) = (agent.key(), agent.did.clone().unwrap_or_default());
                     self.agent_errors.insert(key, (fleet::now_ms(), line));
@@ -2320,6 +2347,7 @@ impl App {
     /// not working or asking now, is done and unread — what finished while hn was closed.
     pub fn catch_up(&mut self, machine_id: &str) {
         if !self.seen_rostered.insert(machine_id.to_string()) { return }
+        let local = machine_id == self.fleet.local_id;
         let floor = self.seen_since;
         for agent in self.fleet.agents.values_mut().filter(|a| a.machine_id == machine_id && a.engine != "terminal") {
             let key = (agent.machine_id.clone(), agent.id.clone());
@@ -2335,6 +2363,7 @@ impl App {
                 if agent.since == 0 { agent.since = *at }
             }
         }
+        if local && !self.headless { self.back_again() }
     }
 
     /// seen.json's path.
@@ -2347,6 +2376,8 @@ impl App {
         let doc: Value = std::fs::read_to_string(Self::seen_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
         self.seen_since = doc.get("since").and_then(Value::as_u64).unwrap_or_else(fleet::now_ms);
         self.merge_seen(&doc);
+        // The last time any harness was looked at: how long hn was away.
+        self.back_from = self.seen_at.values().copied().max();
         self.seen_stamp = Self::seen_stamp_now();
         if doc.is_null() { self.seen_dirty = true }
     }

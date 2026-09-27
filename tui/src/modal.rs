@@ -261,6 +261,7 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
                 .detail(detail)
                 .right(right)
                 .right_narrow(narrow)
+                .line_first(loud)
         })
         .collect()
 }

@@ -29,19 +29,29 @@ pub struct Row {
     pub label_dim: usize,
     /// The right column in a narrow list (under NARROW columns), so the line keeps its room.
     pub right_narrow: Option<String>,
+    /// Its line comes before its right column wherever both don't fit (a question, a failure).
+    pub line_first: bool,
 }
 
 /// A list narrower than this shows a row's narrow right column.
 pub const NARROW: usize = 56;
 
 impl Row {
-    /// The right column at [text_w].
-    pub fn right_at(&self, text_w: usize) -> &str { if text_w < NARROW { self.right_narrow.as_deref().unwrap_or(&self.right) } else { &self.right } }
+    /// The right column at [text_w]: its narrow form in a narrow list — or wherever the whole of it
+    /// would cut the row's line (a question at 80 columns keeps its words; the age stays).
+    pub fn right_at(&self, text_w: usize) -> &str {
+        let Some(narrow) = self.right_narrow.as_deref() else { return &self.right };
+        if text_w < NARROW { return narrow }
+        use unicode_width::UnicodeWidthStr;
+        let line: usize = self.detail.iter().map(|s| s.content.width()).sum();
+        let lead: usize = self.lead.iter().map(|s| s.content.width()).sum();
+        if self.line_first && line > 0 && lead + self.label.width() + 2 + line + 2 + self.right.width() > text_w { narrow } else { &self.right }
+    }
 }
 
 impl Row {
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Row {
-        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, label_dim: 0, right_narrow: None }
+        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, label_dim: 0, right_narrow: None, line_first: false }
     }
     pub fn extra(mut self, text: impl Into<String>) -> Row { self.extra = text.into(); self }
     pub fn group(mut self, text: impl Into<String>) -> Row { self.group = Some(text.into()); self }
@@ -51,6 +61,7 @@ impl Row {
     pub fn boost(mut self, by: u32) -> Row { self.boost = by; self }
     pub fn label_dim(mut self, chars: usize) -> Row { self.label_dim = chars; self }
     pub fn right_narrow(mut self, text: impl Into<String>) -> Row { self.right_narrow = Some(text.into()); self }
+    pub fn line_first(mut self, on: bool) -> Row { self.line_first = on; self }
 }
 
 pub struct Picker {

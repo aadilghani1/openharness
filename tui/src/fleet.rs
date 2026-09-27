@@ -371,6 +371,18 @@ pub fn question_from(payload: &Value, previous: Option<&Question>) -> Option<Que
 
 /// An answer as typed: numbers (`2`, `1,3`) are those options (several joined with ", ", as the
 /// daemon keys a multi-choice answer); anything else is the answer in your own words.
+/// An error's line without the JSON an API wraps it in: `API Error: 529 {"type":"error","error":
+/// {"type":"overloaded_error","message":"Overloaded"}}` is `API Error: 529 Overloaded`.
+pub fn tidy_error(line: &str) -> String {
+    if let Some(i) = line.find('{') {
+        if let Ok(v) = serde_json::from_str::<Value>(&line[i..]) {
+            let what = v.pointer("/error/message").or_else(|| v.pointer("/error/type")).or_else(|| v.get("message")).and_then(Value::as_str);
+            if let Some(w) = what { return format!("{} {w}", line[..i].trim_end()).trim().to_string() }
+        }
+    }
+    line.to_string()
+}
+
 pub fn answer_text(q: &Question, typed: &str) -> Option<String> {
     let typed = typed.trim();
     if typed.is_empty() { return None }
@@ -548,6 +560,16 @@ mod usage_tests {
         assert_eq!(compact(88_400), "88.4k");
         assert_eq!(compact(12_000), "12k");
         assert_eq!(compact(356_000), "356k");
+    }
+}
+
+#[cfg(test)]
+mod tidy_tests {
+    #[test]
+    fn api_errors_without_their_json() {
+        assert_eq!(super::tidy_error(r#"API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#), "API Error: 529 Overloaded");
+        assert_eq!(super::tidy_error("API Error: 529 overloaded"), "API Error: 529 overloaded");
+        assert_eq!(super::tidy_error("a {not json"), "a {not json");
     }
 }
 

@@ -44,10 +44,18 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     let cwd = if !home.is_empty() && a.cwd.starts_with(&home) { format!("~{}", &a.cwd[home.len()..]) } else { a.cwd.clone() };
     let mut out = vec![
         Line::from(vec![Span::styled(word.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)), dim(format!("  {}", ago(a.state_since(state))))]),
-        Line::raw(""),
-        kv("agent", theme::engine_label(&a.engine).to_string()),
-        kv("machine", app.fleet.machine_name(machine_id)),
     ];
+    // What it asks, or why it failed, first: at 80×24 the preview is a few rows.
+    if let Some(q) = &a.question {
+        out.push(Line::raw(""));
+        out.push(Line::from(vec![Span::styled("? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), bold(q.prompt.clone())]));
+        for (i, o) in q.options.iter().enumerate() { out.push(Line::from(vec![Span::styled(format!("  M-{} ", i + 1), Style::default().fg(theme::fzf().hl)), Span::raw(o.clone())])) }
+        out.push(dim(if q.multi { "  M-a several (1,3) or your own words" } else { "  M-a your own words" }).into());
+    }
+    if state == State::Failed && !a.launch_error.is_empty() { out.push(Line::raw("")); out.push(Line::from(vec![Span::styled("✗ ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)), Span::raw(a.launch_error.clone())])) }
+    out.push(Line::raw(""));
+    out.push(kv("agent", theme::engine_label(&a.engine).to_string()));
+    out.push(kv("machine", app.fleet.machine_name(machine_id)));
     if !cwd.is_empty() { out.push(kv("folder", cwd)) }
     if !a.branch.is_empty() { out.push(kv("branch", a.branch.clone())) }
     let model = a.model.rsplit(':').next().unwrap_or("").to_string();
@@ -61,21 +69,16 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
         if a.prs_made > 0 { used.push(format!("{} PR{}", a.prs_made, if a.prs_made == 1 { "" } else { "s" })) }
         out.push(kv("used", used.join(" · ")));
     }
-    if state == State::Failed && !a.launch_error.is_empty() { out.push(Line::raw("")); out.push(Line::from(vec![Span::styled("✗ ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)), Span::raw(a.launch_error.clone())])) }
-    if let Some(q) = &a.question {
-        out.push(Line::raw(""));
-        out.push(Line::from(vec![Span::styled("? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), bold(q.prompt.clone())]));
-        for (i, o) in q.options.iter().enumerate() { out.push(Line::from(vec![Span::styled(format!("  M-{} ", i + 1), Style::default().fg(theme::fzf().hl)), Span::raw(o.clone())])) }
-        out.push(dim(if q.multi { "  M-a several (1,3) or your own words" } else { "  M-a your own words" }).into());
-    }
     if let Some(asked) = &a.asked { out.push(Line::raw("")); out.push(Line::from(vec![Span::styled("❯ ", Style::default().fg(theme::fzf().prompt)), Span::raw(asked.clone())])) }
     // Its plan (TodoWrite): done ✓, doing ▸, to do ·; and the sub-agents it has running.
     if !a.todos.is_empty() {
         let done = a.todos.iter().filter(|(_, s)| s == "completed").count();
         out.push(Line::raw(""));
         out.push(Line::from(vec![dim(format!("{:<9}", "plan")), Span::raw(format!("{done}/{} done", a.todos.len()))]));
+        let working = matches!(state, State::Working | State::NeedsInput);
         for (words, status) in a.todos.iter().take(12) {
-            let (mark, style) = match status.as_str() { "completed" => ("✓ ", Style::default().add_modifier(Modifier::DIM)), "in_progress" => ("▸ ", Style::default().add_modifier(Modifier::BOLD)), _ => ("· ", Style::default()) };
+            // ▸ only while it works: a turn that ended left the item as it was.
+            let (mark, style) = match status.as_str() { "completed" => ("✓ ", Style::default().add_modifier(Modifier::DIM)), "in_progress" if working => ("▸ ", Style::default().add_modifier(Modifier::BOLD)), _ => ("· ", Style::default()) };
             out.push(Line::from(vec![Span::styled(format!("  {mark}"), style), Span::styled(words.clone(), style)]));
         }
     }
@@ -85,7 +88,9 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
         for (_, what) in a.subagents.iter().take(8) { out.push(Line::from(vec![Span::raw(format!("  ⠿ {what}"))])) }
     }
     // What its last turn came to: the recap, then its final message whole (to read it here).
-    if let Some(did) = a.did.as_ref().filter(|_| !matches!(state, State::Working | State::NeedsInput)) { out.push(Line::from(vec![dim("⏺ "), Span::raw(did.clone())])) }
+    // (Not when it is the final message's first line, shown next.)
+    let first = a.last_text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    if let Some(did) = a.did.as_ref().filter(|d| !matches!(state, State::Working | State::NeedsInput) && d.trim() != first) { out.push(Line::from(vec![dim("⏺ "), Span::raw(did.clone())])) }
     if !a.last_text.is_empty() && !matches!(state, State::Working) {
         out.push(Line::raw(""));
         for l in a.last_text.lines().take(40) { let mut spans = vec![dim("  ")]; spans.extend(markdown(l)); out.push(Line::from(spans)) }

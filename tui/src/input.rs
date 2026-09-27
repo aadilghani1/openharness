@@ -644,7 +644,8 @@ pub fn run(app: &mut App, command: &str) {
         "palette" => launch(app, ">", Filter::All),
         "projects" => launch(app, "#", Filter::All),
         "models" => launch(app, ":", Filter::All),
-        "inbox" => picker(app, PickerKind::Inbox, "needs input", "Filter…"),
+        // Nobody asking: said, as C-b a says it, not an empty list.
+        "inbox" => if app.fleet.agents.values().any(|a| a.question.is_some()) { picker(app, PickerKind::Inbox, "needs input", "Filter…") } else { app.say("Nobody is waiting on you", theme::WARN) },
         "machines" => launch(app, "@", Filter::All),
         "help" => launch(app, "?", Filter::All),
         "layout" => picker(app, PickerKind::Layout, "layout", ""),
@@ -1071,7 +1072,12 @@ fn modal_key(app: &mut App, key: KeyEvent) {
             app.modal = Some(Modal::Popup { pane, x, y, width, height, border, title, look });
         }
         Modal::Copy { pane } => { app.modal = Some(Modal::Copy { pane }); mode_key(app, pane, &keys::of(&key)); }
-        Modal::Prompt(p) => prompt_key(app, key, p),
+        Modal::Prompt(p) => {
+            prompt_key(app, key, p);
+            // A message or an answer typed from the list: back to it, its query and place kept.
+            if app.modal.is_none() { if let Some(back) = app.back_to_list.take() { app.modal = Some(Modal::Picker { kind: back.0, picker: back.1 }); refill(app) } }
+            else if !matches!(app.modal, Some(Modal::Prompt(_))) { app.back_to_list = None }
+        }
         Modal::Picker { kind, picker } => picker_key(app, key, kind, picker),
     }
 }
@@ -1508,6 +1514,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             KeyCode::Char('s') if alt && matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) => {
                 if let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) {
                     let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
+                    app.back_to_list = Some(Box::new((kind, picker)));
                     return prompt(app, PromptKind::Message { machine, agent }, "Message", &name, &format!("to {name}"), "", false);
                 }
             }
@@ -1516,8 +1523,15 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             KeyCode::Char('a') if alt && matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) => {
                 if let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) {
                     if let Some(q) = app.fleet.agent(&machine, &agent).and_then(|a| a.question.clone()) {
-                        let hint = if q.multi { format!("1–{} (several: 1,3) or your own words", q.options.len()) } else if q.options.is_empty() { "your answer".to_string() } else { format!("1–{} or your own words", q.options.len()) };
-                        return prompt(app, PromptKind::Answer { machine, agent }, "Answer", &q.prompt, &hint, "", false);
+                        let how = if q.multi { format!("1–{} (several: 1,3) or your own words", q.options.len()) } else if q.options.is_empty() { "your answer".to_string() } else { format!("1–{} or your own words", q.options.len()) };
+                        // Who asks and what, while you type (the list is gone behind the prompt).
+                        let name = app.fleet.agent(&machine, &agent).map(|a| crate::format::short_name(&a.name, 24)).unwrap_or_default();
+                        let mut p = Prompt::status(PromptKind::Answer { machine, agent }, &format!("({name}) "), "");
+                        p.title = "Answer".into();
+                        p.hint = format!("{} — {how}", q.prompt);
+                        app.back_to_list = Some(Box::new((kind, picker)));
+                        app.modal = Some(Modal::Prompt(p));
+                        return;
                     }
                 }
             }
