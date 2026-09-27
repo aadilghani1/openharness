@@ -201,6 +201,20 @@ fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
     newest()
 }
 
+/// A client goes: its socket with it — but the name's own (`work.sock`) stays, nothing listening
+/// on it, when it was the name's first client or the last to go, as tmux's server leaves its
+/// socket: the next command says `no server running on …` (a name never used: `error connecting`).
+pub fn gone(path: &std::path::Path) {
+    let _ = std::fs::remove_file(path.with_extension("port"));
+    let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
+    let primary = dir().join(format!("{name}.sock"));
+    if path == primary { return }
+    let _ = std::fs::remove_file(path);
+    if path.parent() == primary.parent() && !primary.exists() && clients_of(&name).is_empty() {
+        drop(std::os::unix::net::UnixListener::bind(&primary));
+    }
+}
+
 /// Whether a client listens at [path] (the connection is let go at once, and runs nothing).
 pub fn answers(path: &std::path::Path) -> bool { std::os::unix::net::UnixStream::connect(path).is_ok() }
 

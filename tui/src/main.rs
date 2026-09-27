@@ -173,8 +173,7 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     app.fleet.save_cache();
     app.write_sessions(app::Save::Leave);
     mirror::tell_mirrors_now(&app);
-    let _ = std::fs::remove_file(&socket);
-    let _ = std::fs::remove_file(socket.with_extension("port"));
+    ipc::gone(&socket);
     ids::leave();
     Ok(())
 }
@@ -241,6 +240,11 @@ async fn run(config: config::Config) -> io::Result<()> {
     // hn new -s work / hn attach -t work: the session this client starts in.
     let start = cli::start_session(&f.rest);
 
+    // attach with nothing to attach to (no client, no session kept; the desk's is always there):
+    // tmux's words, before it would look for a terminal — `hn attach || hn new` makes one.
+    let deskless = std::env::var("HARNESS_TUI_DESK").as_deref() == Ok("off");
+    let attaching = f.rest.first().and_then(|c| cmd::find(c).ok()).map(|e| e.name == "attach-session").unwrap_or(false);
+    if attaching && deskless && !ipc::alive(f.socket.as_deref(), f.name.as_deref()) && !cli::has_sessions(f.name.as_deref()) { eprintln!("no sessions"); std::process::exit(1) }
     if !io::IsTerminal::is_terminal(&io::stdout()) { eprintln!("open terminal failed: not a terminal"); std::process::exit(1) }
 
     // NO_COLOR is about a program's own output; the panes mirror OTHER programs' screens, whose
@@ -413,7 +417,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     // The clients showing its sessions take them; the owner of the one it showed is told.
     mirror::tell_mirrors_now(&app);
     mirror::leave(&app);
-    if let Some(path) = &socket { let _ = std::fs::remove_file(path); let _ = std::fs::remove_file(path.with_extension("port")); }
+    if let Some(path) = &socket { ipc::gone(path) }
     ids::leave();
     let session = app.session_name();
     drop(term);

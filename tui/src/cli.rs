@@ -131,7 +131,7 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
 }
 
 /// Whether sessions are kept for this server name (no client has them, or one does).
-fn has_sessions(name: Option<&str>) -> bool {
+pub fn has_sessions(name: Option<&str>) -> bool {
     let doc = crate::app::read_sessions(&crate::app::sessions_path(name));
     doc["sessions"].as_array().map(|rows| rows.iter().any(|r| !r.get("desk").and_then(Value::as_bool).unwrap_or(false))).unwrap_or(false)
 }

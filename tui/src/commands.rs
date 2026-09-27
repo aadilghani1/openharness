@@ -2314,17 +2314,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
             }
             let cwd = opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty());
             let detached = flag(words, "-d");
-            match app.new_session(name.as_deref(), opt(words, "-n").as_deref(), cwd, shell_command(words), detached) {
-                Ok(id) => if flag(words, "-P") {
-                    let fmt = opt(words, "-F").unwrap_or_else(|| "#{session_name}:".into());
-                    let (back, swap) = (app.session_id, app.session_id != id);
-                    if swap { app.swap_session(id); }
-                    let line = expand(app, &fmt);
-                    if swap { app.swap_session(back); }
-                    app.print("new-session", vec![line]);
-                },
-                Err(e) => app.error(e),
-            }
+            // -P: printed once its pane is there (#{pane_index}, #{pane_id}), as new-window -P.
+            if flag(words, "-P") { app.print_new = Some(opt(words, "-F").unwrap_or_else(|| "#{session_name}:".into())) }
+            if let Err(e) = app.new_session(name.as_deref(), opt(words, "-n").as_deref(), cwd, shell_command(words), detached) { app.print_new = None; app.error(e) }
         }
         "detach-client" => {
             // -s: the clients showing that session (this one, another of this name's, or none: one

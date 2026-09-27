@@ -29,7 +29,7 @@ pub fn text(app: &App, fmt: &str, window: Option<usize>) -> String {
 
 /// tmux's format_expand ([time]: format_expand_time) for a window and a pane.
 pub fn expand(app: &App, fmt: &str, window: usize, pane: Option<u64>, time: bool) -> String {
-    let mut es = Es { app, window, pane, time, nojobs: false, depth: 0, now: now_secs(), session: None };
+    let mut es = Es { app, window, pane, time, nojobs: false, depth: 0, now: now_secs(), session: None, window_of: None };
     expand1(&mut es, fmt)
 }
 
@@ -55,12 +55,12 @@ pub fn every(app: &App, window: usize, pane: Option<u64>) -> Vec<String> {
 /// A format for a session not in front (another client's, or a list's row): its session_*
 /// values its own, as a #{S:} loop expands them.
 pub fn expand_session(app: &App, fmt: &str, session: u32) -> String {
-    let mut es = Es { app, window: app.active, pane: None, time: true, nojobs: false, depth: 0, now: now_secs(), session: (session != app.session_id).then_some(session) };
+    let mut es = Es { app, window: app.active, pane: None, time: true, nojobs: false, depth: 0, now: now_secs(), session: (session != app.session_id).then_some(session), window_of: None };
     expand1(&mut es, fmt)
 }
 
 pub fn expand_nojobs(app: &App, fmt: &str) -> String {
-    let mut es = Es { app, window: app.active, pane: app.focused(), time: true, nojobs: true, depth: 0, now: now_secs(), session: None };
+    let mut es = Es { app, window: app.active, pane: app.focused(), time: true, nojobs: true, depth: 0, now: now_secs(), session: None, window_of: None };
     expand1(&mut es, fmt)
 }
 
@@ -77,13 +77,15 @@ struct Es<'a> {
     nojobs: bool,
     depth: u32,
     now: i64,
-    /// In a #{S:} loop: the session (another than the one in front) whose session_* these are.
+    /// In a #{S:} loop: the session (another than the one in front) whose session_* these are;
+    /// in a #{W:} loop inside it, which of its windows (session_windows) the window_* are.
     session: Option<u32>,
+    window_of: Option<usize>,
 }
 
 impl<'a> Es<'a> {
     fn at(&self, window: usize, pane: Option<u64>) -> Es<'a> {
-        Es { app: self.app, window, pane, time: self.time, nojobs: self.nojobs, depth: self.depth, now: self.now, session: self.session }
+        Es { app: self.app, window, pane, time: self.time, nojobs: self.nojobs, depth: self.depth, now: self.now, session: self.session, window_of: self.window_of }
     }
 }
 
@@ -374,6 +376,19 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
         let mut next = es.at(es.app.active, None);
         let v = expand1(&mut next, copy);
         v
+    } else if f.windows && es.session.is_some() {
+        // format_loop_windows in a session not in front (a #{S:} loop's): its own windows.
+        let (all, active) = match choose(es, copy, false) { Some((a, b)) => (a, Some(b)), None => (copy.to_string(), None) };
+        let sid = es.session.unwrap_or_default();
+        let current = es.app.stash_value(sid, "window_index");
+        let mut v = String::new();
+        for (k, (num, _, _)) in es.app.session_windows(sid).into_iter().enumerate() {
+            let use_ = if Some(num.to_string()) == current { active.as_deref().unwrap_or(&all) } else { &all };
+            let mut next = es.at(es.window, None);
+            next.window_of = Some(k);
+            v.push_str(&expand1(&mut next, use_));
+        }
+        v
     } else if f.windows {
         let (all, active) = match choose(es, copy, false) { Some((a, b)) => (a, Some(b)), None => (copy.to_string(), None) };
         let mut v = String::new();
@@ -467,7 +482,10 @@ fn truthy(v: &str) -> bool { !v.is_empty() && v != "0" }
 fn find(es: &mut Es, key: &str, f: &Flags, time_format: Option<&str>) -> Option<String> {
     let app = es.app;
     let window_id = app.tabs.get(es.window).map(|t| t.id.clone()).unwrap_or_default();
-    let mut found = es.session.and_then(|id| app.stash_value(id, key));
+    let mut found = es.session.and_then(|id| match es.window_of {
+        Some(k) if key.starts_with("window_") => Some(app.stash_window_value(id, k, key).unwrap_or_default()),
+        _ => app.stash_value(id, key),
+    });
     if found.is_none() { found = app.options.format_value(key, &window_id, es.pane) }
     let mut t: i64 = 0;
     if found.is_none() {

@@ -1851,6 +1851,21 @@ impl App {
         })
     }
 
+    /// A window of a session not in front ([k]th of session_windows), for a #{W:} loop inside a
+    /// #{S:} one: its index, name, pane count and whether it is the session's current window.
+    pub fn stash_window_value(&self, id: u32, k: usize, key: &str) -> Option<String> {
+        let (num, name, panes) = self.session_windows(id).get(k).cloned()?;
+        let current = self.stash_value(id, "window_index") == Some(num.to_string());
+        Some(match key {
+            "window_index" => num.to_string(),
+            "window_name" => name,
+            "window_panes" => panes.to_string(),
+            "window_active" => (current as u8).to_string(),
+            "window_flags" | "window_raw_flags" => if current { "*".into() } else { String::new() },
+            _ => return None,
+        })
+    }
+
     /// A session's windows (number, name, panes), whichever client has it.
     pub fn session_windows(&self, id: u32) -> Vec<(usize, String, usize)> {
         let of = |tabs: &[Tab], nums: &HashMap<String, usize>| tabs.iter().filter(|t| t.root.is_some()).map(|t| (nums.get(&t.id).copied().unwrap_or(0), t.name.clone(), t.panes().len())).collect();
