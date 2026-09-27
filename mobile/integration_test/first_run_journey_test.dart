@@ -41,11 +41,11 @@ void main() {
     }
 
     await app.main();
-    await waitFor(find.text('Continue with email'));
+    await waitFor(find.text('Is Harness on your computer?'));
     await shot('welcome');
 
     // The sample: no account, no computer.
-    await tester.tap(find.text('Try it first'));
+    await tester.longPress(find.byKey(const ValueKey('welcome-wordmark')));
     await wait(2000);
     // "Pick up where you left off": the sessions, a tap from their terminals.
     await shot('sample-pick-up');
@@ -108,8 +108,16 @@ void main() {
     await wait(800);
     await shot('back-to-welcome');
 
-    // The way in: email, then setting up a computer.
-    await tester.tap(find.text('Continue with email'));
+    // The two ways in: set it up, or scan the code the desktop app shows.
+    await tester.tap(find.text('Not yet — set it up'));
+    await wait(800);
+    await shot('set-up-computer');
+    await tester.tap(find.bySemanticsLabel('Back'));
+    await wait(800);
+    await tester.tap(find.text('Yes — scan to connect'));
+    await wait(1500);
+    await shot('scan-to-connect');
+    await tester.tap(find.text('Use email instead'));
     await wait(800);
     await shot('sign-in-email');
   });

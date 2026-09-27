@@ -7,34 +7,36 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
-import '../find_row.dart';
 import '../tty.dart';
 import '../tty_controls.dart';
+import 'connect_code.dart';
+import 'scan_to_connect.dart';
+import 'set_up_computer.dart';
 
-/// The phone's first screen, signed out: what Harness is in one breath, a glimpse of it working,
-/// and the two ways in — sign in, or try a sample first.
+/// The phone's first screen, signed out: what Harness is in one breath, and one question anyone
+/// can answer — is Harness on your computer?
 ///
 /// ```
 /// harness▌
 ///
-/// Your coding agents,
-/// in your pocket.
+/// Claude Code and Codex
+/// run on your computer.
+/// Drive them from here.
 ///
-///   fix-login                     working
-///   ⏺ 42 tests passed
-///   api-tests                      asking
-///   "Push the branch to origin?"
-///
-/// Claude Code and Codex keep working on your
-/// computer. Watch them, answer them and start
-/// new ones — from here.
-///
-/// [            Sign in            ]
-///        Try a sample first
+/// Is Harness on your computer?
+/// ┌──────────────────────────────┐
+/// │ Yes — scan to connect      › │
+/// └──────────────────────────────┘
+/// ┌──────────────────────────────┐
+/// │ Not yet — set it up        › │
+/// └──────────────────────────────┘
 /// ```
 ///
-/// Signing in is two short steps on this same screen: the email, then the four-digit code — the
-/// phone never goes to a browser (see `viewer/email_code_api.dart`).
+/// **Yes** scans the code the desktop app shows ([ScanToConnectPage]), which names the account: the
+/// email is filled in and its code sent, so signing in is the four digits (`viewer/email_code_api
+/// .dart`, no browser). **Not yet** gets Harness onto the computer ([SetUpComputerPage]). Both
+/// buttons weigh the same: the question decides, not us. Nothing else is on the screen — no
+/// pretend agents, no diagram — for someone who has never seen Harness.
 class PhoneWelcome extends StatefulWidget {
   const PhoneWelcome({
     super.key,
@@ -42,7 +44,11 @@ class PhoneWelcome extends StatefulWidget {
     this.onTrySample,
     this.sendCode,
     this.signIn,
+    this.scanCamera,
   });
+
+  /// Stands in for the camera on the scan page, in tests and renders. Null opens the real one.
+  final Widget? scanCamera;
 
   final AppNotifier notifier;
 
@@ -58,7 +64,7 @@ class PhoneWelcome extends StatefulWidget {
   State<PhoneWelcome> createState() => _PhoneWelcomeState();
 }
 
-enum _Step { hello, email, code }
+enum _Step { hello, setUp, scan, email, code }
 
 class _PhoneWelcomeState extends State<PhoneWelcome> {
   _Step _step = _Step.hello;
@@ -85,23 +91,25 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     super.dispose();
   }
 
-  /// The sample, and — when it was left from its end card to set up a computer — the set-up page.
+  /// The offline sample — no longer offered on this screen (a video shows the app instead), but
+  /// kept behind a long press on the wordmark for the simulator's screenshots. Left from its end
+  /// card to set up a computer, it lands on the set-up page.
   Future<void> _trySample() async {
     final result = await widget.onTrySample!(context);
     if (!mounted || result != 'set-up') return;
-    _openSetUp();
+    _go(_Step.setUp);
   }
 
-  /// Setting up a computer starts with signing in here: the computer signs in with the same
-  /// email, and only a signed-in phone can watch for it to appear and address the steps to you.
-  /// Signed in, home IS the set-up page — see `ConnectComputerPage`.
-  void _openSetUp() {
-    setState(() => _forSetUp = true);
-    _go(_Step.email);
+  /// A code the desktop app showed: its account's email is filled in and the code sent, so signing
+  /// in is the four digits.
+  ///
+  /// ⚠️ Its pairing code ([ConnectCode.pairCode]) is not used yet: pairing with it — the daemon's
+  /// live-code CPace — replaces the remote password once the phone speaks it. Until then, a locked
+  /// computer still asks for its password after sign-in.
+  void _onScanned(ConnectCode code) {
+    _email.text = code.email;
+    unawaited(_sendCode());
   }
-
-  /// Signing in on the way to setting up a computer — the email step says why it comes first.
-  bool _forSetUp = false;
 
   void _go(_Step step) {
     setState(() {
@@ -110,10 +118,7 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     });
     if (step == _Step.email) _emailFocus.requestFocus();
     if (step == _Step.code) _codeFocus.requestFocus();
-    if (step == _Step.hello) {
-      FocusManager.instance.primaryFocus?.unfocus();
-      _forSetUp = false;
-    }
+    if (step == _Step.hello) FocusManager.instance.primaryFocus?.unfocus();
   }
 
   Future<void> _sendCode() async {
@@ -196,19 +201,27 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
         body: SafeArea(
           child: switch (_step) {
             _Step.hello => _Hello(
-              onSignIn: () => _go(_Step.email),
-              onNewHere: _openSetUp,
-              onTrySample: widget.onTrySample == null
+              onScan: () => _go(_Step.scan),
+              onSetUp: () => _go(_Step.setUp),
+              onSample: widget.onTrySample == null
                   ? null
                   : () => unawaited(_trySample()),
             ),
+            _Step.setUp => SetUpComputerPage(
+              onScan: () => _go(_Step.scan),
+              onBack: () => _go(_Step.hello),
+            ),
+            _Step.scan => ScanToConnectPage(
+              camera: widget.scanCamera,
+              onCode: _onScanned,
+              onUseEmail: () => _go(_Step.email),
+              onBack: () => _go(_Step.hello),
+            ),
             _Step.email => _Form(
               onBack: () => _go(_Step.hello),
-              title: _forSetUp ? 'First, your email' : 'Your email',
-              lines: [
-                _forSetUp
-                    ? 'Your computer signs in to Harness with the same email, so it comes first. We’ll send you a 4-digit code.'
-                    : 'We’ll send you a 4-digit code. You’ll sign in with this email on your computer too.',
+              title: 'Your email',
+              lines: const [
+                'The one Harness on your computer is signed in with. We’ll send you a 4-digit code.',
               ],
               field: TtyField(
                 key: const Key('welcome-email'),
@@ -274,17 +287,15 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
   }
 }
 
-/// The first thing anyone sees.
+/// The first thing anyone sees: the headline, the question and its two answers.
 class _Hello extends StatelessWidget {
-  const _Hello({
-    required this.onSignIn,
-    required this.onNewHere,
-    this.onTrySample,
-  });
+  const _Hello({required this.onScan, required this.onSetUp, this.onSample});
 
-  final VoidCallback onSignIn;
-  final VoidCallback onNewHere;
-  final VoidCallback? onTrySample;
+  final VoidCallback onScan;
+  final VoidCallback onSetUp;
+
+  /// Behind a long press on the wordmark — see `_PhoneWelcomeState._trySample`.
+  final VoidCallback? onSample;
 
   @override
   Widget build(BuildContext context) {
@@ -292,127 +303,90 @@ class _Hello extends StatelessWidget {
     final hero = tty
         .style(size: TtySize.display, weight: FontWeight.w600)
         .copyWith(height: 34 / 28, letterSpacing: -0.6);
-    return LayoutBuilder(
-      builder: (context, box) => SingleChildScrollView(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: box.maxHeight),
-          child: IntrinsicHeight(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(
-                Tty.origin,
-                24,
-                Tty.origin,
-                16,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      TtyText(
-                        'harness',
-                        size: TtySize.title,
-                        weight: FontWeight.w600,
-                      ),
-                      Container(
-                        width: 9,
-                        height: 18,
-                        margin: const EdgeInsets.only(left: 2),
-                        color: tty.green,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 36),
-                  Text('Your coding agents,\nin your pocket.', style: hero),
-                  const SizedBox(height: 28),
-                  const _Glimpse(),
-                  // No paragraph: the glimpse already says what it does.
-                  const Spacer(),
-                  const SizedBox(height: 24),
-                  TtyPrimaryButton(
-                    label: 'Continue with email',
-                    onPressed: onSignIn,
-                  ),
-                  const SizedBox(height: 4),
-                  if (onTrySample != null)
-                    Center(
-                      child: TtyTextButton(
-                        label: 'Try it first',
-                        color: tty.faint,
-                        onPressed: onTrySample,
-                      ),
-                    ),
-                  // No 'Set up my computer' here: it began with the same email as Continue.
-                  const SizedBox(height: 8),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Icon(
-                          LucideIcons.lock300,
-                          size: 13,
-                          color: tty.faint,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'End-to-end encrypted. Your code stays on your computer.',
-                          style: tty.style(
-                            size: TtySize.meta,
-                            color: tty.faint,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(Tty.origin, 24, Tty.origin, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          GestureDetector(
+            key: const ValueKey('welcome-wordmark'),
+            behavior: HitTestBehavior.opaque,
+            onLongPress: onSample,
+            child: Row(
+              children: [
+                TtyText(
+                  'harness',
+                  size: TtySize.title,
+                  weight: FontWeight.w600,
+                ),
+                Container(
+                  width: 9,
+                  height: 18,
+                  margin: const EdgeInsets.only(left: 2),
+                  color: tty.green,
+                ),
+              ],
             ),
           ),
-        ),
+          const SizedBox(height: 48),
+          Text(
+            'Claude Code and Codex\nrun on your computer.\nDrive them from here.',
+            style: hero,
+          ),
+          const Spacer(),
+          TtyText(
+            'Is Harness on your computer?',
+            color: tty.faint,
+            size: TtySize.row,
+          ),
+          const SizedBox(height: 12),
+          _Answer(label: 'Yes — scan to connect', onTap: onScan),
+          const SizedBox(height: 10),
+          _Answer(label: 'Not yet — set it up', onTap: onSetUp),
+        ],
       ),
     );
   }
 }
 
-/// A glimpse of Harness at work — three harnesses as Find lists them, one working, one asking,
-/// one done. Not live; a picture of what is on the other side of Sign in.
-class _Glimpse extends StatelessWidget {
-  const _Glimpse();
+/// One of the question's two answers: a raised row the width of the screen, its words and a `›`.
+/// Equal weight — neither is the "primary" — because which one is right depends on the person.
+class _Answer extends StatelessWidget {
+  const _Answer({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    return IgnorePointer(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: ttyRaised(tty),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Column(
+    return Semantics(
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        child: Container(
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(
+            color: ttyRaised(tty),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
             children: [
-              FindRow(
-                title: 'fix-login',
-                detail: '✓ 42 tests passed · 1 fixed',
-                state: 'working',
-                stateColor: tty.green,
+              Expanded(
+                child: TtyText(
+                  label,
+                  size: TtySize.row,
+                  weight: FontWeight.w600,
+                ),
               ),
-              FindRow(
-                title: 'api-tests',
-                detail: '"Push the branch to origin?"',
-                detailColor: tty.text,
-                state: 'asking',
-                stateColor: tty.yellow,
-              ),
-              FindRow(
-                title: 'docs-site',
-                detail: 'laptop:site · main · 3m',
-                state: 'done',
-              ),
+              Icon(LucideIcons.chevronRight300, size: 18, color: tty.faint),
             ],
           ),
         ),

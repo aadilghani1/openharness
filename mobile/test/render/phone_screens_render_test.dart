@@ -319,9 +319,13 @@ void main() {
         onTrySample: (_) async => null,
         sendCode: (_) async {},
         signIn: (_, _) async {},
+        scanCamera: const SizedBox(),
       ),
     );
-    await tester.tap(find.text('Continue with email'));
+    await tester.tap(find.text('Yes — scan to connect'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await shoot(tester, key, '0a-welcome-scan');
+    await tester.tap(find.text('Use email instead'));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.enterText(
       find.byKey(const Key('welcome-email')).last,
@@ -340,9 +344,12 @@ void main() {
         onTrySample: (_) async => null,
         sendCode: (_) async {},
         signIn: (_, _) async {},
+        scanCamera: const SizedBox(),
       ),
     );
-    await tester.tap(find.text('Continue with email'));
+    await tester.tap(find.text('Yes — scan to connect'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Use email instead'));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.enterText(find.byType(TextField), 'ada@example.com');
     await tester.tap(find.text('Send code'));

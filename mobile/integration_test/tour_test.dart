@@ -52,8 +52,9 @@ void main() {
     }
 
     await app.main();
-    await waitFor(find.text('Continue with email'));
-    await tester.tap(find.text('Try it first'));
+    await waitFor(find.text('Is Harness on your computer?'));
+    // The sample, behind a long press on the wordmark: kept for these screenshots.
+    await tester.longPress(find.byKey(const ValueKey('welcome-wordmark')));
     await wait(3000);
     // It opens on the sessions to pick up, as a new phone does.
     await shot('pick-up');

@@ -1,0 +1,192 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
+
+import 'package:harness_mobile/shared/theme/app_theme.dart';
+
+import '../tty.dart';
+import '../tty_controls.dart';
+
+/// Where the desktop app is downloaded — what "Send link to my Mac" carries.
+const kDesktopDownloadUrl = 'https://harness.autonomous.ai/download';
+
+/// The terminal way, for a computer without the app (Linux, a server, over SSH): install, sign in,
+/// start — in the installer's own order.
+const kTerminalSetUp = [
+  'curl -fsSL https://harness.autonomous.ai/install.sh | bash',
+  'harness login',
+  'harness start',
+];
+
+/// **Not yet — set it up**: getting Harness onto the computer, from the phone.
+///
+/// ```
+/// ‹
+/// Get Harness for
+/// your computer
+///
+/// Your agents run on your Mac.
+///
+/// [      Send link to my Mac      ]
+///   AirDrop · Messages · Email
+///
+/// or open on your Mac:
+/// harness.autonomous.ai/download
+///
+/// Then open it, and scan the code it shows.
+///            Scan to connect
+///
+/// Using a terminal?
+/// ┌─────────────────────────────────┐
+/// │ curl -fsSL https://harness…     │
+/// │ harness login                   │
+/// │ harness start           [ Copy ]│
+/// └─────────────────────────────────┘
+/// ```
+///
+/// The app is the way for nearly everyone; the terminal is for the rest, last and small.
+class SetUpComputerPage extends StatefulWidget {
+  const SetUpComputerPage({
+    super.key,
+    required this.onScan,
+    required this.onBack,
+  });
+
+  /// Back to the first screen's other answer, once the app is on the computer.
+  final VoidCallback onScan;
+  final VoidCallback onBack;
+
+  @override
+  State<SetUpComputerPage> createState() => _SetUpComputerPageState();
+}
+
+class _SetUpComputerPageState extends State<SetUpComputerPage> {
+  bool _copied = false;
+  Timer? _copiedTimer;
+  final _sendKey = GlobalKey();
+
+  @override
+  void dispose() {
+    _copiedTimer?.cancel();
+    super.dispose();
+  }
+
+  /// The share sheet with the download link: AirDrop straight to the Mac beside you, or Messages
+  /// or email to yourself. Anchored to the button for iPad, where the sheet is a popover.
+  Future<void> _send() async {
+    final box = _sendKey.currentContext?.findRenderObject() as RenderBox?;
+    await SharePlus.instance.share(
+      ShareParams(
+        uri: Uri.parse(kDesktopDownloadUrl),
+        subject: 'Harness for your computer',
+        sharePositionOrigin: box == null
+            ? null
+            : box.localToGlobal(Offset.zero) & box.size,
+      ),
+    );
+  }
+
+  void _copy() {
+    unawaited(
+      Clipboard.setData(ClipboardData(text: kTerminalSetUp.join('\n'))),
+    );
+    HapticFeedback.selectionClick();
+    _copiedTimer?.cancel();
+    setState(() => _copied = true);
+    _copiedTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final tty = Tty.of(context);
+    final faint = tty.style(color: tty.faint, size: TtySize.meta);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TtyBackButton(onPressed: widget.onBack),
+        ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(Tty.origin, 8, Tty.origin, 24),
+            children: [
+              Text(
+                'Get Harness for\nyour computer',
+                style: tty
+                    .style(size: TtySize.display, weight: FontWeight.w600)
+                    .copyWith(height: 34 / 28, letterSpacing: -0.6),
+              ),
+              const SizedBox(height: 10),
+              Text('Your agents run on your Mac.', style: faint),
+              const SizedBox(height: 28),
+              KeyedSubtree(
+                key: _sendKey,
+                child: TtyPrimaryButton(
+                  label: 'Send link to my Mac',
+                  onPressed: () => unawaited(_send()),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Center(child: Text('AirDrop · Messages · Email', style: faint)),
+              const SizedBox(height: 24),
+              Text('or open on your Mac:', style: faint),
+              const SizedBox(height: 4),
+              SelectableText(
+                kDesktopDownloadUrl.replaceFirst('https://', ''),
+                style: tty.style(size: TtySize.row),
+              ),
+              const SizedBox(height: 24),
+              Text('Then open it, and scan the code it shows.', style: faint),
+              const SizedBox(height: 4),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Transform.translate(
+                  // The button's own inset, so its words sit on the gutter.
+                  offset: const Offset(-12, 0),
+                  child: TtyTextButton(
+                    label: 'Scan to connect ›',
+                    onPressed: widget.onScan,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 32),
+              Text('Using a terminal?', style: faint),
+              const SizedBox(height: 8),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: ttyRaised(tty),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: SelectableText(
+                          kTerminalSetUp.join('\n'),
+                          style: tty.style(size: TtySize.meta),
+                        ),
+                      ),
+                      TtyTextButton(
+                        label: _copied ? 'Copied' : 'Copy',
+                        color: _copied ? tty.green : tty.text,
+                        onPressed: _copy,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
