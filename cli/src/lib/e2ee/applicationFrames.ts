@@ -57,6 +57,11 @@ export const STRICT_DOWN_TYPES = new Set(['dsh_install', 'dsh_update', 'dsh_remo
 /** What a client seals for a given daemon: the always-sealed types, plus STRICT_DOWN_TYPES when it opens them. */
 export const encryptDownFrameFor = (type: string, peer: { strictDown: boolean }): boolean =>
   encryptDownFrame(type) || (peer.strictDown && STRICT_DOWN_TYPES.has(type))
+/** What became of one client's answer to a question (`question_response`): typed, or refused as
+ * STALE_QUESTION. Listed so it goes back sealed and to the connection that answered — a dial, a phone, a
+ * machine relaying for its app — rather than being broadcast to every window and web client of this
+ * machine. Here and not in core.ts's pinned set: the reply is the same frame, only its route changes. */
+const QUESTION_RESULT = 'question_response_result'
 export const encryptRpcResult = (type: string): boolean =>
   ENCRYPTED_RPC_RESULT_TYPES.has(type) || MACHINE_RESULTS.has(type) || FLEET_RESULTS.has(type) || SHARE_RESULT_TYPES.has(type)
-  || PAIR_RESULTS.has(type) || type === LOCAL_PAIR_RESULT
+  || PAIR_RESULTS.has(type) || type === LOCAL_PAIR_RESULT || type === QUESTION_RESULT

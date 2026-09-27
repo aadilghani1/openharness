@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs'
+import { readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -822,5 +822,281 @@ describe('QuestionWatcher on a permission prompt', () => {
     // Same prompt still on screen ⇒ announced once, not every 1.5s tick.
     await tick()
     expect(seen).toHaveLength(1)
+  })
+})
+
+// ── the requestId of a dialog that is waiting ────────────────────────────────────────────────────────
+//
+// The id is recomputed on every 1.5s poll (a new id = a new question: the needs-you alert, the sound, the
+// dial push) and again at the moment an answer is typed (a new id = STALE_QUESTION, nothing typed). So it
+// may only change when the QUESTION does — never because a timer ticked, the cursor moved or a box was
+// ticked. Hashing the raw `dialog` broke both halves for every engine that keeps one.
+
+const FIXTURES = join(__dirname, '__fixtures__')
+// SGR and cursor codes, and OSC 8 hyperlinks (grok) — what a person sees is what is left.
+const ANSI_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g
+const paneOf = (file: string): string => readFileSync(join(FIXTURES, file), 'utf8').replace(ANSI_RE, '')
+const engineOf = (file: string): Parameters<typeof parseEngineQuestionPane>[0] => {
+  const name = /^(?:permission|question)-([a-z]+)/.exec(file)![1]
+  return (['single', 'multi', 'tabs', 'review'].includes(name) ? 'claude' : name) as Parameters<typeof parseEngineQuestionPane>[0]
+}
+const viewIn = (file: string, pane: string): QuestionView => asQuestion(parseEngineQuestionPane(engineOf(file), pane))
+const idIn = (file: string, pane: string): string => questionRequestId('s1', viewIn(file, pane))
+/** main's fingerprint — the words, the options, the arity — which never saw the dialog below its first line. */
+const wordsOf = (view: QuestionView): string => `${view.question}|${view.rows.map((r) => r.label).join('|')}|${view.multi}`
+
+/** Every captured dialog that is an open question (review screens have no id). */
+const OPEN = readdirSync(FIXTURES)
+  .filter((file) => /^(permission|question)-.*\.txt$/.test(file))
+  .filter((file) => {
+    const view = parseEngineQuestionPane(engineOf(file), paneOf(file))
+    return view?.kind === 'question' && !view.partial && !!view.question && view.rows.length > 0
+  })
+  .sort()
+
+/** Advance every live timer on the pane by `by`: `(01m30s · ↓ 82 tok)`, `(21s · esc to interrupt)`,
+ *  `( 30.5s · ↓ 63 tok)`, `(1s • esc to interrupt)`, grok's bare `1m33s`, a footer's `(89s)`. */
+const tickTimers = (pane: string, by: number): string =>
+  pane
+    .replace(/\([^()\n]*?(?:\d(?:ms|s|m|h)\b|\dm\d|\d\s*tok|esc to interrupt)[^()\n]*\)|\b\d+m\d+s\b|\b\d+(?:\.\d+)?s\b|\b\d+ tok(?:en)?s?\b/g,
+      (live) => live.replace(/\d+/g, (n) => String(Number(n) + by).padStart(n.length, '0')))
+
+interface CursorStyle { at: RegExp; row: RegExp; off: (line: string) => string; on: (line: string, glyph: string) => string }
+const CURSOR_STYLES: CursorStyle[] = [
+  { // `❯ 1. Yes` over `  2. No`: Claude, Command Code, Codex and Muse (`›`), agy (`>`), Copilot, Hermes.
+    // The last "row" a cursor can sit on in Claude's multi-select is the unnumbered Submit/Next.
+    at: /^(\s*(?:[│┃|]\s*)?)([❯›>])(\s*)(\d+\.\s.*)$/,
+    row: /^(\s*(?:[│┃|]\s*)?)(\s\s)((?:\d+\.\s|(?:Submit|Next)\s*$).*)$/,
+    off: (line) => line.replace(/^(\s*(?:[│┃|]\s*)?)([❯›>])(\s*)(\d+\.\s.*)$/, (_m, a: string, _g, sp: string, rest: string) => `${a} ${sp}${rest}`),
+    on: (line, glyph) => line.replace(/^(\s*(?:[│┃|]\s*)?)(\s\s)(.*)$/, (_m, a: string, _s, rest: string) => `${a}${glyph} ${rest}`),
+  },
+  { // devin: `❭ 1 Xanh` over `· 2 Đỏ` and `·   Other (type your own)`.
+    at: /^(\s*)❭(\s.*)$/,
+    row: /^(\s*)·(\s.*)$/,
+    off: (line) => line.replace(/^(\s*)❭/, '$1·'),
+    on: (line) => line.replace(/^(\s*)·/, '$1❭'),
+  },
+  { // grok's permission radio: `1 (●) Yes, and don't ask again…` over `2 (○) Yes, proceed`.
+    at: /^.*\b\d+ \(●\)/,
+    row: /^.*\b\d+ \(○\)/,
+    off: (line) => line.replace('(●)', '(○)'),
+    on: (line) => line.replace('(○)', '(●)'),
+  },
+]
+
+/** The pane with the cursor moved to each other row of the live dialog, one pane per row. */
+function cursorMoves(pane: string): string[] {
+  const lines = pane.split('\n')
+  for (const style of CURSOR_STYLES) {
+    const cur = lines.findLastIndex((line) => style.at.test(line))
+    if (cur < 0) continue
+    const glyph = /[❯›>❭●]/.exec(lines[cur].replace(/^\s*[│┃|]/, ''))![0]
+    const targets: number[] = []
+    // The rows around the cursor, allowing a description line or a rule between two of them.
+    for (const step of [-1, 1]) {
+      for (let i = cur + step, gap = 0; i >= 0 && i < lines.length && gap <= 2; i += step) {
+        if (style.row.test(lines[i])) { targets.push(i); gap = 0 } else gap++
+      }
+    }
+    return targets.map((t) => {
+      const moved = [...lines]
+      moved[cur] = style.off(lines[cur])
+      moved[t] = style.on(lines[t], glyph)
+      return moved.join('\n')
+    })
+  }
+  return []
+}
+
+/** The live multi-select with each box ticked in turn, then all of them. */
+function boxToggles(pane: string): string[] {
+  const lines = pane.split('\n')
+  const first = lines.findLastIndex((line) => /\b1\.\s+\[ \]|^\s*[□■]\s+1\s/.test(line))
+  if (first < 0) return []
+  // Every option's box; not the free-text row's, which opens an editor rather than ticking a choice.
+  const boxes = lines.map((line, i) => i >= first && /\d\.\s+\[ \]|^\s*□\s/.test(line) && !/type something|type your own/i.test(line) ? i : -1)
+    .filter((i) => i >= 0)
+  const tick = (line: string): string => line.replace('[ ]', '[✔]').replace(/^(\s*)□/, '$1■')
+  const one = boxes.map((b) => lines.map((line, i) => i === b ? tick(line) : line).join('\n'))
+  return [...one, lines.map((line, i) => boxes.includes(i) ? tick(line) : line).join('\n')]
+}
+
+// TUIs that mark the highlighted row by colour alone (the SGR is gone once captured) or lay the rows out
+// side by side: no glyph in the text to move, so nothing a cursor does can reach the id.
+const CURSOR_BY_COLOUR = ['permission-cursor.txt', 'permission-opencode.txt', 'question-grok.txt', 'question-kilo.txt', 'question-opencode.txt', 'question-devin-multi.txt']
+// The captures that paint a live timer — inside the dialog (Hermes, Muse) or around it.
+const TICKING = ['permission-grok.txt', 'permission-hermes.txt', 'permission-muse.txt', 'question-codex.txt', 'question-grok.txt', 'question-hermes.txt', 'question-muse.txt']
+
+describe('a waiting dialog keeps one requestId', () => {
+  it('covers every captured dialog', () => {
+    // A new fixture joins every case below by being in the folder; this only guards the sweep itself.
+    expect(OPEN.length).toBeGreaterThanOrEqual(25)
+    for (const file of TICKING) expect(OPEN).toContain(file)
+  })
+
+  it.each(OPEN)('%s: while its timers tick', (file) => {
+    const pane = paneOf(file)
+    const id = idIn(file, pane)
+    for (const by of [1, 7, 61, 997]) expect(idIn(file, tickTimers(pane, by))).toBe(id)
+  })
+
+  it.each(TICKING)('%s: the timer really is on the pane (the tick test is not vacuous)', (file) => {
+    expect(tickTimers(paneOf(file), 1)).not.toBe(paneOf(file))
+  })
+
+  it.each(['permission-hermes.txt', 'permission-muse.txt', 'question-hermes.txt'])('%s: even though the timer is inside the dialog itself', (file) => {
+    const pane = paneOf(file)
+    expect(viewIn(file, tickTimers(pane, 1)).dialog).not.toBe(viewIn(file, pane).dialog)
+    expect(idIn(file, tickTimers(pane, 1))).toBe(idIn(file, pane))
+  })
+
+  it.each(OPEN)('%s: with the cursor on each row', (file) => {
+    const pane = paneOf(file)
+    const moves = cursorMoves(pane)
+    if (moves.length === 0) { expect(CURSOR_BY_COLOUR).toContain(file); return }
+    const view = viewIn(file, pane)
+    for (const moved of moves) {
+      expect(moved).not.toBe(pane)
+      // The move is a real one: the same dialog, still read as the same question with the same options.
+      expect(wordsOf(viewIn(file, moved))).toBe(wordsOf(view))
+      expect(idIn(file, moved)).toBe(idIn(file, pane))
+      // …and with its timers ticking at the same time.
+      expect(idIn(file, tickTimers(moved, 3))).toBe(idIn(file, pane))
+    }
+  })
+
+  it('moves the cursor through every row of the dialogs whose rows it can see', () => {
+    // Guards the sweep above against quietly moving nothing: each of these is `❯ 1.` over N more rows.
+    expect(cursorMoves(paneOf('permission-claude.txt'))).toHaveLength(2)
+    expect(cursorMoves(paneOf('question-single.txt'))).toHaveLength(3)           // Coffee, Type something, Chat
+    expect(cursorMoves(paneOf('question-multi.txt'))).toHaveLength(5)            // + Submit
+    expect(cursorMoves(paneOf('permission-devin.txt'))).toHaveLength(6)
+    expect(cursorMoves(paneOf('permission-grok.txt'))).toHaveLength(2)
+  })
+
+  it.each(['question-multi.txt', 'question-tabs.txt', 'question-devin-multi.txt'])('%s: with its boxes ticked', (file) => {
+    const pane = paneOf(file)
+    const toggles = boxToggles(pane)
+    expect(toggles.length).toBeGreaterThanOrEqual(4)
+    for (const toggled of toggles) {
+      expect(viewIn(file, toggled).rows.some((row) => row.checked)).toBe(true)
+      expect(idIn(file, toggled)).toBe(idIn(file, pane))
+      for (const moved of cursorMoves(toggled)) expect(idIn(file, moved)).toBe(idIn(file, pane))
+    }
+  })
+
+  it('keeps the raw dialog — timer, cursor and all — for the pair floor, which reads it exactly', () => {
+    const view = viewIn('permission-hermes.txt', paneOf('permission-hermes.txt'))
+    expect(view.dialog).toContain('❯ 1. Allow once')
+    expect(view.dialog).toContain('(01m30s · ↓ 82 tok)')
+  })
+})
+
+describe('two different commands are still two requestIds', () => {
+  // The reason the dialog is in the id at all: a command that wraps is only whole there. What was taken
+  // out of it above must never be enough to make two commands look alike.
+  function variants(file: string, from: string, to: [string, string]): [string, string] {
+    const pane = paneOf(file)
+    expect(pane).toContain(from)
+    return [pane.replace(from, to[0]), pane.replace(from, to[1])]
+  }
+
+  const cases: Array<{ file: string; from: string; to: [string, string] }> = [
+    // Claude titles the prompt by the command's FIRST line; the second is only in the dialog.
+    { file: 'permission-claude.txt', from: '   curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin',
+      to: ['   npm test &&\n   git push', '   npm test &&\n   rm -rf ~/work'] },
+    // Codex titles it by the line just above the rows — the LAST line — so the middle one differs.
+    { file: 'permission-codex.txt', from: "  $ printf 'hi\\n' > /private/etc/harness-probe.txt",
+      to: ['  $ npm test &&\n    git status &&\n    git push', '  $ npm test &&\n    rm -rf ~/work &&\n    git push'] },
+    // Hermes titles it by the URL on the second line; the first (`curl -s`) is only in the dialog.
+    { file: 'permission-hermes.txt', from: '│ curl -s ', to: ['│ curl -s ', '│ rm -rf  '] },
+    // Muse: what is being reached, in the body above the command.
+    { file: 'permission-muse.txt', from: 'network: example.com:443 https', to: ['network: example.com:443 https', 'network: evil.example:443 https'] },
+  ]
+
+  it.each(cases)('$file: a different command below its first line', ({ file, from, to }) => {
+    const [a, b] = variants(file, from, to)
+    // main's fingerprint cannot see the difference…
+    expect(wordsOf(viewIn(file, a))).toBe(wordsOf(viewIn(file, b)))
+    // …the id can, with the timers ticking and the cursor anywhere.
+    expect(idIn(file, a)).not.toBe(idIn(file, b))
+    expect(idIn(file, tickTimers(a, 5))).toBe(idIn(file, a))
+    expect(idIn(file, tickTimers(b, 5))).toBe(idIn(file, b))
+    for (const moved of cursorMoves(b)) expect(idIn(file, moved)).not.toBe(idIn(file, a))
+  })
+})
+
+describe('the review\'s simulation: a real QuestionWatcher and AskQuestionController over one pane', () => {
+  // What the dial saw: the question re-announced on every poll, then its answer refused as STALE_QUESTION.
+  function world(engine: string, first: string) {
+    let screen = first
+    const session = { agentId: 'a1', sessionId: 's1', engine, active: true, tmuxPane: '%1' } as unknown as RegisteredSession
+    const announced: string[] = []
+    const watcher = new QuestionWatcher({
+      getSession: () => session,
+      capture: async () => screen,
+      hasDevice: () => true,
+      onQuestion: (_s, requestId) => { announced.push(requestId) },
+      onQuestionGone: (_s, requestId) => { announced.push(`gone:${requestId}`) },
+    })
+    const keys: string[] = []
+    const controller = new AskQuestionController({
+      getSession: () => session,
+      capture: async () => screen,
+      sendText: async () => true,
+      // The keystroke answers the dialog: it leaves the pane.
+      sendKey: async (_t, key) => { keys.push(key); screen = '❯ '; return true },
+      wait: async () => {},
+    })
+    return {
+      announced,
+      keys,
+      show: (pane: string) => { screen = pane },
+      poll: () => (watcher as unknown as { tick: (s: string) => Promise<void> }).tick('s1'),
+      controller,
+    }
+  }
+
+  it('Claude: the person arrows through the prompt in the desktop terminal — announced once, and the dial\'s answer is typed', async () => {
+    const pane = paneOf('permission-claude.txt')
+    const w = world('claude', pane)
+    await w.poll()
+    for (const moved of cursorMoves(pane)) { w.show(moved); await w.poll() }
+    w.show(pane); await w.poll()
+    expect(w.announced).toEqual([idIn('permission-claude.txt', pane)])
+
+    w.show(cursorMoves(pane)[1])   // the cursor is on "No" when the answer lands
+    w.controller.remember(w.announced[0], 's1')
+    const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: 'Yes' } })
+    expect(r).toEqual({ ok: true })
+    expect(w.keys).toEqual(['1'])
+  })
+
+  it.each([
+    ['permission-hermes.txt', 'hermes', 'Deny', '3'],
+    ['permission-muse.txt', 'muse', 'Yes, proceed (y)', '1'],
+    ['question-hermes.txt', 'hermes', 'M', '2'],
+  ])('%s: its timer ticks every poll — announced once, and the answer is typed', async (file, engine, answer, key) => {
+    const pane = paneOf(file)
+    const w = world(engine, pane)
+    for (let s = 0; s < 6; s++) { w.show(tickTimers(pane, s)); await w.poll() }
+    expect(w.announced).toEqual([idIn(file, pane)])
+
+    w.show(tickTimers(pane, 9))
+    const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: answer } })
+    expect(r).toEqual({ ok: true })
+    expect(w.keys).toEqual([key])
+  })
+
+  it('still refuses an answer once the command itself changed', async () => {
+    const pane = paneOf('permission-claude.txt')
+    const w = world('claude', pane)
+    await w.poll()
+    w.show(pane.replace('   curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin', '   curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin\n   | sh'))
+    await w.poll()
+    expect(w.announced).toHaveLength(2)
+    const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: 'Yes' } })
+    expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(w.keys).toEqual([])
   })
 })

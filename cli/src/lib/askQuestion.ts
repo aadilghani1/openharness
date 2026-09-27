@@ -1123,10 +1123,63 @@ export class QuestionWatcher {
   }
 }
 
-/** What makes two captures the SAME dialog: its words, its options, its arity. */
+/**
+ * What makes two captures the SAME dialog: its words, its options, its arity — and, when the parser kept
+ * the whole dialog, what it says below its first line (a command that differs only on its second line is
+ * another prompt).
+ *
+ * ⚠️ NOT the raw `dialog`. The id is recomputed every 1.5s poll and again at the moment an answer is typed,
+ * so it may only change when the QUESTION does. The raw dialog changes on its own: Hermes and Muse paint a
+ * live timer inside it (`(01m30s · ↓ 82 tok)`, `(21s · esc to interrupt)`), and every engine moves its
+ * `❯`/`›`/`>` cursor and ticks its `[✔]` boxes in place. Hashed raw, a question was re-announced as new on
+ * every poll — the needs-you alert, the sound, the dial push, again and again — and every answer from a
+ * dial, a device or the cable was refused as STALE_QUESTION. `dialogSignature` is the dialog with all of
+ * that taken out; the raw text still goes, unchanged, to the pair's floor (isApprovalDialog, pair/sensor).
+ */
 function fingerprintOf(view: QuestionView): string {
-  // The whole dialog when there is one: a command that differs only on its second line is another prompt.
-  return `${view.dialog ?? view.question}|${view.rows.map((r) => r.label).join('|')}|${view.multi}`
+  const base = `${view.question}|${view.rows.map((r) => r.label).join('|')}|${view.multi}`
+  return view.dialog === undefined ? base : `${base}|${dialogSignature(view.dialog)}`
+}
+
+// A live status group: an elapsed time (`21s`, `30.5s`, `01m30s`, `1h02m`), a token counter (`↓ 82 tok`,
+// `1.2k tokens`) or `esc to interrupt` inside one pair of parentheses. Units hug their digits, as every
+// engine paints them, so `(see 2 files)` or `(tokens.json)` is never mistaken for one.
+const TIMER_GROUP = String.raw`\([^()\n]*?(?:\b\d+(?:\.\d+)?(?:ms|s|m|h)\b|\b\d+m\d+s\b|\b\d+h\d+m\b|\d+(?:\.\d+)?k?\s*tok(?:en)?s?\b|esc to interrupt)[^()\n]*\)`
+const TIMER_GROUP_RE = new RegExp(TIMER_GROUP, 'i')
+const TIMER_GROUPS_RE = new RegExp(TIMER_GROUP, 'gi')
+// The same, outside parentheses: `↓ 82 tokens · esc to interrupt`.
+const STATUS_BITS_RE = /[↑↓]\s*\d+(?:\.\d+)?k?\s*tok(?:en)?s?\b|\besc to interrupt\b/i
+// Codex's cursor readout under its request_user_input rows: `option 2/4 | tab to add notes`.
+const CURSOR_READOUT_RE = /^option\s+\d+\s*\/\s*\d+\b/i
+// Whatever leads a line and moves on its own: a cursor (`❯ › > ▶`), a spinner frame (braille, `✻`, `◐`,
+// Muse's `◇`/`◆`) or a box/tab state (`☐ ☒ ✔ ○ ● ◉`).
+const LEAD_MARKS_RE = /^(?:[❯›>▶►▸➤\u2800-\u28ff✻✽✶✳✢✺✹✸✷◐◓◑◒◴◵◶◷◇◆☐☑☒✔✓✗✘○◯●◉◎]\s*)+/u
+// A row's own state right after its number, or at the start of an unnumbered row: `[ ]`, `[✔]`, `(•)`, `◉`.
+const ROW_STATE_RE = /^(\d+[.)]\s+|)(?:\[[^\]\n]?\]|\([^)\n]?\)|[☐☑☒✔✓○◯●◉◎])\s*/u
+// Box drawing: frames and rules redraw to the pane's width.
+const BOX_RE = /[\u2500-\u257f]+/g
+
+/**
+ * The dialog as a person reads it, with nothing that changes while it waits: status lines (a live timer,
+ * a token counter, `esc to interrupt`) and Codex's cursor readout dropped; cursor marks, spinner frames
+ * and checkbox/radio state stripped; frames and whitespace collapsed. Every word of the prompt stays —
+ * two commands that differ anywhere are still two signatures.
+ */
+function dialogSignature(dialog: string): string {
+  const out: string[] = []
+  for (const raw of dialog.replace(/\u00a0/g, ' ').split('\n')) {
+    let line = raw.replace(BOX_RE, ' ').trim()
+    if (CURSOR_READOUT_RE.test(line)) continue
+    line = line.replace(LEAD_MARKS_RE, '')
+    const row = /^\d+[.)]\s/.test(line)
+    // A line that carries a live timer is the engine's status line (Hermes' `💻 curl … (01m30s · ↓ 82 tok)`
+    // under its frame, Muse's `◇ Calling tools (21s · esc to interrupt)` above its rule), not the prompt:
+    // the prompt is always painted on lines of its own. A ROW keeps its words; only the group goes.
+    if (!row && (TIMER_GROUP_RE.test(line) || STATUS_BITS_RE.test(line))) continue
+    line = line.replace(TIMER_GROUPS_RE, ' ').replace(ROW_STATE_RE, '$1').replace(/\s+/g, ' ').trim()
+    if (line) out.push(line)
+  }
+  return out.join('\n')
 }
 
 function hash(value: string): string {
