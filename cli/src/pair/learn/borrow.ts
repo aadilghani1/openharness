@@ -419,7 +419,7 @@ export class LessonBorrower {
       const lesson = guarded.lesson
       if (lesson.kind === 'skill' && bodies.has(bodyHash(lesson.body))) { count('duplicate'); continue }
       const added = store.add({ lesson, signal, learnedBy, source: 'borrowed', provenance: `borrowed from ${candidate.engine}` })
-      if (!added.ok) { count(added.error === 'SKIPPED' ? 'skipped' : 'known'); continue }
+      if (!added.ok) { count(added.error === 'SKIPPED' ? 'skipped' : added.error === 'REFUSED' ? 'refused' : 'known'); continue }
       keys.add(signal.key)
       if (lesson.kind === 'skill') bodies.add(bodyHash(lesson.body))
       out.added.push(added.record)

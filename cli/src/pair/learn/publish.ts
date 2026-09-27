@@ -111,7 +111,8 @@ export function installLessons(runtimeDir: string, lessons: RuntimeLessons | nul
       writeFileSync(join(target, LESSONS_MARK), 'Copied by Harness from the lessons folder at launch. Read-only; edits are not kept.\n', { mode: 0o444 })
       for (const skill of skills) {
         const from = join(lessons.dir, skill.name, 'SKILL.md')
-        if (!isPlainFile(from)) continue
+        // Neither the file nor its folder may be a link: a linked folder would copy whatever it points at.
+        if (!isPlainDir(join(lessons.dir, skill.name)) || !isPlainFile(from)) continue
         mkdirSync(join(target, skill.name), { mode: 0o700 })
         writeFileSync(join(target, skill.name, 'SKILL.md'), readFileSync(from, 'utf8'), { mode: 0o444 })
         copied.push(skill)
