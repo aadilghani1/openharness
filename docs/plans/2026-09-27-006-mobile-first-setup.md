@@ -1,143 +1,158 @@
-# Mobile first: set up every computer from the phone
+# One way in, from any device
 
-September 27, 2026. The phone is where people find Harness. Someone installs the app, and it gets
-Harness running on their computers and shows the sessions on them, with nothing to learn. This plan
-builds on `2026-09-26-001-mobile-zero-questions.md`. That plan starts with the desktop app already
-installed; this one starts with nothing on the computer.
+September 27, 2026. People arrive in three orders:
 
-## Today, from a fresh phone
+- **Phone → computer:** they find the app, then set up their Mac.
+- **Computer → computer:** they add a second Mac.
+- **Computer → phone:** they already use Harness and add the phone.
 
-The phone signs in with an email code, then shows four commands to run on the computer
-(`mobile/lib/phone/welcome/connect_computer.dart:15-20`). A new person hits nine walls:
+Each device needs the same two things, and today it gets them through two separate chores:
 
-1. **Two sign-ins.** The phone uses an email code; the computer uses browser SSO (`harness login`,
-   `cli/src/cli.ts:846-932`). Over SSH, you paste a callback URL back by hand.
-2. **The phone can't hand anything over.** It can only email the steps to itself (`mailto:`). The
-   installer rejects any argument: "no longer accepts a machine token" (`cli/scripts/install.sh:54-64`).
-3. **Four commands, in two orders.** The phone says login → password → start; the installer prints
-   login → start → password. `harness` isn't on PATH in the same shell (`install.sh:697-724`).
-4. **A password to invent.** You type it twice on the computer, then again on the phone, once per
-   computer. Wrong guesses lock you out for 5 minutes, doubling up to a day (`e2ee/store.ts:24-25`).
-5. **Nothing survives a reboot.** There's no launch agent or service; the daemon runs only until the
-   computer restarts, unless the desktop app is open (`cli.ts:6311-6319`).
-6. **Linux needs sudo and apt**; other distros fail (`install.sh:386-401`).
-7. **The computer shows up late.** The phone polls every 5 s and shows it offline until `start` has run.
-8. **Your sessions aren't there.** Plain `claude` and `codex` sessions are invisible. Harness only
-   sees tmux sessions it started (`cli/src/lib/tmuxAgentDiscovery.ts:129-148`).
-9. **No second computer path.** Each computer repeats everything above.
+1. **An account session: who you are.** The phone signs in with an email code; the desktop app and
+   `harness login` sign in through a browser.
+2. **Trust: an end-to-end key the other devices accept.** It lets this device read and drive your
+   terminals, which the server relays but cannot read. Today that means inventing a remote password
+   and typing it on every client, once per computer.
 
-## The flow
+**Proposal: approving a new device on one you already have does both, and it looks the same on
+every path.** This plan builds on `2026-09-26-001-mobile-zero-questions.md`.
 
-```
- PHONE                                        COMPUTER
- ─────                                        ────────
- 1. Your email → 4-digit code (autofilled)
- 2. "Set up your computer"
-      ┌──────────────────────────────┐
-      │ Run this on your computer:   │
-      │                              │
-      │ curl -fsSL harness.sh | sh   │
-      │   -s K7QM-4XPT-9D2W          │
-      │                              │
-      │ [ Send to my Mac ]  [ Copy ] │   AirDrop, Messages, email, or read it off
-      │                              │
-      │ ⠋ Waiting for your computer… │
-      └──────────────────────────────┘
-                                              3. Paste. One command, no questions:
-                                                 installs, signs in as you, starts,
-                                                 stays on after a reboot, pairs with
-                                                 your phone.
- 4. "Connected to MacBook Pro"  ◄──────────────  (live, over the relay)
- 5. Your sessions on it:
-      fix-login        2m   claude
-      docs-rewrite     1h   codex
-      + New Harness
-```
+## Today
 
-Three steps: sign in, run one command, pick a session. No password or second login, and nothing to
-choose on the computer. **Add another computer** in Settings or Find runs the same card with a new
-code.
+1. **Two sign-ins.** The phone uses an email code (`mobile/lib/viewer/email_code_api.dart`); the
+   desktop and CLI use browser SSO (`cli/src/cli.ts:846-932`). Over SSH you paste a callback URL
+   back by hand.
+2. **A password per computer, typed on every client.** You set it twice on the computer and enter it
+   on the phone. Wrong guesses lock you out for 5 minutes, doubling up to a day (`e2ee/store.ts:24-25`).
+   The desktop app doesn't set one by default (Machines ▸ Set password).
+3. **The phone's setup page is four terminal commands**, in a different order from the installer's.
+   It can only email them to yourself (`mobile/lib/phone/welcome/connect_computer.dart:15-20, 66-92`).
+4. **Nothing survives a reboot without the desktop app.** The CLI installs no launch agent or
+   service (`cli/src/cli.ts:6311-6319`).
+5. **Your existing sessions aren't there.** Plain `claude` and `codex` sessions are invisible
+   (`cli/src/lib/tmuxAgentDiscovery.ts:129-148`).
 
-## How one command does it all
+## The pattern: approve on a device you have
 
-The code is an argument to the script, never part of the URL: the server that hands out the script
-must not see it. It carries two things:
+A new device (the phone app, the desktop app, or the CLI) asks for one thing, your email:
 
 ```
-K7QM-4XPT-9D2W   =   K7QM-4XPT         + 9D2W…
-                     sign-in part        pairing secret
-                     (backend knows it)  (only the phone and the command know it)
+ NEW DEVICE                               A DEVICE YOU ALREADY HAVE
+ ──────────                               ─────────────────────────
+ Your email  [ dee@…            ]
+ [ Continue ]
+
+ Approve on your iPhone                   ┌──────────────────────────────┐
+ or MacBook Pro.                          │ MacBook Air wants to join    │
+                                          │ your Harness.                │
+ The code on it should read:              │                              │
+        482 913                           │ Its code:  482 913           │
+                                          │                              │
+ [ Use an email code instead ]            │ [ Deny ]          [ Approve ]│
+                                          └──────────────────────────────┘
+ ✓ You're in. MacBook Air can reach
+   your computers, and they can reach it.
 ```
 
-**Sign-in part.** The phone, already signed in, asks the backend for a one-time setup code
-(10-minute TTL, single use). The backend's device-code flow is most of this already
-(`backend/src/routes/deviceAuth.ts`, `backend/src/lib/deviceAuth.ts`): here the phone creates and
-approves the code in one step, instead of the computer creating it. The CLI redeems it for its own
-session. Today an approval returns a machine `apiKey`, but the daemon's socket (`/api/adapter-ws`)
-accepts only an SSO token (`backend/src/lib/adapterWs.ts:11-13, 172`). So either redeeming returns
-tokens the socket accepts, or the socket also accepts the machine key. **This is the security review.**
+- **Approve does both.** The new device is signed in and trusted by every computer and phone you
+  have. There's no email code and no password.
+- **The first device of an account** has nothing to approve with. It signs in with an email code and
+  starts your list of devices.
+- **With the phone in hand,** a desktop or the CLI also shows the code as a QR. Scanning it approves
+  without comparing numbers.
+- **Email code only** (no trusted device nearby): you're signed in and see your computers, but can't
+  open a terminal until a device you have approves this one.
 
-**Pairing secret.** A high-entropy code made on the phone that never goes to the backend. The
-computer runs the daemon's one-time-code pairing with it: CPace over the code, as the retired web
-client did (`cli/src/lib/e2ee/manager.ts:405-568`, `harness pair <code>`). Both ends pin each other's
-keys. This keeps the remote password's security property. The backend and relay are treated as
-untrusted (`docs/architecture.md:35-41`), and the secret reaches the computer by a path they don't
-control: you, carrying the command. The code is used once, and the pairing window closes after 60 s,
-or after 10 minutes if we lengthen it for this.
+### The three orders
 
-**What the installer adds:** it accepts the setup code again, runs `login --code`, `start` and
-`pair`, and installs a launchd agent (macOS) or a systemd user unit (Linux) so the daemon comes back
-after a reboot.
+1. **Phone → computer.**
+   - The phone signs in with an email code. It is your first device.
+   - **Set up your computer** leads with the app: *"Get Harness for Mac"* sends
+     `harness.autonomous.ai/download` to the Mac by AirDrop, Messages or email.
+   - On the Mac, install and open the app, then enter your email.
+   - The phone shows *"Approve MacBook Pro? 482 913"*. Approve. The Mac is signed in, its daemon is
+     running, and the phone lists its sessions.
+2. **Computer → computer.** The second Mac enters your email. The first Mac, and the phone if you have
+   one, show the approval. Approve. All of them trust each other.
+3. **Computer → phone.** The phone enters your email. The Mac shows *"Approve iPhone? 482 913"*.
+   Approve.
+
+**The terminal path (the 1%):** `curl -fsSL https://harness.autonomous.ai/install.sh | bash`, then
+`harness login` prints the same code and a QR, and waits for your approval. It needs no browser, so it
+works over SSH. The phone's setup page offers it second, under *"Using a terminal or Linux?"*.
+
+## How one approval is enough
+
+**The device list.** Every device already has its own identity key. The account gets a list of its
+trusted devices' keys, and each entry is signed by the device that approved it. The server stores
+and hands out the list, but it can't add to it: an entry without a valid signature from a device
+already on the list is ignored. A computer's daemon trusts every key it can verify on the list,
+where today it trusts only the keys it pinned with a password. So one approval reaches every
+computer. Parts exist already: a trusted client can vouch for a new hardware device
+(`pairDeviceFromTrustedWeb`, `cli/src/lib/e2ee/manager.ts:465-496`), and the live-code pairing that
+underlies it (`manager.ts:405-568`).
+
+**Why comparing six digits replaces the password.** The danger E2E guards against is the server
+handing each side its own key and sitting in the middle. The approval exchange commits to both
+devices' keys first, then derives the six digits from both (Bluetooth's numeric comparison and
+Signal's safety numbers work this way). A server that swapped a key can't make the two screens show
+the same digits except by a one-in-a-million guess, and every attempt is a new approval someone has
+to accept. You compare instead of typing, and nothing secret has to be chosen or remembered.
+
+**The session comes with the approval.** The approving device asks the backend for a one-time
+handoff. The new device, polling, receives its own session: the tokens `harness login` stores today
+(`~/.harness/auth/session.json`), written by the app. The backend's device-code flow is most of this
+(`backend/src/routes/deviceAuth.ts`). It needs to return a session the daemon's socket accepts;
+today it returns a machine key that `/api/adapter-ws` rejects (`backend/src/lib/adapterWs.ts:11-13`).
+
+**Removing a device** is signed from any trusted device, in Settings ▸ Devices.
+
+**Losing every device:** an email code starts a new list. Your computers keep trusting the old one
+until you approve at each computer itself (`harness trust reset` shows a code and a QR). This is
+rare, and it is deliberate.
+
+**The remote password stays** as a fallback for computers set up by hand and for older CLIs. It is
+never asked for on these paths.
 
 ## Sessions you already have
 
-After connecting, the phone lists the sessions on that computer, **including ones started outside
-Harness**. The session search indexer already reads every engine's transcripts (see
-`docs/research/2026-09-26-session-search.md`). Today it indexes only sessions Harness registered. The
-changes:
+After a computer joins, the phone and desktop list its sessions, **including ones started outside
+Harness**.
 
-- Index `~/.claude/projects` and `~/.codex/sessions` whole. They show as sessions to resume, not
-  running agents.
-- Tapping one resumes it in a Harness pane (`claude --resume <id>`, `codex resume <id>`) and opens
-  its terminal. The desktop gets the same list.
-
-This is what "set up all their sessions" means on day one: everything you already did with Claude
-Code or Codex is there to continue.
+- The session search indexer already reads every engine's transcripts
+  (`docs/research/2026-09-26-session-search.md`). Index `~/.claude/projects` and `~/.codex/sessions`
+  whole, not only sessions Harness registered.
+- Outside sessions show as sessions to resume. Tapping one resumes it in a Harness pane
+  (`claude --resume <id>`, `codex resume <id>`).
 
 ## Work
 
 | | Part | Est. |
 |---|---|---|
-| **1. Phone, now** | Order the four commands as the installer does. Share sheet ("Send to my Mac") instead of `mailto:`. A tap-to-copy single block. Plain-words errors. Refresh the computer list live. | 2 days |
-| **2. Backend** | `POST /api/setup-codes` (phone, SSO) → a code. `POST /api/setup-codes/redeem` (CLI, no auth) → a session the daemon's socket accepts. One use, 10-minute TTL, rate-limited, listed and revocable. | 3–4 days + review |
-| **3. CLI** | `install.sh <code>`. `harness login --code`. `harness pair` in the installer. A launchd/systemd unit. Output: "Connected. Open Harness on your phone." | 4–5 days |
-| **4. Phone** | The setup card above, and the live-code pairing client (port the pairing context from `cli/src/lib/e2ee/core.ts`). "Add another computer." | 4–5 days |
-| **5. Sessions** | Index outside sessions; a "Resume" row in Find and after connecting. | 1 week |
-| **6. Later** | Sign in with Apple. A QR on the computer for phone number two. One pairing that introduces every computer you own (plan 001, B3). | — |
+| **1. Phone, now** | The setup page leads with "Get Harness for Mac" (share `harness.autonomous.ai/download`). The terminal path is second, with `harness.autonomous.ai/install.sh` and the installer's own order. Plain-words errors. The computer list refreshes live. | 2 days |
+| **2. Backend** | Approval requests (start, poll, approve, deny) that return a daemon-ready session. The signed device list: append-only, delivered to every device. Push to the phone for approvals (APNs; "needs you" wants it too). | 1.5–2 weeks + security review |
+| **3. CLI / daemon** | Trust keys on the verified list. `harness login` shows the code and QR and waits. A launchd/systemd unit so the daemon survives a reboot. | 1 week |
+| **4. Desktop app** | Email-and-approve sign-in in place of the browser. The approval prompt. Settings ▸ Devices. | 1 week |
+| **5. Phone** | The same sign-in, the approval prompt, a QR scanner, Settings ▸ Devices. | 1 week |
+| **6. Sessions** | Index outside sessions; "Resume" rows. | 1 week |
 
-Parts 2 and 3 are one pull request each and can run in parallel; part 4 follows them. Parts 1 and 5
-stand alone.
+Part 1 stands alone. Parts 2–5 ship together behind the remote password, which keeps working
+throughout. Part 6 stands alone.
 
 ## The bar
 
-Hand a phone to someone with a Mac who has never heard of Harness. Within three minutes they have
-it running and are talking to one of their existing Claude Code sessions from the phone, without
-asking anything and without typing a password.
+Hand a phone to someone with a Mac who has never heard of Harness. Within three minutes they are
+talking to one of their existing Claude Code sessions from the phone, and they haven't typed a
+password or signed in twice.
 
 ## Decisions for you
 
-1. **Short domain.** The address the command downloads the installer from. Today it is
-   `https://harness.autonomous.ai/cli/install.sh`, 45 characters; `harness.sh` would make the
-   command short enough to read off the phone and type. It is optional: the command works either
-   way.
-2. **The daemon's credential.** The daemon keeps a socket open to the backend, signed in as you:
-   that is what lists the computer on your phone and lets the relay reach it through home routers.
-   Today `harness login` gets that sign-in through a browser. Redeeming the setup code gives the
-   daemon the same tokens `harness login` would, with no browser (recommended: nothing else
-   changes), or a key only good for that computer (revocable per computer, but the socket must learn
-   a second kind of credential).
-3. **The remote password.** It stays as the fallback for computers set up by hand. It is dropped
-   from the phone path entirely, not only hidden.
-4. **Outside sessions.** Index all of them by default, or ask once on the computer ("Show my Claude
-   Code and Codex sessions on my phone? Y/n"). They hold code and secrets. They never leave the
-   machine except as hits and tails, sealed, which is how search works today.
+1. **The approval default.** Compare six digits everywhere, and offer the QR where a camera is in
+   hand (recommended). Or make the QR the default from phone to computer.
+2. **What an email-code-only device may do.** See your computers and sessions but not open terminals
+   (recommended). Or nothing until approved.
+3. **Desktop sign-in.** Move the desktop and CLI to email code plus approval, and retire the browser
+   sign-in (recommended: one way everywhere). Or keep the browser as an option.
+4. **Outside sessions.** Index them by default, or ask once on the computer ("Show my Claude Code and
+   Codex sessions on my phone?"). They never leave the machine except as sealed search hits and
+   previews, as today.
