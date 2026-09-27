@@ -436,6 +436,10 @@ pub struct App {
     pub cli_held: std::collections::VecDeque<Box<dyn FnOnce(&mut App) + Send>>,
     /// When a command from a shell last came (hn with no terminal stays that long after it).
     pub last_cli: Instant,
+    /// kill-session under way (kill_windows): its windows' window-unlinked wait for its
+    /// session-closed, as session_destroy orders them.
+    pub killing_session: bool,
+    pub unlinked_later: Vec<(u32, String, u64, String)>,
     /// The server's state (global options, key tables, buffers, global environment) as this
     /// client last wrote or took it, and whether a command ran since (server.rs).
     pub server_synced: Option<crate::server::Synced>,
@@ -618,6 +622,8 @@ impl App {
             wait_channels: HashMap::new(),
             cli_held: std::collections::VecDeque::new(),
             last_cli: Instant::now(),
+            killing_session: false,
+            unlinked_later: Vec::new(),
             server_synced: None,
             server_dirty: false,
             mirror: None,
@@ -1976,6 +1982,21 @@ impl App {
         })
     }
 
+    /// A window named (-n): automatic-rename off, as tmux's window_set_name with it.
+    pub fn name_window(&mut self, w: usize, name: &str) {
+        let Some(tab) = self.tabs.get_mut(w) else { return };
+        tab.name = name.to_string();
+        tab.named = true;
+        let id = tab.id.clone();
+        self.options.windows.entry(id).or_default().insert("automatic-rename".into(), "off".into());
+    }
+
+    /// A session of this client's: its windows' ids and names, and its current window's id.
+    pub fn windows_of(&self, sid: u32) -> (Vec<(u64, String)>, Option<u64>) {
+        let (tabs, active) = if sid == self.session_id { (&self.tabs, self.active) } else { match self.sessions.iter().find(|s| s.id == sid) { Some(s) => (&s.tabs, s.active), None => return (Vec::new(), None) } };
+        (tabs.iter().filter(|t| t.root.is_some()).map(|t| (t.wid(), t.name.clone())).collect(), tabs.get(active).filter(|t| t.root.is_some()).map(|t| t.wid()))
+    }
+
     /// A session's windows (number, name, panes), whichever client has it.
     pub fn session_windows(&self, id: u32) -> Vec<(usize, String, usize)> {
         let of = |tabs: &[Tab], nums: &HashMap<String, usize>| tabs.iter().filter(|t| t.root.is_some()).map(|t| (nums.get(&t.id).copied().unwrap_or(0), t.name.clone(), t.panes().len())).collect();
@@ -3027,7 +3048,12 @@ impl App {
     /// free index or `num`; -d: not gone to.
     pub fn break_pane(&mut self, src: u64, name: Option<String>, num: Option<usize>, detached: bool) -> Result<(), String> {
         let Some(from) = self.tabs.iter().position(|t| t.panes().contains(&src)) else { return Err("can't find pane".into()) };
-        if self.tabs[from].panes().len() < 2 { return Err("can't break with only one pane".into()) }
+        // A window of one pane moves whole (cmd-break-pane.c's server_link_window): its id and
+        // name kept, to -t's index or the next free one.
+        if self.tabs[from].panes().len() < 2 {
+            if let Some(n) = name { self.name_window(from, &n) }
+            return self.move_window(from, num, false, !detached);
+        }
         self.renumber();
         let n = match num { Some(n) => { if self.tab_by_num(n).is_some() { return Err(format!("index in use: {n}")) } n } None => self.free_num() };
         let back = self.tabs[self.active].id.clone();
@@ -3165,24 +3191,33 @@ impl App {
         }
         let tab = self.tabs.remove(index);
         self.lastw.retain(|id| *id != tab.id);
-        // A window of a session not in front (a command there): notify_changes does not see it.
-        let unlinked = self.swap_back.is_some_and(|b| b != self.session_id).then(|| (self.session_id, self.session_name(), tab.wid(), tab.name.clone()));
-        let unlinked = |app: &mut App| if let Some((sid, name, wid, w)) = unlinked { crate::commands::notify_session(app, "window-unlinked", sid, &name, Some((wid, w))) };
+        // Its window-unlinked: said here for a session not in front (a command there), which
+        // notify_changes does not see, and when the session goes with it.
+        let elsewhere = self.swap_back.is_some_and(|b| b != self.session_id);
+        let gone = (self.session_id, self.session_name(), tab.wid(), tab.name.clone());
+        let unlinked = |app: &mut App, g: (u32, String, u64, String)| crate::commands::notify_session(app, "window-unlinked", g.0, &g.1, Some((g.2, g.3)));
         for id in tab.panes() { self.end_shell(id); self.drop_pane(id) }
         if tab.on_desk { self.desk_op(json!({ "op": "tab.close", "id": tab.id })) }
         // The last window gone: the session is over (tmux's `[exited]` when it was the last).
         if self.tabs.is_empty() {
             self.tabs.push(Tab::home());
             self.active = 0;
-            // session_destroy: session-closed, then its windows unlinked.
-            self.notify_closed();
-            unlinked(self);
+            if self.killing_session {
+                // kill-session (session_destroy): session-closed, then its windows unlinked.
+                self.notify_closed();
+                for g in std::mem::take(&mut self.unlinked_later) { unlinked(self, g) }
+                unlinked(self, gone);
+            } else {
+                // Its last window killed: the window unlinked, then the session closed.
+                unlinked(self, gone);
+                self.notify_closed();
+            }
             self.session_gone_quiet();
             self.fit_panes();
             return;
         }
         if index < self.active || self.active >= self.tabs.len() { self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1) }
-        unlinked(self);
+        if self.killing_session { self.unlinked_later.push(gone) } else if elsewhere { unlinked(self, gone) }
         self.fit_panes();
     }
 
@@ -3240,7 +3275,7 @@ impl App {
             let _ = layout;
             if &old.3 != focus && old.3.is_some() { crate::commands::notify(self, "window-pane-changed", Some(w), None) }
         }
-        if before.current != now.current && before.current.is_some() { crate::commands::notify(self, "session-window-changed", Some(self.active), None) }
+        if before.current != now.current && before.current.is_some() { let (sid, name) = (self.session_id, self.session_name()); crate::commands::notify_session(self, "session-window-changed", sid, &name, None) }
         // Pane focus (window_pane_update_focus), where tmux looks again: a window's active pane
         // that changed and a window that became current only with focus-events; a window whose
         // active pane went away (window_lost_pane), and the client's own focus, always.

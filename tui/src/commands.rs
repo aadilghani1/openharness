@@ -1238,6 +1238,12 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
         w
     };
     let detached = args.has('d') > 0;
+    // Its windows before, for the hooks after (window-linked where one came, session-window-
+    // changed where the current one changed, window-unlinked where one went).
+    let (src_before, _) = app.windows_of(src);
+    let (dst_before, dst_current) = app.windows_of(dst);
+    let name_of_session = |app: &App, id: u32| app.session_list().into_iter().find(|(i, _)| *i == id).map(|(_, n)| n).unwrap_or_default();
+    let (src_name, dst_name) = (name_of_session(app, src), name_of_session(app, dst));
     app.swap_back = Some(back);
     let result: Result<(), String> = (|| {
         app.swap_session(src);
@@ -1295,7 +1301,17 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
             _ => {
                 // break-pane: a window of its own there, at -t's number or the first free one,
                 // named -n or for its harness.
-                let (_, p) = match src_t.as_deref() { Some(t) => pane_target(app, t).ok_or_else(|| format!("can't find pane: {t}"))?, None => app.current().ok_or("can't find pane")? };
+                let (sw, p) = match src_t.as_deref() { Some(t) => pane_target(app, t).ok_or_else(|| format!("can't find pane: {t}"))?, None => app.current().ok_or("can't find pane")? };
+                let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: true, default_marked: false };
+                // A window of one pane moves whole, its id and name kept (server_link_window).
+                if app.tabs[sw].panes().len() == 1 {
+                    let tab = app.take_tab(sw);
+                    app.swap_session(dst);
+                    let at = app.put_tab(tab, None);
+                    if let Some(n) = args.get('n') { app.name_window(at, n) }
+                    let idx = crate::cmd::resolve(app, dst_t.as_deref(), spec).ok().and_then(|f| f.idx);
+                    return app.move_window(at, idx, false, !detached);
+                }
                 let label = args.get('n').map(str::to_string).or_else(|| app.panes.get(&p).and_then(|x| app.fleet.agent(&x.machine_id, &x.agent_id)).map(|a| a.name.clone())).unwrap_or_else(|| "tab".into());
                 app.take_pane(p);
                 app.swap_session(dst);
@@ -1309,6 +1325,13 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
         Ok(())
     })();
     if let Err(e) = result { app.error(e) }
+    // server_link_window then server_unlink_window: linked in the one it went to (its current
+    // window changed, unless -d), then unlinked from the one it left.
+    let (src_after, _) = app.windows_of(src);
+    let (dst_after, dst_now) = app.windows_of(dst);
+    for (wid, w) in dst_after.iter().filter(|(wid, _)| !dst_before.iter().any(|(b, _)| b == wid)) { notify_session(app, "window-linked", dst, &dst_name, Some((*wid, w.clone()))) }
+    if dst_now != dst_current && dst_current.is_some() { notify_session(app, "session-window-changed", dst, &dst_name, None) }
+    for (wid, w) in src_before.iter().filter(|(wid, _)| !src_after.iter().any(|(a, _)| a == wid)) { notify_session(app, "window-unlinked", src, &src_name, Some((*wid, w.clone()))) }
     // The session it left, if that has no window now: gone (the client's own: detach-on-destroy).
     if app.swap_session(src) && !app.has_windows() && !app.session_desk {
         app.swap_back = (src != back).then_some(back);
@@ -1318,6 +1341,8 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
     app.swap_back = None;
     app.fit_panes();
     app.save_sessions();
+    // (Said above, in tmux's order: not again when the hooks next look.)
+    app.hooks_seen_now();
     true
 }
 
@@ -1364,12 +1389,15 @@ fn other_session(app: &App, words: &[String]) -> Option<u32> {
 /// kill-session: the windows of the session in front closed, the last taking the session with it.
 fn kill_windows(app: &mut App) {
     let sid = app.session_id;
+    let was = std::mem::replace(&mut app.killing_session, true);
     while app.session_id == sid && !app.quit {
         let empty = app.tabs.iter().all(|t| t.root.is_none());
         let last = app.tabs.len() - 1;
         app.close_tab(last);
         if empty { break }
     }
+    app.killing_session = was;
+    app.unlinked_later.clear();
 }
 
 fn run_words_in(app: &mut App, words: &[String]) {
@@ -1435,6 +1463,12 @@ fn run_words_in(app: &mut App, words: &[String]) {
             }
             app.new_tab_at(idx);
             if let Some(n) = &name { let n = expand(app, n); app.rename_tab(&n) }
+            // A window made in a session not in front: its window-linked (notify_changes sees
+            // only the one in front).
+            if app.swap_back.is_some_and(|b| b != app.session_id) {
+                let (sid, sname, wid, w) = (app.session_id, app.session_name(), app.tabs[app.active].wid(), app.tabs[app.active].name.clone());
+                notify_session(app, "window-linked", sid, &sname, Some((wid, w)));
+            }
             // -d: made, not visited: its shell starts there, and you stay where you were.
             if flag(words, "-d") { app.return_to = Some((was_id, last_before)) }
             if flag(words, "-P") { app.print_new = Some(opt(words, "-F").unwrap_or_else(|| "#{session_name}:#{window_index}.#{pane_index}".into())) }
@@ -1614,7 +1648,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // tmux's break-pane [-d] [-n name] [-s src] [-t dst-window]: the pane (this one, or
             // -s's) becomes a window of its own, keeping its id — at the first free index, or -t's.
             let src = match opt(words, "-s") { Some(t) => match pane_target(app, &t) { Some((_, p)) => p, None => return app.error(format!("can't find pane: {t}")) }, None => match app.focused() { Some(f) => f, None => return } };
-            let num = match opt(words, "-t") { Some(t) => match t.trim_start_matches(':').trim_start_matches('=').parse::<usize>() { Ok(n) => Some(n), Err(_) => return app.error(format!("can't find window: {t}")) }, None => None };
+            // -t as a window index (cmd-find's WINDOW_INDEX: a number no window has yet is fine).
+            let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: true, default_marked: false };
+            let num = match opt(words, "-t") { Some(t) => match crate::cmd::resolve(app, Some(&t), spec) { Ok(f) => f.idx, Err(e) => return app.error(e) }, None => None };
             if let Err(e) = app.break_pane(src, opt(words, "-n"), num, flag(words, "-d")) { app.error(e) }
         }
         "rotate-window" => {
