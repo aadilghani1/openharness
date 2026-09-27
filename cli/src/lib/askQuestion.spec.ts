@@ -1203,3 +1203,34 @@ describe('the dialog read is the LAST one on the pane (regression: an answered d
     }
   })
 })
+
+describe('a bare timer line in the dialog keeps the requestId (regression: `waiting 3s` moved it every tick)', () => {
+  // Found end to end: a status line with no parentheses and no ` · ` sat inside the dialog the id hashes,
+  // so every second was a new question: re-announced, and every answer to it refused as stale.
+  const FILE = 'permission-codex.txt'
+  const ASKED = '  Would you like to run the following command?'
+  const withLine = (line: string): string => {
+    expect(paneOf(FILE)).toContain(ASKED)
+    return paneOf(FILE).replace(ASKED, `  ${line}\n${ASKED}`)
+  }
+
+  it.each([
+    'waiting 3s', 'Waiting… 12s', 'thinking 4s', 'Churned for 4s', '✻ Working... 1m30s', '⠼ Fetch Bitcoin price… 1m33s',
+    'Waiting on answers for the command?          4.2s',
+  ])('%s', (status) => {
+    const pane = withLine(status)
+    expect(viewIn(FILE, pane).dialog).toContain(status)
+    expect(tickTimers(pane, 1)).not.toBe(pane)
+    for (const by of [1, 7, 61, 997]) expect(idIn(FILE, tickTimers(pane, by))).toBe(idIn(FILE, pane))
+  })
+
+  it.each([
+    ['sleep 30s', 'sleep 99s'],
+    ['$ timeout 30s npm test', '$ timeout 99s npm test'],
+    ['Reason: retry after 30s', 'Reason: retry after 99s'],
+    ['npm test && sleep 5s', 'npm test && sleep 500s'],
+    ['Waiting on answers for the command?          4.2s', 'Waiting on answers for another command?          4.2s'],
+  ])('keeps the prompt\'s own words and numbers: %s', (a, b) => {
+    expect(idIn(FILE, withLine(a))).not.toBe(idIn(FILE, withLine(b)))
+  })
+})

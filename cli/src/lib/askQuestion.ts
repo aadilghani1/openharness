@@ -1202,6 +1202,16 @@ const TIMER_GROUP_RE = new RegExp(TIMER_GROUP, 'i')
 const TIMER_GROUPS_RE = new RegExp(TIMER_GROUP, 'gi')
 // The same, outside parentheses: `↓ 82 tokens · esc to interrupt`.
 const STATUS_BITS_RE = /[↑↓]\s*\d+(?:\.\d+)?k?\s*tok(?:en)?s?\b|\besc to interrupt\b/i
+// A bare elapsed time, with no parentheses and no ` · ` to mark it: a status line that is only a word or
+// three and a duration — a verb in -ing/-ed (`waiting 3s`, `thinking 4s`, `Churned for 4s`) or anything
+// trailing off in an ellipsis (`Waiting… 12s`, `Fetch Bitcoin price… 1m33s`). A command's own number stays:
+// `sleep 30s` and `retry after 30s` are neither.
+const DURATION = String.raw`(?:\d+h\d+m(?:\d+s)?|\d+m\d+s|\d+(?:\.\d+)?m?s)`
+const WORDS = String.raw`(?:\p{L}[\p{L}'’-]*\s+){0,2}\p{L}[\p{L}'’-]*`
+const BARE_TIMER_LINE_RE = new RegExp(String.raw`^${WORDS}(?:(?<=ing|ed)(?:\s+for)?\s+|\s*(?:…|\.{3})\s*)${DURATION}$`, 'iu')
+// …and one hung off the end of a longer line, after an ellipsis or a column gap: grok's right-aligned
+// `Waiting on answers for Which color should I report?             4.2s`. Only the time goes.
+const TRAILING_TIMER_RE = new RegExp(String.raw`(?:(?<=…|\.{3})\s*|\s{2,})${DURATION}$`, 'u')
 // Codex's cursor readout under its request_user_input rows: `option 2/4 | tab to add notes`.
 const CURSOR_READOUT_RE = /^option\s+\d+\s*\/\s*\d+\b/i
 // Whatever leads a line and moves on its own: a cursor (`❯ › > ▶`), a spinner frame (braille, `✻`, `◐`,
@@ -1214,7 +1224,7 @@ const BOX_RE = /[\u2500-\u257f]+/g
 
 /**
  * The dialog as a person reads it, with nothing that changes while it waits: status lines (a live timer,
- * a token counter, `esc to interrupt`) and Codex's cursor readout dropped; cursor marks, spinner frames
+ * bare or in parentheses, a token counter, `esc to interrupt`) and Codex's cursor readout dropped; cursor marks, spinner frames
  * and checkbox/radio state stripped; frames and whitespace collapsed. Every word of the prompt stays —
  * two commands that differ anywhere are still two signatures.
  */
@@ -1226,9 +1236,11 @@ function dialogSignature(dialog: string): string {
     line = line.replace(LEAD_MARKS_RE, '')
     const row = /^\d+[.)]\s/.test(line)
     // A line that carries a live timer is the engine's status line (Hermes' `💻 curl … (01m30s · ↓ 82 tok)`
-    // under its frame, Muse's `◇ Calling tools (21s · esc to interrupt)` above its rule), not the prompt:
-    // the prompt is always painted on lines of its own. A ROW keeps its words; only the group goes.
-    if (!row && (TIMER_GROUP_RE.test(line) || STATUS_BITS_RE.test(line))) continue
+    // under its frame, Muse's `◇ Calling tools (21s · esc to interrupt)` above its rule, a bare `waiting 3s`),
+    // not the prompt: the prompt is always painted on lines of its own. A ROW keeps its words; only the
+    // group goes.
+    if (!row && (TIMER_GROUP_RE.test(line) || STATUS_BITS_RE.test(line) || BARE_TIMER_LINE_RE.test(line))) continue
+    if (!row) line = line.replace(TRAILING_TIMER_RE, '')
     line = line.replace(TIMER_GROUPS_RE, ' ').replace(ROW_STATE_RE, '$1').replace(/\s+/g, ' ').trim()
     if (line) out.push(line)
   }
