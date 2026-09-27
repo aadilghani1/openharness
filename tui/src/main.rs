@@ -314,6 +314,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     // colours are content. crossterm would otherwise drop every colour, theirs included.
     crossterm::style::force_color_output(true);
     terminal::enable_raw_mode()?;
+    // What the terminal is (XDA), as tmux asks it: its colours and features by its own word.
+    if std::env::var("HARNESS_TUI_ASK_TERMINAL").as_deref() != Ok("off") { term_out::ask_terminal() }
     let mut out = io::stdout();
     execute!(out, crossterm::style::Print(TITLE_PUSH), EnterAlternateScreen, term_out::Mouse(1), EnableBracketedPaste, EnableFocusChange)?;
     // The kitty keyboard protocol, where the terminal has it: ⌘ arrives as SUPER, and ^I is not Tab.

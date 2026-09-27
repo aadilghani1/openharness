@@ -116,7 +116,9 @@ pub fn outer_features(features: &[String]) -> (bool, bool) {
             || ["xterm-kitty", "xterm-ghostty", "wezterm", "alacritty", "foot", "tmux", "contour", "rio"].iter().any(|t| term.starts_with(t));
         (term, known)
     });
-    let (mut us, mut links) = (*known, *known);
+    // (A terminal that said what it is and has them: tmux's features for it.)
+    let said = terminal_name().map(|n| n.to_lowercase()).is_some_and(|n| ["iterm2", "tmux", "wezterm", "foot", "kitty", "ghostty", "contour", "rio"].iter().any(|p| n.starts_with(p)));
+    let (mut us, mut links) = (*known || said, *known || said);
     for f in features {
         let (pattern, rest) = f.split_once(':').unwrap_or((f.as_str(), ""));
         if !crate::cmd::fnmatch(pattern, term) { continue }
@@ -174,6 +176,60 @@ impl crossterm::Command for Mouse {
     fn execute_winapi(&self) -> io::Result<()> { Ok(()) }
 }
 
+/// What the terminal said it is (XDA, `CSI > q`: `iTerm2 3.5.4`, `tmux 3.5a`, `kitty(0.36.4)`),
+/// as tmux asks it at attach; None when it said nothing.
+static TERMINAL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Ask the terminal what it is (XDA), DA1 after it — which every terminal answers, and after the
+/// XDA answer when there is one — read before the keys' reader starts (so neither answer reaches
+/// it); a second and a half at most, for a link that slow.
+pub fn ask_terminal() {
+    let answer = (|| -> Option<String> {
+        use std::os::fd::AsRawFd;
+        let find = |buf: &[u8], pat: &[u8]| buf.windows(pat.len()).position(|w| w == pat);
+        let mut out = io::stdout();
+        out.write_all(b"\x1b[>q\x1b[c").ok()?;
+        out.flush().ok()?;
+        let fd = io::stdin().as_raw_fd();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        let mut buf: Vec<u8> = Vec::new();
+        loop {
+            // DA1's answer (ESC [ ? … c) ends it.
+            let mut from = 0;
+            let mut done = false;
+            while let Some(i) = find(&buf[from..], b"\x1b[?") {
+                let at = from + i + 3;
+                match buf[at..].iter().position(|b| !(b.is_ascii_digit() || *b == b';')) { Some(k) if buf[at + k] == b'c' => { done = true; break } Some(k) => from = at + k, None => break }
+            }
+            if done { break }
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() { break }
+            let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+            if unsafe { libc::poll(&mut pfd, 1, left.as_millis() as i32) } <= 0 { break }
+            let mut chunk = [0u8; 512];
+            let n = unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
+            if n <= 0 { break }
+            buf.extend_from_slice(&chunk[..n as usize]);
+        }
+        // DCS > | text ST
+        let start = find(&buf, b"\x1bP>|")? + 4;
+        let end = find(&buf[start..], b"\x1b\\").or_else(|| buf[start..].iter().position(|b| *b == 0x07))?;
+        Some(String::from_utf8_lossy(&buf[start..start + end]).to_string())
+    })();
+    let _ = TERMINAL.set(answer);
+}
+
+/// The terminal's own name for itself (XDA), when it gave one.
+pub fn terminal_name() -> Option<&'static str> { TERMINAL.get().and_then(|o| o.as_deref()) }
+
+/// A terminal that says what it is and is one tmux gives 24-bit colour (tty_default_features:
+/// iTerm2, tmux, WezTerm, foot, XTerm, mintty) — or one of today's that has it too.
+fn modern_terminal() -> bool {
+    let Some(name) = terminal_name() else { return false };
+    let n = name.to_lowercase();
+    ["iterm2", "tmux", "wezterm", "foot", "xterm(", "mintty", "kitty", "ghostty", "alacritty", "contour", "rio", "konsole", "xterm.js", "warp", "vte"].iter().any(|p| n.starts_with(p))
+}
+
 /// How many colours the terminal shows, as tmux reads it (terminfo's colors; 24-bit with RGB):
 /// 0, 8, 16, 256, or 1 << 24.
 static COLOURS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1 << 24);
@@ -195,7 +251,13 @@ pub fn colours_for(term: &str, colorterm: &str, features: &[String], overrides: 
         crate::cmd::fnmatch(pat, term) && parts.any(|c| caps.contains(&c.split('=').next().unwrap_or(c)))
     });
     if matches!(colorterm, "truecolor" | "24bit") || term.ends_with("-direct") || says(features, &["RGB"]) || says(overrides, &["Tc", "RGB"]) { return 1 << 24 }
-    if term.contains("256color") || matches!(term, "xterm-kitty" | "xterm-ghostty" | "alacritty" | "wezterm" | "foot") { return if apple { 256 } else { 1 << 24 } }
+    // What the terminal said it is, whatever TERM says (an old outer tmux's `screen`, TERM=xterm
+    // over ssh from iTerm2): its features, as tmux adds them.
+    if modern_terminal() { return 1 << 24 }
+    if matches!(term, "xterm-kitty" | "xterm-ghostty" | "alacritty" | "wezterm" | "foot") { return 1 << 24 }
+    // (One that did not say — Terminal.app — gets the 256 its terminfo has; asked or not, a
+    // 256-colour one hn could not ask is taken as 24-bit but Terminal.app.)
+    if term.contains("256color") { return if apple || TERMINAL.get().is_some() { 256 } else { 1 << 24 } }
     if term.contains("16color") { return 16 }
     if term.is_empty() { return 256 }
     if matches!(term, "vt100" | "vt102" | "vt220" | "dumb") { return 0 }
