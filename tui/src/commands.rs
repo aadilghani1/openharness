@@ -1516,7 +1516,10 @@ fn best_session(app: &App, words: &[String]) -> Option<u32> {
     let entry = crate::cmd::find(words.first()?).ok()?;
     if entry.target.is_none() || matches!(entry.name, "switch-client" | "attach-session" | "new-session" | "detach-client" | "kill-server" | "list-sessions" | "has-session") { return None }
     let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).ok()?;
-    if args.get('t').is_some() || args.get('s').is_some() { return None }
+    // A target with no session of its own (`:`, `:.0`, `.1`, `+`, `!`, a window's number or
+    // name) is in the current session — from a shell the one used last, as with no -t.
+    let implicit = |t: &str| t.is_empty() || t.starts_with([':', '.', '+', '-', '!', '^']) || (!t.contains(':') && !t.starts_with(['$', '@', '%', '{', '=', '~']));
+    if args.get('t').map(implicit) == Some(false) || args.get('s').map(implicit) == Some(false) { return None }
     let best = app.sessions.iter().filter(|s| !s.desk && s.tabs.iter().any(|t| t.root.is_some())).max_by_key(|s| s.used)?;
     (best.used > app.session_used).then_some(best.id)
 }
