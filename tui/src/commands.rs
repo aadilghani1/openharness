@@ -703,14 +703,23 @@ fn command_hooks(app: &mut App, words: &[String], failed: bool) -> Queue {
     if !crate::options::is_hook(&name) || name == "after-queue" { return Queue::new() }
     let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).unwrap_or_default();
     // cmdq_insert_hook: the hook of the command's target session (its options), run about it.
-    let sid = other_session(app, words).filter(|s| app.swap_back.is_none() && app.sessions.iter().any(|x| x.id == *s && x.mirror.is_none()));
+    // (What a kill- command named is gone: its hook is about where you are, as tmux's.)
+    let killed = matches!(entry.name, "kill-pane" | "kill-window" | "kill-session");
+    // (-t naming another session — `set -t a`, `display -t a`, `list-windows -t a` — is that
+    // session's, whether or not the command itself went there.)
+    let named = |t: &str| target_session(app, t).or_else(|| app.find_session(t.split(':').next().unwrap_or(t)));
+    let sid = if killed { None } else { other_session(app, words).or_else(|| args.get('t').and_then(named)) }
+        .filter(|s| *s != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|x| x.id == *s && x.mirror.is_none()));
     let back = app.session_id;
     if let Some(sid) = sid { app.swap_back = Some(back); app.swap_session(sid); }
     // About the command's target (cmdq_insert_hook's fsp): what it made (new-window's window,
     // split-window's pane — there once the queue has waited for it), else its -t, else the
     // current pane.
     let made = matches!(entry.name, "new-window" | "split-window") && !failed;
-    let target = args.get('t').filter(|_| !made && entry.target.map(|t| t.kind == crate::cmd::Kind::Pane || t.kind == crate::cmd::Kind::Window).unwrap_or(false)).and_then(|t| pane_target(app, t)).or_else(|| app.current());
+    let by_pane = entry.target.map(|t| t.kind == crate::cmd::Kind::Pane || t.kind == crate::cmd::Kind::Window).unwrap_or(false);
+    // (A session named alone — `a`, `a:` — is its current window's active pane.)
+    let only_session = |t: &str| sid.is_some() && (!t.contains([':', '.']) || t.ends_with(':')) && !t.starts_with(['%', '@']);
+    let target = args.get('t').filter(|t| !made && !killed && by_pane && !only_session(t)).and_then(|t| pane_target(app, t)).or_else(|| app.current());
     let mut formats = vec![("hook".to_string(), name.clone())];
     formats.extend(args.hook_formats());
     let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: sid, made };
@@ -1949,7 +1958,14 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 None => match app.current() { Some(x) => x, None => return },
             };
             if flag(words, "-Z") {
-                if w != app.active || app.focused() != Some(p) { app.focus_pane(w, p) }
+                // window_zoom (or unzoom) of the target's window, its pane the active one there —
+                // that window made current by nothing (tmux zooms it where it is).
+                if w != app.active {
+                    app.tabs[w].set_active(p);
+                    if app.tabs[w].panes().len() > 1 { app.tabs[w].zoomed = !app.tabs[w].zoomed; app.fit_panes(); app.layout_changed(w) }
+                    return;
+                }
+                if app.focused() != Some(p) { app.focus_pane(w, p) }
                 input::run(app, "zoom");
                 return;
             }
