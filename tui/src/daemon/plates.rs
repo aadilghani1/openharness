@@ -9,6 +9,12 @@
 //! 1 on toward white. In truecolor hn prints that colour glyph by glyph (the tests match frames.json
 //! `plateColors`); with 256 colours the row's nearest xterm index, SGR dim below 0.6 and bold above 1;
 //! with 16, the nearest base colour the same way; NO_COLOR, the plain text.
+//!
+//! The eggs are baked there too, every kind through every stage with a material per cell (`g` glow,
+//! `s` star, `p` peek), and coloured by bake.mjs `eggColor`; an individual's own plates come from
+//! harnessd with their materials (`m` a marking, `a` the extra, `e` the odd eye), coloured by
+//! `individualColor` — and until they arrive the species plate is painted in the individual's colour
+//! family. Both are drawn as a `Paint`: each cell's base colour, inked by its glyph the same way.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -16,6 +22,7 @@ use std::sync::OnceLock;
 use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
 
+use super::render::Traits;
 use super::roster::{roster, Daemon, Gradient};
 
 pub const PLATES_JSON: &str = include_str!("../../../daemons/plates.json");
@@ -30,11 +37,25 @@ pub const BG: [u8; 3] = [0x0c, 0x0c, 0x0c];
 /// id → size → version → mood → frames, each frame its rows joined by `\n`, all rows one width.
 type Baked = HashMap<String, HashMap<String, HashMap<String, HashMap<String, Vec<String>>>>>;
 
+/// One frame of a plate with its material rows: `.` the body or the shell, else a material's letter.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct Framed { pub rows: String, pub mats: String }
+
+impl Framed {
+    pub fn rows(&self) -> Vec<String> { self.rows.split('\n').map(str::to_string).collect() }
+    pub fn mats(&self) -> Vec<String> { self.mats.split('\n').map(str::to_string).collect() }
+}
+
+/// kind → size → stage → frames.
+type Eggs = HashMap<String, HashMap<String, HashMap<String, Vec<Framed>>>>;
+
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Plates {
     pub frame_ms: u64,
     pub daemons: Baked,
+    #[serde(default)]
+    pub eggs: Eggs,
 }
 
 pub fn plates() -> &'static Plates {
@@ -69,6 +90,26 @@ pub fn frame_at(t: u64, n: usize) -> usize { if n == 0 { 0 } else { ((t / plates
 /// How long until the frame after the one `t` ms in: when a popup animating a plate draws again.
 pub fn next_frame_in(t: u64) -> u64 { let ms = plates().frame_ms.max(1); ms - t % ms }
 
+/// An egg's frames at a size and stage (`p0` to `p4`, `rock`, `burst`, `tumble`, `open`): every
+/// stage of one kind and size shares one crop, so nothing jumps as it opens.
+pub fn egg_frames(kind: &str, size: &str, stage: &str) -> &'static [Framed] {
+    plates().eggs.get(kind).and_then(|s| s.get(size)).and_then(|s| s.get(stage)).map(Vec::as_slice).unwrap_or(&[])
+}
+
+/// One egg frame (wrapping around its loop).
+pub fn egg_frame(kind: &str, size: &str, stage: &str, frame: usize) -> Option<&'static Framed> {
+    let f = egg_frames(kind, size, stage);
+    (!f.is_empty()).then(|| &f[frame % f.len()])
+}
+
+/// A plate's frames as harnessd draws an individual's (`daemon_plate`): rows with their materials.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Art { pub frames: Vec<Framed>, pub frame_ms: u64 }
+
+impl Art {
+    pub fn frame(&self, i: usize) -> Option<&Framed> { (!self.frames.is_empty()).then(|| &self.frames[i % self.frames.len()]) }
+}
+
 // ── colour ────────────────────────────────────────────────────────────────────
 
 fn rgb(hex: &str) -> [u8; 3] {
@@ -89,6 +130,61 @@ pub fn row_rgb(g: &Gradient, rows: usize, r: usize) -> [u8; 3] {
     mix(rgb(&g.top.hex), rgb(&g.bottom.hex), if rows > 1 { r as f64 / (rows - 1) as f64 } else { 0.0 })
 }
 
+/// bake.mjs `inked`: a base colour as a glyph of it is drawn — at most 1 mixes from the background
+/// toward it, above 1 on toward white.
+pub fn inked(base: [u8; 3], ch: char, bg: [u8; 3]) -> Option<[u8; 3]> {
+    let level = level(ch)?;
+    Some(if level > 1.0 { mix(base, [255, 255, 255], level - 1.0) } else { mix(bg, base, level) })
+}
+
+/// The light an egg's glow shows: `plain` while it is earned, the rarity's once it opens.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Light<'a> { pub name: &'a str, pub dim: bool }
+
+/// bake.mjs `eggColor`, before its ink: a glow cell is the light, a peek cell `light.peek`, a star
+/// the kind's stars (a secret's opening takes them to 0.3), the shell its row down the kind's
+/// gradient (a secret's opening, 0.22 of it).
+pub fn egg_base(kind: &str, rows: usize, r: usize, mat: char, light: Light, bg: [u8; 3]) -> Option<[u8; 3]> {
+    let rules = &roster().rules;
+    let egg = rules.eggs.get(kind)?;
+    let l = &rules.plate.light;
+    Some(match mat {
+        'g' => rgb(&l.get(light.name).or_else(|| l.get("plain"))?.hex),
+        'p' => rgb(&l.get("peek")?.hex),
+        's' => { let star = rgb(&egg.stars.as_ref().unwrap_or(&egg.gradient.top).hex); if light.dim { mix(bg, star, 0.3) } else { star } }
+        _ => { let row = row_rgb(&egg.gradient, rows, r); if light.dim { mix(bg, row, 0.22) } else { row } }
+    })
+}
+
+/// bake.mjs `eggColor`: the colour of one glyph of an egg plate.
+pub fn egg_rgb(kind: &str, rows: usize, r: usize, ch: char, mat: char, light: Light, bg: [u8; 3]) -> Option<[u8; 3]> {
+    inked(egg_base(kind, rows, r, mat, light, bg)?, ch, bg)
+}
+
+/// bake.mjs `individualColor`, before its ink: a marking (`m`) its accent, the extra (`a`) the extra's
+/// colour, the odd eye (`e`) rules.plate.oddEye, the body its row down its colour family (a shiny
+/// one's, the species' shiny gradient).
+pub fn individual_base(d: &Daemon, traits: &Traits, rows: usize, r: usize, mat: char, shiny: bool) -> Option<[u8; 3]> {
+    Some(match mat {
+        'm' => rgb(&traits.accent),
+        'a' => rgb(d.traits.as_ref()?.extras.iter().find(|e| e.name.is_some() && e.name == traits.extra)?.hex.as_deref()?),
+        'e' => rgb(&roster().rules.plate.odd_eye.hex),
+        _ => family_row(d, traits, rows, r, shiny)?,
+    })
+}
+
+/// Row r of an individual's body: down its colour family, or the shiny gradient.
+pub fn family_row(d: &Daemon, traits: &Traits, rows: usize, r: usize, shiny: bool) -> Option<[u8; 3]> {
+    if shiny { return Some(row_rgb(d.gradient(true)?, rows, r)) }
+    let f = d.family(&traits.colour)?;
+    Some(mix(rgb(&f.top), rgb(&f.bottom), if rows > 1 { r as f64 / (rows - 1) as f64 } else { 0.0 }))
+}
+
+/// bake.mjs `individualColor`: the colour of one glyph of an individual's plate.
+pub fn individual_rgb(d: &Daemon, traits: &Traits, rows: usize, r: usize, ch: char, mat: char, shiny: bool, bg: [u8; 3]) -> Option<[u8; 3]> {
+    inked(individual_base(d, traits, rows, r, mat, shiny)?, ch, bg)
+}
+
 /// A glyph's ink level (rules.plate.ink); None for a space or anything that is not ink.
 pub fn level(ch: char) -> Option<f64> {
     let mut b = [0u8; 4];
@@ -97,9 +193,7 @@ pub fn level(ch: char) -> Option<f64> {
 
 /// bake.mjs `plateColor`: the colour of one glyph of a plate of `rows`, on `bg`.
 pub fn glyph_rgb(d: &Daemon, rows: usize, r: usize, ch: char, bg: [u8; 3], shiny: bool) -> Option<[u8; 3]> {
-    let row = row_rgb(d.gradient(shiny)?, rows, r);
-    let level = level(ch)?;
-    Some(if level > 1.0 { mix(row, [255, 255, 255], level - 1.0) } else { mix(bg, row, level) })
+    inked(row_rgb(d.gradient(shiny)?, rows, r), ch, bg)
 }
 
 /// The nearest xterm-256 colour: the 6x6x6 cube's or the grey ramp's, whichever is closer.
@@ -149,20 +243,64 @@ impl PlateInk {
 /// A glyph of a plate's row as this terminal draws it; None for a space or anything not ink (a
 /// card's border), which keeps the row's own style.
 pub fn style(ink: PlateInk, ch: char, mode: Mode) -> Option<Style> {
+    let d = roster().daemons.get(ink.daemon as usize)?;
+    glyph_style(row_rgb(d.gradient(ink.shiny)?, ink.rows as usize, ink.row as usize), ch, mode)
+}
+
+/// A glyph of a base colour as this terminal draws it (the README's terminal rule): in truecolor its
+/// exact colour, inked; with 256 or 16 colours the base's nearest, SGR dim below 0.6 and bold above
+/// 1; NO_COLOR, plain. None for a space or anything not ink.
+pub fn glyph_style(base: [u8; 3], ch: char, mode: Mode) -> Option<Style> {
     let level = level(ch)?;
     if mode == Mode::Plain { return Some(Style::default()) }
-    let d = roster().daemons.get(ink.daemon as usize)?;
-    let (rows, r) = (ink.rows as usize, ink.row as usize);
     if mode == Mode::Truecolor {
-        let [red, green, blue] = glyph_rgb(d, rows, r, ch, BG, ink.shiny)?;
+        let [red, green, blue] = inked(base, ch, BG)?;
         return Some(Style::default().fg(Color::Rgb(red, green, blue)));
     }
-    let row = row_rgb(d.gradient(ink.shiny)?, rows, r);
-    let fg = if mode == Mode::Xterm { Color::Indexed(nearest_xterm(row)) } else { crate::theme::depth_fit(Color::Rgb(row[0], row[1], row[2])) };
+    let fg = if mode == Mode::Xterm { Color::Indexed(nearest_xterm(base)) } else { crate::theme::depth_fit(Color::Rgb(base[0], base[1], base[2])) };
     let mut s = Style::default().fg(fg);
     if level < 0.6 { s = s.add_modifier(Modifier::DIM) }
     if level > 1.0 { s = s.add_modifier(Modifier::BOLD) }
     Some(s)
+}
+
+/// A row painted cell by cell: each cell's base colour (None: not ink), inked by its glyph as it is
+/// drawn. An egg's row, an individual's (its own art, or its species' painted in its colour family).
+/// `block` names the art the row belongs to, so the rows of one art are laid out together.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Paint { pub block: u32, pub cells: Vec<Option<[u8; 3]>> }
+
+impl Paint {
+    /// The same row, `n` cells further right.
+    pub fn shifted(&self, n: usize) -> Paint {
+        let mut cells = vec![None; n];
+        cells.extend(self.cells.iter().copied());
+        Paint { block: self.block, cells }
+    }
+
+    pub fn style(&self, col: usize, ch: char, mode: Mode) -> Option<Style> { glyph_style((*self.cells.get(col)?)?, ch, mode) }
+}
+
+/// An egg frame's rows, painted (`light` in its glow).
+pub fn paint_egg(kind: &str, f: &Framed, light: Light, block: u32) -> Vec<(String, Paint)> {
+    let (rows, mats) = (f.rows(), f.mats());
+    let n = rows.len();
+    rows.into_iter().enumerate().map(|(r, row)| {
+        let m: Vec<char> = mats.get(r).map(|m| m.chars().collect()).unwrap_or_default();
+        let cells = row.chars().enumerate().map(|(c, ch)| if ch == ' ' { None } else { egg_base(kind, n, r, m.get(c).copied().unwrap_or('.'), light, BG) }).collect();
+        (row, Paint { block, cells })
+    }).collect()
+}
+
+/// An individual's plate rows, painted: with its materials (its own art), or without (the species
+/// plate in its colour family).
+pub fn paint_individual(d: &Daemon, traits: &Traits, shiny: bool, rows: Vec<String>, mats: Option<Vec<String>>, block: u32) -> Vec<(String, Paint)> {
+    let n = rows.len();
+    rows.into_iter().enumerate().map(|(r, row)| {
+        let m: Vec<char> = mats.as_ref().and_then(|m| m.get(r)).map(|m| m.chars().collect()).unwrap_or_default();
+        let cells = row.chars().enumerate().map(|(c, ch)| if ch == ' ' { None } else { individual_base(d, traits, n, r, m.get(c).copied().unwrap_or('.'), shiny) }).collect();
+        (row, Paint { block, cells })
+    }).collect()
 }
 
 #[cfg(test)]
@@ -231,6 +369,92 @@ mod tests {
             }
         }
         assert!(n > 1000, "{n} cells");
+    }
+
+    #[test]
+    fn every_egg_colour_in_frames_json_in_truecolor() {
+        let mut n = 0;
+        for c in reference()["eggColors"].as_array().unwrap() {
+            let kind = c["kind"].as_str().unwrap();
+            let f = egg_frame(kind, c["size"].as_str().unwrap(), c["stage"].as_str().unwrap(), c["frame"].as_u64().unwrap() as usize).unwrap();
+            let (rows, mats) = (f.rows(), f.mats());
+            assert_eq!(rows.len() as u64, c["rows"].as_u64().unwrap());
+            let light = Light { name: c["light"].as_str().unwrap(), dim: c["dim"].as_bool().unwrap() };
+            let painted = paint_egg(kind, f, light, 1);
+            for cell in c["cells"].as_array().unwrap() {
+                let (row, col) = (cell["r"].as_u64().unwrap() as usize, cell["c"].as_u64().unwrap() as usize);
+                let ch = cell["ch"].as_str().unwrap().chars().next().unwrap();
+                let mat = cell["mat"].as_str().unwrap().chars().next().unwrap();
+                assert_eq!((rows[row].as_bytes()[col] as char, mats[row].as_bytes()[col] as char), (ch, mat), "{kind} {row},{col}");
+                let want = cell["hex"].as_str().unwrap();
+                assert_eq!(egg_rgb(kind, rows.len(), row, ch, mat, light, BG).map(hex).as_deref(), Some(want), "{kind} {light:?} {row},{col} {ch}{mat}");
+                // What hn prints for it, in truecolor.
+                let [red, green, blue] = rgb(want);
+                assert_eq!(painted[row].1.style(col, ch, Mode::Truecolor), Some(Style::default().fg(Color::Rgb(red, green, blue))));
+                n += 1;
+            }
+        }
+        assert!(n > 500, "{n} cells");
+    }
+
+    #[test]
+    fn every_individual_colour_in_frames_json_in_truecolor() {
+        let r = roster();
+        let mut n = 0;
+        for c in reference()["individualColors"].as_array().unwrap() {
+            let d = r.daemon(c["id"].as_str().unwrap()).unwrap();
+            let traits = super::super::render::roll_traits(r, &d.id, c["traits"]["seed"].as_u64().unwrap()).unwrap();
+            // The case paints a marking, an extra and an odd eye on the first seed's roll.
+            let traits = Traits { marks: c["traits"]["marks"].as_str().map(str::to_string), extra: c["traits"]["extra"].as_str().map(str::to_string), odd_eye: c["traits"]["oddEye"].as_bool().unwrap(), ..traits };
+            assert_eq!(traits.to_json(), c["traits"]);
+            let shiny = c["shiny"].as_bool().unwrap();
+            let rows: Vec<String> = c["rows"].as_str().unwrap().split('\n').map(str::to_string).collect();
+            let mats: Vec<String> = c["mats"].as_str().unwrap().split('\n').map(str::to_string).collect();
+            let painted = paint_individual(d, &traits, shiny, rows.clone(), Some(mats.clone()), 1);
+            for cell in c["cells"].as_array().unwrap() {
+                let (row, col) = (cell["r"].as_u64().unwrap() as usize, cell["c"].as_u64().unwrap() as usize);
+                let ch = cell["ch"].as_str().unwrap().chars().next().unwrap();
+                let mat = cell["mat"].as_str().unwrap().chars().next().unwrap();
+                assert_eq!(mats[row].as_bytes()[col] as char, mat);
+                let want = cell["hex"].as_str().unwrap();
+                assert_eq!(individual_rgb(d, &traits, rows.len(), row, ch, mat, shiny, BG).map(hex).as_deref(), Some(want), "{} shiny={shiny} {row},{col} {ch}{mat}", d.id);
+                let [red, green, blue] = rgb(want);
+                assert_eq!(painted[row].1.style(col, ch, Mode::Truecolor), Some(Style::default().fg(Color::Rgb(red, green, blue))));
+                n += 1;
+            }
+        }
+        assert!(n > 500, "{n} cells");
+    }
+
+    #[test]
+    fn every_egg_is_baked_through_every_stage() {
+        let r = roster();
+        for kind in r.rules.eggs.keys() {
+            for (size, cols) in [(PORTRAIT, 28), (REVEAL, 56)] {
+                let first = egg_frame(kind, size, "p0", 0).unwrap().rows();
+                for (stage, n) in [("p0", 8), ("p1", 1), ("p2", 1), ("p3", 1), ("p4", 8), ("rock", 8), ("burst", 6), ("tumble", 8), ("open", 1)] {
+                    assert_eq!(egg_frames(kind, size, stage).len(), n, "{kind} {size} {stage}");
+                    // One crop for the kind and size: nothing jumps as it opens.
+                    for f in egg_frames(kind, size, stage) {
+                        let (rows, mats) = (f.rows(), f.mats());
+                        assert_eq!((rows.len(), mats.len()), (first.len(), first.len()));
+                        assert!(rows.iter().zip(&mats).all(|(a, m)| a.len() == first[0].len() && m.len() == a.len() && a.len() <= cols));
+                    }
+                }
+            }
+        }
+        // At 256 colours an egg's glow is its light's xterm colour; the shell its row's.
+        let f = egg_frame("first", REVEAL, "p4", 0).unwrap();
+        let painted = paint_egg("first", f, Light { name: "plain", dim: false }, 1);
+        let mats = f.mats();
+        let (row, col) = mats.iter().enumerate().find_map(|(r, m)| m.find('g').map(|c| (r, c))).unwrap();
+        let ch = f.rows()[row].as_bytes()[col] as char;
+        assert_eq!(painted[row].1.style(col, ch, Mode::Xterm).and_then(|s| s.fg), Some(Color::Indexed(230)));
+        assert_eq!(painted[row].1.style(col, ch, Mode::Plain), Some(Style::default()));
+        // Shifted right by a centring pad, a cell keeps its colour.
+        let moved = painted[row].1.shifted(3);
+        assert_eq!(moved.style(col + 3, ch, Mode::Xterm), painted[row].1.style(col, ch, Mode::Xterm));
+        assert_eq!(moved.style(0, '#', Mode::Xterm), None);
     }
 
     #[test]

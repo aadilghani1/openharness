@@ -1,14 +1,17 @@
 //! A port of daemons/tools/card.mjs: a daemon's card and a drop's shelf (the box back), as text for a
 //! fenced code block and as SVG for places a code block does not travel. Never a live mood: a card
 //! is a portrait, not a presence indicator. Checked against daemons/frames.json (`cards`).
-//! A filled daemon's card shows its portrait plate at the card's version, idle, frame 0.
+//! A filled daemon's card shows its portrait plate at the card's version, idle, frame 0. An
+//! individual's card says its name (`pip the tim 2.0  #0042`), its flags wrapped as a long command
+//! is, and how rare it is (`1 in 2,130`), on its own portrait plate once harnessd has drawn it, else
+//! its species'.
 
 use super::plates::{self, PORTRAIT};
-use super::render::{portrait, sprite, Opts};
+use super::render::{individual_flags, one_in, portrait, sprite, thousands, Opts, Traits};
 use super::roster::{Daemon, DropDef, Roster};
 
-const W: usize = 42;
-const INNER: usize = W - 4;
+pub const W: usize = 42;
+pub const INNER: usize = W - 4;
 
 fn regulars<'r>(roster: &'r Roster, drop: &str) -> Vec<&'r Daemon> {
     roster.daemons.iter().filter(|x| x.rarity != "secret" && x.drop == drop).collect()
@@ -33,17 +36,42 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     out
 }
 
-/// What a card says besides the daemon: its version, whether it is shiny, its serial, nickname,
-/// the day it hatched and the egg it came from.
+/// What a card says besides the daemon: its version, whether it is shiny, its serial, its name,
+/// the day it hatched and the egg it came from — and, for an individual, its traits and its own
+/// portrait plate (`plate`, idle, frame 0, as harnessd draws it; else the species').
 #[derive(Clone, Debug, Default)]
 pub struct CardOpts {
     pub version: Option<String>,
     pub shiny: bool,
     pub serial: Option<String>,
-    pub nickname: Option<String>,
+    pub name: Option<String>,
     pub hatched: Option<String>,
     pub egg: Option<String>,
+    pub traits: Option<Traits>,
+    pub plate: Option<Vec<String>>,
 }
+
+/// card.mjs `flagLines`: an individual's flags as card lines, `width` at most, wrapped at spaces as a
+/// long command is — every line but the last ending in ` \`, the lines after the first indented two.
+pub fn flag_lines(flags: &str, width: usize) -> Vec<String> {
+    let words: Vec<&str> = flags.split(' ').collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for (i, word) in words.iter().enumerate() {
+        let indent = if out.is_empty() { "" } else { "  " };
+        let next = format!("{indent}{line} {word}");
+        // A line that breaks keeps room for its ` \`; the last line may run to the edge.
+        if line.is_empty() { line = word.to_string() }
+        else if next.len() + 2 <= width || (i == words.len() - 1 && next.len() <= width) { line.push(' '); line.push_str(word) }
+        else { out.push(format!("{indent}{line} \\")); line = word.to_string() }
+    }
+    let indent = if out.is_empty() { "" } else { "  " };
+    out.push(format!("{indent}{line}"));
+    out
+}
+
+/// `1 in 2,130`.
+pub fn one_in_text(n: u64) -> String { format!("1 in {}", thousands(n)) }
 
 fn pad_cut(s: &str, n: usize) -> String {
     let mut out = format!("{s:<n$}");
@@ -69,8 +97,8 @@ pub fn card_lines(roster: &Roster, d: &Daemon, o: &CardOpts) -> Vec<String> {
     let head = format!("{}  DROP {}: {}", card_number(roster, d), drop.n, drop.name.to_uppercase());
     let rarity = format!("{}{}", if o.shiny { "SHINY " } else { "" }, d.rarity.to_uppercase());
     let serial = o.serial.as_ref().map(|s| format!("  #{s:0>4}")).unwrap_or_default();
-    let name = format!("{}{} {version}{serial}", o.nickname.as_ref().map(|n| format!("{n} the ")).unwrap_or_default(), d.id);
-    let art = card_art(roster, d, &version);
+    let name = format!("{}{} {version}{serial}", o.name.as_ref().map(|n| format!("{n} the ")).unwrap_or_default(), d.id);
+    let art = o.plate.clone().unwrap_or_else(|| card_art(roster, d, &version));
     let width = art.iter().map(String::len).max().unwrap_or(0);
     let pad = INNER.saturating_sub(width) / 2;
     let mut out = vec![format!(".{}.", "-".repeat(W - 2))];
@@ -79,6 +107,10 @@ pub fn card_lines(roster: &Roster, d: &Daemon, o: &CardOpts) -> Vec<String> {
     for line in &art { out.push(l(&format!("{}{line}", " ".repeat(pad)))) }
     out.push(l(""));
     out.push(l(&format!("  {name}")));
+    if let Some(t) = &o.traits {
+        for line in flag_lines(&individual_flags(roster, &d.id, t), INNER - 2) { out.push(l(&format!("  {line}"))) }
+        out.push(l(&format!("  {}", one_in_text(one_in(roster, &d.id, t)))));
+    }
     out.push(l(&format!("  {}", d.lineage())));
     out.push(l(""));
     for line in wrap(&format!("\"{}\"", d.first), INNER - 2) { out.push(l(&format!("  {line}"))) }
@@ -182,11 +214,14 @@ pub fn svg_for(lines: &[String], colors: &std::collections::HashMap<usize, Strin
 pub fn card_svg(roster: &Roster, d: &Daemon, o: &CardOpts) -> String {
     let lines = card_lines(roster, d, o);
     let version = o.version.clone().unwrap_or_else(|| roster.rules.versions[0].clone());
-    let rows = card_art(roster, d, &version).len();
+    let rows = o.plate.as_ref().map(Vec::len).unwrap_or_else(|| card_art(roster, d, &version).len());
     let color = if o.shiny { d.shiny.as_ref().map(|s| s.hex.clone()).unwrap_or(d.color.hex.clone()) } else { d.color.hex.clone() };
     let mut colors = std::collections::HashMap::new();
-    // A plate runs down its gradient, a row at a time.
-    let gradient = d.gradient(o.shiny).filter(|_| d.plate);
+    // A plate runs down its gradient, a row at a time: an individual's own colour family (a shiny
+    // one's, the shiny gradient).
+    let family = o.traits.as_ref().filter(|_| !o.shiny).and_then(|t| d.family(&t.colour)).map(|f| super::roster::Gradient {
+        top: super::roster::Colour { xterm: 0, hex: f.top.clone() }, bottom: super::roster::Colour { xterm: 0, hex: f.bottom.clone() } });
+    let gradient = family.as_ref().or(d.gradient(o.shiny)).filter(|_| d.plate);
     for i in 3..3 + rows { colors.insert(i, gradient.map(|g| plates::hex(plates::row_rgb(g, rows, i - 3))).unwrap_or(color.clone())); }
     colors.insert(1, match d.rarity.as_str() { "rare" => "#5fafaf", "legendary" => "#d7af5f", "secret" => "#af87af", _ => "#d0d0d0" }.to_string());
     svg_for(&lines, &colors, &format!("{}, a {} daemon", d.id, d.rarity))
@@ -201,22 +236,45 @@ mod tests {
     #[test]
     fn every_card_in_frames_json() {
         let r = roster();
-        let mut n = 0;
+        let (mut n, mut seeded) = (0, 0);
         for c in frames()["cards"].as_array().unwrap() {
             let d = r.daemon(c["id"].as_str().unwrap()).unwrap();
             let o = CardOpts {
                 version: c["version"].as_str().map(str::to_string),
                 shiny: c["shiny"].as_bool().unwrap_or(false),
                 serial: c["serial"].as_u64().map(|s| s.to_string()),
-                nickname: c["nickname"].as_str().map(str::to_string),
+                name: c["name"].as_str().or(c["nickname"].as_str()).map(str::to_string),
                 hatched: c["hatched"].as_str().map(str::to_string),
                 egg: c["egg"].as_str().map(str::to_string),
+                // An individual's card, on its species' plate until harnessd has drawn its own.
+                traits: c["seed"].as_u64().and_then(|seed| super::super::render::roll_traits(r, &d.id, seed)),
+                plate: None,
             };
             let want: Vec<String> = c["out"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
             assert_eq!(card_lines(r, d, &o), want, "card {} {}", c["id"], c["version"]);
+            if o.traits.is_some() { seeded += 1 }
             n += 1;
         }
-        assert_eq!(n, 180);
+        assert_eq!((n, seeded), (190, 10));
+    }
+
+    #[test]
+    fn an_individuals_card_on_its_own_plate() {
+        let r = roster();
+        let tim = r.daemon("tim").unwrap();
+        let traits = super::super::render::roll_traits(r, "tim", 826).unwrap();
+        let plate = vec!["  .,;x,  ".to_string(), " x@@##%; ".to_string(), "  :%%:   ".to_string()];
+        let o = CardOpts { version: Some("2.0".into()), serial: Some("42".into()), name: Some("pip".into()), traits: Some(traits), plate: Some(plate.clone()), ..Default::default() };
+        let lines = card_lines(r, tim, &o);
+        for (i, row) in plate.iter().enumerate() { assert!(lines[3 + i].contains(row.as_str()), "{:?}", lines[3 + i]) }
+        assert_eq!(lines[3 + plate.len() + 1], "|   pip the tim 2.0  #0042               |");
+        assert_eq!(lines[3 + plate.len() + 2], "|   tim -c lilac --freckles --big-head \\ |");
+        assert!(lines.contains(&"|   1 in 34                              |".to_string()) && lines.iter().all(|l| l.len() == 42));
+        // As SVG the plate runs down its colour family (lilac), a row at a time.
+        let svg = card_svg(r, tim, &o);
+        assert!(svg.contains("fill=\"#d7afff\"") && svg.contains("fill=\"#8787d7\""), "{svg}");
+        assert_eq!(flag_lines("tim -c coral", 38), vec!["tim -c coral"]);
+        assert_eq!(one_in_text(2130), "1 in 2,130");
     }
 
     #[test]

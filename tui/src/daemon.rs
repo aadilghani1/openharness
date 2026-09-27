@@ -3,11 +3,12 @@
 //! daemon; this side never sees anything but plaintext frames).
 //!
 //! Requests carry a `requestId` and resolve on `<type>_result` (or `terminal_ready` / `terminal_error`
-//! for `terminal_open`, `route_result` for `route_task`). Everything else the machine pushes — turns,
+//! for `terminal_open`, `route_result` for `route_task`, `daemon_plate` for `daemon_plate_get`). Everything else the machine pushes — turns,
 //! questions, agents appearing — goes to the app as an event, as do binary terminal frames.
 
 // The daemons — the creatures in the status line (daemons/README.md), not harnessd — live under
 // daemon/: the roster and its renderer, the zoo, the face, the pair brain's lines and the hatch.
+pub mod art;
 pub mod brain;
 pub mod card;
 pub mod hatch;
@@ -148,6 +149,7 @@ impl Link {
                                         let mut map = pending.lock().unwrap();
                                         let matches = map.get(request_id).map(|(want, _)| {
                                             ty == format!("{want}_result") || (want == "terminal_open" && (ty == "terminal_ready" || ty == "terminal_error")) || (want == "route_task" && ty == "route_result")
+                                                || (want == "daemon_plate_get" && ty == "daemon_plate")
                                         }).unwrap_or(false);
                                         if matches { map.remove(request_id) } else { None }
                                     };

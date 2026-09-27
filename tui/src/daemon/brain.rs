@@ -150,7 +150,7 @@ pub fn on_frame(app: &mut App, ty: &str, p: &Value) -> bool {
         }
         "daemon_brief" => { brief(app, p); true }
         // Results reach the request that asked (daemon::Link); one that comes late is dropped.
-        "daemon_act_result" | "daemon_confirm_result" | "daemon_talk_result" => true,
+        "daemon_act_result" | "daemon_confirm_result" | "daemon_talk_result" | "daemon_plate" | "daemon_plate_get_result" => true,
         _ => false,
     }
 }
