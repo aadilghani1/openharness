@@ -565,6 +565,8 @@ pub fn encode_key(key: &KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
                 };
                 with_alt(vec![byte])
             } else {
+                // S-x is X (a key tmux names M-X arrives here as M-S-x).
+                let c = if shift && c.is_lowercase() { c.to_uppercase().next().unwrap_or(c) } else { c };
                 let mut buf = [0u8; 4];
                 with_alt(c.encode_utf8(&mut buf).as_bytes().to_vec())
             }
@@ -572,7 +574,8 @@ pub fn encode_key(key: &KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
         // As the desktop sends it: prompts tell a newline (⇧⏎) from the Return that submits.
         KeyCode::Enter if shift && !alt && !ctrl => b"\x1b[13;2u".to_vec(),
         KeyCode::Enter => with_alt(vec![b'\r']),
-        KeyCode::Tab => if shift { b"\x1b[Z".to_vec() } else { with_alt(vec![b'\t']) },
+        // S-Tab is a Tab (tmux drops the shift without extended keys); BTab is the back tab.
+        KeyCode::Tab => with_alt(vec![b'\t']),
         KeyCode::BackTab => b"\x1b[Z".to_vec(),
         KeyCode::Backspace => with_alt(if ctrl { vec![0x08] } else { vec![0x7f] }),
         KeyCode::Esc => with_alt(vec![0x1b]),
@@ -592,6 +595,13 @@ pub fn encode_key(key: &KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
                 if plain_mods.is_empty() { format!("\x1bO{f}").into_bytes() } else { format!("\x1b[1;{}{f}", modifier_param(plain_mods)).into_bytes() }
             }
             5 => tilde(15), 6 => tilde(17), 7 => tilde(18), 8 => tilde(19), 9 => tilde(20), 10 => tilde(21), 11 => tilde(23), 12 => tilde(24),
+            // The keypad (KP/ … KP., after F12): its characters, or ESC O x in application
+            // keypad mode (tmux's input_key_defaults).
+            13..=28 => {
+                let i = (n - 13) as usize;
+                if mode.contains(TermMode::APP_KEYPAD) { format!("\x1bO{}", "ojmwxyktuvqrsMpn".as_bytes()[i] as char).into_bytes() }
+                else { with_alt(if i == 13 { vec![b'\n'] } else { vec!["/*-789+456123\n0.".as_bytes()[i]] }) }
+            }
             _ => return None,
         },
         _ => return None,
