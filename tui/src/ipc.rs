@@ -71,6 +71,8 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
                 let cwd = request.get("cwd").and_then(Value::as_str).map(str::to_string);
                 let stdin = request.get("stdin").and_then(Value::as_str).map(str::to_string);
                 let passed = request.get("forwarded").and_then(Value::as_bool).unwrap_or(false);
+                // From a shell outside hn (not its jobs', not another client's): no client's.
+                let outside = !passed && !request.get("inside").and_then(Value::as_bool).unwrap_or(false);
                 let (tx, rx) = oneshot::channel::<crate::app::Reply>();
                 let _ = sink.send(Event::Apply(Box::new(move |app: &mut crate::app::App| {
                     app.capture = Some(Vec::new());
@@ -79,6 +81,7 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
                     app.cli_code = 0;
                     app.cli_cwd = cwd;
                     app.cli_stdin = stdin;
+                    app.cli_outside = outside;
                     FORWARDED.store(passed, std::sync::atomic::Ordering::Relaxed);
                     crate::commands::execute_args(app, &words);
                     FORWARDED.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -269,7 +272,9 @@ pub async fn call_at(path: &std::path::Path, words: &[String]) -> Option<i32> {
                 // load-buffer - and source-file -: what is piped in goes with the command.
                 let reads_stdin = words.first().and_then(|w| crate::cmd::find(w).ok()).map(|e| matches!(e.name, "load-buffer" | "source-file")).unwrap_or(false) && words.iter().skip(1).any(|w| w == "-");
                 let stdin = if reads_stdin { let mut s = String::new(); let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut s); Some(s) } else { None };
-                if write.write_all(format!("{}\n", json!({ "argv": words, "cwd": cwd, "stdin": stdin })).as_bytes()).await.is_err() { return Some(1) }
+                // From one of a client's own jobs (its $HN_SOCKET): that client is the command's client.
+                let inside = std::env::var("HN_SOCKET").map(|s| !s.is_empty()).unwrap_or(false);
+                if write.write_all(format!("{}\n", json!({ "argv": words, "cwd": cwd, "stdin": stdin, "inside": inside })).as_bytes()).await.is_err() { return Some(1) }
                 let mut line = String::new();
                 let _ = BufReader::new(read).read_line(&mut line).await;
                 let reply: Value = serde_json::from_str(line.trim()).unwrap_or(Value::Null);

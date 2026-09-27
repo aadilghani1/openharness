@@ -1002,7 +1002,7 @@ pub fn hn_owned(name: &str) -> bool {
 fn run_words(app: &mut App, words: &[String]) {
     let words = &session_targets(app, words);
     if cross_session(app, words) { return }
-    match other_session(app, words) {
+    match other_session(app, words).or_else(|| best_session(app, words)) {
         Some(id) if app.swap_back.is_none() => {
             // Another client's session: the command runs in that client, its output here.
             if let Some(owner) = app.remote_owner(id) { return forward(app, &owner, words) }
@@ -1167,6 +1167,19 @@ fn cross_session(app: &mut App, words: &[String]) -> bool {
     app.fit_panes();
     app.save_sessions();
     true
+}
+
+/// cmd_find_from_nothing: a command from a shell outside hn with no -t (and no -s) is for the
+/// session used last — a key, or its making (`hn new -d -s dev; hn split-window` splits dev) —
+/// when that is not the one in front. This client's sessions only.
+fn best_session(app: &App, words: &[String]) -> Option<u32> {
+    if !app.cli_outside || app.capture.is_none() || app.swap_back.is_some() { return None }
+    let entry = crate::cmd::find(words.first()?).ok()?;
+    if entry.target.is_none() || matches!(entry.name, "switch-client" | "attach-session" | "new-session" | "detach-client" | "kill-server" | "list-sessions" | "has-session") { return None }
+    let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).ok()?;
+    if args.get('t').is_some() || args.get('s').is_some() { return None }
+    let best = app.sessions.iter().filter(|s| !s.desk && s.tabs.iter().any(|t| t.root.is_some())).max_by_key(|s| s.activity)?;
+    (best.activity >= app.session_activity).then_some(best.id)
 }
 
 /// The session (not the one in front) a command's -t or -s names: the part before `:`, the whole

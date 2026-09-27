@@ -423,6 +423,9 @@ pub struct App {
     pub cli_code: i32,
     /// That shell's folder: where run-shell and if-shell run what it asked (tmux's client cwd).
     pub cli_cwd: Option<String>,
+    /// The command came from a shell outside hn: with no -t, it is for the session used last
+    /// (cmd_find_from_nothing), not the one this client shows.
+    pub cli_outside: bool,
     /// #{command_list_name} #{command_list_alias} #{command_list_usage} (list-commands -F).
     pub format_command: Option<(String, String, String)>,
     /// The config files read at start (#{config_files}).
@@ -563,6 +566,7 @@ impl App {
             cli_tx: None,
             cli_code: 0,
             cli_cwd: None,
+            cli_outside: false,
             origin: None,
             format_buffer: None,
             format_agent: None,
@@ -1567,6 +1571,8 @@ impl App {
         // The session the client leaves was in use until now (session_update_activity).
         let used = std::mem::replace(&mut self.session_activity, epoch_secs());
         if !self.swap_session(id) { self.session_activity = used; return }
+        // …and the one it goes to is in use from now (server_client_set_session).
+        self.session_activity = epoch_secs();
         self.last_session = Some(from);
         // A session left with no window (the one a client started in, before its shell came):
         // gone, as tmux has no session without a window.
