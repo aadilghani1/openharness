@@ -1529,9 +1529,16 @@ fn best_session(app: &App, words: &[String]) -> Option<u32> {
     let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).ok()?;
     // A target with no session of its own (`:`, `:.0`, `.1`, `+`, `!`, a window's number or
     // name) is in the current session — from a shell the one used last, as with no -t.
-    let implicit = |t: &str| t.is_empty() || t.starts_with([':', '.', '+', '-', '!', '^']) || (!t.contains(':') && !t.starts_with(['$', '@', '%', '{', '=', '~']));
-    if args.get('t').map(implicit) == Some(false) || args.get('s').map(implicit) == Some(false) { return None }
     let best = app.sessions.iter().filter(|s| !s.desk && s.tabs.iter().any(|t| t.root.is_some())).max_by_key(|s| s.used)?;
+    // (A bare word is a window of that session first, then a session by that name — cmd-find.c's
+    // order: `-t main` with a session main is main, unless the session used last has a window
+    // called main.)
+    let windows = app.session_windows(best.id);
+    let a_window = |t: &str| windows.iter().any(|(n, name, _)| name == t || n.to_string() == t);
+    let a_session = |t: &str| app.find_session(t).is_some();
+    let implicit = |t: &str| t.is_empty() || t.starts_with([':', '.', '+', '-', '!', '^'])
+        || (!t.contains(':') && !t.starts_with(['$', '@', '%', '{', '=', '~']) && (a_window(t.split('.').next().unwrap_or(t)) || !a_session(t.split('.').next().unwrap_or(t))));
+    if args.get('t').map(implicit) == Some(false) || args.get('s').map(implicit) == Some(false) { return None }
     (best.used > app.session_used).then_some(best.id)
 }
 
