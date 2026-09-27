@@ -296,7 +296,9 @@ impl Picker {
             let mut groups: Vec<Vec<(String, bool)>> = Vec::new();
             let mut or_next = false;
             for (w, s) in words {
-                if w == "|" { or_next = true; continue }
+                // (A `|` with nothing before it is a term of its own, as fzf reads it — one no
+                // keyword answers.)
+                if w == "|" && !groups.is_empty() { or_next = true; continue }
                 // (An anchored term is about the line as drawn: no keyword answers it.)
                 let w = if w.starts_with('^') || w.ends_with('$') { String::new() } else { w };
                 match groups.last_mut() { Some(g) if or_next => g.push((w, s)), _ => groups.push(vec![(w, s)]) }
