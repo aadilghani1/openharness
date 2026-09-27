@@ -232,6 +232,15 @@ fn owner_of_target(args: &[String], name: Option<&str>) -> Option<std::path::Pat
         });
         if let Some(owner) = hit.and_then(crate::app::live_owner) { return Some(owner.into()) }
     }
+    // No target of its own (or one in the current session: `:1`, `.0`): the client used last,
+    // as tmux's cmd_find_best_client — its session the current one.
+    let implicit = |t: &str| t.is_empty() || t.starts_with([':', '.', '+', '-', '!', '^', '{']);
+    // (From inside a pane — $HN_SOCKET — that pane's client, as tmux finds it from $TMUX.)
+    let inside = std::env::var("HN_SOCKET").is_ok_and(|s| !s.is_empty());
+    if !inside && a.get('t').is_none_or(implicit) && a.get('s').is_none_or(implicit) && a.get('c').is_none() {
+        let n = name.map(str::to_string).or_else(|| std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty())).unwrap_or_else(|| "default".into());
+        return crate::ipc::busiest(&n);
+    }
     None
 }
 

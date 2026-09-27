@@ -360,8 +360,10 @@ async fn run(config: config::Config) -> io::Result<()> {
     app.first_session();
     // `hn <command>` from a shell comes in here.
     let socket = ipc::serve(tx.clone(), port);
-    // (A client with a terminal: never marked as one without, whatever a crash left.)
+    // (A client with a terminal: never marked as one without, whatever a crash left; attached
+    // now is used now.)
     if let Some(here) = ipc::here() { let _ = std::fs::remove_file(here.with_extension("headless")); }
+    ipc::mark_active();
     // tmux's defaults, then ~/.tmux.conf, then tui.toml: each one can change what the last set.
     // Mouse on (Shift-drag is still the terminal's own selection) unless tmux.conf says off.
     app.mouse = true;

@@ -34,6 +34,18 @@ pub fn here() -> Option<PathBuf> { HERE.get().cloned() }
 /// clients with one run what shows on a terminal first.
 pub fn mark_headless(socket: &std::path::Path) { let _ = std::fs::write(socket.with_extension("headless"), b""); }
 
+/// This client typed into just now (`<socket>.activity`'s time): where a command from a shell
+/// with no target goes, as tmux's cmd_find_best_client takes the client used last.
+pub fn mark_active() { if let Some(here) = here() { let _ = std::fs::write(here.with_extension("activity"), b""); } }
+
+/// Of this name's clients with a terminal, the one used last — when there are several.
+pub fn busiest(name: &str) -> Option<PathBuf> {
+    let attached: Vec<PathBuf> = clients_of(name).into_iter().filter(|p| !is_headless(p)).collect();
+    if attached.len() < 2 { return None }
+    let when = |p: &PathBuf| std::fs::metadata(p.with_extension("activity")).and_then(|m| m.modified()).or_else(|_| std::fs::metadata(p).and_then(|m| m.modified())).ok();
+    attached.into_iter().max_by_key(|p| when(p))
+}
+
 /// Whether the client at [socket] has no terminal.
 pub fn is_headless(socket: &std::path::Path) -> bool { socket.with_extension("headless").exists() }
 
@@ -267,6 +279,7 @@ pub fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
 /// socket: the next command says `no server running on …` (a name never used: `error connecting`).
 pub fn gone(path: &std::path::Path) {
     let _ = std::fs::remove_file(path.with_extension("port"));
+    let _ = std::fs::remove_file(path.with_extension("activity"));
     let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
     let primary = dir().join(format!("{name}.sock"));
     if path == primary { return }
