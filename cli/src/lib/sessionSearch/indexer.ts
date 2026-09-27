@@ -371,7 +371,9 @@ export class SessionSearchIndex {
       size: file.size, mtime,
       resumeOffset: open ? open.offset : end,
       resumeTurn: open ? open.turn : collector.next,
-      lastAt: lastAt ?? (resume ? existing.lastAt : null) ?? mtime,
+      // Lines with no time of their own (Cursor's) date the session by when its conversation last
+      // moved, as its engine says, before the file's own time.
+      lastAt: lastAt ?? (resume ? existing.lastAt : null) ?? (source.external && source.changedAt ? source.changedAt : mtime),
       turns: 0,
       ...externalFields(source, title),
     }

@@ -208,7 +208,10 @@ export function parseTtys(stdout: string): Map<number, string | null> {
  *  none when `ps` could not be read. */
 export async function listProcesses(read: typeof processRows = processRows): Promise<RunningProcess[]> {
   const rows = await read()
-  return (rows ?? []).map((row) => ({ pid: row.pid, ppid: row.parentPid, executable: row.executable, args: row.args }))
+  return (rows ?? []).map((row) => {
+    const started = Date.parse(row.startMarker)
+    return { pid: row.pid, ppid: row.parentPid, executable: row.executable, args: row.args, ...(Number.isFinite(started) ? { started } : {}) }
+  })
 }
 
 /** The machine's processes, looked at once per view: the list is read on first use and kept. */
