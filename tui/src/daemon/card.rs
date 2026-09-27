@@ -1,7 +1,9 @@
 //! A port of daemons/tools/card.mjs: a daemon's card and a drop's shelf (the box back), as text for a
 //! fenced code block and as SVG for places a code block does not travel. Never a live mood: a card
 //! is a portrait, not a presence indicator. Checked against daemons/frames.json (`cards`).
+//! A filled daemon's card shows its portrait plate at the card's version, idle, frame 0.
 
+use super::plates::{self, PORTRAIT};
 use super::render::{portrait, sprite, Opts};
 use super::roster::{Daemon, DropDef, Roster};
 
@@ -50,7 +52,13 @@ fn pad_cut(s: &str, n: usize) -> String {
 }
 
 fn drop_of(roster: &Roster, d: &Daemon) -> DropDef {
-    roster.drops.iter().find(|x| x.id == d.drop).cloned().unwrap_or(DropDef { id: d.drop.clone(), n: 1, name: d.drop.clone(), announce: None, release: None })
+    roster.drops.iter().find(|x| x.id == d.drop).cloned().unwrap_or(DropDef { id: d.drop.clone(), n: 1, name: d.drop.clone(), announce: None, release: None, hold: false })
+}
+
+/// What a card shows of the daemon: its portrait plate (idle, frame 0) when it is drawn filled, else
+/// its line portrait. Never a live mood.
+pub fn card_art(roster: &Roster, d: &Daemon, version: &str) -> Vec<String> {
+    if d.plate { plates::rows(&d.id, PORTRAIT, version, "idle", 0) } else { portrait(roster, d, version, "idle", Opts::still()) }
 }
 
 /// The card as lines of printable ASCII, 42 columns wide.
@@ -62,7 +70,7 @@ pub fn card_lines(roster: &Roster, d: &Daemon, o: &CardOpts) -> Vec<String> {
     let rarity = format!("{}{}", if o.shiny { "SHINY " } else { "" }, d.rarity.to_uppercase());
     let serial = o.serial.as_ref().map(|s| format!("  #{s:0>4}")).unwrap_or_default();
     let name = format!("{}{} {version}{serial}", o.nickname.as_ref().map(|n| format!("{n} the ")).unwrap_or_default(), d.id);
-    let art = portrait(roster, d, &version, "idle", Opts::still());
+    let art = card_art(roster, d, &version);
     let width = art.iter().map(String::len).max().unwrap_or(0);
     let pad = INNER.saturating_sub(width) / 2;
     let mut out = vec![format!(".{}.", "-".repeat(W - 2))];
@@ -99,9 +107,11 @@ pub fn day_number(day: &str) -> Option<i64> {
 }
 
 /// A drop's state `now_ms` (ms since the epoch): `released`, `announced` (silhouettes) or `hidden`.
+/// A drop on hold is hidden whatever its dates (it has none): never drawn, hatched or shown.
 pub fn drop_state(drop: Option<&DropDef>, now_ms: i64) -> &'static str {
     let at = |day: &str| day_number(day).map(|n| n * 86_400_000);
     let Some(drop) = drop else { return "released" };
+    if drop.hold { return "hidden" }
     match drop.release.as_deref().and_then(at) {
         None => "released",
         Some(r) if r <= now_ms => "released",
@@ -172,10 +182,12 @@ pub fn svg_for(lines: &[String], colors: &std::collections::HashMap<usize, Strin
 pub fn card_svg(roster: &Roster, d: &Daemon, o: &CardOpts) -> String {
     let lines = card_lines(roster, d, o);
     let version = o.version.clone().unwrap_or_else(|| roster.rules.versions[0].clone());
-    let rows = portrait(roster, d, &version, "idle", Opts::still()).len();
+    let rows = card_art(roster, d, &version).len();
     let color = if o.shiny { d.shiny.as_ref().map(|s| s.hex.clone()).unwrap_or(d.color.hex.clone()) } else { d.color.hex.clone() };
     let mut colors = std::collections::HashMap::new();
-    for i in 3..3 + rows { colors.insert(i, color.clone()); }
+    // A plate runs down its gradient, a row at a time.
+    let gradient = d.gradient(o.shiny).filter(|_| d.plate);
+    for i in 3..3 + rows { colors.insert(i, gradient.map(|g| plates::hex(plates::row_rgb(g, rows, i - 3))).unwrap_or(color.clone())); }
     colors.insert(1, match d.rarity.as_str() { "rare" => "#5fafaf", "legendary" => "#d7af5f", "secret" => "#af87af", _ => "#d0d0d0" }.to_string());
     svg_for(&lines, &colors, &format!("{}, a {} daemon", d.id, d.rarity))
 }
@@ -204,25 +216,68 @@ mod tests {
             assert_eq!(card_lines(r, d, &o), want, "card {} {}", c["id"], c["version"]);
             n += 1;
         }
-        assert_eq!(n, 60);
+        assert_eq!(n, 180);
+    }
+
+    #[test]
+    fn a_filled_daemons_card_is_its_portrait_plate() {
+        let r = roster();
+        let tim = r.daemon("tim").unwrap();
+        let o = CardOpts { version: Some("2.0".into()), serial: Some("42".into()), ..Default::default() };
+        let lines = card_lines(r, tim, &o);
+        assert_eq!(lines[1], "| #01/09  DROP 1: INIT            COMMON |");
+        let plate = plates::rows("tim", PORTRAIT, "2.0", "idle", 0);
+        for (i, row) in plate.iter().enumerate() { assert!(lines[3 + i].contains(row.as_str()), "{row:?} in {:?}", lines[3 + i]) }
+        assert!(lines.iter().any(|l| l.contains("tim 2.0  #0042")) && lines.iter().all(|l| l.len() == 42));
+        // As SVG, the plate runs down tim's gradient; shiny, down the gold one.
+        let g = tim.gradient.as_ref().unwrap();
+        let svg = card_svg(r, tim, &o);
+        assert!(svg.contains(&format!("fill=\"{}\"", g.top.hex)) && svg.contains(&format!("fill=\"{}\"", g.bottom.hex)), "{svg}");
+        let gold = card_svg(r, tim, &CardOpts { shiny: true, ..o });
+        assert!(gold.contains(&format!("fill=\"{}\"", tim.shiny_gradient.as_ref().unwrap().top.hex)));
+        assert_eq!(card_number(r, r.daemon("auk").unwrap()), "#09/09");
+        assert_eq!(card_number(r, r.daemon("beastie").unwrap()), "#S/09");
     }
 
     #[test]
     fn a_shelf_as_card_mjs_draws_it() {
-        // node daemons/tools/card.mjs --shelf 'tim*x2,vim,grue'
+        // node daemons/tools/card.mjs --shelf 'tim*x2,yak,beastie'
         let r = roster();
-        let owned = [Shelved { id: "tim".into(), dupes: 1 }, Shelved { id: "vim".into(), ..Default::default() }, Shelved { id: "grue".into(), ..Default::default() }];
+        let owned = [Shelved { id: "tim".into(), dupes: 1 }, Shelved { id: "yak".into(), ..Default::default() }, Shelved { id: "beastie".into(), ..Default::default() }];
         let now = day_number("2026-09-27").unwrap() * 86_400_000;
         let got = shelf_lines(r, &owned, None, now);
-        assert_eq!(got[0], "zoo: drop 1 unix  2/9  +secret");
-        assert!(got[2].starts_with("\\[o|o]/   [ ? ]     [ ? ]     [ ? ]     < o_o >_"), "{:?}", got[2]);
-        assert!(got[3].starts_with("tim x2    #02       #03       #04       vim"), "{:?}", got[3]);
+        assert_eq!(got, [
+            "zoo: drop 1 init  2/9  +secret", "",
+            "~(o o)~   [ ? ]     [ ? ]     [ ? ]     ~\"o\"o\"~", "tim x2    #02       #03       #04       yak", "",
+            "[ ? ]     [ ? ]     [ ? ]     [ ? ]     }oWo{ -E", "#06       #07       #08       #09       beastie",
+        ]);
         // Before release the regulars are silhouettes and the date shows.
         let early = day_number("2026-09-20").unwrap() * 86_400_000;
         let before = shelf_lines(r, &owned, None, early);
-        assert_eq!(before[0], "zoo: drop 1 unix  out 2026-09-26");
-        assert!(before[2].starts_with("## ##     ####"), "{:?}", before[2]);
+        assert_eq!(before[0], "zoo: drop 1 init  out 2026-09-27");
+        assert_eq!(before[2], "## ##     #####     #####     ######    #####");
         assert!(shelf_lines(r, &owned, None, day_number("2026-09-01").unwrap() * 86_400_000).is_empty());
+    }
+
+    #[test]
+    fn a_drop_on_hold_shows_nowhere_ever() {
+        let r = roster();
+        let init = r.drops.iter().find(|x| x.id == "init");
+        let at = |day: &str| day_number(day).unwrap() * 86_400_000 + 43_200_000;
+        assert_eq!(["2026-09-12", "2026-09-13", "2026-09-26", "2026-09-27"].map(|d| drop_state(init, at(d))), ["hidden", "announced", "announced", "released"]);
+        for id in ["unix", "tty"] {
+            let drop = r.drops.iter().find(|x| x.id == id).unwrap();
+            assert!(drop.hold && drop.announce.is_none() && drop.release.is_none());
+            for day in ["2026-09-27", "2027-09-27", "2036-01-01"] { assert_eq!(drop_state(Some(drop), at(day)), "hidden", "{id} {day}") }
+            // Even with dates, hold comes first.
+            let dated = DropDef { announce: Some("2026-01-01".into()), release: Some("2026-01-15".into()), ..drop.clone() };
+            assert_eq!(drop_state(Some(&dated), at("2030-01-01")), "hidden");
+            let owned = [Shelved { id: "tmux".into(), ..Default::default() }, Shelved { id: "vim".into(), ..Default::default() }];
+            assert!(shelf_lines(r, &owned, Some(id), at("2030-01-01")).is_empty());
+        }
+        // The old tim is tmux now, kept on hold; hn shows neither it nor any of its drop.
+        assert!(r.held(r.daemon("tmux").unwrap()) && r.shown("tmux").is_none() && r.shown("grue").is_none());
+        assert!(!r.held(r.daemon("tim").unwrap()) && r.shown("tim").is_some());
     }
 
     #[test]

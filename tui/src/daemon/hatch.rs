@@ -3,18 +3,23 @@
 //! The egg wobbles until harnessd answers `zoo.hatch`, then tells the rarity at the crack — a rare's
 //! shell glows cyan, a legendary's pop throws yellow `*'.` sparks, a secret's stage goes pitch black
 //! first — pops, and the hatchling's 0.1 portrait appears as `#` in the faint colour for 1200 ms,
-//! fills with its colour, blinks; its name types in as a banner (banner.json), then the rarity stamp,
-//! `fork() returned 0.`, its first words, and the card. A duplicate has no reveal of a new name: it
-//! says it merged (`another vim. +150 xp.`), and a level-up morphs the portrait to the new version.
-//! Reduce Motion (`set -g @daemon-motion off`) goes straight to the card.
+//! fills with its colour — a filled daemon's plate in its gradient, its idle loop running a frame
+//! every frameMs; line art blinks —; its name types in as a banner (banner.json), then the rarity
+//! stamp, `fork() returned 0.`, its first words, and the card. A duplicate has no reveal of a new
+//! name: it says it merged (`another tux. +150 xp.`), and a level-up morphs the portrait to the new
+//! version. Reduce Motion (`set -g @daemon-motion off`) goes straight to the card.
+//!
+//! A plate shows at its `reveal` size (56 columns) when the whole reveal fits the terminal, else at
+//! its `portrait` size (28): `fit` decides, from the reveal's tallest moment, so nothing moves.
 //!
 //! `frame` is a pure function of the reveal and the time, so the tests can read any moment of it.
 
 use std::time::{Duration, Instant};
 
-use super::card::{card_lines, CardOpts};
+use super::card::{card_art, card_lines, CardOpts};
+use super::plates::{self, PlateInk, PORTRAIT, REVEAL};
 use super::render::{self, Opts};
-use super::roster::roster;
+use super::roster::{roster, Daemon};
 
 /// Two wobbles at least, then until harnessd answers.
 const WOBBLE: u64 = 120;
@@ -52,11 +57,13 @@ pub struct Reveal {
     pub skipped: bool,
     /// After the card: what the daemon sees, until the person has answered it once.
     pub consent_next: bool,
+    /// The size a plate shows at: `reveal` when the terminal has room for all of it, else `portrait`.
+    pub size: &'static str,
 }
 
-/// How a row is drawn: its ink.
+/// How a row is drawn: its ink. A plate's row is inked glyph by glyph (plates.rs).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Ink { Plain, Faint, Bold, Colour(u8), Dark(u8), Cyan, Yellow }
+pub enum Ink { Plain, Faint, Bold, Colour(u8), Dark(u8), Cyan, Yellow, Plate(PlateInk) }
 
 #[derive(Clone, Debug, Default)]
 pub struct Frame {
@@ -71,7 +78,7 @@ pub struct Frame {
 impl Reveal {
     pub fn new(egg_id: &str, egg_kind: &str, motion: bool, skippable: bool, consent_next: bool) -> Reveal {
         let _ = egg_id;
-        Reveal { egg_kind: egg_kind.into(), started: Instant::now(), answered: None, outcome: None, error: None, motion, skippable, skipped: false, consent_next }
+        Reveal { egg_kind: egg_kind.into(), started: Instant::now(), answered: None, outcome: None, error: None, motion, skippable, skipped: false, consent_next, size: PORTRAIT }
     }
 
     /// When the wobble ends (ms from the start): past two wobbles and the answer, on a wobble's end.
@@ -125,6 +132,19 @@ fn sparks() -> Vec<String> { vec!["   *  '  .   *   .  '  *".into(), "  .   *   
 /// Every drawn cell, as `#`.
 fn hashed(rows: &[String]) -> Vec<String> { rows.iter().map(|r| super::card::silhouette(r)).collect() }
 
+/// A daemon's portrait as rows in its ink: a plate at `size` (the mood's loop, frame `frame`) in its
+/// gradient, or line art in its colour (`lid` while it blinks).
+pub fn art(d: &Daemon, size: &str, version: &str, mood: &str, frame: usize, shiny: bool, lid: Option<&str>) -> Vec<(String, Ink)> {
+    if d.plate {
+        return PlateInk::rows(d, shiny, plates::rows(&d.id, size, version, mood, frame)).into_iter().map(|(r, ink)| (r, Ink::Plate(ink))).collect();
+    }
+    let colour = d.colour(shiny);
+    render::portrait(roster(), d, version, mood, Opts { t: 0, lid, motion: false }).into_iter().map(|r| (r, Ink::Colour(colour))).collect()
+}
+
+/// Rows of text, without their ink.
+fn texts(rows: &[(String, Ink)]) -> Vec<String> { rows.iter().map(|(r, _)| r.clone()).collect() }
+
 /// A duplicate's level-up: of the cells that differ, a quarter more each frame, in ordered-dither
 /// order, from the old version's portrait to the new one's.
 pub fn morph(old: &[String], new: &[String], step: u8) -> Vec<String> {
@@ -141,15 +161,25 @@ pub fn morph(old: &[String], new: &[String], step: u8) -> Vec<String> {
 /// How wide the reveal is: the card, and a margin.
 pub const WIDTH: usize = 44;
 
+/// How wide the reveal is at a plate size: the card's width, or a reveal plate's and a margin.
+pub fn width(size: &str) -> usize {
+    if size == REVEAL { WIDTH.max(roster().rules.plate.cols.get(REVEAL).copied().unwrap_or(56) + 2) } else { WIDTH }
+}
+
+/// Two rows of one block: the same ink, or rows of one plate.
+fn one_block(a: Ink, b: Ink) -> bool {
+    match (a, b) { (Ink::Plate(x), Ink::Plate(y)) => x.same_plate(&y), _ => a == b }
+}
+
 /// Each block (a run of rows in one ink, between blank rows) centred in the reveal's width, and a
 /// line longer than it wrapped: the art keeps its shape and nothing jumps as rows are added.
-fn centre(rows: Vec<(String, Ink)>) -> Vec<(String, Ink)> {
+fn centre(rows: Vec<(String, Ink)>, width: usize) -> Vec<(String, Ink)> {
     let mut wrapped: Vec<(String, Ink)> = Vec::new();
     for (r, ink) in rows {
-        if r.len() <= WIDTH - 2 { wrapped.push((r, ink)); continue }
+        if r.len() <= width - 2 { wrapped.push((r, ink)); continue }
         let mut line = String::new();
         for w in r.split(' ') {
-            if !line.is_empty() && line.len() + 1 + w.len() > WIDTH - 2 { wrapped.push((std::mem::take(&mut line), ink)) }
+            if !line.is_empty() && line.len() + 1 + w.len() > width - 2 { wrapped.push((std::mem::take(&mut line), ink)) }
             if !line.is_empty() { line.push(' ') }
             line.push_str(w);
         }
@@ -160,10 +190,10 @@ fn centre(rows: Vec<(String, Ink)>) -> Vec<(String, Ink)> {
     while i < wrapped.len() {
         let ink = wrapped[i].1;
         let mut j = i;
-        while j < wrapped.len() && wrapped[j].1 == ink && !wrapped[j].0.is_empty() { j += 1 }
+        while j < wrapped.len() && one_block(wrapped[j].1, ink) && !wrapped[j].0.is_empty() { j += 1 }
         if j == i { out.push(wrapped[i].clone()); i += 1; continue }
         let w = wrapped[i..j].iter().map(|(r, _)| r.len()).max().unwrap_or(0);
-        let pad = " ".repeat(WIDTH.saturating_sub(w) / 2);
+        let pad = " ".repeat(width.saturating_sub(w) / 2);
         for (r, ink) in &wrapped[i..j] { out.push((format!("{pad}{r}"), *ink)) }
         i = j;
     }
@@ -173,7 +203,33 @@ fn centre(rows: Vec<(String, Ink)>) -> Vec<(String, Ink)> {
 /// What the reveal shows at `now`, laid out in its width.
 pub fn frame(rv: &Reveal, now: Instant) -> Frame {
     let f = raw(rv, now);
-    Frame { rows: centre(f.rows), ..f }
+    Frame { rows: centre(f.rows, width(rv.size)), ..f }
+}
+
+/// How much room the reveal takes at a plate size, once harnessd has answered: the widest and the
+/// tallest it gets (the last moment before the card, and the card), so it is laid out once.
+pub fn extent(rv: &Reveal, size: &'static str) -> (usize, usize) {
+    let mut probe = rv.clone();
+    probe.size = size;
+    probe.motion = true;
+    probe.skipped = false;
+    let Some(len) = probe.length() else { return (width(size), 0) };
+    let (mut w, mut h) = (width(size), 0);
+    for ms in [len.saturating_sub(1), len] {
+        let f = frame(&probe, probe.started + Duration::from_millis(ms));
+        h = h.max(f.rows.len());
+        w = w.max(f.rows.iter().map(|(r, _)| r.len()).max().unwrap_or(0));
+    }
+    (w, h)
+}
+
+/// The size a plate shows at in `width` x `height`: `reveal` when all of the reveal fits, else
+/// `portrait`. Line art has one size.
+pub fn fit(rv: &Reveal, width: usize, height: usize) -> &'static str {
+    let filled = rv.outcome.as_ref().and_then(|o| roster().daemon(&o.daemon)).map(|d| d.plate).unwrap_or(false);
+    if !filled { return PORTRAIT }
+    let (w, h) = extent(rv, REVEAL);
+    if w <= width && h <= height { REVEAL } else { PORTRAIT }
 }
 
 fn raw(rv: &Reveal, now: Instant) -> Frame {
@@ -192,7 +248,6 @@ fn raw(rv: &Reveal, now: Instant) -> Frame {
     };
     let r = roster();
     let d = r.daemon(&o.daemon);
-    let colour = d.map(|d| d.colour(o.shiny)).unwrap_or(7);
     let rar = rarity(&o.daemon);
     let secret = rar == "secret";
     if rv.done(now) { return card_frame(rv, o, secret) }
@@ -215,20 +270,22 @@ fn raw(rv: &Reveal, now: Instant) -> Frame {
     }
     let Some(d) = d else { return card_frame(rv, o, secret) };
     let name = o.nickname.clone().unwrap_or(d.id.clone());
+    // A plate's idle loop runs from the moment it is in colour (Reduce Motion: frame 0).
+    let looped = |since: u64| if rv.motion { plates::frame_at(s.saturating_sub(since), 8) } else { 0 };
     if o.duplicate {
         // Yours, as it was, then what the duplicate did to it.
-        let old = render::portrait(r, d, &o.old_version, "idle", Opts::still());
+        let old = art(d, rv.size, &o.old_version, "idle", looped(700), o.shiny, None);
         let mut out = Vec::new();
         let grew_at = 1700;
-        let art = match &o.grew {
+        let shown = match &o.grew {
             Some((_, v)) if s >= grew_at + 200 => {
-                let new = render::portrait(r, d, v, "idle", Opts::still());
+                let new = art(d, rv.size, v, "idle", looped(700), o.shiny, None);
                 let step = ((s - grew_at - 200) / 160 + 1).min(4) as u8;
-                if step >= 4 { new } else { morph(&old, &new, step) }
+                if step >= 4 { new } else { remorph(d, o.shiny, &old, &new, step) }
             }
             _ => old,
         };
-        out.extend(rows(art, Ink::Colour(colour)));
+        out.extend(shown);
         out.push((String::new(), Ink::Plain));
         out.push((format!("{} x{} · +{} xp", d.id, o.count.max(2), o.xp), Ink::Bold));
         out.push((format!("another {}. +{} xp.", d.id, o.xp), Ink::Plain));
@@ -240,11 +297,12 @@ fn raw(rv: &Reveal, now: Instant) -> Frame {
     let young = r.rules.versions[0].clone();
     if s < 1900 {
         // The silhouette, faint, for 1200 ms.
-        out.extend(rows(hashed(&render::portrait(r, d, &young, "idle", Opts::still())), Ink::Faint));
+        out.extend(rows(hashed(&texts(&art(d, rv.size, &young, "idle", 0, o.shiny, None))), Ink::Faint));
         return Frame { rows: out, black, done: false };
     }
+    // In colour: a plate runs its idle loop; line art blinks.
     let lid = (2100..2220).contains(&s).then_some("-");
-    out.extend(rows(render::portrait(r, d, &young, "idle", Opts { t: 0, lid, motion: false }), Ink::Colour(colour)));
+    out.extend(art(d, rv.size, &young, "idle", looped(1900), o.shiny, lid));
     if s >= 2220 {
         out.push((String::new(), Ink::Plain));
         let banner = render::banner(super::roster::banner(), &d.id);
@@ -258,6 +316,20 @@ fn raw(rv: &Reveal, now: Instant) -> Frame {
     Frame { rows: out, black, done: false }
 }
 
+/// The morph between two portraits in their ink: a plate's rows keep their width, each version
+/// centred over the other, so the art does not slide.
+fn remorph(d: &Daemon, shiny: bool, old: &[(String, Ink)], new: &[(String, Ink)], step: u8) -> Vec<(String, Ink)> {
+    let (mut old, mut new) = (texts(old), texts(new));
+    if !d.plate { return morph(&old, &new, step).into_iter().map(|r| (r, Ink::Colour(d.colour(shiny)))).collect() }
+    let w = old.iter().chain(new.iter()).map(String::len).max().unwrap_or(0);
+    for rows in [&mut old, &mut new] {
+        let pad = " ".repeat(w.saturating_sub(rows.iter().map(String::len).max().unwrap_or(0)) / 2);
+        for r in rows.iter_mut() { *r = format!("{pad}{r}") }
+    }
+    let rows = morph(&old, &new, step).into_iter().map(|r| format!("{r:<w$}")).collect();
+    PlateInk::rows(d, shiny, rows).into_iter().map(|(r, ink)| (r, Ink::Plate(ink))).collect()
+}
+
 /// `[ LEGENDARY ]`, `[ SHINY RARE ]`.
 pub fn stamp(o: &Outcome) -> String { format!("[ {}{} ]", if o.shiny { "SHINY " } else { "" }, rarity(&o.daemon).to_uppercase()) }
 
@@ -265,11 +337,10 @@ pub fn stamp(o: &Outcome) -> String { format!("[ {}{} ]", if o.shiny { "SHINY " 
 fn card_frame(rv: &Reveal, o: &Outcome, secret: bool) -> Frame {
     let r = roster();
     let Some(d) = r.daemon(&o.daemon) else { return Frame { rows: vec![(format!("hatched {}", o.daemon), Ink::Bold)], black: false, done: true } };
-    let colour = d.colour(o.shiny);
     let mut out: Vec<(String, Ink)> = Vec::new();
     if o.duplicate {
         let v = o.grew.as_ref().map(|(_, v)| v.clone()).unwrap_or(o.old_version.clone());
-        out.extend(render::portrait(r, d, &v, "idle", Opts::still()).into_iter().map(|l| (l, Ink::Colour(colour))));
+        out.extend(art(d, rv.size, &v, "idle", 0, o.shiny, None));
         out.push((String::new(), Ink::Plain));
         out.push((format!("another {}. +{} xp.", d.id, o.xp), Ink::Bold));
         if o.became_shiny { out.push(("yours is shiny now.".into(), Ink::Plain)) }
@@ -282,8 +353,10 @@ fn card_frame(rv: &Reveal, o: &Outcome, secret: bool) -> Frame {
         out.push(("fork() returned 0.".into(), Ink::Plain));
         out.push((String::new(), Ink::Plain));
         let card = card_lines(r, d, &CardOpts { version: None, shiny: o.shiny, serial: o.serial.map(|s| s.to_string()), nickname: o.nickname.clone(), hatched: o.hatched.clone(), egg: Some(rv.egg_kind.clone()) });
-        let rows = crate::daemon::render::portrait(r, d, &r.rules.versions[0], "idle", Opts::still()).len();
-        for (i, l) in card.into_iter().enumerate() { out.push((l, if (3..3 + rows).contains(&i) { Ink::Colour(colour) } else { Ink::Plain })) }
+        // The card's portrait rows in the daemon's ink: a plate down its gradient, line art in its colour.
+        let rows = card_art(r, d, &r.rules.versions[0]).len();
+        let ink = |i: usize| if d.plate { Ink::Plate(PlateInk::of(d, o.shiny, i, rows)) } else { Ink::Colour(d.colour(o.shiny)) };
+        for (i, l) in card.into_iter().enumerate() { out.push((l, if (3..3 + rows).contains(&i) { ink(i - 3) } else { Ink::Plain })) }
     }
     out.push((String::new(), Ink::Plain));
     out.push((if rv.consent_next { "any key: next · Esc: later".into() } else { "any key: close".into() }, Ink::Faint));
@@ -304,6 +377,7 @@ pub fn next_in(rv: &Reveal, now: Instant) -> Option<Duration> { (!rv.done(now)).
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::card::silhouette;
 
     fn at(rv: &Reveal, ms: u64) -> Frame { frame(rv, rv.started + Duration::from_millis(ms)) }
     fn text(f: &Frame) -> String { f.rows.iter().map(|(r, _)| r.as_str()).collect::<Vec<_>>().join("\n") }
@@ -313,6 +387,12 @@ mod tests {
         rv.answered = Some(rv.started + Duration::from_millis(300));
         rv.outcome = Some(Outcome { daemon: daemon.into(), serial: Some(42), duplicate, xp: if duplicate { 150 } else { 0 }, old_version: "0.1".into(), hatched: Some("2026-09-26".into()), total_xp: 210, ..Default::default() });
         rv
+    }
+
+    /// A plate's rows as the reveal lays them out: centred in its width.
+    fn laid(rows: &[String], size: &str) -> Vec<String> {
+        let pad = " ".repeat((width(size) - rows[0].len()) / 2);
+        rows.iter().map(|r| format!("{pad}{r}")).collect()
     }
 
     #[test]
@@ -327,29 +407,68 @@ mod tests {
         let w = 960;
         assert!(text(&at(&rv, w + 100)).contains("|  /\\  |"), "the crack");
         assert!(text(&at(&rv, w + 500)).contains("|\\/\\/\\/|"), "the pop");
-        let sil = text(&at(&rv, w + 1000));
-        assert!(sil.contains("#   #") && !sil.contains('o'), "the silhouette: {sil}");
-        assert_eq!(at(&rv, w + 1000).rows[0].1, Ink::Faint);
-        assert!(text(&at(&rv, w + 2000)).contains("|   o   o   |"), "in colour");
-        assert!(text(&at(&rv, w + 2150)).contains("|   -   -   |"), "a blink");
+        // tim's 0.1 plate as a silhouette, faint: every glyph a `#`.
+        let young = plates::rows("tim", PORTRAIT, "0.1", "idle", 0);
+        let sil = at(&rv, w + 1000);
+        let hashed: Vec<String> = young.iter().map(|r| silhouette(r)).collect();
+        assert_eq!(sil.rows.iter().map(|(r, _)| r.clone()).collect::<Vec<_>>(), laid(&hashed, PORTRAIT));
+        assert!(sil.rows.iter().all(|(_, ink)| *ink == Ink::Faint));
+        // Then in colour: the plate, down tim's gradient, its idle loop a frame every 170 ms.
+        let tim = roster().daemon("tim").unwrap();
+        let lit = at(&rv, w + 2000);
+        for (i, row) in laid(&young, PORTRAIT).into_iter().enumerate() { assert_eq!(lit.rows[i], (row, Ink::Plate(PlateInk::of(tim, false, i, young.len())))) }
+        let next = laid(&plates::rows("tim", PORTRAIT, "0.1", "idle", 1), PORTRAIT);
+        assert_eq!(at(&rv, w + 1900 + 170).rows[..young.len()].iter().map(|(r, _)| r.clone()).collect::<Vec<_>>(), next);
+        assert_ne!(next, laid(&young, PORTRAIT), "the loop moves");
         assert!(text(&at(&rv, w + 2900)).contains("[ COMMON ]"));
         assert!(text(&at(&rv, w + 3200)).contains("fork() returned 0."));
         assert!(text(&at(&rv, w + 3500)).contains("\"oh hi. i'm tim."));
+        // The card, its portrait plate in tim's ink.
         let card = at(&rv, w + 4300);
-        assert!(card.done && text(&card).contains("| #01/09  DROP 1: UNIX            COMMON |") && text(&card).contains("tim 0.1  #0042"));
+        assert!(card.done && text(&card).contains("| #01/09  DROP 1: INIT            COMMON |") && text(&card).contains("tim 0.1  #0042"), "{}", text(&card));
         assert!(text(&card).contains("hatched 2026-09-26, first egg"));
+        let inked: Vec<&(String, Ink)> = card.rows.iter().filter(|(_, ink)| matches!(ink, Ink::Plate(_))).collect();
+        assert_eq!(inked.len(), young.len());
+        for (row, (line, _)) in young.iter().zip(inked) { assert!(line.contains(row.as_str()), "{row:?} in {line:?}") }
+    }
+
+    #[test]
+    fn a_plate_at_the_reveal_size_when_it_fits() {
+        let mut rv = answered("tim", false);
+        // Room for all of it (a 120 x 32 terminal's popup): the reveal plate, 56 columns wide.
+        assert_eq!(fit(&rv, 116, 30), REVEAL);
+        let (w, h) = extent(&rv, REVEAL);
+        assert!(w <= 116 && h <= 30 && w == width(REVEAL), "{w} x {h}");
+        // Too narrow or too short: the portrait plate.
+        assert_eq!(fit(&rv, 50, 30), PORTRAIT);
+        assert_eq!(fit(&rv, 116, h - 1), PORTRAIT);
+        rv.size = REVEAL;
+        let big = plates::rows("tim", REVEAL, "0.1", "idle", 0);
+        assert!(big.len() > plates::rows("tim", PORTRAIT, "0.1", "idle", 0).len());
+        let lit = at(&rv, 960 + 2000);
+        assert_eq!(lit.rows[..big.len()].iter().map(|(r, _)| r.clone()).collect::<Vec<_>>(), laid(&big, REVEAL));
+        // No row moves as the rest arrives: the reveal is never taller than its extent.
+        for ms in (0..5200).step_by(100) { assert!(at(&rv, ms).rows.len() <= h, "{ms}") }
+        // The card keeps its portrait plate; before the answer there is nothing to fit.
+        assert!(text(&at(&rv, 960 + 4300)).contains(plates::rows("tim", PORTRAIT, "0.1", "idle", 0)[1].as_str()));
+        assert_eq!(fit(&Reveal::new("e1", "first", true, false, true), 116, 30), PORTRAIT);
     }
 
     #[test]
     fn rarity_tells_and_a_secret_in_the_dark() {
         let w = 960;
-        let rare = answered("vim", false);
+        let rare = answered("yak", false);
         assert_eq!(at(&rare, w + 100).rows[0].1, Ink::Cyan);
-        let legendary = answered("fzf", false);
+        let legendary = answered("tux", false);
         assert!(at(&legendary, w + 500).rows.iter().any(|(r, ink)| *ink == Ink::Yellow && r.contains('*')));
-        let secret = answered("grue", false);
+        let secret = answered("beastie", false);
         assert!(at(&secret, w + 100).black && at(&secret, w + 5000).black);
         assert!(!at(&secret, 500).black, "black only once it answers");
+        // A shiny one wears its gold gradient.
+        let mut gold = answered("tux", false);
+        gold.outcome.as_mut().unwrap().shiny = true;
+        assert!(at(&gold, w + 2000).rows.iter().any(|(_, ink)| matches!(ink, Ink::Plate(p) if p.shiny)));
+        assert!(text(&at(&gold, w + 2900)).contains("[ SHINY LEGENDARY ]"));
     }
 
     #[test]
@@ -361,13 +480,19 @@ mod tests {
         assert!(!text(&at(&rv, w + 800)).contains("fork()"), "no new name for a duplicate");
         assert!(text(&at(&rv, w + 1800)).contains("tim grew: bond 2 · 1.0"));
         let held = at(&rv, w + 2700);
-        assert!(held.done && text(&held).contains("|_[0]_tim*__|"), "the new version: {}", text(&held));
-        // Three frames between, a quarter more of the differing cells each.
-        let old = render::portrait(roster(), roster().daemon("tim").unwrap(), "0.1", "idle", Opts::still());
-        let new = render::portrait(roster(), roster().daemon("tim").unwrap(), "1.0", "idle", Opts::still());
-        assert_eq!(morph(&old, &new, 0), old.iter().map(|l| l.trim_end().to_string()).collect::<Vec<_>>());
-        assert_eq!(morph(&old, &new, 4), new.iter().map(|l| l.trim_end().to_string()).collect::<Vec<_>>());
-        assert!(morph(&old, &new, 2) != morph(&old, &new, 1));
+        let grown = plates::rows("tim", PORTRAIT, "1.0", "idle", 0);
+        assert!(held.done && grown.iter().all(|row| text(&held).contains(row.as_str())), "the new version: {}", text(&held));
+        // Three frames between, a quarter more of the differing cells each, every row one width.
+        let old = plates::rows("tim", PORTRAIT, "0.1", "idle", 0);
+        let m0 = morph(&old, &grown, 0);
+        assert_eq!(m0[..old.len()], old.iter().map(|l| l.trim_end().to_string()).collect::<Vec<_>>()[..]);
+        assert!(m0[old.len()..].iter().all(String::is_empty));
+        assert_eq!(morph(&old, &grown, 4), grown.iter().map(|l| l.trim_end().to_string()).collect::<Vec<_>>());
+        assert!(morph(&old, &grown, 2) != morph(&old, &grown, 1));
+        let between = at(&rv, w + 1700 + 200 + 170);
+        let plate: Vec<&(String, Ink)> = between.rows.iter().filter(|(_, ink)| matches!(ink, Ink::Plate(_))).collect();
+        assert_eq!(plate.len(), grown.len());
+        assert!(plate.iter().all(|(r, _)| r.len() == plate[0].0.len()), "the morph keeps its width");
     }
 
     #[test]
@@ -375,5 +500,11 @@ mod tests {
         let mut rv = answered("tim", false);
         rv.motion = false;
         assert!(at(&rv, 350).done);
+        // Line art (a daemon of a later drop) still blinks, in its colour.
+        let mut line = answered("tmux", false);
+        line.size = REVEAL;
+        assert_eq!(fit(&line, 200, 60), PORTRAIT, "line art has one size");
+        assert!(text(&at(&line, 960 + 2000)).contains("|   o   o   |") && text(&at(&line, 960 + 2150)).contains("|   -   -   |"));
+        assert!(matches!(at(&line, 960 + 2000).rows[0].1, Ink::Colour(_)));
     }
 }

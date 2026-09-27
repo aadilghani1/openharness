@@ -1,9 +1,12 @@
 //! What the daemons put over the window, as tmux's display-popup floats over it: the hatch reveal
-//! (the whole screen), the zoo (the box back and the meters), a line's detail in full, the
-//! first-day consent (what the daemon sees), the brief on return, and — while the daemon key table
-//! is up — its keys, as the prefix's which-key shows the prefix table's.
+//! (the whole screen), the zoo (the paired daemon's portrait, the box back and the meters), a line's
+//! detail in full, the first-day consent (what the daemon sees), the brief on return, and — while
+//! the daemon key table is up — its keys, as the prefix's which-key shows the prefix table's.
+//!
+//! A filled daemon's plate is inked glyph by glyph (plates.rs) and, while motion is on and the
+//! terminal is in front, runs its mood's loop, a frame every frameMs.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
@@ -12,6 +15,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 use super::card::{shelf_lines, Shelved};
 use super::hatch::{self, Ink, Reveal};
+use super::plates::{self, Mode, PORTRAIT};
 use super::render;
 use super::roster::roster;
 use super::state::ZooState;
@@ -37,15 +41,24 @@ impl Row {
 
 fn t(s: impl Into<String>) -> Row { Row::Text(s.into(), Ink::Plain) }
 
-/// The zoo as rows: the paired daemon, the box back, what you own, the eggs and the meters — or,
-/// before any hatch, the nest and its habits. Shared by the popup and `hn zoo`.
-pub fn zoo_rows(state: &ZooState, doc: &ZooDoc, habits: &[String], today: &str, now_ms: i64) -> Vec<Row> {
+/// The paired daemon's portrait over the zoo: its mood, and the frame of that mood's loop.
+#[derive(Clone, Copy, Debug)]
+pub struct Face<'a> { pub mood: &'a str, pub frame: usize }
+
+/// The zoo as rows: the paired daemon (its portrait, with a `face`), the box back, what you own, the
+/// eggs and the meters — or, before any hatch, the nest and its habits. Shared by the popup and
+/// `hn zoo`. A daemon of a drop on hold is never shown.
+pub fn zoo_rows(state: &ZooState, doc: &ZooDoc, habits: &[String], today: &str, now_ms: i64, face: Option<Face>) -> Vec<Row> {
     let r = roster();
     let zoo: &Zoo = &doc.zoo;
     let mut out = Vec::new();
     let account = *state == ZooState::Account;
     if account && !zoo.daemons.is_empty() {
         if let Some((mine, d)) = zoo.paired() {
+            if let Some(f) = face {
+                out.extend(hatch::art(d, PORTRAIT, &mine.version(), f.mood, f.frame, mine.shiny, None).into_iter().map(|(s, ink)| Row::Text(s, ink)));
+                out.push(t(""));
+            }
             let levels = &r.rules.bond.levels;
             let next = levels.get(mine.bond as usize + 1).map(|n| format!("{}/{n} xp", mine.xp)).unwrap_or(format!("{} xp", mine.xp));
             let name = mine.nickname.as_ref().map(|n| format!("{n} the {}", d.id)).unwrap_or(d.id.clone());
@@ -66,7 +79,7 @@ pub fn zoo_rows(state: &ZooState, doc: &ZooDoc, habits: &[String], today: &str, 
         }
         out.push(t(""));
         for o in &zoo.daemons {
-            let Some(d) = r.daemon(&o.id) else { continue };
+            let Some(d) = r.shown(&o.id) else { continue };
             let mut bits = vec![format!("{:<6} {:<4}", o.id, o.version()), format!("bond {}", o.bond), format!("{} xp", o.xp)];
             if o.dupes > 0 { bits.push(format!("x{}", o.dupes + 1)) }
             if o.shiny { bits.push("shiny".into()) }
@@ -146,6 +159,8 @@ fn ink_style(ink: Ink, plain: bool) -> Style {
         Ink::Dark(x) => if plain { Style::default() } else { Style::default().fg(Color::Indexed(x)).bg(Color::Black) },
         Ink::Cyan => c(Color::Cyan).add_modifier(Modifier::BOLD),
         Ink::Yellow => c(Color::Yellow).add_modifier(Modifier::BOLD),
+        // Inked glyph by glyph (put_rows).
+        Ink::Plate(_) => Style::default(),
     }
 }
 
@@ -167,12 +182,20 @@ fn centred(area: Rect, w: u16, h: u16) -> Rect {
     Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h)
 }
 
-fn put_rows(buf: &mut Buffer, inner: Rect, rows: &[Row], top: usize, base: Style, plain: bool, centre: bool) {
+fn put_rows(buf: &mut Buffer, inner: Rect, rows: &[Row], top: usize, base: Style, mode: Mode, centre: bool) {
+    let plain = mode == Mode::Plain;
     let w = rows.iter().map(|r| r.text().len()).max().unwrap_or(0) as u16;
     let x0 = if centre && w < inner.width { inner.x + (inner.width - w) / 2 } else { inner.x };
     for (i, row) in rows.iter().skip(top).take(inner.height as usize).enumerate() {
         let y = inner.y + i as u16;
         match row {
+            // A plate's row: each glyph its ink (a space, or a card's border, the row's own style).
+            Row::Text(s, Ink::Plate(p)) => {
+                for (i, ch) in s.chars().enumerate().take(inner.width as usize) {
+                    let style = plates::style(*p, ch, mode).map(|g| base.patch(g)).unwrap_or(base);
+                    buf.set_string(x0 + i as u16, y, ch.to_string(), style);
+                }
+            }
             Row::Text(s, ink) => { buf.set_stringn(x0, y, s, inner.width as usize, base.patch(ink_style(*ink, plain))); }
             Row::Shelf(s, colours) => {
                 for (c, chunk) in s.as_bytes().chunks(10).enumerate() {
@@ -215,32 +238,48 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 pub fn draw(buf: &mut Buffer, app: &mut App) -> bool {
     let area = *buf.area();
     if area.width < 10 || area.height < 5 { return false }
-    let plain = crate::theme::no_color();
+    let mode = Mode::now();
+    let plain = mode == Mode::Plain;
     let body = app.body();
     // The brief on return, above the status line, while it lasts.
-    brief(buf, app, body, plain);
+    brief(buf, app, body, mode);
     let mut took = false;
     match app.daemons.overlay.take() {
         None => {}
-        Some(Overlay::Hatch(rv)) => {
+        Some(Overlay::Hatch(mut rv)) => {
             let now = Instant::now();
+            // A plate at the reveal size when all of the reveal fits in the box, else the portrait size.
+            let room = Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), area.height.saturating_sub(2));
+            rv.size = hatch::fit(&rv, room.width as usize, room.height as usize);
             let f = hatch::frame(&rv, now);
             let fill = if f.black && !plain { Style::default().bg(Color::Black).fg(Color::Gray) } else { Style::default() };
             let inner = frame_box(buf, area, " hatch ", fill);
             let rows: Vec<Row> = f.rows.iter().map(|(s, ink)| Row::Text(s.clone(), *ink)).collect();
-            // A fixed place (the card's height, the reveal's width): rows are added below, and the
-            // art never moves.
-            let (w, h) = (hatch::WIDTH as u16, rows.len() as u16);
-            let top = inner.height.saturating_sub(h.max(26)) / 2;
+            // A fixed place (the reveal's tallest moment, or the card's height; its width): rows are
+            // added below, and the art never moves.
+            let tallest = hatch::extent(&rv, rv.size).1.max(26) as u16;
+            let (w, h) = (hatch::width(rv.size) as u16, rows.len() as u16);
+            let top = inner.height.saturating_sub(h.max(tallest)) / 2;
             let region = Rect::new(inner.x + inner.width.saturating_sub(w) / 2, inner.y + top, w.min(inner.width), h.min(inner.height - top));
-            put_rows(buf, region, &rows, 0, fill, plain, false);
-            if let Some(ms) = hatch::next_in(&rv, now) { super::brain::wake(app, ms.as_millis() as u64) }
+            put_rows(buf, region, &rows, 0, fill, mode, false);
+            if let Some(ms) = hatch::next_in(&rv, now) { animate(app, ms) }
             app.daemons.overlay = Some(Overlay::Hatch(rv));
             took = true;
         }
         Some(Overlay::Zoo) => {
+            // The paired daemon's portrait in its mood; a plate runs that mood's loop while motion is
+            // on and the terminal is in front (else its first frame).
+            let clock = super::zoo::now_ms().max(0) as u64;
+            let moving = super::state::motion(app) && app.terminal_focused;
+            let mood = super::state::mood(app);
+            let paired = app.daemons.zoo.zoo.paired();
+            let loop_len = paired.map(|(mine, d)| plates::frames(&d.id, PORTRAIT, &mine.version(), mood).len()).unwrap_or(0);
+            let face = Face { mood, frame: if moving { plates::frame_at(clock, loop_len) } else { 0 } };
             let d = &app.daemons;
-            let mut rows = zoo_rows(&d.zoo_state, &d.zoo, &d.habits(), &super::zoo::local_today(), super::zoo::now_ms());
+            let (today, now) = (super::zoo::local_today(), super::zoo::now_ms());
+            let mut rows = zoo_rows(&d.zoo_state, &d.zoo, &d.habits(), &today, now, Some(face));
+            // No room for the portrait: the zoo without it.
+            if rows.len() + 4 > body.height as usize { rows = zoo_rows(&d.zoo_state, &d.zoo, &d.habits(), &today, now, None) }
             rows.push(t(""));
             let hatch = if d.zoo_state == ZooState::Account && !d.zoo.zoo.eggs.is_empty() { "h hatch · " } else { "" };
             let card = if d.zoo.zoo.paired().is_some() { "c copy card · " } else { "" };
@@ -248,7 +287,8 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> bool {
             let w = rows.iter().map(|r| r.text().len()).max().unwrap_or(40) as u16 + 6;
             let rect = centred(body, w.max(56), rows.len() as u16 + 2);
             let inner = frame_box(buf, rect, " zoo ", Style::default());
-            put_rows(buf, inner, &rows, 0, Style::default(), plain, false);
+            put_rows(buf, inner, &rows, 0, Style::default(), mode, false);
+            if moving && loop_len > 1 { animate(app, Duration::from_millis(plates::next_frame_in(clock))) }
             app.daemons.overlay = Some(Overlay::Zoo);
             took = true;
         }
@@ -262,7 +302,7 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> bool {
             let room = inner.height.saturating_sub(2) as usize;
             let top = top.min(lines.len().saturating_sub(room));
             let rows: Vec<Row> = lines.iter().map(|l| t(l.clone())).collect();
-            put_rows(buf, Rect::new(inner.x, inner.y, inner.width, room as u16), &rows, top, Style::default(), plain, false);
+            put_rows(buf, Rect::new(inner.x, inner.y, inner.width, room as u16), &rows, top, Style::default(), mode, false);
             let more = if top + room < lines.len() { format!("  ({} more — j/k)", lines.len() - top - room) } else { String::new() };
             buf.set_stringn(inner.x, inner.y + inner.height - 1, format!("{foot}{more}"), inner.width as usize, Style::default().add_modifier(Modifier::DIM));
             // All of it has been on screen: now a key on it may count.
@@ -274,7 +314,7 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> bool {
             let rows = consent_rows(&name);
             let w = rows.iter().map(|r| r.text().len()).max().unwrap_or(40) as u16 + 6;
             let inner = frame_box(buf, centred(body, w, rows.len() as u16 + 2), " consent ", Style::default());
-            put_rows(buf, inner, &rows, 0, Style::default(), plain, false);
+            put_rows(buf, inner, &rows, 0, Style::default(), mode, false);
             app.daemons.overlay = Some(Overlay::Consent { name });
             took = true;
         }
@@ -285,6 +325,15 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> bool {
     app.daemons.table_up = up;
     if !took && up { table(buf, app, body) }
     took
+}
+
+/// Draw again in `after` (a plate's next frame, the reveal's next moment) — one timer at a time, so
+/// frames drawn for other reasons never start a second.
+fn animate(app: &mut App, after: Duration) {
+    let now = Instant::now();
+    if app.daemons.frame_due.map(|t| t > now).unwrap_or(false) { return }
+    app.daemons.frame_due = Some(now + after);
+    super::brain::wake(app, after.as_millis() as u64);
 }
 
 /// The keys a line's detail answers with, named: `y Yes · n No · g open · Esc close`.
@@ -298,7 +347,7 @@ fn keys_named(app: &App, id: &str) -> String {
     format!("{} · Esc close{armed}", keys.join(" · "))
 }
 
-fn brief(buf: &mut Buffer, app: &mut App, body: Rect, plain: bool) {
+fn brief(buf: &mut Buffer, app: &mut App, body: Rect, mode: Mode) {
     let Some(b) = app.daemons.brain.brief.as_ref() else { return };
     if Instant::now() >= b.until { app.daemons.brain.brief = None; return }
     if app.daemons.overlay.is_some() || app.modal.is_some() { return }
@@ -310,7 +359,7 @@ fn brief(buf: &mut Buffer, app: &mut App, body: Rect, plain: bool) {
     let h = (rows.len() as u16 + 2).min(body.height);
     let rect = Rect::new(body.x + body.width - w, body.y + body.height - h, w, h);
     let inner = frame_box(buf, rect, &format!(" {} ", app.daemons.name()), Style::default());
-    put_rows(buf, inner, &rows, 0, Style::default(), plain, false);
+    put_rows(buf, inner, &rows, 0, Style::default(), mode, false);
     let ids: Vec<String> = app.daemons.brain.brief.as_ref().map(|b| b.items.iter().map(|l| l.id.clone()).collect()).unwrap_or_default();
     for id in ids { super::brain::drawn(app, &id) }
 }
@@ -395,24 +444,57 @@ mod tests {
 
     #[test]
     fn the_zoo_as_rows() {
-        let doc: ZooDoc = serde_json::from_value(json!({ "revision": 2, "zoo": { "daemons": [{ "id": "tim", "bond": 1, "xp": 60, "version": "0.1", "serial": 42 }, { "id": "vim", "version": "1.0", "dupes": 1, "shiny": true }],
+        let doc: ZooDoc = serde_json::from_value(json!({ "revision": 2, "zoo": { "daemons": [{ "id": "tim", "bond": 1, "xp": 60, "version": "0.1", "serial": 42 }, { "id": "yak", "version": "1.0", "dupes": 1, "shiny": true }, { "id": "vim", "version": "2.0" }],
             "eggs": [{ "id": "e", "kind": "turn" }, { "id": "f", "kind": "turn" }], "pair": "tim", "habits": ["turn", "split", "find"], "firstEgg": true, "progress": { "turns": 52, "days": { "2026-09-26": 4 } } } })).unwrap();
-        let rows = zoo_rows(&ZooState::Account, &doc, &[], "2026-09-26", super::super::card::day_number("2026-09-27").unwrap() * 86_400_000);
+        let now = super::super::card::day_number("2026-09-27").unwrap() * 86_400_000;
+        let rows = zoo_rows(&ZooState::Account, &doc, &[], "2026-09-26", now, None);
         let text: Vec<&str> = rows.iter().map(Row::text).collect();
         assert_eq!(text[0], "tim 0.1 · common · paired · bond 1 · 60/150 xp · #0042");
-        assert!(text.contains(&"zoo: drop 1 unix  2/9"));
-        assert!(text.iter().any(|l| l.starts_with("\\[o|o]/   [ ? ]")), "{text:?}");
-        assert!(text.iter().any(|l| l.contains("vim x2")));
-        assert!(text.iter().any(|l| l.starts_with("  vim    1.0  · bond 0 · 0 xp · x2 · shiny")), "{text:?}");
+        assert!(text.contains(&"zoo: drop 1 init  2/9"));
+        assert!(text.iter().any(|l| l.starts_with("~(o o)~   [ ? ]")), "{text:?}");
+        assert!(text.iter().any(|l| l.contains("yak x2")));
+        assert!(text.iter().any(|l| l.starts_with("  yak    1.0  · bond 0 · 0 xp · x2 · shiny")), "{text:?}");
+        // vim's drop is on hold: a record of it is never shown.
+        assert!(!text.iter().any(|l| l.contains("vim ") && !l.contains("Named the way vim")), "{text:?}");
         assert!(text.contains(&"eggs: \\_O_/ x2 waiting — h hatches"));
         assert!(text.contains(&"next egg: 12/40 turns · today 4/20 (the day's cap)"));
         assert!(text.contains(&"habits: 3/6 toward the setup egg"));
+        // With a face: tim's portrait plate over it all, in its mood and frame, down its gradient.
+        let faced = zoo_rows(&ZooState::Account, &doc, &[], "2026-09-26", now, Some(Face { mood: "work", frame: 2 }));
+        let plate = plates::rows("tim", PORTRAIT, "0.1", "work", 2);
+        let tim = roster().daemon("tim").unwrap();
+        for (i, row) in plate.iter().enumerate() {
+            assert!(matches!(&faced[i], Row::Text(t, Ink::Plate(p)) if t == row && *p == plates::PlateInk::of(tim, false, i, plate.len())), "{:?}", faced[i]);
+        }
+        assert_eq!(faced[plate.len()].text(), "");
+        assert_eq!(faced[plate.len() + 1].text(), text[0]);
         // Signed out: the nest, its habits, and how to hatch.
-        let nest = zoo_rows(&ZooState::SignedOut, &ZooDoc::default(), &["split".into(), "find".into()], "2026-09-26", 0);
+        let nest = zoo_rows(&ZooState::SignedOut, &ZooDoc::default(), &["split".into(), "find".into()], "2026-09-26", 0, Some(Face { mood: "idle", frame: 0 }));
         let text: Vec<&str> = nest.iter().map(Row::text).collect();
         assert_eq!(text[0], "the nest   \\_.._/   2 of 3 toward the first egg");
         assert!(text.contains(&"  [ ] Finish a turn in a harness  (needed)") && text.contains(&"  [x] Run two harnesses side by side"));
         assert!(text.contains(&"sign in to hatch: harness login"));
+    }
+
+    #[test]
+    fn a_plate_row_is_inked_glyph_by_glyph() {
+        let tim = roster().daemon("tim").unwrap();
+        let ink = Ink::Plate(plates::PlateInk::of(tim, false, 0, 2));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 12, 1));
+        put_rows(&mut buf, Rect::new(0, 0, 12, 1), &[Row::Text("|.#@ |".into(), ink)], 0, Style::default(), Mode::Xterm, false);
+        let cell = |x: u16| buf.cell((x, 0)).unwrap().clone();
+        // The border and the space keep the row's style; ink takes the plate's.
+        assert_eq!((cell(0).symbol(), cell(0).fg), ("|", Color::Reset));
+        // At 256 colours: the row's nearest xterm colour (tim's top, 213), dim below 0.6, bold above 1.
+        assert_eq!((cell(2).symbol(), cell(2).fg, cell(2).modifier), ("#", Color::Indexed(213), Modifier::empty()));
+        assert_eq!((cell(1).fg, cell(1).modifier), (Color::Indexed(213), Modifier::DIM));
+        assert_eq!((cell(3).fg, cell(3).modifier), (Color::Indexed(213), Modifier::BOLD));
+        assert_eq!((cell(4).symbol(), cell(4).fg), (" ", Color::Reset));
+        // NO_COLOR: the plain text.
+        let mut plain = Buffer::empty(Rect::new(0, 0, 12, 1));
+        put_rows(&mut plain, Rect::new(0, 0, 12, 1), &[Row::Text("|.#@ |".into(), ink)], 0, Style::default(), Mode::Plain, false);
+        assert!((0..6).all(|x| plain.cell((x, 0)).unwrap().fg == Color::Reset && plain.cell((x, 0)).unwrap().modifier.is_empty()));
+        assert_eq!((0..6).map(|x| plain.cell((x, 0)).unwrap().symbol().to_string()).collect::<String>(), "|.#@ |");
     }
 
     #[test]

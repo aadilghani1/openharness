@@ -10,6 +10,7 @@ it chose where the contract leaves room. It replaces `tim.rs` and `~/.harness/tu
 | part | file |
 |---|---|
 | roster and banner (`include_str!` of `daemons/roster.json`, `banner.json`) | `src/daemon/roster.rs` |
+| plates (`include_str!` of `daemons/plates.json`, parsed on first use) and their colour (bake.mjs `plateColor`) | `src/daemon/plates.rs` |
 | renderer: sprite, portrait, status cell, base width, banner, nest stage (render.mjs) | `src/daemon/render.rs` |
 | cards and shelves, text and SVG (card.mjs) | `src/daemon/card.rs` |
 | harnessd's Unix socket | `src/daemon/socket.rs` |
@@ -22,8 +23,28 @@ it chose where the contract leaves room. It replaces `tim.rs` and `~/.harness/tu
 | `hn zoo`, `hn card`, `hn hatch`, `hn talk`, `hn lessons`, `hn tim` | `src/daemon/shell.rs` |
 
 `cargo test` checks every sprite, portrait, status cell, card, nest and banner in
-`daemons/frames.json` byte for byte. Change the roster, run `node daemons/tools/generate.mjs`, and
-the test says whether the port still draws what the reference draws.
+`daemons/frames.json` byte for byte, and every cell of `plateColors` in truecolor. Change the roster,
+run `node daemons/tools/generate.mjs`, and the test says whether the port still draws what the
+reference draws.
+
+## Drops and plates
+
+Drop 1 is `init`: ten daemons drawn filled (`plate: true`), tim the octopus among them. `unix` and
+`tty` are on hold (`hold: true`, no dates): hn never shows them — no shelf, no silhouettes, no count,
+and a record of one in a zoo is passed over (`dropState` is hidden for a hold before any date).
+
+A filled daemon keeps its one-line sprite in the status line. Everywhere else it is its plate from
+`plates.json`: the `portrait` size (28 columns) over the zoo and on the card (idle, frame 0), and the
+`reveal` size (56) in the hatch when the whole reveal fits the terminal, else the portrait size. A
+plate runs its mood's loop, a frame every `frameMs` (170 ms), while `@daemon-motion` is on and the
+terminal is in front; else it shows frame 0.
+
+**Colour** (daemons/README.md, "Plate colour"): row r of R takes mix(top, bottom, r / (R - 1)) of the
+daemon's gradient (the gold `shinyGradient` when shiny). In truecolor (`COLORTERM=truecolor|24bit`,
+as hn decides for its own chrome) each glyph is `plateColor` on `#0c0c0c`: its ink level mixes from
+the background toward the row colour, above 1 on toward white. With 256 colours it is the row's
+nearest xterm index, SGR dim below 0.6 and bold above 1; with 16, the nearest base colour the same
+way. `NO_COLOR` prints the plain text.
 
 ## Keys
 
@@ -145,11 +166,12 @@ over TCP says so and sends nothing): harnessd refuses `daemon_*` writes over TCP
 whole window. The egg wobbles until harnessd answers `zoo.hatch` (two wobbles at least), then tells
 the rarity at the crack — a rare's shell glows cyan, a legendary's pop throws yellow `*'.` sparks, a
 secret's stage is pitch black first — pops, and the 0.1 portrait appears as `#` in the faint colour
-for 1200 ms, fills with its colour, blinks, and its name types in as a banner (`banner.json`); then
-the rarity stamp, `fork() returned 0.`, its first words and the card, with the server's serial. The
-reveal is laid out in a fixed place (the card's width and height), so nothing moves as rows arrive.
-A duplicate has no new name: `another vim. +150 xp.` (`yours is shiny now.` when it was), and a
-level-up morphs the portrait into the new version in three dithered frames of 160 ms. From the fourth
+for 1200 ms, fills with its colour (a plate in its gradient, its idle loop running; line art blinks),
+and its name types in as a banner (`banner.json`); then the rarity stamp, `fork() returned 0.`, its
+first words and the card, with the server's serial. The reveal is laid out in a fixed place (its
+tallest moment, or the card's height; its width), so nothing moves as rows arrive. A duplicate has
+no new name: `another tux. +150 xp.` (`yours is shiny now.` when it was), and a level-up morphs the
+portrait into the new version in three dithered frames of 160 ms. From the fourth
 hatch any key skips to the card; Escape closes. Reduce Motion goes straight to the card.
 
 While nobody has answered the consent, the card's next key shows **what the daemon sees** (the
@@ -159,8 +181,10 @@ README's words): `y` sends `zoo.consent { watching: true }`, `n` false, Escape a
 ## From a shell
 
 ```
-hn zoo                     the box back, what you own, eggs, the meters (or the nest)
-hn card [daemon] [--svg]   a card as text (copied with OSC 52 at a terminal) or SVG
+hn zoo                     your daemon's portrait, the box back, what you own, eggs, the meters (or the nest)
+hn card [daemon] [--version v] [--svg]
+                           a card as text (copied with OSC 52 at a terminal) or SVG; a filled
+                           daemon's shows its portrait plate at the card's version
 hn hatch                   the running hn hatches an egg
 hn talk "<words>"          words to your daemon, through the running hn
 hn lessons [...]           harness pair lessons — approving one asks you at the terminal
@@ -172,12 +196,13 @@ hn tim                     one line about it
 
 ## Tests
 
-`cargo test` (the frames, the reveal at chosen moments, the zoo's rows, the key table coming and
-going) and `tests/e2e.sh` against `tests/mock-daemon.mjs`, which serves harnessd's Unix socket in
+`cargo test` (the frames, the plates and their colours, drops on hold, the reveal at chosen moments
+and sizes, the zoo's rows, the key table coming and going) and `tests/e2e.sh` against `tests/mock-daemon.mjs`, which serves harnessd's Unix socket in
 `ADAPTER_DATA_DIR`, a zoo (`MOCK_ZOO=egg|tim|nest|signedout|off|disabled`, `MOCK_HATCH`,
 `MOCK_SHINY`, and `POST /test/zoo-mode` to flip the switch) and the pair brain's frame rules (shown
 before a key, 400 ms, the socket only). The e2e hatches, consents, answers a keys-first line through
 the table, replaces a line by its id, takes pushed `daemon_state` (a need, then `pair: null`), switches
-the daemons off and on again under a running hn, talks, reads the brief and the zoo, prints a card,
-checks Quiet, and runs hn against the daemons off and signed out.
-`E2E_SNAPSHOTS=<dir>` keeps the screens it saw.
+the daemons off and on again under a running hn, talks, reads the brief and the zoo, prints a card
+(`hn card tim --version 2.0` byte for byte against `daemons/tools/card.mjs`), checks Quiet, and runs
+hn against the daemons off and signed out. `E2E_SNAPSHOTS=<dir>` keeps the screens it saw (and the
+card).

@@ -61,14 +61,19 @@ pub struct Zoo {
 pub struct ZooDoc { pub revision: i64, pub zoo: Zoo }
 
 impl Zoo {
-    /// The paired daemon: its record, and its roster entry.
+    /// The paired daemon: its record, and its roster entry (never one of a drop on hold).
     pub fn paired(&self) -> Option<(&Owned, &'static Daemon)> {
         let id = self.pair.as_deref()?;
         let mine = self.daemons.iter().find(|d| d.id == id)?;
-        Some((mine, roster().daemon(id)?))
+        Some((mine, roster().shown(id)?))
     }
 
-    pub fn owned(&self, id: &str) -> Option<&Owned> { self.daemons.iter().find(|d| d.id == id) }
+    /// Your record of a daemon; none for a daemon of a drop on hold, which is never shown.
+    pub fn owned(&self, id: &str) -> Option<&Owned> {
+        let r = roster();
+        if r.daemon(id).is_some_and(|d| r.held(d)) { return None }
+        self.daemons.iter().find(|d| d.id == id)
+    }
 }
 
 impl Owned {

@@ -1,7 +1,10 @@
 //! The daemons from a shell, beside `hn ls` and `hn send-message`:
 //!
 //!   hn zoo                     the box back, what you own, eggs and what's next (or the nest)
-//!   hn card [daemon] [--svg]   a card, as text (copied with OSC 52 at a terminal) or SVG
+//!   hn card [daemon] [--version v] [--svg]
+//!                              a card, as text (copied with OSC 52 at a terminal) or SVG, at your
+//!                              daemon's version or the one asked for (a filled daemon's shows its
+//!                              portrait plate)
 //!   hn hatch                   the running hn hatches an egg, full screen
 //!   hn talk "<words>"          words to your daemon, from the running hn (a window)
 //!   hn lessons [...]           harness pair lessons (approving stays yours, at a terminal)
@@ -9,7 +12,7 @@
 
 use std::io::IsTerminal;
 
-use super::overlay::{zoo_rows, Row};
+use super::overlay::{zoo_rows, Face, Row};
 use super::roster::roster;
 use super::state::ZooState;
 use super::zoo::{local_today, now_ms, Settings, ZooDoc};
@@ -49,23 +52,31 @@ pub async fn run(args: &[String], port: u16, socket: Option<&str>, name: Option<
     Some(match verb {
         "zoo" => {
             if state == ZooState::Unknown { return Some(1) }
-            let rows = zoo_rows(&state, &doc, &habits(&state, &doc), &local_today(), now_ms());
+            // The paired daemon's portrait at rest (idle, its first frame), as text.
+            let rows = zoo_rows(&state, &doc, &habits(&state, &doc), &local_today(), now_ms(), Some(Face { mood: "idle", frame: 0 }));
             let text: Vec<&str> = rows.iter().map(Row::text).collect();
             crate::cli::out(&(text.join("\n").trim_end().to_string() + "\n"));
             0
         }
         "card" => {
             let svg = rest.iter().any(|a| a == "--svg");
-            let id = rest.iter().find(|a| !a.starts_with('-')).cloned();
+            // `--version v` takes the word after it; the first other word is the daemon.
+            let version = rest.iter().position(|a| a == "--version").map(|i| rest.get(i + 1).cloned().unwrap_or_default());
+            let id = rest.iter().enumerate().find(|(i, a)| !a.starts_with('-') && (*i == 0 || rest[i - 1] != "--version")).map(|(_, a)| a.clone());
+            if let Some(v) = version.as_ref().filter(|v| !roster().rules.versions.contains(v)) {
+                eprintln!("hn: no version {v:?} — {}", roster().rules.versions.join(", "));
+                return Some(2);
+            }
             if state == ZooState::SignedOut { eprintln!("hn: no zoo — sign in to hatch (harness login)"); return Some(1) }
             if state != ZooState::Account { return Some(1) }
             let mine = match &id { Some(i) => doc.zoo.owned(i), None => doc.zoo.paired().map(|(m, _)| m) };
             let Some(mine) = mine else {
-                eprintln!("hn: {}", match &id { Some(i) if roster().daemon(i).is_some() => format!("you have not hatched {i}"), Some(i) => format!("no daemon is called {i}"), None => "no daemon yet — hatch one first".into() });
+                eprintln!("hn: {}", match &id { Some(i) if roster().shown(i).is_some() => format!("you have not hatched {i}"), Some(i) => format!("no daemon is called {i}"), None => "no daemon yet — hatch one first".into() });
                 return Some(1);
             };
-            let d = roster().daemon(&mine.id)?;
-            let o = super::hooks::card_opts(mine);
+            let d = roster().shown(&mine.id)?;
+            let mut o = super::hooks::card_opts(mine);
+            if version.is_some() { o.version = version }
             if svg { crate::cli::out(&super::card::card_svg(roster(), d, &o)); return Some(0) }
             let text = super::card::card_lines(roster(), d, &o).join("\n");
             crate::cli::out(&format!("{text}\n"));

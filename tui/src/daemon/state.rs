@@ -88,6 +88,8 @@ pub struct Daemons {
     pub presence_gen: Option<u64>,
     /// The daemon key table was up at the last frame.
     pub table_up: bool,
+    /// When a popup's animation draws next (a plate's frame, the reveal): one timer at a time.
+    pub frame_due: Option<Instant>,
     // ── the pair brain, and what is open over the window ──
     pub brain: Brain,
     pub overlay: Option<super::overlay::Overlay>,
@@ -98,7 +100,7 @@ impl Daemons {
         Daemons {
             settings: Settings::load(), tim_off: false, zoo: ZooDoc::default(), zoo_state: ZooState::Unknown, fetching: false, refetch: false, reported: Vec::new(), retry_at: None, retry: RETRY_FIRST, keys_on: false, fetched_gen: None,
             held: None, last_done: None, blink: None, last_look: None, step: 0, last_step: None, back_at: None, nap_until: None, boop_until: None, egg_until: None,
-            last_key: Instant::now(), pause_at: None, idle_sent: false, away_since: None, focus_back: None, focus_sent: None, presence_gen: None, table_up: false,
+            last_key: Instant::now(), pause_at: None, idle_sent: false, away_since: None, focus_back: None, focus_sent: None, presence_gen: None, table_up: false, frame_due: None,
             brain: Brain::default(), overlay: None,
         }
     }

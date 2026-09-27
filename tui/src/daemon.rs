@@ -13,6 +13,7 @@ pub mod card;
 pub mod hatch;
 pub mod hooks;
 pub mod overlay;
+pub mod plates;
 pub mod render;
 pub mod roster;
 pub mod shell;

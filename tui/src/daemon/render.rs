@@ -162,7 +162,7 @@ pub mod tests {
             assert_eq!(got, s(&c["out"]), "sprite {c}");
             n += 1;
         }
-        assert_eq!(n, 960);
+        assert_eq!(n, 2880);
     }
 
     #[test]

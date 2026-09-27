@@ -370,7 +370,7 @@ pub fn copy_card(app: &mut App) {
 pub fn card_text(doc: &ZooDoc, id: Option<&str>) -> Option<String> {
     let zoo = &doc.zoo;
     let mine = match id { Some(id) => zoo.owned(id)?, None => zoo.paired()?.0 };
-    let d = super::roster::roster().daemon(&mine.id)?;
+    let d = super::roster::roster().shown(&mine.id)?;
     let o = card_opts(mine);
     Some(super::card::card_lines(super::roster::roster(), d, &o).join("\n"))
 }

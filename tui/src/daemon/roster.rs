@@ -1,6 +1,7 @@
 //! daemons/roster.json and daemons/banner.json, read once (`include_str!`): the art, the rules and
 //! the lines every client draws from. Never edited here — `node daemons/tools/generate.mjs` checks
-//! the roster, and `render::tests` checks this port against daemons/frames.json.
+//! the roster, and `render::tests` checks this port against daemons/frames.json. The filled
+//! daemons' baked plates are daemons/plates.json, read in `plates.rs`.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -36,6 +37,18 @@ pub struct Rules {
     pub earn: Earn,
     pub nest: Vec<String>,
     pub egg: Vec<String>,
+    /// How plates are baked and inked (drop `init`'s filled daemons).
+    pub plate: PlateRules,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PlateRules {
+    /// The columns each size is baked at (`portrait` 28, `reveal` 56). (Its frameMs is plates.json's.)
+    pub cols: HashMap<String, usize>,
+    /// Each glyph's brightness: at most 1 mixes from the background toward the row colour, above 1
+    /// on toward white. A space is not drawn.
+    pub ink: HashMap<String, f64>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -77,10 +90,17 @@ pub struct DropDef {
     pub announce: Option<String>,
     #[serde(default)]
     pub release: Option<String>,
+    /// On hold: no dates, never drawn, hatched or shown anywhere.
+    #[serde(default)]
+    pub hold: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Colour { pub xterm: u8, pub hex: String }
+
+/// A plate's colour, top row to bottom row.
+#[derive(Deserialize, Debug, Clone)]
+pub struct Gradient { pub top: Colour, pub bottom: Colour }
 
 #[derive(Deserialize, Debug)]
 pub struct Part { pub rest: String, pub work: Vec<String>, pub ms: u64 }
@@ -101,7 +121,16 @@ pub struct Daemon {
     pub sprites: HashMap<String, String>,
     pub work: Vec<String>,
     pub work_ms: u64,
+    /// Line art, one per version drawn. A filled daemon has none: its portraits are plates.
+    #[serde(default)]
     pub portraits: HashMap<String, Vec<String>>,
+    /// Drawn filled (plates.json), in its gradient; the status line keeps the one-line sprite.
+    #[serde(default)]
+    pub plate: bool,
+    #[serde(default)]
+    pub gradient: Option<Gradient>,
+    #[serde(default)]
+    pub shiny_gradient: Option<Gradient>,
     #[serde(default)]
     pub parts: HashMap<String, Part>,
     #[serde(default)]
@@ -137,11 +166,23 @@ impl Roster {
 
     /// The index of a version (`0.1` → 0), else the youngest.
     pub fn version_index(&self, version: &str) -> usize { self.rules.versions.iter().position(|v| v == version).unwrap_or(0) }
+
+    /// A daemon of a drop on hold: kept in the roster, never shown anywhere (a record of one in a
+    /// zoo is passed over as a name the roster does not know).
+    pub fn held(&self, d: &Daemon) -> bool { self.drops.iter().any(|x| x.id == d.drop && x.hold) }
+
+    /// A daemon hn may show: known, and not of a drop on hold.
+    pub fn shown(&self, id: &str) -> Option<&Daemon> { self.daemon(id).filter(|d| !self.held(d)) }
 }
 
 impl Daemon {
     /// Its colour on the terminal background: the shiny one when it is shiny.
     pub fn colour(&self, shiny: bool) -> u8 { if shiny { self.shiny.as_ref().map(|s| s.xterm).unwrap_or(self.color.xterm) } else { self.color.xterm } }
+
+    /// A plate's gradient: the shiny one (every shiny in drop `init` is gold) when it is shiny.
+    pub fn gradient(&self, shiny: bool) -> Option<&Gradient> {
+        if shiny { self.shiny_gradient.as_ref().or(self.gradient.as_ref()) } else { self.gradient.as_ref() }
+    }
 
     /// `screen -> tmux -> tim`.
     pub fn lineage(&self) -> String { self.family.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(" -> ") }

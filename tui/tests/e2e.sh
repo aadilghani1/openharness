@@ -198,8 +198,11 @@ expect "C-b Z: the daemon's keys" "Hatch an egg"
 snap table
 tmux_ send-keys -t t h
 expect "h: the hatch, full screen" "─ hatch ─"
-expect "the hatchling as a silhouette first" "#   #   #   #"
+# tim is drawn filled: its 0.1 plate, at the reveal size (56 columns) since 120 x 32 has room for all of it.
+expect "the hatchling as a silhouette first (the reveal plate, every glyph a #)" "###################"
 snap hatch-silhouette
+expect "then the plate itself, its idle loop running" "##########%%%%"
+snap hatch-plate
 expect "its name as a banner" "| |_  (_)  _ __"
 expect "fork() returned 0." "fork() returned 0."
 snap hatch-fork
@@ -211,8 +214,8 @@ snap consent
 tmux_ send-keys -t t y
 wait_eq "y: zoo.consent { watching: true }" "true" dial "d.zooOps.filter(o => o.op === 'zoo.consent').map(o => o.watching).join()"
 wait_eq "tim is paired, in the status line" "tim" hn display -p '#{daemon_name}'
-wait_eq "#{daemon}: tim's face in the status cell" '  [o o]   ' hn display -p '#{daemon}'
-expect "tim in the status line, once its reply has gone" "[o o]" 7000
+wait_eq "#{daemon}: tim's face in the status cell (its one-line sprite)" '  (o o)   ' hn display -p '#{daemon}'
+expect "tim in the status line, once its reply has gone" "(o o)" 7000
 snap status-tim
 wait_eq "presence over the socket (daemon_presence, trusted)" "true" dial "d.daemon.some(f => f.type === 'daemon_presence' && f.trusted)"
 # A line from the pair brain, keys first; its detail is on screen before a key counts.
@@ -271,16 +274,42 @@ wait_eq "on again after zoo_changed" "tim" hn display -p '#{daemon_name}'
 wait_eq "prefix Z back" 1 sh -c "HOME=$home $bin -L $client list-keys -T prefix Z | grep -c 'switch-client -T daemon'"
 # The zoo: the box back and what's next.
 tmux_ send-keys -t t C-b Z z
-expect "z: the zoo's box back" "zoo: drop 1 unix  1/9"
+expect "z: the zoo's box back (drop 1 is init; unix and tty are on hold, shown nowhere)" "zoo: drop 1 init  1/9"
 expect "an empty numbered slot" "[ ? ]"
+expect "tim's portrait plate over the zoo" "#####%"
 snap zoo
+screen | grep -qiF "unix" && fail "the zoo shows a drop on hold"
+echo "✓ no drop on hold in the zoo"
 tmux_ send-keys -t t Escape
 out=$(hn zoo)
-echo "$out" | grep -qF "zoo: drop 1 unix  1/9" || fail "hn zoo from a shell: $out"
-echo "✓ hn zoo from a shell"
+echo "$out" | grep -qF "zoo: drop 1 init  1/9" || fail "hn zoo from a shell: $out"
+echo "$out" | grep -qF ";x###%x," || fail "hn zoo: tim's portrait plate: $out"
+echo "✓ hn zoo from a shell, tim's portrait plate at its head"
 out=$(hn card)
-echo "$out" | grep -qF "| #01/09  DROP 1: UNIX            COMMON |" || fail "hn card: $out"
+echo "$out" | grep -qF "| #01/09  DROP 1: INIT            COMMON |" || fail "hn card: $out"
 echo "✓ hn card prints the card"
+# A filled daemon's card is its portrait plate: byte for byte what daemons/tools/card.mjs draws.
+out=$(hn card tim --version 2.0)
+hatched=$(curl -s "http://127.0.0.1:$port/api/zoo" | node -e "const v = JSON.parse(require('fs').readFileSync(0, 'utf8')); console.log((v.data ?? v).zoo.daemons.find(d => d.id === 'tim').hatchedAt.slice(0, 10))")
+want=$(node --input-type=module -e "
+import { readFileSync } from 'node:fs'
+import { cardLines } from '$here/../../daemons/tools/card.mjs'
+const roster = JSON.parse(readFileSync('$here/../../daemons/roster.json', 'utf8'))
+const plates = JSON.parse(readFileSync('$here/../../daemons/plates.json', 'utf8'))
+const tim = roster.daemons.find(d => d.id === 'tim')
+const plate = plates.daemons.tim.portrait['2.0'].idle[0].split('\\n')
+console.log(cardLines(roster, tim, { version: '2.0', plate, serial: 42, hatched: '$hatched', egg: 'first' }).join('\\n'))")
+[ "$out" = "$want" ] || fail "hn card tim --version 2.0 is not card.mjs's card:
+$out
+--- card.mjs ---
+$want"
+[ -n "${E2E_SNAPSHOTS:-}" ] && printf '%s\n' "$out" > "$E2E_SNAPSHOTS/card-tim-2.0.txt"
+echo "✓ hn card tim --version 2.0: the portrait plate card, as card.mjs draws it"
+out=$(hn card --version 9.9 2>&1 || true)
+echo "$out" | grep -qF 'no version "9.9"' || fail "hn card --version 9.9: $out"
+out=$(hn card tmux 2>&1 || true)
+echo "$out" | grep -qF "no daemon is called tmux" || fail "hn card tmux: a daemon on hold is shown: $out"
+echo "✓ hn card: a version it knows; a daemon on hold is not one it knows"
 hn card --svg | grep -qF "<svg" || fail "hn card --svg"
 echo "✓ hn card --svg"
 # Quiet: no line nobody asked for.
