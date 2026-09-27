@@ -1081,7 +1081,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             pane.and_then(|p| p.modes.last()).and_then(|m| m.format(name, &ws)).unwrap_or_default()
         }
         "pane_search_string" => pane.and_then(|p| p.search.str.clone()).unwrap_or_default(),
-        "client_prefix" => app.prefix.then_some("1").unwrap_or("0").into(),
+        // 1 whenever the client's table is not its default one (the prefix, or one of your own).
+        "client_prefix" => (app.prefix || app.key_table.is_some()).then_some("1").unwrap_or("0").into(),
         // gethostname(3): the whole name (mac.lan); #{host_short} is it up to the first dot.
         "host" => crate::app::full_hostname(),
         "host_short" => crate::app::full_hostname().split('.').next().unwrap_or("").to_string(),
@@ -1229,7 +1230,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_end_flag" => (window.checked_add(1) == Some(app.tabs.len())).then_some("1").unwrap_or("0").into(),
         "client_termname" => std::env::var("TERM").unwrap_or_default(),
         "client_pid" => std::process::id().to_string(),
-        "client_key_table" => app.key_table.clone().unwrap_or_else(|| if app.prefix { "prefix".into() } else { "root".into() }),
+        "client_key_table" => app.key_table.clone().unwrap_or_else(|| if app.prefix { "prefix".into() } else { app.options.get("key-table", "", None).unwrap_or_else(|| "root".into()) }),
         // server_client_get_flags, in its order.
         "client_flags" => {
             let has = |f: &str| app.client_flags.iter().any(|x| x == f);

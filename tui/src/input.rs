@@ -66,13 +66,21 @@ fn on_key(app: &mut App, key: KeyEvent) {
         }
     }
     // A table of your own (switch-client -T): its key runs, and the client goes back to root
-    // (a -r key keeps the table); the prefix, or a key it does not have, goes on as from root.
+    // (a -r key keeps the table for repeat-time); the prefix wins as everywhere. A key it does
+    // not have is looked up in root — and, found in neither, goes nowhere: only a table kept for
+    // a -r key lets it through to the pane (server_client_key_callback).
+    if app.key_table_until.is_some_and(|t| Instant::now() >= t) { app.key_table = None; app.key_table_until = None }
     if let Some(table) = app.key_table.take() {
         app.status_redraws += 1;
+        let repeating = app.key_table_until.take().is_some();
         if chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2 { app.prefix = true; app.prefix_at = Some(std::time::Instant::now()); return }
         if let Some(b) = app.keymap.named.get(&table).and_then(|l| l.iter().rev().find(|b| b.chord == chord)).cloned() {
-            if b.repeat { app.key_table = Some(table) }
+            if b.repeat { app.key_table = Some(table); app.key_table_until = Some(Instant::now() + Duration::from_millis(app.keymap.repeat_ms)) }
             commands::execute_bound(app, &b.command);
+            return;
+        }
+        if !repeating {
+            if let Some(b) = app.keymap.root_command(&chord).cloned() { commands::execute_bound(app, &b.command) }
             return;
         }
     }

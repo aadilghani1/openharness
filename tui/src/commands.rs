@@ -2903,7 +2903,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 match t.as_str() {
                     "root" => { app.key_table = None; app.prefix = false }
                     "prefix" => { app.key_table = None; app.prefix = true; app.prefix_at = Some(std::time::Instant::now()) }
-                    _ if app.keymap.named.contains_key(&t) => { app.key_table = Some(t); app.prefix = false }
+                    _ if app.keymap.named.contains_key(&t) => { app.key_table = Some(t); app.prefix = false; app.key_table_until = None }
                     _ => app.error(format!("table {t} doesn't exist")),
                 }
                 return;

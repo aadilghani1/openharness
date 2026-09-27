@@ -720,6 +720,8 @@ pub struct App {
     pub dial: crate::dial::Dial,
     /// A key table of your own the next key is looked up in (`switch-client -T`).
     pub key_table: Option<String>,
+    /// A -r key of that table ran: the table is kept until then (repeat-time), then root again.
+    pub key_table_until: Option<Instant>,
     /// tmux's options, as set (options.rs): what show-options prints and formats read.
     pub options: crate::options::Store,
     /// `#()` commands in formats: their last output, run again every status-interval.
@@ -911,6 +913,7 @@ impl App {
             options: Default::default(),
             jobs: Default::default(),
             key_table: None,
+            key_table_until: None,
             fleet_marked: false,
         }
     }
@@ -4892,6 +4895,8 @@ impl App {
         self.ask_said();
         self.ask_tails();
         self.tick += 1;
+        // A table kept for a -r key: back to root once repeat-time is up (server_client_repeat_timer).
+        if self.key_table_until.is_some_and(|t| Instant::now() >= t) { self.key_table = None; self.key_table_until = None; self.status_redraws += 1 }
         // Since you were here: once every machine's harnesses are listed, so it counts them all.
         if self.back_from.is_some() && !self.headless && self.fleet_ready() { self.back_again() }
         self.enrich();
