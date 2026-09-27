@@ -61,8 +61,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     match &app.modal {
         Some(Modal::DisplayPanes { .. }) => display_panes(buf, app),
         Some(Modal::Clock { pane }) => {
-            let rect = app.rects.iter().find(|(id, _)| id == pane).map(|(_, r)| *r).unwrap_or(body);
-            clock(buf, rect);
+            let rect = app.rects.iter().find(|(id, _)| id == pane).map(|(_, r)| app.content_of(app.tab(), *r)).unwrap_or(body);
+            clock(buf, app, rect);
             cursor = None;
         }
         _ => {}
@@ -2086,34 +2086,16 @@ pub fn screen_preview(buf: &mut Buffer, pane: &Pane, x: u16, y: u16, nx: u16, ny
 }
 
 /// tmux's big digits (clock-mode, display-panes): 5 wide, 5 tall, drawn as coloured blocks.
-const DIGITS: [[&str; 5]; 11] = [
+const DIGITS: [[&str; 5]; 14] = [
     ["xxxxx", "x...x", "x...x", "x...x", "xxxxx"], ["....x", "....x", "....x", "....x", "....x"],
     ["xxxxx", "....x", "xxxxx", "x....", "xxxxx"], ["xxxxx", "....x", "xxxxx", "....x", "xxxxx"],
     ["x...x", "x...x", "xxxxx", "....x", "....x"], ["xxxxx", "x....", "xxxxx", "....x", "xxxxx"],
     ["xxxxx", "x....", "xxxxx", "x...x", "xxxxx"], ["xxxxx", "....x", "....x", "....x", "....x"],
     ["xxxxx", "x...x", "xxxxx", "x...x", "xxxxx"], ["xxxxx", "x...x", "xxxxx", "....x", "xxxxx"],
     [".....", "..x..", ".....", "..x..", "....."],
+    ["xxxxx", "x...x", "xxxxx", "x...x", "x...x"], ["xxxxx", "x...x", "xxxxx", "x....", "x...."],
+    ["x...x", "xx.xx", "x.x.x", "x...x", "x...x"],
 ];
-
-fn big(buf: &mut Buffer, text: &str, area: Rect, color: Color) {
-    let glyphs: Vec<usize> = text.chars().filter_map(|c| c.to_digit(10).map(|d| d as usize).or((c == ':').then_some(10))).collect();
-    let w = glyphs.len() as u16 * 6;
-    if area.width < w || area.height < 5 {
-        // Too small for blocks: the plain text, as tmux does.
-        let x = area.x + area.width.saturating_sub(text.len() as u16) / 2;
-        buf.set_string(x, area.y + area.height / 2, text, Style::default().fg(color));
-        return;
-    }
-    let x0 = area.x + (area.width - w) / 2;
-    let y0 = area.y + (area.height - 5) / 2;
-    for (i, g) in glyphs.iter().enumerate() {
-        for (r, row) in DIGITS[*g].iter().enumerate() {
-            for (c, bit) in row.chars().enumerate() {
-                if bit == 'x' { if let Some(cell) = buf.cell_mut((x0 + i as u16 * 6 + c as u16, y0 + r as u16)) { cell.set_symbol(" ").set_style(Style::default().bg(color)); } }
-            }
-        }
-    }
-}
 
 /// display-panes (C-b q), as cmd_display_panes_draw_pane draws it: each pane's index in the
 /// middle of its content (below its title row), in blocks of display-panes-colour (the active
@@ -2164,11 +2146,32 @@ fn display_panes(buf: &mut Buffer, app: &App) {
     }
 }
 
-/// clock-mode (C-b t): the time, big, in blue, on a cleared pane.
-fn clock(buf: &mut Buffer, rect: Rect) {
+/// clock-mode (C-b t), as window_clock_draw_screen draws it: the pane cleared, the time
+/// (clock-mode-style 12: `%l:%M AM`) in blocks of clock-mode-colour from the middle — as plain
+/// text when the pane is too small for them.
+fn clock(buf: &mut Buffer, app: &App, rect: Rect) {
     for y in rect.y..rect.y + rect.height { for x in rect.x..rect.x + rect.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
-    let (time, _) = local_time(crate::app::utc_offset());
-    big(buf, &time, rect, Color::Blue);
+    let tab_id = app.tab().id.clone();
+    let colour = app.options.get("clock-mode-colour", &tab_id, None).and_then(|c| crate::tmuxconf::colour(&c)).unwrap_or(Color::Blue);
+    let (hm, _) = local_time(crate::app::utc_offset());
+    let tim = if app.options.get("clock-mode-style", &tab_id, None).as_deref() == Some("12") {
+        let h: u32 = hm.get(..2).and_then(|h| h.parse().ok()).unwrap_or(0);
+        format!("{:>2}:{} {}", if h % 12 == 0 { 12 } else { h % 12 }, hm.get(3..5).unwrap_or("00"), if h >= 12 { "PM" } else { "AM" })
+    } else { hm };
+    let (sx, sy, len) = (rect.width as i32, rect.height as i32, tim.len() as i32);
+    let put = |buf: &mut Buffer, x: i32, y: i32, style: Style, text: &str| { if x >= 0 && y >= 0 && x < sx && y < sy { buf.set_string(rect.x + x as u16, rect.y + y as u16, text, style); } };
+    if sx < 6 * len || sy < 6 {
+        if sx >= len && sy != 0 { put(buf, sx / 2 - len / 2, sy / 2, Style::default().fg(colour), &tim) }
+        return;
+    }
+    let (mut x, y) = (sx / 2 - 3 * len, sy / 2 - 3);
+    for ch in tim.chars() {
+        let idx = match ch { '0'..='9' => ch as usize - '0' as usize, ':' => 10, 'A' => 11, 'P' => 12, 'M' => 13, _ => { x += 6; continue } };
+        for (j, row) in DIGITS[idx].iter().enumerate() {
+            for (i, bit) in row.chars().enumerate() { if bit == 'x' { put(buf, x + i as i32, y + j as i32, Style::default().bg(colour), " ") } }
+        }
+        x += 6;
+    }
 }
 
 fn clip(text: &str, cols: usize) -> String {

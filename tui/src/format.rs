@@ -950,6 +950,9 @@ pub fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layo
 
 /// tmux's format table: a variable's value for a window (and a pane: else the window's active
 /// one), or None when there is no such variable. Times are seconds since the epoch.
+/// clock-mode on this pane (the mode on top of its others).
+fn clock_on(app: &App, pane: Option<u64>) -> bool { matches!(app.modal, Some(crate::modal::Modal::Clock { pane: c }) if Some(c) == pane) }
+
 fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<Val> {
     let tab = app.tabs.get(window);
     // A hook's (#{hook}, #{hook_pane}, #{hook_flag_t} …), as cmdq_add_formats adds them.
@@ -1011,7 +1014,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             match name { "pane_width" => r.width, "pane_height" => r.height, "pane_left" => r.x, "pane_top" => r.y, "pane_right" => r.x + r.width.saturating_sub(1), _ => (r.y + r.height).saturating_sub(1) }.to_string()
         }
         // format_cb_pane_in_mode: how many modes the pane is in.
-        "pane_in_mode" => pane.map(|p| p.mode_count().to_string()).unwrap_or_else(|| "0".into()),
+        "pane_in_mode" => pane.map(|p| (p.mode_count() + clock_on(app, focus) as usize).to_string()).unwrap_or_else(|| "0".into()),
         "session_windows" => app.tabs.len().to_string(),
         // The session in front is this client's; one a command reaches for a moment is not.
         // The client's own session is attached to it (hn with no terminal is no client).
@@ -1055,7 +1058,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "socket_path" => crate::ipc::here().map(|p| p.display().to_string()).unwrap_or_default(),
         "client_session" => app.session_name(),
         "client_name" | "client_tty" => crate::app::tty_name(),
-        "pane_mode" => pane.and_then(|p| if p.tree_top() { Some(crate::tree::MODE_NAME) } else { p.modes.last().map(|m| if m.view { "view-mode" } else { "copy-mode" }) }).unwrap_or("").into(),
+        "pane_mode" => pane.and_then(|p| if clock_on(app, focus) { Some("clock-mode") } else if p.tree_top() { Some(crate::tree::MODE_NAME) } else { p.modes.last().map(|m| if m.view { "view-mode" } else { "copy-mode" }) }).unwrap_or("").into(),
         // window_copy_formats: a pane in copy or view mode has them (some only with a selection
         // or a search); others none.
         "scroll_position" | "rectangle_toggle" | "copy_cursor_x" | "copy_cursor_y" | "selection_start_x" | "selection_start_y" | "selection_end_x" | "selection_end_y"
