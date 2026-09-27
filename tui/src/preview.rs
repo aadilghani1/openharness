@@ -49,10 +49,21 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     // Its latest turns, when its session's index has them: as its terminal shows them, the newest
     // at the bottom (where the preview starts), what it asks you below them.
     if let Some(tail) = app.tails.get(&a.session_id) {
-        let facts = [app.fleet.machine_name(machine_id), cwd.clone(), a.branch.clone()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+        // Its facts on one line: where, which model, its PR, what it has used.
+        let model = a.model.rsplit(':').next().unwrap_or("").to_string();
+        let pr = a.pr.as_ref().map(|p| format!("#{} {}", p.number, p.state)).unwrap_or_default();
+        let tokens = if a.tokens > 0 { format!("{} tokens", crate::fleet::compact(a.tokens)) } else { String::new() };
+        let facts = [app.fleet.machine_name(machine_id), cwd.clone(), a.branch.clone(), model, pr, tokens].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
         out.push(dim(facts).into());
+        // Why it failed, first.
+        if state == State::Failed {
+            let why = if !a.launch_error.is_empty() { a.launch_error.clone() } else { a.did.clone().unwrap_or_default() };
+            if !why.is_empty() { out.push(Line::raw("")); out.push(Line::from(vec![Span::styled("✗ ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)), Span::raw(why)])) }
+        }
         out.push(Line::raw(""));
         out.extend(turns(app, &a.session_id, tail));
+        // While it works: its plan, under the turn it is on.
+        if state == State::Working { out.extend(plan(a, true)) }
         if let Some(q) = &a.question {
             out.push(Line::raw(""));
             out.push(Line::from(vec![Span::styled("? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), bold(q.prompt.clone())]));
@@ -108,16 +119,7 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     }
     if let Some(asked) = a.asked.as_ref().filter(|_| working) { out.push(Line::raw("")); out.push(Line::from(vec![Span::styled("❯ ", Style::default().fg(theme::fzf().prompt)), Span::raw(asked.clone())])) }
     // Its plan (TodoWrite): done ✓, doing ▸, to do ·; and the sub-agents it has running.
-    if !a.todos.is_empty() {
-        let done = a.todos.iter().filter(|(_, s)| s == "completed").count();
-        out.push(Line::raw(""));
-        out.push(Line::from(vec![dim(format!("{:<9}", "plan")), Span::raw(format!("{done}/{} done", a.todos.len()))]));
-        for (words, status) in a.todos.iter().take(12) {
-            // ▸ only while it works: a turn that ended left the item as it was.
-            let (mark, style) = match status.as_str() { "completed" => ("✓ ", Style::default().add_modifier(Modifier::DIM)), "in_progress" if working => ("▸ ", Style::default().add_modifier(Modifier::BOLD)), _ => ("· ", Style::default()) };
-            out.push(Line::from(vec![Span::styled(format!("  {mark}"), style), Span::styled(words.clone(), style)]));
-        }
-    }
+    out.extend(plan(a, working));
     if !a.subagents.is_empty() {
         out.push(Line::raw(""));
         out.push(Line::from(vec![dim(format!("{:<9}", "agents")), Span::raw(format!("{} running", a.subagents.len()))]));
@@ -155,6 +157,21 @@ pub fn bottom_up(app: &App, kind: &PickerKind, id: &str) -> bool {
 /// A session's latest turns (session_tail), oldest first: each ask after `❯`, the answer, the
 /// tools it ran dim — the words C-b s searched for bold. An older turn the search matched says
 /// where it was first.
+/// Its plan (TodoWrite): done ✓, doing ▸ (while it works), to do ·.
+fn plan(a: &crate::fleet::Agent, working: bool) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    if a.todos.is_empty() { return out }
+    let done = a.todos.iter().filter(|(_, s)| s == "completed").count();
+    out.push(Line::raw(""));
+    out.push(Line::from(vec![dim(format!("{:<9}", "plan")), Span::raw(format!("{done}/{} done", a.todos.len()))]));
+    for (words, status) in a.todos.iter().take(12) {
+        // ▸ only while it works: a turn that ended left the item as it was.
+        let (mark, style) = match status.as_str() { "completed" => ("✓ ", Style::default().add_modifier(Modifier::DIM)), "in_progress" if working => ("▸ ", Style::default().add_modifier(Modifier::BOLD)), _ => ("· ", Style::default()) };
+        out.push(Line::from(vec![Span::styled(format!("  {mark}"), style), Span::styled(words.clone(), style)]));
+    }
+    out
+}
+
 fn turns(app: &App, session: &str, tail: &Value) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let rows: Vec<Value> = tail.get("rows").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -178,7 +195,14 @@ fn turns(app: &App, session: &str, tail: &Value) -> Vec<Line<'static>> {
         }
         for t in tools.lines().filter(|t| !t.trim().is_empty()).take(6) { out.push(Line::from(vec![dim("  ⎿ "), dim(t.to_string())])) }
         // (Its answer as the agent's terminal writes it: ⏺ before the first line.)
-        for (j, l) in answer.lines().take(60).enumerate() { let mut spans = vec![if j == 0 { dim("⏺ ") } else { Span::raw("  ") }]; spans.extend(lit(l, &words, Style::default())); out.push(Line::from(spans)) }
+        // (A long answer: its start and its end — where the question usually is — with how much
+        // is left out between.)
+        let lines: Vec<&str> = answer.lines().collect();
+        let keep: Vec<(usize, &str)> = if lines.len() <= 80 { lines.iter().copied().enumerate().collect() } else { lines.iter().copied().enumerate().filter(|(j, _)| *j < 10 || *j >= lines.len() - 60).collect() };
+        for (j, l) in keep {
+            if lines.len() > 80 && j == lines.len() - 60 { out.push(dim(format!("  … {} lines …", lines.len() - 70)).into()) }
+            let mut spans = vec![if j == 0 { dim("⏺ ") } else { Span::raw("  ") }]; spans.extend(lit(l, &words, Style::default())); out.push(Line::from(spans))
+        }
     }
     if rows.is_empty() { out.push(dim("(nothing said yet)").into()) }
     out
@@ -197,7 +221,8 @@ fn lit(text: &str, words: &[String], base: Style) -> Vec<Span<'static>> {
     for i in 1..=text.len() {
         if i == text.len() || marks[i] != marks[start] {
             if text.is_char_boundary(start) && text.is_char_boundary(i) {
-                let style = if marks[start] { base.add_modifier(Modifier::BOLD) } else { base };
+                // (The words found in fzf's match colour, as a list lights them.)
+                let style = if marks[start] { base.fg(theme::fzf().hl).add_modifier(Modifier::BOLD) } else { base };
                 out.push(Span::styled(text[start..i].to_string(), style));
                 start = i;
             }
