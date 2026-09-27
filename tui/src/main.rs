@@ -287,6 +287,9 @@ async fn run(config: config::Config) -> io::Result<()> {
         }
     }
     if !io::IsTerminal::is_terminal(&io::stdout()) { eprintln!("open terminal failed: not a terminal"); std::process::exit(1) }
+    // A terminal that cannot clear its screen (dumb, or none named) is refused as tmux refuses it.
+    // (A name hn does not know is used anyway: it writes what every terminal since xterm reads.)
+    if matches!(std::env::var("TERM").as_deref(), Err(_) | Ok("") | Ok("dumb")) { eprintln!("open terminal failed: terminal does not support clear"); std::process::exit(1) }
 
     // NO_COLOR is about a program's own output; the panes mirror OTHER programs' screens, whose
     // colours are content. crossterm would otherwise drop every colour, theirs included.
