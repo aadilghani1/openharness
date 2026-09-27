@@ -1312,6 +1312,10 @@ private final class SwarmTabStrip: NSView {
     pullRequestButton.isHidden = state["pullRequest"] == nil
     let rows = state["tabs"] as? [[String: Any]] ?? []
     let nextActiveId = state["activeId"] as? String ?? ""
+    // A closed tab left the keyboard on the strip (Dart's `tabStripFocused`):
+    // the selected tab is drawn focused, and Return goes into it. The keys stay
+    // with Flutter, so every shortcut keeps working while the strip holds them.
+    let tabsFocused = state["tabsFocused"] as? Bool == true
     revealActiveAfterLayout = revealActiveAfterLayout || nextActiveId != activeId
     activeId = nextActiveId
     let ids = rows.compactMap { $0["id"] as? String }
@@ -1328,6 +1332,7 @@ private final class SwarmTabStrip: NSView {
       tab.labelFont = barFont
       tab.foreground = terminalForeground
       tab.selected = id == activeId
+      tab.keyboardFocus = tabsFocused && id == activeId
       tab.actionsEnabled = actionsEnabled
       tab.attention = (row["attention"] as? Int ?? 0) > 0
       tab.emit = { [weak self, weak tab] method, args in
@@ -1481,6 +1486,9 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var preferredWidth: CGFloat { min(cellWidth * 24, ceil(max(label.size().width, emphasizedLabel.size().width) / cellWidth) * cellWidth + cellWidth * 2) }
   var selected = false { didSet { if selected != oldValue { invalidateLabel(); updateAccessibility() } } }
   var attention = false { didSet { if attention != oldValue { needsDisplay = true; updateAccessibility() } } }
+  /// The strip holds the keyboard on this, the selected tab — drawn like a
+  /// focused control, though the keys themselves stay in Flutter.
+  var keyboardFocus = false { didSet { if keyboardFocus != oldValue { needsDisplay = true; updateAccessibility() } } }
   var showsDivider = false { didSet { if showsDivider != oldValue { needsDisplay = true } } }
   var contentCenterY: CGFloat = 20
   var emit: ((String, Any?) -> Void)?
@@ -1581,7 +1589,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     return emphasized
   }
   override func draw(_ dirtyRect: NSRect) {
-    let active = actionsEnabled && (hovered || selectButton.hasKeyboardFocus || selectButton.isHighlighted)
+    let active = actionsEnabled &&
+      (hovered || keyboardFocus || selectButton.hasKeyboardFocus || selectButton.isHighlighted)
     let text = active ? emphasizedLabel : label
     if selected {
       palette.workspace.setFill()
@@ -1600,7 +1609,9 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     setAccessibilityLabel(name)
     selectButton.setAccessibilityLabel("Select \(name)")
     selectButton.setAccessibilityValue(selected ? "Selected" : "")
-    selectButton.setAccessibilityHelp(attention ? "Contains agents needing input" : nil)
+    let help = [attention ? "Contains agents needing input" : nil,
+      keyboardFocus ? "Keyboard is on the tabs. Press Return to type in this tab." : nil].compactMap { $0 }
+    selectButton.setAccessibilityHelp(help.isEmpty ? nil : help.joined(separator: ". "))
   }
   func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { actionsEnabled }
   override func mouseDown(with event: NSEvent) {

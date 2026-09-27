@@ -839,7 +839,10 @@ class _TerminalPanelState extends State<TerminalPanel>
   bool focusInput() {
     // The model has already selected this retained view, but widget visibility
     // and focus flags will not catch up until the canvas's next frame.
+    // While a closed tab has left the keyboard on the tab strip, no restore
+    // path — a dialog or picker closing — hands it to a terminal instead.
     if (!_canClaimInput ||
+        widget.notifier.tabStripFocused ||
         !identical(widget.notifier.focusedPane?.session, widget.session)) {
       return false;
     }

@@ -161,6 +161,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
   StreamSubscription<SpokenTaskRequest>? _spokenTasks;
   StreamSubscription<void>? _modelsRequests;
   final _shellFocus = FocusNode(debugLabel: 'Swarm shell');
+
+  /// Where the keyboard waits after the active tab closes
+  /// ([AppNotifier.tabStripFocused]): the strip drawn here, or the native one
+  /// in the title bar, which draws its selected tab as focused.
+  final _tabStripFocus = FocusNode(
+    debugLabel: 'Tab strip',
+    skipTraversal: true,
+  );
+  late int _tabStripRequest;
   final _focusedModelController = GridModelPickerController();
   MachinesPanelHandle? _machinesPanel;
   OverlayEntry? _modelsOverlay;
@@ -357,6 +366,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       app.addListener(_syncNative);
       _syncNative();
     }
+    _tabStripRequest = app.tabStripFocusRequest;
+    _tabStripFocus.addListener(_tabStripFocusChanged);
+    app.addListener(_followTabStripFocus);
   }
 
   @override
@@ -416,6 +428,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     terminalFontStore.removeListener(_fontChanged);
     app.removeListener(_recordNavigation);
     app.removeListener(_observeLearning);
+    app.removeListener(_followTabStripFocus);
+    _tabStripFocus.removeListener(_tabStripFocusChanged);
+    _tabStripFocus.dispose();
     app.agentUnread.removeListener(_unreadChanged);
     _lifecycle?.dispose();
     if (widget.learning == null) _learning.dispose();
@@ -767,6 +782,61 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (_native) _syncNative();
   }
 
+  /// A closed tab left the keyboard on the tab strip. Flutter's focus moves
+  /// there now, before the next frame: a key typed in between must reach
+  /// neither the closed tab's terminal nor the one beside it.
+  void _followTabStripFocus() {
+    if (!mounted || !app.tabStripFocused) return;
+    final request = app.tabStripFocusRequest;
+    if (request == _tabStripRequest) return;
+    _tabStripRequest = request;
+    if (ModalRoute.of(context)?.isCurrent == false) return;
+    _tabStripFocus.requestFocus();
+    FocusManager.instance.applyFocusChangesIfNeeded();
+  }
+
+  void _tabStripFocusChanged() {
+    if (!mounted) return;
+    setState(() {});
+    if (_native) _syncNative();
+  }
+
+  /// ⏎ on the strip goes into the selected tab. Chords are left to the keymap,
+  /// so shortcuts still work here. Anything else typed — letters, arrows, Tab —
+  /// was meant for the tab that closed and goes nowhere: not into the tab
+  /// beside it, and not into a pane by focus traversal.
+  KeyEventResult _onTabStripKey(FocusNode node, KeyEvent event) {
+    if (!node.hasPrimaryFocus) return KeyEventResult.ignored;
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isMetaPressed ||
+        keyboard.isControlPressed ||
+        keyboard.isAltPressed) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    // A held ⏎ enters once; its repeats are not typed into the terminal.
+    if (event is KeyDownEvent &&
+        (key == LogicalKeyboardKey.enter ||
+            key == LogicalKeyboardKey.numpadEnter)) {
+      if (app.tabStripFocused) {
+        app.focusFromTabStrip();
+      } else {
+        _focusWorkspaceInput();
+      }
+    }
+    return KeyEventResult.handled;
+  }
+
+  /// The keyboard back to the workspace after a picker or dialog closes: the
+  /// tab strip while a closed tab left it there, else the focused pane.
+  bool _focusWorkspaceInput() {
+    if (app.tabStripFocused) {
+      _tabStripFocus.requestFocus();
+      return true;
+    }
+    return app.focusedPane?.session?.focusInput() == true;
+  }
+
   void _restoreEmptyFocus() {
     if (!mounted ||
         app.panes.isNotEmpty ||
@@ -939,6 +1009,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final payload = {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'activeId': app.activeSwarmId,
+      // The selected tab is drawn with keyboard focus: ⏎ goes into it.
+      'tabsFocused': app.tabStripFocused && _tabStripFocus.hasPrimaryFocus,
       'palette': grid.AppTheme.palette.value.nativeColors,
       'barStyle': {
         'family': barStyle.fontFamily,
@@ -1572,7 +1644,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _canvasFocus.descendantsAreFocusable = _search == null;
         if (_search == null &&
             ModalRoute.of(context)?.isCurrent != false &&
-            app.focusedPane?.session?.focusInput() != true) {
+            !_focusWorkspaceInput()) {
           _shellFocus.requestFocus();
         }
         if (_native) _syncNative();
@@ -2333,7 +2405,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           previous.context?.mounted == true &&
           previous.canRequestFocus) {
         previous.requestFocus();
-      } else if (app.focusedPane?.session?.focusInput() != true) {
+      } else if (!_focusWorkspaceInput()) {
         _shellFocus.requestFocus();
       }
     }
@@ -3080,7 +3152,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (restoreFocus) {
       if (previous?.context?.mounted == true && previous!.canRequestFocus) {
         previous.requestFocus();
-      } else if (app.focusedPane?.session?.focusInput() != true) {
+      } else if (!_focusWorkspaceInput()) {
         _shellFocus.requestFocus();
       }
     }
@@ -3971,7 +4043,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (restoreFocus) {
       if (previous?.context != null && previous!.canRequestFocus) {
         previous.requestFocus();
-      } else if (app.focusedPane?.session?.focusInput() != true) {
+      } else if (!_focusWorkspaceInput()) {
         _shellFocus.requestFocus();
       }
       FocusManager.instance.applyFocusChangesIfNeeded();
@@ -4092,8 +4164,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 backgroundColor: grid.AppPalette.swarmField,
                 body: Column(
                   children: [
-                    if (!_native)
-                      MediaQuery.withNoTextScaling(child: _tabStrip()),
+                    Focus(
+                      focusNode: _tabStripFocus,
+                      onKeyEvent: _onTabStripKey,
+                      child: _native
+                          ? const SizedBox.shrink()
+                          : MediaQuery.withNoTextScaling(child: _tabStrip()),
+                    ),
                     if (_native)
                       _focusedModelPicker(
                         WorkspacePaneContext.focused(app),
@@ -4595,6 +4672,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               ),
                               selectedBackground: grid.AppPalette.swarmWelcome,
                               selected: selected,
+                              highlighted:
+                                  selected &&
+                                  app.tabStripFocused &&
+                                  _tabStripFocus.hasPrimaryFocus,
                               onPressed: _shortcutsEnabled
                                   ? () => app.selectSwarm(swarm.id)
                                   : null,

@@ -349,6 +349,12 @@ void main() {
 
       await activate('close', {'id': second});
       expect(app.activeSwarmId, first);
+      // The closed tab's neighbour is shown; the keyboard waits on the strip.
+      expect(app.tabStripFocused, isTrue);
+      expect(tester.testTextInput.hasAnyClients, isFalse);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyY);
+      expect(input, hasLength(1));
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       expect(tester.testTextInput.hasAnyClients, isTrue);
       tester.testTextInput.enterText('y');
       await tester.idle();
