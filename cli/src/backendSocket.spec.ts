@@ -907,7 +907,7 @@ describe('BackendSocket outbound queue', () => {
       cliVersion: null,
       processIdentity: null,
       registeredAt: 1,
-      updatedAt: 1,
+      touchedAt: 1,
       lastHookAt: 1,
       lastTranscriptAt: 1,
     }
@@ -1166,7 +1166,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
       runtimes: [{ backend: 'tmux', paneId: '%9' }], primaryRuntimeKey: 'tmux/%9', tmuxPane: '%9',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     }
     socket.onCreateAgent = async () => ({ ok: true, session: pending })
 
@@ -1193,7 +1193,7 @@ describe('BackendSocket outbound queue', () => {
     socket.registerLocalClient('local:resume', {
       sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true,
     })
-    const inputs: Array<{ resumeSessionId?: string | null; cwd: string }> = []
+    const inputs: Array<{ resumeSessionId?: string | null; takeOver?: string | null; cwd: string }> = []
     socket.onCreateAgent = async (input) => {
       inputs.push(input)
       return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app.' }
@@ -1207,12 +1207,17 @@ describe('BackendSocket outbound queue', () => {
     expect(inputs[0]).toMatchObject({ resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', cwd: '/work/cohorts' })
     // What cli.ts said about it reaches the client as it was said.
     expect(reply('ok')).toMatchObject({ error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app.' })
+    // Taken over from the terminal that has it: how, passed on as asked.
+    create('wait', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', takeOver: 'wait' })
+    await vi.waitFor(() => expect(reply('wait')).toBeDefined())
+    expect(inputs[1]).toMatchObject({ takeOver: 'wait' })
     create('shape', { resumeSessionId: '../../etc/passwd' })
     create('prompt', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', prompt: 'and then this' })
-    await vi.waitFor(() => expect(reply('prompt')).toBeDefined())
-    expect(reply('shape')).toMatchObject({ error: 'INVALID_SESSION' })
-    expect(reply('prompt')).toMatchObject({ error: 'INVALID_SESSION' })
-    expect(inputs).toHaveLength(1)
+    create('how', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', takeOver: 'forcefully' })
+    create('what', { takeOver: 'now' })
+    await vi.waitFor(() => expect(reply('what')).toBeDefined())
+    for (const id of ['shape', 'prompt', 'how', 'what']) expect(reply(id)).toMatchObject({ error: 'INVALID_SESSION' })
+    expect(inputs).toHaveLength(2)
     await socket.unregisterLocalClient('local:resume')
     await socket.stop()
   })
@@ -1229,7 +1234,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
       runtimes: [{ backend: 'tmux', paneId: '%9' }], primaryRuntimeKey: 'tmux/%9', tmuxPane: '%9',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     })
     const create = vi.fn(async (input: { bypassPermission: boolean; permissionMode: string | null }) => ({ ok: true as const, session: pending(`b-${create.mock.calls.length}`) }))
     socket.onCreateAgent = create
@@ -1271,7 +1276,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'nqhieu84', cwd: homedir(),
       runtimes: [{ backend: 'tmux', paneId: '%9' }], primaryRuntimeKey: 'tmux/%9', tmuxPane: '%9',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     }
     const create = vi.fn(async (_input: { engine: string; cwd: string }) => ({ ok: true as const, session: pending }))
     socket.onCreateAgent = create
@@ -1308,7 +1313,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
       runtimes: [{ backend: 'tmux', paneId: '%receipt' }], primaryRuntimeKey: 'tmux/%receipt', tmuxPane: '%receipt',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     }
     const lookup = vi.spyOn(registry, 'byAgent').mockReturnValue(pending)
     let finish!: () => void
@@ -1823,7 +1828,7 @@ describe('agent_fork RPC', () => {
     forkedFrom: { agentId: 'agent-1', name: 'Agent one' },
     transcriptPath: null, projectDir: 'workspace', cwd: '/tmp/workspace', runtimes: [], primaryRuntimeKey: '',
     tmuxPane: '%2', source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-    registeredAt: 2, updatedAt: 2, lastHookAt: 2, lastTranscriptAt: 2,
+    registeredAt: 2, touchedAt: 2, lastHookAt: 2, lastTranscriptAt: 2,
   }
 
   function localSocket(): { socket: BackendSocket; frames: Array<Record<string, unknown>> } {
@@ -1968,7 +1973,7 @@ describe('agent_restart RPC', () => {
     cliVersion: null,
     processIdentity: null,
     registeredAt: 1,
-    updatedAt: 1,
+    touchedAt: 1,
     lastHookAt: 1,
     lastTranscriptAt: 1,
   }
@@ -2376,7 +2381,7 @@ describe('agent_create with a prompt, a name and a named agent', () => {
     transcriptPath: null, projectDir: 'home', cwd: '/home/someone', defaultName: 'Local model',
     runtimes: [{ backend: 'tmux', paneId: '%11' }], primaryRuntimeKey: 'tmux/%11', tmuxPane: '%11',
     source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-    registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 
   async function create(choices: Record<string, unknown>) {

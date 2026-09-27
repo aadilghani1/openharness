@@ -111,7 +111,7 @@ export interface HookServerHandlers {
   /** `harness remote-password status` — whether one is set, and its fingerprint. */
   onRemotePasswordStatus?: () => PairOutcome
   /** Local dashboard status snapshot (GET /api/status). */
-  onStatus?: () => Record<string, unknown>
+  onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   /** Recent adapter log tail (GET /api/logs). */
   onLogs?: () => string
   /** Stop the adapter from the local dashboard (POST /api/stop). */
@@ -449,7 +449,7 @@ export function startHookServer(
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(LOCAL_WEB_HTML); return
       }
       if (req.method === 'GET' && url === '/api/status') {
-        json(200, handlers.onStatus ? handlers.onStatus() : { supported: false }); return
+        json(200, handlers.onStatus ? await handlers.onStatus() : { supported: false }); return
       }
       if (req.method === 'GET' && url === '/api/logs') {
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(handlers.onLogs ? handlers.onLogs() : ''); return

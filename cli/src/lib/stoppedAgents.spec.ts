@@ -47,7 +47,7 @@ describe('stopped harness persistence', () => {
     expect(store.patch(saved.agentId, { cwd: '/tmp/work-repaired' })).toBe(true)
     const after = store.get(saved.agentId)!
     expect(after).toEqual({ ...before, cwd: '/tmp/work-repaired' })
-    expect(after.updatedAt).toBe(before.updatedAt)
+    expect(after.touchedAt).toBe(before.touchedAt)
     expect(after.defaultName).toBe('harness Desktop')
     expect(store.patch('never-saved', { cwd: '/tmp' })).toBe(false)
   })

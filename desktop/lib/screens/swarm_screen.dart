@@ -71,6 +71,7 @@ import '../state/toolbar_notices.dart';
 import '../widgets/machine_actions.dart';
 import '../widgets/rename_agent_dialog.dart';
 import '../widgets/delete_agent_dialog.dart';
+import '../widgets/take_over_dialog.dart';
 import '../widgets/fork_agent_dialog.dart';
 import '../widgets/restart_agent_action.dart';
 import '../widgets/new_agent_dialog.dart';
@@ -266,6 +267,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Widget _startGuide() => WorkspaceWelcome(
     key: ValueKey('welcome:${app.activeSwarmId}'),
     onCommand: _runShortcut,
+    // What to pick up, opened into this tab the way Cmd-P opens it: a harness
+    // as itself, a conversation Harness did not start as a harness resuming it.
+    app: app,
+    projects: _projects.projects,
+    onOpen: (row) => unawaited(
+      _activateSearch(
+        SwarmSearchSelection(row),
+        app.activeSwarmId,
+        placement: HarnessPlacement.currentTab,
+      ),
+    ),
   );
 
   void _showKeyboardShortcuts() {
@@ -2484,6 +2496,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     String target, {
     PaneSplitRequest? split,
     HarnessPlacement? placement,
+    TakeOver? takeOver,
   }) async {
     final command = selected.destination.commandId;
     if (command != null) {
@@ -2516,8 +2529,40 @@ class _SwarmScreenState extends State<SwarmScreen> {
         projects: _projects.projects,
         split: split,
         placement: placement,
+        takeOver: takeOver,
       );
     } on SwarmResumeFailure catch (failure) {
+      // Open in a terminal: ask whether to move it here — and, mid-turn,
+      // whether to wait for the turn or stop it. Asked again when a turn
+      // started between the question and the answer.
+      final ask =
+          failure.canTakeOver &&
+          (takeOver == null || (takeOver == TakeOver.idle && failure.busy));
+      if (ask && failure.destination.external != null) {
+        TakeOver? choice;
+        await _dialog(() async {
+          choice = await askTakeOver(
+            context,
+            title: failure.destination.title,
+            engine: failure.destination.external!.engine,
+            busy: failure.busy,
+            machine: failure.destination.machineLabel.isEmpty
+                ? null
+                : failure.destination.machineLabel,
+            keymap: _keymap,
+          );
+        });
+        if (choice case final choice? when mounted) {
+          await _activateSearch(
+            selected,
+            target,
+            split: split,
+            placement: placement,
+            takeOver: choice,
+          );
+        }
+        return;
+      }
       _showResumeFailure(failure, target: target, placement: placement);
       return;
     }

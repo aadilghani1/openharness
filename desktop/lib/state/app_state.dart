@@ -47,6 +47,7 @@ import '../terminal/terminal_theme_store.dart';
 import '../logging/app_log.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../terminal/remote_media_download.dart';
+import 'take_over.dart';
 import '../widgets/engine_identity.dart'
     show allEngines, engineIdentity, isTerminalEngine;
 import '../store/store_screen.dart' show openStoreAgent;
@@ -213,6 +214,11 @@ class AgentCreationAttempt {
   bool _codexHomeTrusted = false;
 
   bool get awaitingConfirmation => _awaitingConfirmation;
+
+  /// The machine's code for a request it refused before launching anything,
+  /// such as `SESSION_BUSY_IN_TERMINAL`: what a caller can offer next.
+  String? _refusal;
+  String? get refusal => _refusal;
 
   /// A completed folder survives a refused agent launch, so correcting the
   /// agent choice does not clone or create the same project again.
@@ -7350,7 +7356,10 @@ class AppNotifier extends ChangeNotifier {
   /// The machine refuses one open elsewhere, already a harness, or whose folder
   /// is gone, and says why. Null when it started; otherwise what to tell the
   /// person.
-  Future<String?> resumeConversation(
+  /// Opens a conversation Harness did not start as a new harness. One open in
+  /// a terminal is refused unless [takeOver] says how to take it over from
+  /// there; the refusal's code says whether that terminal is mid-turn.
+  Future<({String? error, String? refusal})> resumeConversation(
     String machineId, {
     required String engine,
     required String folder,
@@ -7358,18 +7367,25 @@ class AppNotifier extends ChangeNotifier {
     String? name,
     String? swarmId,
     HarnessPlacement? placement,
-  }) => _create(
-    machineId,
-    {
-      'engine': engine,
-      'cwd': folder,
-      'bypassPermission': true,
-      'name': ?name,
-      'resumeSessionId': sessionId,
-    },
-    swarmId: swarmId,
-    placement: placement,
-  );
+    TakeOver? takeOver,
+  }) async {
+    final attempt = AgentCreationAttempt();
+    final error = await _create(
+      machineId,
+      {
+        'engine': engine,
+        'cwd': folder,
+        'bypassPermission': true,
+        'name': ?name,
+        'resumeSessionId': sessionId,
+        'takeOver': ?takeOver?.name,
+      },
+      swarmId: swarmId,
+      placement: placement,
+      attempt: attempt,
+    );
+    return (error: error, refusal: error == null ? null : attempt.refusal);
+  }
 
   Future<String?> _create(
     String machineId,
@@ -7500,6 +7516,9 @@ class AppNotifier extends ChangeNotifier {
     'SESSION_IN_HARNESS' ||
     'SESSION_NOT_FOUND' ||
     'SESSION_FOLDER_GONE' ||
+    'SESSION_OPEN_IN_TERMINAL' ||
+    'SESSION_BUSY_IN_TERMINAL' ||
+    'SESSION_STOP_FAILED' ||
     'INVALID_SESSION' =>
       detail ?? 'Could not open that conversation on $machine.',
     // A daemon that predates the terminal engine refuses it by name; the
@@ -7710,9 +7729,13 @@ class AppNotifier extends ChangeNotifier {
         'SESSION_IN_HARNESS',
         'SESSION_NOT_FOUND',
         'SESSION_FOLDER_GONE',
+        'SESSION_OPEN_IN_TERMINAL',
+        'SESSION_BUSY_IN_TERMINAL',
+        'SESSION_STOP_FAILED',
         'INVALID_SESSION',
       };
       if (refusedBeforeLaunch.contains(failure.code)) {
+        creation._refusal = failure.code;
         if (failure.code == 'INVALID_CWD' && choices['projectSource'] != null) {
           return creation._complete(
             'Update Harness CLI on $machineName to create or clone project folders. Local can open an existing folder.',
@@ -7761,6 +7784,7 @@ class AppNotifier extends ChangeNotifier {
             when folder.isNotEmpty) {
           creation._preparedFolder = folder;
         }
+        creation._refusal = failure['code'] as String;
         return creation._complete(
           _creationFailureMessage(
             failure['code'] as String,

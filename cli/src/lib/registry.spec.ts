@@ -271,12 +271,17 @@ describe('registry remote display names', () => {
       tmuxPane: '%17',
       runtimes: [{ backend: 'tmux', paneId: '%17' }],
       schemaVersion: 2,
+      // Saved as `updatedAt` before the row's bookkeeping time was named for what it is.
+      touchedAt: 20,
     })
-    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))[0]).toMatchObject({
+    const saved = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))[0]
+    expect(saved).toMatchObject({
       agentId: 'stable-agent',
       tmuxPane: '%17',
       runtimes: [{ backend: 'tmux', paneId: '%17' }],
+      touchedAt: 20,
     })
+    expect(saved).not.toHaveProperty('updatedAt')
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.pre-v2.json'), 'utf8'))[0]).toMatchObject({
       agentId: 'stable-agent', sessionId: 'legacy-session', tmuxPane: '%17',
     })
@@ -1854,19 +1859,19 @@ describe('lastOpenedAt: when an app last opened the agent, on the daemon clock',
   const OPENED = Date.UTC(2026, 8, 26, 9, 30)
   const onDisk = () => JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8')) as Array<Record<string, unknown>>
 
-  it('stamps the daemon’s own clock, persists it, and leaves the bookkeeping `updatedAt` alone', async () => {
+  it('stamps the daemon’s own clock, persists it, and leaves the bookkeeping `touchedAt` alone', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
     const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%41' }], cwd: '/tmp/demo' })!
     expect(pending.lastOpenedAt).toBeUndefined()
     expect(onDisk()[0]).not.toHaveProperty('lastOpenedAt')
-    const updatedAt = pending.updatedAt
+    const touchedAt = pending.touchedAt
 
     vi.setSystemTime(OPENED)
     const opened = registry.markOpened(pending.agentId)
     expect(opened?.lastOpenedAt).toBe(OPENED)
-    expect(opened?.updatedAt).toBe(updatedAt)
-    expect(onDisk()[0]).toMatchObject({ agentId: pending.agentId, lastOpenedAt: OPENED, updatedAt })
+    expect(opened?.touchedAt).toBe(touchedAt)
+    expect(onDisk()[0]).toMatchObject({ agentId: pending.agentId, lastOpenedAt: OPENED, touchedAt })
     expect(registry.markOpened('nobody')).toBeNull()
 
     // The load rebuilds every row from a named list: a field missing there is written and then lost.

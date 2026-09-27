@@ -355,6 +355,14 @@ describe('requests must name this server', () => {
     expect(onLogs).not.toHaveBeenCalled()
   })
 
+  it('serves a status that has to read before it answers', async () => {
+    // A harness's `updatedAt` is when its conversation last moved, which is read from its transcript.
+    const { base } = await start({ onStatus: async () => ({ sessions: [{ id: 'a', updatedAt: 42 }] }) })
+    const res = await fetch(`${base}/api/status`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ sessions: [{ id: 'a', updatedAt: 42 }] })
+  })
+
   it('still serves loopback names, and the dashboard from its own origin', async () => {
     const { base } = await start({ onStatus: () => ({ ok: true }) })
     const port = new URL(base).port

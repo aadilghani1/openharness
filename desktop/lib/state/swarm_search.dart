@@ -1539,7 +1539,10 @@ class SwarmSearchController extends ChangeNotifier {
         sessionId: external.sessionId,
       ));
       if (external.open || previewed?.openElsewhere == true) {
-        return external.origin == 'terminal'
+        // One in a terminal can be moved here: opening it asks how.
+        final where = previewed?.openIn ?? external.openIn;
+        if (where == 'terminal') return null;
+        return external.origin == 'terminal' && where == null
             ? 'Open in another terminal'
             : 'Open in the ${external.originLabel}';
       }

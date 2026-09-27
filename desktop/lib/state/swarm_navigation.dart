@@ -17,6 +17,7 @@ import 'session_content_search.dart';
 import 'session_preview.dart';
 import 'swarm.dart';
 import 'swarm_catalog.dart';
+import 'take_over.dart';
 import 'terminal_pane.dart';
 
 String swarmDestinationId(String id) => 'swarm:$id';
@@ -252,6 +253,7 @@ class ExternalSessionRef {
     required this.origin,
     this.title = '',
     this.open = false,
+    this.openIn,
   });
 
   final String sessionId, engine, cwd, title;
@@ -262,6 +264,14 @@ class ExternalSessionRef {
   /// Open in a running process elsewhere: opening it here too would have two
   /// processes writing one conversation.
   final bool open;
+
+  /// Where it is open: `terminal`, which Harness can take it over from, or
+  /// `app`, which it cannot. Null when it is not open, or the machine predates
+  /// taking over.
+  final String? openIn;
+
+  /// Open, and only in a terminal: opening it here moves it, once asked.
+  bool get inTerminal => open && openIn == 'terminal';
 
   /// Where it ran, as a person says it.
   String get originLabel => switch (origin) {
@@ -392,9 +402,19 @@ class SwarmDestination {
 enum SwarmSearchAction { open, addHere }
 
 class SwarmResumeFailure implements Exception {
-  const SwarmResumeFailure(this.destination, this.message);
+  const SwarmResumeFailure(this.destination, this.message, {this.code});
   final SwarmDestination destination;
   final String message;
+
+  /// The machine's refusal, such as `SESSION_BUSY_IN_TERMINAL`, when it said.
+  final String? code;
+
+  /// A conversation open in a terminal, which can be taken over from there.
+  bool get canTakeOver =>
+      code == 'SESSION_OPEN_IN_TERMINAL' || code == 'SESSION_BUSY_IN_TERMINAL';
+
+  /// Mid-turn in that terminal: wait for the turn, or stop it.
+  bool get busy => code == 'SESSION_BUSY_IN_TERMINAL';
 }
 
 Future<void> _resumeStoppedDestination(
@@ -842,14 +862,16 @@ Future<bool> activateSwarmSearchSelection(
   List<SavedSwarmProject> projects = const [],
   PaneSplitRequest? split,
   HarnessPlacement? placement,
+  TakeOver? takeOver,
 }) async {
   final destination = selection.destination;
   if (destination.external case final external?) {
     final machineId = destination.machineId;
     if (machineId == null || split != null) return false;
     // A new harness that resumes it, in its own folder: the machine refuses one
-    // that is open elsewhere, or already a harness, and says so.
-    final error = await app.resumeConversation(
+    // that is open elsewhere, or already a harness, and says so — and one open
+    // in a terminal until asked how to take it over from there.
+    final (:error, :refusal) = await app.resumeConversation(
       machineId,
       engine: external.engine,
       folder: external.cwd,
@@ -857,8 +879,11 @@ Future<bool> activateSwarmSearchSelection(
       name: external.title.isEmpty ? null : external.title,
       swarmId: destinationSwarmId,
       placement: placement ?? HarnessPlacement.currentTab,
+      takeOver: takeOver,
     );
-    if (error != null) throw SwarmResumeFailure(destination, error);
+    if (error != null) {
+      throw SwarmResumeFailure(destination, error, code: refusal);
+    }
     return true;
   }
   if (placement != null) {
