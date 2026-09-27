@@ -461,15 +461,17 @@ is 0. Then, in order:
    the night hours `fromHour`–`toHour` (22:00 to 06:59, across midnight). A night is named by the day
    it began: 23:00 on the 21st and 02:00 on the 22nd are the same night, the 21st's. When
    `earn.night.nights` (3) distinct nights have counted, the egg is earned and the count starts again
-   from none. Nights need not be in a row. The night egg is the only ordinary egg that can hold the grue.
+   from none. Nights need not be in a row. The night egg is the only ordinary egg that can hold the
+   secret (beastie).
 9. **history** egg: `rules.historyDates` maps `MM-DD` to the daemon that day belongs to, or null:
-   `04-01` teapot (HTTP 418), `09-09` moth (the first actual bug, 1947), `10-31` zombie (processes).
+   `04-01` teapot (HTTP 418), `08-25` tux (Linux announced, 1991), `09-09` bug (the first actual bug,
+   1947), `09-27` gnu (GNU announced, 1983), `10-31` zombie (processes).
    Each date's egg is open for `earn.history.days` (7) days from the date (09-09 to 09-15; 12-30 would
    run to 01-05 of the next year), earned by the first counted turn in that week, once per date per
    year. The egg carries `date: 'YYYY-MM-DD'`, the date it remembers (with the year its week began), not
-   the day it was earned. None of those daemons exists yet. Hatched, a history egg gives its date's
-   daemon when a released drop holds it and you do not own it; otherwise (today: always) it draws from
-   the usual pool with `eggs.history` weights, which hold no secret.
+   the day it was earned. teapot and zombie do not exist yet. Hatched, a history egg gives its date's
+   daemon when a released drop holds it and you do not own it; otherwise it draws from the usual pool
+   with `eggs.history` weights, which hold no secret.
 10. **Bond**: the paired daemon (the one with the paired id) gains `bond.xpPerTurn` (1) xp per counted
     turn, plus `bond.xpPerDay` (5) for the first counted turn of a local day. `bond` is the level its xp
     reached on `bond.levels` [0, 50, 150, 300, 600] (levels 0–4); `version` follows `bondForVersion`:
