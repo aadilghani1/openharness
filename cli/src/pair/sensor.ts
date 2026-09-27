@@ -54,6 +54,8 @@ type EntryFields = Omit<PairJournalEntry, 'epoch' | 'seq' | 'at' | 'agentId' | '
 export class PairSensor implements PairService {
   private on = false
   private daemonId: string | null = null
+  /** How the paired individual is called, `pip the tim` (pair/individuals.ts); null: by its species. */
+  private daemonName: string | null = null
   private readonly harnesses = new Map<string, PairHarness>()
   private rev = 0
   private readonly watchers = new Map<string, (event: PairEvent) => boolean>()
@@ -71,11 +73,19 @@ export class PairSensor implements PairService {
 
   // ── the switch ────────────────────────────────────────────────────────────────────────────────────
 
-  /** The paired daemon's roster id, or null when nothing is paired (pairing off). */
-  setPair(daemonId: string | null): void {
+  /**
+   * The paired individual's SPECIES (a roster id: its voice, lines and lore), or null when nothing is paired
+   * (pairing off); and what it is called, `pip the tim`, when the zoo names it.
+   */
+  setPair(daemonId: string | null, name: string | null = null): void {
     this.daemonId = daemonId
+    const renamed = daemonId !== null && name !== this.daemonName
+    this.daemonName = daemonId === null ? null : name
     const on = daemonId !== null
-    if (on === this.on) return
+    if (on === this.on) {
+      if (renamed && on) console.log(`[pair] paired with ${name ?? daemonId}`)
+      return
+    }
     this.on = on
     if (on) this.carried ??= new Set(this.deps.journal.openQuestions().keys())
     if (!on) {
@@ -84,12 +94,14 @@ export class PairSensor implements PairService {
       this.harnesses.clear()
       this.watchers.clear()
     }
-    console.log(`[pair] sensor ${on ? `on · paired with ${daemonId}` : 'off · nothing paired'}`)
+    console.log(`[pair] sensor ${on ? `on · paired with ${name ?? daemonId}` : 'off · nothing paired'}`)
     this.deps.onEnabledChanged?.(on)
   }
 
   enabled(): boolean { return this.on }
   pairedDaemon(): string | null { return this.daemonId }
+  /** `pip the tim`, or null when the paired individual goes by its species. */
+  pairedName(): string | null { return this.daemonName }
 
   // ── inputs ────────────────────────────────────────────────────────────────────────────────────────
 
