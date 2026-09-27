@@ -199,8 +199,10 @@ restart is a baseline, not a return.
 
 ## As built (P0–P5)
 
-- **The switch.** Pairing is on while the account's zoo (`GET /api/zoo`, re-read on `zoo_changed` and on
-  every reconnect) has `pair` set to a roster id; the same read takes `autonomy`. Signed out, a guest
+- **The switch.** Only while daemons are on at all ([README.md](README.md), "Off switches": the server's
+  `HARNESS_DAEMONS`, harnessd's probe, the local kill switch); off, none of this runs. Then pairing is on
+  while the account's zoo (`GET /api/zoo`, re-read on `zoo_changed` and on every reconnect) has `pair` set
+  to a roster id; the same read takes `autonomy`. Signed out, a guest
   window says which daemon its local zoo pairs, and its dial, with `daemon_presence { pair, autonomy }`.
   Off, every daemon senses nothing and answers `pair_*` with `PAIR_OFF`.
 - **Local frames** go only to the loopback sockets bound to this computer's machine (`sendLocal`), and

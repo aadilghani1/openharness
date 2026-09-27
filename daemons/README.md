@@ -123,6 +123,40 @@ Silent by default.
   `examples` holds each line filled with sample values for previews.
 - Answer keys come first in the line, and work only while the line is showing.
 
+## Off switches
+
+Every daemon deploy ships dark: until daemons are turned on, nothing here changes anything for anyone.
+
+- **Server** (`backend/src/lib/daemonsSwitch.ts`). `HARNESS_DAEMONS` is off unless `true`. Off, the zoo
+  routes are not registered — `/api/zoo` and `/api/zoo/ops` answer the server's ordinary 404 — nothing
+  publishes `zoo_changed` and no socket subscribes to it. On, `HARNESS_DAEMONS_USERS` (comma-separated user
+  ids or emails; empty is everyone) limits the zoo to those accounts; any other gets the same 404 before
+  anything is read or written.
+- **harnessd** (`cli/src/lib/daemonsSwitch.ts`). Idle until `GET /api/zoo` answers 200: no `zoo.turn`
+  reporter, no `zoo.lesson` credit, no PairSensor or journal, no brain, no learning (signals, distilling,
+  usage, lessons in launches), no pair harness, no pair.jsonc tick — no timers, no files, no model warm-up,
+  and one request, the probe: at startup (a sign-in restarts harnessd), at most every 6 hours after that
+  (plus up to 30 minutes of jitter), and at once on `zoo_changed`. A 404 is off, and cached; a 5xx or no
+  answer is unknown — idle, asked again after 5 minutes, doubling to 6 hours, or at the next reconnect. A
+  window's own read through the proxy, and a 404 on a report, count as answers. Once on, it re-reads the
+  zoo on `zoo_changed` and every reconnect, as before; a later 404 switches it all off again (reports
+  dropped, the pair harness paused). Signed out it asks nothing, and is on only while a window bound to
+  this machine says its guest zoo has consent (`daemon_presence { consent: true }`).
+- **Local kill switch.** `HARNESS_DAEMONS=0` (or `false`, `off`, `no`) in harnessd's environment, or
+  `"daemons": false` in `~/.config/harness/pair.jsonc`, beats the server and a guest window: nothing is
+  asked and nothing runs. Set while on, it takes effect within 30 s; cleared, at the next zoo read or start.
+- **What harnessd answers while off.** A window's `/api/zoo` and `/api/zoo/ops`: the server's 404, or —
+  killed locally — `404 { error: { code: 'DAEMONS_OFF' } }` without asking. `daemon_act`, `daemon_confirm`,
+  `daemon_talk`: `{ ok: false, error: 'DAEMONS_OFF' }`. The `pair` request (`harness pair`, the MCP server):
+  `{ error: 'DAEMONS_OFF' }`. `daemon_shown` and `daemon_presence` are dropped (but a guest's consent), and
+  no `daemon_*` frame is sent. Another machine's `pair_*`: `PAIR_OFF`. `GET /api/status` says
+  `daemons: { on, server, killed }`.
+- **What every client does** (desktop, phone, `hn`, web). A 404 from `GET /api/zoo`, or a `DAEMONS_OFF`
+  result, means off: hide everything daemon-related (the daemon in the status line, the nest, zoo, hatch,
+  consent screen, panel and cards), send no zoo ops or `daemon_*` frames, and behave exactly as before
+  daemons existed. Ask again on `zoo_changed`, on a reconnect, or at most every 6 hours. A 5xx is not off:
+  keep what you had and try later. A guest client keeps its local zoo, as before.
+
 ## The zoo (server contract)
 
 The zoo is account state, the same on every client, like the desk but separate from it: a desk
@@ -145,6 +179,11 @@ request sees them; every other client learns the same thing by re-reading the zo
 (a new egg id, a higher `bond`, a higher `dupes`).
 
 `harnessd` proxies `/api/zoo` for local clients exactly as it proxies `/api/desk`.
+
+`zoo_changed` goes out only when something a client draws changed (`lib/zoo.ts` `shownZoo`: the daemons
+but not their xp alone, eggs, pair, dial, consent, habits, the first and setup eggs). A report that only
+tallied — turns, days, batch ids, xp short of a level — still moves the revision, and reaches the other
+clients on their next read of the zoo.
 
 ```
 zoo = {

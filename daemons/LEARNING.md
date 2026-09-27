@@ -25,7 +25,8 @@ The default is always nothing: no signal, no lesson; a model that is not sure an
 ## L1 as built
 
 Everything below is in `pair/learn/`. It runs in every harnessd, for that machine's own harnesses, only
-while pairing is on.
+while pairing is on — and nothing of it, usage and lessons in launches included, while daemons are off
+([README.md](README.md), "Off switches").
 
 ### Notice (`signals.ts`)
 
