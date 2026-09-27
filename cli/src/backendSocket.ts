@@ -114,6 +114,7 @@ import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from './lib/
 import { parseRuntimeProfile, type RuntimeModelOption } from './lib/runtimeProfile.js'
 import { sid, preview, logFrame } from './lib/log.js'
 import type { SessionSearchResult } from './lib/sessionSearch/indexer.js'
+import type { SessionTail } from './lib/sessionSearch/store.js'
 import {
   TerminalP2pResponderPool,
   TERMINAL_P2P_DOWN_TYPES,
@@ -150,6 +151,10 @@ const HANDSHAKE_TIMEOUT_MS = 15_000
  *  whatever is resolved. Well under the app's 12s `grid_models_list` timeout, leaving that RPC room
  *  for its own `grid` spawns; a reconcile slower than this lands by the next open. */
 const GRID_ATTACH_WAIT_MS = 6_000
+/** An `agent_update {opened: true}` for an agent opened less than this long ago is answered but not
+ *  stamped or broadcast: a person flicking between two tabs, or two apps opening the same agent at
+ *  once, would otherwise push a frame to every client for each flick. Exported for the spec. */
+export const AGENT_OPENED_THROTTLE_MS = 3_000
 const BASE_DELAY_MS = 1_000
 const MAX_DELAY_MS = 30_000
 const QUEUE_MAX = 2_000
@@ -492,6 +497,14 @@ export class BackendSocket {
     /** A mode from `PERMISSION_MODES` for this engine; null when the client sent only
      *  `bypassPermission`, which then decides. Validated here (`INVALID_PERMISSION_MODE`). */
     permissionMode: string | null
+    /** A conversation Harness did not start, to open this harness ON: the engine resumes it, in its own
+     *  folder (lib/sessionSearch/external.ts). Null for a new conversation. Shape-checked here; cli.ts
+     *  checks it is one it found, not open elsewhere, and not already a harness. */
+    resumeSessionId?: string | null
+    /** A conversation open in a terminal, taken over from it: `idle` stops that terminal's process
+     *  only between turns, `now` whatever it is doing (then tells it to continue), `wait` when its
+     *  turn ends. Absent, one open elsewhere is refused and the refusal says whether it is busy. */
+    takeOver?: 'idle' | 'now' | 'wait' | null
   }) =>
     Promise<{ ok: true; session: RegisteredSession } | { ok: false; error: string; detail?: string }>) | null = null
   /** Called on `dsh_install` — cli.ts clones/sets up/doctors the harness and reports each phase. */
@@ -622,6 +635,8 @@ export class BackendSocket {
   /** Answers `session_search` from this machine's transcript index (lib/sessionSearch/). Null when
    *  this Node has no `node:sqlite`. */
   sessionSearchProvider: ((query: string, options: { limit?: number; from?: number; to?: number }) => SessionSearchResult) | null = null
+  /** The end of one session from the same index, for Cmd-P's preview (`session_tail`). */
+  sessionTailProvider: ((sessionId: string, options: { beforeTurn?: number; maxChars?: number }) => Promise<SessionTail | null>) | null = null
   /** Runtime Model/Effort integration, wired by cli.ts for registered tmux sessions. */
   runtimeModelsProvider: ((sessionId?: string) => Promise<RuntimeModelOption[]>) | null = null
   /** Answers `usage_read` — this machine's own agent-account usage (lib/accountUsage.ts). A field
@@ -1765,7 +1780,7 @@ export class BackendSocket {
             const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
             const before = typeof payload.before === 'string' ? payload.before : undefined
             const messages = await readDevinMessages(DEVIN_DB, sessionId)
-            const timestamp = new Date(s.updatedAt).toISOString()
+            const timestamp = new Date(s.touchedAt).toISOString()
             if (!limit) {
               reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: devinMessagesToEvents(messages), timestamp, engine: s.engine })
               return
@@ -1786,7 +1801,7 @@ export class BackendSocket {
             const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
             const before = typeof payload.before === 'string' ? payload.before : undefined
             const messages = await readHermesMessages(await hermesDbForSession(s), sessionId)
-            const timestamp = new Date(s.updatedAt).toISOString()
+            const timestamp = new Date(s.touchedAt).toISOString()
             if (!limit) {
               reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: hermesMessagesToEvents(messages), timestamp, engine: s.engine })
               return
@@ -1807,7 +1822,7 @@ export class BackendSocket {
             const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
             const before = typeof payload.before === 'string' ? payload.before : undefined
             const messages = await readOpencodeMessages(OPENCODE_DB, sessionId)
-            const timestamp = new Date(s.updatedAt).toISOString()
+            const timestamp = new Date(s.touchedAt).toISOString()
             if (!limit) {
               reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: opencodeMessagesToEvents(messages), timestamp, engine: s.engine })
               return
@@ -1832,7 +1847,7 @@ export class BackendSocket {
             const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
             const before = typeof payload.before === 'string' ? payload.before : undefined
             const messages = await readKiloMessages(KILO_DB, sessionId)
-            const timestamp = new Date(s.updatedAt).toISOString()
+            const timestamp = new Date(s.touchedAt).toISOString()
             if (!limit) {
               reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: kiloMessagesToEvents(messages), timestamp, engine: s.engine })
               return
@@ -1852,7 +1867,7 @@ export class BackendSocket {
               id: sessionId,
               title: projectDisplayName(s),
               events: [],
-              timestamp: new Date(s.updatedAt).toISOString(),
+              timestamp: new Date(s.touchedAt).toISOString(),
               engine: s.engine,
               hasMore: false,
               oldestCursor: null,
@@ -2185,7 +2200,16 @@ export class BackendSocket {
           if (!projectId) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
           const hasName = Object.prototype.hasOwnProperty.call(payload, 'name')
           const hasProfile = Object.prototype.hasOwnProperty.call(payload, 'selectedModel')
-          if (!hasName && !hasProfile) { reply(type, requestId, { error: 'MISSING_UPDATE' }); return }
+          // An app OPENED this agent — see RegisteredSession.lastOpenedAt. Only a literal `true`: a
+          // client that means "opened" says so, and anything else is not an update at all. A client
+          // reaching this handler is already one that may change the agent — a shared harness's
+          // observer never gets here (sharing/owner.ts answers everything but terminal frames with
+          // VIEW_ONLY) — so an open is taken from the local window, a paired web/phone session and a
+          // remote desktop relayed through its own daemon alike.
+          const hasOpened = payload.opened === true
+          // An older client, and a request carrying none of the three, still get MISSING_UPDATE — which
+          // is also what a client learns from a daemon that predates `opened`.
+          if (!hasName && !hasProfile && !hasOpened) { reply(type, requestId, { error: 'MISSING_UPDATE' }); return }
           const name = typeof payload.name === 'string' ? payload.name.trim() : ''
           if (hasName && !name) { reply(type, requestId, { error: 'MISSING_NAME' }); return }
           let s = registry.resolve(projectId)
@@ -2207,8 +2231,27 @@ export class BackendSocket {
             s = registry.rename(projectId, name) ?? s
             this.onAgentRename?.(s, name)
           }
+          // Throttled on the stamp the row already carries, so a repeat inside the window is answered
+          // with the current frame but moves nothing and tells no one. A stamp from the future (the
+          // clock was set back) never throttles: the next open corrects it.
+          let opened = false
+          if (hasOpened) {
+            const since = Date.now() - (s.lastOpenedAt ?? 0)
+            if (!s.lastOpenedAt || since < 0 || since >= AGENT_OPENED_THROTTLE_MS) {
+              s = registry.markOpened(s.agentId) ?? s
+              opened = true
+            }
+          }
           const agent = await this.toProject(s)
           reply(type, requestId, { agent })
+          // Every app sorts by the same stamp, so every app hears it: the web audience — the phone,
+          // other desktops, and this computer's own windows — through `send`. Not the device: the dial
+          // lists agents in creation order and has nothing to reorder. Not for an agent whose terminal
+          // this daemon cannot see either, the rule `syncSession` (cli.ts) keeps: that row is not in
+          // `agents_list`, and a push would put it back on every screen.
+          if (opened && registry.terminalAvailable(s.agentId)) {
+            this.send({ type: 'agent_synced', payload: { agent } })
+          }
           if (hasName) {
             const renamed = { type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } }
             this.send(renamed)          // every OTHER web client on this machine (group-encrypted)
@@ -2335,6 +2378,25 @@ export class BackendSocket {
             }
             permissionMode = payload.permissionMode
           }
+          // Opening a conversation Harness did not start: the engine resumes it, as it was. Nothing a new
+          // conversation is created with applies to it.
+          let resumeSessionId: string | null = null
+          if (payload.resumeSessionId !== undefined && payload.resumeSessionId !== null) {
+            if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9-]{8,80}$/.test(payload.resumeSessionId)) {
+              reply(type, requestId, { error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
+            }
+            if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || dsh || prompt || agent) {
+              reply(type, requestId, { error: 'INVALID_SESSION', detail: 'a resumed conversation takes no new folder, grid, harness, prompt or agent' }); return
+            }
+            resumeSessionId = payload.resumeSessionId
+          }
+          let takeOver: 'idle' | 'now' | 'wait' | null = null
+          if (payload.takeOver !== undefined && payload.takeOver !== null) {
+            if (!resumeSessionId || (payload.takeOver !== 'idle' && payload.takeOver !== 'now' && payload.takeOver !== 'wait')) {
+              reply(type, requestId, { error: 'INVALID_SESSION', detail: 'takeOver is idle, now or wait, with a resumeSessionId' }); return
+            }
+            takeOver = payload.takeOver
+          }
           const input = {
             engine,
             cwd: typeof cwd === 'string' ? cwd : terminal ? homedir() : '',
@@ -2347,6 +2409,8 @@ export class BackendSocket {
             prompt,
             name,
             agent,
+            resumeSessionId,
+            takeOver,
           }
           const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input
           if (creationId !== undefined) {
@@ -2746,6 +2810,19 @@ export class BackendSocket {
           // `from`/`to`: only sessions worked on in that window (epoch ms) — "the dial one from last
           // week". The client reads the time words, so every machine searches the same window.
           reply(type, requestId, { ...this.sessionSearchProvider(query, { limit: number(payload.limit), from: number(payload.from), to: number(payload.to) }) })
+          return
+        }
+
+        // A session's latest rows, newest last; `beforeTurn` pages up from the first row the client
+        // has. The same index as `session_search`, so it reads no transcript for a preview.
+        case 'session_tail': {
+          if (!this.sessionTailProvider) { reply(type, requestId, { error: 'SEARCH_UNAVAILABLE' }); return }
+          const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.slice(0, 200) : ''
+          if (!sessionId) { reply(type, requestId, { error: 'BAD_SESSION' }); return }
+          const integer = (value: unknown) => typeof value === 'number' && Number.isInteger(value) ? value : undefined
+          const tail = await this.sessionTailProvider(sessionId, { beforeTurn: integer(payload.beforeTurn), maxChars: integer(payload.maxChars) })
+          if (!tail) { reply(type, requestId, { error: 'NOT_INDEXED', sessionId }); return }
+          reply(type, requestId, { ...tail })
           return
         }
 
