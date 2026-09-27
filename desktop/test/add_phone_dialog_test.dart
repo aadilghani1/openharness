@@ -158,7 +158,7 @@ void main() {
           code: code,
         ).toString(),
       );
-      expect(_status(tester), 'Waiting for your phone…');
+      expect(_status(tester), 'Scan with Harness on your iPhone');
 
       await tester.pump(const Duration(milliseconds: 1500));
       expect(daemon.codes, [code, code]);
@@ -224,7 +224,7 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
       await tester.pump();
       expect(daemon.codes, hasLength(2));
-      expect(_status(tester), 'Waiting for your phone…');
+      expect(_status(tester), 'Scan with Harness on your iPhone');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
     });

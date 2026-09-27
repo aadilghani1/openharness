@@ -383,11 +383,12 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
     final cell = terminalCellSizeOf(context);
     final margin = cell.width * 2;
     final row = cell.height;
-    // At least 200 points — a phone camera at arm's length reads that easily
-    // — and a whole number of rows, so the text under it stays on the grid.
-    final qrSide = (200 / row).ceil() * row;
+    // The window is the QR and one line: 240 points — a phone camera reads that
+    // from across a desk — in a whole number of rows, so the line under it stays
+    // on the grid, and the window just wider than the code.
+    final qrSide = (240 / row).ceil() * row;
     final width = math.min(
-      math.max(cell.width * 52, qrSide + margin * 2),
+      qrSide + margin * 4,
       MediaQuery.sizeOf(context).width - 32,
     );
     return TerminalPromptKeys(
@@ -418,8 +419,6 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
                     Text('Add your phone', style: _ink()),
                     SizedBox(height: row),
                     ..._body(qrSide, row),
-                    SizedBox(height: row),
-                    _hints(context),
                   ],
                 ),
               ),
@@ -459,25 +458,8 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
         ),
       ),
       SizedBox(height: row),
-      Text.rich(
-        TextSpan(
-          children: [
-            const TextSpan(text: 'On your iPhone, open Harness and tap '),
-            TextSpan(
-              text: 'Yes — scan to connect',
-              style: _ink().copyWith(fontWeight: FontWeight.bold),
-            ),
-            const TextSpan(text: '.'),
-          ],
-        ),
-        style: _ink(),
-      ),
-      Text(
-        'Scanning pairs your phone with this ${_thisComputer()}, '
-        'end-to-end encrypted. No password.',
-        style: _ink(_faint),
-      ),
-      SizedBox(height: row),
+      // One line, and it is the status too: what to do, then that it worked.
+      // The phone's own screen says the rest (Yes — scan to connect).
       _status(),
     ];
   }
@@ -488,42 +470,14 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
         ? ('✓ Connected $connected', _theme.green)
         : _message != null
         ? (_message!, _theme.red)
-        : ('Waiting for your phone…', _faint);
+        : ('Scan with Harness on your iPhone', _faint);
     return Semantics(
       liveRegion: true,
       child: Text(
         text,
         key: const ValueKey('add-phone-status'),
+        textAlign: TextAlign.center,
         style: _ink(color),
-      ),
-    );
-  }
-
-  Widget _hints(BuildContext context) {
-    final escape = boxKeyLabel(
-      terminalPromptHint(context, 'picker.cancel', 'esc'),
-    );
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Semantics(
-        button: true,
-        label: 'Close, $escape',
-        excludeSemantics: true,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            onTap: _close,
-            child: Text.rich(
-              TextSpan(
-                children: [
-                  TextSpan(text: escape),
-                  TextSpan(text: '  close', style: _ink(_faint)),
-                ],
-              ),
-              style: _ink(_theme.foreground.withValues(alpha: .7)),
-            ),
-          ),
-        ),
       ),
     );
   }
