@@ -24,6 +24,7 @@ List<SearchFieldMatch> searchResultMatches(
         field,
         term,
         title: i < row.titleFieldCount,
+        initialsForShort: row.agentId != null,
       );
       if (score != null && (best == null || score < best)) {
         best = score;

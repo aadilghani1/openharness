@@ -1313,7 +1313,12 @@ List<String> swarmQueryTerms(String query) {
 /// "port audit", a word of "windows port" and only a fragment of "support".
 /// Scattered letters must start a word and stay close together; loose, they
 /// matched nearly any folder ("auth" in ".../autonomous-harness/...").
-int? swarmFieldMatchScore(String field, String term, {required bool title}) {
+int? swarmFieldMatchScore(
+  String field,
+  String term, {
+  required bool title,
+  bool initialsForShort = false,
+}) {
   final offset = field.indexOf(term);
   final int score;
   if (offset == 0) {
@@ -1321,7 +1326,11 @@ int? swarmFieldMatchScore(String field, String term, {required bool title}) {
   } else if (offset > 0) {
     score = wordStartIndexOf(field, term, offset) >= 0 ? 12 : 16;
   } else {
-    final spread = wordSubsequenceSpread(field, term);
+    final spread = wordSubsequenceSpread(
+      field,
+      term,
+      initialsForShort: initialsForShort,
+    );
     if (spread == null) return null;
     score = 128 + spread;
   }
@@ -1421,6 +1430,7 @@ List<_SwarmMatch> _matchSwarmDestinations(
           field,
           term,
           title: i < entry.titleFieldCount,
+          initialsForShort: entry.agentId != null,
         );
         if (score == null) continue;
         if (best == null || score < best) best = score;

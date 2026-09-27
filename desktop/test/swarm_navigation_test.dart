@@ -92,6 +92,8 @@ void main() {
       detail: '',
       swarmId: null,
       current: false,
+      agentId: id,
+      machineId: 'm',
       lastActivityAt: DateTime.utc(2026, 9, 26, hour),
       searchFields: [cwd],
     );
@@ -112,7 +114,8 @@ void main() {
       // Two letters scattered through "harness…" names and folders are noise.
       ['named', 'newer word', 'word'],
     );
-    // Two letters still work as initials.
+    // Two letters still work as initials. (A command keeps abbreviations like
+    // "kb": the strict rule is for the hundreds of harness names.)
     expect(
       rankSwarmDestinationsByActivity([
         row('split', 'New Split', hour: 2),

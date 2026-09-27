@@ -55,9 +55,7 @@ void main() {
       final result = row('Fix authentication · 東京');
       final pieces = runs(result, 'fx ath 東');
       expect(pieces.map((r) => r.text).join(), result.title);
-      // Two scattered letters count only as initials: "fx" is not, "fa" is.
-      expect(marked(pieces), ['a', 'th', '東']);
-      expect(marked(runs(result, 'fa')), ['F', 'a']);
+      expect(marked(pieces), ['F', 'x', 'a', 'th', '東']);
       expect(marked(runs(result, '  AUTHENTICATION\t東京  ')), [
         'authentication',
         '東京',
