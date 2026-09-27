@@ -195,6 +195,40 @@ Two gotchas:
 - FTS5 refuses `bm25()` inside an aggregate, even in a subquery that gets flattened.
 - `rowid IN (…)` beside `MATCH` runs a posting-list lookup per value: 3,000 ids took 72 seconds.
 
+## Tested end to end
+
+The branch's daemon ran on the development Mac in isolation, beside the real one: its own HOME,
+port 28473 and tmux socket, fed a copy of the stopped sessions. Their transcripts were read in
+place, read-only, and nothing was resumed or spawned. Two harnesses drove it:
+
+- **A protocol client that speaks what the app speaks:** local WebSocket, `machine_select`, then
+  `session_search`. Real queries answered in 1–18 ms. Typing "retention cohorts" a key at a time
+  peaked at 7 ms. 60 concurrent requests were all answered, each with its own answer. Hostile input
+  (FTS5 syntax, SQL, quotes, a 5,000-character query, wrong payload types, bad windows) never
+  errored or took the daemon down.
+- **Cmd-P's own code against it** (`desktop/test/session_search_daemon_e2e_test.dart`, opt-in):
+  the app's `WsConn`, catalog and search controller over the real index. 23 cases cover names,
+  conversations, time phrases, prefixes, codenames, file names and "nothing". Each keystroke
+  reaches results in about 130 ms, most of it the 110 ms pause-in-typing debounce, with the best
+  row selected.
+
+What it found, all fixed:
+
+- **Injected messages counted as yours.** Sub-agent hand-backs and harness notices were 6% of what
+  the index held as the person's asks.
+- **A time alone showed agent text.** It showed an agent's report instead of the last thing the
+  person asked then.
+- **Paste markers leaked** into snippets.
+- **Two scattered letters matched everything:** "hn" hit 182 rows. They are now initials only, for
+  harness rows.
+- **Keystrokes got slower** from the stricter letter check. Fixed; 2,000 harnesses are at parity
+  with main.
+- **Command search lost "kb".** Short curated lists (commands, machines, projects, models, Store)
+  keep main's letter matching; command search is identical to main on 30 short queries.
+
+Also by design: a leading `#` in Cmd-P opens projects, so type issue numbers without it ("issue
+189", "pr #368").
+
 ## Protocol
 
 `session_search { query, limit, from?, to? }` → `{ hits: [{ agentId, sessionId, engine, turn, at,
