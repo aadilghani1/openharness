@@ -29,7 +29,7 @@ import {
  *   phone    → POST /api/auth/refresh          (no auth)    → { token, expiresIn }
  *
  * The handoff code is the whole credential, so it is 32 random bytes, lives [HANDOFF_TTL_SEC], and
- * is spent by the first redeem (GETDEL). It rides in the QR link's fragment, which a browser never
+ * is spent by the first redeem. It rides in the QR link's fragment, which a browser never
  * sends, so it reaches this server only in the redeem's body.
  *
  * Nothing here is the person's Autonomous credential, and nothing here reaches the account service:
@@ -69,9 +69,13 @@ export async function startHandoff(userId: string): Promise<{ code: string; expi
  */
 export async function redeemHandoff(code: string, label: string): Promise<HarnessTokens | null> {
   if (!isHarnessHandoffCode(code)) return null
-  // Read and spend in ONE step: two phones racing the same QR must not both get in.
-  const userId = await pub.getdel(handoffKey(harnessTokenHash(code)))
-  if (!userId) return null
+  // Read and spend in ONE step: two phones racing the same QR must not both get in. MULTI rather
+  // than GETDEL, which a Redis older than 6.2 does not have.
+  const key = handoffKey(harnessTokenHash(code))
+  const [read] = (await pub.multi().get(key).del(key).exec()) ?? []
+  if (!read || read[0]) throw read?.[0] ?? new Error('handoff redeem: no reply from Redis')
+  const userId = read[1]
+  if (typeof userId !== 'string' || !userId) return null
   const user = await userService.get(userId)
   if (!user) return null
   const refreshToken = newHarnessToken(HARNESS_REFRESH_PREFIX)

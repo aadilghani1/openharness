@@ -20,10 +20,15 @@ const fakes = vi.hoisted(() => {
       if (failRedis) throw new Error('redis down')
       return redis.get(key) ?? null
     }),
-    getdel: vi.fn(async (key: string) => {
-      const value = redis.get(key) ?? null
-      redis.delete(key)
-      return value
+    // GET then DEL, in one transaction — how a redeem spends a code.
+    multi: vi.fn(() => {
+      const ops: Array<() => unknown> = []
+      const chain = {
+        get: (key: string) => { ops.push(() => redis.get(key) ?? null); return chain },
+        del: (key: string) => { ops.push(() => (redis.delete(key) ? 1 : 0)); return chain },
+        exec: async () => ops.map((op) => [null, op()]),
+      }
+      return chain
     }),
   }
   const harnessSession = {
@@ -107,7 +112,7 @@ describe('scan to sign in — the handoff', () => {
   it('refuses a code it never issued, or one that is not shaped like one', async () => {
     expect(await redeemHandoff(`hnh_${'A'.repeat(43)}`, 'x')).toBeNull()
     expect(await redeemHandoff('hnh_short', 'x')).toBeNull()
-    expect(fakes.pub.getdel).toHaveBeenCalledTimes(1) // the malformed one never reached Redis
+    expect(fakes.pub.multi).toHaveBeenCalledTimes(1) // the malformed one never reached Redis
   })
 
   it('a phone session is a viewer: machine connections refuse it', async () => {
