@@ -794,7 +794,9 @@ async function hermesTopLevelSession(dbPath, sessionId) {
       const raw = await execFileText('sqlite3', [
         '-json', '-cmd', '.timeout 500', '-cmd', 'PRAGMA query_only=1', `file:${db}?mode=ro`,
         `SELECT source FROM sessions WHERE id = '${sessionId}';`,
-      ], 1000)
+        // As long as the process scan gets: on a loaded machine a second is not always enough to
+        // spawn sqlite3, and a lookup cut short drops a real session's registration.
+      ], 3000)
       if (raw === null) continue     // unreadable store — another home may still hold the row
       sawStore = true
       try {
