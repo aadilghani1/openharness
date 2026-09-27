@@ -53,6 +53,7 @@ import '../state/workspace_status.dart';
 import '../state/workspace_pull_request.dart';
 import '../state/terminal_pane.dart';
 import '../widgets/transient_menus.dart';
+import '../widgets/add_phone_dialog.dart';
 import '../widgets/layout_palette.dart';
 import '../widgets/move_pane_palette.dart';
 import '../widgets/engine_identity.dart';
@@ -1514,6 +1515,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         unawaited(_notifications());
       case 'settings':
         await _settings();
+      case 'addPhone':
+        await _addPhone();
       case 'customize':
         await _customize();
     }
@@ -1707,6 +1710,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       source: 'swarm',
     ),
   );
+
+  /// Harness ▸ Add Phone… and `> add phone`: the QR a phone scans to sign in
+  /// and pair with this computer. See `widgets/add_phone_dialog.dart`.
+  Future<void> _addPhone() =>
+      _dialog(() => showAddPhoneDialog(context, app, keymap: _keymap));
 
   /// Settings, by section, as rows of the box: `> usage` goes straight to
   /// Settings ▸ Usage. A palette that finds a setting by name is how an editor
@@ -3695,6 +3703,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'pane.focus_$i': () => app.focusPaneByIndex(i - 1),
     'navigation.commands': _showSearchCommands,
     'app.customize': () => unawaited(_customize()),
+    'app.add_phone': () => unawaited(_addPhone()),
     'app.store': _openStore,
     'agent.add': _addAgent,
     if (kDebugSurfaceEnabled) 'app.onboarding_review': _newTab,
@@ -3757,7 +3766,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (id == 'keyboard.quick_start' ||
         id == 'keyboard.practice' ||
-        id == 'app.onboarding_review') {
+        id == 'app.onboarding_review' ||
+        // A viewer has no daemon of its own to pair a phone with.
+        id == 'app.add_phone') {
       return app.viewer == null;
     }
     if (id == 'agent.rename' ||

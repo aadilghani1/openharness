@@ -476,6 +476,15 @@ final harnessCommands = <HarnessCommand>[
     action: ShortcutAction.showSettings,
     nativeAction: 'settings',
   ),
+  // Harness ▸ Add Phone…, beside Settings in the app menu. No default keys:
+  // it is a once-per-phone errand, not a chord worth learning.
+  const HarnessCommand(
+    'app.add_phone',
+    'Add phone',
+    ShortcutGroup.actions,
+    keywords: ['iphone', 'mobile', 'pair', 'qr', 'scan', 'connect'],
+    nativeAction: 'addPhone',
+  ),
   const HarnessCommand(
     'keyboard.help',
     'Keyboard shortcuts',
