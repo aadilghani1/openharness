@@ -123,8 +123,8 @@ export function museOwnStream(line: string, sessionId: string): boolean {
 
 /**
  * Whether a Copilot event is the conversation's own: not a sub-agent's (those carry `agentId`), and not
- * a prompt nobody typed (a skill's or another agent's, which say where they came from in `source`,
- * or an autopilot continuation).
+ * a prompt nobody typed (a skill's or another agent's, whose `source` is `skill-…` or `agent-…`, or
+ * an autopilot continuation).
  */
 export function copilotOwnLine(line: string): boolean {
   if (!line.includes('"agentId"') && !line.includes('"source"') && !line.includes('isAutopilotContinuation')) return true
@@ -132,7 +132,8 @@ export function copilotOwnLine(line: string): boolean {
   try { event = JSON.parse(line) } catch { return true }
   if (typeof event.agentId === 'string' && event.agentId) return false
   if (event.type !== 'user.message') return true
-  return !(typeof event.data?.source === 'string' && event.data.source) && event.data?.isAutopilotContinuation !== true
+  const source = typeof event.data?.source === 'string' ? event.data.source : ''
+  return !/^(?:skill|agent)-/.test(source) && event.data?.isAutopilotContinuation !== true
 }
 
 /**

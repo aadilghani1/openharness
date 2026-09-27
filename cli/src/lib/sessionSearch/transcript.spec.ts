@@ -186,6 +186,9 @@ describe("engines' own lines", () => {
     expect(copilotOwnLine('{"type":"assistant.message","agentId":"","data":{}}')).toBe(true)
     expect(copilotOwnLine('{"type":"user.message","data":{"content":"x","source":"skill-review"}}')).toBe(false)
     expect(copilotOwnLine('{"type":"user.message","data":{"content":"x","source":""}}')).toBe(true)
+    expect(copilotOwnLine('{"type":"user.message","data":{"content":"x","source":"agent-a1"}}')).toBe(false)
+    // Any other source is the person's: only skills and agents are left out.
+    expect(copilotOwnLine('{"type":"user.message","data":{"content":"x","source":"cli"}}')).toBe(true)
     expect(copilotOwnLine('{"type":"user.message","data":{"content":"go on","isAutopilotContinuation":true}}')).toBe(false)
     expect(copilotOwnLine('{"type":"tool.call","data":{"source":"x"}}')).toBe(true)
     expect(copilotOwnLine('{"type":"user.message","data":{"source": half')).toBe(true)

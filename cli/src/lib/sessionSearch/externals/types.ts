@@ -70,6 +70,11 @@ export interface RunningProcess {
   /** The command's name as the system reports it (`comm`). */
   executable: string
   args: string
+  /**
+   * When it started, epoch ms to the second (`ps` lstart), when known. A record or lock older than
+   * the process named in it was left by another process that once had the same pid.
+   */
+  started?: number
 }
 
 /** What a provider may ask about the machine's processes. One view serves one look. */

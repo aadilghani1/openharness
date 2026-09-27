@@ -225,8 +225,13 @@ describe('processes', () => {
     expect((await processTtys([process.pid])).has(process.pid)).toBe(true)
   })
 
-  it('lists no processes when ps cannot be read', async () => {
+  it('lists no processes when ps cannot be read, and each start time when it can be read', async () => {
     expect(await listProcesses(async () => null)).toEqual([])
+    const row = { pid: 5, parentPid: 1, executable: 'grok', args: 'grok', startMarker: 'Sun Sep 27 09:05:03 2026' }
+    expect(await listProcesses(async () => [row, { ...row, pid: 6, startMarker: 'soon' }])).toEqual([
+      { pid: 5, ppid: 1, executable: 'grok', args: 'grok', started: Date.parse('Sun Sep 27 09:05:03 2026') },
+      { pid: 6, ppid: 1, executable: 'grok', args: 'grok' },
+    ])
   })
 
   it("knows Harness's own panes by their tmux session names", async () => {

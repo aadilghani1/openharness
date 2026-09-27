@@ -51,8 +51,9 @@ export function externalPaths(vars: NodeJS.ProcessEnv = process.env): ExternalPa
   return {
     claudeProjectsDir: env.CLAUDE_PROJECTS_DIR,
     codexHome: env.CODEX_HOME,
-    cursorConfigDir: vars.CURSOR_CONFIG_DIR || (vars.XDG_CONFIG_HOME ? join(vars.XDG_CONFIG_HOME, 'cursor') : env.CURSOR_HOME),
-    cursorDataDir: vars.CURSOR_DATA_DIR || env.CURSOR_HOME,
+    // Cursor ignores these when blank, as it ignores them unset.
+    cursorConfigDir: vars.CURSOR_CONFIG_DIR?.trim() || (vars.XDG_CONFIG_HOME?.trim() ? join(vars.XDG_CONFIG_HOME, 'cursor') : env.CURSOR_HOME),
+    cursorDataDir: vars.CURSOR_DATA_DIR?.trim() || env.CURSOR_HOME,
     grokHome: env.GROK_HOME,
     copilotHome: env.COPILOT_HOME,
     opencodeDb: databasePath(vars.OPENCODE_DB, env.OPENCODE_DATA_DIR, 'opencode.db'),

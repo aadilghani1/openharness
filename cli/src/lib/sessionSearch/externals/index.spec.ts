@@ -30,6 +30,9 @@ describe('where each engine keeps its conversations', () => {
     })
     expect(paths.piSessionDir).toBeUndefined()
     expect(externalPaths({}).cursorConfigDir).toBe(env.CURSOR_HOME)
+    expect(externalPaths({ CURSOR_CONFIG_DIR: '  ', XDG_CONFIG_HOME: ' ', CURSOR_DATA_DIR: '' })).toMatchObject({
+      cursorConfigDir: env.CURSOR_HOME, cursorDataDir: env.CURSOR_HOME,
+    })
     // The process's own environment by default.
     expect(externalPaths().codexHome).toBe(env.CODEX_HOME)
   })
