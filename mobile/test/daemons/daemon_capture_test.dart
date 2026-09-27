@@ -1,6 +1,6 @@
-// Real-font review captures of the phone's daemon: the header chip in its
-// states, the header with large text, the sheet (with a daemon, before one,
-// and on a small phone with large text), the hatch reveal's frames, and
+// Real-font review captures of the phone's daemon: the chip in the terminal's
+// title in its states and with large text, the sheet (with a daemon, before
+// one, and on a small phone with large text), the hatch reveal's frames, and
 // economy v2 (`v2-*`: a duplicate's reveal, serial and shiny cards, the setup
 // egg and its habits, a drop announced but not released), and round 4
 // (`r4-*`: the consent screen, the sheet's consent and dial, a need line in
@@ -17,8 +17,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/daemons/daemon_face.dart';
 import 'package:harness_mobile/daemons/daemon_lines.dart';
 import 'package:harness_mobile/daemons/plates.dart';
@@ -33,9 +31,7 @@ import 'package:harness_mobile/phone/daemon_plate.dart';
 import 'package:harness_mobile/phone/daemon_scope.dart';
 import 'package:harness_mobile/phone/daemon_sheet.dart';
 import 'package:harness_mobile/phone/daemon_style.dart';
-import 'package:harness_mobile/phone/phone_status.dart';
-import 'package:harness_mobile/phone/terminal_header.dart';
-import 'package:harness_mobile/phone/terminal_header_action.dart';
+import 'package:harness_mobile/phone/terminal_title.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/state/app_state.dart';
 
@@ -167,61 +163,69 @@ Future<void> _capture(
   });
 }
 
-/// The terminal page's header with the chip in it, over a little terminal.
-Widget _screen(AppNotifier app, {bool body = true, bool chip = true}) =>
-    DaemonHost(
-      notifier: app,
-      child: Scaffold(
-        backgroundColor: grid.AppPalette.windowBg,
-        body: SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TerminalHeader(
-                agent: Agent.fromJson({
-                  'id': 'a',
-                  'engine': 'claude',
-                  'name': 'Fix login redirect',
-                  'project': {'name': 'harness', 'cwd': '/work/harness'},
-                }),
-                status: (label: 'Live', tone: PhoneTone.good),
-                machineName: 'studio',
-                trailing: [
-                  if (chip)
-                    const Padding(
-                      padding: EdgeInsets.only(left: 8),
-                      child: DaemonChip(),
-                    ),
-                  TerminalHeaderAction(
-                    icon: LucideIcons.ellipsisVertical300,
-                    tooltip: 'Harness actions',
-                    last: true,
-                    onPressed: () {},
-                  ),
-                ],
-              ),
-              const TerminalHeaderRule(busy: false),
-              if (body)
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Text(
-                      '> fix the login redirect\n\n'
-                      '  Reading src/auth/redirect.ts\n'
-                      '  Editing 2 files\n',
-                      style: TextStyle(
-                        fontFamily: grid.AppFont.mono,
-                        fontSize: 13,
-                        color: grid.AppPalette.textSecondary,
-                      ),
-                    ),
+/// The terminal page's title with the chip at its right end, over a little
+/// terminal — laid as the page lays it: the title floats over the output.
+///
+/// The title's TYPE is held at [_titleScale] at most. Its three lines sit in
+/// four fixed terminal rows (`TerminalTitle.heightOf`), which they outgrow past
+/// about 1.3x whatever sits beside them — the title's own matter, not the
+/// daemon's. The chip never scales, and the sheet over it keeps the full size.
+Widget _screen(
+  AppNotifier app, {
+  bool body = true,
+  bool chip = true,
+  VoidCallback? onTitleTap,
+}) => DaemonHost(
+  notifier: app,
+  child: Scaffold(
+    backgroundColor: grid.AppPalette.windowBg,
+    body: SafeArea(
+      child: Stack(
+        children: [
+          if (body)
+            Positioned.fill(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 84, 12, 12),
+                child: Text(
+                  '> fix the login redirect\n\n'
+                  '  Reading src/auth/redirect.ts\n'
+                  '  Editing 2 files\n',
+                  style: TextStyle(
+                    fontFamily: grid.AppFont.mono,
+                    fontSize: 13,
+                    color: grid.AppPalette.textSecondary,
                   ),
                 ),
-            ],
+              ),
+            ),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Builder(
+              builder: (context) => MediaQuery.withClampedTextScaling(
+                maxScaleFactor: _titleScale,
+                child: TerminalTitle(
+                  name: 'Fix login redirect',
+                  place: 'studio:harness',
+                  branch: 'fix/login-redirect',
+                  onTap: onTitleTap ?? () {},
+                  onFind: () {},
+                  daemon: chip
+                      ? const DaemonChip(margin: EdgeInsets.only(left: 12))
+                      : null,
+                ),
+              ),
+            ),
           ),
-        ),
+        ],
       ),
-    );
+    ),
+  ),
+);
+
+/// The largest text scale [_screen]'s title is drawn at.
+const _titleScale = 1.3;
 
 DaemonHostState _host(WidgetTester tester) =>
     tester.state<DaemonHostState>(find.byType(DaemonHost));
@@ -229,7 +233,7 @@ DaemonHostState _host(WidgetTester tester) =>
 void main() {
   setUpAll(_fonts);
 
-  const header = Size(390, 64);
+  const header = Size(390, 80);
   const phone = Size(390, 844);
 
   testWidgets('chip: idle, need, work, fail, boop', (tester) async {
@@ -260,30 +264,59 @@ void main() {
     }
   });
 
-  testWidgets('header: large text grows the row, with and without the chip', (
+  testWidgets('title: the chip at the right end, its size at any text size', (
     tester,
   ) async {
     for (final (name, size, scale, chip) in [
-      ('header-320-large-text', const Size(320, 96), 1.5, true),
-      ('header-320-large-text-no-chip', const Size(320, 96), 1.5, false),
-      ('header-390-larger-text', const Size(390, 110), 2.0, true),
+      ('title-320', const Size(320, 80), 1.0, true),
+      ('title-320-no-chip', const Size(320, 80), 1.0, false),
+      ('title-390-large-text', const Size(390, 80), 1.3, true),
     ]) {
       final app = await _app({
         'daemons': [_daemon('tim')],
         'pair': 'tim',
       });
+      var menus = 0;
       await _capture(
         tester,
         name,
         size,
-        _screen(app, body: false, chip: chip),
+        _screen(app, body: false, chip: chip, onTitleTap: () => menus++),
         textScale: scale,
       );
+      final chipFinder = find.byKey(const ValueKey('daemon-chip'));
+      if (!chip) {
+        expect(chipFinder, findsNothing, reason: name);
+        continue;
+      }
+      final title = tester.getRect(
+        find.byKey(const ValueKey('terminal-title')),
+      );
+      final sprite = tester.getRect(chipFinder);
+      final names = tester.getRect(find.text('Fix login redirect'));
+      // Inside the title, at its right end, beside the names rather than over
+      // them — and the art never scales with the text.
+      expect(sprite.right, lessThanOrEqualTo(title.right), reason: name);
       expect(
-        tester.getSize(find.byType(TerminalHeader)).height,
-        TerminalHeader.heightFor(TextScaler.linear(scale)) - 1,
+        title.right - sprite.right,
+        lessThanOrEqualTo(12 + 1),
         reason: name,
       );
+      expect(sprite.top, greaterThanOrEqualTo(title.top), reason: name);
+      expect(sprite.bottom, lessThanOrEqualTo(title.bottom), reason: name);
+      expect(names.right, lessThanOrEqualTo(sprite.left), reason: name);
+      expect(sprite.height, DaemonChip.height, reason: name);
+      // A tap on it opens the daemon's sheet, not the harness's menu the rest
+      // of the title opens.
+      await tester.tap(chipFinder);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        find.byKey(const ValueKey('daemon-sheet')),
+        findsOneWidget,
+        reason: name,
+      );
+      expect(menus, 0, reason: name);
     }
   });
 
