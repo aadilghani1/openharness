@@ -45,6 +45,9 @@ class WorkspaceWelcome extends StatefulWidget {
 }
 
 class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
+  // Resolve the icon at compile time. Lazy initialization of Lucide's large
+  // generated library overflows the browser debug runtime's stack here.
+  static const _phoneIcon = LucideIcons.smartphone500;
   WelcomeSessions? _sessions;
   int _cursor = 0;
   final _focus = FocusNode(debugLabel: 'Welcome sessions');
@@ -399,7 +402,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                   alignment: Alignment.centerLeft,
                   // Drawn at the weight and height of the ⌘ keys beside it.
                   child: Icon(
-                    LucideIcons.smartphone500,
+                    _phoneIcon,
                     color: accent,
                     size: (style.fontSize ?? 13) * 1.15,
                   ),
