@@ -8,6 +8,7 @@ import 'app_shell.dart';
 import 'p2p/phone_terminal_p2p.dart';
 import 'phone/phone_shell.dart';
 import 'demo/sample_mode.dart';
+import 'phone/welcome/phone_boot.dart';
 import 'phone/welcome/phone_welcome.dart';
 
 /// Harness for iOS and Android: a viewer onto the machines this device has
@@ -34,6 +35,7 @@ Future<void> main() {
     authenticatedScreen: (app) => PhoneShell(notifier: app),
     signedOutScreen: (app) =>
         PhoneWelcome(notifier: app, onTrySample: openSampleMode),
+    bootScreen: (_) => const PhoneBoot(),
     transportPlugins: phoneTerminalP2p.create,
   );
 }

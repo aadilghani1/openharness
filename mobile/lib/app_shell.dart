@@ -47,6 +47,10 @@ Future<void> startHarness({
   /// [LoginScreen].
   AuthenticatedScreenBuilder? signedOutScreen,
 
+  /// The screen while the app starts, when the platform has its own. Null keeps
+  /// [BootstrappingScreen], which speaks of a window and a local service — the desktop's.
+  AuthenticatedScreenBuilder? bootScreen,
+
   /// A viewer build's second wire to each machine (see
   /// [TerminalTransportPlugin]); the desktop passes none.
   TerminalTransportPluginFactory? transportPlugins,
@@ -80,6 +84,7 @@ Future<void> startHarness({
         keymap: keymap,
         authenticatedScreen: authenticatedScreen,
         signedOutScreen: signedOutScreen,
+        bootScreen: bootScreen,
       ),
     ),
   );
@@ -99,10 +104,12 @@ class HarnessApp extends StatelessWidget {
     this.keymap,
     required this.authenticatedScreen,
     this.signedOutScreen,
+    this.bootScreen,
   });
   final AppKeymap? keymap;
   final AuthenticatedScreenBuilder authenticatedScreen;
   final AuthenticatedScreenBuilder? signedOutScreen;
+  final AuthenticatedScreenBuilder? bootScreen;
 
   @override
   Widget build(BuildContext context) {
@@ -187,6 +194,7 @@ class HarnessApp extends StatelessWidget {
         child: RootShell(
           authenticatedScreen: authenticatedScreen,
           signedOutScreen: signedOutScreen,
+          bootScreen: bootScreen,
         ),
       ),
     );
@@ -226,10 +234,12 @@ class RootShell extends ConsumerStatefulWidget {
     super.key,
     required this.authenticatedScreen,
     this.signedOutScreen,
+    this.bootScreen,
   });
 
   final AuthenticatedScreenBuilder authenticatedScreen;
   final AuthenticatedScreenBuilder? signedOutScreen;
+  final AuthenticatedScreenBuilder? bootScreen;
 
   @override
   ConsumerState<RootShell> createState() => _RootShellState();
@@ -331,7 +341,8 @@ class _RootShellState extends ConsumerState<RootShell>
             // and again on success.
             screen = app.signingIn
                 ? _signedOut(app)
-                : BootstrappingScreen(statusMessage: app.bootStatusMessage);
+                : widget.bootScreen?.call(app) ??
+                      BootstrappingScreen(statusMessage: app.bootStatusMessage);
           case AppStatus.checkingEnvironment:
             screen = EnvironmentPreflightScreen(
               readiness: app.environmentReadiness,
