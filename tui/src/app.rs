@@ -2581,8 +2581,9 @@ impl App {
         self.nums.insert(id.clone(), num);
         self.tabs.insert(index, tab);
         if index <= self.active && self.tabs.len() > 1 { self.active += 1 }
-        // The placeholder of a session that had none.
-        if let Some(home) = self.tabs.iter().position(|t| t.root.is_none() && t.id != id) { self.tabs.remove(home); if home < self.active { self.active -= 1 } }
+        // The placeholder of a session that had none (the current one then, or before it).
+        if let Some(home) = self.tabs.iter().position(|t| t.root.is_none() && t.id != id) { self.tabs.remove(home); if home <= self.active && self.active > 0 { self.active -= 1 } }
+        self.active = self.active.min(self.tabs.len() - 1);
         for (m, a) in panes { self.desk_pane_added(&id, &m, &a) }
         self.fit_panes();
         self.tabs.iter().position(|t| t.id == id).unwrap_or(0)
