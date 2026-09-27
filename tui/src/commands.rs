@@ -1677,8 +1677,10 @@ fn run_words_in(app: &mut App, words: &[String]) {
         }
         "next-window" | "previous-window" => {
             // -a: the next (previous) window with an alert — # ! ~ — round the end
-            // (session_next_alert); else simply the next (previous) one.
+            // (session_next_alert); else simply the next (previous) one — none when there is
+            // only this one (tmux's "no next window").
             let n = app.tabs.len();
+            if n <= 1 { return app.error(format!("no {} window", if command == "next-window" { "next" } else { "previous" })) }
             let step = |i: usize| if command == "next-window" { (i + 1) % n } else { (i + n - 1) % n };
             if flag(words, "-a") {
                 let mut i = step(app.active);
@@ -1688,10 +1690,18 @@ fn run_words_in(app: &mut App, words: &[String]) {
             }
             app.select_tab(step(app.active))
         }
-        "last-window" => input::run(app, "last-tab"),
+        "last-window" => {
+            if !app.lastw.iter().any(|id| app.tabs.iter().any(|t| t.id == *id)) { return app.error("no last window") }
+            input::run(app, "last-tab")
+        }
         "select-window" => {
             let target = opt(words, "-t").or_else(|| Some(rest(words))).unwrap_or_default();
-            if flag(words, "-l") { input::run(app, "last-tab"); return }
+            // -l the last window, -n and -p the next and previous (their errors too).
+            if flag(words, "-l") { return run_words(app, &["last-window".to_string()]) }
+            if flag(words, "-n") { return run_words(app, &["next-window".to_string()]) }
+            if flag(words, "-p") { return run_words(app, &["previous-window".to_string()]) }
+            // -T: the last window when the target is the current one already.
+            if flag(words, "-T") && window_target(app, &target) == Some(app.active) { return run_words(app, &["last-window".to_string()]) }
             match window_target(app, &target) { Some(i) => app.select_tab(i), None => app.error(format!("can't find window: {}", target.trim_start_matches(':'))) }
         }
         "rename-window" => {
