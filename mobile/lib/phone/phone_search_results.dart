@@ -296,10 +296,8 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     }
     children.addAll(rest.map(row));
     if (current != null) children.add(row(current));
-    if (pausedRows.isNotEmpty) {
-      children.add(const FindHeader('paused'));
-      children.addAll(pausedRows.map(row));
-    }
+    // At the end and without a heading: each one's own word on the right says `paused`.
+    children.addAll(pausedRows.map(row));
     if (ordered.isEmpty) {
       children.add(
         Padding(
