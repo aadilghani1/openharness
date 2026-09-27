@@ -288,22 +288,43 @@ export function argvProfile(args: string): string | null {
   return null
 }
 
+export interface HermesLease {
+  sessionId: string
+  pid: number
+  /** When the lease's process started, epoch ms (Hermes writes psutil's `create_time`, seconds), when known. */
+  started?: number
+}
+
+/** How far a lease's start may sit from `ps`'s (whole seconds) and still be the same process. */
+const START_SLACK_MS = 2_000
+
 /** Hermes's active-session leases: the stored sessions a live CLI or terminal UI holds, by pid. */
-export async function hermesLeases(home: string): Promise<Array<{ sessionId: string; pid: number }>> {
+export async function hermesLeases(home: string): Promise<HermesLease[]> {
   const file = await readJson(join(home, 'runtime', 'active_sessions.json'))
   const list = Array.isArray(file) ? file : record(file)?.entries
   if (!Array.isArray(list)) return []
-  const leases: Array<{ sessionId: string; pid: number }> = []
+  const leases: HermesLease[] = []
   for (const item of list) {
     const entry = record(item)
     const sessionId = text(entry?.session_id)
     const pid = entry?.pid
+    const started = entry?.process_start_time
     // A gateway's lease names a chat's key, not a stored session.
     if (!HERMES_HISTORY_ID_RE.test(sessionId) || text(entry?.surface).startsWith('gateway')) continue
     if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) continue
-    leases.push({ sessionId, pid })
+    leases.push({ sessionId, pid, ...(typeof started === 'number' && started > 0 ? { started: started * 1000 } : {}) })
   }
   return leases
+}
+
+/**
+ * Whether [lease] still names the process now running under its pid. A Hermes that crashed leaves its
+ * lease behind, and the pid can go to anything after, a tool another Hermes runs among them; the
+ * process's start says which. Either side unknown: the pid is all there is to go on.
+ */
+export function leaseHeldBy(lease: HermesLease, row: RunningProcess | undefined): boolean {
+  if (lease.started === undefined || row?.started === undefined) return true
+  return Math.abs(row.started - lease.started) <= START_SLACK_MS
 }
 
 /**
@@ -421,7 +442,7 @@ export function hermesProvider(options: HermesOptions): ExternalProvider & Count
       // A lease is exact, so it is read first and wins over the same session named in arguments.
       for (const home of homes) {
         for (const lease of await hermesLeases(home.home)) {
-          if (!view.alive(lease.pid)) continue
+          if (!view.alive(lease.pid) || !leaseHeldBy(lease, byPid.get(lease.pid))) continue
           // The lease's pid is the REPL itself, or a terminal UI's gateway two levels under its
           // `hermes` (hermes → node UI → python gateway). A pid that is neither was reused.
           const owner = ancestry(byPid, lease.pid, 2).find(isHermes)

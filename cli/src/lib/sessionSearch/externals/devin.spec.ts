@@ -5,7 +5,7 @@
  * (3000.2.17). WAL mode, read through both of Harness's SQLite paths. No real conversation text.
  */
 
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -298,6 +298,24 @@ describe('Devin owners', () => {
       // No lock says so: the id it was started on, which it may have left since.
       { sessionId: 'argv-otter', pid: 107, record: ownerRecord(db, 'argv-otter'), fromArgs: true },
     ])
+  })
+
+  it('refuses a lock written before the process now under its pid began', async () => {
+    const home = tempDir()
+    const locks = join(home, 'session_locks')
+    mkdirSync(locks, { recursive: true })
+    const now = Date.now()
+    // Left by a Devin that crashed an hour ago; its pid now belongs to another Devin.
+    writeFileSync(join(locks, 'crashed-otter.lock'), '201')
+    utimesSync(join(locks, 'crashed-otter.lock'), (now - 3_600_000) / 1000, (now - 3_600_000) / 1000)
+    // Written by the Devin running now: after its start (ps reports whole seconds, so allow one).
+    writeFileSync(join(locks, 'current-otter.lock'), '202')
+    utimesSync(join(locks, 'current-otter.lock'), (now - 1_000) / 1000, (now - 1_000) / 1000)
+    const claims = await devinProvider({ home }).owners!(view([
+      { ...devin(201), started: now - 60_000 },
+      { ...devin(202), started: now },
+    ]))
+    expect(claims.map((c) => [c.sessionId, c.pid])).toEqual([['current-otter', 202]])
   })
 
   it('finds no lock folder on a machine Devin never ran on', async () => {

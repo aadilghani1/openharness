@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { commandCodeActivity, commandcodeProvider, readCommandCodeHead, readCommandCodeMeta } from './commandcode.js'
 import { scanMemo } from './support.js'
-import type { ExternalProvider, ProcessView, RunningProcess } from './types.js'
+import { type ExternalProvider, type ProcessView, type RunningProcess, UNSETTLED } from './types.js'
 
 // Shapes follow command-code 1.66.0's own writer and the repo's recorded Command Code session
 // (engines/commandcode/normalizer.spec.ts); every value here is made up.
@@ -67,21 +67,23 @@ describe('readCommandCodeHead', () => {
     expect(await head(jsonl(header(ID, '/w', { version: 4 })))).toEqual({ sessionId: ID, cwd: '/w' })
   })
 
-  it('refuses anything else: another id, an older format, a torn or partial header, a relative folder', async () => {
+  it('refuses a v3 header that names another id, no time or a relative folder', async () => {
     expect(await head(jsonl(header(ID2, '/w')))).toBeNull()
-    expect(await head(jsonl(header(ID, '/w', { version: 2 })))).toBeNull()
-    expect(await head(jsonl(header(ID, '/w', { version: '3' })))).toBeNull()
     expect(await head(jsonl(header(ID, '/w', { timestamp: 5 })))).toBeNull()
     expect(await head(jsonl(header(ID, 'relative')))).toBeNull()
-    expect(await head(jsonl(message('user', 1)))).toBeNull()
-    expect(await head(jsonl('{torn'))).toBeNull()
-    // Before the v3 format: no header, so no folder of its own.
-    expect(await head(jsonl(JSON.stringify({ sessionId: ID, role: 'user', content: 'x', metadata: { version: 2, entrypoint: 'interactive' } })))).toBeNull()
+  })
+
+  it('cannot judge yet a file from before v3 (Command Code rewrites it when it opens it) or a first line that is no header', async () => {
+    expect(await head(jsonl(JSON.stringify({ sessionId: ID, role: 'user', content: 'x', metadata: { version: 2, entrypoint: 'interactive' } })))).toBe(UNSETTLED)
+    expect(await head(jsonl(header(ID, '/w', { version: 2 })))).toBe(UNSETTLED)
+    expect(await head(jsonl(header(ID, '/w', { version: '3' })))).toBe(UNSETTLED)
+    expect(await head(jsonl(message('user', 1)))).toBe(UNSETTLED)
+    expect(await head(jsonl('{torn'))).toBe(UNSETTLED)
   })
 
   it('says "not yet" while the header is being written, and "never" when no line fits the bound', async () => {
-    await expect(head(header(ID, '/w'))).rejects.toThrow()
-    await expect(head('\n\n')).rejects.toThrow()
+    expect(await head(header(ID, '/w'))).toBe(UNSETTLED)
+    expect(await head('\n\n')).toBe(UNSETTLED)
     expect(await head('x'.repeat(256 * 1024 + 1))).toBeNull()
     // A header larger than the first read is read whole on a second.
     expect(await head(jsonl(header(ID, '/w', { extra: 'y'.repeat(40_000) }), message('user', 1)))).toEqual({ sessionId: ID, cwd: '/w' })
@@ -166,6 +168,20 @@ describe('commandcodeProvider', () => {
     expect(await scan()).toEqual([])
     appendFileSync(path, `\n${message('user', 1)}\n`)
     expect((await scan()).map((s) => s.sessionId)).toEqual([ID])
+  })
+
+  it('lists a file from before v3 once Command Code rewrites it in place with a header', async () => {
+    const home = temp()
+    const legacy = JSON.stringify({ sessionId: ID, role: 'user', content: 'x', timestamp: at(1), metadata: { version: 2, entrypoint: 'interactive' } })
+    const path = transcript(home, 'w', ID, [legacy], 100)
+    const scan = scanner(commandcodeProvider({ home }))
+    expect(await scan()).toEqual([])
+    // Unchanged: not read again, and still not listed.
+    expect(await scan()).toEqual([])
+    // Migrated as Command Code does it: a new file renamed over the old one.
+    write(`${path}.tmp`, jsonl(header(ID, '/w/migrated'), message('user', 1)), 200)
+    renameSync(`${path}.tmp`, path)
+    expect((await scan()).map((s) => [s.sessionId, s.cwd])).toEqual([[ID, '/w/migrated']])
   })
 
   it('reads a meta file again only when it changed, and the header never again', async () => {

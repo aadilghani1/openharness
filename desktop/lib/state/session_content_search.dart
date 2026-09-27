@@ -131,7 +131,12 @@ class SessionContentHit {
       open: external['open'] == true,
       openIn: switch (external['openIn']) {
         final String where
-            when where == 'terminal' || where == 'app' || where == 'harness' =>
+            when const {
+              'terminal',
+              'app',
+              'harness',
+              'maybe',
+            }.contains(where) =>
           where,
         _ => null,
       },

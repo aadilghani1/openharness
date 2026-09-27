@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { piActivity, piProvider, piSessionFolder, piTurnOpen, readPiHead, readPiTitle } from './pi.js'
 import { scanMemo } from './support.js'
-import type { ExternalProvider, ProcessView, RunningProcess } from './types.js'
+import { type ExternalProvider, type ProcessView, type RunningProcess, UNSETTLED } from './types.js'
 
 // Shapes follow Pi 0.85.1's own writer (session-manager.js) and the repo's recorded Pi session
 // (engines/pi/normalizer.spec.ts); every value here is made up.
@@ -101,8 +101,8 @@ describe('readPiHead', () => {
 
   it('says "not yet" while the header is being written, and "never" past Pi\'s own bound', async () => {
     const dir = temp()
-    await expect(readPiHead(write(join(dir, 'a.jsonl'), header(ID, '/w')))).rejects.toThrow()
-    await expect(readPiHead(write(join(dir, 'b.jsonl'), ''))).rejects.toThrow()
+    expect(await readPiHead(write(join(dir, 'a.jsonl'), header(ID, '/w')))).toBe(UNSETTLED)
+    expect(await readPiHead(write(join(dir, 'b.jsonl'), ''))).toBe(UNSETTLED)
     expect(await readPiHead(write(join(dir, 'c.jsonl'), 'x'.repeat(1024 * 1024 + 10)))).toBeNull()
     // A header larger than the first read (a long folder, extra fields) is read whole on a second.
     expect(await readPiHead(write(join(dir, 'd.jsonl'), jsonl(header(ID, '/w', { extra: 'y'.repeat(40_000) }), message('user', 1))))).toEqual({ sessionId: ID, cwd: '/w' })

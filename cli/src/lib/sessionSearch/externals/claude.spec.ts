@@ -46,7 +46,11 @@ describe('readClaudeHead', () => {
     // long for that.
     expect(await readClaudeHead(file('n', ['["entrypoint"]']))).toBe(UNSETTLED)
     expect(await readClaudeHead(file('e', [{ type: 'summary', summary: 'nothing else' }]))).toBe(UNSETTLED)
-    expect(await readClaudeHead(file('big', [{ type: 'summary', summary: 'x'.repeat(300 * 1024) }]))).toBeNull()
+    // Past every window without one: not a conversation, for good.
+    expect(await readClaudeHead(file('big', [{ type: 'summary', summary: 'x'.repeat(3000) }]), [1024, 2048])).toBeNull()
+    // A first prompt with a pasted image runs past the first window: the next, wider one reads it.
+    const pasted = line(A, 'cli', { message: { role: 'user', content: [{ type: 'image', source: { data: 'i'.repeat(300 * 1024) } }] } })
+    expect(await readClaudeHead(file('pasted', [{ type: 'permission-mode' }, pasted]))).toEqual({ sessionId: A, cwd: '/work/dial', origin: 'terminal' })
   })
 })
 
@@ -86,8 +90,14 @@ describe('claudeProvider', () => {
 
   it('knows its owners from their live process records, and whether they are between turns', async () => {
     const root = home()
-    write(join(root, 'sessions', '101.json'), [{ pid: 101, sessionId: A, status: 'busy' }])
+    const started = Date.parse('2026-09-27T10:00:00Z')
+    write(join(root, 'sessions', '101.json'), [{ pid: 101, sessionId: A, status: 'busy', startedAt: started + 400 }])
     write(join(root, 'sessions', '102.json'), [{ pid: 102, sessionId: B, status: 'idle' }])
+    // A crashed Claude's record, its pid now a shell's, and one now a later Claude's.
+    write(join(root, 'sessions', '107.json'), [{ pid: 107, sessionId: 'reused-by-a-shell', startedAt: started }])
+    write(join(root, 'sessions', '108.json'), [{ pid: 108, sessionId: 'reused-by-claude', startedAt: started }])
+    // Alive, but gone from the process list by the time it was read.
+    write(join(root, 'sessions', '109.json'), [{ pid: 109, sessionId: 'unlisted' }])
     write(join(root, 'sessions', '103.json'), [{ pid: 103, sessionId: B }])
     write(join(root, 'sessions', '104.json'), ['{ being written'])
     write(join(root, 'sessions', '105.json'), [{ pid: '105', sessionId: B }])
@@ -95,13 +105,25 @@ describe('claudeProvider', () => {
     write(join(root, 'sessions', 'notes.txt'), ['x'])
     mkdirSync(join(root, 'sessions', 'dir.json'))
     const provider = claudeProvider({ projectsDir: join(root, 'projects'), home: root })
-    const claims = await provider.owners!(view((pid) => pid === 101 || pid === 102 || pid === 106))
+    const running = [
+      { pid: 101, ppid: 1, executable: 'claude', args: 'claude --resume x', started },
+      { pid: 102, ppid: 1, executable: 'claude', args: 'claude' },
+      { pid: 106, ppid: 1, executable: 'claude', args: 'claude', started },
+      { pid: 107, ppid: 1, executable: '-zsh', args: '-zsh', started: started + 60_000 },
+      { pid: 108, ppid: 1, executable: 'claude', args: 'claude', started: started + 60_000 },
+    ]
+    const claims = await provider.owners!({ ...view((pid) => [101, 102, 106, 107, 108, 109].includes(pid)), list: async () => running })
     expect(claims.sort((a, b) => a.pid - b.pid)).toEqual([
       { sessionId: A, pid: 101, record: join(root, 'sessions', '101.json') },
       { sessionId: B, pid: 102, record: join(root, 'sessions', '102.json') },
     ])
     expect(await provider.busy!({ pid: 101, record: join(root, 'sessions', '101.json') })).toBe(true)
     expect(await provider.busy!({ pid: 102, record: join(root, 'sessions', '102.json') })).toBe(false)
+    // No records at all: nothing is open, and no process is looked at.
+    let looked = false
+    expect(await claudeProvider({ projectsDir: join(root, 'projects'), home: join(root, 'none') })
+      .owners!({ ...view(() => true), list: async () => { looked = true; return [] } })).toEqual([])
+    expect(looked).toBe(false)
     // The record gone is the process gone: not mid-turn.
     expect(await provider.busy!({ pid: 9, record: join(root, 'sessions', 'gone.json') })).toBe(false)
   })

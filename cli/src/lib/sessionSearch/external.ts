@@ -94,6 +94,8 @@ export interface SessionOwner {
   harness?: boolean
   /** Only its arguments name the session: it may have moved on, and is never stopped from here. */
   fromArgs?: boolean
+  /** Harness's own panes could not be listed, so this one may be Harness's: never stopped from here. */
+  unverified?: boolean
 }
 
 export interface OpenSessionsOptions {
@@ -104,8 +106,8 @@ export interface OpenSessionsOptions {
   view?: () => ProcessView
   /** The terminal each process runs in, or null; tests replace it. */
   ttys?: (pids: number[]) => Promise<Map<number, string | null>>
-  /** The terminals of Harness's own panes; tests replace it. */
-  harnessTtys?: () => Promise<Set<string>>
+  /** The terminals of Harness's own panes, or null when they could not be listed; tests replace it. */
+  harnessTtys?: () => Promise<Set<string> | null>
   now?: () => number
   log?: (line: string) => void
 }
@@ -157,7 +159,7 @@ export class OpenSessions {
     if (this.answer && now - this.answer.at <= (this.opts.maxAgeMs ?? 5_000)) return Promise.resolve(this.answer)
     this.asking ??= this.read().then((owners) => {
       const open = new Map([...owners].map(([id, owner]): [string, OpenIn] => [
-        id, owner.harness ? 'harness' : !owner.tty ? 'app' : owner.fromArgs ? 'maybe' : 'terminal',
+        id, owner.harness ? 'harness' : !owner.tty ? 'app' : owner.fromArgs || owner.unverified ? 'maybe' : 'terminal',
       ]))
       this.answer = { at: (this.opts.now ?? Date.now)(), owners, open }
       return this.answer
@@ -180,13 +182,14 @@ export class OpenSessions {
     if (!claims.length) return owners
     const [ttys, harness] = await Promise.all([
       (this.opts.ttys ?? ((pids) => processTtys(pids)))([...new Set(claims.map((claim) => claim.pid))]).catch(() => new Map<number, string | null>()),
-      (this.opts.harnessTtys ?? (() => readHarnessTtys()))().catch(() => new Set<string>()),
+      (this.opts.harnessTtys ?? (() => readHarnessTtys()))().catch(() => null),
     ])
     for (const claim of claims) {
       const tty = claim.app ? null : ttys.get(claim.pid) ?? null
       const owner: SessionOwner = {
         pid: claim.pid, engine: claim.engine, tty, record: claim.record,
-        ...(tty && harness.has(tty) ? { harness: true } : {}),
+        ...(tty && harness?.has(tty) ? { harness: true } : {}),
+        ...(tty && !harness ? { unverified: true } : {}),
         ...(claim.fromArgs ? { fromArgs: true } : {}),
       }
       // Hard evidence outranks a process's arguments for the same session.

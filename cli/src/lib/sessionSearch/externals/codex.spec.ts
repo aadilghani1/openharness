@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { codexProvider, codexTitles, codexTurnOpen, readCodexHead, rollouts } from './codex.js'
+import { codexProvider, codexServer, codexTitles, codexTurnOpen, readCodexHead, rollouts } from './codex.js'
 import { scanMemo } from './support.js'
 import { type ProcessView, UNSETTLED } from './types.js'
 
@@ -33,7 +33,10 @@ describe('readCodexHead', () => {
   it('reads the terminal, the Codex app and the editors, not scripts, sub-agents or a broken head', async () => {
     const dir = home()
     const file = (name: string, first: unknown) => write(join(dir, `${name}.jsonl`), [first, event('x')])
+    // `meta` carries 40 KB of instructions: past the first window, found by the second.
     expect(await readCodexHead(file('cli', meta(C, 'cli')))).toEqual({ sessionId: C, cwd: '/work/cohorts', origin: 'terminal' })
+    const short = { ...meta(C, 'cli'), payload: { ...meta(C, 'cli').payload, base_instructions: 'x' } }
+    expect(await readCodexHead(file('short', short))).toMatchObject({ sessionId: C })
     expect(await readCodexHead(file('app', meta(C, 'vscode', 'Codex Desktop')))).toMatchObject({ origin: 'codex-app' })
     expect(await readCodexHead(file('ide', meta(C, 'vscode', 'codex_vscode')))).toMatchObject({ origin: 'editor' })
     expect(await readCodexHead(file('exec', meta(C, 'exec', 'codex_exec')))).toBeNull()
@@ -118,15 +121,40 @@ describe('codexProvider', () => {
   it('knows its owners from the rollouts Codex processes hold open, and asks their rollout about the turn', async () => {
     const root = home()
     const path = write(join(root, rolloutName(C)), [meta(C, 'cli'), event('task_started')])
+    const served = join(root, rolloutName(D))
     const view: ProcessView = {
-      list: async () => [], openFiles: async () => new Map(), alive: () => true,
+      list: async () => [
+        { pid: 201, ppid: 1, executable: 'codex', args: '/opt/codex/bin/codex resume x' },
+        { pid: 203, ppid: 1, executable: 'codex', args: '/opt/codex/bin/codex app-server --listen stdio' },
+      ],
+      openFiles: async () => new Map(), alive: () => true,
       openFilesOf: async (commands) => {
         expect(commands).toEqual(['codex', 'Codex'])
-        return new Map([[201, [path, '/dev/ttys003', '/tmp/rollout-notes.txt']], [202, ['/x/rollout-2026-not-an-id.jsonl']]])
+        return new Map([[201, [path, '/dev/ttys003', '/tmp/rollout-notes.txt']], [202, ['/x/rollout-2026-not-an-id.jsonl']], [203, [served]]])
       },
     }
     const provider = codexProvider({ home: root })
-    expect(await provider.owners!(view)).toEqual([{ sessionId: C, pid: 201, record: path }])
+    // A server holding a thread is never stopped from here, even when a terminal started it.
+    expect(await provider.owners!(view)).toEqual([
+      { sessionId: C, pid: 201, record: path },
+      { sessionId: D, pid: 203, record: served, app: true },
+    ])
     expect(await provider.busy!({ pid: 201, record: path })).toBe(true)
+    // Nothing held open: no process is looked at.
+    let listed = false
+    expect(await provider.owners!({ ...view, openFilesOf: async () => new Map(), list: async () => { listed = true; return [] } })).toEqual([])
+    expect(listed).toBe(false)
+  })
+
+  it("tells Codex's servers from a person's Codex", () => {
+    const row = (executable: string, args: string) => ({ pid: 1, ppid: 0, executable, args })
+    expect(codexServer(undefined)).toBe(false)
+    expect(codexServer(row('codex', 'codex'))).toBe(false)
+    expect(codexServer(row('codex', 'codex -m o3 --yolo'))).toBe(false)
+    expect(codexServer(row('codex', 'codex resume 01a0'))).toBe(false)
+    expect(codexServer(row('codex', 'codex "run the mcp tests"'))).toBe(false)
+    for (const sub of ['app-server', 'mcp-server', 'mcp', 'proto']) expect(codexServer(row('codex', `codex --verbose ${sub}`))).toBe(true)
+    expect(codexServer(row('/opt/bin/codex-acp', '/opt/bin/codex-acp'))).toBe(true)
+    expect(codexServer(row('node', 'node /opt/lib/codex-acp --stdio'))).toBe(true)
   })
 })
