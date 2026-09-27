@@ -38,7 +38,7 @@ import 'phone_search_results.dart';
 /// ⚠️ **One list, and it is the same list focused or not.** The sheet used to open on the account's
 /// desk tabs and trade them for results on focus; a phone has no tabs now (see
 /// `docs/plans/2026-09-26-001-mobile-zero-questions.md`). The rows are the account's harnesses by
-/// last use — the desktop ⌘P's order, and the same moment on every app ([Agent.lastUsedAt]) — so
+/// when their conversation last moved ([Agent.updatedAt], the same moment on every app) — so
 /// the two or three you work with on the go are the top rows; typing filters them, and return
 /// opens the first. The desktop's modes work here too: `>` commands, `#` projects, `@` machines,
 /// `?` help.

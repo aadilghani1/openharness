@@ -49,7 +49,7 @@ class AgentEntry {
   /// a turn this app saw since ([MachineState.agentActivityAt]) — whichever is
   /// later. Null when neither is known.
   DateTime? get lastActiveAt {
-    final reported = agent.lastUsedAt;
+    final reported = agent.updatedAt;
     final seen = machine.agentActivityAt[agent.id];
     if (reported == null || seen == null) return seen ?? reported;
     return seen.isAfter(reported) ? seen : reported;
@@ -131,10 +131,11 @@ List<AgentEntry> recentAgents(List<AgentEntry> entries) => _stableSorted(
 /// Then the desktop's tie-breaks: its own focus history (which a phone does not have, so it is
 /// skipped), the name as drawn in natural order, and finally the id so two rows never swap.
 int compareMonitorOrder(AgentEntry a, AgentEntry b) {
-  // Last USED, not last active: an agent opened on any app a moment ago comes
-  // first here and in every desktop's ⌘P alike — see [Agent.lastUsedAt].
-  final activity = (b.agent.lastUsedAt?.millisecondsSinceEpoch ?? 0).compareTo(
-    a.agent.lastUsedAt?.millisecondsSinceEpoch ?? 0,
+  // When the conversation last MOVED — the true time (the owner: "use conversation last move, not
+  // last open"). Opening a harness on some app is not work on it, and sorting it up for that put a
+  // glance above the harness that actually just did something.
+  final activity = (b.agent.updatedAt?.millisecondsSinceEpoch ?? 0).compareTo(
+    a.agent.updatedAt?.millisecondsSinceEpoch ?? 0,
   );
   if (activity != 0) return activity;
   final name = compareNatural(

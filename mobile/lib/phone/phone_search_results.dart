@@ -398,7 +398,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
           ? null
           : onScreen
           ? 'current'
-          : fzfAge(entry.agent.lastUsedAt, now),
+          : fzfAge(entry.agent.updatedAt, now),
       detailColor: question != null && entry.isWaiting ? tty.text : null,
       state: state.word,
       stateColor: state.color,

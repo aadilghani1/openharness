@@ -1056,9 +1056,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
   String? _latestAgentFolder() {
     final agents = [...?_machine?.agents]
       ..sort(
-        (a, b) => (b.lastUsedAt ?? DateTime(0)).compareTo(
-          a.lastUsedAt ?? DateTime(0),
-        ),
+        (a, b) =>
+            (b.updatedAt ?? DateTime(0)).compareTo(a.updatedAt ?? DateTime(0)),
       );
     for (final agent in agents) {
       final path = agent.project?.root ?? agent.project?.cwd;

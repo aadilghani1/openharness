@@ -36,8 +36,8 @@ The phone signs in with an email code, then shows four commands to run on the co
       ┌──────────────────────────────┐
       │ Run this on your computer:   │
       │                              │
-      │ curl -fsSL harness.sh/K7QM-  │
-      │ 4XPT-9D2W | sh               │
+      │ curl -fsSL harness.sh | sh   │
+      │   -s K7QM-4XPT-9D2W          │
       │                              │
       │ [ Send to my Mac ]  [ Copy ] │   AirDrop, Messages, email, or read it off
       │                              │
@@ -60,12 +60,13 @@ code.
 
 ## How one command does it all
 
-The code in the command carries two things:
+The code is an argument to the script, never part of the URL: the server that hands out the script
+must not see it. It carries two things:
 
 ```
-harness.sh/K7QM-4XPT-9D2W   =   K7QM-4XPT         + 9D2W…
-                                sign-in part        pairing secret
-                                (backend knows it)  (only the phone and the command know it)
+K7QM-4XPT-9D2W   =   K7QM-4XPT         + 9D2W…
+                     sign-in part        pairing secret
+                     (backend knows it)  (only the phone and the command know it)
 ```
 
 **Sign-in part.** The phone, already signed in, asks the backend for a one-time setup code
@@ -125,11 +126,16 @@ asking anything and without typing a password.
 
 ## Decisions for you
 
-1. **Short domain.** `harness.sh/<code>` reads well and is easy to type from the phone. Otherwise
-   `harness.autonomous.ai/i/<code>`.
-2. **The daemon's credential.** Redeeming a setup code yields either SSO tokens (no socket change)
-   or a machine key (the socket learns a second credential, revocable per computer). The first is
-   simpler; the second is cleaner.
+1. **Short domain.** The address the command downloads the installer from. Today it is
+   `https://harness.autonomous.ai/cli/install.sh`, 45 characters; `harness.sh` would make the
+   command short enough to read off the phone and type. It is optional: the command works either
+   way.
+2. **The daemon's credential.** The daemon keeps a socket open to the backend, signed in as you:
+   that is what lists the computer on your phone and lets the relay reach it through home routers.
+   Today `harness login` gets that sign-in through a browser. Redeeming the setup code gives the
+   daemon the same tokens `harness login` would, with no browser (recommended: nothing else
+   changes), or a key only good for that computer (revocable per computer, but the socket must learn
+   a second kind of credential).
 3. **The remote password.** It stays as the fallback for computers set up by hand. It is dropped
    from the phone path entirely, not only hidden.
 4. **Outside sessions.** Index all of them by default, or ask once on the computer ("Show my Claude

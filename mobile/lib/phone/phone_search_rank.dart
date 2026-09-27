@@ -51,7 +51,7 @@ int? phoneFieldMatchScore(
 }
 
 /// How well a row matched, coarsest first — the desktop's `SwarmMatchStrength`. Harnesses order
-/// by last use only among equally good matches, so the one named for a word is never buried under
+/// by when their conversation last moved only among equally good matches, so the one named for a word is never buried under
 /// newer ones that mention it in a folder or a recap.
 enum PhoneMatchStrength {
   /// The whole query is the name.
@@ -150,10 +150,10 @@ typedef _Match = ({
 /// session. A hit vouches for every word, so it admits a row the fields alone cannot, and lifts
 /// one that only scattered letters matched.
 ///
-/// ⚠️ **Typed, a list of agents orders by how well each matched, then by last use** — not by last
-/// use alone, which is what buried the harness named `hn` 6th of 166 under newer ones whose folder
-/// paths spell h…n. With nothing typed it is the last-use order the desktop's monitor shows, and
-/// [recent] (this phone's visits) only breaks ties.
+/// ⚠️ **Typed, a list of agents orders by how well each matched, then by when its conversation last
+/// moved** — not by that alone, which buried the harness named `hn` 6th of 166 under newer ones
+/// whose folder paths spell h…n. With nothing typed it is the conversations that moved last first,
+/// and [recent] (this phone's visits) only breaks ties.
 List<PhoneDestination> rankPhoneDestinations(
   List<PhoneDestination> all,
   String query, {
@@ -230,9 +230,9 @@ List<PhoneDestination> rankPhoneDestinations(
       match.strength == PhoneMatchStrength.said ||
       match.strength == PhoneMatchStrength.content;
   ranked.sort((a, b) {
-    // Nothing typed: the desktop's monitor order — last use, then this phone's visits.
+    // Nothing typed: the conversation that moved last first, then this phone's visits.
     if (needle.isEmpty) {
-      var order = _lastUsedFirst(a.entry, b.entry);
+      var order = _lastMovedFirst(a.entry, b.entry);
       if (order == 0) {
         order = (recency[a.entry.id] ?? 1 << 20).compareTo(
           recency[b.entry.id] ?? 1 << 20,
@@ -243,9 +243,9 @@ List<PhoneDestination> rankPhoneDestinations(
     if (byActivity) {
       var order = a.strength.index.compareTo(b.strength.index);
       // What was said is ranked by the index, which weighs how well it matched against how long
-      // ago; last use decides between equal answers.
+      // ago; the conversation's last move decides between equal answers.
       if (order == 0 && conversation(a)) order = b.said.compareTo(a.said);
-      if (order == 0) order = _lastUsedFirst(a.entry, b.entry);
+      if (order == 0) order = _lastMovedFirst(a.entry, b.entry);
       if (order == 0) {
         order = (recency[a.entry.id] ?? 1 << 20).compareTo(
           recency[b.entry.id] ?? 1 << 20,
@@ -269,10 +269,11 @@ List<PhoneDestination> rankPhoneDestinations(
   return [for (final row in ranked) row.entry];
 }
 
-/// Newest last use first; an agent never dated, and anything that is not an agent, after.
-int _lastUsedFirst(PhoneDestination a, PhoneDestination b) {
-  final left = a.entry?.agent.lastUsedAt?.millisecondsSinceEpoch ?? 0;
-  final right = b.entry?.agent.lastUsedAt?.millisecondsSinceEpoch ?? 0;
+/// The conversation that moved last first — the true time; opening a harness is not work on it. An
+/// agent never dated, and anything that is not an agent, after.
+int _lastMovedFirst(PhoneDestination a, PhoneDestination b) {
+  final left = a.entry?.agent.updatedAt?.millisecondsSinceEpoch ?? 0;
+  final right = b.entry?.agent.updatedAt?.millisecondsSinceEpoch ?? 0;
   return right.compareTo(left);
 }
 

@@ -99,8 +99,8 @@ class PhoneSearchController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// With a time in the query, the rows worked on then: last used in it, or vouched for by a
-  /// machine that saw a turn in it.
+  /// With a time in the query, the rows worked on then: the conversation last moved in it, or a
+  /// machine vouches it saw a turn in it.
   List<PhoneDestination> _within(List<PhoneDestination> rows) {
     final when = _read.when;
     if (when == null) return rows;
@@ -109,7 +109,7 @@ class PhoneSearchController extends ChangeNotifier {
         at != null && !at.isBefore(when.from) && !at.isAfter(when.to);
     return [
       for (final row in rows)
-        if (hits.containsKey(row.id) || then(row.entry?.agent.lastUsedAt)) row,
+        if (hits.containsKey(row.id) || then(row.entry?.agent.updatedAt)) row,
     ];
   }
 

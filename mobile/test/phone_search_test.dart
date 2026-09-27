@@ -1014,7 +1014,8 @@ void main() {
       );
     });
 
-    test('an agent opened on another app a moment ago comes first', () {
+    test('opening a harness on another app does not move it: the conversation that moved last leads', () {
+      // The owner: "use conversation last move, not last open — that's the true timestamp".
       final app = _app([
         _machine('box', [
           _agent('alpha', minutesAgo: 90, openedMinutesAgo: 0),
@@ -1022,7 +1023,7 @@ void main() {
         ]),
       ]);
       addTearDown(app.dispose);
-      expect(_agentIds(_rank(app, '')), ['alpha', 'delta']);
+      expect(_agentIds(_rank(app, '')), ['delta', 'alpha']);
     });
 
     test('paused work keeps its place by when it last moved', () {
