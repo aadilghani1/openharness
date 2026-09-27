@@ -1687,7 +1687,12 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         return;
     }
     let before = picker.query.clone();
-    let multi = matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) && crate::picker::scope_of(&picker.query).is_none();
+    // (--multi in FZF_DEFAULT_OPTS: every list takes marks, as fzf's do.)
+    let multi = (matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) || theme::fzf_opts().multi) && crate::picker::scope_of(&picker.query).is_none();
+    // change-multi: the list takes marks, or not, as it said.
+    let multi = picker.multi_override.map(|n| n > 0).unwrap_or(multi);
+    // unbind / toggle-bind: that key does nothing in this list now.
+    if picker.unbound.contains(&fzf_key_name(&key)) { app.modal = Some(Modal::Picker { kind, picker }); return }
     let up: i64 = if theme::fzf().reverse { -1 } else { 1 };
     // FZF_DEFAULT_OPTS --bind: your key:action pairs come first (the last bind for a key wins,
     // as in fzf). A key bound only to what hn does not run (execute, become, reload …) keeps this
@@ -1972,6 +1977,43 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
                 picker.preview_window = Some(pw);
             }
             "yank" => picker.yank(),
+            // up-match / down-match: up and down (the rows are all matches without --raw).
+            "up-match" => picker.move_by(up), "down-match" => picker.move_by(-up),
+            // The subword ones (fzf's camelCase-aware words).
+            "backward-subword" => picker.subword(false, false), "forward-subword" => picker.subword(true, false),
+            "backward-kill-subword" => picker.subword(false, true), "kill-subword" => picker.subword(true, true),
+            // The input shown or hidden (--no-input's).
+            "hide-input" => theme::opts_change(|o| o.no_input = true), "show-input" => theme::opts_change(|o| o.no_input = false),
+            "toggle-input" => { let on = theme::fzf_opts().no_input; theme::opts_change(|o| o.no_input = !on) }
+            // change-multi: marks taken (no limit), change-multi(N): up to N (0: none) — the marks
+            // dropped when that changes a list that took them.
+            a if a == "change-multi" || action_arg(a, "change-multi").is_some() => {
+                let n = match action_arg(a, "change-multi") { Some(v) => match v.trim().parse::<usize>() { Ok(n) => n, Err(_) => continue }, None => usize::MAX };
+                let was = picker.multi_override.unwrap_or(if multi { usize::MAX } else { 0 });
+                if was > 0 && n != was { picker.marked.clear() }
+                picker.multi_override = Some(n);
+            }
+            // unbind(keys) / rebind(keys) / toggle-bind(keys): keys that do nothing here, or again.
+            a if action_arg(a, "unbind").is_some() => { for k in action_arg(a, "unbind").unwrap_or("").split(',') { picker.unbound.insert(k.trim().to_string()); } }
+            a if action_arg(a, "rebind").is_some() => { for k in action_arg(a, "rebind").unwrap_or("").split(',') { picker.unbound.remove(k.trim()); } }
+            a if action_arg(a, "toggle-bind").is_some() => { for k in action_arg(a, "toggle-bind").unwrap_or("").split(',') { let k = k.trim().to_string(); if !picker.unbound.remove(&k) { picker.unbound.insert(k); } } }
+            // The look, for this list: the prompt, the pointer, the ghost text, the header, the
+            // footer, each section's label.
+            a if action_arg(a, "change-prompt").is_some() => { let v = action_arg(a, "change-prompt").unwrap_or("").to_string(); theme::fzf_change(|f| f.prompt_text = v) }
+            a if action_arg(a, "change-pointer").is_some() => {
+                let v = action_arg(a, "change-pointer").unwrap_or("").to_string();
+                // (fzf takes one of at most two columns.)
+                if unicode_width::UnicodeWidthStr::width(v.as_str()) <= 2 { theme::fzf_change(|f| f.pointer_char = v) }
+            }
+            a if action_arg(a, "change-ghost").is_some() => { let v = action_arg(a, "change-ghost").unwrap_or("").to_string(); theme::opts_change(|o| o.ghost = Some(v)) }
+            a if action_arg(a, "change-header").is_some() => picker.header_text = action_arg(a, "change-header").map(str::to_string),
+            a if action_arg(a, "change-footer").is_some() => { let v: Vec<String> = action_arg(a, "change-footer").unwrap_or("").split('\n').map(str::to_string).collect(); theme::opts_change(|o| o.footer = v) }
+            a if action_arg(a, "change-border-label").is_some() => { let v = action_arg(a, "change-border-label").unwrap_or("").to_string(); theme::opts_change(|o| o.border_label = v) }
+            a if action_arg(a, "change-list-label").is_some() => { let v = theme::strip_ansi(action_arg(a, "change-list-label").unwrap_or("")); theme::opts_change(|o| o.list_label = v) }
+            a if action_arg(a, "change-input-label").is_some() => { let v = theme::strip_ansi(action_arg(a, "change-input-label").unwrap_or("")); theme::opts_change(|o| o.input_label = v) }
+            a if action_arg(a, "change-header-label").is_some() => { let v = theme::strip_ansi(action_arg(a, "change-header-label").unwrap_or("")); theme::opts_change(|o| o.header_label = v) }
+            a if action_arg(a, "change-footer-label").is_some() => { let v = theme::strip_ansi(action_arg(a, "change-footer-label").unwrap_or("")); theme::opts_change(|o| o.footer_label = v) }
+            a if action_arg(a, "change-preview-label").is_some() => { let v = action_arg(a, "change-preview-label").unwrap_or("").to_string(); theme::opts_change(|o| o.preview_label = Some(v)) }
             "accept-non-empty" => { if !picker.visible.is_empty() { return End::Accept } }
             "accept" => return End::Accept,
             "abort" => return End::Abort,

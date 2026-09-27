@@ -1044,8 +1044,10 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     if theme::fzf_opts().binds.iter().any(|(_, a)| a.split('+').any(|x| x == "toggle-sort")) { count.push_str(if o_sorts(picker) { " +S" } else { " -S" }) }
     // --track: +T.
     if picker.tracking_all() { count.push_str(" +T") } else if picker.track_current.is_some() { count.push_str(" +t") }
-    let limit = theme::fzf_opts().multi_limit;
-    if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) || limit > 0 { count.push_str(&if limit > 0 { format!(" ({}/{limit})", picker.marked.len()) } else { format!(" ({})", picker.marked.len()) }) }
+    // The marks, while the list takes them (change-multi's say, else the list's own).
+    let limit = match picker.multi_override { Some(n) if n != usize::MAX => n, Some(_) => 0, None => theme::fzf_opts().multi_limit };
+    let takes = picker.multi_override.map(|n| n > 0).unwrap_or(matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) || theme::fzf_opts().multi);
+    if !picker.marked.is_empty() || takes { count.push_str(&if limit > 0 { format!(" ({}/{limit})", picker.marked.len()) } else { format!(" ({})", picker.marked.len()) }) }
     // fzf's printInfoImpl, each --info laid out as it lays it out: the count in the info pair, cut
     // with `..` when the room runs out (trimMessage); the separator's line filled with its string
     // (RepeatToFill) after a blank in its pair; the last column left blank. A list still loading
@@ -1796,6 +1798,8 @@ fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'st
 /// header_line indented [indent] columns (in a header box with a left side, none: its margin
 /// stands for the indent).
 fn header_line_at(picker: &Picker, width: usize, indent: usize) -> Option<Line<'static>> {
+    // change-header: its text in place of the hints.
+    if let Some(h) = &picker.header_text { if h.is_empty() { return None } return Some(Line::from(vec![Span::raw(" ".repeat(indent)), Span::styled(clip(h, width.saturating_sub(indent)), theme::fzf().header_style())])) }
     if picker.hints.is_empty() && picker.heading.is_none() { return None }
     let mut spans = vec![Span::raw(" ".repeat(indent))];
     let mut used = indent;

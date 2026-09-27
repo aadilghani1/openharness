@@ -176,6 +176,12 @@ pub struct Picker {
     pub history_at: Option<usize>, pub history_draft: String,
     /// jump (Some(false)) or jump-accept (Some(true)): the rows labelled, the next key picks one.
     pub jumping: Option<bool>,
+    /// change-header: the header row's text instead of the keys' hints.
+    pub header_text: Option<String>,
+    /// unbind / toggle-bind: keys that do nothing in this list now.
+    pub unbound: std::collections::HashSet<String>,
+    /// change-multi: marks taken (their limit; 0 none) whatever the list's own say.
+    pub multi_override: Option<usize>,
     /// exclude / exclude-multi: rows out of the list for as long as it is open.
     pub excluded: std::collections::HashSet<String>,
     /// track-current: the item tracked until the cursor moves or it leaves the results (+t).
@@ -200,6 +206,8 @@ impl Picker {
     }
 
     pub fn new(title: impl Into<String>, placeholder: impl Into<String>) -> Picker {
+        // A new list starts from FZF_DEFAULT_OPTS (what change-* actions did was the last one's).
+        crate::theme::fzf_reset();
         Picker {
             title: title.into(),
             heading: None,
@@ -240,6 +248,9 @@ impl Picker {
             track_flipped: false,
             history_at: None, history_draft: String::new(),
             jumping: None,
+            header_text: None,
+            unbound: Default::default(),
+            multi_override: None,
             excluded: Default::default(),
             track_current: None,
             search: None,
@@ -564,7 +575,32 @@ impl Picker {
     }
 
     /// --multi=N: whether another row may be marked (fzf's selectItem).
-    pub fn room_to_mark(&self) -> bool { let n = crate::theme::fzf_opts().multi_limit; n == 0 || self.marked.len() < n }
+    pub fn room_to_mark(&self) -> bool {
+        match self.multi_override { Some(n) => self.marked.len() < n, None => { let n = crate::theme::fzf_opts().multi_limit; n == 0 || self.marked.len() < n } }
+    }
+
+    /// fzf's subword actions (its subWordRubout / subWordNext): back to a word's start or a
+    /// camelCase hump, on past one's end — [kill] taking what it passed (to be yanked back).
+    pub fn subword(&mut self, forward: bool, kill: bool) {
+        let before = self.query.clone();
+        let chars: Vec<char> = self.query.chars().collect();
+        let at = self.qcursor.min(chars.len());
+        let to = if forward {
+            let rest: String = chars[at..].iter().collect();
+            at as i64 + first_match(r"[a-z][A-Z]|[\pL\pN][^\pL\pN]|(.$)", &rest) + 1
+        } else {
+            let head: String = chars[..at].iter().collect();
+            last_match(r"[a-z][A-Z]|[^\pL\pN][\pL\pN]", &head) + 1
+        };
+        let to = (to.max(0) as usize).min(chars.len()).max(if forward { 0 } else { self.floor() });
+        if !kill { self.qcursor = to.max(self.floor()); return }
+        let (a, b) = if forward { (at, to) } else { (to, at) };
+        if b <= a { return }
+        self.kill = chars[a..b].iter().collect();
+        self.query = chars[..a].iter().chain(chars[b..].iter()).collect();
+        self.qcursor = a;
+        self.changed(&before);
+    }
 
     /// select / deselect: the current row marked, or not, whichever it was.
     pub fn set_mark(&mut self, on: bool) {
@@ -685,6 +721,18 @@ pub fn line(row: &Row) -> String {
 }
 
 /// Where an alphanumeric word ends, going back or forward from `at` (readline's M-b / M-f).
+/// fzf's findLastMatch: where (in characters) the last match of [pattern] in [s] starts, -1 if none.
+fn last_match(pattern: &str, s: &str) -> i64 {
+    let Ok(rx) = regex::Regex::new(pattern) else { return -1 };
+    rx.find_iter(s).last().map(|m| s[..m.start()].chars().count() as i64).unwrap_or(-1)
+}
+
+/// fzf's findFirstMatch: where the first match starts, -1 if none.
+fn first_match(pattern: &str, s: &str) -> i64 {
+    let Ok(rx) = regex::Regex::new(pattern) else { return -1 };
+    rx.find(s).map(|m| s[..m.start()].chars().count() as i64).unwrap_or(-1)
+}
+
 fn word_edge(chars: &[char], mut at: usize, forward: bool) -> usize {
     let word = |c: char| c.is_alphanumeric();
     if forward {

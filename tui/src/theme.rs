@@ -389,6 +389,7 @@ pub const TEXT: Color = Color::Reset;
 
 /// fzf's colours — its dark256 default, or what `--color=light|16|bw` in `$FZF_DEFAULT_OPTS` asks
 /// for (and bw under NO_COLOR), so a list here looks like fzf does on this terminal.
+#[derive(Clone)]
 pub struct Fzf { pub reverse: bool, pub unicode: bool, pub pointer_char: String, pub marker_char: String, pub marker_multi: [String; 3], pub prompt_text: String, pub bg_plus: Color, pub hl: Color, pub prompt: Color, pub bw: bool, pub pal: fzfcolor::Palette }
 
 impl Fzf {
@@ -424,7 +425,39 @@ pub fn fzf_spec(v: &str) -> (Option<Color>, Modifier) {
     (colour, attrs)
 }
 
+/// What a list's change-* actions made of the look and the options (change-prompt, change-ghost,
+/// hide-input …): in force until the next list opens (fzf starts from its options each time).
+static FZF_LIVE: std::sync::atomic::AtomicPtr<Fzf> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static OPTS_LIVE: std::sync::atomic::AtomicPtr<FzfOpts> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// The look changed for this list (the one before stays: a reference to it may be held).
+pub fn fzf_change(f: impl FnOnce(&mut Fzf)) {
+    let mut c = fzf().clone();
+    f(&mut c);
+    FZF_LIVE.store(Box::into_raw(Box::new(c)), std::sync::atomic::Ordering::Release);
+}
+
+/// The options changed for this list.
+pub fn opts_change(f: impl FnOnce(&mut FzfOpts)) {
+    let mut c = fzf_opts().clone();
+    f(&mut c);
+    OPTS_LIVE.store(Box::into_raw(Box::new(c)), std::sync::atomic::Ordering::Release);
+}
+
+/// A new list: the look and options as FZF_DEFAULT_OPTS has them.
+pub fn fzf_reset() {
+    FZF_LIVE.store(std::ptr::null_mut(), std::sync::atomic::Ordering::Release);
+    OPTS_LIVE.store(std::ptr::null_mut(), std::sync::atomic::Ordering::Release);
+}
+
 pub fn fzf() -> &'static Fzf {
+    let live = FZF_LIVE.load(std::sync::atomic::Ordering::Acquire);
+    // SAFETY: set only from a leaked Box, never freed.
+    if !live.is_null() { return unsafe { &*live } }
+    fzf_base()
+}
+
+fn fzf_base() -> &'static Fzf {
     static FZF: std::sync::OnceLock<Fzf> = std::sync::OnceLock::new();
     FZF.get_or_init(|| {
         use fzfcolor::*;
@@ -632,7 +665,8 @@ pub fn strip_ansi(s: &str) -> String {
 
 /// The rest of FZF_DEFAULT_OPTS that shapes a list: --cycle, --exact, -i/+i, --no-separator,
 /// --ellipsis, fg:/bg: colours, and --bind key:action pairs.
-pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_prefix: String, pub separator_char: String, pub scrollbar: Option<String>, pub preview_scrollbar: Option<String>, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize, pub tabstop: usize, pub wrap: bool, pub wrap_sign: String, pub height: Option<Height>, pub min_height: i64, pub margin: [Size; 4], pub padding: [Size; 4], pub border_label: String, pub border_label_pos: (i64, bool), pub unicode: bool, pub gutter: Option<String>, pub keep_right: bool, pub gap: usize, pub gap_line: Option<String>, pub preview_window: PreviewWindow, pub preview_label: Option<String>, pub preview_label_pos: (i64, bool), pub literal: bool, pub multi_limit: usize, pub preview_window_set: bool,
+#[derive(Clone)]
+pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_prefix: String, pub separator_char: String, pub scrollbar: Option<String>, pub preview_scrollbar: Option<String>, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize, pub tabstop: usize, pub wrap: bool, pub wrap_sign: String, pub height: Option<Height>, pub min_height: i64, pub margin: [Size; 4], pub padding: [Size; 4], pub border_label: String, pub border_label_pos: (i64, bool), pub unicode: bool, pub gutter: Option<String>, pub keep_right: bool, pub gap: usize, pub gap_line: Option<String>, pub preview_window: PreviewWindow, pub preview_label: Option<String>, pub preview_label_pos: (i64, bool), pub literal: bool, pub multi_limit: usize, pub multi: bool, pub preview_window_set: bool,
     /// Each --preview-window as written, in order (a list with a look of its own lays them over it).
     pub preview_window_specs: Vec<String>,
     /// --ghost: what an empty query shows (else the list's own placeholder); --track.
@@ -659,10 +693,17 @@ pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_fir
     pub no_mouse: bool }
 
 pub fn fzf_opts() -> &'static FzfOpts {
+    let live = OPTS_LIVE.load(std::sync::atomic::Ordering::Acquire);
+    // SAFETY: set only from a leaked Box, never freed.
+    if !live.is_null() { return unsafe { &*live } }
+    fzf_opts_base()
+}
+
+fn fzf_opts_base() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = default_opts();
-        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None, keep_right: false, gap: 0, gap_line: None, preview_window: PreviewWindow::default(), preview_label: None, preview_label_pos: (0, false), literal: false, multi_limit: 0, preview_window_set: false, preview_window_specs: Vec::new(), ghost: None, track: false, list_border: None, input_border: None, header_border: None, footer_border: None, footer: Vec::new(), list_label: String::new(), input_label: String::new(), header_label: String::new(), footer_label: String::new(), separator_set: false, no_input: false, info_command: None, algo_v1: false, no_extended: false, history: None, history_size: 1000, jump_labels: "asdfghjklqwertyuiopzxcvbnm1234567890ASDFGHJKLQWERTYUIOPZXCVBNM`~;:,<.>/?'\"!@#$%^&*()[{]}-_=+".into(), no_mouse: false };
+        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None, keep_right: false, gap: 0, gap_line: None, preview_window: PreviewWindow::default(), preview_label: None, preview_label_pos: (0, false), literal: false, multi_limit: 0, multi: false, preview_window_set: false, preview_window_specs: Vec::new(), ghost: None, track: false, list_border: None, input_border: None, header_border: None, footer_border: None, footer: Vec::new(), list_label: String::new(), input_label: String::new(), header_label: String::new(), footer_label: String::new(), separator_set: false, no_input: false, info_command: None, algo_v1: false, no_extended: false, history: None, history_size: 1000, jump_labels: "asdfghjklqwertyuiopzxcvbnm1234567890ASDFGHJKLQWERTYUIOPZXCVBNM`~;:,<.>/?'\"!@#$%^&*()[{]}-_=+".into(), no_mouse: false };
         let (mut sep_set, mut bar_set, mut ell_set, mut sign_set) = (false, false, false, false);
         let mut i = 0;
         while i < opts.len() {
@@ -673,13 +714,15 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 "--cycle" => o.cycle = true, "--no-cycle" => o.cycle = false,
                 // --multi[=N]: at most N marked (the info then says (1/N)).
                 // (fzf's optional number: --multi=2, --multi 2, -m 2, -m2.)
+                "--no-multi" | "+m" => { o.multi = false; o.multi_limit = 0 }
                 "--multi" | "-m" => {
+                    o.multi = true;
                     o.multi_limit = match value.as_deref() {
                         Some(v) => v.parse().unwrap_or(0),
                         None => match opts.get(i + 1).and_then(|n| n.parse::<usize>().ok()) { Some(n) => { i += 1; n } None => 0 },
                     }
                 }
-                m if m.starts_with("-m") && m.len() > 2 && m[2..].chars().all(|c| c.is_ascii_digit()) => o.multi_limit = m[2..].parse().unwrap_or(0),
+                m if m.starts_with("-m") && m.len() > 2 && m[2..].chars().all(|c| c.is_ascii_digit()) => { o.multi = true; o.multi_limit = m[2..].parse().unwrap_or(0) }
                 "--hscroll" => o.hscroll = true, "--no-hscroll" => o.hscroll = false,
                 "--hscroll-off" => { if let Some(v) = take() { o.hscroll_off = v.parse().unwrap_or(10) } }
                 "--highlight-line" => o.highlight_line = true, "--no-highlight-line" => o.highlight_line = false,
