@@ -11,8 +11,10 @@
 pub mod card;
 pub mod render;
 pub mod roster;
+pub mod socket;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -57,6 +59,9 @@ pub struct Link {
     /// Bumped per connection so the app can tell a stale link's events from the live one's.
     #[allow(dead_code)]
     pub generation: u64,
+    /// Connected over harnessd's Unix socket (daemon/socket.rs), not its loopback port: only there
+    /// does the pair brain take a key, a talk or presence.
+    pub unix: Arc<AtomicBool>,
 }
 
 impl Link {
@@ -64,17 +69,18 @@ impl Link {
     pub fn spawn(port: u16, machine_id: &str, generation: u64, sink: mpsc::UnboundedSender<Event>) -> Link {
         let (tx, mut rx) = mpsc::unbounded_channel::<Out>();
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
-        let link = Link { machine_id: machine_id.to_string(), tx, pending: pending.clone(), generation };
+        let unix = Arc::new(AtomicBool::new(false));
+        let link = Link { machine_id: machine_id.to_string(), tx, pending: pending.clone(), generation, unix: unix.clone() };
         let id = machine_id.to_string();
         tokio::spawn(async move {
             let emit = |event: MachineEvent| {
                 let _ = sink.send(Event::Machine { machine_id: id.clone(), generation, event });
             };
-            let url = format!("ws://127.0.0.1:{port}/api/local-ws");
-            let connect = tokio::time::timeout(Duration::from_secs(20), tokio_tungstenite::connect_async(url)).await;
-            let (ws, _) = match connect {
-                Ok(Ok(ok)) => ok,
-                Ok(Err(error)) => { emit(MachineEvent::Failed(RpcError::new("DAEMON_UNREACHABLE", error.to_string()))); return }
+            // harnessd's Unix socket when it is there, else its loopback port (daemon/socket.rs).
+            let connect = tokio::time::timeout(Duration::from_secs(20), socket::connect(port)).await;
+            let ws = match connect {
+                Ok(Ok((ws, over_socket))) => { unix.store(over_socket, Ordering::Relaxed); ws }
+                Ok(Err(error)) => { emit(MachineEvent::Failed(RpcError::new("DAEMON_UNREACHABLE", error))); return }
                 Err(_) => { emit(MachineEvent::Failed(RpcError::new("TIMEOUT", "the daemon did not answer"))); return }
             };
             let (mut write, mut read) = ws.split();
@@ -158,6 +164,9 @@ impl Link {
         });
         link
     }
+
+    /// Whether this connection is over harnessd's Unix socket.
+    pub fn over_socket(&self) -> bool { self.unix.load(Ordering::Relaxed) }
 
     pub fn send(&self, ty: &str, payload: Value) -> bool {
         self.tx.send(Out::Text(json!({ "type": ty, "payload": payload }).to_string())).is_ok()
