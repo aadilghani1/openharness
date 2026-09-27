@@ -30,13 +30,15 @@ const turn = (day: string, n: number, hour = 12, machineId = 'm1', batchId = `b$
   ({ op: 'zoo.turn', batchId, n, day, hour, machineId, ...extra })
 /** Noon UTC of a day: the server's clock while that day is being worked. */
 const noonOf = (day: string) => new Date(`${day}T12:00:00.000Z`)
+/** A readable uid for a test individual: its label in hex, padded to 24. */
+const uid = (label: string) => Buffer.from(label).toString('hex').padEnd(24, '0').slice(0, 24)
 const daemon = (id: string, extra: Partial<ZooDaemon> = {}): ZooDaemon =>
-  ({ id, hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 0, version: '0.1', ...extra })
+  ({ uid: uid(id), id, seed: 0, shiny: false, xp: 0, bond: 0, version: '0.1', hatched: '2026-09-01T00:00:00.000Z', egg: 'first', ...extra })
 const egg = (id: string, kind = 'turn') => ({ id, kind, grantedAt: '2026-09-02T00:00:00.000Z' })
 const fullNest = () => Array.from({ length: ZOO_MAX_EGGS }, (_, i) => egg(`e${i}`))
 const zooOf = (patch: Partial<Zoo>, progress: Partial<ZooProgress> = {}): Zoo =>
   ({ ...emptyZoo(), ...patch, progress: { ...emptyProgress(), ...progress } })
-const paired = (extra: Partial<ZooDaemon> = {}) => zooOf({ daemons: [daemon('tim', extra)], pair: 'tim' })
+const paired = (extra: Partial<ZooDaemon> = {}) => zooOf({ daemons: [daemon('tim', extra)], paired: uid('tim') })
 
 type Report = [day: string, n: number, hour?: number, machineId?: string, extra?: Extra]
 /** Report turns one batch at a time, each on its own day's clock; collect what came of them. */
@@ -71,7 +73,8 @@ describe('the rules the server grants by', () => {
       history: { days: 7 },
     })
     expect(RULES.bond).toEqual({ xpPerTurn: 1, xpPerDay: 5, levels: [0, 50, 150, 300, 600] })
-    expect({ overflowXp: RULES.overflowXp, duplicateXp: RULES.duplicateXp, lessonXp: RULES.lessonXp }).toEqual({ overflowXp: 50, duplicateXp: 150, lessonXp: 25 })
+    // (`duplicateXp` is no longer the server's: a species hatched again is an individual of its own.)
+    expect({ overflowXp: RULES.overflowXp, lessonXp: RULES.lessonXp }).toEqual({ overflowXp: 50, lessonXp: 25 })
     expect(RULES.historyDates).toEqual({ '04-01': 'teapot', '08-25': 'tux', '09-09': 'bug', '09-27': 'gnu', '10-31': 'zombie' })
     expect(Object.keys(RULES.eggs)).toEqual(expect.arrayContaining(['turn', 'week', 'marathon', 'night', 'history']))
   })
@@ -352,15 +355,15 @@ describe('a full nest', () => {
 
   it('turns each egg earned past 64 held into 50 xp for the pair, answered as a grant', () => {
     const held = Array.from({ length: ZOO_MAX_HELD }, () => ({ kind: 'turn' }))
-    const start = zooOf({ daemons: [daemon('tim', { xp: 40 })], pair: 'tim', eggs: fullNest() }, { turns: 39, held })
+    const start = zooOf({ daemons: [daemon('tim', { xp: 40 })], paired: uid('tim'), eggs: fullNest() }, { turns: 39, held })
     const r = play(start, [['2026-09-26', 1]])
     expect(r.zoo.progress.held).toHaveLength(ZOO_MAX_HELD)
     expect(r.zoo.progress.turns).toBe(40)
     expect(r.grants).toEqual([{ kind: 'turn', xp: 50 }])
     expect(r.zoo.daemons[0].xp).toBe(40 + 50 + 1 + 5)                     // the egg's 50, then the turn's own xp
-    expect(r.levelUps).toEqual([{ id: 'tim', level: 1, version: '0.1' }])
+    expect(r.levelUps).toEqual([{ uid: uid('tim'), id: 'tim', level: 1, version: '0.1' }])
     // Two at once (a turn egg and a week egg) are two grants.
-    const two = play(zooOf({ daemons: [daemon('tim')], pair: 'tim', eggs: fullNest() }, { turns: 79, held, days: { '2026-09-21': 1, '2026-09-22': 1 } }), [['2026-09-23', 1]])
+    const two = play(zooOf({ daemons: [daemon('tim')], paired: uid('tim'), eggs: fullNest() }, { turns: 79, held, days: { '2026-09-21': 1, '2026-09-22': 1 } }), [['2026-09-23', 1]])
     expect(two.grants).toEqual([{ kind: 'turn', xp: 50 }, { kind: 'week', xp: 50 }])
     expect(two.zoo.daemons[0].xp).toBe(100 + 1 + 5)
   })
@@ -374,7 +377,7 @@ describe('a full nest', () => {
 
   it('lets a held egg in on any write once there is room', () => {
     const zoo = zooOf({ daemons: [daemon('tim')] }, { held: [{ kind: 'week' }] })
-    const r = applyZooOps(zoo, [{ op: 'zoo.nickname', id: 'tim', nickname: 'timothy' }], seeded(), noonOf('2026-09-26'))
+    const r = applyZooOps(zoo, [{ op: 'zoo.nickname', uid: uid('tim'), name: 'timothy' }], seeded(), noonOf('2026-09-26'))
     expect(kinds(r.grants)).toEqual(['week'])
     expect(r.zoo.progress.held).toEqual([])
   })
@@ -393,21 +396,26 @@ describe('bond: xp, levels and versions', () => {
     expect(capped.zoo.daemons[0].xp).toBe(r.zoo.daemons[0].xp)
   })
 
-  it('gives nothing without a pair, and only the pair (the first one hatched with its id)', () => {
+  it('gives nothing without a pair, and only the paired individual, not others of its species', () => {
     expect(play(zooOf({ daemons: [daemon('tim')] }), [['2026-09-26', 3]]).zoo.daemons[0].xp).toBe(0)
-    const two = play(zooOf({ daemons: [daemon('yak'), daemon('tim'), daemon('tim')], pair: 'tim' }), [['2026-09-26', 3]])
-    expect(two.zoo.daemons.map((d) => d.xp)).toEqual([0, 8, 0])
+    const tims = [daemon('yak'), daemon('tim'), daemon('tim', { uid: uid('tim2') })]
+    const second = play(zooOf({ daemons: tims, paired: uid('tim2') }), [['2026-09-26', 3]])
+    expect(second.zoo.daemons.map((d) => d.xp)).toEqual([0, 0, 8])
+    expect(play(zooOf({ daemons: tims, paired: uid('tim') }), [['2026-09-26', 3]]).zoo.daemons.map((d) => d.xp)).toEqual([0, 8, 0])
+    // A level reached names the individual by its uid.
+    const up = play(zooOf({ daemons: tims.map((d) => ({ ...d, xp: 45 })), paired: uid('tim2') }), [['2026-09-26', 3]])
+    expect(up.levelUps).toEqual([{ uid: uid('tim2'), id: 'tim', level: 1, version: '0.1' }])
   })
 
   it('answers each level reached with its version, and bumps bond and version', () => {
     const r = play(paired({ xp: 40 }), [['2026-09-26', 10]])                // 40 + 5 + 10 = 55
-    expect(r.levelUps).toEqual([{ id: 'tim', level: 1, version: '0.1' }])
+    expect(r.levelUps).toEqual([{ uid: uid('tim'), id: 'tim', level: 1, version: '0.1' }])
     expect(r.zoo.daemons[0]).toMatchObject({ xp: 55, bond: 1, version: '0.1' })
     const two = play(paired({ xp: 140, bond: 1 }), [['2026-09-26', 5]])
-    expect(two.levelUps).toEqual([{ id: 'tim', level: 2, version: '1.0' }])
+    expect(two.levelUps).toEqual([{ uid: uid('tim'), id: 'tim', level: 2, version: '1.0' }])
     expect(two.zoo.daemons[0]).toMatchObject({ bond: 2, version: '1.0' })
     const four = play(paired({ xp: 590, bond: 3, version: '1.0' }), [['2026-09-26', 5]])
-    expect(four.levelUps).toEqual([{ id: 'tim', level: 4, version: '2.0' }])
+    expect(four.levelUps).toEqual([{ uid: uid('tim'), id: 'tim', level: 4, version: '2.0' }])
     const past = play(four.zoo, [['2026-09-27', 20]])
     expect(past.levelUps).toEqual([])
     expect(past.zoo.daemons[0]).toMatchObject({ bond: 4, version: '2.0' })
@@ -419,13 +427,15 @@ describe('bond: xp, levels and versions', () => {
     expect(r.zoo.daemons[0]).toMatchObject({ xp: 600, bond: 4, version: '2.0' })
   })
 
-  it('reads bond and version from xp, and gives a daemon stored without xp the xp its bond needs', () => {
+  it('reads bond and version from xp, and gives a daemon stored without xp (from before individuals) the xp its bond needs', () => {
+    const old = (id: string) => ({ id, hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, version: '0.1' })
     const zoo = parseZoo({
       daemons: [
-        { ...daemon('tim'), xp: undefined, bond: 2, version: '0.1' },
+        { ...old('tim'), bond: 2, version: '0.1' },
         { ...daemon('yak'), xp: 700, bond: 0, version: '0.1' },
         { ...daemon('gopher'), xp: 10, bond: 3, version: '2.0' },
         { ...daemon('gnu'), xp: -1 },
+        { ...daemon('lynx'), xp: undefined, bond: 2 },                     // an individual always has xp
       ],
     })
     expect(zoo.daemons.map(({ id, xp, bond, version }) => ({ id, xp, bond, version }))).toEqual([
@@ -459,7 +469,7 @@ describe('batches', () => {
   })
 
   it('never changes the zoo it was handed', () => {
-    const start = zooOf({ daemons: [daemon('tim')], pair: 'tim', eggs: fullNest() }, { turns: 39, held: [{ kind: 'week' }] })
+    const start = zooOf({ daemons: [daemon('tim')], paired: uid('tim'), eggs: fullNest() }, { turns: 39, held: [{ kind: 'week' }] })
     const copy = structuredClone(start)
     applyZooOps(start, [turn('2026-09-26', 5, 1, 'm2'), { op: 'zoo.hatch', eggId: 'e0' }], seeded(), noonOf('2026-09-26'))
     expect(start).toEqual(copy)
