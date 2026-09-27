@@ -3059,7 +3059,8 @@ impl App {
             self.save_sessions();
             return;
         }
-        let how = self.options.get("detach-on-destroy", "", None).unwrap_or_default();
+        // (hn with no terminal is tmux's server, not a client: it keeps the sessions it has.)
+        let how = if self.headless { "off".to_string() } else { self.options.get("detach-on-destroy", "", None).unwrap_or_default() };
         let others: Vec<u32> = self.sessions.iter().map(|s| s.id).collect();
         let next = match how.as_str() {
             "off" | "no-detached" => self.last_session.filter(|l| others.contains(l)).or_else(|| self.sessions.iter().max_by_key(|s| s.created).map(|s| s.id)),
