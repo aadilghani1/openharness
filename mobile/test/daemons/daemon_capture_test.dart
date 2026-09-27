@@ -4,8 +4,9 @@
 // economy v2 (`v2-*`: a duplicate's reveal, serial and shiny cards, the setup
 // egg and its habits, a drop announced but not released), and round 4
 // (`r4-*`: the consent screen, the sheet's consent and dial, a need line in
-// voice v3, a level-up's morph). Always checks that nothing overflows; writes
-// PNGs only when asked:
+// voice v3, a level-up's morph), and drop init (`plate-*`: every filled
+// daemon's plate in the reveal and the sheet). Always checks that nothing
+// overflows; writes PNGs only when asked:
 //
 //   HARNESS_DAEMON_CAPTURE_DIR=/tmp/daemon-phone \
 //     flutter test test/daemons/daemon_capture_test.dart
@@ -20,6 +21,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/daemons/daemon_face.dart';
 import 'package:harness_mobile/daemons/daemon_lines.dart';
+import 'package:harness_mobile/daemons/plates.dart';
 import 'package:harness_mobile/daemons/render.dart';
 import 'package:harness_mobile/daemons/roster.dart';
 import 'package:harness_mobile/daemons/zoo.dart';
@@ -27,6 +29,7 @@ import 'package:harness_mobile/daemons/zoo_client.dart';
 import 'package:harness_mobile/phone/daemon_chip.dart';
 import 'package:harness_mobile/phone/daemon_consent.dart';
 import 'package:harness_mobile/phone/daemon_hatch.dart';
+import 'package:harness_mobile/phone/daemon_plate.dart';
 import 'package:harness_mobile/phone/daemon_scope.dart';
 import 'package:harness_mobile/phone/daemon_sheet.dart';
 import 'package:harness_mobile/phone/daemon_style.dart';
@@ -326,9 +329,9 @@ void main() {
     final app = await _app({
       'daemons': [
         _daemon('tim'),
-        _daemon('vim', xp: 150),
-        _daemon('fzf', xp: 0, shiny: true),
-        _daemon('grue', xp: 0),
+        _daemon('gnu', xp: 150),
+        _daemon('tux', xp: 0, shiny: true),
+        _daemon('beastie', xp: 0),
       ],
       'eggs': [
         {'id': 'e1', 'kind': 'week', 'grantedAt': ''},
@@ -466,6 +469,8 @@ void main() {
       HatchFrame(stage: HatchStage.card, sprite: sprite, bannerRows: timRows),
       size: const Size(320, 568),
     );
+    // The grue (drop unix, on hold) is the one daemon that only shows in
+    // the dark: its reveal starts pitch black, if one ever hatches.
     await reveal(
       'grue-pitch',
       'grue',
@@ -484,14 +489,25 @@ void main() {
       ),
       kind: 'night',
     );
-    final fzf = _roster.byId('fzf')!;
+    final beastie = _roster.byId('beastie')!;
     await reveal(
-      'fzf-shiny-card',
-      'fzf',
+      'beastie-card',
+      'beastie',
       HatchFrame(
         stage: HatchStage.card,
-        sprite: renderSprite(_roster, fzf, 0, DaemonMood.idle),
-        bannerRows: renderBanner(daemonBanner, 'fzf').length,
+        sprite: renderSprite(_roster, beastie, 0, DaemonMood.idle),
+        bannerRows: renderBanner(daemonBanner, 'beastie').length,
+      ),
+      kind: 'night',
+    );
+    final tux = _roster.byId('tux')!;
+    await reveal(
+      'tux-shiny-card',
+      'tux',
+      HatchFrame(
+        stage: HatchStage.card,
+        sprite: renderSprite(_roster, tux, 0, DaemonMood.idle),
+        bannerRows: renderBanner(daemonBanner, 'tux').length,
       ),
       shiny: true,
       kind: 'marathon',
@@ -529,8 +545,9 @@ void main() {
         ),
       );
       // Inside the margins, and never wrapped: a banner wider than the 280pt
-      // between them (drop 2's longer names, up to fortune's 43 columns)
-      // scales down whole. Drop 1's names are drawn at their own size.
+      // between them (mutt, gopher and beastie of drop init; the held drops'
+      // longer names, up to fortune's 43 columns) scales down whole. A name
+      // of 25 columns or fewer is drawn at its own size.
       final drawn = tester.getRect(banner);
       final natural = tester.getSize(banner);
       expect(drawn.left, greaterThanOrEqualTo(20), reason: d.id);
@@ -540,7 +557,11 @@ void main() {
         closeTo(natural.height * drawn.width, 1),
         reason: d.id,
       );
-      if (natural.width <= 280 || d.drop == 'unix') {
+      final cols = rows.fold(0, (w, r) => r.length > w ? r.length : w);
+      if (cols <= 25) {
+        expect(natural.width, lessThanOrEqualTo(280), reason: d.id);
+      }
+      if (natural.width <= 280) {
         expect(drawn.width, closeTo(natural.width, .01), reason: d.id);
       }
     }
@@ -649,13 +670,13 @@ void main() {
     );
     await reveal(
       'v2-reveal-serial-card',
-      'vim',
-      const ZooHatch(eggId: 'e', daemonId: 'vim', shiny: false, serial: 42),
+      'gnu',
+      const ZooHatch(eggId: 'e', daemonId: 'gnu', shiny: false, serial: 42),
     );
     await reveal(
       'v2-reveal-shiny-serial-card',
-      'fzf',
-      const ZooHatch(eggId: 'e', daemonId: 'fzf', shiny: true, serial: 7),
+      'tux',
+      const ZooHatch(eggId: 'e', daemonId: 'tux', shiny: true, serial: 7),
       kind: 'marathon',
     );
   });
@@ -666,9 +687,9 @@ void main() {
     final app = await _app({
       'daemons': [
         _daemon('tim', shiny: true, serial: 42, dupes: 1),
-        _daemon('vim', xp: 150, serial: 1203),
-        _daemon('fzf', xp: 0, dupes: 3),
-        _daemon('grue', xp: 0),
+        _daemon('gnu', xp: 150, serial: 1203),
+        _daemon('tux', xp: 0, dupes: 3),
+        _daemon('beastie', xp: 0),
       ],
       'eggs': [
         {'id': 's', 'kind': 'setup', 'grantedAt': ''},
@@ -740,8 +761,8 @@ void main() {
       ..zoo = {
         'daemons': [
           _daemon('tim', serial: 42),
-          _daemon('vim', xp: 150),
-          _daemon('fzf', xp: 0, dupes: 1),
+          _daemon('gnu', xp: 150),
+          _daemon('tux', xp: 0, dupes: 1),
         ],
         'pair': 'tim',
         'firstEgg': true,
@@ -752,7 +773,8 @@ void main() {
       write: backend.write,
       roster: roster,
     );
-    // A day inside the made-up drop 2's announcement (see rosterWithDropTwo).
+    // A day inside drop 2's announcement, once it has dates (see
+    // rosterWithDropTwo).
     final face = DaemonFace(zoo, now: () => DateTime.utc(2026, 10, 5));
     addTearDown(() {
       face.dispose();
@@ -776,7 +798,7 @@ void main() {
       then: () async {
         await tester.pump();
         await tester.scrollUntilVisible(
-          find.byKey(const ValueKey('daemon-shelf-drop-bsd')),
+          find.byKey(const ValueKey('daemon-shelf-drop-unix')),
           120,
           scrollable: sheetScroll(),
         );
@@ -787,7 +809,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 600));
       },
     );
-    expect(find.text('zoo: drop 2 bsd  out 2026-10-15'), findsOneWidget);
+    expect(find.text('zoo: drop 2 unix  out 2026-10-15'), findsOneWidget);
   });
 
   // ── round 4 ────────────────────────────────────────────────────────────────
@@ -871,7 +893,7 @@ void main() {
       Map<String, dynamic>? consent,
       String autonomy = 'watch',
     }) => _app({
-      'daemons': [_daemon('tim', serial: 42), _daemon('vim', xp: 150)],
+      'daemons': [_daemon('tim', serial: 42), _daemon('gnu', xp: 150)],
       'pair': 'tim',
       'habits': const ['turn', 'split', 'find', 'machine', 'store', 'resume'],
       'firstEgg': true,
@@ -948,11 +970,13 @@ void main() {
     final from = renderSprite(_roster, tim, 1, DaemonMood.idle);
     final to = renderSprite(_roster, tim, 2, DaemonMood.idle);
     final morph = versionMorph(from, to);
+    // tim is drawn filled: each frame names the version its plate is at.
     final frames = [
-      (from, false),
-      for (final (i, frame) in morph.indexed) (frame, i < morph.length - 1),
+      (from, false, 1),
+      for (final (i, frame) in morph.indexed)
+        (frame, i < morph.length - 1, i == 0 ? 1 : 2),
     ];
-    for (final (i, (sprite, faint)) in frames.indexed) {
+    for (final (i, (sprite, faint, version)) in frames.indexed) {
       await _capture(
         tester,
         'r4-morph-$i',
@@ -978,6 +1002,7 @@ void main() {
             stage: HatchStage.card,
             sprite: sprite,
             faint: faint,
+            version: version,
           ),
         ),
         then: () async {
@@ -987,5 +1012,94 @@ void main() {
       );
     }
     expect(find.text('level up · bond 4/4 · now tim 2.0'), findsOneWidget);
+  });
+
+  // ── drop init: plates ──────────────────────────────────────────────────────
+
+  testWidgets('plate: every filled daemon in the reveal, at 2.0', (
+    tester,
+  ) async {
+    final app = await _app(const {'daemons': []});
+    for (final d in _roster.daemons.where((d) => d.plate)) {
+      for (final (name, size) in [
+        ('390', phone),
+        ('320', const Size(320, 568)),
+      ]) {
+        await _capture(
+          tester,
+          'plate-reveal-${d.id}-$name',
+          size,
+          DaemonHatchReveal(
+            key: ValueKey('${d.id} $name'),
+            roster: _roster,
+            egg: const ZooEgg(id: 'e', kind: 'turn', grantedAt: ''),
+            result: Future.value(
+              ZooHatch(
+                eggId: 'e',
+                daemonId: d.id,
+                shiny: false,
+                duplicate: true,
+                xp: 150,
+                count: 2,
+                versionBefore: '2.0',
+              ),
+            ),
+            zoo: app.zoo,
+            still: HatchFrame(
+              stage: HatchStage.card,
+              sprite: renderSprite(_roster, d, 2, DaemonMood.idle),
+            ),
+          ),
+          then: () async {
+            await tester.pump();
+            await tester.pump();
+          },
+        );
+        // A phone is wide enough for the reveal plate; it stays inside the
+        // reveal's margins, never wrapped.
+        final plate = find.byKey(const ValueKey('daemon-hatch-plate'));
+        expect(
+          tester.widget<DaemonPlateView>(plate).size,
+          PlateSize.reveal,
+          reason: '${d.id} $name',
+        );
+        final drawn = tester.getRect(plate);
+        expect(drawn.left, greaterThanOrEqualTo(20 - .01), reason: d.id);
+        expect(drawn.right, lessThanOrEqualTo(size.width - 20 + .01));
+      }
+    }
+  });
+
+  testWidgets('plate: every filled daemon in its sheet, at 2.0 and shiny', (
+    tester,
+  ) async {
+    for (final d in _roster.daemons.where((d) => d.plate)) {
+      for (final shiny in [false, true]) {
+        final app = await _app({
+          'daemons': [_daemon(d.id, shiny: shiny)],
+          'pair': d.id,
+          'firstEgg': true,
+        });
+        await _capture(
+          tester,
+          'plate-sheet-${d.id}${shiny ? '-shiny' : ''}',
+          phone,
+          _screen(app),
+          then: () async {
+            await tester.pump();
+            await tester.tap(find.byKey(const ValueKey('daemon-chip')));
+            await tester.pump();
+            await tester.pump(const Duration(milliseconds: 1200));
+          },
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('daemon-portrait')),
+            matching: find.byType(DaemonPlateView),
+          ),
+          findsOneWidget,
+        );
+      }
+    }
   });
 }

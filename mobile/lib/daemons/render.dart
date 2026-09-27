@@ -78,12 +78,14 @@ String renderSprite(
   return s;
 }
 
-/// The portrait for a version, falling back to the nearest one drawn.
+/// The portrait for a version, falling back to the nearest one drawn. None
+/// for a daemon drawn filled: it has plates instead (`plates.dart`).
 List<String> portraitFor(DaemonRoster roster, DaemonDef d, String version) {
   final own = d.portraits[version];
   if (own != null) return own;
   final versions = roster.rules.versions;
   final drawn = versions.where(d.portraits.containsKey).toList();
+  if (drawn.isEmpty) return const [];
   final at = versions.indexOf(version);
   final below = drawn.where((v) => versions.indexOf(v) <= at).toList();
   return d.portraits[below.isNotEmpty ? below.last : drawn.first]!;

@@ -82,7 +82,7 @@ import { emptyZoo, parseZoo, type Hatched, type Zoo, type ZooEgg, type ZooOp } f
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 
-/** After drop 1's release, so every daemon is drawable whatever day the suite runs. */
+/** After drop 1's (init) release, so its daemons are drawable whatever day the suite runs. */
 const NOW = new Date('2026-10-01T12:00:00.000Z')
 const egg = (id: string, kind = 'turn'): ZooEgg => ({ id, kind, grantedAt: '2026-09-30T00:00:00.000Z' })
 const hatch = (eggId: string): ZooOp => ({ op: 'zoo.hatch', eggId })
@@ -175,8 +175,9 @@ describe('zoo writes racing on one account', () => {
       expect(zoo.progress.days['2026-10-01']).toBe(7)
       expect([...zoo.progress.batches].sort()).toEqual(['other', 'same'])
       expect(zoo.progress.machines.sort()).toEqual(['m1', 'm2'])
-      // The second machine earns the marathon egg exactly once, whichever write carried it.
-      expect(zoo.eggs.map((e) => e.kind)).toEqual(['marathon'])
+      // The second machine earns the marathon egg exactly once, whichever write carried it. (10-01 is in the
+      // week of the 09-27 history date: the first counted turn earns its egg, once, before the marathon.)
+      expect(zoo.eggs.map((e) => e.kind)).toEqual(['history', 'marathon'])
     }
   })
 

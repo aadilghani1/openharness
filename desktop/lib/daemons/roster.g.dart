@@ -478,10 +478,6 @@ const daemonRosterJson = r'''
         [
           "GNU",
           1983
-        ],
-        [
-          "gnu",
-          2026
         ]
       ],
       "lore": "Richard Stallman announced GNU on 27 September 1983: GNU's Not Unix, a recursive acronym. The gnu is a wildebeest, and it will politely remind you it's GNU/Linux.",
@@ -560,12 +556,8 @@ const daemonRosterJson = r'''
           1990
         ],
         [
-          "Lynx",
-          1992
-        ],
-        [
           "lynx",
-          2026
+          1992
         ]
       ],
       "lore": "Lynx came out of the University of Kansas in 1992 and is still maintained, the oldest web browser that is. It reads the web with the pictures taken out.",
@@ -644,12 +636,8 @@ const daemonRosterJson = r'''
           1986
         ],
         [
-          "Mutt",
-          1995
-        ],
-        [
           "mutt",
-          2026
+          1995
         ]
       ],
       "lore": "Michael Elkins wrote Mutt, a terminal mail client, in 1995: \"All mail clients suck. This one just sucks less.\" A scruffy dog, loyal to your inbox.",
@@ -804,12 +792,12 @@ const daemonRosterJson = r'''
       },
       "family": [
         [
-          "Gopher",
-          1991
+          "FTP",
+          1971
         ],
         [
           "gopher",
-          2026
+          1991
         ]
       ],
       "lore": "The University of Minnesota's Gopher (1991) was named for the campus mascot, and for a moment it was bigger than the web. It served menus on port 70; this one pops out of its burrow when something needs you.",
@@ -966,12 +954,8 @@ const daemonRosterJson = r'''
           1991
         ],
         [
-          "Tux",
-          1996
-        ],
-        [
           "tux",
-          2026
+          1996
         ]
       ],
       "lore": "Linus Torvalds said a penguin bit him at a zoo in Canberra. Larry Ewing drew Tux in the GIMP in 1996, well fed and content, and the kernel still draws one per CPU at boot.",

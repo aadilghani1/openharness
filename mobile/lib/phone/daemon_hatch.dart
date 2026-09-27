@@ -5,12 +5,14 @@ import 'package:flutter/services.dart';
 
 import 'package:harness_mobile/daemons/card.dart';
 import 'package:harness_mobile/daemons/daemon_face.dart';
+import 'package:harness_mobile/daemons/plates.dart';
 import 'package:harness_mobile/daemons/render.dart';
 import 'package:harness_mobile/daemons/roster.dart';
 import 'package:harness_mobile/daemons/zoo.dart';
 import 'package:harness_mobile/daemons/zoo_client.dart';
 
 import 'daemon_consent.dart';
+import 'daemon_plate.dart';
 import 'daemon_style.dart';
 
 /// Open [egg] on the server and show the reveal over everything. The chip
@@ -73,6 +75,7 @@ class HatchFrame {
     this.sprite,
     this.bannerRows = 0,
     this.faint,
+    this.version,
   });
   final HatchStage stage;
   final String? egg, sprite;
@@ -81,6 +84,11 @@ class HatchFrame {
   /// The sprite in the faint colour: a silhouette's, or a level-up morph's
   /// first two frames. Defaults to the silhouette stage.
   final bool? faint;
+
+  /// The version the hatchling is drawn at (an index into the roster's
+  /// versions): a filled daemon's plate is drawn from it, not from [sprite].
+  /// Defaults to the version it hatched at.
+  final int? version;
 }
 
 /// The hatch reveal, full screen (`daemons/README.md`, Hatching): the egg
@@ -90,9 +98,15 @@ class HatchFrame {
 /// hatch is shiny) and blinks; its name types in, a row at a time, as a
 /// banner in the face from `daemons/banner.json` ([renderBanner]); the rarity
 /// stamp and first words appear; then the card, which copies as a fenced code
-/// block and carries the new daemon's serial. A secret's reveal (a daemon that
-/// shows only in the dark) starts pitch black. Reduce Motion goes straight to
-/// the card.
+/// block and carries the new daemon's serial. A secret's reveal starts pitch
+/// black; the grue, who shows only in the dark, stays there. Reduce Motion goes
+/// straight to the card.
+///
+/// A daemon drawn filled (drop `init`) hatches as its plate instead of its
+/// sprite: the plate's `#` shape, then the plate in its colours, looping a
+/// frame every `frameMs` from then on ([DaemonPlateView]) — at `reveal` size
+/// where the screen is wide enough, else its portrait plate scaled to fit
+/// ([revealPlateFit]). A plate has no lid to blink.
 ///
 /// A duplicate has no name to reveal and no card of its own: it is a fork of
 /// the one you have, drawn at its version, and after the colour it says what
@@ -140,11 +154,12 @@ class DaemonHatchReveal extends StatefulWidget {
 }
 
 class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
-  /// The banner's type: 18pt cells fit every drop 1 name (grue, 25 columns,
-  /// 270pt at a monospace face's 0.6em advance) inside the 280pt a 320pt-wide
-  /// screen leaves between the reveal's margins. A wider face or a wider name
-  /// (drop 2's longer ones, up to fortune's 43 columns) is scaled down whole
-  /// to fit, never wrapped.
+  /// The banner's type: 18pt cells fit a 25-column name (270pt at a
+  /// monospace face's 0.6em advance) inside the 280pt a 320pt-wide screen
+  /// leaves between the reveal's margins: seven of drop init's ten, lynx the
+  /// widest at 23. A wider face or a wider name (mutt 28, gopher 38, beastie
+  /// 39; the held drops' up to fortune's 43) is scaled down whole to fit,
+  /// never wrapped.
   static const _bannerSize = 18.0;
   static const _bannerHeight = 1.15;
 
@@ -186,7 +201,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         if (mounted) {
           setState(() {
             _hatch = hatch;
-            _version = _from(hatch);
+            _version = still.version ?? _from(hatch);
           });
         }
       }),
@@ -281,7 +296,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     final grown = renderSprite(roster, def, to, DaemonMood.idle);
     _version = from;
     if (!_reduceMotion) {
-      if (def.darkOnly) {
+      if (def.darkOnly || def.secret) {
         _show(() => _stage = HatchStage.pitch);
         if (!await _wait(1600)) return;
       }
@@ -297,15 +312,18 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         _faint = false;
       });
       if (!await _wait(320)) return;
-      _show(
-        () => _sprite = renderSprite(
-          roster,
-          def,
-          from,
-          DaemonMood.idle,
-          lid: def.lid ?? '-',
-        ),
-      );
+      // A plate has no lid: it only blinks if its loop does.
+      if (!def.plate) {
+        _show(
+          () => _sprite = renderSprite(
+            roster,
+            def,
+            from,
+            DaemonMood.idle,
+            lid: def.lid ?? '-',
+          ),
+        );
+      }
       if (!await _wait(120)) return;
       _show(() => _sprite = sprite);
       if (!await _wait(220)) return;
@@ -341,7 +359,8 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       _show(() {
         _sprite = frame;
         _faint = !last;
-        if (last) _version = to;
+        // The old shape, then the new one's (a plate is drawn from this).
+        _version = i == 0 ? from : to;
       });
     }
   }
@@ -438,9 +457,10 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
   Widget build(BuildContext context) {
     final def = _def;
     final pitch =
-        def?.darkOnly == true &&
-        _stage != HatchStage.failed &&
-        _stage != HatchStage.egg;
+        _stage == HatchStage.pitch ||
+        (def?.darkOnly == true &&
+            _stage != HatchStage.failed &&
+            _stage != HatchStage.egg);
     return PopScope(
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) _markRevealed();
@@ -608,27 +628,27 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         Padding(
           padding: const EdgeInsets.only(bottom: 20),
           child: Text(
-            'It is pitch black. You are likely to be eaten by a grue.',
+            def.darkOnly
+                ? 'It is pitch black. You are likely to be eaten by a grue.'
+                : 'It is pitch black.',
             key: const ValueKey('daemon-hatch-pitch'),
             textAlign: TextAlign.center,
             style: DaemonInk.mono(size: 14, color: DaemonInk.dim, height: 1.4),
           ),
         ),
-      if (_sprite != null)
+      if (_sprite != null && def.plate)
+        _plate(def, hatch.shiny, pitch)
+      else if (_sprite != null)
         _art(
           _sprite!,
           DaemonInk.mono(
             size: 44,
             height: 1,
             weight: FontWeight.w600,
-            color: _faint ? DaemonInk.ink.withValues(alpha: .35) : colour,
+            color: _faint ? _faintInk : colour,
           ),
           key: const ValueKey('daemon-hatch-sprite'),
-          semantics: _stage == HatchStage.silhouette
-              ? 'A silhouette'
-              : _faint
-              ? '${def.id}, growing'
-              : '${def.id} ${roster.rules.versions[_version]}',
+          semantics: _hatchlingLabel(def),
         ),
       if (_bannerRows > 0) ...[
         const SizedBox(height: 18),
@@ -736,6 +756,46 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     ];
   }
 
+  /// The silhouette's colour, and a morph's first two frames'.
+  static final _faintInk = DaemonInk.ink.withValues(alpha: .35);
+
+  String _hatchlingLabel(DaemonDef def) => _stage == HatchStage.silhouette
+      ? 'A silhouette'
+      : _faint
+      ? '${def.id}, growing'
+      : '${def.id} ${roster.rules.versions[_version]}';
+
+  /// A filled daemon's hatchling: its plate's `#` shape while faint, else the
+  /// plate in its colours, looping; at the size [revealPlateFit] picks for the
+  /// width.
+  Widget _plate(DaemonDef def, bool shiny, bool pitch) => LayoutBuilder(
+    builder: (context, constraints) {
+      final fit = revealPlateFit(roster, constraints.maxWidth);
+      final version = roster.rules.versions[_version];
+      return Semantics(
+        label: _hatchlingLabel(def),
+        image: true,
+        excludeSemantics: true,
+        child: Center(
+          child: DaemonPlateView(
+            key: ValueKey(
+              _faint ? 'daemon-hatch-sprite' : 'daemon-hatch-plate',
+            ),
+            roster: roster,
+            def: def,
+            size: fit.size,
+            version: version,
+            shiny: shiny,
+            ground: pitch ? DaemonInk.pitch : DaemonInk.deep,
+            fontSize: fit.fontSize,
+            asSilhouette: _faint,
+            faint: _faintInk,
+          ),
+        ),
+      );
+    },
+  );
+
   Widget _button(
     String label,
     VoidCallback onPressed, {
@@ -748,7 +808,8 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
 /// A card as it is drawn on the phone: its lines in their columns, scaled to
 /// fit and never wrapped, the head in its rarity's colour and the portrait in
 /// the daemon's (its shiny one when it is shiny), as card.mjs's `cardSvg`
-/// colours them. The words stay ink.
+/// colours them. A filled daemon's portrait plate runs down its gradient, each
+/// glyph in its plate colour on [ground]. The words stay ink.
 class DaemonCardView extends StatelessWidget {
   const DaemonCardView({
     super.key,
@@ -778,11 +839,58 @@ class DaemonCardView extends StatelessWidget {
   Widget build(BuildContext context) {
     final portrait = cardPortraitRows(roster, def, version);
     final colour = def.colorFor(shiny: shiny);
+    final plate = def.plate && def.gradient != null
+        ? PlatePalette.of(
+            roster,
+            def,
+            portrait.to - portrait.from,
+            ground: ground,
+            shiny: shiny,
+          )
+        : null;
     Color? rowColour(int i) => i == 1
         ? DaemonInk.rarity(def.rarity)
         : i >= portrait.from && i < portrait.to
         ? colour
         : null;
+    InlineSpan line(int i) {
+      final text = i == lines.length - 1 ? lines[i] : '${lines[i]}\n';
+      if (plate == null || i < portrait.from || i >= portrait.to) {
+        final c = rowColour(i);
+        return TextSpan(
+          text: text,
+          style: c == null ? null : TextStyle(color: c),
+        );
+      }
+      // The frame `| ` and ` |` stays ink; every glyph inside is the plate's.
+      final r = i - portrait.from;
+      final spans = <TextSpan>[];
+      final run = StringBuffer();
+      Color? at;
+      void flush() {
+        if (run.isEmpty) return;
+        spans.add(
+          TextSpan(
+            text: run.toString(),
+            style: at == null ? null : TextStyle(color: at),
+          ),
+        );
+        run.clear();
+      }
+
+      for (var c = 0; c < text.length; c++) {
+        final inside = c >= 2 && c < cardWidth - 2;
+        final next = inside ? plate.at(r, text[c]) : null;
+        if (next != at && (next != null || !inside || text[c] != ' ')) {
+          flush();
+          at = next;
+        }
+        run.write(text[c]);
+      }
+      flush();
+      return TextSpan(children: spans);
+    }
+
     return Semantics(
       label:
           'The card: ${def.id}, ${shiny ? 'shiny ' : ''}${def.rarity}'
@@ -800,15 +908,7 @@ class DaemonCardView extends StatelessWidget {
           fit: BoxFit.scaleDown,
           child: Text.rich(
             TextSpan(
-              children: [
-                for (var i = 0; i < lines.length; i++)
-                  TextSpan(
-                    text: i == lines.length - 1 ? lines[i] : '${lines[i]}\n',
-                    style: rowColour(i) == null
-                        ? null
-                        : TextStyle(color: rowColour(i)),
-                  ),
-              ],
+              children: [for (var i = 0; i < lines.length; i++) line(i)],
             ),
             softWrap: false,
             textScaler: TextScaler.noScaling,
