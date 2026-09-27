@@ -1,7 +1,9 @@
 //! The terminal hn draws on: ratatui's crossterm backend, with colours written as tmux writes
 //! them — the eight colours and their bright forms as SGR 30–37, 90–97 (40–47, 100–107 behind),
-//! `colourN` as 38;5;N, RGB as 38;2;R;G;B — where crossterm writes every colour as 38;5;N, which
-//! an eight-colour terminal (the Linux console) does not read. Everything else is crossterm's.
+//! and so `colour0`–`colour15` too (terminfo's setaf/setab do that for the first sixteen),
+//! `colourN` past them as 38;5;N, RGB as 38;2;R;G;B — where crossterm writes every colour as
+//! 38;5;N, which an eight-colour terminal (the Linux console) does not read. Everything else is
+//! crossterm's.
 
 use std::io::{self, Write};
 
@@ -70,6 +72,9 @@ fn sgr(c: Color, base: u16) -> String {
         Color::Blue => named(4), Color::Magenta => named(5), Color::Cyan => named(6), Color::Gray => named(7),
         Color::DarkGray => bright(0), Color::LightRed => bright(1), Color::LightGreen => bright(2), Color::LightYellow => bright(3),
         Color::LightBlue => bright(4), Color::LightMagenta => bright(5), Color::LightCyan => bright(6), Color::White => bright(7),
+        // setaf's `%p1%{8}%<%t3%p1%d%e%p1%{16}%<%t9%p1%{8}%-%d%e38;5;%p1%d`.
+        Color::Indexed(n) if n < 8 && base != 58 => named(n as u16),
+        Color::Indexed(n) if n < 16 && base != 58 => bright(n as u16 - 8),
         Color::Indexed(n) => format!("{};5;{n}", base + 8),
         Color::Rgb(r, g, b) => format!("{};2;{r};{g};{b}", base + 8),
     }
@@ -167,7 +172,12 @@ mod tests {
         assert_eq!(sgr(Color::LightBlue, 30), "94");
         assert_eq!(sgr(Color::White, 40), "107");
         assert_eq!(sgr(Color::Reset, 40), "49");
-        assert_eq!(sgr(Color::Indexed(1), 30), "38;5;1");
+        // The first sixteen of the 256 as terminfo's setaf/setab write them (\e[38;5;1m → 31).
+        assert_eq!(sgr(Color::Indexed(1), 30), "31");
+        assert_eq!(sgr(Color::Indexed(9), 30), "91");
+        assert_eq!(sgr(Color::Indexed(4), 40), "44");
+        assert_eq!(sgr(Color::Indexed(12), 40), "104");
+        assert_eq!(sgr(Color::Indexed(16), 30), "38;5;16");
         assert_eq!(sgr(Color::Rgb(1, 2, 3), 40), "48;2;1;2;3");
     }
 }

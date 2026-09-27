@@ -949,6 +949,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
     }
     // No window (a target tmux could not find): its window and pane have nothing to say.
     if tab.is_none() && (name.starts_with("window_") || name.starts_with("pane_")) { return Some(Val::Str(String::new())) }
+    // …nor its session, when there was no target at all (display -t nosuch).
+    if window == usize::MAX && name.starts_with("session_") { return Some(Val::Str(String::new())) }
     let focus = pane_id.or_else(|| tab.and_then(|t| t.focus));
     let pane = focus.and_then(|f| app.panes.get(&f));
     let agent = pane.and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id));

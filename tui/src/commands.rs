@@ -1159,6 +1159,14 @@ fn to_client(app: &mut App, tty: &str, words: &[String]) {
     app.error(format!("can't find client: {tty}"))
 }
 
+/// The options commands' error for a -t they can't find (cmd-set-option.c): `no such session`,
+/// `no such window` or `no such pane`, as the flags (or the option's own scope) say.
+fn no_such(f: &crate::options::SetFlags, name: Option<&str>, t: &str) -> String {
+    let window_option = name.and_then(|n| crate::options::find(n.split('[').next().unwrap_or(n))).map(|o| matches!(o.scope, crate::options::Scope::Window | crate::options::Scope::Pane)).unwrap_or(false);
+    let scope = if f.pane { "pane" } else if f.window || window_option { "window" } else { "session" };
+    format!("no such {scope}: {t}")
+}
+
 /// The other running clients of this server name (-L): their sockets.
 pub fn other_clients() -> Vec<std::path::PathBuf> {
     let me = crate::ipc::here();
@@ -2040,7 +2048,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 i += 1;
             }
             let (tab, pane) = match target.as_deref() {
-                Some(t) => match pane_target(app, t) { Some(tp) => tp, None => return app.error(format!("can't find window: {t}")) },
+                Some(t) => match pane_target(app, t) { Some(tp) => tp, None => return app.error(no_such(&f, name.as_deref(), t)) },
                 None => app.current().unwrap_or((app.active, 0)),
             };
             let tab_id = app.tabs[tab].id.clone();
@@ -2139,7 +2147,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let value = args.get(1).map(|v| if format { expand(app, v) } else { v.clone() });
             // -t: the window (or pane) the option is for; else the one here.
             let (tab, pane) = match target.as_deref() {
-                Some(t) => match pane_target(app, t) { Some(tp) => tp, None => return app.error(format!("can't find window: {t}")) },
+                Some(t) => match pane_target(app, t) { Some(tp) => tp, None => return app.error(no_such(&f, Some(&name), t)) },
                 None => app.current().unwrap_or((app.active, 0)),
             };
             let tab_id = app.tabs[tab].id.clone();
@@ -2270,6 +2278,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // tmux's set-environment [-Fhgru] [-t target-session] name [value]: -g the global
             // environment (else the session's), -u unset, -r cleared (taken from what runs),
             // -h hidden, -F the value expanded.
+            if let Some(t) = opt(words, "-t").filter(|_| !flag(words, "-g")) { if app.find_session(t.split(':').next().unwrap_or(&t)).is_none() { return app.error(format!("no such session: {t}")) } }
             let args = positional(words);
             let name = args.first().cloned().unwrap_or_default();
             if name.is_empty() { return app.error("empty variable name") }
@@ -2537,13 +2546,23 @@ fn run_words_in(app: &mut App, words: &[String]) {
             if flag(words, "-C") { for t in app.tabs.iter_mut() { t.alerts = 0 } return }
             if flag(words, "-a") {
                 let (me, back) = (app.session_id, app.swap_back);
-                for id in app.sessions.iter().map(|s| s.id).collect::<Vec<_>>() {
+                // (Not the desk's, nor another terminal's shown here: this client's own.)
+                for id in app.sessions.iter().filter(|s| !s.desk && s.mirror.is_none()).map(|s| s.id).collect::<Vec<_>>() {
                     app.swap_back = Some(me);
                     app.swap_session(id);
                     kill_windows(app);
                     app.swap_session(me);
                 }
                 app.swap_back = back;
+                // The session this terminal showed was among them: as tmux's clients of a
+                // destroyed session — [exited] (detach-on-destroy on), else here on -t's.
+                if let Some(shown) = back.filter(|b| *b != me && !app.sessions.iter().any(|s| s.id == *b)) {
+                    let _ = shown;
+                    app.swap_back = None;
+                    app.last_session = None;
+                    let how = app.options.get("detach-on-destroy", "", None).unwrap_or_default();
+                    if !app.headless && !matches!(how.as_str(), "off" | "no-detached") { app.exited = true; app.quit = true }
+                }
                 return;
             }
             kill_windows(app);

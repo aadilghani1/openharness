@@ -3004,12 +3004,20 @@ impl App {
     /// A window taken out of the session in front (it moves to another session), its harnesses
     /// still in its panes: its number freed, the current window kept; the desk told it closed.
     pub fn take_tab(&mut self, index: usize) -> Tab {
+        let current = index == self.active;
         let mut tab = self.tabs.remove(index);
         self.nums.remove(&tab.id);
         self.lastw.retain(|x| *x != tab.id);
         if index < self.active { self.active -= 1 }
         if self.tabs.is_empty() { self.tabs.push(Tab::home()) }
         self.active = self.active.min(self.tabs.len() - 1);
+        // session_detach: the current window gone, the last one is current (session_last), else
+        // the one before it, round.
+        if current && self.tabs.len() > 0 {
+            let last = self.lastw.first().and_then(|id| self.tabs.iter().position(|t| &t.id == id));
+            self.active = last.unwrap_or(if index > 0 { index - 1 } else { self.tabs.len() - 1 }).min(self.tabs.len() - 1);
+            if let Some(i) = last { let id = self.tabs[i].id.clone(); self.lastw.retain(|x| *x != id) }
+        }
         if tab.on_desk && self.session_desk { self.desk_op(json!({ "op": "tab.close", "id": tab.id })) }
         tab.on_desk = false;
         tab

@@ -110,7 +110,10 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
         // server does, when there are none).
         "start-server" | "start" => {
             if !crate::ipc::alive(socket.as_deref(), name.as_deref()) && has_sessions(name.as_deref()) { spawn_headless(name.as_deref(), explicit_port).await; }
-            Some(0)
+            // `start-server \; has-session -t proj`: the commands after it, as they run alone.
+            let rest: Vec<String> = args.iter().skip_while(|w| w.as_str() != ";").skip(1).cloned().collect();
+            if rest.is_empty() { return Some(0) }
+            return Box::pin(run(&rest, explicit_port, socket.as_deref(), name.as_deref())).await.or(Some(0));
         }
         // No client running: what tmux's server would answer — the sessions a client left (and the
         // desk's), from where they are kept.
