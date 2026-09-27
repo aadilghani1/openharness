@@ -154,6 +154,10 @@ class _VoiceMicFabState extends State<VoiceMicFab>
       onHoldFinish: action.onHoldFinish,
       onSlipChanged: widget.onSlipChanged,
       working: widget.working,
+      level: voice.level,
+      onSwipeDown: voice.status == VoiceInputStatus.listening
+          ? voice.clear
+          : null,
     );
   }
 }

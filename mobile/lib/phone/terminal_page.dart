@@ -1071,7 +1071,7 @@ class _TerminalPageState extends State<TerminalPage>
     return true;
   }
 
-  /// Whether the agent on screen is working — the status line then offers `esc`.
+  /// Whether the agent on screen is working — the mic wears its ring, and the menu offers Interrupt.
   bool get _agentWorking =>
       visibleAgents(agentIndex(widget.notifier))
           .where(
@@ -2228,55 +2228,6 @@ class _TerminalPageState extends State<TerminalPage>
                           ),
                         ),
                     ],
-                    // A take recording: esc on the mic's left throws it away — the terminal's key for
-                    // "not that". Nothing on its right: the mic itself says it is listening.
-                    if (!_ownsInput)
-                      ListenableBuilder(
-                        listenable: widget.voice,
-                        builder: (context, _) {
-                          if (!VoiceLine.recording(widget.voice)) {
-                            return const SizedBox.shrink();
-                          }
-                          return Stack(
-                            children: [
-                              Positioned(
-                                right:
-                                    MediaQuery.sizeOf(context).width / 2 +
-                                    VoiceMicButton.extent / 2 +
-                                    20 -
-                                    _Keycap.slop,
-                                bottom: _micCenter - _Keycap.touch / 2,
-                                child: _EscChip(
-                                  semanticsLabel:
-                                      'Escape — throw the take away',
-                                  onTap: widget.voice.clear,
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    // `esc`, one tap, beside the mic while the agent is working or asking — the key a
-                    // terminal person reaches for most, and the one a phone keyboard does not have.
-                    if (!_ownsInput &&
-                        session != null &&
-                        _answersBesideMic == null &&
-                        !VoiceLine.recording(widget.voice) &&
-                        (_agentWorking ||
-                            _questionWatcher?.view != null ||
-                            (_questionWatcher?.interruptible ?? false)))
-                      Positioned(
-                        right:
-                            MediaQuery.sizeOf(context).width / 2 +
-                            VoiceMicButton.extent / 2 +
-                            20 -
-                            _Keycap.slop,
-                        bottom: _micCenter - _Keycap.touch / 2,
-                        child: _EscChip(
-                          onTap: () =>
-                              session.terminal.keyInput(TerminalKey.escape),
-                        ),
-                      ),
                     // The sample, done: what it was, and the way to the real thing. Once.
                     if (_showEndCard)
                       Positioned.fill(
@@ -3372,25 +3323,6 @@ class _SlideAway extends StatelessWidget {
         ),
       );
     },
-  );
-}
-
-/// `esc`, as a key you can reach with a thumb: a small raised chip, 44pt of touch.
-class _EscChip extends StatelessWidget {
-  const _EscChip({
-    required this.onTap,
-    this.semanticsLabel = 'Escape — interrupt the agent',
-  });
-
-  final VoidCallback onTap;
-  final String semanticsLabel;
-
-  @override
-  Widget build(BuildContext context) => _Keycap(
-    semanticsLabel: semanticsLabel,
-    haptic: HapticFeedback.mediumImpact,
-    onTap: onTap,
-    child: TtyText('esc', size: TtySize.meta, weight: FontWeight.w500),
   );
 }
 

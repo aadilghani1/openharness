@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -17,8 +19,9 @@ enum VoiceMicFace {
   /// The microphone is opening: tap to call it off.
   starting,
 
-  /// Recording: tap, and what was said is sent. The waveform in the capsule
-  /// beside it is what shows it listening — see `voice_take_meter.dart`.
+  /// Recording: tap, and what was said is sent. Its bars move with the voice —
+  /// what ChatGPT's dictation and Siri do while they listen — and a swipe down
+  /// throws the take away.
   listening,
 
   /// Transcribing: nothing to tap until the words are back.
@@ -87,15 +90,12 @@ _Fill _fillFor(VoiceMicFace face, {required bool dead}) {
 }
 
 /// The glyph for what a press will do.
-enum _Glyph { mic, micOff, send, cancel, check, dots }
+enum _Glyph { mic, micOff, send, cancel, check, dots, bars }
 
 _Glyph _glyphFor(VoiceMicFace face) => switch (face) {
   VoiceMicFace.talk || VoiceMicFace.starting => _Glyph.mic,
-  // ⚠️ The arrow only in the tap mode, where the next tap IS the send — the
-  // fill no longer says so, because the mic is filled at rest too. In
-  // hold-to-talk the arrow would be a lie: nothing is sent by pressing, it is
-  // sent by letting go, and the thumb never leaves the button to press again.
-  VoiceMicFace.listening => micHoldsToTalk ? _Glyph.mic : _Glyph.send,
+  // Live bars, not an arrow: a still `↑` read as "send", not as "listening".
+  VoiceMicFace.listening => _Glyph.bars,
   VoiceMicFace.busy => _Glyph.dots,
   VoiceMicFace.sending || VoiceMicFace.retry => _Glyph.send,
   VoiceMicFace.sent => _Glyph.check,
@@ -118,7 +118,11 @@ class VoiceMicCore extends StatelessWidget {
     required this.face,
     required this.dead,
     this.working = false,
+    this.level,
   });
+
+  /// The microphone's level, 0–1, which the bars follow while it listens. Null draws them idling.
+  final ValueListenable<double>? level;
 
   /// The visible circle's diameter: Siri's orb, near enough. Centred at the foot of Focus it is
   /// the one control on the screen, the way a camera's shutter is — and it is held through a
@@ -174,6 +178,7 @@ class VoiceMicCore extends StatelessWidget {
                   ink,
                   bob: motion && face == VoiceMicFace.sending,
                   motion: motion,
+                  level: level,
                 ),
               ),
             ),
@@ -225,6 +230,7 @@ class VoiceMicCore extends StatelessWidget {
     Color ink, {
     required bool bob,
     required bool motion,
+    ValueListenable<double>? level,
   }) {
     Icon icon(IconData data) => Icon(data, size: 30, color: ink);
     return switch (glyph) {
@@ -234,6 +240,7 @@ class VoiceMicCore extends StatelessWidget {
       _Glyph.cancel => icon(LucideIcons.x300),
       _Glyph.check => icon(LucideIcons.check300),
       _Glyph.dots => _Dots(color: ink, animate: motion),
+      _Glyph.bars => _LiveBars(color: ink, level: level, animate: motion),
     };
   }
 
@@ -432,6 +439,99 @@ class _DotsState extends State<_Dots> with SingleTickerProviderStateMixin {
       ),
     ),
   );
+}
+
+/// Five bars that move with the voice while the mic listens: short at silence, tall when loud,
+/// each on its own phase so they never move as one block. They idle gently when there is no
+/// level to follow, so the mic never looks frozen while it is recording.
+class _LiveBars extends StatefulWidget {
+  const _LiveBars({
+    required this.color,
+    required this.level,
+    required this.animate,
+  });
+
+  final Color color;
+  final ValueListenable<double>? level;
+  final bool animate;
+
+  @override
+  State<_LiveBars> createState() => _LiveBarsState();
+}
+
+class _LiveBarsState extends State<_LiveBars>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _wave = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1000),
+  );
+
+  /// The level, eased toward what the microphone reports, so the bars glide.
+  double _shown = 0;
+
+  static const _weights = [0.55, 0.85, 1.0, 0.8, 0.5];
+  static const double _bar = 4;
+  static const double _gap = 4;
+  static const double _low = 5;
+  static const double _high = 30;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.animate) unawaited(_wave.repeat());
+  }
+
+  @override
+  void didUpdateWidget(_LiveBars old) {
+    super.didUpdateWidget(old);
+    if (widget.animate && !_wave.isAnimating) unawaited(_wave.repeat());
+    if (!widget.animate) _wave.stop();
+  }
+
+  @override
+  void dispose() {
+    _wave.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => RepaintBoundary(
+    child: AnimatedBuilder(
+      animation: _wave,
+      builder: (context, _) {
+        final target = (widget.level?.value ?? 0.15).clamp(0.0, 1.0);
+        _shown += (target - _shown) * 0.35;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            for (var i = 0; i < _weights.length; i++) ...[
+              if (i > 0) const SizedBox(width: _gap),
+              Container(
+                width: _bar,
+                height: _heightOf(i),
+                decoration: BoxDecoration(
+                  color: widget.color,
+                  borderRadius: BorderRadius.circular(_bar / 2),
+                ),
+              ),
+            ],
+          ],
+        );
+      },
+    ),
+  );
+
+  double _heightOf(int i) {
+    // A breath of motion always, more of it the louder the voice.
+    final phase = math.sin(2 * math.pi * (_wave.value + i * 0.18));
+    final swing = 0.18 + 0.82 * _shown;
+    final amount = (_weights[i] * swing * (0.75 + 0.25 * phase)).clamp(
+      0.0,
+      1.0,
+    );
+    return _low + (_high - _low) * amount;
+  }
 }
 
 /// The send arrow, nudging upward while the words are on their way.

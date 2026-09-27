@@ -18,11 +18,6 @@ abstract final class VoiceLine {
       voice.status == VoiceInputStatus.starting ||
       voice.status == VoiceInputStatus.listening ||
       voice.status == VoiceInputStatus.transcribing;
-
-  /// Whether a take is being recorded right now: esc then throws it away.
-  static bool recording(VoiceInputController voice) =>
-      voice.status == VoiceInputStatus.starting ||
-      voice.status == VoiceInputStatus.listening;
 }
 
 /// The words for the line above the mic — only when something went wrong: the mic could not

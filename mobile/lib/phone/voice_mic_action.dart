@@ -29,8 +29,8 @@ VoiceMicAction voiceMicAction(
 /// Tap to talk, tap Send — [VoiceMicMode.tapToToggle].
 ///
 /// The second tap ends the take and sends what was heard as a composer turn —
-/// the daemon pastes it into the prompt and presses Return. `×` in the pill
-/// beside the mic is the way out while it listens.
+/// the daemon pastes it into the prompt and presses Return. A swipe down on the
+/// mic is the way out while it listens (see `VoiceMicButton.onSwipeDown`).
 ///
 /// ⚠️ **A composer turn, never keystrokes typed into the pane.** Typing the
 /// words and pressing Return from here puts both on the wire in the same
