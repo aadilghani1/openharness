@@ -140,10 +140,11 @@ class DaemonHatchReveal extends StatefulWidget {
 }
 
 class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
-  /// The banner's type: 18pt cells fit the widest name in the roster (grue,
-  /// 25 columns, 270pt at a monospace face's 0.6em advance) inside the 280pt a
-  /// 320pt-wide screen leaves between the reveal's margins. A wider face or a
-  /// wider name is scaled down to fit, never wrapped.
+  /// The banner's type: 18pt cells fit every drop 1 name (grue, 25 columns,
+  /// 270pt at a monospace face's 0.6em advance) inside the 280pt a 320pt-wide
+  /// screen leaves between the reveal's margins. A wider face or a wider name
+  /// (drop 2's longer ones, up to fortune's 43 columns) is scaled down whole
+  /// to fit, never wrapped.
   static const _bannerSize = 18.0;
   static const _bannerHeight = 1.15;
 

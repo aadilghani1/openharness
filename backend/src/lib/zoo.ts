@@ -894,8 +894,9 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
       // client could not have made valuable — regular daemon ids, fresh at 0.1 (no shiny, no xp, no bond,
       // no duplicates, no serial), the first and turn eggs, and the habits — all marked `local`. Pity,
       // secrets, the eggs that can hold one (night, easter), easter words, progress, the dial and consent
-      // stay the account's own.
-      const regular = new Set(ROSTER_DAEMONS.filter((d) => d.rarity !== 'secret').map((d) => d.id))
+      // stay the account's own. A daemon of a drop not yet released could not have hatched anywhere, so it
+      // stays out too.
+      const regular = new Set(releasedDaemons(now).filter((d) => d.rarity !== 'secret').map((d) => d.id))
       const daemons = seed.daemons.filter((d) => regular.has(d.id)).map((d): ZooDaemon => ({
         id: d.id, hatchedAt: d.hatchedAt, egg: d.egg, shiny: false, bond: 0, xp: 0, version: FIRST_VERSION,
         ...(d.nickname ? { nickname: d.nickname } : {}), origin: 'local',

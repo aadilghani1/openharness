@@ -15,13 +15,14 @@ import { DAEMON_ROSTER } from './daemonRoster.g.js'
  */
 
 const R = DAEMON_ROSTER.rules
-const ROSTER = DAEMON_ROSTER.daemons
+/** After drop 1's release (2026-09-26) and before drop 2's (2026-10-11): drop 1 is every daemon a draw can give. */
+const NOW = new Date('2026-10-01T12:00:00.000Z')
+const OUT = new Set(DAEMON_ROSTER.drops.filter((d) => Date.parse(`${d.release}T00:00:00.000Z`) <= NOW.getTime()).map((d) => d.id))
+const ROSTER = DAEMON_ROSTER.daemons.filter((d) => OUT.has(d.drop))
 const KINDS = Object.keys(R.eggs) as Array<keyof typeof R.eggs>
 const REGULARS: readonly string[] = ROSTER.filter((d) => d.rarity !== 'secret').map((d) => d.id)
 const SECRETS: readonly string[] = ROSTER.filter((d) => d.rarity === 'secret').map((d) => d.id)
 const RARITY = new Map<string, string>(ROSTER.map((d) => [d.id, d.rarity]))
-/** After drop 1's release (2026-09-26), so every daemon of the roster is drawable. */
-const NOW = new Date('2026-10-01T12:00:00.000Z')
 /** An hour on: when a retried request arrives. */
 const LATER = new Date('2026-10-01T13:00:00.000Z')
 const N = 200_000

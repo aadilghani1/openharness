@@ -258,6 +258,244 @@ export const PAIR_ROSTER = {
         "nap": "...",
         "boop": "you touched something in the dark."
       }
+    },
+    {
+      "id": "xeyes",
+      "lore": "Keith Packard's X11 eyes (1988) follow your pointer around the screen, copied, its man page says, from a NeWS demo seen at SIGGRAPH '88. These look toward whatever changed.",
+      "first": "i see you. i keep an eye on things. two, actually.",
+      "family": [
+        [
+          "X11",
+          1987
+        ],
+        [
+          "xeyes",
+          1988
+        ]
+      ],
+      "lines": {
+        "idle": "looking around. nothing moved.",
+        "work": "{n} busy. eyes on them.",
+        "need": "{who}: {q}  (over there)",
+        "done": "{who} finished. saw it: {recap}",
+        "fail": "{who} failed: {recap}  (saw that)",
+        "back": "there you are. {summary}.",
+        "nap": "eyes shut for a bit.",
+        "boop": "ow. my eye."
+      }
+    },
+    {
+      "id": "oneko",
+      "lore": "Neko is Japanese for cat. It began on the NEC PC-9801, reached the Mac in 1989 and X11 as oneko: a cat that chases your pointer and falls asleep when it stops.",
+      "first": "mew. i chase whatever moves.",
+      "family": [
+        [
+          "neko",
+          1989
+        ],
+        [
+          "oneko",
+          1990
+        ]
+      ],
+      "lines": {
+        "idle": "sitting. scratching an ear.",
+        "work": "{n} moving. chasing them.",
+        "need": "{who}: {q}  mew?",
+        "done": "{who} finished. caught it: {recap}",
+        "fail": "{who} failed: {recap}  hiss",
+        "back": "you moved! {summary}.",
+        "nap": "the pointer stopped. zzz.",
+        "boop": "mrrp."
+      }
+    },
+    {
+      "id": "cowsay",
+      "lore": "Tony Monroe's Perl script (1999) draws a cow saying whatever you pipe to it. Its eyes and tongue are options: -e, -T, and -d for dead. cowthink gives it a thought bubble.",
+      "first": "< moo. i say whatever you pipe me. >",
+      "family": [
+        [
+          "cowsay",
+          1999
+        ]
+      ],
+      "lines": {
+        "idle": "< moo >",
+        "work": "< {n} busy. chewing on it. >",
+        "need": "{who}: {q}  moo?",
+        "done": "< {who} done: {recap} >",
+        "fail": "{who} failed: {recap}  (cowsay -d)",
+        "back": "< welcome back. {summary}. >",
+        "nap": "( zzz )",
+        "boop": "< moo! >"
+      }
+    },
+    {
+      "id": "fortune",
+      "lore": "fortune has printed a random saying at login since Version 7 Unix (1979); BSD fortune files put each one between lines holding a single %. Every welcome back comes with one.",
+      "first": "your fortune: you will meet a new friend today.",
+      "family": [
+        [
+          "fortune",
+          1979
+        ]
+      ],
+      "lines": {
+        "idle": "no fortune yet.",
+        "work": "{n} at work. the future is compiling.",
+        "need": "{who}: {q}  (a fortune awaits)",
+        "done": "{who} done: {recap}. good fortune.",
+        "fail": "{who} failed: {recap}  (bad fortune)",
+        "back": "while you were out: {summary}. a watched build never finishes.",
+        "nap": "sleeping on it.",
+        "boop": "you crack me open. it says: boop."
+      }
+    },
+    {
+      "id": "rogue",
+      "lore": "Rogue (1980), by Michael Toy and Glenn Wichman with Ken Arnold, drew a dungeon with curses and made you the @. It shipped with 4.2BSD and named a genre. The mood is whatever lies next to you: gold *, a scroll ?, a trap ^.",
+      "first": "welcome to the Dungeons of Doom. you are the @.",
+      "family": [
+        [
+          "rogue",
+          1980
+        ]
+      ],
+      "lines": {
+        "idle": "a quiet room.",
+        "work": "{n} in the corridors.",
+        "need": "{who}: {q}  --More--",
+        "done": "{who} done: {recap}. that was gold.",
+        "fail": "{who} failed: {recap}  (a trap)",
+        "back": "back up the stairs. {summary}.",
+        "nap": "resting in a dark room.",
+        "boop": "you touch the @. it is you."
+      }
+    },
+    {
+      "id": "sl",
+      "lore": "Type sl for ls and a steam locomotive crosses your terminal (Toyoda Masashi, 1993). It ignores Ctrl-C. Its smoke ages as it drifts; sl -a has an accident, and people cry for help.",
+      "first": "choo choo. you meant ls. too late.",
+      "family": [
+        [
+          "ls",
+          1971
+        ],
+        [
+          "sl",
+          1993
+        ]
+      ],
+      "lines": {
+        "idle": "the line is clear.",
+        "work": "{n} on the rails. full steam.",
+        "need": "{who}: {q}  (whistle)",
+        "done": "{who} arrived: {recap}",
+        "fail": "{who} failed: {recap}  (Help!)",
+        "back": "all aboard. {summary}.",
+        "nap": "in the roundhouse.",
+        "boop": "you meant ls."
+      }
+    },
+    {
+      "id": "doctor",
+      "lore": "Joseph Weizenbaum's ELIZA (MIT, 1964-67) ran a script called DOCTOR that turned what you typed back into questions. Emacs still has it: M-x doctor. A rubber duck that answers.",
+      "first": "I am the psychotherapist. Please, describe your problems.",
+      "family": [
+        [
+          "ELIZA",
+          1966
+        ],
+        [
+          "doctor",
+          1985
+        ]
+      ],
+      "lines": {
+        "idle": "how does that make you feel?",
+        "work": "{n} working. why do you think that is?",
+        "need": "{who}: {q}  what do you think?",
+        "done": "{who} is done: {recap}. how do you feel about that?",
+        "fail": "{who} failed: {recap}  tell me more.",
+        "back": "welcome back. {summary}. what's on your mind?",
+        "nap": "we'll continue next session.",
+        "boop": "why do you say boop?"
+      }
+    },
+    {
+      "id": "hack",
+      "lore": "Jay Fenlason's Hack (1982) followed Rogue down; Andries Brouwer's Hack 1.0 (1984) gave you a pet little dog, d, that follows you. In NetHack (1987) it grows: little dog, dog, large dog.",
+      "first": "woof. i'm your little dog. i'll follow you down.",
+      "family": [
+        [
+          "hack",
+          1982
+        ],
+        [
+          "nethack",
+          1987
+        ]
+      ],
+      "lines": {
+        "idle": "sitting at your feet.",
+        "work": "{n} busy. i follow along.",
+        "need": "{who}: {q}  (barks)",
+        "done": "{who} done: {recap}  (yips)",
+        "fail": "{who} failed: {recap}  (whines)",
+        "back": "you're back! {summary}.",
+        "nap": "curled up by the stairs.",
+        "boop": "you swap places with your dog."
+      }
+    },
+    {
+      "id": "tty",
+      "lore": "The Teletype Model 33 (1963) typed ten characters a second, upper case only, and rang a real bell. Unix grew up on it, and terminals are still called ttys. tty is drawn only with what a Model 33 could print.",
+      "first": "HELLO. I AM TTY. TERMINALS ARE STILL NAMED AFTER ME.",
+      "family": [
+        [
+          "Model 33",
+          1963
+        ],
+        [
+          "tty",
+          1971
+        ]
+      ],
+      "lines": {
+        "idle": "ON LINE. NOTHING TO PRINT.",
+        "work": "{n} TYPING. CLACK CLACK.",
+        "need": "{who}: {q}  ^G",
+        "done": "{who} DONE: {recap}",
+        "fail": "{who} FAILED: {recap}  ^G^G",
+        "back": "WELCOME BACK. {summary}.",
+        "nap": "SWITCHED TO LOCAL.",
+        "boop": "DING."
+      }
+    },
+    {
+      "id": "lp0",
+      "lore": "The Linux kernel still prints \"lp0 on fire\" when a printer reports an error; fast line printers, the story goes, could set their paper alight. The IBM 1403 (1959) printed a famous Mona Lisa in characters like these. This one is always on fire.",
+      "first": "lp0 on fire. hello.",
+      "family": [
+        [
+          "1403",
+          1959
+        ],
+        [
+          "lp0",
+          1992
+        ]
+      ],
+      "lines": {
+        "idle": "lp0 on fire.",
+        "work": "{n} printing. still on fire.",
+        "need": "{who}: {q}  (on fire)",
+        "done": "{who} printed: {recap}",
+        "fail": "{who} failed: {recap}  lp0 on fire",
+        "back": "you're back. {summary}. still on fire.",
+        "nap": "smouldering.",
+        "boop": "hot."
+      }
     }
   ]
 } as const

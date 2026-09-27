@@ -163,6 +163,11 @@ export const DAEMON_ROSTER = {
       "id": "unix",
       "announce": "2026-09-12",
       "release": "2026-09-26"
+    },
+    {
+      "id": "tty",
+      "announce": "2026-09-27",
+      "release": "2026-10-11"
     }
   ],
   "daemons": [
@@ -224,6 +229,66 @@ export const DAEMON_ROSTER = {
       "id": "grue",
       "n": 10,
       "drop": "unix",
+      "rarity": "secret"
+    },
+    {
+      "id": "xeyes",
+      "n": 1,
+      "drop": "tty",
+      "rarity": "common"
+    },
+    {
+      "id": "oneko",
+      "n": 2,
+      "drop": "tty",
+      "rarity": "common"
+    },
+    {
+      "id": "cowsay",
+      "n": 3,
+      "drop": "tty",
+      "rarity": "common"
+    },
+    {
+      "id": "fortune",
+      "n": 4,
+      "drop": "tty",
+      "rarity": "common"
+    },
+    {
+      "id": "rogue",
+      "n": 5,
+      "drop": "tty",
+      "rarity": "rare"
+    },
+    {
+      "id": "sl",
+      "n": 6,
+      "drop": "tty",
+      "rarity": "rare"
+    },
+    {
+      "id": "doctor",
+      "n": 7,
+      "drop": "tty",
+      "rarity": "rare"
+    },
+    {
+      "id": "hack",
+      "n": 8,
+      "drop": "tty",
+      "rarity": "legendary"
+    },
+    {
+      "id": "tty",
+      "n": 9,
+      "drop": "tty",
+      "rarity": "legendary"
+    },
+    {
+      "id": "lp0",
+      "n": 10,
+      "drop": "tty",
       "rarity": "secret"
     }
   ]

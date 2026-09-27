@@ -73,6 +73,21 @@ for (const d of roster.daemons) {
   }
   for (const v of rules.versions) if (!d.sprites?.[v]) fail(`${d.id}: no sprite for ${v}`)
   if (!d.portraits?.['2.0']) fail(`${d.id}: no 2.0 portrait`)
+  // A daemon may draw with fewer characters, as its lore did (tty: only what a Teletype Model 33 could
+  // print; lp0: a line printer's density ramp). Eyes aside: every template, part and mood part keeps to it.
+  if (d.charset != null) {
+    if (typeof d.charset !== 'string' || !d.charset || !printable(d.charset)) fail(`${d.id}: charset must be a string of printable ASCII`)
+    else {
+      const drawn = [...Object.values(d.sprites ?? {}), ...(d.work ?? []), ...Object.values(d.portraits ?? {}).flat(),
+        ...Object.values(d.parts ?? {}).flatMap(p => [p.rest, ...p.work]), ...Object.values(d.moodParts ?? {}).flatMap(m => Object.values(m))]
+      for (const tpl of drawn) {
+        const off = [...tpl.replace(/\{[a-zA-Z]+\}/g, '')].find(ch => !d.charset.includes(ch))
+        if (off) fail(`${d.id}: "${off}" in "${tpl}" is outside its charset`)
+      }
+    }
+  }
+  // A line that types out, a character every typeMs (tty: a Model 33's ten characters a second).
+  if (d.typeMs != null && !(Number.isInteger(d.typeMs) && d.typeMs >= 10 && d.typeMs <= 1000)) fail(`${d.id}: typeMs must be a whole number of ms from 10 to 1000`)
   // Every mood, every version, every frame of motion, plus both blink lids.
   const times = [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]
   for (const mood of rules.moods) {

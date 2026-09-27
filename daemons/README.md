@@ -5,8 +5,8 @@ with you at a time. It watches every harness on every machine, tells you what ne
 the orchestration you ask for. Every daemon can do the whole job; they differ in lore, look and
 voice. Each is named after a piece of terminal history, the way **tim** is **t**mux **im**proved.
 
-The lookbook ([lookbook.html](lookbook.html)) shows all of it moving: the status line, drop 1, a
-working hatch simulation, eggs, growth, moods, memory and learning. This file is the contract the
+The lookbook ([lookbook.html](lookbook.html)) shows all of it moving: the status line, the zoo drop
+by drop (with a switch to see an announced drop as players do), a working hatch simulation, eggs, growth, moods, memory and learning. This file is the contract the
 clients and the server build against.
 
 ## Files
@@ -31,7 +31,8 @@ clients and the server build against.
 - **zoo**: your daemons and eggs. `hn zoo`.
 - **hatch**: opening an egg. The reveal says `fork() returned 0.`
 - **pair**: the one daemon in your status line.
-- **drop**: a set of daemons released together. Drop 1 is `unix`. Drops ship when an idea is ready.
+- **drop**: a set of daemons released together. Drop 1 is `unix`; drop 2, `tty`, is announced. Drops ship
+  when an idea is ready.
 
 ## Art rules
 
@@ -54,18 +55,34 @@ is impossible (a terminal's own font):
   kitten, housecat, large cat): fewer parts when young, a lore-true feature each release. A missing
   version uses the nearest one drawn.
 - **Eyes carry the mood.** The body stays still; a mood changes at most two cells of the sprite. A
-  portrait may add one or two lore-true mood parts, never more.
+  portrait may add one or two lore-true mood parts, never more. A daemon may give its own `eyes` per mood
+  (and a `lid`): the grue's glow in the dark, tty's are upper case (a Model 33 printed nothing else), and
+  rogue's "eye" is whatever lies next to the `@`: floor `.`, a weapon `)` while working, a scroll `?`,
+  gold `*`, a trap `^`, the stairs `%`.
+- **Charset.** A daemon may keep to fewer characters, as its lore did: `charset` lists what its drawing
+  may use, eyes aside, and `generate.mjs` checks every sprite, work frame, portrait, part and mood part
+  against it. tty draws only what a Teletype Model 33 could print (the 64 characters from space to `_`:
+  no lower case, no `|`); lp0 only a line printer's density ramp, `` .:-=+*#%@``.
 - **Placeholders** (see `render.mjs`): `{e}` an eye; `{<part>}` a moving part with a `rest` glyph and
   `work` frames; `{<moodPart>}` a value per mood (tim's mouth `{m}` and tmux window flag `{g}`, vim's
   mode line `{mode}`, fish's mouth bubble `{b}`, ping's sonar `{s}`, biff's mouth `{m}` with its tongue
   out when happy, fzf's match count `{n}`, and the grue's teeth `{t}`, seen only when something was eaten).
+  Drop 2: xeyes's pupils, `{a}{b}` looking toward what changed (left, where the panes are, when one needs
+  you; right, at you, when you come back) and `{c}{d}` following the pointer `{p}` while agents work;
+  oneko's tail `{t}` and its nap `{z}`; cowsay's bubble `{b}` (cowthink's `( )` for a nap) and tongue
+  `{t}`, out only when a turn failed (`cowsay -d`); fortune's slip `{f}`; rogue's message line `{m}`
+  (`--More--` while something needs you) and the corridor `{w}`, drawn as you walk it; sl's smoke `{s}`,
+  ageing as it drifts, and `{h}`, the passengers of `sl -a` crying for help when a turn failed; doctor's
+  notepad `{q}`; hack's legs `{l}`; tty's print head `{h}`, ten characters a second; lp0's flames `{f}{g}`.
 - **Colour** is a filter over the drawing, never the only signal. Each daemon has one xterm-256 colour,
   `color: { xterm, hex }`, used only on the terminal background (panel, reveal, zoo, card), with a
   darker variant on light themes. A shiny daemon wears its own `shiny: { xterm, hex }` there instead: a
   clearly different, lore-true colour (tim a brighter cyan-green, fish a goldfish, ping deep-sea sonar,
   bat a pale ghost bat, vim the yellow of `hlsearch`, zsh the purple pincher, biff a chocolate lab, fzf
-  its own pointer colour, tldr a highlighter, the grue a deep violet). `generate.mjs` checks every hex
-  is the xterm index it names. In the status line the daemon takes the status line's own text colour:
+  its own pointer colour, tldr a highlighter, the grue a deep violet; xeyes `-fg magenta`, oneko
+  `-tora`, a purple cow, fortune's red ink, rogue's gold, sl flying (`-F`, the galaxy express), doctor a
+  rubber duck, hack a winter wolf (NetHack's cyan `d`), tty a glass tty's green phosphor, lp0 a hotter,
+  blue flame). `generate.mjs` checks every hex is the xterm index it names. In the status line the daemon takes the status line's own text colour:
   daemon colours fail contrast on tmux's green bar and on the yellow message line.
 
 ## Moods
@@ -122,6 +139,9 @@ Silent by default.
   from what it knows; a line whose slot cannot be filled is dropped, never shown with made-up facts.
   `examples` holds each line filled with sample values for previews.
 - Answer keys come first in the line, and work only while the line is showing.
+- A daemon with `typeMs` types its line out, a character every that many ms (tty: a Model 33's ten
+  characters a second); the line then shows for its 5.2 s. Reduce Motion, or a client that does not type,
+  shows it at once.
 
 ## Off switches
 
@@ -241,7 +261,9 @@ verified (a later verify endpoint will be), and a guest's seeded daemons and egg
 **Drops.** Each drop in `roster.drops` has `announce` and `release` (UTC `YYYY-MM-DD`, announced 14
 days before release). Only released drops are drawn from; a drop announced but not yet released shows
 on shelves as silhouettes, and one not yet announced shows nowhere. Drop 1, `unix`, is released
-(announced 2026-09-12, released 2026-09-26).
+(announced 2026-09-12, released 2026-09-26). Drop 2, `tty`, is announced (2026-09-27) and released
+2026-10-11: until then nothing draws, seeds or hatches it, and its secret, lp0, joins the grue in the
+night and easter eggs on that day.
 
 **The draw** (`zoo.hatch`, server only, `crypto.randomInt`):
 
@@ -273,7 +295,7 @@ on shelves as silhouettes, and one not yet announced shows nowhere. Drop 1, `uni
 - A full nest does not lose anything: the first and setup eggs arrive with the next habit report, an
   easter word stays unspent, and earned eggs are held.
 - `zoo.seed` brings only what a client could not have made valuable, because all of it was drawn and
-  counted on a client: the REGULAR daemons the roster knows (never a secret), each fresh at `0.1` —
+  counted on a client: the REGULAR daemons of released drops (never a secret, never a drop not yet out), each fresh at `0.1` —
   no shiny, xp, bond, duplicates or serial, its nickname kept — the `first` and `turn` eggs (never an
   egg that can hold a secret: night, easter; nor setup, week, marathon or history eggs), and the habits,
   every daemon and egg marked `origin: 'local'` and each egg given a server id. Pity, easter words,
@@ -498,7 +520,8 @@ in their colours (shiny ones in their shiny colour), `x2` beside a daemon with o
 shows its regulars as `#` silhouettes of their 0.1 sprites and its release date; one not yet announced
 shows nothing. Cards and shelves never show a live mood, so they never reveal whether you are working.
 
-Secrets sit outside the numbered set: drop 1 is `#01/09` to `#09/09`, and grue is `#S/09`.
+Secrets sit outside the numbered set, and every drop numbers its own: drop 1 is `#01/09` to `#09/09`,
+and grue is `#S/09`; drop 2 is xeyes `#01/09` to tty `#09/09`, and lp0 is `#S/09`.
 
 ```
 node daemons/tools/card.mjs tim --version 2.0 --serial 42          # a card as text

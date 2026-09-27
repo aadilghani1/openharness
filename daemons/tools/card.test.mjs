@@ -20,11 +20,28 @@ test('every card, every version, is 42 printable columns', () => {
   }
 })
 
-test('secrets sit outside the numbered set', () => {
-  const secret = roster.daemons.find(d => d.rarity === 'secret')
-  const regular = roster.daemons.filter(d => d.rarity !== 'secret')
-  assert.match(cardNumber(roster, secret), /^#S\/\d\d$/)
-  assert.equal(cardNumber(roster, regular[0]), `#01/${String(regular.length).padStart(2, '0')}`)
+test('secrets sit outside the numbered set, and every drop numbers its own', () => {
+  for (const drop of roster.drops) {
+    const set = roster.daemons.filter(d => d.drop === drop.id)
+    const regular = set.filter(d => d.rarity !== 'secret')
+    const of = String(regular.length).padStart(2, '0')
+    assert.deepEqual(regular.map(d => cardNumber(roster, d)), regular.map((_, i) => `#${String(i + 1).padStart(2, '0')}/${of}`), drop.id)
+    for (const secret of set.filter(d => d.rarity === 'secret')) assert.equal(cardNumber(roster, secret), `#S/${of}`, secret.id)
+  }
+  const tty = roster.daemons.find(d => d.id === 'tty')
+  assert.ok(cardLines(roster, tty, { version: '2.0' })[1].startsWith('| #09/09  DROP 2: TTY'))
+})
+
+test('drop 2 (tty) is announced on 2026-09-27 and shows as silhouettes until 2026-10-11', () => {
+  const tty = roster.drops.find(d => d.id === 'tty')
+  const at = day => new Date(`${day}T12:00:00.000Z`)
+  assert.deepEqual(['2026-09-26', '2026-09-27', '2026-10-10', '2026-10-11'].map(d => dropState(tty, at(d))), ['hidden', 'announced', 'announced', 'released'])
+  const soon = shelfLines(roster, [], { drop: 'tty', now: at('2026-10-01') })
+  assert.equal(soon[0], 'zoo: drop 2 tty  out 2026-10-11')
+  const art = soon.slice(1).join('\n')   // the head names the drop; the slots name nobody
+  for (const d of roster.daemons.filter(x => x.drop === 'tty')) assert.ok(!art.includes(d.id), `${d.id} is named before its release`)
+  assert.ok(art.includes('[ ! ]'))
+  assert.match(shelfLines(roster, ['tty'], { drop: 'tty', now: at('2026-10-11') })[0], /^zoo: drop 2 tty {2}1\/9$/)
 })
 
 test('a shelf shows owned sprites and numbered empty slots', () => {

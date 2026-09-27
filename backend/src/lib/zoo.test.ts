@@ -8,8 +8,10 @@ import { DAEMON_ROSTER } from './daemonRoster.g.js'
 const NOW = new Date('2026-09-26T12:00:00.000Z')
 const UNIT = 1_000_000
 const ALL = DAEMON_ROSTER.daemons.map((d) => d.id)
+/** The drops out at NOW: drop 1 only (drop 2, tty, is out 2026-10-11). */
+const OUT = new Set(DAEMON_ROSTER.drops.filter((d) => Date.parse(`${d.release}T00:00:00.000Z`) <= NOW.getTime()).map((d) => d.id))
 /** Drop 1's nine regulars: the numbered set. The grue is its secret, outside the set. */
-const REGULARS = DAEMON_ROSTER.daemons.filter((d) => d.rarity !== 'secret').map((d) => d.id)
+const REGULARS = DAEMON_ROSTER.daemons.filter((d) => OUT.has(d.drop) && d.rarity !== 'secret').map((d) => d.id)
 const HABITS = [...DAEMON_ROSTER.rules.firstEgg.habits]
 const XYZZY = '184858a00fd7971f810848266ebcecee5e8b69972c5ffaed622f5ee078671aed'
 

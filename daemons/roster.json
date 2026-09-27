@@ -306,6 +306,13 @@
       "name": "unix",
       "announce": "2026-09-12",
       "release": "2026-09-26"
+    },
+    {
+      "id": "tty",
+      "n": 2,
+      "name": "tty",
+      "announce": "2026-09-27",
+      "release": "2026-10-11"
     }
   ],
   "daemons": [
@@ -1367,6 +1374,1070 @@
         "back": "you have moved into a dark place.",
         "nap": "...",
         "boop": "you touched something in the dark."
+      }
+    },
+    {
+      "id": "xeyes",
+      "n": 1,
+      "drop": "tty",
+      "rarity": "common",
+      "color": {
+        "xterm": 153,
+        "hex": "#afd7ff"
+      },
+      "shiny": {
+        "xterm": 201,
+        "hex": "#ff00ff"
+      },
+      "family": [
+        [
+          "X11",
+          1987
+        ],
+        [
+          "xeyes",
+          1988
+        ]
+      ],
+      "lore": "Keith Packard's X11 eyes (1988) follow your pointer around the screen, copied, its man page says, from a NeWS demo seen at SIGGRAPH '88. These look toward whatever changed.",
+      "first": "i see you. i keep an eye on things. two, actually.",
+      "lines": {
+        "idle": "looking around. nothing moved.",
+        "work": "{n} busy. eyes on them.",
+        "need": "{who}: {q}  (over there)",
+        "done": "{who} finished. saw it: {recap}",
+        "fail": "{who} failed: {recap}  (saw that)",
+        "back": "there you are. {summary}.",
+        "nap": "eyes shut for a bit.",
+        "boop": "ow. my eye."
+      },
+      "sprites": {
+        "0.1": "({e})({e})",
+        "1.0": "(({e})({e}))",
+        "2.0": "( {e})( {e})"
+      },
+      "work": [
+        "({e} )({e} )",
+        "( {e})( {e})"
+      ],
+      "workMs": 300,
+      "portraits": {
+        "0.1": [
+          "  .---.  .---.",
+          " ({a}{c}{e}{d}{b})({a}{c}{e}{d}{b})",
+          "  '---'  '---'"
+        ],
+        "1.0": [
+          "   .---.   .---.",
+          "  /     \\ /     \\ ",
+          " | {a}{c}{e}{d}{b} | {a}{c}{e}{d}{b} |",
+          "  \\     / \\     /",
+          "   '---'   '---'"
+        ],
+        "2.0": [
+          ".-[ xeyes ]-------------.",
+          "|     .---.   .---.     |",
+          "|    /     \\ /     \\    |",
+          "|   | {a}{c}{e}{d}{b} | {a}{c}{e}{d}{b} |   |",
+          "|    \\     / \\     /    |",
+          "|     '---'   '---'     |",
+          "|{p}|",
+          "'-----------------------'"
+        ]
+      },
+      "parts": {
+        "c": {
+          "rest": " ",
+          "work": [
+            "",
+            " ",
+            "  ",
+            " "
+          ],
+          "ms": 300
+        },
+        "d": {
+          "rest": " ",
+          "work": [
+            "  ",
+            " ",
+            "",
+            " "
+          ],
+          "ms": 300
+        },
+        "p": {
+          "rest": "           X           ",
+          "work": [
+            "    X                  ",
+            "           X           ",
+            "                  X    ",
+            "           X           "
+          ],
+          "ms": 300
+        }
+      },
+      "moodParts": {
+        "a": {
+          "idle": " ",
+          "work": " ",
+          "need": "",
+          "done": "",
+          "fail": "",
+          "back": "  ",
+          "nap": " ",
+          "boop": " "
+        },
+        "b": {
+          "idle": " ",
+          "work": " ",
+          "need": "  ",
+          "done": "  ",
+          "fail": "  ",
+          "back": "",
+          "nap": " ",
+          "boop": " "
+        }
+      },
+      "turn": "pupils, following the pointer",
+      "examples": {
+        "idle": "looking around. nothing moved.",
+        "work": "3 busy. eyes on them.",
+        "need": "codex@office: Bash: npm run migrate  (over there)",
+        "done": "codex@office finished. saw it: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (saw that)",
+        "back": "there you are. 2 done, 1 waiting 40m.",
+        "nap": "eyes shut for a bit.",
+        "boop": "ow. my eye."
+      }
+    },
+    {
+      "id": "oneko",
+      "n": 2,
+      "drop": "tty",
+      "rarity": "common",
+      "color": {
+        "xterm": 223,
+        "hex": "#ffd7af"
+      },
+      "shiny": {
+        "xterm": 172,
+        "hex": "#d78700"
+      },
+      "family": [
+        [
+          "neko",
+          1989
+        ],
+        [
+          "oneko",
+          1990
+        ]
+      ],
+      "lore": "Neko is Japanese for cat. It began on the NEC PC-9801, reached the Mac in 1989 and X11 as oneko: a cat that chases your pointer and falls asleep when it stops.",
+      "first": "mew. i chase whatever moves.",
+      "lines": {
+        "idle": "sitting. scratching an ear.",
+        "work": "{n} moving. chasing them.",
+        "need": "{who}: {q}  mew?",
+        "done": "{who} finished. caught it: {recap}",
+        "fail": "{who} failed: {recap}  hiss",
+        "back": "you moved! {summary}.",
+        "nap": "the pointer stopped. zzz.",
+        "boop": "mrrp."
+      },
+      "sprites": {
+        "0.1": "'{e}.{e}'",
+        "1.0": "^'{e}.{e}'^",
+        "2.0": "^'{e}.{e}'^~"
+      },
+      "work": [
+        "^'{e}.{e}'^~",
+        "^'{e}.{e}'^)",
+        "^'{e}.{e}'^~",
+        "^'{e}.{e}'^("
+      ],
+      "workMs": 200,
+      "portraits": {
+        "0.1": [
+          "  /\\_/\\ ",
+          " ( {e}.{e} )",
+          "  > ^ <"
+        ],
+        "1.0": [
+          "   /\\_/\\ ",
+          "  ( {e}.{e} )",
+          "   > ^ <",
+          "  /     \\ ",
+          " (  | |  )~",
+          "  '-'-'-'"
+        ],
+        "2.0": [
+          "           {z}",
+          "   /\\_/\\ ",
+          "  ( {e}.{e} )",
+          "   > ^ <",
+          "  /     \\ ",
+          " (  | |  )_{t}",
+          "  '-'-'-'"
+        ]
+      },
+      "parts": {
+        "t": {
+          "rest": "~",
+          "work": [
+            "~",
+            ")",
+            "~",
+            "("
+          ],
+          "ms": 200
+        }
+      },
+      "moodParts": {
+        "z": {
+          "idle": "",
+          "work": "",
+          "need": "",
+          "done": "",
+          "fail": "",
+          "back": "",
+          "nap": "z Z",
+          "boop": ""
+        }
+      },
+      "turn": "tail, swishing",
+      "examples": {
+        "idle": "sitting. scratching an ear.",
+        "work": "3 moving. chasing them.",
+        "need": "codex@office: Bash: npm run migrate  mew?",
+        "done": "codex@office finished. caught it: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  hiss",
+        "back": "you moved! 2 done, 1 waiting 40m.",
+        "nap": "the pointer stopped. zzz.",
+        "boop": "mrrp."
+      }
+    },
+    {
+      "id": "cowsay",
+      "n": 3,
+      "drop": "tty",
+      "rarity": "common",
+      "color": {
+        "xterm": 151,
+        "hex": "#afd7af"
+      },
+      "shiny": {
+        "xterm": 177,
+        "hex": "#d787ff"
+      },
+      "family": [
+        [
+          "cowsay",
+          1999
+        ]
+      ],
+      "lore": "Tony Monroe's Perl script (1999) draws a cow saying whatever you pipe to it. Its eyes and tongue are options: -e, -T, and -d for dead. cowthink gives it a thought bubble.",
+      "first": "< moo. i say whatever you pipe me. >",
+      "lines": {
+        "idle": "< moo >",
+        "work": "< {n} busy. chewing on it. >",
+        "need": "{who}: {q}  moo?",
+        "done": "< {who} done: {recap} >",
+        "fail": "{who} failed: {recap}  (cowsay -d)",
+        "back": "< welcome back. {summary}. >",
+        "nap": "( zzz )",
+        "boop": "< moo! >"
+      },
+      "sprites": {
+        "0.1": "{e}__{e}",
+        "1.0": "({e}__{e})",
+        "2.0": "^({e}__{e})^"
+      },
+      "work": [
+        "^({e}__{e})^",
+        "^({e}--{e})^"
+      ],
+      "workMs": 350,
+      "portraits": {
+        "0.1": [
+          "  ^___^",
+          "  ({e} {e})",
+          "  (___)",
+          "   {t}"
+        ],
+        "1.0": [
+          "  ^___^",
+          "  ({e} {e})\\_______",
+          "  (___)\\       )\\/\\ ",
+          "   {t}  |----w |",
+          "       |      |"
+        ],
+        "2.0": [
+          " _______",
+          "{b}",
+          " -------",
+          "     \\  ^___^",
+          "      \\ ({e} {e})\\_______",
+          "        (___)\\       )\\/\\ ",
+          "         {t}  |----w |",
+          "            |      |"
+        ]
+      },
+      "moodParts": {
+        "b": {
+          "idle": "<  moo  >",
+          "work": "<  ...  >",
+          "need": "<  moo? >",
+          "done": "<  moo! >",
+          "fail": "<  moo. >",
+          "back": "<  hi!  >",
+          "nap": "(  zzz  )",
+          "boop": "<  MOO  >"
+        },
+        "t": {
+          "idle": " ",
+          "work": " ",
+          "need": " ",
+          "done": " ",
+          "fail": "U",
+          "back": " ",
+          "nap": " ",
+          "boop": " "
+        }
+      },
+      "turn": "mouth, chewing the cud",
+      "examples": {
+        "idle": "< moo >",
+        "work": "< 3 busy. chewing on it. >",
+        "need": "codex@office: Bash: npm run migrate  moo?",
+        "done": "< codex@office done: 3 files changed, tests pass >",
+        "fail": "codex@office failed: 3 files changed, tests pass  (cowsay -d)",
+        "back": "< welcome back. 2 done, 1 waiting 40m. >",
+        "nap": "( zzz )",
+        "boop": "< moo! >"
+      }
+    },
+    {
+      "id": "fortune",
+      "n": 4,
+      "drop": "tty",
+      "rarity": "common",
+      "color": {
+        "xterm": 222,
+        "hex": "#ffd787"
+      },
+      "shiny": {
+        "xterm": 167,
+        "hex": "#d75f5f"
+      },
+      "family": [
+        [
+          "fortune",
+          1979
+        ]
+      ],
+      "lore": "fortune has printed a random saying at login since Version 7 Unix (1979); BSD fortune files put each one between lines holding a single %. Every welcome back comes with one.",
+      "first": "your fortune: you will meet a new friend today.",
+      "lines": {
+        "idle": "no fortune yet.",
+        "work": "{n} at work. the future is compiling.",
+        "need": "{who}: {q}  (a fortune awaits)",
+        "done": "{who} done: {recap}. good fortune.",
+        "fail": "{who} failed: {recap}  (bad fortune)",
+        "back": "while you were out: {summary}. a watched build never finishes.",
+        "nap": "sleeping on it.",
+        "boop": "you crack me open. it says: boop."
+      },
+      "sprites": {
+        "0.1": "%{e} {e}%",
+        "1.0": "(%{e} {e}%)",
+        "2.0": "(%{e} {e}%)-"
+      },
+      "work": [
+        "(%{e} {e}%) ",
+        "(%{e} {e}%)-",
+        "(%{e} {e}%)=",
+        "(%{e} {e}%)-"
+      ],
+      "workMs": 250,
+      "portraits": {
+        "0.1": [
+          "    _.---._",
+          "  .' {e}   {e} '.",
+          " (_.-.___.-._)"
+        ],
+        "1.0": [
+          "      _.-----._",
+          "    .'  {e}   {e}  '.",
+          "   /      v      \\ ",
+          "  (_.--._____.--._)"
+        ],
+        "2.0": [
+          "      _.-----._",
+          "    .'  {e}   {e}  '.",
+          "   /      v      \\ ",
+          "  (_.--._____.--._)",
+          "        \\__%__/",
+          "    [ {f} ]",
+          "       %"
+        ]
+      },
+      "moodParts": {
+        "f": {
+          "idle": "   patience.   ",
+          "work": "  busy hands.  ",
+          "need": "you are needed.",
+          "done": " good fortune. ",
+          "fail": "  misfortune.  ",
+          "back": " welcome back. ",
+          "nap": "   rest well.  ",
+          "boop": "    crack!     "
+        }
+      },
+      "turn": "the slip, sliding out",
+      "examples": {
+        "idle": "no fortune yet.",
+        "work": "3 at work. the future is compiling.",
+        "need": "codex@office: Bash: npm run migrate  (a fortune awaits)",
+        "done": "codex@office done: 3 files changed, tests pass. good fortune.",
+        "fail": "codex@office failed: 3 files changed, tests pass  (bad fortune)",
+        "back": "while you were out: 2 done, 1 waiting 40m. a watched build never finishes.",
+        "nap": "sleeping on it.",
+        "boop": "you crack me open. it says: boop."
+      }
+    },
+    {
+      "id": "rogue",
+      "n": 5,
+      "drop": "tty",
+      "rarity": "rare",
+      "color": {
+        "xterm": 174,
+        "hex": "#d78787"
+      },
+      "shiny": {
+        "xterm": 220,
+        "hex": "#ffd700"
+      },
+      "family": [
+        [
+          "rogue",
+          1980
+        ]
+      ],
+      "lore": "Rogue (1980), by Michael Toy and Glenn Wichman with Ken Arnold, drew a dungeon with curses and made you the @. It shipped with 4.2BSD and named a genre. The mood is whatever lies next to you: gold *, a scroll ?, a trap ^.",
+      "first": "welcome to the Dungeons of Doom. you are the @.",
+      "lines": {
+        "idle": "a quiet room.",
+        "work": "{n} in the corridors.",
+        "need": "{who}: {q}  --More--",
+        "done": "{who} done: {recap}. that was gold.",
+        "fail": "{who} failed: {recap}  (a trap)",
+        "back": "back up the stairs. {summary}.",
+        "nap": "resting in a dark room.",
+        "boop": "you touch the @. it is you."
+      },
+      "eyes": {
+        "idle": ".",
+        "work": ")",
+        "need": "?",
+        "done": "*",
+        "fail": "^",
+        "back": "%",
+        "nap": " ",
+        "boop": "!"
+      },
+      "lid": ".",
+      "sprites": {
+        "0.1": "@{e}",
+        "1.0": "|.@{e}.|",
+        "2.0": "##@{e}##"
+      },
+      "work": [
+        "##@{e}##",
+        "##@{e}K#",
+        "##@{e}##",
+        "##@{e}B#"
+      ],
+      "workMs": 300,
+      "portraits": {
+        "0.1": [
+          " -------",
+          " |.....|",
+          " |.@{e}..|",
+          " |.....|",
+          " -------"
+        ],
+        "1.0": [
+          " ----------",
+          " |........|",
+          " |..@{e}.....+###",
+          " |........|",
+          " ----------"
+        ],
+        "2.0": [
+          "{m}",
+          " -------          -------",
+          " |.....|          |.....|",
+          " |.....+###@{e}{w}+..*..|",
+          " |.....|          |.....|",
+          " -------          -------",
+          "Level: 3 Gold: 42 Hp: 12(12)"
+        ]
+      },
+      "parts": {
+        "w": {
+          "rest": "####",
+          "work": [
+            "    ",
+            "#   ",
+            "##  ",
+            "### "
+          ],
+          "ms": 300
+        }
+      },
+      "moodParts": {
+        "m": {
+          "idle": "",
+          "work": "",
+          "need": "--More--",
+          "done": "",
+          "fail": "",
+          "back": "",
+          "nap": "",
+          "boop": ""
+        }
+      },
+      "turn": "the corridor, drawn as you walk it",
+      "examples": {
+        "idle": "a quiet room.",
+        "work": "3 in the corridors.",
+        "need": "codex@office: Bash: npm run migrate  --More--",
+        "done": "codex@office done: 3 files changed, tests pass. that was gold.",
+        "fail": "codex@office failed: 3 files changed, tests pass  (a trap)",
+        "back": "back up the stairs. 2 done, 1 waiting 40m.",
+        "nap": "resting in a dark room.",
+        "boop": "you touch the @. it is you."
+      }
+    },
+    {
+      "id": "sl",
+      "n": 6,
+      "drop": "tty",
+      "rarity": "rare",
+      "color": {
+        "xterm": 250,
+        "hex": "#bcbcbc"
+      },
+      "shiny": {
+        "xterm": 117,
+        "hex": "#87d7ff"
+      },
+      "family": [
+        [
+          "ls",
+          1971
+        ],
+        [
+          "sl",
+          1993
+        ]
+      ],
+      "lore": "Type sl for ls and a steam locomotive crosses your terminal (Toyoda Masashi, 1993). It ignores Ctrl-C. Its smoke ages as it drifts; sl -a has an accident, and people cry for help.",
+      "first": "choo choo. you meant ls. too late.",
+      "lines": {
+        "idle": "the line is clear.",
+        "work": "{n} on the rails. full steam.",
+        "need": "{who}: {q}  (whistle)",
+        "done": "{who} arrived: {recap}",
+        "fail": "{who} failed: {recap}  (Help!)",
+        "back": "all aboard. {summary}.",
+        "nap": "in the roundhouse.",
+        "boop": "you meant ls."
+      },
+      "sprites": {
+        "0.1": "({e}_]",
+        "1.0": "({e}n_]",
+        "2.0": "({e}n__]~"
+      },
+      "work": [
+        "({e}n__]@",
+        "({e}n__]o",
+        "({e}n__].",
+        "({e}n__] "
+      ],
+      "workMs": 250,
+      "portraits": {
+        "0.1": [
+          "    n",
+          " .-'|__",
+          "( {e}  []|",
+          " 'o--o-'"
+        ],
+        "1.0": [
+          "      n",
+          " .--'|------.__",
+          "( {e}        |[]|",
+          " '-.______.|__|",
+          "  (O)(O)  (O)(O)"
+        ],
+        "2.0": [
+          "        {s}",
+          "      n",
+          " .--'|------.__",
+          "( {e}        |[]|{h}",
+          " '-.______.|__|",
+          "  (O)(O)  (O)(O)"
+        ]
+      },
+      "parts": {
+        "s": {
+          "rest": "(@@) (@) @ .",
+          "work": [
+            "(@@@) (@@)  (@)",
+            " (@@)  (@)   @ ",
+            "  (@)   @    . ",
+            "   @    .      "
+          ],
+          "ms": 250
+        }
+      },
+      "moodParts": {
+        "h": {
+          "idle": "",
+          "work": "",
+          "need": "",
+          "done": "",
+          "fail": " \\O/ Help!",
+          "back": "",
+          "nap": "",
+          "boop": ""
+        }
+      },
+      "turn": "smoke, ageing as it drifts",
+      "examples": {
+        "idle": "the line is clear.",
+        "work": "3 on the rails. full steam.",
+        "need": "codex@office: Bash: npm run migrate  (whistle)",
+        "done": "codex@office arrived: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (Help!)",
+        "back": "all aboard. 2 done, 1 waiting 40m.",
+        "nap": "in the roundhouse.",
+        "boop": "you meant ls."
+      }
+    },
+    {
+      "id": "doctor",
+      "n": 7,
+      "drop": "tty",
+      "rarity": "rare",
+      "color": {
+        "xterm": 146,
+        "hex": "#afafd7"
+      },
+      "shiny": {
+        "xterm": 227,
+        "hex": "#ffff5f"
+      },
+      "family": [
+        [
+          "ELIZA",
+          1966
+        ],
+        [
+          "doctor",
+          1985
+        ]
+      ],
+      "lore": "Joseph Weizenbaum's ELIZA (MIT, 1964-67) ran a script called DOCTOR that turned what you typed back into questions. Emacs still has it: M-x doctor. A rubber duck that answers.",
+      "first": "I am the psychotherapist. Please, describe your problems.",
+      "lines": {
+        "idle": "how does that make you feel?",
+        "work": "{n} working. why do you think that is?",
+        "need": "{who}: {q}  what do you think?",
+        "done": "{who} is done: {recap}. how do you feel about that?",
+        "fail": "{who} failed: {recap}  tell me more.",
+        "back": "welcome back. {summary}. what's on your mind?",
+        "nap": "we'll continue next session.",
+        "boop": "why do you say boop?"
+      },
+      "sprites": {
+        "0.1": "*{e}-{e}*",
+        "1.0": "(*{e}-{e}*)",
+        "2.0": "(*{e}-{e}*)?"
+      },
+      "work": [
+        "(*{e}-{e}*)?",
+        "(*{e}-{e}*).",
+        "(*{e}-{e}*):",
+        "(*{e}-{e}*)."
+      ],
+      "workMs": 300,
+      "portraits": {
+        "0.1": [
+          "   .-----.",
+          "  /       \\ ",
+          " | ({e})-({e}) |",
+          "  \\   -   /",
+          "   '-----'"
+        ],
+        "1.0": [
+          "   .-----.",
+          "  /       \\ ",
+          " | ({e})-({e}) |",
+          " |    L    |",
+          "  \\ \\___/ /",
+          "   \\/\\/\\/\\/"
+        ],
+        "2.0": [
+          "   .-----.",
+          "  /       \\ ",
+          " | ({e})-({e}) |   ____",
+          " |    L    |  |{q} |",
+          "  \\ \\___/ /   |____|",
+          "   \\/\\/\\/\\/",
+          "-UU-:**-  *doctor*  (Doctor)"
+        ]
+      },
+      "moodParts": {
+        "q": {
+          "idle": "   ",
+          "work": "...",
+          "need": " ? ",
+          "done": "ok ",
+          "fail": "hm ",
+          "back": " ! ",
+          "nap": "zz ",
+          "boop": "!? "
+        }
+      },
+      "turn": "a question mark, pondering",
+      "examples": {
+        "idle": "how does that make you feel?",
+        "work": "3 working. why do you think that is?",
+        "need": "codex@office: Bash: npm run migrate  what do you think?",
+        "done": "codex@office is done: 3 files changed, tests pass. how do you feel about that?",
+        "fail": "codex@office failed: 3 files changed, tests pass  tell me more.",
+        "back": "welcome back. 2 done, 1 waiting 40m. what's on your mind?",
+        "nap": "we'll continue next session.",
+        "boop": "why do you say boop?"
+      }
+    },
+    {
+      "id": "hack",
+      "n": 8,
+      "drop": "tty",
+      "rarity": "legendary",
+      "color": {
+        "xterm": 255,
+        "hex": "#eeeeee"
+      },
+      "shiny": {
+        "xterm": 51,
+        "hex": "#00ffff"
+      },
+      "family": [
+        [
+          "hack",
+          1982
+        ],
+        [
+          "nethack",
+          1987
+        ]
+      ],
+      "lore": "Jay Fenlason's Hack (1982) followed Rogue down; Andries Brouwer's Hack 1.0 (1984) gave you a pet little dog, d, that follows you. In NetHack (1987) it grows: little dog, dog, large dog.",
+      "first": "woof. i'm your little dog. i'll follow you down.",
+      "lines": {
+        "idle": "sitting at your feet.",
+        "work": "{n} busy. i follow along.",
+        "need": "{who}: {q}  (barks)",
+        "done": "{who} done: {recap}  (yips)",
+        "fail": "{who} failed: {recap}  (whines)",
+        "back": "you're back! {summary}.",
+        "nap": "curled up by the stairs.",
+        "boop": "you swap places with your dog."
+      },
+      "sprites": {
+        "0.1": "d{e}.{e}b",
+        "1.0": "d{e}.{e}b_)",
+        "2.0": "d{e}.{e}b__)"
+      },
+      "work": [
+        "d{e}.{e}b__)",
+        "d{e}.{e}b_/)",
+        "d{e}.{e}b__)",
+        "d{e}.{e}b\\_)"
+      ],
+      "workMs": 200,
+      "portraits": {
+        "0.1": [
+          "   __",
+          " _/ {e}\\_",
+          "(_     \\___",
+          "  '-.  __  )~",
+          "    |_|  |_|"
+        ],
+        "1.0": [
+          "    __",
+          "  _/ {e}\\__",
+          " (_      \\_______",
+          "   '--.          )~",
+          "       \\  ____  /",
+          "       |_|    |_|"
+        ],
+        "2.0": [
+          "       __",
+          "     _/ {e}\\__",
+          "@   (_      \\__________",
+          "      '--.             )~",
+          "          \\           /",
+          "           \\  _____  /",
+          "           {l}"
+        ]
+      },
+      "parts": {
+        "l": {
+          "rest": "|_|     |_|",
+          "work": [
+            "/_/     /_/",
+            "|_|     |_|",
+            "\\_\\     \\_\\",
+            "|_|     |_|"
+          ],
+          "ms": 200
+        }
+      },
+      "turn": "legs, trotting after you",
+      "examples": {
+        "idle": "sitting at your feet.",
+        "work": "3 busy. i follow along.",
+        "need": "codex@office: Bash: npm run migrate  (barks)",
+        "done": "codex@office done: 3 files changed, tests pass  (yips)",
+        "fail": "codex@office failed: 3 files changed, tests pass  (whines)",
+        "back": "you're back! 2 done, 1 waiting 40m.",
+        "nap": "curled up by the stairs.",
+        "boop": "you swap places with your dog."
+      }
+    },
+    {
+      "id": "tty",
+      "n": 9,
+      "drop": "tty",
+      "rarity": "legendary",
+      "color": {
+        "xterm": 187,
+        "hex": "#d7d7af"
+      },
+      "shiny": {
+        "xterm": 46,
+        "hex": "#00ff00"
+      },
+      "family": [
+        [
+          "Model 33",
+          1963
+        ],
+        [
+          "tty",
+          1971
+        ]
+      ],
+      "lore": "The Teletype Model 33 (1963) typed ten characters a second, upper case only, and rang a real bell. Unix grew up on it, and terminals are still called ttys. tty is drawn only with what a Model 33 could print.",
+      "first": "HELLO. I AM TTY. TERMINALS ARE STILL NAMED AFTER ME.",
+      "lines": {
+        "idle": "ON LINE. NOTHING TO PRINT.",
+        "work": "{n} TYPING. CLACK CLACK.",
+        "need": "{who}: {q}  ^G",
+        "done": "{who} DONE: {recap}",
+        "fail": "{who} FAILED: {recap}  ^G^G",
+        "back": "WELCOME BACK. {summary}.",
+        "nap": "SWITCHED TO LOCAL.",
+        "boop": "DING."
+      },
+      "eyes": {
+        "idle": "O",
+        "work": "=",
+        "need": "?",
+        "done": "^",
+        "fail": "X",
+        "back": "^",
+        "nap": "-",
+        "boop": "@"
+      },
+      "charset": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_",
+      "typeMs": 100,
+      "sprites": {
+        "0.1": "/{e} {e}\\",
+        "1.0": "[/{e} {e}\\]",
+        "2.0": ":[/{e} {e}\\]"
+      },
+      "work": [
+        ":[/{e} {e}\\]",
+        ".[/{e} {e}\\]",
+        "'[/{e} {e}\\]",
+        " [/{e} {e}\\]"
+      ],
+      "workMs": 100,
+      "portraits": {
+        "0.1": [
+          "   .--------.",
+          "  /  {e}    {e}  \\ ",
+          " [____________]"
+        ],
+        "1.0": [
+          "    .--------.",
+          "   /  {e}    {e}  \\ ",
+          "  [____________]",
+          " [ ############ ]",
+          " [______________]"
+        ],
+        "2.0": [
+          "       .---------.",
+          "       ! LOGIN:  !",
+          "    .--!---------!--.",
+          "   /      {e}    {e}      \\ ",
+          "  /  {h}    \\ ",
+          " [_____________________]",
+          " [ .:. ############### ]",
+          "     I               I"
+        ]
+      },
+      "parts": {
+        "h": {
+          "rest": "^             ",
+          "work": [
+            "^             ",
+            "   ^          ",
+            "      ^       ",
+            "         ^    ",
+            "            ^ "
+          ],
+          "ms": 100
+        }
+      },
+      "turn": "the print head, ten characters a second",
+      "examples": {
+        "idle": "ON LINE. NOTHING TO PRINT.",
+        "work": "3 TYPING. CLACK CLACK.",
+        "need": "codex@office: Bash: npm run migrate  ^G",
+        "done": "codex@office DONE: 3 files changed, tests pass",
+        "fail": "codex@office FAILED: 3 files changed, tests pass  ^G^G",
+        "back": "WELCOME BACK. 2 done, 1 waiting 40m.",
+        "nap": "SWITCHED TO LOCAL.",
+        "boop": "DING."
+      }
+    },
+    {
+      "id": "lp0",
+      "n": 10,
+      "drop": "tty",
+      "rarity": "secret",
+      "color": {
+        "xterm": 202,
+        "hex": "#ff5f00"
+      },
+      "shiny": {
+        "xterm": 69,
+        "hex": "#5f87ff"
+      },
+      "family": [
+        [
+          "1403",
+          1959
+        ],
+        [
+          "lp0",
+          1992
+        ]
+      ],
+      "lore": "The Linux kernel still prints \"lp0 on fire\" when a printer reports an error; fast line printers, the story goes, could set their paper alight. The IBM 1403 (1959) printed a famous Mona Lisa in characters like these. This one is always on fire.",
+      "first": "lp0 on fire. hello.",
+      "lines": {
+        "idle": "lp0 on fire.",
+        "work": "{n} printing. still on fire.",
+        "need": "{who}: {q}  (on fire)",
+        "done": "{who} printed: {recap}",
+        "fail": "{who} failed: {recap}  lp0 on fire",
+        "back": "you're back. {summary}. still on fire.",
+        "nap": "smouldering.",
+        "boop": "hot."
+      },
+      "charset": " .:-=+*#%@",
+      "sprites": {
+        "0.1": "#{e}*{e}#",
+        "1.0": ".#{e}*{e}#.",
+        "2.0": "*#{e}*{e}#*"
+      },
+      "work": [
+        "*#{e}*{e}#*",
+        "+#{e}*{e}#+",
+        ".#{e}*{e}#.",
+        "+#{e}*{e}#+"
+      ],
+      "workMs": 150,
+      "portraits": {
+        "0.1": [
+          "     . * .",
+          "  : .-=*=-. :",
+          "  . %  {e} {e}  % .",
+          "  : %  --  % :",
+          "  . -=*#*=- ."
+        ],
+        "1.0": [
+          "      .  *  .",
+          "   : .-=*#*=-. :",
+          "   . %  {e}   {e}  % .",
+          "   : %   --   % :",
+          "   . -=*#%#*=- .",
+          " @@@@@@@@@@@@@@@@@@",
+          " @@%%%%%%%%%%%%%%@@"
+        ],
+        "2.0": [
+          "     {f}",
+          "     {g}",
+          "   : .-=*#*=-. :",
+          "   . %  {e}   {e}  % .",
+          "   : %   --   % :",
+          "   . -=*#%#*=- .",
+          " @@@@@@@@@@@@@@@@@@@",
+          " @@%%%%%%%%%%%%%%%@@"
+        ]
+      },
+      "parts": {
+        "f": {
+          "rest": "  .  *  +  .",
+          "work": [
+            "  .  *  +  .",
+            " . +  * .  *",
+            "  *  .  *  .",
+            " .  *  +  * "
+          ],
+          "ms": 150
+        },
+        "g": {
+          "rest": " .*+#%@%#+*.",
+          "work": [
+            " .*+#%@%#+*.",
+            " *+#%@%@%#+*",
+            " .*#%@#@%#*.",
+            " *+#%@%@%#+*"
+          ],
+          "ms": 150
+        }
+      },
+      "turn": "flames, flickering",
+      "examples": {
+        "idle": "lp0 on fire.",
+        "work": "3 printing. still on fire.",
+        "need": "codex@office: Bash: npm run migrate  (on fire)",
+        "done": "codex@office printed: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  lp0 on fire",
+        "back": "you're back. 2 done, 1 waiting 40m. still on fire.",
+        "nap": "smouldering.",
+        "boop": "hot."
       }
     }
   ]
