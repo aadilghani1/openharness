@@ -191,6 +191,38 @@ fn fuzzy_v2(case_sensitive: bool, normalize: bool, forward: bool, text: &[char],
     Some((j, max_pos + 1, max_score, pos))
 }
 
+/// FuzzyMatchV1: where the pattern's characters first come in order (from the start, or from the
+/// end when not [forward]), narrowed back from that end to the last start that still holds them
+/// all, scored as calculateScore scores a fixed alignment.
+fn fuzzy_v1(case_sensitive: bool, normalize: bool, forward: bool, text: &[char], pattern: &[char]) -> Option<(usize, usize, i32, Vec<usize>)> {
+    let (m, n) = (pattern.len(), text.len());
+    if m == 0 { return Some((0, 0, 0, Vec::new())) }
+    let at = |i: usize, len: usize| if forward { i } else { len - 1 - i };
+    let (mut pidx, mut sidx, mut eidx) = (0usize, None, None);
+    for index in 0..n {
+        if fold(text[at(index, n)], case_sensitive, normalize) == pattern[at(pidx, m)] {
+            if sidx.is_none() { sidx = Some(index) }
+            pidx += 1;
+            if pidx == m { eidx = Some(index + 1); break }
+        }
+    }
+    let (mut s, e) = (sidx?, eidx?);
+    let mut p = m as i64 - 1;
+    let mut index = e as i64 - 1;
+    while index >= s as i64 {
+        if fold(text[at(index as usize, n)], case_sensitive, normalize) == pattern[at(p as usize, m)] {
+            p -= 1;
+            if p < 0 { s = index as usize; break }
+        }
+        index -= 1;
+    }
+    let (s, e) = if forward { (s, e) } else { (n - e, n - s) };
+    let score = calculate_score(case_sensitive, normalize, text, pattern, s, e);
+    let mut pos = Vec::with_capacity(m);
+    for (i, &c) in text.iter().enumerate().take(e).skip(s) { if pos.len() < m && fold(c, case_sensitive, normalize) == pattern[pos.len()] { pos.push(i) } }
+    Some((s, e, score, pos))
+}
+
 /// fzf's calculateScore: a fixed alignment scored as V2 scores it.
 fn calculate_score(case_sensitive: bool, normalize: bool, text: &[char], pattern: &[char], sidx: usize, eidx: usize) -> i32 {
     let (mut pidx, mut score, mut in_gap, mut consecutive, mut first_bonus) = (0usize, 0i32, false, 0i32, 0i32);
@@ -339,7 +371,7 @@ pub enum Case { Smart, Respect, Ignore }
 /// A query in fzf's extended-search syntax: terms that must all match, `|` between the ones any
 /// of which will do.
 #[derive(Clone, Debug)]
-pub struct Query { sets: Vec<Vec<Term>>, forward: bool }
+pub struct Query { sets: Vec<Vec<Term>>, forward: bool, v1: bool }
 
 /// A line's match: its score, where the terms matched (for the tiebreaks: the first begin, the
 /// first and the last end), and the characters lit.
@@ -384,7 +416,7 @@ impl Query {
             }
         }
         if !set.is_empty() { sets.push(set) }
-        Query { sets, forward: true }
+        Query { sets, forward: true, v1: false }
     }
 
     /// The direction fzf searches in for these tiebreaks (core.go): backward when the first of
@@ -395,6 +427,9 @@ impl Query {
         }
         self
     }
+
+    /// --algo=v1: fuzzy terms matched by FuzzyMatchV1.
+    pub fn v1(mut self, on: bool) -> Query { self.v1 = on; self }
 
     /// Some term asks for something (not only `!x`): fzf sorts only then.
     pub fn sortable(&self) -> bool { self.sets.iter().any(|s| s.iter().any(|t| !t.inv)) }
@@ -408,7 +443,7 @@ impl Query {
             let mut matched = false;
             let (mut score, mut off, mut pos): (i32, (usize, usize), Vec<usize>) = (0, (0, 0), Vec::new());
             for term in set {
-                match run(term, line, self.forward) {
+                match run(term, line, self.forward, self.v1) {
                     Some((s, e, sc, p)) => {
                         if term.inv { continue }
                         score = sc;
@@ -433,9 +468,10 @@ impl Query {
 }
 
 /// One term against a line: (start, end, score, positions when the algorithm knows them).
-fn run(term: &Term, line: &[char], forward: bool) -> Option<(usize, usize, i32, Option<Vec<usize>>)> {
+fn run(term: &Term, line: &[char], forward: bool, v1: bool) -> Option<(usize, usize, i32, Option<Vec<usize>>)> {
     let (cs, nz, p) = (term.case_sensitive, term.normalize, &term.text[..]);
     match term.kind {
+        Kind::Fuzzy if v1 => fuzzy_v1(cs, nz, forward, line, p).map(|(s, e, sc, pos)| (s, e, sc, Some(pos))),
         Kind::Fuzzy => fuzzy_v2(cs, nz, forward, line, p).map(|(s, e, sc, pos)| (s, e, sc, Some(pos))),
         Kind::Exact => exact(cs, nz, forward, false, line, p).map(|(s, e, sc)| (s, e, sc, None)),
         Kind::ExactBoundary => exact(cs, nz, forward, true, line, p).map(|(s, e, sc)| (s, e, sc, None)),
