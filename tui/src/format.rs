@@ -1296,6 +1296,8 @@ fn harness_value(app: &App, machine: &str, id: &str, key: &str) -> Option<Val> {
             }
         }
         "question" => question,
+        // Its question's choices, as answer-harness takes them by number (1 is the first).
+        "options" => a.question.as_ref().map(|q| q.options.iter().enumerate().map(|(i, o)| format!("{}) {o}", i + 1)).collect::<Vec<_>>().join("  ")).unwrap_or_default(),
         "doing" => a.doing.clone().unwrap_or_default(),
         "did" => a.did.clone().unwrap_or_default(),
         "error" => a.launch_error.clone(),

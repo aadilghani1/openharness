@@ -40,6 +40,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("show-messages", "showmsgs", "Messages so far"),
     ("list-keys", "lsk", "Key bindings (-T a table, -1N one key)"),
     ("keys", "keys", "Every key binding, searched as you type (C-b ? lists them as tmux does)"),
+    ("answer-harness", "answer", "Answer a harness's question: answer -t name 2 (its second choice), 1,3, or your own words"),
+    ("open-harness", "openh", "A harness into a window of its own (-h/-v beside/below -t's pane, -d not gone to): open-harness -s name"),
     ("list-windows", "lsw", "The windows (-F a format)"),
     ("list-panes", "lsp", "The panes (-a/-s every window, -t one, -F a format)"),
     ("list-sessions", "ls", "The session (this computer) and its windows"),
@@ -1081,6 +1083,24 @@ pub fn option_changed(app: &mut App, name: &str) {
     if crate::options::is_hook(name.split('[').next().unwrap_or(name)) { return }
     let now = app.options.get(name, "", None);
     after_set(app, name, now, true, None);
+}
+
+/// A harness a command names: `machine:agent` or its id, a pane that shows it (%N, a:1.0), or
+/// its name — exact, else the only one it starts, else the only one it matches as a pattern.
+fn find_harness(app: &App, t: &str) -> Result<(String, String), String> {
+    if let Some((m, a)) = t.split_once(':') { if app.fleet.agent(m, a).is_some() { return Ok((m.to_string(), a.to_string())) } }
+    if let Some(a) = app.fleet.agents.values().find(|a| a.id == t) { return Ok(a.key()) }
+    if t.starts_with('%') || t.contains([':', '.']) {
+        if let Some(p) = pane_target(app, t).and_then(|(_, p)| app.panes.get(&p)) { return Ok((p.machine_id.clone(), p.agent_id.clone())) }
+    }
+    let one = |hits: Vec<(String, String)>| -> Option<Result<(String, String), String>> {
+        match hits.len() { 0 => None, 1 => Some(Ok(hits[0].clone())), _ => Some(Err(format!("more than one harness: {t}"))) }
+    };
+    let agents: Vec<&crate::fleet::Agent> = app.fleet.agents.values().collect();
+    if let Some(r) = one(agents.iter().filter(|a| a.name == t).map(|a| a.key()).collect()) { return r }
+    if let Some(r) = one(agents.iter().filter(|a| a.name.starts_with(t)).map(|a| a.key()).collect()) { return r }
+    if let Some(r) = one(agents.iter().filter(|a| crate::cmd::fnmatch(t, &a.name)).map(|a| a.key()).collect()) { return r }
+    Err(format!("can't find harness: {t}"))
 }
 
 /// The other running clients of this server name (-L): their sockets.
@@ -2622,6 +2642,42 @@ fn run_words_in(app: &mut App, words: &[String]) {
         "send-task" => { let text = rest(words); if text.is_empty() { input::run(app, "send") } else { input::route_task(app, text) } }
         "broadcast" => { let text = rest(words); if text.is_empty() { input::run(app, "broadcast") } else { input::broadcast(app, &text) } }
         "send-message" => { let text = rest(words); input::message_focused(app, &text) }
+        // answer-harness [-t harness] answer: its question answered — a choice's number (1 the
+        // first; 1,3 several where it takes several) or your own words; without -t, the pane's
+        // harness, else the first one waiting on you.
+        "answer-harness" => {
+            let text = positional(words).join(" ");
+            if text.trim().is_empty() { return app.error("usage: answer-harness [-t harness] answer") }
+            let key = match opt(words, "-t") {
+                Some(t) => match find_harness(app, &t) { Ok(k) => k, Err(e) => return app.error(e) },
+                None => {
+                    let here = app.focused().and_then(|p| app.panes.get(&p)).map(|p| (p.machine_id.clone(), p.agent_id.clone())).filter(|(m, a)| app.fleet.agent(m, a).map(|x| x.question.is_some()).unwrap_or(false));
+                    match here.or_else(|| app.fleet.ranked().into_iter().find(|a| a.question.is_some()).map(|a| a.key())) { Some(k) => k, None => return app.error("nobody is waiting on you") }
+                }
+            };
+            let name = app.fleet.agent(&key.0, &key.1).map(|a| a.name.clone()).unwrap_or_default();
+            let Some(q) = app.fleet.agent(&key.0, &key.1).and_then(|a| a.question.clone()) else { return app.error(format!("{name} is not asking anything")) };
+            let Some(value) = crate::fleet::answer_text(&q, &text) else { return };
+            if !input::answer_with(app, &key.0, &key.1, &value) { app.error(format!("{name}'s machine is not connected")) }
+        }
+        // open-harness [-bdfhv] [-s harness] [-t target]: a harness into a window of its own in
+        // the session (-t's), or split into -t's pane (-h beside, -v below; -b before, -f across
+        // the window) — -d not gone to. Open already: gone to.
+        "open-harness" => {
+            let Some(who) = opt(words, "-s").or_else(|| positional(words).first().cloned()) else { return app.error("usage: open-harness [-bdfhv] [-s harness] [-t target]") };
+            let (m, a) = match find_harness(app, &who) { Ok(k) => k, Err(e) => return app.error(e) };
+            let detached = flag(words, "-d");
+            if flag(words, "-h") || flag(words, "-v") {
+                let dir = if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical };
+                let Some((w, p)) = (match opt(words, "-t") { Some(t) => pane_target(app, &t), None => app.current() }) else { return app.error("can't find pane") };
+                let at = crate::app::At { tab: app.tabs[w].id.clone(), pane: Some(p), dir, before: flag(words, "-b"), full: flag(words, "-f"), size: None, detached, zoom: false };
+                app.open_agent(&m, &a, crate::app::Placement::At(at));
+            } else {
+                let back = app.tabs.get(app.active).map(|t| t.id.clone());
+                app.open_agent(&m, &a, crate::app::Placement::Window);
+                if detached { if let Some(i) = back.and_then(|b| app.tabs.iter().position(|t| t.id == b)) { app.select_tab(i) } }
+            }
+        }
         "next-harness" => input::next_attention(app, flag(words, "-p")),
         // Harness-era command ids still work, for old configs and the palette.
         other if input::is_command(other) => input::run(app, other),

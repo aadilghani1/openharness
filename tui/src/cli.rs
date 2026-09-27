@@ -87,7 +87,7 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
         // The running client knows each one's state (what it asks, does, did); with none, the
         // daemons' rosters.
         // (No client: hn with no terminal answers it, as tmux's server starts for a command.)
-        "list-harnesses" | "lsh" => {
+        "list-harnesses" | "lsh" | "answer-harness" | "answer" | "open-harness" | "openh" => {
             let up = crate::ipc::alive(socket.as_deref(), name.as_deref()) || (socket.is_none() && spawn_headless(name.as_deref(), explicit_port).await);
             if up { Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await) } else { Some(ls(port).await) }
         }

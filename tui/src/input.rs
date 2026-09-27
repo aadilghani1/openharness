@@ -1794,7 +1794,7 @@ fn mark_read(app: &mut App, key: (String, String)) -> bool {
 
 /// question_response with [value]: an option's words, several joined with ", ", or free text
 /// (the daemon keys each into the agent's own dialog).
-fn answer_with(app: &mut App, machine: &str, agent: &str, value: &str) -> bool {
+pub fn answer_with(app: &mut App, machine: &str, agent: &str, value: &str) -> bool {
     let Some(a) = app.fleet.agent(machine, agent) else { return false };
     let Some(q) = a.question.clone() else { return false };
     let session = a.session_id.clone();

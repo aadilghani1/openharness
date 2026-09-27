@@ -1566,7 +1566,7 @@ impl App {
         let opens_shell = words.iter().any(|w| matches!(crate::cmd::find(w).map(|e| e.name), Ok("new-session" | "new-window" | "split-window" | "respawn-pane" | "respawn-window" | "display-popup")));
         // list-harnesses from a client just started (hn with no terminal, for a script): once
         // every machine's harnesses are known, so it says what each one is doing.
-        let asks_fleet = matches!(words.first().map(String::as_str), Some("list-harnesses" | "lsh"));
+        let asks_fleet = matches!(words.first().map(String::as_str), Some("list-harnesses" | "lsh" | "answer-harness" | "answer" | "open-harness" | "openh"));
         self.last_cli = Instant::now();
         if !self.cli_held.is_empty() || (opens_shell && !self.cli_ready()) || (asks_fleet && !self.fleet_ready()) { self.cli_held.push_back(job); return }
         job(self)
