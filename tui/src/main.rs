@@ -293,6 +293,17 @@ async fn run(config: config::Config) -> io::Result<()> {
     }
     if let Some(problem) = config.problems.first() { app.say(problem.clone(), theme::DANGER) }
     else if let Some(path) = read.last() { if app.messages.is_empty() { app.say(format!("{} read — your prefix is {}", path.replace(&std::env::var("HOME").unwrap_or_default(), "~"), keys::name(&app.keymap.prefix)), theme::WARN) } }
+    // Inside a tmux client whose prefix is hn's too: tmux takes it first, and its send-prefix
+    // passes the second on.
+    if let Some(socket) = std::env::var("TMUX").ok().filter(|v| !v.is_empty() && std::env::var("HN_SOCKET").is_err()).and_then(|v| v.split(',').next().map(str::to_string)) {
+        let p = keys::name(&app.keymap.prefix);
+        let outer = std::process::Command::new("tmux").args(["-S", &socket, "show", "-gv", "prefix"]).stderr(std::process::Stdio::null()).output().ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        if outer == p {
+            app.say(format!("Inside tmux: {p} is tmux's — {p} {p} reaches hn (or give hn another prefix)"), theme::WARN);
+            app.toast_hold = Some(6000);
+        }
+    }
     // When you last looked at each harness (what finished while hn was closed shows as done).
     app.load_seen();
     app.boot();
