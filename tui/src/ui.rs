@@ -48,6 +48,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let lines = app.status_lines().max(1).min(area.height);
     let status = Rect::new(0, if app.status_top { 0 } else { area.height - lines }, area.width, lines);
     let body = app.body();
+    // The window in front at the terminal's size, whatever brought it there.
+    if app.tab().root.as_ref().is_some_and(|r| r.size() != (body.width, body.height)) { app.fit_panes() }
     let buf = frame.buffer_mut();
     let mut cursor: Option<Position> = None;
     // A list takes the window (with --height, only its bottom rows: the panes stay in view).

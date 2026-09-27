@@ -1482,7 +1482,9 @@ impl App {
     /// Where a window's panes are laid out: the client's body, or (hn with no terminal) the
     /// window's own size from the top left.
     pub fn window_area(&self, tab: &Tab) -> Rect {
-        if !self.headless { return self.body() }
+        // (A window not in front is as big as it was when last in front, or made.)
+        let front = self.tabs.get(self.active).map(|t| t.id == tab.id).unwrap_or(false);
+        if !self.headless && (front || tab.root.is_none()) { return self.body() }
         let (w, h) = tab.root.as_ref().map(|r| r.size()).unwrap_or_else(|| tab.size.unwrap_or(self.default_size()));
         Rect::new(0, 0, w, h)
     }
@@ -1544,7 +1546,9 @@ impl App {
             self.tabs[i].size = None;
             if let Some(root) = self.tabs[i].root.as_mut() {
                 root.status = status;
-                if root.size() != (body.width, body.height) { root.resize(body.width, body.height) }
+                // server_client_check_window_resize: only the window in front takes the
+                // terminal's size; the others keep theirs until they are gone to.
+                if i == self.active && root.size() != (body.width, body.height) { root.resize(body.width, body.height) }
             }
         }
         self.rects = self.compute_rects();
@@ -2326,7 +2330,9 @@ impl App {
         tab.named = win.get("named").and_then(Value::as_bool).unwrap_or(false);
         let layout = win.get("layout").and_then(Value::as_str).unwrap_or("");
         // With no terminal: the size the last terminal gave it (tmux keeps it).
-        let (w, h) = match Node::tmux_size(layout).filter(|_| self.headless) { Some(s) => { tab.size = Some(s); s } None => (w, h) };
+        // At the size it was saved at (the one in front takes the terminal's when it is shown);
+        // hn with no terminal keeps it as the window's own.
+        let (w, h) = match Node::tmux_size(layout) { Some(s) => { if self.headless { tab.size = Some(s) } s } None => (w, h) };
         tab.root = Node::from_tmux(layout, &ids, w, h).or_else(|| layout::arrange(layout::Named::Tiled, &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0")));
         tab.order = ids.clone();
         tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
