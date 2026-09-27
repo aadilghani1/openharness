@@ -224,6 +224,9 @@ pub struct Tab {
     pub on_desk: bool,
     /// synchronize-panes: keys go to every pane here.
     pub sync: bool,
+    /// automatic-rename off: the window has had the name tmux gives one when it is made
+    /// (default_window_name: a shell by its command), and keeps it.
+    pub first_named: bool,
     /// The desk's layout document for this tab, kept whole: a preset chosen here updates its entry
     /// and leaves the sizes other windows saved alone.
     pub layout: Value,
@@ -238,7 +241,7 @@ impl Tab {
     pub fn home() -> Tab { Tab::with_wid("home", NO_WID) }
     /// A window with the id it had (a session another client kept, the desk's).
     pub fn with_wid(name: &str, wid: u64) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, layout: json!({}) }
+        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}) }
     }
     /// Its @N, numbered now if it has none yet.
     pub fn wid(&self) -> u64 {
@@ -3343,10 +3346,21 @@ impl App {
             // active pane — a shell by what runs in it (automatic-rename-format: `zsh`, `vim`,
             // `[tmux]` in copy mode), a harness by its name.
             let tab_id = self.tabs[index].id.clone();
-            if self.options.get("automatic-rename", &tab_id, None).as_deref() == Some("off") { continue }
+            let off = self.options.get("automatic-rename", &tab_id, None).as_deref() == Some("off");
+            if off && self.tabs[index].first_named { continue }
             let first = self.tabs[index].focus.or_else(|| self.tabs[index].panes().first().copied());
             let Some(id) = first else { continue };
             let Some(pane) = self.panes.get(&id) else { continue };
+            // Off: a shell is named once by its command, as tmux names a window when it makes it
+            // (a harness keeps its own name).
+            if off {
+                let agent = self.fleet.agent(&pane.machine_id, &pane.agent_id);
+                if agent.map(|a| a.engine != "terminal").unwrap_or(false) { self.tabs[index].first_named = true; continue }
+                let Some(cmd) = pane.fg_command.clone() else { continue };
+                let name = cmd.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("").to_string();
+                if !name.is_empty() { self.tabs[index].name = name; self.tabs[index].first_named = true }
+                continue;
+            }
             // (A harness this client has not heard of yet — another terminal's new shell — is
             // named by what runs in it, when that is known.)
             let agent = self.fleet.agent(&pane.machine_id, &pane.agent_id);
