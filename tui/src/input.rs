@@ -784,6 +784,48 @@ fn is_loading(what: &str) -> bool { LOADING.with(|l| l.borrow().iter().any(|w| w
 
 fn agent_rpc(app: &mut App, ty: &'static str, done: &'static str) {
     let Some((machine, agent)) = focused_agent(app) else { app.say("This pane has no harness in it", theme::MUTED); return };
+    agent_rpc_on(app, machine, agent, ty, done)
+}
+
+/// A harness's verb from a command with its target (restart-harness -t …): restart, pause,
+/// clone, resume or rename that one — one mid-turn restarted or paused only with [yes].
+pub fn harness_verb(app: &mut App, verb: &str, (machine, agent): (String, String), yes: bool, name: &str) {
+    let Some(a) = app.fleet.agent(&machine, &agent) else { return app.error("can't find harness") };
+    let working = matches!(app.fleet.state_of(a), crate::fleet::State::Working | crate::fleet::State::Starting);
+    let who = a.name.clone();
+    if app.link(&machine).is_none() { return app.error(format!("{who}'s machine is not connected")) }
+    match verb {
+        "restart-harness" | "pause-harness" if working && !yes => app.error(format!("{who} is working (-y to {} it anyway)", if verb == "restart-harness" { "restart" } else { "pause" })),
+        "restart-harness" => agent_rpc_on(app, machine, agent, "agent_restart", "Restarted"),
+        "pause-harness" => agent_rpc_on(app, machine, agent, "agent_delete", "Paused — the conversation is saved"),
+        "resume-harness" => match app.find_pane_anywhere(&machine, &agent).map(|(_, _, p)| p) {
+            Some(pane) => app.resume(pane),
+            None => agent_rpc_on(app, machine, agent, "agent_resume", "Resumed"),
+        },
+        "clone-harness" => clone_on(app, machine, agent),
+        _ => {
+            let Some(link) = app.link(&machine) else { return };
+            let name = name.to_string();
+            app.spawn(async move { link.rpc("agent_update", json!({ "agentId": agent, "name": name }), Duration::from_secs(20)).await }, move |app, r| {
+                if let Err(e) = r { app.say(format!("{e}"), theme::DANGER) } else { app.relist(&machine) }
+            });
+        }
+    }
+}
+
+fn clone_on(app: &mut App, machine: String, agent: String) {
+    let Some(link) = app.link(&machine) else { return };
+    app.say("Cloning…", theme::SOFT);
+    app.spawn(async move { link.rpc("agent_fork", json!({ "agentId": agent, "creationId": uuid::Uuid::new_v4().to_string() }), Duration::from_secs(120)).await }, move |app, reply| match reply {
+        Ok(reply) => if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
+            app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+            app.open_agent(&machine, id, Placement::Auto(None));
+        },
+        Err(e) => app.say(format!("Clone failed: {e}"), theme::DANGER),
+    });
+}
+
+fn agent_rpc_on(app: &mut App, machine: String, agent: String, ty: &'static str, done: &'static str) {
     let Some(link) = app.link(&machine) else { return };
     app.spawn(async move { link.rpc(ty, json!({ "agentId": agent }), Duration::from_secs(120)).await }, move |app, reply| match reply {
         Ok(_) => { app.say(done, theme::ONLINE); app.relist(&machine) }
@@ -1957,22 +1999,27 @@ fn split_key(id: &str) -> Option<(String, String)> {
 
 fn answer_from(app: &mut App, kind: &PickerKind, picker: &mut Picker, option: usize) {
     if !matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) { return }
-    // fzf --multi: the marked rows, when there are marks — each given its own choice N (those
-    // asking with fewer choices left marked); else the current row.
-    let marked: Vec<(String, String)> = picker.marked.iter().filter_map(|m| split_key(m)).collect();
+    // fzf --multi: the marked rows the query shows — never one it hides (an answer is not a
+    // printed line: it approves what that harness asks) — each given its own choice N (those
+    // asking with fewer choices left marked); with none shown, the current row.
+    let shown: std::collections::HashSet<&str> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.as_str()).collect();
+    let marked: Vec<(String, String)> = picker.marked.iter().filter(|m| shown.contains(m.as_str())).filter_map(|m| split_key(m)).collect();
     if marked.is_empty() {
         let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) else { return };
-        if answer(app, &machine, &agent, option) { picker.say("Answered") }
+        let (who, choice) = app.fleet.agent(&machine, &agent).map(|a| (a.name.clone(), a.question.as_ref().and_then(|q| q.options.get(option).cloned()).unwrap_or_default())).unwrap_or_default();
+        if answer(app, &machine, &agent, option) { picker.say(&format!("Answered {who}: {choice}")) }
         return;
     }
     let (mut done, mut left) = (0, 0);
+    let hidden = picker.marked.len().saturating_sub(marked.len());
     for (m, a) in &marked { if answer(app, m, a, option) { done += 1 } else { left += 1 } }
     picker.marked.retain(|id| split_key(id).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.question.is_some())).unwrap_or(false));
     let n = option + 1;
-    picker.say(match (done, left) {
-        (0, _) => format!("No choice {n} to give"),
-        (d, 0) => format!("{d} answered"),
-        (d, l) => format!("{d} answered · {l} without a choice {n}, still marked"),
+    let also = if hidden > 0 { format!(" · {hidden} marked out of view left as they were") } else { String::new() };
+    picker.say(&match (done, left) {
+        (0, _) => format!("No choice {n} to give{also}"),
+        (d, 0) => format!("{d} answered{also}"),
+        (d, l) => format!("{d} answered · {l} without a choice {n}, still marked{also}"),
     });
 }
 

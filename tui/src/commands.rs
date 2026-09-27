@@ -1015,9 +1015,12 @@ fn opt(words: &Words, f: &str) -> Option<String> {
     words.get(at + 1).cloned()
 }
 /// The positional words: past the flags and the values the flags take (`-t x`, `-l 10`).
-fn positional(words: &Words) -> Vec<String> {
+fn positional(words: &Words) -> Vec<String> { positional_with(words, "tcdFlnpsxyTIeNPb") }
+
+/// positional, where only the flags in [valued] take a value (hn's harness verbs: -t; their -l
+/// and -y are flags alone).
+fn positional_with(words: &Words, valued: &str) -> Vec<String> {
     if let Some(a) = &words.args { return a.values.clone() }
-    const VALUED: &str = "tcdFlnpsxyTIeNPb";
     let mut out = Vec::new();
     let mut i = 1;
     while i < words.len() {
@@ -1025,7 +1028,7 @@ fn positional(words: &Words) -> Vec<String> {
         if out.is_empty() && w.starts_with('-') && w.len() > 1 && w.parse::<f64>().is_err() {
             if w == "--" { out.extend(words[i + 1..].iter().cloned()); break }
             // A flag that takes a value, last in its cluster, takes the next word.
-            if w.len() == 2 && VALUED.contains(&w[1..]) { i += 1 }
+            if w.len() == 2 && valued.contains(&w[1..]) { i += 1 }
             i += 1;
             continue;
         }
@@ -2935,17 +2938,33 @@ fn run_words_in(app: &mut App, words: &[String]) {
         }
         "new-harness" => { let args = rest(words); if args.is_empty() { input::run(app, "new") } else { input::new_harness_from(app, &args) } }
         "new-terminal" => input::run(app, "terminal"),
-        "clone-harness" => input::run(app, "clone"),
-        "restart-harness" => input::run(app, "restart"),
-        "pause-harness" => input::run(app, "pause"),
-        "resume-harness" => input::run(app, "resume-focused"),
-        "rename-harness" => { let name = rest(words); if name.is_empty() { input::run(app, "rename") } else { input::rename_focused(app, &name) } }
+        // A harness's verbs, on -t's harness (the hook's in a harness-* hook), else the focused
+        // pane's; from a shell -t is needed, and one mid-turn is restarted or paused only with -y
+        // (the keys ask first).
+        "clone-harness" | "restart-harness" | "pause-harness" | "resume-harness" | "rename-harness" => {
+            let verb = words[0].as_str();
+            let name = positional_with(words, "t").join(" ");
+            let key = match harness_target(app, words) {
+                Ok(Some(k)) => k,
+                Ok(None) if app.capture.is_some() => return app.error(format!("{verb}: which harness? (-t)")),
+                Ok(None) => return match verb {
+                    "clone-harness" => input::run(app, "clone"),
+                    "restart-harness" => input::run(app, "restart"),
+                    "pause-harness" => input::run(app, "pause"),
+                    "resume-harness" => input::run(app, "resume-focused"),
+                    _ => if name.is_empty() { input::run(app, "rename") } else { input::rename_focused(app, &name) },
+                },
+                Err(e) => return app.error(e),
+            };
+            if verb == "rename-harness" && name.trim().is_empty() { return app.error("usage: rename-harness [-t harness] name") }
+            input::harness_verb(app, verb, key, flag(words, "-y"), &name);
+        }
         "send-task" => { let text = rest(words); if text.is_empty() { input::run(app, "send") } else { input::route_task(app, text) } }
         "broadcast" => { let text = rest(words); if text.is_empty() { input::run(app, "broadcast") } else { input::broadcast(app, &text) } }
         // send-message [-t harness] text: a turn for it — -t's, the hook's harness in a harness-*
         // hook, else the focused pane's.
         "send-message" => {
-            let text = positional(words).join(" ");
+            let text = positional_with(words, "t").join(" ");
             if text.trim().is_empty() { return app.error("usage: send-message [-t harness] text") }
             let key = match harness_target(app, words) {
                 Ok(Some(k)) => k,
@@ -2965,7 +2984,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
         // #{hook_harness_id}); in a harness-* hook the hook's harness, from the keys the focused
         // pane's — from a shell, never a guess (an answer may approve a command).
         "answer-harness" => {
-            let text = positional(words).join(" ");
+            let text = positional_with(words, "t").join(" ");
             if text.trim().is_empty() { return app.error("usage: answer-harness [-l] [-t harness] answer") }
             let key = match harness_target(app, words) {
                 Ok(Some(k)) => k,

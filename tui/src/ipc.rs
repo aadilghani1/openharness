@@ -270,6 +270,13 @@ pub fn clients_of(name: &str) -> Vec<PathBuf> {
     found
 }
 
+/// clients_of, less this process's own sockets (its own, and the name's when it took it).
+pub fn others_of(name: &str) -> Vec<PathBuf> {
+    let primary = dir().join(format!("{name}.sock"));
+    let claimed = CLAIMED.load(std::sync::atomic::Ordering::Relaxed);
+    clients_of(name).into_iter().filter(|p| Some(p) != here().as_ref() && !(claimed && *p == primary)).collect()
+}
+
 /// Whether a client is running where a command would go (its socket answers).
 pub fn alive(socket: Option<&str>, name: Option<&str>) -> bool {
     chosen(socket, name).map(|p| answers(&p)).unwrap_or(false)

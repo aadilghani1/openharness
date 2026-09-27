@@ -97,6 +97,10 @@ const dial = { said: {}, replies: [], messages: [] }
 // How many of each request the windows made (GET /test/counts), for tests of what hn asks.
 const counts = {}
 const windows = new Set()
+// The questions open on this computer, as the daemon keeps them: replayed to a window as it
+// connects, then their ids (commander_questions_open).
+const openQs = new Map()
+let demoAsked = false
 
 const json = (res, body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success: true, data: body })) }
 const server = http.createServer((req, res) => {
@@ -119,7 +123,16 @@ const server = http.createServer((req, res) => {
   if (req.url === '/test/dial' && req.method === 'POST') {
     let body = ''
     req.on('data', (c) => { body += c })
-    req.on('end', () => { for (const ws of windows) ws.send(body); json(res, { windows: windows.size }) })
+    req.on('end', () => {
+      try {
+        const f = JSON.parse(body)
+        const rid = f?.payload?.requestId
+        if (f?.type === 'commander_question' && rid) openQs.set(rid, f)
+        if (f?.type === 'commander_question_close' && rid) openQs.delete(rid)
+      } catch {}
+      for (const ws of windows) ws.send(body)
+      json(res, { windows: windows.size })
+    })
     return
   }
   if (req.url === '/api/desk' && req.method === 'GET') return json(res, desk)
@@ -197,9 +210,13 @@ wss.on('connection', (ws) => {
         windows.add(ws)
         ws.on('close', () => windows.delete(ws))
         send('dial_status', { attached: true, fw: '1.0.0-mock' })
+        // The open questions in the same tick, as the daemon hands them over (d0047d1c).
+        if (DEMO && !openQs.size && !demoAsked) { const asked = question(LOCAL); if (asked) openQs.set(asked.payload.requestId, asked); demoAsked = true }
+        for (const f of openQs.values()) ws.send(JSON.stringify(f))
+        send('commander_questions_open', { requestIds: [...openQs.keys()] })
       }
       if (DEMO) {
-        const asked = question(machine)
+        const asked = machine === LOCAL ? null : question(machine)
         if (asked) setTimeout(() => ws.send(JSON.stringify(asked)), 300)
         const ev = (x, type, payload = {}) => ws.send(JSON.stringify({ type, agentId: x.id, dbSessionId: x.sessionId, payload: { agentId: x.id, sessionId: x.sessionId, ...payload } }))
         // Of the fleet, about half work; the rest are idle. Each working one steps through a turn.
@@ -277,6 +294,7 @@ wss.on('connection', (ws) => {
       case 'message': dial.messages.push({ machine, ...payload }); return
       // An answer: recorded, and the question closed, as the daemon closes it once it is keyed in.
       case 'question_response': {
+        openQs.delete(payload.requestId)
         dial.answers = [...(dial.answers || []), payload]
         const a = agents[machine].find((x) => x.id === payload.agentId)
         send('commander_question_close', { requestId: payload.requestId, agentId: payload.agentId, dbSessionId: a?.sessionId })

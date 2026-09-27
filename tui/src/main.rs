@@ -179,7 +179,8 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     app.write_sessions(app::Save::Leave);
     mirror::tell_mirrors_now(&app);
     ipc::gone(&socket);
-    ids::leave();
+    // (hn with no terminal going leaves the server's say as it was.)
+    ids::leave(None);
     Ok(())
 }
 
@@ -445,9 +446,11 @@ async fn run(config: config::Config) -> io::Result<()> {
     // (tmux's server keeps running hooks after its last client detaches).
     if app.harness_hooks() && app.start_failed.is_none() && !app.forget_sessions {
         let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty());
-        if ipc::clients_of(name.as_deref().unwrap_or("default")).is_empty() { cli::spawn_headless(name.as_deref(), Some(app.port)).await; }
+        // (Its own sockets still answer until it has gone: not counted.)
+        if ipc::others_of(name.as_deref().unwrap_or("default")).is_empty() { cli::spawn_headless(name.as_deref(), Some(app.port)).await; }
     }
-    ids::leave();
+    // (A server with the desk lives on past its last terminal, until kill-server.)
+    ids::leave(Some(app.desk_mode != app::DeskMode::Off && !app.forget_sessions));
     let session = app.session_name();
     drop(term);
     drop(restore);

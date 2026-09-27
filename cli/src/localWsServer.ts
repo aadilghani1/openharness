@@ -339,7 +339,14 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             // Right after, not inside `connected`: the window's handshake parser is shared with the
             // relay path, and a field it does not expect is a field it has to learn to ignore.
             if (options.dialStatus) sink.sendFrame({ type: 'dial_status', payload: options.dialStatus() })
-            for (const asked of options.openQuestions?.() ?? []) sink.sendFrame(asked)
+            if (options.openQuestions) {
+              const open = options.openQuestions()
+              for (const asked of open) sink.sendFrame(asked)
+              // Then which questions are open at all, so a window that was here before (its link
+              // dropped) lets go of one answered meanwhile. Sent even when there are none.
+              const requestIds = open.map((f) => (f.payload as { requestId?: unknown } | undefined)?.requestId).filter((id): id is string => typeof id === 'string')
+              sink.sendFrame({ type: 'commander_questions_open', payload: { requestIds } })
+            }
             return
           }
           // Not this daemon's own machine — relay to backend for the other machines this same

@@ -117,12 +117,13 @@ describe('local CLI WebSocket', () => {
     const frames: Frame[] = []
     const got = new Promise<void>((resolve) => ws.on('message', (raw) => {
       frames.push(JSON.parse(raw.toString()) as Frame)
-      if (frames.length === 2) resolve()
+      if (frames.length === 3) resolve()
     }))
     ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
     await got
-    expect(frames.map((f) => f.type)).toEqual(['connected', 'commander_question'])
+    expect(frames.map((f) => f.type)).toEqual(['connected', 'commander_question', 'commander_questions_open'])
     expect(frames[1]).toEqual(asked)
+    expect(frames[2]).toEqual({ type: 'commander_questions_open', payload: { requestIds: ['q_1'] } })
     ws.close()
   })
 

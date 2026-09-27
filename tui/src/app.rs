@@ -459,10 +459,10 @@ pub struct App {
     /// came, shared with this computer's other clients through prs.json — one question per
     /// branch every five minutes (an hour for a merged or closed one), not one per harness each.
     pub prs: HashMap<String, (Option<fleet::Pr>, u64)>,
+    /// Questions for harnesses not listed when they came (machine, frame, when).
+    pub pending_questions: Vec<(String, Value, Instant)>,
     /// Branches whose pull request is being asked right now (one ask per branch).
     pub pr_asking: HashSet<String>,
-    /// PR lookups this minute: (when the minute began, how many).
-    pub pr_budget: (Instant, u32),
     pub prs_read: Option<Instant>,
     /// Desk windows whose layout changed here, to be sent (send_desk_layouts).
     pub desk_layouts: HashSet<String>,
@@ -659,8 +659,8 @@ impl App {
             last_cli: Instant::now(),
             killing_session: false,
             prs: HashMap::new(),
+            pending_questions: Vec::new(),
             pr_asking: HashSet::new(),
-            pr_budget: (Instant::now(), 0),
             prs_read: None,
             desk_layouts: HashSet::new(),
             desk_no_tmux: false,
@@ -1027,6 +1027,7 @@ impl App {
                 let rows = reply.get("agents").and_then(Value::as_array).cloned().unwrap_or_default();
                 app.fleet.merge_roster(&fast_id, &rows);
                 app.sync_titles();
+                app.replay_questions(&fast_id);
             }
         });
         let asked = Instant::now();
@@ -1036,8 +1037,19 @@ impl App {
                 app.fleet.replace_roster(&id, &rows, asked);
                 app.catch_up(&id);
                 app.sync_titles();
+                app.replay_questions(&id);
             }
         });
+    }
+
+    /// The questions kept for harnesses not listed then: asked again now that [machine]'s are.
+    fn replay_questions(&mut self, machine: &str) {
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending_questions).into_iter().partition(|(m, _, _)| m == machine);
+        self.pending_questions = rest;
+        for (_, payload, at) in mine {
+            let known = self.fleet.event_agent(machine, &payload).is_some();
+            if known { self.on_frame(machine, "commander_question", payload) } else if at.elapsed() < Duration::from_secs(120) { self.pending_questions.push((machine.to_string(), payload, at)) }
+        }
     }
 
     fn on_frame(&mut self, machine_id: &str, ty: &str, payload: Value) {
@@ -1181,9 +1193,26 @@ impl App {
                     }
                     if fresh && !self.terminal_focused { crate::notify(&format!("{name} needs input"), &prompt) }
                     if fresh { crate::commands::notify_harness(self, "harness-needs", &hook_key) }
+                } else {
+                    // A harness not listed yet (the daemon hands the open questions over as the
+                    // link comes up, before hn has asked for the list): kept until it is.
+                    let rid = payload.get("requestId").and_then(Value::as_str).unwrap_or("").to_string();
+                    self.pending_questions.retain(|(m, p, at)| !(m == machine_id && p.get("requestId").and_then(Value::as_str) == Some(rid.as_str())) && at.elapsed() < Duration::from_secs(120));
+                    if self.pending_questions.len() < 256 { self.pending_questions.push((machine_id.to_string(), payload, Instant::now())) }
                 }
             }
+            // Which questions are open on this computer (after the ones handed over as the link
+            // came up): one asked before and answered while the link was down is let go.
+            "commander_questions_open" => {
+                let open: std::collections::HashSet<String> = payload.get("requestIds").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                for a in self.fleet.agents.values_mut().filter(|a| a.machine_id == machine_id) {
+                    if a.question.as_ref().map(|q| !open.contains(&q.request_id)).unwrap_or(false) { a.question = None }
+                }
+                self.pending_questions.retain(|(m, p, _)| m != machine_id || p.get("requestId").and_then(Value::as_str).map(|r| open.contains(r)).unwrap_or(false));
+            }
             "commander_question_close" => {
+                let rid = payload.get("requestId").and_then(Value::as_str).unwrap_or("").to_string();
+                self.pending_questions.retain(|(m, p, _)| !(m == machine_id && p.get("requestId").and_then(Value::as_str) == Some(rid.as_str())));
                 if let Some(agent) = self.fleet.event_agent(machine_id, &payload) { agent.question = None }
             }
             "machines_changed" => self.refresh_machines(),
@@ -1626,7 +1655,7 @@ impl App {
         let opens_shell = words.iter().any(|w| matches!(crate::cmd::find(w).map(|e| e.name), Ok("new-session" | "new-window" | "split-window" | "respawn-pane" | "respawn-window" | "display-popup")));
         // list-harnesses from a client just started (hn with no terminal, for a script): once
         // every machine's harnesses are known, so it says what each one is doing.
-        let asks_fleet = matches!(words.first().map(String::as_str), Some("list-harnesses" | "lsh" | "answer-harness" | "answer" | "open-harness" | "openh" | "send-message"));
+        let asks_fleet = matches!(words.first().map(String::as_str), Some("list-harnesses" | "lsh" | "answer-harness" | "answer" | "open-harness" | "openh" | "send-message" | "restart-harness" | "restarth" | "pause-harness" | "resume-harness" | "clone-harness" | "rename-harness"));
         self.last_cli = Instant::now();
         if !self.cli_held.is_empty() || (opens_shell && !self.cli_ready()) || (asks_fleet && !self.fleet_ready()) { self.cli_held.push_back(job); return }
         job(self)
@@ -1762,7 +1791,10 @@ impl App {
 
     /// The desk's session, named as this computer is.
     fn machine_session_name(&self) -> String {
-        self.fleet.machine(&self.fleet.local_id).map(|m| m.name.clone()).unwrap_or_else(hostname)
+        // (Before the daemon has said which it is, this computer as the fleet was last seen:
+        // `hn attach -t studio` finds the desk's session at once.)
+        let m = if self.fleet.local_id.is_empty() { self.fleet.machines.iter().find(|m| m.local) } else { self.fleet.machine(&self.fleet.local_id) };
+        m.map(|m| m.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(hostname)
     }
 
     fn stash_name(&self, s: &Stash) -> String { s.alias.clone().unwrap_or_else(|| self.machine_session_name()) }
@@ -4213,9 +4245,7 @@ impl App {
             }
             // At most 20 a minute (a first look at 400 harnesses takes 20 minutes, the ones that
             // need you first) — 2,400 `gh` calls an hour at worst, under GitHub's 5,000.
-            if pr && self.pr_budget.0.elapsed() > Duration::from_secs(60) { self.pr_budget = (now, 0) }
-            if pr && self.enriching < AT_ONCE && self.pr_budget.1 < 20 {
-                self.pr_budget.1 += 1;
+            if pr && self.enriching < AT_ONCE && Self::take_pr_budget() {
                 if let Some(a) = self.fleet.agents.get_mut(&(machine.clone(), agent_id.clone())) { a.pr_checked = Some(now) }
                 self.enriching += 1;
                 self.pr_asking.insert(branch_key.clone());
@@ -4234,6 +4264,24 @@ impl App {
                 });
             }
         }
+    }
+
+    /// One PR lookup out of this computer's 20 a minute — shared by every terminal (and hn with
+    /// none) through a file beside prs.json. False when the minute's are spent.
+    fn take_pr_budget() -> bool {
+        // (Spent: not asked again until the minute is out.)
+        static SPENT_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        if fleet::now_ms() < SPENT_UNTIL.load(std::sync::atomic::Ordering::Relaxed) { return false }
+        let path = Self::prs_path().with_file_name("prs-budget.json");
+        if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+        let _lock = crate::ipc::lock(&path);
+        let doc: Value = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+        let now = fleet::now_ms();
+        let (mut since, mut used) = (doc.get("since").and_then(Value::as_u64).unwrap_or(0), doc.get("used").and_then(Value::as_u64).unwrap_or(0));
+        if now.saturating_sub(since) >= 60_000 { since = now; used = 0 }
+        if used >= 20 { SPENT_UNTIL.store(since + 60_000, std::sync::atomic::Ordering::Relaxed); return false }
+        let _ = std::fs::write(&path, json!({ "since": since, "used": used + 1 }).to_string());
+        true
     }
 
     fn prs_path() -> std::path::PathBuf { std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui").join("prs.json") }
