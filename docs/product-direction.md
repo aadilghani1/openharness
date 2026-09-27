@@ -206,7 +206,7 @@ requires an explicit storage and encryption design before adding cloud synchroni
 Flutter package in `desktop/`, sharing the screens, state, and terminal renderer.
 The browser target is live as a public preview at
 [harness.autonomous.ai](https://harness.autonomous.ai), with authenticated machine access and existing
-private invitations; it has not been deployed. Public publishing is a separate next
+private invitations. Public publishing is a separate next
 step requiring the review, snapshot storage, and acquisition flow described below.
 
 The founder identified a concrete growth hypothesis: someone shares a Harness session on X,
