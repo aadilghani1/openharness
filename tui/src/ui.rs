@@ -1559,10 +1559,15 @@ fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'st
         spans.push(Span::styled(h, theme::fzf().header_style().add_modifier(Modifier::BOLD)));
         if !picker.hints.is_empty() { spans.push(Span::styled(" · ", theme::fzf().border_style())) }
     }
-    for (i, (k, w)) in picker.hints.iter().enumerate() {
-        // Whole hints only: the ones that do not fit are left out, not cut.
+    // (A key you bound to something else in FZF_DEFAULT_OPTS is not offered for this.)
+    for (i, (k, w)) in picker.hints.iter().filter(|(k, _)| !crate::input::rebound(k)).enumerate() {
+        // Whole hints only: the ones that do not fit are left out, the line ended as fzf ends a
+        // long header (··).
         let piece = if i > 0 { 3 } else { 0 } + k.width() + 1 + w.width();
-        if used + piece > width { break }
+        if used + piece > width {
+            if used + 2 <= width { spans.push(Span::styled("··", theme::fzf().header_style())) }
+            break;
+        }
         used += piece;
         if i > 0 { spans.push(Span::styled(" · ", theme::fzf().border_style())) }
         spans.push(Span::styled(k.to_string(), theme::fzf().header_style().add_modifier(Modifier::BOLD)));

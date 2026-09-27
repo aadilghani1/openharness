@@ -24,6 +24,10 @@ pub struct Row {
     pub disabled: bool,
     /// Ranked above equal matches (live harnesses over paused ones).
     pub boost: u32,
+    /// What of the line changes while you look (a harness's doing-now line; how long it has been
+    /// as it is, at the right column's end): no query matches it, so a row does not come and go.
+    pub volatile_detail: bool,
+    pub volatile_right: usize,
     /// How many of the label's first characters are dim (a buffer's `name: N bytes: `): part of
     /// the line, matched and scrolled with it.
     pub label_dim: usize,
@@ -51,7 +55,7 @@ impl Row {
 
 impl Row {
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Row {
-        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, label_dim: 0, right_narrow: None, line_first: false }
+        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, volatile_detail: false, volatile_right: 0, label_dim: 0, right_narrow: None, line_first: false }
     }
     pub fn extra(mut self, text: impl Into<String>) -> Row { self.extra = text.into(); self }
     pub fn group(mut self, text: impl Into<String>) -> Row { self.group = Some(text.into()); self }
@@ -59,6 +63,9 @@ impl Row {
     pub fn detail(mut self, spans: Vec<Span<'static>>) -> Row { self.detail = spans; self }
     pub fn right(mut self, text: impl Into<String>) -> Row { self.right = text.into(); self }
     pub fn boost(mut self, by: u32) -> Row { self.boost = by; self }
+    /// The parts of its line that change as you look: the detail, and the right column's last
+    /// [right_tail] characters.
+    pub fn volatile(mut self, detail: bool, right_tail: usize) -> Row { self.volatile_detail = detail; self.volatile_right = right_tail; self }
     pub fn label_dim(mut self, chars: usize) -> Row { self.label_dim = chars; self }
     pub fn right_narrow(mut self, text: impl Into<String>) -> Row { self.right_narrow = Some(text.into()); self }
     pub fn line_first(mut self, on: bool) -> Row { self.line_first = on; self }
@@ -171,7 +178,9 @@ impl Picker {
         active.hidden = match show { Some(s) => !s, None => !active.hidden };
         self.preview_window = Some(pw);
         self.preview = true;
+        // Shown again: from its +N, as fzf's preview starts.
         self.preview_scroll.set(0);
+        self.preview_fresh.set(true);
     }
 
     pub fn new(title: impl Into<String>, placeholder: impl Into<String>) -> Picker {
@@ -252,7 +261,7 @@ impl Picker {
         // The query as fzf's pattern reads it: leading blanks and trailing unescaped ones aside
         // (`pane\ ` keeps its escaped space).
         let mut query = self.query.as_str();
-        if self.prefixed && query.trim_start().starts_with(['>', '@', '#', ':', '*', '?']) { query = &query.trim_start()[1..] }
+        if self.prefixed && scope_of(query).is_some() { query = &query.trim_start()[1..] }
         // fzf sorts only when a term asks for something (`!x` alone keeps the input order).
         let mut sorted = false;
         if query.trim().is_empty() {
@@ -272,26 +281,39 @@ impl Picker {
             // `!word` (and `!'word`): not only a row whose line says it, but one whose keywords do.
             let negated: Vec<(String, bool)> = words.iter().filter_map(|(w, s)| w.strip_prefix('!').map(|r| (r.trim_start_matches(['\'', '^']).trim_end_matches('$').to_string(), *s))).filter(|(w, _)| !w.is_empty()).collect();
             let words: Vec<(String, bool)> = words.into_iter().filter(|(w, _)| !w.starts_with('!')).collect();
+            // The keywords by fzf's OR groups (`webapp | api`: either).
+            let mut groups: Vec<Vec<(String, bool)>> = Vec::new();
+            let mut or_next = false;
+            for (w, s) in words {
+                if w == "|" { or_next = true; continue }
+                // (An anchored term is about the line as drawn: no keyword answers it.)
+                let w = if w.starts_with('^') || w.ends_with('$') { String::new() } else { w };
+                match groups.last_mut() { Some(g) if or_next => g.push((w, s)), _ => groups.push(vec![(w, s)]) }
+                or_next = false;
+            }
+            let live_tiebreak: Vec<crate::fzf::Tiebreak> = o.tiebreak.iter().copied().filter(|t| *t != crate::fzf::Tiebreak::Length).collect();
             let mut scored: Vec<(Vec<i64>, usize, Vec<u32>)> = Vec::new();
             let mut hidden: Vec<usize> = Vec::new();
             for (index, row) in self.rows.iter().enumerate() {
                 if row.disabled { continue }
                 let keywords = format!("{} {}", row.label, row.extra);
                 if negated.iter().any(|(w, s)| w.chars().count() >= 3 && names_word(&keywords, w, *s)) { continue }
-                let chars: Vec<char> = if self.live { row.label.chars().collect() } else { line(row).chars().collect() };
+                let chars: Vec<char> = if self.live { steady_line(row) } else { line(row).chars().collect() };
                 // (A keyword hit still has to keep out of what the query excludes from the line.)
                 let seen = if negated.is_empty() { String::new() } else { line(row) };
                 let clear = |w: &str, sensitive: bool| if sensitive { !seen.contains(w) } else { !seen.to_lowercase().contains(w) };
                 match q.matches(&chars) {
                     Some(hit) => {
-                        let mut rank = crate::fzf::rank(&hit, &chars, &o.tiebreak);
+                        // A live list's rows are its order (by urgency), as fzf's are over lines
+                        // drawn to one width: length decides nothing between them.
+                        let mut rank = crate::fzf::rank(&hit, &chars, if self.live { &live_tiebreak } else { &o.tiebreak });
                         // --tac: the input read bottom-up, ties too.
                         rank.push(if o.tac { -(index as i64) } else { index as i64 });
                         scored.push((rank, index, hit.positions.iter().map(|p| *p as u32).collect()));
                     }
                     // The keywords behind a row (engine, machine, branch): whole words of three
                     // letters or more find it, after everything that matched what you see.
-                    None if !words.is_empty() && words.iter().all(|(w, sensitive)| w.chars().count() >= 3 && names_word(&keywords, w, *sensitive)) && negated.iter().all(|(w, s)| clear(w, *s)) => hidden.push(index),
+                    None if !groups.is_empty() && groups.iter().all(|g| g.iter().any(|(w, sensitive)| w.chars().count() >= 3 && names_word(&keywords, w, *sensitive))) && negated.iter().all(|(w, s)| clear(w, *s)) => hidden.push(index),
                     None => {}
                 }
             }
@@ -369,7 +391,7 @@ impl Picker {
 
     /// Where editing starts: after the mode character (`>` `@` `#` `:` `*` `?`), which reads as
     /// part of the prompt — C-u, C-w, C-a and the arrows stop at it, as at fzf's prompt.
-    fn floor(&self) -> usize { usize::from(self.prefixed && self.query.starts_with(['>', '@', '#', ':', '*', '?'])) }
+    fn floor(&self) -> usize { usize::from(self.prefixed && scope_of(&self.query).is_some()) }
     fn qlen(&self) -> usize { self.query.chars().count() }
 
     pub fn type_char(&mut self, c: char) {
@@ -468,17 +490,22 @@ impl Picker {
     pub fn qend(&mut self) { self.qcursor = self.qlen() }
 
     /// Tab: mark or unmark the row under the cursor (fzf --multi).
-    pub fn toggle_mark(&mut self) {
-        let Some(id) = self.current_id() else { return };
-        if let Some(at) = self.marked.iter().position(|m| *m == id) { self.marked.remove(at); }
-        // --multi=N: no more than N.
-        else if crate::theme::fzf_opts().multi_limit == 0 || self.marked.len() < crate::theme::fzf_opts().multi_limit { self.marked.push(id) }
+    /// The current row marked or not, the other way: false when nothing changed (--multi=N full).
+    pub fn toggle_mark(&mut self) -> bool {
+        let Some(id) = self.current_id() else { return false };
+        if let Some(at) = self.marked.iter().position(|m| *m == id) { self.marked.remove(at); return true }
+        if !self.room_to_mark() { return false }
+        self.marked.push(id);
+        true
     }
+
+    /// --multi=N: whether another row may be marked (fzf's selectItem).
+    pub fn room_to_mark(&self) -> bool { let n = crate::theme::fzf_opts().multi_limit; n == 0 || self.marked.len() < n }
 
     /// select / deselect: the current row marked, or not, whichever it was.
     pub fn set_mark(&mut self, on: bool) {
         let Some(id) = self.current_id() else { return };
-        if self.marked.contains(&id) != on { self.toggle_mark() }
+        if self.marked.contains(&id) != on { self.toggle_mark(); }
     }
 
     /// next-selected / prev-selected: the cursor to the next (or previous) marked row, round.
@@ -571,12 +598,41 @@ fn word_edge(chars: &[char], mut at: usize, forward: bool) -> usize {
     at
 }
 
+/// A launcher list's scope, from the query's first character (`>` commands, `@` machines, `#`
+/// projects …) — `#` and a digit is a pull request's number (#4807), not the projects'.
+pub fn scope_of(query: &str) -> Option<char> {
+    let mut chars = query.trim_start().chars();
+    let c = chars.next().filter(|c| ['>', '@', '#', ':', '*', '?'].contains(c))?;
+    if c == '#' && chars.next().map(|d| d.is_ascii_digit()).unwrap_or(false) { return None }
+    Some(c)
+}
+
+/// A live row's line as a query sees it: as drawn (picker::line), its changing parts blanked —
+/// what it is doing now, how long it has been as it is — so hits light where the row shows them.
+fn steady_line(row: &Row) -> Vec<char> {
+    const OUT: char = '\u{1}';
+    let mut out: Vec<char> = row.label.chars().collect();
+    let detail: String = row.detail.iter().map(|s| s.content.as_ref()).collect();
+    if !detail.is_empty() { out.extend("  ".chars()); out.extend(detail.chars().map(|c| if row.volatile_detail { OUT } else { c })) }
+    if !row.right.is_empty() {
+        out.extend("  ".chars());
+        let n = row.right.chars().count();
+        out.extend(row.right.chars().enumerate().map(|(i, c)| if i + row.volatile_right >= n { OUT } else { c }));
+    }
+    out
+}
+
+/// The state words among a harness's keywords: found whole (`work` is not `working`).
+const STATE_WORDS: [&str; 15] = ["waiting", "needs-you", "failed", "done", "finished", "working", "starting", "idle", "paused", "offline", "pr", "open", "merged", "closed", "draft"];
+
 /// A hidden keyword this word names from its start (`codex`, `gpu-box`).
 fn names_word(hidden: &str, word: &str, case_sensitive: bool) -> bool {
     let hidden = if case_sensitive { hidden.to_string() } else { hidden.to_lowercase() };
     // A keyword whole (a branch with its slash: feat/rate-limit), without its `#` (a pull request's
-    // number: 4807), or each part of it (rate-limit).
-    hidden.split_whitespace().any(|w| w.starts_with(word) || w.trim_start_matches('#').starts_with(word) || w.split(['/', '·']).any(|p| p.starts_with(word)))
+    // number: 4807), or each part of it (rate-limit); a state word only whole.
+    hidden.split_whitespace().any(|w| if STATE_WORDS.contains(&w) { w == word } else {
+        w.starts_with(word) || w.trim_start_matches('#').starts_with(word.trim_start_matches('#')) || w.split(['/', '·']).any(|p| p.starts_with(word))
+    })
 }
 
 #[cfg(test)]
@@ -603,6 +659,45 @@ mod tests {
         assert_eq!(ids(&p), ["a"]);
         p.set_query("login-flake");
         assert_eq!(ids(&p), ["b"]);
+    }
+
+    /// A live list (C-b s) finds what its rows show but what changes as you look: the question,
+    /// the error, the finished turn, the pull request, lit where they are; keywords by OR groups;
+    /// state words whole; `#4807` a pull request's number.
+    #[test]
+    fn live_rows_match_what_they_show() {
+        let span = |t: &str| ratatui::text::Span::raw(t.to_string());
+        let mut p = Picker::new("t", "");
+        p.live = true;
+        p.prefixed = true;
+        p.set_rows(vec![
+            Row::new("a", "Add rate limiting to the API").detail(vec![span("Rate limit per API key or per IP?")]).right("#4807 draft  2m").extra("api feat/rate-limit claude waiting").volatile(false, 2),
+            Row::new("b", "Refactor billing service").detail(vec![span("Invoices now use Decimal")]).right("5m").extra("billing main codex done").volatile(false, 2),
+            Row::new("c", "Fix flaky test").detail(vec![span("Running cargo test")]).right("1m").extra("webapp fix/login-flake claude working").volatile(true, 2),
+        ]);
+        let ids = |p: &Picker| p.visible.iter().map(|(i, _)| p.rows[*i].id.clone()).collect::<Vec<_>>();
+        p.set_query("per IP");
+        assert_eq!(ids(&p), ["a"]);
+        p.set_query("Decimal");
+        assert_eq!(ids(&p), ["b"]);
+        // A hit in the right column is lit there.
+        p.set_query("4807");
+        assert_eq!(ids(&p), ["a"]);
+        let at = "Add rate limiting to the API".chars().count() + 2 + "Rate limit per API key or per IP?".chars().count() + 2 + 1;
+        assert!(p.visible[0].1.contains(&(at as u32)));
+        p.set_query("#4807");
+        assert_eq!(ids(&p), ["a"]);
+        // What it is doing now is not searched (it changes as you look), nor how long.
+        p.set_query("'cargo");
+        assert!(ids(&p).is_empty());
+        // State words whole: `work` is not `working`.
+        p.set_query("'work");
+        assert!(ids(&p).is_empty());
+        p.set_query("working");
+        assert_eq!(ids(&p), ["c"]);
+        // OR groups over the keywords too.
+        p.set_query("webapp | billing");
+        assert_eq!(ids(&p).len(), 2);
     }
 
     #[test]

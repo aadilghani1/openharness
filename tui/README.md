@@ -216,7 +216,7 @@ count, and your own `bind -T copy-mode-vi …` all do what they do in tmux. `r` 
 
 What a command prints — `C-b ?`, `C-b ~`, `:show -g`, `:list-windows`, `run-shell` — opens in the
 pane's view mode, as in tmux: the same keys move and search it, `q` closes it. The same list of
-keys to search as you type, fzf-style, is `C-b s` then `>` and `keys`.
+keys to search as you type, fzf-style, is `C-b :keys` (or `hn keys` from a shell).
 
 ## Mouse and clipboard
 
@@ -314,7 +314,7 @@ arm64, musl) with a checksummed manifest that `harness tui --install` verifies.
 | `fleet.rs` | machines and harnesses, kept live from the daemon's frames |
 | `input.rs` | keys, mouse, the launcher's modes and actions |
 | `dial.rs` | the Harness device: the ring and windows it turns through, its focus, scroll, taps and spoken tasks |
-| `modal.rs` / `picker.rs` | the launcher's rows and its fzf matching (nucleo) |
+| `modal.rs` / `picker.rs` | the launcher's rows and its fzf matching (fzf.rs, ported from fzf) |
 | `ui.rs` | drawing |
 | `layout.rs` | the split tree |
 | `mouse.rs` | tmux's mouse: events as mouse keys, drags, what a program in a pane is sent |

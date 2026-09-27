@@ -215,14 +215,14 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
     let in_preview = preview.map(|(r, _)| inside(r)).unwrap_or(false);
     // Shift with a click or the wheel marks as it goes (fzf's shift-left-click, shift-scroll).
     let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
-    let multi = matches!(&app.modal, Some(Modal::Picker { kind: PickerKind::Open { .. }, picker }) if !picker.query.starts_with(['>', '@', '#', ':', '*', '?']));
+    let multi = matches!(&app.modal, Some(Modal::Picker { kind: PickerKind::Open { .. }, picker }) if crate::picker::scope_of(&picker.query).is_none());
     match mouse.kind {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
             let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
             if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
                 if in_preview { picker.preview_by(if up { -1 } else { 1 }) }
                 else if inside(list) {
-                    if shift && multi { picker.toggle_mark() }
+                    if shift && multi { picker.toggle_mark(); }
                     let r: i64 = if theme::fzf().reverse { -1 } else { 1 };
                     picker.move_by(if up { r } else { -r })
                 }
@@ -251,8 +251,8 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
         MouseEventKind::Down(MouseButton::Right) if !inside(list) => {}
         MouseEventKind::Down(MouseButton::Right) => {
             if let Some(Modal::Picker { kind, picker }) = &mut app.modal {
-                let multi = matches!(kind, PickerKind::Open { .. }) && !picker.query.starts_with(['>', '@', '#', ':', '*', '?']);
-                if picker.click(mouse.row) && multi { picker.toggle_mark() }
+                let multi = matches!(kind, PickerKind::Open { .. }) && crate::picker::scope_of(&picker.query).is_none();
+                if picker.click(mouse.row) && multi { picker.toggle_mark(); }
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
@@ -270,7 +270,7 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
             }
             let hit = match &mut app.modal { Some(Modal::Picker { picker, .. }) if inside(list) || mouse.column >= list.x && mouse.column < list.x + list.width => Some(picker.click(mouse.row)), Some(Modal::Picker { .. }) => Some(false), _ => None };
             match hit {
-                Some(true) if shift => { if multi { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.toggle_mark() } } }
+                Some(true) if shift => { if multi { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.toggle_mark(); } } }
                 Some(true) => {
                     let double = matches!(app.last_click, Some((9, _, r, at, _)) if r == mouse.row && at.elapsed() < Duration::from_millis(400));
                     app.last_click = Some((9, mouse.column, mouse.row, std::time::Instant::now(), 1));
@@ -803,13 +803,14 @@ fn load_dsh(app: &mut App, machine: String) {
     });
 }
 
-/// The harness lists' preview, unless your --preview-window says otherwise: beside the list, and
-/// below it under 180 columns (fzf's `right,50%,<90(down,40%)`), so each harness's one line keeps
-/// its room.
+/// The harness lists' preview: beside the list, and below it under 180 columns (fzf's
+/// `right,50%,<90(down,40%)`), so each harness's one line keeps its room — your --preview-window
+/// laid over it, as fzf reads one after another (`border-sharp` changes the border only).
 fn harness_preview(picker: &mut Picker) {
-    if picker.preview_window.is_some() || theme::fzf_opts().preview_window_set { return }
-    let mut pw = theme::fzf_opts().preview_window.clone();
+    if picker.preview_window.is_some() { return }
+    let mut pw = crate::theme::PreviewWindow::default();
     theme::parse_preview_window(&mut pw, "right,50%,<90(down,40%)");
+    for spec in &theme::fzf_opts().preview_window_specs { theme::parse_preview_window(&mut pw, spec) }
     picker.preview_window = Some(pw);
 }
 
@@ -1430,13 +1431,13 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         return;
     }
     let before = picker.query.clone();
-    let multi = matches!(kind, PickerKind::Open { .. }) && !picker.query.starts_with(['>', '@', '#', ':', '*', '?']);
+    let multi = matches!(kind, PickerKind::Open { .. }) && crate::picker::scope_of(&picker.query).is_none();
     let up: i64 = if theme::fzf().reverse { -1 } else { 1 };
     // FZF_DEFAULT_OPTS --bind: your key:action pairs come first (the last bind for a key wins,
-    // as in fzf), and a bound key never falls back to this list's own meaning of it: the actions it
-    // knows run, the others do nothing.
+    // as in fzf). A key bound only to what hn does not run (execute, become, reload …) keeps this
+    // list's own meaning of it; one with an action hn runs never falls back to it.
     let name = fzf_key_name(&key);
-    let bound = theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| a.clone());
+    let bound = theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| a.clone()).filter(|a| runs_here(a));
     if let Some(actions) = bound {
         match bound_actions(&mut picker, &actions, up, multi) {
             End::Accept => { choose(app, kind, picker, Choice::Enter); return }
@@ -1559,7 +1560,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     let mut kind = kind;
     if picker.query != before {
         // Marks belong to one list: switching scope (> commands, @ machines…) drops them.
-        let scope = |q: &str| q.chars().next().filter(|c| ['>', '@', '#', ':', '*', '?'].contains(c));
+        let scope = |q: &str| crate::picker::scope_of(q);
         if scope(&picker.query) != scope(&before) { picker.marked.clear() }
         let (next, changed) = remode(app, kind, &mut picker);
         kind = next;
@@ -1625,12 +1626,14 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             "top" | "first" => picker.move_by(-len), "last" => picker.move_by(len),
             // fzf's older names: toggle+up, toggle+down.
             // In a list that takes no marks (C-b =) the toggle is nothing and the move still is.
-            "toggle-up" => { if multi { picker.toggle_mark() } picker.move_by(up) }
-            "toggle-down" => { if multi { picker.toggle_mark() } picker.move_by(-up) }
+            // The toggles move on only when they toggled (fzf's actToggleDown/Up): not in a list
+            // that takes no marks (C-b =), nor when --multi=N is full.
+            "toggle-up" => { if multi && picker.toggle_mark() { picker.move_by(up) } }
+            "toggle-down" => { if multi && picker.toggle_mark() { picker.move_by(-up) } }
             // toggle-in: toggle+down, or toggle+up under --layout=reverse — toward the list's first
             // row either way; toggle-out the other way.
-            "toggle-in" => { if multi { picker.toggle_mark() } picker.move_by(-1) }
-            "toggle-out" => { if multi { picker.toggle_mark() } picker.move_by(1) }
+            "toggle-in" => { if multi && picker.toggle_mark() { picker.move_by(-1) } }
+            "toggle-out" => { if multi && picker.toggle_mark() { picker.move_by(1) } }
             "select" => { if multi { picker.set_mark(true) } } "deselect" => picker.set_mark(false), "clear-selection" => picker.marked.clear(),
             "next-selected" => picker.to_marked(true), "prev-selected" => picker.to_marked(false),
             "preview-page-up" => picker.preview_page(-1, false), "preview-page-down" => picker.preview_page(1, false),
@@ -1659,7 +1662,8 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
                 let spec = specs[picker.pw_next % specs.len()];
                 picker.pw_next += 1;
                 let mut pw = theme::fzf_opts().preview_window.clone();
-                if !spec.is_empty() { theme::parse_preview_window(&mut pw, spec) }
+                // A spec shows the preview unless it says hidden (fzf clears the flag first).
+                if !spec.is_empty() { pw.hidden = false; theme::parse_preview_window(&mut pw, spec) }
                 picker.preview = true;
                 picker.preview_cells = None;
                 picker.preview_window = Some(pw);
@@ -1670,11 +1674,12 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             "abort" => return End::Abort,
             "up" => picker.move_by(up), "down" => picker.move_by(-up),
             "page-up" => crate::ui::page(picker, up, false), "page-down" => crate::ui::page(picker, -up, false),
-            "toggle" => { if multi { picker.toggle_mark() } }
-            // The matches into the marks (those the query hides stay marked), or out of them.
-            "select-all" => { if multi { for (i, _) in picker.visible.clone() { let id = picker.rows[i].id.clone(); if !picker.marked.contains(&id) { picker.marked.push(id) } } } }
+            "toggle" => { if multi { picker.toggle_mark(); } }
+            // The matches into the marks (those the query hides stay marked), or out of them — no
+            // more than --multi=N marked.
+            "select-all" => { if multi { for (i, _) in picker.visible.clone() { let id = picker.rows[i].id.clone(); if !picker.marked.contains(&id) && picker.room_to_mark() { picker.marked.push(id) } } } }
             "deselect-all" => { let shown: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); picker.marked.retain(|m| !shown.contains(m)) }
-            "toggle-all" => { if multi { let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); for id in all { if let Some(at) = picker.marked.iter().position(|m| *m == id) { picker.marked.remove(at); } else { picker.marked.push(id) } } } }
+            "toggle-all" => { if multi { let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); for id in all { if let Some(at) = picker.marked.iter().position(|m| *m == id) { picker.marked.remove(at); } else if picker.room_to_mark() { picker.marked.push(id) } } } }
             "toggle-preview" => picker.show_preview(None), "toggle-wrap" => picker.toggle_wrap(),
             "preview-up" => picker.preview_by(-1), "preview-down" => picker.preview_by(1),
             "clear-query" => picker.set_query(""),
@@ -1691,6 +1696,29 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
         }
     }
     End::Stay
+}
+
+/// The --bind actions hn runs (bound_actions); the rest (execute, become, reload, print …) are
+/// the shell's side of fzf, which a list in hn has not.
+fn known_action(a: &str) -> bool {
+    matches!(a, "half-page-up" | "half-page-down" | "top" | "first" | "last" | "toggle-up" | "toggle-down" | "toggle-in" | "toggle-out" | "select" | "deselect"
+        | "clear-selection" | "next-selected" | "prev-selected" | "preview-page-up" | "preview-page-down" | "preview-half-page-up" | "preview-half-page-down"
+        | "preview-top" | "preview-bottom" | "unix-word-rubout" | "kill-line" | "backward-char" | "forward-char" | "backward-word" | "forward-word"
+        | "backward-delete-char" | "delete-char" | "delete-char/eof" | "backward-delete-char/eof" | "cancel" | "accept-or-print-query" | "hide-preview"
+        | "show-preview" | "toggle-preview-wrap" | "toggle-sort" | "yank" | "accept-non-empty" | "accept" | "abort" | "up" | "down" | "page-up" | "page-down"
+        | "toggle" | "select-all" | "deselect-all" | "toggle-all" | "toggle-preview" | "toggle-wrap" | "preview-up" | "preview-down" | "clear-query"
+        | "backward-kill-word" | "kill-word" | "unix-line-discard" | "beginning-of-line" | "end-of-line")
+        || (a.starts_with("change-preview-window(") && a.ends_with(')')) || (a.starts_with("pos(") && a.ends_with(')'))
+}
+
+/// Whether a bind's chain has an action hn runs.
+fn runs_here(actions: &str) -> bool { split_chain(actions).iter().any(|a| known_action(a)) }
+
+/// Whether a hint's key (`C-v`, `M-a`, `enter`, `tab`) is bound in FZF_DEFAULT_OPTS to something
+/// hn runs — it no longer does what the hint says.
+pub fn rebound(hint: &str) -> bool {
+    let name = if let Some(k) = hint.strip_prefix("C-") { format!("ctrl-{}", k.to_lowercase()) } else if let Some(k) = hint.strip_prefix("M-") { format!("alt-{}", k.to_lowercase()) } else { hint.to_lowercase() };
+    theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| runs_here(a)).unwrap_or(false)
 }
 
 /// A key as fzf's --bind names it: ctrl-j, alt-a, enter, btab, f1, ctrl-/ …

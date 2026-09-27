@@ -39,6 +39,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("display-message", "display", "A message or format (-p prints it, -t a pane)"),
     ("show-messages", "showmsgs", "Messages so far"),
     ("list-keys", "lsk", "Key bindings (-T a table, -1N one key)"),
+    ("keys", "keys", "Every key binding, searched as you type (C-b ? lists them as tmux does)"),
     ("list-windows", "lsw", "The windows (-F a format)"),
     ("list-panes", "lsp", "The panes (-a/-s every window, -t one, -F a format)"),
     ("list-sessions", "ls", "The session (this computer) and its windows"),

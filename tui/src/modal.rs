@@ -256,6 +256,8 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
             Row::new(format!("{}:{}", a.machine_id, a.id), a.name.clone())
                 .boost(if state == State::NeedsInput { 60 } else if live { 30 } else { 0 })
                 .extra(format!("{} {} {} {} {} {} {} {} {}", a.project, a.branch, app.fleet.machine_name(&a.machine_id), a.engine, engine_label(&a.engine), a.dsh, pr, pr_words, words))
+                // What it is doing now and how long it has been as it is change as you look.
+                .volatile(matches!(state, State::Working | State::Starting), narrow.chars().count())
                 .group(group)
                 .lead(vec![span(dot, fg(color)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
                 .detail(detail)
@@ -291,7 +293,7 @@ pub fn open_status(_app: &App, filter: Filter) -> String {
 
 /// The mode a launcher query is in, by its first character.
 pub fn launcher_kind(query: &str, current: &PickerKind) -> PickerKind {
-    match query.trim_start().chars().next() {
+    match crate::picker::scope_of(query) {
         Some('>') => PickerKind::Palette,
         Some('@') => PickerKind::Machines,
         Some('#') => PickerKind::Projects,
