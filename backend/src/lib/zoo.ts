@@ -57,8 +57,9 @@ export const cryptoRng: Rng = (n) => randomInt(n)
 // ── What the roster says ─────────────────────────────────────────────────────────────────────────
 interface EggRule { weights: Readonly<Record<string, number>>; boost?: Readonly<Record<string, number>> }
 interface RosterDaemon { id: string; n: number; drop: string; rarity: string }
-/** A drop is announced (shown as silhouettes on shelves) before it is released (drawn from). */
-interface RosterDrop { id: string; announce: string; release: string }
+/** A drop is announced (shown as silhouettes on shelves) before it is released (drawn from). A drop on
+ *  hold is kept in the roster without dates: never announced, never drawn. */
+interface RosterDrop { id: string; announce?: string; release?: string; hold?: boolean }
 
 const RULES = DAEMON_ROSTER.rules
 const EGG_RULES: Readonly<Record<string, EggRule>> = RULES.eggs
@@ -88,6 +89,7 @@ const MARATHON_REASONS = ['turns', 'machines'] as const
  * that is announced but not yet released is the shelves' silhouettes, never a draw.
  */
 export function dropReleased(drop: RosterDrop, now: Date): boolean {
+  if (drop.hold || !drop.release) return false
   return Date.parse(`${drop.release}T00:00:00.000Z`) <= now.getTime()
 }
 

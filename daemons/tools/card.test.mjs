@@ -5,12 +5,16 @@ import { readFileSync } from 'node:fs'
 import { cardLines, cardNumber, dropState, shelfLines, cardSvg, shelfSvg, silhouette } from './card.mjs'
 
 const roster = JSON.parse(readFileSync(new URL('../roster.json', import.meta.url), 'utf8'))
+const plates = JSON.parse(readFileSync(new URL('../plates.json', import.meta.url), 'utf8'))
 const printable = s => /^[\x20-\x7e]*$/.test(s)
+// A filled daemon's card shows its portrait plate, idle, first frame.
+const plate = (d, version = '2.0') => d.plate ? plates.daemons[d.id].portrait[version].idle[0].split('\n') : null
 
 test('every card, every version, is 42 printable columns', () => {
   for (const d of roster.daemons) {
     for (const version of roster.rules.versions) {
-      for (const lines of [cardLines(roster, d, { version }), cardLines(roster, d, { version, shiny: true, serial: 9999, nickname: 'pip', hatched: '2026-09-26', egg: 'first' })]) {
+      const p = plate(d, version)
+      for (const lines of [cardLines(roster, d, { version, plate: p }), cardLines(roster, d, { version, plate: p, shiny: true, serial: 9999, nickname: 'pip', hatched: '2026-09-26', egg: 'first' })]) {
         for (const l of lines) {
           assert.equal(l.length, 42, `${d.id} ${version}: "${l}"`)
           assert.ok(printable(l), `${d.id} ${version}: not ASCII`)
@@ -29,31 +33,44 @@ test('secrets sit outside the numbered set, and every drop numbers its own', () 
     for (const secret of set.filter(d => d.rarity === 'secret')) assert.equal(cardNumber(roster, secret), `#S/${of}`, secret.id)
   }
   const tty = roster.daemons.find(d => d.id === 'tty')
-  assert.ok(cardLines(roster, tty, { version: '2.0' })[1].startsWith('| #09/09  DROP 2: TTY'))
+  assert.ok(cardLines(roster, tty, { version: '2.0' })[1].startsWith('| #09/09  DROP 3: TTY'))
+  const auk = roster.daemons.find(d => d.id === 'auk')
+  assert.ok(cardLines(roster, auk, { version: '2.0', plate: plate(auk) })[1].startsWith('| #09/09  DROP 1: INIT'))
+  const beastie = roster.daemons.find(d => d.id === 'beastie')
+  assert.equal(cardNumber(roster, beastie), '#S/09')
 })
 
-test('drop 2 (tty) is announced on 2026-09-27 and shows as silhouettes until 2026-10-11', () => {
-  const tty = roster.drops.find(d => d.id === 'tty')
+test('a filled daemon\'s card shows its portrait plate, and asks for it', () => {
+  const tim = roster.daemons.find(d => d.id === 'tim')
+  const lines = cardLines(roster, tim, { version: '2.0', plate: plate(tim) })
+  for (const row of plate(tim)) assert.ok(lines.some(l => l.includes(row.trim())), row)
+  assert.throws(() => cardLines(roster, tim, { version: '2.0' }), /pass its portrait plate/)
+  const svg = cardSvg(roster, tim, { version: '2.0', plate: plate(tim) })
+  assert.ok(svg.includes(`fill="${tim.gradient.top.hex}"`) && svg.includes(`fill="${tim.gradient.bottom.hex}"`))
+})
+
+test('drop 1 (init) is out on 2026-09-27; unix and tty are on hold and show nowhere, ever', () => {
   const at = day => new Date(`${day}T12:00:00.000Z`)
-  assert.deepEqual(['2026-09-26', '2026-09-27', '2026-10-10', '2026-10-11'].map(d => dropState(tty, at(d))), ['hidden', 'announced', 'announced', 'released'])
-  const soon = shelfLines(roster, [], { drop: 'tty', now: at('2026-10-01') })
-  assert.equal(soon[0], 'zoo: drop 2 tty  out 2026-10-11')
-  const art = soon.slice(1).join('\n')   // the head names the drop; the slots name nobody
-  for (const d of roster.daemons.filter(x => x.drop === 'tty')) assert.ok(!art.includes(d.id), `${d.id} is named before its release`)
-  assert.ok(art.includes('[ ! ]'))
-  assert.match(shelfLines(roster, ['tty'], { drop: 'tty', now: at('2026-10-11') })[0], /^zoo: drop 2 tty {2}1\/9$/)
+  const init = roster.drops.find(d => d.id === 'init')
+  assert.deepEqual(['2026-09-12', '2026-09-13', '2026-09-26', '2026-09-27'].map(d => dropState(init, at(d))), ['hidden', 'announced', 'announced', 'released'])
+  for (const id of ['unix', 'tty']) {
+    const drop = roster.drops.find(d => d.id === id)
+    assert.equal(drop.hold, true)
+    for (const day of ['2026-09-27', '2027-09-27', '2036-01-01']) assert.equal(dropState(drop, at(day)), 'hidden', `${id} ${day}`)
+    assert.deepEqual(shelfLines(roster, [], { drop: id, now: at('2030-01-01') }), [])
+  }
 })
 
 test('a shelf shows owned sprites and numbered empty slots', () => {
   const lines = shelfLines(roster, ['tim'])
-  assert.match(lines[0], /^zoo: drop 1 unix {2}1\/\d+$/)
+  assert.match(lines[0], /^zoo: drop 1 init {2}1\/\d+$/)
   assert.ok(lines.some(l => l.includes('[ ? ]')))
   assert.ok(lines.some(l => l.includes('[ ! ]')))
   for (const l of lines) assert.ok(printable(l))
 })
 
 test('the svg escapes markup and colours owned cells', () => {
-  const svg = cardSvg(roster, roster.daemons[0], { version: '2.0' })
+  const svg = cardSvg(roster, roster.daemons[0], { version: '2.0', plate: plate(roster.daemons[0]) })
   assert.ok(svg.startsWith('<svg') && svg.trim().endsWith('</svg>'))
   assert.ok(!/<text[^>]*>[^<]*[<>][^<]*<\/text>/.test(svg.replace(/&lt;|&gt;/g, '')))
   const shelf = shelfSvg(roster, ['tim'])
@@ -62,29 +79,30 @@ test('the svg escapes markup and colours owned cells', () => {
 
 test('a card shows its serial as #0042, and a guest\'s daemon shows none', () => {
   const tim = roster.daemons.find(d => d.id === 'tim')
-  assert.ok(cardLines(roster, tim, { version: '2.0', serial: 42 }).some(l => l.includes('tim 2.0  #0042')))
-  assert.ok(cardLines(roster, tim, { version: '2.0', serial: 12345 }).some(l => l.includes('#12345')))
-  assert.ok(!cardLines(roster, tim, { version: '2.0' }).some(l => /#\d{4}/.test(l)))
+  const p = plate(tim)
+  assert.ok(cardLines(roster, tim, { version: '2.0', plate: p, serial: 42 }).some(l => l.includes('tim 2.0  #0042')))
+  assert.ok(cardLines(roster, tim, { version: '2.0', plate: p, serial: 12345 }).some(l => l.includes('#12345')))
+  assert.ok(!cardLines(roster, tim, { version: '2.0', plate: p }).some(l => /#\d{4}/.test(l)))
 })
 
 test('every daemon has a shiny colour of its own, and a shiny card wears it', () => {
   for (const d of roster.daemons) {
     assert.ok(d.shiny && /^#[0-9a-f]{6}$/.test(d.shiny.hex), `${d.id}: shiny colour`)
     assert.notEqual(d.shiny.hex, d.color.hex, `${d.id}: shiny must differ`)
-    const shiny = cardSvg(roster, d, { version: '2.0', shiny: true })
-    const plain = cardSvg(roster, d, { version: '2.0' })
+    const shiny = cardSvg(roster, d, { version: '2.0', plate: plate(d), shiny: true })
+    const plain = cardSvg(roster, d, { version: '2.0', plate: plate(d) })
     assert.ok(shiny.includes(`fill="${d.shiny.hex}"`), `${d.id}: shiny card colour`)
     assert.ok(!plain.includes(`fill="${d.shiny.hex}"`) || d.shiny.hex === '#d0d0d0', `${d.id}: plain card`)
-    assert.ok(cardLines(roster, d, { shiny: true })[1].includes('SHINY'))
+    assert.ok(cardLines(roster, d, { plate: plate(d, '0.1'), shiny: true })[1].includes('SHINY'))
   }
 })
 
 test('a shelf counts duplicates beside a daemon, and colours a shiny one in its shiny colour', () => {
-  const lines = shelfLines(roster, [{ id: 'tim', shiny: true, dupes: 1 }, 'vim'])
-  assert.match(lines[0], /^zoo: drop 1 unix {2}2\/9$/)
+  const lines = shelfLines(roster, [{ id: 'tim', shiny: true, dupes: 1 }, 'yak'])
+  assert.match(lines[0], /^zoo: drop 1 init {2}2\/9$/)
   assert.ok(lines.some(l => l.startsWith('tim x2 ')))
-  assert.ok(lines.some(l => /(^| )vim$/.test(l)))
-  assert.deepEqual(shelfLines(roster, ['tim', 'vim']), shelfLines(roster, [{ id: 'tim' }, { id: 'vim' }]))
+  assert.ok(lines.some(l => /(^| )yak$/.test(l)))
+  assert.deepEqual(shelfLines(roster, ['tim', 'yak']), shelfLines(roster, [{ id: 'tim' }, { id: 'yak' }]))
   const tim = roster.daemons.find(d => d.id === 'tim')
   assert.ok(shelfSvg(roster, [{ id: 'tim', shiny: true }]).includes(tim.shiny.hex))
   assert.ok(!shelfSvg(roster, ['tim']).includes(tim.shiny.hex))
@@ -96,12 +114,12 @@ test('an announced drop shows as silhouettes until its release, and an unannounc
   const ghost = { ...roster.daemons.find(d => d.id === 'grue'), id: 'ghost', n: 2, drop: 'plan9' }
   const r2 = { ...roster, drops: [...roster.drops, next], daemons: [...roster.daemons, rio, ghost] }
   const at = day => new Date(`${day}T12:00:00.000Z`)
-  assert.equal(dropState(roster.drops[0], at('2026-09-26')), 'released')
+  assert.equal(dropState(roster.drops[0], at('2026-09-27')), 'released')
   assert.deepEqual(['2026-09-30', '2026-10-01', '2026-10-15'].map(d => dropState(next, at(d))), ['hidden', 'announced', 'released'])
   assert.deepEqual(shelfLines(r2, [], { drop: 'plan9', now: at('2026-09-30') }), [])
   const soon = shelfLines(r2, ['rio'], { drop: 'plan9', now: at('2026-10-05') })
   assert.equal(soon[0], 'zoo: drop 2 plan9  out 2026-10-15')
-  assert.ok(soon[2].startsWith(silhouette('[o o]')))                         // rio's 0.1 sprite, as # only
+  assert.ok(soon[2].startsWith(silhouette('(o o)')))                         // rio's 0.1 sprite, as # only
   assert.ok(soon[2].includes('[ ! ]'))                                      // a secret gives nothing away
   assert.ok(!soon.join('\n').includes('rio'))
   const out = shelfLines(r2, ['rio'], { drop: 'plan9', now: at('2026-10-15') })

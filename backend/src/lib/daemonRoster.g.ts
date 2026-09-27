@@ -85,7 +85,7 @@ export const DAEMON_ROSTER = {
           "secret": 8
         },
         "boost": {
-          "bat": 4
+          "bug": 4
         }
       },
       "history": {
@@ -154,25 +154,90 @@ export const DAEMON_ROSTER = {
     },
     "historyDates": {
       "04-01": "teapot",
-      "09-09": "moth",
+      "08-25": "tux",
+      "09-09": "bug",
+      "09-27": "gnu",
       "10-31": "zombie"
     }
   },
   "drops": [
     {
+      "id": "init",
+      "announce": "2026-09-13",
+      "release": "2026-09-27"
+    },
+    {
       "id": "unix",
-      "announce": "2026-09-12",
-      "release": "2026-09-26"
+      "hold": true
     },
     {
       "id": "tty",
-      "announce": "2026-09-27",
-      "release": "2026-10-11"
+      "hold": true
     }
   ],
   "daemons": [
     {
       "id": "tim",
+      "n": 1,
+      "drop": "init",
+      "rarity": "common"
+    },
+    {
+      "id": "gnu",
+      "n": 2,
+      "drop": "init",
+      "rarity": "common"
+    },
+    {
+      "id": "lynx",
+      "n": 3,
+      "drop": "init",
+      "rarity": "common"
+    },
+    {
+      "id": "mutt",
+      "n": 4,
+      "drop": "init",
+      "rarity": "common"
+    },
+    {
+      "id": "yak",
+      "n": 5,
+      "drop": "init",
+      "rarity": "rare"
+    },
+    {
+      "id": "gopher",
+      "n": 6,
+      "drop": "init",
+      "rarity": "rare"
+    },
+    {
+      "id": "bug",
+      "n": 7,
+      "drop": "init",
+      "rarity": "rare"
+    },
+    {
+      "id": "tux",
+      "n": 8,
+      "drop": "init",
+      "rarity": "legendary"
+    },
+    {
+      "id": "auk",
+      "n": 9,
+      "drop": "init",
+      "rarity": "legendary"
+    },
+    {
+      "id": "beastie",
+      "n": 10,
+      "drop": "init",
+      "rarity": "secret"
+    },
+    {
+      "id": "tmux",
       "n": 1,
       "drop": "unix",
       "rarity": "common"

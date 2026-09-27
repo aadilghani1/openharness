@@ -21,9 +21,14 @@ clients and the server build against.
 | `desktop/lib/daemons/roster.g.dart` | Generated. The roster as a Dart raw string. |
 | `mobile/lib/daemons/roster.g.dart` | Generated. The same raw string for the phone, which depends on no other package here. |
 | `backend/src/lib/daemonRoster.g.ts` | Generated. Only what decides a draw, a grant or a level: ids, rarities, drops and their dates, egg, earn and bond rules, easter hashes. |
+| `plates/<id>.mjs` | A filled daemon's model: shapes, in every mood, version and animation frame (see "Plates"). |
+| `tools/plate.mjs` | The shader that prints a model as characters, at any width. |
+| `tools/bake.mjs` | Bakes every plate a client shows, and the colour rule every client follows. |
+| `plates.json` | Generated (by `generate.mjs`, through `bake.mjs`). Every plate frame, as text. Baked again only when a model, the shader or `rules.plate` changes; a bake takes minutes. |
+| `desktop/lib/daemons/plates.g.dart`, `mobile/lib/daemons/plates.g.dart` | Generated. `plates.json` as a Dart raw string. |
 | `cli/src/pair/roster.g.ts` | Generated. Ids, line templates, lore, first words and family: the pair brain's voice and the pair harness's persona ([BRAIN.md](BRAIN.md)); and `awayMinutes`, how long an absence makes a finished turn an away turn. |
 
-`hn` (the Rust terminal client) reads `roster.json` with `include_str!` and tests against `frames.json`.
+`hn` (the Rust terminal client) reads `roster.json` and `plates.json` with `include_str!` and tests against `frames.json`.
 
 ## Words
 
@@ -31,8 +36,11 @@ clients and the server build against.
 - **zoo**: your daemons and eggs. `hn zoo`.
 - **hatch**: opening an egg. The reveal says `fork() returned 0.`
 - **pair**: the one daemon in your status line.
-- **drop**: a set of daemons released together. Drop 1 is `unix`; drop 2, `tty`, is announced. Drops ship
-  when an idea is ready.
+- **drop**: a set of daemons released together. Drop 1 is `init`: `init(8)` is PID 1, the first process
+  a Unix machine starts and the parent of every daemon (when a daemon's parent dies, init adopts it). It
+  is ten animals hiding in Unix names, drawn filled and in colour, and tim, tmux improved, is its
+  octopus. `unix` and `tty` are kept on hold, to come back later as a step up. Drops ship when an idea
+  is ready.
 
 ## Art rules
 
@@ -54,6 +62,20 @@ is impossible (a terminal's own font):
   the card. Every daemon in drop 1 draws one portrait per version, growing from the same face (NetHack's
   kitten, housecat, large cat): fewer parts when young, a lore-true feature each release. A missing
   version uses the nearest one drawn.
+- **Plates** (drop `init`): a daemon with `plate: true` is drawn filled, the way line printers shaded
+  the Mona Lisa: denser characters for more light, from `rules.plate.ink` (`` .,:;ox%#@``). It is not
+  drawn by hand. Its model, `plates/<id>.mjs`, is a set of shapes with a `model({ t, mood, age })`, and
+  `tools/plate.mjs` shades it into characters: light from the upper left, round volumes, a dark line
+  where a part crosses the parts behind it, and each cell's glyph picked by where its light falls in
+  the cell. `::` is broken as `:;`; `generate.mjs` checks every frame against every ligature pair
+  anyway. `bake.mjs` prints each plate at two widths, `rules.plate.cols`: `portrait` (28 columns, at
+  most 12 rows) where a portrait shows, and `reveal` (56 columns, at most 24 rows) for the hatch reveal
+  and anywhere with room. Every version and mood gets a loop (`idle` 8 frames, the others 4, a frame
+  every `frameMs`, 170 ms). All frames of one width and version share one crop, so nothing jumps
+  between moods. Clients never run a model: they print the baked text. The versions grow as NetHack's
+  pets do, the same animal throughout: the hatchling is mostly head. The status line still takes the
+  8-cell sprite, in the same line-art rules as everyone else (a filled daemon cannot be eight
+  characters wide). A plate daemon needs no line portrait; its card shows its portrait plate.
 - **Eyes carry the mood.** The body stays still; a mood changes at most two cells of the sprite. A
   portrait may add one or two lore-true mood parts, never more. A daemon may give its own `eyes` per mood
   (and a `lid`): the grue's glow in the dark, tty's are upper case (a Model 33 printed nothing else), and
@@ -84,6 +106,14 @@ is impossible (a terminal's own font):
   rubber duck, hack a winter wolf (NetHack's cyan `d`), tty a glass tty's green phosphor, lp0 a hotter,
   blue flame). `generate.mjs` checks every hex is the xterm index it names. In the status line the daemon takes the status line's own text colour:
   daemon colours fail contrast on tmux's green bar and on the yellow message line.
+- **Plate colour.** A plate daemon also has `gradient: { top, bottom }` and `shinyGradient` (each stop an
+  xterm index with its hex; every shiny in drop `init` is gold). Row `r` of a plate of `R` rows takes
+  the colour `mix(top, bottom, r / (R - 1))`, and each glyph its brightness from `rules.plate.ink`: at
+  most 1 mixes from the background toward the row colour (`.` is faint, `#` is the colour itself), above
+  1 mixes on toward white by the excess (`@` burns). `bake.mjs` has the reference `plateColor`, and
+  `frames.json` has `plateColors` for every port to match. A terminal (hn) may print the row colour in
+  truecolor, or its nearest xterm index, with SGR dim below 0.6 and bold above 1. A soft glow in the
+  bottom colour is welcome where a client can draw one.
 
 ## Moods
 
@@ -259,11 +289,10 @@ verified (a later verify endpoint will be), and a guest's seeded daemons and egg
 'local'`.
 
 **Drops.** Each drop in `roster.drops` has `announce` and `release` (UTC `YYYY-MM-DD`, announced 14
-days before release). Only released drops are drawn from; a drop announced but not yet released shows
-on shelves as silhouettes, and one not yet announced shows nowhere. Drop 1, `unix`, is released
-(announced 2026-09-12, released 2026-09-26). Drop 2, `tty`, is announced (2026-09-27) and released
-2026-10-11: until then nothing draws, seeds or hatches it, and its secret, lp0, joins the grue in the
-night and easter eggs on that day.
+days before release), or `hold: true` and no dates. Only released drops are drawn from; a drop announced
+but not yet released shows on shelves as silhouettes, and one not yet announced, or on hold, shows
+nowhere. Drop 1, `init`, is released (announced 2026-09-13, released 2026-09-27). `unix` and `tty` are
+on hold: kept in the roster, never drawn, seeded, hatched or shown, until they get dates.
 
 **The draw** (`zoo.hatch`, server only, `crypto.randomInt`):
 
@@ -271,16 +300,17 @@ night and easter eggs on that day.
    Once you own every released regular, every released regular is eligible again (a duplicate).
 2. **Secrets sit outside the set.** A secret never counts toward "every regular owned", and owning or
    missing it never holds duplicates back. An unowned secret of a released drop is eligible only from
-   an egg whose `weights.secret` is above 0: in drop 1, the night egg (8) and the easter egg (10).
+   an egg whose `weights.secret` is above 0: the night egg (8) and the easter egg (10).
 3. **Weight**: `egg.weights[rarity] / (eligible daemons of that rarity)`, plus `pity * pityPerMiss` for
-   a secret, times `egg.boost[id]` when the egg has one (the first egg: tim x4; the night egg: bat x4).
+   a secret, times `egg.boost[id]` when the egg has one (the first egg: tim x4; the night egg: bug x4,
+   the moth drawn to your screen's light).
    A rarity with no eligible daemon gives its weight to nothing (it is not redistributed).
 4. **Pity** counts only hatches of eggs that can hold a secret: it resets on a secret (from any egg)
    and grows by one on any other hatch of such an egg. **The guarantee**: when it stands at
    `secretGuaranteeAt - 1` (7) and a released secret is unowned, the next hatch of such an egg draws
-   only from the unowned secrets. So the 8th night or easter egg without the grue is the grue.
+   only from the unowned secrets. So the 8th night or easter egg without beastie is beastie.
 5. **Shiny**: 1 in `shinyOneIn` (256), independent of who hatched.
-6. An egg with nothing eligible that weighs anything (an easter egg once every legendary and the grue
+6. An egg with nothing eligible that weighs anything (an easter egg once every legendary and beastie
    are owned) draws from every released daemon, as if you owned them all: a duplicate.
 
 **Details** (as built in `backend/src/lib/zoo.ts`; a guest client follows the same rules):
@@ -520,8 +550,9 @@ in their colours (shiny ones in their shiny colour), `x2` beside a daemon with o
 shows its regulars as `#` silhouettes of their 0.1 sprites and its release date; one not yet announced
 shows nothing. Cards and shelves never show a live mood, so they never reveal whether you are working.
 
-Secrets sit outside the numbered set, and every drop numbers its own: drop 1 is `#01/09` to `#09/09`,
-and grue is `#S/09`; drop 2 is xeyes `#01/09` to tty `#09/09`, and lp0 is `#S/09`.
+Secrets sit outside the numbered set, and every drop numbers its own: drop 1 is tim `#01/09` to auk
+`#09/09`, and beastie is `#S/09`. A plate daemon's card shows its portrait plate (idle, first frame);
+its SVG runs down the daemon's gradient, a row at a time.
 
 ```
 node daemons/tools/card.mjs tim --version 2.0 --serial 42          # a card as text

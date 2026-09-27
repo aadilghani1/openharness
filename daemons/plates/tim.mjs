@@ -1,7 +1,7 @@
 import { ellipse, tube, path, blend, part, eye } from '../tools/plate.mjs'
 
-// octopus: git's octopus merge, which takes more than two branches at once, and refuses any merge
-// that would need a human to resolve.
+// tim, the octopus: tmux improved, the way vim is vi improved. Eight arms, eight panes. It will do
+// git's octopus merge too, which takes more than two branches at once.
 export const size = { w: 114, h: 96 }
 
 // One arm per row: where it leaves the body (x from the middle, y), its heading (0 = right,

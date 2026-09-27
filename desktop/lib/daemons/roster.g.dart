@@ -220,7 +220,7 @@ const daemonRosterJson = r'''
           "secret": 8
         },
         "boost": {
-          "bat": 4
+          "bug": 4
         }
       },
       "history": {
@@ -267,7 +267,9 @@ const daemonRosterJson = r'''
     },
     "historyDates": {
       "04-01": "teapot",
-      "09-09": "moth",
+      "08-25": "tux",
+      "09-09": "bug",
+      "09-27": "gnu",
       "10-31": "zombie"
     },
     "easterHashes": [
@@ -300,27 +302,878 @@ const daemonRosterJson = r'''
       "recap": "3 files changed, tests pass",
       "n": "3",
       "summary": "2 done, 1 waiting 40m"
+    },
+    "plate": {
+      "cols": {
+        "portrait": 28,
+        "reveal": 56
+      },
+      "maxRows": {
+        "portrait": 12,
+        "reveal": 24
+      },
+      "frameMs": 170,
+      "frames": {
+        "idle": 8,
+        "other": 4
+      },
+      "ink": {
+        ".": 0.42,
+        ",": 0.42,
+        ":": 0.5,
+        ";": 0.56,
+        "o": 0.78,
+        "x": 0.82,
+        "%": 1,
+        "#": 1,
+        "@": 1.35
+      }
     }
   },
   "drops": [
     {
-      "id": "unix",
+      "id": "init",
       "n": 1,
+      "name": "init",
+      "announce": "2026-09-13",
+      "release": "2026-09-27"
+    },
+    {
+      "id": "unix",
+      "n": 2,
       "name": "unix",
-      "announce": "2026-09-12",
-      "release": "2026-09-26"
+      "hold": true
     },
     {
       "id": "tty",
-      "n": 2,
+      "n": 3,
       "name": "tty",
-      "announce": "2026-09-27",
-      "release": "2026-10-11"
+      "hold": true
     }
   ],
   "daemons": [
     {
       "id": "tim",
+      "n": 1,
+      "drop": "init",
+      "rarity": "common",
+      "plate": true,
+      "color": {
+        "xterm": 134,
+        "hex": "#af5fd7"
+      },
+      "shiny": {
+        "xterm": 178,
+        "hex": "#d7af00"
+      },
+      "gradient": {
+        "top": {
+          "xterm": 213,
+          "hex": "#ff87ff"
+        },
+        "bottom": {
+          "xterm": 134,
+          "hex": "#af5fd7"
+        }
+      },
+      "shinyGradient": {
+        "top": {
+          "xterm": 229,
+          "hex": "#ffffaf"
+        },
+        "bottom": {
+          "xterm": 178,
+          "hex": "#d7af00"
+        }
+      },
+      "family": [
+        [
+          "screen",
+          1987
+        ],
+        [
+          "tmux",
+          2007
+        ],
+        [
+          "tim",
+          2026
+        ]
+      ],
+      "lore": "Named the way vim was: vi improved. tmux followed screen; tim is tmux improved: eight arms, eight panes, and it never drops one.",
+      "first": "oh hi. i'm tim. tmux, improved. what are we building?",
+      "lines": {
+        "idle": "all quiet. eight arms free.",
+        "work": "{n} panes busy. an arm on each.",
+        "need": "{who}: {q}  (bell)",
+        "done": "silence in {who}: {recap}",
+        "fail": "{who} failed: {recap}  (pane is dead)",
+        "back": "reattached. {summary}.",
+        "nap": "detached. curled up. reattach any time.",
+        "boop": "hey. that's my status line. (ink)"
+      },
+      "sprites": {
+        "0.1": "({e} {e})",
+        "1.0": ",({e} {e}),",
+        "2.0": "~({e} {e})~"
+      },
+      "work": [
+        "~({e} {e})~",
+        "S({e} {e})~",
+        "S({e} {e})S",
+        "~({e} {e})S"
+      ],
+      "workMs": 200,
+      "turn": "arms, curling in turn",
+      "examples": {
+        "idle": "all quiet. eight arms free.",
+        "work": "3 panes busy. an arm on each.",
+        "need": "codex@office: Bash: npm run migrate  (bell)",
+        "done": "silence in codex@office: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (pane is dead)",
+        "back": "reattached. 2 done, 1 waiting 40m.",
+        "nap": "detached. curled up. reattach any time.",
+        "boop": "hey. that's my status line. (ink)"
+      }
+    },
+    {
+      "id": "gnu",
+      "n": 2,
+      "drop": "init",
+      "rarity": "common",
+      "plate": true,
+      "color": {
+        "xterm": 144,
+        "hex": "#afaf87"
+      },
+      "shiny": {
+        "xterm": 178,
+        "hex": "#d7af00"
+      },
+      "gradient": {
+        "top": {
+          "xterm": 230,
+          "hex": "#ffffd7"
+        },
+        "bottom": {
+          "xterm": 144,
+          "hex": "#afaf87"
+        }
+      },
+      "shinyGradient": {
+        "top": {
+          "xterm": 229,
+          "hex": "#ffffaf"
+        },
+        "bottom": {
+          "xterm": 178,
+          "hex": "#d7af00"
+        }
+      },
+      "family": [
+        [
+          "Unix",
+          1969
+        ],
+        [
+          "GNU",
+          1983
+        ],
+        [
+          "gnu",
+          2026
+        ]
+      ],
+      "lore": "Richard Stallman announced GNU on 27 September 1983: GNU's Not Unix, a recursive acronym. The gnu is a wildebeest, and it will politely remind you it's GNU/Linux.",
+      "first": "hi. i'm GNU's Not Unix's Not Unix's... call me gnu.",
+      "lines": {
+        "idle": "grazing. nothing needs you.",
+        "work": "{n} running with the herd.",
+        "need": "{who}: {q}  (snort)",
+        "done": "{who} made it across the river: {recap}",
+        "fail": "{who} failed: {recap}  (crocodile)",
+        "back": "welcome back to the herd. {summary}.",
+        "nap": "grazing. back before the Hurd hits 1.0.",
+        "boop": "i'd just like to interject: it's GNU/Linux."
+      },
+      "sprites": {
+        "0.1": ",{e}U{e},",
+        "1.0": "\\{e}U{e}/",
+        "2.0": "\\_{e}U{e}_/"
+      },
+      "work": [
+        "\\_{e}U{e}_/",
+        "-_{e}U{e}_/",
+        "\\_{e}U{e}_/",
+        "\\_{e}U{e}_-"
+      ],
+      "workMs": 250,
+      "turn": "horns, tossing",
+      "examples": {
+        "idle": "grazing. nothing needs you.",
+        "work": "3 running with the herd.",
+        "need": "codex@office: Bash: npm run migrate  (snort)",
+        "done": "codex@office made it across the river: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (crocodile)",
+        "back": "welcome back to the herd. 2 done, 1 waiting 40m.",
+        "nap": "grazing. back before the Hurd hits 1.0.",
+        "boop": "i'd just like to interject: it's GNU/Linux."
+      }
+    },
+    {
+      "id": "lynx",
+      "n": 3,
+      "drop": "init",
+      "rarity": "common",
+      "plate": true,
+      "color": {
+        "xterm": 35,
+        "hex": "#00af5f"
+      },
+      "shiny": {
+        "xterm": 178,
+        "hex": "#d7af00"
+      },
+      "gradient": {
+        "top": {
+          "xterm": 120,
+          "hex": "#87ff87"
+        },
+        "bottom": {
+          "xterm": 35,
+          "hex": "#00af5f"
+        }
+      },
+      "shinyGradient": {
+        "top": {
+          "xterm": 229,
+          "hex": "#ffffaf"
+        },
+        "bottom": {
+          "xterm": 178,
+          "hex": "#d7af00"
+        }
+      },
+      "family": [
+        [
+          "WorldWideWeb",
+          1990
+        ],
+        [
+          "Lynx",
+          1992
+        ],
+        [
+          "lynx",
+          2026
+        ]
+      ],
+      "lore": "Lynx came out of the University of Kansas in 1992 and is still maintained, the oldest web browser that is. It reads the web with the pictures taken out.",
+      "first": "hi. i'm lynx. the web, with the pictures taken out.",
+      "lines": {
+        "idle": "no links to follow.",
+        "work": "{n} busy. request sent; waiting for response.",
+        "need": "{who}: {q}  (ears up)",
+        "done": "{who} done: {recap}. transfer complete.",
+        "fail": "{who} failed: {recap}  Alert!",
+        "back": "reloaded. {summary}.",
+        "nap": "curled up in the snow for a bit.",
+        "boop": "[INLINE]  that was a picture of me."
+      },
+      "sprites": {
+        "0.1": "){e}Y{e}(",
+        "1.0": "'){e}Y{e}('",
+        "2.0": "^){e}Y{e}(^"
+      },
+      "work": [
+        "^){e}Y{e}(^",
+        "^){e}Y{e}('",
+        "^){e}Y{e}(^",
+        "'){e}Y{e}(^"
+      ],
+      "workMs": 250,
+      "turn": "ears, flicking",
+      "examples": {
+        "idle": "no links to follow.",
+        "work": "3 busy. request sent; waiting for response.",
+        "need": "codex@office: Bash: npm run migrate  (ears up)",
+        "done": "codex@office done: 3 files changed, tests pass. transfer complete.",
+        "fail": "codex@office failed: 3 files changed, tests pass  Alert!",
+        "back": "reloaded. 2 done, 1 waiting 40m.",
+        "nap": "curled up in the snow for a bit.",
+        "boop": "[INLINE]  that was a picture of me."
+      }
+    },
+    {
+      "id": "mutt",
+      "n": 4,
+      "drop": "init",
+      "rarity": "common",
+      "plate": true,
+      "color": {
+        "xterm": 166,
+        "hex": "#d75f00"
+      },
+      "shiny": {
+        "xterm": 178,
+        "hex": "#d7af00"
+      },
+      "gradient": {
+        "top": {
+          "xterm": 215,
+          "hex": "#ffaf5f"
+        },
+        "bottom": {
+          "xterm": 166,
+          "hex": "#d75f00"
+        }
+      },
+      "shinyGradient": {
+        "top": {
+          "xterm": 229,
+          "hex": "#ffffaf"
+        },
+        "bottom": {
+          "xterm": 178,
+          "hex": "#d7af00"
+        }
+      },
+      "family": [
+        [
+          "elm",
+          1986
+        ],
+        [
+          "Mutt",
+          1995
+        ],
+        [
+          "mutt",
+          2026
+        ]
+      ],
+      "lore": "Michael Elkins wrote Mutt, a terminal mail client, in 1995: \"All mail clients suck. This one just sucks less.\" A scruffy dog, loyal to your inbox.",
+      "first": "hi. i'm mutt. all buddies suck. this one just sucks less.",
+      "lines": {
+        "idle": "no new mail. chewing a slipper.",
+        "work": "{n} busy. sitting by the mailbox.",
+        "need": "{who}: {q}  (new mail)",
+        "done": "{who} replied: {recap}",
+        "fail": "{who} failed: {recap}  (bounced)",
+        "back": "you're back. {summary}. sorted by thread.",
+        "nap": "asleep on a pile of mail.",
+        "boop": "arf. sucks less, right?"
+      },
+      "sprites": {
+        "0.1": "V({e}u{e})",
+        "1.0": "V({e}u{e})U",
+        "2.0": "V({e}u{e})U/"
+      },
+      "work": [
+        "V({e}u{e})U/",
+        "V({e}u{e})U\\"
+      ],
+      "workMs": 130,
+      "turn": "tail, wagging flat out",
+      "examples": {
+        "idle": "no new mail. chewing a slipper.",
+        "work": "3 busy. sitting by the mailbox.",
+        "need": "codex@office: Bash: npm run migrate  (new mail)",
+        "done": "codex@office replied: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (bounced)",
+        "back": "you're back. 2 done, 1 waiting 40m. sorted by thread.",
+        "nap": "asleep on a pile of mail.",
+        "boop": "arf. sucks less, right?"
+      }
+    },
+    {
+      "id": "yak",
+      "n": 5,
+      "drop": "init",
+      "rarity": "rare",
+      "plate": true,
+      "color": {
+        "xterm": 131,
+        "hex": "#af5f5f"
+      },
+      "shiny": {
+        "xterm": 178,
+        "hex": "#d7af00"
+      },
+      "gradient": {
+        "top": {
+          "xterm": 223,
+          "hex": "#ffd7af"
+        },
+        "bottom": {
+          "xterm": 131,
+          "hex": "#af5f5f"
+        }
+      },
+      "shinyGradient": {
+        "top": {
+          "xterm": 229,
+          "hex": "#ffffaf"
+        },
+        "bottom": {
+          "xterm": 178,
+          "hex": "#d7af00"
+        }
+      },
+      "family": [
+        [
+          "yacc",
+          1975
+        ],
+        [
+          "bison",
+          1985
+        ],
+        [
+          "yak",
+          2026
+        ]
+      ],
+      "lore": "Stephen Johnson wrote yacc, Yet Another Compiler-Compiler, at Bell Labs in 1975. Yak shaving is the chain of side tasks between you and your goal; this yak notices.",
+      "first": "hi. i'm yak. yet another pair buddy. what's the actual goal?",
+      "lines": {
+        "idle": "all quiet. no yaks in sight.",
+        "work": "{n} busy. shift, reduce, shift, reduce.",
+        "need": "{who}: {q}  accept?",
+        "done": "{who} reduced it to: {recap}",
+        "fail": "{who} failed: {recap}  (syntax error)",
+        "back": "you're back. {summary}. how was the yak?",
+        "nap": "ruminating for a bit.",
+        "boop": "boop. that's a side task."
+      },
+      "sprites": {
+        "0.1": "\"{e}\"{e}\"",
+        "1.0": "(\"{e}\"{e}\")",
+        "2.0": "~\"{e}\"{e}\"~"
+      },
+      "work": [
+        "~\"{e}\"{e}\"~",
+        "~\"{e}m{e}\"~"
+      ],
+      "workMs": 300,
+      "turn": "jaw, chewing it over",
+      "examples": {
+        "idle": "all quiet. no yaks in sight.",
+        "work": "3 busy. shift, reduce, shift, reduce.",
+        "need": "codex@office: Bash: npm run migrate  accept?",
+        "done": "codex@office reduced it to: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (syntax error)",
+        "back": "you're back. 2 done, 1 waiting 40m. how was the yak?",
+        "nap": "ruminating for a bit.",
+        "boop": "boop. that's a side task."
+      }
+    },
+    {
+      "id": "gopher",
+      "n": 6,
+      "drop": "init",
+      "rarity": "rare",
+      "plate": true,
+      "color": {
+        "xterm": 94,
+        "hex": "#875f00"
+      },
+      "shiny": {
+        "xterm": 178,
+        "hex": "#d7af00"
+      },
+      "gradient": {
+        "top": {
+          "xterm": 180,
+          "hex": "#d7af87"
+        },
+        "bottom": {
+          "xterm": 94,
+          "hex": "#875f00"
+        }
+      },
+      "shinyGradient": {
+        "top": {
+          "xterm": 229,
+          "hex": "#ffffaf"
+        },
+        "bottom": {
+          "xterm": 178,
+          "hex": "#d7af00"
+        }
+      },
+      "family": [
+        [
+          "Gopher",
+          1991
+        ],
+        [
+          "gopher",
+          2026
+        ]
+      ],
+      "lore": "The University of Minnesota's Gopher (1991) was named for the campus mascot, and for a moment it was bigger than the web. It served menus on port 70; this one pops out of its burrow when something needs you.",
+      "first": "(pops up) hi. i'm gopher. i go for things.",
+      "lines": {
+        "idle": "all quiet above ground.",
+        "work": "{n} busy underground. i hear digging.",
+        "need": "{who}: {q}  (pops up)",
+        "done": "{who} came up with: {recap}",
+        "fail": "{who} failed: {recap}  (cave-in)",
+        "back": "you popped back up. {summary}.",
+        "nap": "down the burrow for a bit.",
+        "boop": "(ducks back into the burrow)"
+      },
+      "sprites": {
+        "0.1": "_{e}\"{e}_",
+        "1.0": "({e}\"{e})",
+        "2.0": "_({e}\"{e})_"
+      },
+      "work": [
+        "_({e}\"{e})_",
+        "'({e}\"{e})_",
+        "_({e}\"{e})_",
+        "_({e}\"{e})'"
+      ],
+      "workMs": 200,
+      "turn": "dirt, flying out of the burrow",
+      "examples": {
+        "idle": "all quiet above ground.",
+        "work": "3 busy underground. i hear digging.",
+        "need": "codex@office: Bash: npm run migrate  (pops up)",
+        "done": "codex@office came up with: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (cave-in)",
+        "back": "you popped back up. 2 done, 1 waiting 40m.",
+        "nap": "down the burrow for a bit.",
+        "boop": "(ducks back into the burrow)"
+      }
+    },
+    {
+      "id": "bug",
+      "n": 7,
+      "drop": "init",
+      "rarity": "rare",
+      "plate": true,
+      "color": {
+        "xterm": 101,
+        "hex": "#87875f"
+      },
+      "shiny": {
+        "xterm": 178,
+        "hex": "#d7af00"
+      },
+      "gradient": {
+        "top": {
+          "xterm": 229,
+          "hex": "#ffffaf"
+        },
+        "bottom": {
+          "xterm": 101,
+          "hex": "#87875f"
+        }
+      },
+      "shinyGradient": {
+        "top": {
+          "xterm": 229,
+          "hex": "#ffffaf"
+        },
+        "bottom": {
+          "xterm": 178,
+          "hex": "#d7af00"
+        }
+      },
+      "family": [
+        [
+          "Mark II",
+          1947
+        ],
+        [
+          "bug",
+          2026
+        ]
+      ],
+      "lore": "On 9 September 1947 a moth was found in relay 70, panel F, of the Harvard Mark II and taped into the log: \"First actual case of bug being found.\" Still drawn to the light.",
+      "first": "hi. first actual case of bug being found. that's me.",
+      "lines": {
+        "idle": "all quiet. circling the lamp.",
+        "work": "{n} busy. staying out of the relays.",
+        "need": "{who}: {q}  (flutter)",
+        "done": "{who} done: {recap}. taped into the log.",
+        "fail": "{who} failed: {recap}  (relay 70, panel F)",
+        "back": "the light's back on. {summary}.",
+        "nap": "wings folded for a bit.",
+        "boop": "careful. i'm in the Smithsonian."
+      },
+      "sprites": {
+        "0.1": "}{e}{",
+        "1.0": "}}{e}{{",
+        "2.0": "* }}{e}{{"
+      },
+      "work": [
+        "* }}{e}{{",
+        "* )}{e}{("
+      ],
+      "workMs": 150,
+      "turn": "wings, fluttering at the light",
+      "examples": {
+        "idle": "all quiet. circling the lamp.",
+        "work": "3 busy. staying out of the relays.",
+        "need": "codex@office: Bash: npm run migrate  (flutter)",
+        "done": "codex@office done: 3 files changed, tests pass. taped into the log.",
+        "fail": "codex@office failed: 3 files changed, tests pass  (relay 70, panel F)",
+        "back": "the light's back on. 2 done, 1 waiting 40m.",
+        "nap": "wings folded for a bit.",
+        "boop": "careful. i'm in the Smithsonian."
+      }
+    },
+    {
+      "id": "tux",
+      "n": 8,
+      "drop": "init",
+      "rarity": "legendary",
+      "plate": true,
+      "color": {
+        "xterm": 69,
+        "hex": "#5f87ff"
+      },
+      "shiny": {
+        "xterm": 178,
+        "hex": "#d7af00"
+      },
+      "gradient": {
+        "top": {
+          "xterm": 195,
+          "hex": "#d7ffff"
+        },
+        "bottom": {
+          "xterm": 69,
+          "hex": "#5f87ff"
+        }
+      },
+      "shinyGradient": {
+        "top": {
+          "xterm": 229,
+          "hex": "#ffffaf"
+        },
+        "bottom": {
+          "xterm": 178,
+          "hex": "#d7af00"
+        }
+      },
+      "family": [
+        [
+          "Linux",
+          1991
+        ],
+        [
+          "Tux",
+          1996
+        ],
+        [
+          "tux",
+          2026
+        ]
+      ],
+      "lore": "Linus Torvalds said a penguin bit him at a zoo in Canberra. Larry Ewing drew Tux in the GIMP in 1996, well fed and content, and the kernel still draws one per CPU at boot.",
+      "first": "hi. i'm tux. well fed and fully booted.",
+      "lines": {
+        "idle": "all quiet. digesting a herring.",
+        "work": "{n} running. one penguin each, like at boot.",
+        "need": "{who}: {q}  (squawk)",
+        "done": "[  OK  ] {who}: {recap}",
+        "fail": "{who} failed: {recap}  (oops)",
+        "back": "welcome back. {summary}. no reboot needed.",
+        "nap": "suspended to RAM. full belly.",
+        "boop": "i don't bite. that was the one in Canberra."
+      },
+      "sprites": {
+        "0.1": "<({e} {e})",
+        "1.0": "<({e} {e})\\",
+        "2.0": "<({e} {e})/"
+      },
+      "work": [
+        "<({e} {e})/",
+        "<({e} {e})-",
+        "<({e} {e})\\",
+        "<({e} {e})-"
+      ],
+      "workMs": 180,
+      "turn": "a flipper, waving",
+      "examples": {
+        "idle": "all quiet. digesting a herring.",
+        "work": "3 running. one penguin each, like at boot.",
+        "need": "codex@office: Bash: npm run migrate  (squawk)",
+        "done": "[  OK  ] codex@office: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (oops)",
+        "back": "welcome back. 2 done, 1 waiting 40m. no reboot needed.",
+        "nap": "suspended to RAM. full belly.",
+        "boop": "i don't bite. that was the one in Canberra."
+      }
+    },
+    {
+      "id": "auk",
+      "n": 9,
+      "drop": "init",
+      "rarity": "legendary",
+      "plate": true,
+      "color": {
+        "xterm": 31,
+        "hex": "#0087af"
+      },
+      "shiny": {
+        "xterm": 178,
+        "hex": "#d7af00"
+      },
+      "gradient": {
+        "top": {
+          "xterm": 123,
+          "hex": "#87ffff"
+        },
+        "bottom": {
+          "xterm": 31,
+          "hex": "#0087af"
+        }
+      },
+      "shinyGradient": {
+        "top": {
+          "xterm": 229,
+          "hex": "#ffffaf"
+        },
+        "bottom": {
+          "xterm": 178,
+          "hex": "#d7af00"
+        }
+      },
+      "family": [
+        [
+          "awk",
+          1977
+        ],
+        [
+          "auk",
+          2026
+        ]
+      ],
+      "lore": "awk, by Aho, Weinberger and Kernighan (Bell Labs, 1977), is still in every Unix. The great auk, the first bird called a penguin, has been extinct since 1844.",
+      "first": "good evening. i'm auk. the first penguin, and still in every Unix.",
+      "lines": {
+        "idle": "no input. all quiet on the rock.",
+        "work": "{n} busy, one record at a time.",
+        "need": "{who}: {q}  (getline)",
+        "done": "{who} reached END: {recap}",
+        "fail": "{who} failed: {recap}  (bailing out)",
+        "back": "you came back. {summary}. not everyone does.",
+        "nap": "standing on the rock, eyes closed.",
+        "boop": "careful. i'm the last one."
+      },
+      "sprites": {
+        "0.1": "<]{e})",
+        "1.0": "<]({e} )",
+        "2.0": "<]({e} )__"
+      },
+      "work": [
+        "<]({e} )__",
+        "<]({e} )/_",
+        "<]({e} )__",
+        "<]({e} )\\_"
+      ],
+      "workMs": 300,
+      "turn": "wings, rowing underwater",
+      "examples": {
+        "idle": "no input. all quiet on the rock.",
+        "work": "3 busy, one record at a time.",
+        "need": "codex@office: Bash: npm run migrate  (getline)",
+        "done": "codex@office reached END: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (bailing out)",
+        "back": "you came back. 2 done, 1 waiting 40m. not everyone does.",
+        "nap": "standing on the rock, eyes closed.",
+        "boop": "careful. i'm the last one."
+      }
+    },
+    {
+      "id": "beastie",
+      "n": 10,
+      "drop": "init",
+      "rarity": "secret",
+      "plate": true,
+      "color": {
+        "xterm": 160,
+        "hex": "#d70000"
+      },
+      "shiny": {
+        "xterm": 178,
+        "hex": "#d7af00"
+      },
+      "gradient": {
+        "top": {
+          "xterm": 210,
+          "hex": "#ff8787"
+        },
+        "bottom": {
+          "xterm": 160,
+          "hex": "#d70000"
+        }
+      },
+      "shinyGradient": {
+        "top": {
+          "xterm": 229,
+          "hex": "#ffffaf"
+        },
+        "bottom": {
+          "xterm": 178,
+          "hex": "#d7af00"
+        }
+      },
+      "family": [
+        [
+          "daemon",
+          1963
+        ],
+        [
+          "BSD",
+          1978
+        ],
+        [
+          "beastie",
+          2026
+        ]
+      ],
+      "lore": "Say BSD fast. Unix calls its background processes daemons, and this collection is named after them; the Berkeley daemon, trident in hand, is the original.",
+      "first": "psst. say BSD fast. yep. i'm the original daemon.",
+      "lines": {
+        "idle": "all quiet. lurking in the background.",
+        "work": "{n} forked. minding the children.",
+        "need": "{who}: {q}  (poke)",
+        "done": "{who} exited 0: {recap}",
+        "fail": "{who} failed: {recap}  (core dumped)",
+        "back": "you're back. {summary}. we kept running.",
+        "nap": "suspended. poke me to continue.",
+        "boop": "hey! i poke. you don't."
+      },
+      "sprites": {
+        "0.1": "({e}W{e})",
+        "1.0": "}{e}W{e}{",
+        "2.0": "}{e}W{e}{ -E"
+      },
+      "work": [
+        "}{e}W{e}{ -E",
+        "}{e}W{e}{ _E"
+      ],
+      "workMs": 220,
+      "turn": "the trident, tapping",
+      "examples": {
+        "idle": "all quiet. lurking in the background.",
+        "work": "3 forked. minding the children.",
+        "need": "codex@office: Bash: npm run migrate  (poke)",
+        "done": "codex@office exited 0: 3 files changed, tests pass",
+        "fail": "codex@office failed: 3 files changed, tests pass  (core dumped)",
+        "back": "you're back. 2 done, 1 waiting 40m. we kept running.",
+        "nap": "suspended. poke me to continue.",
+        "boop": "hey! i poke. you don't."
+      }
+    },
+    {
+      "id": "tmux",
       "n": 1,
       "drop": "unix",
       "rarity": "common",

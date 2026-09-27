@@ -11,6 +11,284 @@ export const PAIR_ROSTER = {
   "daemons": [
     {
       "id": "tim",
+      "lore": "Named the way vim was: vi improved. tmux followed screen; tim is tmux improved: eight arms, eight panes, and it never drops one.",
+      "first": "oh hi. i'm tim. tmux, improved. what are we building?",
+      "family": [
+        [
+          "screen",
+          1987
+        ],
+        [
+          "tmux",
+          2007
+        ],
+        [
+          "tim",
+          2026
+        ]
+      ],
+      "lines": {
+        "idle": "all quiet. eight arms free.",
+        "work": "{n} panes busy. an arm on each.",
+        "need": "{who}: {q}  (bell)",
+        "done": "silence in {who}: {recap}",
+        "fail": "{who} failed: {recap}  (pane is dead)",
+        "back": "reattached. {summary}.",
+        "nap": "detached. curled up. reattach any time.",
+        "boop": "hey. that's my status line. (ink)"
+      }
+    },
+    {
+      "id": "gnu",
+      "lore": "Richard Stallman announced GNU on 27 September 1983: GNU's Not Unix, a recursive acronym. The gnu is a wildebeest, and it will politely remind you it's GNU/Linux.",
+      "first": "hi. i'm GNU's Not Unix's Not Unix's... call me gnu.",
+      "family": [
+        [
+          "Unix",
+          1969
+        ],
+        [
+          "GNU",
+          1983
+        ],
+        [
+          "gnu",
+          2026
+        ]
+      ],
+      "lines": {
+        "idle": "grazing. nothing needs you.",
+        "work": "{n} running with the herd.",
+        "need": "{who}: {q}  (snort)",
+        "done": "{who} made it across the river: {recap}",
+        "fail": "{who} failed: {recap}  (crocodile)",
+        "back": "welcome back to the herd. {summary}.",
+        "nap": "grazing. back before the Hurd hits 1.0.",
+        "boop": "i'd just like to interject: it's GNU/Linux."
+      }
+    },
+    {
+      "id": "lynx",
+      "lore": "Lynx came out of the University of Kansas in 1992 and is still maintained, the oldest web browser that is. It reads the web with the pictures taken out.",
+      "first": "hi. i'm lynx. the web, with the pictures taken out.",
+      "family": [
+        [
+          "WorldWideWeb",
+          1990
+        ],
+        [
+          "Lynx",
+          1992
+        ],
+        [
+          "lynx",
+          2026
+        ]
+      ],
+      "lines": {
+        "idle": "no links to follow.",
+        "work": "{n} busy. request sent; waiting for response.",
+        "need": "{who}: {q}  (ears up)",
+        "done": "{who} done: {recap}. transfer complete.",
+        "fail": "{who} failed: {recap}  Alert!",
+        "back": "reloaded. {summary}.",
+        "nap": "curled up in the snow for a bit.",
+        "boop": "[INLINE]  that was a picture of me."
+      }
+    },
+    {
+      "id": "mutt",
+      "lore": "Michael Elkins wrote Mutt, a terminal mail client, in 1995: \"All mail clients suck. This one just sucks less.\" A scruffy dog, loyal to your inbox.",
+      "first": "hi. i'm mutt. all buddies suck. this one just sucks less.",
+      "family": [
+        [
+          "elm",
+          1986
+        ],
+        [
+          "Mutt",
+          1995
+        ],
+        [
+          "mutt",
+          2026
+        ]
+      ],
+      "lines": {
+        "idle": "no new mail. chewing a slipper.",
+        "work": "{n} busy. sitting by the mailbox.",
+        "need": "{who}: {q}  (new mail)",
+        "done": "{who} replied: {recap}",
+        "fail": "{who} failed: {recap}  (bounced)",
+        "back": "you're back. {summary}. sorted by thread.",
+        "nap": "asleep on a pile of mail.",
+        "boop": "arf. sucks less, right?"
+      }
+    },
+    {
+      "id": "yak",
+      "lore": "Stephen Johnson wrote yacc, Yet Another Compiler-Compiler, at Bell Labs in 1975. Yak shaving is the chain of side tasks between you and your goal; this yak notices.",
+      "first": "hi. i'm yak. yet another pair buddy. what's the actual goal?",
+      "family": [
+        [
+          "yacc",
+          1975
+        ],
+        [
+          "bison",
+          1985
+        ],
+        [
+          "yak",
+          2026
+        ]
+      ],
+      "lines": {
+        "idle": "all quiet. no yaks in sight.",
+        "work": "{n} busy. shift, reduce, shift, reduce.",
+        "need": "{who}: {q}  accept?",
+        "done": "{who} reduced it to: {recap}",
+        "fail": "{who} failed: {recap}  (syntax error)",
+        "back": "you're back. {summary}. how was the yak?",
+        "nap": "ruminating for a bit.",
+        "boop": "boop. that's a side task."
+      }
+    },
+    {
+      "id": "gopher",
+      "lore": "The University of Minnesota's Gopher (1991) was named for the campus mascot, and for a moment it was bigger than the web. It served menus on port 70; this one pops out of its burrow when something needs you.",
+      "first": "(pops up) hi. i'm gopher. i go for things.",
+      "family": [
+        [
+          "Gopher",
+          1991
+        ],
+        [
+          "gopher",
+          2026
+        ]
+      ],
+      "lines": {
+        "idle": "all quiet above ground.",
+        "work": "{n} busy underground. i hear digging.",
+        "need": "{who}: {q}  (pops up)",
+        "done": "{who} came up with: {recap}",
+        "fail": "{who} failed: {recap}  (cave-in)",
+        "back": "you popped back up. {summary}.",
+        "nap": "down the burrow for a bit.",
+        "boop": "(ducks back into the burrow)"
+      }
+    },
+    {
+      "id": "bug",
+      "lore": "On 9 September 1947 a moth was found in relay 70, panel F, of the Harvard Mark II and taped into the log: \"First actual case of bug being found.\" Still drawn to the light.",
+      "first": "hi. first actual case of bug being found. that's me.",
+      "family": [
+        [
+          "Mark II",
+          1947
+        ],
+        [
+          "bug",
+          2026
+        ]
+      ],
+      "lines": {
+        "idle": "all quiet. circling the lamp.",
+        "work": "{n} busy. staying out of the relays.",
+        "need": "{who}: {q}  (flutter)",
+        "done": "{who} done: {recap}. taped into the log.",
+        "fail": "{who} failed: {recap}  (relay 70, panel F)",
+        "back": "the light's back on. {summary}.",
+        "nap": "wings folded for a bit.",
+        "boop": "careful. i'm in the Smithsonian."
+      }
+    },
+    {
+      "id": "tux",
+      "lore": "Linus Torvalds said a penguin bit him at a zoo in Canberra. Larry Ewing drew Tux in the GIMP in 1996, well fed and content, and the kernel still draws one per CPU at boot.",
+      "first": "hi. i'm tux. well fed and fully booted.",
+      "family": [
+        [
+          "Linux",
+          1991
+        ],
+        [
+          "Tux",
+          1996
+        ],
+        [
+          "tux",
+          2026
+        ]
+      ],
+      "lines": {
+        "idle": "all quiet. digesting a herring.",
+        "work": "{n} running. one penguin each, like at boot.",
+        "need": "{who}: {q}  (squawk)",
+        "done": "[  OK  ] {who}: {recap}",
+        "fail": "{who} failed: {recap}  (oops)",
+        "back": "welcome back. {summary}. no reboot needed.",
+        "nap": "suspended to RAM. full belly.",
+        "boop": "i don't bite. that was the one in Canberra."
+      }
+    },
+    {
+      "id": "auk",
+      "lore": "awk, by Aho, Weinberger and Kernighan (Bell Labs, 1977), is still in every Unix. The great auk, the first bird called a penguin, has been extinct since 1844.",
+      "first": "good evening. i'm auk. the first penguin, and still in every Unix.",
+      "family": [
+        [
+          "awk",
+          1977
+        ],
+        [
+          "auk",
+          2026
+        ]
+      ],
+      "lines": {
+        "idle": "no input. all quiet on the rock.",
+        "work": "{n} busy, one record at a time.",
+        "need": "{who}: {q}  (getline)",
+        "done": "{who} reached END: {recap}",
+        "fail": "{who} failed: {recap}  (bailing out)",
+        "back": "you came back. {summary}. not everyone does.",
+        "nap": "standing on the rock, eyes closed.",
+        "boop": "careful. i'm the last one."
+      }
+    },
+    {
+      "id": "beastie",
+      "lore": "Say BSD fast. Unix calls its background processes daemons, and this collection is named after them; the Berkeley daemon, trident in hand, is the original.",
+      "first": "psst. say BSD fast. yep. i'm the original daemon.",
+      "family": [
+        [
+          "daemon",
+          1963
+        ],
+        [
+          "BSD",
+          1978
+        ],
+        [
+          "beastie",
+          2026
+        ]
+      ],
+      "lines": {
+        "idle": "all quiet. lurking in the background.",
+        "work": "{n} forked. minding the children.",
+        "need": "{who}: {q}  (poke)",
+        "done": "{who} exited 0: {recap}",
+        "fail": "{who} failed: {recap}  (core dumped)",
+        "back": "you're back. {summary}. we kept running.",
+        "nap": "suspended. poke me to continue.",
+        "boop": "hey! i poke. you don't."
+      }
+    },
+    {
+      "id": "tmux",
       "lore": "Named the way vim was: vi improved. tmux followed screen; tim is tmux improved, and so is the app it lives in.",
       "first": "oh hi. i'm tim. tmux, improved. what are we building?",
       "family": [
