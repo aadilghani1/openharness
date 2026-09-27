@@ -531,7 +531,7 @@ pub struct Item { pub words: Vec<String>, pub origin: Option<(std::sync::Arc<str
 /// What a hook's commands run with (cmdq_new_state, CMDQ_STATE_NOHOOKS): its formats and the pane
 /// it is about (the tab's id and the pane), their current one.
 #[derive(Clone, Debug, Default)]
-pub struct HookState { pub formats: Vec<(String, String)>, pub target: Option<(String, u64)>, pub session: Option<u32> }
+pub struct HookState { pub formats: Vec<(String, String)>, pub target: Option<(String, u64)>, pub session: Option<u32>, pub made: bool }
 
 pub type Queue = std::collections::VecDeque<Item>;
 
@@ -706,10 +706,14 @@ fn command_hooks(app: &mut App, words: &[String], failed: bool) -> Queue {
     let sid = other_session(app, words).filter(|s| app.swap_back.is_none() && app.sessions.iter().any(|x| x.id == *s && x.mirror.is_none()));
     let back = app.session_id;
     if let Some(sid) = sid { app.swap_back = Some(back); app.swap_session(sid); }
-    let target = app.current();
+    // About the command's target (cmdq_insert_hook's fsp): what it made (new-window's window,
+    // split-window's pane — there once the queue has waited for it), else its -t, else the
+    // current pane.
+    let made = matches!(entry.name, "new-window" | "split-window") && !failed;
+    let target = args.get('t').filter(|_| !made && entry.target.map(|t| t.kind == crate::cmd::Kind::Pane || t.kind == crate::cmd::Kind::Window).unwrap_or(false)).and_then(|t| pane_target(app, t)).or_else(|| app.current());
     let mut formats = vec![("hook".to_string(), name.clone())];
     formats.extend(args.hook_formats());
-    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: sid };
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: sid, made };
     let items = hook_items(app, &name, target, state);
     if sid.is_some() { app.swap_back = None; if app.session_id != back { app.swap_session(back); } }
     items
@@ -736,7 +740,7 @@ pub fn notify(app: &mut App, name: &str, window: Option<usize>, pane: Option<u64
     // window's active one otherwise.
     if let Some(p) = pane { formats.push(("hook_pane".to_string(), crate::pane::tag(p))) }
     let target = w.or(Some(app.active)).and_then(|w| pane.or(app.tabs.get(w).and_then(|t| t.focus)).map(|p| (w, p)));
-    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: None };
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: None, made: false };
     let items = hook_items(app, name, target, state);
     app.pending_hooks.extend(items);
 }
@@ -754,7 +758,7 @@ pub fn notify_session(app: &mut App, name: &str, sid: u32, session_name: &str, w
     ];
     if let Some((wid, w)) = window { formats.push(("hook_window".to_string(), format!("@{wid}"))); formats.push(("hook_window_name".to_string(), w)) }
     let target = app.tabs.get(app.active).and_then(|t| t.focus).map(|p| (app.active, p));
-    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: None };
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: None, made: false };
     let items = hook_items(app, name, target, state);
     app.pending_hooks.extend(items);
 }
@@ -782,7 +786,7 @@ pub fn notify_harness(app: &mut App, name: &str, key: &(String, String)) {
         ("hook_harness_question".to_string(), question),
     ];
     let target = pane.or_else(|| app.focused().map(|p| (app.active, p)));
-    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: None };
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: None, made: false };
     let items = hook_items(app, name, target, state);
     app.pending_hooks.extend(items);
 }
@@ -799,7 +803,7 @@ pub fn notify_gone(app: &mut App, name: &str, wid: u64, window_name: &str) {
         ("hook_window_name".to_string(), window_name.to_string()),
     ];
     let target = app.focused().map(|p| (app.active, p));
-    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: None };
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))), session: None, made: false };
     let items = hook_items(app, name, target, state);
     app.pending_hooks.extend(items);
 }

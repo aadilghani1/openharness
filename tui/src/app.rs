@@ -459,6 +459,9 @@ pub struct App {
     pub home_moved: bool,
     /// More commands of the same line or binding wait behind the one running.
     pub chain_follows: bool,
+    /// The window and pane a shell was last made in (new-window's, split-window's): what their
+    /// after- hooks are about.
+    pub last_made: Option<(String, u64)>,
     /// The Claude Code and Codex conversations Harness did not start that the home page offers
     /// (each machine's session index, asked once each time the page shows), and the machines
     /// asked so far.
@@ -889,6 +892,7 @@ impl App {
             home_cursor: 0,
             home_moved: false,
             chain_follows: false,
+            last_made: None,
             home_external: Vec::new(),
             home_asked: HashSet::new(),
             home_shown: false,
@@ -4371,7 +4375,11 @@ impl App {
     /// (cmd_find_from_mouse), else the active pane of the current window.
     pub fn current(&self) -> Option<(usize, u64)> {
         if let Some(found) = self.mouse_ev.as_ref().filter(|m| m.valid).and_then(|m| crate::mouse::mouse_pane(self, m)) { return Some(found) }
-        // A hook's commands: the pane (window) it is about.
+        // A hook's commands: the pane (window) it is about — for a command's that made one, the
+        // one it made.
+        if let Some((tab, pane)) = self.hook_state.as_ref().filter(|h| h.made).and(self.last_made.clone()) {
+            if let Some(w) = self.tabs.iter().position(|t| t.id == tab) { return Some((w, pane)) }
+        }
         if let Some((tab, pane)) = self.hook_state.as_ref().and_then(|h| h.target.clone()) {
             if let Some(w) = self.tabs.iter().position(|t| t.id == tab) { return Some((w, pane)) }
         }

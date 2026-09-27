@@ -1170,6 +1170,7 @@ fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Res
                     if let Some((w, _)) = app.find_pane(&machine, id) { app.tabs[w].touch(); app.alert(w, crate::app::ACTIVITY) }
                 }
                 if let Some((w, pane)) = app.find_pane(&machine, id) {
+                    app.last_made = Some((app.tabs[w].id.clone(), pane));
                     if let Some(p) = app.panes.get_mut(&pane) { p.queued.extend(typed) }
                     // -P: what was made, printed (to the shell waiting on it).
                     if let Some(fmt) = app.print_new.take() {
