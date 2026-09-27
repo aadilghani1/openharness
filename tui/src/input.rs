@@ -1852,7 +1852,14 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             // more than --multi=N marked.
             "select-all" => { if multi { for (i, _) in picker.visible.clone() { let id = picker.rows[i].id.clone(); if !picker.marked.contains(&id) && picker.room_to_mark() { picker.marked.push(id) } } } }
             "deselect-all" => { let shown: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); picker.marked.retain(|m| !shown.contains(m)) }
-            "toggle-all" => { if multi { let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); for id in all { if let Some(at) = picker.marked.iter().position(|m| *m == id) { picker.marked.remove(at); } else if picker.room_to_mark() { picker.marked.push(id) } } } }
+            // actToggleAll: the shown rows that were marked unmarked first, then the others marked
+            // from the top while --multi=N has room.
+            "toggle-all" => { if multi {
+                let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect();
+                let was: Vec<String> = all.iter().filter(|id| picker.marked.contains(id)).cloned().collect();
+                picker.marked.retain(|m| !was.contains(m));
+                for id in all.into_iter().filter(|id| !was.contains(id)) { if picker.room_to_mark() { picker.marked.push(id) } }
+            } }
             "toggle-preview" => picker.show_preview(None), "toggle-wrap" => picker.toggle_wrap(),
             "preview-up" => picker.preview_by(-1), "preview-down" => picker.preview_by(1),
             "clear-query" => picker.set_query(""),
@@ -2009,6 +2016,9 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
     // fzf's accept with nothing matched: the list goes.
     if id.is_none() && picker.visible.is_empty() && choice == Choice::Enter { SPLIT.with(|s| s.set(None)); return }
     let keep = |app: &mut App, kind: PickerKind, picker: Picker| app.modal = Some(Modal::Picker { kind, picker });
+    // A list of keys, buffers, commands or text: only Enter picks — the harness lists' keys (C-v
+    // beside, C-x below, M-p pause …) do nothing here, as keys fzf has no action for.
+    if choice != Choice::Enter && matches!(kind, PickerKind::Keys | PickerKind::Buffers | PickerKind::Palette | PickerKind::Help | PickerKind::Messages | PickerKind::Output { .. }) { return keep(app, kind, picker) }
     match kind.clone() {
         PickerKind::Open { .. } if id.as_deref().map(|i| i.starts_with("session:")).unwrap_or(false) => {
             let sid = id.as_deref().and_then(|i| i.strip_prefix("session:")).and_then(|n| n.parse().ok()).unwrap_or(app.session_id);

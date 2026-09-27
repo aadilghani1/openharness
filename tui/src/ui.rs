@@ -988,7 +988,10 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     let pal = theme::fzf().pal;
     let (base, matched, current, marked, alt) = row_gutter(buf, picker, vi, x, y, None);
     let base_style = base.style();
-    let cell = |part: Option<Style>, on: bool| paint(base, matched, part, on);
+    // A row with no colours of its own is fzf's item without ANSI: its hits in the match pair
+    // alone (colorOffsets), none of the row's attributes on them.
+    let plain = row.lead.iter().all(|s| s.content.is_empty()) && row.label_dim == 0 && row.detail.iter().all(|s| s.content.is_empty() || s.style == Style::default());
+    let cell = |part: Option<Style>, on: bool| if plain && on { matched.style() } else { paint(base, matched, part, on) };
     let mut spans: Vec<Span> = Vec::new();
     for s in &row.lead { spans.push(Span::styled(s.content.clone(), cell(Some(s.style), false))) }
     let lead_w: usize = row.lead.iter().map(|s| s.content.width()).sum();
@@ -1405,9 +1408,10 @@ fn fzf_row_part(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, te
         spans.push(Span::styled(sign, base.style().add_modifier(Modifier::DIM)));
     }
     let (mut run, mut run_style) = (String::new(), None::<Style>);
+    let plain = cells.iter().all(|(_, part, _)| part.is_none());
     for (c, part, on) in cells {
         if !run.is_empty() && unicode_width::UnicodeWidthChar::width(*c) == Some(0) { run.push(*c); continue }
-        let st = paint(base, matched, *part, *on);
+        let st = if plain && *on { matched.style() } else { paint(base, matched, *part, *on) };
         if run_style != Some(st) && !run.is_empty() { spans.push(Span::styled(std::mem::take(&mut run), run_style.unwrap_or_default())) }
         run_style = Some(st);
         run.push(*c);
@@ -1459,7 +1463,7 @@ fn repeat_to_fill(s: &str, limit: usize) -> String {
 /// in view with --hscroll-off columns after it, the ellipsis where it was cut on either side.
 fn hscroll(cells: Vec<Cell>, room: usize, ellipsis: &str, scroll: bool, scroll_off: usize, keep_right: bool) -> Vec<Cell> {
     let cw = |c: char| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-    let w = |c: &[Cell]| -> usize { c.iter().map(|x| cw(x.0)).sum() };
+    let w = |c: &[Cell]| -> usize { cell_widths(c).iter().sum() };
     if w(&cells) <= room { return cells }
     // util.Truncate(ellipsis, maxWidth): as much of it as the room takes.
     let mut ew = 0;
@@ -1468,7 +1472,7 @@ fn hscroll(cells: Vec<Cell>, room: usize, ellipsis: &str, scroll: bool, scroll_o
     let trim_right = |c: &[Cell], width: usize| -> Vec<Cell> {
         let mut out = Vec::new();
         let mut used = 0;
-        for x in c { if used + cw(x.0) > width { break } used += cw(x.0); out.push(*x) }
+        for (x, cw) in c.iter().zip(cell_widths(c)) { if used + cw > width { break } used += cw; out.push(*x) }
         out
     };
     // --keep-right, a row the query did not light: its end in view, the ellipsis before it (trimLeft).
@@ -1509,9 +1513,11 @@ fn hscroll(cells: Vec<Cell>, room: usize, ellipsis: &str, scroll: bool, scroll_o
     if w(&cells[maxe..]) > ew { cells.truncate(maxe); cells.extend(ell.iter().map(plain)) }
     // Trim from the left until it fits beside the leading ellipsis.
     let width = room.saturating_sub(ew);
-    let mut current = w(&cells);
+    let widths = cell_widths(&cells);
+    let mut current: usize = widths.iter().sum();
     let mut from = 0;
-    while current > width && from < cells.len() { current -= cw(cells[from].0); from += 1 }
+    // (A cluster's marks go with it.)
+    while (current > width || widths.get(from) == Some(&0)) && from < cells.len() { current -= widths[from]; from += 1 }
     let mut out: Vec<Cell> = ell.iter().map(plain).collect();
     out.extend(cells[from..].iter().cloned());
     out
@@ -1520,6 +1526,20 @@ fn hscroll(cells: Vec<Cell>, room: usize, ellipsis: &str, scroll: bool, scroll_o
 /// A character of a row's line: its own colours if it has them (hn's glyphs, a dim detail — an
 /// --ansi part to fzf), and whether the query lit it.
 type Cell = (char, Option<Style>, bool);
+
+/// Each cell's columns as fzf counts them (uniseg, by grapheme cluster): the cluster's width on
+/// its first character, none on the rest — a family emoji's ZWJ-joined people are two columns,
+/// not six.
+fn cell_widths(cells: &[Cell]) -> Vec<usize> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let s: String = cells.iter().map(|c| c.0).collect();
+    let mut out = Vec::with_capacity(cells.len());
+    for g in s.graphemes(true) {
+        out.push(unicode_width::UnicodeWidthStr::width(g));
+        out.extend(std::iter::repeat_n(0, g.chars().count() - 1));
+    }
+    out
+}
 
 /// The pointer's cells (fzf pads every row to it) and the pointer and marker together.
 fn pointer_w() -> usize { theme::fzf().pointer_char.width() }

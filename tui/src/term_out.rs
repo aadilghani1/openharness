@@ -12,7 +12,65 @@ use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
 use ratatui::style::{Color, Modifier};
 
-pub struct TmuxBackend<W: Write> { inner: CrosstermBackend<W> }
+/// [shadow]: every cell as last written, row by row — so a row whose width the terminal may
+/// count otherwise can be written again whole.
+pub struct TmuxBackend<W: Write> { inner: CrosstermBackend<W>, shadow: Vec<Vec<Cell>> }
+
+/// A cluster whose width terminals may count otherwise than hn does: several code points (a
+/// base and its marks, ZWJ emoji, a keycap, VS16), or a script whose vowels some count as
+/// spacing and some as combining (Thai, Lao, Tibetan, Myanmar, Khmer).
+fn risky(symbol: &str) -> bool {
+    let mut n = 0;
+    for c in symbol.chars() {
+        n += 1;
+        if n > 1 { return true }
+        let u = c as u32;
+        if (0x0E00..=0x0FFF).contains(&u) || (0x1000..=0x109F).contains(&u) || (0x1780..=0x17FF).contains(&u) { return true }
+    }
+    false
+}
+
+/// What the terminal was last told: colours, attributes, the underline's style, the open link.
+struct Pen { fg: Color, bg: Color, ul: Color, modifier: Modifier, style: u8, link: Option<std::sync::Arc<str>> }
+
+impl Pen {
+    fn new() -> Pen { Pen { fg: Color::Reset, bg: Color::Reset, ul: Color::Reset, modifier: Modifier::empty(), style: 0, link: None } }
+
+    /// A cell's attributes (as tmux's tty_attributes writes them) and its symbol.
+    fn put(&mut self, w: &mut impl Write, cell: &Cell, extra: Option<&Extra>, usstyle: bool, links: bool) -> io::Result<()> {
+        if cell.modifier != self.modifier {
+            // tmux's tty_attributes: an attribute taken away resets everything, then what is
+            // wanted is set again.
+            if !(self.modifier - cell.modifier).is_empty() {
+                w.write_all(b"\x1b[0m")?;
+                (self.fg, self.bg, self.ul, self.modifier, self.style) = (Color::Reset, Color::Reset, Color::Reset, Modifier::empty(), 0);
+            }
+            for (flag, code) in ATTRS { if cell.modifier.contains(flag) && !self.modifier.contains(flag) { write!(w, "\x1b[{code}m")?; if code == 4 { self.style = 1 } } }
+            self.modifier = cell.modifier;
+        }
+        // tty_attributes' Smulx: a curly (double, dotted, dashed) underline where the
+        // terminal reads one, else a plain one.
+        let want = if !cell.modifier.contains(Modifier::UNDERLINED) { 0 } else if usstyle { extra.map(|e| e.underline).filter(|u| *u >= 2).unwrap_or(1) } else { 1 };
+        if want != self.style && want > 0 { if want == 1 { w.write_all(b"\x1b[4:1m")? } else { write!(w, "\x1b[4:{want}m")? } self.style = want }
+        if cell.fg != self.fg { write!(w, "\x1b[{}m", sgr(cell.fg, 30))?; self.fg = cell.fg; }
+        if cell.bg != self.bg { write!(w, "\x1b[{}m", sgr(cell.bg, 40))?; self.bg = cell.bg; }
+        if usstyle && cell.underline_color != self.ul { write!(w, "\x1b[{}m", sgr_underline(cell.underline_color))?; self.ul = cell.underline_color; }
+        // A link (OSC 8) opened where it starts and closed where it ends.
+        let want_link = if links { extra.and_then(|e| e.link.clone()) } else { None };
+        if want_link != self.link {
+            match &want_link { Some(uri) => write!(w, "\x1b]8;;{uri}\x1b\\")?, None => w.write_all(b"\x1b]8;;\x1b\\")? }
+            self.link = want_link;
+        }
+        w.write_all(cell.symbol().as_bytes())
+    }
+
+    /// Everything back to the terminal's defaults (and so known).
+    fn reset(&mut self, w: &mut impl Write) -> io::Result<()> {
+        if self.link.is_some() { w.write_all(b"\x1b]8;;\x1b\\")? }
+        *self = Pen::new();
+        w.write_all(b"\x1b[0m")
+    }
+}
 
 /// What a pane's cell carries that ratatui's cell cannot: its underline's style (2 double, 3
 /// curly, 4 dotted, 5 dashed — tmux's 4:N) and its link (OSC 8). Kept by position for the frame
@@ -54,7 +112,20 @@ pub fn outer_features(features: &[String]) -> (bool, bool) {
 }
 
 impl<W: Write> TmuxBackend<W> {
-    pub fn new(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer) } }
+    pub fn new(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new() } }
+
+    fn row_risky(&self, y: u16) -> bool { self.shadow.get(y as usize).map(|r| r.iter().any(|c| risky(c.symbol()))).unwrap_or(false) }
+
+    fn remember(&mut self, x: u16, y: u16, cell: &Cell) {
+        let (x, y) = (x as usize, y as usize);
+        if self.shadow.len() <= y { self.shadow.resize(y + 1, Vec::new()) }
+        // (A wide cluster covers the cells after it: ratatui blanks them and sends none.)
+        let wide = unicode_width::UnicodeWidthStr::width(cell.symbol()).max(1);
+        let row = &mut self.shadow[y];
+        if row.len() < x + wide { row.resize(x + wide, Cell::default()) }
+        row[x] = cell.clone();
+        for c in &mut row[x + 1..x + wide] { *c = Cell::default() }
+    }
 }
 
 impl<W: Write> Write for TmuxBackend<W> {
@@ -106,46 +177,45 @@ impl<W: Write> Backend for TmuxBackend<W> {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
-        // CrosstermBackend writes through to its writer.
-        let w = &mut self.inner;
+        let cells: Vec<(u16, u16, Cell)> = content.map(|(x, y, c)| (x, y, c.clone())).collect();
+        // A row that holds (or held) a cluster the terminal may count otherwise is written again
+        // whole from its first column, as fzf writes a line: a cell-by-cell update there would
+        // leave a stale character where the two counts part (a Thai vowel beside a keycap).
+        let touched: std::collections::BTreeSet<u16> = cells.iter().map(|c| c.1).collect();
+        let was: std::collections::HashSet<u16> = touched.iter().copied().filter(|y| self.row_risky(*y)).collect();
+        for (x, y, c) in &cells { self.remember(*x, *y, c) }
+        let whole: std::collections::BTreeSet<u16> = touched.into_iter().filter(|y| was.contains(y) || self.row_risky(*y)).collect();
         let frame = FRAME.lock().ok();
         let frame = frame.as_ref().and_then(|f| f.as_ref());
         let (usstyle, links) = frame.map(|f| (f.usstyle, f.links)).unwrap_or((false, false));
-        let (mut fg, mut bg, mut ul, mut modifier) = (Color::Reset, Color::Reset, Color::Reset, Modifier::empty());
-        // The underline's style as written (0 none, 1 plain, 2… tmux's 4:N), and the open link.
-        let (mut style, mut link): (u8, Option<std::sync::Arc<str>>) = (0, None);
+        let extra_at = |x: u16, y: u16| frame.and_then(|f| f.extras.get(&(x, y)));
+        // CrosstermBackend writes through to its writer.
+        let w = &mut self.inner;
+        let mut pen = Pen::new();
         let mut last: Option<(u16, u16)> = None;
-        for (x, y, cell) in content {
+        for (x, y, cell) in cells.iter().filter(|c| !whole.contains(&c.1)) {
             // The cursor moves only where the cells do not follow on.
-            if !matches!(last, Some((lx, ly)) if x == lx + 1 && y == ly) { write!(w, "\x1b[{};{}H", y + 1, x + 1)?; }
-            last = Some((x, y));
-            let extra = frame.and_then(|f| f.extras.get(&(x, y)));
-            if cell.modifier != modifier {
-                // tmux's tty_attributes: an attribute taken away resets everything, then what is
-                // wanted is set again.
-                if !(modifier - cell.modifier).is_empty() {
-                    w.write_all(b"\x1b[0m")?;
-                    (fg, bg, ul, modifier, style) = (Color::Reset, Color::Reset, Color::Reset, Modifier::empty(), 0);
-                }
-                for (flag, code) in ATTRS { if cell.modifier.contains(flag) && !modifier.contains(flag) { write!(w, "\x1b[{code}m")?; if code == 4 { style = 1 } } }
-                modifier = cell.modifier;
-            }
-            // tty_attributes' Smulx: a curly (double, dotted, dashed) underline where the
-            // terminal reads one, else a plain one.
-            let want = if !cell.modifier.contains(Modifier::UNDERLINED) { 0 } else if usstyle { extra.map(|e| e.underline).filter(|u| *u >= 2).unwrap_or(1) } else { 1 };
-            if want != style && want > 0 { if want == 1 { w.write_all(b"\x1b[4:1m")? } else { write!(w, "\x1b[4:{want}m")? } style = want }
-            if cell.fg != fg { write!(w, "\x1b[{}m", sgr(cell.fg, 30))?; fg = cell.fg; }
-            if cell.bg != bg { write!(w, "\x1b[{}m", sgr(cell.bg, 40))?; bg = cell.bg; }
-            if usstyle && cell.underline_color != ul { write!(w, "\x1b[{}m", sgr_underline(cell.underline_color))?; ul = cell.underline_color; }
-            // A link (OSC 8) opened where it starts and closed where it ends.
-            let want_link = if links { extra.and_then(|e| e.link.clone()) } else { None };
-            if want_link != link {
-                match &want_link { Some(uri) => write!(w, "\x1b]8;;{uri}\x1b\\")?, None => w.write_all(b"\x1b]8;;\x1b\\")? }
-                link = want_link;
-            }
-            w.write_all(cell.symbol().as_bytes())?;
+            if !matches!(last, Some((lx, ly)) if *x == lx + 1 && *y == ly) { write!(w, "\x1b[{};{}H", y + 1, x + 1)?; }
+            last = Some((*x, *y));
+            pen.put(w, cell, extra_at(*x, *y), usstyle, links)?;
         }
-        if link.is_some() { w.write_all(b"\x1b]8;;\x1b\\")? }
+        for y in whole {
+            let Some(row) = self.shadow.get(y as usize) else { continue };
+            write!(w, "\x1b[{};1H", y + 1)?;
+            pen.reset(w)?;
+            w.write_all(b"\x1b[2K")?;
+            let (mut skip, mut placed) = (0usize, true);
+            for (x, cell) in row.iter().enumerate() {
+                if skip > 0 { skip -= 1; continue }
+                // After a cluster the terminal may have counted otherwise, the next cell goes
+                // where hn counts it.
+                if !placed { write!(w, "\x1b[{};{}H", y + 1, x + 1)?; }
+                pen.put(w, cell, extra_at(x as u16, y), usstyle, links)?;
+                skip = unicode_width::UnicodeWidthStr::width(cell.symbol()).saturating_sub(1);
+                placed = !risky(cell.symbol());
+            }
+        }
+        if pen.link.is_some() { w.write_all(b"\x1b]8;;\x1b\\")? }
         w.write_all(b"\x1b[39m\x1b[49m\x1b[59m\x1b[0m")
     }
 
@@ -153,8 +223,8 @@ impl<W: Write> Backend for TmuxBackend<W> {
     fn show_cursor(&mut self) -> io::Result<()> { self.inner.show_cursor() }
     fn get_cursor_position(&mut self) -> io::Result<Position> { self.inner.get_cursor_position() }
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> { self.inner.set_cursor_position(position) }
-    fn clear(&mut self) -> io::Result<()> { self.inner.clear() }
-    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> { self.inner.clear_region(clear_type) }
+    fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.inner.clear() }
+    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> { if matches!(clear_type, ClearType::All) { self.shadow.clear() } self.inner.clear_region(clear_type) }
     fn append_lines(&mut self, n: u16) -> io::Result<()> { self.inner.append_lines(n) }
     fn size(&self) -> io::Result<Size> { self.inner.size() }
     fn window_size(&mut self) -> io::Result<WindowSize> { self.inner.window_size() }
