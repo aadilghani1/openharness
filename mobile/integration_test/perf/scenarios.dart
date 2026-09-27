@@ -170,8 +170,7 @@ class PerfSuite {
       () => _stream('stream_append', StreamLoad.append),
     );
     await _step('scroll_read', _scroll);
-    await _step('find_open_tap', () => _findOpenTap(idle: true));
-    await _step('find_open_tap_streaming', () => _findOpenTap(idle: false));
+    // Find opens by a swipe only: a tap on the title is its menu now.
     await _step('find_open_swipe', _findOpenSwipe);
     await _step('mic_tap', () => _micTap(idle: true));
     await _step('mic_tap_streaming', () => _micTap(idle: false));
@@ -577,6 +576,22 @@ class PerfSuite {
             AnimationStatus.completed;
   }, what: 'Find to finish opening');
 
+  /// Opens Find the way a person does — a swipe right on the terminal — and waits for it.
+  Future<void> _openFindBySwipe() async {
+    final view = _find((w) => w is TerminalView, 'terminal');
+    final box = view.renderObject! as RenderBox;
+    final finger = touches.down(
+      box.localToGlobal(Offset(box.size.width * 0.2, box.size.height * 0.5)),
+    );
+    await nextFrame();
+    finger.moveBy(const Offset(30, 0));
+    await nextFrame();
+    finger.moveBy(const Offset(20, 0));
+    await glide(finger, const Offset(220, 0), steps: 11);
+    finger.up();
+    await _untilOverlayOpen();
+  }
+
   Future<void> _closeFind() async {
     final overlay = findElement((w) => w is TerminalSearchOverlay);
     if (overlay == null) return;
@@ -593,49 +608,6 @@ class PerfSuite {
     final previous = await nextFrame();
     final began = finger.up();
     return (previous, began, wallMicros());
-  }
-
-  Future<void> _findOpenTap({required bool idle}) async {
-    const load = StreamLoad.redraw;
-    final pump = idle
-        ? null
-        : (OutputPump(_terminalA, _outputs[_a]!, load)..start());
-    try {
-      if (pump != null) await Future<void>.delayed(const Duration(seconds: 1));
-      await _series(
-        idle ? 'find_open_tap' : 'find_open_tap_streaming',
-        idle ? 'idle' : load.name,
-        description:
-            'Tap on the agent\'s name in the header (terminal-find): first '
-            'frame with Find (TerminalSearchOverlay) built, and the frame its '
-            '250 ms open animation completes.',
-        (measured) async {
-          await _settle(frames: 2, pause: const Duration(milliseconds: 150));
-          final name = _find(
-            (w) => w.key == const ValueKey('terminal-find'),
-            'terminal-find',
-          );
-          final (previous, began, dispatched) = await _tap(
-            touches.centerOf(name),
-          );
-          final first = await _untilFrame(_overlayUp, what: 'Find to appear');
-          final ready = await _untilOverlayOpen();
-          await _closeFind();
-          return _Observation(
-            operation: 'find_open_tap',
-            load: idle ? 'idle' : load.name,
-            measured: measured,
-            began: began,
-            dispatched: dispatched,
-            previousFrame: previous,
-            firstFrame: first,
-            readyFrame: ready,
-          );
-        },
-      );
-    } finally {
-      await pump?.stop();
-    }
   }
 
   Future<void> _findOpenSwipe() async {
@@ -802,12 +774,7 @@ class PerfSuite {
         final from = _host.currentState!.agentId;
         final to = from == _a ? _b : _a;
         await _settle(frames: 2, pause: const Duration(milliseconds: 150));
-        final name = _find(
-          (w) => w.key == const ValueKey('terminal-find'),
-          'terminal-find',
-        );
-        await _tap(touches.centerOf(name));
-        await _untilOverlayOpen();
+        await _openFindBySwipe();
         await _settle(frames: 2, pause: const Duration(milliseconds: 150));
         final row = _find(
           (w) =>
@@ -903,12 +870,7 @@ class PerfSuite {
           'Five Find opens by tap and their closes, per-widget events on.',
       ...await _traced(() async {
         for (var i = 0; i < 5; i++) {
-          final name = _find(
-            (w) => w.key == const ValueKey('terminal-find'),
-            'terminal-find',
-          );
-          await _tap(touches.centerOf(name));
-          await _untilOverlayOpen();
+          await _openFindBySwipe();
           await _closeFind();
         }
       }),

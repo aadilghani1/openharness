@@ -4,6 +4,7 @@ import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/find_models.dart';
+import 'package:harness_mobile/phone/find_row.dart';
 import 'package:harness_mobile/phone/terminal_search.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
@@ -107,7 +108,8 @@ void main() {
   ) async {
     await pumpFind(tester);
     expect(find.byType(FindModels), findsOneWidget);
-    expect(find.text('qwen3-coder-30b', findRichText: true), findsNothing);
+    // Each model is a Find row of its own — the same rows as every other mode of Find.
+    expect(find.byType(FindRow), findsWidgets);
     expect(
       find.textContaining('qwen3-coder-30b', findRichText: true),
       findsOneWidget,

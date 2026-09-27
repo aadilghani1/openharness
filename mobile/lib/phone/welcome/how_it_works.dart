@@ -41,11 +41,10 @@ class HowItWorksPage extends StatelessWidget {
   static const _gestures = [
     ('swipe right', 'all your harnesses'),
     ('swipe left', 'start a new harness'),
-    ('tap the name', 'switch harness'),
-    ('hold the name', 'back to the last harness'),
+    ('tap the title', 'rename, restart, paste'),
+    ('hold the title', 'back to the last harness'),
     ('esc', 'stop what it is doing'),
     ('the mic', 'talk to the harness on screen'),
-    ('…', 'rename, restart or stop it'),
   ];
 
   @override

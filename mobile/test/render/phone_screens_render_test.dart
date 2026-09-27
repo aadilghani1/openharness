@@ -419,7 +419,10 @@ void main() {
 
   testWidgets('find', skip: skip, (tester) async {
     final key = await pumpScreen(tester, focus());
-    await tester.tap(find.byKey(const ValueKey('terminal-find')));
+    await tester.dragFrom(
+      tester.getCenter(find.byType(TerminalPage).first) - const Offset(120, 0),
+      const Offset(300, 0),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
     await shoot(tester, key, '3-find');
@@ -501,7 +504,10 @@ void main() {
   });
 
   Future<void> openFind(WidgetTester tester) async {
-    await tester.tap(find.byKey(const ValueKey('terminal-find')));
+    await tester.dragFrom(
+      tester.getCenter(find.byType(TerminalPage).first) - const Offset(120, 0),
+      const Offset(300, 0),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
   }

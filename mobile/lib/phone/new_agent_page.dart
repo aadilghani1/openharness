@@ -640,6 +640,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
     });
   }
 
+  /// Options unfolded: branch, approvals and profile shown rather than left on their defaults.
+  bool _optionsOpen = false;
+
   /// The last Start did not take: the button says Try Again, and every value stays.
   bool _failed = false;
 
@@ -720,10 +723,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
                           weight: FontWeight.w700,
                         ),
                       ),
-                      TtyTextButton(
-                        label: 'Cancel',
-                        onPressed: () => Navigator.of(context).maybePop(),
-                      ),
+                      // No Cancel: a swipe right goes back, the way a swipe left came in.
+                      const SizedBox(height: 44),
                     ],
                   ),
                 ),
@@ -776,7 +777,17 @@ class _NewAgentPageState extends State<NewAgentPage> {
                               ? null
                               : () => unawaited(_chooseProject()),
                         ),
-                        if (info != null || _gitLoading || _gitFailed)
+                        // Options, folded as the desktop folds them: branch, approvals and profile
+                        // sit on their defaults until asked for.
+                        TtyFormRow(
+                          label: 'options',
+                          value: _optionsOpen ? '[−]' : '[+]',
+                          chevron: false,
+                          onTap: () =>
+                              setState(() => _optionsOpen = !_optionsOpen),
+                        ),
+                        if (_optionsOpen &&
+                            (info != null || _gitLoading || _gitFailed))
                           TtyFormRow(
                             label: 'branch',
                             valueColor: info == null && !_gitLoading
@@ -798,7 +809,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                 ? null
                                 : () => unawaited(_chooseBranch(info)),
                           ),
-                        if (_permissionModes.isNotEmpty)
+                        if (_optionsOpen && _permissionModes.isNotEmpty)
                           TtyFormRow(
                             label: 'approvals',
                             value: mode?.label ?? 'Auto-approve',
@@ -808,7 +819,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                 ? null
                                 : () => unawaited(_chooseApprovals()),
                           ),
-                        if (_showsCodexProfile)
+                        if (_optionsOpen && _showsCodexProfile)
                           TtyFormRow(
                             label: 'profile',
                             value: _codexProfile?.label ?? 'Default',

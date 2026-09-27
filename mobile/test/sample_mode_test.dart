@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/phone/terminal_page.dart';
 import 'package:harness_mobile/demo/sample_mode.dart';
 import 'package:harness_mobile/demo/sample_screen.dart' show SayEntry;
 import 'package:harness_mobile/phone/agent_home.dart';
@@ -103,7 +104,10 @@ void main() {
   ) async {
     final notifier = await openSample(tester);
 
-    await tester.tap(find.byKey(const ValueKey('terminal-find')));
+    await tester.dragFrom(
+      tester.getCenter(find.byType(TerminalPage).first) - const Offset(120, 0),
+      const Offset(300, 0),
+    );
     await settle(tester, const Duration(milliseconds: 600));
     for (final name in [
       'fix-login',
@@ -253,7 +257,7 @@ void main() {
     final notifier = await openSample(tester);
     await open(tester, 'sample-docs-site', 'sample-laptop');
 
-    await tester.tap(find.text('…'));
+    await tester.tap(find.byKey(const ValueKey('terminal-title')).first);
     await settle(tester, const Duration(milliseconds: 500));
     await tester.tap(find.text('Rename…'));
     await settle(tester, const Duration(milliseconds: 500));
@@ -268,9 +272,9 @@ void main() {
       isTrue,
     );
 
-    await tester.tap(find.text('…'));
+    await tester.tap(find.byKey(const ValueKey('terminal-title')).first);
     await settle(tester, const Duration(milliseconds: 500));
-    await tester.tap(find.text('Stop Harness…'));
+    await tester.tap(find.text('Stop this harness…'));
     await settle(tester, const Duration(milliseconds: 500));
     await tester.tap(find.text('Stop').last);
     await settle(tester, const Duration(seconds: 2));
@@ -287,7 +291,7 @@ void main() {
   testWidgets('Leave sample in Settings goes back and ends it', (tester) async {
     final notifier = await openSample(tester);
 
-    await tester.tap(find.text('…'));
+    await tester.tap(find.byKey(const ValueKey('terminal-title')).first);
     await settle(tester, const Duration(milliseconds: 500));
     await tester.tap(find.text('Settings'));
     await settle(tester, const Duration(seconds: 1));

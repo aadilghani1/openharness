@@ -216,8 +216,11 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
           DateTime.fromMillisecondsSinceEpoch(0);
     }
 
+    // Paused work has its own place at the end: last used lately, it is still not what is running.
+    bool paused(PhoneDestination row) => row.entry?.agent.isStopped ?? false;
     final List<PhoneDestination> needsYou;
     final List<PhoneDestination> rest;
+    var pausedRows = const <PhoneDestination>[];
     final PhoneDestination? current;
     if (!typed && plain) {
       current = showing == null
@@ -229,14 +232,18 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       ]..sort((a, b) => since(b).compareTo(since(a)));
       rest = [
         for (final row in rows)
-          if (!asking(row) && row != current) row,
+          if (!asking(row) && row != current && !paused(row)) row,
+      ];
+      pausedRows = [
+        for (final row in rows)
+          if (!asking(row) && row != current && paused(row)) row,
       ];
     } else {
       current = null;
       needsYou = const [];
       rest = rows;
     }
-    final ordered = [...needsYou, ...rest, ?current];
+    final ordered = [...needsYou, ...rest, ?current, ...pausedRows];
     final selectedAt = typed ? ordered.indexWhere(search.canSubmit) : -1;
     final newHarness = widget.onNewHarness;
     final project = search.projectMatch;
@@ -251,6 +258,10 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     }
     children.addAll(rest.map(row));
     if (current != null) children.add(row(current));
+    if (pausedRows.isNotEmpty) {
+      children.add(const FindHeader('paused'));
+      children.addAll(pausedRows.map(row));
+    }
     if (ordered.isEmpty) {
       children.add(
         Padding(

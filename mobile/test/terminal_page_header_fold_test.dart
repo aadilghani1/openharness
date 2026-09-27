@@ -117,7 +117,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     resizes.clear();
 
-    await tester.tap(find.byKey(const ValueKey('terminal-find')));
+    await tester.dragFrom(
+      tester.getCenter(find.byType(TerminalPage).first) - const Offset(120, 0),
+      const Offset(300, 0),
+    );
     await tester.pump();
     // The search field's keyboard slides up, and the page shrinks above it.
     tester.view.viewInsets = const FakeViewPadding(bottom: 900);
@@ -154,7 +157,10 @@ void main() {
       expect(find.byType(TerminalActionColumn), findsOneWidget);
     }
 
-    await tester.tap(find.byKey(const ValueKey('terminal-find')));
+    await tester.dragFrom(
+      tester.getCenter(find.byType(TerminalPage).first) - const Offset(120, 0),
+      const Offset(300, 0),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     // Find opens on the recent agents; a tap on its field is what starts a

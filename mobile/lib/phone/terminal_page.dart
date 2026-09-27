@@ -36,7 +36,6 @@ import 'held_height.dart';
 import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'settings_page.dart';
-import 'status_pill.dart';
 import 'terminal_action_column.dart';
 import 'terminal_chrome_scroll.dart';
 import 'terminal_header.dart';
@@ -1618,7 +1617,6 @@ class _TerminalPageState extends State<TerminalPage>
         !agentGone &&
         (_reclaiming == _Reclaim.reconnect ||
             (machine != null && phoneMachineRedialling(machine)));
-    final reclaim = phoneReclaimAction(session, reconnecting: reconnecting);
     // Read-only either way — the terminal was never this pane's (a watcher) or was taken from it.
     // `_AgentGone` owns the page when the agent itself is missing, so this stays out of its way.
     final blocked =
@@ -1637,11 +1635,6 @@ class _TerminalPageState extends State<TerminalPage>
         ? const <KeyHint>[]
         : _questionWatcher?.hints ?? const <KeyHint>[];
     final takerName = phoneTakerName(
-      session,
-      (id) => widget.notifier.stateOf(id)?.machine.displayName,
-    );
-    final takeoverNotice = phoneTakeoverNotice(session, takerName);
-    final holderName = phoneHolderName(
       session,
       (id) => widget.notifier.stateOf(id)?.machine.displayName,
     );
@@ -1814,8 +1807,20 @@ class _TerminalPageState extends State<TerminalPage>
                                             NotificationListener<
                                               ScrollNotification
                                             >(
-                                              onNotification:
-                                                  _chrome.onNotification,
+                                              // A scroll on a terminal held elsewhere takes it,
+                                              // as a tap does: no button to find first.
+                                              onNotification: (notification) {
+                                                if (blocked &&
+                                                    notification
+                                                        is ScrollStartNotification &&
+                                                    notification.dragDetails !=
+                                                        null) {
+                                                  unawaited(_takeControl());
+                                                }
+                                                return _chrome.onNotification(
+                                                  notification,
+                                                );
+                                              },
                                               child: agentGone
                                                   ? _AgentGone(
                                                       name: _cachedAgentName,
@@ -2034,42 +2039,23 @@ class _TerminalPageState extends State<TerminalPage>
                               asking: SampleMode.maybeOf(context) != null
                                   ? null
                                   : _askingElsewhere(),
-                              onHoldName: _openLastHarness,
+                              onHold: _openLastHarness,
                               onFind: _openSearch,
-                              state: headerStatus.tone == PhoneTone.good
-                                  ? null
-                                  : headerStatus.label.toLowerCase(),
-                              action:
-                                  reclaim != null &&
-                                      !blocked &&
-                                      _reclaiming == null
-                                  ? (
-                                      label: reclaim.label.toLowerCase(),
-                                      onTap: () => unawaited(_takeControl()),
-                                    )
-                                  : null,
-                              onActions: agent == null
-                                  ? null
-                                  : () => _showActions(
-                                      machineName:
-                                          machine?.machine.displayName ?? '',
-                                      agent: agent,
-                                      status: headerStatus,
-                                    ),
+                              onTap: () {
+                                if (agent == null) return;
+                                _showActions(
+                                  machineName:
+                                      machine?.machine.displayName ?? '',
+                                  agent: agent,
+                                  status: headerStatus,
+                                );
+                              },
                             ),
                             // The sample's guide: one line of what to try next.
                             if (_sampleGuide() case final guide?)
                               _SampleGuideLine(text: guide),
-                            // Read-only: whose terminal it is and the way to take it
-                            // back. See [_ControlBanner].
-                            if (blocked || _reclaiming == _Reclaim.control)
-                              _ControlBanner(
-                                watching: session?.watching ?? false,
-                                busy: !blocked,
-                                takeoverNotice: takeoverNotice,
-                                holderName: holderName,
-                                onTakeControl: _takeControl,
-                              ),
+                            // ⚠️ No "take control" band: a tap or a scroll on a terminal held
+                            // elsewhere takes it — see `onInputTap` and [_onScrollTakeControl].
                           ],
                         ),
                       ),
@@ -2157,27 +2143,14 @@ class _TerminalPageState extends State<TerminalPage>
                         child: Align(
                           alignment: Alignment.bottomCenter,
                           heightFactor: 1,
-                          // Faded while the history is read back: it sits on the rows being read, and
-                          // is not what reading needs. Still there, still tappable.
-                          child:
-                              ValueListenableBuilder<({int above, int total})?>(
-                                valueListenable: _scrollback,
-                                builder: (context, position, mic) =>
-                                    AnimatedOpacity(
-                                      duration: const Duration(
-                                        milliseconds: 150,
-                                      ),
-                                      opacity: position == null ? 1 : 0.25,
-                                      child: mic,
-                                    ),
-                                child: TerminalActionColumn(
-                                  voice: widget.voice,
-                                  session: session,
-                                  onSearch: _openSearch,
-                                  unread: widget.notifier.agentNotices.unread,
-                                  working: _agentWorking,
-                                ),
-                              ),
+                          // Always there, reading or not: what is read is what gets answered.
+                          child: TerminalActionColumn(
+                            voice: widget.voice,
+                            session: session,
+                            onSearch: _openSearch,
+                            unread: widget.notifier.agentNotices.unread,
+                            working: _agentWorking,
+                          ),
                         ),
                       ),
                     // `esc`, one tap, beside the mic while the agent is working or asking — the key a
@@ -2410,7 +2383,7 @@ class _TerminalPageState extends State<TerminalPage>
   List<PhoneSheetAction> _agentActions(Agent agent) => [
     PhoneSheetAction(
       icon: LucideIcons.clipboardPaste300,
-      label: 'Paste',
+      label: 'Paste from clipboard',
       onTap: () => unawaited(_pasteClipboard()),
     ),
     // Stop what it is doing — Esc, as in the terminal — only while it is doing something. First,
@@ -2490,8 +2463,10 @@ class _TerminalPageState extends State<TerminalPage>
   /// share the route.
   PhoneSheetAction _stopAction(Agent agent) => PhoneSheetAction(
     icon: LucideIcons.trash2300,
-    label: 'Stop Harness…',
+    // The least used thing here: small and faint at the foot, not a red row (it still confirms).
+    label: 'Stop this harness…',
     destructive: true,
+    quiet: true,
     onTap: () => unawaited(
       confirmDeleteAgent(
         context,
@@ -2616,144 +2591,6 @@ class _AgentGone extends StatelessWidget {
       ),
     ),
   );
-}
-
-/// The band over the output saying this pane cannot be typed into, and offering the way in.
-///
-/// ⚠️ **Over the output, not in the header.** The header's status word is 11pt in a corner beside
-/// the agent's name, and somebody mid-sentence never looks there — the keystrokes simply stop
-/// landing and nothing on screen says why. This sits where the eyes already are. The desktop puts
-/// the same band in the same place for the same reason (`widgets/terminal_panel.dart`); this is
-/// that band at phone width.
-///
-/// Covers both ways a pane goes read-only. A WATCHER never held the terminal — the page attached
-/// to an agent the desktop was already driving, output and all (see [TerminalSession.watching]) —
-/// while `takenOver` is a terminal this phone HAD and lost. One sentence each, because "another
-/// app has it, press this" is the part that matters either way; the lost one names the taker when
-/// the daemon said who.
-class _ControlBanner extends StatelessWidget {
-  const _ControlBanner({
-    required this.watching,
-    required this.busy,
-    required this.takeoverNotice,
-    required this.holderName,
-    required this.onTakeControl,
-  });
-
-  /// True where the terminal was never this pane's; false where it was taken away.
-  final bool watching;
-
-  /// The take is in flight — its `terminal_open` is out and this pane is waiting to hear.
-  final bool busy;
-
-  /// Who took it, as the one sentence [phoneTakeoverNotice] writes. Null for a watcher, which
-  /// never lost a terminal, and while a take is in flight.
-  final String? takeoverNotice;
-
-  /// Who is driving the terminal a watcher is looking at, as [phoneHolderName] names it — the
-  /// machine, as the desktop names a taker. Null when the daemon did not say.
-  final String? holderName;
-
-  final VoidCallback onTakeControl;
-
-  String get _title {
-    if (busy) return 'Taking control…';
-    if (watching) {
-      return '${holderName ?? 'Another app'} is using this terminal';
-    }
-    return takeoverNotice ?? 'Another app took control of this terminal';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final ink = phoneToneColor(PhoneTone.attention);
-    return Semantics(
-      key: const ValueKey('phone-takeover-strip'),
-      container: true,
-      liveRegion: true,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          // Composited over the pane's own ground rather than laid on as a wash: the terminal
-          // theme behind this band may be any colour, and a bare translucent fill would read
-          // differently on each of them.
-          color: Color.alphaBlend(
-            ink.withValues(alpha: 0.12),
-            AppPalette.windowBg,
-          ),
-          border: Border(
-            bottom: BorderSide(color: ink.withValues(alpha: 0.55)),
-          ),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
-          child: Row(
-            children: [
-              if (busy)
-                SizedBox(
-                  width: 15,
-                  height: 15,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: ink),
-                )
-              else
-                Icon(LucideIcons.lock300, size: 15, color: ink),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      _title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppPalette.textPrimary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    if (!busy) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        'Typing is paused. Take control to type here.',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: AppPalette.textSecondary,
-                          fontSize: 11,
-                          height: 1.3,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              if (!busy) ...[
-                const SizedBox(width: 10),
-                TextButton(
-                  onPressed: onTakeControl,
-                  style: TextButton.styleFrom(
-                    foregroundColor: ink,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: const Text(
-                    'Take control',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// The terminal's body while its first keyframe is still crossing the network.

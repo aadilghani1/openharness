@@ -65,7 +65,7 @@ class FocusHintsSeen {
 /// terminal once, in the terminal's own type; any touch puts them away for good.
 ///
 /// ```
-///  tap the name        ─ switch harness
+///  tap the title       ─ rename, restart, paste…
 ///
 ///  → swipe right                swipe left ←
 ///    all your harnesses       start a new one
@@ -151,7 +151,7 @@ class _FocusHintsState extends State<FocusHints> {
         child: Semantics(
           label:
               'Tips: swipe right for all your harnesses, swipe left to start '
-              'one, tap the name to switch, the mic to talk.',
+              'one, tap the title for its menu, the mic to talk.',
           child: Material(
             color: tty.ground.withValues(alpha: 0.95),
             child: Stack(
@@ -159,8 +159,8 @@ class _FocusHintsState extends State<FocusHints> {
                 // Under the title, never on it: the title is three rows tall.
                 Positioned(
                   left: 16,
-                  top: 3 * tty.row + 14,
-                  child: hint('↑ tap the name', 'to switch harness'),
+                  top: 4 * tty.row + 14,
+                  child: hint('↑ tap the title', 'rename, restart, paste…'),
                 ),
                 Positioned(
                   left: 16,

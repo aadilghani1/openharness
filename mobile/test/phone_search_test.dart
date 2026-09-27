@@ -1250,7 +1250,7 @@ void main() {
   // ⚠️ **The sheet's own bar, not the page's.** No chevron in it: Cancel ends
   // the SEARCH and leaves the sheet up on its tabs, and Back steps out of the
   // search first and closes the sheet only after — never leaves the agent.
-  testWidgets('Find: Cancel ends the search, then Find; Back the same', (
+  testWidgets('Find: Back ends the search, then Find — no Cancel to find', (
     tester,
   ) async {
     final app = _app([
@@ -1270,7 +1270,7 @@ void main() {
       ),
     );
     await tester.pump();
-    // The field at the top, with Cancel beside it.
+    // The field at the top, and no Cancel: a swipe or Back is the way out.
     expect(find.byType(TtyField), findsOneWidget);
     expect(find.byType(SheetSearchField), findsNothing);
 
@@ -1286,26 +1286,17 @@ void main() {
       await tester.pump();
     }
 
-    // Cancel while searching ends the search and leaves Find up...
+    expect(find.text('Cancel'), findsNothing);
+    // Back ends the search and leaves Find up, then closes it.
     await search();
-    await tester.tap(find.text('Cancel'));
-    await tester.pump();
+    await back();
+    expect(closed, 0);
     expect(
       tester.widget<TextField>(find.byType(TextField)).controller!.text,
       '',
     );
-    expect(closed, 0);
-    // ...and Cancel again closes it.
-    await tester.tap(find.text('Cancel'));
-    await tester.pump();
-    expect(closed, 1);
-
-    // Back takes the same two steps.
-    await search();
     await back();
     expect(closed, 1);
-    await back();
-    expect(closed, 2);
   });
   testWidgets('one bar: no Cancel beside it, and its chevron closes search', (
     tester,

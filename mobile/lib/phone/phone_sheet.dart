@@ -27,10 +27,14 @@ class PhoneSheetAction {
     this.valueColor,
     this.enabled = true,
     this.chevron = false,
+    this.quiet = false,
   });
 
   final IconData icon;
   final String label;
+
+  /// Drawn small and faint, at the foot — the action least used, kept out of the way (Stop).
+  final bool quiet;
 
   /// Run AFTER the sheet has closed — see [showPhoneSheet], which pops first and then calls this.
   /// A dialog opened from here would otherwise open behind the closing sheet.
@@ -237,10 +241,7 @@ class _TmuxMenuState extends State<_TmuxMenu> {
                   ],
                 ),
               ),
-              TtyTextButton(
-                label: 'Cancel',
-                onPressed: () => Navigator.of(context).maybePop(),
-              ),
+              // No Cancel: a tap anywhere outside the sheet puts it away.
             ],
           ),
         ),
@@ -268,6 +269,19 @@ class _TmuxMenuState extends State<_TmuxMenu> {
   }
 
   Widget _item(Tty tty, PhoneSheetAction action, {VoidCallback? onTap}) {
+    if (action.quiet) {
+      return TtyTap(
+        onTap: action.enabled
+            ? (onTap ?? () => widget.onAction(action))
+            : null,
+        semanticsLabel: action.label,
+        minHeight: 44,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: TtyText(action.label, color: tty.faint, size: TtySize.meta),
+        ),
+      );
+    }
     final color = !action.enabled
         ? tty.dim
         : action.destructive

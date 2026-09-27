@@ -453,8 +453,9 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                   SizedBox(height: media.padding.top + 8),
                   // The field at the top, like ⌘P: the list grows down from it. The keyboard stays
                   // down until the field is tapped — the list is usually the answer.
+                  // No Cancel: a swipe left is the way out, as it was the way in.
                   Padding(
-                    padding: const EdgeInsets.only(left: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Row(
                       children: [
                         Expanded(
@@ -486,7 +487,6 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                             ],
                           ),
                         ),
-                        TtyTextButton(label: 'Cancel', onPressed: _back),
                       ],
                     ),
                   ),

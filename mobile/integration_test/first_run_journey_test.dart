@@ -86,11 +86,11 @@ void main() {
     await wait(4000);
     await shot('sample-new-harness-working');
 
-    // The menu.
-    await tester.tap(find.text('…').first);
+    // The menu: a tap on the title; a tap anywhere else puts it away.
+    await tester.tap(find.byKey(const ValueKey('terminal-title')).first);
     await wait(800);
     await shot('sample-menu');
-    await tester.tap(find.text('Cancel').last);
+    await tester.tapAt(const Offset(200, 120));
     await wait(600);
 
     // The end card, once the new harness has run a while — and the way to the real thing.

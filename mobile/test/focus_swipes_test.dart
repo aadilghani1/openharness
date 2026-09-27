@@ -106,7 +106,10 @@ void main() {
   testWidgets('a tap on the agent\'s name opens Find', (tester) async {
     await pumpFocus(tester);
 
-    await tester.tap(find.byKey(const ValueKey('terminal-find')));
+    await tester.dragFrom(
+      tester.getCenter(find.byType(TerminalPage).first) - const Offset(120, 0),
+      const Offset(300, 0),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 
@@ -115,7 +118,10 @@ void main() {
 
   testWidgets('a swipe left on Find sends it back', (tester) async {
     await pumpFocus(tester);
-    await tester.tap(find.byKey(const ValueKey('terminal-find')));
+    await tester.dragFrom(
+      tester.getCenter(find.byType(TerminalPage).first) - const Offset(120, 0),
+      const Offset(300, 0),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 

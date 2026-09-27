@@ -9,8 +9,9 @@ import 'package:harness_mobile/widgets/engine_identity.dart';
 import 'agent_model_controller.dart';
 import 'agent_model_sections.dart';
 import 'agent_model_sheet.dart' show applyModelChoice;
-import 'fzf.dart';
+import 'find_row.dart';
 import 'tty.dart';
+import 'tty_controls.dart';
 
 /// Find's `:` — the desktop ⌘P's models mode: what the agent on screen can run on, as fzf rows.
 ///
@@ -83,8 +84,11 @@ class _FindModelsState extends State<FindModels> {
           needle.isEmpty || text.toLowerCase().contains(needle);
       final rows = <Widget>[];
       Widget note(String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 8, 12, 8),
-        child: Text(text, style: tty.style(color: tty.faint)),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        child: Text(
+          text,
+          style: tty.style(color: tty.faint, size: TtySize.meta),
+        ),
       );
       if (!kModelSheetEngines.contains(engine)) {
         rows.add(
@@ -102,14 +106,14 @@ class _FindModelsState extends State<FindModels> {
               displayName: agent?.engineDisplayName,
             ).label;
         if (matches(ownTitle)) {
+          rows.add(const FindHeader('subscription'));
           rows.add(
-            FzfRow(
+            FindRow(
               title: ownTitle,
               detail: (reading?['account'] as String?) ?? 'subscription',
               terms: needle.isEmpty ? const [] : [needle],
-              mark: agent?.gridModel == null ? '*' : null,
-              markColor: tty.green,
-              trailing: 'sub',
+              state: agent?.gridModel == null ? '✓' : null,
+              stateColor: tty.green,
               onTap: () => _pick(null),
             ),
           );
@@ -131,14 +135,15 @@ class _FindModelsState extends State<FindModels> {
               if (empty != null)
                 rows.add(note('$where: ${empty.toLowerCase()}'));
             }
+            if (shown.isNotEmpty) rows.add(FindHeader(where));
             for (final model in shown) {
               rows.add(
-                FzfRow(
+                FindRow(
                   title: model.id,
                   detail: model.node.isEmpty ? where : '$where · ${model.node}',
                   terms: needle.isEmpty ? const [] : [needle],
-                  mark: agent?.gridModel == model.id ? '*' : null,
-                  markColor: tty.green,
+                  state: agent?.gridModel == model.id ? '✓' : null,
+                  stateColor: tty.green,
                   onTap: () => _pick(model),
                 ),
               );
@@ -146,9 +151,8 @@ class _FindModelsState extends State<FindModels> {
           }
         }
       }
-      // fzf: the first row sits on the prompt.
+      // Find's list: down from the field at the top, the same rows as every other mode.
       return ListView(
-        reverse: true,
         padding: EdgeInsets.zero,
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         children: rows,

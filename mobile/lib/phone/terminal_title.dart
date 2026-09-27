@@ -1,41 +1,40 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'tty.dart';
 import 'tty_controls.dart';
 
-/// Focus's title: whose terminal this is, as a pane title would say it — the agent, then where it
-/// works.
+/// Focus's title: whose terminal this is, in three lines — the harness, where it runs, its branch.
 ///
 /// ```
-///  hn                                  1 asking  …
-///  M2:autonomous-harness  main
+///  fix-login                         api-fix asking
+///  studio:web
+///  ⑂ fix/login-refresh
 /// ```
 ///
-/// ⚠️ **A title, not a tab bar.** Agents are like vim's buffers: one on screen, the rest a search
-/// away (the name opens Find, as `:b` would). Nothing here lists other agents; the one exception
-/// is `1 asking` — harnesses elsewhere asking you something — since nothing else on the screen
-/// would say so.
+/// ⚠️ **The whole title is one button: its menu** (rename, restart, paste…). Nothing else is drawn
+/// to tap — no `…`, no state words: the terminal says when it is loading. Holding it goes back to
+/// the last harness. Find is a swipe right, and `api-fix asking` — a harness elsewhere waiting on
+/// you — is the one word that opens it from here.
 ///
-/// It floats over the terminal's top rows and the page slides it away while you read back through
-/// the history; back at the end of the output, it returns (see `TerminalChromeScroll`).
+/// It floats over the terminal's top rows only while the output is followed at its end, and slides
+/// away while the history is read back (see `TerminalChromeScroll`) — so it can afford three rows.
 class TerminalTitle extends StatelessWidget {
   const TerminalTitle({
     super.key,
     required this.name,
+    required this.onTap,
     required this.onFind,
     this.place,
     this.branch,
     this.asking,
-    this.onHoldName,
-    this.state,
-    this.action,
-    this.onActions,
+    this.onHold,
   });
 
   final String name;
 
-  /// `machine:folder` — where the agent works.
+  /// `machine:folder` — where the harness works.
   final String? place;
 
   final String? branch;
@@ -43,189 +42,145 @@ class TerminalTitle extends StatelessWidget {
   /// Harnesses elsewhere asking — `api-fix asking`, or `2 asking` — in yellow; a tap opens Find.
   final String? asking;
 
-  /// Holding the name: back to the last harness (tmux's `prefix L`, vim's `:b#`).
-  final VoidCallback? onHoldName;
+  /// A tap anywhere on the title: the harness's menu.
+  final VoidCallback onTap;
 
-  /// A word for a connection state that is not plain live — `attaching`, `reconnecting` — or null.
-  final String? state;
-
-  /// A way out of a stuck state — `take control`, `reconnect` — as a word to tap.
-  final ({String label, VoidCallback onTap})? action;
-
+  /// What `asking` opens.
   final VoidCallback onFind;
-  final VoidCallback? onActions;
+
+  /// Holding the title: back to the last harness (tmux's `prefix L`, vim's `:b#`).
+  final VoidCallback? onHold;
+
+  /// Four terminal rows: three lines of text and half a row of air above and below.
+  static double heightOf(Tty tty) => 4 * tty.row;
 
   /// A long branch shortened in the middle — `fix/login-refresh-token` → `fix/logi…sh-token` — where
-  /// both ends say which one it is; cut at the end, `fix/logi` said nothing.
-  static String _short(String branch) => branch.length <= 18
+  /// both ends say which one it is.
+  static String _short(String branch) => branch.length <= 30
       ? branch
-      : '${branch.substring(0, 8)}…${branch.substring(branch.length - 8)}';
-
-  /// Three terminal rows: two of text and half a row of air above and below, which is also what
-  /// makes each word a 44pt target.
-  static double heightOf(Tty tty) => 3 * tty.row;
+      : '${branch.substring(0, 14)}…${branch.substring(branch.length - 14)}';
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final height = heightOf(tty);
-    Widget word(
-      String text, {
-      VoidCallback? onTap,
-      String? semanticsLabel,
-      Color? color,
-      Color? background,
-      FontWeight weight = FontWeight.w400,
-      double? size,
-    }) {
-      final drawn = Padding(
-        padding: EdgeInsets.symmetric(horizontal: tty.cell / 2),
-        child: TtyText(
-          text,
-          color: color ?? tty.text,
-          background: background,
-          weight: weight,
-          size: size,
-        ),
-      );
-      if (onTap == null) return Center(child: drawn);
-      return Semantics(
-        button: true,
-        label: semanticsLabel ?? text,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () {
-            HapticFeedback.selectionClick();
-            onTap();
-          },
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minWidth: 6 * tty.cell),
-            child: SizedBox(
-              height: height,
-              child: Center(child: drawn),
-            ),
+    final meta = tty.style(color: tty.faint, size: TtySize.meta);
+    return Semantics(
+      button: true,
+      label: '$name — harness menu',
+      child: GestureDetector(
+        key: const ValueKey('terminal-title'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        onLongPress: onHold == null
+            ? null
+            : () {
+                HapticFeedback.mediumImpact();
+                onHold!();
+              },
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: tty.ground,
+            border: Border(bottom: BorderSide(color: tty.dim, width: 0.5)),
           ),
-        ),
-      );
-    }
-
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: tty.ground,
-        border: Border(bottom: BorderSide(color: tty.dim, width: 0.5)),
-      ),
-      child: SizedBox(
-        height: height,
-        child: LayoutBuilder(
-          builder: (context, box) => Row(
-            children: [
-              // The name and where it runs take what the words at the right leave — all of it when
-              // there are none.
-              Expanded(
-                child: Semantics(
-                  button: true,
-                  label: 'Find an agent',
-                  child: GestureDetector(
-                    key: const ValueKey('terminal-find'),
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      HapticFeedback.selectionClick();
-                      onFind();
-                    },
-                    onLongPress: onHoldName == null
-                        ? null
-                        : () {
-                            HapticFeedback.mediumImpact();
-                            onHoldName!();
-                          },
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: Tty.origin),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          TtyText(
-                            name,
-                            weight: FontWeight.w700,
+          child: SizedBox(
+            height: height,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: tty.style(
                             size: TtySize.title,
+                            weight: FontWeight.w700,
                           ),
-                          Text.rich(
-                            TextSpan(
-                              children: [
-                                if (place case final place?)
-                                  TextSpan(
-                                    text: place,
-                                    style: tty.style(
-                                      color: tty.faint,
-                                      size: TtySize.meta,
-                                    ),
-                                  ),
-                                if (branch case final branch?
-                                    when branch.trim().isNotEmpty)
-                                  TextSpan(
-                                    text:
-                                        '${place == null ? '' : ' · '}${_short(branch)}',
-                                    style: tty.style(
-                                      color: tty.magenta,
-                                      size: TtySize.meta,
-                                    ),
-                                  ),
-                              ],
-                            ),
+                        ),
+                        if (place case final place? when place.isNotEmpty)
+                          Text(
+                            place,
                             maxLines: 1,
-                            softWrap: false,
                             overflow: TextOverflow.ellipsis,
+                            style: meta,
                           ),
-                        ],
-                      ),
+                        if (branch case final branch?
+                            when branch.trim().isNotEmpty)
+                          Row(
+                            children: [
+                              Icon(
+                                LucideIcons.gitBranch300,
+                                size: 12,
+                                color: tty.magenta,
+                              ),
+                              const SizedBox(width: 5),
+                              Flexible(
+                                child: Text(
+                                  _short(branch),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: tty.style(
+                                    color: tty.magenta,
+                                    size: TtySize.meta,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                      ],
                     ),
                   ),
-                ),
+                  if (asking case final asking?)
+                    Semantics(
+                      button: true,
+                      label: '$asking — open Find',
+                      excludeSemantics: true,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          onFind();
+                        },
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minHeight: height,
+                            minWidth: 44,
+                            maxWidth: 170,
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 12),
+                            child: Align(
+                              alignment: Alignment.topRight,
+                              widthFactor: 1,
+                              child: Padding(
+                                padding: EdgeInsets.only(top: tty.row * 0.6),
+                                child: Text(
+                                  asking,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: tty.style(
+                                    color: tty.yellow,
+                                    size: TtySize.meta,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
-              // The words between the name and `…` take only what they need, and never more than
-              // under half the row: clipped rather than crowding out where the harness runs.
-              if (asking != null || state != null || action != null)
-                ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: box.maxWidth * 0.45),
-                  child: ClipRect(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      reverse: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (asking case final asking?)
-                            word(
-                              asking,
-                              color: tty.yellow,
-                              size: TtySize.meta,
-                              onTap: onFind,
-                              semanticsLabel: '$asking — open Find',
-                            ),
-                          if (state case final state?)
-                            word(state, color: tty.faint),
-                          if (action case final action?)
-                            word(
-                              '[${action.label}]',
-                              weight: FontWeight.w700,
-                              onTap: action.onTap,
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              if (onActions != null)
-                word(
-                  // SF Mono's own glyph — it has no ⋮, and a fallback face would break the grid.
-                  '…',
-                  weight: FontWeight.w700,
-                  onTap: onActions,
-                  semanticsLabel: 'Harness actions',
-                ),
-              SizedBox(width: Tty.origin - tty.cell / 2),
-            ],
+            ),
           ),
         ),
       ),

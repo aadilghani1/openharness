@@ -120,10 +120,6 @@ class _ChooserState<T> extends State<_Chooser<T>> {
     Navigator.of(context).pop(item.value);
   }
 
-  void _cancel() {
-    FocusManager.instance.primaryFocus?.unfocus();
-    Navigator.of(context).pop();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -145,7 +141,8 @@ class _ChooserState<T> extends State<_Chooser<T>> {
     return Align(
       alignment: Alignment.bottomCenter,
       child: Container(
-        height: media.size.height - media.padding.top - 12,
+        // Three quarters of the screen: the dimmed form above it is the way out.
+        height: media.size.height * 0.75,
         decoration: BoxDecoration(
           color: tty.ground,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
@@ -169,7 +166,8 @@ class _ChooserState<T> extends State<_Chooser<T>> {
                         weight: FontWeight.w700,
                       ),
                     ),
-                    TtyTextButton(label: 'Cancel', onPressed: _cancel),
+                    // No Cancel: a tap above the sheet, or a pull down, puts it away.
+                    const SizedBox(height: 44),
                   ],
                 ),
               ),
