@@ -1,0 +1,102 @@
+{
+  "octopus": {
+    "top": {
+      "xterm": 213,
+      "hex": "#ff87ff"
+    },
+    "bottom": {
+      "xterm": 134,
+      "hex": "#af5fd7"
+    }
+  },
+  "beastie": {
+    "top": {
+      "xterm": 210,
+      "hex": "#ff8787"
+    },
+    "bottom": {
+      "xterm": 160,
+      "hex": "#d70000"
+    }
+  },
+  "mutt": {
+    "top": {
+      "xterm": 215,
+      "hex": "#ffaf5f"
+    },
+    "bottom": {
+      "xterm": 166,
+      "hex": "#d75f00"
+    }
+  },
+  "gopher": {
+    "top": {
+      "xterm": 180,
+      "hex": "#d7af87"
+    },
+    "bottom": {
+      "xterm": 94,
+      "hex": "#875f00"
+    }
+  },
+  "bug": {
+    "top": {
+      "xterm": 229,
+      "hex": "#ffffaf"
+    },
+    "bottom": {
+      "xterm": 101,
+      "hex": "#87875f"
+    }
+  },
+  "lynx": {
+    "top": {
+      "xterm": 120,
+      "hex": "#87ff87"
+    },
+    "bottom": {
+      "xterm": 35,
+      "hex": "#00af5f"
+    }
+  },
+  "auk": {
+    "top": {
+      "xterm": 123,
+      "hex": "#87ffff"
+    },
+    "bottom": {
+      "xterm": 31,
+      "hex": "#0087af"
+    }
+  },
+  "tux": {
+    "top": {
+      "xterm": 195,
+      "hex": "#d7ffff"
+    },
+    "bottom": {
+      "xterm": 69,
+      "hex": "#5f87ff"
+    }
+  },
+  "gnu": {
+    "top": {
+      "xterm": 230,
+      "hex": "#ffffd7"
+    },
+    "bottom": {
+      "xterm": 144,
+      "hex": "#afaf87"
+    }
+  },
+  "yak": {
+    "top": {
+      "xterm": 223,
+      "hex": "#ffd7af"
+    },
+    "bottom": {
+      "xterm": 131,
+      "hex": "#af5f5f"
+    }
+  }
+}
