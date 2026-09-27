@@ -295,7 +295,14 @@ async function stopHarnessd(state) {
 function killTmux(state) {
   const tmux = which('tmux')
   // Only ever the private server, by its label; TMUX is unset so nothing can redirect this.
-  if (tmux) spawnSync(tmux, ['-L', state.tmuxLabel, 'kill-server'], { env: { PATH: process.env.PATH, HOME: join(E2E, 'home') }, encoding: 'utf8' })
+  if (!tmux) return
+  const env = { PATH: process.env.PATH, HOME: join(E2E, 'home') }
+  spawnSync(tmux, ['-L', state.tmuxLabel, 'kill-server'], { env, encoding: 'utf8' })
+  // The server can leave its socket file behind; remove it once nothing answers on it.
+  const socket = join('/tmp', `tmux-${process.getuid()}`, state.tmuxLabel)   // harnessd's env has no TMUX_TMPDIR
+  if (existsSync(socket) && spawnSync(tmux, ['-L', state.tmuxLabel, 'ls'], { env, encoding: 'utf8' }).status !== 0) {
+    try { unlinkSync(socket) } catch { /* gone */ }
+  }
 }
 
 // ── commands ─────────────────────────────────────────────────────────────────────────────────────────
