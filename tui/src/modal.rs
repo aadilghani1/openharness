@@ -86,6 +86,7 @@ pub enum PromptKind {
 }
 
 /// A line typed in the status line, tmux-style: `(rename-window) name`, `:split-window -h`.
+#[derive(Clone, Debug)]
 pub struct Prompt {
     pub kind: PromptKind,
     pub title: String,
@@ -131,7 +132,15 @@ pub struct Menu {
     pub no_mouse: bool,
     pub mouse: Option<crate::mouse::Event>,
     pub tree: Option<(u64, usize)>,
+    /// A prompt's completion menu (status_prompt_complete_list_menu): the prompt under it, back
+    /// when it closes, the chosen word put in it.
+    pub complete: Option<Box<Complete>>,
 }
+
+/// What a completion menu completes: the prompt, the words its items stand for, the flag they
+/// go after (-t, -s), and whether the prompt is a window target's (the word is the whole line).
+#[derive(Clone, Debug)]
+pub struct Complete { pub prompt: Prompt, pub list: Vec<String>, pub flag: Option<char>, pub window_target: bool }
 
 pub enum Modal {
     /// tmux's display-menu: a box of items, each with its key; Enter or the key runs one.

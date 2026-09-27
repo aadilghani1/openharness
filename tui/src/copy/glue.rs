@@ -149,6 +149,11 @@ fn parse_line(line: &str, sx: u32, template: &mut Option<alacritty_terminal::ter
 /// run-shell's output is. False when there is no pane to show them in.
 pub fn print(app: &mut App, lines: &[String], parse: bool) -> bool {
     let Some(pane) = app.focused() else { return false };
+    print_to(app, pane, lines, parse)
+}
+
+/// print, into [pane]'s view mode (run-shell -t's).
+pub fn print_to(app: &mut App, pane: u64, lines: &[String], parse: bool) -> bool {
     if !app.panes.contains_key(&pane) { return false }
     let top_view = app.panes.get(&pane).and_then(|p| p.modes.last()).map(|m| m.view).unwrap_or(false);
     if !top_view {

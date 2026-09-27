@@ -838,6 +838,8 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
             }
             let command = args.values.first().map(|c| expand(c));
             let shown = command.clone().unwrap_or_default();
+            // -t: its output goes to that pane's view mode, whoever asked (cmd_run_shell_print).
+            let into = p.filter(|_| args.get('t').is_some());
             Ok(Some(Job { command, cwd, delay, background, done: Box::new(move |app, o| {
                 if let Some(e) = o.failed { app.error(e); return Default::default() }
                 // Each line it printed, then how it failed, to the shell that asked (else shown).
@@ -851,7 +853,8 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
                 if !lines.is_empty() {
                     // Waited for, it prints to the client as any command does; with -b, into the
                     // pane's view mode with its escapes read (cmd_run_shell_print).
-                    if background && app.capture.is_none() && crate::copy::print(app, &lines, true) {} else { app.print("run-shell", lines) }
+                    if into.is_some_and(|pane| crate::copy::print_to(app, pane, &lines, true)) {}
+                    else if background && app.capture.is_none() && crate::copy::print(app, &lines, true) {} else { app.print("run-shell", lines) }
                 }
                 Default::default()
             }), wait: None }))
@@ -2902,7 +2905,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 let from = (starting as usize).min(n - 1);
                 (0..n).map(|k| (from + k) % n).find(|k| !items[*k].disabled && !items[*k].separator)
             };
-            app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice, x, y, width, stay_open: args.has('O') > 0, no_mouse, mouse: app.mouse_ev.clone(), tree: None }));
+            app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice, x, y, width, stay_open: args.has('O') > 0, no_mouse, mouse: app.mouse_ev.clone(), tree: None, complete: None }));
             app.wait_cli = app.capture.is_some();
         }
         "customize-mode" => {

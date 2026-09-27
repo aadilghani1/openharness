@@ -23,6 +23,9 @@ pub fn find(name: &str) -> Option<&'static Opt> {
 }
 
 /// A hook (set-hook's, show-hooks'), not an option.
+/// Every option's name (hooks too), in the table's order: what the prompt completes.
+pub fn names() -> impl Iterator<Item = &'static str> { table::TABLE.iter().chain(table::HOOKS.iter()).map(|o| o.name) }
+
 pub fn is_hook(name: &str) -> bool { let base = name.split('[').next().unwrap_or(name); table::HOOKS.iter().any(|o| o.name == base) }
 
 /// Where options_array_assign splits a value into items: the table's separator (" ," when it

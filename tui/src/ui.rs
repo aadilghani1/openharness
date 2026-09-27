@@ -387,12 +387,14 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
 fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> {
     // NO_COLOR (and no colours of your own): reverse video carries the status line and messages.
     let yellow = app.message_style();
-    let prompt_like: Option<(String, String, usize, String, bool)> = match &app.modal {
-        Some(Modal::Prompt(p)) => {
+    // (A prompt's completion menu keeps the prompt on the status line under it.)
+    let under_menu = match &app.modal { Some(Modal::Menu(m)) => m.complete.as_ref().map(|c| &c.prompt), _ => None };
+    let prompt_like: Option<(String, String, usize, String, bool)> = match (&app.modal, under_menu) {
+        (_, Some(p)) | (Some(Modal::Prompt(p)), _) => {
             let shown: String = if p.secret { "*".repeat(p.value.chars().count()) } else { p.value.clone() };
             Some((p.label.clone(), shown, p.cursor, p.hint.clone(), p.vi_normal))
         }
-        Some(Modal::Confirm { prompt, .. }) => Some((format!("{prompt} "), String::new(), 0, String::new(), false)),
+        (Some(Modal::Confirm { prompt, .. }), _) => Some((format!("{prompt} "), String::new(), 0, String::new(), false)),
         _ => None,
     };
     if let Some((mut label, value, cursor, hint, command_mode)) = prompt_like {

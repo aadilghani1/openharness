@@ -1039,6 +1039,18 @@ fn modal_key(app: &mut App, key: KeyEvent) {
         Modal::Menu(mut menu) => {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
             let name = keys::name(&keys::of(&key));
+            // MENU_TAB (a prompt's completions): BSpace closes it, Tab moves down (past the last,
+            // closes it).
+            if menu.complete.is_some() {
+                let last = menu.items.len().saturating_sub(1);
+                let close = key.code == KeyCode::Backspace || (key.code == KeyCode::Tab && menu.choice == Some(last));
+                if close { if let Some(c) = menu.complete.take() { complete_chosen(app, *c, None) } return }
+                if key.code == KeyCode::Tab { menu.choice = Some(menu.choice.map(|c| (c + 1) % menu.items.len()).unwrap_or(0)); app.modal = Some(Modal::Menu(menu)); return }
+                if matches!(key.code, KeyCode::Esc) || (matches!(key.code, KeyCode::Char('q')) && !ctrl) || (ctrl && matches!(key.code, KeyCode::Char('c' | 'g'))) {
+                    if let Some(c) = menu.complete.take() { complete_chosen(app, *c, None) }
+                    return;
+                }
+            }
             if let Some(i) = menu.items.iter().position(|it| !it.disabled && !it.separator && !it.key.is_empty() && it.key == name) {
                 menu.choice = Some(i);
                 return menu_chosen(app, menu);
@@ -1222,20 +1234,13 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
             if p.value.is_empty() { prefix = '='; if let PromptKind::Command { last, .. } = &p.kind { let l = last.clone(); let n = l.chars().count(); set(&mut p, l.chars().collect(), n) } } else { prefix = '+' }
             changed = true;
         }
-        KeyCode::Tab if matches!(p.kind, PromptKind::Command { template: None, .. }) => {
-            // Complete the command name: the only match, or the part every match shares.
-            if !p.value.contains(' ') {
-                let typed = p.value.clone();
-                let matches: Vec<&str> = commands::COMMANDS.iter().map(|(n, _, _)| *n).filter(|n| n.starts_with(&typed)).collect();
-                if matches.len() == 1 { p.value = format!("{} ", matches[0]) }
-                else if !matches.is_empty() {
-                    let mut common = matches[0].to_string();
-                    for m in &matches[1..] { while !m.starts_with(&common) { common.pop(); } }
-                    p.value = common;
-                    p.hint = matches.join("  ");
-                }
-                p.cursor = p.value.chars().count();
-                changed = true;
+        // status_prompt_replace_complete: the word at the cursor completed — the only match and
+        // a space, else the part every match shares; when that is the word already, a menu of
+        // them (Tab or its key picks one).
+        KeyCode::Tab if matches!(p.kind, PromptKind::Command { .. } | PromptKind::Tree { .. }) => {
+            match complete_prompt(app, &mut p, ptype) {
+                Some(menu) => { app.modal = Some(Modal::Menu(menu)); return }
+                None => changed = true,
             }
         }
         KeyCode::Char(c) if !ctrl && !alt => { let mut v = chars.clone(); v.insert(at, c); set(&mut p, v, at + 1); p.hint.clear(); appended = true; changed = true }
@@ -1248,6 +1253,172 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
         return;
     }
     if changed && incremental { prompt_changed(app, &p, prefix) }
+    app.modal = Some(Modal::Prompt(p));
+}
+
+/// status_prompt_replace_complete's word: where the one at the cursor starts and ends.
+fn prompt_word(chars: &[char], cursor: usize) -> Option<(usize, usize)> {
+    let at = |i: usize| chars.get(i).copied();
+    let space = |i: usize| at(i) == Some(' ');
+    let idx = cursor.saturating_sub(1);
+    let mut first = idx;
+    while first > 0 && !space(first) { first -= 1 }
+    while at(first).is_some() && space(first) { first += 1 }
+    let mut last = idx;
+    while at(last).is_some() && !space(last) { last += 1 }
+    while last > 0 && space(last) { last -= 1 }
+    if at(last).is_some() { last += 1 }
+    (last >= first).then_some((first, last))
+}
+
+/// The word at the cursor made [s], the cursor after it.
+fn prompt_replace(p: &mut Prompt, s: &str) -> bool {
+    let chars: Vec<char> = p.value.chars().collect();
+    let Some((first, last)) = prompt_word(&chars, p.cursor) else { return false };
+    let mut v: Vec<char> = chars[..first].to_vec();
+    v.extend(s.chars());
+    v.extend(&chars[last..]);
+    p.value = v.into_iter().collect();
+    p.cursor = first + s.chars().count();
+    true
+}
+
+/// status_prompt_complete_list: the commands and their aliases, command-alias's names; past the
+/// first word, every option and layout too — each once.
+fn complete_list(app: &App, s: &str, at_start: bool) -> Vec<String> {
+    let mut list: Vec<String> = Vec::new();
+    let mut add = |w: &str| if !list.iter().any(|x| x == w) { list.push(w.to_string()) };
+    for e in crate::cmd::TABLE.iter() {
+        if e.name.starts_with(s) { add(e.name) }
+        if !e.alias.is_empty() && e.alias.starts_with(s) { add(e.alias) }
+    }
+    for a in app.options.array("command-alias") {
+        if let Some((name, _)) = a.split_once('=') { if s.len() <= name.len() && name.starts_with(s) { add(name) } }
+    }
+    if at_start { return list }
+    for name in crate::options::names() { if name.starts_with(s) { add(name) } }
+    for l in ["even-horizontal", "even-vertical", "main-horizontal", "main-horizontal-mirrored", "main-vertical", "main-vertical-mirrored", "tiled"] { if l.starts_with(s) { add(l) } }
+    list
+}
+
+/// status_prompt_complete_prefix: what every word of [list] starts with.
+fn complete_prefix(list: &[String]) -> Option<String> {
+    let mut out: Vec<char> = list.first()?.chars().collect();
+    for w in &list[1..] {
+        let w: Vec<char> = w.chars().collect();
+        let mut j = w.len().min(out.len());
+        out.truncate(j);
+        while j > 0 { if out[j - 1] != w[j - 1] { out.truncate(j - 1) } j -= 1 }
+    }
+    Some(out.into_iter().collect())
+}
+
+/// Tab in a prompt (status_prompt_complete): the word at the cursor completed in [p], or a menu
+/// of the words it could be (the prompt inside it).
+fn complete_prompt(app: &App, p: &mut Prompt, ptype: usize) -> Option<crate::modal::Menu> {
+    let chars: Vec<char> = p.value.chars().collect();
+    let (first, last) = prompt_word(&chars, p.cursor)?;
+    let word: String = chars[first..last].iter().collect();
+    let (target, window_target) = (ptype == 2 || ptype == 3, ptype == 3);
+    if word.is_empty() && !target { return None }
+    let mut offset = first;
+    let mut list: Vec<String> = Vec::new();
+    let mut flag = None;
+    let mut out: Option<String> = None;
+    if !target && !word.starts_with("-t") && !word.starts_with("-s") {
+        list = complete_list(app, &word, first == 0);
+        out = match list.len() { 0 => None, 1 => Some(format!("{} ", list[0])), _ => complete_prefix(&list) };
+    } else {
+        let s: String = if target { word.clone() } else { flag = word.chars().nth(1); offset += 2; word.chars().skip(2).collect() };
+        let menu_of = |app: &App, sid: u32, s: &str, list: &mut Vec<String>| -> Result<Option<String>, crate::modal::Menu> { window_menu(app, p, sid, s, offset, flag, window_target, list) };
+        if window_target {
+            match menu_of(app, app.session_id, &s, &mut list) { Ok(Some(w)) => { prompt_set(p, &w, window_target); return None } Ok(None) => return None, Err(m) => return Some(m) }
+        }
+        match s.find(':') {
+            // status_prompt_complete_session: `name:` (or `$N:`) of each session it starts.
+            None => {
+                for (id, name) in app.session_list() {
+                    if s.is_empty() || name.starts_with(&s) { list.push(format!("{name}:")) }
+                    else if let Some(n) = s.strip_prefix('$') { if id.to_string().starts_with(n) { list.push(format!("${id}:")) } }
+                }
+                out = complete_prefix(&list).map(|o| match flag { Some(f) => format!("-{f}{o}"), None => o });
+            }
+            Some(colon) if !s[colon + 1..].contains('.') => {
+                let sid = if s.starts_with(':') { Some(app.session_id) } else { app.session_list().into_iter().find(|(_, n)| *n == s[..colon]).map(|(i, _)| i) };
+                let Some(sid) = sid else { return None };
+                let mut windows = Vec::new();
+                match menu_of(app, sid, &s[colon + 1..], &mut windows) { Ok(Some(w)) => out = Some(w), Ok(None) => return None, Err(m) => return Some(m) }
+            }
+            _ => {}
+        }
+    }
+    list.sort();
+    if out.as_deref() == Some(word.as_str()) { out = None }
+    if let Some(o) = out { prompt_replace(p, &o); return None }
+    complete_menu(app, p, list, offset, flag, false)
+}
+
+/// The prompt's word made [s] — for a window target's prompt, the whole line.
+fn prompt_set(p: &mut Prompt, s: &str, window_target: bool) {
+    if window_target { p.value = s.to_string(); p.cursor = p.value.chars().count() } else { prompt_replace(p, s); }
+}
+
+/// status_prompt_complete_list_menu: the words (the last ten, as many as fit above the status
+/// line), each with its digit, over the prompt where the word starts; none for one word.
+fn complete_menu(app: &App, p: &Prompt, list: Vec<String>, offset: usize, flag: Option<char>, window_target: bool) -> Option<crate::modal::Menu> {
+    let size = list.len();
+    let lines = app.status_lines();
+    if size <= 1 || app.size.1.saturating_sub(lines) < 3 { return None }
+    let height = (app.size.1 - lines - 2).min(10).min(size as u16) as usize;
+    let start = size - height;
+    let items: Vec<crate::modal::MenuItem> = list[start..].iter().enumerate().map(|(i, w)| crate::modal::MenuItem { label: w.clone(), key: ((b'0' + i as u8) as char).to_string(), command: String::new(), disabled: false, separator: false }).collect();
+    Some(prompt_menu(app, p, items, list[start..].to_vec(), offset, flag, window_target))
+}
+
+/// A completion menu placed as tmux's: at the word's column (less the box's two), right above
+/// the status line (below it at the top), kept on the screen.
+fn prompt_menu(app: &App, p: &Prompt, items: Vec<crate::modal::MenuItem>, list: Vec<String>, offset: usize, flag: Option<char>, window_target: bool) -> crate::modal::Menu {
+    let lines = app.status_lines();
+    let width = items.iter().map(|it| crate::draw::format_width(&it.label) + it.key.chars().count() + 3).max().unwrap_or(0) as u16;
+    let height = items.len() as u16;
+    let y = if app.status_top { lines } else { app.size.1.saturating_sub(3 + height) };
+    let x = (offset + unicode_width::UnicodeWidthStr::width(p.label.as_str())).saturating_sub(2) as u16;
+    let x = x.min(app.size.0.saturating_sub(width + 4));
+    crate::modal::Menu { title: String::new(), items, choice: Some(0), x, y, width, stay_open: false, no_mouse: true, mouse: None, tree: None,
+        complete: Some(Box::new(crate::modal::Complete { prompt: p.clone(), list, flag, window_target })) }
+}
+
+/// status_prompt_complete_window_menu: session [sid]'s windows whose number starts [word] —
+/// the one there is (Ok(Some)), none (Ok(None)), else a menu of up to ten.
+#[allow(clippy::too_many_arguments)]
+fn window_menu(app: &App, p: &Prompt, sid: u32, word: &str, offset: usize, flag: Option<char>, window_target: bool, list: &mut Vec<String>) -> Result<Option<String>, crate::modal::Menu> {
+    let lines = app.status_lines();
+    if app.size.1.saturating_sub(lines) < 3 { return Ok(None) }
+    let height = (app.size.1 - lines - 2).min(10) as usize;
+    let name = app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| n).unwrap_or_default();
+    let mut items = Vec::new();
+    for (num, wname, _) in app.session_windows(sid) {
+        if !word.is_empty() && !num.to_string().starts_with(word) { continue }
+        let (label, w) = if window_target { (format!("{num} ({wname})"), num.to_string()) } else { (format!("{name}:{num} ({wname})"), format!("{name}:{num}")) };
+        items.push(crate::modal::MenuItem { label, key: ((b'0' + list.len() as u8) as char).to_string(), command: String::new(), disabled: false, separator: false });
+        list.push(w);
+        if list.len() == height { break }
+    }
+    match list.len() {
+        0 => Ok(None),
+        1 => Ok(Some(match flag { Some(f) => format!("-{f}{}", list[0]), None => list[0].clone() })),
+        _ => Err(prompt_menu(app, p, items, list.clone(), offset, flag, window_target)),
+    }
+}
+
+/// A completion menu's item chosen (status_prompt_menu_callback): its word into the prompt,
+/// which is back; closed without one, the prompt as it was.
+fn complete_chosen(app: &mut App, c: crate::modal::Complete, choice: Option<usize>) {
+    let mut p = c.prompt;
+    if let Some(w) = choice.and_then(|i| c.list.get(i)) {
+        let s = match c.flag { Some(f) => format!("-{f}{w}"), None => w.clone() };
+        prompt_set(&mut p, &s, c.window_target);
+    }
     app.modal = Some(Modal::Prompt(p));
 }
 
@@ -2400,6 +2571,7 @@ fn menu_chosen(app: &mut App, menu: crate::modal::Menu) {
         return;
     }
     if let Some((pane, line)) = menu.tree { return crate::tree::menu_chosen(app, pane, line, &it.key) }
+    if let Some(comp) = menu.complete { return complete_chosen(app, *comp, Some(c)) }
     let command = it.command.clone();
     commands::execute_in(app, &command, menu.mouse.clone());
 }
@@ -2413,7 +2585,7 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
     if menu.no_mouse {
         // (tmux asks the terminal for no bare motion then: none reaches it.)
         let motion = is_drag(m.sgr_b) && is_release(m.sgr_b);
-        if !motion && (m.b & 195) != 0 { return }
+        if !motion && (m.b & 195) != 0 { if let Some(c) = menu.complete.take() { complete_chosen(app, *c, None) } return }
         app.modal = Some(Modal::Menu(menu));
         return;
     }
