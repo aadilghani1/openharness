@@ -369,6 +369,24 @@ class SampleRuntime implements SampleHarnessHost {
         };
       case 'usage_read':
         return {};
+      case 'grid_models_list':
+        // Find's `:` — the models a sample harness could run on: this computer's own, as a
+        // real machine lists them.
+        return {
+          'gridName': 'home',
+          'localModelEngines': ['claude', 'codex', 'opencode'],
+          'grids': [
+            {
+              'name': 'home',
+              'own': true,
+              'models': [
+                {'id': 'qwen3-coder-30b', 'node': machineId},
+                {'id': 'gpt-oss-20b', 'node': machineId},
+                {'id': 'devstral-small', 'node': 'laptop'},
+              ],
+            },
+          ],
+        };
     }
     throw WsRequestFailure(
       responseType: '${type}_result',
