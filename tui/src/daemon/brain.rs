@@ -141,7 +141,7 @@ pub fn wake(app: &App, ms: u64) {
 /// A frame from this computer's harnessd; true when it was the brain's.
 pub fn on_frame(app: &mut App, ty: &str, p: &Value) -> bool {
     match ty {
-        "daemon_state" => { app.daemons.brain.state = p.clone(); true }
+        "daemon_state" => { state(app, p); true }
         "daemon_say" => { if let Some(line) = line_from(p, Instant::now()) { said(app, line) } true }
         "daemon_unsay" => {
             let id = p.get("id").and_then(Value::as_str).unwrap_or("").to_string();
@@ -152,6 +152,23 @@ pub fn on_frame(app: &mut App, ty: &str, p: &Value) -> bool {
         // Results reach the request that asked (daemon::Link); one that comes late is dropped.
         "daemon_act_result" | "daemon_confirm_result" | "daemon_talk_result" => true,
         _ => false,
+    }
+}
+
+/// `daemon_state`, pushed when a window attaches and whenever pairing, the paired daemon, the dial or
+/// the daemons switch changes — unasked. `pair: null` is the brain not thinking (nothing paired, no
+/// consent, or the daemons switched off): its lines and brief go (their keys would answer PAIR_OFF),
+/// and, when it was thinking a moment ago, the zoo is read again — an off switch shows there.
+fn state(app: &mut App, p: &Value) {
+    let was = app.daemons.brain.state.get("pair").map(|v| !v.is_null()).unwrap_or(false);
+    app.daemons.brain.state = p.clone();
+    if p.get("pair").map(Value::is_null).unwrap_or(true) {
+        let b = &mut app.daemons.brain;
+        if b.line.as_ref().map(|l| !l.local).unwrap_or(false) { b.line = None }
+        b.waiting.clear();
+        b.brief = None;
+        if matches!(app.daemons.overlay, Some(super::overlay::Overlay::Detail { keyed: true, .. })) { app.daemons.overlay = None }
+        if was { super::hooks::fetch(app) }
     }
 }
 
@@ -379,6 +396,7 @@ fn result(app: &mut App, r: Result<(String, Value), RpcError>, what: &str, id: &
     let id = id.to_string();
     if p.get("ok").and_then(Value::as_bool) != Some(true) {
         let code = p.get("error").and_then(Value::as_str).unwrap_or("FAILED").to_string();
+        if code == "DAEMONS_OFF" { return super::hooks::daemons_off(app) }
         // A new connection, or a key a little early: acknowledge again, and it re-arms.
         if matches!(code.as_str(), "NOT_SHOWN" | "TOO_SOON") { with_line(app, &id, |l| l.shown_at = None); drawn(app, &id) }
         return reply(app, worded(&code, p.get("detail").and_then(Value::as_str).unwrap_or("")));
@@ -416,6 +434,7 @@ pub fn talk(app: &mut App, text: &str) {
             return reply(app, format!("{name}: {how}{cost}"));
         }
         let code = p.get("error").and_then(Value::as_str).unwrap_or("FAILED");
+        if code == "DAEMONS_OFF" { return super::hooks::daemons_off(app) }
         let again = p.get("retryAfterMs").and_then(Value::as_u64).map(|ms| format!(" — again in {}s", ms.div_ceil(1000))).unwrap_or_default();
         reply(app, format!("{}{again}", worded(code, p.get("detail").and_then(Value::as_str).unwrap_or(""))))
     });

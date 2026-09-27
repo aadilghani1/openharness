@@ -81,13 +81,16 @@ minutes; a need still wakes it.
 new connection. A new egg arriving sits in the slot for 3 s with an ack blink; a higher bond is a
 slow blink. A first read is a baseline.
 
-- **Off.** The server's switch — `GET /api/zoo` answering 404 or `{ enabled: false }` — or a
-  harnessd with no zoo (503): hn shows nothing of the daemons. No cell, no `prefix Z`, no key table,
-  no habits reported or kept, no `daemon_*` frame sent (and those it hears dropped): hn as before
-  them. `hn zoo` and the rest say `the daemons are off here`. A later `zoo_changed` asks again.
+- **Off** (daemons/README.md, "Off switches"). `GET /api/zoo` answering 404 (the server's switch, or
+  harnessd's local kill switch, `DAEMONS_OFF`), `{ enabled: false }`, or a key, talk or confirmation
+  answered `DAEMONS_OFF`: hn shows nothing of the daemons. No cell, no `prefix Z`, no key table, no
+  habits reported or kept, no `daemon_*` frame sent (and those it hears dropped): hn as before them.
+  `hn zoo` and the rest say `the daemons are off here`. Asked again on `zoo_changed`, on a reconnect,
+  and every six hours.
 - **Signed out** (401): the nest from the habits hn saw here, and `sign in to hatch`. hn draws no
   guest daemons; the habits it kept are reported once there is an account.
-- **Not answering** (the backend out of reach): nothing is drawn, and it is asked again in 30 s.
+- **Not answering** (a 5xx, or no answer): not off. What was shown stays (nothing, before a first
+  answer), and it is asked again after five minutes, doubling to six hours, or at a reconnect.
 
 `~/.harness/tui/daemon.json` keeps Quiet, the habits seen here, the days hn ran and how many hatches
 it showed. The first time, `tim.json`'s `off` becomes Quiet and `tim.json` goes (its species was
@@ -103,7 +106,14 @@ three different local days).
 Heard only from this computer's harnessd, and sent only over its Unix socket (`socket.rs`; a link
 over TCP says so and sends nothing): harnessd refuses `daemon_*` writes over TCP.
 
-- `daemon_state` feeds the face (needs, asks, confirms, working, failing).
+- `daemon_state` feeds the face (needs, asks, confirms, working, failing). harnessd pushes it unasked
+  when a window attaches and whenever pairing, the paired daemon, the dial or the switch changes.
+  `pair: null` (the brain not thinking: nothing paired, no consent, or the daemons off) takes the
+  brain's line, what waits and the brief down — their keys would answer `PAIR_OFF` — and, coming
+  from a thinking brain, has hn read the zoo again, where an off switch shows.
+- Question ids stay still now (a timer or a cursor in the dialog no longer moves them): a `daemon_say`
+  with an id already showing replaces that line in place, and a key still needs its current detail
+  on screen first.
 - `daemon_say` is a line in the message line, as tmux's display-message, keys first
   (`[y/n/g] api@office Bash: npm test`), for its `ttlMs` since it arrived; loud (`need`, `fail`,
   `ask`, a confirmation) in `message-style`, a reply dim in the status style, the pair's words after
@@ -165,7 +175,9 @@ hn tim                     one line about it
 `cargo test` (the frames, the reveal at chosen moments, the zoo's rows, the key table coming and
 going) and `tests/e2e.sh` against `tests/mock-daemon.mjs`, which serves harnessd's Unix socket in
 `ADAPTER_DATA_DIR`, a zoo (`MOCK_ZOO=egg|tim|nest|signedout|off|disabled`, `MOCK_HATCH`,
-`MOCK_SHINY`) and the pair brain's frame rules (shown before a key, 400 ms, the socket only). The
-e2e hatches, consents, answers a keys-first line through the table, talks, reads the brief and the
-zoo, prints a card, checks Quiet, and runs hn against the daemons switched off and signed out.
+`MOCK_SHINY`, and `POST /test/zoo-mode` to flip the switch) and the pair brain's frame rules (shown
+before a key, 400 ms, the socket only). The e2e hatches, consents, answers a keys-first line through
+the table, replaces a line by its id, takes pushed `daemon_state` (a need, then `pair: null`), switches
+the daemons off and on again under a running hn, talks, reads the brief and the zoo, prints a card,
+checks Quiet, and runs hn against the daemons off and signed out.
 `E2E_SNAPSHOTS=<dir>` keeps the screens it saw.

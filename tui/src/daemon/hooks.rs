@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use super::brain;
 use super::hatch::{Outcome, Reveal};
 use super::overlay::Overlay;
-use super::state::{self, ZooState, BACK_AFTER, IDLE, NAP};
+use super::state::{self, ZooState, BACK_AFTER, IDLE, NAP, RETRY_FIRST, RETRY_MOST};
 use super::zoo::{op, ZooDoc};
 use crate::app::App;
 use crate::daemon::{http_json, RpcError};
@@ -63,8 +63,15 @@ pub fn keys(km: &mut Keymap, on: bool) {
     }
 }
 
+/// harnessd said the daemons are off (`DAEMONS_OFF` on a key, a talk or a confirmation): off at once,
+/// and the zoo read again to be sure.
+pub fn daemons_off(app: &mut App) {
+    set_state(app, ZooState::Off);
+    fetch(app);
+}
+
 /// The daemons on or off (the zoo's answer): the keys follow, and off leaves nothing on screen.
-fn set_state(app: &mut App, state: ZooState) {
+pub fn set_state(app: &mut App, state: ZooState) {
     let on = state.on();
     app.daemons.zoo_state = state;
     if on != app.daemons.keys_on {
@@ -176,7 +183,9 @@ pub fn tick(app: &mut App) {
     // The local link again (a reconnect): the zoo is read again.
     let generation = app.link(&app.fleet.local_id).map(|l| l.generation);
     if generation.is_some() && generation != app.daemons.fetched_gen {
-        let again = app.daemons.fetched_gen.is_some();
+        // The first connection needs no read of its own (hn read the zoo as it started) — unless
+        // that read found nothing yet.
+        let again = app.daemons.fetched_gen.is_some() || app.daemons.zoo_state == ZooState::Unknown;
         app.daemons.fetched_gen = generation;
         if again { fetch(app) }
     }
@@ -255,15 +264,19 @@ pub fn fetch(app: &mut App) {
     let port = app.port;
     app.spawn(async move { http_json(port, "GET", "/api/zoo", None).await }, |app, r| {
         app.daemons.fetching = false;
+        let now = Instant::now();
         match r {
-            // The server's switch: the daemons are off.
-            Ok(v) if v.get("enabled").and_then(Value::as_bool) == Some(false) => set_state(app, ZooState::Off),
-            Ok(v) => take(app, serde_json::from_value(v).unwrap_or_default()),
-            Err(e) if e.code == "HTTP_401" => set_state(app, ZooState::SignedOut),
-            // Off on the server (404), or a harnessd with no zoo (503): nothing of the daemons.
-            Err(e) if matches!(e.code.as_str(), "HTTP_404" | "HTTP_503") => set_state(app, ZooState::Off),
-            // A blip keeps the last answer; with none yet, nothing shows and it is asked again.
-            Err(_) => { if app.daemons.zoo_state == ZooState::Unknown { app.daemons.retry_at = Some(Instant::now() + Duration::from_secs(30)) } }
+            // The server's switch (a 404, harnessd's `DAEMONS_OFF` among them), or `{ enabled: false }`:
+            // off, and asked again at most every six hours (zoo_changed and a reconnect ask sooner).
+            Ok(v) if v.get("enabled").and_then(Value::as_bool) == Some(false) => { set_state(app, ZooState::Off); app.daemons.retry_at = Some(now + RETRY_MOST) }
+            Err(e) if e.code == "HTTP_404" => { set_state(app, ZooState::Off); app.daemons.retry_at = Some(now + RETRY_MOST) }
+            Ok(v) => { app.daemons.retry = RETRY_FIRST; app.daemons.retry_at = None; take(app, serde_json::from_value(v).unwrap_or_default()) }
+            Err(e) if e.code == "HTTP_401" => { app.daemons.retry = RETRY_FIRST; app.daemons.retry_at = None; set_state(app, ZooState::SignedOut) }
+            // A 5xx, or no answer, is not off: what was shown stays, and it is asked again later.
+            Err(_) => {
+                app.daemons.retry_at = Some(now + app.daemons.retry);
+                app.daemons.retry = (app.daemons.retry * 2).min(RETRY_MOST);
+            }
         }
         if std::mem::take(&mut app.daemons.refetch) { fetch(app) }
     });

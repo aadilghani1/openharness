@@ -242,6 +242,33 @@ tmux_ send-keys -t t C-b Z Escape
 sleep 0.3
 screen | grep -qF "reattached. 1 done." && fail "C-b Z Escape left the brief"
 echo "✓ C-b Z Escape dismisses it"
+# The same question id again replaces its line in place (ids no longer move with timers or cursors).
+say() { push "{\"type\":\"daemon_say\",\"payload\":{\"id\":\"q2\",\"about\":{\"machineId\":\"mock0000000000000000000000000001\",\"agentId\":\"$codex\"},\"mood\":\"ask\",\"line\":\"[n/g] codex@mock-local $1\",\"actions\":[{\"key\":\"n\",\"label\":\"No\",\"choice\":\"No\"},{\"key\":\"g\",\"label\":\"open\",\"choice\":\"g\"}],\"ttlMs\":30000}}"; }
+say "Edit src/app.ts (1)"
+expect "a keyed line" "codex@mock-local Edit src/app.ts (1)"
+say "Edit src/app.ts (2)"
+expect "the same id replaces it in place" "codex@mock-local Edit src/app.ts (2)"
+# daemon_state, pushed unasked: a need across the fleet makes the face need…
+push '{"type":"daemon_state","payload":{"pair":"tim","needs":[{"machineId":"mock0000000000000000000000000002","agentId":"x","requestId":"r1","question":"Bash: make"}],"working":0,"failing":[],"machines":[],"asks":[],"acted":[],"autonomy":"watch","confirms":[]}}'
+wait_eq "daemon_state pushed: its needs make the face need" "need" hn display -p '#{daemon_mood}'
+# …and the off result (pair: null) takes the brain's lines with it, and has the zoo read again.
+reads=$(dial "d.zooReads")
+push '{"type":"daemon_state","payload":{"pair":null,"needs":[],"working":0,"failing":[],"machines":[],"asks":[],"acted":[],"autonomy":"watch","confirms":[]}}'
+wait_eq "pair: null reads the zoo again" 1 dial "d.zooReads > $reads ? 1 : 0"
+waited=0; while screen | grep -qF "Edit src/app.ts (2)"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 3000 ] && fail "pair: null left the brain's line up"; done
+echo "✓ pair: null takes the brain's line down"
+wait_eq "and the face is itself again" "idle" hn display -p '#{daemon_mood}'
+# The server's switch goes off: the next read (here, after the off result) is a 404, and hn is as before daemons.
+curl -s -X POST "http://127.0.0.1:$port/test/zoo-mode?mode=off" >/dev/null
+push '{"type":"daemon_state","payload":{"pair":"tim","needs":[],"working":0,"failing":[],"machines":[],"asks":[],"acted":[],"autonomy":"watch","confirms":[]}}'
+push '{"type":"daemon_state","payload":{"pair":null,"needs":[],"working":0,"failing":[],"machines":[],"asks":[],"acted":[],"autonomy":"watch","confirms":[]}}'
+wait_eq "switched off: no status cell" "" hn display -p '#{daemon}'
+wait_eq "switched off: no prefix Z" 0 sh -c "HOME=$home $bin -L $client list-keys | grep -c 'switch-client -T daemon' || true"
+# …and on again: zoo_changed asks, and it all comes back.
+curl -s -X POST "http://127.0.0.1:$port/test/zoo-mode?mode=egg" >/dev/null
+push '{"type":"zoo_changed","payload":{"revision":999}}'
+wait_eq "on again after zoo_changed" "tim" hn display -p '#{daemon_name}'
+wait_eq "prefix Z back" 1 sh -c "HOME=$home $bin -L $client list-keys -T prefix Z | grep -c 'switch-client -T daemon'"
 # The zoo: the box back and what's next.
 tmux_ send-keys -t t C-b Z z
 expect "z: the zoo's box back" "zoo: drop 1 unix  1/9"

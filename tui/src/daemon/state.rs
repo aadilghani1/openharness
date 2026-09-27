@@ -20,6 +20,10 @@ pub const NAP: Duration = Duration::from_secs(15 * 60);
 pub const BACK_AFTER: Duration = Duration::from_secs(15 * 60);
 /// Idle in front this long is away (presence), as the desktop measures it.
 pub const IDLE: Duration = Duration::from_secs(5 * 60);
+/// The zoo not answering (a 5xx, no answer) is asked again after this, doubling to RETRY_MOST; off is
+/// asked again after RETRY_MOST (daemons/README.md, "Off switches": at most every six hours).
+pub const RETRY_FIRST: Duration = Duration::from_secs(5 * 60);
+pub const RETRY_MOST: Duration = Duration::from_secs(6 * 60 * 60);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ZooState {
@@ -50,8 +54,10 @@ pub struct Daemons {
     pub refetch: bool,
     /// Habits reported to the account this run (each once).
     pub reported: Vec<String>,
-    /// When to ask for the zoo again (it did not answer).
+    /// When to ask for the zoo again: off, at most every six hours; not answering (a 5xx, no
+    /// answer), after `retry` — five minutes, doubling to six hours.
     pub retry_at: Option<Instant>,
+    pub retry: Duration,
     /// The key table is bound (the daemons are on).
     pub keys_on: bool,
     /// The local link's generation the zoo was read on, and presence said on (a reconnect does both again).
@@ -90,7 +96,7 @@ pub struct Daemons {
 impl Daemons {
     pub fn load() -> Daemons {
         Daemons {
-            settings: Settings::load(), tim_off: false, zoo: ZooDoc::default(), zoo_state: ZooState::Unknown, fetching: false, refetch: false, reported: Vec::new(), retry_at: None, keys_on: false, fetched_gen: None,
+            settings: Settings::load(), tim_off: false, zoo: ZooDoc::default(), zoo_state: ZooState::Unknown, fetching: false, refetch: false, reported: Vec::new(), retry_at: None, retry: RETRY_FIRST, keys_on: false, fetched_gen: None,
             held: None, last_done: None, blink: None, last_look: None, step: 0, last_step: None, back_at: None, nap_until: None, boop_until: None, egg_until: None,
             last_key: Instant::now(), pause_at: None, idle_sent: false, away_since: None, focus_back: None, focus_sent: None, presence_gen: None, table_up: false,
             brain: Brain::default(), overlay: None,

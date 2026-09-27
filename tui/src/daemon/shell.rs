@@ -21,7 +21,7 @@ async fn read(port: u16) -> (ZooState, ZooDoc) {
         Ok(v) if v.get("enabled").and_then(serde_json::Value::as_bool) == Some(false) => (ZooState::Off, ZooDoc::default()),
         Ok(v) => (ZooState::Account, serde_json::from_value(v).unwrap_or_default()),
         Err(e) if e.code == "HTTP_401" => (ZooState::SignedOut, ZooDoc::default()),
-        Err(e) if matches!(e.code.as_str(), "HTTP_404" | "HTTP_503") => (ZooState::Off, ZooDoc::default()),
+        Err(e) if e.code == "HTTP_404" => (ZooState::Off, ZooDoc::default()),
         Err(e) => { eprintln!("hn: {e}"); (ZooState::Unknown, ZooDoc::default()) }
     }
 }

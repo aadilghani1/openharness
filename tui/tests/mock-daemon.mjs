@@ -94,7 +94,7 @@ const desk = DEMO ? { revision: 1, tabs: [
 ] } : { revision: 1, tabs: [] }
 // The dial's side of the daemon, for the e2e: what the windows told it (the ring, the tabs, the
 // focus, spoken-task replies, messages sent), and every local window to push dial frames at.
-const dial = { said: {}, replies: [], messages: [], daemon: [], acts: [], zooOps: [] }
+const dial = { said: {}, replies: [], messages: [], daemon: [], acts: [], zooOps: [], zooReads: 0 }
 const windows = new Set()
 
 // The account's zoo (daemons/README.md, "The zoo"), as backend/src/lib/zoo.ts keeps it — just enough
@@ -104,7 +104,7 @@ const windows = new Set()
 // habit, no egg), `signedout` (401, as harnessd answers with no account), `off` (the daemons switched
 // off on the server: 404), `disabled` (the same switch as `{ enabled: false }`).
 const ROSTER = JSON.parse(readFileSync(join(here, '../../daemons/roster.json'), 'utf8'))
-const ZOO_MODE = process.env.MOCK_ZOO || 'egg'
+let ZOO_MODE = process.env.MOCK_ZOO || 'egg'
 const today = new Date().toISOString().slice(0, 10)
 const zooDoc = { revision: 1, zoo: { daemons: [], eggs: [], pair: null, autonomy: 'watch', consent: null, habits: [], firstEgg: false, setupEgg: false, pity: 0, easter: [],
   progress: { turns: 12, days: { [today]: 3 }, weeks: [], nights: [], machines: [], marathon: [], history: [], held: [], batches: [], lessons: [] } } }
@@ -160,6 +160,9 @@ const signedOut = (res) => { res.writeHead(401, { 'content-type': 'application/j
 
 const json = (res, body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success: true, data: body })) }
 const handler = (req, res) => {
+  // The e2e flips the server's daemons switch (POST /test/zoo-mode?mode=off), as HARNESS_DAEMONS would.
+  if (req.url.startsWith('/test/zoo-mode') && req.method === 'POST') { ZOO_MODE = new URL(req.url, 'http://x').searchParams.get('mode') || 'egg'; return json(res, { mode: ZOO_MODE }) }
+  if (req.url === '/api/zoo' && req.method === 'GET') dial.zooReads++
   if (req.url.startsWith('/api/zoo') && ZOO_MODE === 'off') { res.writeHead(404, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ success: false, error: { code: 'NOT_FOUND', message: 'Not found' } })) }
   if (req.url.startsWith('/api/zoo') && ZOO_MODE === 'disabled') return json(res, { enabled: false })
   if (req.url === '/api/zoo' && req.method === 'GET') return ZOO_MODE === 'signedout' ? signedOut(res) : json(res, zooDoc)
