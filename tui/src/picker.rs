@@ -174,6 +174,8 @@ pub struct Picker {
     /// --history: the queries read from its file, where C-p/C-n are among them (None: the
     /// query being typed, kept in `history_draft`).
     pub history_at: Option<usize>, pub history_draft: String,
+    /// jump (Some(false)) or jump-accept (Some(true)): the rows labelled, the next key picks one.
+    pub jumping: Option<bool>,
 }
 
 impl Picker {
@@ -231,6 +233,7 @@ impl Picker {
             sort_flipped: false,
             track_flipped: false,
             history_at: None, history_draft: String::new(),
+            jumping: None,
             preview_of: None,
             preview_fresh: std::cell::Cell::new(true),
             preview_following: Default::default(),

@@ -1277,7 +1277,11 @@ fn row_gutter(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, mark
     let z = theme::fzf();
     let pal = z.pal;
     let pw = pointer_w();
-    if pw > 0 && current { buf.set_string(x, y, format!("{:<pw$}", z.pointer_char), pal.current_cursor.style()) }
+    // Jump mode: each row shown its label where the pointer goes, in the pointer's colours.
+    let slot = vi.saturating_sub(picker.scroll);
+    let jump_label = picker.jumping.and_then(|_| theme::fzf_opts().jump_labels.chars().nth(slot));
+    if let (Some(l), true) = (jump_label, pw > 0) { buf.set_string(x, y, format!("{:<pw$}", l), if current { pal.current_cursor.style() } else { pal.cursor.style() }) }
+    else if pw > 0 && current { buf.set_string(x, y, format!("{:<pw$}", z.pointer_char), pal.current_cursor.style()) }
     else if pw > 0 {
         // The gutter: --gutter's character, `▌`, or under --no-unicode a blank in reverse.
         let o = theme::fzf_opts();
@@ -1299,8 +1303,12 @@ fn row_gutter(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, mark
         (false, true) => (pal.selected, pal.selected_match),
         (false, false) => (pal.normal, pal.matched),
     };
-    let alt = !(marked && pal.selected.bg != pal.normal.bg) && pal.alt_bg.col != theme::fzfcolor::Col::Undef && vi.saturating_sub(picker.scroll) % 2 == 1;
-    let (base, matched) = if alt && !current { (base.with_bg(pal.alt_bg), matched.with_bg(pal.alt_bg)) } else { (base, matched) };
+    let undefined = pal.alt_bg.col == theme::fzfcolor::Col::Undef;
+    // (Striped in jump mode — on bg+ from the first row when there is no alt-bg — as fzf does.)
+    let (alt, alt_bg) = if jump_label.is_some() {
+        (if undefined { slot % 2 == 0 } else { slot % 2 == 1 }, if undefined { theme::fzfcolor::CA { col: pal.current.bg, attr: 0 } } else { pal.alt_bg })
+    } else { (!(marked && pal.selected.bg != pal.normal.bg) && !undefined && slot % 2 == 1, pal.alt_bg) };
+    let (base, matched) = if alt && !current { (base.with_bg(alt_bg), matched.with_bg(alt_bg)) } else { (base, matched) };
     (base, matched, current, marked, alt)
 }
 

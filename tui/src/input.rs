@@ -210,6 +210,8 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
 /// preview, whichever it is over; a click takes a row, a second one opens it; in the preview a
 /// drag scrolls it and a drag on its border resizes it; a click outside the box closes it.
 fn modal_mouse(app: &mut App, mouse: MouseEvent) {
+    // --no-mouse: a list the mouse does nothing to.
+    if theme::fzf_opts().no_mouse && matches!(app.modal, Some(Modal::Picker { .. })) { return }
     let inside = |r: ratatui::layout::Rect| mouse.column >= r.x && mouse.column < r.x + r.width && mouse.row >= r.y && mouse.row < r.y + r.height;
     let (list, preview) = match &app.modal { Some(Modal::Picker { picker, .. }) => (picker.list_area.get(), picker.preview_area.get().filter(|_| picker.preview)), _ => (Default::default(), None) };
     let in_preview = preview.map(|(r, _)| inside(r)).unwrap_or(false);
@@ -1638,6 +1640,18 @@ fn end_word(chars: &[char], at: usize, ws: &str) -> usize {
 fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    // Jump mode: a row's label goes to it (jump-accept: and picks it); any other key ends it.
+    if let Some(accept) = picker.jumping.take() {
+        if let KeyCode::Char(c) = key.code {
+            let rows = picker.page_rows.get().max(0) as usize;
+            if let Some(k) = theme::fzf_opts().jump_labels.chars().position(|l| l == c).filter(|k| !ctrl && !alt && *k < rows && picker.scroll + k < picker.visible.len()) {
+                picker.vset((picker.scroll + k) as i64, 1);
+                if accept { return choose(app, kind, picker, Choice::Enter) }
+            }
+        }
+        app.modal = Some(Modal::Picker { kind, picker });
+        return;
+    }
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     // Inside a machine or a project, esc (or ⌫ on an empty query) steps back out to the list
     // it was chosen from; anywhere else it closes.
@@ -1877,6 +1891,7 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
                 picker.preview_window = Some(pw);
             }
             "toggle-track" => { picker.track_flipped = !picker.track_flipped }
+            "jump" => picker.jumping = Some(false), "jump-accept" => picker.jumping = Some(true),
             "prev-history" => picker.history_step(true), "next-history" => picker.history_step(false),
             "track-current" if !picker.tracking() => { picker.track_flipped = !picker.track_flipped }
             "untrack-current" if picker.tracking() => { picker.track_flipped = !picker.track_flipped }
