@@ -1,6 +1,8 @@
 # Handoff: external sessions for every engine
 
-Branch `external-engines`, based on `244cfe71` (#387). Not yet rebased, no PR yet.
+Continued from `external-engines` at `40f12db0` on branch `codex/external-engines`.
+Rebased onto `93f148d6` (`origin/main`, including #391 and #392) without conflicts.
+The original branch and worktree are preserved.
 
 ## What it is
 
@@ -22,7 +24,8 @@ The design, each engine's store and evidence, the edge cases and the test result
 - `cli/src/cli.ts`: `adoptableSession`, `heldBy`, `takeOverWhenIdle`, and the `onCreateAgent` resume
   path.
 - `cli/src/lib/sqliteRead.ts`: an idle WAL store is opened `immutable=1`, so reading never creates
-  `-wal`/`-shm` files in an engine's folder.
+  `-wal`/`-shm` files in an engine's folder. Its cached handle is invalidated when the main file's
+  size, modification time or change time moves, including a writer that opens and closes between scans.
 - Index: `transcript.ts` (`lineTime`, `copilotOwnLine`, `museOwnStream`), `indexer.ts`
   (`historyPass` for database engines).
 - Desktop: `swarm_search.dart` (`sessionUnavailable`), `take_over.dart`
@@ -37,27 +40,75 @@ The design, each engine's store and evidence, the edge cases and the test result
 - `continue` is sent on *Take Over Now* only to engines that take a first message (Claude, Codex,
   OpenCode).
 
-## State
+## State after continuation
 
-- CLI: all new code at 100% statements, branches, functions and lines (436 tests in 32 files, no
-  `v8 ignore`). Full CLI suite passes except `hookNotify`, which #390 fixes, and
-  `backendSocket.gridReads`, which fails only under load (passes alone).
-- Desktop: the base commit fails the same 25 tests this branch fails. This branch had one extra:
-  `test/environment_recheck_timer_test.dart` failed to load in a filtered run. It is unrelated to this
-  change and probably timing, but not yet confirmed.
-- End to end, through a sandboxed daemon: real stores read-only (229 sessions indexed, 210 of them
+Checked on macOS with Node 22.23.1, Flutter 3.47.2 and Dart 3.13.2:
+
+- CLI: `npm run typecheck`, `npm run build`, and the full `npx vitest run` pass: **5,168 passed,
+  63 skipped**, 304 passing files. Both `hookNotify` and `backendSocket.gridReads` passed this run;
+  #390 remains a separate open PR.
+- Focused CLI run: **556 tests in 29 files** pass, covering session search, SQLite reads, launch,
+  resume, tmux, and the changed Hermes/Devin helpers. `external.ts` and all `externals/*.ts` have
+  **100% statements, branches, functions and lines**, with no coverage ignores.
+- Desktop: **3,682 passed, 12 skipped, 33 failed** in the complete suite. All 33 failures reproduced
+  when their 13 files were run at clean `93f148d6`; the baseline also had one extra test-file load
+  error. `flutter analyze` reports the same 18 diagnostics on both branches (one error, one warning,
+  16 informational diagnostics), including the missing `WorkspaceBarControl.selection` getter in
+  `grid_model_picker_test.dart`.
+- The original timer question is resolved: `environment_recheck_timer_test.dart` loads on both
+  `40f12db0` and `244cfe71` and fails the same assertion at line 163: expected `unauthenticated`,
+  observed `bootstrapping`. The same failure occurs on current main. It is not introduced here.
+- The five affected desktop search/take-over files pass all **31 tests**. A separate synthetic
+  Grok dialog fixture also passed and supplied
+  [the PR screenshot](../../.github/assets/external-engines/take-over-grok.png).
+- Real tmux 3.5a checks, with a temporary home and an explicit isolated socket: **9 passed,
+  9 skipped**. Discovery and process-only deletion passed for Claude, Codex, OpenCode, Pi, Hermes
+  and Grok, including the installed Grok `agent` alias. Other engine binaries were unavailable.
+- Real Herdr checks were attempted in a private isolated home: installed Herdr 0.9.1 speaks
+  protocol 22, but Harness expects protocol 19. Setup rejects the connection, so none of its
+  26 cases ran. The fixture servers were stopped; this is not a passing Herdr result.
+- Earlier end-to-end evidence from the original handoff, through a sandboxed daemon: real stores
+  read-only (229 sessions indexed, 210 of them
   external), then take-over with made-up stores and stand-in engines (Grok *Now* and *Wait*, OpenCode
-  `maybe` refused, stale lock ignored). Results are in the session search note.
+  `maybe` refused, stale lock ignored). Results are in the session search note; this continuation
+  did not rerun that live-store scan.
+
+The 33 desktop failures shared with main are in these files:
+
+| File under `desktop/test/` | Failures |
+| --- | ---: |
+| `workspace_account_lifecycle_test.dart` | 8 |
+| `boot_flow_widget_test.dart` | 4 |
+| `workspace_expiry_screen_test.dart` | 4 |
+| `machines_manager_test.dart` | 4 |
+| `terminal_panel_presentation_test.dart` | 4 |
+| `signout_recovery_test.dart` | 2 |
+| `orchestrator_test.dart` | 1 |
+| `local_cli_discovery_test.dart` | 1 |
+| `environment_setup_screen_test.dart` | 1 |
+| `grid_model_picker_test.dart` | 1 (load error) |
+| `open_picker_rendering_test.dart` | 1 |
+| `first_workspace_test.dart` | 1 |
+| `environment_recheck_timer_test.dart` | 1 |
+
+## Fixes from the continuation
+
+- **Refresh an idle SQLite snapshot after a complete write cycle.** A cached immutable reader
+  previously kept returning old rows if the engine wrote, checkpointed and closed between scans.
+  A real SQLite regression fails before the fix and passes for both the built-in reader and CLI
+  fallback afterward; neither leaves WAL/SHM files beside the idle store.
+- **Rebuild existing search content with schema 10.** The new Muse/Copilot filters and transcript
+  timestamps must apply to conversations indexed before this branch. Reader and rebuild tests
+  cover schemas 8 and 9 as well as an older schema.
 
 ## Left to do
 
-1. Run `flutter test test/environment_recheck_timer_test.dart` alone on this branch and at `244cfe71`.
-2. Rebase onto `origin/main` (#391, #392 landed; a trial merge had no conflicts), then run
-   `npx vitest run` in `cli/` and `flutter analyze` and `flutter test` in `desktop/`.
-3. #388 (Codex context blocks, schema 9) touches `transcript.ts` and `store.ts`. Whichever merges
-   second reconciles the index schema version.
-4. Open a PR against `main`. The owner merges and releases (`make release-cli`, then the desktop
-   release); never merge or release without their explicit go-ahead.
+1. Review the PR against `main` and the baseline desktop failures above.
+2. Reconcile merge order with #388, which changes `turns.ts` and reserves schema 9. If #388 lands
+   first, keep schema 10 here after rebasing. If this branch lands first, #388 must use **11** when
+   it lands, so an index already written by schema 10 rebuilds for its context filtering too.
+3. The owner merges and releases (`make release-cli`, then the desktop release); never merge or
+   release without their explicit go-ahead.
 
 ## Sandbox end-to-end recipe
 

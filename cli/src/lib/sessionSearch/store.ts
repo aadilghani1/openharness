@@ -16,7 +16,9 @@ import { chmodSync, existsSync, rmSync } from 'node:fs'
 import { builtinSqlite } from '../sqliteRead.js'
 import type { IndexedTurn } from './turns.js'
 
-const SCHEMA_VERSION = '8'
+// Rebuild existing turns with the external-engine timestamps and Muse/Copilot stream filters.
+// Version 9 belongs to the Codex context-block change (#388), which may land in either order.
+const SCHEMA_VERSION = '10'
 
 /** The row that holds a session's name, title and folder: searchable beside its turns. */
 export const HEADER_TURN = -1

@@ -393,6 +393,8 @@ coverage, no ignores):
   watcher checks on every loop.
 - A store being written: a head that is not finished yet is read again when the file changes. An idle
   SQLite WAL store is opened `immutable`, so reading never leaves `-wal` or `-shm` files behind.
+  A main-file change also invalidates its cached immutable handle, catching a writer that opens,
+  checkpoints and closes between scans.
 - Folder names that lose information (Cursor, Pi, Command Code slugs) are never read as the folder.
   The folder comes from the store itself, or the conversation is left out.
 - One engine's store failing keeps its last good list. Harness's own data folder is never offered.

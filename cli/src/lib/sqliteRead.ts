@@ -111,7 +111,7 @@ export function builtinSqlite(): DatabaseConstructor | null {
   return builtin
 }
 
-interface Handle { db: DatabaseLike; dev: number; ino: number; immutable: boolean }
+interface Handle { db: DatabaseLike; dev: number; ino: number; immutable: boolean; stamp: string }
 
 /** One open handle per store: the readers poll every second, and opening is the expensive part. */
 const handles = new Map<string, Handle>()
@@ -122,18 +122,22 @@ const handles = new Map<string, Handle>()
  * from a database nobody writes to any more — a poller that never sees another row, with no error.
  */
 function openHandle(Database: DatabaseConstructor, dbPath: string, busyTimeoutMs: number): DatabaseLike {
-  const { dev, ino } = statSync(dbPath)
+  const { dev, ino, size, mtimeMs, ctimeMs } = statSync(dbPath)
+  const stamp = `${size}:${mtimeMs}:${ctimeMs}`
   // An idle store is read immutable; once its engine opens it again (a `-wal` appears), it is read live.
   const immutable = idleWalStore(dbPath)
   const cached = handles.get(dbPath)
-  if (cached && cached.dev === dev && cached.ino === ino && cached.immutable === immutable) return cached.db
+  // A writer can open, checkpoint, and close between polls, leaving no WAL. An immutable handle
+  // never checks for writes itself, so reuse it only while the main file's fingerprint holds.
+  if (cached && cached.dev === dev && cached.ino === ino && cached.immutable === immutable
+    && (!immutable || cached.stamp === stamp)) return cached.db
   if (cached) dropHandle(dbPath)
   const url = pathToFileURL(dbPath)
   url.search = 'immutable=1'
   const db = new Database(immutable ? url : dbPath, { readOnly: true })
   // Not a write: the pragma is per-connection state, accepted on a read-only handle.
   db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(busyTimeoutMs))}`)
-  handles.set(dbPath, { db, dev, ino, immutable })
+  handles.set(dbPath, { db, dev, ino, immutable, stamp })
   return db
 }
 

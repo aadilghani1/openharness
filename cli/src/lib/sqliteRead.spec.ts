@@ -63,6 +63,7 @@ withCli('sqliteReadAll', () => {
     ['cli', () => overrideBuiltinSqlite(null)],
     ...(hasBuiltin ? [['builtin', () => overrideBuiltinSqlite(undefined)] as ['builtin', () => void]] : []),
   ]
+  const withBuiltin = hasBuiltin ? it : it.skip
 
   for (const [via, select] of paths) {
     describe(`via ${via}`, () => {
@@ -129,6 +130,29 @@ withCli('sqliteReadAll', () => {
         }
       })
 
+      withBuiltin('sees a WAL write that finishes between reads, without leaving sidecars', async () => {
+        run(db, 'PRAGMA journal_mode=WAL;')
+        const query = "SELECT time_created AS time FROM message WHERE id = 'm1';"
+        expect(await sqliteReadAll(db, query)).toEqual({ ok: true, via, rows: [{ time: 1 }] })
+        expect(await sqliteReadAll(db, query)).toEqual({ ok: true, via, rows: [{ time: 1 }] })
+        // The engine starts, updates an existing row, checkpoints, and closes before the next poll.
+        // There is no WAL left to tell a cached immutable reader that its snapshot is stale.
+        type Writer = { exec(sql: string): void; close(): void }
+        const sqlite = (process as unknown as { getBuiltinModule(id: string): { DatabaseSync: new (path: string) => Writer } })
+          .getBuiltinModule('node:sqlite')
+        const writer = new sqlite.DatabaseSync(db)
+        try {
+          writer.exec("UPDATE message SET time_created = 9 WHERE id = 'm1'")
+        } finally {
+          writer.close()
+        }
+        expect(existsSync(`${db}-wal`)).toBe(false)
+        expect(existsSync(`${db}-shm`)).toBe(false)
+        expect(await sqliteReadAll(db, query)).toEqual({ ok: true, via, rows: [{ time: 9 }] })
+        expect(existsSync(`${db}-wal`)).toBe(false)
+        expect(existsSync(`${db}-shm`)).toBe(false)
+      })
+
       it('reports a missing store as transient, and creates nothing', async () => {
         const result = await sqliteReadAll(join(dir, 'absent.db'), 'SELECT 1;', [])
         expect(result.ok).toBe(false)
@@ -138,8 +162,6 @@ withCli('sqliteReadAll', () => {
       })
     })
   }
-
-  const withBuiltin = hasBuiltin ? it : it.skip
 
   // The handle is cached per path for the pollers' sake; a store rebuilt under the same name must
   // not keep answering from the file that was there before.
