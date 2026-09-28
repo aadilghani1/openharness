@@ -5,7 +5,8 @@ import 'package:flutter/widgets.dart';
 import '../logging/debug_surface.dart';
 
 /// Harness uses Command as a direct prefix for frequent workspace actions.
-/// T opens a tab, O opens projects, P finds harnesses, Shift-P opens commands, N creates a harness, S opens the Store,
+/// T opens a tab, N creates a harness. S opens Store, M machines, I models,
+/// O projects, P harnesses, and Shift-P commands.
 /// Shift-L chooses a layout. H/J/K/L and arrows focus panes; B routes a task.
 /// The same definitions feed live keys, help and search.
 ///

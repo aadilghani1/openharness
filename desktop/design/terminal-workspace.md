@@ -31,6 +31,10 @@ User content and embedded viewers retain their own visual language.
 ## Keyboard is the primary path
 
 Every workspace action needs an existing command or a clear keyboard interaction.
+Cmd-S opens the Store tab, Cmd-M opens Machines (`@`), and Cmd-I opens Models (`:`).
+History remains available from its menu without a default shortcut. Cmd-Y and Cmd-U
+have no default workspace action. On macOS, Minimize remains available from the
+yellow window button and the Window menu; Cmd-M belongs to Machines inside Harness.
 Resolve shortcut hints from the live keymap. Cmd-N creates a harness, Cmd-O opens projects (`#`), Cmd-P searches harnesses, and Cmd-Shift-P opens
 commands (`>`) in the shared picker. Cmd-I opens models with `:` already entered;
 typing Shift is unnecessary. From a live harness pane, Enter uses a served or

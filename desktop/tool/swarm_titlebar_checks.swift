@@ -1214,7 +1214,7 @@ private extension SwarmTitlebar {
     try checkTitlebar(strip.newButton.accessibilityLabel() == "New Tab", "The plus announces New Tab")
     try checkTitlebar(main.defersToInput(event("n", 45, .command)) && main.defersToInput(event("t", 17, .command)),
       "Command-N and Command-T reach creation and New Tab")
-    try checkTitlebar(main.defersToInput(event("p", 35, .command)), "Command-P reaches Open Harness")
+    try checkTitlebar(main.defersToInput(event("p", 35, .command)), "Command-P reaches Harnesses")
     try checkTitlebar(main.defersToInput(event("p", 35, [.command, .shift])), "Command-Shift-P reaches commands")
     try checkTitlebar(main.defersToInput(event("o", 31, .command)), "Command-O reaches the project picker")
     try checkTitlebar(!main.defersToInput(event(";", 41, .command)) &&
@@ -1225,8 +1225,12 @@ private extension SwarmTitlebar {
       "Command-I reaches Flutter exactly once")
     try checkTitlebar(main.defersToInput(event("m", 46, .command)) &&
       !main.performKeyEquivalent(with: event("m", 46, .command)),
-      "Command-M reaches Flutter exactly once instead of invoking a native window action")
-    try checkTitlebar(!main.defersToInput(event("u", 32, .command)), "Command-U is no longer claimed")
+      "Command-M reaches Machines exactly once instead of invoking a native window action")
+    try checkTitlebar(main.defersToInput(event("s", 1, .command)) &&
+      !main.performKeyEquivalent(with: event("s", 1, .command)),
+      "Command-S reaches Store exactly once")
+    try checkTitlebar(!main.defersToInput(event("u", 32, .command)), "Command-U has no default workspace action")
+    try checkTitlebar(!main.defersToInput(event("y", 16, .command)), "Command-Y has no default workspace action")
     flutterKeyContext = "picker"
     syncMenuKeys()
     try checkTitlebar(!main.performKeyEquivalent(with: event("\u{f701}", 125)), "Result arrows are owned by the shared picker")
@@ -1248,7 +1252,7 @@ private extension SwarmTitlebar {
     }
     actionsEnabled = true
     // Orchestrator has no default chord now. Exercise an explicit user binding;
-    // Cmd-O opens projects; Cmd-P opens search through the exported default keymap.
+    // Cmd-O opens projects; Cmd-Shift-P opens commands through the exported default keymap.
     let viewerMap = HarnessNativeKeymap(["version": 1, "contexts": [
       "workspace": [["keys": ["cmd+y"], "command": "project.orchestrate", "hint": "⌘Y", "repeatable": false]],
       "terminal": [], "picker": [], "project": [],
