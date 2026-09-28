@@ -42,7 +42,8 @@ URLs. Formats the reader cannot understand add nothing and remove nothing.
 The assigned checkout and previously associated checkouts are read through the
 existing 15-second Git cache. An explicit details refresh clears their cached
 Git snapshots. One projection inspects at most eight additional locations,
-collapsing known subdirectories without additional Git subprocesses. Incomplete
+deduplicating resolved checkout roots. Nested checkouts are resolved through
+Git rather than assumed to share their parent directory's branch. Incomplete
 history is labeled. Short-lived branches switched away between observations,
 and activity deleted before it was observed, cannot be reconstructed reliably.
 

@@ -58,9 +58,12 @@ describe('worktree PR status', () => {
   it('coalesces lookups and invalidates when the checked-out branch changes', async () => {
     const f = fixture()
     await Promise.all([f.read('/worktree'), f.read('/worktree')])
-    expect(f.run.mock.calls.filter(([cmd, args]) => cmd === 'gh' && args.at(-1)?.includes('/pulls?'))).toHaveLength(1)
+    const queries = () => f.run.mock.calls.filter(([cmd, args]) => cmd === 'gh' && args.at(-1)?.includes('/pulls?'))
+      .map(([, args]) => new URLSearchParams(args.at(-1)!.split('?')[1]))
+    expect(queries().map(q => q.get('state')).sort()).toEqual(['closed', 'open'])
     f.branch('another')
     await f.read('/worktree')
+    expect(queries().filter(q => q.get('head') === 'acme:another').map(q => q.get('state')).sort()).toEqual(['closed', 'open'])
     expect(f.run.mock.calls.some(([cmd, args]) => cmd === 'gh' && args.at(-1)?.includes('head=acme%3Aanother'))).toBe(true)
   })
   it('uses canonical repository identity after an origin rename', async () => {

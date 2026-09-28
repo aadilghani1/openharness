@@ -72,7 +72,7 @@ export async function sessionGitContext(home: AgentProject | null, work?: Sessio
   }
   const roots = new Map<string, AgentProject>()
   const add = (project: AgentProject | null) => {
-    if (project?.root) roots.set(project.root, { ...project, cwd: project.root })
+    if (project?.root && !roots.has(project.root)) roots.set(project.root, { ...project, cwd: project.root })
   }
   // The assigned checkout is authoritative for every engine, including engines without a
   // transcript reader. Tool receipts only add associations; they never invalidate Git facts.
@@ -84,9 +84,9 @@ export async function sessionGitContext(home: AgentProject | null, work?: Sessio
   ])]
   let reads = 0
   for (const cwd of paths) {
-    if ([...roots.keys()].some(root => cwd === root || cwd.startsWith(root.endsWith(sep) ? root : root + sep))) continue
-    // Bound one projection, including missing/non-Git paths. Subfolders already resolved to
-    // a checkout consume no extra slots. The shared Git cache bounds subprocess concurrency.
+    if (roots.has(cwd)) continue
+    // A subdirectory can itself be a nested repository/worktree. Resolve it through Git,
+    // never assume path containment proves checkout identity. Bound additional lookups.
     if (reads++ === 8) { context.truncated = true; break }
     add(await read(cwd).catch(() => null))
   }

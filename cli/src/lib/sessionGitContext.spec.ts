@@ -66,6 +66,16 @@ describe('Git context from observed session work', () => {
       .toMatchObject({ state: 'multiple', current: null })
   })
 
+  it('resolves nested checkouts without replacing a fresh assigned-branch snapshot with a cached subfolder', async () => {
+    const home = { name: 'app', cwd: '/home', root: '/home', branch: 'fresh', remote: 'github.com/acme/app' }
+    const read = async (cwd: string) => cwd === '/home/nested'
+      ? { ...home, cwd, root: cwd, branch: 'nested-topic' }
+      : { ...home, cwd, branch: 'older-cache' }
+    const context = await sessionGitContext(home, work(['/home/src', '/home/nested']), read)
+    expect(context.state).toBe('multiple')
+    expect(context.checkouts?.map(p => p.branch)).toEqual(['fresh', 'nested-topic'])
+  })
+
   it('keeps absent, unreadable, uncertain and non-Git contexts distinct', async () => {
     const home = { name: 'app', cwd: '/home', root: '/home', branch: 'launch', remote: null }
     expect(await sessionGitContext(home)).toMatchObject({ state: 'workspace', current: home })
