@@ -23,7 +23,7 @@ class _NoStorage implements LocalKeyValueStore {
 }
 
 void main() {
-  test('preview hatches, names, pairs and earns only in memory', () async {
+  test('preview starts with an egg, then earns and hatches only in memory', () async {
     final storage = _NoStorage();
     final zoo = ZooController(
       storage: storage,
@@ -33,9 +33,28 @@ void main() {
     addTearDown(zoo.dispose);
     zoo.showPreview();
     expect(zoo.source, ZooSource.preview);
-    expect(zoo.paired!.id, 'tim');
+    expect(zoo.zoo.daemons, isEmpty);
+    expect(zoo.paired, isNull);
+    expect(zoo.readyEgg, isNull);
+    expect(zoo.nearestEgg!.kind, 'first');
+    expect(zoo.nearestEgg!.stage, 'p0');
     expect(zoo.needsHint, isFalse);
+    zoo.habit('split');
+    expect(zoo.nearestEgg!.stage, 'p2');
+    zoo.habit('find');
+    expect(zoo.nearestEgg!.stage, 'p3');
+    expect(zoo.readyEgg, isNull, reason: 'a finished turn is required');
+    zoo.bind(null);
+    zoo.showPreview();
+    expect(zoo.nearestEgg!.stage, 'p3', reason: 'hide/show keeps egg progress');
+    expect(zoo.readyEgg, isNull);
+    zoo.habit('turn');
+    expect(zoo.readyEgg!.kind, 'first');
+    expect(zoo.nearestEgg!.stage, 'p4');
+    expect(zoo.paired, isNull, reason: 'earning the egg never hatches it');
     final hatch = (await zoo.hatch(zoo.readyEgg!.id))!;
+    expect(zoo.zoo.daemons, hasLength(1));
+    expect(zoo.paired!.version, '0.1');
     expect(zoo.nickname(hatch.uid!, 'Pip'), isTrue);
     zoo.pair(hatch.uid!);
     zoo.recordTurns(3, machineId: 'fixture');
@@ -57,8 +76,10 @@ void main() {
     final another = ZooController(storage: storage);
     addTearDown(another.dispose);
     another.showPreview();
-    expect(another.zoo.daemons, hasLength(1));
-    expect(another.paired!.id, 'tim', reason: 'a new window starts fresh');
+    expect(another.zoo.daemons, isEmpty);
+    expect(another.paired, isNull, reason: 'a new window starts with an egg');
+    expect(another.readyEgg, isNull);
+    expect(another.nearestEgg!.stage, 'p0');
 
     // Switching to a real account can never upload the preview as a guest seed.
     final remote = FakeZooTransport();
@@ -78,12 +99,15 @@ void main() {
     addTearDown(zoo.dispose);
     zoo.bind('account:test', remote: remote);
     zoo.showPreview();
+    zoo.habit('split');
     gate.complete();
     await Future<void>.delayed(Duration.zero);
     zoo.refresh();
     zoo.pushed(999);
     expect(zoo.isPreview, isTrue);
-    expect(zoo.paired!.uid, 'preview-tim');
+    expect(zoo.paired, isNull);
+    expect(zoo.zoo.habits, ['split']);
+    expect(zoo.nearestEgg!.stage, 'p2');
     expect(remote.fetches, 1);
     expect(remote.batches, isEmpty);
   });

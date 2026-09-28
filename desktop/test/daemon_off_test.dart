@@ -171,7 +171,9 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
       expect(tester.widget<Switch>(experimentSwitch).value, isTrue);
       expect(zoo.isPreview, isTrue);
-      expect(zoo.paired!.id, 'tim');
+      expect(zoo.paired, isNull);
+      expect(zoo.zoo.daemons, isEmpty);
+      expect(zoo.readyEgg, isNull);
       expect(find.byType(SettingsScreen), findsOneWidget);
       expect(app.activeSwarmId, tab);
       expect(frames, isEmpty);
@@ -201,11 +203,74 @@ void main() {
   );
 
   testWidgets(
+    'the experimental egg earns its first hatch from workspace activity',
+    (tester) async {
+      await mount(tester);
+      await setPreview(tester, true);
+      String glyph() => tester
+          .widget<Text>(find.byKey(const ValueKey('daemon-slot-glyph')))
+          .data!
+          .trim();
+      expect(glyph(), r'\_(  )_/');
+      expect(zoo.zoo.daemons, isEmpty);
+
+      app.adoptSessionForTest(terminal('a0', []));
+      await app.handleMachineEventForTest('m', {
+        'type': 'turn_ended',
+        'agentId': 'a0',
+      });
+      await tester.pump();
+      expect(glyph(), r'\_(/\)_/');
+      app.adoptSessionForTest(terminal('a1', []));
+      app.notifyListeners();
+      await tester.pump();
+      expect(glyph(), r"\_(*')_/");
+      app.stateOf('m')!.resumedHarnesses = 1;
+      app.notifyListeners();
+      await tester.pump();
+      expect(zoo.readyEgg!.kind, 'first');
+      expect(glyph(), r'\_(oo)_/');
+      expect(zoo.paired, isNull, reason: 'the user must open the egg');
+
+      await tester.tap(slot);
+      await tester.pump();
+      expect(find.byKey(const ValueKey('daemon-hatch')), findsOneWidget);
+      expect(glyph(), r'\_(oo)_/', reason: 'no creature before the reveal');
+      final card = find.byKey(const ValueKey('daemon-hatch-card'));
+      for (var i = 0; i < 180 && card.evaluate().isEmpty; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(card, findsOneWidget);
+      expect(zoo.zoo.daemons, hasLength(1));
+      expect(zoo.paired!.version, '0.1');
+      expect(glyph(), isNot(r'\_(oo)_/'));
+      await tester.enterText(
+        find.byKey(const ValueKey('daemon-hatch-name')),
+        'Pip',
+      );
+      final saveName = find.byKey(const ValueKey('daemon-hatch-name-save'));
+      await tester.ensureVisible(saveName);
+      await tester.tap(saveName);
+      await tester.pump();
+      expect(zoo.paired!.name, 'Pip');
+      expect(find.byKey(const ValueKey('daemon-hatch-next')), findsNothing);
+      expect(frames, isEmpty);
+      expect(remote.batches, isEmpty);
+      expect(tester.takeException(), isNull);
+      await unmount(tester);
+    },
+  );
+
+  testWidgets(
     'the saved switch survives a new window but the test collection does not',
     (tester) async {
       await mount(tester);
       await setPreview(tester, true);
-      expect(zoo.nickname('preview-tim', 'Window one'), isTrue);
+      for (final habit in ['turn', 'split', 'find']) {
+        zoo.habit(habit);
+      }
+      final hatch = (await zoo.hatch(zoo.readyEgg!.id))!;
+      expect(zoo.nickname(hatch.uid!, 'Window one'), isTrue);
       await tester.pump();
       expect(zoo.paired!.name, 'Window one');
       await unmount(tester);
@@ -216,8 +281,9 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
       expect(slot, findsOneWidget);
       expect(zoo.isPreview, isTrue);
-      expect(zoo.paired!.name, isNot('Window one'));
-      expect(zoo.zoo.eggs, hasLength(1));
+      expect(zoo.paired, isNull);
+      expect(zoo.zoo.daemons, isEmpty);
+      expect(zoo.readyEgg, isNull);
       await setPreview(tester, false);
       await unmount(tester);
       experiments.dispose();
@@ -260,10 +326,13 @@ void main() {
   ) async {
     await mount(tester);
     await setPreview(tester, true);
+    for (final habit in ['turn', 'split', 'find']) {
+      zoo.habit(habit);
+    }
+    await tester.pump();
     await tester.tap(slot);
     await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('daemon-egg:turn')));
-    await tester.pump();
+    expect(find.byKey(const ValueKey('daemon-hatch')), findsOneWidget);
     await setPreview(tester, false);
     expect(slot, findsNothing);
     expect(find.byKey(const ValueKey('daemon-panel')), findsNothing);
@@ -340,11 +409,12 @@ void main() {
         isNot(contains('app.daemon_preview')),
       );
       await setPreview(tester, true);
-      expect(zoo.paired!.id, 'tim');
+      expect(zoo.paired, isNull);
       final updates = calls.where((c) => c.method == 'update');
       final daemon = (updates.last.arguments as Map)['daemon'] as Map;
       expect(daemon['visible'], isTrue);
-      expect(daemon['glyph'], isNotEmpty);
+      expect(daemon['glyph'], r'\_(  )_/');
+      expect(daemon['label'], 'Egg');
       expect(daemon['tooltip'], contains('Settings → Experimental'));
       await setPreview(tester, false);
       expect(zoo.loaded, isFalse);

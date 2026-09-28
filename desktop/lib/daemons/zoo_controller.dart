@@ -328,27 +328,11 @@ class ZooController extends ChangeNotifier {
 
   Future<void> _load(int generation) async {
     if (isPreview) {
-      final at = _now().toUtc().toIso8601String();
       _source = ZooSource.preview;
       _hintSeen = true;
-      _show(
-        _previewZoo ??= Zoo(
-          daemons: [
-            ZooDaemon(
-              uid: 'preview-tim',
-              id: 'tim',
-              hatched: at,
-              egg: 'first',
-              version: '1.0',
-              xp: 150,
-            ),
-          ],
-          pair: 'preview-tim',
-          firstEgg: true,
-          eggs: [ZooEgg(id: 'preview-egg', kind: 'turn', grantedAt: at)],
-        ),
-        baseline: true,
-      );
+      // Start with the same unhatched egg as a new collection. The preview
+      // earns its first hatch through habits; it never preselects a creature.
+      _show(_previewZoo ??= Zoo.empty, baseline: true);
       return;
     }
     if (_remote == null) {

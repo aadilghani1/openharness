@@ -28,8 +28,8 @@ existed, exactly:
 
 ### Experimental focus-bar creature
 
-Open **Settings → Experimental → Focus-bar creature** to show a test tim at
-the focus bar beside Share. Switch it off there to hide the creature, its
+Open **Settings → Experimental → Focus-bar creature** to start with an egg in
+the focus bar. Switch it off there to hide the creature, its
 panel and any hatch. The activation shortcut has been removed entirely,
 including its command and native Mac binding. The switch works by mouse or
 keyboard and leaves focus in Settings.
@@ -40,8 +40,10 @@ its choice on this computer (`experimental.focus_bar_creature`). The store is
 loaded before the first frame, so a saved choice takes effect at launch.
 
 The preview works even while the server rollout is off. The window gets a
-separate in-memory collection with tim and one ready turn egg. Click the
-creature to open its panel; open the egg there to test hatching and naming.
+separate, empty in-memory collection. The first egg cracks as habits are
+completed: a finished turn and any two other habits make it ready. Click the
+egg to see progress; once ready, click to hatch and name the new companion.
+Earning an egg never hatches it automatically or preselects its species.
 Only turns finishing after activation count toward preview progress. Hide/show
 keeps that window's collection; closing the window discards it. Motion, Quiet
 and the panel tab also stay temporary. There is no collection upload, guest

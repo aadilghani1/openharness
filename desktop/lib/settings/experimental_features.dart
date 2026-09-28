@@ -10,7 +10,7 @@ enum ExperimentalFeature {
   focusBarCreature(
     'focus_bar_creature',
     'Focus-bar creature',
-    'Try a small companion in the focus bar, with an egg ready to hatch. '
+    'Start with an egg in the focus bar. Work toward hatching your companion. '
         'Its test collection resets when you close the window.',
   ),
   shareButton(
