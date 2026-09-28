@@ -558,6 +558,26 @@ describe('local CLI WebSocket', () => {
     }
   })
 
+  it('serves individual art on the private socket and refuses it on TCP', async () => {
+    const backend = new FakeBackend()
+    const called = vi.fn((_connId, payload, reply) => reply({ type: 'daemon_plate', payload: { requestId: payload.requestId, frames: [{ rows: 'o', mats: '.' }] } }))
+    const w = await unixWorld(backend, { onDaemonPlate: called })
+    try {
+      const socket = await w.open(w.unix, { machineId })
+      let result = onceMessage(socket)
+      socket.send(JSON.stringify({ type: 'daemon_plate_get', payload: { requestId: 'art' } }))
+      expect(await result).toMatchObject({ type: 'daemon_plate', payload: { requestId: 'art', frames: [{ rows: 'o', mats: '.' }] } })
+      const tcp = await w.open(w.tcp, { machineId })
+      result = onceMessage(tcp)
+      tcp.send(JSON.stringify({ type: 'daemon_plate_get', payload: { requestId: 'tcp' } }))
+      expect(await result).toMatchObject({ type: 'daemon_plate', payload: { requestId: 'tcp', error: 'LOCAL_SOCKET_REQUIRED' } })
+      expect(called).toHaveBeenCalledOnce()
+      expect(backend.frames).toEqual([])
+      socket.close()
+      tcp.close()
+    } finally { await w.cleanup() }
+  })
+
   it('answers daemon_act UNSUPPORTED when there is no pair brain, rather than passing it on', async () => {
     const backend = new FakeBackend()
     const w = await unixWorld(backend)

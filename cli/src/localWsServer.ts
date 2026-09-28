@@ -15,7 +15,7 @@ import {
   type TerminalBinaryClear,
 } from './lib/terminalBinary.js'
 import { RelayConnectError, type RelaySession, type RemoteRelayPool } from './lib/remoteRelay.js'
-import { DAEMON_IN_TYPES } from './pair/protocol.js'
+import { DAEMON_IN_TYPES, DAEMON_PLATE, DAEMON_PLATE_GET } from './pair/protocol.js'
 
 export const LOCAL_WS_PATH = '/api/local-ws'
 export const LOCAL_WS_PROTOCOL_VERSION = 1
@@ -123,6 +123,13 @@ export interface LocalWsServerOptions {
   onDaemonShown?: (connId: string, payload: Record<string, unknown>) => void
   /** `daemon_confirm { requestId, kind, nonce, accept }` → `daemon_confirm_result`. */
   onDaemonConfirm?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
+  /**
+   * `daemon_plate_get { requestId, uid, id, seed, size, version, mood }` → `daemon_plate` (pair/plateService.ts):
+   * an individual's art. Over the Unix socket only (LOCAL_SOCKET_REQUIRED on TCP), from any client there —
+   * it moves nothing. Answered here, never forwarded to a relayed machine: any computer draws any individual.
+   * Absent: `daemon_plate { requestId, error: 'UNSUPPORTED' }`.
+   */
+  onDaemonPlate?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
 }
 
 /** The pair brain's frames from a window (pair/protocol.ts DAEMON_IN_TYPES). */
@@ -575,6 +582,19 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // A key here can answer a harness, so the transport is part of the check (daemons/BRAIN.md,
         // "Security"): only the Unix socket, whose file mode keeps other users out — never the TCP port any
         // user's process can reach — and, for everything but presence, only a window bound to this machine.
+        // An individual's art: the same socket rule as the keys below, but no window rule — a plate moves
+        // nothing. Not awaited either: a plate not drawn yet takes seconds.
+        if (!isBinary && parsed?.type === DAEMON_PLATE_GET) {
+          const payload = (parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
+            ? parsed.payload : {}) as Record<string, unknown>
+          const refuse = (error: string, detail?: string): void => {
+            sink.sendFrame({ type: DAEMON_PLATE, payload: { requestId: payload.requestId, error, ...(detail ? { detail } : {}) } })
+          }
+          if (!trusted) { refuse('LOCAL_SOCKET_REQUIRED', 'The daemon takes these only over its own socket, never TCP.'); return }
+          if (!options.onDaemonPlate) { refuse('UNSUPPORTED'); return }
+          options.onDaemonPlate(connId, payload, (frame) => sink.sendFrame(frame))
+          return
+        }
         if (!isBinary && parsed && typeof parsed.type === 'string' && DAEMON_IN.has(parsed.type)) {
           const type: string = parsed.type
           const payload = (parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)

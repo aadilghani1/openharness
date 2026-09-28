@@ -52,6 +52,7 @@ import 'terminal_pane.dart';
 import 'desk_sync.dart';
 import 'phone_desk.dart';
 import '../daemons/daemon_habits.dart';
+import '../daemons/individual_art.dart';
 import '../daemons/zoo_client.dart';
 import 'swarm.dart';
 import '../terminal/terminal_binary.dart';
@@ -583,6 +584,47 @@ class AppNotifier extends ChangeNotifier {
     read: () => api.zoo(),
     write: (ops) => api.zooOps(ops),
   );
+
+  /// Individuals' own plates, drawn by harnessd on one of the account's
+  /// computers and asked for over the sealed `pair_plate_get` frame
+  /// (`daemons/individual_art.dart`). Until one arrives, and where none can
+  /// be asked, the species plate is shown in the individual's colours.
+  late final IndividualArt individualArt = IndividualArt(
+    request: requestIndividualPlate,
+  );
+
+  /// Ask the account's connected computers, this one first, for an
+  /// individual's plates (`pair_plate_get { uid, id, seed, size, version,
+  /// mood }` → `pair_plate { ..., frames, frameMs }`). The first that answers
+  /// wins; a computer whose harnessd predates individual art says
+  /// `UNSUPPORTED` or stays silent (a sealed frame it cannot open), which is a
+  /// timeout and the next one. A first render can take tens of seconds;
+  /// the recoloured species plate remains visible while it draws.
+  Future<Map<String, dynamic>?> requestIndividualPlate(
+    Map<String, dynamic> payload,
+  ) async {
+    if (_disposed || (_pool == null && connectionForTest == null)) return null;
+    final machines = [
+      for (final machine in machineStates.values)
+        if (machine.connectionStatus == ConnectionStatus.connected &&
+            !machine.needsLink &&
+            machine.nodeOnline != false)
+          machine,
+    ]..sort((a, b) => (b.isLocalMachine ? 1 : 0) - (a.isLocalMachine ? 1 : 0));
+    for (final machine in machines) {
+      try {
+        final answer = await _conn(machine.machine.machineId).request(
+          'pair_plate_get',
+          payload: payload,
+          timeout: const Duration(minutes: 2),
+        );
+        if (answer['error'] == null && answer['frames'] is List) return answer;
+      } catch (_) {
+        // Too old, asleep, or not there: the next one.
+      }
+    }
+    return null;
+  }
 
   /// The first egg's habits this phone can see for itself — see
   /// `daemons/daemon_habits.dart` for which, and why the rest are left to the
@@ -2957,6 +2999,7 @@ class AppNotifier extends ChangeNotifier {
     _desk.reset();
     // The zoo is the account's too.
     zoo.reset();
+    individualArt.reset();
     currentUser = null;
     machines = [];
     machineStates.clear();
@@ -7611,6 +7654,7 @@ class AppNotifier extends ChangeNotifier {
     agentNotices.dispose();
     _desk.dispose();
     daemonHabits.dispose();
+    individualArt.dispose();
     zoo.dispose();
     super.dispose();
   }

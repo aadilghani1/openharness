@@ -16,10 +16,13 @@
 /// next time the app comes to the front, or the sheet opening.
 ///
 /// The server decides everything that is drawn or earned. The phone's own
-/// writes are a pair switch, a habit it saw, the first-day consent answer, and
-/// opening an egg; all but the egg show at once and are laid back over every
-/// answer until one acknowledges them, the way the desktop's `ZooController`
-/// does. The autonomy dial is read here, never written: it turns at a
+/// writes are a pair switch, a name given at the hatch, a habit it saw, the
+/// first-day consent answer, and opening an egg; all but the egg show at once
+/// and are laid back over every answer until one acknowledges them, the way
+/// the desktop's `ZooController` does. Pair and name address an individual by
+/// its uid (`zoo.pair { uid }`, `zoo.nickname { uid, name }`); one read from
+/// a zoo stored before individuals goes out as that server knows it, by
+/// species id. The autonomy dial is read here, never written: it turns at a
 /// computer, where each step up waits for the person's yes.
 library;
 
@@ -208,8 +211,8 @@ class ZooClient extends ChangeNotifier {
     }
     final seen = <String>{};
     for (final daemon in next.daemons) {
-      if (!seen.add(daemon.id)) continue;
-      final was = before.daemons.where((d) => d.id == daemon.id).firstOrNull;
+      if (!seen.add(daemon.uid)) continue;
+      final was = before.individual(daemon.uid);
       if (was != null && daemon.bond > was.bond) {
         _events.add(
           ZooDaemonGrew(daemon, versionChanged: daemon.version != was.version),
@@ -231,8 +234,12 @@ class ZooClient extends ChangeNotifier {
             next = next.copyWith(habits: [...next.habits, key]);
           }
         case 'zoo.pair':
-          final id = op['id'] as String;
-          if (next.owns(id)) next = next.copyWith(pair: id);
+          final uid = (op['uid'] ?? op['id']) as String;
+          if (next.individual(uid) != null) next = next.copyWith(pair: uid);
+        case 'zoo.nickname':
+          final uid = (op['uid'] ?? op['id']) as String;
+          final name = (op['name'] ?? op['nickname']) as String?;
+          if (next.individual(uid) != null) next = next.withName(uid, name);
         case 'zoo.consent':
           next = _consented(next, op['watching'] as bool);
       }
@@ -282,11 +289,36 @@ class ZooClient extends ChangeNotifier {
     _show(_zoo.copyWith(habits: [..._zoo.habits, key]));
   }
 
-  /// The daemon on the chip, on every client.
-  void pair(String id) {
-    if (!_loaded || !_zoo.owns(id) || _zoo.pair == id) return;
-    _send({'op': 'zoo.pair', 'id': id});
-    _show(_zoo.copyWith(pair: id));
+  /// The individual on the chip, on every client.
+  void pair(String uid) {
+    final daemon = _zoo.individual(uid);
+    if (!_loaded || daemon == null || _zoo.pair == uid) return;
+    _send(
+      daemon.legacy
+          ? {'op': 'zoo.pair', 'id': daemon.id}
+          : {'op': 'zoo.pair', 'uid': uid},
+    );
+    _show(_zoo.copyWith(pair: uid));
+  }
+
+  /// The name individual [uid] was given (at its hatch, or later): 1–24
+  /// printable ASCII characters, trimmed. Anything else, or the name it
+  /// already has, sends nothing.
+  void name(String uid, String name) {
+    final daemon = _zoo.individual(uid);
+    final trimmed = name.trim();
+    if (!_loaded ||
+        daemon == null ||
+        !validNickname(trimmed) ||
+        daemon.name == trimmed) {
+      return;
+    }
+    _send(
+      daemon.legacy
+          ? {'op': 'zoo.nickname', 'id': daemon.id, 'nickname': trimmed}
+          : {'op': 'zoo.nickname', 'uid': uid, 'name': trimmed},
+    );
+    _show(_zoo.withName(uid, trimmed));
   }
 
   /// The first-day answer: may the daemon watch at all (`zoo.consent`). A yes
@@ -330,23 +362,40 @@ class ZooClient extends ChangeNotifier {
           ?ZooHatch.fromJson(h),
       ].where((h) => h.eggId == eggId).firstOrNull;
       if (hatch == null) return null;
-      final had = before.daemon(hatch.daemonId);
-      final has = _zoo.daemon(hatch.daemonId);
-      final levelUp = [
-        for (final l in answer['levelUps'] as List? ?? const [])
-          ?ZooLevelUp.fromJson(l),
-      ].where((l) => l.id == hatch.daemonId).lastOrNull;
-      // A duplicate is one more of it; an answer older than what is shown
-      // (a later read got here first) still counts it once.
-      final count = hatch.duplicate
-          ? max(has?.count ?? 0, (had?.count ?? 0) + 1)
-          : 1;
+      if (hatch.duplicate) {
+        // A server before individuals merged it into the one you have.
+        final had = before.daemon(hatch.daemonId);
+        final has = _zoo.daemon(hatch.daemonId);
+        final levelUp = [
+          for (final l in answer['levelUps'] as List? ?? const [])
+            ?ZooLevelUp.fromJson(l),
+        ].where((l) => l.id == hatch.daemonId).lastOrNull;
+        // One more of it; an answer older than what is shown (a later read
+        // got here first) still counts it once.
+        return hatch.learned(
+          count: max(has?.count ?? 0, (had?.count ?? 0) + 1),
+          becameShiny: hatch.shiny && had?.shiny != true,
+          uid: has?.uid,
+          levelUp: levelUp,
+          versionBefore: had?.version,
+        );
+      }
+      // The new individual: named by the answer, else the one of its
+      // species that was not there before.
+      final born =
+          _zoo.individual(hatch.uid) ??
+          _zoo.daemons
+              .where(
+                (d) =>
+                    d.id == hatch.daemonId && before.individual(d.uid) == null,
+              )
+              .lastOrNull;
       return hatch.learned(
-        count: count,
-        becameShiny: hatch.duplicate && hatch.shiny && had?.shiny != true,
-        serial: hatch.duplicate ? null : has?.serial,
-        levelUp: levelUp,
-        versionBefore: had?.version,
+        count: _zoo.ofSpecies(hatch.daemonId).length,
+        becameShiny: false,
+        uid: born?.uid,
+        seed: born?.seed,
+        serial: born?.serial,
       );
     } catch (error) {
       debugPrint('zoo: hatch failed: $error');

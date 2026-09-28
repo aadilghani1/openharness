@@ -110,7 +110,7 @@ import {
 } from './lib/terminalBinary.js'
 import { b64d, fingerprint, isWrapped } from './lib/e2ee/core.js'
 import { tmuxPaneInfo } from './lib/tmux.js'
-import { encryptRpcResult, PAIR_REQUESTS } from './lib/e2ee/applicationFrames.js'
+import { encryptRpcResult, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType } from './lib/e2ee/applicationFrames.js'
 import type { PairEvent, PairService } from './pair/protocol.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from './lib/deviceRecentTrim.js'
 import { shouldReplayCommander } from './lib/commanderReplay.js'
@@ -677,6 +677,11 @@ export class BackendSocket {
    * MCP server) is answered DAEMONS_OFF before any verb runs. Null: always on, as before the switch.
    */
   daemonsOn: (() => boolean) | null = null
+  /**
+   * An individual's art (pair/plateService.ts), for the phone's sealed `pair_plate_get` → `pair_plate`. Null
+   * answers UNSUPPORTED, like an older daemon. The service answers DAEMONS_OFF itself while daemons are off.
+   */
+  plateService: { get: (payload: Record<string, unknown>) => Promise<Record<string, unknown>> } | null = null
   runtimeProfileProvider: ((session: RegisteredSession) => string | null) | null = null
   onRuntimeProfileUpdate: ((sessionId: string, selectedModel: string) => Promise<void>) | null = null
   /** Web↔adapter E2EE: group-encrypts user events, runs the CPace pairing, holds per-conn sessions. */
@@ -1452,7 +1457,7 @@ export class BackendSocket {
    *  encrypted with that connection's session key and delivered ONLY to it. Content-bearing adapter data
    *  is never returned plaintext: even legacy backend nodeRequest (`connId === ''`) gets only an error. */
   private emitReply(connId: string, type: string, requestId: unknown, payload: Record<string, unknown>): void {
-    const resultType = `${type}_result`
+    const resultType = rpcResultType(type)
     if (connId && deviceDump.enabled && this.e2ee.sessionRole(connId) === 'device') deviceDump.record('out', 'legacy', connId, { type: resultType, payload: { requestId, ...payload } })
     // Before the E2EE wrap: an RPC reply is only readable here.
     if (env.LOG_FRAMES && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
@@ -1787,6 +1792,17 @@ export class BackendSocket {
     // sealed — the default-deny above already refused them in the clear. `pair` is this computer's own.
     if (PAIR_REQUESTS.has(type) || type === 'pair') {
       this.handlePair(connId, type, payload, local, reply)
+      return
+    }
+    // An individual's art for the phone, sealed (the default-deny above refused it in the clear). A window
+    // on this computer asks `daemon_plate_get` over the Unix socket instead; the same request over loopback
+    // would let a TCP client past that, so it is refused like a loopback `pair_*`.
+    if (type === PLATE_REQUEST) {
+      if (local) { reply(type, requestId, { error: 'REMOTE_ONLY', detail: 'On this computer, ask daemon_plate_get over the daemon\'s socket.' }); return }
+      const plates = this.plateService
+      if (!plates) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+      // Detached: a plate not drawn yet takes seconds, and this connection's other requests must not wait.
+      void plates.get(payload).then((result) => reply(type, requestId, result)).catch(() => reply(type, requestId, { error: 'RENDER_FAILED' }))
       return
     }
 

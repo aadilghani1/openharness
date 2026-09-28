@@ -22,7 +22,8 @@ const regularsOf = (drop: string) => DAEMON_ROSTER.daemons.filter((d) => d.drop 
 const REGULARS = regularsOf('init')
 const UNIX = regularsOf('unix')
 const TTY = regularsOf('tty')
-const daemon = (id: string) => ({ id, hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 0, version: '0.1' })
+const uid = (label: string) => Buffer.from(label).toString('hex').padEnd(24, '0').slice(0, 24)
+const daemon = (id: string) => ({ uid: uid(id), id, seed: 0, shiny: false, xp: 0, bond: 0, version: '0.1', hatched: '2026-09-01T00:00:00.000Z', egg: 'first' })
 const eggOf = (kind: string) => ({ id: 'e', kind, grantedAt: '2026-10-01T00:00:00.000Z' })
 const eligible = (zoo: ReturnType<typeof emptyZoo>, at: string, kind = 'turn') =>
   drawWeights(zoo, kind, new Date(at)).filter((w) => w.weight > 0).map((w) => w.id)
@@ -66,10 +67,13 @@ describe('drops: announced, then released', () => {
       const r = applyZooOps({ ...emptyZoo(), eggs: [eggOf('marathon')] }, [{ op: 'zoo.hatch', eggId: 'e' }], seeded(seed), new Date('2026-10-10T23:00:00.000Z'))
       expect(REGULARS).toContain(r.hatched[0].daemonId)
     }
-    // Owning all of drop 1 before the release gives a duplicate; from the release, only drop 2 is new.
+    // Owning all of drop 1 before the release gives drop 1 again; from the release drop 2 joins the draw,
+    // and is the only new one: what a run of eight hatches without a new species is owed.
     const allOfDrop1 = { ...emptyZoo(), daemons: REGULARS.map(daemon), eggs: [eggOf('turn')] }
     expect(eligible(allOfDrop1, '2026-10-10T12:00:00.000Z')).toEqual(REGULARS)
-    expect(eligible(allOfDrop1, '2026-10-11T12:00:00.000Z')).toEqual(UNIX)
+    expect(eligible({ ...allOfDrop1, sinceNew: 30 }, '2026-10-10T12:00:00.000Z')).toEqual(REGULARS)
+    expect(eligible(allOfDrop1, '2026-10-11T12:00:00.000Z')).toEqual([...REGULARS, ...UNIX])
+    expect(eligible({ ...allOfDrop1, sinceNew: 30 }, '2026-10-11T12:00:00.000Z')).toEqual(UNIX)
   })
 
   it('keeps grue a secret: only from an egg that can hold one, only once released, and the pity finds it', () => {
@@ -86,13 +90,13 @@ describe('drops: announced, then released', () => {
   })
 
   it('never seeds a daemon of a drop that is not out yet', () => {
-    const seed = { daemons: [daemon('tim'), daemon('fish'), daemon('grue'), daemon('xeyes')], eggs: [], pair: 'fish' }
+    const seed = { daemons: [daemon('tim'), daemon('fish'), daemon('grue'), daemon('xeyes')], eggs: [], paired: uid('fish') }
     const early = applyZooOps(emptyZoo(), [{ op: 'zoo.seed', zoo: seed }], seeded(1), new Date('2026-10-10T12:00:00.000Z'))
     expect(early.zoo.daemons.map((d) => d.id)).toEqual(['tim'])
-    expect(early.zoo.pair).toBe('tim')
+    expect(early.zoo.paired).toBe(early.zoo.daemons[0].uid)
     const late = applyZooOps(emptyZoo(), [{ op: 'zoo.seed', zoo: seed }], seeded(1), new Date('2026-10-11T12:00:00.000Z'))
     expect(late.zoo.daemons.map((d) => d.id)).toEqual(['tim', 'fish'])         // never a secret, never tty (on hold)
-    expect(late.zoo.pair).toBe('fish')
+    expect(late.zoo.paired).toBe(late.zoo.daemons[1].uid)
   })
 
   it('never draws a daemon of a drop that is only announced', () => {
@@ -105,15 +109,20 @@ describe('drops: announced, then released', () => {
   })
 
   it('counts a released drop\'s regulars toward the set the moment it is out', () => {
-    const allReleased = { ...emptyZoo(), daemons: [...REGULARS, ...UNIX].map(daemon), eggs: [eggOf('turn')] }
-    // Before the release every released regular is owned, so a draw gives a duplicate...
+    // Eight hatches in a row without a new species: a new one is owed, while there is one to give.
+    const allReleased = { ...emptyZoo(), daemons: [...REGULARS, ...UNIX].map(daemon), eggs: [eggOf('turn')], sinceNew: 8 }
+    // Before the release every released regular is owned, so a draw gives one of them again...
     expect(eligible(allReleased, '2026-10-14T12:00:00.000Z')).toEqual([...REGULARS, ...UNIX])
     const before = applyZooOps(allReleased, [{ op: 'zoo.hatch', eggId: 'e' }], (n) => n - 1, new Date('2026-10-14T12:00:00.000Z'))
-    expect(before.hatched[0]).toMatchObject({ duplicate: true })
+    expect([...REGULARS, ...UNIX]).toContain(before.hatched[0].daemonId)
+    expect(before.zoo.sinceNew).toBe(9)
     // ...and on release day the new regular is the only one eligible.
     expect(eligible(allReleased, '2026-10-15T12:00:00.000Z')).toEqual(['rio'])
     const after = applyZooOps(allReleased, [{ op: 'zoo.hatch', eggId: 'e' }], (n) => n - 1, new Date('2026-10-15T12:00:00.000Z'))
-    expect(after.hatched).toEqual([{ eggId: 'e', daemonId: 'rio', shiny: false }])
+    expect(after.hatched).toEqual([expect.objectContaining({ eggId: 'e', daemonId: 'rio', id: 'rio', shiny: false })])
+    expect(after.zoo.sinceNew).toBe(0)
+    // Without the run, it joins the draw beside everything owned.
+    expect(eligible({ ...allReleased, sinceNew: 0 }, '2026-10-15T12:00:00.000Z')).toEqual([...REGULARS, ...UNIX, 'rio'])
   })
 
   it('keeps a drop on hold out while the drops around it come out', () => {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { applyZooOps, draw, drawWeights, emptyZoo, type Rng, type Zoo, type ZooDaemon, type ZooEgg, type ZooOp } from './zoo.js'
+import {
+  applyZooOps, draw, drawWeights, emptyZoo, ZOO_FIRST_NEW, ZOO_NEW_AFTER, type Rng, type Zoo, type ZooDaemon, type ZooEgg, type ZooOp,
+} from './zoo.js'
 import { DAEMON_ROSTER } from './daemonRoster.g.js'
 
 /**
@@ -44,19 +46,35 @@ function seeded(seed: number): Rng {
   return (n) => Math.floor((((u32() >>> 5) * 67108864 + (u32() >>> 6)) / 9007199254740992) * n)
 }
 
-const daemon = (id: string): ZooDaemon =>
-  ({ id, hatchedAt: '2026-09-27T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 0, version: '0.1' })
-const zooOwning = (ids: readonly string[], patch: Partial<Zoo> = {}): Zoo => ({ ...emptyZoo(), daemons: ids.map(daemon), ...patch })
+/** The README's numbers for new species ("The draw"): the first 4 hatches, and the one after 8 without. */
+const FIRST_NEW = 4
+const NEW_AFTER = 8
+
+let uids = 0
+const daemon = (id: string): ZooDaemon => ({
+  uid: (++uids).toString(16).padStart(24, '0'), id, seed: 0, shiny: false, xp: 0, bond: 0, version: '0.1',
+  hatched: '2026-09-27T00:00:00.000Z', egg: 'first',
+})
+/** A zoo owning `ids`, one individual each; `hatches` pads it with more of the first (a species hatched
+ *  again), since a zoo's individuals are its hatches. */
+const zooOwning = (ids: readonly string[], patch: Partial<Zoo> = {}, hatches = ids.length): Zoo =>
+  ({ ...emptyZoo(), daemons: [...ids, ...Array(hatches - ids.length).fill(ids[0])].map(daemon), ...patch })
 const egg = (id: string, kind: string): ZooEgg => ({ id, kind, grantedAt: '2026-09-27T00:00:00.000Z' })
+
+/** What a zoo holds that the draw reads: the species owned, how many hatches, the run since a new one, pity. */
+interface State { hatches?: number; sinceNew?: number; pity?: number }
 
 /**
  * The README's odds for one hatch, restated independently of the implementation:
- * eligible = unowned regulars (all regulars once none is left) + unowned secrets when the egg's secret
- * weight is above 0; weight = weights[rarity] / (eligible of that rarity), + pity for a secret, x boost;
- * at pity secretGuaranteeAt - 1 with an unowned secret, only the unowned secrets; an egg whose eligible
- * all weigh nothing draws from everyone.
+ * eligible = every regular, owned or not, + unowned secrets when the egg's secret weight is above 0;
+ * weight = weights[rarity] / (eligible of that rarity), + pity for a secret, x boost. At pity
+ * secretGuaranteeAt - 1 with an unowned secret, only the unowned secrets. Else, owed a new species (one of
+ * the first 4 hatches while any is eligible, or after 8 in a row without one while an unowned regular is
+ * left), only the unowned — unless they weigh nothing for this egg, when it draws as usual. An egg whose
+ * eligible all weigh nothing draws from everyone.
  */
-function expectedOdds(kind: keyof typeof R.eggs, owned: ReadonlySet<string>, pity = 0): Map<string, number> {
+function expectedOdds(kind: keyof typeof R.eggs, owned: ReadonlySet<string>, state: State = {}): Map<string, number> {
+  const { hatches = owned.size, sinceNew = 0, pity = 0 } = state
   const rule = R.eggs[kind] as { weights: Record<string, number>; boost?: Record<string, number> }
   const holdsSecret = (rule.weights.secret ?? 0) > 0
   const fresh = REGULARS.filter((id) => !owned.has(id))
@@ -70,10 +88,15 @@ function expectedOdds(kind: keyof typeof R.eggs, owned: ReadonlySet<string>, pit
       return [id, ((rule.weights[rarity] ?? 0) / count.get(rarity)! + pityBonus) * (rule.boost?.[id] ?? 1)]
     }))
   }
-  let weights = secrets.length && pity >= R.secretGuaranteeAt - 1
-    ? weigh(secrets)
-    : weigh([...(fresh.length ? fresh : REGULARS), ...secrets])
-  if (![...weights.values()].some((w) => w > 0)) weights = weigh(ROSTER.map((d) => d.id))
+  const weighs = (w: Map<string, number>) => [...w.values()].some((x) => x > 0)
+  let weights: Map<string, number> | null = null
+  if (secrets.length && pity >= R.secretGuaranteeAt - 1) weights = weigh(secrets)
+  else {
+    const owed = (hatches < FIRST_NEW && fresh.length + secrets.length > 0) || (sinceNew >= NEW_AFTER && fresh.length > 0)
+    if (owed && weighs(weigh([...fresh, ...secrets]))) weights = weigh([...fresh, ...secrets])
+    weights ??= weigh([...REGULARS, ...secrets])
+    if (!weighs(weights)) weights = weigh(ROSTER.map((d) => d.id))
+  }
   const total = [...weights.values()].reduce((s, w) => s + w, 0)
   return new Map([...weights].map(([id, w]) => [id, w / total]))
 }
@@ -197,7 +220,7 @@ describe('the draw, measured: 200,000 hatches per egg kind', () => {
       const h = hatched.hatched[0]
       if (h.daemonId === 'tim') tim++
       if (h.shiny) shiny++
-      expect(hatched.zoo.pair).toBe(h.daemonId)
+      expect(hatched.zoo.paired).toBe(h.uid)
     }
     expectProportion(tim, n, expectedOdds('first', new Set()).get('tim')!, 'tim through the flow')
     expectProportion(shiny, n, SHINY, 'shiny through the flow')
@@ -221,22 +244,42 @@ describe('the draw, measured: 200,000 hatches per egg kind', () => {
     expectProportion(shiny, total, SHINY, 'shiny over every egg')
   }, 60_000)
 
-  it('weighs a rarity by how many of it are left, and gives an emptied rarity to nobody', () => {
-    const cases: Array<[keyof typeof R.eggs, string[], number]> = [
-      ['first', ['tim', 'gnu', 'lynx', 'mutt'], 0],            // no common left: its 60 goes nowhere
-      ['first', ['tim'], 0],                                   // tim owned: the boost has nothing to boost
-      ['turn', ['tim', 'gnu', 'yak', 'tux'], 0],
-      ['week', ['yak', 'gopher', 'bug', 'tux', 'auk'], 0],     // only commons left
-      ['marathon', ['tim', 'gnu', 'lynx', 'mutt', 'tux'], 0],
-      ['night', ['bug'], 3],                                   // the boosted one owned; pity 3 on beastie
-      ['night', [], 6],
-      ['easter', ['tux'], 2],
+  it('weighs a rarity by how many of it are left while a new species is owed, and gives an emptied rarity to nobody', () => {
+    expect([ZOO_FIRST_NEW, ZOO_NEW_AFTER]).toEqual([FIRST_NEW, NEW_AFTER])
+    // [kind, owned, state]: every case owes a new species (under four hatches, or eight without one).
+    const cases: Array<[keyof typeof R.eggs, string[], State]> = [
+      ['first', ['tim', 'gnu', 'lynx', 'mutt'], { sinceNew: 8 }],     // no common left: its 60 goes nowhere
+      ['first', ['tim'], {}],                                         // tim owned: the boost has nothing to boost
+      ['turn', ['tim', 'gnu', 'yak'], {}],
+      ['week', ['yak', 'gopher', 'bug', 'tux', 'auk'], { sinceNew: 8 }],   // only commons left
+      ['marathon', ['tim', 'gnu', 'lynx', 'mutt', 'tux'], { sinceNew: 11 }],
+      ['night', ['bug'], { pity: 3 }],                                // the boosted one owned; pity 3 on beastie
+      ['night', [], { pity: 6 }],
+      ['easter', ['tux'], { pity: 2 }],
+      ['turn', ['tim'], { hatches: 3 }],                              // three tims: still owed a new one
     ]
-    for (const [kind, owned, pity] of cases) {
-      const zoo = zooOwning(owned, { pity })
-      const odds = expectedOdds(kind, new Set(owned), pity)
+    for (const [kind, owned, state] of cases) {
+      const zoo = zooOwning(owned, { pity: state.pity ?? 0, sinceNew: state.sinceNew ?? 0 }, state.hatches)
+      const odds = expectedOdds(kind, new Set(owned), state)
       for (const id of owned) expect(odds.has(id), `${kind} would give ${id} again`).toBe(false)
-      expectMatches(tallyDraws(zoo, kind, N, 900 + pity + owned.length), odds, `${kind} owning [${owned}] at pity ${pity}`)
+      expectMatches(tallyDraws(zoo, kind, N, 900 + (state.pity ?? 0) + owned.length), odds, `${kind} owning [${owned}] ${JSON.stringify(state)}`)
+    }
+  }, 120_000)
+
+  it('draws every regular at its rarity\'s share once no new species is owed, owned or not', () => {
+    const cases: Array<[keyof typeof R.eggs, string[], State]> = [
+      ['turn', ['tim', 'gnu', 'yak', 'tux'], {}],                     // the fifth hatch: owned ones come again
+      ['first', ['gnu', 'lynx', 'mutt', 'yak', 'bug'], { sinceNew: 7 }],   // one short of the guarantee
+      ['week', REGULARS.slice(0, 8), { sinceNew: 3 }],
+      ['night', ['tim', 'gnu', 'lynx', 'mutt'], { pity: 4, sinceNew: 5 }],
+      ['turn', [...REGULARS], { sinceNew: 40 }],                      // every regular owned: nothing to owe
+      ['night', [...REGULARS], { sinceNew: 40, pity: 2 }],
+    ]
+    for (const [kind, owned, state] of cases) {
+      const zoo = zooOwning(owned, { pity: state.pity ?? 0, sinceNew: state.sinceNew ?? 0 })
+      const odds = expectedOdds(kind, new Set(owned), state)
+      for (const id of REGULARS) expect(odds.get(id), `${kind}: ${id} not eligible`).toBeGreaterThan(0)
+      expectMatches(tallyDraws(zoo, kind, N, 1900 + (state.sinceNew ?? 0) + owned.length), odds, `${kind} owning [${owned}] ${JSON.stringify(state)}`)
     }
   }, 120_000)
 
@@ -255,19 +298,28 @@ describe('the draw, measured: 200,000 hatches per egg kind', () => {
 // ── The pity guarantee ───────────────────────────────────────────────────────────────────────────
 /**
  * The exact distribution of which night hatch (1..8) first gives beastie, from a fresh zoo hatching only
- * night eggs: a walk over (regulars owned, pity), each step with the README's odds.
+ * night eggs: the chance of every (regulars owned, hatches since a new one) carried forward a hatch at a
+ * time, each with the README's odds (pity is the hatch count, as every egg is a night egg).
  */
 function beastieArrival(): number[] {
   const arrival = new Array(R.secretGuaranteeAt + 1).fill(0)
-  const walk = (owned: string[], pity: number, p: number, hatch: number): void => {
-    const odds = expectedOdds('night', new Set(owned), pity)
-    for (const [id, q] of odds) {
-      if (q <= 0) continue
-      if (RARITY.get(id) === 'secret') arrival[hatch] += p * q
-      else walk([...owned, id], pity + 1, p * q, hatch + 1)
+  let states = new Map<string, number>([['|0', 1]])                     // 'owned,ids|sinceNew' -> chance
+  for (let hatch = 1; hatch <= R.secretGuaranteeAt; hatch++) {
+    const next = new Map<string, number>()
+    for (const [key, p] of states) {
+      const [list, since] = key.split('|')
+      const owned = new Set(list ? list.split(',') : [])
+      const odds = expectedOdds('night', owned, { hatches: hatch - 1, sinceNew: Number(since), pity: hatch - 1 })
+      for (const [id, q] of odds) {
+        if (q <= 0) continue
+        if (RARITY.get(id) === 'secret') { arrival[hatch] += p * q; continue }
+        const now = [...new Set([...owned, id])].sort().join(',')
+        const k = `${now}|${owned.has(id) ? Number(since) + 1 : 0}`
+        next.set(k, (next.get(k) ?? 0) + p * q)
+      }
     }
+    states = next
   }
-  walk([], 0, 1, 1)
   return arrival
 }
 
@@ -281,7 +333,9 @@ describe('the dark egg: the secret by the 8th egg that can hold it', () => {
     for (let i = 0; i < players; i++) {
       const r = applyZooOps({ ...emptyZoo(), eggs }, ops, rng, NOW)
       expect(r.hatched.length).toBe(R.secretGuaranteeAt)
-      expect(r.hatched.some((h) => h.duplicate)).toBe(false)             // nothing repeats on the way
+      // The first four are four species; after that one may come again.
+      expect(new Set(r.hatched.slice(0, FIRST_NEW).map((h) => h.daemonId)).size).toBe(FIRST_NEW)
+      expect(r.zoo.daemons.length).toBe(R.secretGuaranteeAt)
       const at = r.hatched.findIndex((h) => SECRETS.includes(h.daemonId))
       expect(at, 'no beastie in eight night eggs').toBeGreaterThanOrEqual(0)
       seen[at + 1]++
@@ -331,51 +385,93 @@ describe('the dark egg: the secret by the 8th egg that can hold it', () => {
     }
     // With beastie owned, pity guarantees nothing: a night egg draws its regulars at its usual odds.
     const owned = zooOwning(['beastie'], { pity: R.secretGuaranteeAt - 1 })
-    expectMatches(tallyDraws(owned, 'night', N, 70), expectedOdds('night', new Set(['beastie']), R.secretGuaranteeAt - 1), 'night with beastie owned')
+    expectMatches(tallyDraws(owned, 'night', N, 70), expectedOdds('night', new Set(['beastie']), { pity: R.secretGuaranteeAt - 1 }), 'night with beastie owned')
+    const later = zooOwning(['beastie', 'tim', 'gnu', 'yak'], { pity: R.secretGuaranteeAt - 1 })
+    expectMatches(tallyDraws(later, 'night', N, 71), expectedOdds('night', new Set(['beastie', 'tim', 'gnu', 'yak']), { pity: R.secretGuaranteeAt - 1 }), 'night with beastie owned, four hatches in')
   }, 120_000)
 })
 
-// ── No duplicates before the set is complete ─────────────────────────────────────────────────────
-describe('no duplicate before every regular is owned', () => {
-  it('completes the nine regulars in exactly nine regular hatches, whatever the eggs (20,000 collections)', () => {
+// ── New species: the first four, and never nine in a row without one ────────────────────────────
+describe('new species: the first four hatches, and one after eight without', () => {
+  /** Egg kinds for these runs: easter one time in three, so its exception (below) is exercised often. */
+  const pickKind = (rng: Rng): string => (rng(3) === 0 ? 'easter' : KINDS[rng(KINDS.length)])
+  /** Whether an easter egg has no species to give that the zoo lacks: tux, auk and beastie all owned. */
+  const easterHasNothingNew = (owned: ReadonlySet<string>) => ['tux', 'auk', 'beastie'].every((id) => owned.has(id))
+
+  it('hatches four different species first, whatever the eggs (20,000 accounts)', () => {
     const rng = seeded(99)
-    const collections = 20_000
-    let easterFallbacks = 0
-    for (let c = 0; c < collections; c++) {
+    let easterExceptions = 0
+    for (let account = 0; account < 20_000; account++) {
       let zoo = emptyZoo()
-      let regularHatches = 0
-      for (let round = 0; round < 50 && !REGULARS.every((id) => zoo.daemons.some((d) => d.id === id)); round++) {
-        const eggs = Array.from({ length: 12 }, (_, i) => egg(`e${i}`, KINDS[rng(KINDS.length)]))
-        const r = applyZooOps({ ...zoo, eggs }, eggs.map((e): ZooOp => ({ op: 'zoo.hatch', eggId: e.id })), rng, NOW)
+      for (let i = 0; i < FIRST_NEW; i++) {
+        const kind = pickKind(rng)
         const owned = new Set(zoo.daemons.map((d) => d.id))
-        for (const h of r.hatched) {
-          const kind = eggs.find((e) => e.id === h.eggId)!.kind
-          const complete = REGULARS.every((id) => owned.has(id))
-          if (h.duplicate && !complete) {
-            // The one documented exception (README, draw rule 6): an easter egg with only commons and rares
-            // left to give, beastie already owned, has nothing it can weigh and draws as if all were owned.
-            expect(kind).toBe('easter')
-            expect(owned.has('beastie') && owned.has('tux') && owned.has('auk')).toBe(true)
-            easterFallbacks++
-          }
-          if (!h.duplicate && RARITY.get(h.daemonId) !== 'secret') regularHatches++
-          expect(!h.duplicate).toBe(!owned.has(h.daemonId))
-          owned.add(h.daemonId)
+        const r = applyZooOps({ ...zoo, eggs: [egg('x', kind)] }, [{ op: 'zoo.hatch', eggId: 'x' }], rng, NOW)
+        const got = r.hatched[0].daemonId
+        if (owned.has(got)) {
+          // The one exception (README, "The draw"): an easter egg, which gives only legendaries and the secret,
+          // after those three were the first three hatches. It gives a legendary again rather than nobody.
+          expect(kind).toBe('easter')
+          expect(easterHasNothingNew(owned)).toBe(true)
+          easterExceptions++
         }
-        zoo = { ...r.zoo, eggs: [] }
+        zoo = r.zoo
+      }
+      expect(zoo.daemons.length).toBe(FIRST_NEW)
+    }
+    expect(easterExceptions).toBeGreaterThan(0)                          // the exception is exercised, not assumed
+  }, 120_000)
+
+  it('never hatches nine in a row without a new species while an unowned regular is left (5,000 collections)', () => {
+    const rng = seeded(1999)
+    let guaranteed = 0
+    let easterWaits = 0
+    let longest = 0
+    for (let c = 0; c < 5_000; c++) {
+      let zoo = emptyZoo()
+      let dry = 0
+      for (let step = 0; step < 400 && !REGULARS.every((id) => zoo.daemons.some((d) => d.id === id)); step++) {
+        const kind = pickKind(rng)
+        const owned = new Set(zoo.daemons.map((d) => d.id))
+        const r = applyZooOps({ ...zoo, eggs: [egg('x', kind)] }, [{ op: 'zoo.hatch', eggId: 'x' }], rng, NOW)
+        const isNew = !owned.has(r.hatched[0].daemonId)
+        if (dry >= NEW_AFTER && !isNew) {
+          // Owed a new one, it gave one owned: only an easter egg with no legendary or secret left to give.
+          expect(kind).toBe('easter')
+          expect(easterHasNothingNew(owned)).toBe(true)
+          easterWaits++
+        } else if (dry >= NEW_AFTER) {
+          guaranteed++
+        }
+        dry = isNew ? 0 : dry + 1
+        expect(r.zoo.sinceNew).toBe(dry)                                 // the zoo counts the run as the README does
+        longest = Math.max(longest, kind === 'easter' ? 0 : dry)
+        zoo = r.zoo
       }
       expect(REGULARS.every((id) => zoo.daemons.some((d) => d.id === id))).toBe(true)
-      expect(regularHatches).toBe(REGULARS.length)
-      // One record per daemon, however many duplicates merged.
-      expect(new Set(zoo.daemons.map((d) => d.id)).size).toBe(zoo.daemons.length)
+      // Every hatch an individual of its own.
+      expect(new Set(zoo.daemons.map((d) => d.uid)).size).toBe(zoo.daemons.length)
     }
-    expect(easterFallbacks).toBeGreaterThan(0)                           // the exception is exercised, not assumed
+    expect(guaranteed).toBeGreaterThan(100)                              // the guarantee is exercised, not assumed
+    expect(easterWaits).toBeGreaterThan(0)
+    expect(longest).toBeLessThanOrEqual(NEW_AFTER)
   }, 180_000)
 
-  it('once complete, every regular is equally a duplicate again at its rarity odds', () => {
-    const t = tallyDraws(zooOwning(REGULARS), 'turn', N, 31)
-    expectMatches(t, expectedOdds('turn', new Set(REGULARS)), 'turn egg with every regular owned')
-  }, 60_000)
+  it('owed a new species after eight without, draws the unowned at their odds', () => {
+    const cases: Array<[keyof typeof R.eggs, string[]]> = [
+      ['turn', ['tim', 'gnu', 'lynx', 'mutt', 'yak']],
+      ['first', ['gnu', 'lynx', 'mutt', 'yak', 'gopher', 'bug', 'tux', 'auk']],       // only tim left: always tim
+      ['night', ['tim', 'gnu', 'lynx', 'mutt', 'yak', 'gopher']],                   // beastie beside the unowned
+      ['easter', ['tim', 'gnu', 'lynx', 'mutt', 'yak', 'tux']],                     // only auk and beastie are new
+    ]
+    for (const [kind, owned] of cases) {
+      const state: State = { sinceNew: NEW_AFTER }
+      const zoo = zooOwning(owned, { sinceNew: NEW_AFTER })
+      const odds = expectedOdds(kind, new Set(owned), state)
+      for (const id of owned) expect(odds.has(id), `${kind} owed a new one would give ${id}`).toBe(false)
+      expectMatches(tallyDraws(zoo, kind, N, 3100 + owned.length), odds, `${kind} owed a new one, owning [${owned}]`)
+    }
+  }, 120_000)
 })
 
 // ── Replay and racing writers ────────────────────────────────────────────────────────────────────
@@ -384,22 +480,24 @@ const WORDS = ['xyzzy', 'plugh', 'XYZZY']
 
 /**
  * A random op a client could send against `zoo`: mostly names that exist there, some that do not. With
- * `seenOnly`, a daemon is named only when the zoo holds it — what a client that saw this zoo can name.
+ * `seenOnly`, an individual or a species is named only when the zoo holds it — what a client that saw this
+ * zoo can name.
  */
 function randomOp(zoo: Zoo, rng: Rng, seenOnly = false): ZooOp {
   const pick = <T>(xs: readonly T[]): T => xs[rng(xs.length)]
   const someDaemon = (): string => (zoo.daemons.length && (seenOnly || rng(4)) ? pick(zoo.daemons).id : seenOnly ? 'nobody' : pick(ROSTER).id)
+  const someUid = (): string => (zoo.daemons.length && (seenOnly || rng(4)) ? pick(zoo.daemons).uid : rng(0x1_0000_0000).toString(16).padStart(24, 'f'))
   switch (rng(10)) {
     case 0: return { op: 'zoo.habit', key: pick([...R.firstEgg.habits, 'bogus']) }
     case 1: case 2: return { op: 'zoo.hatch', eggId: zoo.eggs.length && rng(5) ? pick(zoo.eggs).id : `gone${rng(3)}` }
-    case 3: return { op: 'zoo.pair', id: someDaemon() }
-    case 4: return { op: 'zoo.nickname', id: someDaemon(), nickname: rng(3) ? pick(['Tim', 'x', 'grue!']) : null }
+    case 3: return { op: 'zoo.pair', uid: someUid() }
+    case 4: return { op: 'zoo.nickname', uid: someUid(), name: rng(3) ? pick(['Tim', 'x', 'grue!']) : null }
     case 5: return { op: 'zoo.autonomy', level: pick(['watch', 'suggest', 'act-on-key', 'act-within-rules', 'future']) }
     case 6: return { op: 'zoo.easter', word: pick(WORDS) }
     // A lesson for a daemon you do not own grows the paired one; with nothing paired yet it waits (it is not
     // remembered), so a batch that hatches your first daemon would credit it on the replay. A client that saw
     // no pair has nothing to credit, so `seenOnly` sends none.
-    case 7: return seenOnly && zoo.pair === null ? { op: 'zoo.habit', key: 'days' } : { op: 'zoo.lesson', lessonId: `l${rng(6)}`, daemonId: someDaemon() }
+    case 7: return seenOnly && zoo.paired === null ? { op: 'zoo.habit', key: 'days' } : { op: 'zoo.lesson', lessonId: `l${rng(6)}`, daemonId: someDaemon() }
     default: {
       const n = 1 + rng(30)
       return {
@@ -619,12 +717,16 @@ describe('racing writers under compare-and-set', () => {
       const answered = writers.flatMap((w) => w.answered!.hatched)
       expect(new Set(answered.map((h) => h.eggId)).size).toBe(answered.length)
       expect(answered.map((h) => h.eggId).sort()).toEqual(eggs.map((e) => e.id).sort())
-      // What the zoo holds is exactly the owned-before plus what was answered: new daemons once, the rest as dupes.
-      const fresh = answered.filter((h) => !h.duplicate).map((h) => h.daemonId)
-      expect(new Set(fresh).size).toBe(fresh.length)
-      expect(doc.zoo.daemons.map((d) => d.id).sort()).toEqual([...start.daemons.map((d) => d.id), ...fresh].sort())
-      const dupes = doc.zoo.daemons.reduce((s, d) => s + (d.dupes ?? 0), 0)
-      expect(dupes).toBe(answered.filter((h) => h.duplicate).length)
+      // What the zoo holds is exactly the owned-before plus the individuals answered, each once, as answered.
+      expect(doc.zoo.daemons.slice(0, start.daemons.length)).toEqual(start.daemons)
+      const added = doc.zoo.daemons.slice(start.daemons.length)
+      expect(added.map((d) => d.uid).sort()).toEqual(answered.map((h) => h.uid).sort())
+      for (const h of answered) {
+        const { eggId: _egg, daemonId, ...individual } = h
+        expect(individual.id).toBe(daemonId)
+        expect(added.find((d) => d.uid === h.uid)).toEqual(individual)
+      }
+      expect(new Set(doc.zoo.daemons.map((d) => d.uid)).size).toBe(doc.zoo.daemons.length)
     }
   }, 120_000)
 

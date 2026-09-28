@@ -126,11 +126,12 @@ describe('zoo writes racing on one account', () => {
       const answered = [...one.hatched, ...two.hatched]
       expect(answered.map((h) => h.eggId).sort()).toEqual(['a', 'b', 'c'])
       // Every daemon in the zoo is one that was answered, with the serial that was answered.
-      for (const h of answered.filter((x) => !x.duplicate)) {
-        const d = zoo.daemons.find((x) => x.id === h.daemonId)!
+      for (const h of answered) {
+        const d = zoo.daemons.find((x) => x.uid === h.uid)!
         expect(d.serial).toBe(h.serial)
+        expect(d.seed).toBe(h.seed)
       }
-      expect(zoo.daemons.length).toBe(answered.filter((h) => !h.duplicate).length)
+      expect(zoo.daemons.length).toBe(answered.length)
       // The later answer carries the zoo as written; the earlier answer's revision is the one before it.
       const [first, last] = one.revision < two.revision ? [one, two] : [two, one]
       expect([first.revision, last.revision]).toEqual([4, 5])
@@ -239,4 +240,3 @@ describe('zoo writes racing on one account', () => {
     }
   })
 })
-

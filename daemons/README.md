@@ -230,11 +230,12 @@ event zoo_changed    { revision }   (same paths as desk_changed: bus -> adapter 
 
 `grants: [{ kind, eggId }]` is every egg that arrived in the nest during the request (first, setup,
 easter, earned, or held until there was room); an egg earned with 64 already held arrives as
-`{ kind, xp }` instead (see "Earning eggs and growing"). `levelUps: [{ id, level, version }]` is every
-daemon whose bond reached a new level. `hatched: [{ eggId, daemonId, shiny, serial? }]` is every hatch;
-a duplicate reads `{ eggId, daemonId, shiny, duplicate: true, xp }`. Only the client that sent the
+`{ kind, xp }` instead (see "Earning eggs and growing"). `levelUps: [{ uid, id, level, version }]` is every
+individual whose bond reached a new level. `hatched` contains every new individual, with `eggId` and
+`daemonId` alongside its `uid`, `id`, `seed`, `serial`, `name`, `shiny`, `xp`, `bond`, `version`,
+`hatched` and `egg`. A same-species hatch is another individual. Only the client that sent the
 request sees them; every other client learns the same thing by re-reading the zoo after `zoo_changed`
-(a new egg id, a higher `bond`, a higher `dupes`).
+(a new egg id, a higher `bond`, or a new individual uid).
 
 `harnessd` proxies `/api/zoo` for local clients exactly as it proxies `/api/desk`.
 
@@ -245,16 +246,17 @@ clients on their next read of the zoo.
 
 ```
 zoo = {
-  daemons: [{ id, hatchedAt, egg, shiny, nickname?, bond, xp, version,
-              dupes?, serial?, origin? }],   // one record per roster id; see "Serials and duplicates"
+  daemons: [{ uid, id, seed, serial?, name?, shiny, xp, bond, version,
+              hatched, egg, origin? }],     // one record per individual, up to 256
   eggs:    [{ id, kind, grantedAt, date?, origin? }],  // kind is a key of rules.eggs; date on a history egg
-  pair:    daemonId | null,
+  paired:  uid | null,
   autonomy: 'watch' | 'suggest' | 'act-on-key' | 'act-within-rules',   // the pair's dial; default watch
   consent: { watching, at } | null,  // the first-day answer: may the daemon watch at all (null: not asked)
   habits:  [habitKey],             // habits done, from rules.firstEgg.habits
   firstEgg: bool,                  // the first egg has been granted
   setupEgg: bool,                  // the setup egg has been granted
   pity:    number,                 // hatches of eggs that can hold a secret since the last secret
+  sinceNew: number,                // consecutive hatches of an already owned species
   easter:  [sha256],               // easter words already used, as rules.easterHashes entries
   progress: {                      // what counts toward eggs earned from work (server-written)
     turns:    number,              // counted turns, all time (long turns count more)
@@ -276,9 +278,9 @@ Ops (every op is idempotent; an op on something missing is dropped, never an err
 | op | effect |
 |---|---|
 | `zoo.habit { key }` | Records a habit. Grants the `first` egg and then the `setup` egg when they are due (see "First egg: habits"). |
-| `zoo.hatch { eggId }` | Draws on the server, removes the egg, and adds the daemon (with its serial) or merges a duplicate into the one you have; pairs a new daemon if nothing is paired. Answers `hatched`. |
-| `zoo.pair { id }` | Pairs a daemon you own. |
-| `zoo.nickname { id, nickname }` | 1–24 printable ASCII characters, or null to clear. |
+| `zoo.hatch { eggId }` | Draws on the server, removes the egg, and adds a new individual (with its seed and serial), including when its species is owned; pairs it if nothing is paired. Answers `hatched`. |
+| `zoo.pair { uid }` | Pairs an individual you own. |
+| `zoo.nickname { uid, name }` | 1–24 printable ASCII characters, or null to clear. |
 | `zoo.autonomy { level }` | How much the paired daemon may do on its own ([BRAIN.md](BRAIN.md), "Autonomy dial"). A level the server does not know is dropped. A request: each harnessd acts above `suggest` only after the person confirms it at a window there ([BRAIN.md](BRAIN.md), "Security"). |
 | `zoo.consent { watching }` | The first-day consent screen's answer (see "What your daemon sees"). Sets `consent { watching, at }` (`at` moves only when a request changes the answer). Every yes sets the dial to `watch`, a repeated one too (the person opts into more with a dial move after it); a no leaves the dial, and the next yes starts at `watch` again. In one request the dial ends at the person's last move, so a request delivered twice lands where it did the first time. Until `watching` is true no harnessd senses anything. Never seeded. |
 | `zoo.easter { word }` | The server trims and lowercases the word and hashes it (sha256); a hash in `rules.easterHashes` grants one `easter` egg, once per word. |
@@ -286,7 +288,7 @@ Ops (every op is idempotent; an op on something missing is dropped, never an err
 | `zoo.turn { batchId, n, minutes?, away?, day, hour, machineId }` | Turns finished on one machine in one local hour (see "Earning eggs and growing"). harnessd sends it. Self-reported (see below). |
 | `zoo.lesson { lessonId, daemonId }` | A lesson the person approved ([LEARNING.md](LEARNING.md)): `rules.lessonXp` (25) xp for `daemonId` when you own it, else for the paired daemon, level and version recomputed and answered in `levelUps`. Once per lesson id (the last 256 are remembered); with no daemon to grow nothing happens and the id is not remembered. harnessd sends it when a lesson is approved, signed in only; `lessonId` is 1–64 id-safe characters. Self-reported, like `zoo.turn`. |
 
-Limits: 12 eggs, 64 daemons (a duplicate merges, so it never needs a place). The server alone grants
+Limits: 12 eggs, 256 individuals. A full zoo leaves the egg in the nest. The server alone grants
 turn, week, marathon, night and history eggs from the turns reported to it; clients never send a draw
 result or an egg.
 
@@ -304,8 +306,9 @@ on hold: kept in the roster, never drawn, seeded, hatched or shown, until they g
 
 **The draw** (`zoo.hatch`, server only, `crypto.randomInt`):
 
-1. **Regulars first.** Eligible: every regular (not a secret) of a released drop that you do not own.
-   Once you own every released regular, every released regular is eligible again (a duplicate).
+1. **New species guarantees.** The first four hatches draw unowned species. After eight consecutive
+   hatches of owned species, the next draws a new one when an eligible released regular remains.
+   Otherwise every released regular is eligible, including species already owned.
 2. **Secrets sit outside the set.** A secret never counts toward "every regular owned", and owning or
    missing it never holds duplicates back. An unowned secret of a released drop is eligible only from
    an egg whose `weights.secret` is above 0: the night egg (8) and the easter egg (10).
@@ -324,9 +327,9 @@ on hold: kept in the roster, never drawn, seeded, hatched or shown, until they g
 **Details** (as built in `backend/src/lib/zoo.ts`; a guest client follows the same rules):
 
 - A daemon's `egg` is the kind of egg it came from (the card's "first egg"). Egg ids come from the server.
-- One record per roster id: `pair` and `zoo.nickname` address it by id. A zoo stored (or seeded) from
-  before duplicates merged, with two records of one id, reads as one: the first, shiny if either was,
-  the others counted in its `dupes` (no xp for them).
+- One record per individual: `zoo.pair` and `zoo.nickname` address its uid. A legacy record reads as
+  one individual with default traits (seed 0), a stable uid derived from the account and species,
+  and its existing name, bond and serial. Its old merged `dupes` count does not create new hatches.
 - A name the server does not know (a habit key, an easter word, an egg id, a daemon you do not own)
   drops that op. A malformed op, such as a 25-character nickname or a `zoo.turn` whose `away` is more
   than its `n`, refuses the whole request. Nicknames are trimmed.
@@ -334,7 +337,7 @@ on hold: kept in the roster, never drawn, seeded, hatched or shown, until they g
   easter word stays unspent, and earned eggs are held.
 - `zoo.seed` brings only what a client could not have made valuable, because all of it was drawn and
   counted on a client: the REGULAR daemons of released drops (never a secret, never a drop not yet out), each fresh at `0.1` —
-  no shiny, xp, bond, duplicates or serial, its nickname kept — the `first` and `turn` eggs (never an
+  seed 0, no shiny, xp, bond or serial, its name kept and a new server uid — the `first` and `turn` eggs (never an
   egg that can hold a secret: night, easter; nor setup, week, marathon or history eggs), and the habits,
   every daemon and egg marked `origin: 'local'` and each egg given a server id. Pity, easter words,
   progress, the dial and consent stay the account's own. It pairs the guest's pair if it survived, else
@@ -346,9 +349,9 @@ on hold: kept in the roster, never drawn, seeded, hatched or shown, until they g
   the zoo records the hash of each word used (a word stored before hashing reads as its hash). A client
   that wants to react locally to `xyzzy` may hard-code that one classic.
 
-**Serials and duplicates.**
+**Serials and individuals.**
 
-- **Serials.** Every server hatch of a daemon the account did not own takes that daemon's next mint
+- **Serials.** Every server hatch takes its species' next mint
   number: `DaemonMint { daemonId @unique, count }` (Mongo), one counter per roster id across every
   account, bumped with an atomic increment (created at 1 on the first hatch anywhere; two first hatches
   at once turn the loser's create into an increment). The daemon keeps it as `serial` (1-based) and
@@ -356,12 +359,9 @@ on hold: kept in the roster, never drawn, seeded, hatched or shown, until they g
   is reused by the retry's hatch of the same daemon; a request that never writes leaves a gap. A number
   is never given twice. A guest's daemons (`origin: 'local'`) and daemons hatched before serials have
   none.
-- **Duplicates.** A hatch that draws a daemon you own (every regular owned, or an egg's fallback) merges
-  into it: `+rules.duplicateXp` (150) xp to that daemon, whether or not it is paired, with its level and
-  version recomputed and any new level answered in `levelUps`; if the duplicate was shiny, yours
-  becomes shiny (never the other way); its `dupes` grows by one (the shelf's `x2` is one). It takes no
-  serial, no place in the 64, and never pairs. `hatched` answers `{ eggId, daemonId, shiny,
-  duplicate: true, xp }`, `shiny` being the duplicate's own roll.
+- **Repeated species.** Each hatch gets its own uid, crypto seed and serial. It starts at 0.1 with
+  zero xp and its own shiny roll; existing individuals keep their names, traits, bond and pairing.
+  There is no merge xp. A shelf's `x2` counts two individuals of that species.
 
 **Guests** (no Harness account) keep a local zoo with the same shape and rules, drawn on the client.
 On first sign-in it is sent once with `zoo.seed` (which keeps only what is listed above). A guest's
@@ -483,8 +483,7 @@ is 0. Then, in order:
     turn, plus `bond.xpPerDay` (5) for the first counted turn of a local day. `bond` is the level its xp
     reached on `bond.levels` [0, 50, 150, 300, 600] (levels 0–4); `version` follows `bondForVersion`:
     0.1, 1.0 at level 2, 2.0 at level 4. Nothing is earned without a pair, and xp never goes down. At
-    the cap a full day is 25 xp, so 2.0 takes about 24 full days. A duplicate hatched gives its daemon
-    150 more (see "Serials and duplicates").
+    the cap a full day is 25 xp, so 2.0 takes about 24 full days.
 11. A batch that changed nothing (its day already at the cap) is not remembered, and writes nothing.
 
 **A full nest** (12 eggs): an earned egg is held in `progress.held`, oldest first, up to 64, and lands
@@ -684,8 +683,8 @@ its colour family (a shiny one's runs down the species' `shinyGradient`), a mark
 extra its catalogue colour, the odd eye `rules.plate.oddEye` (`#5fffd7`); every glyph's brightness from
 `rules.plate.ink`, as a daemon's plate.
 
-**In the zoo** (the server builds this next, in `backend/src/lib/zoo.ts`). A zoo holds individuals,
-`{ uid, id (species), seed, serial, name?, shiny, xp, bond, version, hatched, egg }`, and `pair` names a
+**In the zoo** (`backend/src/lib/zoo.ts`). A zoo holds individuals,
+`{ uid, id (species), seed, serial, name?, shiny, xp, bond, version, hatched, egg }`, and `paired` names a
 uid. A hatch mints the species' serial (`DaemonMint`, per species) and draws the seed. The draw keeps
 the species weights; duplicates are allowed; the first 4 hatches of an account are always a species it
 does not own, and after 8 hatches in a row with no new species the next is a new one, while an unowned
@@ -725,9 +724,9 @@ starts pitch black. The card copies as a fenced code block:
 '----------------------------------------'
 ```
 
-Until the zoo holds individuals, a duplicate has no reveal of its own name: it says it merged
-(`another tim. +150 xp.`), and a shiny one says yours is shiny now. A shiny hatch fills with the
-daemon's shiny colour.
+Every individual gets the full reveal and optional name prompt, including a species already owned.
+A shiny hatch fills with the daemon's shiny colour. Clients still understand a merged-hatch answer
+from an older server for compatibility.
 
 ## Cards and shelves
 
@@ -736,7 +735,7 @@ number, rarity (`SHINY` first when it is), name, serial (`#0042`, when it has on
 words, 42 columns of printable ASCII, copied as a fenced code block. The same lines render as SVG for
 places a code block does not travel (X, previews, a GitHub profile README), in monospace system fonts;
 a shiny card's portrait wears the roster's shiny colour. A shelf is a drop as a box back: owned sprites
-in their colours (shiny ones in their shiny colour), `x2` beside a daemon with one duplicate merged in,
+in their colours (shiny ones in their shiny colour), `x2` beside a species with two individuals,
 `[ ? ]` for a numbered slot still empty, `[ ! ]` for a secret. A drop announced but not yet released
 shows its regulars as `#` silhouettes of their 0.1 sprites and its release date; one not yet announced
 shows nothing. Cards and shelves never show a live mood, so they never reveal whether you are working.
@@ -776,7 +775,7 @@ node --test daemons/tools/card.test.mjs
    lookbook's LEARNING section.
 5. **The rest of the zoo**: turn/week/marathon/night/history eggs, bond and versions, serials,
    duplicates and drop dates (the server and harnessd: see "Earning eggs and growing" and "Serials and
-   duplicates"; the clients follow), logbooks, more drops.
+   individuals"; the clients follow), logbooks, more drops.
 6. **Eggs that crack and individuals with traits**: the contract is here ("Eggs", "Individuals", the
    references in `render.mjs` and `bake.mjs`, `frames.json`); next, in parallel, the server's zoo of
    individuals, harnessd's individual art, the desktop, the phone and `hn`.

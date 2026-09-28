@@ -29,14 +29,30 @@ class DaemonHabit {
   final String key, label;
 }
 
+/// One kind of egg (`rules.eggs[kind]`, README "Eggs"): its mark in the
+/// status line's one-line egg, the shell's colours top to bottom, a night
+/// egg's stars, and what it may hold.
 class DaemonEggKind {
   const DaemonEggKind({
     required this.kind,
-    required this.look,
+    required this.mark,
+    required this.gradient,
     required this.weights,
+    this.stars,
     this.boost = const {},
   });
-  final String kind, look;
+  final String kind;
+
+  /// `{k}` in `rules.eggLine`: first a space, setup `$`, turn `.`, week `7`,
+  /// marathon `@`, night `*`, easter `?`, history `#`.
+  final String mark;
+
+  /// The shell's colour, a row at a time, as a daemon's plate runs down its
+  /// gradient.
+  final DaemonGradient gradient;
+
+  /// A star cell's colour (`s`), `#rrggbb`: the night egg's pale stars.
+  final String? stars;
   final Map<String, num> weights;
   final Map<String, num> boost;
 }
@@ -97,7 +113,11 @@ class DaemonRules {
         for (final e in (raw['eggs'] as Map).entries)
           e.key as String: DaemonEggKind(
             kind: e.key as String,
-            look: (e.value as Map)['look'] as String,
+            mark: (e.value as Map)['mark'] as String? ?? ' ',
+            gradient:
+                DaemonGradient._maybe(e.value['gradient']) ??
+                const DaemonGradient(top: '#ffffd7', bottom: '#d7d7af'),
+            stars: (e.value['stars'] as Map?)?['hex'] as String?,
             weights: Map<String, num>.from(e.value['weights'] as Map),
             boost: Map<String, num>.from(e.value['boost'] as Map? ?? const {}),
           ),
@@ -105,8 +125,10 @@ class DaemonRules {
       easterHashes = [
         for (final h in raw['easterHashes'] as List? ?? const []) h as String,
       ],
-      nest = [for (final n in raw['nest'] as List) n as String],
-      egg = [for (final n in raw['egg'] as List) n as String],
+      eggLine = {
+        for (final e in (raw['eggLine'] as Map? ?? const {}).entries)
+          e.key as String: e.value as String,
+      },
       lineSlots = raw['lineSlots'] == null
           ? null
           : raw['lineSlots'] is Map
@@ -155,8 +177,12 @@ class DaemonRules {
 
   /// sha256 of each lowercased easter word: the words themselves never ship.
   final List<String> easterHashes;
-  final List<String> nest;
-  final List<String> egg;
+
+  /// An egg in the status line, one line of at most eight cells per stage
+  /// (`p0` to `p4`, `rock`, `burst`, `tumble`, `open`) and the ready egg's
+  /// `blink`; `{k}` is the kind's [DaemonEggKind.mark]. See `eggLine` in
+  /// `render.dart`.
+  final Map<String, String> eggLine;
 
   /// The slots a line may carry (`{who}`, `{q}`, `{recap}`, `{n}`,
   /// `{summary}`), when the roster's lines are templates. Null for a roster
@@ -210,7 +236,14 @@ class DaemonPlateRules {
       ink = {
         for (final e in (raw['ink'] as Map).entries)
           e.key as String: (e.value as num).toDouble(),
-      };
+      },
+      room = (raw['room'] as num? ?? 0).toInt(),
+      light = {
+        for (final e in (raw['light'] as Map? ?? const {}).entries)
+          e.key as String: ((e.value as Map)['hex'] as String),
+      },
+      oddEye = (raw['oddEye'] as Map?)?['hex'] as String? ?? '#5fffd7',
+      eggMs = DaemonEggMs._(raw['eggMs'] as Map? ?? const {});
 
   /// Columns of each baked width: `portrait` 28, `reveal` 56.
   final Map<String, int> cols;
@@ -222,6 +255,40 @@ class DaemonPlateRules {
   /// Each glyph's brightness: at most 1 mixes from the ground toward the
   /// row's colour, above 1 on toward white. A space is not drawn.
   final Map<String, double> ink;
+
+  /// Whole portrait rows an individual's canvas may add above its species'
+  /// (a hat, long tufts): its plates stay within [maxRows] plus this.
+  final int room;
+
+  /// The light inside an egg (`#rrggbb`): `plain` while it is earned, the
+  /// rarity's (`common`, `rare`, `legendary`, `secret`) once it is opened,
+  /// and `peek`, the eyes in a ready egg's chip.
+  final Map<String, String> light;
+
+  /// The odd eye's colour, `#rrggbb` (an individual's `e` cells).
+  final String oddEye;
+
+  /// How an egg moves (README "Eggs", Opening).
+  final DaemonEggMs eggMs;
+}
+
+/// The egg's timings (`rules.plate.eggMs`): `p0` and `p4` loop a frame every
+/// [loop] while they wait; opening, `rock` a frame every [rock], `burst`'s
+/// first frame holds [burstHold] and the rest [burst] each, `tumble` [tumble]
+/// a frame, and `open` holds [open].
+class DaemonEggMs {
+  DaemonEggMs._(Map raw)
+    : loop = _ms(raw, 'loop', 190),
+      rock = _ms(raw, 'rock', 65),
+      burstHold = _ms(raw, 'burstHold', 420),
+      burst = _ms(raw, 'burst', 150),
+      tumble = _ms(raw, 'tumble', 75),
+      open = _ms(raw, 'open', 380);
+
+  static int _ms(Map raw, String key, int fallback) =>
+      (raw[key] as num?)?.toInt() ?? fallback;
+
+  final int loop, rock, burstHold, burst, tumble, open;
 }
 
 /// Where a drop stands on a day (card.mjs `dropState`): `released` (its
@@ -294,6 +361,112 @@ class DaemonGradient {
       Color(0xff000000 | int.parse(bottom.substring(1), radix: 16));
 }
 
+/// A colour family an individual may be (`traits.colours`): its name as a
+/// flag (`-c coral`), how often it is rolled, and the two stops its body runs
+/// down, `#rrggbb`. The first is the species' own gradient.
+class DaemonColourFamily {
+  const DaemonColourFamily(this.name, this.weight, this.top, this.bottom);
+  final String name;
+  final num weight;
+  final String top, bottom;
+}
+
+/// A rare extra (`traits.extras`): its name as a flag (`--beanie`), how often
+/// it is rolled, the colour its cells are painted in, and its status-line
+/// variant in the species' sprite contract ([sprites] by version, [work]
+/// frames). The entry with no [name] is none.
+class DaemonExtra {
+  const DaemonExtra(
+    this.name,
+    this.weight, {
+    this.hex,
+    this.sprites,
+    this.work,
+  });
+  final String? name;
+  final num weight;
+  final String? hex;
+  final Map<String, String>? sprites;
+  final List<String>? work;
+}
+
+/// A proportion (`traits.props`): its key, its range around 1, and the flag
+/// it earns near an end of it (`traits.flags`).
+class DaemonProportion {
+  const DaemonProportion(this.key, this.lo, this.hi, {this.high, this.low});
+  final String key;
+  final double lo, hi;
+  final String? high, low;
+}
+
+/// A plate species' trait catalogue (roster `daemons[].traits`, README
+/// "Individuals"): what every individual of it is rolled from. Lists keep the
+/// roster's order, which the roll depends on.
+class DaemonTraitCatalogue {
+  DaemonTraitCatalogue._(Map raw)
+    : colours = [
+        for (final c in raw['colours'] as List)
+          DaemonColourFamily(
+            (c as List)[0] as String,
+            c[1] as num,
+            c[2] as String,
+            c[3] as String,
+          ),
+      ],
+      marks = [
+        for (final m in raw['marks'] as List)
+          ((m as List)[0] as String?, m[1] as num),
+      ],
+      extras = [
+        for (final e in raw['extras'] as List)
+          DaemonExtra(
+            (e as List)[0] as String?,
+            e[1] as num,
+            hex: e.length > 2 ? e[2] as String? : null,
+            sprites: e.length > 3 && e[3] is Map
+                ? Map<String, String>.from((e[3] as Map)['sprites'] as Map)
+                : null,
+            work: e.length > 3 && e[3] is Map
+                ? [for (final w in (e[3] as Map)['work'] as List) w as String]
+                : null,
+          ),
+      ],
+      props = [
+        for (final e in (raw['props'] as Map? ?? const {}).entries)
+          DaemonProportion(
+            e.key as String,
+            ((e.value as List)[0] as num).toDouble(),
+            (e.value[1] as num).toDouble(),
+            high: ((raw['flags'] as Map?)?[e.key] as Map?)?['high'] as String?,
+            low: ((raw['flags'] as Map?)?[e.key] as Map?)?['low'] as String?,
+          ),
+      ],
+      accents = [for (final a in raw['accents'] as List) a as String],
+      oddEye = (raw['oddEye'] as num).toDouble(),
+      fidgety = (raw['fidgety'] as num).toDouble();
+
+  static DaemonTraitCatalogue? _maybe(Object? raw) =>
+      raw is Map ? DaemonTraitCatalogue._(raw) : null;
+
+  final List<DaemonColourFamily> colours;
+
+  /// Markings, a name or null (none), and a weight.
+  final List<(String?, num)> marks;
+  final List<DaemonExtra> extras;
+  final List<DaemonProportion> props;
+
+  /// The colours markings are painted in, `#rrggbb`.
+  final List<String> accents;
+
+  /// The chance of an odd eye, and of a fidgety temper.
+  final double oddEye, fidgety;
+
+  DaemonColourFamily? colour(String? name) =>
+      colours.where((c) => c.name == name).firstOrNull;
+  DaemonExtra? extra(String? name) =>
+      name == null ? null : extras.where((e) => e.name == name).firstOrNull;
+}
+
 class DaemonDef {
   DaemonDef._(Map raw)
     : id = raw['id'] as String,
@@ -342,7 +515,57 @@ class DaemonDef {
       examples = {
         for (final e in (raw['examples'] as Map? ?? const {}).entries)
           if (e.value is String) e.key as String: e.value as String,
-      };
+      },
+      traits = DaemonTraitCatalogue._maybe(raw['traits']);
+
+  /// [base] as one individual shows it in the status line (render.mjs
+  /// `individualDaemon`): a rare extra's own [sprites] and [work] frames, and
+  /// a fidgety temper's [workMs]. Everything else is the species'.
+  DaemonDef._individual(
+    DaemonDef base, {
+    Map<String, String>? sprites,
+    List<String>? work,
+    int? workMs,
+  }) : id = base.id,
+       n = base.n,
+       drop = base.drop,
+       rarity = base.rarity,
+       xterm = base.xterm,
+       hex = base.hex,
+       shinyHex = base.shinyHex,
+       plate = base.plate,
+       gradient = base.gradient,
+       shinyGradient = base.shinyGradient,
+       family = base.family,
+       lore = base.lore,
+       first = base.first,
+       lines = base.lines,
+       suggest = base.suggest,
+       eyes = base.eyes,
+       lid = base.lid,
+       darkOnly = base.darkOnly,
+       sprites = sprites ?? base.sprites,
+       work = work ?? base.work,
+       workMs = workMs ?? base.workMs,
+       portraits = base.portraits,
+       parts = base.parts,
+       moodParts = base.moodParts,
+       turn = base.turn,
+       examples = base.examples,
+       traits = base.traits;
+
+  /// This species drawn as an individual's status line shows it: see
+  /// `individualDaemon` in `render.dart`, which decides what changes.
+  DaemonDef asIndividual({
+    Map<String, String>? sprites,
+    List<String>? work,
+    int? workMs,
+  }) => DaemonDef._individual(
+    this,
+    sprites: sprites,
+    work: work,
+    workMs: workMs,
+  );
 
   final String id;
   final int n;
@@ -379,6 +602,10 @@ class DaemonDef {
 
   /// A filled-in line per mood, for previews only (`examples[mood]`).
   final Map<String, String> examples;
+
+  /// What an individual of this species is rolled from; null for a species
+  /// without one (line art, and every daemon of a held drop).
+  final DaemonTraitCatalogue? traits;
 
   bool get secret => rarity == 'secret';
   Color get color => _colour(hex);

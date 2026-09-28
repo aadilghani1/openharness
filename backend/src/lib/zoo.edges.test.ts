@@ -25,7 +25,7 @@ describe('a guest seed with eggs and no daemon', () => {
   it('brings the eggs and pairs nothing', () => {
     const r = applyZooOps(emptyZoo(), [{ op: 'zoo.seed', zoo: { eggs: [{ id: 'g1', kind: 'first', grantedAt: '2026-09-30T00:00:00.000Z' }], pair: 'tim' } }], rng, NOW)
     expect(r.changed).toBe(true)
-    expect(r.zoo.pair).toBeNull()
+    expect(r.zoo.paired).toBeNull()
     expect(r.zoo.eggs).toEqual([expect.objectContaining({ kind: 'first', origin: 'local' })])
     expect(r.zoo.eggs[0].id).not.toBe('g1')                                  // egg ids are the server's to give
   })

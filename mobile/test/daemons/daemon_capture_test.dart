@@ -455,17 +455,17 @@ void main() {
     await reveal(
       '1-egg',
       'tim',
-      HatchFrame(stage: HatchStage.egg, egg: eggFrame(_roster, offset: -1)),
+      const HatchFrame(stage: HatchStage.rock, eggFrame: 1),
     );
     await reveal(
       '2-crack',
       'tim',
-      HatchFrame(stage: HatchStage.egg, egg: eggFrame(_roster, crack: 2)),
+      const HatchFrame(stage: HatchStage.burst, eggFrame: 2),
     );
     await reveal(
       '3-pop',
       'tim',
-      HatchFrame(stage: HatchStage.egg, egg: eggPopFrame(_roster)),
+      const HatchFrame(stage: HatchStage.tumble, eggFrame: 4),
     );
     await reveal(
       '4-silhouette',
@@ -507,7 +507,7 @@ void main() {
     await reveal(
       'grue-pitch',
       'grue',
-      const HatchFrame(stage: HatchStage.pitch),
+      const HatchFrame(stage: HatchStage.burst),
       kind: 'night',
     );
     final grue = _roster.byId('grue')!;
