@@ -269,6 +269,22 @@ Keep lists virtualized and retain cached row controls. Arrow movement updates
 the old and new highlights; it should not rebuild the editor or whole catalog.
 Calculate reveal and paging from the actual measured item extent.
 
+## Share an agent
+
+Share follows the Cmd-N form: the agent name, aligned Access and People fields,
+collapsed Options, and Copy link selected. Access opens Private/Public choices
+beside the form. Browsing choices never changes access; accepting one applies it
+and returns to Copy link. People owns an email editor and the existing invitations.
+Options reveals invitation expiry, Comments, and Stop sharing. Expiry applies
+to new email invitations, not to the public link. Keep online guidance visible.
+Up/Down move within a pane, Tab switches panes, Enter accepts, and Escape backs
+out or dismisses. Narrow windows replace the form with the active chooser.
+Opening or cancelling the form alone never changes permissions or creates a link.
+
+![Compact Share form, rendered with synthetic data](images/share-form-compact.png)
+
+![Public and private choices beside the same form](images/share-form-access.png)
+
 ## Review a dialog change
 
 Check the result with the user's terminal font and colors, an alternate scheme,
@@ -289,6 +305,9 @@ Reuse the relevant existing checks:
   preview navigation and narrow layouts.
 - [`keymap_runtime_test.dart`](../test/keymap_runtime_test.dart): shortcut
   routing and focus ownership.
+- [`share_harness_test.dart`](../test/share_harness_test.dart) and
+  [`share_toolbar_test.dart`](../test/share_toolbar_test.dart): sharing flows,
+  cell layout, responsive draft preservation, shortcuts, and focused-agent scope.
 
 When checking a native build, restart into the rebuilt app before judging the
 result. An existing process does not pick up a new build automatically.

@@ -64,6 +64,7 @@ import '../widgets/workspace_status_line.dart';
 import '../widgets/workspace_bar_control.dart';
 import '../widgets/session_work_dialog.dart';
 import '../widgets/web_download_button.dart';
+import '../widgets/workspace_share_button.dart';
 import '../widgets/grid_model_picker.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
@@ -506,6 +507,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _keymapChanged() {
     _syncKeymap();
+    if (_native) _syncNative();
     if (mounted) setState(() {});
     _search?.refreshCommands();
   }
@@ -1148,6 +1150,21 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'canReopen': app.canReopenLastClosed,
       'canFind': _canFindTerminal,
       'canClosePane': app.focusedPane != null,
+      'shareAction': {
+        'text': WorkspaceShareButton.text,
+        'label': _shareLabel(focused),
+        'tooltip': _shareTooltip(focused),
+        'enabled': _canExecuteCommand('agent.share'),
+        'paneId': focused?.pane.id,
+        'machineId': focused?.pane.machineId,
+        'agentId': focused?.agentId,
+        'background': WorkspaceShareButton.backgroundFor(
+          _canExecuteCommand('agent.share'),
+        ).toARGB32(),
+        'foreground': WorkspaceShareButton.foregroundFor(
+          _canExecuteCommand('agent.share'),
+        ).toARGB32(),
+      },
       'paneActions': {
         'restartAgent': _canExecuteCommand('agent.restart'),
         'shareAgent': _canExecuteCommand('agent.share'),
@@ -1363,6 +1380,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     final args = call.arguments is Map ? call.arguments as Map : const {};
+    if (call.method == 'shareAgent' && args.containsKey('paneId')) {
+      final focused = WorkspacePaneContext.focused(app);
+      if (focused == null ||
+          focused.pane.id != args['paneId'] ||
+          focused.pane.machineId != args['machineId'] ||
+          focused.agentId != args['agentId']) {
+        return;
+      }
+    }
     if (call.method == 'focusedModel') {
       if (args['paneId'] is int) {
         final expectedPane = args['paneId'];
@@ -1829,6 +1855,20 @@ class _SwarmScreenState extends State<SwarmScreen> {
       agent.displayName,
     );
   });
+
+  String _shareLabel(WorkspacePaneContext? focused) =>
+      focused?.agent == null ? 'Share' : 'Share ${focused!.agent!.displayName}';
+
+  String _shareTooltip(WorkspacePaneContext? focused) {
+    if (focused?.agent == null) return 'Focus an agent to share it';
+    if (app.stateOf(focused!.pane.machineId)?.machine.isShared != false) {
+      return 'Only the owner can share this agent';
+    }
+    return [
+      _shareLabel(focused),
+      _keymap.hint('agent.share'),
+    ].whereType<String>().join(' · ');
+  }
 
   void _toggleFocusedViewer() {
     final focused = WorkspacePaneContext.focused(app);
@@ -3896,6 +3936,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     ShortcutAction.newTerminal: _newTerminal,
     ShortcutAction.cloneAgent: _cloneAgent,
     ShortcutAction.restartAgent: _restartAgent,
+    ShortcutAction.shareAgent: _shareAgent,
     ShortcutAction.routeTask: () =>
         _dialog(() => showTaskPalette(context, app)),
     ShortcutAction.orchestrate: () =>
@@ -3945,7 +3986,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     },
     'agent.stop': () => _editAgent(stop: true),
     'agent.fork': _forkAgent,
-    'agent.share': _shareAgent,
     'pane.toggle_viewer': _toggleFocusedViewer,
     'pane.toggle_composer': () {
       if (app.focusedPaneId case final id?) app.toggleComposer(id);
@@ -4752,9 +4792,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final downloadWidth = kIsWeb
           ? WebDownloadButton.widthOf(context) + cell.width
           : 0.0;
+      final shareWidth = WorkspaceShareButton.widthOf(context) + cell.width;
       final contentWidth = math.max(
         0.0,
-        constraints.maxWidth - cell.width * 7 - downloadWidth,
+        constraints.maxWidth - cell.width * 7 - downloadWidth - shareWidth,
       );
       final tabBudget = contentWidth * .45;
       _tabWidths = [
@@ -4900,7 +4941,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                 mainAxisSize: MainAxisSize.min,
                                 mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
-                                  if (modelPickerSupports(focused.engine)) ...[
+                                  if (modelPickerSupports(focused.engine) &&
+                                      constraints.maxWidth >=
+                                          cell.width * 12) ...[
                                     ConstrainedBox(
                                       constraints: BoxConstraints(
                                         maxWidth: constraints.maxWidth * .35,
@@ -4955,6 +4998,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 SizedBox(width: cell.width),
                 const WebDownloadButton(),
               ],
+              SizedBox(width: cell.width),
+              WorkspaceShareButton(
+                key: const ValueKey('workspace-share-button'),
+                label: _shareLabel(focused),
+                tooltip: _shareTooltip(focused),
+                onPressed: _canExecuteCommand('agent.share')
+                    ? () => _runShortcut('agent.share')
+                    : null,
+              ),
               SizedBox(width: cell.width),
             ],
           ),

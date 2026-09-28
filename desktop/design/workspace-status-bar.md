@@ -4,7 +4,7 @@ One shared status line, using compact monospace text and measured character cell
 Follow the [terminal workspace design system](terminal-workspace.md).
 
 ```text
-1:api  2:web  3:blender  +          M2  autonomous-harness  (main)
+1:api  2:web  3:blender  +          M2  autonomous-harness  (main)   [ Share ]
 ```
 
 ## Tabs on the left
@@ -95,7 +95,20 @@ Pane edges have no floating split buttons. Split Right and Split Down remain
 keyboard commands (Cmd-R and Cmd-D by default), with File menu and command-search
 access. Keep the resize gaps available for resizing.
 
-Restart Harness and Share Harness belong in File. Fork remains available in
+Share is a persistent primary action at the far right of the top bar, with a
+flat accent fill, white text, and the same fixed font and control height as the
+other bar actions. Reserve its width before allocating tabs and context. Web
+keeps Download app as a secondary text action immediately before Share.
+Clicking Share or pressing Cmd-Shift-S (Alt-Shift-S on web) opens the existing
+public/private link dialog for the focused agent. The tooltip and accessibility
+label name that agent; the shortcut hint follows remaps. A dependent viewer
+shares its owner. Empty tabs and view-only shared agents keep a disabled button.
+Opening Share alone does not create a link or change access. Native macOS and
+Flutter use the same command, labels, resolved colors, and availability.
+
+![The Share action at the right edge, rendered with synthetic data](images/workspace-share-button.png)
+
+Restart Harness and Share Harness also belong in File. Fork remains available in
 command search. Viewer and message-composer toggles belong in View and command
 search. These actions apply to the focused pane; sharing and viewer visibility
 follow a dependent viewer's owner.
@@ -235,7 +248,7 @@ References: [Zsh prompt parameters](https://zsh.sourceforge.io/Doc/Release/Param
 [Powerlevel10k](https://github.com/romkatv/powerlevel10k).
 
 Pane headers keep task identity and the hover-only close action. The top bar
-contains tabs, New Tab, and focused model/machine/project/branch/PR context.
+contains tabs, New Tab, focused model/machine/project/branch/PR context, and Share.
 Do not add a standalone Search label or category icons at the right edge.
 Context links open the corresponding scope in the unified picker. Global
 search remains available through Cmd-P and the app menu.
