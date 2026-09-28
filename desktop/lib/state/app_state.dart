@@ -24,6 +24,7 @@ import '../auth/cli_login.dart';
 import '../bootstrap/environment_provisioner.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
+import '../core/agent_git_context.dart';
 import '../core/agent_names.dart';
 import '../core/agent_preference.dart';
 import '../core/dsh_catalog.dart';
@@ -371,7 +372,7 @@ class MachineState {
       (!isLocalMachine && machine.reportedOnline == false);
 
   AgentProject? projectOf(Agent agent) =>
-      agent.project ??
+      agent.displayProject ??
       localProjects[agent.id] ??
       localEndpoint?.agentProjects[agent.id];
 
@@ -4705,6 +4706,7 @@ class AppNotifier extends ChangeNotifier {
           prev.modelName != agent.modelName ||
           prev.parentAgentId != agent.parentAgentId ||
           prev.project != agent.project ||
+          prev.gitContext != agent.gitContext ||
           prev.lastActivityAt != agent.lastActivityAt ||
           prev.lastOpenedAt != agent.lastOpenedAt ||
           prev.tokensUsed != agent.tokensUsed ||
@@ -6233,6 +6235,11 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void _replaceAgents(MachineState machine, List<Agent> agents) {
+    final previousWork = {for (final agent in machine.agents) agent.id: agent};
+    agents = [
+      for (final agent in agents)
+        retainNewerGitContext(agent, previousWork[agent.id]),
+    ];
     final previous = {for (final agent in machine.agents) agent.id: agent};
     final nextIds = agents.map((agent) => agent.id).toSet();
     machine._agentNames.removeWhere((id, _) => !nextIds.contains(id));
@@ -6290,6 +6297,7 @@ class AppNotifier extends ChangeNotifier {
   void _upsertAgent(MachineState machine, Agent agent) {
     final index = machine.agents.indexWhere((item) => item.id == agent.id);
     final previous = index == -1 ? null : machine.agents[index];
+    agent = retainNewerGitContext(agent, previous);
     if (index == -1) {
       machine.agents = [...machine.agents, agent];
     } else {
@@ -7210,12 +7218,63 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String agentId,
   ) async {
+    final machine = stateOf(machineId), revision = _authRevision;
+    final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
+    if (machine == null || agent == null) return {'status': 'unavailable'};
+    final identity = agent.gitContext?.requestIdentity;
+    if (agent.gitContext != null && identity == null) {
+      return {'status': 'unavailable'};
+    }
     try {
-      return await _conn(machineId).request(
+      final result = await _conn(machineId).request(
         'git_pull_request',
-        payload: {'agentId': agentId},
+        payload: {'agentId': agentId, 'context': ?identity},
         timeout: const Duration(seconds: 30),
       );
+      if (!_machineWorkCurrent(machine, revision) ||
+          !sameGitConversation(
+            agent,
+            machine.agents.where((a) => a.id == agentId).firstOrNull,
+          )) {
+        return {'status': 'unavailable'};
+      }
+      if (identity != null &&
+          !mapEquals(
+            identity,
+            result['context'] is Map
+                ? Map<String, Object?>.from(result['context'])
+                : null,
+          )) {
+        return {'status': 'unavailable'};
+      }
+      return result;
+    } catch (_) {
+      return {'status': 'unavailable'};
+    }
+  }
+
+  Future<Map<String, dynamic>> readAgentGitHistory(
+    String machineId,
+    String agentId, {
+    int offset = 0,
+  }) async {
+    final machine = stateOf(machineId), revision = _authRevision;
+    final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
+    if (machine == null || agent == null) return {'status': 'unavailable'};
+    try {
+      final result = await _conn(machineId).request(
+        'git_pull_request',
+        payload: {'agentId': agentId, 'history': true, 'offset': offset},
+        timeout: const Duration(seconds: 45),
+      );
+      if (!_machineWorkCurrent(machine, revision) ||
+          !sameGitConversation(
+            agent,
+            machine.agents.where((a) => a.id == agentId).firstOrNull,
+          )) {
+        return {'status': 'unavailable'};
+      }
+      return result;
     } catch (_) {
       return {'status': 'unavailable'};
     }
@@ -8768,7 +8827,7 @@ class AppNotifier extends ChangeNotifier {
       );
     }
     final terminal = isTerminalEngine(engine);
-    final cwd = machine.projectOf(source)?.cwd;
+    final cwd = source.project?.cwd ?? machine.projectOf(source)?.cwd;
     if (cwd == null && !terminal) {
       return Future.value(
         '${source.displayName} has no project folder to clone into.',

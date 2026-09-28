@@ -400,7 +400,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     final question = entry.machine.blockedAgents[entry.agent.id]?.prompt.trim();
     final state = _stateOf(entry, openable, tty, resuming: _resuming == row.id);
     final asking = question != null && question.isNotEmpty && entry.isWaiting;
-    final branch = entry.agent.project?.branch;
+    final branch = entry.agent.displayProject?.branch;
     // Found in what was said rather than in its own name and place: the second line shows where
     // — the desktop Cmd-P's rule.
     final hit = widget.controller.contentHitFor(row.id);
@@ -420,7 +420,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       // `M2:site ⑂ docs-v2 · 2m` — or, while it asks, its question.
       detail: asking
           ? '"${question.split('\n').first}"'
-          : '${entry.machineName}:${entry.agent.project?.label ?? entry.project?.name ?? ''}',
+          : '${entry.machineName}:${entry.agent.displayProject?.label ?? entry.project?.name ?? ''}',
       branch: asking || branch == null || branch.isEmpty ? null : branch,
       tail: asking
           ? null
@@ -474,13 +474,13 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       )) {
         continue;
       }
-      final cwd = entry.agent.project?.cwd ?? entry.project?.cwd;
+      final cwd = entry.agent.displayProject?.cwd ?? entry.project?.cwd;
       if (cwd == null || cwd.isEmpty) continue;
       return (
         machineId: entry.machineId,
         folder: cwd,
         label:
-            '${entry.machineName}:${entry.agent.project?.label ?? project.title}',
+            '${entry.machineName}:${entry.agent.displayProject?.label ?? project.title}',
       );
     }
     return null;

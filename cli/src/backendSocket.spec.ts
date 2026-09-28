@@ -1,4 +1,5 @@
 import * as gitPullRequest from './lib/gitPullRequest.js'
+import * as sessionGitPullRequest from './lib/sessionGitPullRequest.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { homedir, tmpdir } from 'os'
@@ -818,6 +819,26 @@ describe('BackendSocket outbound queue', () => {
       type: 'git_pull_request_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
     } }))
     expect(JSON.stringify(parseSent(ws))).not.toContain('github.com/private')
+    await socket.stop()
+  })
+
+  it('keeps session work paths and PR history inside the requesting encrypted reply', async () => {
+    const history = { status: 'unavailable' as const, context: null, gitContext: {
+      state: 'uncertain' as const, current: null, observedAt: null, locations: [], pullRequests: [], truncated: false,
+    }, history: { branches: [{ cwd: '/private/worktree', remote: null, branch: 'private-fix', at: '2026-09-27' }], pullRequests: [], truncated: false }, lookups: [], nextOffset: null }
+    vi.spyOn(registry, 'resolve').mockReturnValue({ cwd: '/remote/workspace' } as RegisteredSession)
+    vi.spyOn(sessionGitPullRequest, 'readSessionGitPullRequest').mockResolvedValue(history)
+    const socket = new BackendSocket('token'); socket.connect()
+    const ws = wsMock.instances[0]; ws.open()
+    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'git_pull_request', payload: {
+      requestId: 'history-1', agentId: 'agent1', history: true,
+    } })
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({ type: 'git_pull_request_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-history' } } })
+    ws.message({ t: 'down', connId: 'viewer-a', frame: { type: 'git_pull_request', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-request' } } } })
+    await vi.waitFor(() => expect(wrap).toHaveBeenCalledWith('viewer-a', 'git_pull_request_result', 'history-1', history))
+    expect(JSON.stringify(parseSent(ws))).not.toContain('/private/worktree')
+    expect(parseSent(ws)).toContainEqual(expect.objectContaining({ targetConnId: 'viewer-a', frame: { type: 'git_pull_request_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-history' } } } }))
     await socket.stop()
   })
 

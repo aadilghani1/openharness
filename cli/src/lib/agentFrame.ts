@@ -19,6 +19,8 @@
  */
 
 import { agentProject, type AgentProject } from './agentProject.js'
+import { sessionGitContext, SessionGitContextReader, type SessionGitContext } from './sessionGitContext.js'
+import { sessionGitHistory } from './sessionGitHistory.js'
 import { transcriptActivityAt } from './transcriptActivity.js'
 import type { AgentTokenUsage } from './agentTokenUsage.js'
 import type { AgentOutputStats } from './agentOutputStats.js'
@@ -78,6 +80,8 @@ export type AgentFrame = {
   grid: GridFrameBlock | null
   codexHome: string | null
   project: AgentProject | null
+  /** Additive display context; project/cwd remain the registered launch workspace. */
+  gitContext: SessionGitContext
   /** The domain-specific harness this agent was created as, or null for a plain engine. */
   dsh: string | null
   /** Its display name from the installed manifest; null when unknown here (not installed, plain engine). */
@@ -171,10 +175,19 @@ function frameTitle(s: RegisteredSession): string | null {
  * half of "last used" — when a person last opened it, from any app — and a client sorts by the later
  * of the two.
  */
+const gitContexts = new SessionGitContextReader()
+
 export async function agentFrame(
   s: RegisteredSession,
   { selectedModel, terminalAvailable, dsh, tokenUsage }: AgentFrameContext,
 ): Promise<AgentFrame> {
+  const home = agentProject(s.cwd)
+  const context = gitContexts.read(JSON.stringify([s.agentId, s.sessionId, s.engine, s.codexHome, s.registeredAt]), async () => {
+    const value = await sessionGitContext(await home, tokenUsage?.work)
+    value.history = await sessionGitHistory.observe(s, value)
+    return value
+  })
+  const [project, updatedAt, gitContext] = await Promise.all([home, lastActivityAt(s), context])
   return {
     id: s.agentId,
     sessionId: s.sessionId,
@@ -184,7 +197,7 @@ export async function agentFrame(
     status: s.active ? 'active' : 'offline',
     launch: s.launch ?? { state: 'ready' },
     createdAt: new Date(s.registeredAt).toISOString(),
-    updatedAt: new Date(await lastActivityAt(s)).toISOString(),
+    updatedAt: new Date(updatedAt).toISOString(),
     // Null, never omitted, for the reason the module doc gives: a push without the key would erase
     // the open an earlier frame had reported.
     lastOpenedAt: s.lastOpenedAt ? new Date(s.lastOpenedAt).toISOString() : null,
@@ -207,7 +220,8 @@ export async function agentFrame(
     // engine's own login. Codex only; null is a real answer ("uses ~/.codex") for the same reason
     // `grid: null` is above.
     codexHome: s.codexHome ?? null,
-    project: await agentProject(s.cwd),
+    project,
+    gitContext,
     // All five are real answers when null, for the reason the module doc gives: a frame that omits
     // them would erase a viewer URL or a verdict an earlier frame had reported.
     dsh: dsh?.id ?? s.dsh ?? null,

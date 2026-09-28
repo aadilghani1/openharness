@@ -340,6 +340,19 @@ final harnessCommands = <HarnessCommand>[
     nativeAction: 'newAgent',
   ),
   const HarnessCommand('agent.rename', 'Rename Harness', ShortcutGroup.actions),
+  const HarnessCommand(
+    'agent.work',
+    'Inspect session work',
+    ShortcutGroup.actions,
+    keywords: [
+      'branch',
+      'branches',
+      'pull requests',
+      'git',
+      'worktree',
+      'history',
+    ],
+  ),
   const HarnessCommand('agent.stop', 'Stop Harness', ShortcutGroup.actions),
   const HarnessCommand('agent.fork', 'Fork Harness', ShortcutGroup.actions),
   const HarnessCommand(

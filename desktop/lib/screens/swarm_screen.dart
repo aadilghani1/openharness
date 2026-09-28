@@ -60,6 +60,7 @@ import '../widgets/engine_identity.dart';
 import '../widgets/status_line.dart';
 import '../widgets/workspace_status_line.dart';
 import '../widgets/workspace_bar_control.dart';
+import '../widgets/session_work_dialog.dart';
 import '../widgets/web_download_button.dart';
 import '../widgets/grid_model_picker.dart';
 import '../store/store_mark.dart';
@@ -851,7 +852,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ),
     if (focused.branch != null && focused.project != null)
       StatusLineField.branch: (
-        label: 'Find harnesses on ${focused.branch} in ${focused.projectName}',
+        label: focused.agent?.gitContext == null
+            ? 'Find harnesses on ${focused.branch} in ${focused.projectName}'
+            : 'Inspect session work · ${focused.branch}\n${focused.detail}',
         onPressed: _shortcutsEnabled
             ? () =>
                   _openContextResource(StatusLineField.branch, focused.pane.id)
@@ -864,6 +867,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final focused = WorkspacePaneContext.focused(app);
     if (focused == null || focused.pane.id != expectedPaneId) return;
     if (field == StatusLineField.branch && focused.branch == null) return;
+    if (field == StatusLineField.branch && focused.agent?.gitContext != null) {
+      unawaited(_showSessionWork(focused));
+      return;
+    }
     if (app.stateOf(focused.pane.machineId) == null) return;
     final group = field == StatusLineField.machine
         ? 'machine:${focused.pane.machineId}'
@@ -883,6 +890,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
     _focusSearch();
   }
+
+  Future<void> _showSessionWork(WorkspacePaneContext focused) =>
+      _dialog(() async {
+        final agent = focused.agent;
+        if (agent == null) return;
+        final machineId = focused.pane.machineId;
+        await showDialog<void>(
+          context: context,
+          builder: (_) => SessionWorkDialog(
+            agent: agent,
+            online: app.stateOf(machineId)?.isOffline == false,
+            read: (offset) =>
+                app.readAgentGitHistory(machineId, agent.id, offset: offset),
+          ),
+        );
+      });
 
   Future<void> _openFocusedPullRequest(String? expectedUrl) async {
     final pr = _pullRequest.value;
@@ -3699,6 +3722,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     'agent.add': _addAgent,
     if (kDebugSurfaceEnabled) 'app.onboarding_review': _newTab,
     'agent.rename': () => _editAgent(),
+    'agent.work': () async {
+      final focused = WorkspacePaneContext.focused(app);
+      if (focused != null) await _showSessionWork(focused);
+    },
     'agent.stop': () => _editAgent(stop: true),
     'agent.fork': _forkAgent,
     'agent.share': _shareAgent,
@@ -3735,6 +3762,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return false;
     }
     if (id == 'keyboard.open_config') return _keymap.store != null;
+    if (id == 'agent.work') {
+      return WorkspacePaneContext.focused(app)?.agent != null;
+    }
     if (id == 'keyboard.pause_guide') return _learning.active;
     if (id == 'agent.share' || id == 'pane.toggle_viewer') {
       final focused = WorkspacePaneContext.focused(app);
