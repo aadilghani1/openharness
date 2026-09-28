@@ -218,6 +218,54 @@ private extension SwarmTabButton {
 }
 
 private extension SwarmTabStrip {
+  func checkShareAction() throws {
+    let target: [String: Any] = ["text": "[ Share ]", "label": "Share Website launch",
+      "tooltip": "Share Website launch · ⇧⌘S", "enabled": true,
+      "paneId": 7, "machineId": "office", "agentId": "website",
+      "foreground": Int64(0xffffffff), "background": Int64(0xff2f5bea)]
+    var state: [String: Any] = ["enabled": true, "shareAction": target,
+      "tabs": [["id": "work", "name": "Work"]], "activeId": "work",
+      "focusedContext": ["text": "Office project", "segments": [["text": "Office project"]]]]
+    var calls: [(String, [String: Any])] = []
+    emit = { method, args in calls.append((method, args as? [String: Any] ?? [:])) }
+    for width in [CGFloat(360), CGFloat(520), CGFloat(1280)] {
+      setFrameSize(NSSize(width: width, height: 40))
+      update(state)
+      try checkTitlebar(!shareButton.isHidden && shareButton.isEnabled &&
+        shareButton.frame.width == shareButton.preferredWidth &&
+        shareButton.frame.maxX <= bounds.width &&
+        contextButton.frame.maxX < shareButton.frame.minX &&
+        newButton.frame.maxX < shareButton.frame.minX,
+        "Share stays prominent at the right edge without overlapping tabs or context at width \(width)")
+    }
+    try checkTitlebar(shareButton.accessibilityLabel() == "Share Website launch" &&
+      shareButton.toolTip == "Share Website launch · ⇧⌘S",
+      "Share identifies the selected agent and its live shortcut")
+    let pixel = shareButton.renderedBitmap().colorAt(x: 1, y: 1)!.usingColorSpace(.sRGB)!
+    try checkTitlebar(abs(pixel.blueComponent - 234.0 / 255.0) < 0.02,
+      "The primary Share action paints the color supplied by Flutter")
+    shareButton.performClick(nil)
+    try checkTitlebar(calls.last?.0 == "shareAgent" && calls.last?.1["paneId"] as? Int == 7 &&
+      calls.last?.1["machineId"] as? String == "office" && calls.last?.1["agentId"] as? String == "website",
+      "The native Share button sends the exact displayed agent identity")
+    let count = calls.count
+    state["enabled"] = false
+    update(state)
+    shareButton.performClick(nil)
+    try checkTitlebar(!shareButton.isEnabled && calls.count == count,
+      "Share is disabled behind a modal and cannot dispatch")
+    state["enabled"] = true
+    var disabled = target
+    disabled["enabled"] = false
+    state["shareAction"] = disabled
+    update(state)
+    shareButton.performClick(nil)
+    try checkTitlebar(!shareButton.isHidden && !shareButton.isEnabled && calls.count == count,
+      "An empty or view-only pane keeps Share visible and inactive")
+    update([:])
+    try checkTitlebar(shareButton.isHidden, "Workspace teardown clears the Share control")
+  }
+
   func checkAgentIdentity() throws {
     func show(_ count: Int, engine: String? = nil) {
       var row: [String: Any] = ["id": "agent-tab", "name": "Login flow", "agentCount": count]
@@ -444,8 +492,8 @@ private extension SwarmTabStrip {
       newButton.frame.maxX < contextButton.frame.minX, "Tabs are left of the right-aligned focused context")
     try checkTitlebar(tabs[0].frame.width < 120 && tabs[0].displayLabel == "1:code",
       "Short numbered labels use text-sized widths")
-    try checkTitlebar(subviews.count == 5 && pullRequestButton.isHidden && focusedModelButton.isHidden,
-      "Context links fill the bar; standalone search and management controls are absent")
+    try checkTitlebar(subviews.count == 6 && pullRequestButton.isHidden && focusedModelButton.isHidden && shareButton.isHidden,
+      "Context links fill the bar; absent context and Share state clear their controls")
     let controls = [newButton]
     for (control, symbol) in zip(controls, ["+"]) {
       try checkTitlebar(control.image == nil && control.title == symbol && !control.isBordered,
@@ -1293,6 +1341,7 @@ do {
   try strip.runChecks()
   try strip.checkAgentIdentity()
   try strip.checkSharedTypography()
+  try strip.checkShareAction()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
   try checkTitlebar(titlebarCheckApp.windows.isEmpty, "Checks never open an application window")
   if CommandLine.arguments.contains("--window-layout") {

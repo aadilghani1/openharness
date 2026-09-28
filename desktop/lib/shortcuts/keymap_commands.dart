@@ -359,6 +359,8 @@ final harnessCommands = <HarnessCommand>[
     'agent.share',
     'Share Harness',
     ShortcutGroup.actions,
+    action: ShortcutAction.shareAgent,
+    keywords: ['link', 'public', 'private', 'invite', 'collaborate'],
     nativeAction: 'shareAgent',
   ),
   const HarnessCommand(
