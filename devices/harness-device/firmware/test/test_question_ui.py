@@ -79,7 +79,8 @@ static bool queue(action_t a) {
     if (congested) return false;
     queued=a; if (a.kind==A_ANSWER) queued_answers++; return true;
 }
-static void notice_add(const char *id,const char *name,const char *machine,const char *text,bool question) {
+static void notice_add(const char *id,const char *name,const char *machine,const char *text,bool question,bool failed) {
+    assert(!failed); // Asking a question cannot manufacture a failure notification.
     (void)id;(void)name;(void)machine;(void)text;assert(question);notices++;
 }
 static void notice_remove(const char *id,bool all) { assert(id && all);removed++; }

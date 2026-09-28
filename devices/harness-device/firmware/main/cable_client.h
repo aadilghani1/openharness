@@ -203,6 +203,7 @@ typedef struct {
     char machine[CABLE_NAME_MAX];
     char summary[240];
     bool question;
+    bool failed; // Optional explicit host metadata; never inferred from prose.
 } cable_notif_t;
 
 // The user tapped a swarm. Not answered — see above.

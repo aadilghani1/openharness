@@ -109,6 +109,28 @@ static void bell_checks(void)
     puts("bell glyph: both native cells, no fallback, empty/active/count/clear incremental raster PASS");
 }
 
+static void notification_marks(void)
+{
+    const char *marks[] = {HT_DONE, "?", HT_FAILED};
+    ht_scene_t a, b;
+    ht_scene_clear(&a, ht_rgb(0x191919));
+    transition(NULL, &a);
+    for (unsigned i = 0; i < sizeof marks / sizeof marks[0]; i++) {
+        ht_scene_clear(&b, a.background);
+        char text[32]; snprintf(text, sizeof text, "%s Release", marks[i]);
+        assert(ht_can_display(text, &ht_mono_28, 170, 1));
+        ht_center(&b, 90, &ht_mono_28, 0xffff, text);
+        transition(&a, &b); a = b;
+        if (i != 1) {
+            strcpy(b.runs[0].text, "? Release");
+            ht_raster(&b, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, scratch);
+            assert(memcmp(full, scratch, sizeof full));
+        }
+    }
+    ht_scene_clear(&b, a.background); transition(&a, &b);
+    puts("Inbox status: check/question/cross glyphs, no fallback, incremental transitions PASS");
+}
+
 static void shimmer_checks(void)
 {
     // Exercise the production damage + raster path, including skipped frames,
@@ -225,6 +247,7 @@ int main(void)
     punctuation_checks();
     inline_arrow_checks();
     bell_checks();
+    notification_marks();
     shimmer_checks();
     ht_scene_t a = {0}, b = {0};
     assert(ht_text_rows("one\ntwo\nthree",&ht_mono_20,348)==3);

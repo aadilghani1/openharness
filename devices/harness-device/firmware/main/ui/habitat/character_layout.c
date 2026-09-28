@@ -1,4 +1,5 @@
 #include "character_layout.h"
+#include <stdio.h>
 #include <string.h>
 
 bool ht_character_caption_tick(ht_character_caption_t *c, uint32_t now,
@@ -137,14 +138,25 @@ void ht_recap_lines(ht_scene_t *s, int y, uint16_t ink, const char *recap)
     recap_lines(s, y, 336, 3, false, NULL, ink, recap, &ht_mono_20, 0);
 }
 void ht_inbox_card(ht_scene_t *s, const char *name, const char *message,
-                   uint16_t foreground, uint16_t dim)
+                   uint16_t foreground)
 {
-    static const int title_widths[] = {306, 374};
+    static const int title_widths[] = {340, 374};
     static const int body_widths[] = {408, 408, 391, 340};
-    lines(s, 78, 306, 2, &ht_mono_28, foreground, name, true, title_widths);
-    ht_center(s, 165, &ht_mono_20, dim, "----------------------");
-    recap_lines(s, 202, 408, HT_CHARACTER_RECAP_ROWS, true, body_widths,
+    lines(s, 90, 340, 2, &ht_mono_28, foreground, name, true, title_widths);
+    recap_lines(s, 196, 408, HT_CHARACTER_RECAP_ROWS, true, body_widths,
                 foreground, message, &ht_mono_28, HT_CHARACTER_RECAP_CHARS);
+}
+void ht_notification_bell(ht_scene_t *s, unsigned count, uint16_t ink)
+{
+    char number[12];
+    snprintf(number, sizeof number, "%u", count);
+    int digits = count ? (int)strlen(number) * ht_mono_28.width : 0;
+    int width = ht_bell_footer.width + (count ? 8 + digits : 0);
+    int x = (HT_WIDTH - width) / 2;
+    ht_text(s, x, HT_NOTIFICATION_Y, ht_bell_footer.width, &ht_bell_footer,
+            ink, s->background, HT_BELL);
+    if (count) ht_text(s, x + ht_bell_footer.width + 8, HT_NOTIFICATION_Y, digits,
+                       &ht_mono_28, ink, s->background, number);
 }
 static void recipient(ht_scene_t *s, const ht_character_face_t *f, int y)
 {
@@ -167,6 +179,7 @@ void ht_character_layout(ht_scene_t *s, const ht_character_face_t *f, uint8_t fr
         compact ? HT_CHARACTER_COMPACT : HT_CHARACTER_FULL;
     int y = result ? (brief ? 78 : 72) : compact ? 113 : 98;
     if (result && f->roomy_reading) y = HT_CHARACTER_READING_Y;
+    else if (!compact && f->roomy_reading) { size = HT_CHARACTER_COMPACT; y = 114; }
     paint(s, f, frame, ink, size, y);
     if (!f->single_label) {
         if (f->straight_title) recipient(s, f, 41);

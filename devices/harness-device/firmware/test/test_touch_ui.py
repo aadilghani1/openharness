@@ -304,8 +304,15 @@ static bool action_enabled(action_kind_t action) {
     return false;
 }
 static bool status_is(const char *text) {
+    char footer[32]="";
+    for (int i=0;i<scene.count;i++) if(scene.runs[i].y==HT_NOTIFICATION_Y) {
+        if(footer[0]) strcat(footer," ");
+        assert(strlen(footer)+strlen(scene.runs[i].text)<sizeof footer);
+        strcat(footer,scene.runs[i].text);
+    }
+    if(footer[0] && !strcmp(footer,text)) return true;
     for (int i=0;i<scene.count;i++)
-        if ((scene.runs[i].arc==2 || scene.runs[i].y==385 || scene.runs[i].y==399) &&
+        if ((scene.runs[i].arc==2 || scene.runs[i].y==385 || scene.runs[i].y==HT_NOTIFICATION_Y) &&
             !strcmp(scene.runs[i].text,text)) return true;
     return false;
 }
@@ -617,7 +624,7 @@ static void notice_checks(const char *dir) {
                 assert(ht_can_display(r->text,r->font,r->w,1)); icons++;
             }
             if(r->font==&ht_mono_28 && r->text[0])
-                assert((r->y==78 || r->y==116) || (r->y>=202 && r->y+r->font->height<=354));
+                assert((r->y==90 || r->y==128) || (r->y>=196 && r->y+r->font->height<=348));
         }
         assert(icons==1); // Only Back; the full message opens the pane.
         // The inbox keeps its own reading layout and the same source message.
@@ -649,6 +656,7 @@ static void notice_checks(const char *dir) {
     bool question_shown=false;
     for(int i=0;i<scene.count;i++) if(strstr(scene.runs[i].text,"Should I deploy"))question_shown=true;
     assert(question_shown && s.notice_count==1 && !question_sends);
+    assert(!strcmp(scene.runs[0].text,"? Release"));
     portrait(dir,"notification-question");
     s.connected=false; scene_take(); assert(!action_enabled(A_NOTICE));
     portrait(dir,"inbox-offline");
@@ -876,10 +884,23 @@ static void bell_checks(const char *dir) {
     reset(); scene_take();
     bool found=false;
     for(int i=0;i<scene.count;i++) if(!strcmp(scene.runs[i].text,HT_BELL)) {
-        assert(scene.runs[i].fg==DIM && scene.runs[i].font==&ht_mono_28 && !scene.runs[i].shimmer);
+        assert(scene.runs[i].fg==DIM && scene.runs[i].font==&ht_bell_footer && !scene.runs[i].shimmer);
         found=true;
     }
     assert(found && !action_enabled(A_INBOX));
+    // A restored host failure is distinct from a completed task. Questions
+    // keep priority; an ordinary fresh result must clear any old failure mark.
+    cable_notif_t failed={.agent_id="b",.name="Website",.failed=true,
+        .summary="The deployment failed. Check the terminal for details."};
+    ui_notif_replace(&failed,1); ui_notif_open(); scene_take();
+    assert(!strcmp(scene.runs[0].text,HT_FAILED " Website"));
+    portrait(dir,"notification-failed");
+    failed.question=true; ui_notif_replace(&failed,1); scene_take();
+    assert(!strcmp(scene.runs[0].text,"? Website"));
+    ui_notify_task_done("b","Website","M2","The site is deployed."); scene_take();
+    assert(!strcmp(scene.runs[0].text,HT_DONE " Website"));
+    for(int i=0;i<scene.count;i++) assert(!strstr(scene.runs[i].text,"----"));
+    reset(); scene_take();
     portrait(dir,"bell-empty");
     for(unsigned i=0;i<sizeof points/sizeof points[0];i++) {
         reset(); tap(1000,points[i][0],points[i][1]);
@@ -960,9 +981,9 @@ int main(int argc, char **argv) {
     assert(!strcmp(s.pending_focus,"b"));
     s.active=0;ui_apply_pending_focus();assert(s.active==1 && !s.pending_focus[0]);
     ui_focus_project(exact);assert(s.active==target);
-    notice_add(exact,"Exact target","M2","This target fits.",false);
+    notice_add(exact,"Exact target","M2","This target fits.",false,false);
     unsigned exact_notices=s.notice_count;
-    notice_add(oversized,"Wrong target","M2","Must not alias another pane.",false);
+    notice_add(oversized,"Wrong target","M2","Must not alias another pane.",false,false);
     assert((unsigned)s.notice_count==exact_notices && !strcmp(s.notice[0].agent_id,exact));
     reset();
     }

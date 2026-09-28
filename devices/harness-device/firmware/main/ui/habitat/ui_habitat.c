@@ -729,8 +729,7 @@ static void render_home(ht_scene_t *f)
     bool bell = !s.voice_retry_until && !carry.active && !carry.error[0] && !visit.available;
     char status[100];
     if (s.voice_retry_until) COPY(status, "Try again");
-    else if (bell && s.notice_count) snprintf(status, sizeof status, HT_BELL " %d", s.notice_count);
-    else COPY(status, bell ? HT_BELL : "");
+    else status[0] = 0;
     ht_character_face_t f_ = {.recipient = caption, .status = bell ? "" : status,
         .hint = "",
         .detail = "",
@@ -747,7 +746,7 @@ static void render_home(ht_scene_t *f)
     }
     if (visit.available) f_.hint = "";
     ht_character_face(f, &character, &f_, ACCENT, recap);
-    if (bell) ht_center(f, 399, UI_FONT, f_.ink, status);
+    if (bell) ht_notification_bell(f, s.notice_count, f_.ink);
     s.status_phase = status_animated() ? ht_shimmer_phase(ms()) : 0;
     for (int i = 0; i < f->count; i++) {
         ht_run_t *run = &f->runs[i];
@@ -978,8 +977,10 @@ static void render_notice(ht_scene_t *f)
     // changes desktop focus; a tap on the name/message opens that exact pane.
     int body = s.hit_count++;
     s.hits[body] = (hit_t){{33, 55, 400, 327}, A_NOTICE, s.offset, s.connected};
-    ht_inbox_card(f, n->name, n->summary[0] ? n->summary : "No preview available.",
-                  s.connected ? FG : DIM, DIM);
+    char title[CABLE_NAME_MAX + 8];
+    snprintf(title, sizeof title, "%s %s", n->question ? "?" : n->failed ? HT_FAILED : HT_DONE, n->name);
+    ht_inbox_card(f, title, n->summary[0] ? n->summary : "No preview available.",
+                  s.connected ? FG : DIM);
     s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, A_HOME, 0, true};
     ht_text(f, 223, 400, 20, &ht_nav_32,
         s.pressed == body + 1 ? FG : ACCENT, BG, "\xe2\x86\x90");
@@ -3045,7 +3046,7 @@ static void notice_restore_selection(const char *id)
         if (!strcmp(id, s.notice[i].agent_id)) { s.offset = i; return; }
 }
 static void notice_add(const char *id, const char *name, const char *machine, const char *recap,
-                       bool question)
+                       bool question, bool failed)
 {
     if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return;
     char selected[ID_MAX]; notice_selection(selected, sizeof selected);
@@ -3073,6 +3074,7 @@ static void notice_add(const char *id, const char *name, const char *machine, co
     COPY(n->machine, machine);
     recap_preview(n->summary, sizeof n->summary, recap);
     n->question = question;
+    n->failed = failed;
     notice_restore_selection(selected);
     notice_sync_view();
 }
@@ -3080,7 +3082,7 @@ void ui_notify_task_done(const char *id, const char *name, const char *machine, 
 {
     if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return;
     display_lock();
-    notice_add(id, name, machine, recap, false);
+    notice_add(id, name, machine, recap, false, false);
     s.notice_sequence++;
     uint32_t now = ms();
     if (!waiting() && !s.nap && !s.quiet && (!s.last_celebration || now - s.last_celebration >= 20000)) {
@@ -3113,7 +3115,7 @@ void ui_notif_replace(const cable_notif_t *rows, int count)
     s.notice_count = 0;
     for (int i = count - 1; i >= 0; i--)
         notice_add(rows[i].agent_id, rows[i].name, rows[i].machine, rows[i].summary,
-                   rows[i].question);
+                   rows[i].question, rows[i].failed);
     notice_restore_selection(selected);
     notice_sync_view();
     change();
@@ -3156,7 +3158,7 @@ void ui_question_show(const char *id, const char *name, const char *machine, con
     display_lock();
     const cJSON *first=cJSON_GetArrayItem(questions,0);
     const cJSON *prompt=cJSON_GetObjectItemCaseSensitive(first,"q");
-    notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true);
+    notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true,false);
     s.notice_sequence++;
     // A different agent's alert cannot replace the question being read.
     if (s.q.valid && !strcmp(s.q.agent,id) && strcmp(s.q.request,request)) {

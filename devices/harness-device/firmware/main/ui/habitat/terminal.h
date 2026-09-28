@@ -21,6 +21,9 @@ extern const uint8_t ht_mono_20_ink[224][4], ht_open_20_ink[1][4];
 // One authored outline bell in a normal terminal cell, not an emoji font.
 #define HT_BELL "\xee\x80\x80"
 extern const ht_font_t ht_bell_20, ht_bell_28;
+extern const ht_font_t ht_bell_footer, ht_done_28, ht_failed_28;
+#define HT_DONE "\xe2\x9c\x93"
+#define HT_FAILED "\xe2\x9c\x97"
 extern const uint8_t ht_bell_20_ink[1][4];
 // The lock's dot is the only 40 px glyph used by the daily UI. Keep its exact
 // pixels without retaining the other 94 glyphs of the gallery font in flash.

@@ -217,10 +217,34 @@ static void recap_budget(void)
         }
 }
 
+static void footer_layout(void)
+{
+    const unsigned counts[] = {0, 1, 9, 10, 32, 1, 0};
+    ht_scene_t before, after;
+    ht_scene_clear(&before, 0); redraw(NULL, &before);
+    for (unsigned i = 0; i < sizeof counts / sizeof counts[0]; i++) {
+        ht_scene_clear(&after, 0);
+        ht_notification_bell(&after, counts[i], counts[i] ? 0xffff : ht_rgb(0x888888));
+        redraw(&before, &after); before = after;
+        int left = HT_WIDTH, right = 0, top = HT_HEIGHT, bottom = 0;
+        for (int y = 0; y < HT_HEIGHT; y++) for (int x = 0; x < HT_WIDTH; x++)
+            if (full[y * HT_WIDTH + x]) {
+                assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);
+                if (x < left) left = x;
+                if (x > right) right = x;
+                if (y < top) top = y;
+                if (y > bottom) bottom = y;
+            }
+        assert(left + right >= 460 && left + right <= 470);
+        assert(top >= 418 && bottom <= 451); // Matches the upper curve's rim inset.
+    }
+    ht_scene_clear(&after, 0); redraw(&before, &after);
+}
+
 int main(void)
 {
     assert(!strcmp(ht_character_name(HT_CHARACTER_TIM), "Tim"));
     assert(!strcmp(ht_character_name(HT_CHARACTER_TUX), "Tux"));
-    clocks(); portraits(); delivery_and_caption(); recap_budget();
+    clocks(); portraits(); delivery_and_caption(); recap_budget(); footer_layout();
     printf("Characters: both adapters, eight moods, five sizes, pause/mic/wrap/swap and %u exact incremental redraws PASS\n", redraws);
 }

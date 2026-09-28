@@ -19,6 +19,10 @@ static uint32_t punctuation_alias(uint32_t cp)
 }
 static const ht_font_t *glyph_font(const ht_font_t *font, uint32_t cp)
 {
+    if (font == &ht_mono_28) {
+        if (cp == 0x2713) return &ht_done_28;
+        if (cp == 0x2717) return &ht_failed_28;
+    }
     // Authored arrows in a recap use the same precomputed glyph as its marker.
     // Identical cell metrics: no scaling, allocation, or extra text runs.
     // ht_open_20's cell is 12 x 28 — mono_20's exactly, which is what made this free. The recap now

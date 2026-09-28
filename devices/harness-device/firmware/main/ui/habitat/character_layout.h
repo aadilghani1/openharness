@@ -4,9 +4,10 @@ typedef enum {
     HT_CHARACTER_FULL, HT_CHARACTER_COMPACT, HT_CHARACTER_BRIEF,
     HT_CHARACTER_READING, HT_CHARACTER_QUICK
 } ht_character_size_t;
-enum { HT_CHARACTER_BRIEF_Y = 84, HT_CHARACTER_READING_Y = 92,
-       HT_CHARACTER_BRIEF_TEXT_Y = 264, HT_CHARACTER_READING_TEXT_Y = 230,
-       HT_CHARACTER_RECAP_CHARS = 90, HT_CHARACTER_RECAP_ROWS = 4 };
+enum { HT_CHARACTER_BRIEF_Y = 84, HT_CHARACTER_READING_Y = 82,
+       HT_CHARACTER_BRIEF_TEXT_Y = 264, HT_CHARACTER_READING_TEXT_Y = 208,
+       HT_CHARACTER_RECAP_CHARS = 90, HT_CHARACTER_RECAP_ROWS = 4,
+       HT_NOTIFICATION_Y = 414 };
 typedef struct {
     char pane[128];
     uint32_t began, next_ms;
@@ -22,7 +23,8 @@ void ht_character_layout(ht_scene_t *s, const ht_character_face_t *f, uint8_t fr
                          uint16_t ink, const char *recap, ht_character_painter_t paint);
 // Text-only inbox, deliberately distinct from the companion's home recap.
 void ht_inbox_card(ht_scene_t *scene, const char *name, const char *message,
-                   uint16_t foreground, uint16_t dim);
+                   uint16_t foreground);
+void ht_notification_bell(ht_scene_t *scene, unsigned count, uint16_t ink);
 // The envelope is painted in the character's own cells, attached to its limb.
 void ht_character_letter(ht_scene_t *s, const ht_character_face_t *f,
                          const ht_font_t *font, int x, int y);

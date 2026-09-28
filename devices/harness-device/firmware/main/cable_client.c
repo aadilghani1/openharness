@@ -949,6 +949,7 @@ static void handle_notifications(const cJSON *p)
         snprintf(rows[n].machine, sizeof(rows[n].machine), "%s", str_of(it, "machine") ? str_of(it, "machine") : "");
         snprintf(rows[n].summary, sizeof(rows[n].summary), "%s", str_of(it, "summary") ? str_of(it, "summary") : "");
         rows[n].question = bool_of(it, "question");
+        rows[n].failed = bool_of(it, "failed");
         n++;
     }
     ui_notif_replace(rows, n);

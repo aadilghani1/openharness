@@ -17,12 +17,17 @@ any summary. Summary length never changes the creature size or position. All
 summaries use a fixed 28 px font, up to four rows, and at most 90 characters
 including any trailing ellipsis. Clipping prefers a whole-word boundary and
 counts UTF-8 characters rather than bytes. Complete summaries end naturally.
-The small portrait starts at y=92 and the summary at y=230, leaving more room
-below the top title and between the portrait and prose. Lower rows narrow to
+The small portrait starts at y=82 and the summary at y=208. The tighter
+title/portrait/prose spacing leaves room above the bottom bell. The regular home
+portrait uses the compact atlas (Tim: 216 × 216 px instead of 270 × 270 px). Lower rows narrow to
 stay inside the circle; four rows retain the 90-character maximum.
 The inbox is deliberately a different surface: no creature, a straight pane
-name in up to two rows, a quiet terminal divider, and the message centered in
-its own reading area. It keeps the same 28 px font and 90-character budget.
+name in up to two rows, preceded by the desktop/TUI status glyph, and the
+message centered in its own reading area. There is no divider. `✓` means a
+completed turn, `?` means input needed, and `✗` requires explicit `failed: true`
+notification metadata. Questions take priority over failure when both are set.
+Older hosts still send only completed turns and questions; the firmware never
+guesses failure from message wording or creates a new source of notifications. It keeps the same 28 px font and 90-character budget.
 Swipes move between messages without changing desktop focus. Tapping the pane
 name or message opens that exact desktop pane; a single bottom **←** returns
 home. Questions still require their existing explicit answer flow. Opening a
@@ -54,9 +59,11 @@ available. The count uses existing message/question semantics, not a new source
 of notifications. Tim and Tux no longer hold an envelope on any daily screen.
 The old letter art stays available to historical experiment renders.
 
-The bell is an authored outline glyph in the same fixed cell and stroke style
-as the terminal font. Two precomputed sizes occupy 246 pixel bytes in total;
-the live footer uses the 28 px size. There is no emoji renderer, icon library,
+The bell is a round, authored outline glyph with the terminal font’s stroke
+weight. Its own 26 × 38 px cell keeps the dome round, alongside a 28 px count.
+It starts at y=414, with visible ink about 20 px from the rim, matching the top
+caption. The new bell and two status glyphs use 571 immutable pixel bytes.
+The earlier narrow bell cells remain for historical renderer comparisons. There is no emoji renderer, icon library,
 allocation or per-frame bell animation. Listening temporarily owns the bottom
 curve; the bell returns after the voice flow closes.
 
@@ -122,8 +129,8 @@ source hashes. The original moods map as follows:
 
 Frames share a 52×24 crop and immutable RGB565 cell colours. Geist Mono atlases
 cover the full, compact, brief, reading and shortcut portraits. The firmware
-does not run the procedural model or decode images. Unread results give Tux a
-letter to hold; offline and sleeping portraits dim. Shared reactions overlay the
+does not run the procedural model or decode images. Historical letter poses remain available to experiments; offline and sleeping
+portraits dim. Shared reactions overlay the
 registered face cells without changing application behaviour.
 
 Regenerate from the source checkout and then bake firmware data:
@@ -305,3 +312,18 @@ its phase boundary, inbox title/message taps, and the empty-transcription retry.
 Image SHA-256: `a9a97e5c55ed6bedfddd5ce7865911c27c40028b5a1443a3f7aeb68afb200513`.
 The release report covers native and bridge behavior, not physical USB/touch
 latency. The separate deployment receipt records the actual dial handshake.
+
+## Bell and reading polish — 2026-09-28
+
+Orange revision `.orange.6` widens the live bell, moves it 15 px toward the rim,
+and gives it a separately centered count. The thumb target stays 300 × 84 px
+and remains separate from voice. Home uses the smaller existing portrait atlas;
+the fixed summary portrait and prose move up 10 px and 22 px respectively.
+The inbox replaces its dashed divider with space and prefixes the straight
+pane title with the matching desktop/TUI status symbol. No host app is replaced.
+
+The checks exercise the round bell and count changes against full-frame renders,
+check the rim bounds, and verify that status glyphs cannot become fallback `?`
+characters. Protocol tests cover explicit failure metadata and legacy snapshots;
+touch replays cover both characters, notification arrivals/removals under a
+finger, pane focus, question safety, and voice restoration.
