@@ -395,17 +395,7 @@ class _ApiEditorState extends State<_ApiEditor> {
                     _url,
                     'Base URL',
                     hint: 'https://api.example.com/v1',
-                    validator: (value) {
-                      final url = Uri.tryParse(value?.trim() ?? '');
-                      return url == null ||
-                              !['https', 'http'].contains(url.scheme) ||
-                              url.host.isEmpty ||
-                              url.userInfo.isNotEmpty ||
-                              url.hasQuery ||
-                              url.hasFragment
-                          ? 'Enter an API URL without credentials or query parameters.'
-                          : null;
-                    },
+                    validator: (value) => apiUrlProblem(value ?? ''),
                   ),
                 ],
                 _field(

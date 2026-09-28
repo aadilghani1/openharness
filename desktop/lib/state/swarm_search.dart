@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:collection/collection.dart' show compareNatural;
 
+import '../models/api_connections_controller.dart' show ApiConnection, ApiModel;
 import '../models/model_search_catalog.dart';
 import '../core/dsh_catalog.dart';
 import '../core/machine_resources.dart';
@@ -100,6 +101,77 @@ class SwarmSearchController extends ChangeNotifier {
   bool modelDownloadsVisible = false;
   bool isModelDownloadsRow(SwarmDestination? row) =>
       isModelMode && row?.id == 'model:downloads';
+
+  /// Saved APIs whose models are shown under them. An API such as OpenRouter lists hundreds, so
+  /// they stay folded until Enter on the API's row — or a search that matches them.
+  final expandedApis = <String>{};
+
+  /// [row] is a saved API's own row (not one of its models).
+  bool isApiRow(SwarmDestination? row) {
+    final entry = models?.entries[row?.modelId];
+    return entry?.api != null && entry?.apiModel == null;
+  }
+
+  /// [row] is one of a saved API's models, listed under the API's row.
+  bool isApiModelRow(SwarmDestination? row) =>
+      models?.entries[row?.modelId]?.apiModel != null;
+
+  /// Whether [row]'s API has its models shown under it, and the words at the end of its row: how
+  /// many models it lists, or that it is for tools. Null for any other row.
+  ({bool open, String hint})? apiRowState(SwarmDestination? row) {
+    if (!isModelMode || !isApiRow(row)) return null;
+    final api = models!.entries[row!.modelId]!.api!;
+    final listed = models!.manager.apis.models[api.id];
+    final count = listed?.models.length ?? 0;
+    return (
+      // Open while any of its models is listed under it: unfolded, or found by a search.
+      open: rows.any(
+        (shown) =>
+            models!.entries[shown.modelId]?.apiModel != null &&
+            models!.entries[shown.modelId]!.api!.id == api.id,
+      ),
+      hint: !api.servesModels
+          ? 'Tools'
+          : listed?.loading == true && count == 0
+          ? 'Loading…'
+          : count > 0
+          ? '$count ${count == 1 ? 'model' : 'models'}'
+          : 'Tools',
+    );
+  }
+
+  /// Enter on [row] shows or hides its API's models: it lists some, or is still reading them.
+  bool canExpandApi(SwarmDestination? row) {
+    if (!isModelMode || !isApiRow(row)) return false;
+    final api = models!.entries[row!.modelId]!.api!;
+    final listed = models!.manager.apis.models[api.id];
+    return api.servesModels &&
+        listed != null &&
+        (listed.models.isNotEmpty || listed.loading);
+  }
+
+  /// The API model [row] offers the focused harness, or null when it cannot run on it: only a
+  /// harness on the machine the APIs are saved on (this computer, in the desktop app), where the
+  /// key is kept, on an engine that can be re-pointed.
+  ({ApiConnection api, ApiModel model})? selectableApiModel(
+    SwarmDestination? row,
+  ) {
+    if (!isModelMode || modelSelectionEngine == null) return null;
+    final entry = models?.entries[row?.modelId];
+    final api = entry?.api, model = entry?.apiModel;
+    if (api == null || model == null || !api.servesModels) return null;
+    if (_modelChoices?.canRunLocally(modelSelectionEngine) == false) {
+      return null;
+    }
+    final machine = app.stateOf(_modelSelectionMachineId ?? '');
+    if (machine == null ||
+        machine.machine.machineId != models!.manager.apis.machineId ||
+        machine.connectionStatus != ConnectionStatus.connected) {
+      return null;
+    }
+    return (api: api, model: model);
+  }
+
   late final _showDownloadsRow = SwarmDestination(
     id: 'model:downloads',
     modelId: 'model:downloads',
@@ -169,7 +241,15 @@ class SwarmSearchController extends ChangeNotifier {
       if (subscription['status'] == 'Not signed in') return 'Not signed in';
       return 'Other account';
     }
-    if (entry.api != null) return 'Tools only';
+    if (entry.apiModel != null) {
+      final machine = app.stateOf(_modelSelectionMachineId ?? '');
+      if (machine != null &&
+          machine.machine.machineId != models!.manager.apis.machineId) {
+        return 'Other machine';
+      }
+      return 'Not available to this harness';
+    }
+    if (entry.api != null) return canExpandApi(row) ? null : 'Tools only';
     if (entry.gridModel?.unavailable != null) return 'Offline';
     if (entry.needsDownload) return 'Download first';
     if (entry.local case final local?) {
@@ -303,7 +383,9 @@ class SwarmSearchController extends ChangeNotifier {
           available['status'] != 'Not signed in' &&
           available['account'] == subscription['account'];
     }
-    return selectableGridModel(row) != null || canStartModelForUse(row);
+    return selectableGridModel(row) != null ||
+        selectableApiModel(row) != null ||
+        canStartModelForUse(row);
   }
 
   bool canStartModelForUse(SwarmDestination? row) {
@@ -585,7 +667,10 @@ class SwarmSearchController extends ChangeNotifier {
   String get createDescription => isMachineMode
       ? 'On the other computer:\n\n1. Install the app or CLI.\n2. Sign in to the same account.\n3. Set its password.\n\nThen select it here and Connect.'
       : isModelMode
-      ? 'Connect an API. Select a local model to download or start it.'
+      ? 'Add an API key\n\n'
+            'OpenRouter or a Custom API: Use its models to run a harness.\n'
+            'fal.ai or Replicate: harness agents can call it as a tool.\n\n'
+            'The key stays on this computer.'
       : 'Choose a harness, machine, and project.';
   SwarmGroupScope? _groupScope;
   bool get canGoBack => _groupScope != null;
@@ -881,6 +966,10 @@ class SwarmSearchController extends ChangeNotifier {
       ? modelDownloadsVisible
             ? 'Hide catalog'
             : 'Get models'
+      : canExpandApi(row)
+      ? expandedApis.contains(models!.entries[row!.modelId]!.api!.id)
+            ? 'Hide models'
+            : 'Show models'
       : canSelectModel(row)
       ? 'Use'
       : canGetModel(row)
@@ -1165,6 +1254,12 @@ class SwarmSearchController extends ChangeNotifier {
           .where((row) => models?.entries[row.modelId]?.needsDownload != true)
           .toList();
     }
+    if (isModelMode && matchQuery.trim().isEmpty) {
+      candidates = candidates.where((row) {
+        final entry = models?.entries[row.modelId];
+        return entry?.apiModel == null || expandedApis.contains(entry!.api!.id);
+      }).toList();
+    }
     if (scopedBranch case final branch?) {
       candidates = candidates.where((row) {
         final machine = app.stateOf(row.machineId ?? '');
@@ -1351,13 +1446,38 @@ class SwarmSearchController extends ChangeNotifier {
           modelDownloadsVisible ? _hideDownloadsRow : _showDownloadsRow,
         ];
       }
+      // An API's models are listed under its row, as a group: a search that matches a model and not
+      // its API still shows the API above it, and the models of two APIs never interleave.
+      final shown = {for (final row in rows) row.modelId};
+      for (final row in [...rows]) {
+        final entry = models?.entries[row.modelId];
+        final heading = entry?.apiModel == null
+            ? null
+            : models!.entries['model:api:${entry!.api!.id}']?.destination;
+        if (heading != null && shown.add(heading.modelId)) rows.add(heading);
+      }
+      final apiOrder = {
+        for (final (index, row) in (models?.rows ?? const []).indexed)
+          if (isApiRow(row)) models!.entries[row.modelId]!.api!.id: index,
+      };
+      int apiGroup(SwarmDestination row) =>
+          apiOrder[models?.entries[row.modelId]?.api?.id] ?? 0;
       final order = {for (final (index, row) in rows.indexed) row.id: index};
       rows.sort((a, b) {
         final section = modelSection(a).index.compareTo(modelSection(b).index);
         if (section != 0) return section;
         if (modelSection(a) != ModelSearchSection.local) {
           final create = (a.isCreate ? 1 : 0).compareTo(b.isCreate ? 1 : 0);
-          return create != 0 ? create : order[a.id]!.compareTo(order[b.id]!);
+          if (create != 0) return create;
+          if (modelSection(a) == ModelSearchSection.apis && !a.isCreate) {
+            final group = apiGroup(a).compareTo(apiGroup(b));
+            if (group != 0) return group;
+            final heading = (isApiRow(a) ? 0 : 1).compareTo(
+              isApiRow(b) ? 0 : 1,
+            );
+            if (heading != 0) return heading;
+          }
+          return order[a.id]!.compareTo(order[b.id]!);
         }
         final installed = (models?.entries[a.modelId]?.localRank ?? 1)
             .compareTo(models?.entries[b.modelId]?.localRank ?? 1);
@@ -1491,6 +1611,24 @@ class SwarmSearchController extends ChangeNotifier {
   SwarmSearchSelection? submit([SwarmDestination? row]) {
     final destination = row ?? selected;
     if (destination == null || !canSubmit(destination)) return null;
+    if (canExpandApi(destination)) {
+      final api = models!.entries[destination.modelId]!.api!;
+      final opening = expandedApis.add(api.id);
+      if (!opening) expandedApis.remove(api.id);
+      _filter();
+      final index = opening
+          ? rows.indexWhere(
+              (row) =>
+                  row.modelId?.startsWith(apiModelRowId(api.id, '')) == true,
+            )
+          : rows.indexWhere((row) => row.id == destination.id);
+      if (index >= 0) {
+        cursor = index;
+        _selectedId = selected!.id;
+      }
+      notifyListeners();
+      return null;
+    }
     if (isModelDownloadsRow(destination)) {
       modelDownloadsVisible = !modelDownloadsVisible;
       _filter();

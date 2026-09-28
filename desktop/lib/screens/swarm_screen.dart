@@ -18,6 +18,7 @@ import '../core/harness_file_store.dart';
 import '../core/project_folder.dart';
 import '../core/test_run.dart';
 import '../logging/debug_surface.dart';
+import '../models/api_connections_controller.dart' show agentOnApiModel;
 import '../models/models_panel.dart';
 import '../models/model_search_catalog.dart';
 import '../widgets/resting_section.dart' show confirmSwitchAnyway;
@@ -4754,6 +4755,24 @@ class _SwarmScreenState extends State<SwarmScreen> {
       }
 
       if (!current()) return;
+      // A saved API's model. Decided first: the rest of this branch reads "no grid model" as the
+      // pane's own login, and would move the agent there.
+      if (search.selectableApiModel(choice.destination) case (
+        :final api,
+        :final model,
+      )) {
+        final now = WorkspacePaneContext.focused(app)!;
+        _closeSearch();
+        if (!agentOnApiModel(now.agent, api, model.id)) {
+          await app.retargetAgentToApiModel(
+            now.pane.machineId,
+            now.agentId!,
+            connectionId: api.id,
+            modelId: model.id,
+          );
+        }
+        return;
+      }
       var selected = search.selectableGridModel(choice.destination);
       if (selected == null && search.canStartModelForUse(choice.destination)) {
         selected = await search.startModelForUse(

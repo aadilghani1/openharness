@@ -42,8 +42,9 @@ class _App extends ModelManagerTestApp {
   @override
   Future<Map<String, dynamic>> apiConnections(
     String machineId,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
     final action = payload['action'] as String;
     apiCalls.add(action);
     if (action == 'remove') {

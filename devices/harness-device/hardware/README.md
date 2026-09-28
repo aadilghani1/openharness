@@ -1,8 +1,8 @@
 # Harness device hardware
 
 Mechanical and electrical design files for the harness-device: a round USB companion with a
-466×466 AMOLED touchscreen, dual microphones, and a speaker, built around a Waveshare
-ESP32-S3-Touch-AMOLED-1.75C-compatible display module.
+466×466 AMOLED touchscreen, dual microphones, and a speaker, built around an ESP32-S3 and a
+1.75″ round AMOLED touch display module.
 
 ## Photos
 
