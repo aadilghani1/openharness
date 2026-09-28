@@ -624,7 +624,7 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![("enter", "its harnesses"), ("M-n", "new there"), ("C-t", "terminal there"), ("M-l", "link")];
         }
         PickerKind::Layout => { picker.set_rows(modal::layout_rows()); picker.hints = vec![("enter", "apply")] }
-        PickerKind::Help => { picker.keep_order = true; picker.set_rows(modal::mode_rows(app)); picker.hints = vec![("enter", "go")] }
+        PickerKind::Help => { picker.set_rows(modal::mode_rows(app)); picker.hints = vec![("enter", "go")] }
         PickerKind::Store => {
             let catalog = app.dsh.get(&app.fleet.local_id).cloned().unwrap_or_default();
             picker.set_rows(modal::store_rows(&catalog));

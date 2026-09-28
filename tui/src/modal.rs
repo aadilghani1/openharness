@@ -449,8 +449,9 @@ pub fn mode_rows(app: &App) -> Vec<Row> {
         ("*", "store", "the Harness Store", hint("choose-tree -S"))];
     let mut rows: Vec<Row> = modes.iter().map(|(p, t, d, k)| Row::new(format!("mode:{p}"), format!("{p} {t}")).detail(vec![span(*d, Style::default().add_modifier(ratatui::style::Modifier::DIM))]).right(k.clone())).collect();
     let prefix = crate::keys::name(&app.keymap.prefix);
-    rows.extend(app.keymap.prefix_table.iter().filter(|b| !b.note.is_empty()).map(|b| Row::new(format!("key:{}", b.command), b.note.clone()).extra(b.command.clone())
-        .lead(vec![span(format!("{prefix} {:<7}", crate::keys::name(&b.chord)), Style::default().fg(theme::fzf().hl))])));
+    // Each key as part of its line (as fzf would be given it): searched for as any word is
+    // (`C-b z`, `PPage`), lit only where the query matches.
+    rows.extend(app.keymap.prefix_table.iter().filter(|b| !b.note.is_empty()).map(|b| Row::new(format!("key:{}", b.command), format!("{prefix} {:<7} {}", crate::keys::name(&b.chord), b.note)).extra(b.command.clone())));
     rows
 }
 
