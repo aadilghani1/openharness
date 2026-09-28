@@ -95,8 +95,23 @@ dialogs use the same thin frame as a focused pane. Avoid raised cards, shadows,
 rounded action pills, and redundant headings. Tabs use concise text labels, with
 selection conveyed by background rather than bold type.
 
+The selected pane stays at full contrast; other panes receive a 30% neutral-gray
+veil (`#9D9D9D`) over their header and content, lifting dark backgrounds while
+softening text. In the default Graphite palette, inactive backgrounds render as
+`#404040` (RGB 64, 64, 64). Selection follows the existing click and keyboard
+focus actions. Keep the current pane clear while a menu or the tab strip
+temporarily owns keyboard focus. A single or zoomed pane stays clear.
+Waiting-question borders paint above the veil, at full strength.
+This is a paint treatment: retain terminal state and let the first click reach
+the pane underneath.
+
+![Selected center pane at full contrast, with synthetic terminal content](images/workspace-pane-focus.png)
+
 Status layouts and terminal palettes are separate choices. **Plain** always uses
-the terminal foreground, including PR status. Shell layouts use the terminal's
+the terminal foreground for context text. PR state icons keep their distinct
+green/purple/red/gray colors when Color is on, including in Plain. In Powerline
+layouts, that state color fills the final joined block, with contrasting icon
+and number inside. Shell layouts use the terminal's
 ANSI colors. The named Pastel Powerline, Catppuccin Powerline, Tokyo Night, and
 Gruvbox Rainbow presets carry their own status-only colors, resolved in the
 shared status formatter for both Flutter and AppKit. Color off makes any preset

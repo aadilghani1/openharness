@@ -50,6 +50,7 @@ private extension SwarmTabStrip {
     let tab = tabs[0]
     try checkTitlebar(activityTimer == nil, "A hidden native strip runs no animation timer")
     try tab.checkActivityDrawing(states: states)
+    try tab.checkShortNamesFit()
     update(["enabled": true, "reduceMotion": true, "activeId": "activity", "tabs": [
       ["id": "activity", "name": "desktop", "label": "1:desktop", "activity": payload("⠋", "Working", working: true)]
     ]])
@@ -66,7 +67,8 @@ private extension SwarmTabButton {
     }
     let width = preferredWidth
     let rect = activityRect
-    try checkTitlebar(labelText == "1:desktop  ", "Activity reserves its cell after the tab name")
+    try checkTitlebar(label.string == "1:desktop" && activitySpace == cellWidth * 2,
+      "Activity measures its gap and cell separately from the tab name")
     try checkTitlebar(rect.minX > ("1:desktop" as NSString).size(withAttributes: [.font: labelFont]).width,
       "The native activity follows the complete tab name")
     var pictures = Set<Data>()
@@ -112,9 +114,91 @@ private extension SwarmTabButton {
       frame.size.width = width
     }
   }
+
+  func checkShortNamesFit() throws {
+    for name in ["1:desktop", "2:device", "3:swarm", "4:daemons", "5:web", "6:tui", "7:mobile"] {
+      displayLabel = name
+      activity = SwarmTabActivity(["mark": "", "label": "Idle", "color": Int64(0xff999999)])
+      frame.size.width = preferredWidth
+      let available = activityRect.minX - cellWidth - contentRect.minX
+      try checkTitlebar(available >= max(label.size().width, emphasizedLabel.size().width),
+        "\(name) fits at its preferred width in both weights without a false ellipsis")
+    }
+  }
 }
 
 private extension SwarmContextButton {
+  func checkPullRequestIcons() throws {
+    let previous = Self.statusIcons
+    defer { Self.statusIcons = previous }
+    Self.statusIcons = SwarmHistoryIcons(assetURL: { asset in
+      guard let root = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_ASSETS"] else { return nil }
+      return URL(fileURLWithPath: root).appendingPathComponent(String(asset.dropFirst("assets/".count)))
+    })
+    font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    let states: [(String, String, Int64)] = [("Open", "git-pull-request", 0xff3fb950),
+      ("Merged", "git-merge", 0xffbc8cff), ("Closed", "git-pull-request-closed", 0xfff85149),
+      ("Draft", "git-pull-request-draft", 0xff9198a1)]
+    var shapes = Set<Data>()
+    var width: CGFloat?
+    for (state, name, color) in states {
+      var payload: [String: Any] = ["text": "#436", "label": "#436 \(state)",
+        "detail": "#436 \(state) — Open on GitHub", "interactive": true,
+        "iconAsset": "assets/octicons/\(name).svg", "iconColor": color,
+        "segments": [["text": "#436", "foreground": Int64(0xffdddddd)]]]
+      update(payload, enabled: true)
+      frame = NSRect(x: 0, y: 0, width: preferredWidth, height: 28)
+      let bitmap = renderedBitmap()
+      let expected = statusColor(color, fallback: .clear).usingColorSpace(.sRGB)!
+      let colored = (0..<13).contains { x in
+        (0..<28).contains { y in
+          guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), pixel.alphaComponent > 0.4 else { return false }
+          return abs(pixel.redComponent - expected.redComponent) < 0.03 &&
+            abs(pixel.greenComponent - expected.greenComponent) < 0.03 &&
+            abs(pixel.blueComponent - expected.blueComponent) < 0.03
+        }
+      }
+      try checkTitlebar(colored && accessibilityValue() as? String == "#436 \(state)" && toolTip?.contains(state) == true,
+        "\(state) draws its colored Octicon and retains the full accessible/hover status")
+      width = width ?? preferredWidth
+      try checkTitlebar(preferredWidth == width, "Changing PR state never moves the title bar")
+      if let capture = ProcessInfo.processInfo.environment["HARNESS_ACTIVITY_CAPTURE_DIR"] {
+        try bitmap.representation(using: .png, properties: [:])!.write(to:
+          URL(fileURLWithPath: capture).appendingPathComponent("native-pr-\(state).png"))
+      }
+      payload["iconColor"] = Int64(0xffdddddd)
+      update(payload, enabled: true)
+      shapes.insert(renderedPixels())
+      // A ribbon uses the PR state as its fill; the same Octicon and number
+      // must use contrasting ink inside it, not the standalone icon's tint.
+      payload["segmented"] = true
+      payload["roundedEnd"] = true
+      payload["segments"] = [["text": "#436", "foreground": Int64(0xff111111),
+        "background": color]]
+      update(payload, enabled: true)
+      frame.size.width = preferredWidth
+      let ribbon = renderedBitmap()
+      let cell = ("m" as NSString).size(withAttributes: [.font: textFont]).width
+      let iconInk = (Int(cell)..<Int(cell) + 13).contains { x in
+        (0..<28).contains { y in
+          guard let pixel = ribbon.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+          // The thin 13px strokes are antialiased at this fixture's 1x scale.
+          return pixel.alphaComponent > 0.9 && pixel.redComponent < expected.redComponent * 0.7 &&
+            pixel.greenComponent < expected.greenComponent * 0.7 &&
+            pixel.blueComponent < expected.blueComponent * 0.7
+        }
+      }
+      let fill = ribbon.colorAt(x: 1, y: 14)!.usingColorSpace(.sRGB)!
+      try checkTitlebar(iconInk && abs(fill.redComponent - expected.redComponent) < 0.03 &&
+        abs(fill.greenComponent - expected.greenComponent) < 0.03 &&
+        abs(fill.blueComponent - expected.blueComponent) < 0.03,
+        "\(state) draws contrasting icon ink inside the final colored ribbon block")
+      try checkTitlebar(abs(preferredWidth - width! - cell * 3) < 1,
+        "The PR ribbon reserves only the shared segment padding and end cap")
+    }
+    try checkTitlebar(shapes.count == 4, "All four PR states remain distinct with Color off")
+  }
+
   func checkThemeSymbolsAndCaps() throws {
     font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     textAlignment = .left
@@ -844,6 +928,7 @@ private extension SwarmTabStrip {
       abs(tail!.blueComponent - expectedJoin!.blueComponent) < 0.02,
       "The last arrow paints through to the adjacent PR background without a dark divider")
     try join.checkThemeSymbolsAndCaps()
+    try SwarmContextButton().checkPullRequestIcons()
     let contextFields: [[String: Any]] = ["machine", "project", "branch"].map { field in
       ["text": field, "field": field, "paneId": 7, "interactive": true,
        "detail": "Find harnesses: \(field)",

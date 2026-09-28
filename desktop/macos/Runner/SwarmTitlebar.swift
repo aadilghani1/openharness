@@ -730,8 +730,14 @@ private final class SwarmHistoryIcons {
   /// which is how the store tab once read "S".
   static func opens(_ asset: String) -> Bool {
     !asset.contains("..") && (asset == "assets/app_icon.png" || asset == "assets/harnesses.png" || asset == "assets/machines.svg" || asset == "assets/models.svg" || asset == "assets/harnesses.svg" || asset == "assets/models.png" || asset == "assets/store/polymath.png"
-      || asset.hasPrefix("assets/engine-icons/") && asset.hasSuffix(".png"))
+      || asset.hasPrefix("assets/engine-icons/") && asset.hasSuffix(".png")
+      || pullRequestAssets.contains(asset))
   }
+
+  static let pullRequestAssets: Set<String> = ["git-merge", "git-pull-request",
+    "git-pull-request-closed", "git-pull-request-draft"].reduce(into: []) {
+      $0.insert("assets/octicons/\($1).svg")
+    }
 
   private let cache = NSCache<NSString, NSImage>()
   private let assetURL: (String) -> URL?
@@ -1020,6 +1026,7 @@ private func drawStatusBranch(in rect: NSRect, color: NSColor) {
 /// Dart sends the same resolved segments that Flutter uses for its previews.
 /// Shapes are drawn in cells; no Powerline/Nerd Font installation is needed.
 private final class SwarmContextButton: SwarmIconButton {
+  fileprivate static var statusIcons = SwarmHistoryIcons()
   var onField: ((String, Int) -> Void)?
   fileprivate private(set) var fieldButtons: [SwarmContextButton] = []
   private var field: String?
@@ -1030,6 +1037,9 @@ private final class SwarmContextButton: SwarmIconButton {
   var textAlignment: NSTextAlignment = .right
   var contentPadding: CGFloat = 0
   private var detail: String?
+  private var iconAsset: String?
+  private var iconColor = NSColor.white
+  private var iconWidth: CGFloat { iconAsset == nil ? 0 : textFont.pointSize + cellWidth }
   private var segments: [SwarmStatusSegment] = []
   private var segmented = false
   private var roundedSeparators = false
@@ -1043,7 +1053,10 @@ private final class SwarmContextButton: SwarmIconButton {
   private var textFont: NSFont { font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
   private var cellWidth: CGFloat { ("m" as NSString).size(withAttributes: [.font: textFont]).width }
   private var naturalWidths: [CGFloat] {
-    segments.map { workspaceBarTextWidth($0.text, font: textFont) + ($0.branchSymbol ? cellWidth * 2 : 0) }
+    segments.enumerated().map { index, segment in
+      workspaceBarTextWidth(segment.text, font: textFont) + (segment.branchSymbol ? cellWidth * 2 : 0)
+        + (index == 0 ? iconWidth : 0)
+    }
   }
   var preferredWidth: CGFloat {
     if !fieldButtons.isEmpty { return fieldButtons.reduce(0) { $0 + $1.preferredWidth } }
@@ -1052,6 +1065,9 @@ private final class SwarmContextButton: SwarmIconButton {
 
   func update(_ context: [String: Any]?, enabled: Bool) {
     text = context?["text"] as? String ?? ""
+    let asset = context?["iconAsset"] as? String
+    iconAsset = asset.flatMap { SwarmHistoryIcons.pullRequestAssets.contains($0) ? $0 : nil }
+    iconColor = statusColor(context?["iconColor"], fallback: foreground)
     segmented = context?["segmented"] as? Bool == true
     roundedSeparators = context?["roundedSeparators"] as? Bool == true
     roundedStart = context?["roundedStart"] as? Bool == true
@@ -1087,7 +1103,7 @@ private final class SwarmContextButton: SwarmIconButton {
     detail = context?["detail"] as? String
     updateTooltip()
     isEnabled = enabled && context?["interactive"] as? Bool == true
-    setAccessibilityValue(text)
+    setAccessibilityValue(context?["label"] as? String ?? text)
     setAccessibilityHelp(toolTip)
     needsDisplay = true
     needsLayout = true
@@ -1116,14 +1132,21 @@ private final class SwarmContextButton: SwarmIconButton {
     guard !fieldButtons.isEmpty else { return }
     let natural = fieldButtons.map { $0.preferredWidth }
     var widths = natural
-    if natural.reduce(0, +) > bounds.width {
-      var low: CGFloat = 0, high = natural.max() ?? 0
+    var excess = max(0, widths.reduce(0, +) - bounds.width)
+    for (index, button) in fieldButtons.enumerated() where button.field == "branch" {
+      let reduction = min(excess, max(0, widths[index] - cellWidth * 12))
+      widths[index] -= reduction
+      excess -= reduction
+    }
+    if widths.reduce(0, +) > bounds.width {
+      let capped = widths
+      var low: CGFloat = 0, high = capped.max() ?? 0
       for _ in 0..<24 {
         let cap = (low + high) / 2
-        if natural.reduce(0, { $0 + min($1, cap) }) > bounds.width { high = cap }
+        if capped.reduce(0, { $0 + min($1, cap) }) > bounds.width { high = cap }
         else { low = cap }
       }
-      widths = natural.map { min($0, low) }
+      widths = capped.map { min($0, low) }
     }
     var x: CGFloat = 0
     for (index, button) in fieldButtons.enumerated() {
@@ -1137,7 +1160,7 @@ private final class SwarmContextButton: SwarmIconButton {
   override var mouseDownCanMoveWindow: Bool { false }
   private func attributed(_ value: String, _ color: NSColor, alignment: NSTextAlignment = .left) -> NSAttributedString {
     let paragraph = NSMutableParagraphStyle()
-    paragraph.lineBreakMode = .byTruncatingTail
+    paragraph.lineBreakMode = field == "branch" ? .byTruncatingMiddle : .byTruncatingTail
     paragraph.alignment = alignment
     return NSAttributedString(string: value, attributes: [
       .font: isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
@@ -1156,6 +1179,18 @@ private final class SwarmContextButton: SwarmIconButton {
     attachment.bounds = NSRect(x: 0, y: -1, width: width * 2, height: height)
     return NSAttributedString(attachment: attachment)
   }
+  private func drawPullRequestIcon(x: CGFloat, color: NSColor) {
+    guard let iconAsset else { return }
+    let size = textFont.pointSize
+    let rect = NSRect(x: x, y: (bounds.height - size) / 2, width: size, height: size)
+    let image = Self.statusIcons.image(engine: nil, asset: iconAsset, pointSize: size)
+    // Preserve the SVG at the current backing scale; tint only this layer.
+    NSGraphicsContext.current?.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
+    image.draw(in: rect)
+    color.setFill()
+    rect.fill(using: .sourceIn)
+    NSGraphicsContext.current?.cgContext.endTransparencyLayer()
+  }
   override func draw(_ dirtyRect: NSRect) {
     guard fieldButtons.isEmpty, bounds.width > 0, !segments.isEmpty else { return }
     NSGraphicsContext.saveGraphicsState()
@@ -1172,8 +1207,9 @@ private final class SwarmContextButton: SwarmIconButton {
         }
       }
       let inset = min(contentPadding, bounds.width / 2)
-      line.draw(in: NSRect(x: inset, y: (bounds.height - line.size().height) / 2,
-        width: max(0, bounds.width - inset * 2), height: line.size().height))
+      drawPullRequestIcon(x: inset, color: iconColor)
+      line.draw(in: NSRect(x: inset + iconWidth, y: (bounds.height - line.size().height) / 2,
+        width: max(0, bounds.width - inset * 2 - iconWidth), height: line.size().height))
       return
     }
     let natural = naturalWidths
@@ -1251,9 +1287,11 @@ private final class SwarmContextButton: SwarmIconButton {
         drawStatusBranch(in: NSRect(x: x + inset, y: bottom + height * 0.15,
           width: cellWidth, height: height * 0.7), color: segment.foreground)
       }
+      let leadingIconWidth = index == 0 ? iconWidth : 0
+      if leadingIconWidth > 0 { drawPullRequestIcon(x: x + inset, color: segment.foreground) }
       let line = attributed(segment.text, segment.foreground)
-      line.draw(in: NSRect(x: x + inset + symbolWidth, y: (bounds.height - line.size().height) / 2,
-        width: max(0, widths[index] - symbolWidth), height: line.size().height))
+      line.draw(in: NSRect(x: x + inset + symbolWidth + leadingIconWidth, y: (bounds.height - line.size().height) / 2,
+        width: max(0, widths[index] - symbolWidth - leadingIconWidth), height: line.size().height))
       x += width
     }
   }
@@ -1805,9 +1843,17 @@ private final class SwarmTabStrip: NSView {
       y: (bounds.height - toolHeight) / 2, width: daemonWidth, height: toolHeight)
     // Compact windows keep a scrolling tab list; context never overlaps it.
     let available = max(0, bounds.width - cell * 7 - shareSpace - daemonWidth)
-    let widths = tabs.map { max($0.minimumWidth, min($0.preferredWidth, available * 0.45)) }
+    let naturalStatus = contextButton.preferredWidth
+      + (hasFocusedModel ? focusedModelButton.preferredWidth + cell : 0)
+      + (hasPullRequest ? pullRequestButton.preferredWidth + (contextButton.isSegmented && pullRequestButton.isSegmented ? 0 : cell) : 0)
+    // Match Flutter: context reserves only what it needs, up to 40% / 52 cells.
+    // Extra room from a short tab list returns to the full context below.
+    // Keep a usable message line even on an empty tab when the daemon is on.
+    let statusBudget = min(max(naturalStatus, daemonWidth > 0 ? cell * 32 : 0), min(available * 0.4, cell * 52))
+    let tabBudget = max(0, available - statusBudget)
+    let widths = tabs.map { max($0.minimumWidth, min($0.preferredWidth, tabBudget)) }
     let total = widths.reduce(0, +)
-    let occupied = min(total, available * 0.45)
+    let occupied = min(total, tabBudget)
     let scrollX = cell
     scroll.frame = NSRect(x: scrollX, y: 0, width: occupied, height: bounds.height)
     document.frame = NSRect(x: 0, y: 0, width: max(occupied, total), height: bounds.height)
@@ -1927,7 +1973,9 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var minimumWidth: CGFloat {
     activityLabel == nil ? 0 : (labelPrefix as NSString).size(withAttributes: [.font: labelFont]).width + cellWidth * 4
   }
-  var preferredWidth: CGFloat { min(cellWidth * 24, ceil(max(label.size().width, emphasizedLabel.size().width) / cellWidth) * cellWidth + cellWidth * 2) }
+  private var activitySpace: CGFloat { activityLabel == nil ? 0 : cellWidth * 2 }
+  private var naturalContentWidth: CGFloat { max(label.size().width, emphasizedLabel.size().width) + activitySpace }
+  var preferredWidth: CGFloat { min(cellWidth * 24, ceil(naturalContentWidth + cellWidth * 2)) }
   var selected = false { didSet { if selected != oldValue { invalidateLabel(); updateAccessibility() } } }
   var attention = false { didSet { if attention != oldValue { invalidateLabel(); updateAccessibility() } } }
   var activity: SwarmTabActivity? {
@@ -1946,18 +1994,16 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     guard let colon = displayLabel.firstIndex(of: ":") else { return "" }
     return String(displayLabel[...colon])
   }
-  private var labelText: String {
-    guard activityLabel != nil else { return displayLabel }
-    // Keep the trailing gap and status cell even when idle has no glyph.
-    return displayLabel + "  "
+  private var contentRect: NSRect {
+    let available = max(0, bounds.width - cellWidth * 2)
+    let width = min(available, naturalContentWidth)
+    return NSRect(x: cellWidth + (available - width) / 2, y: 0, width: width, height: bounds.height)
   }
   private var activityRect: NSRect {
     if bounds.width < minimumWidth {
       return NSRect(x: bounds.midX - cellWidth / 2, y: 0, width: cellWidth, height: bounds.height)
     }
-    let available = max(0, bounds.width - cellWidth * 2)
-    let textWidth = min(available, label.size().width)
-    return NSRect(x: cellWidth + (available - textWidth) / 2 + textWidth - cellWidth,
+    return NSRect(x: contentRect.maxX - cellWidth,
       y: 0, width: cellWidth, height: bounds.height)
   }
   /// The strip holds the keyboard on this, the selected tab — drawn like a
@@ -2017,7 +2063,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       .trimmingCharacters(in: .whitespacesAndNewlines)
     let fullName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     var hints: [String] = []
-    if max(label.size().width, emphasizedLabel.size().width) > max(0, bounds.width - cellWidth * 2) { hints.append(displayLabel) }
+    if naturalContentWidth > max(0, bounds.width - cellWidth * 2) { hints.append(displayLabel) }
     if !fullName.isEmpty && fullName != visibleName && fullName != displayLabel { hints.append(name) }
     if let activityLabel { hints.append(activityLabel) }
     toolTip = hints.isEmpty ? nil : hints.joined(separator: "\n")
@@ -2049,7 +2095,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineBreakMode = .byTruncatingTail
     paragraph.alignment = .center
-    let label = NSAttributedString(string: labelText,
+    let label = NSAttributedString(string: displayLabel,
       attributes: [.font: labelFont,
         .foregroundColor: foreground, .paragraphStyle: paragraph])
     cachedLabel = label
@@ -2075,13 +2121,12 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       let y = contentCenterY - text.size().height / 2
       if activity != nil || attention {
         // Keep the number and trailing activity cell; only the name truncates.
-        let available = max(0, bounds.width - cellWidth * 2)
-        let x = cellWidth + (available - min(available, label.size().width)) / 2
+        let x = contentRect.minX
         let prefix = text.attributedSubstring(from: NSRange(location: 0, length: labelPrefix.utf16.count))
         prefix.draw(at: NSPoint(x: x, y: y))
         let start = labelPrefix.utf16.count
         let title = NSMutableAttributedString(attributedString:
-          text.attributedSubstring(from: NSRange(location: start, length: text.length - start - 2)))
+          text.attributedSubstring(from: NSRange(location: start, length: text.length - start)))
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
         paragraph.alignment = .left

@@ -30,6 +30,7 @@ import '../shared/theme/workspace_bar_style.dart';
 import '../sharing/share_harness_dialog.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/status_line_style.dart';
+import '../shared/theme/pull_request_icon.dart';
 import '../shortcuts/app_shortcuts.dart';
 import '../core/models.dart';
 import '../shortcuts/app_keymap.dart';
@@ -64,8 +65,8 @@ import '../widgets/layout_palette.dart';
 import '../widgets/move_pane_palette.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
-import '../widgets/status_line.dart';
 import '../widgets/workspace_status_line.dart';
+import '../widgets/workspace_pull_request_label.dart';
 import '../widgets/workspace_bar_control.dart';
 import '../widgets/session_work_dialog.dart';
 import '../widgets/web_download_button.dart';
@@ -1616,9 +1617,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 terminalTheme,
                 segmentOffset: parts?.segments.length ?? 0,
               ),
+              'label': _pullRequest.value!.label,
+              'iconAsset': pullRequestIconAsset(_pullRequest.value!.state),
+              'iconColor': pullRequestIconColor(
+                _pullRequest.value!.state,
+                terminalTheme,
+                color: prefs.color,
+              ).toARGB32(),
               'url': _pullRequest.value!.url.toString(),
-              'detail':
-                  'Open pull request #${_pullRequest.value!.number} on GitHub',
+              'detail': '${_pullRequest.value!.label} — Open on GitHub',
               'interactive': true,
             },
       'canReopen': app.canReopenLastClosed,
@@ -6268,7 +6275,53 @@ class _SwarmScreenState extends State<SwarmScreen> {
             shareWidth -
             daemonSpace,
       );
-      final tabBudget = contentWidth * .45;
+      final focused = WorkspacePaneContext.focused(app);
+      final prefs = appearancePrefsStore.value.prompt;
+      final parts = focused?.format(prefs);
+      final contextWidth = parts == null
+          ? 0.0
+          : workspaceStatusLineWidthsOf(
+              context,
+              parts,
+            ).fold(0.0, (a, b) => a + b);
+      final modelWidth = focused != null && modelPickerSupports(focused.engine)
+          ? workspaceBarTextSizeOf(context, focused.provider).width + cell.width
+          : 0.0;
+      final joined =
+          prefs.statusStyle.segmented &&
+          parts != null &&
+          parts.segments.isNotEmpty &&
+          pr != null;
+      final prBackground = !joined
+          ? null
+          : statusLinePaintSegments(
+              pullRequestStatusLineParts(
+                number: pr.number,
+                state: pr.state,
+                style: prefs.statusStyle,
+              ),
+              theme,
+              color: prefs.color,
+              segmentOffset: parts.segments.length,
+            ).single.background;
+      final prWidth = pr == null
+          ? 0.0
+          : WorkspacePullRequestLabel.widthOf(
+                  context,
+                  pr.number,
+                  style: prefs.statusStyle,
+                ) +
+                (joined ? 0 : cell.width);
+      // Reserve only the context's actual width, capped at 40% / 52 cells.
+      // Tabs get the rest; unused tab space flows back to the full context.
+      final statusBudget = math.min(
+        math.max(
+          contextWidth + modelWidth + prWidth,
+          _slotShown ? cell.width * 32 : 0,
+        ),
+        math.min(contentWidth * .4, cell.width * 52),
+      );
+      final tabBudget = math.max(0.0, contentWidth - statusBudget);
       _tabWidths = [
         for (var i = 0; i < labels.length; i++)
           math.max(
@@ -6287,29 +6340,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ];
       final total = _tabWidths.fold(0.0, (sum, width) => sum + width);
       final tabsWidth = math.min(total, tabBudget);
-      final focused = WorkspacePaneContext.focused(app);
-      final prefs = appearancePrefsStore.value.prompt;
-      final parts = focused?.format(prefs);
-      final prParts = pr == null
-          ? null
-          : pullRequestStatusLineParts(
-              number: pr.number,
-              state: pr.state,
-              style: prefs.statusStyle,
-            );
-      final joined =
-          prefs.statusStyle.segmented &&
-          parts != null &&
-          parts.segments.isNotEmpty &&
-          prParts != null;
-      final prBackground = joined
-          ? statusLinePaintSegments(
-              prParts,
-              theme,
-              color: prefs.color,
-              segmentOffset: parts.segments.length,
-            ).first.background
-          : null;
       _revealSelectedTab(tabsWidth);
       // The context, and the pull request beside it: exactly the bar from
       // before daemons existed, which the daemon's line covers only while
@@ -6359,22 +6389,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 child: WorkspaceBarControl(
                   key: const ValueKey('workspace-pull-request'),
                   label: '${pr.label} — Open on GitHub',
-                  tooltip: 'Open pull request #${pr.number} on GitHub',
+                  tooltip: '${pr.label} — Open on GitHub',
                   onPressed: _shortcutsEnabled
                       ? () => _openFocusedPullRequest(pr.url.toString())
                       : null,
-                  builder: (context, emphasized) => SizedBox(
-                    height: toolHeight,
-                    child: Center(
-                      widthFactor: 1,
-                      child: StatusLine(
-                        parts: prParts!,
-                        workspaceBar: true,
-                        emphasized: emphasized,
-                        color: prefs.color,
-                        segmentOffset: parts?.segments.length ?? 0,
-                      ),
-                    ),
+                  builder: (context, emphasized) => WorkspacePullRequestLabel(
+                    number: pr.number,
+                    state: pr.state,
+                    emphasized: emphasized,
+                    color: prefs.color,
+                    style: prefs.statusStyle,
+                    segmentOffset: parts?.segments.length ?? 0,
                   ),
                 ),
               ),

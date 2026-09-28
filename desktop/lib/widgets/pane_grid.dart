@@ -1177,18 +1177,19 @@ class _PaneCell extends StatelessWidget {
   Widget _build(BuildContext context) {
     grid.AppTheme.watch(context);
     final focused = visible && notifier.isPaneFocused(pane.id);
+    // Keep the selected pane clear while a menu or the tab strip owns keyboard
+    // focus. This is paint only: inactive terminals stay mounted and clickable.
+    final dimmed = !_single && notifier.focusedPaneId != pane.id;
     final agentId = pane.agentId;
     final blocked =
         agentId != null &&
         notifier.questionFor(pane.machineId, agentId) != null;
     return Listener(
-      // Translucent so the press still reaches the renderer underneath: on
-      // macOS the terminal is a WebView and AppKit gives it first responder on
-      // its own, so this only has to keep the app's idea of the current tile in
-      // step with the one the keyboard already went to.
+      // The same press selects the pane and reaches its terminal or viewer.
       behavior: HitTestBehavior.translucent,
       onPointerDown: (_) => notifier.focusPane(pane.id),
       child: Container(
+        key: ValueKey('pane-frame:${pane.id}'),
         decoration: BoxDecoration(
           // UNCHANGED, and deliberately: the terminal renders its own background
           // inside this box, so a tile that stops matching the window colour
@@ -1206,19 +1207,20 @@ class _PaneCell extends StatelessWidget {
             terminalPaneBorder(focused: !_single && focused),
           ),
         ),
-        // Attention, drawn OVER the terminal and inside the border above, so a
-        // pane can carry both at once — this one is blocked AND focused is a
-        // normal state, not a conflict to resolve. It is amber and 2px against
-        // the border's 1px accent precisely so the two never read as each
-        // other. Unlike focus, it shows on a single pane too: with one tile
-        // there is nowhere else focus could be, but there is very much a
-        // question waiting.
-        foregroundDecoration: blocked
-            ? BoxDecoration(
-                border: Border.all(color: grid.AppPalette.warn, width: 2),
-                borderRadius: BorderRadius.circular(_paneRadius),
-              )
-            : null,
+        // A neutral gray veil lifts inactive backgrounds and softens their text
+        // without changing terminal colors. Paint attention above the veil so
+        // a waiting question keeps its full-strength amber rim. Keep this
+        // decoration present even when clear: inserting/removing it would
+        // reparent the terminal and lose its input, scroll and selection state.
+        foregroundDecoration: BoxDecoration(
+          color: dimmed
+              ? const Color(0xFF9D9D9D).withValues(alpha: .30)
+              : null,
+          border: blocked
+              ? Border.all(color: grid.AppPalette.warn, width: 2)
+              : null,
+          borderRadius: BorderRadius.circular(_paneRadius),
+        ),
         // Keeps a terminal's constant repainting inside its own layer instead
         // of dirtying the whole grid. No key: nothing reads this boundary, it
         // only has to exist.
