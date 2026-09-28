@@ -84,6 +84,46 @@ describe('process-owned hook server', () => {
     expect(handlers.onRegistered).not.toHaveBeenCalled()
   })
 
+  it('accepts a Herdr hint from a hook installed by an earlier build, and resolves by its tmux pane only', async () => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        engine: 'codex',
+        tmuxPane: '%41',
+        sessionId: '019fea92-e31a-7692-9c35-f616e9d458b7',
+        runtimeHints: [
+          { backend: 'tmux', paneId: '%41' },
+          { backend: 'herdr', paneId: 'w1:p1', sessionName: 'default', socketPath: '/tmp/herdr.sock' },
+        ],
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(resolveHookAgent).toHaveBeenCalledWith({
+      engine: 'codex', tmuxPane: '%41', runtimeHints: [{ backend: 'tmux', paneId: '%41' }], callerPid: undefined,
+    })
+  })
+
+  it('ignores a hook whose only terminal is a Herdr pane', async () => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        engine: 'claude',
+        sessionId: 'session-1',
+        runtimeHints: [{ backend: 'herdr', paneId: 'w1:p1', sessionName: 'default' }],
+      }),
+    })
+
+    expect(await response.json()).toEqual({ ignored: true, reason: 'not_in_terminal' })
+    expect(resolveHookAgent).not.toHaveBeenCalled()
+  })
+
   it('rejects hooks outside configured terminal contexts before attempting process resolution', async () => {
     const resolveHookAgent = vi.fn(async () => null)
     const { handlers, base, headers } = await start({ resolveHookAgent })
@@ -426,6 +466,40 @@ describe('requests must name this server', () => {
     }
     expect(await send(base, 'GET', '/api/status', { host: `localhost:${port}`, origin: `http://localhost:${port}` })).toBe(200)
     expect(await send(base, 'GET', '/api/status', { host: `127.0.0.1:${port}`, origin: 'http://evil.example' })).toBe(403)
+  })
+})
+
+describe('the trust group endpoints', () => {
+  const local = { 'x-adapter-local': '1', 'content-type': 'application/json' }
+  const key = Buffer.alloc(32, 7).toString('base64')
+  const machineId = 'a'.repeat(32)
+
+  it('trust-peer takes only a real key and machine id, and trims the label', async () => {
+    const onTrustLinkedPeer = vi.fn(() => ({ status: 200, body: { ok: true } }))
+    const { base } = await start({ onTrustLinkedPeer })
+    const post = (body: unknown, headers: Record<string, string> = local) =>
+      fetch(`${base}/api/link/trust-peer`, { method: 'POST', headers, body: JSON.stringify(body) })
+    for (const bad of [{ pub: 'x', machineId }, { pub: key, machineId: 'nope' }, { machineId }, { pub: `${key}AA`, machineId }]) {
+      expect((await post(bad)).status, JSON.stringify(bad)).toBe(400)
+    }
+    expect((await post({ pub: key, machineId }, { 'content-type': 'application/json' })).status).toBe(403)
+    expect((await post({ pub: key, machineId, label: `  ${'n'.repeat(80)} ` })).status).toBe(200)
+    expect(onTrustLinkedPeer).toHaveBeenCalledTimes(1)
+    expect(onTrustLinkedPeer).toHaveBeenCalledWith({ pub: key, machineId, label: 'n'.repeat(60) })
+  })
+
+  it('group remove and sync are local writes; list is readable', async () => {
+    const onGroupRemove = vi.fn(() => ({ status: 200, body: { label: 'b', fingerprint: 'fp' } }))
+    const onGroupSync = vi.fn(() => ({ status: 200, body: { ok: true } }))
+    const onGroupList = vi.fn(() => ({ status: 200, body: { members: [] } }))
+    const { base } = await start({ onGroupRemove, onGroupSync, onGroupList })
+    expect((await fetch(`${base}/api/group/remove`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"selector":"1"}' })).status).toBe(403)
+    expect((await fetch(`${base}/api/group/sync`, { method: 'POST' })).status).toBe(403)
+    expect((await fetch(`${base}/api/group/remove`, { method: 'POST', headers: local, body: '{"selector":"  "}' })).status).toBe(400)
+    expect((await fetch(`${base}/api/group/remove`, { method: 'POST', headers: local, body: '{"selector":" 1 "}' })).status).toBe(200)
+    expect(onGroupRemove).toHaveBeenCalledWith('1')
+    expect((await fetch(`${base}/api/group/sync`, { method: 'POST', headers: local })).status).toBe(200)
+    expect(await (await fetch(`${base}/api/group`)).json()).toEqual({ members: [] })
   })
 })
 

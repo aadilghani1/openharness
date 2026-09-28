@@ -4,9 +4,9 @@
  * A pane keeps an answered dialog in its scrollback and paints the next one under it, so the live dialog is
  * always the LAST one on screen. Every reader anchors low (a footer, the bottom-most rows) and walks UP for
  * the rest: the question, the title, the command, a frame's top. Nothing at or above an earlier dialog's
- * end belongs to the live one. Read across it, an unframed prompt was titled — and its dialog read by the
- * pair's classifier (pair/classify.ts) — by the PREVIOUS prompt's header and command (`Approve Bash
- * command: npm test` over `python3 wipe.py --all`).
+ * end belongs to the live one. Read across it, an unframed prompt was titled by the PREVIOUS prompt's
+ * header and command (`Approve Bash command: npm test` over `python3 wipe.py --all`), under that prompt's
+ * very requestId.
  *
  * A dialog ends in its key hints on a line of their own, right under its rows. Both halves are needed:
  * prose can mention a key (`Make Esc close the modal`), and a numbered list is not a dialog. Every engine's

@@ -4,6 +4,7 @@ library;
 import 'package:flutter/foundation.dart' show immutable;
 
 import 'runtime_model_name.dart';
+import 'agent_git_context.dart';
 
 enum MachineAuthMode { managed, remote, self, provider }
 
@@ -326,6 +327,9 @@ class Agent {
   final GridNote? gridNote;
   final String? parentAgentId;
   final AgentProject? project;
+  final AgentGitContext? gitContext;
+  AgentProject? get displayProject =>
+      gitContext?.displayProject(project) ?? project;
 
   /// The CLI's transcript/hook activity time, not its registry refresh time.
   final DateTime? lastActivityAt;
@@ -432,6 +436,7 @@ class Agent {
     this.gridNote,
     this.parentAgentId,
     this.project,
+    this.gitContext,
     this.lastActivityAt,
     this.lastOpenedAt,
     this.tokensUsed,
@@ -564,6 +569,7 @@ class Agent {
       gridNote: GridNote.fromWire(grid?['note']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
       project: AgentProject.fromJson(j['project']),
+      gitContext: AgentGitContext.fromJson(j['gitContext']),
       lastActivityAt: j['updatedAt'] is String
           ? DateTime.tryParse(j['updatedAt'] as String)
           : null,
@@ -606,6 +612,7 @@ class Agent {
 
   Agent copyWith({
     String? name,
+    AgentGitContext? gitContext,
     String? status,
     bool? terminalAvailable,
     DateTime? lastOpenedAt,
@@ -625,6 +632,7 @@ class Agent {
     gridNote: gridNote,
     parentAgentId: parentAgentId,
     project: project,
+    gitContext: gitContext ?? this.gitContext,
     lastActivityAt: lastActivityAt,
     lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,
     tokensUsed: tokensUsed,

@@ -1,5 +1,5 @@
 // The Flutter status bar's geometry, for comparing the bar with daemons off
-// against the bar from before daemons existed
+// against the current main bar without daemons (0e4724cd, including Share)
 // (test/fixtures/status_bar_before_daemons.json).
 //
 // Only what both versions have is read, so the same code measures either:

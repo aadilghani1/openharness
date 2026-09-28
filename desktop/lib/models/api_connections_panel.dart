@@ -377,6 +377,13 @@ class _ApiEditorState extends State<_ApiEditor> {
                   ],
                 ),
                 const SizedBox(height: 12),
+                if (controller.app.viewer != null) ...[
+                  Text(
+                    'Saved on ${controller.hostLabel}',
+                    style: AppType.monoMeta(color: AppPalette.textSecondary),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 if (custom || _advanced) ...[
                   _field(
                     _name,
@@ -463,7 +470,7 @@ class _ApiEditorState extends State<_ApiEditor> {
                   children: [
                     Expanded(
                       child: Text(
-                        'Stored on this computer.',
+                        'Stored on ${controller.hostLabel}.',
                         style: AppType.monoMeta(
                           color: AppPalette.textSecondary,
                         ),

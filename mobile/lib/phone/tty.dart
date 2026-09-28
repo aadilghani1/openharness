@@ -45,8 +45,16 @@ class Tty {
 
   /// Secondary TEXT in the chrome: labels, details, hints. brightBlack on the ground is 3.1:1, too
   /// faint to read at a glance on a phone; this is the agent's own faint text, about 4.9:1.
-  Color get faint =>
-      Color.alphaBlend(theme.foreground.withValues(alpha: 0.52), theme.background);
+  Color get faint => Color.alphaBlend(
+    theme.foreground.withValues(alpha: 0.52),
+    theme.background,
+  );
+
+  /// Hints stay readable on raised form fields, as well as on the terminal ground.
+  Color get placeholder => Color.alphaBlend(
+    theme.foreground.withValues(alpha: 0.60),
+    theme.background,
+  );
   Color get green => theme.green;
   Color get yellow => theme.yellow;
   Color get red => theme.red;
@@ -110,7 +118,10 @@ class Tty {
     backgroundColor: background,
     fontWeight: weight,
     // Tabular by construction, but ligatures would glue `->` and `!=` in paths and branch names.
-    fontFeatures: const [FontFeature.disable('liga'), FontFeature.disable('calt')],
+    fontFeatures: const [
+      FontFeature.disable('liga'),
+      FontFeature.disable('calt'),
+    ],
   );
 }
 

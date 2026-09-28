@@ -231,14 +231,13 @@ describe('a stale `Approve …` header (regression: a header from an earlier dia
   const project = { permission: true, cwd: '/tmp/project' }
 
   it('pickAnswer: an approval is named by its own text only, never a prefix either way', () => {
-    const exact = { exact: true }
-    expect(pickAnswer({ 'Approve Bash command': 'Yes' }, 'Approve Bash command: rm -rf ~/projects', new Set(), exact)).toBeNull()
-    expect(pickAnswer({ 'Approve Bash command: npm test': 'Yes' }, 'Approve Bash command', new Set(), exact)).toBeNull()
-    expect(pickAnswer({ 'Approve Bash command: rm -rf ~/pro': 'Yes' }, 'Approve Bash command: rm -rf ~/projects', new Set(), exact)).toBeNull()
-    expect(pickAnswer({ 'approve bash command:  rm -rf ~/projects…': 'No' }, 'Approve Bash command: rm -rf ~/projects', new Set(), exact))
+    expect(pickAnswer({ 'Approve Bash command': 'Yes' }, 'Approve Bash command: rm -rf ~/projects', new Set())).toBeNull()
+    expect(pickAnswer({ 'Approve Bash command: npm test': 'Yes' }, 'Approve Bash command', new Set())).toBeNull()
+    expect(pickAnswer({ 'Approve Bash command: rm -rf ~/pro': 'Yes' }, 'Approve Bash command: rm -rf ~/projects', new Set())).toBeNull()
+    expect(pickAnswer({ 'approve bash command:  rm -rf ~/projects…': 'No' }, 'Approve Bash command: rm -rf ~/projects', new Set()))
       .toEqual({ key: 'approve bash command:  rm -rf ~/projects…', value: 'No' })
-    // A question the agent asks keeps its prefix rule (the device cuts long labels).
-    expect(pickAnswer({ 'Which drink would': 'Tea' }, 'Which drink would you like?', new Set())).not.toBeNull()
+    // A truncated device label needs requestId-backed positional matching too.
+    expect(pickAnswer({ 'Which drink would': 'Tea' }, 'Which drink would you like?', new Set())).toBeNull()
   })
 
   it('types nothing into a permission prompt for a no-requestId answer keyed by an earlier prompt\'s header', async () => {
@@ -312,13 +311,14 @@ describe('keys and matching', () => {
     expect(matchRow(rows, 'no')?.number).toBe('1')   // …but matches exactly
   })
 
-  it('pickAnswer: a prefix of 6+ characters names a question in either direction; a used one is not taken twice', () => {
+  it('pickAnswer: only the complete question matches; a used answer is not taken twice', () => {
     const answers = { 'Which drink would you like? (pick one)': 'Tea' }
-    expect(pickAnswer(answers, 'Which drink would you like?', new Set())).toEqual({ key: 'Which drink would you like? (pick one)', value: 'Tea' })
-    expect(pickAnswer({ 'Which drink would': 'Tea' }, 'Which drink would you like?', new Set())).toEqual({ key: 'Which drink would', value: 'Tea' })
-    expect(pickAnswer(answers, 'Which drink would you like?', new Set(['Which drink would you like? (pick one)']))).toBeNull()
+    expect(pickAnswer(answers, 'Which drink would you like?', new Set())).toBeNull()
+    expect(pickAnswer({ 'Which drink would': 'Tea' }, 'Which drink would you like?', new Set())).toBeNull()
+    expect(pickAnswer(answers, 'Which drink would you like? (pick one)', new Set())).toEqual({ key: 'Which drink would you like? (pick one)', value: 'Tea' })
+    expect(pickAnswer(answers, 'Which drink would you like? (pick one)', new Set(['Which drink would you like? (pick one)']))).toBeNull()
     expect(pickAnswer({ a: '1' }, 'Other?', new Set(['a']), { positional: true })).toBeNull()
-    expect(pickAnswer({ 'Size? (S or M)': 'M' }, 'Size?', new Set())).toBeNull()   // a question under 6 must match exactly
+    expect(pickAnswer({ 'Size? (S or M)': 'M' }, 'Size?', new Set())).toBeNull()
     expect(pickAnswer({ 'size?': 'M' }, 'Size?', new Set())).toEqual({ key: 'size?', value: 'M' })
   })
 })

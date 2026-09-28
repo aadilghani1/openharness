@@ -47,7 +47,9 @@ Keep mouse access useful without adding duplicate floating controls. Clickable
 text shows a hand cursor and bold text on hover, press, and keyboard focus.
 Preserve the underlying colors, including filled status segments. Reserve both
 text weights during layout so emphasis never shifts neighboring controls.
-Resting controls stay unboxed. Tooltips describe the
+Resting controls stay unboxed, except the persistent Share action: its flat
+primary accent fill makes collaboration visible at the top-right corner.
+Tooltips describe the
 action, not merely the text. Omit a tooltip that repeats the visible name;
 show the full name when truncated, or a different underlying name. A model
 selector says `Switch model · Subscription or local models`; include its full
@@ -104,9 +106,11 @@ shared app bar. A dependent viewer uses its owner's context. Keep internal
 worktree paths and machinery out of everyday labels.
 
 Machine opens the shared picker scoped to that machine. Project opens its harnesses across
-known checkouts and machines. Branch narrows that project to the exact named
-branch. Hide detached commit hashes from the bar. These are navigation actions;
-they do not check out a branch.
+known checkouts and machines. With session Git context, Branch opens Branches and pull requests: checked-out and recorded branches,
+with PR history. Temporary checkout paths stay out of these labels and details.
+Older daemons keep exact-branch project search. Hide detached commit hashes from
+the bar. Multiple branches or unavailable Git data use plain context text, without a
+branch symbol. These are navigation actions; they do not check out a branch.
 The PR label opens that PR. Each field gets its own accessible link, tooltip, and
 the shared hover treatment, including in joined Agnoster segments.
 

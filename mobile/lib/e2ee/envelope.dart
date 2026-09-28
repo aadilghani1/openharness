@@ -44,6 +44,10 @@ const Set<String> encryptedDownTypes = {
   // outright beside it — this one among them. Sent in the clear it came back
   // `E2EE_REQUIRED`, which on this screen read as a folder with no branches.
   'git_project_info',
+  // The harness's branch and pull-request history is a machine RPC too.
+  'git_pull_request',
+  // The trust-group roster swap (`viewer/group_sync.dart`): the keys every member trusts.
+  'group_sync',
   'codex_profiles_list',
   'codex_profile_link',
   // Asks the machine to read its OWN agent accounts' usage (cli/src/lib/accountUsage.ts). Missing
@@ -103,8 +107,13 @@ bool sealsDown(String type, {required bool strictDown}) =>
     encryptedDownTypes.contains(type) ||
     (strictDown && strictDownTypes.contains(type));
 
-Uint8List _aad(int v, String type, String dbSessionId, String k, String epoch) =>
-    utf8Bytes('$v|$type|$dbSessionId|$k|$epoch');
+Uint8List _aad(
+  int v,
+  String type,
+  String dbSessionId,
+  String k,
+  String epoch,
+) => utf8Bytes('$v|$type|$dbSessionId|$k|$epoch');
 
 /// Seals [payload] under [key]: [k] is 'p' (pairwise session) or 'g' (the machine's group key,
 /// which also carries an [epoch]).
@@ -140,7 +149,11 @@ Map<String, dynamic>? unwrapPayload(
 ) {
   final v = env['v'], k = env['k'], n = env['n'], ct = env['ct'];
   final epoch = env['epoch'] ?? '';
-  if (v is! int || k is! String || n is! int || ct is! String || epoch is! String) {
+  if (v is! int ||
+      k is! String ||
+      n is! int ||
+      ct is! String ||
+      epoch is! String) {
     return null;
   }
   final Uint8List sealed;
@@ -149,11 +162,17 @@ Map<String, dynamic>? unwrapPayload(
   } on FormatException {
     return null;
   }
-  final clear = aeadOpen(key, n, _aad(v, frameType, dbSessionId ?? '', k, epoch), sealed);
+  final clear = aeadOpen(
+    key,
+    n,
+    _aad(v, frameType, dbSessionId ?? '', k, epoch),
+    sealed,
+  );
   return clear == null ? null : jsonObjectOf(clear);
 }
 
-bool isWrapped(Object? payload) => payload is Map && payload.containsKey('__e2e');
+bool isWrapped(Object? payload) =>
+    payload is Map && payload.containsKey('__e2e');
 
 /// UTF-8 JSON that must be an object; null for anything else.
 Map<String, dynamic>? jsonObjectOf(List<int> utf8Json) {

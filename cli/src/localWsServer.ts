@@ -59,8 +59,10 @@ export interface LocalWsServerOptions {
   localClient?: () => { kind: string; name: string; machineId?: string } | null
   /** The desktop app opened an agent's terminal — which agent, and on which machine. Lets the dial follow
    *  the window, so the two screens stay one desk. */
-  /** Explicit app focus, including clear/disconnect, for voice routing independent of the dial. */
+  /** Explicit app focus, including a live empty workspace, for device routing. */
   onAppFocusState?: (machineId: string, agentId: string | null, connId: string, expectedRevision?: string) => unknown
+  /** A registered desktop connection closed. Never interpret this as live empty-workspace focus. */
+  onAppDisconnect?: (machineId: string, connId: string) => void
   onDevicePrepareOpened?: (operationId: string, agentId: string) => void
   onAppFocus?: (machineId: string, agentId: string) => void
   /** Every agent the window currently has a tile for, across all its machines. */
@@ -93,6 +95,9 @@ export interface LocalWsServerOptions {
   onRouteSend?: (agentId: string, text: string) => { ok: true } | { ok: false; machine: string; reason: string }
   /** The dial right now, sent to a window the moment it connects — it may have missed the announcement. */
   dialStatus?: () => { attached: boolean; fw?: string; updating?: string }
+  /** Questions still waiting on the user, as the `commander_question` frames that announced them. A window
+   *  that connects after one was asked is handed them, so a terminal opened late still sees who is blocked. */
+  openQuestions?: () => Frame[]
   /**
    * The window answering a `voice_route_request` — words spoken into the dial that IT was asked to route.
    *
@@ -127,6 +132,9 @@ export interface LocalWsServerOptions {
    * Absent: `daemon_plate { requestId, error: 'UNSUPPORTED' }`.
    */
   onDaemonPlate?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
+  onSelectionReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
+  onVisitReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
+  onFormReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
 }
 
 /** The pair brain's frames from a window (pair/protocol.ts DAEMON_IN_TYPES). */
@@ -180,6 +188,8 @@ export interface LocalWsServer {
    * (pair/learn/approval.ts). Null over the daemon's Unix socket, or once the connection is gone.
    */
   peerPort: (connId: string) => number | null
+  /** Exact local socket, including sockets viewing a remote machine; never relayed. */
+  sendToWindow: (connId: string, frame: Frame) => boolean
 }
 
 function isLoopback(address: string | undefined): boolean {
@@ -243,7 +253,22 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
   }
   if (swarms.length === 0) return null
   const active = typeof p.active === 'string' && swarms.some((s) => s.id === p.active) ? p.active : swarms[0].id
-  return { active, swarms }
+  // Absent from a window that predates the field, and absent is the honest answer: the far side falls
+  // back to deriving a shape from the count, which is what it did before any window sent one.
+  const tiles: AppSwarms['tiles'] = []
+  for (const row of Array.isArray(p.tiles) ? p.tiles : []) {
+    if (!row || typeof row !== 'object') continue
+    const t = row as Record<string, unknown>
+    const n = (v: unknown): number | null =>
+      typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1000, Math.round(v))) : null
+    const x1 = n(t.x1), y1 = n(t.y1), x2 = n(t.x2), y2 = n(t.y2)
+    // A tile with no area is not a tile. Dropping it here rather than on the device keeps the far
+    // side's rule simple: every row it receives is drawable.
+    if (x1 === null || y1 === null || x2 === null || y2 === null || x2 <= x1 || y2 <= y1) continue
+    tiles.push({ x1, y1, x2, y2, agentId: typeof t.agentId === 'string' ? t.agentId : '' })
+    if (tiles.length === 24) break   // the window's own ceiling, same as the rows above
+  }
+  return { active, swarms, tiles }
 }
 
 function binaryBytes(raw: RawData): Uint8Array {
@@ -275,6 +300,10 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     // clients that insist on proposing one; it carries no authority and is never inspected.
     handleProtocols: (protocols) => [...protocols][0] ?? false,
   })
+  // One desktop can have a connection per machine. Once a live window reports its selected pane,
+  // background terminal attachments on ANY of those connections must not overwrite that selection.
+  const explicitFocusClients = new Set<string>()
+  const windowSinks = new Map<string, LocalClientSink>()
 
   const onUpgrade = (req: http.IncomingMessage, socket: Socket, head: Buffer): void => {
     const path = (req.url ?? '').split('?')[0]
@@ -330,6 +359,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         try { ws.send(frame, { binary: true }); return true } catch { return false }
       },
     }
+    // A reading cursor belongs to this physical desk. A terminal's upstream
+    // event feed cannot manufacture device gestures; only sendToWindow can.
+    const terminalSink: LocalClientSink = {
+      ...sink,
+      sendFrame: (frame) => frame.type === 'dial_selection' || frame.type === 'dial_visit' || frame.type === 'dial_form' || sink.sendFrame(frame),
+    }
 
     const close = (code: number, reason: string): void => {
       try { ws.close(code, reason) } catch { ws.terminate() }
@@ -352,7 +387,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           if (typeof payload.shareId === 'string') {
             if (!options.shareRelay) { close(4403, 'Sharing is unavailable'); return }
             try {
-              relay = await options.shareRelay.acquire(requestedMachineId, payload.shareId, sink, close)
+              relay = await options.shareRelay.acquire(requestedMachineId, payload.shareId, terminalSink, close)
               if (ws.readyState !== WebSocket.OPEN) { relay.detach(); return }
               selected = true
             } catch (error) {
@@ -363,11 +398,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           }
           if (requestedMachineId === options.machineId) {
             tool = payload.tool === true
-            if (!options.backend.registerLocalClient(connId, sink, tool ? { tool: true } : {})) {
+            if (!options.backend.registerLocalClient(connId, terminalSink, tool ? { tool: true } : {})) {
               close(1011, 'local registration failed')
               return
             }
             selected = true
+            windowSinks.set(connId, sink)
             sink.sendFrame({
               type: 'connected',
               payload: {
@@ -381,6 +417,14 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             // Right after, not inside `connected`: the window's handshake parser is shared with the
             // relay path, and a field it does not expect is a field it has to learn to ignore.
             if (options.dialStatus) sink.sendFrame({ type: 'dial_status', payload: options.dialStatus() })
+            if (options.openQuestions) {
+              const open = options.openQuestions()
+              for (const asked of open) sink.sendFrame(asked)
+              // Then which questions are open at all, so a window that was here before (its link
+              // dropped) lets go of one answered meanwhile. Sent even when there are none.
+              const requestIds = open.map((f) => (f.payload as { requestId?: unknown } | undefined)?.requestId).filter((id): id is string => typeof id === 'string')
+              sink.sendFrame({ type: 'commander_questions_open', payload: { requestIds } })
+            }
             return
           }
           // Not this daemon's own machine — relay to backend for the other machines this same
@@ -399,10 +443,11 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           }
           try {
             relay = payload?.relayIsolation === true
-              ? await options.relayPool.acquireIsolated(requestedMachineId, options.autonomousEnv, frame, sink, close)
-              : await options.relayPool.acquire(requestedMachineId, options.autonomousEnv, frame, sink, close)
+              ? await options.relayPool.acquireIsolated(requestedMachineId, options.autonomousEnv, frame, terminalSink, close)
+              : await options.relayPool.acquire(requestedMachineId, options.autonomousEnv, frame, terminalSink, close)
             if (ws.readyState !== WebSocket.OPEN) { relay.detach(); return }
             selected = true
+            windowSinks.set(connId, sink)
           } catch (err) {
             const noPeerLink = err instanceof RelayConnectError && err.message === 'NO_PEER_LINK'
             const code = noPeerLink ? 4404 : err instanceof RelayConnectError && err.closeCode ? err.closeCode : 1011
@@ -416,6 +461,17 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // output) and a resize are. A frame that does not parse falls through all of them, as before,
         // to the close at the bottom.
         const parsed = isBinary ? null : jsonFrame(raw)
+
+        // Local reading context must never reach a remote daemon/cloud relay.
+        if (parsed?.type === 'app_selection_result' || parsed?.type === 'app_visit_result' || parsed?.type === 'app_form_result') {
+          const p = parsed.payload
+          if (windowSinks.has(connId) && boundMachineId && p && typeof p === 'object' && !Array.isArray(p)) {
+            const reply = parsed.type === 'app_form_result' ? options.onFormReply :
+              parsed.type === 'app_visit_result' ? options.onVisitReply : options.onSelectionReply
+            reply?.(connId, boundMachineId, p as Record<string, unknown>)
+          }
+          return
+        }
 
         // Local desktop acknowledgement only; never forward this through a remote relay.
         if (parsed?.type === 'device_prepare_opened') {
@@ -614,6 +670,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           const agentId = (parsed?.payload as Record<string, unknown> | undefined)?.agentId
           if (parsed?.type === 'app_focus') {
             if (agentId === null || (typeof agentId === 'string' && agentId)) {
+              explicitFocusClients.add(connId)
               // Ahead of the dial's revision check below: that gate is about which agent the voice
               // follows, and a stale one says nothing about which terminal is in front of the person.
               // Only this daemon's own streams — a relayed machine's live on that machine's daemon.
@@ -626,8 +683,9 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             // Focus is local desk state and must never be forwarded to a remote machine.
             return
           }
-          // Preserve the old dial fallback; terminal streams never establish voice focus.
-          if (parsed?.type === 'terminal_open' && typeof agentId === 'string' && agentId) {
+          // Compatibility for windows that never report selection. A modern window restores every
+          // terminal on reconnect; their attachment order is not the pane the person selected.
+          if (parsed?.type === 'terminal_open' && !explicitFocusClients.size && typeof agentId === 'string' && agentId) {
             options.onAppFocus?.(boundMachineId, agentId)
           }
         }
@@ -669,7 +727,9 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     const cleanup = (): void => {
       peers.delete(connId)
       heartbeat.stop()
-      if (boundMachineId) options.onAppFocusState?.(boundMachineId, null, connId)
+      const wasWindow = windowSinks.delete(connId)
+      explicitFocusClients.delete(connId)
+      if (wasWindow && boundMachineId) options.onAppDisconnect?.(boundMachineId, connId)
       // A window that went away has no tiles open. Left standing, the roster
       // would keep silencing the dial for agents nobody can see any more —
       // exactly backwards, and permanently.
@@ -685,6 +745,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
 
   return {
     peerPort: (connId) => peers.get(connId) ?? null,
+    sendToWindow: (connId, frame) => windowSinks.get(connId)?.sendFrame(frame) ?? false,
     close: async () => {
       for (const each of servers) each.off('upgrade', onUpgrade)
       for (const client of wss.clients) client.close(1001, 'server shutting down')

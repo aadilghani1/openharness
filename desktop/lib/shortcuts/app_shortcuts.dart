@@ -71,6 +71,7 @@ enum ShortcutAction {
   /// conversation where the engine can — the pane, its folder and its settings
   /// all stay. Asks first, unlike [cloneAgent]: the running process ends.
   restartAgent,
+  shareAgent,
   routeTask,
   orchestrate,
   reload,
@@ -423,6 +424,17 @@ AppShortcut _platformShortcut(AppShortcut shortcut) => !kIsWeb
 /// Swarm bindings replace the old workspace navigation in the retained legacy
 /// screen. Live Swarm bindings, tooltips, and help all use this same catalog.
 const kSwarmShortcuts = [
+  AppShortcut(
+    action: ShortcutAction.shareAgent,
+    activator: SingleActivator(
+      LogicalKeyboardKey.keyS,
+      meta: true,
+      shift: true,
+      includeRepeats: false,
+    ),
+    label: 'Share the focused agent',
+    group: ShortcutGroup.actions,
+  ),
   AppShortcut(
     action: ShortcutAction.addAgent,
     activator: SingleActivator(LogicalKeyboardKey.keyO, meta: true),

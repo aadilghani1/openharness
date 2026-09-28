@@ -29,7 +29,7 @@ existed, exactly:
 ### Experimental focus-bar creature
 
 Open **Settings → Experimental → Focus-bar creature** to show a test tim at
-the far right of the focus bar. Switch it off there to hide the creature, its
+the focus bar beside Share. Switch it off there to hide the creature, its
 panel and any hatch. The activation shortcut has been removed entirely,
 including its command and native Mac binding. The switch works by mouse or
 keyboard and leaves focus in Settings.
@@ -79,7 +79,7 @@ daemons are on. Switching off while on takes all of it away at once.
 
 `test/daemon_off_test.dart` holds all of this to the bar from before daemons
 at five widths (`test/fixtures/status_bar_before_daemons.json`, measured on
-`refs/heads/daemons` by `test/support/status_bar_layout.dart`); the native
+`main` at `0e4724cd`, including Share, by `test/support/status_bar_layout.dart`); the native
 checks hold the AppKit bar to the same with the daemon hidden.
 
 **Appearing.** When daemons turn on (the first 200, or the preview switched

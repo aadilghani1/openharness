@@ -32,9 +32,11 @@ class TerminalTitle extends StatelessWidget {
     this.asking,
     this.onHold,
     this.daemon,
+    this.sample = false,
   });
 
   final String name;
+  final bool sample;
 
   /// `machine:folder` — where the harness works.
   final String? place;
@@ -63,9 +65,15 @@ class TerminalTitle extends StatelessWidget {
 
   /// A long branch shortened in the middle — `fix/login-refresh-token` → `fix/logi…sh-token` — where
   /// both ends say which one it is.
-  static String _short(String branch) => branch.length <= 30
-      ? branch
-      : '${branch.substring(0, 14)}…${branch.substring(branch.length - 14)}';
+  ///
+  /// Cut by characters, not UTF-16 units, for the reason `_windowName` in `terminal_page.dart`
+  /// gives: half an emoji is a string the text engine throws on.
+  static String _short(String branch) {
+    final characters = branch.characters;
+    return characters.length <= 30
+        ? branch
+        : '${characters.take(14)}…${characters.skip(characters.length - 14)}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -91,8 +99,11 @@ class TerminalTitle extends StatelessWidget {
         child: DecoratedBox(
           // No rule under it: the output fades out beneath instead — see the gradient below.
           decoration: BoxDecoration(color: tty.ground),
-          child: SizedBox(
-            height: height,
+          // ⚠️ **At least four rows, not exactly four.** The rows are the terminal's, which the
+          // text scale does not touch, and the three lines are the app's type, which it does: at
+          // Settings ▸ Text size's largest the lines outgrew a fixed box and overflowed it.
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: height),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
               child: Row(
@@ -144,6 +155,15 @@ class TerminalTitle extends StatelessWidget {
                       ],
                     ),
                   ),
+                  if (sample)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 12),
+                      child: TtyText(
+                        'Sample',
+                        color: tty.faint,
+                        size: TtySize.meta,
+                      ),
+                    ),
                   if (asking case final asking?)
                     Semantics(
                       button: true,

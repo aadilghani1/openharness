@@ -103,8 +103,14 @@ PKCE transaction; conditional adapters handle storage and native-only services.
 `platform_auth_web.dart` serializes shared login/refresh/logout with Web Locks
 and reloads other tabs when the account changes. Auth and E2EE keys persist in
 origin-local storage; only the OAuth transaction is in session storage.
-Private shared sessions use `ObserverRelayCodec` and `/api/observer-ws`, verifying
-the owner and permitting only observation. Anonymous public pages are not included.
+Shared sessions use `ObserverRelayCodec` and `/api/observer-ws`, verifying the
+owner and permitting only observation and authenticated comments. `/s/:id#key=…`
+opens `SharedAgentPage` without restoring the visitor's workspace. Public links
+allow anonymous viewing; private links require an invited account. Preserve the
+fragment identity pin through sign-in and reload: `startHarness` disables Flutter
+hash routing, while the sign-in adapter owns the callback and return URL.
+The owner daemon stores comments and enforces link/invitation access on every
+request. Reuse `ShareHarnessDialog` and `HarnessComments` for both app targets.
 See [README.md](README.md#web-development) for origin setup, browser storage
 lifetime, capability limits, and Chrome checks. Browser tests must set
 `--dart-define=HARNESS_TEST=true` so no production pollers or analytics run.

@@ -240,6 +240,39 @@ class ApiClient {
     }
   }
 
+  /// What this computer trusts to read and drive its terminals — every phone
+  /// paired by QR or password, and every computer linked to it — as the
+  /// daemon keeps them (`GET /api/pairs`, the list `harness pairings` prints).
+  /// Null when the daemon cannot say; the dialog then shows no list.
+  Future<List<PairedDevice>?> pairedDevices() async {
+    try {
+      final res = await _dio.get('/api/pairs');
+      final data = res.data;
+      final pairs = data is Map ? data['pairs'] : null;
+      if (res.statusCode != 200 || pairs is! List) return null;
+      return [for (final raw in pairs) ?PairedDevice.fromJson(raw)];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Take [fingerprint]'s trust away: it can no longer read or drive this
+  /// computer, and any session it has open is dropped (`POST /api/revoke`,
+  /// what `harness unpair` sends). True when the daemon did it.
+  Future<bool> removePairedDevice(String fingerprint) async {
+    try {
+      final res = await _dio.post(
+        '/api/revoke',
+        data: {'id': fingerprint},
+        options: Options(headers: {'x-adapter-local': '1'}),
+      );
+      final data = res.data;
+      return res.statusCode == 200 && !(data is Map && data['error'] != null);
+    } catch (_) {
+      return false;
+    }
+  }
+
   // -- the Harness Store: ratings and reviews (control plane, proxied by the local CLI) --
   Future<Map<String, dynamic>?> storeRatings() async {
     final res = await _dio.get('/api/store/ratings');
@@ -377,7 +410,11 @@ class ApiException implements Exception {
 }
 
 bool isUnauthorizedError(Object error) =>
-    error is DioException && error.response?.statusCode == 401 ||
+    error is AccessTokenFailure && error.signedOut ||
+    error is DioException &&
+        (error.response?.statusCode == 401 ||
+            error.error is AccessTokenFailure &&
+                (error.error as AccessTokenFailure).signedOut) ||
     error is ApiException && error.status == 401;
 
 /// Unwraps the backend's `{success, data, error}` envelope, which both legs
@@ -444,4 +481,48 @@ String describeApiError(Object error) {
     }
   }
   return '$error';
+}
+
+/// One entry of [ApiClient.pairedDevices].
+class PairedDevice {
+  const PairedDevice({
+    required this.fingerprint,
+    required this.label,
+    required this.pairedAt,
+    required this.online,
+  });
+
+  final String fingerprint;
+
+  /// What the device called itself ("Dee's iPhone"). An older phone, or a
+  /// computer linked with `harness link connect`, is `harness link` — which
+  /// says nothing, so [name] says "Linked device" for it instead.
+  final String label;
+  final DateTime pairedAt;
+  final bool online;
+
+  String get name {
+    final trimmed = label.trim();
+    return trimmed.isEmpty || trimmed == 'harness link' || trimmed == 'browser'
+        ? 'Linked device'
+        : trimmed;
+  }
+
+  /// A `web` pairing: a phone or another computer. The dial (`device`) has
+  /// its own place, in Settings.
+  static PairedDevice? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final fingerprint = raw['fingerprint'], label = raw['label'];
+    final pairedAt = raw['pairedAt'], role = raw['role'];
+    if (fingerprint is! String || fingerprint.isEmpty) return null;
+    if (role != null && role != 'web') return null;
+    return PairedDevice(
+      fingerprint: fingerprint,
+      label: label is String ? label : '',
+      pairedAt: pairedAt is num
+          ? DateTime.fromMillisecondsSinceEpoch(pairedAt.toInt())
+          : DateTime.fromMillisecondsSinceEpoch(0),
+      online: raw['online'] == true,
+    );
+  }
 }

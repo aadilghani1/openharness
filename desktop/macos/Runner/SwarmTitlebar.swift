@@ -289,7 +289,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     add(file, "Clone Harness", "n", "cloneAgent", [.command, .shift])
     // ⌘⇧E: the pane's harness starts again where it is (Dart: `agent.restart`).
     add(file, "Restart Harness", "e", "restartAgent", [.command, .shift])
-    add(file, "Share Harness", "", "shareAgent")
+    add(file, "Share Harness", "s", "shareAgent", [.command, .shift])
     file.addItem(.separator())
     add(file, "New Tab", "t", "new")
     add(file, "Rename Tab", "r", "renameActive", [.command, .shift])
@@ -927,6 +927,31 @@ private final class SwarmStatusSymbolButton: SwarmIconButton {
   }
 }
 
+/// Flat primary action; Dart supplies the same colors and text as Flutter.
+private final class SwarmShareButton: SwarmIconButton {
+  var background = NSColor.clear { didSet { needsDisplay = true } }
+  var foreground = NSColor.white { didSet { needsDisplay = true } }
+  var preferredWidth: CGFloat {
+    let regularFont = font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    let cell = ("m" as NSString).size(withAttributes: [.font: regularFont]).width
+    return ceil(workspaceBarTextWidth(title, font: regularFont) + cell * 2)
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    background.setFill()
+    bounds.fill()
+    let regularFont = font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    let emphasized = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
+    let line = NSAttributedString(string: title, attributes: [
+      .font: emphasized ? workspaceBarEmphasisFont(regularFont) : regularFont,
+      .foregroundColor: foreground,
+    ])
+    let size = line.size()
+    line.draw(in: NSRect(x: (bounds.width - size.width) / 2,
+      y: (bounds.height - size.height) / 2, width: size.width, height: size.height))
+  }
+}
+
 private final class SwarmStripScrollView: NSScrollView {
   override func scrollWheel(with event: NSEvent) {
     let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
@@ -1400,6 +1425,8 @@ private final class SwarmTabStrip: NSView {
   fileprivate let focusedModelButton = SwarmContextButton()
   private var focusedModelTarget: [String: Any]?
   fileprivate let pullRequestButton = SwarmContextButton()
+  fileprivate let shareButton = SwarmShareButton()
+  private var shareTarget: [String: Any]?
   private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
   fileprivate let daemonButton = SwarmSymbolButton()
   fileprivate let voiceLabel = SwarmVoiceLabel()
@@ -1475,7 +1502,15 @@ private final class SwarmTabStrip: NSView {
       self.emit?("daemonLook", nil)
     }
     addSubview(daemonButton)
-    setAccessibilityChildren([scroll, newButton, focusedModelButton, contextButton, pullRequestButton, voiceLabel, daemonButton])
+    shareButton.isBordered = false
+    shareButton.title = "[ Share ]"
+    shareButton.target = self
+    shareButton.action = #selector(shareFocusedAgent)
+    shareButton.isEnabled = false
+    shareButton.isHidden = true
+    shareButton.setAccessibilityLabel("Share")
+    addSubview(shareButton)
+    setAccessibilityChildren([scroll, newButton, focusedModelButton, contextButton, pullRequestButton, voiceLabel, daemonButton, shareButton])
     registerForDraggedTypes([swarmPasteboardType])
   }
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1518,6 +1553,16 @@ private final class SwarmTabStrip: NSView {
     pullRequestButton.font = barFont
     pullRequestButton.foreground = terminalForeground
     pullRequestButton.update(state["pullRequest"] as? [String: Any], enabled: actionsEnabled)
+    shareTarget = state["shareAction"] as? [String: Any]
+    shareButton.isHidden = shareTarget == nil
+    shareButton.font = barFont
+    shareButton.title = shareTarget?["text"] as? String ?? "[ Share ]"
+    shareButton.isEnabled = actionsEnabled && shareTarget?["enabled"] as? Bool == true
+    shareButton.background = statusColor(shareTarget?["background"], fallback: .clear)
+    shareButton.foreground = statusColor(shareTarget?["foreground"], fallback: terminalForeground)
+    shareButton.toolTip = shareTarget?["tooltip"] as? String
+    shareButton.setAccessibilityLabel(shareTarget?["label"] as? String ?? "Share")
+    shareButton.setAccessibilityHelp(shareButton.toolTip)
     hasPullRequest = state["pullRequest"] != nil
     daemonButton.font = barFont
     daemonButton.foreground = terminalForeground
@@ -1682,12 +1727,16 @@ private final class SwarmTabStrip: NSView {
     let cell = ceil(("m" as NSString).size(withAttributes: [.font: barFont]).width)
     let trailing = cell
     let toolHeight = workspaceBarControlHeight(barFont)
+    let shareWidth = shareButton.isHidden ? 0 : shareButton.preferredWidth
+    let shareSpace = shareWidth > 0 ? shareWidth + cell : 0
+    shareButton.frame = NSRect(x: bounds.width - trailing - shareWidth,
+      y: (bounds.height - toolHeight) / 2, width: shareWidth, height: toolHeight)
     let daemonWidth = daemonButton.isHidden ? 0 : daemonButton.preferredWidth
-    let statusRight = bounds.width - trailing - daemonWidth
+    let statusRight = bounds.width - trailing - shareSpace - daemonWidth
     daemonButton.frame = NSRect(x: statusRight,
       y: (bounds.height - toolHeight) / 2, width: daemonWidth, height: toolHeight)
     // Compact windows keep a scrolling tab list; context never overlaps it.
-    let available = max(0, bounds.width - cell * 7 - daemonWidth)
+    let available = max(0, bounds.width - cell * 7 - shareSpace - daemonWidth)
     let widths = tabs.map { min($0.preferredWidth, available * 0.45) }
     let total = widths.reduce(0, +)
     let occupied = min(total, available * 0.45)
@@ -1766,6 +1815,13 @@ private final class SwarmTabStrip: NSView {
     if actionsEnabled && pullRequestButton.isEnabled, let url = pullRequestButton.actionURL {
       emit?("focusedPullRequest", ["url": url])
     }
+  }
+  @objc private func shareFocusedAgent() {
+    guard actionsEnabled, shareButton.isEnabled,
+          let paneId = shareTarget?["paneId"] as? Int,
+          let machineId = shareTarget?["machineId"] as? String,
+          let agentId = shareTarget?["agentId"] as? String else { return }
+    emit?("shareAgent", ["paneId": paneId, "machineId": machineId, "agentId": agentId])
   }
   @objc private func newSwarm() {
     if actionsEnabled && newButton.isEnabled { emit?("new", nil) }

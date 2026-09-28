@@ -41,6 +41,8 @@ export interface ShapedQuestion {
   q: string
   options: string[]
   multi: boolean
+  /** Observed free-text editor; never inferred for permission prompts. */
+  canText?: boolean
 }
 
 export interface QuestionRow {
@@ -695,23 +697,22 @@ export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | nul
  * requestId proves it was written for: without that proof, an answer that names no question on screen
  * belongs to one that is gone, and typing it here would answer — or approve — something nobody saw.
  *
- * `exact` (an approval): only the question's own text names it, never a prefix either way. An approval's
- * title is `Approve <header>: <argument>`, and a header is shared by every prompt of its kind: a key left
- * from an earlier prompt, `Approve Bash command` (its argument unread) or `Approve Bash command: npm test`,
- * would otherwise name `Approve Bash command: rm -rf ~` — or a header-only title name any earlier command.
+ * The text must be the question's OWN (case, spacing and a trailing `…` aside), never a prefix either way.
+ * An approval is titled `Approve <header>: <argument>` and the header is shared by every prompt of its
+ * kind: a key left from an earlier prompt — `Approve Bash command` (its argument unread) — was a prefix of
+ * `Approve Bash command: rm -rf ~/projects` and pressed Yes on it, and an old full title named a
+ * header-only prompt the other way round. A client echoes back the key it was announced, so the whole
+ * text is always there to match; one it has cut is answered through its requestId (`positional`).
  */
 export function pickAnswer(
   answers: Record<string, string>,
   question: string,
   used: Set<string>,
-  opts: { positional?: boolean; exact?: boolean } = {},
+  opts: { positional?: boolean } = {},
 ): { key: string; value: string } | null {
   const entries = Object.entries(answers)
   const q = norm(question)
-  // A prefix names a question only when BOTH sides are long enough to mean something: a key that normalises
-  // to '' (or one word) is a prefix of every question, and would answer whatever is on screen.
-  const byText = entries.find(([k]) => norm(k) === q)
-    ?? (q.length >= 6 && !opts.exact ? entries.find(([k]) => norm(k).length >= 6 && (norm(k).startsWith(q) || q.startsWith(norm(k)))) : undefined)
+  const byText = q ? entries.find(([k]) => norm(k) === q) : undefined
   if (byText && !used.has(byText[0])) return { key: byText[0], value: byText[1] }
   if (!opts.positional) return null
   const next = entries.find(([k]) => !used.has(k))
@@ -750,6 +751,10 @@ export interface AskQuestionDeps {
 }
 
 export interface QuestionAnswerPayload {
+  /** Exact contents reviewed on the device; guarded submissions never use positional fallback. */
+  expectedQuestions?: ShapedQuestion[]
+  selectedLabels?: Record<string, string[]>
+  freeTextKeys?: string[]
   allowPermissions?: boolean
   requestId?: string
   sessionId?: string
@@ -776,6 +781,19 @@ export class AskQuestionController {
 
   async answer(payload: QuestionAnswerPayload): Promise<QuestionAnswerResult> {
     const requestId = payload.requestId ?? ''
+    if (payload.expectedQuestions !== undefined && (!Array.isArray(payload.expectedQuestions) ||
+        payload.expectedQuestions.length < 1 || payload.expectedQuestions.length > 4 ||
+        payload.expectedQuestions.some(q => !q || typeof q.key !== 'string' || !q.key ||
+          typeof q.q !== 'string' || !q.q || !Array.isArray(q.options) || !q.options.length ||
+          q.options.some(option => typeof option !== 'string' || !option) ||
+          typeof q.multi !== 'boolean' || (q.multi && !Array.isArray(payload.selectedLabels?.[q.key]))))) {
+      return failed('The reviewed question metadata is invalid.')
+    }
+    if (payload.freeTextKeys !== undefined && (!payload.expectedQuestions || !Array.isArray(payload.freeTextKeys) ||
+        payload.freeTextKeys.some(key => typeof key !== 'string' || !payload.expectedQuestions!.some(q =>
+          q.key === key && q.canText === true && !q.multi)))) {
+      return failed('The reviewed text answer metadata is invalid.')
+    }
     const remembered = this.pending.get(requestId)
     const sessionId = payload.sessionId || payload.agentId || remembered || ''
     const answers = payload.answers && typeof payload.answers === 'object' ? payload.answers : null
@@ -789,7 +807,11 @@ export class AskQuestionController {
       console.warn(`[question] no terminal target for ${sessionId.slice(0, 8)} — answer dropped`)
       return { ok: false, error: 'AGENT_NOT_FOUND', detail: 'That agent is no longer running.' }
     }
-    if (this.driving.has(sessionId)) {
+    if (remembered) {
+      const owner = this.deps.getSession(remembered)
+      if ((owner?.agentId || owner?.sessionId) !== terminalTarget) return STALE_CHANGED
+    }
+    if (this.driving.has(terminalTarget)) {
       console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · already driving this dialog`)
       return { ok: false, error: 'ANSWER_BUSY', detail: 'Another answer is already being entered for this agent.' }
     }
@@ -804,15 +826,15 @@ export class AskQuestionController {
     // The ids the watcher could have announced this dialog under: the session it was remembered for, and
     // the session as the registry knows it now.
     const owners = [...new Set([remembered, session?.sessionId].filter((id): id is string => !!id))]
-    this.driving.add(sessionId)
+    this.driving.add(terminalTarget)
     try {
-      const result = await this.drive(terminalTarget, answers, this.deps.getSession(sessionId)?.engine ?? 'claude', payload.allowPermissions !== false, { requestId, owners })
+      const result = await this.drive(terminalTarget, answers, this.deps.getSession(sessionId)?.engine ?? 'claude', payload.allowPermissions !== false, { requestId, owners }, payload.expectedQuestions ? payload : undefined)
       this.pending.delete(requestId)
       const outcome = result.ok ? 'submitted' : result.error === 'STALE_QUESTION' ? 'refused · STALE_QUESTION, nothing typed' : 'FAILED'
       console.log(`[question] ${sessionId.slice(0, 8)} answered from device · ${outcome} (req=${requestId || 'none'})`)
       return result
     } finally {
-      this.driving.delete(sessionId)
+      this.driving.delete(terminalTarget)
       release?.()
     }
   }
@@ -831,9 +853,11 @@ export class AskQuestionController {
     engine: AgentEngine,
     allowPermissions: boolean,
     asked: { requestId: string; owners: string[] },
+    reviewed?: QuestionAnswerPayload,
   ): Promise<QuestionAnswerResult> {
     const wait = this.deps.wait ?? sleep
     const used = new Set<string>()
+    const reviewedComplete = () => !reviewed || used.size === reviewed.expectedQuestions!.length
     let lastQuestion = ''
     let repeats = 0
     let blanks = 0
@@ -841,10 +865,11 @@ export class AskQuestionController {
 
     for (let step = 0; step < MAX_STEPS; step++) {
       const capture = await this.deps.capture(terminalTarget, CAPTURE_LINES)
+      if (reviewed && capture === null) return failed('The question could not be read.')
       const view = parseEngineQuestionPane(engine, capture ?? '')
       if (!view) {
         // Nothing on screen: either the dialog was already gone, or the last keystroke submitted it.
-        return answered > 0 ? { ok: true } : STALE_GONE
+        return answered > 0 && reviewedComplete() ? { ok: true } : STALE_GONE
       }
       if (!allowPermissions && view.kind === 'question' && view.permission) return failed('Permission prompts cannot be answered from here.')
       if (view.kind === 'question' && view.partial) {
@@ -859,12 +884,13 @@ export class AskQuestionController {
         // Reached by our own keys, this submits the form. Reached first, it means every question was
         // answered somewhere else — submitting would send answers this person never gave.
         if (answered === 0) return STALE_GONE
+        if (!reviewedComplete()) return STALE_CHANGED
         return await this.deps.sendKey(terminalTarget, view.submitRow) ? { ok: true } : failed('The answers could not be submitted.')
       }
       // Mid-repaint the question line can read blank for a capture (see parseQuestionPane). Neither its id
       // nor its text can be checked against a blank, so look again rather than judge the dialog by it.
       if (!view.question) {
-        if (++blanks > 2) return answered > 0 ? { ok: true } : failed('The question could not be read.')
+        if (++blanks > 2) return answered > 0 && reviewedComplete() ? { ok: true } : failed('The question could not be read.')
         await wait(STEP_MS)
         continue
       }
@@ -893,18 +919,50 @@ export class AskQuestionController {
 
       // Out of answers with the dialog still up = a multi-QUESTION dialog whose next question the device
       // hasn't been shown yet. Leave it open: the watcher pushes that one and the device answers it next.
-      const picked = pickAnswer(answers, view.question, used, { positional, exact: isApprovalDialog(view) })
+      const expected = reviewed?.expectedQuestions?.find(q => q.q === view.question)
+      if (reviewed && (!expected || expected.multi !== view.multi ||
+          JSON.stringify(expected.options) !== JSON.stringify(view.rows.map(row => row.label)))) {
+        // A request id proves the initial dialog; every reviewed screen must also match its full choices.
+        return answered > 0 && reviewedComplete() ? { ok: true } : STALE_CHANGED
+      }
+      const picked = expected
+        ? (!used.has(expected.key) && typeof answers[expected.key] === 'string'
+          ? { key: expected.key, value: answers[expected.key] } : null)
+        : pickAnswer(answers, view.question, used, { positional })
       if (!picked) {
-        if (answered > 0) return { ok: true }
+        if (answered > 0 && reviewedComplete()) return { ok: true }
         console.warn(`[question] no answer names "${view.question.slice(0, 60)}" — nothing typed`)
         return STALE_CHANGED
       }
       used.add(picked.key)
       answered++
 
+      if (reviewed?.freeTextKeys?.includes(picked.key)) {
+        // Spoken words are explicitly text, even when they happen to equal an option label.
+        // A permission prompt can never acquire consent through this path.
+        if (!expected?.canText || view.permission || view.multi || !view.typeRow ||
+            !picked.value.trim() || Buffer.byteLength(picked.value, 'utf8') > 1200 ||
+            /[\x00-\x09\x0b-\x1f\x7f]/.test(picked.value)) return failed('The text answer cannot be entered into this question.')
+        if (!await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return KEYS_FAILED
+        await wait(STEP_MS)
+        continue
+      }
+
       if (view.multi) {
         // Device joins the selected labels with ", " (q_done_tap).
-        const labels = picked.value.split(',').map((s) => s.trim()).filter(Boolean)
+        const labels = reviewed ? reviewed.selectedLabels?.[picked.key] ?? []
+          : picked.value.split(',').map((s) => s.trim()).filter(Boolean)
+        if (reviewed && (!labels.length || labels.some(label => !view.rows.some(row => row.label === label)))) return failed('That answer matches no option.')
+        if (reviewed) {
+          // Set the exact reviewed set, including clearing choices selected in another client.
+          for (const row of view.rows) if (row.checked !== labels.includes(row.label)) {
+            if (!await this.deps.sendKey(terminalTarget, row.number)) return KEYS_FAILED
+            await wait(TEXT_MS)
+          }
+          if (!await this.deps.sendKey(terminalTarget, multiSubmitKey(engine))) return KEYS_FAILED
+          await wait(STEP_MS)
+          continue
+        }
         let toggled = 0
         for (const label of labels) {
           const row = matchRow(view.rows, label)
@@ -920,7 +978,7 @@ export class AskQuestionController {
         continue
       }
 
-      const row = matchRow(view.rows, picked.value)
+      const row = reviewed ? view.rows.find(row => row.label === picked.value) ?? null : matchRow(view.rows, picked.value)
       if (row) {
         // One digit selects AND submits — except on Amp, whose rows are unnumbered and reached by
         // walking the list, so this is a short sequence rather than a single key.
@@ -931,6 +989,7 @@ export class AskQuestionController {
         await wait(STEP_MS)
         continue
       }
+      if (reviewed) return failed('That answer matches no option.')
       if (!view.typeRow) { console.warn(`[question] no option matched "${picked.value.slice(0, 40)}" and no free-text row`); return failed('That answer matches no option.') }
       if (!await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return KEYS_FAILED
       await wait(STEP_MS)
@@ -940,7 +999,8 @@ export class AskQuestionController {
 
   /** True while a dialog is being keyed — the watcher pauses so a half-driven dialog isn't re-announced. */
   isDriving(sessionId: string): boolean {
-    return this.driving.has(sessionId)
+    const session = this.deps.getSession(sessionId)
+    return this.driving.has(session?.agentId || session?.sessionId || sessionId)
   }
 
   /** Free-text answer (a voice answer is always free text): open the "Type something." row, type, Enter. */
@@ -1171,6 +1231,7 @@ export class QuestionWatcher {
       q: view.question,
       options: view.rows.map((r) => r.label),
       multi: view.multi,
+      ...(view.typeRow && !view.multi && !view.permission ? { canText: true } : {}),
     }], { permission: isApprovalDialog(view), dialog: view.dialog ?? view.question })
 
   }

@@ -9,7 +9,7 @@ import { basename, join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { readCodexRolloutMeta } from './engines/codex/rollout.js'
-import { hermesSessionSource } from './engines/hermes/reader.js'
+import { hermesSessionSource, isHermesInteractiveSource } from './engines/hermes/reader.js'
 import { hermesDbPath, listHermesHomes } from './engines/hermes/home.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
@@ -31,8 +31,7 @@ import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib
  *
  * Caller ancestry — the hook's process descends from the engine we registered — is the strong one and
  * always wins. It is not always available: Cursor posts its hooks from outside the pane's process tree,
- * on tmux and on Herdr alike, so requiring ancestry rejected every hook that engine ever sent and no
- * session bound at all.
+ * so requiring ancestry rejected every hook that engine ever sent and no session bound at all.
  *
  * Only Cursor may use the weaker runtime evidence: the hook named a pane carrying exactly one Cursor
  * agent, and the caller already proved it can read the 0600 hook credential. Other engines must match
@@ -110,6 +109,13 @@ export interface HookServerHandlers {
   onClearRemotePassword?: () => PairOutcome
   /** `harness remote-password status` — whether one is set, and its fingerprint. */
   onRemotePasswordStatus?: () => PairOutcome
+  /** `harness link connect` — the machine this one just linked pinned it back, so trust that machine
+   *  here too (the mutual half of the link). Goes through the daemon: it holds paired.json in memory. */
+  onTrustLinkedPeer?: (peer: { pub: string; machineId: string; label: string }) => PairOutcome
+  /** `harness group list|sync|remove` — the trust group this machine belongs to (groupSyncer.ts). */
+  onGroupList?: () => PairOutcome
+  onGroupSync?: () => PairOutcome
+  onGroupRemove?: (selector: string) => PairOutcome
   /** Local dashboard status snapshot (GET /api/status). */
   onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   /** Recent adapter log tail (GET /api/logs). */
@@ -195,6 +201,9 @@ function validHookBody(value: unknown): value is BoundHookBody {
         if (Object.keys(hint).some((field) => field !== 'backend' && field !== 'paneId')
           || typeof hint.paneId !== 'string' || !/^%\d+$/.test(hint.paneId)) return false
       } else if (hint.backend === 'herdr') {
+        // A hook script installed by an earlier build still sends these from inside a Herdr pane. The
+        // backend is retired and `normalizedRuntimeHints` drops the hint, but the rest of the body is
+        // still good evidence, so the shape stays accepted rather than failing the whole request.
         if (Object.keys(hint).some((field) => !['backend', 'paneId', 'sessionName', 'socketPath'].includes(field))
           || !optionalBoundedString(hint.paneId, 200) || !hint.paneId
           || !optionalBoundedString(hint.sessionName, 64)
@@ -226,16 +235,6 @@ function normalizedRuntimeHints(body: RegisterInput): HookTerminalHint[] {
   if (Array.isArray(body.runtimeHints) && body.runtimeHints.length <= 4) {
     for (const hint of body.runtimeHints) {
       if (hint?.backend === 'tmux' && /^%\d+$/.test(hint.paneId)) hints.push({ backend: 'tmux', paneId: hint.paneId })
-      if (hint?.backend === 'herdr'
-        && typeof hint.paneId === 'string' && hint.paneId.length <= 200
-        && (hint.sessionName === undefined || (typeof hint.sessionName === 'string' && hint.sessionName.length <= 64))
-        && (hint.socketPath === undefined || (typeof hint.socketPath === 'string' && hint.socketPath.length <= 4_096))) {
-        hints.push({
-          backend: 'herdr', paneId: hint.paneId,
-          ...(hint.sessionName ? { sessionName: hint.sessionName } : {}),
-          ...(hint.socketPath ? { socketPath: hint.socketPath } : {}),
-        })
-      }
     }
   }
   if (body.tmuxPane && /^%\d+$/.test(body.tmuxPane)
@@ -364,7 +363,7 @@ async function awaitHermesKind(body: RegisterInput, handlers: HookServerHandlers
       break
     }
     if (source === null) continue
-    if (source !== '' && source !== 'cli') {
+    if (!isHermesInteractiveSource(source)) {
       console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · hermes_subagent`)
       return
     }
@@ -656,6 +655,40 @@ export function startHookServer(
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onClearRemotePassword) { json(503, { error: 'UNAVAILABLE' }); return }
         const out = handlers.onClearRemotePassword(); json(out.status, out.body); return
+      }
+
+      // `harness link connect` → trust the machine just linked back, on the daemon's live E2EE state.
+      if (req.method === 'POST' && url === '/api/link/trust-peer') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onTrustLinkedPeer) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: { pub?: unknown; machineId?: unknown; label?: unknown }
+        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
+        const isKey = typeof body.pub === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(body.pub) // 32-byte Ed25519, base64
+        if (!isKey || typeof body.machineId !== 'string' || !/^[a-f0-9]{32}$/.test(body.machineId)) { json(400, { error: 'BAD_PEER' }); return }
+        const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 60) : body.machineId
+        const out = handlers.onTrustLinkedPeer({ pub: body.pub as string, machineId: body.machineId, label })
+        json(out.status, out.body); return
+      }
+
+      // `harness group list` → the trust group's members. Read-only (keys and labels, no secrets).
+      if (req.method === 'GET' && url === '/api/group') {
+        if (!handlers.onGroupList) { json(503, { error: 'UNAVAILABLE' }); return }
+        const out = handlers.onGroupList(); json(out.status, out.body); return
+      }
+      // `harness group sync` → compare rosters with every reachable member now.
+      if (req.method === 'POST' && url === '/api/group/sync') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onGroupSync) { json(503, { error: 'UNAVAILABLE' }); return }
+        const out = handlers.onGroupSync(); json(out.status, out.body); return
+      }
+      // `harness group remove <id|#|fp>` / `harness link unlink` → drop a member everywhere.
+      if (req.method === 'POST' && url === '/api/group/remove') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onGroupRemove) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: { selector?: unknown }
+        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
+        if (typeof body.selector !== 'string' || !body.selector.trim()) { json(400, { error: 'MISSING_SELECTOR' }); return }
+        const out = handlers.onGroupRemove(body.selector.trim()); json(out.status, out.body); return
       }
 
       // `harness remote-password status` → whether one is set, and its fingerprint. Read-only, same

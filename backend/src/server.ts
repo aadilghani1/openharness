@@ -10,6 +10,7 @@ import { registerAuthMiddleware } from './middlewares/authMiddleware.js'
 import { cursorRoutes } from './routes/cursor.js'
 import { voiceRoutes } from './routes/voice.js'
 import { harnessShareRoutes } from './routes/harnessShares.js'
+import { harnessLinkRoutes } from './routes/harnessLinks.js'
 import { deskRoutes } from './routes/desk.js'
 import { zooRoutes } from './routes/zoo.js'
 import { describeDaemonsSwitch } from './lib/daemonsSwitch.js'
@@ -166,6 +167,7 @@ async function start(): Promise<void> {
   await app.register(deviceAuthRoutes) // device-authorization grant: how the desktop app gets a machine key
   await app.register(storeRoutes)      // the Harness Store's ratings and reviews; the catalogue is the CLI's registry
   await app.register(harnessShareRoutes)
+  await app.register(harnessLinkRoutes)
   await app.register(deskRoutes)          // the account's tabs, the same on every computer (lib/desk.ts)
   // The account's daemons and eggs, the same on every client (lib/zoo.ts). Dark unless HARNESS_DAEMONS is
   // on (lib/daemonsSwitch.ts): off, nothing is registered and /api/zoo answers the ordinary 404.

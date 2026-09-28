@@ -1,4 +1,4 @@
-import { readGitPullRequest } from './lib/gitPullRequest.js'
+import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
 import type { HarnessShareOwner } from './sharing/owner.js'
 import { SHARE_REQUEST_TYPES } from './sharing/protocol.js'
 import { AutonomousDeviceRelay } from './lib/autonomous-device/relay.js'
@@ -73,14 +73,16 @@ import { routeVoiceTask } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { messagesToEvents, windowRawLines, subagentStatsFromRawLines, type SessionEvent } from './lib/normalize.js'
-import { listFileTree, readProjectFile } from './lib/files.js'
 import { MediaPreviewError, readMediaPreviewChunk } from './lib/mediaPreview.js'
 import { ViewerForwarder } from './lib/viewerForwarder.js'
+import { InteractiveViewers } from './lib/interactiveViewer.js'
+import { OwnerCommands, OWNER_COMMAND_TYPES } from './lib/ownerCommands.js'
 import { VIEWER_DOWN_TYPES } from './lib/viewerWire.js'
 import { codexMessagesToEvents, windowCodexLines } from './engines/codex/normalizer.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
 import { parseHostTheme, type HostTheme } from './lib/hostTheme.js'
 import { cursorMessagesToEvents, windowCursorLines } from './engines/cursor/normalizer.js'
+import { cursorConfigDir, cursorDataDir } from './engines/cursor/home.js'
 import { loadCursorReplayTaskLinks } from './engines/cursor/subagent.js'
 import { opencodeMessagesToEvents, windowOpencodeMessages } from './engines/opencode/normalizer.js'
 import { kiloMessagesToEvents, windowKiloMessages } from './engines/kilo/normalizer.js'
@@ -99,7 +101,8 @@ import { hermesDbForSession } from './lib/hermesHome.js'
 import { readDevinMessages } from './engines/devin/reader.js'
 import { readOpencodeMessages } from './engines/opencode/reader.js'
 import { readKiloMessages } from './engines/kilo/reader.js'
-import { E2eeManager, type PairResult } from './lib/e2ee/manager.js'
+import { E2eeManager, type LinkedPeer, type PairResult } from './lib/e2ee/manager.js'
+import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import {
   decodeTerminalHop,
@@ -111,6 +114,7 @@ import {
 import { b64d, fingerprint, isWrapped } from './lib/e2ee/core.js'
 import { encryptRpcResult, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType } from './lib/e2ee/applicationFrames.js'
 import type { PairEvent, PairService } from './pair/protocol.js'
+import { tmuxPaneInfo } from './lib/tmux.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from './lib/deviceRecentTrim.js'
 import { shouldReplayCommander } from './lib/commanderReplay.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from './lib/runtimeProfileController.js'
@@ -528,8 +532,11 @@ export class BackendSocket {
   onTerminalHandoff: ((tmuxPane: string) => string | null) | null = null
   /** What the daemon knows about an agent's DSH companions (viewer URL, verdict); null when nothing. */
   harnessSharing: HarnessShareOwner | null = null
+  /** Answers the trust group's roster exchange (`group_sync`); null until the daemon wires it. */
+  groupSync: { handle: (peerPub: string, payload: Record<string, unknown>) => Record<string, unknown> } | null = null
   dshFrameProvider: ((session: RegisteredSession) => AgentDshContext | null) | null = null
   viewerTargetProvider: ((agentId: string) => string | null) | null = null
+  readonly interactiveViewers = new InteractiveViewers(agentId => this.viewerTargetProvider?.(agentId) ?? null)
   readonly viewerForwarder = new ViewerForwarder({
     target: (agentId) => this.viewerTargetProvider?.(agentId) ?? null,
     send: (connId, type, payload) => {
@@ -546,6 +553,7 @@ export class BackendSocket {
   engineProbeProvider: typeof probeEngines = probeEngines
   /** Entrypoint override for isolated integration fixtures; never a wire option. */
   orchestratorCommand: string | null = null
+  readonly ownerCommands = new OwnerCommands()
   onCancelOrchestratorMessage: ((deliveryId: string) => boolean) | null = null
   orchestratorDelivery(event: SessionInputDelivery): void {
     this.orchestratorService?.delivery(event)
@@ -734,6 +742,10 @@ export class BackendSocket {
   private readonly directDeviceSinks = new Map<string, (frame: Record<string, unknown>) => void>()
   private readonly directDevicePins = new Map<string, string>()
   onDirectDeviceRevoked?: (fingerprint: string) => void
+  /** A peer linked here over the remote password (after it is trusted and, for a machine, pinned back). */
+  onPeerLinked?: (peer: LinkedPeer) => void
+  /** A person unpaired this identity here (not the trust group removing it). */
+  onUnpaired?: (identityPub: string) => void
   /** A connection that is, or is pairing as, an Autonomous device — what the device dump records. */
   private isDeviceConn(connId: string): boolean {
     return this.directDeviceSinks.has(connId) || this.e2ee.sessionRole(connId) === 'device'
@@ -805,7 +817,16 @@ export class BackendSocket {
       isConnectionAvailable: connId => this.directDeviceSinks.has(connId) || this.isConnected(),
       onIdentityPaired: (connId, pub) => { if (this.directDeviceSinks.has(connId)) this.directDevicePins.set(connId, pub) },
       onIdentityRevoked: identity => { this.autonomousDeviceRelay?.revoke(identity); this.onDirectDeviceRevoked?.(fingerprint(b64d(identity))) },
-      onSessionDropped: (connId) => this.viewerForwarder.closeConnection(connId),
+      onSessionDropped: (connId) => { this.viewerForwarder.closeConnection(connId); this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId) },
+      onPeerLinked: (peer) => {
+        // The mutual half of a password link: a machine that proved this one's password is pinned back,
+        // so this machine can dial it without that machine's own password.
+        if (peer.kind === 'machine' && peer.machineId && peer.machineId !== this.machineId) {
+          new MachinePeerStore().pin(peer.machineId, peer.pub, peer.label)
+        }
+        this.onPeerLinked?.(peer)
+      },
+      onUnpaired: (pub) => this.onUnpaired?.(pub),
     })
     this.terminalP2p = new TerminalP2pResponderPool({
       sendSignal: (connId, type, payload) => this.sendP2pSignal(connId, type, payload),
@@ -844,6 +865,17 @@ export class BackendSocket {
   /** `harness remote-password clear` — remove the persistent remote password. */
   clearRemotePassword(): void {
     this.e2ee.clearRemotePassword()
+  }
+  /** `harness link connect` — trust the machine this one just linked as a client too (mutual link). */
+  trustPeer(peer: LinkedPeer): void {
+    this.e2ee.trustPeer(peer)
+  }
+  /** Stop trusting `pub` here (unlink / trust-group removal); true when it was trusted. */
+  untrustPeer(pub: string): boolean {
+    return this.e2ee.untrustPeer(pub)
+  }
+  pairedPeers(): ReturnType<E2eeManager['pairedPeers']> {
+    return this.e2ee.pairedPeers()
   }
   /** `harness remote-password status` — whether one is set, and its fingerprint. */
   remotePasswordStatus(): ReturnType<E2eeManager['remotePasswordStatus']> {
@@ -986,6 +1018,7 @@ export class BackendSocket {
       this.harnessSharing?.closeAll()
       this.setCommanderCount(0, null) // active count is unknown until the next __clients snapshot
       this.viewerForwarder.closeAll()
+      this.interactiveViewers.closeAll(); this.ownerCommands.closeAll()
       void this.terminalStreams?.closeConnectionsWhere(
         (connId) => !isLocalClientId(connId),
         'backend disconnected',
@@ -1058,6 +1091,7 @@ export class BackendSocket {
     this.stopGridModelsPush()
     this.orchestratorService?.stop()
     this.viewerForwarder.closeAll()
+    this.interactiveViewers.closeAll(); this.ownerCommands.closeAll()
     if (this.heartbeat) this.heartbeat.stop()
     if (this.appPing) clearInterval(this.appPing)
     await this.terminalStreams?.stop()
@@ -1248,6 +1282,7 @@ export class BackendSocket {
     this.rowStateWindows.delete(connId)
     this.viewerForwarder.closeConnection(connId)
     this.pairService?.unwatch(connId)
+    this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
     // The window left before any link could hear it attach: nothing happened, as far as the backend
     // is concerned, and a later link must not be told otherwise.
     if (this.localClients.size === 0) this.appOpenOwed = false
@@ -1459,7 +1494,7 @@ export class BackendSocket {
     const resultType = rpcResultType(type)
     if (connId && deviceDump.enabled && this.e2ee.sessionRole(connId) === 'device') deviceDump.record('out', 'legacy', connId, { type: resultType, payload: { requestId, ...payload } })
     // Before the E2EE wrap: an RPC reply is only readable here.
-    if (env.LOG_FRAMES && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
+    if (env.LOG_FRAMES && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && type !== 'phone_pair' && type !== 'api_connections' && type !== 'orchestrator' && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
       return
@@ -1650,7 +1685,7 @@ export class BackendSocket {
     // than as an opaque __e2e envelope.
     // Terminal frames contain raw keystrokes, paste text and screen bytes after
     // unwrap. Never pass them to the frame logger, even in diagnostic mode.
-    if (env.LOG_FRAMES && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'orchestrator' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
+    if (env.LOG_FRAMES && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'orchestrator' && type !== 'api_connections' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => this.emitReply(connId, t, rid, p)
@@ -1692,6 +1727,7 @@ export class BackendSocket {
       this.e2ee.dropSession(connId)
       this.viewerForwarder.closeConnection(connId)
       this.pairService?.unwatch(connId)
+      this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
       await this.terminalP2p.closeConnection(connId, 'client_disconnected', false)
       this.p2pPendingOpens.delete(connId)
       this.p2pStreams.delete(connId)
@@ -1771,15 +1807,21 @@ export class BackendSocket {
     const requestId = payload.requestId
 
     if (type === 'api_connections') {
-      if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Manage APIs on this computer.' }); return }
+      if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
       reply(type, requestId, apiConnectionsRequest(this.apiConnections, payload))
       return
     }
 
-    // Same-host only until remote viewer transport and remote task ownership exist.
-    // Refuse before parsing project content; never send it to the relay as plaintext.
+    // A paired owner can run the machine's orchestrator; observers and device sessions cannot.
+    // Both requests and replies are encrypted, including project artifacts.
+    if (OWNER_COMMAND_TYPES.has(type)) {
+      if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
+      void this.ownerCommands.request(connId, type, payload).then(result => reply(type, requestId, result))
+      return
+    }
+
     if (type === 'orchestrator') {
-      if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Orchestrator projects run on the local machine.' }); return }
+      if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
       // Detached: a large artifact snapshot must not block cancel/status on this connection.
       void orchestratorRequest(this.orchestration(), payload)
         .then(result => reply(type, requestId, result))
@@ -1802,6 +1844,24 @@ export class BackendSocket {
       if (!plates) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
       // Detached: a plate not drawn yet takes seconds, and this connection's other requests must not wait.
       void plates.get(payload).then((result) => reply(type, requestId, result)).catch(() => reply(type, requestId, { error: 'RENDER_FAILED' }))
+      return
+    }
+
+    if (type === 'viewer_surface') {
+      if (!local && this.e2ee.sessionRole(connId) !== 'web') return
+      // Rendering and input never hold up terminal traffic on the ordered machine queue.
+      void this.interactiveViewers.request(connId, payload)
+        .then(result => reply(type, requestId, result))
+        .catch(() => reply(type, requestId, { error: 'VIEWER_UNAVAILABLE' }))
+      return
+    }
+
+    // Trust-group roster exchange: only over an E2EE session, from the identity that session proved —
+    // the roster carries the keys this machine trusts, and the peer's own entry must be that identity.
+    if (type === 'group_sync') {
+      const peerPub = local ? null : this.e2ee.sessionIdentity(connId)
+      if (!peerPub || this.e2ee.sessionRole(connId) !== 'web' || !this.groupSync) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+      try { reply(type, requestId, this.groupSync.handle(peerPub, payload)) } catch { reply(type, requestId, { error: 'GROUP_SYNC_FAILED' }) }
       return
     }
 
@@ -1856,6 +1916,10 @@ export class BackendSocket {
           return
         case 'device_e2ee_pair':
           await this.e2ee.pairDeviceFromTrustedWeb(connId, payload)
+          return
+        case 'phone_pair':
+          // CPace waits for another connection. Do not block this browser's terminal queue.
+          void this.e2ee.pairPhoneFromTrustedWeb(connId, payload)
           return
 
         case 'e2ee_pairings_list':
@@ -2035,7 +2099,7 @@ export class BackendSocket {
             const fullEvents = s.engine === 'codex'
               ? codexMessagesToEvents(lines, codexSubagentResolverFor(s.codexHome))
               : s.engine === 'cursor'
-                ? cursorMessagesToEvents(lines, sessionId, await loadCursorReplayTaskLinks(env.CURSOR_HOME, sessionId))
+                ? cursorMessagesToEvents(lines, sessionId, await loadCursorReplayTaskLinks(cursorConfigDir(), sessionId, cursorDataDir()))
                 : s.engine === 'muse'
                   ? museMessagesToEvents(lines)
                   : s.engine === 'amp'
@@ -2111,7 +2175,7 @@ export class BackendSocket {
               ? cursorMessagesToEvents(
                   w.window,
                   sessionId,
-                  await loadCursorReplayTaskLinks(env.CURSOR_HOME, sessionId),
+                  await loadCursorReplayTaskLinks(cursorConfigDir(), sessionId, cursorDataDir()),
                   'startIndex' in w && typeof w.startIndex === 'number' ? w.startIndex : 0,
                   'initialTodos' in w && Array.isArray(w.initialTodos) ? w.initialTodos : [],
                 )
@@ -2530,7 +2594,9 @@ export class BackendSocket {
           // conversation is created with applies to it.
           let resumeSessionId: string | null = null
           if (payload.resumeSessionId !== undefined && payload.resumeSessionId !== null) {
-            if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9-]{8,80}$/.test(payload.resumeSessionId)) {
+            // Engines' ids: uuids, `ses_…` (OpenCode, Kilo), `20260927_101500_ab12cd` (Hermes), slugs
+            // (Devin), Pi's custom ids with dots. One word, never a path.
+            if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(payload.resumeSessionId)) {
               reply(type, requestId, { error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
             }
             if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || dsh || prompt || agent) {
@@ -2794,14 +2860,15 @@ export class BackendSocket {
           return
         }
 
-        case 'agent_files': {
-          // SourceTree list — rooted at the tmux session's working dir.
-          const projectId = payload.agentId as string | undefined
-          if (!projectId) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
-          const s = registry.resolve(projectId)
-          if (!s?.cwd) { reply(type, requestId, { error: 'AGENT_NOT_FOUND' }); return }
-          try { reply(type, requestId, { files: listFileTree(s.cwd) }) }
-          catch (e) { reply(type, requestId, { error: e instanceof Error ? e.message : 'FILE_TREE_ERROR' }) }
+        case 'terminal_info': {
+          // What a harness's pane runs now and where — tmux's #{pane_current_command} and
+          // #{pane_current_path}, for a terminal client's formats. Read-only. Not in the e2ee
+          // sets (core.ts is hash-pinned with the other implementations), so it answers the local
+          // client; over the relay a peer is not asked, and the client keeps its fallback.
+          const id = payload.agentId
+          const agent = typeof id === 'string' ? registry.resolve(id) : undefined
+          if (!agent?.tmuxPane) { reply(type, requestId, { error: 'AGENT_NOT_FOUND' }); return }
+          void tmuxPaneInfo(agent.tmuxPane).then(info => reply(type, requestId, info ? { ...info } : { error: 'PANE_NOT_FOUND' }))
           return
         }
 
@@ -2809,13 +2876,27 @@ export class BackendSocket {
           const id = payload.agentId
           const agent = typeof id === 'string' ? registry.resolve(id) : undefined
           if (!agent?.cwd) { reply(type, requestId, { status: 'unavailable' }); return }
-          void readGitPullRequest(agent.cwd).then(result => reply(type, requestId, result))
+          const requested = payload.context
+          if (requested !== undefined && (!requested || typeof requested !== 'object'
+            || typeof (requested as Record<string, unknown>).cwd !== 'string'
+            || typeof (requested as Record<string, unknown>).branch !== 'string'
+            || (requested as Record<string, unknown>).remote !== null && typeof (requested as Record<string, unknown>).remote !== 'string')) {
+            reply(type, requestId, { status: 'unavailable' }); return
+          }
+          void readSessionGitPullRequest(agent, {
+            expected: requested as import('./lib/sessionGitPullRequest.js').ExpectedGitContext | undefined,
+            history: payload.history === true, offset: typeof payload.offset === 'number' ? payload.offset : undefined,
+          }).then(result => reply(type, requestId, result))
+            .catch(() => reply(type, requestId, { status: 'unavailable' }))
           return
         }
 
         case 'git_project_info': {
           const path = typeof payload.path === 'string' ? payload.path : ''
-          void readGitProject(path, { refresh: payload.refresh === true })
+          // Same root set as project_preview below: the browsable home, widened by the workspaces
+          // agents are running in, so a repo outside both is not somewhere this daemon runs git.
+          void readGitProject(path, { refresh: payload.refresh === true,
+            knownRoots: registry.list().flatMap(agent => agent.cwd ? [agent.cwd] : []) })
             .then(result => reply(type, requestId, result))
             .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
           return
@@ -2863,23 +2944,20 @@ export class BackendSocket {
         }
 
         case 'agent_read_file': {
-          // Text reads keep their ≤5 MB guard; media uses bounded binary chunks.
+          // Media previews, in bounded binary chunks. The text mode this RPC also used to serve was
+          // read by nothing — every client has always asked with `media: true` — so it is gone rather
+          // than carrying a second, laxer file reader (lib/mediaPreview.ts).
           const projectId = payload.agentId as string | undefined
           const path = payload.path as string | undefined
           if (!projectId || !path) { reply(type, requestId, { error: 'MISSING_AGENT_OR_PATH' }); return }
+          if (payload.media !== true) { reply(type, requestId, { error: 'UNSUPPORTED', detail: 'agent_read_file serves media previews only' }); return }
           const s = registry.resolve(projectId)
           if (!s?.cwd) { reply(type, requestId, { error: 'AGENT_NOT_FOUND' }); return }
-          if (payload.media === true) {
-            if (typeof path !== 'string') { reply(type, requestId, { error: 'MEDIA_INVALID_REQUEST' }); return }
-            try {
-              reply(type, requestId, { ...await readMediaPreviewChunk(s.cwd, path, payload.offset, payload.revision) })
-            } catch (error) {
-              reply(type, requestId, { error: error instanceof MediaPreviewError ? error.message : 'MEDIA_READ_FAILED' })
-            }
-            return
+          try {
+            reply(type, requestId, { ...await readMediaPreviewChunk(s.cwd, path, payload.offset, payload.revision) })
+          } catch (error) {
+            reply(type, requestId, { error: error instanceof MediaPreviewError ? error.message : 'MEDIA_READ_FAILED' })
           }
-          try { reply(type, requestId, { path, content: readProjectFile(s.cwd, path) }) }
-          catch (e) { reply(type, requestId, { error: e instanceof Error ? e.message : 'NOT_FOUND' }) }
           return
         }
 

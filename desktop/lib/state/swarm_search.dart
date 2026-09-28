@@ -1564,9 +1564,13 @@ class SwarmSearchController extends ChangeNotifier {
         // One in a terminal can be moved here: opening it asks how.
         final where = previewed?.openIn ?? external.openIn;
         if (where == 'terminal') return null;
-        return external.origin == 'terminal' && where == null
-            ? 'Open in another terminal'
-            : 'Open in the ${external.originLabel}';
+        if (where == 'harness') return 'Already in Harness';
+        if (where == 'maybe') return 'May be open in a terminal';
+        if (external.origin == 'terminal') {
+          // A machine that predates taking over; or no terminal holds it now.
+          return where == null ? 'Open in another terminal' : 'Open in an app';
+        }
+        return 'Open in the ${external.originLabel}';
       }
       final machine = app.stateOf(row.machineId ?? '');
       return machine == null || machine.nodeOnline == false
@@ -1704,11 +1708,7 @@ SwarmDestination externalSessionDestination(
   ExternalSessionRef external, {
   String machineLabel = '',
 }) {
-  final engine = switch (external.engine) {
-    'claude' => 'Claude Code',
-    'codex' => 'Codex',
-    final other => other,
-  };
+  final engine = external.engineName;
   final folder =
       external.cwd.split('/').where((part) => part.isNotEmpty).lastOrNull ??
       external.cwd;

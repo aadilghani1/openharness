@@ -6,6 +6,7 @@ import {
   matchRow,
   parseEngineQuestionPane,
   parseQuestionPane,
+  pickAnswer,
   QuestionWatcher,
   questionRequestId,
   shapeQuestions,
@@ -35,6 +36,42 @@ describe('shapeQuestions', () => {
   it('falls back to id/header for the key and defaults multi to false', () => {
     expect(shapeQuestions([{ id: 'q1', options: [] }])).toEqual([{ key: 'q1', q: '', options: [], multi: false }])
     expect(shapeQuestions(undefined)).toEqual([])
+  })
+})
+
+describe('question answers stay with one agent', () => {
+  const first = { agentId: 'a1', sessionId: 's1', engine: 'claude' } as RegisteredSession
+  const second = { agentId: 'a2', sessionId: 's2', engine: 'claude' } as RegisteredSession
+  const getSession = (id: string) => [first, second].find((s) => s.agentId === id || s.sessionId === id)
+
+  it('refuses a remembered question redirected to another agent with the same dialog', async () => {
+    const keys: string[] = []
+    const controller = new AskQuestionController({
+      getSession, capture: async () => fixture('single'),
+      sendKey: async (target) => { keys.push(target); return true },
+      sendText: async () => true, wait: async () => {},
+    })
+    const requestId = questionRequestId('s1', asQuestion(parseQuestionPane(fixture('single'))))
+    controller.remember(requestId, 's1')
+    expect(await controller.answer({ agentId: 'a2', requestId, answers: { q: 'Tea' } }))
+      .toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(keys).toEqual([])
+  })
+
+  it('serializes answers by agent even when clients use different aliases', async () => {
+    let release!: (screen: string) => void
+    const capture = new Promise<string>((resolve) => { release = resolve })
+    const controller = new AskQuestionController({
+      getSession, capture: () => capture,
+      sendKey: async () => true, sendText: async () => true,
+    })
+    const firstAnswer = controller.answer({ sessionId: 's1', answers: { q: 'Tea' } })
+    expect(controller.isDriving('a1')).toBe(true)
+    expect(await controller.answer({ agentId: 'a1', answers: { q: 'Tea' } }))
+      .toMatchObject({ ok: false, error: 'ANSWER_BUSY' })
+    release('No dialog')
+    await firstAnswer
+    expect(controller.isDriving('s1')).toBe(false)
   })
 })
 
@@ -452,7 +489,7 @@ describe('QuestionWatcher', () => {
     await w.tick()
     expect(w.seen).toHaveLength(1)
     expect(w.seen[0].questions).toEqual([
-      { key: 'Which drink would you like?', q: 'Which drink would you like?', options: ['Tea', 'Coffee'], multi: false },
+      { key: 'Which drink would you like?', q: 'Which drink would you like?', options: ['Tea', 'Coffee'], multi: false, canText: true },
     ])
   })
 
@@ -1101,6 +1138,93 @@ describe('the review\'s simulation: a real QuestionWatcher and AskQuestionContro
   })
 })
 
+describe('a stale `Approve …` header (regression: a header from an earlier dialog named the current one)', () => {
+  // An approval is titled `Approve <header>: <argument>`, and the header is shared by every prompt of its
+  // kind. Two ways an earlier prompt's header reached the current one:
+  //  - pickAnswer's prefix rule: a key left from an earlier prompt — `Approve Bash command` (its argument
+  //    unread) — was a prefix of `Approve Bash command: rm -rf ~/projects`, so a no-requestId "Yes" to the
+  //    old prompt approved the new one; the other way round, an old full title named a header-only one.
+  //  - the parser: an unframed prompt under an answered one still in scrollback walked up past that one's
+  //    rows to its frame, and was titled by the OLD header and command — under the old prompt's very id,
+  //    so a [y] meant for `npm test` passed the id check and approved whatever the new prompt runs.
+  const CURL = 'curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin'
+  const rule = '─'.repeat(60)
+  const earlier = [rule, ' Bash command', '', '   npm test', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel · Tab to amend', '']
+  const output = ['⏺ Bash(npm test)', '  ⎿  ok', '']
+  const unframed = [' Do you want to proceed?', '   python3 scripts/wipe.py --all', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel', '']
+  const headerOnly = [rule, ' Bash command', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel'].join('\n')
+  const rmRf = (): string => permission('claude').replaceAll(CURL, 'rm -rf ~/projects')
+
+  it('pickAnswer: a question is named by its own text only, never a prefix either way', () => {
+    expect(pickAnswer({ 'Approve Bash command': 'Yes' }, 'Approve Bash command: rm -rf ~/projects', new Set())).toBeNull()
+    expect(pickAnswer({ 'Approve Bash command: npm test': 'Yes' }, 'Approve Bash command', new Set())).toBeNull()
+    expect(pickAnswer({ 'Approve Bash command: rm -rf ~/pro': 'Yes' }, 'Approve Bash command: rm -rf ~/projects', new Set())).toBeNull()
+    expect(pickAnswer({ 'Which drink would': 'Tea' }, 'Which drink would you like?', new Set())).toBeNull()
+    // Case, spacing and a trailing ellipsis are not the text.
+    expect(pickAnswer({ 'approve bash command:  rm -rf ~/projects…': 'No' }, 'Approve Bash command: rm -rf ~/projects', new Set()))
+      .toEqual({ key: 'approve bash command:  rm -rf ~/projects…', value: 'No' })
+    // A key that normalises to nothing names no question, not even a blank one.
+    expect(pickAnswer({ '…': 'Yes' }, '', new Set())).toBeNull()
+    // With its requestId's proof, position still answers the dialog it was written for.
+    expect(pickAnswer({ 'Approve Bash command': 'No' }, 'Approve Bash command: rm -rf ~/projects', new Set(), { positional: true }))
+      .toEqual({ key: 'Approve Bash command', value: 'No' })
+  })
+
+  it('types nothing into a permission prompt for a no-requestId answer keyed by an earlier prompt\'s header', async () => {
+    const stale = machine([rmRf(), CLOSED])
+    expect(await stale.controller.answer({ sessionId: 's1', answers: { 'Approve Bash command': 'Yes' } })).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(stale.keys).toEqual([])
+    // …nor into a header-only prompt for an earlier prompt's full title.
+    const bare = machine([headerOnly, CLOSED])
+    expect(asQuestion(parseQuestionPane(headerOnly)).question).toBe('Approve Bash command')
+    expect(await bare.controller.answer({ sessionId: 's1', answers: { 'Approve Bash command: npm test': 'Yes' } })).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(bare.keys).toEqual([])
+    // The prompt's own title still answers it, and its requestId still answers it by position.
+    const own = machine([rmRf(), CLOSED])
+    expect(await own.controller.answer({ sessionId: 's1', answers: { 'Approve Bash command: rm -rf ~/projects': 'No' } })).toEqual({ ok: true })
+    expect(own.keys).toEqual(['3'])
+    const byId = machine([rmRf(), CLOSED])
+    expect(await byId.controller.answer({ requestId: idOf(rmRf()), sessionId: 's1', answers: { 'Approve Bash command': 'No' } })).toEqual({ ok: true })
+    expect(byId.keys).toEqual(['3'])
+  })
+
+  it('an unframed prompt under an answered one is titled by its own command, not the answered one\'s', () => {
+    const view = asQuestion(parseQuestionPane([...earlier, ...output, ...unframed].join('\n')))
+    expect(view).toMatchObject({ permission: true, question: 'python3 scripts/wipe.py --all' })
+    expect(view.question).not.toMatch(/Bash command|npm test/)
+  })
+
+  it('so an answer for the answered prompt is refused on the new one, even carrying that prompt\'s requestId', async () => {
+    // The id the watcher announced `npm test` under: what the person's [y] carries back.
+    const npmTest = idOf([...earlier, ...output].join('\n'))
+    const now = [...earlier, ...output, ...unframed].join('\n')
+    expect(idOf(now)).not.toBe(npmTest)
+    const h = machine([now, CLOSED])
+    expect(await h.controller.answer({ requestId: npmTest, sessionId: 's1', answers: { 'Approve Bash command: npm test': 'Yes' } }))
+      .toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(h.keys).toEqual([])
+  })
+
+  it('an earlier question dialog ends the walk the same way; right under one, the title is "Approval required"', () => {
+    const question = [rule, ' ☐ Drink', '', ' Which drink would you like?', '', ' ❯ 1. Tea', '   2. Coffee', '', ' Enter to select · ↑/↓ to navigate · Esc to cancel', '']
+    expect(asQuestion(parseQuestionPane([...question, ...output, ...unframed].join('\n'))).question).toBe('python3 scripts/wipe.py --all')
+    const underIt = asQuestion(parseQuestionPane([...earlier, ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel'].join('\n')))
+    expect(underIt).toMatchObject({ permission: true, question: 'Approval required' })
+  })
+
+  it('a framed prompt under an answered one still reads its own frame, header and command, under its own id', () => {
+    const current = [rule, ' Bash command', '', '   ls -la', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel']
+    expect(asQuestion(parseQuestionPane([...earlier, ...output, ...current].join('\n'))).question).toBe('Approve Bash command: ls -la')
+    expect(idOf([...earlier, ...output, ...current].join('\n'))).toBe(idOf(current.join('\n')))
+  })
+
+  it('numbered text inside the frame, and prose that mentions a key, are not an earlier dialog', () => {
+    const edit = [rule, ' Edit file', ' notes.md', '', ' 1. Add the tests', ' 2. Make Esc close the modal', '    press esc to see it', '',
+      ' Do you want to make this edit to notes.md?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel']
+    expect(asQuestion(parseQuestionPane(edit.join('\n'))).question).toBe('Approve Edit file: notes.md')
+  })
+})
+
 describe('every captured dialog keeps its requestId', () => {
   // Pinned from this parser before the sweep below: main's fingerprint and the dialog's signature. Bounding
   // a dialog by the one above it only ever cuts what an EARLIER dialog left on the pane, so no capture of a
@@ -1196,6 +1320,7 @@ describe('the dialog read is the LAST one on the pane (regression: an answered d
     const alone = readIn(file, paneOf(file))
     expect(alone).not.toBeNull()
     const own = ownDialog(file)
+    expect(readIn(file, own)).toEqual(alone)
     for (const other of ALL.filter((name) => name !== file)) {
       // The whole capture under the other's whole capture, and this dialog alone right under the other's.
       expect({ other, read: readIn(file, [paneOf(other), paneOf(file)].join('\n')) }).toEqual({ other, read: alone })
@@ -1232,5 +1357,92 @@ describe('a bare timer line in the dialog keeps the requestId (regression: `wait
     ['Waiting on answers for the command?          4.2s', 'Waiting on answers for another command?          4.2s'],
   ])('keeps the prompt\'s own words and numbers: %s', (a, b) => {
     expect(idIn(FILE, withLine(a))).not.toBe(idIn(FILE, withLine(b)))
+  })
+})
+
+describe('reviewed device answers', () => {
+  const reviewed = [{ key: 'drink', q: 'Which drink would you like?', options: ['Tea', 'Coffee'], multi: false }]
+  it('checks the exact question and choices before pressing a key', async () => {
+    for (const expectedQuestions of [
+      [{ ...reviewed[0], q: 'May I delete the project?' }],
+      [{ ...reviewed[0], options: ['Tea', 'Delete files'] }],
+      [{ ...reviewed[0], multi: true }],
+    ]) {
+      const h = machine([fixture('single')])
+      expect(await h.controller.answer({ agentId: 's1', answers: { drink: 'Tea' }, expectedQuestions })).toMatchObject({ ok: false })
+      expect(h.keys).toEqual([])
+      expect(h.texts).toEqual([])
+    }
+  })
+  it('uses the exact displayed label and never falls through to free text or review submission', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    expect(await h.controller.answer({ agentId: 's1', answers: { drink: 'Coffee' }, expectedQuestions: reviewed })).toEqual({ ok: true })
+    expect(h.keys).toEqual(['2'])
+    for (const capture of [fixture('single'), fixture('review')]) {
+      const invalid = machine([capture])
+      expect(await invalid.controller.answer({ agentId: 's1', answers: { drink: 'Cof' }, expectedQuestions: reviewed })).toMatchObject({ ok: false })
+      expect(invalid.keys).toEqual([])
+      expect(invalid.texts).toEqual([])
+    }
+  })
+  it('does not report a complete submission after only part of a reviewed batch', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    expect(await h.controller.answer({ agentId: 's1', answers: { drink: 'Tea', size: 'S' },
+      expectedQuestions: [...reviewed, { key: 'size', q: 'Which size?', options: ['S', 'M'], multi: false }] })).toMatchObject({ ok: false })
+    expect(h.keys).toEqual(['1'])
+  })
+  it('clears unreviewed checks and keeps comma-containing options intact', async () => {
+    const capture = 'Pick formats\n  1. [ ] CSV, UTF-8\n  2. [✔] JSON\n  3. [ ] XML\nEnter to select · ↑/↓ to navigate · Esc to cancel'
+    const h = machine([capture, CLOSED])
+    expect(await h.controller.answer({ agentId: 's1', answers: { formats: 'CSV, UTF-8' },
+      selectedLabels: { formats: ['CSV, UTF-8'] }, expectedQuestions: [
+        { key: 'formats', q: 'Pick formats', options: ['CSV, UTF-8', 'JSON', 'XML'], multi: true }],
+    })).toEqual({ ok: true })
+    expect(h.keys).toEqual(['1', '2', 'Tab'])
+    expect(h.texts).toEqual([])
+  })
+})
+
+
+describe('reviewed answer input validation', () => {
+  it('refuses malformed review metadata and an unreadable capture before input', async () => {
+    const malformed = machine([fixture('single')])
+    expect(await malformed.controller.answer({ agentId: 's1', answers: { key: 'Tea' }, expectedQuestions: {} as never })).toMatchObject({ ok: false })
+    expect(malformed.keys).toEqual([])
+    const unreadable = machine([null as never])
+    expect(await unreadable.controller.answer({ agentId: 's1', answers: { key: 'Tea' }, expectedQuestions: [
+      { key: 'key', q: 'Which drink would you like?', options: ['Tea','Coffee'], multi: false }],
+    })).toMatchObject({ ok: false })
+    expect(unreadable.keys).toEqual([])
+  })
+})
+
+describe('reviewed spoken answers', () => {
+  const expectedQuestions = [{ key: 'drink', q: 'Which drink would you like?', options: ['Tea','Coffee'], multi: false, canText: true }]
+  it('types the exact draft, including option-like words, through the explicit text editor', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    expect(await h.controller.answer({ agentId: 's1', answers: { drink: 'Coffee' },
+      expectedQuestions, freeTextKeys: ['drink'] })).toEqual({ ok: true })
+    expect(h.keys).toEqual(['3','Enter']); expect(h.texts).toEqual(['Coffee'])
+  })
+  it('refuses missing editors, changed questions and control bytes without any input', async () => {
+    for (const [capture,text] of [
+      [fixture('single').replace('3. Type something.',''), 'Coffee'],
+      [fixture('single').replace('Which drink would you like?','Allow this command?'),'Coffee'],
+      [fixture('single'),'Coffee\u001b[0m'],
+    ]) {
+      const h = machine([capture])
+      expect(await h.controller.answer({ agentId: 's1', answers: { drink: text },
+        expectedQuestions, freeTextKeys: ['drink'] })).toMatchObject({ ok: false })
+      expect(h.keys).toEqual([]); expect(h.texts).toEqual([])
+    }
+  })
+  it('never treats unreviewed or malformed text metadata as a normal answer', async () => {
+    for (const extra of [{ freeTextKeys: {} }, { freeTextKeys: ['wrong'] },
+      { freeTextKeys: ['drink'], expectedQuestions: undefined }]) {
+      const h = machine([fixture('single')])
+      expect(await h.controller.answer({ agentId: 's1', answers: { drink: 'Coffee' }, expectedQuestions, ...extra } as never)).toMatchObject({ ok: false })
+      expect(h.keys).toEqual([])
+    }
   })
 })

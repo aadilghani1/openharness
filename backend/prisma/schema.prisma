@@ -684,3 +684,23 @@ model HarnessSession {
   @@index([userId])
   @@map("harness_sessions")
 }
+
+/// Public/private link metadata only. The owner daemon keeps the final policy and encrypted discussion.
+model HarnessLink {
+  id             String    @id @map("_id")
+  ownerId        String
+  machineId      String
+  agentId        String
+  autonomousEnv  String
+  name           String
+  engine         String?
+  ownerPublicKey String
+  visibility     String
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([machineId, agentId])
+  @@index([ownerId, machineId])
+  @@map("harness_links")
+}

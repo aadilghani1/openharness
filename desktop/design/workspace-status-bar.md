@@ -4,7 +4,7 @@ One shared status line, using compact monospace text and measured character cell
 Follow the [terminal workspace design system](terminal-workspace.md).
 
 ```text
-1:api  2:web  3:blender  +          M2  autonomous-harness  (main)
+1:api  2:web  3:blender  +          M2  autonomous-harness  (main)   [ Share ]
 ```
 
 ## Tabs on the left
@@ -95,7 +95,20 @@ Pane edges have no floating split buttons. Split Right and Split Down remain
 keyboard commands (Cmd-R and Cmd-D by default), with File menu and command-search
 access. Keep the resize gaps available for resizing.
 
-Restart Harness and Share Harness belong in File. Fork remains available in
+Share is a persistent primary action at the far right of the top bar, with a
+flat accent fill, white text, and the same fixed font and control height as the
+other bar actions. Reserve its width before allocating tabs and context. Web
+keeps Download app as a secondary text action immediately before Share.
+Clicking Share or pressing Cmd-Shift-S (Alt-Shift-S on web) opens the existing
+public/private link dialog for the focused agent. The tooltip and accessibility
+label name that agent; the shortcut hint follows remaps. A dependent viewer
+shares its owner. Empty tabs and view-only shared agents keep a disabled button.
+Opening Share alone does not create a link or change access. Native macOS and
+Flutter use the same command, labels, resolved colors, and availability.
+
+![The Share action at the right edge, rendered with synthetic data](images/workspace-share-button.png)
+
+Restart Harness and Share Harness also belong in File. Fork remains available in
 command search. Viewer and message-composer toggles belong in View and command
 search. These actions apply to the focused pane; sharing and viewer visibility
 follow a dependent viewer's owner.
@@ -121,9 +134,33 @@ empty tab.
 Each field is independently clickable, with the same bold hover/keyboard-focus
 text and hand cursor as the status symbols. Machine opens the shared picker scoped by machine
 identity; project opens its harnesses across matching remote checkouts; branch
-opens that project filtered by its exact branch. Escape returns
-from branch to project, then to project search. Names never establish identity.
-Branch navigation does not check out or create a branch.
+opens the focused session's branches and PRs when the daemon supplies `gitContext`.
+When recent successful work identifies one Git branch, show its name followed
+by the count of other checked-out branches, for example `ship-hn · +3`. The
+tooltip explains that this is recent confirmed work and gives its observation
+time. Git remains the source of branch names for every engine. When several
+branches have equal recent evidence, show the count instead of selecting one.
+
+Details group each branch with its PRs, put recent work and open PRs first, and
+fold completed work behind one action. Show a shared repository once, align PR
+states on the right, and keep head/base names and check times in inspection
+details. Size the dialog to its contents with bounded scrolling. Escape returns
+focus to the terminal.
+Older daemons keep exact-branch project search, with Escape returning through its
+scopes. Names never establish identity. Branch navigation does not check out or
+create a branch. Unknown/multiple/unavailable work uses plain muted context text,
+without a Git branch symbol when no single branch is displayed; the same action
+remains inspectable.
+
+![Session branches with synthetic data](images/session-branches.png)
+
+![Completed PRs expanded](images/session-branches-completed.png)
+
+Render these fixtures with `HARNESS_GIT_CONTEXT_CAPTURE_DIR=/tmp/work-dialog
+flutter test test/session_work_dialog_test.dart`. Local macOS captures load the
+system SF Mono face at 18 pt; the dialog itself follows the selected terminal
+font, size and palette. The same suite checks narrow windows, enlarged text,
+alternate palettes, and retained keyboard focus when appearance changes.
 
 Customize Harness → Status offers twelve saved themes, grouped into Minimal
 and Powerline, with a preview of the same sample pane beneath each choice.
@@ -211,7 +248,7 @@ References: [Zsh prompt parameters](https://zsh.sourceforge.io/Doc/Release/Param
 [Powerlevel10k](https://github.com/romkatv/powerlevel10k).
 
 Pane headers keep task identity and the hover-only close action. The top bar
-contains tabs, New Tab, and focused model/machine/project/branch/PR context.
+contains tabs, New Tab, focused model/machine/project/branch/PR context, and Share.
 Do not add a standalone Search label or category icons at the right edge.
 Context links open the corresponding scope in the unified picker. Global
 search remains available through Cmd-P and the app menu.

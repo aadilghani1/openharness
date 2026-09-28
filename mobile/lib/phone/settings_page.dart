@@ -150,9 +150,15 @@ class _Body extends StatelessWidget {
     ),
     children: [
       SettingsCaption(_sample(context) == null ? 'Account' : 'Sample'),
+      // Who you are, what you have used, the computers you reach and what they call this phone —
+      // one group, so no row stands alone under a heading that only repeats it.
       SettingsGroup(
         children: [
           _accountRow(context),
+          // ⚠️ Usage sits right under the account, above everything that is set once and left
+          // alone, and that is deliberate: it is the only row here anybody opens twice.
+          // No Stats row: counters this app keeps about itself are nobody's daily question.
+          buildUsageSettingsRow(context, notifier),
           // The computers this phone reaches — here rather than a menu of their own: linking one is
           // a once-a-while errand, and Find already reaches every agent on them.
           SettingsRow(
@@ -161,32 +167,17 @@ class _Body extends StatelessWidget {
               phoneRoute((_) => MachinesTab(notifier: notifier, large: false)),
             ),
           ),
-        ],
-      ),
-      // ⚠️ Usage sits SECOND, right under the account and above the appearance settings, and that
-      // is deliberate: it is the only run here anybody opens twice. Everything below it is set once
-      // and left alone, so burying a figure people check daily under four preferences would be
-      // ordering the list by how permanent each row is rather than by how often it is read.
-      const SettingsCaption('Usage'),
-      SettingsGroup(
-        children: [
-          // No Stats row: counters this app keeps about itself are nobody's daily question.
-          buildUsageSettingsRow(context, notifier),
+          // The name those computers show when this phone takes a harness over — which makes it a
+          // fact about the account's computers, not about how the terminal looks.
+          _PhoneNameRow(notifier: notifier),
         ],
       ),
       const SettingsCaption('Terminal'),
       SettingsGroup(
-        children: [
-          _FontPreview(),
-          _PhoneNameRow(notifier: notifier),
-          _FontRow(),
-          _SizeRow(),
-          _TerminalThemeRow(),
-        ],
+        children: [_FontPreview(), _FontRow(), _SizeRow(), _TerminalThemeRow()],
       ),
       // ⚠️ **Its own section, not a row under Terminal.** The rows above answer
-      // what the pane LOOKS like — face, size, colours, the name this phone
-      // signs its takeovers with. This one answers what the mic HEARS, which is
+      // what the pane LOOKS like — face, size, colours. This one answers what the mic HEARS, which is
       // the other half of the terminal and the one people go looking for when
       // the transcript comes back in the wrong language. Under a Terminal
       // caption it read as another thing about the type.
@@ -237,7 +228,7 @@ class _Body extends StatelessWidget {
     if (sample != null) {
       return SettingsRow(
         key: const ValueKey('settings-leave-sample'),
-        title: 'Leave sample',
+        title: 'Leave the sample',
         onTap: () => sample.leave(),
       );
     }
@@ -277,7 +268,12 @@ class _Avatar extends StatelessWidget {
     final source = (user?.name?.trim().isNotEmpty ?? false)
         ? user!.name!.trim()
         : (user?.email ?? '');
-    final initial = source.isEmpty ? '?' : source.substring(0, 1).toUpperCase();
+    // ⚠️ The first CHARACTER, not the first code unit: a name that opens with an emoji starts on
+    // half of a surrogate pair, and a lone half is a string the text engine refuses — it threw,
+    // and took the whole Settings page down with it.
+    final initial = source.isEmpty
+        ? '?'
+        : source.characters.first.toUpperCase();
     return Container(
       // 34, matching the stepper beside it two rows down: both are the tallest thing in their row,
       // and at 38 this one alone pushed its row past [kSettingsRowHeight] while the others sat on
@@ -285,14 +281,14 @@ class _Avatar extends StatelessWidget {
       width: 34,
       height: 34,
       decoration: BoxDecoration(
-        color: AppPalette.avatarFill,
+        color: Tty.of(context).selected,
         shape: BoxShape.circle,
       ),
       alignment: Alignment.center,
       child: Text(
         initial,
-        style: const TextStyle(
-          color: Colors.white,
+        style: TextStyle(
+          color: Tty.of(context).text,
           // Scaled with the disc: 15pt inside 34 left almost no ring around the letter, which
           // reads as a cramped badge rather than an avatar.
           fontSize: 14,
@@ -342,7 +338,8 @@ class _PhoneNameRow extends StatelessWidget {
       AppTheme.watch(context);
       return SettingsRow(
         key: const ValueKey('settings-phone-name'),
-        title: 'This phone',
+        // What the row sets, not what it is about: "This phone · Phone" read as a heading.
+        title: 'Phone name',
         value: notifier.phoneClientDescriptor().name,
         onTap: () => unawaited(
           showAppDialog<void>(
@@ -351,9 +348,7 @@ class _PhoneNameRow extends StatelessWidget {
               current: override ?? '',
               placeholder: composePhoneName(
                 device: NativeDeviceInfo.cached,
-                userName: notifier.currentUser?.isLocalSession == true
-                    ? null
-                    : notifier.currentUser?.name,
+                userName: notifier.currentUser?.name,
               ),
             ),
           ),
@@ -396,7 +391,7 @@ class _PhoneNameDialogState extends State<_PhoneNameDialog> {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return AlertDialog(
-      title: const Text('This phone'),
+      title: const Text('Phone name'),
       content: SizedBox(
         width: 360,
         child: TextField(
@@ -565,11 +560,13 @@ class _PaletteRow extends StatelessWidget {
     builder: (context, prefs, _) {
       AppTheme.watch(context);
       return SettingsRow(
-        title: 'Palette',
+        // "App colors", beside the terminal's own "Colors": both read Graphite by default, and
+        // two rows with one value looked like the same setting twice.
+        title: 'App colors',
         value: prefs.palette.label,
         onTap: () => showPhoneSheet(
           context,
-          title: 'Color palette',
+          title: 'App colors',
           actions: [
             for (final palette in HarnessPalette.values)
               PhoneSheetAction(
