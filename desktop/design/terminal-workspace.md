@@ -51,8 +51,9 @@ Keep mouse access useful without adding duplicate floating controls. Clickable
 text shows a hand cursor and bold text on hover, press, and keyboard focus.
 Preserve the underlying colors, including filled status segments. Reserve both
 text weights during layout so emphasis never shifts neighboring controls.
-Resting controls stay unboxed, except the persistent Share action: its flat
+Resting controls stay unboxed, except the optional Share action: its flat
 primary accent fill makes collaboration visible at the top-right corner.
+Settings → Experimental → Share button enables it; it is off by default.
 Tooltips describe the
 action, not merely the text. Omit a tooltip that repeats the visible name;
 show the full name when truncated, or a different underlying name. A model

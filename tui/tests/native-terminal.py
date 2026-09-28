@@ -267,7 +267,12 @@ def async_creation():
         # caller and the newly returned shell must be deleted. Real tmux creates synchronously;
         # compare its final killed-window state, not this artificial cancellation's exit code.
         local_pid = supervisor()
-        baseline_children = children(local_pid)
+        # A pane-dead event precedes asynchronous PTY reaping. A snapshot here can include an
+        # earlier exited child; comparing against it later then mistakes fewer children for a leak.
+        # The two live anchors are the stable baseline, and all earlier work must drain first.
+        baseline_children = {int(quick('display', '-p', '-t', f'async:{index}', '#{pane_pid}'))
+                             for index in (0, 1)}
+        wait(lambda: children(local_pid) == baseline_children, 'earlier creation shells reaped')
         pause()
         args = ['new-window', '-d', '-P', '-t', 'async:20', 'exec sleep 30']
         cancelled = start(*args)

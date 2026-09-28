@@ -95,9 +95,12 @@ Pane edges have no floating split buttons. Split Right and Split Down remain
 keyboard commands (Cmd-R and Cmd-D by default), with File menu and command-search
 access. Keep the resize gaps available for resizing.
 
-Share is a persistent primary action at the far right of the top bar, with a
-flat accent fill, white text, and the same fixed font and control height as the
-other bar actions. Reserve its width before allocating tabs and context. Web
+Settings → Experimental → Share button is off by default on desktop and web.
+The choice persists locally and updates the bar immediately; when off, no button
+or space is reserved. [Settings reference](images/share-experimental.png).
+When enabled, Share is a primary action at the far right
+of the top bar, with a flat accent fill, white text, and the same fixed font and
+control height as the other bar actions. Reserve its width before allocating tabs and context. Web
 keeps Download app as a secondary text action immediately before Share.
 Clicking Share or pressing Cmd-Shift-S (Alt-Shift-S on web) opens the existing
 public/private link dialog for the focused agent. The tooltip and accessibility
@@ -248,7 +251,8 @@ References: [Zsh prompt parameters](https://zsh.sourceforge.io/Doc/Release/Param
 [Powerlevel10k](https://github.com/romkatv/powerlevel10k).
 
 Pane headers keep task identity and the hover-only close action. The top bar
-contains tabs, New Tab, focused model/machine/project/branch/PR context, and Share.
+contains tabs, New Tab, focused model/machine/project/branch/PR context, and the
+optional Share button.
 Do not add a standalone Search label or category icons at the right edge.
 Context links open the corresponding scope in the unified picker. Global
 search remains available through Cmd-P and the app menu.

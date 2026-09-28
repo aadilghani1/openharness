@@ -575,6 +575,12 @@ private extension SwarmTabStrip {
     emit = { method, args in calls.append((method, args as? [String: Any] ?? [:])) }
     for width in [CGFloat(360), CGFloat(520), CGFloat(1280)] {
       setFrameSize(NSSize(width: width, height: 40))
+      var hidden = state
+      hidden.removeValue(forKey: "shareAction")
+      update(hidden)
+      let withoutShare = barFrames()
+      try checkTitlebar(shareButton.isHidden && !shareButton.isEnabled && shareButton.frame.width == 0,
+        "The Share experiment reserves no space while off at width \(width)")
       update(state)
       try checkTitlebar(!shareButton.isHidden && shareButton.isEnabled &&
         shareButton.frame.width == shareButton.preferredWidth &&
@@ -582,6 +588,10 @@ private extension SwarmTabStrip {
         contextButton.frame.maxX < shareButton.frame.minX &&
         newButton.frame.maxX < shareButton.frame.minX,
         "Share stays prominent at the right edge without overlapping tabs or context at width \(width)")
+      update(hidden)
+      try checkTitlebar(barFrames() == withoutShare,
+        "Turning Share off restores the original toolbar layout at width \(width)")
+      update(state)
     }
     try checkTitlebar(shareButton.accessibilityLabel() == "Share Website launch" &&
       shareButton.toolTip == "Share Website launch · ⇧⌘S",
