@@ -246,6 +246,8 @@ class ModelSearchCatalog extends ChangeNotifier {
                 words.subtitle ??
                 (manager.models?.reachable == false
                     ? 'Unavailable'
+                    : section.own
+                    ? 'Suggested'
                     : 'Available'),
           ),
         );
@@ -266,8 +268,13 @@ class ModelSearchCatalog extends ChangeNotifier {
     local.sort((a, b) {
       final state = rank(a.owner, a.model).compareTo(rank(b.owner, b.model));
       if (state != 0) return state;
-      final name = a.model.name.compareTo(b.model.name);
-      if (name != 0) return name;
+      // Preserve the daemon's grid-ranking order (the order the catalog
+      // service returned), not an alphabetised re-sort — so the top models
+      // match `grid catalog` / `list` instead of listing alphabetical first.
+      final aIndex = a.owner.localModels.indexOf(a.model);
+      final bIndex = b.owner.localModels.indexOf(b.model);
+      final order = aIndex.compareTo(bIndex);
+      if (order != 0) return order;
       final host = (a.owner.machine?.machine.displayName ?? '').compareTo(
         b.owner.machine?.machine.displayName ?? '',
       );
@@ -362,7 +369,7 @@ class ModelSearchCatalog extends ChangeNotifier {
         ? 'Running'
         : model.downloaded
         ? 'Downloaded'
-        : 'Available';
+        : 'Suggested';
   }
 
   @override

@@ -61,8 +61,7 @@ String listAge(int seconds) {
 /// with no known age is still a resting section, and "from ? ago" would be a guess.
 String restingSubtitle(int? lastKnownAge) => [
   'Asleep',
-  'starts when you send a message (about 10–30 s)',
-  if (lastKnownAge != null) 'list from ${listAge(lastKnownAge)}',
+  if (lastKnownAge != null) listAge(lastKnownAge),
 ].join(' · ');
 
 /// A wake that could not start [section]. The account's own section is "your models" — its name is

@@ -197,8 +197,11 @@ void main() {
     tester,
   ) async {
     await mount(tester, ':Shared Qwen');
-    expect(find.text('Shared · Team · Team computer'), findsOneWidget);
-    expect(find.text('Available'), findsNothing);
+    // The preview is a label/value table, not a single joined string.
+    expect(find.text('Shared Qwen'), findsOneWidget);
+    expect(find.text('Shared · Team'), findsOneWidget);
+    expect(find.text('Team computer'), findsOneWidget);
+    expect(find.text('Available'), findsOneWidget);
     await invoke(tester, 'picker.accept');
     expect(choices, isEmpty);
     search.setQuery(':Codex subscription');
@@ -233,7 +236,8 @@ void main() {
   ) async {
     await mount(tester, ':mac.lan');
     expect(find.text('qwen3.8-27b'), findsOneWidget);
-    expect(find.text('On your machines · mac.lan'), findsOneWidget);
+    expect(find.text('On your machines'), findsOneWidget);
+    expect(find.text('mac.lan'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('resource-action:picker.accept')),
       findsOneWidget,
@@ -269,7 +273,8 @@ void main() {
     tester,
   ) async {
     await mount(tester, ':Qwen3.8-27B', scenario: 'ready');
-    expect(find.text('17.6 tok/s · 42 requests / 1d'), findsOneWidget);
+    expect(find.text('17.6 tok/s'), findsOneWidget);
+    expect(find.text('42 req / 1d'), findsOneWidget);
     await invoke(tester, 'picker.accept');
     expect(choices, isEmpty);
     final reads = app.localReads;
@@ -320,8 +325,10 @@ void main() {
       search.rows.where((row) => row.title == 'qwen3.8-27b · Q4_0'),
       hasLength(1),
     );
-    expect(find.text('M2 · 16.0 GB'), findsOneWidget);
-    expect(find.text('17.6 tok/s · 42 requests / 1d'), findsOneWidget);
+    expect(find.text('M2'), findsOneWidget);
+    expect(find.text('16.0 GB'), findsOneWidget);
+    expect(find.text('17.6 tok/s'), findsOneWidget);
+    expect(find.text('42 req / 1d'), findsOneWidget);
     TerminalTextAction button(String action) => tester.widget(
       find.byKey(ValueKey('resource-action:picker.model_$action')),
     );
