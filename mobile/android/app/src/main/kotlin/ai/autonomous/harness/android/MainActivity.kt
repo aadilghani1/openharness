@@ -1,8 +1,10 @@
 package ai.autonomous.harness.android
 
+import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
 import android.content.ContentResolver
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -57,15 +59,36 @@ class MainActivity : FlutterActivity() {
         }.start()
       }
 
-    // `harness/app_task` — "Exit" in the question back asks at the app's root (Dart:
+    // `harness/app_task` — what the app asks of its own activity.
+    //
+    // `moveToBack`: "Exit" in the question back asks at the app's root (Dart:
     // `lib/phone/exit_app.dart`). The task goes to the background, as the system's own back does at
     // a launcher activity since Android 12, rather than being finished: the engine and its sockets
     // stay up, and opening the app again lands where it was. False when the task did not move, and
     // Dart then falls back to `SystemNavigator.pop`.
+    //
+    // `openSettings`: this app's App info screen, where a camera permission refused for good is
+    // turned back on (Dart: `lib/core/app_settings.dart`). False when no activity takes the intent.
     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "harness/app_task")
       .setMethodCallHandler { call, result ->
-        if (call.method != "moveToBack") { result.notImplemented(); return@setMethodCallHandler }
-        result.success(moveTaskToBack(true))
+        when (call.method) {
+          "moveToBack" -> result.success(moveTaskToBack(true))
+          "openSettings" -> {
+            val intent = Intent(
+              Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+              Uri.fromParts("package", packageName, null),
+            )
+            result.success(
+              try {
+                startActivity(intent)
+                true
+              } catch (e: ActivityNotFoundException) {
+                false
+              }
+            )
+          }
+          else -> result.notImplemented()
+        }
       }
   }
 
