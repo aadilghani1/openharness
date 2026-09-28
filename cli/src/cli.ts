@@ -192,7 +192,7 @@ import {
   type Poller, type UpdateEntry,
 } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
-import { ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
+import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
 import { readdir, stat } from 'fs/promises'
 import { CodexNormalizer, codexTaskError, lastCodexTurnText } from './engines/codex/normalizer.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
@@ -451,6 +451,7 @@ function tildify(p: string): string {
 
 /** The currently-running script — dist/cli.js when built, src/cli.ts under tsx. */
 const SCRIPT_PATH = fileURLToPath(import.meta.url)
+ensureHnLauncher(SCRIPT_PATH)
 
 /**
  * Start the daemon that succeeds this one, on whatever bytes are in `~/.harness/cli` right now.

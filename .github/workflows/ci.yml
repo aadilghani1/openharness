@@ -101,6 +101,11 @@ jobs:
       # `npm run test:tmux-real` and friends are how those are run, on a machine that has them.
       - run: npx vitest run
 
+      - name: Verify hn launcher repair in an existing installation
+        run: |
+          npm run bundle
+          node scripts/test-hn-upgrade.mjs
+
       - name: Require complete harness updater coverage
         run: npm run test:dsh-updates
 
