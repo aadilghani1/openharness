@@ -121,13 +121,33 @@ empty tab.
 Each field is independently clickable, with the same bold hover/keyboard-focus
 text and hand cursor as the status symbols. Machine opens the shared picker scoped by machine
 identity; project opens its harnesses across matching remote checkouts; branch
-opens the focused session's Work details when the daemon supplies `gitContext`.
-Details distinguish current observed work from the launch workspace and retain
-observed branches and PRs across tasks. Escape returns focus to the terminal.
+opens the focused session's branches and PRs when the daemon supplies `gitContext`.
+When recent successful work identifies one Git branch, show its name followed
+by the count of other checked-out branches, for example `ship-hn · +3`. The
+tooltip explains that this is recent confirmed work and gives its observation
+time. Git remains the source of branch names for every engine. When several
+branches have equal recent evidence, show the count instead of selecting one.
+
+Details group each branch with its PRs, put recent work and open PRs first, and
+fold completed work behind one action. Show a shared repository once, align PR
+states on the right, and keep head/base names and check times in inspection
+details. Size the dialog to its contents with bounded scrolling. Escape returns
+focus to the terminal.
 Older daemons keep exact-branch project search, with Escape returning through its
 scopes. Names never establish identity. Branch navigation does not check out or
 create a branch. Unknown/multiple/unavailable work uses plain muted context text,
-without a Git branch symbol; the same action remains inspectable.
+without a Git branch symbol when no single branch is displayed; the same action
+remains inspectable.
+
+![Session branches with synthetic data](images/session-branches.png)
+
+![Completed PRs expanded](images/session-branches-completed.png)
+
+Render these fixtures with `HARNESS_GIT_CONTEXT_CAPTURE_DIR=/tmp/work-dialog
+flutter test test/session_work_dialog_test.dart`. Local macOS captures load the
+system SF Mono face at 18 pt; the dialog itself follows the selected terminal
+font, size and palette. The same suite checks narrow windows, enlarged text,
+alternate palettes, and retained keyboard focus when appearance changes.
 
 Customize Harness → Status offers twelve saved themes, grouped into Minimal
 and Powerline, with a preview of the same sample pane beneath each choice.

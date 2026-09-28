@@ -10,6 +10,8 @@ export type SessionGitContext = {
   current: AgentProject | null
   /** Git snapshots of session-associated checkouts. Paths are internal identity, not UI labels. */
   checkouts?: AgentProject[]
+  /** Branch in the most recently confirmed Git location, not a claim of live execution. */
+  recentWork?: { project: AgentProject; at: string }
   observedAt: string | null
   /** The location is confirmed historical work; newer tool activity could not yet be resolved. */
   activityUncertain?: boolean
@@ -71,6 +73,7 @@ export async function sessionGitContext(home: AgentProject | null, work?: Sessio
     checkouts: [],
   }
   const roots = new Map<string, AgentProject>()
+  const resolved = new Map<string, AgentProject | null>()
   const add = (project: AgentProject | null) => {
     if (project?.root && !roots.has(project.root)) roots.set(project.root, { ...project, cwd: project.root })
   }
@@ -84,11 +87,35 @@ export async function sessionGitContext(home: AgentProject | null, work?: Sessio
   ])]
   let reads = 0
   for (const cwd of paths) {
-    if (roots.has(cwd)) continue
+    if (roots.has(cwd)) { resolved.set(cwd, roots.get(cwd)!); continue }
     // A subdirectory can itself be a nested repository/worktree. Resolve it through Git,
     // never assume path containment proves checkout identity. Bound additional lookups.
     if (reads++ === 8) { context.truncated = true; break }
-    add(await read(cwd).catch(() => null))
+    const project = await read(cwd).catch(() => null)
+    resolved.set(cwd, project)
+    add(project)
+  }
+  // A later command outside Git does not erase the last useful coding context.
+  // Same-time locations are one operation: never select one member of parallel work,
+  // or a partially inspected group, as the session's unique recent branch.
+  const activity = [...(work?.current ?? []), ...(work?.locations ?? [])]
+  const times = [...new Set(activity.map(row => row.at))].sort((a, b) => Date.parse(b) - Date.parse(a))
+  for (const at of times) {
+    const locations = activity.filter(row => row.at === at)
+    const projects = locations.map(row => resolved.get(row.cwd))
+    const git = new Map<string, AgentProject>()
+    for (const project of projects) {
+      const fresh = project?.root ? roots.get(project.root) : null
+      if (fresh?.branch && !fresh.branchPending && !fresh.branch.startsWith('Detached ')) {
+        git.set(JSON.stringify([fresh.remote ?? fresh.root, fresh.branch]), fresh)
+      }
+    }
+    if (!git.size) continue
+    if (git.size === 1 && projects.every(project => project != null && !project.branchPending
+      && (!project.root || project.branch && !project.branch.startsWith('Detached ')))) {
+      context.recentWork = { project: [...git.values()][0], at }
+    }
+    break
   }
   // Different files in one checkout are one useful workspace in the details view. Only collapse
   // paths under roots Git actually resolved; similarly named sibling worktrees remain distinct.

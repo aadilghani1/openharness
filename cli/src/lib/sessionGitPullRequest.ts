@@ -21,7 +21,7 @@ export async function readSessionGitPullRequest(agent: RegisteredSession, option
   }
   let context = await resolve()
   await sessionGitHistory.observe(agent, context)
-  const current = context.current
+  const current = context.recentWork?.project ?? context.current
   let identity = current?.branch ? { cwd: current.cwd, branch: current.branch, remote: current.remote } : null
   const matches = !options.expected || identity && options.expected.cwd === identity.cwd
     && options.expected.branch === identity.branch && options.expected.remote === identity.remote
@@ -39,7 +39,7 @@ export async function readSessionGitPullRequest(agent: RegisteredSession, option
     if (JSON.stringify(latest) === JSON.stringify(work)) return
     context = await resolve(latest)
     await sessionGitHistory.observe(agent, context)
-    const project = context.current
+    const project = context.recentWork?.project ?? context.current
     identity = project?.branch ? { cwd: project.cwd, branch: project.branch, remote: project.remote } : null
     result = { status: 'unavailable' }
   }

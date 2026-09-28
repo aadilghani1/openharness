@@ -181,7 +181,19 @@ describe('session work from transcript through Git and PR history', () => {
     })
     expect(await readSessionGitPullRequest(agent, {
       expected: { cwd: ship, branch: 'hn/nfc', remote: 'github.com/acme/app' },
-    })).toMatchObject({ status: 'unavailable', context: null })
+    })).toMatchObject({ status: 'unavailable', context: { cwd: home, branch: 'original', remote: 'github.com/acme/app' } })
+  })
+
+  it('binds the header PR to recent work while retaining the assigned checkout and other branches', async () => {
+    await receipt('ship', join(ship, 'tui'))
+    const value = await frame()
+    expect(value.project?.branch).toBe('original')
+    expect(value.gitContext).toMatchObject({ state: 'multiple', current: null,
+      recentWork: { project: { cwd: ship, branch: 'hn/nfc' } } })
+    const expected = { cwd: ship, branch: 'hn/nfc', remote: 'github.com/acme/app' }
+    expect(await readSessionGitPullRequest(agent, { expected })).toMatchObject({ status: 'found', number: 12, context: expected })
+    expect((await readSessionGitPullRequest(agent, { expected: { ...expected, cwd: home, branch: 'original' } })).status).toBe('unavailable')
+    expect(agent.cwd).toBe(home)
   })
 
   it('refreshes the visible open-first page, including multiple PRs for one branch', async () => {

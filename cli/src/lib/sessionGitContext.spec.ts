@@ -46,6 +46,7 @@ describe('Git context from observed session work', () => {
     const context = await sessionGitContext(launch, observation)
     expect(context).toMatchObject({ state: 'multiple', current: null })
     expect(context.checkouts?.map(p => p.branch)).toEqual(['original', 'hn/preview-fix'])
+    expect(context.recentWork).toMatchObject({ project: { branch: 'hn/preview-fix' }, at })
     expect(launch?.branch).toBe('original')
     const session = { agentId: 'hn', sessionId: 's', engine: 'claude', cwd: home,
       registeredAt: 1, boundAt: 1, lastHookAt: 1, transcriptPath: null, runtimes: [],
@@ -54,6 +55,7 @@ describe('Git context from observed session work', () => {
       tokenUsage: { totalTokens: null, updatedAt: at, work: observation } })
     expect(frame.project?.branch).toBe('original')
     expect(frame.gitContext.checkouts?.map(p => p.branch)).toEqual(['original', 'hn/preview-fix'])
+    expect(frame.gitContext.recentWork?.project.branch).toBe('hn/preview-fix')
     expect(session.cwd).toBe(home)
   })
 
@@ -102,5 +104,17 @@ describe('Git context from observed session work', () => {
     const context = await sessionGitContext(null, work(Array.from({ length: 20 }, (_, i) => `/work/${i}`), { pullRequests }), read)
     expect(context).toMatchObject({ state: 'unavailable', current: null, truncated: true, pullRequests })
     expect(read).toHaveBeenCalledTimes(8)
+  })
+
+  it('retains recent Git work across unrelated non-Git activity without claiming parallel work has one branch', async () => {
+    const home = { name: 'app', cwd: '/home', root: '/home', branch: 'original', remote: null }
+    const read = async (cwd: string) => ({ ...home, cwd, root: cwd === '/notes' ? null : cwd,
+      branch: cwd === '/notes' ? null : cwd === '/ship' ? 'shipping' : 'other' })
+    const locations = [{ cwd: '/notes', at: '2026-09-28T01:00:00Z' }, { cwd: '/ship', at }]
+    const recent = await sessionGitContext(home, work(['/notes'], { locations, uncertain: true }), read)
+    expect(recent.recentWork).toMatchObject({ project: { branch: 'shipping' }, at })
+    expect((await sessionGitContext(home, work(['/ship', '/other']), read)).recentWork).toBeUndefined()
+    expect((await sessionGitContext(home, work(['/ship', '/missing']), async cwd => cwd === '/missing' ? null : read(cwd))).recentWork).toBeUndefined()
+    expect((await sessionGitContext(home)).recentWork).toBeUndefined()
   })
 })

@@ -15,7 +15,7 @@ import 'swarm_state_test.dart' show createApp;
 void main() {
   for (final native in [false, true]) {
     testWidgets(
-      'current branch opens work history without touching its terminal (native=$native)',
+      'recent branch opens work history without touching its terminal (native=$native)',
       (tester) async {
         final old = appearancePrefsStore.value;
         appearancePrefsStore.value = old.copyWith(prompt: const PromptPrefs());
@@ -37,14 +37,31 @@ void main() {
         );
         final app = createApp();
         addTearDown(app.dispose);
+        final git = gitFixture();
+        final recent = git['current'] as Map;
+        git['state'] = 'multiple';
+        git['current'] = null;
+        git['checkouts'] = [
+          recent,
+          {
+            ...recent,
+            'cwd': '/launch',
+            'root': '/launch',
+            'branch': 'original',
+          },
+        ];
+        git['recentWork'] = {'project': recent, 'at': '2026-09-27T13:00:00Z'};
         app.stateOf('m')!
-          ..agents = [workAgent(git: gitFixture())]
+          ..agents = [workAgent(git: git)]
           ..nodeOnline = false;
         final input = <TerminalBinaryFrame>[];
         final pane = app.adoptSessionForTest(terminal('hn', input));
         final session = pane.session;
         await mount(tester, app, nativeTabs: native);
-        expect(WorkspacePaneContext.focused(app)?.branch, 'hn/preview-fix');
+        expect(
+          WorkspacePaneContext.focused(app)?.branch,
+          'hn/preview-fix · +1',
+        );
         if (native) {
           final fields =
               ((updates.last['focusedContext'] as Map)['fields'] as List)
