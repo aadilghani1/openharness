@@ -521,7 +521,7 @@ void main() {
             '1:Release',
           );
         } else {
-          expect(find.text('1:Release'), findsOneWidget);
+          expect(find.text('Release'), findsOneWidget);
         }
         app.newSwarm();
         await tester.pump();
@@ -665,7 +665,9 @@ void main() {
         expect(workspaceTabNames(restored)[office.id], expected);
         expect(restored.swarms.any((tab) => tab.id == term.id), isFalse);
         expect(
-          restored.swarms.singleWhere((tab) => tab.id == office.id).nameIsCustom,
+          restored.swarms
+              .singleWhere((tab) => tab.id == office.id)
+              .nameIsCustom,
           custom,
         );
       },
@@ -924,12 +926,15 @@ void main() {
       app.newSwarm();
       app.adoptSessionForTest(terminal('a1', []));
       await mount(tester, app);
-      expect(find.text('1:code'), findsOneWidget);
-      expect(find.text('2:code'), findsOneWidget);
+      expect(find.text('code'), findsNWidgets(2));
+      expect(find.text('1:'), findsOneWidget);
+      expect(find.text('2:'), findsOneWidget);
       final context = find.byKey(const ValueKey('workspace-pane-context'));
       expect(
         tester.getRect(context).left,
-        greaterThan(tester.getRect(find.text('2:code')).right),
+        greaterThan(
+          tester.getRect(find.byKey(ValueKey(app.activeSwarmId))).right,
+        ),
       );
       final secondTab = find.byKey(ValueKey(app.activeSwarmId));
       final barControls = find.byType(WorkspaceBarControl);
@@ -966,7 +971,7 @@ void main() {
         ),
         findsNothing,
       );
-      await tester.tap(find.text('1:code'));
+      await tester.tap(find.byKey(ValueKey(first.id)));
       await tester.pump(const Duration(milliseconds: 350));
       expect(app.activeSwarm, same(first));
       final originalFont = terminalFontStore.value;

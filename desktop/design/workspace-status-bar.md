@@ -4,7 +4,7 @@ One shared status line, using compact monospace text and measured character cell
 Follow the [terminal workspace design system](terminal-workspace.md).
 
 ```text
-1:api  2:web  3:blender  +          M2  autonomous-harness  (main)   [ Share ]
+1:? api  2:⠹ web  3:✓ blender  +          M2  autonomous-harness  (main)   [ Share ]
 ```
 
 ## Tabs on the left
@@ -53,6 +53,54 @@ label when it is truncated. Keep action hints on symbols and status links.
 The new-tab `+` uses a plain-text control: no resting
 box, with bold text on hover or keyboard
 focus. Keep its New Tab tooltip and shortcut hint.
+
+### Harness activity
+
+Use hn's one-character status vocabulary in two existing places: after the
+number in a tab (`2:⠹ web`), and between the engine icon and title in a pane
+header. Viewer headers show their owner's state. Shells, unknown agents, and
+utility tabs have no harness activity mark. Keep the existing engine icon.
+The mark replaces the native tab's old orange attention indicator; it adds no
+new bar, counter, badge, or permanent legend. Hover and accessibility descriptions
+explain each symbol.
+
+| Mark | Meaning | Terminal color |
+| --- | --- | --- |
+| `?` | Needs your input | Yellow |
+| `✗` | Last turn or launch failed | Red |
+| `✓` | Finished and unread | Green |
+| `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` | Working, one frame per 100 ms | Cyan |
+| `◌` | Starting | Yellow |
+| `·` | Idle | Muted foreground |
+| `‖` | Paused | Muted foreground |
+| `○` | Offline | Muted foreground |
+
+A tab shows its most urgent member in the order above, counting a harness and
+its viewers once. For an individual harness, offline/paused/launch state takes
+precedence; a current question takes precedence over working. A new turn masks
+old results. Seeing a completion clears its unread check, but viewing a failed
+turn does not clear the failure. A pane hidden by zoom or an inactive/utility
+tab is not seen. Existing unread storage remains an in-memory, bounded list;
+these marks are not a durable event history.
+
+Reserve one measured cell for the mark and one for the gap. Animate only the
+mark, never the label, width, terminal, or method-channel payload. Long tabs
+shorten their names and scroll; preserve room for the number and mark. SF Mono
+does not contain Braille, so Flutter explicitly falls back to the platform's
+symbol font inside that fixed cell. Native text uses CoreText fallback.
+
+Flutter shares one clock; AppKit has one local clock. Both derive the same frame
+from Unix time. No visible working mark means no timer. Hidden panes and
+offscreen tabs do not animate; background/inactive apps and Reduce Motion stop
+the clock. Reduce Motion keeps the first Braille frame with its Working label.
+Colors follow the terminal palette and the Color preference.
+
+State rules live in `lib/state/harness_activity.dart`, with the Flutter mark in
+`lib/widgets/harness_activity_mark.dart`. `harness_activity_test.dart`,
+`workspace_activity_test.dart`, and the native titlebar checks cover state,
+acknowledgement, fixed geometry, visibility, and animation. Set
+`HARNESS_ACTIVITY_CAPTURE_DIR` when running the workspace activity test to
+capture synthetic Flutter screenshots and the native tab payload.
 
 Tab labels, status text, pane titles, and model selectors use **13 pt SF Mono,
 regular weight at rest** on macOS. Linux uses its platform monospace stack at the same

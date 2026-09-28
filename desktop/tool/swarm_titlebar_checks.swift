@@ -36,6 +36,81 @@ private extension NSView {
   }
 }
 
+private extension SwarmTabStrip {
+  func checkActivityMarks() throws {
+    func payload(_ mark: String, _ label: String, working: Bool = false) -> [String: Any] {
+      ["mark": mark, "label": label, "working": working, "color": Int64(0xff64d2ff)]
+    }
+    let states: [(String, String)] = [("⠋", "Working"), ("?", "Needs your input"),
+      ("✗", "Failed"), ("✓", "Finished · unread"), ("·", "Idle"),
+      ("◌", "Starting"), ("‖", "Paused"), ("○", "Offline")]
+    update(["enabled": true, "activeId": "activity", "tabs": [
+      ["id": "activity", "name": "desktop", "label": "1:desktop", "activity": payload("⠋", "Working", working: true)]
+    ]])
+    let tab = tabs[0]
+    try checkTitlebar(activityTimer == nil, "A hidden native strip runs no animation timer")
+    try tab.checkActivityDrawing(states: states)
+    update(["enabled": true, "reduceMotion": true, "activeId": "activity", "tabs": [
+      ["id": "activity", "name": "desktop", "label": "1:desktop", "activity": payload("⠋", "Working", working: true)]
+    ]])
+    try checkTitlebar(activityTimer == nil && tab.activityFrame == 0, "Reduce Motion parks the native spinner")
+    update(["enabled": true, "tabs": []])
+    try checkTitlebar(activityTimer == nil, "Removing the last working tab leaves no timer")
+  }
+}
+
+private extension SwarmTabButton {
+  func checkActivityDrawing(states: [(String, String)]) throws {
+    func payload(_ mark: String, _ label: String) -> [String: Any] {
+      ["mark": mark, "label": label, "color": Int64(0xff64d2ff)]
+    }
+    let width = preferredWidth
+    let rect = activityRect
+    try checkTitlebar(labelText == "1:  desktop", "Activity reserves its cell after the tab number")
+    var pictures = Set<Data>()
+    for frame in 0..<10 {
+      // Sample inside each interval: Date's reference-epoch conversion can put
+      // an exact decimal boundary a fraction of a microsecond before it.
+      try checkTitlebar(harnessActivityFrame(at: Date(timeIntervalSince1970: Double(frame) / 10 + 0.05)) == frame,
+        "The native spinner uses hn's exact 100ms frame \(frame)")
+      activityFrame = frame
+      pictures.insert(renderedPixels())
+      try checkTitlebar(preferredWidth == width && activityRect == rect,
+        "A spinner frame never moves native tab text")
+    }
+    try checkTitlebar(pictures.count == 10, "All ten Braille frames render distinctly")
+    for (mark, label) in states {
+      activity = SwarmTabActivity(payload(mark, label))
+      layoutSubtreeIfNeeded()
+      try checkTitlebar(preferredWidth == width && activityRect == rect,
+        "\(label) occupies the same reserved cell")
+      try checkTitlebar(toolTip == label && selectButton.accessibilityHelp() == label,
+        "\(label) has readable hover and accessibility descriptions")
+      for narrow in [CGFloat(28), CGFloat(56), width] {
+        frame.size.width = narrow
+        let bitmap = renderedBitmap()
+        if let capture = ProcessInfo.processInfo.environment["HARNESS_ACTIVITY_CAPTURE_DIR"] {
+          try bitmap.representation(using: .png, properties: [:])!.write(to:
+            URL(fileURLWithPath: capture).appendingPathComponent("native-\(label)-\(Int(narrow)).png"))
+        }
+        let colored = (0..<bitmap.pixelsWide).contains { x in
+          (0..<bitmap.pixelsHigh).contains { y in
+            guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                  pixel.alphaComponent > 0.2 else { return false }
+            // Antialiased dots need not contain a fully opaque ink pixel.
+            // Only the mark has cyan chroma; the title and background are gray.
+            return pixel.blueComponent - pixel.redComponent > 0.15 &&
+              pixel.greenComponent - pixel.redComponent > 0.10 &&
+              pixel.blueComponent - pixel.greenComponent > 0.04
+          }
+        }
+        try checkTitlebar(colored, "\(label) remains visible at tab width \(narrow)")
+      }
+      frame.size.width = width
+    }
+  }
+}
+
 private extension SwarmContextButton {
   func checkThemeSymbolsAndCaps() throws {
     font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
@@ -958,7 +1033,7 @@ private extension SwarmTabStrip {
       try checkTitlebar(messenger.calls.count == before + 1, "Each native tab activation sends one action")
     }
     tab.attention = true
-    try checkTitlebar(buttons[0].accessibilityHelp()?.contains("needing input") == true,
+    try checkTitlebar(buttons[0].accessibilityHelp()?.contains("Needs your input") == true,
       "The attention dot has an accessible description")
     tab.attention = false
     try checkTitlebar(buttons[0].accessibilityHelp() == nil, "Resolved attention clears its accessible description")
@@ -1748,6 +1823,7 @@ do {
   try strip.checkAgentIdentity()
   try strip.checkSharedTypography()
   try strip.checkShareAction()
+  try strip.checkActivityMarks()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
   try strip.checkDaemon()
   try strip.checkDaemonOff()

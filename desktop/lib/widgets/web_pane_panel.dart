@@ -14,6 +14,7 @@ import '../state/terminal_pane.dart';
 import '../theme/app_theme.dart';
 import '../viewer/interactive_viewer.dart';
 import 'engine_identity.dart';
+import 'harness_activity_mark.dart';
 import '../terminal/terminal_text.dart';
 import 'verdict_marks.dart';
 
@@ -45,9 +46,11 @@ class WebPanePanel extends StatefulWidget {
     this.onToggleZoom,
     this.zoomed = false,
     this.compactHeader = false,
+    this.visible = true,
   });
 
   final AppNotifier notifier;
+  final bool visible;
   final TerminalPane pane;
 
   /// What the pane is called in its header ("3D Viewer"); see viewerPaneName.
@@ -268,6 +271,13 @@ class _WebPanePanelState extends State<WebPanePanel> {
               size: 17,
             ),
             const SizedBox(width: 10),
+            if (widget.pane.ownerAgentId case final ownerId?)
+              HarnessActivityMark(
+                app: widget.notifier,
+                machineId: widget.pane.machineId,
+                agentId: ownerId,
+                visible: widget.visible,
+              ),
             // The name, and one status after it — ready, or what stands in
             // the way, or where the work is — in the place a "Viewer" label
             // would only repeat what the pane shows. A status, not a history.

@@ -39,6 +39,7 @@ import '../shortcuts/keymap_native.dart';
 import '../shortcuts/keymap_settings.dart';
 import '../state/app_state.dart';
 import '../state/harness_sessions.dart';
+import '../state/harness_activity.dart';
 import '../state/harness_placement.dart';
 import '../state/new_harness.dart';
 import '../state/device_form.dart';
@@ -61,6 +62,7 @@ import '../widgets/add_phone_dialog.dart';
 import '../widgets/layout_palette.dart';
 import '../widgets/move_pane_palette.dart';
 import '../widgets/engine_identity.dart';
+import '../widgets/harness_activity_mark.dart';
 import '../widgets/status_line.dart';
 import '../widgets/workspace_status_line.dart';
 import '../widgets/workspace_bar_control.dart';
@@ -564,7 +566,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     super.didChangeDependencies();
     // Only the one flag: depending on all of MediaQuery rebuilt the workspace
     // on every resize.
-    _reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final motionChanged = reduceMotion != _reduceMotion;
+    _reduceMotion = reduceMotion;
     _daemonEnvironmentChanged();
     final keymap = KeymapTheme.of(context);
     if (keymap != _providedKeymap) {
@@ -574,7 +578,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     _syncKeymap();
     final current = ModalRoute.isCurrentOf(context) ?? true;
-    if (_routeIsCurrent == current) return;
+    if (_routeIsCurrent == current) {
+      if (motionChanged && _native) _syncNative();
+      return;
+    }
     _routeIsCurrent = current;
     if (!current &&
         (_search != null ||
@@ -1539,6 +1546,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final barStyle = workspaceBarTextStyle();
     final payload = {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
+      'reduceMotion': _reduceMotion,
       'activeId': app.activeSwarmId,
       // The selected tab is drawn with keyboard focus: ⏎ goes into it.
       'tabsFocused': app.tabStripFocused && _tabStripFocus.hasPrimaryFocus,
@@ -1712,6 +1720,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       app.questionFor(p.machineId, p.agentId!) != null,
                 )
                 .length,
+            if (tabActivity(app, swarm) case final activity?)
+              'activity': {
+                'mark': activity.mark,
+                'label': activity.label,
+                'working': activity == HarnessActivity.working,
+                'color': activityColor(
+                  activity,
+                  terminalTheme,
+                  color: prefs.color,
+                ).toARGB32(),
+              },
           },
       ],
     };
@@ -6238,6 +6257,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         terminalThemeStore.value,
       );
       final names = workspaceTabNames(app);
+      final activities = [for (final tab in app.swarms) tabActivity(app, tab)];
       final labels = [
         for (var index = 0; index < app.swarms.length; index++)
           '${index + 1}:${names[app.swarms[index].id]}',
@@ -6265,10 +6285,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
       );
       final tabBudget = contentWidth * .45;
       _tabWidths = [
-        for (final label in labels)
-          math.min(
-            math.min(label.characters.length + 2, 24) * cell.width,
-            tabBudget,
+        for (var i = 0; i < labels.length; i++)
+          math.max(
+            activities[i] == null ? 0 : ('${i + 1}:'.length + 4) * cell.width,
+            math.min(
+              math.min(
+                    labels[i].characters.length +
+                        2 +
+                        (activities[i] == null ? 0 : 2),
+                    24,
+                  ) *
+                  cell.width,
+              tabBudget,
+            ),
           ),
       ];
       final total = _tabWidths.fold(0.0, (sum, width) => sum + width);
@@ -6387,6 +6416,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   itemBuilder: (context, index) {
                     final swarm = app.swarms[index];
                     final selected = app.activeSwarmId == swarm.id;
+                    final activity = activities[index];
+                    final nameHint = workspaceTabTooltip(
+                      labels[index],
+                      swarm.name,
+                      clipped:
+                          workspaceBarTextSizeOf(context, labels[index]).width +
+                              (activity == null ? 0 : cell.width * 2) >
+                          _tabWidths[index] - cell.width * 2,
+                    );
+                    final tabHint = [
+                      ?nameHint,
+                      if (activity != null) activity.label,
+                    ].join('\n');
                     return ReorderableDragStartListener(
                       key: ValueKey(swarm.id),
                       index: index,
@@ -6407,17 +6449,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           onDoubleTap: () => _rename(swarm.id),
                           child: Center(
                             child: WorkspaceBarControl(
-                              label: '${labels[index]}: ${swarm.name}',
-                              tooltip: workspaceTabTooltip(
-                                labels[index],
-                                swarm.name,
-                                clipped:
-                                    workspaceBarTextSizeOf(
-                                      context,
-                                      labels[index],
-                                    ).width >
-                                    _tabWidths[index] - cell.width * 2,
-                              ),
+                              label:
+                                  '${labels[index]}: ${swarm.name}${activity == null ? '' : ', ${activity.label}'}',
+                              tooltip: tabHint.isEmpty ? null : tabHint,
                               selectedBackground: grid.AppPalette.swarmWelcome,
                               selected: selected,
                               highlighted:
@@ -6434,16 +6468,76 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                     horizontal: cell.width,
                                   ),
                                   child: Center(
-                                    child: Text(
-                                      labels[index],
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      textAlign: TextAlign.center,
-                                      style: workspaceBarTextStyle(
-                                        color: theme.foreground,
-                                        emphasized: emphasized,
-                                      ),
-                                    ),
+                                    child: activity == null
+                                        ? Text(
+                                            labels[index],
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            textAlign: TextAlign.center,
+                                            style: workspaceBarTextStyle(
+                                              color: theme.foreground,
+                                              emphasized: emphasized,
+                                            ),
+                                          )
+                                        : Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                '${index + 1}:',
+                                                style: workspaceBarTextStyle(
+                                                  color: theme.foreground,
+                                                  emphasized: emphasized,
+                                                ),
+                                              ),
+                                              ListenableBuilder(
+                                                listenable: _tabScroll,
+                                                builder: (context, _) {
+                                                  final left = _tabWidths
+                                                      .take(index)
+                                                      .fold(
+                                                        0.0,
+                                                        (a, b) => a + b,
+                                                      );
+                                                  final offset =
+                                                      _tabScroll.hasClients
+                                                      ? _tabScroll.offset
+                                                      : 0.0;
+                                                  return ActivityMark(
+                                                    key: ValueKey(
+                                                      'tab-activity:${swarm.id}',
+                                                    ),
+                                                    activity: activity,
+                                                    color: activityColor(
+                                                      activity,
+                                                      theme,
+                                                      color: prefs.color,
+                                                    ),
+                                                    emphasized: emphasized,
+                                                    tooltip: false,
+                                                    visible:
+                                                        left <
+                                                            offset +
+                                                                tabsWidth &&
+                                                        left + _tabWidths[index] >
+                                                            offset,
+                                                  );
+                                                },
+                                              ),
+                                              SizedBox(width: cell.width),
+                                              Flexible(
+                                                child: Text(
+                                                  names[swarm.id]!,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: workspaceBarTextStyle(
+                                                    color: theme.foreground,
+                                                    emphasized: emphasized,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                   ),
                                 ),
                               ),

@@ -228,7 +228,7 @@ void main() {
           expect(tab['id'], office.id);
           expect(tab['label'], '1:office');
         } else {
-          expect(find.text('1:office'), findsOneWidget);
+          expect(find.text('office'), findsOneWidget);
         }
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());

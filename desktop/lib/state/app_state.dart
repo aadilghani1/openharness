@@ -360,7 +360,7 @@ class MachineState {
   /// failed, so the daemon can say who (and not about the pane in front).
   final recentTurnEnds = <({String agentId, bool failed})>[];
 
-  /// Open harnesses whose last turn failed, until their next turn starts or
+  /// Known harnesses whose last turn failed, until their next turn starts or
   /// ends well: the daemon's `fail` face while it lasts.
   final failedTurnAgents = <String>{};
 
@@ -7212,10 +7212,12 @@ class AppNotifier extends ChangeNotifier {
 
   Iterable<({String machineId, String agentId})> _visibleOnTab() {
     if (lifecycle() != AppLifecycleState.resumed) return const [];
+    if (activeSwarm.isStore || activeSwarm.isOrchestrator) return const [];
     return [
       for (final pane in activeSwarm.panes)
-        if (pane.agentId case final agentId?)
-          (machineId: pane.machineId, agentId: agentId),
+        if (zoomedPaneId == null || pane.id == zoomedPaneId)
+          if (pane.agentId case final agentId?)
+            (machineId: pane.machineId, agentId: agentId),
     ];
   }
 
@@ -12878,6 +12880,15 @@ class AppNotifier extends ChangeNotifier {
                       pane.session != null,
                 );
             final failed = event['error'] != null || payload['error'] != null;
+            // Activity belongs to the harness, even if its pane is currently
+            // detached. The zoo counters below still count only our own work.
+            if (agent != null && !isTerminalEngine(agent.engine)) {
+              if (failed) {
+                machine.failedTurnAgents.add(agentId);
+              } else {
+                machine.failedTurnAgents.remove(agentId);
+              }
+            }
             if (ownWork && !failed) {
               machine.completedHarnessUses.add((
                 harness: agent.dsh == null
@@ -12886,10 +12897,8 @@ class AppNotifier extends ChangeNotifier {
                 model: agent.gridModel,
               ));
               machine.completedHarnessTurns++;
-              machine.failedTurnAgents.remove(agentId);
             } else if (ownWork) {
               machine.failedHarnessTurns++;
-              machine.failedTurnAgents.add(agentId);
             }
             if (ownWork) {
               machine.recentTurnEnds.add((agentId: agentId, failed: failed));

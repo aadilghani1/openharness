@@ -41,6 +41,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/workspace_bar_style.dart';
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
+import 'harness_activity_mark.dart';
 import 'grid_model_picker.dart';
 import 'pane_header_actions.dart';
 import 'pane_model_status.dart';
@@ -2366,7 +2367,7 @@ class _TerminalPanelState extends State<TerminalPanel>
         pickerController: _pickerController,
       );
     }
-    return _header!;
+    return TickerMode(enabled: widget.visible, child: _header!);
   }
 }
 
@@ -2645,6 +2646,11 @@ class _TerminalHeader extends StatelessWidget {
                 // 2026-09-15): a harness agent is its harness here, and the
                 // engine it runs on is the dialog's and the tooltip's to say.
                 const SizedBox(width: 10),
+                HarnessActivityMark(
+                  app: notifier,
+                  machineId: session.machineId,
+                  agentId: session.agentId,
+                ),
                 Expanded(
                   child: Row(
                     children: [
