@@ -19,16 +19,29 @@ void main() {
     (tester) async {
       final opened = <Uri>[];
       final git = gitFixture();
+      git['activityUncertain'] = true;
+      final boundary = GlobalKey();
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1000, 720);
+      addTearDown(tester.view.reset);
       await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SessionWorkDialog(
-              agent: workAgent(git: git),
-              read: (_) async => {'gitContext': git, 'history': git['history']},
-              open: (uri) async {
-                opened.add(uri);
-                return true;
-              },
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              body: SessionWorkDialog(
+                agent: workAgent(git: git),
+                read: (_) async => {
+                  'gitContext': git,
+                  'history': git['history'],
+                },
+                open: (uri) async {
+                  opened.add(uri);
+                  return true;
+                },
+              ),
             ),
           ),
         ),
@@ -36,6 +49,28 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('/silent-beacon'), findsOneWidget);
       expect(find.text('hn/preview-fix'), findsOneWidget);
+      expect(
+        find.text('Last observed workspace; latest activity is unconfirmed.'),
+        findsOneWidget,
+      );
+      expect(find.text('Work location unknown'), findsNothing);
+      expect(find.text('hn/preview-fix  · last observed'), findsOneWidget);
+      final output = Platform.environment['HARNESS_GIT_CONTEXT_CAPTURE_DIR'];
+      if (output != null) {
+        await tester.runAsync(() async {
+          final render =
+              boundary.currentContext!.findRenderObject()!
+                  as RenderRepaintBoundary;
+          final picture = await render.toImage(pixelRatio: 1);
+          final bytes = await picture.toByteData(
+            format: ui.ImageByteFormat.png,
+          );
+          await Directory(output).create(recursive: true);
+          await File('$output/work-last-observed.png')
+              .writeAsBytes(bytes!.buffer.asUint8List());
+          picture.dispose();
+        });
+      }
       await tester.tap(
         find.byKey(
           const ValueKey('work-pr-https://github.com/acme/app/pull/12'),

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { appendFile, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -104,6 +104,24 @@ describe('session work from transcript through Git and PR history', () => {
     vi.mocked(github.readPullRequestUrl).mockResolvedValue({ status: 'unavailable' })
     const offline = await readSessionGitPullRequest(agent, { history: true })
     expect('history' in offline && offline.history.pullRequests).toEqual(restarted.pullRequests)
+  })
+
+  it('recovers recorded Codex batches into branch history and a merged PR despite later unknown activity', async () => {
+    agent.engine = 'codex'
+    const recorded = (await readFile(new URL('./fixtures/session-work-codex.jsonl', import.meta.url), 'utf8'))
+      .replaceAll('/workspace/happy-owl/cli', `${ship}/tui`).replaceAll('/workspace/happy-owl', ship)
+    await writeFile(agent.transcriptPath!, line({ timestamp: new Date(now).toISOString(), type: 'turn_context', payload: { cwd: ship } }) + recorded + [
+      { timestamp: '2026-09-28T00:30:00Z', type: 'response_item', payload: { type: 'custom_tool_call', call_id: 'unknown', name: 'exec', input: 'await arbitraryScript();' } },
+      { timestamp: '2026-09-28T00:30:01Z', type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'unknown', output: 'Script completed\nOutput:\n' } },
+    ].map(line).join(''))
+    usage.changed(agent); await usage.settled()
+    rows = [pr(397, 'hn/nfc', true)]
+    const value = await frame()
+    expect(value.gitContext).toMatchObject({ state: 'observed', activityUncertain: true, current: { cwd: ship, branch: 'hn/nfc' },
+      history: { branches: [{ cwd: ship, branch: 'hn/nfc' }], pullRequests: [{ url: 'https://github.com/acme/app/pull/397' }] } })
+    const result = await readSessionGitPullRequest(agent, { history: true })
+    expect(result).toMatchObject({ history: { pullRequests: [{ result: { status: 'found', number: 397, state: 'Merged' } }] } })
+    expect(agent.cwd).toBe(home)
   })
 
   it('rejects a badge if work moves while GitHub is answering', async () => {

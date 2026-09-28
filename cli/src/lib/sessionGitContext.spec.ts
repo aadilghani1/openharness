@@ -61,7 +61,7 @@ describe('Git context from observed session work', () => {
     const home = { name: 'app', cwd: '/home', root: '/home', branch: 'launch', remote: null }
     const read = async (cwd: string) => ({ ...home, cwd, root: cwd.startsWith('/one') ? '/one' : '/two', branch: 'topic' })
     expect(await sessionGitContext(home, work(['/one/src', '/one/test']), read))
-      .toMatchObject({ state: 'observed', current: { cwd: '/one', branch: 'topic' } })
+      .toMatchObject({ state: 'observed', current: { cwd: '/one', branch: 'topic' }, locations: [{ cwd: '/one' }] })
     expect(await sessionGitContext(home, work(['/one/src', '/two/test']), read))
       .toMatchObject({ state: 'multiple', current: null })
   })
@@ -72,10 +72,18 @@ describe('Git context from observed session work', () => {
     const read = vi.fn(async () => null)
     expect(await sessionGitContext(home, work(['/gone']), read)).toMatchObject({ state: 'unavailable', current: null })
     read.mockClear()
-    expect(await sessionGitContext(home, work(['/one'], { uncertain: true }), read)).toMatchObject({ state: 'uncertain', current: null })
+    expect(await sessionGitContext(home, work([], { uncertain: true }), read)).toMatchObject({ state: 'uncertain', current: null })
     expect(read).not.toHaveBeenCalled()
     expect(await sessionGitContext(home, work(['/folder']), async () => ({ ...home, cwd: '/folder', root: null, branch: null })))
       .toMatchObject({ state: 'observed', current: { cwd: '/folder', branch: null } })
+  })
+
+  it('keeps the last confirmed checkout and qualifies unresolved newer activity', async () => {
+    const read = async (cwd: string) => ({ name: 'app', cwd, root: '/one', branch: 'topic', remote: null })
+    const context = await sessionGitContext(null, work(['/one/src'], { uncertain: true,
+      locations: [{ cwd: '/one/src', at }, { cwd: '/one/test', at }, { cwd: '/one-other', at }] }), read)
+    expect(context).toMatchObject({ state: 'observed', current: { cwd: '/one', branch: 'topic' }, activityUncertain: true, observedAt: at })
+    expect(context.locations.map(row => row.cwd)).toEqual(['/one', '/one-other'])
   })
 
   it('bounds Git work for a compound operation and preserves durable PR links without a checkout', async () => {

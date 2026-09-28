@@ -92,6 +92,23 @@ Map<String, dynamic> manyPrFixture() {
 }
 
 void main() {
+  test(
+    'unconfirmed activity keeps the last observed branch and PR context',
+    () {
+      final fresh = AgentGitContext.fromJson(gitFixture())!;
+      final saved = AgentGitContext.fromJson({
+        ...gitFixture(),
+        'activityUncertain': true,
+      })!;
+      expect(saved.branchLabel, 'hn/preview-fix · last observed');
+      expect(saved.explanation, contains('latest activity is unconfirmed'));
+      expect(saved.displayProject(null)?.branch, 'hn/preview-fix');
+      expect(saved.requestIdentity?['cwd'], '/ship-hn');
+      expect(saved.pullRequests.single.state, 'Open');
+      expect(saved, isNot(fresh));
+      expect(fresh.activityUncertain, isFalse);
+    },
+  );
   test('renamed PR aliases do not duplicate the original creation receipt', () {
     final git = gitFixture();
     final row = (git['history']['pullRequests'] as List).single as Map;

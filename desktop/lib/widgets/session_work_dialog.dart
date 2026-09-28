@@ -118,6 +118,9 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
         final data = _data;
         final current =
             data?.current ?? (data == null ? widget.agent.project : null);
+        final currentLabel = data?.activityUncertain == true
+            ? 'last observed'
+            : 'current';
         final prs = [...?data?.pullRequests];
         int rank(AgentWorkPr pr) => switch (pr.state) {
           'Open' || 'Draft' => 0,
@@ -299,7 +302,7 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
                           for (final branch
                               in data?.branches ?? <AgentWorkBranch>[]) ...[
                             line(
-                              '${branch.branch}${branch.cwd == current?.root && branch.branch == current?.branch ? '  · current' : ''}',
+                              '${branch.branch}${branch.cwd == current?.root && branch.branch == current?.branch ? '  · $currentLabel' : ''}',
                             ),
                             line(branch.cwd, dim: true),
                           ],

@@ -30,7 +30,8 @@ GitHub check time, including when a cached answer is reused.
 | --- | --- |
 | Successful tools in one checkout | Its actual current branch |
 | Several checkouts in one operation | Multiple workspaces |
-| Unresolved execution or unsupported dynamic commands | Work location unknown |
+| Pending, failed or unsupported activity after confirmed work | Last observed branch, with an explicit qualifier |
+| Unresolved activity with no confirmed work yet | Work location unknown |
 | The observed directory has disappeared | Workspace unavailable |
 | No tool observations yet | Session workspace, explicitly labeled in details |
 | Machine offline | Last-known observations, labeled offline |
@@ -45,10 +46,16 @@ can safely be deleted.
 
 The daemon reuses its incremental Claude/Codex transcript reader. It accepts
 successful literal shell/file/patch receipts, explicit tool workdirs, guarded
-`cd … && …`, `git -C`, and a small static subset of Codex code-mode calls. Yielded
-Codex processes/cells stay connected to passive completion polls. Concurrent
+`cd … && …`, `git -C`, and a bounded static subset of Codex code-mode calls,
+including sequential calls and literal `Promise.all` / `Promise.allSettled`
+batches with direct result forwarding. Each nested receipt stays attached to
+its own command. Yielded Codex processes/cells stay connected to passive
+completion polls. Concurrent
 operations are ordered by their start, so a slow earlier operation cannot replace
-newer work. Pending execution remains uncertain.
+newer work. Calls within one parallel batch retain all confirmed locations.
+Pending, failed and unsupported activity keeps the last confirmed checkout,
+qualified as last observed; it does not erase that checkout or its PR history.
+Subfolders under a verified Git root appear as one recent workspace.
 
 It never executes transcript text. Arbitrary scripts, shell substitutions,
 interactive input, and unrecognized engine formats cannot establish a location.

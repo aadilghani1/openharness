@@ -53,6 +53,7 @@ class AgentGitContext {
     required this.state,
     this.current,
     this.observedAt,
+    this.activityUncertain = false,
     this.locations = const [],
     this.branches = const [],
     this.pullRequests = const [],
@@ -63,6 +64,7 @@ class AgentGitContext {
   final String state;
   final AgentProject? current;
   final DateTime? observedAt;
+  final bool activityUncertain;
   final List<AgentWorkLocation> locations;
   final List<AgentWorkBranch> branches;
   final List<AgentWorkPr> pullRequests;
@@ -70,16 +72,24 @@ class AgentGitContext {
   final String? epoch;
   final int revision;
 
-  String? get branchLabel => switch (state) {
-    'multiple' => 'Multiple workspaces',
-    'uncertain' => 'Work location unknown',
-    'unavailable' => 'Workspace unavailable',
-    _ =>
-      current?.shownBranch ?? (current?.detached == true ? 'Detached' : null),
-  };
+  String? get branchLabel {
+    final label = switch (state) {
+      'multiple' => 'Multiple workspaces',
+      'uncertain' => 'Work location unknown',
+      'unavailable' => 'Workspace unavailable',
+      _ =>
+        current?.shownBranch ?? (current?.detached == true ? 'Detached' : null),
+    };
+    return activityUncertain && state == 'observed' && label != null
+        ? '$label · last observed'
+        : label;
+  }
 
   String get explanation => switch (state) {
-    'observed' => 'Most recently observed work',
+    'observed' =>
+      activityUncertain
+          ? 'Last observed workspace; latest activity is unconfirmed.'
+          : 'Most recently observed work',
     'multiple' => 'The operation used more than one workspace.',
     'uncertain' => 'The current work location could not be confirmed.',
     'unavailable' => 'The observed workspace is no longer readable.',
@@ -115,6 +125,7 @@ class AgentGitContext {
       state == other.state &&
       current == other.current &&
       observedAt == other.observedAt &&
+      activityUncertain == other.activityUncertain &&
       truncated == other.truncated &&
       epoch == other.epoch &&
       revision == other.revision &&
@@ -126,6 +137,7 @@ class AgentGitContext {
     state,
     current,
     observedAt,
+    activityUncertain,
     truncated,
     epoch,
     revision,
@@ -222,6 +234,7 @@ class AgentGitContext {
           ? AgentProject.fromJson(raw['current'])
           : null,
       observedAt: date(raw['observedAt']),
+      activityUncertain: raw['activityUncertain'] == true,
       locations: List.unmodifiable(locations),
       branches: List.unmodifiable(branches),
       pullRequests: List.unmodifiable(prs),

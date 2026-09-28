@@ -26,6 +26,7 @@ void main() {
     'phone shows current work and launch location and opens only the selected PR',
     (tester) async {
       final git = gitFixture(), opened = <Uri>[];
+      git['activityUncertain'] = true;
       await tester.pumpWidget(
         MaterialApp(
           home: SessionWorkPage(
@@ -41,6 +42,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('/silent-beacon'), findsOneWidget);
       expect(find.text('hn/preview-fix'), findsOneWidget);
+      expect(
+        find.text('Last observed workspace; latest activity is unconfirmed.'),
+        findsOneWidget,
+      );
+      expect(find.text('Work location unknown'), findsNothing);
+      expect(find.text('hn/preview-fix · last observed'), findsOneWidget);
       final pr = find.byKey(
         const ValueKey('work-pr-https://github.com/acme/app/pull/12'),
       );
