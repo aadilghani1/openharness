@@ -49,7 +49,7 @@ interface RunHookOpts {
   cursorHome?: string
   hermesHome?: string
   /** Fake Hermes SQLite source; null means the session row has not appeared. */
-  hermesSource?: 'cli' | 'subagent' | null
+  hermesSource?: 'cli' | 'tui' | 'subagent' | null
   /** How long Hermes' store takes to answer: a loaded machine. */
   hermesDelaySeconds?: number
   grokHome?: string
@@ -686,7 +686,7 @@ describe('hook notify terminal scope', () => {
     expect(() => readFileSync(join(dataDir, 'registry.json'), 'utf8')).toThrow()
   })
 
-  it('offline Hermes fallback binds only source=cli and rejects delegation children or unknown rows', async () => {
+  it.each(['cli', 'tui'] as const)('offline Hermes fallback binds source=%s and rejects delegation children or unknown rows', async (interactiveSource) => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-hermes-source-'))
     tmpDirs.push(dir)
     const hermesHome = join(dir, 'hermes')
@@ -704,7 +704,7 @@ describe('hook notify terminal scope', () => {
     await runHook({
       ...common,
       dataDir: cliData,
-      hermesSource: 'cli',
+      hermesSource: interactiveSource,
       input: { hook_event_name: 'on_session_start', session_id: '20260810_120000_a1b2c3' },
     })
     expect(JSON.parse(readFileSync(join(cliData, 'registry.json'), 'utf8'))).toMatchObject([{

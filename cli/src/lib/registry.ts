@@ -38,6 +38,7 @@ import {
 import { randomUUID } from 'crypto'
 import { join, basename, dirname, relative } from 'path'
 import { hostname, uptime } from 'os'
+import { cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
 import { readCodexRolloutMeta, resolveCodexRollout } from '../engines/codex/rollout.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
@@ -666,7 +667,7 @@ const TRANSCRIPT_ROOT: Readonly<Record<AgentEngine, ((codexHome?: string) => str
   grok: () => join(env.GROK_HOME, 'sessions'),
   agy: () => join(env.AGY_HOME, 'brain'),
   copilot: () => join(env.COPILOT_HOME, 'session-state'),
-  cursor: () => join(env.CURSOR_HOME, 'projects'),
+  cursor: () => join(cursorDataDir(), 'projects'),
   pi: () => join(env.PI_HOME, 'agent', 'sessions'),
   commandcode: () => join(env.COMMANDCODE_HOME, 'projects'),
   claude: () => env.CLAUDE_PROJECTS_DIR,

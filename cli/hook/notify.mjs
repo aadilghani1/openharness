@@ -111,7 +111,7 @@ function paths() {
   const claudeProjectsDir = argValue('--claude-projects-dir', process.env.CLAUDE_PROJECTS_DIR || join(homedir(), '.claude', 'projects'))
   const codexHome = argValue('--codex-home', process.env.CODEX_HOME || join(homedir(), '.codex'))
   const grokHome = argValue('--grok-home', process.env.GROK_HOME || join(homedir(), '.grok'))
-  const cursorHome = argValue('--cursor-home', process.env.CURSOR_HOME || join(homedir(), '.cursor'))
+  const cursorHome = process.env.CURSOR_DATA_DIR?.trim() || argValue('--cursor-home', process.env.CURSOR_HOME || join(homedir(), '.cursor'))
   const hermesHome = argValue('--hermes-home', process.env.HERMES_HOME || join(homedir(), '.hermes'))
   const commandcodeHome = argValue('--commandcode-home', process.env.COMMANDCODE_HOME || join(homedir(), '.commandcode'))
   const devinHome = argValue('--devin-home', process.env.DEVIN_HOME || join(homedir(), '.local', 'share', 'devin', 'cli'))
@@ -803,7 +803,7 @@ async function hermesTopLevelSession(dbPath, sessionId) {
         const rows = JSON.parse(raw.trim() || '[]')
         if (!Array.isArray(rows) || rows.length === 0) continue
         const source = typeof rows[0]?.source === 'string' ? rows[0].source : ''
-        return (source === '' || source === 'cli') ? db : false
+        return (source === '' || source === 'cli' || source === 'tui') ? db : false
       } catch {
         return false
       }

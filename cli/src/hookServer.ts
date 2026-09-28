@@ -9,7 +9,7 @@ import { basename, join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { readCodexRolloutMeta } from './engines/codex/rollout.js'
-import { hermesSessionSource } from './engines/hermes/reader.js'
+import { hermesSessionSource, isHermesInteractiveSource } from './engines/hermes/reader.js'
 import { hermesDbPath, listHermesHomes } from './engines/hermes/home.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
@@ -359,7 +359,7 @@ async function awaitHermesKind(body: RegisterInput, handlers: HookServerHandlers
       break
     }
     if (source === null) continue
-    if (source !== '' && source !== 'cli') {
+    if (!isHermesInteractiveSource(source)) {
       console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · hermes_subagent`)
       return
     }

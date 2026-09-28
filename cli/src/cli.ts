@@ -200,6 +200,7 @@ import { CodexNormalizer, codexTaskError, lastCodexTurnText } from './engines/co
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
 import { CursorNormalizer, lastCursorTurnText } from './engines/cursor/normalizer.js'
 import { CursorTranscriptDiscovery, findCursorTranscript } from './engines/cursor/discovery.js'
+import { cursorConfigDir, cursorDataDir } from './engines/cursor/home.js'
 import { CursorSubagentManager } from './engines/cursor/subagent.js'
 import { CursorTaskHookQueue } from './engines/cursor/taskHookQueue.js'
 import { loadCursorPendingTasks, removeCursorPendingTasks } from './engines/cursor/pendingTasks.js'
@@ -2214,7 +2215,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       payload: { kind: 'error', text: deviceErrorText(deviceMessage, engine) },
     })
   }
-  const cursorDiscovery = new CursorTranscriptDiscovery(env.CURSOR_HOME, (sessionId, transcriptPath) => {
+  const cursorDiscovery = new CursorTranscriptDiscovery(cursorDataDir(), (sessionId, transcriptPath) => {
     const existing = registry.bySession(sessionId)
     if (!existing || existing.engine !== 'cursor' || existing.transcriptPath === transcriptPath) return
     const result = registry.register({
@@ -3028,7 +3029,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (!opts?.replay) autonomousDeviceService?.stream(agentIdFor(sessionId), events)
   }
   for (const queued of queuedSessionEvents.splice(0)) emitSessionEvents(queued.sessionId, queued.events, queued.opts)
-  const cursorSubagents = new CursorSubagentManager(env.CURSOR_HOME, emitSessionEvents)
+  const cursorSubagents = new CursorSubagentManager(cursorConfigDir(), emitSessionEvents, cursorDataDir())
   const cursorTaskHooks = new CursorTaskHookQueue({
     drainTranscript: (sessionId) => watcher.pollSession(sessionId),
     emit: emitSessionEvents,
@@ -3312,7 +3313,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         if (Number.isFinite(ownerStarted) && (!Number.isFinite(observedStarted) || observedStarted <= ownerStarted)) return
       }
       transcriptPath = observed.engine === 'cursor'
-        ? await findCursorTranscript(env.CURSOR_HOME, sessionId) ?? undefined
+        ? await findCursorTranscript(cursorDataDir(), sessionId) ?? undefined
         : observed.engine === 'grok'
           ? await findGrokTranscript(env.GROK_HOME, observed.cwd, sessionId) ?? undefined
           : observed.engine === 'agy'

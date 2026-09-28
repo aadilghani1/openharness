@@ -81,13 +81,17 @@ export async function readHermesMessages(
  * itself to the adapter from the parent's pane. Measured live: dispatching two sub-agents fired
  * `on_session_start` for `20260805_111618_8e3027` / `…_0777bc` 0.2s after the parent's rows appeared, the
  * pane re-bound to them, and the parent was `forgotten` mid-turn — taking its delegation bookkeeping and
- * its sub-agent list with it. `sessions.source` separates them: 'cli' for the real one, 'subagent'/'tool'
+ * its sub-agent list with it. `sessions.source` separates them: 'cli'/'tui' for the real one, 'subagent'/'tool'
  * for the children (`cwd` also points into `/tmp`, but source is the explicit marker).
  *
  */
+export function isHermesInteractiveSource(source: string): boolean {
+  return source === '' || source === 'cli' || source === 'tui'
+}
+
 export async function isHermesSubagentSession(dbPath: string, sessionId: string): Promise<boolean> {
   const source = await hermesSessionSource(dbPath, sessionId)
-  return source !== null && source !== '' && source !== 'cli'
+  return source !== null && !isHermesInteractiveSource(source)
 }
 
 /**
