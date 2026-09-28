@@ -20,41 +20,47 @@ counts UTF-8 characters rather than bytes. Complete summaries end naturally.
 The small portrait starts at y=92 and the summary at y=230, leaving more room
 below the top title and between the portrait and prose. Lower rows narrow to
 stay inside the circle; four rows retain the 90-character maximum.
-The inbox uses the same small portrait and text budget; the full result stays
-available on the desktop.
-Fixed **←** and **↗** controls sit 100 px apart below the text
-and return home and open the result on the desktop. Each has a 180 × 66 px touch
-target, and Open dims and disables while disconnected.
+The inbox is deliberately a different surface: no creature, a straight pane
+name in up to two rows, a quiet terminal divider, and the message centered in
+its own reading area. It keeps the same 28 px font and 90-character budget.
+Swipes move between messages without changing desktop focus. Tapping the pane
+name or message opens that exact desktop pane; a single bottom **←** returns
+home. Questions still require their existing explicit answer flow. Opening a
+result suppresses its duplicate home recap; only a confirmed host event clears
+its notification, and clearing the last card returns home automatically.
 
-The home screen has three states. Idle with no summary shows only the full-size
-creature. Working shows the pane name on the top curve, the full-size creature,
-and live activity on the bottom curve. A completed summary shows the pane name
-on the top curve, the fixed small creature, and the summary beneath it.
-**Working** is the fallback when no more specific native activity is available.
-The name and activity stay visible together. Current work has a soft left-to-right
-highlight sweep followed by a pause, matching the supplied terminal recording.
-The title stays still. Quiet mode, sleeping and touches pause the sweep.
-Curved glyph masks stay cached; only the old and new highlight bands redraw.
-The 2.048-second cycle has 20 steps at 64 ms, then a 768 ms rest.
-Tapping a visible pane name opens the pane picker. Idle has no hidden caption
-target; hold and slide up opens panes from the creature in every home state.
+The top curve names the selected pane. While working, it alternates the name
+and native activity every three seconds, with a 240 ms fade out and in at each change.
+**Working** remains the fallback if a native activity word is unavailable.
+Activity retains the existing 2.048-second highlight cycle: 20 steps at 64 ms
+and a 768 ms rest. A completed result replaces the full-size creature with the
+fixed small portrait and recap. Old results never appear during live work.
+A held caption stays still through a phase boundary, keeping its curved end
+letters tappable. Both phases open the pane picker. Hold and slide up also
+opens panes. Quiet mode, sleeping and touches stop the highlight sweep.
+Curved glyph masks remain cached between caption changes, including during
+colour fades; highlight updates redraw only the affected bands.
 
 The orange trial uses `-DDEVICE_DEFAULT_CHARACTER=tim -DDEVICE_HABITAT_ORANGE=1`.
 Tim and text actions use saturated orange `#ff6d00` on the existing charcoal, with
-neutral text and a light envelope. This is a compile-time palette; it adds no
-image assets, animation state, or allocations. Normal builds keep purple.
+neutral text and a matching monochrome bell. This is a compile-time palette;
+normal builds keep purple.
 
-Unread updates appear as a solid light envelope held by the creature, replacing
-the separate `[n]` counter. Reverse-video ASCII cells provide its filled paper
-and dark flap, using the existing text ink and saved brightness. Both characters
-share a 1.28-second delivery motion; arrivals
-during that motion coalesce. The letter remains until the updates are handled.
-Restoring history or returning from quiet mode does not replay the motion.
-It layers over the current mood and is put away during voice input. The letter
-is part of the portrait, with no separate tap action. Hold and slide right to
-reach the inbox.
+Notifications use a separate bottom bell with a broad 300 × 84 px target,
+starting below the central voice target. When empty, the bell is dim, has no
+zero count and does nothing on a tap. Pending messages make it bright with the
+unread count alongside. Tapping it opens the inbox; hold and slide right remains
+available. The count uses existing message/question semantics, not a new source
+of notifications. Tim and Tux no longer hold an envelope on any daily screen.
+The old letter art stays available to historical experiment renders.
 
-The central tap always starts voice, including over a summary or a letter.
+The bell is an authored outline glyph in the same fixed cell and stroke style
+as the terminal font. Two precomputed sizes occupy 246 pixel bytes in total;
+the live footer uses the 28 px size. There is no emoji renderer, icon library,
+allocation or per-frame bell animation. Listening temporarily owns the bottom
+curve; the bell returns after the voice flow closes.
+
+The central tap always starts voice, including over a summary.
 It never requires a first tap to dismiss the summary. During capture, the pane
 name stays on the top curve and animated `Listening` follows the bottom curve.
 The timer is hidden. Listening uses a 1.024-second sweep cycle, twice the speed
@@ -259,3 +265,43 @@ targets, a 32 ms Listening step versus 64 ms Working step, clock wrap, removal
 of Listening as soon as capture stops, and continued companion motion.
 Artifacts: `/private/tmp/harness-orange-tim-listening/`; image SHA-256
 `920f40bc252dda2c7311ae303492abd8fa5e17fc7a3aaa01699dacaa6f3ffe32`.
+
+
+## Empty-transcription retry — 2026-09-28
+
+When ordinary pane speech returns `Didn't catch that`, the firmware returns to
+the full companion with `Try again` on the bottom curve for three seconds. A
+central tap starts a fresh recording immediately; the hint expires without a
+dismissal tap and the previous summary/status returns. The summary is kept,
+not marked read or cleared. Pane changes, a new recording and disconnect clear
+the hint. This reuses an unused deadline field and adds no heap allocation.
+
+This only handles the host's known empty-transcription error. Other errors
+retain their details, and question/form/draft/search voice failures remain in
+their own context. No speech is replayed or sent automatically. After the hint
+expires, the normal bottom bell returns.
+
+
+## Bell and text-only inbox — 2026-09-28
+
+Orange trial revision `0.0.87-tim.orange.5` implements the bell/count, alternating
+top caption and text-only inbox described above. It also includes the brief
+empty-transcription retry hint. Tim stays unadorned. The inbox has no character
+clock running, and the home bell redraws only when its count or colour changes.
+The main voice region ends at y=382; the bell begins there, so a dim or changing
+bell cannot fall through to voice.
+
+The application image is 778,000 bytes: 720 bytes (0.093%) above orange.4.
+Artifacts: `/private/tmp/harness-orange-tim-bell/`. Source changes and test
+results belong to this revision; historical notes below earlier headings
+describe their own installed versions, not the current layout.
+
+Validation passed on unchanged final inputs: 796 host tests, the built bridge,
+framed bridge-to-C-parser-to-renderer replay, ASan/UBSan, both-character touch
+checks and 200,000 mixed pane/inbox operations per character. New checks cover
+dim/active/count bell raster transitions, every curved bell rotation, upper and
+lower shimmer damage, arrivals/clears during contact, a held long caption across
+its phase boundary, inbox title/message taps, and the empty-transcription retry.
+Image SHA-256: `a9a97e5c55ed6bedfddd5ce7865911c27c40028b5a1443a3f7aeb68afb200513`.
+The release report covers native and bridge behavior, not physical USB/touch
+latency. The separate deployment receipt records the actual dial handshake.

@@ -88,6 +88,27 @@ static void inline_arrow_checks(void)
 }
 
 
+static void bell_checks(void)
+{
+    const ht_font_t *faces[]={&ht_mono_20,&ht_mono_28};
+    const char *labels[]={HT_BELL, HT_BELL " 1", HT_BELL " 9", HT_BELL " 10", HT_BELL " 32", HT_BELL};
+    for(unsigned f=0;f<2;f++) {
+        ht_scene_t a,b;
+        ht_scene_clear(&a,ht_rgb(0x191919));
+        ht_center(&a,399,faces[f],ht_rgb(0x777777),HT_BELL);
+        transition(NULL,&a);
+        assert(ht_can_display(HT_BELL,faces[f],faces[f]->width,1));
+        b=a;strcpy(b.runs[0].text,"?");ht_raster(&b,(ht_rect_t){0,0,HT_WIDTH,HT_HEIGHT},scratch);
+        assert(memcmp(full,scratch,sizeof full)); // authored bell, never fallback '?'
+        for(unsigned i=0;i<sizeof labels/sizeof labels[0];i++) {
+            ht_scene_clear(&b,a.background);ht_center(&b,399,faces[f],i==5?ht_rgb(0x777777):0xffff,labels[i]);
+            transition(&a,&b);a=b;
+        }
+        ht_scene_clear(&b,a.background);transition(&a,&b); // no residual count pixels
+    }
+    puts("bell glyph: both native cells, no fallback, empty/active/count/clear incremental raster PASS");
+}
+
 static void shimmer_checks(void)
 {
     // Exercise the production damage + raster path, including skipped frames,
@@ -103,26 +124,26 @@ static void shimmer_checks(void)
     assert(ht_shimmer_phase(0) == 1);
     const char *labels[] = {"W", "Working", "Coalescing", "Messages to be submitted after", "caf\xc3\xa9", "                                "};
     uint32_t largest = 0;
-    for (unsigned label = 0; label < sizeof labels / sizeof labels[0]; label++) {
+    for (int edge=0;edge<2;edge++) for (unsigned label = 0; label < sizeof labels / sizeof labels[0]; label++) {
         ht_scene_t a, b;
         ht_scene_clear(&a, ht_rgb(0x181818));
-        ht_arc_title(&a, 0xffff, "Stable pane name");
-        ht_arc_status(&a, ht_rgb(0xefe7de), labels[label]);
+        ht_arc_title(&a, ht_rgb(0xefe7de), edge ? "Stable pane name" : labels[label]);
+        ht_arc_status(&a, ht_rgb(0xefe7de), edge ? labels[label] : "Stable bottom");
         transition(NULL, &a);
         uint32_t builds = ht_arc_cache_builds();
         for (unsigned frame = 0; frame < 100; frame++) {
             b = a;
-            b.runs[1].shimmer = frame < 22 ? frame : next() % 22;
+            b.runs[edge].shimmer = frame < 22 ? frame : next() % 22;
             ht_damage_t damage; ht_damage(&a, &b, &damage);
-            for (int i = 0; i < damage.count; i++) assert(damage.rect[i].y >= 320);
-            if (a.runs[1].shimmer && b.runs[1].shimmer && damage.pixels > largest)
+            for (int i = 0; i < damage.count; i++) assert(edge ? damage.rect[i].y >= 320 : damage.rect[i].y + damage.rect[i].h <= 144);
+            if (a.runs[edge].shimmer && b.runs[edge].shimmer && damage.pixels > largest)
                 largest = damage.pixels;
             transition(&a, &b);
             assert(ht_arc_cache_builds() == builds); // No rerotation during a sweep.
             a = b;
         }
-        b = a; b.runs[1].fg = ht_rgb(0xad9bb5); transition(&a, &b); a = b;
-        b.runs[1].shimmer = 0; transition(&a, &b);
+        b = a; b.runs[edge].fg = ht_rgb(0xad9bb5); transition(&a, &b); a = b;
+        b.runs[edge].shimmer = 0; transition(&a, &b);
         assert(ht_arc_cache_builds() == builds);
     }
     assert(largest < HT_WIDTH * HT_HEIGHT / 4);
@@ -203,6 +224,7 @@ int main(void)
     arc_checks();
     punctuation_checks();
     inline_arrow_checks();
+    bell_checks();
     shimmer_checks();
     ht_scene_t a = {0}, b = {0};
     assert(ht_text_rows("one\ntwo\nthree",&ht_mono_20,348)==3);

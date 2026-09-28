@@ -54,7 +54,7 @@ static struct {
     int pattern_mask, pattern_len, view, voice_return, offset, active, count, pressed, hit_count;
     int draft_drag, tab_drag, quick_choice, start_x, start_y, last_x, last_y, tab_count, machine_count, model_count, notice_count, pet_pose;
     uint32_t touch_started, coast_until, character_activity, pet_until, last_celebration;
-    uint32_t notice_sequence;
+    uint32_t notice_sequence, voice_retry_until;
     uint8_t status_phase;
     cable_swarm_t tabs[SWARMS_MAX];
     struct { char id[64], name[96], state[16]; bool local; } machines[2];
@@ -70,6 +70,7 @@ static struct {
 } s;
 static ht_gesture_t gesture;
 static ht_character_t character;
+static ht_character_caption_t home_caption;
 static ht_character_id_t test_character;
 static int character_saves, saved_character;
 static ht_scroll_t scroll;
@@ -182,7 +183,7 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
-for name in ['copy', 'recap_preview', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'workspace_index', 'workspace_failed', 'ui_scroll_reportable', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'render_companion', 'choose_character', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_quick', 'command_face', 'render_workspace_preview', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'workspace_index', 'workspace_failed', 'ui_scroll_reportable', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'render_companion', 'choose_character', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_quick', 'command_face', 'render_workspace_preview', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -273,7 +274,7 @@ static void reset(void) {
     memset(&selection,0,sizeof(selection)); selections=0;
     memset(&carry,0,sizeof(carry)); carry_prepares=carry_drops=0; voice_context[0]=0;
     ht_draft_reset(&draft); draft_actions=reviews=0; ht_form_reset(&form); form_actions=0;
-    memset(&character,0,sizeof character); ht_character_select(&character,test_character); character_saves=0; saved_character=-1; memset(&s, 0, sizeof(s)); memset(&gesture, 0, sizeof(gesture)); memset(&scroll, 0, sizeof(scroll));
+    memset(&home_caption,0,sizeof home_caption); memset(&character,0,sizeof character); ht_character_select(&character,test_character); character_saves=0; saved_character=-1; memset(&s, 0, sizeof(s)); memset(&gesture, 0, sizeof(gesture)); memset(&scroll, 0, sizeof(scroll));
     s.ready = s.connected = true; s.count = 2; s.active = 0; s.view = HOME; s.pressed = -1;
     s.brightness = preview_brightness;
     strcpy(s.agents[0].id, "a"); strcpy(s.agents[1].id, "b");
@@ -304,13 +305,13 @@ static bool action_enabled(action_kind_t action) {
 }
 static bool status_is(const char *text) {
     for (int i=0;i<scene.count;i++)
-        if ((scene.runs[i].arc==2 || scene.runs[i].y==385) &&
+        if ((scene.runs[i].arc==2 || scene.runs[i].y==385 || scene.runs[i].y==399) &&
             !strcmp(scene.runs[i].text,text)) return true;
     return false;
 }
 static bool title_is(const char *text) {
     for(int i=0;i<scene.count;i++)
-        if(scene.runs[i].arc==1 && !strcmp(scene.runs[i].text,text)) return true;
+        if((scene.runs[i].arc==1 || (s.straight_title && scene.runs[i].y==41)) && !strcmp(scene.runs[i].text,text)) return true;
     return false;
 }
 static void portrait(const char *dir, const char *name) {
@@ -610,23 +611,16 @@ static void notice_checks(const char *dir) {
         int icons=0;
         for(int j=0;j<scene.count;j++) {
             const ht_run_t *r=&scene.runs[j];
-            assert(r->font!=&ht_open_20);
+            assert(!r->arc && !r->shimmer && r->font->height>=28); // no creature or home arc
             if(r->font==&ht_nav_32) {
-                assert(!r->arc && r->y==400);
-                assert((r->x==173 && !strcmp(r->text,"\xe2\x86\x90")) ||
-                       (r->x==273 && !strcmp(r->text,"\xe2\x86\x97")));
-                assert(ht_can_display(r->text,r->font,r->w,1));
-                icons++;
+                assert(r->x==223 && r->y==400 && !strcmp(r->text,"\xe2\x86\x90"));
+                assert(ht_can_display(r->text,r->font,r->w,1)); icons++;
             }
             if(r->font==&ht_mono_28 && r->text[0])
-                assert(r->y>=HT_CHARACTER_READING_TEXT_Y &&
-                       r->y+r->font->height<=HT_CHARACTER_READING_TEXT_Y+HT_CHARACTER_RECAP_ROWS*ht_mono_28.height);
-            if(r->font->height<=6 && strlen(r->text)>=32)
-                assert(r->font->height==4 && r->y+r->font->height<=HT_CHARACTER_READING_TEXT_Y);
+                assert((r->y==78 || r->y==116) || (r->y>=202 && r->y+r->font->height<=354));
         }
-        assert(icons==2); // Actions are fixed below the prose, including short messages.
-        // Home and inbox share the expanded reading layout.
-        // Both preserve the same source text.
+        assert(icons==1); // Only Back; the full message opens the pane.
+        // The inbox keeps its own reading layout and the same source message.
         assert(!strcmp(s.notice[0].summary,s.agents[0].preview));
         assert(s.view==INBOX && s.notice_count==1 && !desktop_opens && !starts);
         if(i==2) portrait(dir,"notification-preview");
@@ -657,17 +651,12 @@ static void notice_checks(const char *dir) {
     assert(question_shown && s.notice_count==1 && !question_sends);
     portrait(dir,"notification-question");
     s.connected=false; scene_take(); assert(!action_enabled(A_NOTICE));
-    int disabled_icons=0;
-    for(int i=0;i<scene.count;i++) if(scene.runs[i].font==&ht_nav_32 && scene.runs[i].x==273) {
-        assert(scene.runs[i].fg==DIM); disabled_icons++;
-    }
-    assert(disabled_icons==1);
     portrait(dir,"inbox-offline");
-    tap(3500,323,423); assert(s.view==INBOX && !desktop_opens && !question_sends && !starts);
-    tap(3700,190,415); assert(s.view==HOME && !desktop_opens && !question_sends && !starts);
+    tap(3500,233,260); assert(s.view==INBOX && !desktop_opens && !question_sends && !starts);
+    tap(3700,233,415); assert(s.view==HOME && !desktop_opens && !question_sends && !starts);
     s.connected=true; ui_notif_open(); scene_take();
-    habitat_touch(true,280,418,3900); scene_take(); portrait(dir,"inbox-open-pressed");
-    habitat_touch(false,280,418,3975); scene_take();
+    habitat_touch(true,233,260,3900); scene_take(); portrait(dir,"inbox-open-pressed");
+    habitat_touch(false,233,260,3975); scene_take();
     assert(desktop_opens==1 && !strcmp(opened_agent,"off-tab") && !starts);
     reset(); ui_notify_task_done("a","No saved recap","M2",NULL); ui_notif_open(); scene_take();
     bool fallback=false;
@@ -782,12 +771,12 @@ static void pane_memory_checks(const char *dir) {
     fake_ms+=3400; surface_tick(fake_ms); scene_take();
     bool footer=false;
     for(int i=0;i<scene.count;i++) if(strstr(scene.runs[i].text,"Coalescing")) {
-        assert(scene.runs[i].arc==2 && scene.runs[i].fg==FG); footer=true;
+        assert(scene.runs[i].arc==1 && scene.runs[i].fg==FG); footer=true;
     }
     assert(footer); s.notice_count=0;
     scene_take(); footer=false;
     for(int i=0;i<scene.count;i++) if(strstr(scene.runs[i].text,"Coalescing")) {
-        assert(scene.runs[i].arc==2 && scene.runs[i].fg==FG); footer=true;
+        assert(scene.runs[i].arc==1 && scene.runs[i].fg==FG); footer=true;
     }
     assert(footer);
     ui_project_emit("a",NULL,"processing","Processing",NULL);
@@ -823,26 +812,26 @@ static void pane_memory_checks(const char *dir) {
     assert(pane_memory("wrap",false) && pane_memory("b",false));
     reset(); ui_project_emit("a",NULL,"processing","",NULL); scene_take();
     assert(!active()->tool[0] && !result_visible());
-    assert(title_is("Deploy latest firmware") && status_is("Working"));
+    assert(title_is("Deploy latest firmware") && status_is(HT_BELL));
     fake_ms+=3400; surface_tick(fake_ms); scene_take();
-    assert(status_is("Working")); portrait(dir,"working-without-footer");
-    s.straight_title=true; scene_take(); assert(status_is("Working"));
+    assert(title_is("Working")); portrait(dir,"working-without-footer");
+    s.straight_title=true; scene_take(); assert(title_is("Working"));
     s.straight_title=false;
     ui_project_emit("a",NULL,"activity","Coalescing...",NULL); scene_take();
-    assert(status_is("Coalescing") && !status_is("Working"));
+    assert(title_is("Coalescing") && !title_is("Working"));
     // A native footer disappearing must not erase the known busy state.
     ui_project_emit("a",NULL,"activity","",NULL); scene_take();
-    assert(!active()->tool[0] && status_is("Working"));
-    s.notice_count=2; scene_take(); assert(status_is("Working") && !status_is("[2] Working"));
+    assert(!active()->tool[0] && title_is("Working"));
+    s.notice_count=2; scene_take(); assert(title_is("Working") && !title_is("[2] Working"));
     s.notice_count=0; ui_project_emit("a",NULL,"done",NULL,NULL); scene_take();
-    assert(!active()->busy && !status_is("Working"));
+    assert(!active()->busy && !title_is("Working"));
     // A late activity read cannot bring the completed status back.
     ui_project_emit("a",NULL,"activity","Coalescing",NULL); scene_take();
-    assert(!status_is("Working") && !status_is("Coalescing"));
+    assert(!title_is("Working") && !title_is("Coalescing"));
     ui_project_emit("a",NULL,"processing","Processing",NULL); scene_take();
     fake_ms+=3400; surface_tick(fake_ms); scene_take();
-    assert(!active()->tool[0] && status_is("Working"));
-    s.nap=true; scene_take(); assert(!status_is("Working")); s.nap=false;
+    assert(!active()->tool[0] && title_is("Working"));
+    s.nap=true; scene_take(); assert(!title_is("Working")); s.nap=false;
     s.connected=false; scene_take(); assert(scene.count==1 && !strcmp(scene.runs[0].text,"Harness")); s.connected=true;
     ui_project_emit("a",NULL,"activity","Working",NULL);
     strcpy(active()->name,"hn"); scene_take(); portrait(dir,"short-name-working");
@@ -850,11 +839,12 @@ static void pane_memory_checks(const char *dir) {
     strcpy(active()->tool,"Messages to be submitted after");
     scene_take(); portrait(dir,"photo-long-status");
     strcpy(active()->tool,"Working");
+    home_caption.initialized=false; fake_ms=0; scene_take();
     for (int frame=0;frame<32;frame++) {
-        fake_ms=frame*64; surface_tick(fake_ms); scene_take();
+        fake_ms=3240+frame*64; surface_tick(fake_ms); scene_take();
         int shimmer=0;
         for(int i=0;i<scene.count;i++) if(scene.runs[i].shimmer) {
-            assert(scene.runs[i].arc==2 && !strcmp(scene.runs[i].text,"Working")); shimmer++;
+            assert(scene.runs[i].arc==1 && !strcmp(scene.runs[i].text,"Working")); shimmer++;
         }
         assert(shimmer==1);
         char label[40]; snprintf(label,sizeof label,"working-shimmer-%02d",frame); portrait(dir,label);
@@ -864,7 +854,7 @@ static void pane_memory_checks(const char *dir) {
     s.quiet=false;
     ui_project_remove("a"); pane_memory_t *m=pane_memory("a",false); assert(m);
     m->last_busy=ms()-26000; ui_project_set_name("a","Expired busy");
-    assert(!s.agents[find("a")].busy); scene_take(); assert(!status_is("Working"));
+    assert(!s.agents[find("a")].busy); scene_take(); assert(!title_is("Working"));
     reset(); strcpy(active()->name,"Mobile app build and deploy");
     ui_project_emit("a",NULL,"processing","Coalescing",NULL); scene_take();
     tap(2000,233,41); assert(s.view==AGENTS && !starts); // top caption always picks panes
@@ -880,8 +870,63 @@ static void pane_memory_checks(const char *dir) {
     printf("pane memory: PASS (off-tab completion, returning panes, late restores, live activity, alternating work/results, 128-slot bound); %zu bytes\n",sizeof s.memory);
     reset();
 }
+static void bell_checks(const char *dir) {
+    static const int points[][2]={{233,399},{100,408},{150,430},{315,415},{370,405},{233,450}};
+    assert(ht_can_display(HT_BELL " 32", &ht_mono_28, 68, 1));
+    reset(); scene_take();
+    bool found=false;
+    for(int i=0;i<scene.count;i++) if(!strcmp(scene.runs[i].text,HT_BELL)) {
+        assert(scene.runs[i].fg==DIM && scene.runs[i].font==&ht_mono_28 && !scene.runs[i].shimmer);
+        found=true;
+    }
+    assert(found && !action_enabled(A_INBOX));
+    portrait(dir,"bell-empty");
+    for(unsigned i=0;i<sizeof points/sizeof points[0];i++) {
+        reset(); tap(1000,points[i][0],points[i][1]);
+        assert(s.view==HOME && !starts && !desktop_opens && !switches);
+        cable_notif_t n={.agent_id="b",.name="Other pane",.summary="The update is ready. All checks pass."};
+        ui_notif_replace(&n,1); scene_take();
+        assert(status_is(HT_BELL " 1") && action_enabled(A_INBOX));
+        for(int j=0;j<scene.count;j++) if(scene.runs[j].font->height<=6)
+            assert(scene.runs[j].bg==BG); // no reverse-video envelope on either character
+        tap(2000,points[i][0],points[i][1]);
+        assert(s.view==INBOX && !starts && !desktop_opens);
+        for(int j=0;j<scene.count;j++) assert(!scene.runs[j].arc && scene.runs[j].font->height>=28);
+        tap(3000,233,100); // The pane title, like its message, opens that pane.
+        assert(desktop_opens==1 && !strcmp(opened_agent,"b") && !starts);
+    }
+    reset(); ui_notify_task_done("b","Other pane","M2","Finished."); scene_take();
+    habitat_touch(true,233,420,1000); ui_notif_seen("b"); scene_take();
+    habitat_touch(false,233,420,1080); assert(s.view==HOME && !starts && !desktop_opens);
+    reset(); habitat_touch(true,233,420,1000);
+    ui_notify_task_done("b","Other pane","M2","Finished."); scene_take();
+    habitat_touch(false,233,420,1080); assert(s.view==HOME && !starts && !desktop_opens);
+    scene_take(); portrait(dir,"bell-unread");
+    tap(2000,233,220); assert(s.view==VOICE && starts==1); scene_take();
+    assert(!status_is(HT_BELL " 1"));
+    dispatch((action_t){.kind=A_VOICE_ABORT}); scene_take(); assert(status_is(HT_BELL " 1"));
+    reset(); active()->busy=true; scene_take();
+    fake_ms=3400;surface_tick(fake_ms);scene_take();assert(title_is("Working"));
+    ui_notify_task_done("b","Other pane","M2","Finished.");scene_take();
+    assert(title_is("Working") && status_is(HT_BELL " 1"));
+    fake_ms=6400;surface_tick(fake_ms);scene_take();assert(title_is(active()->name));
+    portrait(dir,"bell-working-name");
+    fake_ms=9400;surface_tick(fake_ms);scene_take();assert(title_is("Working"));
+    portrait(dir,"bell-working-activity");
+    tap(10000,233,41);assert(s.view==AGENTS && !starts && !desktop_opens);
+    reset(); active()->busy=true;
+    memset(active()->name,'x',32);active()->name[32]=0;scene_take();
+    fake_ms=2800;surface_tick(fake_ms);scene_take();
+    int end_x=233+(205*arc_trig[31][0]>>14),end_y=233-(205*arc_trig[31][1]>>14);
+    habitat_touch(true,end_x,end_y,2800);fake_ms=3100;surface_tick(fake_ms);scene_take();
+    assert(title_is(active()->name)); // Rotation cannot shrink a held caption target.
+    habitat_touch(false,end_x,end_y,3150);assert(s.view==AGENTS && !starts && !desktop_opens);
+    puts("bell/inbox: empty/active glyphs, wide separate targets, arrivals/removal during contact, title/message open, no creature, voice restoration, caption rotation PASS");
+    reset();
+}
 int main(int argc, char **argv) {
     test_character = getenv("HABITAT_TEST_TUX") ? HT_CHARACTER_TUX : HT_CHARACTER_TIM;
+    bell_checks(argc>1 ? argv[1] : NULL);
     reset(); view(COMPANION); scene_take();
     assert(action_enabled(A_CHARACTER));
     ht_character_id_t next=(character.id+1)%HT_CHARACTER_COUNT;
@@ -1025,9 +1070,9 @@ int main(int argc, char **argv) {
     reset(); s.connected=false; s.view=SETTINGS; scene_take(); assert(!action_enabled(A_LATEST));
     workspace_setup(); assert(!action_enabled(A_TABS)); portrait(dir,"workspace-home");
     for(int i=0;i<scene.count;i++) assert(!strstr(scene.runs[i].text,"Product") && !strstr(scene.runs[i].text,"[ tabs ]"));
-    assert(!action_enabled(A_AGENTS) && !title_is(active()->name));
-    for(int i=0;i<scene.count;i++) if(scene.runs[i].arc) assert(!scene.runs[i].text[0]);
-    tap(1000,233,41); assert(s.view==HOME && !starts && !tab_switches);
+    assert(action_enabled(A_AGENTS) && title_is(active()->name) && status_is(HT_BELL));
+    tap(1000,233,41); assert(s.view==AGENTS && !starts && !tab_switches);
+    workspace_setup();
     habitat_touch(true,233,230,2000); habitat_touch(true,233,230,2700);
     habitat_touch(true,233,100,2800); habitat_touch(false,233,100,2900);
     assert(s.view==AGENTS && !starts && !tab_switches); // Idle still has the hold-up gesture.
@@ -1039,11 +1084,11 @@ int main(int argc, char **argv) {
     habitat_touch(false,100,230,2900); scene_take();
     assert(s.view==TABS && !starts && !tab_switches && !moves);
     // The visible top name keeps a stable pane-picker target. Notifications
-    // are carried by the creature, while current activity has its own bottom arc.
+    // use a separate bottom bell; top name/activity share one stable target.
     const int update_contacts[][2]={{233,28},{233,41},{100,49},{366,49},{233,61}};
     for (int question=0;question<2;question++) for (unsigned i=0;i<sizeof update_contacts/sizeof update_contacts[0];i++) {
         workspace_setup(); s.notice_count=1; waiting_count=question; s.rim_enabled=true; active()->busy=true; scene_take();
-        assert(!action_enabled(A_INBOX) && action_enabled(A_AGENTS) && !action_enabled(A_TABS));
+        assert(action_enabled(A_INBOX) && action_enabled(A_AGENTS) && !action_enabled(A_TABS));
         bool label=false;
         for (int j=0;j<scene.count;j++) {
             assert(strcmp(scene.runs[j].text,"[1]"));
@@ -1092,13 +1137,13 @@ int main(int argc, char **argv) {
     fake_ms=30010; surface_tick(fake_ms); scene_take(); portrait(dir,"notification-glance-right");
     assert(character.motion.reaction.pose.look==2);
     fake_ms=30170; surface_tick(fake_ms); scene_take(); portrait(dir,"mail-lift");
-    assert(character.delivery.moving && character.delivery.lift==1);
+    assert(!character.delivery.moving && !character.delivery.lift && status_is(HT_BELL " 1"));
     fake_ms=30400; surface_tick(fake_ms); scene_take(); portrait(dir,"notification-glance-left");
     assert(character.motion.reaction.pose.look==-2);
     surface_tick(30860); assert(character.motion.reaction.pose.blink);
     surface_tick(31400); assert(!character.motion.reaction.pose.look && !character.motion.reaction.pose.blink);
     s.pet_pose=0; fake_ms=33000; surface_tick(fake_ms); scene_take();
-    assert(character_mood()!=HT_TIM_DONE && !action_enabled(A_INBOX)); portrait(dir,"unread-persistent");
+    assert(character_mood()!=HT_TIM_DONE && action_enabled(A_INBOX)); portrait(dir,"unread-persistent");
     active()->recap_ready=true;
     strcpy(active()->preview,"The update is ready. All checks pass.");
     scene_take(); portrait(dir,"mail-with-summary");
@@ -1156,7 +1201,7 @@ int main(int argc, char **argv) {
     ui_notif_replace(reordered,3);assert(!strcmp(s.notice[s.offset].agent_id,"a")&&s.offset==1);
     ui_notif_seen("d");assert(!strcmp(s.notice[s.offset].agent_id,"a")&&s.offset==0);
     scene_take();tap(3700,150,430);assert(s.view==HOME&&!desktop_opens&&!starts);
-    ui_notif_open();scene_take();tap(4400,300,430);
+    ui_notif_open();scene_take();tap(4400,233,260);
     assert(desktop_opens==1&&!strcmp(opened_agent,"a")&&!starts);
     // A full inbox evicts another row instead of the oldest card being read.
     workspace_setup();
@@ -1357,7 +1402,7 @@ int main(int argc, char **argv) {
     }
     s.voice_return=FORM; fake_ms=16384; surface_tick(fake_ms); scene_take();
     assert(status_is("Finding") && status_speed()==1 && status_wake_ms(16385)==63);
-    s.view=HOME; active()->busy=true; fake_ms=18432; surface_tick(fake_ms); scene_take(); assert(s.status_phase==1);
+    s.view=HOME; active()->busy=true; fake_ms=15000; surface_tick(fake_ms); fake_ms=18432; surface_tick(fake_ms); scene_take(); assert(s.status_phase==1);
     fake_ms+=32; surface_tick(fake_ms); assert(s.status_phase==1);
     fake_ms+=32; surface_tick(fake_ms); assert(s.status_phase==2);
 
@@ -1402,6 +1447,14 @@ int main(int argc, char **argv) {
     assert(scene.count==1 && !strcmp(scene.runs[0].text,"Harness") && !s.hit_count);
     reset(); s.count=0; s.active=-1; scene_take();
     tap(1000,233,220); assert(!starts);
+    // A missed utterance keeps the entire creature as the retry target.
+    reset(); ui_project_emit("a",NULL,"summary","Previous result stays saved.","Previous result stays saved.");
+    s.voice_retry_until=4000; scene_take(); portrait(dir,"voice-retry");
+    assert(status_is("Try again") && !result_visible() && action_enabled(A_PET));
+    for(int i=0;i<scene.count;i++)assert(!scene.runs[i].shimmer);
+    s.voice_retry_until=0; scene_take(); assert(result_visible());
+    s.voice_retry_until=4000; scene_take(); tap(1000,233,220);
+    assert(starts==1 && s.view==VOICE && !s.voice_retry_until && !strcmp(target,"a"));
     // Hold previews do not execute. A later slide chooses a destination, never scrolls or talks.
     reset(); s.notice_count=1; habitat_touch(true,233,220,1000); surface_tick(1650);
     assert(s.quick_open && s.view==HOME && !starts); scene_take(); portrait(dir,"shortcuts");
@@ -1471,7 +1524,7 @@ int main(int argc, char **argv) {
     assert(s.view==INBOX && !starts);
     reset(); visit.available=true; scene_take(); portrait(dir,"return");
     tap(1000,233,409); assert(returns==1 && !starts); visit.available=false;
-    reset(); strcpy(s.agents[0].name,"A very long recipient name that still needs to be readable on a tiny circular display");
+    reset(); COPY(s.agents[0].name,"A very long recipient name that still needs to be readable on a tiny circular display");
     scene_take(); portrait(dir,"long-name");
     reset(); ht_form_open(&form,"form-test",100,form_emit,NULL);
     ht_form_page_t page={.active=true,.enabled=true,.revision=1,.position=4,.total=4,

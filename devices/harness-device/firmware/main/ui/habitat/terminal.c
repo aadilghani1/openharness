@@ -25,7 +25,11 @@ static const ht_font_t *glyph_font(const ht_font_t *font, uint32_t cp)
     // draws in mono_28 (17 x 38) and there is no open_28, so an authored arrow there renders a 12 px
     // glyph in a 17 px cell: readable, visibly smaller than the words beside it, and better than the
     // '?' the alternative gives. A precomputed 17 x 38 ↗ would settle it properly.
-    return cp == 0x2197 && (font == &ht_mono_20 || font == &ht_mono_28) ? &ht_open_20 : font;
+    if (font == &ht_mono_20 || font == &ht_mono_28) {
+        if (cp == 0x2197) return &ht_open_20;
+        if (cp == 0xe000) return font == &ht_mono_28 ? &ht_bell_28 : &ht_bell_20;
+    }
+    return font;
 }
 static uint32_t font_codepoint(const ht_font_t *font, uint32_t cp)
 {
@@ -614,7 +618,8 @@ static void arc_prepare(const ht_run_t *r, arc_cache_t *cache)
         } else
 #endif
         {
-            const uint8_t *ink = f == &ht_open_20 ? ht_open_20_ink[0] : ht_mono_20_ink[c - f->first];
+            const uint8_t *ink = f == &ht_open_20 ? ht_open_20_ink[0] :
+                f == &ht_bell_20 ? ht_bell_20_ink[0] : ht_mono_20_ink[c - f->first];
             // Source pixels outside this box are transparent. Include a full
             // bilinear halo and two destination pixels for fixed-point rounding.
             int ox = (ink[0] + ink[2]) * 128 - (6 * 256 - 128);

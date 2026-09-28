@@ -20,6 +20,9 @@ typedef void (*ht_character_painter_t)(ht_scene_t *, const ht_character_face_t *
                                       uint16_t ink, ht_character_size_t size, int y);
 void ht_character_layout(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame,
                          uint16_t ink, const char *recap, ht_character_painter_t paint);
+// Text-only inbox, deliberately distinct from the companion's home recap.
+void ht_inbox_card(ht_scene_t *scene, const char *name, const char *message,
+                   uint16_t foreground, uint16_t dim);
 // The envelope is painted in the character's own cells, attached to its limb.
 void ht_character_letter(ht_scene_t *s, const ht_character_face_t *f,
                          const ht_font_t *font, int x, int y);

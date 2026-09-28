@@ -18,6 +18,10 @@ extern const ht_font_t ht_mono_16, ht_mono_20, ht_mono_24, ht_mono_28, ht_pixel_
 // Precomputed curved-label and larger inbox navigation glyphs.
 extern const ht_font_t ht_open_20, ht_nav_32;
 extern const uint8_t ht_mono_20_ink[224][4], ht_open_20_ink[1][4];
+// One authored outline bell in a normal terminal cell, not an emoji font.
+#define HT_BELL "\xee\x80\x80"
+extern const ht_font_t ht_bell_20, ht_bell_28;
+extern const uint8_t ht_bell_20_ink[1][4];
 // The lock's dot is the only 40 px glyph used by the daily UI. Keep its exact
 // pixels without retaining the other 94 glyphs of the gallery font in flash.
 extern const ht_font_t ht_lock_dot;

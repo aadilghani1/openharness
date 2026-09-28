@@ -190,7 +190,7 @@ static EXT_RAM_BSS_ATTR struct {
     question_t q;
     char message[256], title[80], pending_focus[ID_MAX], opening_notice[ID_MAX];
     char voice_target[CABLE_NAME_MAX];
-    uint32_t message_until;
+    uint32_t voice_retry_until;
     model_item_t models[48];
     int model_count;
     bool model_request;
@@ -236,6 +236,7 @@ static ht_draft_t draft;
 static bool selection_emit(const ht_select_command_t *command, void *ctx);
 static ht_gesture_t gesture;
 static ht_character_t character;
+static ht_character_caption_t home_caption;
 static action_t pressed_action;
 static bool queue(action_t a);
 static const char *voice_status(void);
@@ -422,6 +423,7 @@ static void view(view_t v)
     if (selection.active && v != SELECTION && v != VOICE) ht_selection_close(&selection);
     if (s.view == INBOX && v != INBOX) s.opening_notice[0] = 0;
     input_cancel();
+    s.voice_retry_until = 0;
     s.view = v;
     s.offset = 0;
     s.pressed = -1;
@@ -596,15 +598,27 @@ static ht_character_mood_t character_mood(void)
         return HT_CHARACTER_WORKING;
     return HT_CHARACTER_IDLE;
 }
+static bool home_caption_rotates(void)
+{
+    const agent_t *a = active();
+    return (s.view == HOME || s.view == AGENT) && a && a->busy && s.connected &&
+        !s.loading && !s.nap && !s.quiet && !s.locked && !display_is_asleep() &&
+        !s.quick_open && !s.voice_retry_until && !carry.active && !carry.error[0] && !visit.available;
+}
+static bool home_caption_tick(uint32_t now)
+{
+    // A caption's long end letters are part of its touch target. Do not
+    // replace them with a shorter activity label while a finger is down.
+    if (s.touch_down && !s.touch_cancelled && home_caption.initialized) return false;
+    const agent_t *a = active();
+    return ht_character_caption_tick(&home_caption, now, a ? a->id : "", home_caption_rotates());
+}
 static bool status_animated(void)
 {
     if (s.nap || s.quiet || s.locked || display_is_asleep() || s.touch_down || s.quick_open)
         return false;
     if (s.view == VOICE) return !s.voice_review_preview && voice_status()[0];
-    const agent_t *a = active();
-    return (s.view == HOME || s.view == AGENT) && a && a->busy && s.connected &&
-        !s.loading && !s.straight_title &&
-        !carry.active && !carry.error[0] && !visit.available;
+    return home_caption_rotates() && home_caption.activity && !s.straight_title;
 }
 static unsigned status_speed(void)
 {
@@ -618,12 +632,12 @@ static uint32_t status_wake_ms(uint32_t now)
 }
 static void surface_tick(uint32_t now)
 {
+    if (home_caption_tick(now)) change();
     uint8_t phase = status_animated() ? ht_shimmer_phase(now * status_speed()) : 0;
     if (phase != s.status_phase) { s.status_phase = phase; change(); }
     bool main = s.view == HOME || s.view == AGENT;
-    bool inbox = s.view == INBOX && s.offset >= 0 && s.offset < s.notice_count;
     bool visible = !s.locked && !display_is_asleep() &&
-        ((main && s.connected && !s.loading) || s.view == VOICE || inbox);
+        ((main && s.connected && !s.loading) || s.view == VOICE);
     uint32_t held = now - s.touch_started;
     bool review_preview = cable_client_supports(CABLE_FEATURE_DRAFT) &&
         visible && s.view == VOICE && s.voice_open && !s.voice_search &&
@@ -646,13 +660,10 @@ static void surface_tick(uint32_t now)
     }
     ht_character_mood_t mood = s.view == VOICE ?
         (!s.voice_start_pending && !s.voice_waiting && audio_client_recording() ? HT_CHARACTER_LISTENING : HT_CHARACTER_WORKING) :
-        inbox ? (s.notice[s.offset].question ? HT_CHARACTER_ATTENTION : HT_CHARACTER_IDLE) : character_mood();
+        character_mood();
     if (ht_character_tick(&character, now, mood, s.quiet, visible && !s.quick_open,
                            s.touch_down && !s.touch_cancelled, s.last_x,
                            mood == HT_CHARACTER_LISTENING ? audio_client_input_level() : 0, s.character_activity))
-        change();
-    if (ht_character_delivery_tick(&character, now, s.notice_count > 0, s.notice_sequence,
-        visible && main && !s.quick_open && !s.quiet && !s.nap && s.connected && !s.touch_down))
         change();
 }
 static void render_quick(ht_scene_t *f)
@@ -704,24 +715,28 @@ static void render_home(ht_scene_t *f)
     if (s.quick_open) { render_quick(f); return; }
     if (workspace.touching && workspace.moved && !workspace.cancelled) { render_workspace_preview(f); return; }
     agent_t *a = active();
-    // Idle is only the creature. Current work adds name/status arcs; only a
-    // completed result gets the reading layout. Never pair old prose with live work.
+    // The top caption belongs to the current pane; only completed work gets
+    // a recap. The bell has its own lower target, outside the voice surface.
     const char *recap = a && !a->busy && a->recap_ready && s.connected && !s.loading &&
-        !s.nap && !carry.active && !carry.error[0] ? a->preview : NULL;
+        !s.nap && !s.voice_retry_until && !carry.active && !carry.error[0] ? a->preview : NULL;
     // A live turn can outlast its terminal footer (or have no readable footer).
     // Keep its busy state visible while more specific activity is unavailable.
     const char *activity = a && a->busy && s.connected && !s.loading && !s.nap ?
         (a->tool[0] ? a->tool : "Working") : "";
-    bool named = a && ((recap && *recap) || activity[0]);
+    home_caption_tick(ms());
+    bool rotating = home_caption_rotates();
+    const char *caption = rotating && home_caption.activity ? activity : a ? a->name : "Choose a pane";
+    bool bell = !s.voice_retry_until && !carry.active && !carry.error[0] && !visit.available;
     char status[100];
-    if (!a) COPY(status, "Choose a pane");
-    else COPY(status, activity);
-    ht_character_face_t f_ = {.recipient = named ? a->name : "", .status = status,
+    if (s.voice_retry_until) COPY(status, "Try again");
+    else if (bell && s.notice_count) snprintf(status, sizeof status, HT_BELL " %d", s.notice_count);
+    else COPY(status, bell ? HT_BELL : "");
+    ht_character_face_t f_ = {.recipient = caption, .status = bell ? "" : status,
         .hint = "",
-        .detail = "", .unread = s.notice_count > 0,
+        .detail = "",
         .mood = character_mood(), .pose = character.motion.reaction.pose, .straight_title = s.straight_title,
         .footer_action = carry.active || carry.error[0] || visit.available,
-        .ink = FG, .foreground = FG, .dim = DIM,
+        .ink = bell && !s.notice_count ? DIM : FG, .foreground = FG, .dim = DIM,
         .primary_title = true, .roomy_reading = true};
     char carried[128];
     if (carry.active) {
@@ -731,14 +746,17 @@ static void render_home(ht_scene_t *f)
         f_.status="Text expired"; f_.detail="Select it again or drop text"; f_.hint=""; f_.focus=true;
     }
     if (visit.available) f_.hint = "";
-    if (s.touch_down && scroll.axis == 3) {
-        f_.hint = "turn rim to scroll";
-        f_.status = "scrolling";
-    }
     ht_character_face(f, &character, &f_, ACCENT, recap);
+    if (bell) ht_center(f, 399, UI_FONT, f_.ink, status);
     s.status_phase = status_animated() ? ht_shimmer_phase(ms()) : 0;
-    for (int i = 0; i < f->count; i++)
-        if (f->runs[i].arc == 2) f->runs[i].shimmer = s.status_phase;
+    for (int i = 0; i < f->count; i++) {
+        ht_run_t *run = &f->runs[i];
+        if (run->arc == 1 || (s.straight_title && run->font == &ht_mono_20 &&
+                             (run->y == 41 || run->y == 69))) {
+            run->fg = rotating ? ht_character_caption_ink(FG, BG, home_caption.opacity) : FG;
+            if (run->arc) run->shimmer = s.status_phase;
+        }
+    }
     if ((carry.active || carry.error[0]) && visit.available) {
         footer_control(f, 95, 156, "[return]", A_RETURN, s.connected && !visit.pending);
         footer_control(f, 263, 108, "[drop]", A_CARRY_DROP, true);
@@ -747,9 +765,8 @@ static void render_home(ht_scene_t *f)
     } else if (visit.available) {
         footer_control(f, 113, 240, "[ return ]", A_RETURN, s.connected && !visit.pending);
     }
-    if (named && !carry.active && !carry.error[0] && !visit.available) {
-        // The visible name opens the pane picker. Idle has no hidden title
-        // target; hold and slide up still opens panes from the creature.
+    if (!carry.active && !carry.error[0] && !visit.available) {
+        // Both phases of the caption open the same pane picker.
         s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
         for (int i = 0; i < f->count; i++) if (f->runs[i].arc == 1) {
             ht_rect_t r = ht_run_bounds(&f->runs[i]);
@@ -757,12 +774,11 @@ static void render_home(ht_scene_t *f)
             break;
         }
     }
-    // Eyes stay on the computer. A recap or a letter never changes the central
-    // tap into dismissal or navigation; one tap starts voice in either size.
-    s.hits[s.hit_count++] = (hit_t){{33, 60, 400, 336}, A_PET, 0, true};
-    if (!a)
-        s.hits[s.hit_count++] = (hit_t){{65, 359, 336, 30}, A_AGENTS, 0, true};
-
+    if (bell)
+        s.hits[s.hit_count++] = (hit_t){{83, 382, 300, 84}, A_INBOX, 0, s.notice_count > 0};
+    // The bell and the creature never share a target, even when the bell is
+    // dimmed or its count changes under a finger. Centre always starts voice.
+    s.hits[s.hit_count++] = (hit_t){{33, 66, 400, 316}, A_PET, 0, true};
 }
 static void render_agents(ht_scene_t *f)
 {
@@ -958,27 +974,15 @@ static void render_notice(ht_scene_t *f)
     if (s.offset >= s.notice_count) s.offset = s.notice_count - 1;
     if (s.offset < 0) s.offset = 0;
     const cable_notif_t *n = &s.notice[s.offset];
-    // A notification is a readable message, with the same text budget and
-    // curved name as a completed turn. Swipes browse without focusing the app.
+    // Inbox is a text card, not another companion surface. Browsing never
+    // changes desktop focus; a tap on the name/message opens that exact pane.
     int body = s.hit_count++;
-    s.hits[body] = (hit_t){{53, 108, 360, 288}, A_NOTICE, s.offset, s.connected};
-    ht_character_face_t face = {.recipient = n->name,
-        .status = "", .hint = "",
-        .mood = n->question ? HT_CHARACTER_ATTENTION : HT_CHARACTER_IDLE,
-        .pose = character.motion.reaction.pose,
-        .foreground = n->summary[0] ? FG : DIM,
-        .dim = DIM, .ink = ACCENT, .primary_title = true, .roomy_reading = true};
-    ht_character_face(f, &character, &face, ACCENT,
-        n->summary[0] ? n->summary : "No preview available.");
-    // Icons sit together below the text, with separate finger-sized targets.
-    // Keep Open in place while disconnected, visibly dimmed and disabled.
-    s.hits[s.hit_count++] = (hit_t){{53, 400, 180, 66}, A_HOME, 0, true};
-    s.hits[s.hit_count++] = (hit_t){{233, 400, 180, 66}, A_NOTICE, s.offset, s.connected};
-    ht_text(f, 173, 400, 20, &ht_nav_32,
+    s.hits[body] = (hit_t){{33, 55, 400, 327}, A_NOTICE, s.offset, s.connected};
+    ht_inbox_card(f, n->name, n->summary[0] ? n->summary : "No preview available.",
+                  s.connected ? FG : DIM, DIM);
+    s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, A_HOME, 0, true};
+    ht_text(f, 223, 400, 20, &ht_nav_32,
         s.pressed == body + 1 ? FG : ACCENT, BG, "\xe2\x86\x90");
-    ht_text(f, 273, 400, 20, &ht_nav_32,
-        !s.connected ? DIM : s.pressed == body || s.pressed == body + 2 ? FG : ACCENT,
-        BG, "\xe2\x86\x97");
 }
 static void render_list(ht_scene_t *f)
 {
@@ -2328,6 +2332,8 @@ uint32_t habitat_next_wake_ms(void)
     if (visit.pending && delay > 100) delay = 100;
     if (s.view == FORM && delay > 100) delay = 100;
     if (character.motion.next_ms && character.motion.next_ms < delay) delay = character.motion.next_ms;
+    if (home_caption_rotates() && home_caption.next_ms && home_caption.next_ms < delay)
+        delay = home_caption.next_ms;
     if (status_animated()) {
         uint32_t due = status_wake_ms(now);
         if (due < delay) delay = due;
@@ -2339,7 +2345,8 @@ uint32_t habitat_next_wake_ms(void)
         uint32_t left = elapsed >= due ? 1 : due - elapsed;
         if (left < delay) delay = left;
     }
-    uint32_t deadlines[] = {s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0};
+    uint32_t deadlines[] = {s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0,
+                            s.voice_retry_until};
     for (unsigned i = 0; i < sizeof(deadlines) / sizeof(deadlines[0]); i++)
         if (deadlines[i]) {
             int32_t left = (int32_t)(deadlines[i] - now);
@@ -2359,6 +2366,10 @@ void habitat_tick(void)
     if (!s.ready)
         return;
     uint32_t now = ms();
+    if (s.voice_retry_until && (int32_t)(now - s.voice_retry_until) >= 0) {
+        s.voice_retry_until = 0;
+        change();
+    }
     surface_tick(now);
     if (ht_workspace_tick(&workspace,now)) workspace_failed("The tab did not open. Choose it again.");
     if ((s.q.loading || (s.q.pending && !s.q.uncertain)) && (int32_t)(now-s.q.deadline)>=0) {
@@ -2451,6 +2462,7 @@ void ui_init(void)
     s.brightness = (config_load_brightness() * 100 + 127) / 255;
     s.muted = config_load_muted();
     memset(&character, 0, sizeof character);
+    memset(&home_caption, 0, sizeof home_caption);
     uint8_t saved_character = config_load_habitat_character((uint8_t)ht_character_default());
     if (!ht_character_select(&character, (ht_character_id_t)saved_character))
         ht_character_select(&character, ht_character_default());
@@ -2491,6 +2503,7 @@ void ui_set_connected(bool value)
     display_lock();
     if (!value) {
         input_cancel();
+        s.voice_retry_until = 0;
         s.pending_machine[0] = 0;
         // A reconnect may bring a newer saved result than our last live event.
         for (int i = 0; i < PANE_MEMORY_MAX; i++) s.memory[i].live_summary = false;
@@ -3717,6 +3730,13 @@ void ui_voice_error(const char *message)
         COPY(s.q.speech_error,message); view(s.voice_return);
     } else if (s.voice_return == FORM && form.id[0]) {
         COPY(form.page.error, message); form.poll = ms() + 6000; view(FORM);
+    } else if (message && !strcmp(message, "Didn't catch that")) {
+        // An empty transcript sent nothing. Keep the familiar voice surface
+        // available for one-tap retry, then restore its previous result/status.
+        view(HOME);
+        s.voice_retry_until = ms() + 3000;
+        if (!s.voice_retry_until) s.voice_retry_until = 1;
+        change();
     } else {
         COPY(s.title, "Voice"); COPY(s.message, message); view(MESSAGE);
     }

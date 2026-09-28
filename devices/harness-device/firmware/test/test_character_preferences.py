@@ -53,6 +53,7 @@ static int nvs_commit(nvs_handle_t h) {
 }
 static void nvs_close(nvs_handle_t h) { assert(h == 123); closes++; }
 static ht_character_t character;
+static ht_character_caption_t home_caption;
 static void ui_cable_toast(const char *message) {
     assert(!strcmp(message, "Character changed; saving failed.")); errors++;
 }
@@ -68,7 +69,8 @@ int main(void) {
 #else
     assert(ht_character_default() == HT_CHARACTER_TIM);
 #endif
-    boot(); assert(character.id == ht_character_default());
+    home_caption.initialized=true;
+    boot(); assert(character.id == ht_character_default() && !home_caption.initialized);
     assert(!writes && !commits); // Boot cannot overwrite a previous preference.
     for (unsigned id = 0; id <= 255; id++) {
         save(id); assert(stored == id && !errors);

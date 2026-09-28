@@ -136,6 +136,16 @@ void ht_recap_lines(ht_scene_t *s, int y, uint16_t ink, const char *recap)
 {
     recap_lines(s, y, 336, 3, false, NULL, ink, recap, &ht_mono_20, 0);
 }
+void ht_inbox_card(ht_scene_t *s, const char *name, const char *message,
+                   uint16_t foreground, uint16_t dim)
+{
+    static const int title_widths[] = {306, 374};
+    static const int body_widths[] = {408, 408, 391, 340};
+    lines(s, 78, 306, 2, &ht_mono_28, foreground, name, true, title_widths);
+    ht_center(s, 165, &ht_mono_20, dim, "----------------------");
+    recap_lines(s, 202, 408, HT_CHARACTER_RECAP_ROWS, true, body_widths,
+                foreground, message, &ht_mono_28, HT_CHARACTER_RECAP_CHARS);
+}
 static void recipient(ht_scene_t *s, const ht_character_face_t *f, int y)
 {
     // In reading mode the name labels the message directly underneath it.
