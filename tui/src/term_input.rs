@@ -16,7 +16,7 @@ enum Item { Input(Event), Terminal(Option<String>) }
 #[derive(Default)]
 struct Decoder { pending: Vec<u8> }
 impl Decoder {
-    fn push(&mut self, bytes: &[u8]) -> Vec<Item> {
+    fn push(&mut self, bytes: &[u8], more: bool) -> Vec<Item> {
         let mut out = Vec::new();
         for b in bytes {
             self.pending.push(*b);
@@ -35,6 +35,9 @@ impl Decoder {
                 for (i, b) in bytes.iter().enumerate() { self.pending.push(*b); self.parse(i + 1 < bytes.len(), &mut out); }
             } else { self.parse(true, &mut out); }
         }
+        // Match Crossterm's read boundary: a short read ends a standalone Escape.
+        // Waiting for an idle timer here folds a following prefix into an Alt key.
+        if !more { out.extend(self.escape()); }
         out
     }
     fn parse(&mut self, more: bool, out: &mut Vec<Item>) {
@@ -76,7 +79,7 @@ pub fn read(keys: tokio::sync::mpsc::UnboundedSender<crate::event::Event>) {
             let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
             if n <= 0 { break }
             last = Instant::now();
-            decoder.push(&buf[..n as usize])
+            decoder.push(&buf[..n as usize], n as usize == buf.len())
         };
         for item in items {
             let event = match item {
@@ -99,22 +102,35 @@ mod tests {
     fn query_replies_do_not_consume_interleaved_typeahead() {
         let mut decoder = Decoder::default();
         let mut items = Vec::new();
-        for b in b"printf hello\r\x1bP>|tmux 3.5a\x1b\\\x1b[?1;2cWORLD" { items.extend(decoder.push(&[*b])); }
+        for b in b"printf hello\r\x1bP>|tmux 3.5a\x1b\\\x1b[?1;2cWORLD" { items.extend(decoder.push(&[*b], true)); }
         let names: Vec<_> = items.iter().filter_map(|i| if let Item::Terminal(n) = i { Some(n.clone()) } else { None }).collect();
         assert_eq!(names, vec![Some("tmux 3.5a".into()), None]);
         let text: String = items.iter().filter_map(|i| match i { Item::Input(Event::Key(k)) => match k.code { KeyCode::Char(c) => Some(c), KeyCode::Enter => Some('\r'), _ => None }, _ => None }).collect();
         assert_eq!(text, "printf hello\rWORLD");
     }
     #[test]
+    fn escape_at_a_read_boundary_does_not_take_the_next_prefix() {
+        let mut decoder = Decoder::default();
+        assert_eq!(decoder.push(b"\x1b", false), vec![Item::Input(Event::Key(KeyCode::Esc.into()))]);
+        assert_eq!(decoder.push(b"\x02@", false), vec![
+            Item::Input(Event::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL))),
+            Item::Input(Event::Key(KeyCode::Char('@').into())),
+        ]);
+        // Bytes from one terminal write still form Alt keys and CSI sequences.
+        assert_eq!(decoder.push(b"\x1bp", false), vec![Item::Input(Event::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT)))]);
+        assert!(decoder.push(b"\x1b[", false).is_empty());
+        assert_eq!(decoder.push(b"A", false), vec![Item::Input(Event::Key(KeyCode::Up.into()))]);
+    }
+    #[test]
     fn split_utf8_paste_and_modified_keys_use_the_input_decoder() {
         let mut decoder = Decoder::default();
         let mut items = Vec::new();
         let bytes = "é\x1b[1;5D\x1b[200~paste\n\x1b[?1;2c\x1b[201~\x1bPz";
-        for b in bytes.bytes() { items.extend(decoder.push(&[b])); }
+        for b in bytes.bytes() { items.extend(decoder.push(&[b], true)); }
         assert_eq!(items, vec![Item::Input(Event::Key(KeyCode::Char('é').into())), Item::Input(Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL))), Item::Input(Event::Paste("paste\n\x1b[?1;2c".into())), Item::Input(Event::Key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT | KeyModifiers::ALT))), Item::Input(Event::Key(KeyCode::Char('z').into()))]);
-        assert!(decoder.push(b"\x1b").is_empty());
+        assert!(decoder.push(b"\x1b", true).is_empty());
         assert_eq!(decoder.escape(), vec![Item::Input(Event::Key(KeyCode::Esc.into()))]);
-        assert!(decoder.push(b"\x1bP").is_empty());
+        assert!(decoder.push(b"\x1bP", true).is_empty());
         assert_eq!(decoder.escape(), vec![Item::Input(Event::Key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT | KeyModifiers::ALT)))]);
     }
 }
