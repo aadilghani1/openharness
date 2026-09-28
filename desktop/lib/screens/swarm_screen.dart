@@ -242,6 +242,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   late final _experimentalFeatures =
       widget.experimentalFeatures ?? experimentalFeaturesStore;
 
+  bool get _showShareButton =>
+      _experimentalFeatures.enabled(ExperimentalFeature.shareButton);
+
   /// An explicit local choice overrides the separate account rollout. This
   /// stays null for installations that have never tried the test collection.
   late bool? _daemonPreviewOverride = _creaturePreviewChoice;
@@ -1612,21 +1615,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'canReopen': app.canReopenLastClosed,
       'canFind': _canFindTerminal,
       'canClosePane': app.focusedPane != null,
-      'shareAction': {
-        'text': WorkspaceShareButton.text,
-        'label': _shareLabel(focused),
-        'tooltip': _shareTooltip(focused),
-        'enabled': _canExecuteCommand('agent.share'),
-        'paneId': focused?.pane.id,
-        'machineId': focused?.pane.machineId,
-        'agentId': focused?.agentId,
-        'background': WorkspaceShareButton.backgroundFor(
-          _canExecuteCommand('agent.share'),
-        ).toARGB32(),
-        'foreground': WorkspaceShareButton.foregroundFor(
-          _canExecuteCommand('agent.share'),
-        ).toARGB32(),
-      },
+      if (_showShareButton)
+        'shareAction': {
+          'text': WorkspaceShareButton.text,
+          'label': _shareLabel(focused),
+          'tooltip': _shareTooltip(focused),
+          'enabled': _canExecuteCommand('agent.share'),
+          'paneId': focused?.pane.id,
+          'machineId': focused?.pane.machineId,
+          'agentId': focused?.agentId,
+          'background': WorkspaceShareButton.backgroundFor(
+            _canExecuteCommand('agent.share'),
+          ).toARGB32(),
+          'foreground': WorkspaceShareButton.foregroundFor(
+            _canExecuteCommand('agent.share'),
+          ).toARGB32(),
+        },
       'paneActions': {
         'restartAgent': _canExecuteCommand('agent.restart'),
         'shareAgent': _canExecuteCommand('agent.share'),
@@ -1841,6 +1845,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     final args = call.arguments is Map ? call.arguments as Map : const {};
     if (call.method == 'shareAgent' && args.containsKey('paneId')) {
+      if (!_showShareButton) return;
       final focused = WorkspacePaneContext.focused(app);
       if (focused == null ||
           focused.pane.id != args['paneId'] ||
@@ -3205,6 +3210,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       app.sendDaemonFrame(type, payload);
 
   void _experimentalFeaturesChanged() {
+    setState(() {});
+    if (_native) _syncNative();
     final choice = _creaturePreviewChoice;
     if (_daemonPreviewOverride == choice) return;
     final hadOverlay = _daemonOverlay != null || _hatchOverlay != null;
@@ -6248,7 +6255,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final downloadWidth = kIsWeb
           ? WebDownloadButton.widthOf(context) + cell.width
           : 0.0;
-      final shareWidth = WorkspaceShareButton.widthOf(context) + cell.width;
+      final shareWidth = _showShareButton
+          ? WorkspaceShareButton.widthOf(context) + cell.width
+          : 0.0;
       final contentWidth = math.max(
         0.0,
         constraints.maxWidth -
@@ -6496,15 +6505,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   selected: _daemonOverlay != null,
                   onPressed: _activateDaemon,
                 ),
-              SizedBox(width: cell.width),
-              WorkspaceShareButton(
-                key: const ValueKey('workspace-share-button'),
-                label: _shareLabel(focused),
-                tooltip: _shareTooltip(focused),
-                onPressed: _canExecuteCommand('agent.share')
-                    ? () => _runShortcut('agent.share')
-                    : null,
-              ),
+              if (_showShareButton) ...[
+                SizedBox(width: cell.width),
+                WorkspaceShareButton(
+                  key: const ValueKey('workspace-share-button'),
+                  label: _shareLabel(focused),
+                  tooltip: _shareTooltip(focused),
+                  onPressed: _canExecuteCommand('agent.share')
+                      ? () => _runShortcut('agent.share')
+                      : null,
+                ),
+              ],
               SizedBox(width: cell.width),
             ],
           ),

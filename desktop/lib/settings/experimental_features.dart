@@ -12,6 +12,11 @@ enum ExperimentalFeature {
     'Focus-bar creature',
     'Try a small companion in the focus bar, with an egg ready to hatch. '
         'Its test collection resets when you close the window.',
+  ),
+  shareButton(
+    'share_button',
+    'Share button',
+    'Show Share in the top-right corner of the workspace.',
   );
 
   const ExperimentalFeature(this.id, this.label, this.description);
@@ -19,12 +24,14 @@ enum ExperimentalFeature {
 
   String get storageKey => 'experimental.$id';
 
-  // The first experiment belongs to the desktop workspace. A viewer has no
-  // workspace or creature of its own.
-  bool get available => !kIsWeb && !kViewerMode;
+  bool get available => switch (this) {
+    // The creature preview belongs to the native desktop workspace.
+    focusBarCreature => !kIsWeb && !kViewerMode,
+    shareButton => true,
+  };
 }
 
-/// Per-computer preferences, loaded before the first frame. Experiments are
+/// Per-installation preferences, loaded before the first frame. Experiments are
 /// off until chosen; neither an account nor a server can opt a user into one.
 class ExperimentalFeaturesStore extends ChangeNotifier {
   ExperimentalFeaturesStore({LocalKeyValueStore? storage})

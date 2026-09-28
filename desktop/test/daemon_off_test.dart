@@ -360,6 +360,9 @@ void main() {
   testWidgets('a 404 is off: no slot and the bar from before daemons, at '
       'every width', (tester) async {
     seedStatusBarWorkspace(app);
+    // This historical layout includes Share; keep its independent experiment
+    // enabled while checking that daemons reserve no space.
+    await experiments.set(ExperimentalFeature.shareButton, true);
     await mount(tester);
     await tester.pump();
     expect(remote.fetches, 1);
@@ -377,6 +380,7 @@ void main() {
   testWidgets('while the first read has no answer nothing is kept for the '
       'slot', (tester) async {
     seedStatusBarWorkspace(app);
+    await experiments.set(ExperimentalFeature.shareButton, true);
     final gate = Completer<void>();
     await mount(tester, on: true, gate: gate);
     expect(zoo.daemons, DaemonsSwitch.unknown);

@@ -29,28 +29,33 @@ class _DelayedWrite extends MemoryStore {
 void main() {
   const creature = ExperimentalFeature.focusBarCreature;
 
-  test('experiments default off and restore both saved choices', () async {
-    final storage = MemoryStore();
-    Future<ExperimentalFeaturesStore> reopen() async {
-      final store = ExperimentalFeaturesStore(storage: storage);
-      addTearDown(store.dispose);
-      await store.load();
-      return store;
-    }
+  for (final feature in ExperimentalFeature.values) {
+    test(
+      '${feature.label} defaults off and restores both saved choices',
+      () async {
+        final storage = MemoryStore();
+        Future<ExperimentalFeaturesStore> reopen() async {
+          final store = ExperimentalFeaturesStore(storage: storage);
+          addTearDown(store.dispose);
+          await store.load();
+          return store;
+        }
 
-    final first = await reopen();
-    expect(first.enabled(creature), isFalse);
-    expect(first.choice(creature), isNull);
-    expect(storage.values, isEmpty);
-    await first.set(creature, true);
-    final second = await reopen();
-    expect(second.enabled(creature), isTrue);
-    await second.set(creature, false);
-    final third = await reopen();
-    expect(third.choice(creature), isFalse);
-    storage.values[creature.storageKey] = 'true';
-    expect((await reopen()).enabled(creature), isFalse);
-  });
+        final first = await reopen();
+        expect(first.enabled(feature), isFalse);
+        expect(first.choice(feature), isNull);
+        expect(storage.values, isEmpty);
+        await first.set(feature, true);
+        final second = await reopen();
+        expect(second.enabled(feature), isTrue);
+        await second.set(feature, false);
+        final third = await reopen();
+        expect(third.choice(feature), isFalse);
+        storage.values[feature.storageKey] = 'true';
+        expect((await reopen()).enabled(feature), isFalse);
+      },
+    );
+  }
 
   test(
     'a late preference read cannot undo a choice made in Settings',
