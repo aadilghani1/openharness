@@ -269,14 +269,14 @@ Color? daemonSlotPatch(DaemonFace face, TerminalTheme theme) {
   return daemonBackdrop(def);
 }
 
-/// The tally's ink (`+3`, `+1 egg`) and a reply's: the status line's text,
+/// The tally's ink (`3 done`, `1 egg`) and a reply's: the status line's text,
 /// dimmer. Never the alert yellow.
 Color daemonDimInk(TerminalTheme theme) =>
     theme.foreground.withValues(alpha: .62);
 
-/// The status line's daemon: its tally (`+3 +1 egg`), then ten cells (eight
-/// and a one-cell gutter each side) in the workspace bar's font. Only this
-/// widget repaints when the face changes.
+/// The status line's daemon: ten cells (eight and a one-cell gutter each
+/// side), followed by its labeled tally (`3 done, 1 egg`). The creature
+/// separates these counts from Git. Only this widget repaints on a new face.
 class DaemonSlotButton extends StatelessWidget {
   const DaemonSlotButton({
     super.key,
@@ -325,19 +325,6 @@ class DaemonSlotButton extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (tally.isNotEmpty) ...[
-                      SizedBox(width: cell.width),
-                      Text(
-                        tally,
-                        key: const ValueKey('daemon-slot-tally'),
-                        maxLines: 1,
-                        softWrap: false,
-                        style: workspaceBarTextStyle(
-                          color: daemonDimInk(theme),
-                          emphasized: emphasized,
-                        ).copyWith(fontFeatures: daemonTextFeatures),
-                      ),
-                    ],
                     SizedBox(
                       width: cell.width * (face.roster.rules.statusCells + 2),
                       child: Stack(
@@ -367,6 +354,19 @@ class DaemonSlotButton extends StatelessWidget {
                         ],
                       ),
                     ),
+                    if (tally.isNotEmpty) ...[
+                      Text(
+                        tally,
+                        key: const ValueKey('daemon-slot-tally'),
+                        maxLines: 1,
+                        softWrap: false,
+                        style: workspaceBarTextStyle(
+                          color: daemonDimInk(theme),
+                          emphasized: emphasized,
+                        ).copyWith(fontFeatures: daemonTextFeatures),
+                      ),
+                      SizedBox(width: cell.width),
+                    ],
                   ],
                 ),
               ),

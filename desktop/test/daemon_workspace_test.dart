@@ -766,7 +766,7 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('finished turns are a +N beside the slot, cleared when you '
+  testWidgets('finished turns are labeled after the creature, cleared when you '
       'look; Quiet and Motion are switches in the panel', (tester) async {
     app.stateOf('m')!
       ..nodeOnline = true
@@ -792,7 +792,14 @@ void main() {
     expect(focused, isNotNull);
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('daemon-slot-tally'))).data,
-      '+1',
+      '1 done',
+    );
+    expect(
+      tester.getRect(find.byKey(const ValueKey('daemon-slot-glyph'))).right,
+      lessThanOrEqualTo(
+        tester.getRect(find.byKey(const ValueKey('daemon-slot-tally'))).left,
+      ),
+      reason: 'the creature separates its counts from Git context',
     );
     expect(find.byKey(const ValueKey('daemon-voice')), findsNothing);
     await tester.tap(slot);
@@ -882,7 +889,7 @@ void main() {
     await tester.pump();
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('daemon-slot-tally'))).data,
-      '+1 egg',
+      '1 egg',
       reason: 'an egg waits beside the slot until it is opened',
     );
     await tester.tap(slot);
@@ -934,7 +941,7 @@ void main() {
     );
     await tester.pump();
     expect(states.last['cell'], '* (o o)   ');
-    expect(states.last['tally'], '+1 egg');
+    expect(states.last['tally'], '1 egg');
     expect(states.last['patch'], isNull, reason: 'a dark theme');
     await unmount(tester);
   });
@@ -1202,7 +1209,7 @@ void main() {
       await unmount(tester);
     });
 
-    testWidgets('+n is the brain\'s count of finished turns; a look sends '
+    testWidgets('done is the brain\'s count of finished turns; a look sends '
         'doneSeen; auto is done and journaled; asleep is calm', (tester) async {
       await mount(tester, seed: zooWithTim);
       await tester.pump();
@@ -1234,7 +1241,7 @@ void main() {
         tester
             .widget<Text>(find.byKey(const ValueKey('daemon-slot-tally')))
             .data,
-        '+3',
+        '3 done',
       );
       expect(glyph(tester), '(o o)', reason: 'asleep is never a failure');
       // It acted within rules: drawn like done.

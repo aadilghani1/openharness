@@ -258,7 +258,7 @@ void main() {
     await settle(tester);
   });
 
-  testWidgets('a finished turn: ack blink, done for 3 s, a +1 beside the '
+  testWidgets('a finished turn: ack blink, done for 3 s, a labeled count by the '
       'slot and no line', (tester) async {
     await mount(tester);
     face.sync(const DaemonWatch(turns: {'m': 4}));
@@ -266,7 +266,7 @@ void main() {
     face.sync(const DaemonWatch(turns: {'m': 5}));
     expect(face.mood, DaemonMood.done);
     expect(face.voice, isNull, reason: 'a finished turn never takes over');
-    expect(face.tally, '+1');
+    expect(face.tally, '1 done');
     expect(face.lid, isNull);
     await pass(tester, const Duration(milliseconds: 170));
     expect(face.lid, '-');
@@ -277,7 +277,7 @@ void main() {
     expect(face.mood, DaemonMood.idle);
     face.sync(const DaemonWatch(turns: {'m': 7}));
     expect(face.mood, DaemonMood.idle, reason: 'the 20 s cooldown');
-    expect(face.tally, '+3', reason: 'every finish counts');
+    expect(face.tally, '3 done', reason: 'every finish counts');
     expect(face.detail, contains('3 finished since you looked'));
     face.seen();
     expect(face.tally, '', reason: 'cleared when you look');
@@ -303,7 +303,7 @@ void main() {
         focus: 'm/a1',
       ),
     );
-    expect(face.tally, '+1', reason: 'only the one you were not looking at');
+    expect(face.tally, '1 done', reason: 'only the one you were not looking at');
     face.sync(
       const DaemonWatch(
         turns: {'m': 2},
@@ -666,7 +666,7 @@ void main() {
   });
 
   testWidgets('a new egg shows in the slot for a moment, then waits beside '
-      'it as +1 egg until it is opened', (tester) async {
+      'it as 1 egg until it is opened', (tester) async {
     // At 1.0 (150 xp), two days of turns (200 xp) stay below the next level.
     await mount(tester, version: '1.0');
     // A guest's 40th counted turn earns a turn egg; two days at the cap
@@ -680,11 +680,11 @@ void main() {
     expect(zoo.zoo.eggs.single.kind, 'turn');
     expect(face.glyph, r'\_(oo)_/');
     expect(face.voice, isNull, reason: 'an egg is not an interruption');
-    expect(face.tally, '+1 egg');
+    expect(face.tally, '1 egg');
     expect(face.tooltip, contains(r'\_(oo)_/ x1 waiting'));
     await pass(tester, const Duration(seconds: 3));
     expect(face.glyph, ',(o o),', reason: 'the daemon comes back');
-    expect(face.tally, '+1 egg', reason: 'the egg still waits');
+    expect(face.tally, '1 egg', reason: 'the egg still waits');
     await zoo.hatch(zoo.zoo.eggs.single.id);
     expect(face.tally, '', reason: 'opened');
     await pass(tester, const Duration(seconds: 6));
@@ -901,6 +901,36 @@ void main() {
     await settle(tester);
   });
 
+  testWidgets('completed turns and unhatched eggs have distinct labels', (
+    tester,
+  ) async {
+    await mount(
+      tester,
+      custom: Zoo(
+        daemons: [ZooDaemon(id: 'gnu', hatched: '', egg: 'first')],
+        pair: 'gnu',
+        firstEgg: true,
+        eggs: const [
+          ZooEgg(id: 'one', kind: 'turn', grantedAt: ''),
+          ZooEgg(id: 'two', kind: 'week', grantedAt: ''),
+        ],
+      ),
+    );
+    face.sync(const DaemonWatch(doneCount: 1));
+    expect(face.tally, '1 done, 2 eggs');
+    face.sync(const DaemonWatch(doneCount: 1234));
+    expect(face.tally, '999+ done, 2 eggs');
+    expect(face.tooltip, contains('1234'));
+    expect(face.detail, contains('1234 finished'));
+    face.seen();
+    expect(
+      face.tally,
+      '2 eggs',
+      reason: 'looking clears work, never unhatched eggs',
+    );
+    await settle(tester);
+  });
+
   testWidgets('the brain counts finished turns everywhere; a look clears it '
       'and tells the brain', (tester) async {
     await mount(tester);
@@ -912,7 +942,7 @@ void main() {
         doneLast: ['api@office finished: tests pass.'],
       ),
     );
-    expect(face.tally, '+3');
+    expect(face.tally, '3 done');
     expect(face.tooltip, contains('api@office finished: tests pass.'));
     face.seen();
     expect(face.tally, '');
@@ -924,9 +954,9 @@ void main() {
     face.setEnvironment(foreground: false, reduceMotion: false);
     await pass(tester, const Duration(minutes: 1));
     face.setEnvironment(foreground: true, reduceMotion: false);
-    expect(face.tally, '+2');
+    expect(face.tally, '2 done');
     await pass(tester, const Duration(seconds: 3));
-    expect(face.tally, '+2');
+    expect(face.tally, '2 done');
     await pass(tester, const Duration(seconds: 2));
     expect(face.tally, '');
     expect(told, 2);

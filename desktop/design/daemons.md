@@ -174,7 +174,7 @@ the night began). The app does not measure a guest's turn minutes, so long
 turns count once.
 
 The paired daemon draws at its `version`. A new egg sits in the status slot for
-3 s (an ack blink, no line), then the daemon returns and `+1 egg` stays beside
+3 s (an ack blink, no line), then the daemon returns and `1 egg` stays after
 it until the egg is opened; the tooltip shows one egg look and a count
 (`\_O_/ x2 waiting`). A level-up is a slow blink, no line. Before the first
 hatch the slot shows the waiting egg itself: the first egg's ready face, or
@@ -240,13 +240,24 @@ daemon has one now; else the colour brighter and more saturated) on the
 terminal background: panel, zoo, card and reveal; the card reads
 `SHINY <RARITY>`.
 
-**Tally.** Dim, left of the cells: `+3` turns finished since you looked,
+**Tally.** Dim, after the creature: `3 done, 1 egg`. The sprite separates these
+counts from the Git context, and each count has its own label. Finished turns
+are counted since you looked,
 cleared by a hover, opening the panel, or coming back to the window (after
-4 s in front); `+1 egg` while eggs wait, until they are opened. With a pair
-brain the `+n` is its `daemon_state.done.count` (every machine; the tooltip
+4 s in front); `1 egg` stays until it is opened. Bar counts above 999 read
+`999+`; tooltips and accessibility details retain the exact counts. With a pair
+brain the done count is its `daemon_state.done.count` (every machine; the tooltip
 names the last few) and a look sends `daemon_presence { doneSeen: true }`;
 without one the window counts what it sees (a turn in the pane in front of you
 is already seen). Native lays out again only when the tally's width changes.
+
+![The native bar separates Git from labeled creature counts](images/daemon-status-counts.png)
+
+Render the combined Git/creature fixture with `HARNESS_DAEMON_CAPTURE_DIR=/tmp/daemon-counts
+flutter test test/daemon_review_render_test.dart --plain-name 'creature counts'`.
+Then use `HARNESS_NATIVE_STATUS_CAPTURE_DIR=/tmp/daemon-counts
+bash tool/check_swarm_titlebar.sh /path/to/flutter --status-preview` for the
+actual AppKit controls. Both use synthetic state without launching the app.
 
 Clicking a ready egg hatches it; nothing hatches on its own. Otherwise a click
 boops the daemon and opens its panel. Hover is a look. Native updates carry the
@@ -318,7 +329,7 @@ from the loopback socket bound to this computer's own harnessd
   needs (same ids as the window's own questions,
   `machineId/agentId#requestId`), work and failures across every machine;
   `asks` and `confirms` make the face `need` (it asks you something);
-  `done.count` is the `+n`; the dial is the badge. `pair: null` keeps the
+  `done.count` is the labeled done count; the dial is the badge. `pair: null` keeps the
   roster's lines (a harnessd with no consent yet pairs nothing).
 - **Shown, then armed** (BRAIN.md, "Security" 1). A key counts only on a
   line this connection was sent and acknowledged as drawn with `daemon_shown

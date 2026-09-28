@@ -487,7 +487,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _zooPushes = app.zooPushes.listen(_zoo.pushed);
     // The pair brain, when this computer's harnessd has one.
     _brain.addListener(_brainChanged);
-    // A look at the `+n` clears the brain's count too.
+    // A look at the finished-turn count clears the brain's count too.
     _face.onSeen = () => unawaited(_brain.doneSeen());
     _face.plates = _plates;
     _brainSubscriptions.addAll([
@@ -3250,7 +3250,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'visible': _slotShown,
       'glyph': _face.glyph,
       // The ten cells as drawn (centred on the base sprite, a shiny `*` in
-      // the gutter) and the tally beside them (`+3 +1 egg`).
+      // the gutter), followed by the labeled tally (`3 done, 1 egg`).
       'cell': _face.cell,
       'tally': _face.tally,
       'foreground': daemonSlotInk(_face, theme).withValues(alpha: 1).toARGB32(),

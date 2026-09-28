@@ -14,7 +14,7 @@
 /// - **Interruptions**: only a harness waiting on you and a failure take over
 ///   the status line, in the message yellow, at most one line nobody asked for
 ///   every two minutes, never about the pane in front of you, and only after
-///   Enter, a pane switch or 8 s without a key. Finished turns become `+3`
+///   Enter, a pane switch or 8 s without a key. Finished turns become `3 done`
 ///   beside the daemon, cleared when you look. Replies (a boop, its first
 ///   words, why an answer failed, the pair answering you) are dim. Quiet
 ///   silences everything.
@@ -230,11 +230,11 @@ class DaemonFace extends ChangeNotifier {
   int _doneCount = 0, _doneWhileAway = 0;
   Timer? _seenTimer;
 
-  /// You looked at the `+n`: the brain hears `doneSeen`.
+  /// You looked at the finished-turn count: the brain hears `doneSeen`.
   VoidCallback? onSeen;
 
-  /// Coming back to the window is a look at the `+n`, once it has been in
-  /// front this long.
+  /// Coming back to the window is a look at the finished-turn count, once it
+  /// has been in front this long.
   static const seenAfterFocus = Duration(seconds: 4);
 
   // Held faces.
@@ -449,17 +449,19 @@ class DaemonFace extends ChangeNotifier {
     return daemonShown && shiny ? '*${c.substring(1)}' : c;
   }
 
-  /// Beside the slot: `+3` turns finished since you looked, `+1 egg` while
-  /// eggs wait to be opened. Empty before the first hatch (the slot is the
-  /// egg then) and while a reveal runs.
+  /// After the creature: `3 done, 1 egg`. Label both counts so they cannot
+  /// be mistaken for the neighboring Git branch count. Keep the bar bounded;
+  /// the tooltip and accessibility detail retain the exact counts. Empty
+  /// before the first hatch (the slot is the egg) and during a reveal.
   String get tally {
     if (!visible || _revealing || def == null) return '';
     final eggs = eggsWaiting;
     final done = doneCount;
+    String count(int value) => value > 999 ? '999+' : '$value';
     return [
-      if (done > 0) '+$done',
-      if (eggs > 0) '+$eggs ${eggs == 1 ? 'egg' : 'eggs'}',
-    ].join(' ');
+      if (done > 0) '${count(done)} done',
+      if (eggs > 0) '${count(eggs)} ${eggs == 1 ? 'egg' : 'eggs'}',
+    ].join(', ');
   }
 
   /// `tim: bell in codex@office: run the migration?` while it speaks; a line
@@ -679,7 +681,7 @@ class DaemonFace extends ChangeNotifier {
       } else {
         look(force: true);
       }
-      // Back at the window: the `+n` has been seen once it had a moment.
+      // Back at the window: finished turns are seen after a moment in front.
       _seenTimer?.cancel();
       _seenTimer = doneCount == 0
           ? null
@@ -979,7 +981,7 @@ class DaemonFace extends ChangeNotifier {
   }
 
   /// A new egg or a level-up, here or on another client. Neither is a line:
-  /// the egg waits beside the slot (`+1 egg`) until it is opened, and a
+  /// the egg waits after the slot (`1 egg`) until it is opened, and a
   /// level-up is a slow blink.
   void _zooEvent(ZooEvent event) {
     if (_disposed) return;

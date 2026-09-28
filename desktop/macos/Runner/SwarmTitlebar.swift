@@ -975,7 +975,7 @@ private func validDaemonGlyph(_ value: String?) -> String? {
 
 /// Printable ASCII of at most [cells] cells, or nothing: the slot's ten cells
 /// (the glyph centred on its base sprite, a gutter each side, a shiny `*`) and
-/// the tally beside them (`+3 +1 egg`).
+/// the labeled tally after them (`3 done, 1 egg`).
 private func validDaemonText(_ value: String?, cells: Int) -> String? {
   guard let value, value.unicodeScalars.count <= cells,
         value.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value <= 0x7e }) else { return nil }
@@ -1261,7 +1261,7 @@ private final class SwarmContextButton: SwarmIconButton {
 }
 
 /// Plain terminal symbols with fixed cell gutters: the daemon's eight cells plus a
-/// one-cell gutter each side, and its tally (`+3 +1 egg`) to their left. Only this
+/// one-cell gutter each side, and its tally (`3 done, 1 egg`) to their right. Only this
 /// control repaints when its face changes; it lays out again only when the tally's
 /// width does.
 private final class SwarmSymbolButton: SwarmIconButton {
@@ -1302,7 +1302,7 @@ private final class SwarmSymbolButton: SwarmIconButton {
         withAttributes: attributes)
       return
     }
-    let slotX = bounds.width - cellWidth * CGFloat(columns + 2)
+    let slotX: CGFloat = 0
     let height = (cells as NSString).size(withAttributes: attributes).height
     if let patch {
       patch.setFill()
@@ -1310,7 +1310,7 @@ private final class SwarmSymbolButton: SwarmIconButton {
     }
     if !tally.isEmpty {
       let tallyInk = isEnabled || busy ? tallyColor : tallyColor.withAlphaComponent(0.35)
-      (tally as NSString).draw(at: NSPoint(x: cellWidth, y: bounds.midY - height / 2),
+      (tally as NSString).draw(at: NSPoint(x: cellWidth * CGFloat(columns + 2), y: bounds.midY - height / 2),
         withAttributes: [.font: drawFont, .foregroundColor: tallyInk, .ligature: 0])
     }
     (cells as NSString).draw(at: NSPoint(x: slotX, y: bounds.midY - height / 2), withAttributes: attributes)
@@ -1679,7 +1679,7 @@ private final class SwarmTabStrip: NSView {
     daemonButton.glyph = validDaemonGlyph(state["glyph"] as? String) ?? ""
     let previousWidth = daemonButton.preferredWidth
     daemonButton.cells = validDaemonText(state["cell"] as? String, cells: daemonButton.columns + 2) ?? ""
-    daemonButton.tally = validDaemonText(state["tally"] as? String, cells: 16) ?? ""
+    daemonButton.tally = validDaemonText(state["tally"] as? String, cells: 24) ?? ""
     daemonButton.foreground = statusColor(state["foreground"], fallback: terminalForeground)
     daemonButton.tallyColor = statusColor(state["tallyColor"], fallback: terminalForeground.withAlphaComponent(0.62))
     daemonButton.patch = state["patch"] is NSNumber ? statusColor(state["patch"], fallback: .black) : nil

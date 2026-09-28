@@ -514,13 +514,31 @@ private extension SwarmTabStrip {
     daemon["cell"] = "*  [o o]  "
     updateDaemon(daemon)
     try checkTitlebar(daemonButton.cells.hasPrefix("*") && unmoved(), "A shiny daemon's * sits in the gutter")
-    daemon["tally"] = "+3 +1 egg"
+    daemon["tally"] = "3 done, 1 egg"
+    daemon["foreground"] = 0xffffffff
     daemon["tallyColor"] = 0xff808080
     updateDaemon(daemon)
-    try checkTitlebar(abs(daemonButton.frame.width - cellWidth * CGFloat(10 + 1 + 9)) < 0.5 &&
+    try checkTitlebar(abs(daemonButton.frame.width - cellWidth * CGFloat(10 + 1 + 13)) < 0.5 &&
       daemonButton.frame.maxX == daemonFrame.maxX && contextButton.frame.maxX <= daemonButton.frame.minX,
-      "The tally widens the control to the left and the status makes room")
-    daemon["tally"] = "+3 and far too many words"
+      "The labeled tally widens the control and the status makes room")
+    let counted = daemonButton.renderedBitmap()
+    var brightColumns = Set<Int>(), mutedColumns = Set<Int>()
+    for y in 0..<counted.pixelsHigh {
+      for x in 0..<counted.pixelsWide {
+        guard let color = counted.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+              color.alphaComponent > 0.8 else { continue }
+        if color.redComponent > 0.8 { brightColumns.insert(x) }
+        if (0.45...0.55).contains(color.redComponent) { mutedColumns.insert(x) }
+      }
+    }
+    try checkTitlebar(!brightColumns.isEmpty && !mutedColumns.isEmpty &&
+      brightColumns.max()! < Int(cellWidth * 10) && mutedColumns.min()! >= Int(cellWidth * 10),
+      "The native creature draws before its dim counts, separating them from Git")
+    daemon["tally"] = "999+ done, 999+ eggs"
+    updateDaemon(daemon)
+    try checkTitlebar(daemonButton.tally == "999+ done, 999+ eggs",
+      "The largest bounded labeled tally is retained by native validation")
+    daemon["tally"] = "3 done, and far too many words for this slot"
     updateDaemon(daemon)
     try checkTitlebar(daemonButton.tally.isEmpty && daemonButton.frame == daemonFrame,
       "A tally that is not short printable ASCII draws nothing")

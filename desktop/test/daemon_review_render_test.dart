@@ -23,7 +23,11 @@ import 'package:harness/daemons/render.dart';
 import 'package:harness/daemons/roster.dart';
 import 'package:harness/daemons/zoo.dart';
 import 'package:harness/daemons/zoo_controller.dart';
-import 'package:harness/core/models.dart' show CurrentUserProfile;
+import 'package:harness/core/models.dart' show CurrentUserProfile, ConnectionStatus;
+import 'package:harness/core/agent_git_context.dart';
+import 'package:harness/shared/theme/appearance_prefs_store.dart';
+import 'package:harness/shared/theme/prompt_style.dart';
+import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/swarm_catalog.dart' show SwarmProjectStore;
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -41,6 +45,7 @@ import 'package:harness/settings/experimental_features.dart';
 import 'support/real_fonts.dart';
 import 'support/status_bar_layout.dart' show seedStatusBarWorkspace;
 import 'swarm_state_test.dart' show MemoryStore, createApp;
+import 'session_git_context_test.dart' show gitFixture;
 
 class _Memory implements LocalKeyValueStore {
   final values = <String, String>{};
@@ -359,9 +364,9 @@ void main() {
     done
       ..sync(const DaemonWatch(turns: {'m': 0}))
       ..sync(const DaemonWatch(turns: {'m': 3}));
-    rows.add(('tim +3 done', done));
+    rows.add(('tim 3 done', done));
     rows.add((
-      'lynx +1 egg',
+      'lynx 1 egg',
       await _face(
         tester,
         _paired(
@@ -867,7 +872,7 @@ void main() {
 
   // ── round 3: the pair brain in the window, and economy v2 ───────────────
 
-  testWidgets('status line: the pair brain keys first, and the +n', (
+  testWidgets('status line: the pair brain keys first, and finished turns', (
     tester,
   ) async {
     const need = DaemonSay(
@@ -972,7 +977,7 @@ void main() {
         doneLast: ['api@office finished: tests pass.'],
       ),
     );
-    rows.add(('+3 from the brain', done));
+    rows.add(('3 done from the brain', done));
     await _capture(
       tester,
       'status-brain',
@@ -985,7 +990,7 @@ void main() {
     );
     expect(find.text('api@office Bash: npm test'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-answer-y')), findsWidgets);
-    expect(find.text('+3'), findsOneWidget);
+    expect(find.text('3 done'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     for (final (_, face) in rows) {
       face.sync(const DaemonWatch());
@@ -1972,6 +1977,93 @@ void main() {
       );
       expect(find.byKey(const ValueKey('daemon-preview-label')), findsOneWidget);
       expect(remote.batches, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 11));
+    });
+  }
+
+  for (final (native, width) in [(false, 640.0), (false, 1280.0), (true, 1280.0)]) {
+    testWidgets('creature counts separate from Git at $width native=$native', (tester) async {
+      final appearance = appearancePrefsStore.value;
+      appearancePrefsStore.value = appearance.copyWith(
+        prompt: const PromptPrefs(statusStyle: StatusLineStyle.powerlevel10kRainbow),
+      );
+      addTearDown(() => appearancePrefsStore.value = appearance);
+      final app = createApp();
+      addTearDown(app.dispose);
+      seedStatusBarWorkspace(app);
+      final git = gitFixture(branch: 'continue-daemons');
+      final project = git['current'] as Map<String, dynamic>;
+      git['state'] = 'multiple';
+      git['current'] = null;
+      git['checkouts'] = [
+        project,
+        for (var i = 0; i < 3; i++)
+          {...project, 'cwd': '/fixture-$i', 'root': '/fixture-$i', 'branch': 'work-$i'},
+      ];
+      git['recentWork'] = {'project': project, 'at': '2026-09-27T13:00:00Z'};
+      final machine = app.stateOf('m')!;
+      machine.nodeOnline = true;
+      machine.connectionStatus = ConnectionStatus.connected;
+      machine.agents = [
+        for (final agent in machine.agents)
+          agent.copyWith(gitContext: AgentGitContext.fromJson(git)),
+      ];
+      final zoo = ZooController(storage: _Memory());
+      addTearDown(zoo.dispose);
+      final remote = FakeZooTransport()
+        ..zoo = _paired('gnu', version: '0.1', eggs: const [
+          ZooEgg(id: 'one', kind: 'turn', grantedAt: ''),
+          ZooEgg(id: 'two', kind: 'week', grantedAt: ''),
+        ]);
+      const channel = MethodChannel('harness/swarm_tabs');
+      Map<String, dynamic>? state;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'update') state = Map<String, dynamic>.from(call.arguments as Map);
+        if (call.method == 'daemonState') state?['daemon'] = call.arguments;
+        return null;
+      });
+      addTearDown(() async {
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump();
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+      });
+      await _capture(
+        tester,
+        'creature-counts-${width.toInt()}-${native ? 'native' : 'flutter'}',
+        Size(width, 240),
+        (_) => SwarmScreen(
+          notifier: app,
+          nativeTabs: native,
+          projectStore: SwarmProjectStore(),
+          zoo: zoo,
+          zooTransport: remote,
+          daemonClock: () => tester.binding.clock.now(),
+        ),
+        act: () async {
+          app.notifyListeners();
+          await tester.pump();
+          await app.handleMachineEventForTest('m', {'type': 'turn_ended', 'agentId': 'a0'});
+          await tester.pump(const Duration(milliseconds: 3100));
+        },
+      );
+      if (native) {
+        expect((state!['daemon'] as Map)['tally'], '1 done, 2 eggs');
+        if (_output case final output?) {
+          await tester.runAsync(() async {
+            await File('$output/creature-counts-native.json').writeAsString(jsonEncode(state));
+            await File('$output/catalog.json').writeAsString(jsonEncode([
+              {'id': 'creature-counts-native', 'label': 'Git branches | creature | completed turns and unhatched eggs'},
+            ]));
+          });
+        }
+      } else {
+        final count = find.byKey(const ValueKey('daemon-slot-tally'));
+        expect(tester.widget<Text>(count).data, '1 done, 2 eggs');
+        expect(tester.getRect(find.byKey(const ValueKey('daemon-slot-glyph'))).right,
+            lessThanOrEqualTo(tester.getRect(count).left));
+        expect(tester.getRect(count).right, lessThanOrEqualTo(width));
+      }
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 11));
     });
