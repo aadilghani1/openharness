@@ -33,7 +33,8 @@ class SessionWorkDialog extends StatefulWidget {
 
 class _SessionWorkDialogState extends State<SessionWorkDialog> {
   AgentGitContext? _data;
-  bool _loading = false, _showCompleted = false;
+  bool _loading = false;
+  bool? _showCompleted;
   String? _error;
   int? _nextOffset;
   int _revision = 0, _visiblePrs = 4;
@@ -158,6 +159,8 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
         prs.sort(comparePrs);
         bool completed(AgentWorkPr pr) =>
             pr.state == 'Merged' || pr.state == 'Closed';
+        final showCompleted =
+            _showCompleted ?? (prs.isNotEmpty && prs.every(completed));
         final recentUrls = branches
             .where((b) => data?.isRecentBranch(b) == true)
             .expand((b) => b.pullRequests.map((pr) => pr.url))
@@ -184,7 +187,7 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
             .toList();
         final visibleUrls = {
           ...ongoingPrs.take(_visiblePrs).map((pr) => pr.url),
-          if (_showCompleted)
+          if (showCompleted)
             ...completedPrs.take(_visiblePrs).map((pr) => pr.url),
         };
         final groupedUrls = branches
@@ -440,17 +443,16 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
                           alignment: Alignment.centerLeft,
                           child: TerminalTextAction(
                             key: const ValueKey('work-completed'),
-                            label: _showCompleted
+                            label: showCompleted
                                 ? 'Hide completed'
                                 : 'Completed ($completedCount)',
                             padding: EdgeInsets.zero,
-                            onPressed: () => setState(
-                              () => _showCompleted = !_showCompleted,
-                            ),
+                            onPressed: () =>
+                                setState(() => _showCompleted = !showCompleted),
                           ),
                         ),
                       );
-                      if (_showCompleted) {
+                      if (showCompleted) {
                         for (final branch in branches.where(completedBranch)) {
                           addBranch(branch);
                         }
@@ -475,7 +477,7 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
                     }
                     if (_nextOffset != null ||
                         ongoingPrs.length > _visiblePrs ||
-                        _showCompleted && completedPrs.length > _visiblePrs) {
+                        showCompleted && completedPrs.length > _visiblePrs) {
                       separate();
                       rows.add(
                         Align(

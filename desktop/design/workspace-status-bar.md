@@ -139,13 +139,15 @@ text and hand cursor as the status symbols. Machine opens the shared picker scop
 identity; project opens its harnesses across matching remote checkouts; branch
 opens the focused session's branches and PRs when the daemon supplies `gitContext`.
 When recent successful work identifies one Git branch, show its name followed
-by the count of other checked-out branches, for example `ship-hn · +3`. The
+by the count of other checked-out branches, for example `ship-hn +3`. The
 tooltip explains that this is recent confirmed work and gives its observation
 time. Git remains the source of branch names for every engine. When several
 branches have equal recent evidence, show the count instead of selecting one.
 
 Details group each branch with its PRs, put recent work and open PRs first, and
-fold completed work behind one action. Show a shared repository once, align PR
+fold completed work behind one action when other PRs need attention. If every
+recorded PR is completed, expand the history by default. Keep a user's explicit
+expand/collapse choice through refreshes. Show a shared repository once, align PR
 states on the right, and keep head/base names and check times in inspection
 details. Size the dialog to its contents with bounded scrolling. Escape returns
 focus to the terminal.

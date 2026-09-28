@@ -161,6 +161,41 @@ void main() {
   );
 
   testWidgets(
+    'completed-only history starts expanded and respects a choice after refresh',
+    (tester) async {
+      final git = gitFixture();
+      git['history']['pullRequests'][0]['result'].addAll({
+        'state': 'Merged',
+        'headBranch': 'hn/preview-fix',
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SessionWorkDialog(
+              agent: workAgent(git: git),
+              read: (_) async => {'gitContext': git, 'history': git['history']},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('#12'), findsOneWidget);
+      expect(find.text('[ Hide completed ]'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('work-completed')));
+      await tester.pumpAndSettle();
+      expect(find.text('#12'), findsNothing);
+      await tester.tap(find.text('[ Refresh ]'));
+      await tester.pumpAndSettle();
+      expect(find.text('#12'), findsNothing);
+      expect(find.text('[ Completed (1) ]'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('work-completed')));
+      await tester.pumpAndSettle();
+      expect(find.text('#12'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'completed history remains reachable beside a full open PR page',
     (tester) async {
       final git = manyPrFixture();

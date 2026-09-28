@@ -103,7 +103,7 @@ void main() {
     ];
     fixture['recentWork'] = {'project': recent, 'at': '2026-09-27T13:00:00Z'};
     final context = AgentGitContext.fromJson(fixture)!;
-    expect(context.branchLabel, 'hn/preview-fix · +1');
+    expect(context.branchLabel, 'hn/preview-fix +1');
     expect(context.displayProject(null)?.branch, 'hn/preview-fix');
     expect(context.requestIdentity?['cwd'], '/ship-hn');
     expect(

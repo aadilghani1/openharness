@@ -134,7 +134,7 @@ class AgentGitContext {
   String? get branchLabel {
     final checked = branchRows.where((row) => row.checkedOut).toList();
     if (recentWork?.shownBranch case final branch?) {
-      return checked.length > 1 ? '$branch · +${checked.length - 1}' : branch;
+      return checked.length > 1 ? '$branch +${checked.length - 1}' : branch;
     }
     if (checked.length > 1) return '${checked.length} branches';
     if (checked.length == 1) return checked.single.branch;

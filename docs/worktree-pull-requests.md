@@ -8,7 +8,7 @@ for locating code, not user-facing identities.
 
 The focused bar shows the branch at the most recent confirmed Git work location,
 plus its matching PR link when there is one. Other checked-out branches appear
-as a compact count, for example `ship-hn · +3`. This is recent work, not a claim
+as a compact count, for example `ship-hn +3`. This is recent work, not a claim
 that an agent is executing there now. Hovering explains the observation time.
 Without a unique recent location, one checked-out branch appears by name and
 multiple branches appear as `2 branches` (or the corresponding count). Historical
@@ -17,8 +17,10 @@ branches do not increase this count. A dependent viewer uses its owner's context
 Click the branch, or use **Branches and pull requests** in the desktop command
 picker. Each branch appears once, with its PR links, titles and GitHub states
 directly beneath it. Recent work leads, followed by branches with open or draft
-PRs. Completed work folds into **Completed**, except PRs on the recent work
-branch, whose state remains visible. The repository appears once when shared.
+PRs. Completed work folds into **Completed** while other PRs need attention;
+when all recorded PRs are completed, history starts expanded. An explicit
+expand/collapse choice persists through refreshes. PRs on the recent work
+branch always remain visible. The repository appears once when shared.
 Hover or accessibility inspection exposes full titles, head/base branches and
 GitHub check times. Short lists fit their content; long lists scroll within a
 bounded dialog. Temporary folder names and subdirectory lists are not shown.
