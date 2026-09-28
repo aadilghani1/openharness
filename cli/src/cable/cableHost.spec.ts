@@ -365,7 +365,7 @@ describe('DaemonCableHost.listAgentsFlat across machines, and the tab the dial g
     onTab(host, ['old-pane'], 'old-tab')
     host.setDesk(['new-pane']) // app_panes arrives before its matching app_swarms.
     expect((await host.listAgents()).map(a => a.id)).toEqual(['old-pane'])
-    host.setSwarms({ active: 'new-tab', swarms: [{ id: 'new-tab', name: 'New', agentIds: ['new-pane'], panes: 1 }] })
+    host.setSwarms({ active: 'new-tab', tiles: [], swarms: [{ id: 'new-tab', name: 'New', agentIds: ['new-pane'], panes: 1 }] })
     const snapshot = await host.listAgentSnapshot()
     expect(snapshot.tab).toBe('new-tab')
     expect(snapshot.agents.map(a => a.id)).toEqual(['new-pane'])

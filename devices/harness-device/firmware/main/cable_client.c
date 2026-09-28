@@ -714,6 +714,11 @@ static void handle_swarms(const cJSON *p)
         const cJSON *x2 = cJSON_GetObjectItemCaseSensitive(ti, "x2");
         const cJSON *y2 = cJSON_GetObjectItemCaseSensitive(ti, "y2");
         if (!cJSON_IsNumber(x1) || !cJSON_IsNumber(y1) || !cJSON_IsNumber(x2) || !cJSON_IsNumber(y2)) continue;
+        /* Reject out-of-range/NaN/infinite coordinates before converting to integer pixels. */
+        if (!(x1->valuedouble >= 0 && x1->valuedouble <= 1000 &&
+              y1->valuedouble >= 0 && y1->valuedouble <= 1000 &&
+              x2->valuedouble >= 0 && x2->valuedouble <= 1000 &&
+              y2->valuedouble >= 0 && y2->valuedouble <= 1000)) continue;
         tiles[tn].x1 = (int16_t)x1->valuedouble;
         tiles[tn].y1 = (int16_t)y1->valuedouble;
         tiles[tn].x2 = (int16_t)x2->valuedouble;

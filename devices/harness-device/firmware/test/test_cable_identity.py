@@ -58,6 +58,12 @@ static void ui_swarms_replace(const cable_swarm_t *rows,int n,const char *id) {
     assert(!held&&n>=0&&n<=SWARMS_MAX);swarm_calls++;swarm_count=n;
     memcpy(swarms,rows,(size_t)n*sizeof *rows);snprintf(selected,sizeof selected,"%s",id?id:"");
 }
+static int tile_count;
+static void ui_tiles_replace(const cable_tile_t *rows,int n,const char *id) {
+    assert(n>=0&&n<=SWARM_TILES_MAX&&!strcmp(selected,id?id:""));tile_count=n;
+    for(int i=0;i<n;i++)assert(rows[i].x1>=0&&rows[i].x2<=1000&&rows[i].x1<rows[i].x2&&
+                              rows[i].y1>=0&&rows[i].y2<=1000&&rows[i].y1<rows[i].y2);
+}
 static void ui_notif_replace(const cable_notif_t *rows,int n) {
     assert(!held&&n>=0&&n<=8);notice_calls++;notice_count=n;memcpy(notices,rows,(size_t)n*sizeof *rows);
 }
@@ -105,6 +111,8 @@ int main(void) {
         if(kind){handle_notifications(p);assert(notice_count==0);}else{handle_swarms(p);assert(swarm_count==0);}
         cJSON_Delete(p);
     }
+    p=cJSON_Parse("{\"selected\":\"tab\",\"items\":[],\"tiles\":[{\"x1\":0,\"y1\":0,\"x2\":1000,\"y2\":1000},{\"x1\":-1,\"y1\":0,\"x2\":1000,\"y2\":1000},{\"x1\":0,\"y1\":0,\"x2\":1e300,\"y2\":1000},{\"x1\":0,\"y1\":0,\"x2\":10,\"y2\":1e999}]}");
+    assert(p);handle_swarms(p);cJSON_Delete(p);assert(tile_count==1);
     char profile[sizeof models[0].id],bad_profile[sizeof models[0].id+1];
     memset(profile,'p',sizeof profile-1);profile[sizeof profile-1]=0;
     snprintf(bad_profile,sizeof bad_profile,"%sx",profile);

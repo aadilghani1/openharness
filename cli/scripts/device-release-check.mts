@@ -54,6 +54,40 @@ for(const node of ast.statements) if(ts.isImportDeclaration(node)&&ts.isStringLi
   }
 }
 const sandbox=vm.createContext(context)
+for (const statement of ast.statements) if (ts.isVariableStatement(statement)) {
+  for (const declaration of statement.declarationList.declarations) {
+    if (ts.isIdentifier(declaration.name) && declaration.initializer?.kind === ts.SyntaxKind.RegularExpressionLiteral) {
+      context[declaration.name.text] = vm.runInContext(declaration.initializer.getText(ast), sandbox)
+    }
+  }
+}
+// Function declarations are inert until invoked. Register the built functions so
+// inlined pure helpers (activity parsing and recap cleanup) use the same bytes as
+// the release, without executing any CLI startup statements or loading I/O imports.
+for (const statement of ast.statements) if (ts.isFunctionDeclaration(statement) && statement.name) {
+  const name = statement.name.text
+  if (Object.hasOwn(context, name)) continue
+  Object.defineProperty(context, name, { configurable: true, enumerable: true,
+    get() {
+      const value = vm.runInContext(`(${statement.getText(ast)})`, sandbox)
+      Object.defineProperty(context, name, { value, writable: true, configurable: true, enumerable: true })
+      return value
+    },
+    set(value) { Object.defineProperty(context, name, { value, writable: true, configurable: true, enumerable: true }) },
+  })
+}
+// These bounded state holders are constructed by newer CableSession bundles.
+// Only their class definitions run here; all host actions remain fixture wiring.
+for (const name of ['PassageCarry', 'VoiceDraft', 'QuestionInbox']) {
+  const found = nodes.filter((n): n is ts.VariableDeclaration => ts.isVariableDeclaration(n) &&
+    !!n.initializer && ts.isClassExpression(n.initializer) &&
+    n.initializer.members.some(m => ts.isClassStaticBlockDeclaration(m) &&
+      m.getText(ast).includes(JSON.stringify(name))))
+  assert(found.length <= 1, `Ambiguous built ${name} implementation`)
+  for (const declaration of found) {
+    context[declaration.name.getText(ast)] = vm.runInContext(`(${declaration.initializer!.getText(ast)})`, sandbox)
+  }
+}
 for(const fn of codecHelpers)context[fn.name!.text]=vm.runInContext(`(${fn.getText(ast)})`,sandbox)
 context[decoderName]=vm.runInContext(`(${decoderNode.initializer.getText(ast)})`,sandbox)
 context[encode.expression.getText(ast)]=vm.runInContext(`(${encoderNode.getText(ast)})`,sandbox)
@@ -102,7 +136,7 @@ await check('built-capture-is-local-visible-only',async()=>{
  const expr=providerNodes[0].initializer.getText(ast),resolve=expr.match(/(\w+)\.resolve\(/),capture=expr.match(/(\w+)\.capture\(/);assert(resolve&&capture)
  let calls=0;context[resolve[1]]={resolve:(id:string)=>id==='missing'?null:{engine:id==='claude'?'claude':id==='shell'?'terminal':'codex'}}
  context[capture[1]]={capture:async(_session:any,options:any)=>{calls++;assert.deepEqual(plain(options),{mode:'visible',ansi:false});return{state:'succeeded',value:'◦ Working (2s • esc to interrupt)'}}}
- Object.assign(sandbox,context)
+ // context is the contextified object; no eager read of unrelated bundle getters.
  const provider=vm.runInContext(`(${expr})`,sandbox)
  const wrapper=vm.runInContext(`(class {${localMethod.getText(ast)}})`,sandbox),host=new wrapper()
  host.isLocalAgent=(id:string)=>id!=='remote';host.wiring={activityText:provider}

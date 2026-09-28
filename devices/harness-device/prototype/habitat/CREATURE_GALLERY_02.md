@@ -2,7 +2,7 @@
 
 September 27, 2026. Firmware `0.0.87-gallery.4`. Twenty entries: all ten original creatures plus ten new text-animation studies. Only the artwork appears on the display. No title, status, instructions, voice, agent commands or companion mechanics.
 
-The subsequent [connected octopus build](OCTOPUS_BUDDY.md) uses entry 11 with the live Harness controls. This gallery remains a separate, preserved visual comparison.
+The subsequent [connected octopus build](README.md) uses entry 11 with the live Harness controls. This gallery remains a separate, preserved visual comparison.
 
 ## Controls
 

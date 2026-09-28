@@ -17,6 +17,15 @@ accent and one interface font size. `[1]` indicates unread messages and retains
 a wide bottom touch target. Opening an inbox message focuses its pane, acknowledges
 it and returns to the large companion without showing the same recap again.
 
+## Rendered preview
+
+These 466 × 466 images come from the actual C compositor with synthetic session
+messages, replayed from the built bridge. They are not photographs of the panel.
+
+| Working | Completed |
+| --- | --- |
+| ![Working companion](images/bridge-codex-working.png) | ![Completed turn](images/bridge-completed.png) |
+
 ## Controls
 
 - Tap the octopus to speak; tap again to finish.

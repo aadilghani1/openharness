@@ -10,7 +10,7 @@ Updated September 27, 2026. This is the evolving visual and animation collection
 - Study the user-supplied image converter and animated conversion examples.
 - The user specifically likes **the Brrtfetch octopus and its animation**.
 - After trying gallery .4 on the physical device, the user said **“i love the octopus!”** They then explicitly preferred **the text version**, entry **11 — Octopus / ASCII**, over the solid-block version. After seeing the actual installed ASCII frame in chat, they confirmed **“yeah this is it.”** This exact text octopus is the confirmed visual reference for the next iteration. Retain the other candidates for comparison.
-- The next request explicitly connected this choice to the app: [Octopus / connected buddy](OCTOPUS_BUDDY.md) records the deployed animation, voice, touch and agent-state behavior. The rest of this collection remains available for future visual studies.
+- The next request explicitly connected this choice to the app: [Octopus / connected buddy](README.md) records the deployed animation, voice, touch and agent-state behavior. The rest of this collection remains available for future visual studies.
 - Preserve the supplied [daemon craft research](DAEMON_CRAFT_NOTES.md), including its historical references and the distinction between an eight-cell status sprite and a larger device portrait.
 - Continue a visual-only study. App synchronization and agent behavior remain deferred.
 

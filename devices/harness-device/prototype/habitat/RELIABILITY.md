@@ -30,8 +30,10 @@ those sources: the build must separately record and verify its source inputs.
 The artifact inspector never runs the CLI entry point. It evaluates the actual
 built CableSession and wire codec in a fixture, plus its local activity provider.
 An unsupported bundle shape is a failed check, not a fallback to source tests.
-The initial inspector supports the current minified release shape and the narrow
-status repair. Changes to bundling require updating this adapter explicitly.
+The inspector supports the minified release shape, the narrow status repair, and
+the bundled companion controllers. It loads only definitions and literal constants;
+CLI startup and I/O imports never run. Changes to bundling require updating this
+adapter explicitly.
 
 ## Acceptance matrix
 
@@ -51,6 +53,22 @@ the previous installed artifact passed only 5/18 and was correctly rejected.
 Four actual output sequences are replayed at four fragmentation sizes, giving
 16 C render replays. These are defined acceptance cases, **not 100% line or branch
 coverage**, and do not prove every possible edge case has been found.
+
+## Native desktop fixtures
+
+Run the six device interaction scenarios together so Flutter launches one native
+fixture process:
+
+```sh
+cd desktop
+FLUTTER_TEST=1 flutter test -d macos --no-pub \
+  integration_test/native_device_e2e_test.dart
+```
+
+The fixtures use synthetic terminals and in-memory state for Finder, New Harness,
+output search, passage selection, reading position and notification visits. They
+assert navigation and retained native renderer state, not physical focus or input.
+Rebuild the ordinary review artifact afterward, as described in `desktop/CLAUDE.md`.
 
 ## Before merge and before installation
 

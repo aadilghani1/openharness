@@ -24,6 +24,7 @@ typedef struct {
     struct { bool enable_internal_pullup; } flags;
 } i2c_master_bus_config_t;
 #define I2C_NUM_0 0
+#define BSP_I2C_PORT I2C_NUM_0
 #define BSP_I2C_SDA 15
 #define BSP_I2C_SCL 14
 #define I2C_CLK_SRC_DEFAULT 0

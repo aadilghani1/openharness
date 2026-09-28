@@ -565,7 +565,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
         (finding
             ? _newHarness != null ||
                   _modelsOverlay != null ||
-                  _machinesPanel != null ||
                   _harnessesOverlay != null
             : _search != null ||
                   _modelsVisible ||
