@@ -64,6 +64,8 @@ The mark replaces the native tab's old orange attention indicator; it adds no
 new bar, counter, badge, or permanent legend. Hover and accessibility descriptions
 explain each symbol.
 
+![Activity marks in existing tabs and pane headers, rendered with synthetic state at 640 px](images/workspace-activity.png)
+
 | Mark | Meaning | Terminal color |
 | --- | --- | --- |
 | `?` | Needs your input | Yellow |
