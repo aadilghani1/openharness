@@ -126,17 +126,28 @@ pairing, encrypted relays, explicit replies, and continuation; cloud routing and
 terminal responses are synthetic. Backend tests cover auth, owned-machine filtering,
 concurrent host claims, retained hosts, and compatibility with the existing desk routes.
 
-Local validation passed 19 backend tests, 110 CLI/delivery tests, 58 desktop tests,
-and 14 mobile tests in the updated focused sets. The Settings switch was rendered
-with real fonts at widths 390/1100. Conversation renders were inspected at desktop
-widths 390/1280 and phone width 390. These renders use synthetic conversation data.
-TypeScript checks passed for the backend and CLI; the changed desktop/mobile Dart
-files passed analysis. The existing CLI build warning in `dsh/verdict.spec.ts` is
-unrelated to this feature.
+Release integration validation on current main passed:
 
-Backend and CLI builds passed, as did the macOS debug and web builds. Local outputs
-are `backend/dist`, `cli/dist`, `desktop/build/macos/Build/Products/Debug/Harness.app`,
-and `desktop/build/web`. Review PNGs are in `/tmp/harness-channel-review`.
+- Backend and CLI TypeScript checks, Prisma client generation, and builds.
+- Backend routing and desk compatibility: 19 tests.
+- Complete CLI suite with two workers: 7,141 passed, 37 opt-in tests skipped.
+- Real tmux 3.5a suite: 9 passed, 9 unavailable/not-applicable rows skipped.
+  Installed Claude, Codex, OpenCode, Pi, Hermes, and Grok discovery ran, plus lifecycle,
+  literal input, and Grok executable-alias checks. These checks send no model tasks.
+- Desktop settings, conversation, keyboard, and encryption checks: 82 tests.
+  The final Settings pair was rerun after preserving the existing switch order.
+- Mobile conversation/controller and encryption checks: 18 tests.
+- Changed desktop/mobile Dart files passed analysis. macOS debug and browser release builds passed.
+
+The initial concurrent CLI run exposed two timing-sensitive existing checks; their targeted
+rerun and the complete two-worker run passed. The existing CLI build warning in
+`dsh/verdict.spec.ts` is unrelated to this feature. Paid model acceptance was not rerun.
+
+The Settings switch was rendered with real fonts at widths 390/1100. Conversation renders
+were inspected at desktop widths 390/1280 and phone width 390, using synthetic data.
+Review screenshots are committed under `.github/assets/swarm-collaboration/`.
+Local build outputs are `backend/dist`, `cli/dist`,
+`desktop/build/macos/Build/Products/Debug/Harness.app`, and `desktop/build/web`.
 
 The earlier [Claude/Codex/Grok live test](agent-teams-live-verification.md) verified the
 underlying delivery protocol. The tab-channel prompts and automatic membership have not
