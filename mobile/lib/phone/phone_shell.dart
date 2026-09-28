@@ -186,11 +186,23 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// when the root has nothing to close. `canPop` is false at the root even while something there
   /// holds the press itself — Find over the terminal, whose own [PopScope] steps out of it — and
   /// back used to leave the app from under an open Find because of it.
+  ///
+  /// ⚠️ **Only the app's own root asks.** The sample runs this same shell on a route pushed over the
+  /// welcome screen, and back at ITS root has always left the sample for that screen — so a shell
+  /// with a route under it pops that route instead. `pop`, not `maybePop`: this shell's own
+  /// [PopScope] is what refuses the pop, and asking the route again would land straight back here.
   Future<void> _back() async {
     final handled = await _navigator.currentState?.maybePop() ?? false;
     if (!mounted) return;
     _syncCanPop();
-    if (!handled && confirmsExitOnBack) await confirmExitApp(context);
+    if (handled || !confirmsExitOnBack) return;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isFirst) {
+      // Only while it is still on top: a sheet pushed meanwhile is what the next press closes.
+      if (route.isCurrent) Navigator.of(context).pop();
+      return;
+    }
+    await confirmExitApp(context);
   }
 
   @override
