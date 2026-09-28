@@ -199,9 +199,16 @@ try:
     for index in range(10, 22):
         wait(lambda: same('list-panes', '-t', f'work:{index}', '-F', '#{pane_dead}:#{pane_dead_status}') == '1:7', f'fast exit {index}')
         for kind in ('hn', 'tmux'):
-            assert cli(kind, 'show', '-gv', '@died').stdout.split(',').count(f'{index}:7:') == 1
+            # Death is visible before its queued hook necessarily runs. Await delivery,
+            # then check every count together below so duplicate hooks still fail.
+            wait(lambda: cli(kind, 'show', '-gv', '@died').stdout.split(',').count(f'{index}:7:') >= 1,
+                 f'{kind} pane-died delivered for fast exit {index}')
             capture = cli(kind, 'capture-pane', '-p', '-S', '-1000', '-t', f'work:{index}').stdout
             wait(lambda: cli(kind, 'capture-pane', '-p', '-S', '-1000', '-t', f'work:{index}').stdout.count(f'FAST_{index}') == 1, f'{kind} fast output {index}: {capture!r}')
+    for kind in ('hn', 'tmux'):
+        deaths = cli(kind, 'show', '-gv', '@died').stdout.split(',')
+        for index in range(10, 22):
+            assert deaths.count(f'{index}:7:') == 1, (kind, index, deaths)
     stop_servers()
     ui.proc.wait(timeout=4)
     ui.stop()
