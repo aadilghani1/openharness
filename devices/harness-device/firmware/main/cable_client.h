@@ -204,6 +204,9 @@ typedef struct {
     char summary[240];
     bool question;
     bool failed; // Optional explicit host metadata; never inferred from prose.
+    // Local display bookkeeping. Incoming snapshots never supply these values.
+    bool read_on_dial;
+    uint32_t display_revision;
 } cable_notif_t;
 
 // The user tapped a swarm. Not answered — see above.

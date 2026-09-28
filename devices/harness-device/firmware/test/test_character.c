@@ -241,10 +241,42 @@ static void footer_layout(void)
     ht_scene_clear(&after, 0); redraw(&before, &after);
 }
 
+static void inbox_layout(void)
+{
+    const char *names[] = {"Build", "Investigate firmware and notifications"};
+    const char *messages[] = {"Yes. The fix is installed.",
+        "Fixed and merged into main: PR #436. All 62 relevant tests and static analysis passed.",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"};
+    const char *marks[] = {HT_DONE, "?", HT_FAILED};
+    const unsigned colors[] = {0x0dbc79, 0xe5e510, 0xcd3131};
+    ht_scene_t before, after;
+    ht_scene_clear(&before, 0); redraw(NULL, &before);
+    for (unsigned n = 0; n < 2; n++) for (unsigned m = 0; m < 3; m++)
+        for (unsigned k = 0; k < 3; k++) {
+            ht_scene_clear(&after, 0);
+            ht_inbox_card(&after, marks[k], names[n], messages[m], 0xffff, ht_rgb(colors[k]));
+            int titles = n ? 2 : 1, bodies = after.count - titles - 1;
+            assert(bodies >= 1 && bodies <= 4);
+            const ht_run_t *icon = &after.runs[after.count - 1];
+            assert(!strcmp(icon->text, marks[k]) && icon->fg == ht_rgb(colors[k]));
+            assert(icon->x == after.runs[0].x && icon->y == after.runs[0].y);
+            assert(after.runs[titles].y - after.runs[titles - 1].y - 38 == 28);
+            int bottom = after.runs[after.count - 2].y + 38;
+            assert(after.runs[0].y + bottom >= 453 && after.runs[0].y + bottom <= 454);
+            for (int i = 0; i < after.count - 1; i++)
+                assert(after.runs[i].font == &ht_mono_28 && after.runs[i].fg == 0xffff);
+            redraw(&before, &after); before = after;
+            for (int y = 0; y < HT_HEIGHT; y++) for (int x = 0; x < HT_WIDTH; x++)
+                if (full[y * HT_WIDTH + x])
+                    assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);
+        }
+    puts("Inbox layout: desktop status colors, neutral prose, balanced short/long blocks, fixed gap, circle bounds and exact incremental redraws PASS");
+}
+
 int main(void)
 {
     assert(!strcmp(ht_character_name(HT_CHARACTER_TIM), "Tim"));
     assert(!strcmp(ht_character_name(HT_CHARACTER_TUX), "Tux"));
-    clocks(); portraits(); delivery_and_caption(); recap_budget(); footer_layout();
+    clocks(); portraits(); delivery_and_caption(); recap_budget(); footer_layout(); inbox_layout();
     printf("Characters: both adapters, eight moods, five sizes, pause/mic/wrap/swap and %u exact incremental redraws PASS\n", redraws);
 }

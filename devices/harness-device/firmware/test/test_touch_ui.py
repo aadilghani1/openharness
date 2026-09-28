@@ -60,6 +60,9 @@ static struct {
     struct { char id[64], name[96], state[16]; bool local; } machines[2];
     char selected_tab[ID_MAX], pending_focus[ID_MAX], opening_notice[ID_MAX], title[80], message[256];
     cable_notif_t notice[NOTICES];
+    notice_receipt_t notice_reads[NOTICES];
+    uint8_t notice_read_next;
+    uint32_t notice_revision, notice_frame;
     pane_memory_t memory[PANE_MEMORY_MAX];
     uint32_t memory_serial;
     struct { char id[192]; } models[2];
@@ -132,7 +135,8 @@ static void display_lock(void) {}
 static void display_unlock(void) {}
 static void display_wake(void) {}
 static bool config_check_lock(const char *s_) { (void)s_; return false; }
-static bool display_is_asleep(void) { return false; }
+static bool fake_asleep, present_scene=true;
+static bool display_is_asleep(void) { return fake_asleep; }
 static bool audio_client_active(void) { return recording; }
 static bool audio_client_recording(void) { return recording; }
 static unsigned audio_client_input_level(void) { return 3; }
@@ -183,7 +187,7 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
-for name in ['copy', 'recap_preview', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'workspace_index', 'workspace_failed', 'ui_scroll_reportable', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'render_companion', 'choose_character', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_quick', 'command_face', 'render_workspace_preview', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'workspace_failed', 'ui_scroll_reportable', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'render_companion', 'choose_character', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_quick', 'command_face', 'render_workspace_preview', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -236,7 +240,7 @@ static void dispatch(action_t a) {
     else if (a.kind == A_SETTINGS) view(SETTINGS);
     else if (a.kind == A_FIND) view(FORM);
     else if (a.kind == A_AGENTS) view(AGENTS);
-    else if (a.kind == A_INBOX) view(s.notice_count ? INBOX : HOME);
+    else if (a.kind == A_INBOX) notice_open();
     else if (a.kind == A_HOME) view(HOME);
     else if (a.kind == A_NOTICE) notice_action(a);
     else if (a.kind == A_RECAP_DISMISS) dismiss_result(a.id);
@@ -252,7 +256,7 @@ code += function('habitat_touch') + function('habitat_touch_cancel')
 code += r'''
 static ht_scene_t scene;
 static void scene_take(void) {
-    ht_scene_clear(&scene, BG); s.hit_count = 0;
+    ht_scene_clear(&scene, BG); s.hit_count = 0; s.notice_frame = 0;
     if (s.view == OTA) render_brand(&scene);
     else if (s.view == DRAFT) render_draft(&scene);
     else if (s.view == DRAFT_OPTIONS) render_draft_options(&scene);
@@ -266,9 +270,10 @@ static void scene_take(void) {
     else if (s.view == AGENTS) render_agents(&scene);
     else if (s.view == SELECTION) render_selection(&scene); else render_home(&scene);
     if (s.view == SETTINGS) { ht_scene_clear(&scene,BG); s.hit_count=0; render_settings(&scene); }
+    if (present_scene) habitat_scene_presented(habitat_scene_receipt());
 }
 static void reset(void) {
-    host_features=31; fake_ms=0;
+    host_features=31; fake_ms=0; fake_asleep=false; present_scene=true;
     memset(&visit,0,sizeof visit); visit_sends=visit_wire=returns=0; question_pending=false;
     memset(&workspace,0,sizeof workspace); tab_switches=0; tab_target[0]=0;
     memset(&selection,0,sizeof(selection)); selections=0;
@@ -314,6 +319,11 @@ static bool status_is(const char *text) {
     for (int i=0;i<scene.count;i++)
         if ((scene.runs[i].arc==2 || scene.runs[i].y==385 || scene.runs[i].y==HT_NOTIFICATION_Y) &&
             !strcmp(scene.runs[i].text,text)) return true;
+    return false;
+}
+static bool inbox_mark_is(const char *mark, uint16_t ink) {
+    for (int i=0;i<scene.count;i++) if(!strcmp(scene.runs[i].text,mark))
+        return scene.runs[i].fg==ink && scene.runs[i].font==&ht_mono_28;
     return false;
 }
 static bool title_is(const char *text) {
@@ -552,7 +562,7 @@ static void notice_checks(const char *dir) {
         ui_project_emit(id,"session","summary","The next change is ready.","The next change is ready.");
         scene_take(); assert(result_visible());
     }
-    // A refused local queue leaves both the recap and inbox entry unread.
+    // A refused local queue keeps the result/card available; viewing still clears its bell count.
     reset();
     ui_project_emit("a","session","summary","The build is ready.","The build is ready.");
     ui_notify_task_done("a","Build","M2","The build is ready.");
@@ -624,7 +634,7 @@ static void notice_checks(const char *dir) {
                 assert(ht_can_display(r->text,r->font,r->w,1)); icons++;
             }
             if(r->font==&ht_mono_28 && r->text[0])
-                assert((r->y==90 || r->y==128) || (r->y>=196 && r->y+r->font->height<=348));
+                assert(r->y>=72 && r->y+r->font->height<=382);
         }
         assert(icons==1); // Only Back; the full message opens the pane.
         // The inbox keeps its own reading layout and the same source message.
@@ -656,7 +666,7 @@ static void notice_checks(const char *dir) {
     bool question_shown=false;
     for(int i=0;i<scene.count;i++) if(strstr(scene.runs[i].text,"Should I deploy"))question_shown=true;
     assert(question_shown && s.notice_count==1 && !question_sends);
-    assert(!strcmp(scene.runs[0].text,"? Release"));
+    assert(inbox_mark_is("?", color(HT_THEME_QUESTION)));
     portrait(dir,"notification-question");
     s.connected=false; scene_take(); assert(!action_enabled(A_NOTICE));
     portrait(dir,"inbox-offline");
@@ -893,12 +903,12 @@ static void bell_checks(const char *dir) {
     cable_notif_t failed={.agent_id="b",.name="Website",.failed=true,
         .summary="The deployment failed. Check the terminal for details."};
     ui_notif_replace(&failed,1); ui_notif_open(); scene_take();
-    assert(!strcmp(scene.runs[0].text,HT_FAILED " Website"));
+    assert(inbox_mark_is(HT_FAILED, color(HT_THEME_FAILED)));
     portrait(dir,"notification-failed");
     failed.question=true; ui_notif_replace(&failed,1); scene_take();
-    assert(!strcmp(scene.runs[0].text,"? Website"));
+    assert(inbox_mark_is("?", color(HT_THEME_QUESTION)));
     ui_notify_task_done("b","Website","M2","The site is deployed."); scene_take();
-    assert(!strcmp(scene.runs[0].text,HT_DONE " Website"));
+    assert(inbox_mark_is(HT_DONE, color(HT_THEME_DONE)));
     for(int i=0;i<scene.count;i++) assert(!strstr(scene.runs[i].text,"----"));
     reset(); scene_take();
     portrait(dir,"bell-empty");
@@ -945,8 +955,73 @@ static void bell_checks(const char *dir) {
     puts("bell/inbox: empty/active glyphs, wide separate targets, arrivals/removal during contact, title/message open, no creature, voice restoration, caption rotation PASS");
     reset();
 }
+
+static void notification_read_checks(const char *dir) {
+    cable_notif_t rows[2]={
+        {.agent_id="a",.name="Build",.summary="The build passed. All checks are green."},
+        {.agent_id="b",.name="Release",.summary="May I publish this release?",.question=true}};
+    reset(); ui_notif_replace(rows,2); scene_take();
+    assert(notice_unread()==2 && status_is(HT_BELL " 2"));
+    ui_notif_open(); assert(s.notice[s.offset].question);
+    present_scene=false; scene_take(); uint32_t frame=habitat_scene_receipt();
+    assert(frame && notice_unread()==2); // Constructing a frame is not reading it.
+    fake_asleep=true; habitat_scene_presented(frame); assert(notice_unread()==2);
+    fake_asleep=false; s.locked=true; habitat_scene_presented(frame); assert(notice_unread()==2);
+    s.locked=false; habitat_scene_presented(frame); habitat_scene_presented(frame);
+    assert(notice_unread()==1 && s.view==INBOX && s.notice_count==2 && s.notice[s.offset].question);
+    assert(!question_sends && !desktop_opens && !starts);
+    present_scene=true; view(HOME); scene_take(); assert(status_is(HT_BELL " 1"));
+    ui_notif_open(); assert(!strcmp(s.notice[s.offset].agent_id,"a")); scene_take();
+    assert(!notice_unread() && s.notice_count==2 && s.view==INBOX);
+    portrait(dir,"inbox-read-stays");
+    tap(1000,233,430); assert(s.view==HOME && status_is(HT_BELL) && !action_enabled(A_INBOX));
+    for(int i=0;i<scene.count;i++) if(scene.runs[i].font==&ht_bell_footer) assert(scene.runs[i].fg==DIM);
+    portrait(dir,"bell-all-read");
+    ui_notif_replace(NULL,0); ui_notif_replace(rows,2); scene_take();
+    assert(!notice_unread() && status_is(HT_BELL)); // Late/reconnect snapshot stays read.
+    strcpy(rows[0].summary,"The next build is ready.");
+    ui_notif_replace(rows,2); assert(notice_unread()==1);
+    ui_notif_open(); scene_take(); assert(!notice_unread());
+    // A new live result, even with identical words, is a new unread message.
+    ui_notify_task_done("a","Build","M2",rows[0].summary);
+    assert(notice_unread()==1);
+    present_scene=false; scene_take(); frame=habitat_scene_receipt();
+    ui_notify_task_done("a","Build","M2",rows[0].summary);
+    habitat_scene_presented(frame); assert(notice_unread()==1); // Old DMA, new same-text result.
+    scene_take(); frame=habitat_scene_receipt();
+    view(HOME); habitat_scene_presented(frame); assert(notice_unread()==1);
+    ui_notif_open(); scene_take(); frame=habitat_scene_receipt();
+    cable_notif_t newer={.agent_id="a",.name="Build",.summary="This message replaced the old frame."};
+    ui_notif_replace(&newer,1); habitat_scene_presented(frame); assert(notice_unread()==1);
+    scene_take(); frame=habitat_scene_receipt();
+    ui_notif_seen("a"); habitat_scene_presented(frame); assert(!notice_unread() && s.view==HOME);
+    ui_notif_replace(&newer,1); assert(!notice_unread());
+    newer.failed=true; ui_notif_replace(&newer,1); assert(notice_unread()==1);
+    s.notice_revision=UINT32_MAX; ui_notif_replace(&newer,1);
+    ui_notif_open(); scene_take(); assert(habitat_scene_receipt()!=0);
+    // Open clears the bell even before a display receipt and even if the local
+    // focus queue refuses it. A queue failure must never pretend to open a pane.
+    congestion=true; dispatch((action_t){.kind=A_NOTICE,.id="a"});
+    assert(!notice_unread() && !desktop_opens && !question_sends && !starts);
+    congestion=false; present_scene=true; view(HOME); ui_notif_open(); scene_take();
+    tap(2000,233,250); assert(!notice_unread() && desktop_opens==1 && !strcmp(opened_agent,"a"));
+    // Bounded read history reuses a slot for the same pane and remains safe as
+    // more than a full inbox's distinct identities are read.
+    reset();
+    for(int i=0;i<NOTICES*3;i++) {
+        char id[ID_MAX]; snprintf(id,sizeof id,"read-%d",i);
+        ui_notify_task_done(id,"Build","M2","Finished.");
+        ui_notif_open(); scene_take(); assert(!notice_unread());
+        assert(s.notice_read_next<NOTICES && s.notice_count<=NOTICES);
+    }
+    assert(!starts && !question_sends && !desktop_opens);
+    puts("Notification read: post-DMA only, sleep/lock, stale/identical replacements, read/open idempotence, questions, muted bell, reconnect snapshots and bounded receipt history PASS");
+    reset();
+}
+
 int main(int argc, char **argv) {
     test_character = getenv("HABITAT_TEST_TUX") ? HT_CHARACTER_TUX : HT_CHARACTER_TIM;
+    notification_read_checks(argc>1 ? argv[1] : NULL);
     bell_checks(argc>1 ? argv[1] : NULL);
     reset(); view(COMPANION); scene_take();
     assert(action_enabled(A_CHARACTER));
@@ -1223,7 +1298,7 @@ int main(int argc, char **argv) {
     ui_notif_seen("d");assert(!strcmp(s.notice[s.offset].agent_id,"a")&&s.offset==0);
     scene_take();tap(3700,150,430);assert(s.view==HOME&&!desktop_opens&&!starts);
     ui_notif_open();scene_take();tap(4400,233,260);
-    assert(desktop_opens==1&&!strcmp(opened_agent,"a")&&!starts);
+    assert(desktop_opens==1&&!strcmp(opened_agent,"b")&&!starts); // Reopening chooses the remaining unread card.
     // A full inbox evicts another row instead of the oldest card being read.
     workspace_setup();
     for(int i=0;i<NOTICES;i++) {

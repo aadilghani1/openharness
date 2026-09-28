@@ -137,14 +137,33 @@ void ht_recap_lines(ht_scene_t *s, int y, uint16_t ink, const char *recap)
 {
     recap_lines(s, y, 336, 3, false, NULL, ink, recap, &ht_mono_20, 0);
 }
-void ht_inbox_card(ht_scene_t *s, const char *name, const char *message,
-                   uint16_t foreground)
+void ht_inbox_card(ht_scene_t *s, const char *mark, const char *name,
+                   const char *message, uint16_t foreground, uint16_t status_ink)
 {
-    static const int title_widths[] = {340, 374};
-    static const int body_widths[] = {408, 408, 391, 340};
-    lines(s, 90, 340, 2, &ht_mono_28, foreground, name, true, title_widths);
-    recap_lines(s, 196, 408, HT_CHARACTER_RECAP_ROWS, true, body_widths,
+    // One balanced text block. A fixed 28 px gap separates label and message,
+    // whether they take two lines or six. No divider or empty reserved rows.
+    char title[HT_TEXT_BYTES];
+    snprintf(title, sizeof title, "%s %s", mark, name);
+    int start = s->count;
+    lines(s, 0, 374, 2, &ht_mono_28, foreground, title, true, NULL);
+    while (s->count > start && !s->runs[s->count - 1].text[0]) s->count--;
+    int body = s->count;
+    recap_lines(s, 0, 391, HT_CHARACTER_RECAP_ROWS, false, NULL,
                 foreground, message, &ht_mono_28, HT_CHARACTER_RECAP_CHARS);
+    while (s->count > body && !s->runs[s->count - 1].text[0]) s->count--;
+    int title_height = (body - start) * ht_mono_28.height;
+    int body_height = (s->count - body) * ht_mono_28.height;
+    int top = 72 + (310 - title_height - 28 - body_height) / 2;
+    for (int i = start; i < s->count; i++)
+        s->runs[i].y += i < body ? top : top + title_height + 28;
+    if (body > start) {
+        // Put the colored symbol in its own immutable run. Avoid a shared
+        // mutable per-cell palette between the compositor's two scene buffers.
+        ht_run_t *r = &s->runs[start];
+        const char *next = r->text; ht_utf8_next(&next);
+        memmove(r->text + 1, next, strlen(next) + 1); r->text[0] = ' ';
+        ht_text(s, r->x, r->y, ht_mono_28.width, &ht_mono_28, status_ink, s->background, mark);
+    }
 }
 void ht_notification_bell(ht_scene_t *s, unsigned count, uint16_t ink)
 {

@@ -165,6 +165,10 @@ typedef struct {
     char drafts[QUESTION_MAX][48];
     int count;
 } question_submit_t;
+typedef struct {
+    char id[ID_MAX], summary[240];
+    bool question, failed;
+} notice_receipt_t;
 static EXT_RAM_BSS_ATTR struct {
     agent_t agents[MAX_PROJECTS];
     pane_memory_t memory[PANE_MEMORY_MAX];
@@ -185,6 +189,9 @@ static EXT_RAM_BSS_ATTR struct {
     char selected_machine[ID_MAX], pending_machine[ID_MAX];
     uint32_t machine_deadline;
     cable_notif_t notice[NOTICES];
+    notice_receipt_t notice_reads[NOTICES];
+    uint8_t notice_read_next;
+    uint32_t notice_revision, notice_frame;
     int notice_count;
     uint32_t notice_sequence;
     question_t q;
@@ -239,6 +246,7 @@ static ht_character_t character;
 static ht_character_caption_t home_caption;
 static action_t pressed_action;
 static bool queue(action_t a);
+static void view(view_t v);
 static const char *voice_status(void);
 static uint32_t ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 static void copy(char *dst, size_t cap, const char *src)
@@ -305,6 +313,63 @@ static void change(void)
 {
     s.dirty = true;
     habitat_render_notify();
+}
+static unsigned notice_unread(void)
+{
+    unsigned count = 0;
+    for (int i = 0; i < s.notice_count; i++) count += !s.notice[i].read_on_dial;
+    return count;
+}
+static bool notice_was_read(const cable_notif_t *n)
+{
+    for (int i = 0; i < NOTICES; i++) {
+        const notice_receipt_t *r = &s.notice_reads[i];
+        if (!strcmp(r->id, n->agent_id) && r->question == n->question &&
+            r->failed == n->failed && !strcmp(r->summary, n->summary)) return true;
+    }
+    return false;
+}
+static void notice_forget_read(const char *id)
+{
+    for (int i = 0; i < NOTICES; i++)
+        if (!strcmp(s.notice_reads[i].id, id)) s.notice_reads[i].id[0] = 0;
+}
+static void notice_mark_read(cable_notif_t *n)
+{
+    if (n->read_on_dial) return;
+    int slot = -1;
+    for (int i = 0; i < NOTICES; i++)
+        if (!strcmp(s.notice_reads[i].id, n->agent_id)) { slot = i; break; }
+    if (slot < 0) for (int i = 0; i < NOTICES; i++)
+        if (!s.notice_reads[i].id[0]) { slot = i; break; }
+    if (slot < 0) { slot = s.notice_read_next; s.notice_read_next = (slot + 1) % NOTICES; }
+    notice_receipt_t *r = &s.notice_reads[slot];
+    COPY(r->id, n->agent_id); COPY(r->summary, n->summary);
+    r->question = n->question; r->failed = n->failed;
+    n->read_on_dial = true;
+    // Read is not answered, removed or focused. Keep this exact card in place.
+    change();
+}
+static void notice_open(void)
+{
+    view(s.notice_count ? INBOX : HOME);
+    if (s.view == INBOX) for (int i = 0; i < s.notice_count; i++)
+        if (!s.notice[i].read_on_dial) { s.offset = i; break; }
+}
+uint32_t habitat_scene_receipt(void)
+{
+    return s.notice_frame;
+}
+void habitat_scene_presented(uint32_t receipt)
+{
+    display_lock();
+    // A late DMA completion must not mark a replacement message as read, nor
+    // acknowledge a card hidden by the lock screen or a sleeping panel.
+    if (receipt && receipt == s.notice_frame && s.view == INBOX && !s.locked &&
+        !display_is_asleep() && s.offset >= 0 && s.offset < s.notice_count &&
+        s.notice[s.offset].display_revision == receipt)
+        notice_mark_read(&s.notice[s.offset]);
+    display_unlock();
 }
 static int find(const char *id)
 {
@@ -727,6 +792,7 @@ static void render_home(ht_scene_t *f)
     bool rotating = home_caption_rotates();
     const char *caption = rotating && home_caption.activity ? activity : a ? a->name : "Choose a pane";
     bool bell = !s.voice_retry_until && !carry.active && !carry.error[0] && !visit.available;
+    unsigned unread = notice_unread();
     char status[100];
     if (s.voice_retry_until) COPY(status, "Try again");
     else status[0] = 0;
@@ -735,7 +801,7 @@ static void render_home(ht_scene_t *f)
         .detail = "",
         .mood = character_mood(), .pose = character.motion.reaction.pose, .straight_title = s.straight_title,
         .footer_action = carry.active || carry.error[0] || visit.available,
-        .ink = bell && !s.notice_count ? DIM : FG, .foreground = FG, .dim = DIM,
+        .ink = bell && !unread ? DIM : FG, .foreground = FG, .dim = DIM,
         .primary_title = true, .roomy_reading = true};
     char carried[128];
     if (carry.active) {
@@ -746,7 +812,7 @@ static void render_home(ht_scene_t *f)
     }
     if (visit.available) f_.hint = "";
     ht_character_face(f, &character, &f_, ACCENT, recap);
-    if (bell) ht_notification_bell(f, s.notice_count, f_.ink);
+    if (bell) ht_notification_bell(f, unread, f_.ink);
     s.status_phase = status_animated() ? ht_shimmer_phase(ms()) : 0;
     for (int i = 0; i < f->count; i++) {
         ht_run_t *run = &f->runs[i];
@@ -774,7 +840,7 @@ static void render_home(ht_scene_t *f)
         }
     }
     if (bell)
-        s.hits[s.hit_count++] = (hit_t){{83, 382, 300, 84}, A_INBOX, 0, s.notice_count > 0};
+        s.hits[s.hit_count++] = (hit_t){{83, 382, 300, 84}, A_INBOX, 0, unread > 0};
     // The bell and the creature never share a target, even when the bell is
     // dimmed or its count changes under a finger. Centre always starts voice.
     s.hits[s.hit_count++] = (hit_t){{33, 66, 400, 316}, A_PET, 0, true};
@@ -977,13 +1043,14 @@ static void render_notice(ht_scene_t *f)
     // changes desktop focus; a tap on the name/message opens that exact pane.
     int body = s.hit_count++;
     s.hits[body] = (hit_t){{33, 55, 400, 327}, A_NOTICE, s.offset, s.connected};
-    char title[CABLE_NAME_MAX + 8];
-    snprintf(title, sizeof title, "%s %s", n->question ? "?" : n->failed ? HT_FAILED : HT_DONE, n->name);
-    ht_inbox_card(f, title, n->summary[0] ? n->summary : "No preview available.",
-                  s.connected ? FG : DIM);
+    uint16_t mark = color(n->question ? HT_THEME_QUESTION : n->failed ? HT_THEME_FAILED : HT_THEME_DONE);
+    ht_inbox_card(f, n->question ? "?" : n->failed ? HT_FAILED : HT_DONE, n->name,
+                  n->summary[0] ? n->summary : "No preview available.",
+                  s.connected ? FG : DIM, s.connected ? mark : DIM);
+    s.notice_frame = n->read_on_dial ? 0 : n->display_revision;
     s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, A_HOME, 0, true};
     ht_text(f, 223, 400, 20, &ht_nav_32,
-        s.pressed == body + 1 ? FG : ACCENT, BG, "\xe2\x86\x90");
+        s.pressed == body + 1 ? FG : DIM, BG, "\xe2\x86\x90");
 }
 static void render_list(ht_scene_t *f)
 {
@@ -1196,6 +1263,7 @@ bool habitat_scene_take(ht_scene_t *f)
     if (!s.ready || !s.dirty || s.bulk)
         return false;
     s.dirty = false;
+    s.notice_frame = 0;
     s.hit_count = 0;
     ht_scene_clear(f, BG);
     if (s.locked) {
@@ -1567,10 +1635,12 @@ static void dispatch(action_t a)
         else if (a.kind==A_ANSWER) send_answer();
         break;
     case A_INBOX:
-        view(s.notice_count ? INBOX : HOME);
+        notice_open();
         break;
     case A_NOTICE: {
         if (s.connected && !visit.pending && a.id[0]) {
+            for (int i = 0; i < s.notice_count; i++)
+                if (!strcmp(s.notice[i].agent_id, a.id)) notice_mark_read(&s.notice[i]);
             // The shipping bridge supports agent.open, but not the experiment's
             // visit/bookmark protocol. Stay in the inbox while the app opens it;
             // its usual focus/seen messages reconcile the recipient and inbox.
@@ -2996,7 +3066,7 @@ void ui_tap(int32_t x, int32_t y)
 void ui_notif_open(void)
 {
     display_lock();
-    view(s.notice_count ? INBOX : HOME);
+    notice_open();
     display_unlock();
 }
 void ui_notif_close(void)
@@ -3075,6 +3145,9 @@ static void notice_add(const char *id, const char *name, const char *machine, co
     recap_preview(n->summary, sizeof n->summary, recap);
     n->question = question;
     n->failed = failed;
+    n->read_on_dial = notice_was_read(n);
+    if (!++s.notice_revision) ++s.notice_revision;
+    n->display_revision = s.notice_revision;
     notice_restore_selection(selected);
     notice_sync_view();
 }
@@ -3082,6 +3155,7 @@ void ui_notify_task_done(const char *id, const char *name, const char *machine, 
 {
     if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return;
     display_lock();
+    notice_forget_read(id); // A fresh completion is new even if its words repeat.
     notice_add(id, name, machine, recap, false, false);
     s.notice_sequence++;
     uint32_t now = ms();
@@ -3098,6 +3172,8 @@ void ui_notif_seen(const char *id)
 {
     display_lock();
     bool opened = id && s.opening_notice[0] && !strcmp(s.opening_notice, id);
+    for (int i = 0; id && i < s.notice_count; i++)
+        if (!strcmp(s.notice[i].agent_id, id)) notice_mark_read(&s.notice[i]);
     notice_remove(id, false);
     notice_sync_view();
     change();
@@ -3158,6 +3234,7 @@ void ui_question_show(const char *id, const char *name, const char *machine, con
     display_lock();
     const cJSON *first=cJSON_GetArrayItem(questions,0);
     const cJSON *prompt=cJSON_GetObjectItemCaseSensitive(first,"q");
+    notice_forget_read(id);
     notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true,false);
     s.notice_sequence++;
     // A different agent's alert cannot replace the question being read.

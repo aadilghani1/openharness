@@ -83,6 +83,7 @@ static void notice_add(const char *id,const char *name,const char *machine,const
     assert(!failed); // Asking a question cannot manufacture a failure notification.
     (void)id;(void)name;(void)machine;(void)text;assert(question);notices++;
 }
+static void notice_forget_read(const char *id) { assert(id && *id); }
 static void notice_remove(const char *id,bool all) { assert(id && all);removed++; }
 static void cable_client_question_read(const char *id,const char *fetch) { assert(id && fetch);reads++; }
 static bool cable_client_answer_reviewed(const char *id,const char *fetch,const char *token,const uint8_t *choices,const char drafts[][48],int n) {

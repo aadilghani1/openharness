@@ -23,16 +23,22 @@ portrait uses the compact atlas (Tim: 216 × 216 px instead of 270 × 270 px). L
 stay inside the circle; four rows retain the 90-character maximum.
 The inbox is deliberately a different surface: no creature, a straight pane
 name in up to two rows, preceded by the desktop/TUI status glyph, and the
-message centered in its own reading area. There is no divider. `✓` means a
-completed turn, `?` means input needed, and `✗` requires explicit `failed: true`
+message in one vertically centered block. Title and prose have a fixed 28 px
+gap; unused rows reserve no space. The type remains 28 px throughout. There
+is no divider. The status glyph uses the desktop terminal palette: `✓` green
+`#0dbc79`, `?` yellow `#e5e510`, `✗` red `#cd3131`. Text and Back stay neutral.
+`✓` means a completed turn, `?` means input needed, and `✗` requires explicit `failed: true`
 notification metadata. Questions take priority over failure when both are set.
 Older hosts still send only completed turns and questions; the firmware never
 guesses failure from message wording or creates a new source of notifications. It keeps the same 28 px font and 90-character budget.
 Swipes move between messages without changing desktop focus. Tapping the pane
 name or message opens that exact desktop pane; a single bottom **←** returns
 home. Questions still require their existing explicit answer flow. Opening a
-result suppresses its duplicate home recap; only a confirmed host event clears
-its notification, and clearing the last card returns home automatically.
+result suppresses its duplicate home recap. A card becomes read only after its
+pixels reach the panel, or when explicitly tapped Open. Reading clears its bell
+count immediately but leaves the card available. Reading a question never
+answers it. Host acknowledgements still remove completed cards; removing the
+last card returns home automatically.
 
 The top curve names the selected pane. While working, it alternates the name
 and native activity every three seconds, with a 240 ms fade out and in at each change.
@@ -53,10 +59,11 @@ normal builds keep purple.
 
 Notifications use a separate bottom bell with a broad 300 × 84 px target,
 starting below the central voice target. When empty, the bell is dim, has no
-zero count and does nothing on a tap. Pending messages make it bright with the
-unread count alongside. Tapping it opens the inbox; hold and slide right remains
-available. The count uses existing message/question semantics, not a new source
-of notifications. Tim and Tux no longer hold an envelope on any daily screen.
+zero count and does nothing on a tap. New unread messages make it bright with
+the unread count alongside. Tapping it opens the inbox; hold and slide right remains
+available for retained cards, including ones already read. Opening the inbox
+chooses its first unread message. Completed and question messages use the same
+read-count rule, separate from whether a question remains unresolved. Tim and Tux no longer hold an envelope on any daily screen.
 The old letter art stays available to historical experiment renders.
 
 The bell is a round, authored outline glyph with the terminal font’s stroke
@@ -327,3 +334,27 @@ check the rim bounds, and verify that status glyphs cannot become fallback `?`
 characters. Protocol tests cover explicit failure metadata and legacy snapshots;
 touch replays cover both characters, notification arrivals/removals under a
 finger, pane focus, question safety, and voice restoration.
+
+## Read acknowledgements and inbox rhythm — 2026-09-28
+
+Orange revision `.orange.7` counts unread messages rather than retained cards.
+The renderer acknowledges a card only after the panel DMA completes. The receipt
+contains a display revision; an obsolete frame cannot acknowledge a newer message
+from the same pane, including one with identical words. Sleeping, locked and
+background cards remain unread. Open is idempotent with that display receipt.
+
+A fixed 24-entry cache stores exact pane IDs, normalized message text and kind
+in PSRAM; there is no hashing ambiguity, allocation, flash write or network call.
+It keeps repeated/reconnect snapshots read and distinguishes updated text or kind.
+Fresh live notifications invalidate that pane's prior read receipt. The cache is
+local to this dial and resets on reboot; the unchanged host protocol does not
+yet accept a read-only acknowledgement from the dial. The device never focuses a
+desktop pane merely to clear the bell.
+
+The title and up to four message rows form one centered block in y=72…382,
+with a 28 px gap and the existing 90-character budget. Only the status glyph
+has semantic color, matching `desktop/lib/widgets/harness_activity_mark.dart`
+and `desktop/lib/terminal/terminal_theme.dart`. Back uses secondary neutral ink.
+Native tests cover short/long layouts, exact partial redraws, rim bounds, post-DMA
+ordering, locked/sleeping frames, stale replacements, counter rollover, read/Open
+idempotence, questions, bounded receipts and muted/active bell transitions.
