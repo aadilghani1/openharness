@@ -376,7 +376,8 @@ void main() {
             expect(pr['iconAsset'], pullRequestIconAsset('Merged'));
             expect(pr['iconColor'], 0xffbc8cff);
             expect(pr['url'], 'https://github.com/acme/repo/pull/298');
-            expect(pr['segmented'], isNot(true));
+            expect(pr['segmented'], style.segmented);
+            expect(pr['roundedStart'], isFalse);
             final context = updates.last['focusedContext'] as Map;
             final fields = context['fields'] as List;
             expect((fields.first as Map)['roundedStart'], style.roundedStart);
@@ -417,7 +418,7 @@ void main() {
               (pr['segments'] as List).any(
                 (s) => (s as Map)['background'] != null,
               ),
-              isFalse,
+              style.segmented,
             );
           } else {
             final badge = find.byKey(const ValueKey('workspace-pull-request'));
@@ -429,6 +430,7 @@ void main() {
             );
             expect(rendered.number, 298);
             expect(rendered.state, 'Merged');
+            expect(rendered.style, style);
             for (final width in [520.0, 1280.0]) {
               tester.view.physicalSize = Size(width, 800);
               await tester.pump(const Duration(milliseconds: 100));
@@ -436,7 +438,12 @@ void main() {
               final contextRight = tester
                   .getRect(find.byKey(const ValueKey('workspace-pane-context')))
                   .right;
-              expect(tester.getRect(badge).left, greaterThan(contextRight));
+              expect(
+                tester.getRect(badge).left,
+                style.segmented
+                    ? closeTo(contextRight, .01)
+                    : greaterThan(contextRight),
+              );
             }
             final controls = find.descendant(
               of: find.byKey(const ValueKey('workspace-status-bar')),

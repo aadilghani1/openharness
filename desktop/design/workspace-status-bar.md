@@ -285,9 +285,12 @@ has focus. Display the original GitHub Octicon and `#298`: green pull request
 for Open, purple merge for Merged, red closed pull request for Closed, and gray
 draft pull request for Draft. Use the shared SVG assets in `assets/octicons`,
 with light/dark state colors resolved in Dart for both Flutter and AppKit.
-The number stays in ordinary foreground; the full state and link action are
-available on hover and through accessibility. Leave one cell before this compact
-link for every preset. The selected-theme preview shows the same control.
+In Plain and shell layouts, the number stays in ordinary foreground, with one
+cell before the compact link. In Powerline layouts, the PR continues the branch
+ribbon without a gap: its state color fills the final block, and the icon and
+number use contrasting ink. Keep the outer cap and internal joins consistent
+with the selected preset. The full state and link action remain available on
+hover and through accessibility. The selected-theme preview shows the same control.
 Color off makes both context and PR monochrome; the four shapes remain distinct.
 Existing `standard`
 settings resolve to Plain; existing `powerlevel10k` settings resolve to Lean.

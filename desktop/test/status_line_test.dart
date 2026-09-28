@@ -172,7 +172,11 @@ void main() {
           branch: 'main',
           style: style,
         );
-        for (final parts in [context]) {
+        for (final parts in [
+          context,
+          for (final state in ['Open', 'Merged', 'Closed', 'Draft'])
+            pullRequestStatusLineParts(number: 436, state: state, style: style),
+        ]) {
           final paint = statusLinePaintSegments(parts, darkTerminalTheme);
           expect(
             paint.map((p) => p.toJson()),

@@ -1053,11 +1053,14 @@ private final class SwarmContextButton: SwarmIconButton {
   private var textFont: NSFont { font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
   private var cellWidth: CGFloat { ("m" as NSString).size(withAttributes: [.font: textFont]).width }
   private var naturalWidths: [CGFloat] {
-    segments.map { workspaceBarTextWidth($0.text, font: textFont) + ($0.branchSymbol ? cellWidth * 2 : 0) }
+    segments.enumerated().map { index, segment in
+      workspaceBarTextWidth(segment.text, font: textFont) + (segment.branchSymbol ? cellWidth * 2 : 0)
+        + (index == 0 ? iconWidth : 0)
+    }
   }
   var preferredWidth: CGFloat {
     if !fieldButtons.isEmpty { return fieldButtons.reduce(0) { $0 + $1.preferredWidth } }
-    return ceil(naturalWidths.reduce(0, +) + iconWidth + contentPadding * 2 + (segmented ? CGFloat(segments.count) * cellWidth * 3 : 0))
+    return ceil(naturalWidths.reduce(0, +) + contentPadding * 2 + (segmented ? CGFloat(segments.count) * cellWidth * 3 : 0))
   }
 
   func update(_ context: [String: Any]?, enabled: Bool) {
@@ -1176,6 +1179,18 @@ private final class SwarmContextButton: SwarmIconButton {
     attachment.bounds = NSRect(x: 0, y: -1, width: width * 2, height: height)
     return NSAttributedString(attachment: attachment)
   }
+  private func drawPullRequestIcon(x: CGFloat, color: NSColor) {
+    guard let iconAsset else { return }
+    let size = textFont.pointSize
+    let rect = NSRect(x: x, y: (bounds.height - size) / 2, width: size, height: size)
+    let image = Self.statusIcons.image(engine: nil, asset: iconAsset, pointSize: size)
+    // Preserve the SVG at the current backing scale; tint only this layer.
+    NSGraphicsContext.current?.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
+    image.draw(in: rect)
+    color.setFill()
+    rect.fill(using: .sourceIn)
+    NSGraphicsContext.current?.cgContext.endTransparencyLayer()
+  }
   override func draw(_ dirtyRect: NSRect) {
     guard fieldButtons.isEmpty, bounds.width > 0, !segments.isEmpty else { return }
     NSGraphicsContext.saveGraphicsState()
@@ -1192,18 +1207,7 @@ private final class SwarmContextButton: SwarmIconButton {
         }
       }
       let inset = min(contentPadding, bounds.width / 2)
-      if let iconAsset {
-        let size = textFont.pointSize
-        let rect = NSRect(x: inset, y: (bounds.height - size) / 2, width: size, height: size)
-        let image = Self.statusIcons.image(engine: nil, asset: iconAsset, pointSize: size)
-        // Tint within an isolated layer, preserving the original SVG at the
-        // current backing scale and leaving the number in ordinary foreground.
-        NSGraphicsContext.current?.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
-        image.draw(in: rect)
-        iconColor.setFill()
-        rect.fill(using: .sourceIn)
-        NSGraphicsContext.current?.cgContext.endTransparencyLayer()
-      }
+      drawPullRequestIcon(x: inset, color: iconColor)
       line.draw(in: NSRect(x: inset + iconWidth, y: (bounds.height - line.size().height) / 2,
         width: max(0, bounds.width - inset * 2 - iconWidth), height: line.size().height))
       return
@@ -1283,9 +1287,11 @@ private final class SwarmContextButton: SwarmIconButton {
         drawStatusBranch(in: NSRect(x: x + inset, y: bottom + height * 0.15,
           width: cellWidth, height: height * 0.7), color: segment.foreground)
       }
+      let leadingIconWidth = index == 0 ? iconWidth : 0
+      if leadingIconWidth > 0 { drawPullRequestIcon(x: x + inset, color: segment.foreground) }
       let line = attributed(segment.text, segment.foreground)
-      line.draw(in: NSRect(x: x + inset + symbolWidth, y: (bounds.height - line.size().height) / 2,
-        width: max(0, widths[index] - symbolWidth), height: line.size().height))
+      line.draw(in: NSRect(x: x + inset + symbolWidth + leadingIconWidth, y: (bounds.height - line.size().height) / 2,
+        width: max(0, widths[index] - symbolWidth - leadingIconWidth), height: line.size().height))
       x += width
     }
   }
@@ -1839,7 +1845,7 @@ private final class SwarmTabStrip: NSView {
     let available = max(0, bounds.width - cell * 7 - shareSpace - daemonWidth)
     let naturalStatus = contextButton.preferredWidth
       + (hasFocusedModel ? focusedModelButton.preferredWidth + cell : 0)
-      + (hasPullRequest ? pullRequestButton.preferredWidth + cell : 0)
+      + (hasPullRequest ? pullRequestButton.preferredWidth + (contextButton.isSegmented && pullRequestButton.isSegmented ? 0 : cell) : 0)
     // Match Flutter: context reserves only what it needs, up to 40% / 52 cells.
     // Extra room from a short tab list returns to the full context below.
     // Keep a usable message line even on an empty tab when the daemon is on.

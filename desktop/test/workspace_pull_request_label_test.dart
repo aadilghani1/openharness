@@ -3,6 +3,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/pull_request_icon.dart';
+import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/terminal/terminal_theme.dart';
 import 'package:harness/terminal/terminal_theme_store.dart';
 import 'package:harness/widgets/workspace_pull_request_label.dart';
@@ -81,23 +82,26 @@ void main() {
             }
           }
         }
-        for (final width in [0.0, 8.0, 24.0, 40.0]) {
-          await tester.pumpWidget(
-            MaterialApp(
-              theme: grid.buildAppTheme(brightness: Brightness.dark),
-              home: Center(
-                child: SizedBox(
-                  width: width,
-                  child: const WorkspacePullRequestLabel(
-                    number: 123456,
-                    state: 'Open',
+        for (final style in StatusLineStyle.values) {
+          for (final width in [0.0, 8.0, 24.0, 40.0, 80.0, 120.0]) {
+            await tester.pumpWidget(
+              MaterialApp(
+                theme: grid.buildAppTheme(brightness: Brightness.dark),
+                home: Center(
+                  child: SizedBox(
+                    width: width,
+                    child: WorkspacePullRequestLabel(
+                      number: 123456,
+                      state: 'Open',
+                      style: style,
+                    ),
                   ),
                 ),
               ),
-            ),
-          );
-          await tester.pumpAndSettle();
-          expect(tester.takeException(), isNull);
+            );
+            await tester.pumpAndSettle();
+            expect(tester.takeException(), isNull);
+          }
         }
       } finally {
         semantics.dispose();

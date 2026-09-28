@@ -324,6 +324,31 @@ StatusLineParts statusLineParts({
   return StatusLineParts(style, parts);
 }
 
+/// The PR stays compact inside the last ribbon segment. Its icon is drawn from
+/// the shared Octicon asset, outside the text formatter.
+StatusLineParts pullRequestStatusLineParts({
+  required int number,
+  required String state,
+  StatusLineStyle style = StatusLineStyle.standard,
+}) => StatusLineParts(style, [
+  StatusLineSegment(
+    '#$number',
+    foreground: !style.segmented
+        ? StatusLineTone.foreground
+        : state == 'Open' || state == 'Draft'
+        ? StatusLineTone.black
+        : StatusLineTone.white,
+    background: !style.segmented
+        ? null
+        : switch (state) {
+            'Open' => StatusLineTone.green,
+            'Merged' => StatusLineTone.magenta,
+            'Closed' => StatusLineTone.red,
+            _ => StatusLineTone.muted,
+          },
+  ),
+]);
+
 /// Resolved once in Dart so the Flutter preview and native bar use identical
 /// ANSI colors. Backgrounds are static theme styling, not Git clean/dirty state.
 class StatusLinePaintSegment {

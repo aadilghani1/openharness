@@ -40,6 +40,20 @@ class PromptCustomize extends StatelessWidget {
           separateMachine: true,
         );
         final previewContext = example(prefs.statusStyle);
+        final joined =
+            prefs.statusStyle.segmented && previewContext.segments.isNotEmpty;
+        final prBackground = !joined
+            ? null
+            : statusLinePaintSegments(
+                pullRequestStatusLineParts(
+                  number: 298,
+                  state: 'Merged',
+                  style: prefs.statusStyle,
+                ),
+                theme,
+                color: prefs.color,
+                segmentOffset: previewContext.segments.length,
+              ).single.background;
         final buttonStyle = TextButton.styleFrom(
           alignment: Alignment.centerLeft,
           foregroundColor: theme.foreground,
@@ -146,13 +160,16 @@ class PromptCustomize extends StatelessWidget {
                           color: prefs.color,
                           textAlign: TextAlign.left,
                           workspaceBar: true,
+                          nextBackground: prBackground,
                         ),
                       ),
-                      SizedBox(width: cell.width),
+                      if (!joined) SizedBox(width: cell.width),
                       WorkspacePullRequestLabel(
                         number: 298,
                         state: 'Merged',
                         color: prefs.color,
+                        style: prefs.statusStyle,
+                        segmentOffset: previewContext.segments.length,
                       ),
                     ],
                   ),

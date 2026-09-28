@@ -1608,7 +1608,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'pullRequest': _pullRequest.value == null
           ? null
           : {
-              'text': '#${_pullRequest.value!.number}',
+              ..._nativeStatusLine(
+                pullRequestStatusLineParts(
+                  number: _pullRequest.value!.number,
+                  state: _pullRequest.value!.state,
+                  style: prefs.statusStyle,
+                ),
+                terminalTheme,
+                segmentOffset: parts?.segments.length ?? 0,
+              ),
               'label': _pullRequest.value!.label,
               'iconAsset': pullRequestIconAsset(_pullRequest.value!.state),
               'iconColor': pullRequestIconColor(
@@ -1616,12 +1624,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 terminalTheme,
                 color: prefs.color,
               ).toARGB32(),
-              'segments': [
-                {
-                  'text': '#${_pullRequest.value!.number}',
-                  'foreground': terminalTheme.foreground.toARGB32(),
-                },
-              ],
               'url': _pullRequest.value!.url.toString(),
               'detail': '${_pullRequest.value!.label} — Open on GitHub',
               'interactive': true,
@@ -6285,9 +6287,31 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final modelWidth = focused != null && modelPickerSupports(focused.engine)
           ? workspaceBarTextSizeOf(context, focused.provider).width + cell.width
           : 0.0;
+      final joined =
+          prefs.statusStyle.segmented &&
+          parts != null &&
+          parts.segments.isNotEmpty &&
+          pr != null;
+      final prBackground = !joined
+          ? null
+          : statusLinePaintSegments(
+              pullRequestStatusLineParts(
+                number: pr.number,
+                state: pr.state,
+                style: prefs.statusStyle,
+              ),
+              theme,
+              color: prefs.color,
+              segmentOffset: parts.segments.length,
+            ).single.background;
       final prWidth = pr == null
           ? 0.0
-          : WorkspacePullRequestLabel.widthOf(context, pr.number) + cell.width;
+          : WorkspacePullRequestLabel.widthOf(
+                  context,
+                  pr.number,
+                  style: prefs.statusStyle,
+                ) +
+                (joined ? 0 : cell.width);
       // Reserve only the context's actual width, capped at 40% / 52 cells.
       // Tabs get the rest; unused tab space flows back to the full context.
       final statusBudget = math.min(
@@ -6347,6 +6371,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             parts: parts!,
                             links: _contextLinks(focused),
                             color: prefs.color,
+                            nextBackground: prBackground,
                           ),
                         ),
                       ],
@@ -6358,7 +6383,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final prControl = pr == null
           ? const <Widget>[]
           : <Widget>[
-              SizedBox(width: cell.width),
+              if (!joined) SizedBox(width: cell.width),
               ConstrainedBox(
                 constraints: BoxConstraints(maxWidth: contentWidth * .28),
                 child: WorkspaceBarControl(
@@ -6373,6 +6398,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     state: pr.state,
                     emphasized: emphasized,
                     color: prefs.color,
+                    style: prefs.statusStyle,
+                    segmentOffset: parts?.segments.length ?? 0,
                   ),
                 ),
               ),

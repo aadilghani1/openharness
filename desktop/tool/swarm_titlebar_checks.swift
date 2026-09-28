@@ -169,6 +169,32 @@ private extension SwarmContextButton {
       payload["iconColor"] = Int64(0xffdddddd)
       update(payload, enabled: true)
       shapes.insert(renderedPixels())
+      // A ribbon uses the PR state as its fill; the same Octicon and number
+      // must use contrasting ink inside it, not the standalone icon's tint.
+      payload["segmented"] = true
+      payload["roundedEnd"] = true
+      payload["segments"] = [["text": "#436", "foreground": Int64(0xff111111),
+        "background": color]]
+      update(payload, enabled: true)
+      frame.size.width = preferredWidth
+      let ribbon = renderedBitmap()
+      let cell = ("m" as NSString).size(withAttributes: [.font: textFont]).width
+      let iconInk = (Int(cell)..<Int(cell) + 13).contains { x in
+        (0..<28).contains { y in
+          guard let pixel = ribbon.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+          // The thin 13px strokes are antialiased at this fixture's 1x scale.
+          return pixel.alphaComponent > 0.9 && pixel.redComponent < expected.redComponent * 0.7 &&
+            pixel.greenComponent < expected.greenComponent * 0.7 &&
+            pixel.blueComponent < expected.blueComponent * 0.7
+        }
+      }
+      let fill = ribbon.colorAt(x: 1, y: 14)!.usingColorSpace(.sRGB)!
+      try checkTitlebar(iconInk && abs(fill.redComponent - expected.redComponent) < 0.03 &&
+        abs(fill.greenComponent - expected.greenComponent) < 0.03 &&
+        abs(fill.blueComponent - expected.blueComponent) < 0.03,
+        "\(state) draws contrasting icon ink inside the final colored ribbon block")
+      try checkTitlebar(abs(preferredWidth - width! - cell * 3) < 1,
+        "The PR ribbon reserves only the shared segment padding and end cap")
     }
     try checkTitlebar(shapes.count == 4, "All four PR states remain distinct with Color off")
   }
