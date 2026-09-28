@@ -24,6 +24,8 @@ import 'package:harness/widgets/workspace_bar_control.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 import 'package:harness/widgets/agent_drag.dart';
 import 'package:harness/widgets/status_line.dart';
+import 'package:harness/widgets/workspace_pull_request_label.dart';
+import 'package:harness/shared/theme/pull_request_icon.dart';
 import 'package:harness/widgets/pull_request_badge.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -320,7 +322,7 @@ void main() {
 
   for (final native in [false, true]) {
     testWidgets(
-      'focused PR uses every selected theme without duplicate pane lookups (native=$native)',
+      'focused PR stays compact beside every theme without duplicate lookups (native=$native)',
       (tester) async {
         final updates = <Map>[];
         const channel = MethodChannel('harness/swarm_tabs');
@@ -369,12 +371,12 @@ void main() {
           await tester.pump();
           if (native) {
             final pr = updates.last['pullRequest'] as Map;
-            expect(pr['text'], '#298 Merged');
+            expect(pr['text'], '#298');
+            expect(pr['label'], '#298 Merged');
+            expect(pr['iconAsset'], pullRequestIconAsset('Merged'));
+            expect(pr['iconColor'], 0xffbc8cff);
             expect(pr['url'], 'https://github.com/acme/repo/pull/298');
-            expect(pr['segmented'], style.segmented);
-            expect(pr['roundedEnd'], style.roundedEnd);
-            // PR follows the context: it must not restart a rounded capsule.
-            expect(pr['roundedStart'], isFalse);
+            expect(pr['segmented'], isNot(true));
             final context = updates.last['focusedContext'] as Map;
             final fields = context['fields'] as List;
             expect((fields.first as Map)['roundedStart'], style.roundedStart);
@@ -415,15 +417,18 @@ void main() {
               (pr['segments'] as List).any(
                 (s) => (s as Map)['background'] != null,
               ),
-              style.segmented,
+              isFalse,
             );
           } else {
             final badge = find.byKey(const ValueKey('workspace-pull-request'));
-            final rendered = tester.widget<StatusLine>(
-              find.descendant(of: badge, matching: find.byType(StatusLine)),
+            final rendered = tester.widget<WorkspacePullRequestLabel>(
+              find.descendant(
+                of: badge,
+                matching: find.byType(WorkspacePullRequestLabel),
+              ),
             );
-            expect(rendered.parts.style, style);
-            expect(rendered.parts.text, '#298 Merged');
+            expect(rendered.number, 298);
+            expect(rendered.state, 'Merged');
             for (final width in [520.0, 1280.0]) {
               tester.view.physicalSize = Size(width, 800);
               await tester.pump(const Duration(milliseconds: 100));
@@ -431,26 +436,7 @@ void main() {
               final contextRight = tester
                   .getRect(find.byKey(const ValueKey('workspace-pane-context')))
                   .right;
-              expect(
-                tester.getRect(badge).left,
-                style.segmented
-                    ? closeTo(contextRight, .01)
-                    : greaterThan(contextRight),
-              );
-              if (style.segmented) {
-                final ribbon = find.descendant(
-                  of: badge,
-                  matching: find.byType(CustomPaint),
-                );
-                expect(
-                  tester.getRect(ribbon).left,
-                  closeTo(tester.getRect(badge).left, .01),
-                );
-                expect(
-                  tester.getRect(ribbon).right,
-                  closeTo(tester.getRect(badge).right, .01),
-                );
-              }
+              expect(tester.getRect(badge).left, greaterThan(contextRight));
             }
             final controls = find.descendant(
               of: find.byKey(const ValueKey('workspace-status-bar')),
@@ -471,11 +457,31 @@ void main() {
               final target = find.byKey(ValueKey(key));
               await mouse.moveTo(tester.getCenter(target));
               await tester.pump();
-              final lines = find.descendant(
-                of: target,
-                matching: find.byType(StatusLine),
-              );
-              expect(tester.widget<StatusLine>(lines).emphasized, isTrue);
+              if (key == 'workspace-pull-request') {
+                expect(
+                  tester
+                      .widget<WorkspacePullRequestLabel>(
+                        find.descendant(
+                          of: target,
+                          matching: find.byType(WorkspacePullRequestLabel),
+                        ),
+                      )
+                      .emphasized,
+                  isTrue,
+                );
+              } else {
+                expect(
+                  tester
+                      .widget<StatusLine>(
+                        find.descendant(
+                          of: target,
+                          matching: find.byType(StatusLine),
+                        ),
+                      )
+                      .emphasized,
+                  isTrue,
+                );
+              }
               expect(
                 find.descendant(of: target, matching: find.byType(ColoredBox)),
                 findsNothing,

@@ -10,6 +10,7 @@ import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'status_line.dart';
+import 'workspace_pull_request_label.dart';
 
 class PromptCustomize extends StatelessWidget {
   const PromptCustomize({super.key, required this.store});
@@ -39,17 +40,6 @@ class PromptCustomize extends StatelessWidget {
           separateMachine: true,
         );
         final previewContext = example(prefs.statusStyle);
-        final preview = StatusLineParts(prefs.statusStyle, [
-          ...previewContext.segments,
-          if (!prefs.statusStyle.segmented &&
-              previewContext.segments.isNotEmpty)
-            const StatusLineSegment(' '),
-          ...pullRequestStatusLineParts(
-            number: 298,
-            state: 'Merged',
-            style: prefs.statusStyle,
-          ).segments,
-        ]);
         final buttonStyle = TextButton.styleFrom(
           alignment: Alignment.centerLeft,
           foregroundColor: theme.foreground,
@@ -147,11 +137,24 @@ class PromptCustomize extends StatelessWidget {
                     horizontal: cell.width,
                     vertical: cell.height,
                   ),
-                  child: StatusLine(
-                    key: const ValueKey('prompt-preview'),
-                    parts: preview,
-                    color: prefs.color,
-                    textAlign: TextAlign.left,
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: StatusLine(
+                          key: const ValueKey('prompt-preview'),
+                          parts: previewContext,
+                          color: prefs.color,
+                          textAlign: TextAlign.left,
+                          workspaceBar: true,
+                        ),
+                      ),
+                      SizedBox(width: cell.width),
+                      WorkspacePullRequestLabel(
+                        number: 298,
+                        state: 'Merged',
+                        color: prefs.color,
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -176,7 +179,7 @@ class PromptCustomize extends StatelessWidget {
               ),
               toggle(
                 'color',
-                'Color (Plain is always monochrome)',
+                'Color',
                 prefs.color,
                 (value) => choose(prefs.copyWith(color: value)),
               ),

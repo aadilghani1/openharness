@@ -235,12 +235,13 @@ Customize Harness → Status offers twelve saved themes, grouped into Minimal
 and Powerline, with a preview of the same sample pane beneath each choice.
 Selection covers only the name row. Tab and Shift-Tab move between choices;
 Enter or Space selects, scrolls the choice into view, and saves it. The selected
-theme also previews PR status. Previews inherit the terminal font and cell size;
-the workspace bar uses the fixed 13 pt bar font. Controls keep the plain terminal design.
+theme also previews PR status. The individual examples inherit the terminal font
+and cell size; the combined bar preview uses the actual fixed 13 pt workspace
+font. Controls keep the plain terminal design.
 
 | Theme | Treatment |
 | --- | --- |
-| Plain (default) | Monochrome `machine  project  (branch)`, including the PR |
+| Plain (default) | Monochrome `machine  project  (branch)` with a colored PR state icon |
 | Robbyrussell | Green arrow, cyan project, blue `git:(` with red branch |
 | Pure | Blue project, muted machine/branch, magenta prompt mark |
 | Powerlevel10k Lean | Unboxed yellow machine, blue project, green branch symbol and ASCII `>` |
@@ -279,16 +280,25 @@ ink from the named palette (or black/white where necessary) so small text on
 these filled segments has at least 4.5:1 contrast. Preserve the terminal font,
 the existing bold-only hover cue, and stable field widths.
 
-The rightmost PR label belongs to the focused harness, including when its viewer
-has focus. Display `#298 Merged` (or Draft/Open/Closed), with a separate link
-to that PR. Plain themes leave one text cell before the label. Segmented themes
-connect it directly to the preceding arrow, making one continuous bar while
-retaining the PR click target. The selected-theme preview
-shows that same joined line. State colors come from the selected status palette:
-muted for Draft, green for Open, magenta for Merged, and red for Closed. Turning
-Color off applies a monochrome treatment to context and PR together. Plain always
-uses the terminal foreground even when Color is enabled. Existing `standard`
+The rightmost PR link belongs to the focused harness, including when its viewer
+has focus. Display the original GitHub Octicon and `#298`: green pull request
+for Open, purple merge for Merged, red closed pull request for Closed, and gray
+draft pull request for Draft. Use the shared SVG assets in `assets/octicons`,
+with light/dark state colors resolved in Dart for both Flutter and AppKit.
+The number stays in ordinary foreground; the full state and link action are
+available on hover and through accessibility. Leave one cell before this compact
+link for every preset. The selected-theme preview shows the same control.
+Color off makes both context and PR monochrome; the four shapes remain distinct.
+Existing `standard`
 settings resolve to Plain; existing `powerlevel10k` settings resolve to Lean.
+
+Tabs take the available space after a compact context budget, instead of being
+limited to 45% of the bar. Context reserves its measured width up to 40% of the
+remaining space or 52 cells; unused tab space returns to context. With the
+companion enabled, keep room for its message line. Shorten long branch names
+in the middle before squeezing machine/project, retaining the full name in
+the tooltip and navigation action. Tab labels measure the name, status gap,
+and status cell separately so short names never acquire a false ellipsis.
 
 References: [Oh My Zsh themes](https://github.com/ohmyzsh/ohmyzsh/wiki/Themes),
 [Pure](https://github.com/sindresorhus/pure),

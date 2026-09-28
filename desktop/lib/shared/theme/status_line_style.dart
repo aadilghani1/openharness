@@ -324,41 +324,6 @@ StatusLineParts statusLineParts({
   return StatusLineParts(style, parts);
 }
 
-StatusLineParts pullRequestStatusLineParts({
-  required int number,
-  required String state,
-  StatusLineStyle style = StatusLineStyle.standard,
-}) {
-  final tone = switch (state) {
-    'Open' => StatusLineTone.green,
-    'Merged' => StatusLineTone.magenta,
-    'Closed' => StatusLineTone.red,
-    _ => StatusLineTone.muted,
-  };
-  if (style.segmented) {
-    return StatusLineParts(style, [
-      StatusLineSegment(
-        '#$number $state',
-        foreground: state == 'Open' || state == 'Draft'
-            ? StatusLineTone.black
-            : StatusLineTone.white,
-        background: tone,
-      ),
-    ]);
-  }
-  return StatusLineParts(style, [
-    StatusLineSegment(
-      '#$number ',
-      foreground: switch (style) {
-        StatusLineStyle.robbyrussell => StatusLineTone.blue,
-        StatusLineStyle.pure => StatusLineTone.muted,
-        _ => tone,
-      },
-    ),
-    StatusLineSegment(state, foreground: tone),
-  ]);
-}
-
 /// Resolved once in Dart so the Flutter preview and native bar use identical
 /// ANSI colors. Backgrounds are static theme styling, not Git clean/dirty state.
 class StatusLinePaintSegment {
