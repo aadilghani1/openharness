@@ -95,46 +95,45 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   Widget build(BuildContext context) {
     return Focus(
       focusNode: widget.focusNode,
-      // The web text-field node below owns focus semantics. A second focused ancestor can
-      // deactivate its DOM editor when input moves between two custom editors.
-      includeSemantics: !kIsWeb,
+      // The text-field node owns focus semantics. A second focused ancestor can
+      // deactivate the web editor or hide the native accessibility input target.
+      includeSemantics: false,
       autofocus: widget.autofocus,
       onKeyEvent: _onKeyEvent,
-      // Flutter web's accessibility input strategy creates its DOM editor from a semantic
-      // text field. A bare TextInputClient receives arrows/Enter but loses every printable key
-      // when a screen reader (or accessibility automation) enables semantics.
-      child: kIsWeb
-          ? ListenableBuilder(
-              listenable:
-                  Listenable.merge([widget.focusNode, _semanticEditingState]),
-              builder: (context, _) => Semantics(
-                container: true,
-                excludeSemantics: true,
-                // Read-only observers are output surfaces, not browser editors. The web engine
-                // creates a writable DOM textarea even for a semantic readOnly text field.
-                textField: !widget.readOnly,
-                enabled: true,
-                focusable: !widget.readOnly,
-                focused: !widget.readOnly && widget.focusNode.hasFocus,
-                multiline: true,
-                label: widget.semanticLabel ??
-                    (widget.readOnly ? 'Terminal output' : 'Terminal input'),
-                value: _semanticEditingState.value.text,
-                onTap: widget.readOnly ? null : requestKeyboard,
-                onFocus: widget.readOnly ? null : requestKeyboard,
-                onSetText: widget.readOnly
-                    ? null
-                    : (text) {
-                        updateEditingValue(TextEditingValue(
-                          text: text,
-                          selection:
-                              TextSelection.collapsed(offset: text.length),
-                        ));
-                      },
-                child: widget.child,
-              ),
-            )
-          : widget.child,
+      // Browser input and native dictation/accessibility both need an editable semantic
+      // target: a bare TextInputClient exposes no text field to macOS accessibility.
+      child: ListenableBuilder(
+        listenable: Listenable.merge([widget.focusNode, _semanticEditingState]),
+        builder: (context, _) => Semantics(
+          container: true,
+          excludeSemantics: true,
+          // Read-only observers are output surfaces, not browser editors. The web engine
+          // creates a writable DOM textarea even for a semantic readOnly text field.
+          textField: !widget.readOnly,
+          enabled: true,
+          focusable: !widget.readOnly,
+          focused: !widget.readOnly && widget.focusNode.hasFocus,
+          multiline: true,
+          label: widget.semanticLabel ??
+              (widget.readOnly ? 'Terminal output' : 'Terminal input'),
+          value: _semanticEditingState.value.text,
+          onTap: widget.readOnly ? null : requestKeyboard,
+          onFocus: widget.readOnly ? null : requestKeyboard,
+          onSetText: widget.readOnly
+              ? null
+              : (text) {
+                  if (widget.readOnly) return;
+                  updateEditingValue(TextEditingValue(
+                    text: text,
+                    selection: TextSelection.collapsed(offset: text.length),
+                  ));
+                  // A semantic action did not originate in the platform editor. Keep
+                  // its buffer current so the next native key cannot replay old text.
+                  _connection?.setEditingState(_currentEditingState);
+                },
+          child: widget.child,
+        ),
+      ),
     );
   }
 
