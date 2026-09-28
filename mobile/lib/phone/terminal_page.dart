@@ -15,7 +15,8 @@ import 'package:flutter/scheduler.dart';
 import 'package:xterm/xterm.dart' show Terminal, TerminalKey, TerminalStyle;
 
 import 'package:harness_mobile/logging/app_log.dart';
-import 'package:harness_mobile/core/models.dart' show Agent, AgentProject;
+import 'package:harness_mobile/core/models.dart'
+    show Agent, AgentProject, ConnectionStatus;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -40,6 +41,7 @@ import 'held_height.dart';
 import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'settings_page.dart';
+import 'session_work_page.dart';
 import 'terminal_action_column.dart';
 import 'terminal_chrome_scroll.dart';
 import 'terminal_header.dart';
@@ -677,7 +679,7 @@ class _TerminalPageState extends State<TerminalPage>
       rendered: session?.hasRenderedFrame ?? false,
       agentName: agent?.displayName,
       agentEngine: agent?.engine,
-      agentProject: agent?.project,
+      agentProject: agent?.displayProject,
       agentPresent: agent != null,
       agentsFromCache: machine?.agentsFromCache ?? true,
       agentLoadStatus: machine?.agentLoadStatus,
@@ -905,7 +907,7 @@ class _TerminalPageState extends State<TerminalPage>
 
   /// `machine:folder` for the title — where the agent works.
   static String? _placeOf(Agent? agent, MachineState? machine) {
-    final folder = agent?.project?.name;
+    final folder = agent?.displayProject?.name;
     final name = machine?.machine.displayName;
     if (folder == null || folder.isEmpty) return name;
     return name == null ? folder : '$name:$folder';
@@ -2096,7 +2098,9 @@ class _TerminalPageState extends State<TerminalPage>
                               name:
                                   agent?.displayName ?? _cachedAgentName ?? '',
                               place: _placeOf(agent, machine),
-                              branch: agent?.project?.branch,
+                              branch:
+                                  agent?.gitContext?.branchLabel ??
+                                  agent?.displayProject?.branch,
                               // In the sample the guide line says it, once is enough.
                               asking: SampleMode.maybeOf(context) != null
                                   ? null
@@ -2351,9 +2355,10 @@ class _TerminalPageState extends State<TerminalPage>
       // Where it runs, written as everywhere else: `hn` over `M2:autonomous-harness ⑂ main`.
       title: [
         '$agentName · $machineName',
-        if (agent.project?.label case final folder?) ':$folder',
+        if (agent.displayProject?.label case final folder?) ':$folder',
       ].join(),
-      titleBranch: agent.project?.shownBranch,
+      titleBranch:
+          agent.gitContext?.branchLabel ?? agent.displayProject?.shownBranch,
       // The agent, then where it runs — the machine, then the folder with its parent beside the
       // branch — each behind its icon. The header has no room for the path.
       titleParts: [agentName],
@@ -2374,7 +2379,7 @@ class _TerminalPageState extends State<TerminalPage>
       ),
       titleDetail: AgentPlaceLines(
         machineName: machineName,
-        project: agent.project,
+        project: agent.displayProject,
       ),
       // Three cards: what acts on THIS agent, the screens the app itself has, and — alone at the
       // end — the one act that cannot be undone. No caption over the first: the name above it
@@ -2437,6 +2442,28 @@ class _TerminalPageState extends State<TerminalPage>
   }
 
   List<PhoneSheetAction> _agentActions(Agent agent) => [
+    PhoneSheetAction(
+      icon: LucideIcons.gitBranch300,
+      label: 'Branches and pull requests',
+      chevron: true,
+      onTap: () => Navigator.of(context).push(
+        phoneRoute(
+          (_) => SessionWorkPage(
+            agent: agent,
+            online:
+                widget.notifier.stateOf(widget.machineId)?.nodeOnline !=
+                    false &&
+                widget.notifier.stateOf(widget.machineId)?.connectionStatus ==
+                    ConnectionStatus.connected,
+            read: (offset) => widget.notifier.readAgentGitHistory(
+              widget.machineId,
+              agent.id,
+              offset: offset,
+            ),
+          ),
+        ),
+      ),
+    ),
     PhoneSheetAction(
       icon: LucideIcons.clipboardPaste300,
       label: 'Paste from clipboard',

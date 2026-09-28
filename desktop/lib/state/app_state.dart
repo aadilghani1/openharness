@@ -24,6 +24,7 @@ import '../auth/cli_login.dart';
 import '../bootstrap/environment_provisioner.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
+import '../core/agent_git_context.dart';
 import '../core/agent_names.dart';
 import '../core/agent_preference.dart';
 import '../core/dsh_catalog.dart';
@@ -371,7 +372,7 @@ class MachineState {
       (!isLocalMachine && machine.reportedOnline == false);
 
   AgentProject? projectOf(Agent agent) =>
-      agent.project ??
+      agent.displayProject ??
       localProjects[agent.id] ??
       localEndpoint?.agentProjects[agent.id];
 
@@ -510,7 +511,8 @@ class AppNotifier extends ChangeNotifier {
   /// [ViewerServices.login] in a viewer build — which has no CLI — under one name, so every call
   /// site reads the same in both.
   late final SignInClient cliLogin;
-  final CliLink cliLink;
+  CliLink? _cliLink;
+  CliLink get cliLink => _cliLink ??= CliLink();
 
   /// Links to other machines by remote password: [cliLink] in a desktop build, the app itself in a
   /// viewer. THIS machine's own remote password stays on [cliLink] — a viewer is not a machine, and
@@ -1733,7 +1735,6 @@ class AppNotifier extends ChangeNotifier {
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
        session = authSession,
        _store = configStore,
-       cliLink = cliLink ?? CliLink(),
        config = configStore?.config ?? config,
        viewer =
            viewer ??
@@ -1743,6 +1744,7 @@ class AppNotifier extends ChangeNotifier {
                    session: authSession,
                  )
                : null) {
+    _cliLink = cliLink;
     this.cliLogin = cliLogin ?? this.viewer?.login ?? CliLogin();
     this.peerLinks = peerLinks ?? this.viewer?.links ?? this.cliLink;
     _autonomousEnv = this.config.autonomousEnv;
@@ -1769,7 +1771,7 @@ class AppNotifier extends ChangeNotifier {
     config: config,
     session: session,
     auth: viewer?.auth,
-    localTransport: localDaemonTransport,
+    localTransport: viewer == null ? localDaemonTransport : null,
   );
 
   /// How this app reaches the local CLI — its Unix socket or the loopback
@@ -2579,6 +2581,9 @@ class AppNotifier extends ChangeNotifier {
       debugPrint('bootstrap: fallback to login after error: $error\n$stack');
       currentUser = null;
       status = AppStatus.unauthenticated;
+      if (viewer != null) {
+        _lastError = 'Could not complete sign-in. Please sign in again.';
+      }
       notifyListeners();
     } finally {
       // A `finally` rather than a call per exit path: bootstrap resolves four
@@ -2731,6 +2736,9 @@ class AppNotifier extends ChangeNotifier {
       );
       currentUser = null;
       status = AppStatus.unauthenticated;
+      if (viewer != null) {
+        _lastError = 'Could not complete sign-in. Please sign in again.';
+      }
       notifyListeners();
     }
   }
@@ -2945,7 +2953,9 @@ class AppNotifier extends ChangeNotifier {
     // race `harness start`'s own backend handshake and surface a bogus 30s "Could not load
     // machines" timeout. A daemon that never comes up still gets a home screen below, with
     // the failure shown there as before, since that's where the retry affordance lives.
-    _bootStatusMessage = 'Starting local service…';
+    _bootStatusMessage = viewer == null
+        ? 'Starting local service…'
+        : 'Opening workspace…';
     notifyListeners();
     // Before the machines, deliberately: the tiles are intent, they render as
     // "waiting for that machine" on their own, and each attaches as its machine
@@ -4024,7 +4034,7 @@ class AppNotifier extends ChangeNotifier {
   void _ensurePool() {
     if (_pool != null) return;
     _pool = WsPool(
-      localTransport: localDaemonTransport,
+      localTransport: viewer == null ? localDaemonTransport : null,
       wsBaseUrl: config.wsBaseUrl,
       autonomousEnv: _autonomousEnv,
       // Every real desktop WsConn dials the local CLI's loopback WS (transportKind.localPlaintext, see
@@ -4696,6 +4706,7 @@ class AppNotifier extends ChangeNotifier {
           prev.modelName != agent.modelName ||
           prev.parentAgentId != agent.parentAgentId ||
           prev.project != agent.project ||
+          prev.gitContext != agent.gitContext ||
           prev.lastActivityAt != agent.lastActivityAt ||
           prev.lastOpenedAt != agent.lastOpenedAt ||
           prev.tokensUsed != agent.tokensUsed ||
@@ -6224,6 +6235,11 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void _replaceAgents(MachineState machine, List<Agent> agents) {
+    final previousWork = {for (final agent in machine.agents) agent.id: agent};
+    agents = [
+      for (final agent in agents)
+        retainNewerGitContext(agent, previousWork[agent.id]),
+    ];
     final previous = {for (final agent in machine.agents) agent.id: agent};
     final nextIds = agents.map((agent) => agent.id).toSet();
     machine._agentNames.removeWhere((id, _) => !nextIds.contains(id));
@@ -6281,6 +6297,7 @@ class AppNotifier extends ChangeNotifier {
   void _upsertAgent(MachineState machine, Agent agent) {
     final index = machine.agents.indexWhere((item) => item.id == agent.id);
     final previous = index == -1 ? null : machine.agents[index];
+    agent = retainNewerGitContext(agent, previous);
     if (index == -1) {
       machine.agents = [...machine.agents, agent];
     } else {
@@ -7201,12 +7218,63 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String agentId,
   ) async {
+    final machine = stateOf(machineId), revision = _authRevision;
+    final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
+    if (machine == null || agent == null) return {'status': 'unavailable'};
+    final identity = agent.gitContext?.requestIdentity;
+    if (agent.gitContext != null && identity == null) {
+      return {'status': 'unavailable'};
+    }
     try {
-      return await _conn(machineId).request(
+      final result = await _conn(machineId).request(
         'git_pull_request',
-        payload: {'agentId': agentId},
+        payload: {'agentId': agentId, 'context': ?identity},
         timeout: const Duration(seconds: 30),
       );
+      if (!_machineWorkCurrent(machine, revision) ||
+          !sameGitConversation(
+            agent,
+            machine.agents.where((a) => a.id == agentId).firstOrNull,
+          )) {
+        return {'status': 'unavailable'};
+      }
+      if (identity != null &&
+          !mapEquals(
+            identity,
+            result['context'] is Map
+                ? Map<String, Object?>.from(result['context'])
+                : null,
+          )) {
+        return {'status': 'unavailable'};
+      }
+      return result;
+    } catch (_) {
+      return {'status': 'unavailable'};
+    }
+  }
+
+  Future<Map<String, dynamic>> readAgentGitHistory(
+    String machineId,
+    String agentId, {
+    int offset = 0,
+  }) async {
+    final machine = stateOf(machineId), revision = _authRevision;
+    final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
+    if (machine == null || agent == null) return {'status': 'unavailable'};
+    try {
+      final result = await _conn(machineId).request(
+        'git_pull_request',
+        payload: {'agentId': agentId, 'history': true, 'offset': offset},
+        timeout: const Duration(seconds: 45),
+      );
+      if (!_machineWorkCurrent(machine, revision) ||
+          !sameGitConversation(
+            agent,
+            machine.agents.where((a) => a.id == agentId).firstOrNull,
+          )) {
+        return {'status': 'unavailable'};
+      }
+      return result;
     } catch (_) {
       return {'status': 'unavailable'};
     }
@@ -8759,7 +8827,7 @@ class AppNotifier extends ChangeNotifier {
       );
     }
     final terminal = isTerminalEngine(engine);
-    final cwd = machine.projectOf(source)?.cwd;
+    final cwd = source.project?.cwd ?? machine.projectOf(source)?.cwd;
     if (cwd == null && !terminal) {
       return Future.value(
         '${source.displayName} has no project folder to clone into.',
@@ -9499,7 +9567,7 @@ class AppNotifier extends ChangeNotifier {
   /// It has to be a tile like any other — the alternative of letting a machine
   /// take over the whole content area would blank three working terminals
   /// belonging to two other machines. The one exception is a machine that
-  /// already needs linking: selecting it brings up the Machines panel
+  /// already needs linking: selecting it brings up the Machines picker
   /// (`SwarmScreen._maybeLink`), so opening a tile here too would just be a
   /// redundant "not linked" pane sitting behind it. Selecting is still worth
   /// doing — it's what makes that gate notice this machine — the tile is not.
@@ -11740,6 +11808,7 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
+    viewer?.auth.dispose();
     _modelManager?.dispose();
     _modelsMenu?.dispose();
     for (final project in _orchestratorProjects.values) {
