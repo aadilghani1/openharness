@@ -104,9 +104,6 @@ class _SessionWorkPageState extends State<SessionWorkPage> {
       final tty = Tty.of(context), data = _data;
       final current =
           data?.current ?? (data == null ? widget.agent.project : null);
-      final currentLabel = data?.activityUncertain == true
-          ? 'last observed'
-          : 'current';
       final prs = [...?data?.pullRequests];
       int rank(AgentWorkPr pr) => switch (pr.state) {
         'Open' || 'Draft' => 0,
@@ -226,7 +223,7 @@ class _SessionWorkPageState extends State<SessionWorkPage> {
                     for (final branch
                         in data?.branches ?? <AgentWorkBranch>[]) ...[
                       text(
-                        '${branch.branch}${branch.cwd == current?.root && branch.branch == current?.branch ? ' · $currentLabel' : ''}',
+                        '${branch.branch}${branch.cwd == current?.root && branch.branch == current?.branch ? ' · current' : ''}',
                       ),
                       text(branch.cwd, dim: true),
                       SizedBox(height: tty.row),

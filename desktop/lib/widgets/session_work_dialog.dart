@@ -35,6 +35,7 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
   AgentGitContext? _data;
   bool _loading = false;
   String? _error;
+  int? _nextOffset;
   int _revision = 0, _visiblePrs = 4;
   final _unavailable = <String>{};
   @override
@@ -61,6 +62,9 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
       _loading = false;
       final raw = result['gitContext'];
       if (raw is Map && result['history'] is Map) {
+        _nextOffset = result['nextOffset'] is int
+            ? result['nextOffset'] as int
+            : null;
         _data =
             AgentGitContext.fromJson({...raw, 'history': result['history']}) ??
             _data;
@@ -116,11 +120,9 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
           color: theme.foreground.withValues(alpha: .65),
         );
         final data = _data;
-        final current =
-            data?.current ?? (data == null ? widget.agent.project : null);
-        final currentLabel = data?.activityUncertain == true
-            ? 'last observed'
-            : 'current';
+        final branchRows = data?.branchRows ?? <AgentBranchRow>[];
+        final showRepositories =
+            branchRows.map((row) => row.repository).toSet().length > 1;
         final prs = [...?data?.pullRequests];
         int rank(AgentWorkPr pr) => switch (pr.state) {
           'Open' || 'Draft' => 0,
@@ -188,32 +190,43 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    line('${widget.agent.displayName} · Work'),
+                    line(
+                      '${widget.agent.displayName} · Branches and pull requests',
+                    ),
                     line(
                       widget.online
-                          ? data?.explanation ?? 'Session workspace'
-                          : 'Offline · last known work',
+                          ? data?.explanation ??
+                                'Branches and pull requests for this session.'
+                          : 'Offline · saved branches and pull requests',
                       dim: true,
                     ),
                     SizedBox(height: cell.height),
                     Expanded(
                       child: ListView(
                         children: [
-                          line(
-                            current?.branch ??
-                                data?.branchLabel ??
-                                'No branch observed',
-                          ),
-                          if (current != null)
-                            line(current.root ?? current.cwd, dim: true),
-                          if (data?.observedAt case final at?)
+                          line('Branches (${branchRows.length})'),
+                          if (branchRows.isEmpty)
                             line(
-                              'Work observed ${localWorkTime(at)}',
+                              data?.branchLabel ?? 'No branches recorded yet.',
                               dim: true,
                             ),
-                          SizedBox(height: cell.height),
-                          line('Launch workspace', dim: true),
-                          line(widget.agent.project?.cwd ?? 'Unavailable'),
+                          for (final branch in branchRows) ...[
+                            line(
+                              '${branch.branch}${branch.checkedOut ? ' · Checked out' : ''}',
+                            ),
+                            if (showRepositories && branch.repository != null)
+                              line(branch.repository!, dim: true),
+                            if (branch.pullRequests.isNotEmpty)
+                              line(
+                                branch.pullRequests
+                                    .map(
+                                      (pr) =>
+                                          '#${pr.url.pathSegments.last} ${pr.state ?? 'State unknown'}',
+                                    )
+                                    .join(' · '),
+                                dim: true,
+                              ),
+                          ],
                           SizedBox(height: cell.height),
                           line('Pull requests (${prs.length})'),
                           if (prs.isEmpty)
@@ -279,7 +292,7 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
                             else if (pr.checkedAt case final at?)
                               line('Checked ${localWorkTime(at)}', dim: true),
                           ],
-                          if (prs.length > _visiblePrs)
+                          if (_nextOffset != null || prs.length > _visiblePrs)
                             Align(
                               alignment: Alignment.centerLeft,
                               child: TerminalTextAction(
@@ -287,7 +300,8 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
                                 onPressed: _loading
                                     ? null
                                     : () {
-                                        final offset = _visiblePrs;
+                                        final offset =
+                                            _nextOffset ?? _visiblePrs;
                                         setState(() => _visiblePrs += 4);
                                         if (widget.online) {
                                           unawaited(_refresh(offset));
@@ -296,30 +310,10 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
                               ),
                             ),
                           SizedBox(height: cell.height),
-                          line('Observed branches'),
-                          if (data?.branches.isEmpty ?? true)
-                            line('No branch history observed yet.', dim: true),
-                          for (final branch
-                              in data?.branches ?? <AgentWorkBranch>[]) ...[
-                            line(
-                              '${branch.branch}${branch.cwd == current?.root && branch.branch == current?.branch ? '  · $currentLabel' : ''}',
-                            ),
-                            line(branch.cwd, dim: true),
-                          ],
-                          if (data?.state == 'multiple' ||
-                              data?.state == 'uncertain' ||
-                              data?.state == 'unavailable') ...[
-                            SizedBox(height: cell.height),
-                            line('Recent work locations'),
-                            for (final location
-                                in data?.locations ?? <AgentWorkLocation>[])
-                              line(location.cwd, dim: true),
-                          ],
-                          SizedBox(height: cell.height),
                           line(
                             data?.truncated == true
                                 ? 'Older observations are omitted.'
-                                : 'History includes observed work; earlier work may be missing.',
+                                : 'History includes recorded branches and PRs; earlier activity may be missing.',
                             dim: true,
                           ),
                         ],

@@ -64,7 +64,7 @@ void main() {
         }
         await tester.pumpAndSettle();
         expect(find.byType(SessionWorkDialog), findsOneWidget);
-        expect(find.text('/silent-beacon'), findsOneWidget);
+        expect(find.textContaining('/silent-beacon'), findsNothing);
         expect(pane.session, same(session));
         expect(input, isEmpty);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -85,7 +85,7 @@ void main() {
     final context = WorkspacePaneContext.focused(app)!;
     for (final style in StatusLineStyle.values) {
       final parts = context.format(PromptPrefs(statusStyle: style));
-      expect(parts.text, contains('Multiple workspaces'));
+      expect(parts.text, contains('Branches'));
       expect(parts.segments.any((s) => s.branchSymbol), isFalse);
       expect(parts.text, isNot(contains('original')));
     }

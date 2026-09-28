@@ -854,7 +854,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       StatusLineField.branch: (
         label: focused.agent?.gitContext == null
             ? 'Find harnesses on ${focused.branch} in ${focused.projectName}'
-            : 'Inspect session work · ${focused.branch}\n${focused.detail}',
+            : 'Branches and pull requests · ${focused.branch}\n${focused.detail}',
         onPressed: _shortcutsEnabled
             ? () =>
                   _openContextResource(StatusLineField.branch, focused.pane.id)

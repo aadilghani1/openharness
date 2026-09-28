@@ -1,5 +1,4 @@
 import '../core/models.dart';
-import '../core/agent_git_context.dart';
 import '../shared/theme/prompt_style.dart';
 import '../shared/theme/status_line_style.dart';
 import '../widgets/engine_identity.dart';
@@ -206,11 +205,7 @@ class WorkspacePaneContext {
         if (provider.isNotEmpty) provider,
         machineName,
         if (project != null) 'Project: ${project.label}',
-        if (project != null) project.cwd,
-        ?project?.branchDetail,
         if (agent?.gitContext case final git?) git.explanation,
-        if (agent?.gitContext?.observedAt case final at?)
-          'Work observed ${localWorkTime(at)}',
       ].join('\n'),
     );
   }

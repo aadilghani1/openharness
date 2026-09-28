@@ -65,12 +65,12 @@ describe('durable session Git history', () => {
     expect((await restarted.get({ ...target, forkedFrom: { agentId: 'parent', name: 'Parent' }, registeredAt: 2 })).branches).toEqual([])
   })
 
-  it('does not claim the launch branch or uncertain work as a branch worked on', async () => {
+  it('records the assigned branch without requiring tool activity, without inventing unknown branches', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'git-history-')); dirs.push(dir)
     const store = new SessionGitHistoryStore(dir)
     await store.observe(target, context('main', { state: 'workspace' }))
     await store.observe(target, context('maybe', { state: 'uncertain', current: null }))
-    expect((await store.get(target)).branches).toEqual([])
-    expect(await readdir(dir)).toEqual([])
+    expect((await store.get(target)).branches.map(b => b.branch)).toEqual(['main'])
+    await store.settled()
   })
 })

@@ -1,5 +1,8 @@
 # Session Git context
 
+The current product and data contract is [Session branches and pull requests](../worktree-pull-requests.md).
+The original location-driven design below records the first delivery; it is superseded by the branch-first correction at the end.
+
 ## Product contract
 
 A session is a durable conversation, a worktree is a checkout, a branch is a
@@ -213,3 +216,25 @@ A read-only replay of this session's 26 MB transcript into temporary caches
 resolved its actual `happy-owl` checkout, populated branch history, recovered
 PR #397's creation URL, and verified its **Merged** state against GitHub. No
 running daemon data was changed by that replay.
+
+## Branch-first correction — September 28
+
+Git, rather than transcript parsing, now supplies checked-out branch facts for
+every engine. The assigned checkout is always inspected; validated historical
+associations and successful activity add other checkouts. The projection emits
+bounded Git snapshots, and history records branches even without tool receipts.
+Unknown activity cannot clear a known branch. Multiple checked-out branches
+produce a branch count; worktree paths are internal bookkeeping.
+
+The desktop lists checked-out branches, recorded branches and PRs without
+launch paths or recent subdirectory lists. GitHub head repository + branch
+queries discover PRs from saved branch identities even after local deletion;
+PR URL refresh preserves durable merged/closed history. Discovery and URL checks
+share bounded pagination and retain actual cache check times.
+
+Regression coverage includes real temporary Git repositories with Claude, Codex
+and Grok registry rows and no transcripts, branch switches, another session's
+unassociated branch, deleted branches before the first PR lookup, multiple
+checkouts, offline preservation and the recorded Codex batch fixture. App tests
+cover branch grouping, merged history, paths absent from the view, native and
+Flutter navigation without terminal input, narrow layouts and large text.

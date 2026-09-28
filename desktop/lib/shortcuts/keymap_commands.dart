@@ -342,7 +342,7 @@ final harnessCommands = <HarnessCommand>[
   const HarnessCommand('agent.rename', 'Rename Harness', ShortcutGroup.actions),
   const HarnessCommand(
     'agent.work',
-    'Inspect session work',
+    'Branches and pull requests',
     ShortcutGroup.actions,
     keywords: [
       'branch',

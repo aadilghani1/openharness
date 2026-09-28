@@ -45,6 +45,14 @@ typedef AgentWorkPr = ({
   String? title,
   String? headBranch,
   String? baseBranch,
+  String? headRepository,
+});
+
+typedef AgentBranchRow = ({
+  String branch,
+  String? repository,
+  bool checkedOut,
+  List<AgentWorkPr> pullRequests,
 });
 
 /// Display evidence from the owning machine. It never changes launch/resume cwd.
@@ -52,6 +60,7 @@ class AgentGitContext {
   const AgentGitContext({
     required this.state,
     this.current,
+    this.checkouts,
     this.observedAt,
     this.activityUncertain = false,
     this.locations = const [],
@@ -63,6 +72,7 @@ class AgentGitContext {
   });
   final String state;
   final AgentProject? current;
+  final List<AgentProject>? checkouts;
   final DateTime? observedAt;
   final bool activityUncertain;
   final List<AgentWorkLocation> locations;
@@ -72,28 +82,59 @@ class AgentGitContext {
   final String? epoch;
   final int revision;
 
+  List<AgentProject> get checkedOut => checkouts ?? [?current];
+
+  /// Repository + branch is the visible identity. Paths only disambiguate local
+  /// repositories without a remote; temporary folder names never become labels.
+  List<AgentBranchRow> get branchRows {
+    final rows = <(String, String), AgentBranchRow>{};
+    void add(String branch, String? repository, String local, bool checkedOut) {
+      final key = (repository ?? local, branch);
+      final previous = rows[key];
+      rows[key] = (
+        branch: branch,
+        repository: repository,
+        checkedOut: checkedOut || previous?.checkedOut == true,
+        pullRequests: previous?.pullRequests ?? <AgentWorkPr>[],
+      );
+    }
+
+    for (final project in checkedOut) {
+      if (project.shownBranch case final branch?) {
+        add(branch, project.remote, project.root ?? project.cwd, true);
+      }
+    }
+    for (final branch in branches) {
+      add(branch.branch, branch.remote, branch.cwd, false);
+    }
+    for (final pr in pullRequests) {
+      final branch = pr.headBranch;
+      if (branch == null) continue;
+      final repository =
+          'github.com/${pr.headRepository ?? pr.url.pathSegments.take(2).join('/')}'
+              .toLowerCase();
+      add(branch, repository, pr.cwd ?? '', false);
+      rows[(repository, branch)]!.pullRequests.add(pr);
+    }
+    return rows.values.toList();
+  }
+
   String? get branchLabel {
-    final label = switch (state) {
-      'multiple' => 'Multiple workspaces',
-      'uncertain' => 'Work location unknown',
-      'unavailable' => 'Workspace unavailable',
-      _ =>
-        current?.shownBranch ?? (current?.detached == true ? 'Detached' : null),
-    };
-    return activityUncertain && state == 'observed' && label != null
-        ? '$label · last observed'
-        : label;
+    final checked = branchRows.where((row) => row.checkedOut).toList();
+    if (checked.length > 1) return '${checked.length} branches';
+    if (checked.length == 1) return checked.single.branch;
+    if (current?.detached == true) return 'Detached';
+    if (branchRows.isNotEmpty || state == 'multiple' || state == 'uncertain') {
+      return 'Branches';
+    }
+    return state == 'unavailable' ? 'Git unavailable' : null;
   }
 
   String get explanation => switch (state) {
-    'observed' =>
-      activityUncertain
-          ? 'Last observed workspace; latest activity is unconfirmed.'
-          : 'Most recently observed work',
-    'multiple' => 'The operation used more than one workspace.',
-    'uncertain' => 'The current work location could not be confirmed.',
-    'unavailable' => 'The observed workspace is no longer readable.',
-    _ => 'Session workspace; no other work location has been observed.',
+    'multiple' => 'Branches checked out for this session.',
+    'uncertain' || 'unavailable' =>
+      'Git is unavailable. Showing saved branches and pull requests.',
+    _ => 'Branch checked out for this session.',
   };
 
   AgentProject? displayProject(AgentProject? launch) {
@@ -124,6 +165,7 @@ class AgentGitContext {
       other is AgentGitContext &&
       state == other.state &&
       current == other.current &&
+      listEquals(checkouts, other.checkouts) &&
       observedAt == other.observedAt &&
       activityUncertain == other.activityUncertain &&
       truncated == other.truncated &&
@@ -136,6 +178,7 @@ class AgentGitContext {
   int get hashCode => Object.hash(
     state,
     current,
+    checkouts == null ? null : Object.hashAll(checkouts!),
     observedAt,
     activityUncertain,
     truncated,
@@ -224,6 +267,9 @@ class AgentGitContext {
         title: result is Map ? label(result['title'], 512) : null,
         headBranch: result is Map ? label(result['headBranch'], 256) : null,
         baseBranch: result is Map ? label(result['baseBranch'], 256) : null,
+        headRepository: result is Map
+            ? label(result['headRepository'], 512)
+            : null,
       ));
       if (prs.length == 128) break;
     }
@@ -232,6 +278,13 @@ class AgentGitContext {
       state: raw['state'] as String,
       current: const ['workspace', 'observed'].contains(raw['state'])
           ? AgentProject.fromJson(raw['current'])
+          : null,
+      checkouts: raw['checkouts'] is List
+          ? List.unmodifiable(
+              rows(raw['checkouts'])
+                  .map(AgentProject.fromJson)
+                  .whereType<AgentProject>(),
+            )
           : null,
       observedAt: date(raw['observedAt']),
       activityUncertain: raw['activityUncertain'] == true,

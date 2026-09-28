@@ -92,23 +92,65 @@ Map<String, dynamic> manyPrFixture() {
 }
 
 void main() {
+  test('multiple checked-out branches are named without exposing temporary folders', () {
+    final fixture = gitFixture();
+    final project = fixture['current'] as Map<String, dynamic>;
+    fixture['state'] = 'multiple';
+    fixture['current'] = null;
+    fixture['checkouts'] = [
+      project,
+      {
+        ...project,
+        'cwd': '/other-temp',
+        'root': '/other-temp',
+        'branch': 'hn/nfc',
+      },
+      {...project, 'cwd': '/duplicate-temp', 'root': '/duplicate-temp'},
+    ];
+    final context = AgentGitContext.fromJson(fixture)!;
+    expect(context.branchLabel, '2 branches');
+    expect(context.requestIdentity, isNull);
+    expect(context.branchRows.map((b) => b.branch), [
+      'hn/preview-fix',
+      'hn/nfc',
+    ]);
+    expect(context.branchRows.every((b) => b.checkedOut), isTrue);
+    expect(context.explanation, 'Branches checked out for this session.');
+  });
   test(
-    'unconfirmed activity keeps the last observed branch and PR context',
+    'GitHub keeps a merged branch in history after its checkout disappears',
     () {
-      final fresh = AgentGitContext.fromJson(gitFixture())!;
-      final saved = AgentGitContext.fromJson({
-        ...gitFixture(),
-        'activityUncertain': true,
-      })!;
-      expect(saved.branchLabel, 'hn/preview-fix · last observed');
-      expect(saved.explanation, contains('latest activity is unconfirmed'));
-      expect(saved.displayProject(null)?.branch, 'hn/preview-fix');
-      expect(saved.requestIdentity?['cwd'], '/ship-hn');
-      expect(saved.pullRequests.single.state, 'Open');
-      expect(saved, isNot(fresh));
-      expect(fresh.activityUncertain, isFalse);
+      final fixture = gitFixture();
+      fixture['checkouts'] = <Object>[];
+      fixture['current'] = null;
+      fixture['state'] = 'unavailable';
+      (fixture['history']['branches'] as List).clear();
+      fixture['history']['pullRequests'][0]['result'].addAll({
+        'headBranch': 'hn/done',
+        'headRepository': 'acme/app',
+        'state': 'Merged',
+      });
+      final context = AgentGitContext.fromJson(fixture)!;
+      expect(context.branchRows.single.branch, 'hn/done');
+      expect(context.branchRows.single.checkedOut, isFalse);
+      expect(context.branchRows.single.pullRequests.single.state, 'Merged');
+      expect(context.branchLabel, 'Branches');
     },
   );
+  test('unknown activity does not override a Git branch or its PR context', () {
+    final fresh = AgentGitContext.fromJson(gitFixture())!;
+    final saved = AgentGitContext.fromJson({
+      ...gitFixture(),
+      'activityUncertain': true,
+    })!;
+    expect(saved.branchLabel, 'hn/preview-fix');
+    expect(saved.explanation, 'Branch checked out for this session.');
+    expect(saved.displayProject(null)?.branch, 'hn/preview-fix');
+    expect(saved.requestIdentity?['cwd'], '/ship-hn');
+    expect(saved.pullRequests.single.state, 'Open');
+    expect(saved, isNot(fresh));
+    expect(fresh.activityUncertain, isFalse);
+  });
   test('renamed PR aliases do not duplicate the original creation receipt', () {
     final git = gitFixture();
     final row = (git['history']['pullRequests'] as List).single as Map;
