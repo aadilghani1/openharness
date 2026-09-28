@@ -6,7 +6,10 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 bin="${HARNESS_TUI_BIN:-$here/../target/release/harness-tui}"
-port="${E2E_PORT:-18997}"
+port="${E2E_PORT:-19297}"
+[[ "$port" =~ ^[0-9]+$ ]] && (( port >= 19000 && port <= 19999 )) || { echo "E2E_PORT must be in the isolated test range 19000–19999" >&2; exit 2; }
+unset TMUX TMUX_PANE HN_SOCKET
+client="${HN_SOCKET_NAME:-e2e}-$$"
 sock="harness-tui-e2e-$$"
 home="$(mktemp -d)"
 tmux_() { tmux -L "$sock" "$@"; }
@@ -20,7 +23,15 @@ expect() { # expect <what> <text> [timeout-ms]
   done
   echo "✓ $1"
 }
-cleanup() { tmux_ kill-server 2>/dev/null || true; kill "$mock" 2>/dev/null || true; rm -rf "$home"; }
+hn() { env -u TMUX -u TMUX_PANE -u HN_SOCKET HOME="$home" PORT="$port" HN_SOCKET_NAME="$client" "$bin" -L "$client" --port "$port" "$@"; }
+cleanup() {
+  hn kill-server >/dev/null 2>&1 || true
+  env -u TMUX -u TMUX_PANE -u HN_SOCKET HOME="$home" PORT="$port" HN_SOCKET_NAME="$client-2" "$bin" -L "$client-2" --port "$port" kill-server >/dev/null 2>&1 || true
+  tmux_ kill-server 2>/dev/null || true
+  kill "$mock" 2>/dev/null || true
+  wait "$mock" 2>/dev/null || true
+  rm -rf "$home"
+}
 trap cleanup EXIT
 
 node "$here/mock-daemon.mjs" "$port" >/dev/null &
@@ -28,13 +39,11 @@ mock=$!
 sleep 0.5
 # Its own client socket, named: the test's shell calls must never reach a client of yours
 # (an unnamed hn takes "default", which is where `hn <command>` goes).
-client="e2e-$$"
 # HN_DESKTOP=off: no desktop app here, so hn is the window the dial talks to.
-tmux_ new-session -d -s t -x 120 -y 32 "EDITOR=emacs VISUAL= HN_SOCKET_NAME=$client HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off $bin"
+tmux_ new-session -d -s t -x 120 -y 32 "env -u TMUX -u TMUX_PANE -u HN_SOCKET EDITOR=emacs VISUAL= HN_SOCKET_NAME=$client HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off '$bin' -L '$client' --port '$port'"
 # The mock's dial: what hn told it (dial <js expression over d>), and a frame to push at hn.
 dial() { curl -s "http://127.0.0.1:$port/test/dial" | node -e "const d = JSON.parse(require('fs').readFileSync(0, 'utf8')).data; console.log($1)"; }
 push() { curl -s -X POST --data "$1" "http://127.0.0.1:$port/test/dial" >/dev/null; }
-hn() { HOME=$home "$bin" -L "$client" "$@"; }
 wait_eq() { # wait_eq <what> <expected> <command…>: until the command prints what is expected, 3s
   # (The command is run again each time: a `$(…)` in the arguments would be read only once.)
   local what="$1" want="$2" waited=0 got=""; shift 2
@@ -88,11 +97,11 @@ tmux_ send-keys -t t C-v
 expect "C-b s then C-v: a harness beside" "Remote shell (mock)"
 expect "pane titles, tmux pane-border-status" '── Remote shell ─'
 # From a shell, as tmux is scripted: the running client answers.
-out=$(HOME=$home "$bin" -L "$client" display -p '#{session_windows} #{pane_index}')
+out=$(hn display -p '#{session_windows} #{pane_index}')
 [ -n "$out" ] || fail "hn display -p from a shell answered nothing"
 echo "✓ hn display -p from a shell: $out"
 sleep 2.3
-info=$(HOME=$home "$bin" -L "$client" display -p -t 0 '#{pane_current_command} #{pane_current_path}')
+info=$(hn display -p -t 0 '#{pane_current_command} #{pane_current_path}')
 [ "$info" = "zsh /home/demo/src" ] || fail "pane_current_* from the daemon's tmux: got '$info'"
 echo "✓ #{pane_current_command} and #{pane_current_path} come from the pane's tmux"
 
@@ -197,7 +206,7 @@ sleep 0.5
 tmux_ has-session -t t 2>/dev/null && screen | grep -q "Mock" && fail "C-b d did not detach"
 echo "✓ C-b d detaches"
 # The last window closed ends hn, as the session's end ends tmux's client.
-tmux_ new-session -d -s u -x 120 -y 32 "HN_SOCKET_NAME=$client-2 HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off $bin; sleep 5"
+tmux_ new-session -d -s u -x 120 -y 32 "env -u TMUX -u TMUX_PANE -u HN_SOCKET HN_SOCKET_NAME=$client-2 HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off '$bin' -L '$client-2' --port '$port'; sleep 5"
 waited=0; until tmux_ capture-pane -p -t u | grep -qF "Mock terminal (mock)"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 5000 ] && fail "a second hn started no shell"; done
 tmux_ send-keys -t u C-b '&'
 sleep 0.3

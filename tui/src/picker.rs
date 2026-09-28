@@ -182,6 +182,10 @@ pub struct Picker {
     pub history_at: Option<usize>, pub history_draft: String,
     /// jump (Some(false)) or jump-accept (Some(true)): the rows labelled, the next key picks one.
     pub jumping: Option<bool>,
+    /// Matching row indexes in result order, kept separately from the raw input list.
+    pub matched_rows: Vec<usize>,
+    /// Jump event query actions update the prompt before the next ordinary search event.
+    pub defer_filter: bool,
     /// The question each row showed and since when (its request id): a key answers only a question
     /// that has been on screen a moment — never one that just took another's place.
     pub q_seen: HashMap<String, (String, Instant)>,
@@ -267,6 +271,8 @@ impl Picker {
             track_flipped: false,
             history_at: None, history_draft: String::new(),
             jumping: None,
+            matched_rows: Vec::new(),
+            defer_filter: false,
             header_text: None,
             hold: None,
             q_seen: HashMap::new(),
@@ -421,6 +427,13 @@ impl Picker {
         }
         // --tac: the input order reversed (wherever the order is the input's).
         if crate::theme::fzf_opts().tac && !sorted { self.visible.reverse() }
+        self.matched_rows = self.visible.iter().filter(|(i, _)| !self.rows[*i].disabled).map(|(i, _)| *i).collect();
+        if crate::theme::fzf_opts().raw {
+            let hits: HashMap<usize, Vec<u32>> = std::mem::take(&mut self.visible).into_iter().collect();
+            self.visible = self.rows.iter().enumerate().filter(|(_, r)| !r.disabled && !self.excluded.contains(&r.id) && offered(r))
+                .map(|(i, _)| (i, hits.get(&i).cloned().unwrap_or_default())).collect();
+            if crate::theme::fzf_opts().tac { self.visible.reverse() }
+        }
         // Keep the cursor on the same item across a rebuild.
         let keep = self.selected_id.as_ref().and_then(|id| self.visible.iter().position(|(i, _)| &self.rows[*i].id == id));
         // Tracked, it keeps its row on the screen too (UpdateList: offset = cy − pos).
@@ -493,6 +506,45 @@ impl Picker {
         self.skip_disabled(if delta >= 0 { 1 } else { -1 });
     }
 
+    /// Whether the raw row at this position matched the query.
+    pub fn is_match(&self, at: usize) -> bool {
+        !crate::theme::fzf_opts().raw || self.visible.get(at).is_some_and(|(i, _)| self.matched_rows.contains(i))
+    }
+
+    /// up-match/down-match cross raw nonmatches, preserving the cursor if no match is ahead.
+    pub fn move_match(&mut self, delta: i64) {
+        if !crate::theme::fzf_opts().raw { self.move_by(delta); return }
+        let before = self.cursor;
+        for _ in 0..self.visible.len() {
+            let prev = self.cursor;
+            self.move_by(delta);
+            if self.is_match(self.cursor) { return }
+            if self.cursor == prev || self.cursor == before { break }
+        }
+        self.vset(before as i64, delta);
+    }
+
+    /// Switch between the input and the matching results, retaining the nearest match on exit.
+    pub fn set_raw(&mut self, raw: bool) {
+        if crate::theme::fzf_opts().raw == raw { return }
+        let slot = self.cursor.saturating_sub(self.scroll);
+        if !raw && !self.is_match(self.cursor) && self.matched_rows.len() > 1 {
+            'nearest: for distance in 1..self.visible.len() {
+                for at in [self.cursor.checked_add(distance).filter(|i| *i < self.visible.len()), self.cursor.checked_sub(distance)].into_iter().flatten() {
+                    if self.is_match(at) { self.vset(at as i64, 1); break 'nearest }
+                }
+            }
+        }
+        self.selected_id = self.current_id();
+        crate::theme::opts_change(|o| o.raw = raw);
+        self.refilter();
+        self.scroll = self.cursor.saturating_sub(slot);
+        if !raw {
+            let matching: Vec<&str> = self.matched_rows.iter().map(|i| self.rows[*i].id.as_str()).collect();
+            self.marked.retain(|id| matching.contains(&id.as_str()));
+        }
+    }
+
     /// The query was edited: the list is matched again. As fzf 0.67 does, the cursor keeps its
     /// place in the list (not the item it was on), kept within it; an edit that leaves the query
     /// as it was changes nothing.
@@ -500,6 +552,7 @@ impl Picker {
         if self.query == before { return }
         // --no-input: there is no query to edit.
         if crate::theme::fzf_opts().no_input { self.query = before.to_string(); self.qcursor = self.qcursor.min(self.qlen()); return }
+        if self.defer_filter { return }
         // search(…) lasts until the query changes.
         self.search = None;
         // --track (or toggle-track, track-current): the item it was on, wherever it goes.

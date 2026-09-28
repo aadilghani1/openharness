@@ -25,6 +25,9 @@ pub fn find(name: &str) -> Option<&'static Opt> {
 /// tmux's options_match: a name as written, or the one option it is the start of (`stat` is
 /// ambiguous, `mou` is mouse); a user option is itself. Unknown names stay as they are.
 pub fn resolve(name: &str) -> Result<String, String> {
+    if let Some((_, tail)) = name.split_once('[') {
+        if tail.strip_suffix(']').and_then(|n| n.trim_start().parse::<i32>().ok()).filter(|n| *n >= 0).is_none() { return Err(format!("ambiguous option: {name}")) }
+    }
     if name.starts_with('@') { return Ok(name.to_string()) }
     let (base, rest) = match name.find('[') { Some(i) => (&name[..i], &name[i..]), None => (name, "") };
     if base.is_empty() || find(base).is_some() { return Ok(name.to_string()) }
@@ -97,7 +100,7 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         // a space first, so a full window list never runs into it. Narrower than 110 columns only
         // the branch, narrower than 100 no tim: the window list keeps its room.
         m.insert("status-left".into(), "#{?client_prefix,#[reverse],}[#{session_name}]#{?client_prefix,#[noreverse],} ".into());
-        m.insert("status-right".into(), " #{?daemon_down,#[reverse]daemon down#[noreverse] ,}#{?usage_high,#[reverse]#{usage_high}#[noreverse] ,}#{?fleet,#{fleet} ,}#{?pane_watching,[watching] ,}#{?#{e|>=:#{client_width},110},#{?pane_far,#{pane_machine}#{?pane_project,:, },}#{?pane_project,#{=/16/…:pane_project} ,}#{?pane_branch,git:(#{=/24/…:pane_branch}) ,},#{?pane_branch,git:(#{=/16/…:pane_branch}) ,}}#{?#{e|>=:#{client_width},100},#{?#{tim},#{tim} ,},}%H:%M".into());
+        m.insert("status-right".into(), " #{?daemon_down,#[reverse]daemon down#[noreverse] ,}#{?usage_high,#[reverse]#{usage_high}#[noreverse] ,}#{?fleet,#{fleet} ,}#{?pane_watching,[watching] ,}#{?#{e|>=:#{client_width},110},#{?pane_far,#{pane_machine}#{?pane_project,:, },}#{?pane_project,#{=/16/…:pane_project} ,}#{?pane_branch,git:(#{=/24/…:pane_branch}) ,},#{?pane_branch,git:(#{=/16/…:pane_branch}) ,}}#{?#{e|>=:#{client_width},100},#{?#{tim},#{tim} ,},}#{host_short} %H:%M".into());
         // Each window's most urgent harness at a glance (the symbol its pane titles show) and its
         // name in a few whole words (#{window_short_name}): a harness is named for its task.
         for name in ["window-status-format", "window-status-current-format"] {
@@ -252,6 +255,8 @@ impl Store {
         let opt = find(name);
         let array = opt.map(|o| o.array).unwrap_or(false);
         let (base, index) = split_index(name);
+        if name.contains('[') && index.is_none() { return Err(format!("ambiguous option: {name}")) }
+        if index.is_some() && !array { return Err(format!("not an array: {name}")) }
         // An array changed in a layer is all there: the global one starts from tmux's defaults
         // (its items), another from nothing.
         if array && (!f.unset || index.is_some()) {
@@ -329,7 +334,7 @@ impl Store {
                 }
             }
             (Some(Kind::Choice(choices)), Some(v)) => {
-                if let Some(c) = choices.iter().find(|c| c.eq_ignore_ascii_case(v)) { c.to_string() }
+                if let Some(c) = choices.iter().find(|c| **c == v) { c.to_string() }
                 else if let Some(c) = v.parse::<usize>().ok().and_then(|i| choices.get(i)) { c.to_string() }
                 else { return Err(format!("unknown value: {v}")) }
             }
@@ -400,10 +405,12 @@ impl Store {
         match name {
             Some(n) => {
                 let base = n.split('[').next().unwrap_or(n);
-                let hits: Vec<&String> = keys.into_iter().filter(|k| (k.as_str() == n || (!n.contains('[') && k.starts_with(&format!("{base}[")))) && shown(k)).collect();
+                let scalar_index = n.contains('[') && find(n).is_some_and(|o| !o.array);
+                let hits: Vec<&String> = keys.into_iter().filter(|k| (k.as_str() == n || (scalar_index && k.as_str() == base) || (!n.contains('[') && k.starts_with(&format!("{base}[")))) && shown(k)).collect();
+                if hits.is_empty() && n.contains('[') && find(n).is_some_and(|o| o.array) && (global || inherited) { return Ok(vec![line(n, "", false, values_only)]) }
                 // A user option nobody set does not exist; tmux's own just has no value here.
                 if hits.is_empty() && (n.starts_with('@') || find(n).is_none()) { return Err(format!("invalid option: {n}")) }
-                for k in hits { let (v, inh) = &rows[k]; out.push(line(k, v, *inh, values_only)) }
+                for k in hits { let (v, inh) = &rows[k]; out.push(line(if scalar_index { n } else { k }, v, *inh, values_only)) }
             }
             None => for k in keys {
                 let hook = is_hook(k);
@@ -580,6 +587,24 @@ mod tests {
         assert_eq!(hooks.len(), 56);
         assert_eq!(hooks[0], "after-bind-key");
         assert!(s.show(None, &g, false, false, Which::Options, "w", 1).unwrap().iter().all(|l| !l.starts_with("after-")));
+    }
+
+    #[test]
+    fn invalid_array_indexes_and_choices_leave_options_unchanged() {
+        let mut s = Store::default();
+        let g = SetFlags { global: true, ..Default::default() };
+        s.set("user-keys[0]", Some("original"), &g, "w", 1).unwrap();
+        let before = (s.server.clone(), s.global_session.clone(), s.global_window.clone());
+        for name in ["user-keys[x]", "user-keys[-1]", "user-keys[", "user-keys[0]junk"] {
+            assert_eq!(resolve(name), Err(format!("ambiguous option: {name}")));
+            assert!(s.set(name, Some("replacement"), &g, "w", 1).is_err());
+        }
+        assert_eq!((s.server.clone(), s.global_session.clone(), s.global_window.clone()), before);
+        assert_eq!(s.set("status-left[0]", Some("x"), &g, "w", 1), Err("not an array: status-left[0]".into()));
+        assert_eq!(s.set("@custom[0]", Some("x"), &g, "w", 1), Err("not an array: @custom[0]".into()));
+        assert_eq!(s.set("status-keys", Some("EMACS"), &g, "w", 1), Err("unknown value: EMACS".into()));
+        assert_eq!(s.set("mode-keys", Some("Vi"), &g, "w", 1), Err("unknown value: Vi".into()));
+        assert_eq!((s.server.clone(), s.global_session.clone(), s.global_window.clone()), before);
     }
 
     #[test]

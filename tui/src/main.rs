@@ -12,6 +12,7 @@ mod cmd;
 mod cmdparse;
 mod commands;
 mod ids;
+mod history;
 mod mirror;
 mod server;
 mod ipc;
@@ -172,7 +173,7 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
             _ = tokio::time::sleep(Duration::from_millis(500)) => None,
         };
         let apply = |app: &mut app::App, event: Event| match event {
-            Event::Input(_) => {}
+            Event::Input(_) | Event::Animate => {}
             Event::Machine { machine_id, generation, event } => app.on_machine(machine_id, generation, event),
             Event::Apply(f) => f(app),
             Event::Tick => app.on_tick(),
@@ -196,6 +197,7 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
     // (What its last hooks changed — a session-closed hook's option — reaches the others.)
     app.server_dirty = true;
     server::publish(&mut app);
+    history::save(&app);
     app.fleet.save_cache();
     app.write_sessions(app::Save::Leave);
     mirror::tell_mirrors_now(&app);
@@ -353,6 +355,13 @@ async fn run(config: config::Config) -> io::Result<()> {
         loop { interval.tick().await; if ticks.send(Event::Tick).is_err() { break } }
     });
 
+    // Animation frames do not speed up the maintenance timers (reconnects, RPCs and saves).
+    let animation = tx.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        loop { interval.tick().await; if animation.send(Event::Animate).is_err() { break } }
+    });
+
     mark("terminal ready");
     // Its ids ($N @N %N) from this server name's counters: unique among its clients.
     ids::use_file(&app::sessions_path(None));
@@ -433,6 +442,7 @@ async fn run(config: config::Config) -> io::Result<()> {
                 }
                 Event::Apply(f) => { f(app); *refill = true }
                 Event::Tick => app.on_tick(),
+                Event::Animate => {},
             }
         };
         if let Some(event) = first { apply(&mut app, event, &mut refill); need_draw = true }
@@ -525,6 +535,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         app.server_dirty = true;
         server::publish(&mut app);
     }
+    history::save(&app);
     app.fleet.save_cache();
     app.mark_seen();
     app.save_seen();
@@ -534,12 +545,15 @@ async fn run(config: config::Config) -> io::Result<()> {
     mirror::tell_mirrors_now(&app);
     mirror::leave(&app);
     if let Some(path) = &socket { ipc::gone(path) }
-    // The last terminal going, with harness hooks set: hn stays with no terminal to run them
-    // (tmux's server keeps running hooks after its last client detaches).
-    if app.harness_hooks() && app.start_failed.is_none() && !app.forget_sessions {
+    // The last terminal leaves a running server while sessions remain, as tmux does. Scripts
+    // such as tmux-sessionizer can test for a process before deciding to create a session.
+    if app.start_failed.is_none() && !app.forget_sessions && !app.handed_over {
         let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty());
-        // (Its own sockets still answer until it has gone: not counted.)
-        if ipc::others_of(name.as_deref().unwrap_or("default")).is_empty() { cli::spawn_headless(name.as_deref(), Some(app.port)).await; }
+        let keep = cli::has_any_session(name.as_deref()) || app.harness_hooks()
+            || app.options.get("exit-empty", "", None).as_deref() == Some("off");
+        if keep && ipc::others_of(name.as_deref().unwrap_or("default")).is_empty() {
+            cli::spawn_headless(name.as_deref(), Some(app.port)).await;
+        }
     }
     // (A server with the desk lives on past its last terminal, until kill-server.)
     ids::leave(Some(app.desk_mode != app::DeskMode::Off && !app.forget_sessions));

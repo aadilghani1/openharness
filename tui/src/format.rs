@@ -29,7 +29,7 @@ pub fn text(app: &App, fmt: &str, window: Option<usize>) -> String {
 
 /// tmux's format_expand ([time]: format_expand_time) for a window and a pane.
 pub fn expand(app: &App, fmt: &str, window: usize, pane: Option<u64>, time: bool) -> String {
-    let mut es = Es { app, window, pane, time, nojobs: false, depth: 0, now: now_secs(), session: None, window_of: None };
+    let mut es = Es { app, window, pane, time, nojobs: false, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None };
     expand1(&mut es, fmt)
 }
 
@@ -55,18 +55,18 @@ pub fn every(app: &App, window: usize, pane: Option<u64>) -> Vec<String> {
 /// A format for a session not in front (another client's, or a list's row): its session_*
 /// values its own, as a #{S:} loop expands them.
 pub fn expand_session(app: &App, fmt: &str, session: u32) -> String {
-    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: (session != app.session_id).then_some(session), window_of: None };
+    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: (session != app.session_id).then_some(session), window_of: None, format_type: Some(crate::tree::FORMAT_SESSION) };
     expand1(&mut es, fmt)
 }
 
 /// A format for window [k] (of session_windows) of a session not in front (another client's).
 pub fn expand_session_window(app: &App, fmt: &str, session: u32, k: usize) -> String {
-    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: Some(session), window_of: Some(k) };
+    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: Some(session), window_of: Some(k), format_type: Some(crate::tree::FORMAT_WINDOW) };
     expand1(&mut es, fmt)
 }
 
 pub fn expand_nojobs(app: &App, fmt: &str) -> String {
-    let mut es = Es { app, window: app.active, pane: app.focused(), time: false, nojobs: true, depth: 0, now: now_secs(), session: None, window_of: None };
+    let mut es = Es { app, window: app.active, pane: app.focused(), time: false, nojobs: true, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None };
     expand1(&mut es, fmt)
 }
 
@@ -87,11 +87,12 @@ struct Es<'a> {
     /// in a #{W:} loop inside it, which of its windows (session_windows) the window_* are.
     session: Option<u32>,
     window_of: Option<usize>,
+    format_type: Option<u8>,
 }
 
 impl<'a> Es<'a> {
     fn at(&self, window: usize, pane: Option<u64>) -> Es<'a> {
-        Es { app: self.app, window, pane, time: self.time, nojobs: self.nojobs, depth: self.depth, now: self.now, session: self.session, window_of: self.window_of }
+        Es { app: self.app, window, pane, time: self.time, nojobs: self.nojobs, depth: self.depth, now: self.now, session: self.session, window_of: self.window_of, format_type: self.format_type }
     }
 }
 
@@ -412,14 +413,13 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
         let n = expand1(es, copy);
         colour_hex(&n).unwrap_or_default()
     } else if f.sessions {
-        // format_loop_sessions: each session by name, the one in front with the second choice.
-        let (all, active) = match choose(es, copy, false) { Some((a, b)) => (a, Some(b)), None => (copy.to_string(), None) };
+        // Unlike W: and P:, tmux's S: loop has one template; commas remain literal.
         let mut v = String::new();
         for (id, _) in es.app.session_list() {
-            let use_ = if id == es.app.session_id { active.as_deref().unwrap_or(&all) } else { &all };
             let mut next = es.at(es.app.active, None);
             next.session = (id != es.app.session_id).then_some(id);
-            v.push_str(&expand1(&mut next, use_));
+            next.format_type = Some(crate::tree::FORMAT_SESSION);
+            v.push_str(&expand1(&mut next, copy));
         }
         v
     } else if f.clients {
@@ -443,6 +443,7 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
             let use_ = if Some(num.to_string()) == current { active.as_deref().unwrap_or(&all) } else { &all };
             let mut next = es.at(es.window, None);
             next.window_of = Some(k);
+            next.format_type = Some(crate::tree::FORMAT_WINDOW);
             v.push_str(&expand1(&mut next, use_));
         }
         v
@@ -452,6 +453,7 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
         for w in 0..es.app.tabs.len() {
             let use_ = if w == es.app.active { active.as_deref().unwrap_or(&all) } else { &all };
             let mut next = es.at(w, None);
+            next.format_type = Some(crate::tree::FORMAT_WINDOW);
             v.push_str(&expand1(&mut next, use_));
         }
         v
@@ -463,6 +465,7 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
         for p in panes {
             let use_ = if Some(p) == focus { active.as_deref().unwrap_or(&all) } else { &all };
             let mut next = es.at(es.window, Some(p));
+            next.format_type = Some(crate::tree::FORMAT_PANE);
             v.push_str(&expand1(&mut next, use_));
         }
         v
@@ -474,6 +477,7 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
         for p in tab.map(|t| t.panes()).unwrap_or_default() {
             let use_ = if Some(p) == focus { active.as_deref().unwrap_or(&all) } else { &all };
             let mut next = es.at(es.window, Some(p));
+            next.format_type = Some(crate::tree::FORMAT_PANE);
             v.push_str(&expand1(&mut next, use_));
         }
         v
@@ -550,7 +554,9 @@ fn truthy(v: &str) -> bool { !v.is_empty() && v != "0" }
 fn find(es: &mut Es, key: &str, f: &Flags, time_format: Option<&str>) -> Option<String> {
     let app = es.app;
     let window_id = app.tabs.get(es.window).map(|t| t.id.clone()).unwrap_or_default();
-    let mut found = es.session.and_then(|id| match (es.window_of, es.pane) {
+    let kind = match key { "session_format" => Some(crate::tree::FORMAT_SESSION), "window_format" => Some(crate::tree::FORMAT_WINDOW), "pane_format" => Some(crate::tree::FORMAT_PANE), _ => None };
+    let typed = es.format_type.zip(kind).map(|(context, kind)| (context == kind).then_some("1").unwrap_or("0").to_string());
+    let mut found = typed.or_else(|| es.session.and_then(|id| match (es.window_of, es.pane) {
         // A #{P:} loop's pane there: its index and whether it is active are its window's.
         (k, Some(p)) if matches!(key, "pane_index" | "pane_active") => app.stash_pane_value(id, k, p, key),
         // A #{W:} loop's window there: its active pane's id.
@@ -558,7 +564,7 @@ fn find(es: &mut Es, key: &str, f: &Flags, time_format: Option<&str>) -> Option<
         // (Which kind of line it is — window_format — is the tree's to say.)
         (Some(k), _) if key.starts_with("window_") && key != "window_format" => Some(app.stash_window_value(id, k, key).unwrap_or_default()),
         _ => app.stash_value(id, key),
-    });
+    }));
     if found.is_none() { found = app.options.format_value(key, &window_id, es.pane) }
     let mut t: i64 = 0;
     if found.is_none() {
@@ -987,17 +993,7 @@ pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
 /// session shown here as another client has it, that client's count.
 /// How many terminals show session [id] (the one in front, the one a command is in for a moment,
 /// another of this client's).
-fn attached_to(app: &App, id: u32) -> usize {
-    if id == app.session_id { return attached(app) }
-    let here = (Some(id) == app.swap_back && !app.headless) as usize;
-    here + app.mirrors.values().filter(|m| **m == id).count()
-}
-
-fn attached(app: &App) -> usize {
-    if app.mirror.is_some() && app.swap_back.is_none() { return app.mirror_attached.max(1) as usize }
-    let here = !(app.swap_back.is_some() || app.headless) as usize;
-    here + app.mirrors.values().filter(|m| **m == app.session_id).count()
-}
+fn attached(app: &App) -> usize { app.session_attached(app.session_id) }
 
 pub fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect> {
     let r = tab_rect(app, window, pane)?;
@@ -1105,7 +1101,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "line" => app.format_line.map(|n| n.to_string()).unwrap_or_default(),
         "uid" | "client_uid" => unsafe { libc::getuid() }.to_string(),
         "client_user" | "user" => { let pw = unsafe { libc::getpwuid(libc::getuid()) }; if pw.is_null() { String::new() } else { unsafe { std::ffi::CStr::from_ptr((*pw).pw_name) }.to_string_lossy().into_owned() } }
-        "pane_marked" => (focus.is_some() && app.marked == focus).then_some("1").unwrap_or("0").into(),
+        "pane_marked" => (focus.is_some() && app.marked == focus && app.marked_session == Some(app.session_id)).then_some("1").unwrap_or("0").into(),
         "pane_marked_set" => app.marked.is_some().then_some("1").unwrap_or("0").into(),
         "window_id" => tab.map(|t| format!("@{}", t.wid())).unwrap_or_default(),
         "pane_synchronized" => tab.map(|t| t.sync).unwrap_or(false).then_some("1").unwrap_or("0").into(),
@@ -1235,21 +1231,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "client_last_session" => app.last_session.and_then(|l| app.session_list().into_iter().find(|(i, _)| *i == l)).map(|(_, n)| n).unwrap_or_default(),
         "pane_dead_status" | "pane_start_command" => String::new(),
         // Its session group (new -t): none when it is in none (tmux's NULL), but _grouped.
-        "session_group" | "session_group_size" | "session_group_list" | "session_group_attached" | "session_group_many_attached" | "session_group_attached_list" => {
-            let Some(g) = app.session_group.clone() else { return Some(Val::Str(String::new())) };
-            let members = app.group_sessions(&g);
-            let on: Vec<usize> = members.iter().map(|(id, _)| attached_to(app, *id)).collect();
-            let total: usize = on.iter().sum();
-            match name {
-                "session_group" => g,
-                "session_group_size" => members.len().to_string(),
-                "session_group_list" => members.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>().join(","),
-                "session_group_attached" => total.to_string(),
-                "session_group_many_attached" => ((total > 1) as u8).to_string(),
-                _ => if total > 0 && !app.headless { crate::app::tty_name() } else { String::new() },
-            }
-        }
-        "session_grouped" => (app.session_group.is_some() as u8).to_string(),
+        "session_group" | "session_group_size" | "session_group_list" | "session_group_attached" | "session_group_many_attached" | "session_group_attached_list" | "session_grouped" => app.session_group_value(app.session_id, name).unwrap_or_default(),
         // The sessions its window is in (link-window, a group).
         "window_linked" | "window_linked_sessions" | "window_linked_sessions_list" => {
             let list = tab.map(|t| app.window_sessions(&t.id)).unwrap_or_default();
@@ -1269,7 +1251,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_pipe" => pane.map(|p| app.pipes.contains_key(&p.id)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "server_sessions" => app.session_list().len().to_string(),
         "client_utf8" => "1".into(),
-        "session_attached_list" => if app.swap_back.is_some() || app.headless { String::new() } else { crate::app::tty_name() },
+        "session_attached_list" => app.session_attached_ttys(app.session_id).join(","),
         "window_start_flag" => (window == 0).then_some("1").unwrap_or("0").into(),
         "window_end_flag" => (window.checked_add(1) == Some(app.tabs.len())).then_some("1").unwrap_or("0").into(),
         "client_termname" => std::env::var("TERM").unwrap_or_default(),
@@ -1319,14 +1301,14 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_key_mode" => pane.map(|_| "VT10x".to_string()).unwrap_or_default(),
         "alternate_saved_x" | "alternate_saved_y" => pane.map(|_| "0".to_string()).unwrap_or_default(),
         "pane_unseen_changes" => pane.map(|p| if p.unseen { "1" } else { "0" }.to_string()).unwrap_or_default(),
-        "window_marked_flag" => tab.map(|t| app.marked.map(|m| t.panes().contains(&m)).unwrap_or(false)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
+        "window_marked_flag" => tab.map(|t| app.marked_session == Some(app.session_id) && app.marked.map(|m| t.panes().contains(&m)).unwrap_or(false)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "pane_fg" | "pane_bg" => pane.map(|_| "default".to_string()).unwrap_or_default(),
         "pane_path" => pane.and_then(|p| p.osc7_url.clone()).unwrap_or_default(),
         // format_defaults' type: a pane's format, a window's or a session's (choose-tree's items).
         "pane_format" => match app.format_type { Some(t) => (t == crate::tree::FORMAT_PANE).then_some("1").unwrap_or("0").into(), None => (pane_id.is_some() || focus.is_some()).then_some("1").unwrap_or("0").into() },
         "window_format" => (app.format_type == Some(crate::tree::FORMAT_WINDOW)).then_some("1").unwrap_or("0").into(),
         "session_format" => (app.format_type == Some(crate::tree::FORMAT_SESSION)).then_some("1").unwrap_or("0").into(),
-        "session_marked" => "0".into(),
+        "session_marked" => (app.marked.is_some() && app.marked_session == Some(app.session_id)).then_some("1").unwrap_or("0").into(),
         "active_window_index" => app.win_num(app.active).to_string(),
         "last_window_index" => (0..app.tabs.len()).map(|i| app.win_num(i)).max().map(|n| n.to_string()).unwrap_or_default(),
         "next_session_id" => format!("${}", crate::ids::peek(crate::ids::Kind::Session)),
@@ -1338,7 +1320,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // `source -F "#{d:current_file}/…"` reads it.
         "current_file" => app.origin.as_ref().map(|(f, _)| f.to_string()).unwrap_or_default(),
         // format_cb_session_alerts: each window with an alert, its number and its # ! ~.
-        "session_alerts" => (0..app.tabs.len()).filter_map(|i| { let f: String = flags(app, i).chars().filter(|c| matches!(c, '#' | '!' | '~')).collect(); (!f.is_empty()).then(|| format!("{}{f}", app.win_num(i))) }).collect::<Vec<_>>().join(","),
+        "session_alerts" => app.session_alerts(app.session_id),
         // The session's windows in the order they were last current (the current first).
         // The current window's number, then the lastw stack's.
         "session_stack" => std::iter::once(app.win_num(app.active)).chain(app.lastw.iter().filter_map(|id| app.tabs.iter().position(|t| &t.id == id)).map(|p| app.win_num(p))).map(|n| n.to_string()).collect::<Vec<_>>().join(","),
@@ -1475,14 +1457,10 @@ fn state_word(s: crate::fleet::State) -> &'static str {
 
 /// `#{window_raw_flags}`: `#` activity, `!` bell, `~` silence, `*` current, `-` last, `M` the
 /// marked pane's, `Z` zoomed.
-pub fn flags(app: &App, window: usize) -> String {
-    let Some(tab) = app.tabs.get(window) else { return String::new() };
-    // tmux's order: alerts (# !), then * or -, then Z.
-    // window_printable_flags: # activity, ! bell, ~ silence — tmux's alerts, and (a window not
-    // the current one) a harness finished or waiting on you.
+pub fn alert_flags(app: &App, tab: &crate::app::Tab, active: bool) -> String {
     let mut out = String::new();
     let (mut bell, mut activity) = (tab.alerts & crate::app::BELL != 0, tab.alerts & crate::app::ACTIVITY != 0);
-    if window != app.active {
+    if !active {
         for id in tab.panes() {
             let Some(agent) = app.panes.get(&id).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)) else { continue };
             match app.fleet.state_of(agent) { crate::fleet::State::NeedsInput => bell = true, crate::fleet::State::Done => activity = true, _ => {} }
@@ -1491,8 +1469,14 @@ pub fn flags(app: &App, window: usize) -> String {
     if activity { out.push('#') }
     if bell { out.push('!') }
     if tab.alerts & crate::app::SILENCE != 0 { out.push('~') }
+    out
+}
+
+pub fn flags(app: &App, window: usize) -> String {
+    let Some(tab) = app.tabs.get(window) else { return String::new() };
+    let mut out = alert_flags(app, tab, window == app.active);
     if window == app.active { out.push('*') } else if app.last_tab() == Some(&tab.id) { out.push('-') }
-    if app.marked.map(|m| tab.panes().contains(&m)).unwrap_or(false) { out.push('M') }
+    if app.marked_session == Some(app.session_id) && app.marked.map(|m| tab.panes().contains(&m)).unwrap_or(false) { out.push('M') }
     if tab.zoomed { out.push('Z') }
     out
 }

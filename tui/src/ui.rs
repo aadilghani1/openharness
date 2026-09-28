@@ -59,7 +59,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // A list takes the window (with --height, only its bottom rows: the panes stay in view).
     let full_screen = matches!(app.modal, Some(Modal::Picker { .. }) if theme::fzf_opts().height.is_none());
     if !full_screen {
-        if app.tab().root.is_none() { empty_window(buf, app, body) }
+        if app.tab().home || app.tab().root.is_none() { empty_window(buf, app, body) }
         else { cursor = window(buf, app, body) }
     }
     // Panes in clock mode: the time over each (its cursor hidden).
@@ -68,12 +68,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         for rect in clocks { clock(buf, app, rect) }
     }
     if let Some(Modal::DisplayPanes { .. }) = &app.modal { display_panes(buf, app) }
+    let search_busy = app.said_due.is_some() || app.said_pending > 0;
     if let Some(modal) = &mut app.modal {
         match modal {
             // (--no-input: no prompt, no cursor.)
             // (Too small to hold a list — a window being dragged, a drop-down terminal opening: none
             // drawn until it has the room, as fzf clamps and tmux draws what fits; never a crash.)
-            Modal::Picker { kind, picker } if body.height >= 1 && body.width >= 2 => { let at = fzf(buf, body, picker, kind, &*app_preview_placeholder()); cursor = (!theme::fzf_opts().no_input).then_some(at) }
+            Modal::Picker { kind, picker } if body.height >= 1 && body.width >= 2 => { let at = fzf(buf, body, picker, kind, search_busy); cursor = (!theme::fzf_opts().no_input).then_some(at) }
             _ => {}
         }
     }
@@ -130,9 +131,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
     let opt = |name: &str, default: &str| Some(app.style_spec(name, app.active, app.focused())).filter(|s| !s.is_empty()).unwrap_or_else(|| default.to_string());
     let base = Style::default();
-    let style = crate::draw::style_over(&opt("menu-style", "default"), base);
-    let selected = crate::draw::style_over(&opt("menu-selected-style", "bg=yellow,fg=black"), base);
-    let border = crate::draw::style_over(&opt("menu-border-style", "default"), style);
+    // tmux's menu_set_style keeps colours, clearing attributes for each menu pair.
+    let plain = |mut st: Style| { st.add_modifier = Modifier::empty(); st.sub_modifier = Modifier::empty(); st };
+    let style = plain(crate::draw::style_over(&opt("menu-style", "default"), base));
+    let selected = plain(crate::draw::style_over(&opt("menu-selected-style", "bg=yellow,fg=black"), base));
+    let border = plain(crate::draw::style_over(&opt("menu-border-style", "default"), style));
     let lines = opt("menu-border-lines", "single");
     let (tl, tr, bl, br, hz, vt, lj, rj) = box_set(&lines);
     let (w, h) = (m.width + 4, m.items.len() as u16 + 2);
@@ -220,7 +223,7 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
     }
 }
 
-fn app_preview_placeholder() -> String { String::new() }
+
 
 // ── the window ───────────────────────────────────────────────────────────────
 
@@ -362,7 +365,7 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
             let right = if width < 56 { String::new() } else { format!("{}{}", if many && width >= 70 { format!("{}  ", app.fleet.machine_name(m)) } else { String::new() }, ago(recency)) };
             let name_w = if width < 56 { (width as usize).saturating_sub(10).min(28) } else { 28 };
             // Widths are display widths: a CJK or emoji title keeps the columns straight.
-            let name = clip(&title, name_w);
+            let name = clip_middle(&title, name_w);
             let name = format!("{name}{}", " ".repeat(name_w.saturating_sub(name.width())));
             let detail_room = (width as usize).saturating_sub(name_w + right.width() + 12);
             let detail_text = clip(&detail.0, detail_room);
@@ -417,6 +420,10 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
 
 /// tmux's status line — or, while there is one, the prompt, question or message that takes it.
 fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> {
+    // A message replaces only message-line, leaving all other status-format rows visible.
+    status_formats(buf, app, rect);
+    let line = app.options.get("message-line", "", None).and_then(|n| n.parse::<u16>().ok()).unwrap_or(0).min(rect.height.saturating_sub(1));
+    let rect = Rect::new(rect.x, rect.y + line, rect.width, 1);
     // NO_COLOR (and no colours of your own): reverse video carries the status line and messages.
     let yellow = app.message_style();
     // (A prompt's completion menu keeps the prompt on the status line under it.)
@@ -430,6 +437,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
         _ => None,
     };
     if let Some((mut label, value, cursor, hint, command_mode)) = prompt_like {
+        app.status_ranges.retain(|(row, _)| *row != line);
         // status_prompt_redraw: the line in message-style (message-command-style in vi's command
         // mode), the prompt, then the text with the cursor's cell reversed — a reversed blank
         // after it at the end; scrolled to keep the cursor in view. The terminal's own cursor is
@@ -472,12 +480,17 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     }
     if let Some((text, _, at)) = &app.toast {
         if at.elapsed() < Duration::from_millis(app.toast_ms()) {
-            buf.set_style(rect, yellow);
+            app.status_ranges.retain(|(row, _)| *row != line);
+            for x in rect.x..rect.right() { if let Some(cell) = buf.cell_mut((x, rect.y)) { cell.reset(); cell.set_symbol(" "); cell.set_style(yellow); } }
             // Cut at the edge, as tmux's (no … in the last cell).
             buf.set_stringn(rect.x, rect.y, text, rect.width as usize, yellow);
             return None;
         }
     }
+    None
+}
+
+fn status_formats(buf: &mut Buffer, app: &mut App, rect: Rect) {
     let base = app.status_style();
     buf.set_style(rect, base);
     // Each line is its status-format, expanded and drawn as tmux's format_draw draws it: the
@@ -497,7 +510,6 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
         }
         for mut r in ranges { r.start += rect.x; r.end += rect.x; app.status_ranges.push((row, r)) }
     }
-    None
 }
 
 
@@ -679,7 +691,7 @@ fn sections(area: Rect, has_header: bool, prompt_top: bool, reverse: bool) -> (S
     let footer_shape = if o.footer.is_empty() { None } else { match o.footer_border.as_deref() { Some("line") | None => Some(if layout_reverse { "top".to_string() } else { "bottom".to_string() }), Some("none") => None, Some(s) => Some(s.to_string()) } };
     let lines = |s: &Option<String>| s.as_deref().map(|s| { let (t, _, b, _) = shape_sides(s); t as i64 + b as i64 }).unwrap_or(0);
     let has_header_window = has_header && (header_shape.is_some() || input_shape.is_some());
-    let has_input_window = input_shape.is_some() || has_header_window;
+    let has_input_window = !o.no_input && (input_shape.is_some() || has_header_window);
     let input_window_h = if no_separator_line() { 1 } else { 2 };
     let mut avail = area.height as i64;
     let input_h = if has_input_window { (lines(&input_shape) + input_window_h).clamp(0, avail) } else { 0 };
@@ -705,7 +717,8 @@ fn sections(area: Rect, has_header: bool, prompt_top: bool, reverse: bool) -> (S
     let inner = |b: Rect, shape: &Option<String>, shift: i64| {
         let (t, r, bo, l) = shape.as_deref().map(shape_sides).unwrap_or((false, false, false, false));
         let cols = if l { 2 } else { 0 } + if r { 2 } else { 0 };
-        let width = (b.width as i64 - cols - shift + r as i64).min(sec.list.width as i64);
+        let indent = (if list_shape.as_deref().is_some_and(|s| shape_sides(s).3) { 2i64 } else { 0 }).saturating_sub(if l { 2 } else { 0 }).max(0);
+        let width = (b.width as i64 - cols - shift + r as i64).min(sec.list.width as i64 + indent);
         rect(b.x as i64 + shift + if l { 2 } else { 0 }, b.y as i64 + t as i64, width, b.height as i64 - t as i64 - bo as i64)
     };
     let header_first = o.header_first;
@@ -742,17 +755,24 @@ fn sections(area: Rect, has_header: bool, prompt_top: bool, reverse: bool) -> (S
     (sec, [list_shape, input_shape, header_shape, footer_shape])
 }
 
-/// --info-command's output (its first line, escapes taken out), run again only when what it is
+/// --info-command's output (its first line, ANSI colours retained), run again only when what it is
 /// given changes.
-fn info_command(cmd: &str, info: &str, query: &str, matched: usize, total: usize) -> String {
+fn info_command(cmd: &str, info: &str, picker: &Picker, total: usize, area: Rect) -> String {
+    let query = &picker.query;
+    let matched = picker.matched_rows.len();
     thread_local! { static LAST: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) }; }
-    let key = format!("{cmd}\0{info}\0{query}\0{matched}\0{total}");
+    let key = format!("{cmd}\0{info}\0{query}\0{matched}\0{total}\0{:?}\0{:?}", picker.opened, (area, picker.cursor, theme::fzf_opts().raw, &theme::fzf().prompt_text));
     if let Some(out) = LAST.with(|l| l.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, o)| o.clone())) { return out }
-    let out = std::process::Command::new("sh").arg("-c").arg(cmd)
+    let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "sh".into());
+    let mut command = std::process::Command::new(shell);
+    if theme::fzf_opts().raw { command.env("FZF_RAW", if picker.is_match(picker.cursor) { "1" } else { "0" }); } else { command.env_remove("FZF_RAW"); }
+    let out = command.arg("-c").arg(cmd)
         .env("FZF_INFO", info).env("FZF_QUERY", query).env("FZF_MATCH_COUNT", matched.to_string()).env("FZF_TOTAL_COUNT", total.to_string())
+        .env("FZF_SELECT_COUNT", picker.marked.len().to_string()).env("FZF_POS", (picker.cursor + 1).min(picker.visible.len()).to_string())
+        .env("FZF_LINES", area.height.to_string()).env("FZF_COLUMNS", area.width.to_string())
+        .env("FZF_PROMPT", &theme::fzf().prompt_text).env("FZF_INPUT_STATE", if theme::fzf_opts().no_input { "hidden" } else { "enabled" })
         .stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output()
         .map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").to_string()).unwrap_or_default();
-    let out = crate::theme::strip_ansi(&out);
     LAST.with(|l| *l.borrow_mut() = Some((key, out.clone())));
     out
 }
@@ -780,7 +800,7 @@ fn section_indent(list: &Option<String>, own: &Option<String>) -> u16 {
 
 /// A section's box (LightWindow.drawBorder): its shape's sides in the pair, the column inside a
 /// left side in it too; its label on the top (or bottom) edge, centred.
-fn section_box(buf: &mut Buffer, b: Rect, shape: &str, st: Style, label: &str, label_style: Style) {
+fn section_box(buf: &mut Buffer, b: Rect, shape: &str, st: Style, label: &str, label_style: Style, label_pos: (i64, bool)) {
     if b.width < 2 || b.height == 0 { return }
     let (top_c, bottom_c, left_c, right_c, tl, tr, bl, br) = border_glyphs(shape);
     let (top, right, bottom, left) = shape_sides(shape);
@@ -796,8 +816,9 @@ fn section_box(buf: &mut Buffer, b: Rect, shape: &str, st: Style, label: &str, l
     if bottom && right { buf.set_string(x1, y1, br, st) }
     if label.is_empty() || !(top || bottom) { return }
     let (w, len) = (b.width as i64, theme::strip_ansi(label).width() as i64);
-    let col = ((w - len) / 2).max(0) as u16;
-    let row = if top { b.y } else { y1 };
+    let (column, at_bottom) = label_pos;
+    let col = match column { 0 => (w - len) / 2, n if n < 0 => w + n + 1 - len, n => (n - 1).min(w - len) }.max(0) as u16;
+    let row = if at_bottom || !top { y1 } else { b.y };
     put_ansi(buf, b.x + col, row, label, label_style, b.width.saturating_sub(col) as usize);
 }
 
@@ -931,7 +952,7 @@ fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
 /// fzf 0.67's default layout, measured: rows bottom-up (best nearest the prompt), `▌` gutter
 /// (236; the current row's in 161 on 236), matches in 108 (151 on the current row), the info line
 /// `  4/7 ───` (144, separator 59), the prompt `> ` (110). Returns where the cursor goes.
-fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: &str) -> Position {
+fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, search_busy: bool) -> Position {
     let frame = fzf_frame(body, picker);
     picker.screen_area.set(frame.screen);
     // (A --height list is drawn over the panes: its rows are its own.)
@@ -978,16 +999,17 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let sectioned = sec.list_box.is_some() || sec.input.is_some() || sec.header.is_some() || sec.footer.is_some();
     if sectioned {
         // Each section's box and label in its own colours (list-border, input-label …).
-        if let (Some(b), Some(sh)) = (sec.list_box, &shapes[0]) { section_box(buf, b, sh, pal.list_border.style(), &o.list_label, pal.list_label.style()) }
-        if let (Some(b), Some(sh)) = (sec.input_box, &shapes[1]) { section_box(buf, b, sh, pal.input_border.style(), &o.input_label, pal.input_label.style()) }
-        if let (Some(b), Some(sh)) = (sec.header_box, &shapes[2]) { section_box(buf, b, sh, pal.header_border.style(), &o.header_label, pal.header_label.style()) }
-        if let (Some(b), Some(sh)) = (sec.footer_box, &shapes[3]) { section_box(buf, b, sh, pal.footer_border.style(), &o.footer_label, pal.footer_label.style()) }
+        if let (Some(b), Some(sh)) = (sec.list_box, &shapes[0]) { section_box(buf, b, sh, pal.list_border.style(), &o.list_label, pal.list_label.style(), o.list_label_pos) }
+        if let (Some(b), Some(sh)) = (sec.input_box, &shapes[1]) { section_box(buf, b, sh, pal.input_border.style(), &o.input_label, pal.input_label.style(), o.input_label_pos) }
+        if let (Some(b), Some(sh)) = (sec.header_box, &shapes[2]) { section_box(buf, b, sh, pal.header_border.style(), &o.header_label, pal.header_label.style(), o.header_label_pos) }
+        if let (Some(b), Some(sh)) = (sec.footer_box, &shapes[3]) { section_box(buf, b, sh, pal.footer_border.style(), &o.footer_label, pal.footer_label.style(), o.footer_label_pos) }
         // The footer's lines indented as the header's (headerIndentImpl), in the footer's colour,
         // their ANSI colours read (fzf reads a footer's even without --ansi).
         let footer_indent = section_indent(&shapes[0], &shapes[3]);
         if let Some(f) = sec.footer { for (i, l) in o.footer.iter().enumerate().take(f.height as usize) { put_ansi(buf, f.x + footer_indent, f.y + i as u16, l, pal.footer.style(), f.width.saturating_sub(footer_indent) as usize); } }
     }
     let area = if sectioned { sec.list } else { area };
+    picker.list_area.set(area);
     let width = area.width as usize;
     let bottom = area.y + area.height;
     let in_input = sec.input.filter(|_| sectioned);
@@ -1030,11 +1052,11 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let pchars: Vec<(char, Style)> = pline.spans.iter().flat_map(|sp| sp.content.chars().map(|c| (c, sp.style)).collect::<Vec<_>>()).collect();
     let plain: String = pchars.iter().map(|c| c.0).collect();
     let blank_from = plain.trim_end_matches([' ', '\t', '\n', '\x0c', '\r']).len();
-    let clear = theme::fzfcolor::P { attr: 0, ..pal.prompt }.style();
+    let blank_from = if blank_from < plain.len() { pchars.iter().rposition(|(_, st)| *st != Style::default()).map(|i| i + 1).unwrap_or(blank_from) } else { blank_from };
     let mut pw = 0u16;
     for (i, (c, own)) in pchars.iter().enumerate() {
-        let base = if i >= blank_from && i < plain.len() { clear } else { prompt };
-        let st = if *own == Style::default() { base } else { base.patch(*own) };
+        let base = if i >= blank_from && i < plain.len() && *own == Style::default() { theme::fzfcolor::P { attr: 0, ..pal.prompt } } else { pal.prompt };
+        let st = theme::fzfcolor::ansi(theme::fzfcolor::own(*own), base, pal.colored).style();
         let w = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
         pbuf.set_string(ia.x + pw, prompt_y, c.to_string(), st);
         pw += w as u16;
@@ -1082,7 +1104,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let cursor = Position::new(ia.x + pw + before_w as u16, prompt_y);
     picker.prompt_at.set((prompt_y, ia.x + pw));
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
-    let mut count = format!("{}/{}", picker.visible.len(), total);
+    let mut count = format!("{}/{}", picker.matched_rows.len(), total);
     // A toggle-sort binding: whether it sorts (+S) or not (-S), as fzf's info says.
     if theme::fzf_opts().binds.iter().any(|(_, a)| a.split('+').any(|x| x == "toggle-sort")) { count.push_str(if o_sorts(picker) { " +S" } else { " -S" }) }
     // --track: +T.
@@ -1096,7 +1118,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // (RepeatToFill) after a blank in its pair; the last column left blank. A list still loading
     // spins in the spinner's pair where fzf's does, and gives an info prefix that pair too.
     let (info_style, sep_style, spin_style) = (pal.info.style(), pal.separator.style(), pal.spinner.style());
-    let reading = picker.busy.is_some();
+    let reading = picker.busy.is_some() || matches!(kind, PickerKind::Open { .. }) && search_busy;
     // fzf's makeSpinner (ASCII under --no-unicode).
     const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     const ASCII_SPINNER: [&str; 8] = ["-", "\\", "|", "/", "-", "\\", "|", "/"];
@@ -1123,8 +1145,22 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     };
     // --info-command: its output in place of the count (run as fzf runs it: at once, when what it
     // is told changes — $FZF_INFO, the query, the counts).
-    let count = match o.info_command.as_deref() { Some(cmd) => info_command(cmd, &count, &picker.query, picker.visible.len(), total), None => count };
-    let len = count.width() as i32;
+    let count = match o.info_command.as_deref() { Some(cmd) => info_command(cmd, &count, picker, total, frame.inner), None => count };
+    let len = theme::strip_ansi(&count).width() as i32;
+    let count_print = |pbuf: &mut Buffer, x: i32, y: u16, max: i32| -> i32 {
+        let max = max.max(0) as usize;
+        if x < 0 || x >= w || max == 0 { return 0 }
+        if o.info_command.is_some() {
+            if count.contains(['\x1b', '\t']) { return put_ansi(pbuf, ia.x + x as u16, y, &count, info_style, max) as i32 }
+            let output = if count.width() > max { let ell = trim_right(&o.ellipsis, max as i32); trim_right(&count, max as i32 - ell.width() as i32) + &ell } else { count.clone() };
+            put(pbuf, x, y, &output, info_style);
+            output.width() as i32
+        } else {
+            let output = trim_message(&count, max as i32);
+            put(pbuf, x, y, &output, info_style);
+            output.width() as i32
+        }
+    };
     if w > 1 {
         match mode {
             // Hidden: no count, but the rule keeps its line (only --no-separator takes it away).
@@ -1133,9 +1169,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
             "inline" => {
                 let pos = prefix(pbuf, pw as i32 + shift, info_y);
                 let max = w - pos - 1;
-                let out = trim_message(&count, max);
-                put(pbuf, pos, info_y, &out, info_style);
-                let (mut x, mut len) = (pos + out.width() as i32, len);
+                let printed = count_print(pbuf, pos, info_y, max);
+                let (mut x, mut len) = (pos + printed, len);
                 if len < max - 1 && reading { put(pbuf, x + 1, info_y, spinner, spin_style); x += 2; len += 2 }
                 let fill = max - len - 1;
                 if fill > 0 { put(pbuf, x, info_y, " ", sep_style); bar(pbuf, x + 1, info_y, fill) }
@@ -1151,29 +1186,28 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
                 } else {
                     pos = prefix(pbuf, pos.max(w - len - o.info_prefix.width() as i32 - 1), prompt_y);
                 }
-                put(pbuf, pos, prompt_y, &trim_message(&count, w - pos - 1), info_style);
+                count_print(pbuf, pos, prompt_y, w - pos - 1);
                 bar(pbuf, 0, info_y, w - 1);
             }
             // `──────── 3/6 (0) `: the rule from the first column (the spinner after it), the count.
             "right" => {
-                let out = trim_message(&count, w - 1 - if reading { 2 } else { 0 });
-                let fill = w - out.len() as i32 - 2;
+                let max = w - 1 - if reading { 2 } else { 0 };
+                let fill = w - if o.info_command.is_some() { len } else { trim_message(&count, max).len() as i32 } - 2;
                 let mut x = 0;
                 if reading {
                     if fill >= 2 { bar(pbuf, 0, info_y, fill - 2); x = fill - 1 }
                     put(pbuf, x, info_y, spinner, spin_style);
                     x += 2;
                 } else if fill >= 0 { bar(pbuf, 0, info_y, fill); x = fill + 1 }
-                put(pbuf, x, info_y, &out, info_style);
+                count_print(pbuf, x, info_y, if o.info_command.is_some() { max - 1 } else { max });
             }
             // `⠋ 3/6 (0) ────`: the spinner's cell, a margin, the count, a blank, the rule.
             _ => {
                 if reading { put(pbuf, 0, info_y, spinner, spin_style) }
                 let max = w - 3;
-                let out = trim_message(&count, max);
-                put(pbuf, 2, info_y, &out, info_style);
+                let printed = count_print(pbuf, 2, info_y, max);
                 let fill = max - len - 1;
-                if fill > 0 { let x = 2 + out.width() as i32; put(pbuf, x, info_y, " ", sep_style); bar(pbuf, x + 1, info_y, fill) }
+                if fill > 0 { let x = 2 + printed; put(pbuf, x, info_y, " ", sep_style); bar(pbuf, x + 1, info_y, fill) }
             }
         }
     }
@@ -1182,12 +1216,12 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         let fx = (ia.x + ia.width).saturating_sub(text.width() as u16 + 1);
         buf.set_string(fx, info_y, &text, Style::default().fg(Color::Black).bg(Color::Yellow));
     }
-    let header_y = if !o.no_input { header_y } else if prompt_top { area.y } else { bottom.saturating_sub(1) };
+    let header_y = if !o.no_input || in_header.is_some() { header_y } else if prompt_top { area.y } else { bottom.saturating_sub(1) };
     if let Some(h) = &header { let (hx, hw) = in_header.map(|r| (r.x, r.width)).unwrap_or((area.x, area.width)); buf.set_line(hx, header_y, h, hw); }
     // The list: bottom-up (default), or top-down — under the prompt (reverse) or from the top
     // with the prompt below (reverse-list).
     let (list_top, list_bottom) = if o.no_input {
-        if prompt_top { (area.y + header.is_some() as u16, bottom) } else { (area.y, bottom - header.is_some() as u16) }
+        if prompt_top { (area.y + (header.is_some() && in_header.is_none()) as u16, bottom) } else { (area.y, bottom - (header.is_some() && in_header.is_none()) as u16) }
     } else if in_input.is_some() { (area.y, bottom) } else if prompt_top { (if header.is_some() && !header_first { header_y + 1 } else { edge + 1 }, bottom) } else { (area.y, if header.is_some() && !header_first { header_y } else { edge }) };
     picker.page_rows.set(list_bottom.saturating_sub(list_top).max(1) as i64);
     // The box's rows: the prompt's side through the rows' (the list's rows are added as drawn).
@@ -1305,10 +1339,11 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
     // --highlight-line fills the rest of the current, a marked or a striped row (postTask).
     if o.highlight_line && (current || marked || alt) {
-        let fill = if current { base_style } else if alt { pal.selected.with_bg(pal.alt_bg).style() } else { pal.selected.style() };
+        let fill = if current { pal.current.style() } else if alt { pal.selected.with_bg(theme::fzfcolor::CA { col: base.bg, attr: pal.alt_bg.attr }).style() } else { pal.selected.style() };
         spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), fill));
     }
-    buf.set_line(x + gutter_width(), y, &Line::from(spans), text_w as u16);
+    let jump_extra = (pointer_w() == 0 && picker.jumping.is_some() && vi.saturating_sub(picker.scroll) < theme::fzf_opts().jump_labels.chars().count()) as u16;
+    buf.set_line(x + gutter_width() + jump_extra, y, &Line::from(spans), text_w as u16);
 }
 
 /// Where the right column lines up: after the widest line of the list — all of it, not only what
@@ -1331,16 +1366,16 @@ fn row_gutter(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, mark
     let marked = picker.marked.contains(&row.id);
     let z = theme::fzf();
     let pal = z.pal;
-    let pw = pointer_w();
     // Jump mode: each row shown its label where the pointer goes, in the pointer's colours.
     let slot = vi.saturating_sub(picker.scroll);
     let jump_label = picker.jumping.and_then(|_| theme::fzf_opts().jump_labels.chars().nth(slot));
+    let pw = pointer_w().max(jump_label.is_some() as usize);
     if let (Some(l), true) = (jump_label, pw > 0) { buf.set_string(x, y, format!("{:<pw$}", l), if current { pal.current_cursor.style() } else { pal.cursor.style() }) }
-    else if pw > 0 && current { buf.set_string(x, y, format!("{:<pw$}", z.pointer_char), pal.current_cursor.style()) }
+    else if pw > 0 && current && picker.jumping.is_none() { buf.set_string(x, y, format!("{:<pw$}", z.pointer_char), pal.current_cursor.style()) }
     else if pw > 0 {
         // The gutter: --gutter's character, `▌`, or under --no-unicode a blank in reverse.
         let o = theme::fzf_opts();
-        let (gutter, st) = match &o.gutter { Some(g) => (g.as_str(), pal.cursor_empty_char), None if o.unicode => ("▌", pal.cursor_empty_char), None => (" ", pal.cursor_empty) };
+        let (gutter, st) = if o.raw { (o.gutter_raw.as_deref().unwrap_or(if o.unicode { "▖" } else { ":" }), pal.cursor_empty_char) } else { match &o.gutter { Some(g) => (g.as_str(), pal.cursor_empty_char), None if o.unicode => ("▌", pal.cursor_empty_char), None => (" ", pal.cursor_empty) } };
         buf.set_string(x, y, format!("{:<pw$}", gutter), st.style())
     }
     let mw = marker_w();
@@ -1364,6 +1399,7 @@ fn row_gutter(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, mark
         (if undefined { slot % 2 == 0 } else { slot % 2 == 1 }, if undefined { theme::fzfcolor::CA { col: pal.current.bg, attr: 0 } } else { pal.alt_bg })
     } else { (!(marked && pal.selected.bg != pal.normal.bg) && !undefined && slot % 2 == 1, pal.alt_bg) };
     let (base, matched) = if alt && !current { (base.with_bg(alt_bg), matched.with_bg(alt_bg)) } else { (base, matched) };
+    let base = if picker.is_match(vi) { base } else { base.with_fg(pal.nomatch) };
     (base, matched, current, marked, alt)
 }
 
@@ -1692,10 +1728,11 @@ fn fzf_row_part(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, te
     if theme::fzf_opts().highlight_line && (current || marked || alt) {
         let pal = z.pal;
         let used: usize = spans.iter().map(|s| s.content.width()).sum();
-        let fill = if current { base.style() } else if alt { pal.selected.with_bg(pal.alt_bg).style() } else { pal.selected.style() };
+        let fill = if current { pal.current.style() } else if alt { pal.selected.with_bg(theme::fzfcolor::CA { col: base.bg, attr: pal.alt_bg.attr }).style() } else { pal.selected.style() };
         spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), fill));
     }
-    buf.set_line(x + gutter_width(), y, &Line::from(spans), text_w as u16);
+    let jump_extra = (pointer_w() == 0 && picker.jumping.is_some() && vi.saturating_sub(picker.scroll) < theme::fzf_opts().jump_labels.chars().count()) as u16;
+    buf.set_line(x + gutter_width() + jump_extra, y, &Line::from(spans), text_w as u16);
 }
 
 /// fzf's trimRight: as much of [s] as fits in [limit] columns.
@@ -1784,11 +1821,10 @@ fn hscroll(cells: Vec<Cell>, room: usize, ellipsis: &str, scroll: bool, scroll_o
     if w(&cells[maxe..]) > ew { cells.truncate(maxe); cells.extend(ell.iter().map(plain)) }
     // Trim from the left until it fits beside the leading ellipsis.
     let width = room.saturating_sub(ew);
-    let widths = cell_widths(&cells);
-    let mut current: usize = widths.iter().sum();
-    let mut from = 0;
-    // (A cluster's marks go with it.)
-    while (current > width || widths.get(from) == Some(&0)) && from < cells.len() { current -= widths[from]; from += 1 }
+    // fzf's trimLeft first drops len-width runes, then measures what remains. Keep that
+    // initial cut even for zero-width marks: it determines the reference tool's scroll offset.
+    let mut from = cells.len().saturating_sub(room);
+    while from < cells.len() && w(&cells[from..]) > width { from += 1 }
     let mut out: Vec<Cell> = ell.iter().map(plain).collect();
     out.extend(cells[from..].iter().cloned());
     out
@@ -2235,6 +2271,28 @@ fn clock(buf: &mut Buffer, app: &App, rect: Rect) {
     }
 }
 
+/// Keep a distinguishing suffix, such as "(3)", visible when a home title is long.
+fn clip_middle(text: &str, cols: usize) -> String {
+    use unicode_segmentation::UnicodeSegmentation;
+    if text.width() <= cols { return text.to_string() }
+    if cols == 0 { return String::new() }
+    let left_room = cols / 2;
+    let right_room = cols - 1 - left_room;
+    let mut left = String::new();
+    for g in text.graphemes(true) {
+        if left.width() + g.width() > left_room { break }
+        left.push_str(g);
+    }
+    let mut right = Vec::new();
+    let mut width = 0;
+    for g in text.graphemes(true).rev() {
+        if width + g.width() > right_room { break }
+        right.push(g);
+        width += g.width();
+    }
+    format!("{}…{}", left.trim_end(), right.into_iter().rev().collect::<String>().trim_start())
+}
+
 fn clip(text: &str, cols: usize) -> String {
     if text.width() <= cols { return text.to_string() }
     if cols == 0 { return String::new() }
@@ -2356,12 +2414,6 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
                 let mut s = String::with_capacity(8);
                 s.push(cell.c);
                 s.extend(extra.iter());
-                // A narrow character with VS16 (⚠️ ✔️ ❤️): one cell in the pane's grid, as the
-                // program's terminal placed what follows — drawn as its one-cell self, so the
-                // cell after it (a space, a pane's border) is not taken by a two-cell emoji.
-                if s.contains('\u{FE0F}') && unicode_width::UnicodeWidthChar::width(cell.c) == Some(1) && !cell.flags.contains(Flags::WIDE_CHAR) {
-                    s.retain(|c| c != '\u{FE0F}');
-                }
                 target.set_symbol(&s).set_style(style);
             }
             _ => { target.set_char(cell.c).set_style(style); }
@@ -2454,7 +2506,7 @@ mod fzf_list_tests {
     fn screen(p: &mut Picker) -> String {
         let area = Rect::new(0, 0, 40, 10);
         let mut buf = Buffer::empty(area);
-        fzf(&mut buf, area, p, &PickerKind::Output { title: String::new(), lines: vec![] }, "");
+        fzf(&mut buf, area, p, &PickerKind::Output { title: String::new(), lines: vec![] }, false);
         (0..area.height).map(|y| (0..area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
     }
 

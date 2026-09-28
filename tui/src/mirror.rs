@@ -18,7 +18,7 @@ use crate::layout::Node;
 /// Session [name]'s row in the sessions file, read now.
 /// Session [id]'s row (its $N is kept wherever it goes, whatever it is named now), else by
 /// [name] (a row from before ids were kept).
-fn row_of(id: u32, name: &str) -> Option<Value> {
+pub fn row_of(id: u32, name: &str) -> Option<Value> {
     let doc = read_sessions(&crate::app::sessions_path(None));
     let rows = doc["sessions"].as_array()?;
     let live = |r: &&Value| !r.get("desk").and_then(Value::as_bool).unwrap_or(false);
@@ -34,7 +34,7 @@ fn me() -> String { crate::ipc::here().map(|p| p.display().to_string()).unwrap_o
 
 /// Tell the owner this client shows its session [id] (or, [add] false, no longer does).
 fn register(owner: &str, id: u32, add: bool) {
-    let words: Vec<String> = if add { vec!["hn-mirror".into(), "-a".into(), me(), "-t".into(), format!("${id}")] } else { vec!["hn-mirror".into(), "-d".into(), me()] };
+    let words: Vec<String> = if add { vec!["hn-mirror".into(), "-a".into(), me(), "-t".into(), format!("${id}"), "-c".into(), crate::app::tty_name()] } else { vec!["hn-mirror".into(), "-d".into(), me(), "-t".into(), format!("${id}")] };
     let owner = std::path::PathBuf::from(owner);
     tokio::spawn(async move { crate::ipc::notify(&owner, &words).await });
 }
@@ -86,6 +86,7 @@ fn fill(app: &mut App, stash: &mut Stash, row: &Value, mut old: Vec<Tab>, size: 
         tab.order = ids.clone();
         tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
         tab.zoomed = win.get("zoomed").and_then(Value::as_bool).unwrap_or(false) && ids.len() > 1;
+        tab.alerts = win.get("alerts").and_then(Value::as_u64).unwrap_or(0) as u8;
         app.take_window_options(&mut tab, &win);
         if let Some(n) = win.get("num").and_then(Value::as_u64) { nums.insert(tab.id.clone(), n as usize); }
         tabs.push(tab);
@@ -152,6 +153,10 @@ fn rebuild(app: &mut App, row: &Value) {
     app.lastw = stash.lastw;
     app.options.session = crate::app::options_from(row);
     app.session_env = crate::app::env_from(row);
+    app.session_group = row.get("group").and_then(Value::as_str).map(str::to_string);
+    app.session_path = row.get("path").and_then(Value::as_str).map(str::to_string);
+    app.session_activity = row.get("activity").and_then(Value::as_i64).unwrap_or(app.session_activity);
+    app.session_last_attached = row.get("last_attached").and_then(Value::as_i64).unwrap_or(app.session_last_attached);
     // Its clients: the owner (when it shows it) and every one showing it as it has it.
     app.mirror_attached = row.get("front").and_then(Value::as_bool).unwrap_or(false) as u32 + row.get("mirrors").and_then(Value::as_u64).unwrap_or(1) as u32;
     // What the owner did is the owner's to hook: nothing fires here for it.

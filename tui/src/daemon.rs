@@ -80,16 +80,40 @@ impl Link {
             let mut selected = false;
             let select_deadline = tokio::time::sleep(Duration::from_secs(25));
             tokio::pin!(select_deadline);
+            // The WebSocket can remain open when its daemon is hung. Require a pong to a
+            // ping we sent, even when no RPC or terminal output is expected.
+            let mut heartbeat = tokio::time::interval(Duration::from_secs(5));
+            let mut ping: Option<(tokio::time::Instant, Vec<u8>)> = None;
+            let mut ping_id = 0u64;
             loop {
                 tokio::select! {
                     _ = &mut select_deadline, if !selected => {
                         emit(MachineEvent::Failed(RpcError::new("TIMEOUT", "the machine did not answer in time")));
                         return;
                     }
+                    _ = heartbeat.tick(), if selected => {
+                        if ping.as_ref().is_some_and(|(at, _)| at.elapsed() >= Duration::from_secs(10)) {
+                            emit(MachineEvent::Closed(RpcError::new("HEARTBEAT_TIMEOUT", "the daemon stopped answering")));
+                            break;
+                        }
+                        if ping.is_none() {
+                            ping_id += 1;
+                            let bytes = ping_id.to_be_bytes().to_vec();
+                            ping = Some((tokio::time::Instant::now(), bytes.clone()));
+                            if !matches!(tokio::time::timeout(Duration::from_secs(5), write.send(Message::Ping(bytes.into()))).await, Ok(Ok(()))) {
+                                emit(MachineEvent::Closed(RpcError::new("HEARTBEAT_TIMEOUT", "the daemon stopped answering")));
+                                break;
+                            }
+                        }
+                    }
                     out = rx.recv() => {
                         let Some(out) = out else { let _ = write.close().await; return };
                         let message = match out { Out::Text(text) => Message::text(text), Out::Binary(bytes) => Message::binary(bytes) };
-                        if write.send(message).await.is_err() { break }
+                        if !matches!(tokio::time::timeout(Duration::from_secs(10), write.send(message)).await, Ok(Ok(()))) {
+                            let error = RpcError::new("DISCONNECTED", "could not write to the daemon");
+                            if selected { emit(MachineEvent::Closed(error)) } else { emit(MachineEvent::Failed(error)) }
+                            break;
+                        }
                     }
                     incoming = read.next() => {
                         let Some(Ok(message)) = incoming else {
@@ -134,6 +158,9 @@ impl Link {
                                     if let Some((_, reply)) = waiter { let _ = reply.send((ty, payload)); continue }
                                 }
                                 emit(MachineEvent::Frame { ty, payload });
+                            }
+                            Message::Pong(bytes) => {
+                                if ping.as_ref().is_some_and(|(_, sent)| sent.as_slice() == bytes.as_ref()) { ping = None }
                             }
                             Message::Close(frame) => {
                                 let (code, reason) = frame.map(|f| (f.code, f.reason.to_string())).unwrap_or((CloseCode::Normal, String::new()));

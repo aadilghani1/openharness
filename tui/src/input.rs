@@ -89,7 +89,14 @@ fn on_key(app: &mut App, key: KeyEvent) {
             return;
         }
     }
-    // After the prefix: the prefix table.
+    // tmux checks prefix-timeout when the next key arrives (the idle prefix stays shown).
+    let timeout = app.options.server.get("prefix-timeout").and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+    if app.prefix && timeout > 0 && app.prefix_at.is_some_and(|at| at.elapsed() > Duration::from_millis(timeout)) {
+        app.prefix = false;
+        app.prefix_at = None;
+        app.status_redraws += 1;
+    }
+    // After the prefix: the prefix table, then a root binding if this key has none there.
     if app.prefix {
         app.prefix = false;
         app.status_redraws += 1;
@@ -101,7 +108,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
             app.prefix_at = Some(std::time::Instant::now());
             return;
         }
-        if let Some(binding) = app.keymap.prefix_command(&chord).cloned() {
+        if let Some(binding) = app.keymap.prefix_command(&chord).or_else(|| app.keymap.root_command(&chord)).cloned() {
             // A list or view on screen gives way to the command, as tmux's choose modes do.
             if matches!(app.modal, Some(Modal::DisplayPanes { .. }) | Some(Modal::Picker { .. })) { app.modal = None }
             app.repeat_until = binding.repeat.then(|| Instant::now() + Duration::from_millis(app.keymap.repeat_ms));
@@ -160,10 +167,11 @@ fn on_key(app: &mut App, key: KeyEvent) {
         if let Some(binding) = app.keymap.root_command(&chord).cloned() { app.status_redraws += 1; commands::execute_bound(app, &binding.command); return }
     }
     if app.modal.is_some() { modal_key(app, key); return }
+    if app.tab().home { home_key(app, key); return }
     // A shell is on its way (split-window, new-window): what is typed meanwhile is its.
-    if let Some(buffer) = app.starting_shell.as_mut() {
+    if let Some(buffer) = app.shell_inputs.get(&app.tab().id) {
         let key = if key.code == KeyCode::Enter { KeyEvent::new(key.code, key.modifiers - KeyModifiers::SHIFT) } else { key };
-        if let Some(bytes) = encode_key(&key, alacritty_terminal::term::TermMode::empty()) { buffer.push(bytes); return }
+        if let Some(bytes) = encode_key(&key, alacritty_terminal::term::TermMode::empty()) { buffer.lock().unwrap().push(bytes); return }
     }
     let Some(focus) = app.focused() else { home_key(app, key); return };
     // Clock mode: any key that reaches the pane ends it (window_clock_key), and goes no further.
@@ -235,6 +243,8 @@ pub fn send_to_pane(app: &mut App, focus: u64, bytes: Vec<u8>) {
 fn on_paste(app: &mut App, text: String) {
     if let Some(Modal::Picker { picker, .. }) = &mut app.modal { for c in text.chars().filter(|c| !c.is_control()) { picker.type_char(c) } return }
     if let Some(Modal::Prompt(prompt)) = &mut app.modal { prompt.value.push_str(&text.replace(['\r', '\n'], " ")); return }
+    app.tab_mut().home = false;
+    if let Some(buffer) = app.shell_inputs.get(&app.tab().id) { buffer.lock().unwrap().push(text.into_bytes()); return }
     let Some(focus) = app.focused() else { return };
     let live = app.panes.get(&focus).map(|p| p.stream.is_some() && !p.read_only).unwrap_or(false);
     if live { app.send_paste(focus, &text) }
@@ -262,7 +272,7 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
     let in_preview = preview.map(|(r, _)| inside(r)).unwrap_or(false);
     // Shift with a click or the wheel marks as it goes (fzf's shift-left-click, shift-scroll).
     let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
-    let multi = matches!(&app.modal, Some(Modal::Picker { kind: PickerKind::Open { .. } | PickerKind::Inbox, picker }) if crate::picker::scope_of(&picker.query).is_none());
+    let multi = matches!(&app.modal, Some(Modal::Picker { kind, picker }) if picker.multi_override.map(|n| n > 0).unwrap_or((matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) || theme::fzf_opts().multi) && crate::picker::scope_of(&picker.query).is_none()));
     match mouse.kind {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
             let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
@@ -297,8 +307,7 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
         // fzf's right click: the row under it, then toggle (a mark, in a list that takes marks).
         MouseEventKind::Down(MouseButton::Right) if !inside(list) => {}
         MouseEventKind::Down(MouseButton::Right) => {
-            if let Some(Modal::Picker { kind, picker }) = &mut app.modal {
-                let multi = matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) && crate::picker::scope_of(&picker.query).is_none();
+            if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
                 if picker.click(mouse.row) && multi { picker.toggle_mark(); }
             }
         }
@@ -319,7 +328,7 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
                 }
                 return;
             }
-            let hit = match &mut app.modal { Some(Modal::Picker { picker, .. }) if inside(list) || mouse.column >= list.x && mouse.column < list.x + list.width => Some(picker.click(mouse.row)), Some(Modal::Picker { .. }) => Some(false), _ => None };
+            let hit = match &mut app.modal { Some(Modal::Picker { picker, .. }) if inside(list) => Some(picker.click(mouse.row)), Some(Modal::Picker { .. }) => Some(false), _ => None };
             match hit {
                 Some(true) if shift => { if multi { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.toggle_mark(); } } }
                 Some(true) => {
@@ -455,7 +464,7 @@ pub fn home_rows(app: &App) -> Vec<HomeRow> {
 /// named for its title — in the window here when it is empty (else a new one). Its machine says
 /// why when it will not (open elsewhere, already a harness, its folder gone).
 pub fn resume_external(app: &mut App, x: &crate::app::External) {
-    let placement = if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab };
+    let placement = if app.tab().home { Placement::Replace } else if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab };
     resume_external_as(app, x, placement)
 }
 
@@ -504,10 +513,16 @@ fn home_key(app: &mut App, key: KeyEvent) {
         // Anything else is typed into a shell made here, as after tmux's C-b c: in the machine and
         // folder of the pane you came from, what you type (`claude⏎`, `git status⏎`) its.
         _ => {
+            if app.tab().home && (app.focused().is_some() || app.shell_inputs.contains_key(&app.tab().id)) {
+                app.tab_mut().home = false;
+                app.home_from = None;
+                on_key(app, key);
+                return;
+            }
             let Some(bytes) = crate::pane::encode_key(&key, alacritty_terminal::term::TermMode::empty()) else { return };
             let from = app.home_from.take();
             new_shell_from(app, from, Placement::Auto(None), None, None);
-            if let Some(buffer) = app.starting_shell.as_mut() { buffer.push(bytes) }
+            if let Some(buffer) = app.shell_inputs.get(&app.tab().id) { buffer.lock().unwrap().push(bytes) }
         }
     }
 }
@@ -740,7 +755,7 @@ pub fn launch(app: &mut App, prefix: &str, filter: Filter) {
     }
     let kind = match prefix { "" => PickerKind::Open { filter, machine: None, project: None }, p => modal::launcher_kind(p, &PickerKind::Palette) };
     // C-b s reads afresh each time it opens: what was said, and the sessions' latest turns.
-    if matches!(kind, PickerKind::Open { .. }) { app.said.clear(); app.said_for.clear(); app.said_want.clear(); app.said_due = None; app.tails.clear(); app.tails_asked.clear() }
+    if matches!(kind, PickerKind::Open { .. }) { app.said.clear(); app.said_for.clear(); app.said_want.clear(); app.said_due = None; app.said_pending = 0; app.said_generation = app.said_generation.wrapping_add(1); app.tails.clear(); app.tails_asked.clear() }
     let (title, placeholder) = modal::launcher_title(app, &kind);
     let mut picker = Picker::new(title, placeholder);
     picker.prefixed = true;
@@ -1057,9 +1072,11 @@ pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cw
     // `sh -c` takes the whole command line (`echo hi; read x`), as tmux runs it.
     let quoted = |c: &str| format!("'{}'", c.replace('\'', "'\\''"));
     let line = command.map(|c| if close_on_exit { format!(" clear; exec sh -c {}\r", quoted(&c)) } else { format!(" clear; sh -c {}\r", quoted(&c)) });
-    app.starting_shell = Some(line.map(|l| vec![l.into_bytes()]).unwrap_or_default());
+    let buffered = std::sync::Arc::new(std::sync::Mutex::new(line.map(|l| vec![l.into_bytes()]).unwrap_or_default()));
+    app.starting_shell = Some(buffered.clone());
+    app.shell_inputs.insert(app.tab().id.clone(), buffered.clone());
     app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(60)).await }, move |app, reply| {
-        let typed = app.starting_shell.take().unwrap_or_default();
+        let typed = take_shell_input(app, &buffered);
         let Ok(reply) = reply else { app.say("Could not start the popup", theme::DANGER); return };
         let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) else { return };
         app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
@@ -1131,7 +1148,10 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
     // goes when it ends (it was typed into the shell, which stayed, and into its history — the
     // leading blank keeps it out of a history that ignores those).
     let quoted = |c: &str| format!("'{}'", c.replace('\'', "'\\''"));
-    app.starting_shell = Some(command.map(|c| vec![format!(" clear; exec \"${{SHELL:-sh}}\" -c {}\r", quoted(&c)).into_bytes()]).unwrap_or_default());
+    let buffered = std::sync::Arc::new(std::sync::Mutex::new(command.map(|c| vec![format!(" clear; exec \"${{SHELL:-sh}}\" -c {}\r", quoted(&c)).into_bytes()]).unwrap_or_default()));
+    app.starting_shell = Some(buffered.clone());
+    let tab = match &placement { Placement::Fill(id) => id.clone(), Placement::At(at) => at.tab.clone(), _ => app.tab().id.clone() };
+    app.shell_inputs.insert(tab, buffered.clone());
     // The session it was asked for in (a command's `-t work:` puts another in front for a moment):
     // where it goes when it comes, in front again for as long as that takes.
     // (A window's own: the session that has it — new -d's new session is not the one in front.)
@@ -1144,26 +1164,35 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
             let back = app.session_id;
             app.swap_back = Some(back);
             app.swap_session(session);
-            shell_made(app, machine, placement, reply);
+            shell_made(app, machine, placement, reply, &buffered);
             app.swap_back = None;
             app.swap_session(back);
             app.fit_panes();
             app.save_sessions();
             return;
         }
-        shell_made(app, machine, placement, reply);
+        shell_made(app, machine, placement, reply, &buffered);
     });
 }
 
 /// A shell the machine made (agent_create's reply): into its place.
-fn shell_made(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>) {
-    shell_placed(app, machine, placement, reply);
-    // What waited for it (the rest of a chain) goes on, its pane there — or not, if it failed.
-    for tx in std::mem::take(&mut app.shell_waiters) { let _ = tx.send(()); }
+fn take_shell_input(app: &mut App, buffered: &crate::app::ShellInput) -> Vec<Vec<u8>> {
+    if app.starting_shell.as_ref().is_some_and(|current| std::sync::Arc::ptr_eq(current, buffered)) { app.starting_shell = None }
+    app.shell_inputs.retain(|_, current| !std::sync::Arc::ptr_eq(current, buffered));
+    std::mem::take(&mut *buffered.lock().unwrap())
 }
 
-fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>) {
-        let typed = app.starting_shell.take().unwrap_or_default();
+fn shell_made(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>, buffered: &crate::app::ShellInput) {
+    let typed = take_shell_input(app, buffered);
+    shell_placed(app, machine, placement, reply, typed);
+    // Release only the commands waiting for this shell; another request may still be pending.
+    for (request, tx) in std::mem::take(&mut app.shell_waiters) {
+        if std::sync::Arc::ptr_eq(&request, buffered) { let _ = tx.send(()); }
+        else { app.shell_waiters.push((request, tx)); }
+    }
+}
+
+fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>, typed: Vec<Vec<u8>>) {
         match reply {
             Ok(reply) => {
                 let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) else { app.say("The machine made no shell", theme::DANGER); return };
@@ -1716,13 +1745,8 @@ fn backward_word(chars: &[char], at: usize, ws: &str) -> usize {
 
 /// status_prompt_add_history: a line onto its type's history (not twice in a row), at most
 /// prompt-history-limit of them.
-fn add_history(app: &mut App, ptype: usize, line: &str) {
-    let limit: usize = app.options.get("prompt-history-limit", "", None).and_then(|v| v.parse().ok()).unwrap_or(100);
-    let h = &mut app.history[ptype.min(3)];
-    if h.last().map(|l| l == line).unwrap_or(false) { return }
-    if limit == 0 { h.clear(); return }
-    h.push(line.to_string());
-    while h.len() > limit { h.remove(0); }
+pub(crate) fn add_history(app: &mut App, ptype: usize, line: &str) {
+    crate::history::add(app, ptype, line);
 }
 
 /// status_prompt_up_history / _down_history: the prompt's type's history a step back or on
@@ -1850,14 +1874,30 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     let _ = was;
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
-    // Jump mode: a row's label goes to it (jump-accept: and picks it); any other key ends it.
+    // Jump mode consumes one key, then fires jump or jump-cancel as fzf does.
     if let Some(accept) = picker.jumping.take() {
+        let mut event = "jump-cancel";
         if let KeyCode::Char(c) = key.code {
             let rows = picker.page_rows.get().max(0) as usize;
             if let Some(k) = theme::fzf_opts().jump_labels.chars().position(|l| l == c).filter(|k| !ctrl && !alt && *k < rows && picker.scroll + k < picker.visible.len()) {
                 picker.vset((picker.scroll + k) as i64, 1);
+                event = "jump";
                 if accept { return choose(app, kind, picker, Choice::Enter) }
             }
+        }
+        let multi = picker.multi_override.map(|n| n > 0).unwrap_or((matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) || theme::fzf_opts().multi) && crate::picker::scope_of(&picker.query).is_none());
+        let up = if theme::fzf().reverse { -1 } else { 1 };
+        if let Some(actions) = theme::fzf_opts().binds.iter().rev().find(|(key, _)| key == event).map(|(_, actions)| actions.clone()) {
+            let previous_query = picker.query.clone();
+            let previous_search = picker.search.clone();
+            picker.defer_filter = true;
+            match bound_actions(&mut picker, &actions, up, multi) {
+                End::Accept => { picker.defer_filter = false; return choose(app, kind, picker, Choice::Enter) }
+                End::Abort => { SPLIT.with(|s| s.set(None)); return }
+                End::Stay => {}
+            }
+            picker.defer_filter = false;
+            if picker.query != previous_query && picker.search == previous_search { picker.search = Some(previous_search.unwrap_or(previous_query)); }
         }
         app.modal = Some(Modal::Picker { kind, picker });
         return;
@@ -2018,6 +2058,8 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         let q = crate::picker::said_terms(&picker.query);
         if q != app.said_want {
             app.said_want = q.clone();
+            app.said_pending = 0;
+            app.said_generation = app.said_generation.wrapping_add(1);
             if !q.is_empty() { app.said_due = Some(Instant::now() + Duration::from_millis(150)) }
             else { app.said_due = None; app.said.clear(); app.said_for.clear() }
         }
@@ -2106,7 +2148,8 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
     for action in split_chain(actions) {
         match action.as_str() {
             "half-page-up" => crate::ui::page(picker, up, true), "half-page-down" => crate::ui::page(picker, -up, true),
-            "top" | "first" | "best" => picker.move_by(-len), "last" => picker.move_by(len),
+            "top" | "first" => picker.move_by(-len), "last" => picker.move_by(len),
+            "best" => { if let Some(at) = picker.matched_rows.first().and_then(|ri| picker.visible.iter().position(|(i, _)| i == ri)) { picker.move_by(at as i64 - picker.cursor as i64) } }
             // close: the preview if it shows, else the list.
             "close" => { if picker.preview { picker.show_preview(Some(false)) } else { return End::Abort } }
             // replace-query: the query made the current row's text.
@@ -2178,7 +2221,8 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             }
             "yank" => picker.yank(),
             // up-match / down-match: up and down (the rows are all matches without --raw).
-            "up-match" => picker.move_by(up), "down-match" => picker.move_by(-up),
+            "up-match" => picker.move_match(up), "down-match" => picker.move_match(-up),
+            "toggle-raw" => picker.set_raw(!theme::fzf_opts().raw), "enable-raw" => picker.set_raw(true), "disable-raw" => picker.set_raw(false),
             // The subword ones (fzf's camelCase-aware words).
             "backward-subword" => picker.subword(false, false), "forward-subword" => picker.subword(true, false),
             "backward-kill-subword" => picker.subword(false, true), "kill-subword" => picker.subword(true, true),
@@ -2222,12 +2266,12 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             "toggle" => { if multi { picker.toggle_mark(); } }
             // The matches into the marks (those the query hides stay marked), or out of them — no
             // more than --multi=N marked.
-            "select-all" => { if multi { for (i, _) in picker.visible.clone() { let id = picker.rows[i].id.clone(); if !picker.marked.contains(&id) && picker.room_to_mark() { picker.marked.push(id) } } } }
-            "deselect-all" => { let shown: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); picker.marked.retain(|m| !shown.contains(m)) }
+            "select-all" => { if multi { for i in picker.matched_rows.clone() { let id = picker.rows[i].id.clone(); if !picker.marked.contains(&id) && picker.room_to_mark() { picker.marked.push(id) } } } }
+            "deselect-all" => { let shown: Vec<String> = picker.matched_rows.iter().map(|i| picker.rows[*i].id.clone()).collect(); picker.marked.retain(|m| !shown.contains(m)) }
             // actToggleAll: the shown rows that were marked unmarked first, then the others marked
             // from the top while --multi=N has room.
             "toggle-all" => { if multi {
-                let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect();
+                let all: Vec<String> = picker.matched_rows.iter().map(|i| picker.rows[*i].id.clone()).collect();
                 let was: Vec<String> = all.iter().filter(|id| picker.marked.contains(id)).cloned().collect();
                 picker.marked.retain(|m| !was.contains(m));
                 for id in all.into_iter().filter(|id| !was.contains(id)) { if picker.room_to_mark() { picker.marked.push(id) } }

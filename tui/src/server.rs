@@ -20,7 +20,7 @@ use crate::paste::Paste;
 /// The server-wide state as this client last wrote or took it (the buffers by name and version:
 /// their text is compared by neither).
 #[derive(Clone, PartialEq)]
-pub struct Synced { options: [BTreeMap<String, String>; 5], keymap: Keymap, buffers: Vec<(String, u64)>, env: BTreeMap<String, EnvVar> }
+pub struct Synced { options: [BTreeMap<String, String>; 5], keymap: Keymap, buffers: Vec<(String, u64)>, env: BTreeMap<String, EnvVar>, marked: Option<(u32, u64)>, history: [Vec<String>; 4] }
 
 fn path() -> PathBuf { crate::app::sessions_path(None).with_extension("server.json") }
 
@@ -30,6 +30,8 @@ fn now(app: &App) -> Synced {
         keymap: app.keymap.clone(),
         buffers: versions(&app.paste),
         env: app.global_env.clone(),
+        marked: app.marked.map(|p| (app.marked_session.unwrap_or(app.session_id), p)),
+        history: app.history.clone(),
     }
 }
 
@@ -68,7 +70,7 @@ fn set_desk_window_options(app: &mut App, m: BTreeMap<String, String>) {
 fn unchanged(app: &App, s: &Synced) -> bool {
     app.options.server == s.options[0] && app.options.global_session == s.options[1] && app.options.global_window == s.options[2]
         && desk_session_options(app) == s.options[3] && desk_window_options(app) == s.options[4]
-        && app.keymap == s.keymap && app.global_env == s.env && app.paste.walk().map(|b| (&b.name, b.order)).eq(s.buffers.iter().map(|(n, o)| (n, *o)))
+        && app.history == s.history && app.keymap == s.keymap && app.global_env == s.env && app.marked.map(|p| (app.marked_session.unwrap_or(app.session_id), p)) == s.marked && app.paste.walk().map(|b| (&b.name, b.order)).eq(s.buffers.iter().map(|(n, o)| (n, *o)))
 }
 
 // ── the key tables as JSON (keys by tmux's names) ──────────────────────────────
@@ -136,7 +138,7 @@ const MAPS: [&str; 5] = ["server", "global-session", "global-window", "desk-sess
 
 /// What changed from [before] to [after], into the file's copy: an option set or unset, the key
 /// tables (whole), a buffer made, set or freed, a variable of the global environment.
-fn merge(doc: &mut Value, before: Option<&Synced>, after: &Synced, paste: &Paste) {
+fn merge(doc: &mut Value, before: Option<&Synced>, after: &Synced, paste: &Paste, history_changes: &[crate::history::Change]) {
     for (i, name) in MAPS.iter().enumerate() {
         if !doc["options"][*name].is_object() { doc["options"][*name] = json!({}) }
         let map = doc["options"][*name].as_object_mut().unwrap();
@@ -170,6 +172,17 @@ fn merge(doc: &mut Value, before: Option<&Synced>, after: &Synced, paste: &Paste
         let was = doc["buffers"][key].as_u64().unwrap_or(0);
         doc["buffers"][key] = json!(was.max(n));
     }
+    match before {
+        None => doc["history"] = json!(after.history),
+        Some(before) if !history_changes.is_empty() => {
+            let mut history = serde_json::from_value(doc["history"].clone()).unwrap_or_else(|_| before.history.clone());
+            for change in history_changes { change.apply(&mut history) }
+            doc["history"] = json!(history);
+        }
+        _ => {}
+    }
+    // The marked pane belongs to the server, so another terminal or a detach keeps it.
+    if before.map(|b| b.marked != after.marked).unwrap_or(true) { doc["marked"] = json!(after.marked) }
     // The global environment: the server's — its first client's, whole — and what changed since.
     if !doc["env"].is_object() || before.is_none() { doc["env"] = json!({}) }
     if before.is_none() { doc["env-whole"] = json!(true) }
@@ -225,14 +238,28 @@ fn paste_from(doc: &Value) -> Paste {
     Paste::from_parts(list, doc["buffers"]["next-index"].as_u64().unwrap_or(0), doc["buffers"]["next-order"].as_u64().unwrap_or(0))
 }
 
+/// Save the latest server history while holding the same lock that publishes additions.
+/// Use the server's filename too: this client may not yet have received a changed option.
+pub fn save_history(app: &App) {
+    with_file(|doc| {
+        let history = serde_json::from_value(doc["history"].clone()).unwrap_or_else(|_| app.history.clone());
+        let file = if doc["options"]["server"].is_object() {
+            doc["options"]["server"]["history-file"].as_str().unwrap_or("").to_string()
+        } else { app.options.get("history-file", "", None).unwrap_or_default() };
+        crate::history::save_file(&file, &history);
+    });
+}
+
 // ── joining, publishing, taking ────────────────────────────────────────────────
 
 /// A client started (its configuration read): a new server's first client starts the file with
 /// what it has; any other takes the server's.
 pub fn join(app: &mut App) {
     if crate::ids::fresh() || !path().exists() {
+        crate::history::load(app);
         let mine = now(app);
-        with_file(|doc| { *doc = json!({}); merge(doc, None, &mine, &app.paste) });
+        with_file(|doc| { *doc = json!({}); merge(doc, None, &mine, &app.paste, &[]) });
+        app.history_changes.clear();
         app.server_synced = Some(mine);
     } else {
         take(app);
@@ -244,10 +271,15 @@ pub fn join(app: &mut App) {
 pub fn publish(app: &mut App) {
     if !std::mem::take(&mut app.server_dirty) { return }
     let Some(before) = app.server_synced.as_ref() else { return };
-    if unchanged(app, before) { return }
+    if app.history_changes.is_empty() && unchanged(app, before) { return }
     let before = before.clone();
-    let after = now(app);
-    with_file(|doc| merge(doc, Some(&before), &after, &app.paste));
+    let mut after = now(app);
+    let history_changes = std::mem::take(&mut app.history_changes);
+    with_file(|doc| {
+        merge(doc, Some(&before), &after, &app.paste, &history_changes);
+        if let Ok(history) = serde_json::from_value(doc["history"].clone()) { after.history = history }
+    });
+    app.history = after.history.clone();
     app.server_synced = Some(after);
     let others = crate::commands::other_clients();
     if others.is_empty() { return }
@@ -275,6 +307,10 @@ pub fn take(app: &mut App) {
     }
     if doc["keys"].is_object() { app.keymap = keys_from(&doc["keys"], app.keymap.clone()) }
     app.paste = paste_from(&doc);
+    if let Ok(history) = serde_json::from_value(doc["history"].clone()) { app.history = history }
+    app.history_changes.clear();
+    app.marked_session = doc["marked"].get(0).and_then(Value::as_u64).map(|s| s as u32);
+    app.marked = doc["marked"].get(1).and_then(Value::as_u64);
     if let Some(env) = doc["env"].as_object() {
         // The server's environment, as tmux's is its first client's (else only what changed).
         if doc["env-whole"].as_bool().unwrap_or(false) { app.global_env.clear() }

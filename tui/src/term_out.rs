@@ -17,7 +17,7 @@ use ratatui::style::{Color, Modifier};
 pub struct TmuxBackend<W: Write> {
     inner: CrosstermBackend<W>,
     shadow: Vec<Vec<Cell>>,
-    /// A frame's changes are one synchronized update (?2026), closed at its flush.
+    /// A frame with several changes is one synchronized update (?2026), closed at its flush.
     syncing: bool,
     /// The cursor as last written: a frame that changes nothing writes nothing (an idle hn is
     /// silent, as tmux is — a terminal's or an outer tmux's activity mark stays clear).
@@ -81,8 +81,11 @@ impl Pen {
     /// Everything back to the terminal's defaults (and so known).
     fn reset(&mut self, w: &mut impl Write) -> io::Result<()> {
         if self.link.is_some() { w.write_all(b"\x1b]8;;\x1b\\")? }
+        if self.fg != Color::Reset || self.bg != Color::Reset || self.ul != Color::Reset || !self.modifier.is_empty() || self.style != 0 {
+            w.write_all(b"\x1b[0m")?;
+        }
         *self = Pen::new();
-        w.write_all(b"\x1b[0m")
+        Ok(())
     }
 }
 
@@ -160,7 +163,7 @@ impl<W: Write> Write for Counted<W> {
 }
 
 impl<W: Write> Write for TmuxBackend<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> { self.inner.write(buf) }
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> { self.cursor_at = None; self.inner.write(buf) }
     fn flush(&mut self) -> io::Result<()> { Write::flush(&mut self.inner) }
 }
 
@@ -370,9 +373,6 @@ impl<W: Write> Backend for TmuxBackend<W> {
         let cells: Vec<(u16, u16, Cell)> = content.map(|(x, y, c)| (x, y, c.clone())).collect();
         // Nothing changed: nothing written.
         if cells.is_empty() { return Ok(()) }
-        if !self.syncing { self.inner.write_all(b"\x1b[?2026h")?; self.syncing = true }
-        // (The cells move the terminal's cursor: where it is must be said again after them.)
-        self.cursor_at = None;
         // A row that holds (or held) a cluster the terminal may count otherwise is written again
         // whole from its first column, as fzf writes a line: a cell-by-cell update there would
         // leave a stale character where the two counts part (a Thai vowel beside a keycap).
@@ -380,6 +380,9 @@ impl<W: Write> Backend for TmuxBackend<W> {
         let was: std::collections::HashSet<u16> = touched.iter().copied().filter(|y| self.row_risky(*y)).collect();
         for (x, y, c) in &cells { self.remember(*x, *y, c) }
         let whole: std::collections::BTreeSet<u16> = touched.into_iter().filter(|y| was.contains(y) || self.row_risky(*y)).collect();
+        // A single-cell update fits in the writer's one buffered flush; synchronizing it
+        // adds sixteen bytes to an ordinary one-byte echo without hiding any redraw.
+        if !self.syncing && (cells.len() > 1 || !whole.is_empty()) { self.inner.write_all(b"\x1b[?2026h")?; self.syncing = true }
         let frame = FRAME.lock().ok();
         let frame = frame.as_ref().and_then(|f| f.as_ref());
         let (usstyle, links) = frame.map(|f| (f.usstyle, f.links)).unwrap_or((false, false));
@@ -387,16 +390,18 @@ impl<W: Write> Backend for TmuxBackend<W> {
         // CrosstermBackend writes through to its writer.
         let w = &mut self.inner;
         let mut pen = Pen::new();
-        let mut last: Option<(u16, u16)> = None;
         for (x, y, cell) in cells.iter().filter(|c| !whole.contains(&c.1)) {
-            // The cursor moves only where the cells do not follow on.
-            if !matches!(last, Some((lx, ly)) if *x == lx + 1 && *y == ly) { write!(w, "\x1b[{};{}H", y + 1, x + 1)?; }
-            last = Some((*x, *y));
+            // Printing advances the cursor. Keep that position across frames as well: an
+            // ordinary echoed key needs neither a CUP before it nor one after it.
+            if self.cursor_at != Some(Position::new(*x, *y)) { write!(w, "\x1b[{};{}H", y + 1, x + 1)?; }
             pen.put(w, cell, extra_at(*x, *y), usstyle, links)?;
+            let width = unicode_width::UnicodeWidthStr::width(cell.symbol()).max(1) as u16;
+            self.cursor_at = Some(Position::new(x.saturating_add(width), *y));
         }
         for y in whole {
             let Some(row) = self.shadow.get(y as usize) else { continue };
             write!(w, "\x1b[{};1H", y + 1)?;
+            self.cursor_at = Some(Position::new(0, y));
             pen.reset(w)?;
             w.write_all(b"\x1b[2K")?;
             let (mut skip, mut placed) = (0usize, true);
@@ -406,12 +411,15 @@ impl<W: Write> Backend for TmuxBackend<W> {
                 // where hn counts it.
                 if !placed { write!(w, "\x1b[{};{}H", y + 1, x + 1)?; }
                 pen.put(w, cell, extra_at(x as u16, y), usstyle, links)?;
-                skip = unicode_width::UnicodeWidthStr::width(cell.symbol()).saturating_sub(1);
+                let width = unicode_width::UnicodeWidthStr::width(cell.symbol()).max(1);
+                skip = width - 1;
                 placed = !risky(cell.symbol());
+                self.cursor_at = placed.then(|| Position::new((x + width) as u16, y));
             }
         }
-        if pen.link.is_some() { w.write_all(b"\x1b]8;;\x1b\\")? }
-        w.write_all(b"\x1b[39m\x1b[49m\x1b[59m\x1b[0m")
+        // SGR 0 restores all three colours and attributes in one command; when they
+        // are already default, a plain-text echo has nothing to restore.
+        pen.reset(w)
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> { if self.cursor_shown == Some(false) { return Ok(()) } self.cursor_shown = Some(false); self.inner.hide_cursor() }
@@ -427,7 +435,7 @@ impl<W: Write> Backend for TmuxBackend<W> {
     }
     fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.cursor_at = None; self.cursor_shown = None; self.inner.clear() }
     fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> { if matches!(clear_type, ClearType::All) { self.shadow.clear() } self.inner.clear_region(clear_type) }
-    fn append_lines(&mut self, n: u16) -> io::Result<()> { self.inner.append_lines(n) }
+    fn append_lines(&mut self, n: u16) -> io::Result<()> { self.cursor_at = None; self.inner.append_lines(n) }
     fn size(&self) -> io::Result<Size> { self.inner.size() }
     fn window_size(&mut self) -> io::Result<WindowSize> { self.inner.window_size() }
     fn flush(&mut self) -> io::Result<()> {
@@ -439,6 +447,49 @@ impl<W: Write> Backend for TmuxBackend<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_echo_keeps_the_printed_cursor_and_needs_few_bytes() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::new(&mut written);
+        backend.set_cursor_position(Position::new(2, 1)).unwrap();
+        let mut cell = Cell::default();
+        cell.set_char('x');
+        backend.draw(std::iter::once((2, 1, &cell))).unwrap();
+        backend.set_cursor_position(Position::new(3, 1)).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let bytes = written.as_slice();
+        assert!(bytes.len() <= 7, "one echoed key wrote {} bytes including its initial cursor", bytes.len());
+        let mut pane = crate::pane::Pane::new(1, "m", "a", 20, 4);
+        pane.feed(bytes);
+        use alacritty_terminal::index::{Column, Line, Point};
+        assert_eq!(pane.term.grid()[Line(1)][Column(2)].c, 'x');
+        assert_eq!(pane.term.grid().cursor.point, Point::new(Line(1), Column(3)));
+    }
+
+    #[test]
+    fn styled_frame_restores_colours_before_plain_echo() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::new(&mut written);
+        let mut coloured = Cell::default();
+        coloured.set_char('a').set_fg(Color::Red).set_bg(Color::Blue);
+        backend.draw(std::iter::once((0, 0, &coloured))).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        let mut plain = Cell::default();
+        plain.set_char('b');
+        backend.draw(std::iter::once((1, 0, &plain))).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        let mut pane = crate::pane::Pane::new(1, "m", "a", 20, 4);
+        drop(backend);
+        pane.feed(&written);
+        use alacritty_terminal::index::{Column, Line};
+        use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor};
+        let grid = pane.term.grid();
+        assert_eq!(grid[Line(0)][Column(0)].fg, AnsiColor::Named(NamedColor::Red));
+        assert_eq!(grid[Line(0)][Column(1)].fg, AnsiColor::Named(NamedColor::Foreground));
+        assert_eq!(grid[Line(0)][Column(1)].bg, AnsiColor::Named(NamedColor::Background));
+    }
 
     #[test]
     fn colours_as_tmux_writes_them() {

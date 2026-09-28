@@ -594,7 +594,7 @@ fn run_queue(app: &mut App, mut queue: Queue) {
             // and so does the shell that ran the chain.
             if !queue.is_empty() && app.starting_shell.is_some() {
                 let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-                app.shell_waiters.push(tx);
+                app.shell_waiters.push((app.starting_shell.as_ref().unwrap().clone(), tx));
                 let waiting = (app.capture.take(), app.capture_err.take(), app.cli_tx.take(), app.cli_code, app.cli_cwd.clone());
                 app.spawn(async move { let _ = tokio::time::timeout(std::time::Duration::from_secs(90), rx).await; }, move |app, _| {
                     let (cap, err, tx, code, cwd) = waiting;
@@ -1787,9 +1787,15 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 && app.options.get("@hn-look", "", None).as_deref() != Some("tmux");
             // No machine to make its shell on (the daemon down): tmux's error, and no window made.
             let machine = from.as_ref().map(|(m, _)| m.clone()).unwrap_or(app.fleet.local_id.clone());
-            if !bare && app.link(&machine).is_none() { return app.error("create window failed: the daemon is not running (harness start)") }
+            if app.link(&machine).is_none() { return app.error("create window failed: the daemon is not running (harness start)") }
             app.new_tab_at(idx);
-            if bare { app.home_from = from; return }
+            if bare {
+                app.tab_mut().home = true;
+                app.home_from = from.clone();
+                let tab = app.tab().id.clone();
+                input::new_shell_from(app, from, Placement::Fill(tab), cwd, command);
+                return;
+            }
             if let Some(n) = &name { let n = expand(app, n); app.rename_tab(&n) }
             // A window made in a session not in front: its window-linked (notify_changes sees
             // only the one in front).
@@ -1917,13 +1923,13 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // way (round the far side); -d/-e input off/on; -T the title. Else the pane becomes
             // its window's active one — the window does not become the current one. A zoomed
             // window is unzoomed unless -Z.
-            if flag(words, "-M") { app.marked = None; return }
+            if flag(words, "-M") { app.marked = None; app.marked_session = None; return }
             let (w, p) = match opt(words, "-t") {
                 Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.error(format!("can't find pane: {t}")) },
                 None => match app.current() { Some(x) => x, None => return },
             };
             let keep_zoom = flag(words, "-Z");
-            if flag(words, "-m") { app.marked = if app.marked == Some(p) { None } else { Some(p) }; return }
+            if flag(words, "-m") { app.marked = if app.marked == Some(p) && app.marked_session == Some(app.session_id) { None } else { Some(p) }; app.marked_session = app.marked.map(|_| app.session_id); return }
             if flag(words, "-l") { return app.select_last(w, keep_zoom) }
             let toward = if flag(words, "-L") { Some(Toward::Left) } else if flag(words, "-R") { Some(Toward::Right) } else if flag(words, "-U") { Some(Toward::Up) } else if flag(words, "-D") { Some(Toward::Down) } else { None };
             let p = match toward { Some(t) => match app.pane_toward(w, p, t) { Some(x) => x, None => return }, None => p };
@@ -2360,6 +2366,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // list-clients: this client's line, then the other clients' of this name (each asked
             // for its own: hn-list-clients).
             let (command, clients) = if command == "hn-list-clients" { ("list-clients", false) } else { (command, command == "list-clients") };
+            let format_type = app.format_type;
+            app.format_type = Some(match command { "list-sessions" => crate::tree::FORMAT_SESSION, "list-windows" => crate::tree::FORMAT_WINDOW, "list-panes" => crate::tree::FORMAT_PANE, _ => 0 });
             let filter = opt(words, "-f");
             // Every session's (list-sessions, and -a): each in front in turn while its lines are made.
             let all = command == "list-sessions" || flag(words, "-a");
@@ -2384,7 +2392,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             if let Some(owner) = app.remote_owner(sid).filter(|_| command != "list-clients") {
                 let template = opt(words, "-F");
                 if command == "list-sessions" {
-                    let template = template.unwrap_or_else(|| "#{session_name}: #{session_windows} windows (created #{t:session_created})#{?session_attached, (attached),}".into());
+                    let template = template.unwrap_or_else(|| "#{session_name}: #{session_windows} windows (created #{t:session_created})#{?session_grouped, (group ,}#{session_group}#{?session_grouped,),}#{?session_attached, (attached),}".into());
                     let keep = filter.as_ref().map(|f| { let v = crate::format::expand_session(app, f, sid); !v.is_empty() && v != "0" }).unwrap_or(true);
                     if keep { lines.push(crate::format::expand_session(app, &template, sid)) }
                     continue;
@@ -2445,6 +2453,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 if let Some(f) = &filter { ask.extend(["-f".to_string(), f.clone()]) }
                 for other in other_clients() { if let Some((out, _, _)) = crate::ipc::ask(&other, &ask) { lines.extend(out) } }
             }
+            app.format_type = format_type;
             app.print(command, lines);
         }
         "set-option" | "set-window-option" => {
@@ -2683,7 +2692,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 Some(t) => match TYPES.iter().position(|x| *x == t) { Some(i) => vec![i], None => return app.error(format!("invalid type: {t}")) },
                 None => (0..4).collect(),
             };
-            if command == "clear-prompt-history" { for i in which { app.history[i].clear() } return }
+            if command == "clear-prompt-history" { for i in which { crate::history::clear(app, i) } return }
             let mut lines = Vec::new();
             for i in which {
                 lines.push(format!("History for {}:", TYPES[i]));
@@ -2854,6 +2863,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
         "hn-mirror" => {
             if let Some(sock) = opt(words, "-a") {
                 let sid = opt(words, "-t").and_then(|t| t.trim_start_matches('$').parse::<u32>().ok()).unwrap_or(app.session_id);
+                if let Some(tty) = opt(words, "-c") { app.mirror_ttys.insert(sock.clone(), tty); }
                 app.mirrors.insert(sock, sid);
                 // A client went to it (server_client_set_session): used and attached now — the
                 // session a command from a shell with no -t is for.
@@ -2861,7 +2871,12 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 if sid == app.session_id { app.session_used = crate::app::use_order(); app.session_activity = now; app.session_last_attached = now }
                 else if let Some(s) = app.sessions.iter_mut().find(|s| s.id == sid) { s.used = crate::app::use_order(); s.activity = now; s.last_attached = now }
                 app.save_sessions();
-            } else if let Some(sock) = opt(words, "-d") { app.mirrors.remove(&sock); }
+            } else if let Some(sock) = opt(words, "-d") {
+                let sid = opt(words, "-t").and_then(|t| t.trim_start_matches('$').parse::<u32>().ok());
+                // Switching between two sessions of this owner registers the new session before
+                // dropping the old one. Its late unregister must not remove the new attachment.
+                if sid.is_none() || app.mirrors.get(&sock).copied() == sid { app.mirrors.remove(&sock); app.mirror_ttys.remove(&sock); app.save_sessions(); }
+            }
             app.status_redraws += 1;
         }
         // The client that has the session this one shows changed it, or went.
@@ -3077,14 +3092,48 @@ fn run_words_in(app: &mut App, words: &[String]) {
             }
             // -K: the keys as if typed at the client — its key tables, its bindings, then the pane
             // (server_client_handle_key); nothing where no terminal is attached.
-            if flag(words, "-K") {
+            if flag(words, "-K") && !flag(words, "-X") {
                 let Some(args) = words.args.clone() else { return };
                 if app.headless { return }
-                for word in &args.values {
+                let count = match args.get('N').map(|n| expand(app, n)) {
+                    None => 1,
+                    Some(n) => match n.parse::<i64>() {
+                        Ok(n) if n >= 1 && n <= u32::MAX as i64 => n as u32,
+                        Ok(n) if n < 1 => return app.error("repeat count too small"),
+                        Ok(_) => return app.error("repeat count too large"),
+                        Err(_) => return app.error("repeat count invalid"),
+                    },
+                };
+                // The injected keys belong to the attached client's queue. A prompt opened
+                // by a binding must not hold the CLI that sent those keys until it closes.
+                let caller = (app.capture.take(), app.capture_err.take(), app.cli_tx.take(), app.cli_code, app.wait_cli);
+                let mut held = std::mem::take(&mut app.cli_held);
+                app.wait_cli = false;
+                for _ in 0..count { for word in &args.values {
+                    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
                     let parsed = (args.has('l') == 0).then(|| crate::keys::parse(word).ok()).flatten();
-                    let chords = match parsed { Some(c) => vec![c], None => word.chars().map(|c| crate::keys::Chord::normal(crossterm::event::KeyCode::Char(c), crossterm::event::KeyModifiers::NONE)).collect() };
-                    for c in chords { input::handle(app, crossterm::event::Event::Key(crossterm::event::KeyEvent::new(c.code, c.mods))) }
-                }
+                    let events: Vec<KeyEvent> = match parsed {
+                        Some(c) => {
+                            // Binding chords normalize A to S-a. Restore the original character
+                            // for a prompt or pane; an explicit S-a still carries lowercase a.
+                            let uppercase = word.rsplit('-').next().is_some_and(|s| s.chars().count() == 1 && s.chars().next().is_some_and(char::is_uppercase));
+                            let code = match c.code { KeyCode::Char(ch) if uppercase => KeyCode::Char(ch.to_ascii_uppercase()), code => code };
+                            vec![KeyEvent::new(code, c.mods)]
+                        }
+                        None => word.chars().map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)).collect(),
+                    };
+                    for event in events {
+                        // Explicit shifted characters are modified key codes in tmux, not
+                        // text for a status prompt (unmodified uppercase text still inserts).
+                        let shifted_name = args.has('l') == 0 && word.rsplit_once('-').is_some_and(|(mods, _)| mods.split('-').any(|m| m == "S"));
+                        let text_prompt = matches!(&app.modal, Some(Modal::Prompt(p)) if !matches!(p.kind, PromptKind::Key { .. } | PromptKind::Command { digits: true, .. }));
+                        if shifted_name && text_prompt && matches!(event.code, KeyCode::Char(_)) { continue }
+                        input::handle(app, Event::Key(event));
+                    }
+                } }
+                (app.capture, app.capture_err, app.cli_tx, app.cli_code, app.wait_cli) = caller;
+                held.append(&mut app.cli_held);
+                app.cli_held = held;
                 return;
             }
             let (Some(args), Some((_, pane))) = (words.args.clone(), target_pane(app, words)) else { return };

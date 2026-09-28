@@ -52,7 +52,7 @@ pub mod fzfcolor {
     #[derive(Clone, Copy, Debug)]
     pub struct Theme {
         pub colored: bool,
-        pub input: CA, pub ghost: CA, pub fg: CA, pub bg: CA, pub list_fg: CA, pub list_bg: CA, pub alt_bg: CA,
+        pub input: CA, pub ghost: CA, pub nomatch: CA, pub fg: CA, pub bg: CA, pub list_fg: CA, pub list_bg: CA, pub alt_bg: CA,
         pub selected_fg: CA, pub selected_bg: CA, pub selected_match: CA, pub dark_bg: CA, pub gutter: CA, pub prompt: CA,
         pub input_bg: CA, pub matched: CA, pub current: CA, pub current_match: CA, pub spinner: CA, pub info: CA,
         pub cursor: CA, pub marker: CA, pub header: CA, pub header_bg: CA, pub separator: CA, pub scrollbar: CA,
@@ -63,31 +63,31 @@ pub mod fzfcolor {
     }
 
     pub const NO_COLOR: Theme = Theme {
-        colored: false, input: D, ghost: U, fg: D, bg: D, list_fg: D, list_bg: D, alt_bg: U, selected_fg: D, selected_bg: D,
+        colored: false, input: D, ghost: U, nomatch: U, fg: D, bg: D, list_fg: D, list_bg: D, alt_bg: U, selected_fg: D, selected_bg: D,
         selected_match: D, dark_bg: D, gutter: U, prompt: D, input_bg: D, matched: D, current: U, current_match: U, spinner: D,
         info: D, cursor: D, marker: D, header: D, header_bg: D, separator: D, scrollbar: D, border: U, border_label: D, list_border: D, gap_line: D, input_border: D, header_border: D, footer_border: D, list_label: D, input_label: D, header_label: D, footer_label: D, footer: D,
         preview_fg: D, preview_bg: D, preview_border: D, preview_scrollbar: D, preview_label: D,
     };
     pub const EMPTY: Theme = Theme {
-        colored: true, input: U, ghost: U, fg: U, bg: U, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
+        colored: true, input: U, ghost: U, nomatch: U, fg: U, bg: U, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: U, gutter: U, prompt: U, input_bg: U, matched: U, current: U, current_match: U, spinner: U,
         info: U, cursor: U, marker: U, header: U, header_bg: U, separator: U, scrollbar: U, border: U, border_label: U, list_border: U, gap_line: U, input_border: U, header_border: U, footer_border: U, list_label: U, input_label: U, header_label: U, footer_label: U, footer: U,
         preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const DEFAULT16: Theme = Theme {
-        colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
+        colored: true, input: D, ghost: U, nomatch: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(8), gutter: U, prompt: c(4), input_bg: U, matched: c(2), current: c(15), current_match: c(10),
         spinner: c(2), info: c(3), cursor: c(1), marker: c(5), header: c(6), header_bg: U, separator: U, scrollbar: U, border: U,
         border_label: D, list_border: U, gap_line: U, input_border: U, header_border: U, footer_border: U, list_label: U, input_label: U, header_label: U, footer_label: U, footer: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const DARK256: Theme = Theme {
-        colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
+        colored: true, input: D, ghost: U, nomatch: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(236), gutter: U, prompt: c(110), input_bg: U, matched: c(108), current: c(254), current_match: c(151),
         spinner: c(148), info: c(144), cursor: c(161), marker: c(168), header: c(109), header_bg: U, separator: U, scrollbar: U,
         border: c(59), border_label: c(145), list_border: U, gap_line: U, input_border: U, header_border: U, footer_border: U, list_label: U, input_label: U, header_label: U, footer_label: U, footer: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const LIGHT256: Theme = Theme {
-        colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
+        colored: true, input: D, ghost: U, nomatch: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(251), gutter: U, prompt: c(25), input_bg: U, matched: c(66), current: c(237), current_match: c(23),
         spinner: c(65), info: c(101), cursor: c(161), marker: c(168), header: c(31), header_bg: U, separator: U, scrollbar: U,
         border: c(145), border_label: c(59), list_border: U, gap_line: U, input_border: U, header_border: U, footer_border: U, list_label: U, input_label: U, header_label: U, footer_label: U, footer: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
@@ -124,7 +124,7 @@ pub mod fzfcolor {
                 "input-border" => &mut theme.input_border, "header-border" => &mut theme.header_border, "footer-border" => &mut theme.footer_border,
                 "list-label" => &mut theme.list_label, "input-label" => &mut theme.input_label, "header-label" => &mut theme.header_label, "footer-label" => &mut theme.footer_label,
                 "footer" | "footer-fg" => &mut theme.footer, "prompt" => &mut theme.prompt, "input-bg" => &mut theme.input_bg,
-                "spinner" => &mut theme.spinner, "info" => &mut theme.info, "pointer" => &mut theme.cursor, "marker" => &mut theme.marker,
+                "nomatch" => &mut theme.nomatch, "spinner" => &mut theme.spinner, "info" => &mut theme.info, "pointer" => &mut theme.cursor, "marker" => &mut theme.marker,
                 "header" | "header-fg" => &mut theme.header, "header-bg" => &mut theme.header_bg,
                 "preview-fg" => &mut theme.preview_fg, "preview-bg" => &mut theme.preview_bg, "preview-border" => &mut theme.preview_border,
                 "preview-scrollbar" => &mut theme.preview_scrollbar, "preview-label" => &mut theme.preview_label,
@@ -160,6 +160,7 @@ pub mod fzfcolor {
         pub fn merge_non_default(self, o: P) -> P { self.merged(o, Col::Default) }
         pub fn with_attr(self, a: u32) -> P { P { attr: attr_merge(self.attr, a), ..self } }
         /// ColorPair.WithBg: the other's colour as the background, its attributes merged in.
+        pub fn with_fg(self, fg: CA) -> P { self.merge(P { fg: fg.col, bg: Col::Undef, attr: fg.attr }) }
         pub fn with_bg(self, bg: CA) -> P { self.merge(P { fg: Col::Undef, bg: bg.col, attr: bg.attr }) }
         /// HasBg: a background other than the default shows (a reverse shows its foreground).
         pub fn has_bg(self) -> bool { self.attr & REVERSE == 0 && self.bg != Col::Default || self.attr & REVERSE != 0 && self.fg != Col::Default }
@@ -219,7 +220,7 @@ pub mod fzfcolor {
         pub input_border: P, pub header_border: P, pub footer_border: P,
         pub list_label: P, pub input_label: P, pub header_label: P, pub footer_label: P, pub footer: P,
         /// --color=alt-bg: every other row's background (undefined: no stripes).
-        pub alt_bg: CA,
+        pub alt_bg: CA, pub nomatch: CA,
         /// Whether the base theme has colours (not bw / NO_COLOR).
         pub colored: bool,
     }
@@ -286,6 +287,7 @@ pub mod fzfcolor {
         t.selected_fg = over(t.list_fg, t.selected_fg);
         t.selected_bg = over(t.list_bg, t.selected_bg);
         t.selected_match = over(t.matched, t.selected_match);
+        if t.nomatch.undefined() { t.nomatch.attr = DIM }
         let mut ghost = t.ghost;
         if ghost.undefined() { ghost.attr = DIM } else if ghost.color_defined() && !ghost.attr_defined() { ghost.attr = REGULAR }
         t.ghost = over(t.input, ghost);
@@ -327,7 +329,7 @@ pub mod fzfcolor {
             scrollbar: pair(t.scrollbar, t.list_bg), border: pair(t.border, t.bg), header: pair(t.header, t.header_bg),
             list_border: pair(t.list_border, t.list_bg), gap_line: pair(t.gap_line, t.list_bg), border_label: pair(t.border_label, t.bg),
             preview: pair(t.preview_fg, t.preview_bg), preview_border: pair(t.preview_border, t.preview_bg),
-            preview_label: pair(t.preview_label, t.preview_bg), preview_scrollbar: pair(t.preview_scrollbar, t.preview_bg), alt_bg: t.alt_bg, colored: base.colored,
+            preview_label: pair(t.preview_label, t.preview_bg), preview_scrollbar: pair(t.preview_scrollbar, t.preview_bg), alt_bg: t.alt_bg, nomatch: t.nomatch, colored: base.colored,
             input_border: pair(t.input_border, t.bg), header_border: pair(t.header_border, t.bg), footer_border: pair(t.footer_border, t.bg),
             list_label: pair(t.list_label, t.bg), input_label: pair(t.input_label, t.bg), header_label: pair(t.header_label, t.bg), footer_label: pair(t.footer_label, t.bg),
             footer: pair(t.footer, t.header_bg),
@@ -485,6 +487,7 @@ fn fzf_base() -> &'static Fzf {
         // fzf's defaultOptions: NO_COLOR starts from bw; then each option in turn.
         let (mut theme, mut base) = if no_color() { (NO_COLOR, Some(NO_COLOR)) } else { (EMPTY, None) };
         let (mut bold, mut reverse, mut pointer, mut marker, mut prompt, mut multi, mut unicode) = (true, false, None, None, None, None::<String>, true);
+        let mut black = false;
         let mut i = 0;
         while i < opts.len() {
             let w = &opts[i];
@@ -499,6 +502,7 @@ fn fzf_base() -> &'static Fzf {
                 } }
                 "+c" | "--no-color" => { theme = NO_COLOR; base = Some(NO_COLOR) }
                 "+2" | "--no-256" => theme = DEFAULT16,
+                "--black" => black = true, "--no-black" => black = false,
                 "--bold" => bold = true, "--no-bold" => bold = false,
                 "--layout" => { if let Some(v) = take() { reverse = v == "reverse" || v == "reverse-list" } }
                 "--reverse-list" => reverse = true,
@@ -514,6 +518,7 @@ fn fzf_base() -> &'static Fzf {
         }
         // No base named: the renderer's own — 256 colours, or the 16 on a terminal without them.
         let base = base.unwrap_or(if depth() < 256 { DEFAULT16 } else { DARK256 });
+        if black { theme.bg.col = Col::Idx(0) }
         let pal = init(theme, base, bold);
         let fg = |p: P| p.style().fg.unwrap_or(Color::Reset);
         // --no-unicode: fzf's ASCII pointer and markers.
@@ -710,7 +715,11 @@ pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_fir
     /// --jump-labels: the characters jump mode puts on the rows.
     pub jump_labels: String,
     /// --no-mouse: the list takes no mouse.
-    pub no_mouse: bool }
+    pub no_mouse: bool,
+    /// Raw mode keeps nonmatching rows in input order, in the nomatch style.
+    pub raw: bool, pub gutter_raw: Option<String>,
+    /// Each section label uses the same column and bottom-edge rules as --border-label-pos.
+    pub list_label_pos: (i64, bool), pub input_label_pos: (i64, bool), pub header_label_pos: (i64, bool), pub footer_label_pos: (i64, bool) }
 
 pub fn fzf_opts() -> &'static FzfOpts {
     let live = OPTS_LIVE.load(std::sync::atomic::Ordering::Acquire);
@@ -723,7 +732,7 @@ fn fzf_opts_base() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = default_opts();
-        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None, keep_right: false, gap: 0, gap_line: None, preview_window: PreviewWindow::default(), preview_label: None, preview_label_pos: (0, false), literal: false, multi_limit: 0, multi: false, preview_window_set: false, preview_window_specs: Vec::new(), ghost: None, track: false, list_border: None, input_border: None, header_border: None, footer_border: None, footer: Vec::new(), list_label: String::new(), input_label: String::new(), header_label: String::new(), footer_label: String::new(), separator_set: false, no_input: false, info_command: None, algo_v1: false, no_extended: false, history: None, history_size: 1000, jump_labels: "asdfghjklqwertyuiopzxcvbnm1234567890ASDFGHJKLQWERTYUIOPZXCVBNM`~;:,<.>/?'\"!@#$%^&*()[{]}-_=+".into(), no_mouse: false };
+        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None, keep_right: false, gap: 0, gap_line: None, preview_window: PreviewWindow::default(), preview_label: None, preview_label_pos: (0, false), literal: false, multi_limit: 0, multi: false, preview_window_set: false, preview_window_specs: Vec::new(), ghost: None, track: false, list_border: None, input_border: None, header_border: None, footer_border: None, footer: Vec::new(), list_label: String::new(), input_label: String::new(), header_label: String::new(), footer_label: String::new(), separator_set: false, no_input: false, info_command: None, algo_v1: false, no_extended: false, history: None, history_size: 1000, jump_labels: "asdfghjklqwertyuiopzxcvbnm1234567890ASDFGHJKLQWERTYUIOPZXCVBNM`~;:,<.>/?'\"!@#$%^&*()[{]}-_=+".into(), no_mouse: false, raw: false, gutter_raw: None, list_label_pos: (0, false), input_label_pos: (0, false), header_label_pos: (0, false), footer_label_pos: (0, false) };
         let (mut sep_set, mut bar_set, mut ell_set, mut sign_set) = (false, false, false, false);
         let mut i = 0;
         while i < opts.len() {
@@ -731,6 +740,8 @@ fn fzf_opts_base() -> &'static FzfOpts {
             let (flag, value) = match w.split_once('=') { Some((f, v)) => (f.to_string(), Some(v.to_string())), None => (w.clone(), None) };
             let mut take = || value.clone().or_else(|| { i += 1; opts.get(i).cloned() });
             match flag.as_str() {
+                "--raw" => o.raw = true, "--no-raw" => o.raw = false,
+                "--gutter-raw" => { if let Some(v) = take() { if unicode_width::UnicodeWidthStr::width(v.as_str()) == 1 { o.gutter_raw = Some(v) } } }
                 "--cycle" => o.cycle = true, "--no-cycle" => o.cycle = false,
                 // --multi[=N]: at most N marked (the info then says (1/N)).
                 // (fzf's optional number: --multi=2, --multi 2, -m 2, -m2.)
@@ -800,6 +811,10 @@ fn fzf_opts_base() -> &'static FzfOpts {
                 "--history-size" => { if let Some(v) = take() { o.history_size = v.parse().unwrap_or(1000).max(1) } }
                 "--jump-labels" => { if let Some(v) = take() { if !v.is_empty() { o.jump_labels = v } } }
                 "--no-mouse" => o.no_mouse = true, "--mouse" => o.no_mouse = false,
+                "--list-label-pos" => { if let Some(v) = take() { o.list_label_pos = parse_label_pos(&v) } }
+                "--input-label-pos" => { if let Some(v) = take() { o.input_label_pos = parse_label_pos(&v) } }
+                "--header-label-pos" => { if let Some(v) = take() { o.header_label_pos = parse_label_pos(&v) } }
+                "--footer-label-pos" => { if let Some(v) = take() { o.footer_label_pos = parse_label_pos(&v) } }
                 "--list-label" => { if let Some(v) = take() { o.list_label = v.split('\n').next().unwrap_or("").to_string() } }
                 "--input-label" => { if let Some(v) = take() { o.input_label = v.split('\n').next().unwrap_or("").to_string() } }
                 "--header-label" => { if let Some(v) = take() { o.header_label = v.split('\n').next().unwrap_or("").to_string() } }
@@ -1130,10 +1145,11 @@ pub fn most_urgent(states: impl Iterator<Item = State>) -> Option<State> {
 }
 
 /// A spinner frame for things in motion (working dots, connecting cards).
-pub fn spinner(tick: u64) -> &'static str {
+pub fn spinner(_tick: u64) -> &'static str {
     // fzf's frames, in its order.
     const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    FRAMES[(tick as usize) % FRAMES.len()]
+    let frame = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() / 100).unwrap_or(0);
+    FRAMES[frame as usize % FRAMES.len()]
 }
 
 #[cfg(test)]

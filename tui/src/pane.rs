@@ -13,7 +13,7 @@ use std::time::Instant;
 use alacritty_terminal::event::{Event as AlacEvent, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle, Processor};
+use alacritty_terminal::vte::ansi::{self, CursorShape, CursorStyle, Handler, Processor};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use uuid::Uuid;
 
@@ -186,6 +186,153 @@ pub static HISTORY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUs
 
 fn config() -> Config { Config { scrolling_history: HISTORY.load(std::sync::atomic::Ordering::Relaxed).clamp(100, 200_000), default_cursor_style: CursorStyle { shape: CursorShape::HollowBlock, blinking: false }, ..Config::default() } }
 
+/// tmux combines VS16, skin tones, regional indicators and the character after a ZWJ
+/// into the preceding cell. Alacritty handles only zero-width scalars, so adapt printable
+/// input before it reaches the grid; every ANSI operation still uses Alacritty's handler.
+struct TmuxScreen<'a>(&'a mut Term<Listener>);
+
+macro_rules! forward_screen {
+    ($($name:ident($($arg:ident: $ty:ty),*);)*) => { $(
+        fn $name(&mut self, $($arg: $ty),*) { self.0.$name($($arg),*) }
+    )* };
+}
+
+impl Handler for TmuxScreen<'_> {
+    fn input(&mut self, c: char) {
+        use alacritty_terminal::index::Column;
+        use alacritty_terminal::term::cell::Flags;
+        use unicode_width::UnicodeWidthChar;
+        // A VS16 widened at the last column can leave a clipped wide cell under the
+        // cursor. Overwriting it must not clear the unrelated cell to its left.
+        let last_column = self.0.columns() - 1;
+        let grid = self.0.grid_mut();
+        if !grid.cursor.input_needs_wrap && grid.cursor.point.column.0 == last_column {
+            let point = grid.cursor.point;
+            grid[point].flags.remove(Flags::WIDE_CHAR);
+        }
+        // libc wcwidth (and tmux) gives a soft hyphen one column; unicode-width gives
+        // it zero. Let Alacritty place a narrow cell, then preserve the actual scalar.
+        if c == '\u{ad}' {
+            self.0.input(' ');
+            let grid = self.0.grid_mut();
+            let mut at = grid.cursor.point;
+            if !grid.cursor.input_needs_wrap { at.column.0 -= 1 }
+            grid[at].c = c;
+            return;
+        }
+        // screen_write_combine: ASCII never joins a cell, even after a ZWJ.
+        if c.is_ascii() { self.0.input(c); return }
+        let zero = c.width() == Some(0);
+        let modifier = matches!(c, '\u{1f1e6}'..='\u{1f1ff}' | '\u{1f3fb}'..='\u{1f3ff}');
+        let force_wide = c == '\u{fe0f}' || modifier;
+        let columns = self.0.columns();
+        let grid = self.0.grid_mut();
+        let cursor = grid.cursor.point;
+        let cx = cursor.column.0 + usize::from(grid.cursor.input_needs_wrap);
+        if cx == 0 { if !zero { self.0.input(c) } return }
+        let mut at = cx - 1;
+        if at > 0 && grid[cursor.line][Column(at)].flags.contains(Flags::WIDE_CHAR_SPACER) { at -= 1 }
+        let cell = &mut grid[cursor.line][Column(at)];
+        let width = if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+        let valid = at + width == cx && !cell.flags.contains(Flags::WIDE_CHAR_SPACER);
+        let extra = cell.zerowidth().unwrap_or_default();
+        let bytes = cell.c.len_utf8() + extra.iter().map(|c| c.len_utf8()).sum::<usize>();
+        let joined = extra.last() == Some(&'\u{200d}');
+        if valid && (zero || modifier && bytes >= 2 || joined) && bytes + c.len_utf8() <= 21 {
+            cell.push_zerowidth(c);
+            if width == 1 && force_wide {
+                cell.flags.insert(Flags::WIDE_CHAR);
+                if at + 1 < columns {
+                    let mut spacer = alacritty_terminal::term::cell::Cell::default();
+                    spacer.flags.insert(Flags::WIDE_CHAR_SPACER);
+                    grid[cursor.line][Column(at + 1)] = spacer;
+                    grid.cursor.point.column = Column((cx + 1).min(columns - 1));
+                    grid.cursor.input_needs_wrap = cx + 1 >= columns;
+                } else {
+                    // tmux clamps a widened cell past the right margin back to the last
+                    // column; the next printable character overwrites it in place.
+                    grid.cursor.input_needs_wrap = false;
+                }
+            }
+        } else if !zero || valid {
+            self.0.input(c);
+        }
+    }
+
+    forward_screen! {
+        set_title(a0: Option<String>);
+        set_cursor_style(a0: Option<ansi::CursorStyle>);
+        set_cursor_shape(a0: ansi::CursorShape);
+        goto(a0: i32, a1: usize);
+        goto_line(a0: i32);
+        goto_col(a0: usize);
+        insert_blank(a0: usize);
+        move_up(a0: usize);
+        move_down(a0: usize);
+        identify_terminal(a0: Option<char>);
+        device_status(a0: usize);
+        move_forward(a0: usize);
+        move_backward(a0: usize);
+        move_down_and_cr(a0: usize);
+        move_up_and_cr(a0: usize);
+        put_tab(a0: u16);
+        backspace();
+        carriage_return();
+        linefeed();
+        bell();
+        substitute();
+        newline();
+        set_horizontal_tabstop();
+        scroll_up(a0: usize);
+        scroll_down(a0: usize);
+        insert_blank_lines(a0: usize);
+        delete_lines(a0: usize);
+        erase_chars(a0: usize);
+        delete_chars(a0: usize);
+        move_backward_tabs(a0: u16);
+        move_forward_tabs(a0: u16);
+        save_cursor_position();
+        restore_cursor_position();
+        clear_line(a0: ansi::LineClearMode);
+        clear_screen(a0: ansi::ClearMode);
+        clear_tabs(a0: ansi::TabulationClearMode);
+        set_tabs(a0: u16);
+        reset_state();
+        reverse_index();
+        terminal_attribute(a0: ansi::Attr);
+        set_mode(a0: ansi::Mode);
+        unset_mode(a0: ansi::Mode);
+        report_mode(a0: ansi::Mode);
+        set_private_mode(a0: ansi::PrivateMode);
+        unset_private_mode(a0: ansi::PrivateMode);
+        report_private_mode(a0: ansi::PrivateMode);
+        set_scrolling_region(a0: usize, a1: Option<usize>);
+        set_keypad_application_mode();
+        unset_keypad_application_mode();
+        set_active_charset(a0: ansi::CharsetIndex);
+        configure_charset(a0: ansi::CharsetIndex, a1: ansi::StandardCharset);
+        set_color(a0: usize, a1: ansi::Rgb);
+        dynamic_color_sequence(a0: String, a1: usize, a2: &str);
+        reset_color(a0: usize);
+        clipboard_store(a0: u8, a1: &[u8]);
+        clipboard_load(a0: u8, a1: &str);
+        decaln();
+        push_title();
+        pop_title();
+        text_area_size_pixels();
+        text_area_size_chars();
+        set_hyperlink(a0: Option<ansi::Hyperlink>);
+        set_mouse_cursor_icon(a0: ansi::cursor_icon::CursorIcon);
+        report_keyboard_mode();
+        push_keyboard_mode(a0: ansi::KeyboardModes);
+        pop_keyboard_modes(a0: u16);
+        set_keyboard_mode(a0: ansi::KeyboardModes, a1: ansi::KeyboardModesApplyBehavior);
+        set_modify_other_keys(a0: ansi::ModifyOtherKeys);
+        report_modify_other_keys();
+        set_scp(a0: ansi::ScpCharPath, a1: ansi::ScpUpdateMode);
+    }
+}
+
 impl Pane {
     /// The cursor the program in this pane asked for (DECSCUSR), as crossterm spells it.
     pub fn cursor_style(&self) -> crossterm::cursor::SetCursorStyle {
@@ -339,7 +486,7 @@ impl Pane {
     fn advance(&mut self, bytes: &[u8], when: i64) {
         if bytes.is_empty() { return }
         let before = self.term.grid().history_size();
-        self.parser.advance(&mut self.term, bytes);
+        self.parser.advance(&mut TmuxScreen(&mut self.term), bytes);
         let after = self.term.grid().history_size();
         let rows = self.term.screen_lines();
         if self.screen_marks.len() != rows { self.screen_marks.resize(rows, 0) }
@@ -802,6 +949,45 @@ mod tests {
         pane.predictions.push((100, 2, 'x', Instant::now()));
         pane.settle_predictions();
         assert!(pane.predictions.is_empty());
+    }
+
+    #[test]
+    fn emoji_clusters_match_tmux_cells_across_byte_boundaries() {
+        use alacritty_terminal::index::{Column, Line};
+        use alacritty_terminal::term::cell::Flags;
+        for text in ["⚠️", "✔️", "❤️", "ℹ️", "☀️", "👍🏽", "👨‍👩‍👧", "🏳️‍🌈", "🇬🇧"] {
+            let mut pane = Pane::new(1, "m", "a", 20, 5);
+            // A stream may split both UTF-8 characters and grapheme clusters.
+            for b in text.as_bytes() { pane.feed(&[*b]) }
+            let grid = pane.term.grid();
+            assert_eq!(grid.cursor.point.column.0, 2, "{text}");
+            assert!(grid[Line(0)][Column(0)].flags.contains(Flags::WIDE_CHAR), "{text}");
+            assert!(grid[Line(0)][Column(1)].flags.contains(Flags::WIDE_CHAR_SPACER), "{text}");
+            let cell = &grid[Line(0)][Column(0)];
+            let got: String = std::iter::once(cell.c).chain(cell.zerowidth().unwrap_or_default().iter().copied()).collect();
+            assert_eq!(got, text);
+            pane.feed(b"X");
+            assert_eq!(pane.term.grid()[Line(0)][Column(2)].c, 'X');
+        }
+    }
+
+    #[test]
+    fn emoji_preserves_ansi_state_and_wraps_at_the_margin() {
+        use alacritty_terminal::index::{Column, Line};
+        use alacritty_terminal::term::cell::Flags;
+        let mut pane = Pane::new(1, "m", "a", 6, 3);
+        pane.feed("\x1b[31m1234⚠️X\x1b[0m".as_bytes());
+        let grid = pane.term.grid();
+        assert_eq!(grid[Line(0)][Column(4)].c, '⚠');
+        assert!(grid[Line(0)][Column(4)].flags.contains(Flags::WIDE_CHAR));
+        assert_eq!(grid[Line(1)][Column(0)].c, 'X');
+        assert_eq!(grid[Line(1)][Column(0)].fg, ansi::Color::Named(ansi::NamedColor::Red));
+        assert_eq!(grid.cursor.point, alacritty_terminal::index::Point::new(Line(1), Column(1)));
+        pane.feed(b"\x1b[1;6H!");
+        assert!(!pane.term.grid()[Line(0)][Column(4)].flags.contains(Flags::WIDE_CHAR));
+        assert_eq!(pane.term.grid()[Line(0)][Column(5)].c, '!');
+        pane.feed(b"\x1b[?1049hZ\x1b[?1049l");
+        assert_eq!(pane.term.grid()[Line(0)][Column(5)].c, '!');
     }
 
     #[test]
