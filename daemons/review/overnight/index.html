@@ -1,0 +1,148 @@
+<title>Daemons Overnight</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=VT323&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #1c1c1c; --panel: #262626; --deep: #121212; --line: #3a3a3a; --faint: #626262;
+    --dim: #949494; --ink: #d0d0d0; --bright: #eeeeee;
+    --green: #5faf5f; --yellow: #d7af5f; --cyan: #5fafaf; --red: #d75f5f; --blue: #87afd7;
+    --mono: "IBM Plex Mono", Menlo, Consolas, monospace;
+    --sans: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+    --vt: "VT323", "IBM Plex Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--ink); font: 400 16px/1.6 var(--sans); padding-inline: 20px; padding-block: 20px 72px; margin: 0; }
+  .wrap { max-width: 1040px; margin: 0 auto; display: grid; gap: 8px; }
+  a { color: var(--blue); }
+  code, .mono { font-family: var(--mono); font-variant-ligatures: none; font-size: .92em; color: var(--bright); }
+  p { margin: 0; max-width: 70ch; }
+  .manline { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; font: 13px/1.5 var(--mono); color: var(--dim); padding-block: 6px; border-bottom: 1px solid var(--line); }
+  h1 { font: 400 52px/1 var(--vt); letter-spacing: .04em; color: var(--bright); margin: 28px 0 6px; }
+  h2 { font: 400 30px/1 var(--vt); letter-spacing: .08em; color: var(--bright); margin: 44px 0 6px; text-transform: uppercase; }
+  h3 { font: 500 13px var(--mono); text-transform: uppercase; letter-spacing: .1em; color: var(--dim); margin: 18px 0 4px; }
+  .lede { font-size: 19px; color: var(--bright); max-width: 62ch; text-wrap: balance; }
+  .note { font: 13px/1.5 var(--mono); color: var(--dim); }
+  .prs { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin-top: 14px; }
+  .pr { background: var(--panel); border: 1px solid var(--line); padding: 12px 14px; display: grid; gap: 4px; align-content: start; }
+  .pr .n { font: 600 15px var(--mono); color: var(--bright); }
+  .pr .s { font: 11px/1.6 var(--mono); color: var(--yellow); border: 1px solid currentColor; padding: 0 6px; justify-self: start; text-transform: uppercase; letter-spacing: .08em; }
+  .pr p { font-size: 14px; color: var(--ink); }
+  figure { margin: 0; display: grid; gap: 6px; }
+  figure img { width: 100%; height: auto; display: block; border: 1px solid var(--line); background: var(--deep); }
+  figcaption { font: 13px/1.5 var(--mono); color: var(--dim); }
+  .g2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; }
+  .g3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; align-items: start; }
+  .phone img { max-width: 300px; }
+  ul { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; max-width: 76ch; }
+  li::marker { color: var(--faint); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th { text-align: left; font: 500 11.5px var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: .08em; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--line); }
+  td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--panel); vertical-align: top; }
+  td:first-child { font-family: var(--mono); color: var(--bright); white-space: nowrap; }
+  .tbl { overflow-x: auto; }
+  .num { font-variant-numeric: tabular-nums; }
+  .ok { color: var(--green); } .warn { color: var(--yellow); }
+</style>
+
+<div class="wrap">
+  <div class="manline"><span>DAEMONS(6)</span><span>overnight build · 26–27 Sep 2026</span><span>DAEMONS(6)</span></div>
+
+  <h1>Daemons, overnight</h1>
+  <p class="lede">The pair-programming buddies that hatch from your work are built end to end: the server, the brain on every machine, learning, the economy, the desktop and the phone. Everything is in draft PRs. Nothing is merged.</p>
+
+  <div class="prs">
+    <div class="pr"><span class="n"><a href="https://github.com/autonomous-ai/openharness/pull/369">#369</a> Daemons</span><span class="s">draft</span><p>The core: design, roster and art, server zoo, the pair brain, learning, economy, phone, security hardening. 85 commits.</p></div>
+    <div class="pr"><span class="n"><a href="https://github.com/autonomous-ai/openharness/pull/370">#370</a> Daemons on the desktop</span><span class="s">draft</span><p>Stacked on #369: status line, hatch reveal, the four-tab panel, consent, the brain's keys.</p></div>
+    <div class="pr"><span class="n"><a href="https://github.com/autonomous-ai/openharness/pull/367">#367</a> Stale answers</span><span class="s">draft</span><p>A late answer can no longer be typed into the next dialog. Also inside #369.</p></div>
+    <div class="pr"><span class="n"><a href="https://github.com/autonomous-ai/openharness/pull/366">#366</a> Tab and launch fixes</span><span class="s">draft</span><p>A tab closes with its last pane; the New Harness form shows launch progress.</p></div>
+  </div>
+  <p class="note">The lookbook, drawn live from the roster: <a href="https://claude.ai/artifact/53oRRvAqj8XXXMSTysMAav">Terminal Creatures</a>. Start reading the code at <code>daemons/README.md</code>.</p>
+
+  <h2>Look first</h2>
+  <div class="g2">
+    <figure><img src="img/status-brain.jpg" alt="Status line lines: a need with keys first, a proposal, a lesson, a reply, an automatic action, a count"><figcaption>The status line. Keys first, facts first, the daemon's tag last. Only needs and failures take over the line.</figcaption></figure>
+    <figure><img src="img/status-detail-armed.jpg" alt="A need line with its full command shown under the status line"><figcaption>Every approval shows the harness and the exact command. Keys arm 450 ms after the line is drawn.</figcaption></figure>
+  </div>
+  <div class="g3" style="margin-top:14px">
+    <figure><img src="img/hatch-tell-legendary-pop.jpg" alt="An egg popping with yellow sparks"><figcaption>The crack tells the rarity: yellow sparks for a legendary.</figcaption></figure>
+    <figure><img src="img/hatch-7-banner.jpg" alt="The hatchling and its name in the banner face"><figcaption>The name in the new banner face.</figcaption></figure>
+    <figure><img src="img/hatch-8-card.jpg" alt="The hatch card"><figcaption>The card: portrait, number, rarity, lineage, first words. Copies as a code block.</figcaption></figure>
+  </div>
+
+  <h2>The status line</h2>
+  <figure><img src="img/status-slot.jpg" alt="The daemon slot in every state"><figcaption>Eight cells in the bar's own colour: the nest filling with habits, egg kinds, versions, moods, the +N count, a shiny marker.</figcaption></figure>
+
+  <h2>Hatching and growing</h2>
+  <div class="g2">
+    <figure><img src="img/hatch-consent.jpg" alt="The consent screen after a hatch"><figcaption>After the first hatch: what it sees, reads and writes. Nothing is watched until you say yes; it starts at watch.</figcaption></figure>
+    <figure><img src="img/hatch-levelup-held.jpg" alt="A level-up to a new version"><figcaption>A level-up morphs to the new version, with a changelog line.</figcaption></figure>
+  </div>
+
+  <h2>The panel</h2>
+  <div class="g2">
+    <figure><img src="img/panel-tab-2-zoo.jpg" alt="The zoo tab"><figcaption>2:zoo. The back of the box: numbered slots, the secret's slot, versions, duplicates, meters to the next egg.</figcaption></figure>
+    <figure><img src="img/panel-tab-4-settings.jpg" alt="The settings tab"><figcaption>4:settings. Quiet, motion, nap, the autonomy dial with its floor, consent, rules.</figcaption></figure>
+  </div>
+
+  <h2>The phone</h2>
+  <div class="g3 phone">
+    <figure><img src="img/phone-sheet.jpg" alt="The phone's daemon sheet"><figcaption>The sheet: portrait, line, eggs, the shelf.</figcaption></figure>
+    <figure><img src="img/phone-duplicate.jpg" alt="A duplicate hatch merging into the original"><figcaption>A duplicate merges: +150 xp, shiny carried over, level up.</figcaption></figure>
+    <figure><img src="img/phone-consent.jpg" alt="The phone's consent screen"><figcaption>The same consent, on the phone.</figcaption></figure>
+  </div>
+
+  <h2>Cards</h2>
+  <p>Text for a code block, SVG for X, previews and a GitHub profile README. A card never shows a live mood.</p>
+  <div class="g3" style="margin-top:10px">
+    <figure><img src="img/tim.svg" alt="tim's card as SVG" style="border:0;background:none"><figcaption><code>node daemons/tools/card.mjs tim --version 2.0 --svg</code></figcaption></figure>
+    <figure><img src="img/zsh.svg" alt="zsh's card as SVG" style="border:0;background:none"><figcaption>zsh, redrawn as a hermit crab.</figcaption></figure>
+    <figure><img src="img/shelf.svg" alt="A zoo shelf as SVG" style="border:0;background:none"><figcaption>A shelf: owned daemons in colour, numbered empty slots, the secret.</figcaption></figure>
+  </div>
+
+  <h2>What got built</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>area</th><th>what</th></tr></thead>
+    <tbody>
+      <tr><td>design</td><td><code>daemons/</code>: the contract, <code>roster.json</code> (drop 1 “unix”, three portraits per daemon, slot-template lines), the reference renderer, banner face, cards, and a generator that checks every frame and writes the copies and fixtures every client must match byte for byte.</td></tr>
+      <tr><td>server</td><td>The zoo API, the server-side draw, eggs earned from work, bond and versions, duplicates, mint serials, consent.</td></tr>
+      <tr><td>brain</td><td>Model-free sensing on every machine, triage with one-key answers, the return brief, <code>harness pair</code> and an MCP server, the pair harness you can talk to, the autonomy dial and rules.</td></tr>
+      <tr><td>learning</td><td>Notice real signals, propose in one line, teach every agent with SKILL.md only with your yes, revert; borrow, usage, curator and export as opt-ins.</td></tr>
+      <tr><td>security</td><td>Two review rounds. One-time yes only on allow-listed prompts (shell tokenizer, realpath); keys valid only for lines a window showed; confirmations for autonomy and rules; lessons need your key and a nonce; redaction; consent first.</td></tr>
+      <tr><td>clients</td><td>Desktop (status line, reveal, panel) and phone (chip, sheet, reveal, consent). <code>hn</code> later, as agreed.</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Tests</h3>
+  <p class="num">CLI <span class="ok">5341 passed</span> (TMUX unset, stub tmux) · backend <span class="ok">683 passed</span> · phone <span class="ok">541 passed</span> · desktop daemon tests <span class="ok">195 passed</span>, full desktop suite <span class="ok">3848 passed</span> with the same <span class="warn">24 failures</span> that already fail on the base branch · tsc clean · debug build compiles. The app was never launched against your real account.</p>
+
+  <h2>Decided for you</h2>
+  <p>You said to pick what is best. Change any of these.</p>
+  <ul>
+    <li><b>Names:</b> daemons, the zoo, “hatch” with <code>fork() returned 0.</code>, and <code>harnessd</code> as the background service's name in UI copy.</li>
+    <li><b>Drop 1 “unix”:</b> tim, fish, ping, bat (common); vim, zsh, biff (rare); fzf, tldr (legendary); grue (secret, <code>#S/09</code>, outside the set).</li>
+    <li><b>First hour:</b> the first egg after 3 of 8 habits, a finished turn among them; tim is four times as likely from it; a setup egg at 6.</li>
+    <li><b>Eggs from work:</b> a turn egg every 40 counted turns (20 a day, plus one per 10 agent-minutes); week, marathon, night (your agents finishing while you're away) and history eggs.</li>
+    <li><b>Rarity:</b> secrets only from night and easter eggs, guaranteed by the 8th; shiny 1 in 256; duplicates merge (+150 xp); serials minted on the server.</li>
+    <li><b>Voice:</b> silent by default, facts before jokes, one unsolicited line per two minutes at most, no idle animation, blinks only as answers.</li>
+    <li><b>Trust:</b> watch until you say otherwise; model calls opt-in; lessons never go into tracked files by default.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <ul>
+    <li>Keep <code>harnessd</code> as the service's user-facing name?</li>
+    <li>Are the economy numbers right for real use (3 habits, 40 turns an egg, 20 a day)? They need a week of real play to tune.</li>
+    <li>Approved lessons reach Store-harness sessions and project notes; exporting to <code>~/.claude/skills</code> is opt-in. Should approval export by default?</li>
+    <li>The brain's keys work only over the Unix socket, so not on Windows yet.</li>
+    <li>A public card-verify endpoint for serials, and the bold ideas from the review (collab drops with the fish, fzf and bat maintainers; artisan keycaps): pursue?</li>
+  </ul>
+
+  <h2>Next</h2>
+  <ul>
+    <li>Play it for real: quit Harness, run the desktop debug build from <code>daemons-desktop</code> (it shares state with your installed app, so never both at once), hatch, and tune.</li>
+    <li><code>hn</code>: read the same roster, check against the same frames, speak the same daemon frames.</li>
+    <li>Merge order when ready: #366 and #367, then #369, then #370.</li>
+  </ul>
+
+  <div class="manline" style="border-top:1px solid var(--line);border-bottom:0;margin-top:48px"><span>Harness</span><span>September 27, 2026</span><span>DAEMONS(6)</span></div>
+</div>

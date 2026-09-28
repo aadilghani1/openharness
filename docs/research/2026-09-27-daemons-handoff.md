@@ -3,7 +3,9 @@
 Where the daemons work stands, what was decided, and how to continue. The feature itself is described
 in `daemons/README.md` (the contract), `daemons/BRAIN.md` and `daemons/LEARNING.md`; the build spec for
 the work in progress is `docs/research/2026-09-27-daemons-eggs-individuals-spec.md`; the release plan
-is `docs/research/2026-09-27-daemons-rollout.md`.
+is `docs/research/2026-09-27-daemons-rollout.md`. The review pages the owner approved (eggs, traits,
+the lookbook as reviewed, the overnight report) are in `daemons/review/`: open them from disk in a
+browser, and keep new review pages there too, never as hosted artifacts.
 
 ## Decisions (all made by the product owner)
 
