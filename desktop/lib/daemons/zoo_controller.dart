@@ -13,7 +13,7 @@
 /// to ask) is [DaemonsSwitch.off]: nothing is shown, read, kept or sent, and
 /// the window behaves exactly as it did before daemons existed. A failed read
 /// is not an answer: whatever was known stands, and it is asked again. A
-/// guest's durable local zoo stays off. The hidden desktop shortcut opens a
+/// guest's durable local zoo stays off. Settings → Experimental opens a
 /// separate, window-only preview with no account or persistence.
 library;
 
@@ -80,11 +80,11 @@ enum DaemonsSwitch {
   unknown,
 
   /// The server has no zoo for this account (404), harnessd is switched off
-  /// (`DAEMONS_OFF`), or a guest has not opened the hidden preview. Everything
+  /// (`DAEMONS_OFF`), or a guest has not enabled the experimental preview. Everything
   /// daemon-related stays hidden and silent.
   off,
 
-  /// `GET /api/zoo` answered 200, or the hidden local preview is on.
+  /// `GET /api/zoo` answered 200, or the experimental local preview is on.
   on,
 }
 

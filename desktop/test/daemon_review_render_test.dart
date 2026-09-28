@@ -37,10 +37,10 @@ import 'package:harness/widgets/daemon_slot.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle, TerminalTheme;
 
 import 'daemons/zoo_test.dart' show FakeZooTransport;
-import 'keymap_host_test.dart' show key;
+import 'package:harness/settings/experimental_features.dart';
 import 'support/real_fonts.dart';
 import 'support/status_bar_layout.dart' show seedStatusBarWorkspace;
-import 'swarm_state_test.dart' show createApp;
+import 'swarm_state_test.dart' show MemoryStore, createApp;
 
 class _Memory implements LocalKeyValueStore {
   final values = <String, String>{};
@@ -1939,7 +1939,7 @@ void main() {
   }
 
   for (final width in [640.0, 1280.0]) {
-    testWidgets('hidden creature preview panel at ${width.toInt()}', (tester) async {
+    testWidgets('experimental creature preview panel at ${width.toInt()}', (tester) async {
       final app = createApp();
       addTearDown(app.dispose);
       seedStatusBarWorkspace(app);
@@ -1947,9 +1947,11 @@ void main() {
       final zoo = ZooController();
       addTearDown(zoo.dispose);
       final remote = FakeZooTransport(available: false);
+      final experiments = ExperimentalFeaturesStore(storage: MemoryStore());
+      addTearDown(experiments.dispose);
       await _capture(
         tester,
-        'hidden-preview-panel-${width.toInt()}',
+        'experimental-preview-panel-${width.toInt()}',
         Size(width, 620),
         (context) => SwarmScreen(
           notifier: app,
@@ -1957,11 +1959,12 @@ void main() {
           projectStore: SwarmProjectStore(),
           zoo: zoo,
           zooTransport: remote,
+          experimentalFeatures: experiments,
           daemonClock: () => tester.binding.clock.now(),
         ),
         act: () async {
           expect(find.byKey(const ValueKey('daemon-slot')), findsNothing);
-          await key(tester, LogicalKeyboardKey.keyD, cmd: true, alt: true, shift: true);
+          await experiments.set(ExperimentalFeature.focusBarCreature, true);
           await tester.pump(const Duration(seconds: 1));
           await tester.tap(find.byKey(const ValueKey('daemon-slot')));
           await tester.pump();

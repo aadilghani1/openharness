@@ -1,6 +1,6 @@
 // Daemons off (daemons/README.md, "Off switches"): invisible and free. A
 // signed-in window whose `GET /api/zoo` answers 404, or whose harnessd says
-// DAEMONS_OFF, and a guest who has not turned on Daemons (preview), get the
+// DAEMONS_OFF, and a guest who has not enabled the creature experiment, get the
 // window from before daemons existed: the same bar at every width, no frames,
 // no habits, no keys taken, no commands, no easter row, no notices.
 import 'dart:async';
@@ -17,6 +17,8 @@ import 'package:harness/daemons/zoo.dart';
 import 'package:harness/daemons/zoo_controller.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/settings/sections/account_section.dart';
+import 'package:harness/settings/experimental_features.dart';
+import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keymap.dart';
@@ -46,6 +48,8 @@ void main() {
   late ZooController zoo;
   late FakeZooTransport remote;
   late ValueNotifier<bool> preview;
+  late MemoryStore preferences;
+  late ExperimentalFeaturesStore experiments;
   late List<(String, Map<String, dynamic>)> frames;
 
   setUp(() {
@@ -67,10 +71,13 @@ void main() {
       return true;
     };
     preview = ValueNotifier(false);
+    preferences = MemoryStore();
+    experiments = ExperimentalFeaturesStore(storage: preferences);
   });
   tearDown(() {
     app.dispose();
     preview.dispose();
+    experiments.dispose();
   });
 
   /// [on]: `GET /api/zoo` answers 200 with [seed]; otherwise 404.
@@ -103,6 +110,7 @@ void main() {
           zooTransport: remote,
           daemonClock: () => tester.binding.clock.now(),
           daemonsPreview: preview,
+          experimentalFeatures: experiments,
           onboarding: onboarding,
         ),
       ),
@@ -129,58 +137,100 @@ void main() {
     return handled;
   }
 
-  Future<void> previewChord(WidgetTester tester) =>
-      key(tester, LogicalKeyboardKey.keyD, cmd: true, alt: true, shift: true);
+  const feature = ExperimentalFeature.focusBarCreature;
+  final experimentSwitch = find.byKey(
+    const ValueKey('experimental-focus_bar_creature'),
+  );
+
+  Future<void> setPreview(WidgetTester tester, bool on) async {
+    await experiments.set(feature, on);
+    await tester.pump(const Duration(seconds: 1));
+  }
+
+  Future<void> openExperimental(WidgetTester tester) async {
+    await key(tester, LogicalKeyboardKey.comma, cmd: true);
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('settings-search-field')),
+      'experimental',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(experimentSwitch, findsOneWidget);
+  }
 
   testWidgets(
-    'hidden preview toggles for a signed-in account with no rollout',
+    'Settings switches the creature on and off without leaving Settings',
     (tester) async {
       await mount(tester);
       expect(slot, findsNothing);
-      final focus = FocusManager.instance.primaryFocus;
       final tab = app.activeSwarmId;
-      await previewChord(tester);
+      await openExperimental(tester);
+      expect(tester.widget<Switch>(experimentSwitch).value, isFalse);
+      await tester.tap(experimentSwitch);
       await tester.pump(const Duration(seconds: 1));
-      expect(slot, findsOneWidget);
+      expect(tester.widget<Switch>(experimentSwitch).value, isTrue);
       expect(zoo.isPreview, isTrue);
       expect(zoo.paired!.id, 'tim');
-      expect(FocusManager.instance.primaryFocus, same(focus));
+      expect(find.byType(SettingsScreen), findsOneWidget);
       expect(app.activeSwarmId, tab);
       expect(frames, isEmpty);
       expect(remote.batches, isEmpty);
-
-      // One press, not autorepeat. The key-up must not reach the focused input.
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
-      expect(await tester.sendKeyDownEvent(LogicalKeyboardKey.keyD), isTrue);
-      await tester.pump();
-      expect(slot, findsNothing);
-      expect(await tester.sendKeyRepeatEvent(LogicalKeyboardKey.keyD), isTrue);
-      await tester.pump();
-      expect(slot, findsNothing);
-      expect(await tester.sendKeyUpEvent(LogicalKeyboardKey.keyD), isTrue);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
-
-      await previewChord(tester);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump(const Duration(seconds: 1));
+      expect(slot, findsOneWidget);
       await tester.tap(slot);
       await tester.pump();
       expect(
         find.byKey(const ValueKey('daemon-preview-label')),
         findsOneWidget,
       );
-      await previewChord(tester);
-      expect(slot, findsNothing);
+      await openExperimental(tester);
+      await tester.tap(experimentSwitch);
+      await tester.pump();
+      expect(zoo.loaded, isFalse);
+      expect(tester.widget<Switch>(experimentSwitch).value, isFalse);
+      expect(find.byType(SettingsScreen), findsOneWidget);
       expect(find.byKey(const ValueKey('daemon-panel')), findsNothing);
-      expect(frames, isEmpty);
-      expect(remote.batches, isEmpty);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(slot, findsNothing);
+      expect(preferences.values[feature.storageKey], 'off');
       await unmount(tester);
+    },
+  );
 
+  testWidgets(
+    'the saved switch survives a new window but the test collection does not',
+    (tester) async {
       await mount(tester);
-      expect(slot, findsNothing, reason: 'a new window starts hidden');
+      await setPreview(tester, true);
+      expect(zoo.nickname('preview-tim', 'Window one'), isTrue);
+      await tester.pump();
+      expect(zoo.paired!.name, 'Window one');
+      await unmount(tester);
+      experiments.dispose();
+      experiments = ExperimentalFeaturesStore(storage: preferences);
+      await experiments.load();
+      await mount(tester);
+      await tester.pump(const Duration(seconds: 1));
+      expect(slot, findsOneWidget);
+      expect(zoo.isPreview, isTrue);
+      expect(zoo.paired!.name, isNot('Window one'));
+      expect(zoo.zoo.eggs, hasLength(1));
+      await setPreview(tester, false);
+      await unmount(tester);
+      experiments.dispose();
+      experiments = ExperimentalFeaturesStore(storage: preferences);
+      await experiments.load();
+      await mount(tester, on: true);
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        slot,
+        findsNothing,
+        reason: 'saved off also overrides the account rollout',
+      );
+      expect(remote.fetches, 0);
       await unmount(tester);
     },
   );
@@ -191,9 +241,9 @@ void main() {
     await mount(tester, on: true);
     await tester.pump();
     expect(slot, findsOneWidget);
-    await previewChord(tester);
+    await setPreview(tester, true);
     expect(zoo.isPreview, isTrue);
-    await previewChord(tester);
+    await setPreview(tester, false);
     final fetches = remote.fetches;
     zoo.pushed(999);
     zoo.refresh();
@@ -205,15 +255,16 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('the hidden shortcut also closes an egg reveal', (tester) async {
+  testWidgets('disabling the experiment also closes an egg reveal', (
+    tester,
+  ) async {
     await mount(tester);
-    await previewChord(tester);
-    await tester.pump(const Duration(seconds: 1));
+    await setPreview(tester, true);
     await tester.tap(slot);
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('daemon-egg:turn')));
     await tester.pump();
-    await previewChord(tester);
+    await setPreview(tester, false);
     expect(slot, findsNothing);
     expect(find.byKey(const ValueKey('daemon-panel')), findsNothing);
     await tester.pump(const Duration(seconds: 15));
@@ -228,14 +279,21 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('guest preview opens without sign-in and remains out of help', (
+  testWidgets('guest preview needs no sign-in and has no activation shortcut', (
     tester,
   ) async {
     app.signedIn = false;
     await mount(tester);
     expect(slot, findsNothing);
-    await previewChord(tester);
-    await tester.pump(const Duration(seconds: 1));
+    await key(
+      tester,
+      LogicalKeyboardKey.keyD,
+      cmd: true,
+      alt: true,
+      shift: true,
+    );
+    expect(slot, findsNothing, reason: 'the removed shortcut does nothing');
+    await setPreview(tester, true);
     expect(slot, findsOneWidget);
     expect(remote.fetches, 0);
     final context = tester.element(find.byType(SwarmScreen));
@@ -258,53 +316,46 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('native shortcut reveals and hides the same focus-bar creature', (
-    tester,
-  ) async {
-    const channel = MethodChannel('harness/swarm_tabs');
-    final calls = <MethodCall>[];
-    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
-      call,
-    ) async {
-      calls.add(call);
-      return null;
-    });
-    addTearDown(
-      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        channel,
-        null,
-      ),
-    );
-    await mount(tester, native: true);
-    final keymap = calls.lastWhere((c) => c.method == 'keymapState');
-    expect(jsonEncode(keymap.arguments), contains('app.daemon_preview'));
-    Future<void> toggle() async {
-      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
-        channel.name,
-        const StandardMethodCodec().encodeMethodCall(
-          const MethodCall('keymapCommand', {'command': 'app.daemon_preview'}),
+  testWidgets(
+    'the experiment updates the native focus bar without a shortcut',
+    (tester) async {
+      const channel = MethodChannel('harness/swarm_tabs');
+      final calls = <MethodCall>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        calls.add(call);
+        return null;
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
         ),
-        (_) {},
       );
-      await tester.pump(const Duration(seconds: 1));
-    }
-
-    await toggle();
-    expect(zoo.paired!.id, 'tim');
-    final updates = calls.where((c) => c.method == 'update');
-    final daemon = (updates.last.arguments as Map)['daemon'] as Map;
-    expect(daemon['visible'], isTrue);
-    expect(daemon['glyph'], isNotEmpty);
-    expect(daemon['tooltip'], contains('Local preview'));
-    await toggle();
-    expect(zoo.loaded, isFalse);
-    expect(calls.lastWhere((c) => c.method == 'daemonState').arguments, {
-      'visible': false,
-    });
-    expect(frames, isEmpty);
-    expect(remote.batches, isEmpty);
-    await unmount(tester);
-  });
+      await mount(tester, native: true);
+      final keymap = calls.lastWhere((c) => c.method == 'keymapState');
+      expect(
+        jsonEncode(keymap.arguments),
+        isNot(contains('app.daemon_preview')),
+      );
+      await setPreview(tester, true);
+      expect(zoo.paired!.id, 'tim');
+      final updates = calls.where((c) => c.method == 'update');
+      final daemon = (updates.last.arguments as Map)['daemon'] as Map;
+      expect(daemon['visible'], isTrue);
+      expect(daemon['glyph'], isNotEmpty);
+      expect(daemon['tooltip'], contains('Settings → Experimental'));
+      await setPreview(tester, false);
+      expect(zoo.loaded, isFalse);
+      expect(calls.lastWhere((c) => c.method == 'daemonState').arguments, {
+        'visible': false,
+      });
+      expect(frames, isEmpty);
+      expect(remote.batches, isEmpty);
+      await unmount(tester);
+    },
+  );
 
   testWidgets('a 404 is off: no slot and the bar from before daemons, at '
       'every width', (tester) async {
@@ -530,7 +581,7 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('a guest has no daemons until Daemons (preview) is on', (
+  testWidgets('a guest can still exercise the durable-zoo test seam', (
     tester,
   ) async {
     app.signedIn = false;
@@ -660,7 +711,7 @@ void main() {
     });
   });
 
-  testWidgets('Settings keeps the creature preview hidden for everyone', (
+  testWidgets('Account has no duplicate creature preview switch', (
     tester,
   ) async {
     Future<void> show() => tester.pumpWidget(

@@ -26,36 +26,44 @@ existed, exactly:
   The old Settings ▸ Account preview switch is removed and its saved value
   is no longer loaded.
 
-### Hidden focus-bar preview
+### Experimental focus-bar creature
 
-Press **Command-Option-Shift-D** on macOS (**Ctrl-Alt-Shift-D** on Linux or
-Windows) to show a test tim at the far right of the focus bar. Press it again
-to hide the creature, its panel and any hatch. The command is
-`app.daemon_preview`: it uses the shared, remappable keymap and native Mac
-bridge but has no menu item, command-search result or shortcut-help row.
-Holding the chord never toggles repeatedly. Showing it preserves input focus;
-hiding an open panel returns focus to the workspace.
+Open **Settings → Experimental → Focus-bar creature** to show a test tim at
+the far right of the focus bar. Switch it off there to hide the creature, its
+panel and any hatch. The activation shortcut has been removed entirely,
+including its command and native Mac binding. The switch works by mouse or
+keyboard and leaves focus in Settings.
 
-This works signed in or out, even while the server rollout is off. The window
-gets a separate in-memory collection with tim and one ready turn egg. Click
-the creature to open its panel; open the egg there to test hatching and naming.
-Only turns finishing after activation count toward preview progress. Hide/show keeps that
-window's collection; closing the window discards it. Motion, Quiet and the
-panel tab also stay temporary. There is no collection upload, guest seeding,
-brain traffic, rules-file access, account consent or autonomy change. Art uses
-the bundled species fallback; individual plate requests remain off.
+The Experimental section is a shared catalog of opt-in features. This first
+switch is off by default, is available on desktop without sign-in, and saves
+its choice on this computer (`experimental.focus_bar_creature`). The store is
+loaded before the first frame, so a saved choice takes effect at launch.
 
-The preview is opt-in for each window. Hiding it also suppresses an account's
-creature for the rest of that window, including after pushes or reconnects.
-Otherwise the existing account rollout still decides whether the real zoo is
-available. This shortcut does not enable the server or harnessd feature.
+The preview works even while the server rollout is off. The window gets a
+separate in-memory collection with tim and one ready turn egg. Click the
+creature to open its panel; open the egg there to test hatching and naming.
+Only turns finishing after activation count toward preview progress. Hide/show
+keeps that window's collection; closing the window discards it. Motion, Quiet
+and the panel tab also stay temporary. There is no collection upload, guest
+seeding, brain traffic, rules-file access, account consent or autonomy change.
+Art uses the bundled species fallback; individual plate requests remain off.
 
-Checks: `test/daemon_off_test.dart`, `test/daemons/zoo_preview_test.dart`,
-`test/keymap_native_test.dart`, and the hidden-preview cases in
-`test/daemon_review_render_test.dart`. Export `HARNESS_KEYMAP_FIXTURE_PATH`
-when running the keymap test, then point `HARNESS_TITLEBAR_KEYMAP_FIXTURE` at
-that JSON and run `bash tool/check_swarm_titlebar.sh /path/to/flutter
---daemon-preview` for the production AppKit slot and keyboard checks.
+The saved choice overrides the separate account rollout: on selects the test
+collection, and off suppresses all creatures, even after relaunch, pushes or
+reconnects. An installation that has never made a local choice keeps its
+existing account rollout. This switch does not enable the server or harnessd
+feature. The old Settings → Account preference is not migrated.
+
+Checks: `test/experimental_features_test.dart`, `test/settings_screen_test.dart`,
+`test/settings_section_test.dart`, `test/startup_test.dart`,
+`test/daemon_off_test.dart`, `test/daemons/zoo_preview_test.dart`, and
+`test/keymap_native_test.dart`. Real-font render fixtures are
+`test/settings_review_render_test.dart` and `test/daemon_review_render_test.dart`;
+set `HARNESS_SETTINGS_CAPTURE_DIR` or `HARNESS_DAEMON_CAPTURE_DIR` to save PNGs.
+Export `HARNESS_KEYMAP_FIXTURE_PATH` when running the keymap test, then point
+`HARNESS_TITLEBAR_KEYMAP_FIXTURE` at that JSON and run
+`bash tool/check_swarm_titlebar.sh /path/to/flutter --window-layout` for the
+production AppKit slot and keyboard checks. Use isolated state and stubbed tmux.
 
 Off (and while it is not known yet) means: no status slot and no space kept
 for it (the Flutter bar and native lay out the bar from before daemons; native
@@ -66,7 +74,7 @@ unless the zoo has loaded; frames harnessd sends are heard but nothing of them
 shows), no `xyzzy` row, and the daemon's commands are not bound
 (`HarnessCommand.daemon`, `daemonCommandsActive`): ⌘⌥T reaches the pane as it
 did before, and neither the command list, the shortcut list, keyboard practice
-nor the native keymap has them. The hidden preview toggle is the sole exception. The daemon's settings file is read only once
+nor the native keymap has them. The daemon's settings file is read only once
 daemons are on. Switching off while on takes all of it away at once.
 
 `test/daemon_off_test.dart` holds all of this to the bar from before daemons
@@ -100,7 +108,7 @@ daemons are on.
 | Motion, Quiet and the panel's last tab, kept per computer | `lib/daemons/daemon_settings.dart` (`daemons.settings.v1`) |
 | zoo shape, rules, local draw | `lib/daemons/zoo.dart` |
 | zoo state: account, guest, seed; on, off or not known yet | `lib/daemons/zoo_controller.dart` |
-| Hidden local preview | `app.daemon_preview` in the shared keymap; `SwarmScreen._toggleDaemonPreview`; `ZooController.showPreview` |
+| Experimental local preview | `lib/settings/experimental_features.dart`; `lib/settings/sections/experimental_section.dart`; `SwarmScreen._experimentalFeaturesChanged`; `ZooController.showPreview` |
 | moods, blinks, work steps, tally, voice | `lib/daemons/daemon_face.dart` |
 | the pair brain's frames, shown and armed, confirms, talk and `pair` requests | `lib/daemons/daemon_brain.dart` |
 | lessons (list, show, skip, revert; taught only by the live line's key) | `lib/daemons/daemon_lessons.dart` |
@@ -135,7 +143,7 @@ shape and rules as the server (`daemons.zoo.v1.local`). Each hatch is a separate
 individual with its own UID and seed; repeated species never merge XP. Local
 individuals carry no server serial. An existing guest zoo can be seeded once
 when an account's zoo first answers, preserving the account's own dial and
-consent. A 404 never falls back to that local zoo. The hidden preview uses a
+consent. A 404 never falls back to that local zoo. The experimental preview uses a
 separate `ZooSource.preview` and cannot read, write or seed this durable zoo.
 
 At sign-in the guest's zoo is queued first, ahead of any habit report, and

@@ -114,6 +114,7 @@ import '../widgets/workspace_start_guide.dart';
 import '../widgets/workspace_welcome.dart';
 import '../shortcuts/keyboard_practice.dart';
 import '../widgets/agent_alert_banners.dart';
+import '../settings/experimental_features.dart';
 
 class SwarmScreen extends StatefulWidget {
   const SwarmScreen({
@@ -133,6 +134,7 @@ class SwarmScreen extends StatefulWidget {
     this.zooTransport,
     this.daemonClock,
     this.daemonsPreview,
+    this.experimentalFeatures,
   });
   final AppNotifier notifier;
   final bool? nativeTabs;
@@ -153,9 +155,10 @@ class SwarmScreen extends StatefulWidget {
   /// The daemon's clock (tests pass the fake one).
   final DateTime Function()? daemonClock;
 
-  /// Test seam for the guest's durable local zoo. The app's hidden preview
+  /// Test seam for the guest's durable local zoo. The app's experimental preview
   /// uses a separate, window-only collection and never seeds an account.
   final ValueListenable<bool>? daemonsPreview;
+  final ExperimentalFeaturesStore? experimentalFeatures;
   @override
   State<SwarmScreen> createState() => _SwarmScreenState();
 }
@@ -231,9 +234,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
   );
   late final ValueListenable<bool>? _daemonsPreview = widget.daemonsPreview;
 
-  /// Null leaves the server rollout gate in charge. The hidden shortcut
-  /// selects a local preview, or explicitly hides all daemons in this window.
-  bool? _daemonPreviewOverride;
+  late final _experimentalFeatures =
+      widget.experimentalFeatures ?? experimentalFeaturesStore;
+
+  /// An explicit local choice overrides the separate account rollout. This
+  /// stays null for installations that have never tried the test collection.
+  late bool? _daemonPreviewOverride = _creaturePreviewChoice;
+  bool? get _creaturePreviewChoice =>
+      ExperimentalFeature.focusBarCreature.available && app.viewer == null
+      ? _experimentalFeatures.choice(ExperimentalFeature.focusBarCreature)
+      : null;
   late final _brain = DaemonBrain(
     send: _sendDaemonFrame,
     storage: kUnderTest ? null : HarnessFileStore.shared,
@@ -449,6 +459,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // are on screen (`daemon_shown`); its keys arm a moment later.
     _face.voiceLine.addListener(_voiceChanged);
     _daemonsPreview?.addListener(_syncDaemon);
+    _experimentalFeatures.addListener(_experimentalFeaturesChanged);
+    if (_daemonPreviewOverride == true) _baselinePreviewTurns();
     app.agentPulse.addListener(_face.pulse);
     _face.dialogOpen = () =>
         _dialogOpen ||
@@ -578,6 +590,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _toolbarNotices.dispose();
     HardwareKeyboard.instance.removeHandler(_noteKey);
     _daemonsPreview?.removeListener(_syncDaemon);
+    _experimentalFeatures.removeListener(_experimentalFeaturesChanged);
     _slotTimer?.cancel();
     if (_daemonCommandsOn) daemonCommandsActive.value = false;
     unawaited(_zooPushes?.cancel());
@@ -719,10 +732,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       mounted && _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen;
 
   void _runShortcut(String id) {
-    if (id == 'app.daemon_preview') {
-      if (_canExecuteCommand(id)) _toggleDaemonPreview();
-      return;
-    }
     _closeDaemonHint();
     _closeDaemon(restoreFocus: false);
     _closeModelsControls(restoreFocus: false);
@@ -982,16 +991,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
         '${engine.isEmpty ? 'harness' : engine}@$machine';
     DaemonSubject subjectOf(HarnessSession s, {String? q}) => DaemonSubject(
       '${s.machineId}/${s.agent.id}',
-      who: who(
-        s.agent.engine ?? '',
-        s.machine.machine.displayName,
-      ),
+      who: who(s.agent.engine ?? '', s.machine.machine.displayName),
       q: q,
       since: s.question?.since,
     );
-    final byKey = {
-      for (final s in sessions) '${s.machineId}/${s.agent.id}': s,
-    };
+    final byKey = {for (final s in sessions) '${s.machineId}/${s.agent.id}': s};
     final focusedPane = app.focusedPane;
     final focus = focusedPane?.agentId == null
         ? null
@@ -1018,9 +1022,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       for (final need in brain?.needs ?? const <DaemonNeed>[])
         need.key: DaemonSubject(
           need.harness,
-          who: need.machine.isEmpty
-              ? null
-              : who(need.engine, need.machine),
+          who: need.machine.isEmpty ? null : who(need.engine, need.machine),
           q: need.question,
           since: need.since,
         ),
@@ -1074,8 +1076,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
             machine.machine.machineId: [
               for (final end in machine.recentTurnEnds)
                 DaemonTurnEnd(
-                  byKey['${machine.machine.machineId}/${end.agentId}'] ==
-                          null
+                  byKey['${machine.machine.machineId}/${end.agentId}'] == null
                       ? DaemonSubject(
                           '${machine.machine.machineId}/${end.agentId}',
                         )
@@ -2191,6 +2192,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       context,
       app,
       initialSection: section,
+      experimentalFeatures: _experimentalFeatures,
       source: 'swarm',
     ),
   );
@@ -3017,9 +3019,24 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _zoo.loaded &&
       app.sendDaemonFrame(type, payload);
 
-  void _toggleDaemonPreview() {
+  void _experimentalFeaturesChanged() {
+    final choice = _creaturePreviewChoice;
+    if (_daemonPreviewOverride == choice) return;
     final hadOverlay = _daemonOverlay != null || _hatchOverlay != null;
-    _daemonPreviewOverride = _daemonPreviewOverride != true;
+    _daemonPreviewOverride = choice;
+    _baselinePreviewTurns();
+    _closeDaemonHint();
+    _closeDaemon(restoreFocus: false);
+    _closeHatch(restoreFocus: false);
+    _face.dismissVoice();
+    _brain.reset();
+    _plates.reset();
+    _syncDaemon();
+    // A setting change must leave keyboard focus in Settings.
+    if (hadOverlay && _routeIsCurrent && !_dialogOpen) _returnFocusToPane();
+  }
+
+  void _baselinePreviewTurns() {
     // Existing work is a baseline; only turns finishing during the preview
     // should earn its eggs. No terminal focus or input changes on reveal.
     _zooTurnsSeen
@@ -3029,14 +3046,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
           (machine) => MapEntry(machine.machine.machineId, machine.zooTurns),
         ),
       );
-    _closeDaemonHint();
-    _closeDaemon(restoreFocus: false);
-    _closeHatch(restoreFocus: false);
-    _face.dismissVoice();
-    _brain.reset();
-    _plates.reset();
-    _syncDaemon();
-    if (hadOverlay) _returnFocusToPane();
   }
 
   Map<String, Object?> get _daemonPayload {
@@ -3089,9 +3098,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   String get _daemonTooltip {
     if (!_zoo.isPreview) return _face.tooltip;
-    final shortcut = _keymap.hint('app.daemon_preview');
-    return '${_face.tooltip}\nLocal preview'
-        '${shortcut == null ? '' : ' · $shortcut to hide'}';
+    return '${_face.tooltip}\nLocal preview · Settings → Experimental';
   }
 
   /// Whether a key on the spoken line counts yet.
@@ -3689,11 +3696,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     key: key,
     interactive: onAction != null,
     showFor: showFor,
-    child: DaemonNotice(
-      message: message,
-      action: action,
-      onAction: onAction,
-    ),
+    child: DaemonNotice(message: message, action: action, onAction: onAction),
   );
 
   /// A note beside the slot: it never takes focus on arrival, and takes
@@ -5090,6 +5093,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         app,
         source: 'shortcut',
         initialSection: SettingsSection.debug,
+        experimentalFeatures: _experimentalFeatures,
       ),
     ),
   };
@@ -5109,7 +5113,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     'app.store': _openStore,
     'app.daemon': _toggleDaemon,
     'app.daemon_talk': _talkToDaemon,
-    'app.daemon_preview': _toggleDaemonPreview,
     'agent.add': _addAgent,
     if (kDebugSurfaceEnabled) 'app.onboarding_review': _newTab,
     'agent.rename': () => _editAgent(),
@@ -5173,7 +5176,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (id == 'keyboard.quick_start' ||
         id == 'keyboard.practice' ||
         id == 'app.onboarding_review' ||
-        id == 'app.daemon_preview' ||
         // A viewer has no daemon of its own to pair a phone with.
         id == 'app.add_phone') {
       return app.viewer == null;
