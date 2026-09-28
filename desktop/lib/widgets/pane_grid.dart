@@ -1207,14 +1207,14 @@ class _PaneCell extends StatelessWidget {
             terminalPaneBorder(focused: !_single && focused),
           ),
         ),
-        // Mute inactive content without a new layer of hit targets, animation,
-        // or changes to terminal colors. Paint attention above the dimming so
+        // A neutral gray veil lifts inactive backgrounds and softens their text
+        // without changing terminal colors. Paint attention above the veil so
         // a waiting question keeps its full-strength amber rim. Keep this
         // decoration present even when clear: inserting/removing it would
         // reparent the terminal and lose its input, scroll and selection state.
         foregroundDecoration: BoxDecoration(
           color: dimmed
-              ? grid.AppPalette.windowBg.withValues(alpha: .30)
+              ? const Color(0xFF9D9D9D).withValues(alpha: .30)
               : null,
           border: blocked
               ? Border.all(color: grid.AppPalette.warn, width: 2)

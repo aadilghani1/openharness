@@ -95,11 +95,13 @@ dialogs use the same thin frame as a focused pane. Avoid raised cards, shadows,
 rounded action pills, and redundant headings. Tabs use concise text labels, with
 selection conveyed by background rather than bold type.
 
-The selected pane stays at full contrast; other panes receive a subtle 30%
-background-color veil over their header and content. Selection follows the
-existing click and keyboard focus actions. Keep the current pane clear while a
-menu or the tab strip temporarily owns keyboard focus. A single or zoomed pane
-stays clear. Waiting-question borders paint above the veil, at full strength.
+The selected pane stays at full contrast; other panes receive a 30% neutral-gray
+veil (`#9D9D9D`) over their header and content, lifting dark backgrounds while
+softening text. In the default Graphite palette, inactive backgrounds render as
+`#404040` (RGB 64, 64, 64). Selection follows the existing click and keyboard
+focus actions. Keep the current pane clear while a menu or the tab strip
+temporarily owns keyboard focus. A single or zoomed pane stays clear.
+Waiting-question borders paint above the veil, at full strength.
 This is a paint treatment: retain terminal state and let the first click reach
 the pane underneath.
 
