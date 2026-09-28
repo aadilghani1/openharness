@@ -3319,6 +3319,8 @@ impl App {
     /// A window's pane-border-status as it shows: hn's default (top) where it has several panes;
     /// once you set it yourself, as tmux has it — on a lone pane too, and bottom or off.
     pub fn pane_status(&self, tab: &Tab) -> layout::Status {
+        // (A window one row tall: no room for a title row — the row is the pane's, as tmux shows it.)
+        if !self.headless && self.body().height < 2 { return layout::Status::Off }
         // As tmux draws it: over a lone pane too.
         layout::Status::of(&self.options.get("pane-border-status", &tab.id, None).unwrap_or_default())
     }

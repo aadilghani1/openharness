@@ -2367,8 +2367,11 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
             _ => { target.set_char(cell.c).set_style(style); }
         }
     }
-    // The link down: the last screen dimmed, and mosh's one row at the top saying so.
+    // The link down: the last screen dimmed, and mosh's one row at the top saying so (and that
+    // what you type is kept for it).
     if let Phase::Connecting(note) = &pane.phase {
+        let note = if pane.queued.is_empty() { note.clone() } else { format!("{note} — what you typed goes when it is back") };
+        let note = &note;
         buf.set_style(area, Style::default().add_modifier(Modifier::DIM));
         let row = Rect::new(area.x, area.y, area.width, 1);
         buf.set_style(row, Style::default().remove_modifier(Modifier::DIM).add_modifier(Modifier::REVERSED));

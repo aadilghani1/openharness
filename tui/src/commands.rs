@@ -1785,6 +1785,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 && app.options.get("@hn-new-window", "", None).as_deref() != Some("shell")
                 // (tmux's look is tmux's C-b c too.)
                 && app.options.get("@hn-look", "", None).as_deref() != Some("tmux");
+            // No machine to make its shell on (the daemon down): tmux's error, and no window made.
+            let machine = from.as_ref().map(|(m, _)| m.clone()).unwrap_or(app.fleet.local_id.clone());
+            if !bare && app.link(&machine).is_none() { return app.error("create window failed: the daemon is not running (harness start)") }
             app.new_tab_at(idx);
             if bare { app.home_from = from; return }
             if let Some(n) = &name { let n = expand(app, n); app.rename_tab(&n) }

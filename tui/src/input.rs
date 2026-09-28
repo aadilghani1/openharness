@@ -175,10 +175,11 @@ fn on_key(app: &mut App, key: KeyEvent) {
                 if title == "Paused" || title == "Could not resume" { app.resume(focus) } else { app.open_stream(focus, true) }
             }
         }
-        // Mid-takeover (or still opening): keep what is typed and deliver it once the stream is ours.
+        // Mid-takeover, still opening, or the link down: what is typed is kept (a screenful's worth)
+        // and delivered once the stream is back, as mosh holds it.
         Phase::Connecting(_) => {
             if let Some(bytes) = encode_key(&for_pane(app, focus, key), pane.mode()) {
-                if let Some(p) = app.panes.get_mut(&focus) { if p.opening { p.queued.push(bytes) } }
+                if let Some(p) = app.panes.get_mut(&focus) { if p.queued.iter().map(Vec::len).sum::<usize>() < 4096 { p.queued.push(bytes) } }
             }
         }
         Phase::Live | Phase::Watching(_) => {
