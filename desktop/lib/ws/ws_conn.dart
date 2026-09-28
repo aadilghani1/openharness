@@ -578,6 +578,12 @@ class WsConn {
     'terminal_sync',
     'dial_scroll',
     'dial_focus',
+    'dial_selection',
+    'app_selection_result',
+    'dial_visit',
+    'app_visit_result',
+    'dial_form',
+    'app_form_result',
     'ping',
     'pong',
   };

@@ -263,26 +263,32 @@ static void swipe_track(bool pressed, uint16_t x, uint16_t y)
         int home_edge = reader ? READER_HOME_EDGE_PX : BOTTOM_EDGE_PX;
         // HOME gesture: an upward swipe that STARTED at the bottom edge → jump to Overview. (y grows downward;
         // the driver already applies the panel mirror, so sy near y_max = the physical bottom.)
-        // THE DESK OWNS THE GLASS WHILE IT IS UP, AND IT IS HOME. Its tiles take taps through LVGL; what
-        // this classifier must not do is act on the carousel underneath — a horizontal swipe here would
-        // walk agents on a screen that is not showing them, and the home swipe has nowhere to go, because
-        // this IS where home goes. So on the desk it answers nothing.
+        // THE DESK OWNS THE GLASS WHILE IT IS UP — with ONE exception.
+        //
+        // Everything this classifier would do while the grid is up acts on the carousel UNDERNEATH: a
+        // sideways swipe walks agents on a screen that is not showing them, and the deferred tap belongs
+        // to the tile behind. Both stay refused. (The grid's own tiles are pressed through LVGL's indev,
+        // not through here, which is why refusing them costs nothing.)
+        //
+        // The exception is the bottom-edge swipe up. It is the way to the Overview from anywhere, and
+        // swallowing it here left that screen — the one that names the machine and carries Settings and
+        // the fleet count — with no way in at all while the grid was up (owner, 2026-09-28).
 #if UI_DESK_GRID
-        if (!voice && ui_desk_is_open()) {
-            /* home is already on screen — nothing above it, nothing beside it */
-        } else
+        const bool desk_holds = !voice && ui_desk_is_open();
+#else
+        const bool desk_holds = false;
 #endif
         if (!voice && sy >= home_edge && dy < -SWIPE_MIN_PX && abs(dy) > abs(dx)) {
             ESP_LOGI(TAG, "gesture: home (dy=%d)", dy);
             ui_home_overview();
-        } else if (!voice && (dx > SWIPE_MIN_PX || dx < -SWIPE_MIN_PX) && abs(dx) > abs(dy)) {
+        } else if (!voice && !desk_holds && (dx > SWIPE_MIN_PX || dx < -SWIPE_MIN_PX) && abs(dx) > abs(dy)) {
             ESP_LOGI(TAG, "gesture: swipe %+d (dx=%d dy=%d)", dx > 0 ? 1 : -1, dx, dy);
             ui_swipe_end(dx > 0 ? 1 : -1);         // reader → back to the agent; carousel screens → wrap next/prev
         }
         // A vertical drag is NOT classified here any more — it went out as it happened (above). One
         // gesture cannot mean two things: while it also opened the detail reader, every scroll ended by
         // opening a screen nobody asked for. Tapping the recap card opens it, which is the route it kept.
-        else if (abs(dx) < LONG_MOVE_PX && abs(dy) < LONG_MOVE_PX
+        else if (!desk_holds && abs(dx) < LONG_MOVE_PX && abs(dy) < LONG_MOVE_PX
                  && lv_tick_elaps(t0) < TAP_MAX_MS) {   // near-still TAP
             // A tap while RECORDING always stops the voice — on EVERY screen, including the reader (this is the
             // only touch way to end a turn started by double-tap there). The deferred open/close tap, however,

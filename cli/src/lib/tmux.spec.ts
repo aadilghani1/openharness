@@ -13,6 +13,7 @@ import {
   LSTART_MARKER_RE,
   liveProcessRows,
   parseProcessRow,
+  pasteRawIntoTmux,
   resumeSessionId,
   sendLiteralToTmux,
   sendToTmux,
@@ -462,6 +463,61 @@ fi
       else process.env.TMUX_INPUT_STDIN = previous.stdin
       if (previous.fail === undefined) delete process.env.TMUX_INPUT_FAIL_PASTE
       else process.env.TMUX_INPUT_FAIL_PASTE = previous.fail
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('brackets every submitted message and sends one separate Enter only after a successful paste', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-submit-'))
+    const argsFile = join(dir, 'args')
+    const fakeTmux = join(dir, 'tmux')
+    writeFileSync(fakeTmux, `#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_SUBMIT_ARGS"
+if [ "$1" = "load-buffer" ]; then cat > /dev/null; fi
+if [ "$1" = "paste-buffer" ] && [ "$TMUX_SUBMIT_FAIL" = "1" ]; then exit 2; fi
+`)
+    chmodSync(fakeTmux, 0o700)
+    const previous = { path: process.env.PATH, args: process.env.TMUX_SUBMIT_ARGS, fail: process.env.TMUX_SUBMIT_FAIL }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const commands = () => readFileSync(argsFile, 'utf8').trim().split('\n')
+      .map(line => line.replace(/machinemsg-\d+-\d+/g, 'buffer'))
+    try {
+      process.env.PATH = `${dir}:${previous.path ?? ''}`
+      process.env.TMUX_SUBMIT_ARGS = argsFile
+      delete process.env.TMUX_SUBMIT_FAIL
+      for (const message of ['Testing voice.', 'Résumé 日本語.', 'first\nsecond', 'x'.repeat(501)]) {
+        writeFileSync(argsFile, '')
+        expect(await sendToTmux('%7', message)).toBe(true)
+        expect(commands()).toEqual([
+          'load-buffer -b buffer -',
+          'paste-buffer -t %7 -b buffer -p -d',
+          'send-keys -t %7 Enter',
+        ])
+      }
+
+      // A clipboard paste and a live filter edit must remain unsubmitted.
+      writeFileSync(argsFile, '')
+      expect(await pasteRawIntoTmux('%7', 'clipboard')).toBe(true)
+      expect(await sendLiteralToTmux('%7', 'filter')).toBe(true)
+      expect(commands()).toEqual([
+        'load-buffer -b buffer -', 'paste-buffer -t %7 -b buffer -p -d',
+        'load-buffer -b buffer -', 'paste-buffer -t %7 -b buffer -d',
+      ])
+
+      writeFileSync(argsFile, '')
+      process.env.TMUX_SUBMIT_FAIL = '1'
+      expect(await sendToTmux('%7', 'must not send')).toBe(false)
+      expect(commands()).toEqual([
+        'load-buffer -b buffer -', 'paste-buffer -t %7 -b buffer -p -d', 'delete-buffer -b buffer',
+      ])
+    } finally {
+      error.mockRestore()
+      if (previous.path === undefined) delete process.env.PATH
+      else process.env.PATH = previous.path
+      if (previous.args === undefined) delete process.env.TMUX_SUBMIT_ARGS
+      else process.env.TMUX_SUBMIT_ARGS = previous.args
+      if (previous.fail === undefined) delete process.env.TMUX_SUBMIT_FAIL
+      else process.env.TMUX_SUBMIT_FAIL = previous.fail
       rmSync(dir, { recursive: true, force: true })
     }
   })

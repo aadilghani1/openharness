@@ -31,8 +31,7 @@ import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib
  *
  * Caller ancestry — the hook's process descends from the engine we registered — is the strong one and
  * always wins. It is not always available: Cursor posts its hooks from outside the pane's process tree,
- * on tmux and on Herdr alike, so requiring ancestry rejected every hook that engine ever sent and no
- * session bound at all.
+ * so requiring ancestry rejected every hook that engine ever sent and no session bound at all.
  *
  * Only Cursor may use the weaker runtime evidence: the hook named a pane carrying exactly one Cursor
  * agent, and the caller already proved it can read the 0600 hook credential. Other engines must match
@@ -197,6 +196,9 @@ function validHookBody(value: unknown): value is BoundHookBody {
         if (Object.keys(hint).some((field) => field !== 'backend' && field !== 'paneId')
           || typeof hint.paneId !== 'string' || !/^%\d+$/.test(hint.paneId)) return false
       } else if (hint.backend === 'herdr') {
+        // A hook script installed by an earlier build still sends these from inside a Herdr pane. The
+        // backend is retired and `normalizedRuntimeHints` drops the hint, but the rest of the body is
+        // still good evidence, so the shape stays accepted rather than failing the whole request.
         if (Object.keys(hint).some((field) => !['backend', 'paneId', 'sessionName', 'socketPath'].includes(field))
           || !optionalBoundedString(hint.paneId, 200) || !hint.paneId
           || !optionalBoundedString(hint.sessionName, 64)
@@ -228,16 +230,6 @@ function normalizedRuntimeHints(body: RegisterInput): HookTerminalHint[] {
   if (Array.isArray(body.runtimeHints) && body.runtimeHints.length <= 4) {
     for (const hint of body.runtimeHints) {
       if (hint?.backend === 'tmux' && /^%\d+$/.test(hint.paneId)) hints.push({ backend: 'tmux', paneId: hint.paneId })
-      if (hint?.backend === 'herdr'
-        && typeof hint.paneId === 'string' && hint.paneId.length <= 200
-        && (hint.sessionName === undefined || (typeof hint.sessionName === 'string' && hint.sessionName.length <= 64))
-        && (hint.socketPath === undefined || (typeof hint.socketPath === 'string' && hint.socketPath.length <= 4_096))) {
-        hints.push({
-          backend: 'herdr', paneId: hint.paneId,
-          ...(hint.sessionName ? { sessionName: hint.sessionName } : {}),
-          ...(hint.socketPath ? { socketPath: hint.socketPath } : {}),
-        })
-      }
     }
   }
   if (body.tmuxPane && /^%\d+$/.test(body.tmuxPane)

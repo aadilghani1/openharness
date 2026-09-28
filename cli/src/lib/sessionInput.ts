@@ -50,8 +50,8 @@ const AGY_SUBMIT_VERIFY_MS = 8_000
 const COPILOT_SUBMIT_VERIFY_MS = 6_000
 const CURSOR_TURN_SETTLE_MS = 750
 const SUBMIT_MAX_RETRIES = 2
-// Non-cursor engines re-observe the pane (instead of erroring) while an accepted-but-not-yet-started
-// prompt is in flight. Bounded so a truly wedged session eventually reverts to the retry/error path.
+// Re-observe briefly while a submitted prompt awaits a transcript event. Reaching this limit is not
+// evidence of rejection: Claude can hold an accepted follow-up while background agents finish.
 const SUBMIT_MAX_OBSERVES = 5
 // Engines whose own TUI queues a message typed while a turn is running, and runs it when the turn ends.
 // For these the daemon types immediately — the follow-up appears in the pane the moment it is spoken,
@@ -580,7 +580,20 @@ export class SessionInputController {
           this.failAmbiguousSubmission(sessionId, state)
           return
         }
-        // Pathological: accepted-looking but no turn opened for a while → fall through to retry/error.
+        if (state.deliveryId || !/^\s*[›❯→]/mu.test(visibleTerminal(capture))) {
+          // A receipt promises a correlated turn, which the pane alone cannot prove. Report unknown,
+          // also when no composer is visible. Never retry Enter into a dialog or a new human draft.
+          this.failAmbiguousSubmission(sessionId, state)
+          return
+        }
+        // The paste succeeded and our text left the composer. Stop polling without claiming that the
+        // agent started or failed. Its real turn event can arrive much later; pressing Enter again can
+        // submit somebody else's draft. This was the false "Claude didn't start" on a queued voice turn.
+        console.log(`[inject] ${sid(sessionId)} submit left composer; awaiting agent turn · engine=${session.engine}`)
+        state.awaitingFingerprint = null
+        state.awaitingContent = null
+        state.observes = 0
+        return
       }
       // capture === null (dep missing / unreadable) → fall through to today's blind retry/error so a
       // real delivery failure is never hidden.

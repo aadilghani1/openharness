@@ -6,7 +6,7 @@
  * node_modules (it runs inside the user's `claude` process).
  *
  * SessionStart: registers terminal hints plus session metadata with the adapter,
- *   but only from an authenticated tmux or configured Herdr context.
+ *   but only from an authenticated tmux context.
  * SessionEnd:   asks the adapter to reconcile the terminal; process discovery remains
  *   the authority for whether the agent exists.
  *
@@ -17,7 +17,6 @@
 import http from 'node:http'
 import { execFile, execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { createConnection } from 'node:net'
 import {
   accessSync,
   closeSync,
@@ -37,7 +36,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { homedir, uptime } from 'node:os'
 
 const BOOT_TOLERANCE_SEC = 120
@@ -348,12 +347,6 @@ function readHookCredential() {
 function terminalHookFields(tmuxPane) {
   const runtimeHints = []
   if (tmuxPane) runtimeHints.push({ backend: 'tmux', paneId: tmuxPane })
-  if (process.env.HERDR_PANE_ID) runtimeHints.push({
-    backend: 'herdr',
-    paneId: process.env.HERDR_PANE_ID,
-    sessionName: process.env.HERDR_SESSION,
-    socketPath: process.env.HERDR_SOCKET_PATH,
-  })
   return { tmuxPane, runtimeHints, callerPid: process.ppid }
 }
 
@@ -656,119 +649,6 @@ async function rootEngineProcess(rootPid, engine) {
     state: 'alive',
     identity: { pid: best.row.pid, executable: best.row.executable, startMarker: best.row.startMarker },
   } : { state: 'gone' }
-}
-
-function safePathComponents(path) {
-  const root = parse(path).root
-  const result = [root]
-  for (const component of path.slice(root.length).split(sep).filter(Boolean)) {
-    result.push(resolve(result[result.length - 1], component))
-  }
-  return result
-}
-
-function readTerminalSnapshot(p) {
-  try {
-    const file = join(p.dataDir, 'terminal-config.json')
-    secureStateDirectory(p.dataDir, false)
-    const snapshot = JSON.parse(readPrivateStateFile(file, 64 * 1024))
-    if (snapshot?.version !== 1 || !Array.isArray(snapshot.backends) || !Array.isArray(snapshot.herdrEndpoints)) return null
-    return snapshot
-  } catch { return null }
-}
-
-function checkedHerdrEndpoint(endpoint) {
-  try {
-    if (!endpoint || typeof endpoint.socketPath !== 'string' || !isAbsolute(endpoint.socketPath)) return false
-    const uid = typeof process.getuid === 'function' ? process.getuid() : null
-    if (uid === null) return false
-    for (const component of safePathComponents(dirname(endpoint.socketPath))) {
-      const stat = lstatSync(component)
-      if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== uid && stat.uid !== 0)) return false
-      if ((stat.mode & 0o002) || (stat.uid === 0 && (stat.mode & 0o020))) return false
-    }
-    const parent = lstatSync(dirname(endpoint.socketPath))
-    const socket = lstatSync(endpoint.socketPath)
-    if (parent.uid !== uid || !socket.isSocket() || socket.isSymbolicLink() || socket.uid !== uid || (socket.mode & 0o777) !== 0o600) return false
-    if (realpathSync(endpoint.socketPath) !== resolve(endpoint.socketPath)) return false
-    return socket.dev === endpoint.generation?.device && socket.ino === endpoint.generation?.inode
-  } catch { return false }
-}
-
-function herdrRequest(endpoint, method, params) {
-  return new Promise((resolveRequest) => {
-    const budget = Math.min(1500, remainingBudget())
-    if (budget < 50 || !checkedHerdrEndpoint(endpoint)) { resolveRequest(null); return }
-    const id = randomUUID()
-    const frame = Buffer.from(`${JSON.stringify({ id, method, params })}\n`)
-    if (frame.byteLength > 1024 * 1024) { resolveRequest(null); return }
-    let response = Buffer.alloc(0)
-    let settled = false
-    let socket
-    const finish = (value) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      socket?.destroy()
-      resolveRequest(value)
-    }
-    const timer = setTimeout(() => finish(null), budget)
-    try { socket = createConnection({ path: endpoint.socketPath }) } catch { finish(null); return }
-    socket.once('connect', () => {
-      if (!checkedHerdrEndpoint(endpoint)) { finish(null); return }
-      try { socket.end(frame) } catch { finish(null) }
-    })
-    socket.on('data', (chunk) => {
-      response = Buffer.concat([response, chunk])
-      if (response.byteLength > 1024 * 1024) { finish(null); return }
-      const newline = response.indexOf(0x0a)
-      if (newline < 0) return
-      if (response.subarray(newline + 1).toString('utf8').trim()) { finish(null); return }
-      try {
-        const parsed = JSON.parse(response.subarray(0, newline).toString('utf8'))
-        finish(parsed?.id === id && parsed.result && !parsed.error ? parsed.result : null)
-      } catch { finish(null) }
-    })
-    socket.once('end', () => finish(null))
-    socket.once('error', () => finish(null))
-  })
-}
-
-async function herdrFallbackRuntime(engine) {
-  const hint = terminalHookFields(process.env.TMUX_PANE).runtimeHints.find((runtime) => runtime.backend === 'herdr')
-  if (!hint?.sessionName || !hint.socketPath || !hint.paneId) return null
-  const snapshot = readTerminalSnapshot(paths())
-  if (!snapshot?.backends.includes('herdr')) return null
-  const endpoint = snapshot.herdrEndpoints.find((candidate) =>
-    candidate?.sessionName === hint.sessionName && candidate?.socketPath === hint.socketPath)
-  if (!endpoint || !checkedHerdrEndpoint(endpoint)) return null
-  const pong = await herdrRequest(endpoint, 'ping', {})
-  if (pong?.type !== 'pong' || pong.protocol !== 19 || !/^0\.8\./.test(String(pong.version || ''))) return null
-  const [pane, info] = await Promise.all([
-    herdrRequest(endpoint, 'pane.get', { pane_id: hint.paneId }),
-    herdrRequest(endpoint, 'pane.process_info', { pane_id: hint.paneId }),
-  ])
-  if (pane?.type !== 'pane_info' || typeof pane.pane?.terminal_id !== 'string'
-    || info?.type !== 'pane_process_info' || !Number.isSafeInteger(info.process_info?.shell_pid)) return null
-  const owner = await rootEngineProcess(info.process_info.shell_pid, engine)
-  if (owner.state !== 'alive' || !owner.identity) return null
-  const rows = await processRows()
-  if (!rows) return null
-  const parents = new Map(rows.map((row) => [row.pid, row.parentPid]))
-  let caller = process.ppid
-  const visited = new Set()
-  while (caller > 0 && !visited.has(caller) && caller !== owner.identity.pid) {
-    visited.add(caller)
-    caller = parents.get(caller) || 0
-  }
-  if (caller !== owner.identity.pid) return null
-  return {
-    identity: owner.identity,
-    runtime: {
-      backend: 'herdr', endpointId: endpoint.endpointId, sessionName: endpoint.sessionName,
-      terminalId: pane.pane.terminal_id, paneId: pane.pane.pane_id,
-    },
-  }
 }
 
 /**
@@ -1133,21 +1013,17 @@ async function clearCursorTasks(sessionId) {
 }
 
 function runtimeRouteKey(runtime) {
-  return runtime.backend === 'tmux'
-    ? `tmux\u0000${runtime.paneId}`
-    : `herdr\u0000${runtime.endpointId}\u0000${runtime.paneId}`
+  return `tmux\u0000${runtime.paneId}`
 }
 
 function runtimePlacementKey(runtime) {
-  return runtime.backend === 'tmux'
-    ? runtimeRouteKey(runtime)
-    : `herdr\u0000${runtime.endpointId}\u0000${runtime.terminalId}`
+  return runtimeRouteKey(runtime)
 }
 
 function mergeRuntimes(current, observed) {
   const merged = new Map()
   for (const runtime of [...(Array.isArray(current) ? current : []), ...observed]) {
-    if (runtime?.backend === 'tmux' || runtime?.backend === 'herdr') merged.set(runtimePlacementKey(runtime), runtime)
+    if (runtime?.backend === 'tmux') merged.set(runtimePlacementKey(runtime), runtime)
   }
   return [...merged.values()].sort((a, b) => runtimePlacementKey(a).localeCompare(runtimePlacementKey(b)))
 }
@@ -1162,13 +1038,8 @@ function validRegistryString(value, max = 4096) {
 }
 
 function validRegistryRuntime(runtime) {
-  if (!runtime || typeof runtime !== 'object') return false
-  if (runtime.backend === 'tmux') return typeof runtime.paneId === 'string' && /^%\d+$/.test(runtime.paneId)
-  return runtime.backend === 'herdr'
-    && validRegistryString(runtime.endpointId, 200) && runtime.endpointId.length > 0
-    && validRegistryString(runtime.sessionName, 64) && runtime.sessionName.length > 0
-    && validRegistryString(runtime.terminalId, 200) && runtime.terminalId.length > 0
-    && validRegistryString(runtime.paneId, 200) && runtime.paneId.length > 0
+  return !!runtime && typeof runtime === 'object'
+    && runtime.backend === 'tmux' && typeof runtime.paneId === 'string' && /^%\d+$/.test(runtime.paneId)
 }
 
 function validRegistryProcess(identity) {
@@ -1260,8 +1131,6 @@ async function fallbackRegister(input, engine, tmuxPane) {
       observations.push({ identity: tmux.identity, runtime: { backend: 'tmux', paneId: tmuxPane } })
     }
   }
-  const herdr = await herdrFallbackRuntime(engine)
-  if (herdr) observations.push(herdr)
   if (!observations.length) return
   const process = observations[0]
   if (observations.some((observation) => observation.identity.pid !== process.identity.pid
@@ -1379,7 +1248,7 @@ async function main() {
 
   const event = input.hook_event_name || input.hookEventName
   const tmuxPane = process.env.TMUX_PANE
-  if (!tmuxPane && !process.env.HERDR_PANE_ID) return
+  if (!tmuxPane) return
   const mutationFields = { engine, ...terminalHookFields(tmuxPane) }
   if (engine === 'cursor' && input.is_background_agent === true) return
   if (engine === 'codex' && isCodexSubagent(input, paths())) return

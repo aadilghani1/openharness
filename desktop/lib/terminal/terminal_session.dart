@@ -1292,7 +1292,36 @@ class TerminalSession extends ChangeNotifier {
 
   void find(TerminalFindAction action) => _viewport?.find(action);
 
+  Map<String, dynamic> selectPassage(Map<String, dynamic> command) {
+    final viewport = _viewport;
+    return viewport is TerminalPassageViewport
+        ? (viewport as TerminalPassageViewport).selectPassage(command)
+        : {'ok': false, 'error': 'Open the terminal pane first.'};
+  }
+
+  Future<Map<String, dynamic>> searchPassage(
+    Map<String, dynamic> command,
+  ) async {
+    final viewport = _viewport;
+    return viewport is TerminalPassageSearchViewport
+        ? (viewport as TerminalPassageSearchViewport).searchPassage(command)
+        : {'ok': false, 'error': 'Open the terminal pane first.'};
+  }
+
   bool focusInput() => _viewport?.focusInput() ?? false;
+
+  TerminalReadingBookmark? bookmarkReading() {
+    final viewport = _viewport;
+    return viewport is TerminalReadingViewport
+        ? (viewport as TerminalReadingViewport).bookmarkReading()
+        : null;
+  }
+
+  bool showLatestReading() {
+    final viewport = _viewport;
+    return viewport is TerminalLatestViewport &&
+        (viewport as TerminalLatestViewport).showLatestReading();
+  }
 
   /// Coalescing windows for the two things the user drives directly.
   ///

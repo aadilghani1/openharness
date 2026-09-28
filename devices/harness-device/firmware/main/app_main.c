@@ -36,6 +36,7 @@
 #include "ui/display.h"
 #include "ui/touch.h"
 #include "ui/ui_screens.h"
+#include "ui/ui_perf.h"
 
 static const char *TAG = "app";
 
@@ -73,7 +74,9 @@ static int refresh_projects(void)
     project_t *pr = proj_scratch();
     if (!pr) { ESP_LOGW(TAG, "project scratch alloc failed"); return -1; }
 
-    const int n = cable_client_list_agents(pr, MAX_PROJECTS);
+    cable_agent_snapshot_t snapshot;
+    const int n = cable_client_list_agents_snapshot(pr, MAX_PROJECTS, &snapshot);
+    if (n < 0) return -1; // agents.end will request another refresh after the complete roster arrives
     ESP_LOGI(TAG, "agents: %d", n);
 
     // Apply the WHOLE reconcile atomically. With the huge-range circular carousel each add/remove
@@ -121,7 +124,8 @@ static int refresh_projects(void)
     if (n > 1) ui_project_apply_order(ids, n);
     // The fleet behind the list: the overview's count, and whether the empty page means "no window" or
     // "empty tab".
-    ui_fleet_set(cable_client_agent_total(), cable_client_has_window());
+    ui_fleet_set(snapshot.total, snapshot.window);
+    ui_workspace_applied(snapshot.tab, snapshot.generation);
 
     // The list is built. If a landing is pending, LAND: drop the loading spinner and focus agent 1 (or the
     // No-agents page). No-op otherwise, so a periodic refresh never yanks the view.
@@ -197,17 +201,21 @@ void app_main(void)
     audio_client_init();
     ram_telemetry_checkpoint("voice_buffer_ready");
 
-    // Voice: double-tap (or hold physical button B / GPIO0) captures and streams PCM over the cable.
-    // Nothing to configure — the wire carries the identity, so voice needs neither a URL nor a token.
-    ptt_start();
-
     // Speaker notify: beep on a finished turn. Init before the link so the beep task exists when the first
     // summary arrives.
     audio_notify_init();
 
+    // Enable physical PTT after codec initialization. Otherwise holding the
+    // button during boot can race the microphone's first allocation.
+    ptt_start();
+
     // Agents have not arrived yet — don't flash the "No agents" empty tile. Park on the loading screen and
     // arm a landing so refresh_projects slides to agent 0 once the first list lands.
     ui_enter_boot_loading();
+
+#ifdef DEVICE_PERF_BENCH
+    ui_perf_run();  // synthetic, local-only, before the cable can affect a live harness
+#endif
 
     if (!cable_client_start()) {
         // A dial with no link still runs, still lights up, and still says so on screen. A device stuck in a
