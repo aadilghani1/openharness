@@ -19,15 +19,23 @@ reviewed-question and spoken-answer validation and adds only the missing guards.
 | Native accessibility input (#249) | Native terminals expose the editable semantics already used by the browser. Accessibility insertion updates the platform buffer; a subsequent echo or typed character does not repeat the phrase. Read-only terminals expose no editing action. | Four new macOS/Linux-platform widget variants failed before the change. Keyboard, IME, focus, and drop tests pass. This verifies the app's accessibility insertion path, not Wispr Flow itself. |
 | Resume process identity | A resume that becomes ready from process evidence persists the verified identity before announcing readiness. Attachment and Stop need not wait for discovery or a delayed hook. | The real Claude resume fixture exposed a null PID after reopening; a focused unit regression reproduced it. Native Claude and Codex acceptance tests now pass. The fixture separately waits for rendering and deferred startup hooks, matching current readiness semantics. |
 | Device pairing | A selected discovery candidate survives one missed mDNS browse. A fresh endpoint takes precedence, and pairing still requires authenticated device identity. | The regression fails before the fix; all 188 device tests pass afterward, including wrong-code, unknown-device, reconnect, and revocation cases. Adapted from PR #354, `ce725639`, by 69tc. |
+| Dependency reproducibility | The pnpm lockfile now includes the existing slugify dependency and its two transitive dependencies, at the same versions already present in the npm lockfile. | Linux CI initially stopped before tests because the dependency was missing. The repaired lockfile passes pnpm 11's frozen-lockfile check without changing package versions. |
 
 The process-launch portability integration cases now have an explicit 15-second
 test budget. A full run under simultaneous native-build load exceeded the old
 five-second unit-test default. Production subprocess deadlines are unchanged.
+The Cursor hook fixture also pins both of its temporary config/data roots:
+Linux CI exposed its accidental reliance on an unset host XDG config directory.
+The existing test fails with a temporary XDG root before this isolation fix.
 
 ## Validation
 
-- CLI typecheck and build pass. Full suite: **5,766 passed, 37 skipped**.
-- Desktop: **3,870 passed, 12 skipped**. Analysis has **12 existing informational
+The complete local suites were rerun after rebasing onto `0eeef83b` (including
+PR #411's Git-context changes), on macOS 26.6.2 arm64, Node 22.23.1, and Flutter
+3.47.2.
+
+- CLI typecheck and build pass. Full suite: **5,768 passed, 37 skipped**.
+- Desktop: **3,872 passed, 12 skipped**. Analysis has **12 existing informational
   notices in vendored xterm**, no errors or warnings.
 - Native macOS terminal integration: **2 passed**. The normal debug
   `lib/main.dart` application was rebuilt afterward, replacing the fixture build.
