@@ -97,6 +97,8 @@ pub struct Picker {
     pub selected_id: Option<String>,
     /// The cursor was put on an item when the list opened (not moved by you since).
     pub preselected: bool,
+    /// When the list opened (a question on it since then has only just appeared).
+    pub opened: std::time::Instant,
     pub status: String,
     pub hints: Vec<(&'static str, &'static str)>,
     pub keep_order: bool,
@@ -233,6 +235,7 @@ impl Picker {
             cursor: 0,
             selected_id: None,
             preselected: false,
+            opened: std::time::Instant::now(),
             status: String::new(),
             hints: Vec::new(),
             keep_order: false,

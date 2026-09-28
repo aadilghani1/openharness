@@ -260,7 +260,7 @@ fn external(app: &App, id: &str) -> Vec<Line<'static>> {
     }
     out.push(Line::raw(""));
     out.push(if x.open { Line::styled("Open in another terminal or app — close it there to open it here", Style::default().fg(Color::Yellow)) }
-        else { dim("enter resumes it in a window · C-v beside · C-x below · M-enter here").into() });
+        else { dim("enter resumes it in a window · C-v beside · C-x below · M-enter here — without permission prompts, as the desktop resumes it").into() });
     out
 }
 

@@ -544,6 +544,8 @@ fn answerable(app: &App, picker: &Picker, row: &str) -> Result<String, &'static 
     let req = app.fleet.agent(&m, &a).and_then(|x| x.question.as_ref()).map(|q| q.request_id.clone()).ok_or("That question is no longer open")?;
     match picker.q_seen.get(row) {
         Some((r, at)) if *r == req && at.elapsed() >= LOOK => Ok(req),
+        // (On a list just opened, the question only just came into view: read it first.)
+        _ if picker.opened.elapsed() < LOOK => Err("Read the question first — press again"),
         _ => Err("That question just changed — look again"),
     }
 }
