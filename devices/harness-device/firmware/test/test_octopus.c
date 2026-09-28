@@ -142,7 +142,7 @@ static void text_checks(void)
         for (int i=0;i<s.count;i++) {
             const ht_run_t *r=&s.runs[i];
             if (r->font==&ht_open_20) { assert(!arrow); arrow=r; continue; }
-            if (r->arc || r->font!=&ht_mono_20 || r->y<194 || r->y>390 || !r->text[0]) continue;
+            if (r->arc || r->font!=&ht_mono_28 || r->y<194 || r->y>390 || !r->text[0]) continue;
             if (shown[0]) strcat(shown," ");
             strcat(shown,r->text); last=r;
             assert(r->w<=408 && ht_can_display(r->text,r->font,r->w,1));
@@ -154,7 +154,12 @@ static void text_checks(void)
         assert(arrow->x+arrow->w<=431);
         assert(!strchr(shown,'+'));
         shown[strlen(shown)-1]=0; // The space before the consistently present arrow.
-        if (n<6) assert(!strcmp(shown,examples[n])); // Complete prose is retained.
+        // COMPLETE PROSE IS RETAINED UP TO THE CAP, and the cap is now the contract. This held for
+        // every example below index 6, the longest of which is 101 characters. At ht_mono_28 four
+        // rows hold 92 cells and RECAP_MAX_CELLS stops at 60, so examples 4 (78) and 5 (101) are
+        // deliberately cut. Indices 0-3 are 18, 26, 28 and 60 characters and must still arrive
+        // whole — which is what stops the cap quietly becoming a smaller number.
+        if (n<4) assert(!strcmp(shown,examples[n]));
         else assert(!strstr(shown,"..."));
     }
 }
@@ -163,16 +168,22 @@ static void orphan_marker_checks(void)
 {
     ht_scene_t s; ht_scene_clear(&s, 0);
     ht_recap_lines(&s, 253, 0xffff, "The desktop sorts by last activity only (newest first +");
-    assert(!strcmp(s.runs[1].text, "activity only (newest"));
-    assert(!strcmp(s.runs[2].text, "first "));
+    // 19 cells a row at ht_mono_28, not 28 — the same sentence breaks a word earlier and its tail no
+    // longer fits three rows. What is under test survives: the host's "+" never reaches the glass,
+    // the arrow takes its place, and it stays attached to the last word.
+    assert(!strcmp(s.runs[1].text, "by last activity"));
+    assert(!strcmp(s.runs[2].text, "only (newest "));
     assert(s.runs[3].font == &ht_open_20);
     assert(s.runs[3].x == s.runs[2].x + s.runs[2].w);
     assert(s.runs[3].y == s.runs[2].y);
     // A very long unbroken token cannot move as a word. Still draw the glyph,
     // never the internal marker; preserve the full token on its own row.
     ht_scene_clear(&s, 0);
-    ht_recap_lines(&s, 253, 0xffff, "abcdefghijklmnopqrstuvwxyzab +");
-    assert(!strcmp(s.runs[0].text, "abcdefghijklmnopqrstuvwxyzab"));
+    // Sixteen characters, not twenty-eight: a row is 336 / 17 = 19 cells now, and a 28-character
+    // token could not be "preserved on its own row" by any layout. The property is unchanged — an
+    // unbroken token is never split and the arrow follows it. The trailing space is the arrow's seat.
+    ht_recap_lines(&s, 253, 0xffff, "abcdefghijklmnop +");
+    assert(!strcmp(s.runs[0].text, "abcdefghijklmnop "));
     assert(s.runs[3].font == &ht_open_20);
     for (int i = 0; i < s.count; i++) assert(!strchr(s.runs[i].text, '+'));
     // A literal C++ is not a continuation marker.
@@ -183,8 +194,10 @@ static void orphan_marker_checks(void)
     // This actual completed answer contains an authored arrow, not a suffix.
     // Preserve it within prose, alongside the one consistently added marker.
     ht_scene_clear(&s, 0);
-    ht_recap_lines(&s, 253, 0xffff,
-        "It was a wrapping bug: a + alone on a new line escaped conversion to \xe2\x86\x97.");
+    // Shorter than the sentence it replaces: three rows of 19 cells hold about fifty characters, and
+    // the authored arrow has to survive INSIDE them to be worth asserting. Same case — a literal "+"
+    // in prose, and an arrow the host wrote rather than one the device added.
+    ht_recap_lines(&s, 253, 0xffff, "A + alone escaped conversion to \xe2\x86\x97.");
     assert(s.count == 4 && s.runs[3].font == &ht_open_20);
     bool arrow = false;
     for (int i = 0; i < s.count; i++) {

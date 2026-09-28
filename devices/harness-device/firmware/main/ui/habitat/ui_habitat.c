@@ -40,8 +40,10 @@ static ht_gallery_t gallery;
 #define NOTICES 24
 #define QUESTION_MAX 4
 #define OPTION_MAX 6
-#define TAB_ROWS 5
-#define TAB_ROW_HEIGHT 56
+// FOUR ROWS, PITCH 64. Five at 56 put the last line at 112 + 4*56 + 14 + 38 = 388, two pixels into
+// the footer at 390. Four at 64 end at 356 and leave it alone.
+#define TAB_ROWS 4
+#define TAB_ROW_HEIGHT 64
 #define TAB_TOP 112
 #define PANE_MEMORY_MAX 128
 #define PANE_RESULT_BYTES 1024
@@ -206,8 +208,6 @@ static EXT_RAM_BSS_ATTR struct {
     int hit_count, pressed;
     bool touch_down, touch_cancelled;
     bool touch_brake, coasting;
-    bool quick_open;
-    int quick_choice;
     uint32_t coast_until;
     uint32_t tim_activity;
     int start_x, start_y, last_x, last_y;
@@ -393,7 +393,6 @@ static void input_cancel(void)
     ht_workspace_cancel_touch(&workspace);
     ht_scroll_cancel(&scroll);
     s.coasting = false;
-    s.quick_open = false;
     s.voice_review_preview = false;
     if (s.touch_down) s.touch_cancelled = true;
     s.pressed = -1;
@@ -475,13 +474,27 @@ static uint16_t color(unsigned rgb)
 #define ACCENT color(HT_THEME_ACCENT)
 #define ERROR color(HT_THEME_ERROR)
 #define SEL color(HT_THEME_SELECTION)
+/*
+ * THE INTERFACE FONT LIVES IN THESE THREE HELPERS AND NOWHERE ELSE.
+ *
+ * ht_mono_28 is a 17 x 38 cell against mono_20's 12 x 28 — 42% wider and 36% taller, the nearest step
+ * fonts.c holds; there is no mono_30, and a true +50% would mean generating one.
+ *
+ * Everything downstream is arithmetic on the cell, so the bump is neither free nor local: a run holds
+ * width / 17 characters instead of width / 12 — a THIRD fewer on every line — and a row is 38 tall.
+ * The screens below are re-seated for that, not merely re-fonted.
+ *
+ * The two ARCS keep mono_20 deliberately: their cell pitch is baked into arc_trig[32][2] on a 205 px
+ * radius and their bounds come from ht_mono_20_ink[], so a different cell there is a different table.
+ */
+#define UI_FONT (&ht_mono_28)
 static void text(ht_scene_t *f, int x, int y, int w, const char *t, uint16_t c)
 {
-    ht_text(f, x, y, w, &ht_mono_20, c, BG, t);
+    ht_text(f, x, y, w, UI_FONT, c, BG, t);
 }
 static void center(ht_scene_t *f, int y, const char *t, uint16_t c)
 {
-    ht_center(f, y, &ht_mono_20, c, t);
+    ht_center(f, y, UI_FONT, c, t);
 }
 static void control(ht_scene_t *f, int x, int y, int w, const char *label, action_kind_t a,
                     int value, bool enabled)
@@ -489,8 +502,10 @@ static void control(ht_scene_t *f, int x, int y, int w, const char *label, actio
     if (s.hit_count >= 24)
         return;
     int n = s.hit_count++;
-    s.hits[n] = (hit_t){{x, y - 14, w, 60}, a, value, enabled};
-    ht_text(f, x, y, w, &ht_mono_20, enabled ? (a == A_STOP_YES ? ERROR : n == s.pressed ? ACCENT : FG) : DIM,
+    // 66, not 60: the target is the line plus a thumb's margin, and the line is ten pixels taller now.
+    // Keeping 60 would have made the control smaller than its own text.
+    s.hits[n] = (hit_t){{x, y - 14, w, 66}, a, value, enabled};
+    ht_text(f, x, y, w, UI_FONT, enabled ? (a == A_STOP_YES ? ERROR : n == s.pressed ? ACCENT : FG) : DIM,
             n == s.pressed ? SEL : BG, label);
 }
 static bool home_footer(action_kind_t action)
@@ -545,6 +560,7 @@ static ht_tim_mood_t tim_mood(void)
         return HT_TIM_WORKING;
     return HT_TIM_CONTENT;
 }
+static void dispatch(action_t a);   // the hold below acts at once; defined with the other actions
 static void surface_tick(uint32_t now)
 {
     bool main = s.view == HOME || s.view == AGENT;
@@ -558,38 +574,32 @@ static void surface_tick(uint32_t now)
         s.touch_down && !s.touch_cancelled && gesture.live && !gesture.moved && !gesture.guarded &&
         pressed_action.kind == A_PET && held >= 650 && held <= 1800;
     if (review_preview != s.voice_review_preview) { s.voice_review_preview = review_preview; change(); }
+    /*
+     * HOLD OPENS THE TABS, not a menu about where to go.
+     *
+     * It used to raise a four-way chooser — slide up for panes, left for tabs, right for inbox, down
+     * for controls, release to commit. That is two gestures and a decision for something the person
+     * already decided when they pressed and held (owner, 2026-09-28: "hold vào con mực thì ra màn
+     * hình tabs luôn chứ ko ra 4 lựa chọn gì nữa").
+     *
+     * It fires while the finger is still down, which is the point: the hold IS the action, and there
+     * is nothing left to aim at. The contact is cancelled with it so the release cannot act twice.
+     */
     if (visible && main && s.touch_down && !s.touch_cancelled && gesture.live && !gesture.guarded) {
         uint32_t held = now - s.touch_started;
-        if (!s.quick_open && pressed_action.kind == A_PET && !gesture.moved && held >= 650 && held < 5000) {
-            s.quick_open = true;
-            s.quick_choice = 0;
-            ht_scroll_cancel(&scroll);
-            change();
-        } else if (s.quick_open && held >= 5000) {
-            input_cancel(); // resting a hand cannot eventually open a menu or start voice
+        if (pressed_action.kind == A_PET && !gesture.moved && held >= 650 && held < 5000) {
+            input_cancel();
+            dispatch((action_t){.kind = A_TABS});
             change();
         }
     }
     ht_tim_mood_t mood = s.view == VOICE ?
         (!s.voice_start_pending && !s.voice_waiting && audio_client_recording() ? HT_TIM_LISTENING : HT_TIM_WORKING) :
         inbox ? (s.notice[s.offset].question ? HT_TIM_ATTENTION : HT_TIM_CONTENT) : tim_mood();
-    if (ht_octopus_motion_tick(&octopus_motion, now, mood, s.quiet, visible && !s.quick_open,
+    if (ht_octopus_motion_tick(&octopus_motion, now, mood, s.quiet, visible,
                            s.touch_down && !s.touch_cancelled, s.last_x,
                            mood == HT_TIM_LISTENING ? audio_client_input_level() : 0, s.tim_activity))
         change();
-}
-static void render_quick(ht_scene_t *f)
-{
-    static const char *destinations[] = {"release to stay", "release for panes", "release for inbox", "release for tabs", "release for controls"};
-    ht_arc_title(f, DIM, "slide, then release");
-    ht_center(f, 125, &ht_mono_20, s.quick_choice == 1 ? ACCENT : DIM, "panes");
-    ht_text(f, 62, 224, 108, &ht_mono_20, s.quick_choice == 3 ? ACCENT : DIM, BG, "tabs");
-    ht_text(f, 326, 224, 84, &ht_mono_20, s.quick_choice == 2 ? ACCENT : DIM, BG, "inbox");
-    ht_tim_face_t face = {.mood=HT_TIM_CONTENT, .dim=DIM, .pose=octopus_motion.reaction.pose};
-    face.pose.look = s.quick_choice == 3 ? -1 : s.quick_choice == 2 ? 1 : 0;
-    ht_octopus_portrait(f, &face, octopus_motion.frame, ACCENT, &ht_octopus_font_4, 180);
-    ht_center(f, 322, &ht_mono_20, s.quick_choice == 4 ? ACCENT : DIM, "controls");
-    ht_arc_status(f, FG, destinations[s.quick_choice]);
 }
 static void page_controls(ht_scene_t *f, int count)
 {
@@ -623,7 +633,6 @@ static void render_workspace_preview(ht_scene_t *f)
 static void render_home(ht_scene_t *f)
 {
     s.inbox_arc = (ht_rect_t){0};
-    if (s.quick_open) { render_quick(f); return; }
     if (workspace.touching && workspace.moved && !workspace.cancelled) { render_workspace_preview(f); return; }
     agent_t *a = active();
     // Two alternating states: current work owns the large companion; only its
@@ -712,7 +721,7 @@ static void render_agents(ht_scene_t *f)
         s.hits[hit] = (hit_t){{59, y, 348, TAB_ROW_HEIGHT}, A_AGENT, i, s.connected};
         bool selected = i == s.active || hit == s.pressed;
         char label[HT_TEXT_BYTES]; snprintf(label, sizeof label, " %s", a->name);
-        ht_text(f, 71, y + 14, 324, &ht_mono_20,
+        ht_text(f, 71, y + 14, 324, UI_FONT,
             !s.connected ? DIM : is_question(a->id) || selected ? ACCENT : FG,
             selected ? SEL : BG, label);
     }
@@ -725,34 +734,39 @@ static bool question_view(view_t v)
 {
     return v == QUESTION || v == CHOICE || v == ANSWER_REVIEW;
 }
+// THREE ROWS, NOT FIVE. Five at 38 px run 146 -> 336, past the position line; three end at 260.
+// A page is 348 / 17 = 20 cells x 3 = 60 characters, where it used to be 29 x 5 = 145 — so a long
+// question is three pages now, not one. That is the honest cost of the size.
+#define Q_ROWS 3
 static int question_rows(const char *value)
 {
-    return ht_text_rows(value, &ht_mono_20, 348);
+    return ht_text_rows(value, UI_FONT, 348);
 }
 static void question_text(ht_scene_t *f, const char *value)
 {
-    int rows = question_rows(value), last = rows > 5 ? rows - 5 : 0;
+    int rows = question_rows(value), last = rows > Q_ROWS ? rows - Q_ROWS : 0;
     if (s.offset > last) s.offset = last;
     if (s.offset < 0) s.offset = 0;
-    ht_wrap(f, 59, 146, 348, 5, s.offset, &ht_mono_20, FG, value);
+    ht_wrap(f, 59, 146, 348, Q_ROWS, s.offset, UI_FONT, FG, value);
     char position[40];
-    if (rows > 5) snprintf(position,sizeof position,"%d-%d / %d   drag to read",s.offset+1,s.offset+5,rows);
+    if (rows > Q_ROWS) snprintf(position,sizeof position,"%d-%d / %d  drag to read",s.offset+1,s.offset+Q_ROWS,rows);
     else if (s.view==CHOICE) COPY(position,"drag for choices");
     else position[0] = 0;
-    if (!s.q.speech_error[0]) text(f, 85, 301, 296, position, DIM);
+    // mono_20 at 276: this is chrome ABOUT the text, not the text.
+    if (!s.q.speech_error[0]) ht_text(f, 85, 276, 296, &ht_mono_20, DIM, BG, position);
 }
 static void render_question(ht_scene_t *f)
 {
     heading(f, s.q.name[0] ? s.q.name : "Question");
     if (s.q.loading) {
         center(f, 214, "Reading the question...", DIM);
-        control(f, 149, 381, 168, "[ later ]", A_HOME, 0, true);
+        control(f, 122, 346, 187, "[ later ]", A_HOME, 0, true);
         return;
     }
     if (s.q.error[0] || !s.q.valid || !s.q.supported) {
-        ht_wrap(f, 65, 173, 336, 5, 0, &ht_mono_20, DIM,
+        ht_wrap(f, 65, 173, 336, 5, 0, UI_FONT, DIM,
             s.q.error[0] ? s.q.error : !s.q.valid ? "Answered elsewhere." : "This question needs the desktop.");
-        control(f, 137, 355, 192, "[ on desktop ]", A_DESKTOP, 1, s.connected);
+        control(f, 116, 346, 238, "[ on desktop ]", A_DESKTOP, 1, s.connected);
         return;
     }
     question_item_t *q = &s.q.item[s.q.index];
@@ -761,12 +775,22 @@ static void render_question(ht_scene_t *f)
     question_text(f, q->prompt);
     if (s.q.speech_error[0]) ht_wrap(f,77,319,312,2,0,&ht_mono_20,ERROR,s.q.speech_error);
     if (q->can_text) {
-        control(f,77,379,96,"[later]",A_HOME,0,true);
-        control(f,185,379,84,q->draft[0] ? "[draft]" : "[say]",
+        /*
+     * UP TO y=336, AND THE RIM IS WHY.
+     *
+     * At 17 px a cell these labels are 119 + 85 + 102 = 306 px of text. The chord at y=417, where the
+     * old row ended, is 143 px — the outer two would have been cut in half by the glass. At 336 the
+     * chord is 364 and the row fits with margin.
+     *
+     * "[choices]" (153 px) went with it: three labels at this size do not share a line on a circle.
+     * The choices screen is still one drag away, which is what the position line says.
+     */
+    control(f,54,336,119,"[later]",A_HOME,0,true);
+        control(f,190,336,85,q->draft[0] ? "[draft]" : "[say]",
                 q->draft[0] ? A_QUESTION_REVIEW : A_QUESTION_SAY,0,!s.q.pending);
-        control(f,277,379,120,"[choices]",A_QUESTION_CHOICES,0,!s.q.pending);
+        control(f,292,336,102,"[next]",A_QUESTION_CHOICES,0,!s.q.pending);
     } else {
-        control(f,96,381,108,"[ later ]",A_HOME,0,true);
+        control(f,79,346,153,"[ later ]",A_HOME,0,true);
         control(f,226,381,168,"[ choices ]",A_QUESTION_CHOICES,0,!s.q.pending);
     }
 }
@@ -778,16 +802,17 @@ static void render_choices(ht_scene_t *f)
     text(f, 107, 109, 252, label, DIM);
     question_text(f, q->options[s.q.choice]);
     bool chosen = (q->selected & (1u << s.q.choice)) != 0;
-    control(f, 137, 325, 192, chosen ? "[ selected ]" : "[ select ]", A_CHOICE, s.q.choice, !s.q.pending);
-    control(f, 84, 387, 108, "[ back ]", A_QUESTION_BACK, 0, true);
-    control(f, 240, 387, 144, "[ review ]", A_QUESTION_REVIEW, 0, q->selected && !s.q.pending);
+    control(f, 131, 300, 204, chosen ? "[ selected ]" : "[ select ]", A_CHOICE, s.q.choice, !s.q.pending);
+    // 366, where the chord is 380. At the old 387 two labels of 102 + 136 would not have cleared it.
+    control(f, 88, 366, 102, "[back]", A_QUESTION_BACK, 0, true);
+    control(f, 258, 366, 136, "[review]", A_QUESTION_REVIEW, 0, q->selected && !s.q.pending);
 }
 static void render_answer_review(ht_scene_t *f)
 {
     heading(f, s.q.name);
     if (s.q.error[0]) {
-        ht_wrap(f,65,166,336,5,0,&ht_mono_20,DIM,s.q.error);
-        control(f,137,355,192,"[ on desktop ]",A_DESKTOP,1,s.connected);
+        ht_wrap(f,65,166,336,5,0,UI_FONT,DIM,s.q.error);
+        control(f,116,346,238,"[ on desktop ]",A_DESKTOP,1,s.connected);
         return;
     }
     question_item_t *q = &s.q.item[s.q.index];
@@ -795,7 +820,7 @@ static void render_answer_review(ht_scene_t *f)
     text(f,125,109,216,label,DIM);
     question_text(f,q->answer);
     if (s.q.speech_error[0]) ht_wrap(f,77,319,312,2,0,&ht_mono_20,ERROR,s.q.speech_error);
-    control(f,84,387,108,"[ back ]",A_QUESTION_BACK,0,!s.q.pending);
+    control(f,88,366,102,"[back]",A_QUESTION_BACK,0,!s.q.pending);
     if (q->draft[0]) control(f,198,387,84,"[again]",A_QUESTION_SAY,0,!s.q.pending);
     control(f,q->draft[0] ? 294 : 232,387,q->draft[0] ? 96 : 152,s.q.pending ? "Waiting..." : s.q.index+1 < s.q.count ? "[ next ]" : "[ send ]",
         A_ANSWER,0,s.connected && !s.q.pending && (q->selected || q->draft[0]));
@@ -860,7 +885,7 @@ static void render_tabs(ht_scene_t *f)
         bool selected = !strcmp(s.selected_tab, s.tabs[i].id);
         char label[HT_TEXT_BYTES];
         snprintf(label, sizeof label, " %s", s.tabs[i].name);
-        ht_text(f, 71, y + 14, 324, &ht_mono_20,
+        ht_text(f, 71, y + 14, 324, UI_FONT,
                 !s.connected ? DIM : selected || hit == s.pressed ? ACCENT : FG,
                 selected || hit == s.pressed ? SEL : BG, label);
     }
@@ -918,7 +943,9 @@ static void render_list(ht_scene_t *f)
             a = A_NOTICE;
         }
         control(f, 59, y, 348, label, a, i, enabled);
-        text(f, 71, y + 31, 324, detail, DIM);
+        // y + 42, not y + 31: a 38 px line starting at y ends at y + 38, so the old offset put the
+        // detail three pixels inside the label above it.
+        text(f, 71, y + 42, 324, detail, DIM);
     }
     page_controls(f, count);
 }
@@ -944,7 +971,16 @@ static void render_voice(ht_scene_t *f)
     f_.focus = f_.detail && *f_.detail;
     ht_octopus_face(f, &f_, octopus_motion.frame, ACCENT, NULL);
     s.hits[s.hit_count++] = (hit_t){{33, 97, 400, 274}, A_PET, 0, true};
-    control(f, 167, 413, 144, "[ discard ]", A_VOICE_ABORT, 0, true);
+    /*
+     * "[discard]", 153 px, at y=400 — every number moved for a reason.
+     *
+     * It was "[ discard ]" in a run declared 144 px wide. Eleven cells at 17 px is 187, so ht_text
+     * clipped it to eight and the glass read "[ discar". Dropping the inner spaces brings it to nine
+     * cells / 153 px. And it could not stay at 413: that run is 413..451, where the circle is 164 px
+     * across, so the glyph bottoms met the rim. 400..438 sits inside a 220 px chord, and the status
+     * line above ends at 397.
+     */
+    control(f, 156, 400, 153, "[discard]", A_VOICE_ABORT, 0, true);
 }
 static void render_selection(ht_scene_t *f)
 {
@@ -957,7 +993,7 @@ static void render_selection(ht_scene_t *f)
         return;
     }
     if (selection.error[0]) {
-        ht_wrap(f, 65, 180, 336, 5, 0, &ht_mono_20, FG, selection.error);
+        ht_wrap(f, 65, 180, 336, 5, 0, UI_FONT, FG, selection.error);
         control(f, 137, 349, 192, "[ try again ]", A_SELECT_BEGIN, 0, s.connected);
         return;
     }
@@ -969,7 +1005,7 @@ static void render_selection(ht_scene_t *f)
         else COPY(status, "No matches");
     }
     center(f, 167, (selection.rows || selection.query[0]) ? status : "Look at your desktop", FG);
-    ht_wrap(f, 65, 211, 336, 4, 0, &ht_mono_20, FG,
+    ht_wrap(f, 65, 211, 336, 4, 0, UI_FONT, FG,
             selection.excerpt[0] ? selection.excerpt : selection.pending ? "Finding the text..." : selection.query[0] ? "Try another phrase." : "Blank line");
     if (ht_selection_ready(&selection) && selection.excerpt[0]) {
         s.hits[s.hit_count++] = (hit_t){{53, 151, 360, 184}, A_PET, 0, true};
@@ -994,9 +1030,9 @@ static void render_form(ht_scene_t *f)
     if (p->query[0]) text(f, 95, 113, 276, p->query, DIM);
     else if (p->total) center(f, 113, count, DIM);
     text(f, 77, 158, 312, p->previous, DIM);
-    ht_wrap(f, 65, 199, 336, 2, 0, &ht_mono_20, ACCENT,
+    ht_wrap(f, 65, 199, 336, 2, 0, UI_FONT, ACCENT,
             p->label[0] ? p->label : form.failed ? "Could not open" : "Opening...");
-    ht_wrap(f, 65, 261, 336, 2, 0, &ht_mono_20, FG, p->detail);
+    ht_wrap(f, 65, 261, 336, 2, 0, UI_FONT, FG, p->detail);
     if (!form.pending && p->active && p->enabled && !p->busy && !form.failed)
         s.hits[s.hit_count++] = (hit_t){{49, 185, 368, 124}, A_FORM_MAIN, 0, true};
     if (p->error[0]) ht_wrap(f, 71, 319, 324, 2, 0, &ht_mono_20, ERROR, p->error);
@@ -1020,7 +1056,7 @@ static void render_draft(ht_scene_t *f)
     center(f, 111, position, DIM);
     int rows = question_rows(p->text), last = rows > 5 ? rows - 5 : 0;
     if (s.offset > last) s.offset = last;
-    ht_wrap(f, 59, 153, 348, 5, s.offset, &ht_mono_20, FG, p->text);
+    ht_wrap(f, 59, 153, 348, 5, s.offset, UI_FONT, FG, p->text);
     if (rows > 5) snprintf(position, sizeof position, "%d-%d / %d  drag to read", s.offset+1, s.offset+5, rows);
     else COPY(position, p->total > 1 ? "drag for other parts" : p->context);
     text(f, 71, 297, 324, position, DIM);
@@ -1067,7 +1103,7 @@ static void render_settings(ht_scene_t *f)
                 (active() && (action != A_STOP || active()->busy) && (action != A_LATEST || !visit.pending))));
         int y = TAB_TOP + row * TAB_ROW_HEIGHT, hit = s.hit_count++;
         s.hits[hit] = (hit_t){{59, y, 348, TAB_ROW_HEIGHT}, action, 0, enabled};
-        ht_text(f, 83, y + 14, 300, &ht_mono_20,
+        ht_text(f, 83, y + 14, 300, UI_FONT,
             !enabled ? DIM : hit == s.pressed ? ACCENT : FG, hit == s.pressed ? SEL : BG, label);
     }
 }
@@ -1142,7 +1178,7 @@ bool habitat_scene_take(ht_scene_t *f)
         agent_t *a = active();
         heading(f, "latest result");
         if (a)
-            ht_wrap(f, 59, 125, 348, 8, s.offset, &ht_mono_20, FG, a->full);
+            ht_wrap(f, 59, 125, 348, 5, s.offset, UI_FONT, FG, a->full);
         control(f, 119, 387, 72, "<", A_UP, 0, s.offset > 0);
         control(f, 217, 387, 144, "[ desktop ]", A_DESKTOP, 0, s.connected);
         break;
@@ -1181,7 +1217,7 @@ bool habitat_scene_take(ht_scene_t *f)
     case MESSAGE:
     case OTA:
         heading(f, s.title);
-        ht_wrap(f, 65, 161, 336, 6, 0, &ht_mono_20, FG, s.message);
+        ht_wrap(f, 65, 161, 336, 5, 0, UI_FONT, FG, s.message);
         break;
     }
     return true;
@@ -2052,12 +2088,6 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         ht_gesture_move(&gesture, x, y);
         if (surface && home_footer(pressed_action.kind)) {
             if (pressed_action.kind==A_TABS && ht_workspace_move(&workspace,x,y,gesture.axis,now)) change();
-        } else if (s.quick_open) {
-            int dx = x - s.start_x, dy = y - s.start_y;
-            int choice = 0;
-            if (dx * dx + dy * dy > 54 * 54)
-                choice = abs(dx) > abs(dy) ? (dx < 0 ? 3 : 2) : (dy < 0 ? 1 : 4);
-            if (choice != s.quick_choice) { s.quick_choice = choice; change(); }
         } else if ((s.view == TABS || s.view == AGENTS || s.view == SETTINGS) && gesture.axis == 1) {
             tabs_move((s.last_y - y) * (scroll_reversed ? -1 : 1));
         } else if (s.view == DRAFT && gesture.axis == 1) {
@@ -2088,17 +2118,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         }
         int dx = x - s.start_x, dy = y - s.start_y;
         s.pressed = -1;
-        if (s.quick_open && !s.touch_cancelled) {
-            // Use the release coordinates too: lifting after sliding back to
-            // the center cancels, even if no final MOVE sample was delivered.
-            int choice = 0;
-            if (dx * dx + dy * dy > 54 * 54)
-                choice = abs(dx) > abs(dy) ? (dx < 0 ? 3 : 2) : (dy < 0 ? 1 : 4);
-            static const action_kind_t destinations[] = {A_NONE, A_AGENTS, A_INBOX, A_TABS, A_SETTINGS};
-            s.quick_open = false;
-            if (choice) dispatch((action_t){.kind = destinations[choice]});
-            change();
-        } else if (scrolled || s.touch_cancelled) {
+        if (scrolled || s.touch_cancelled) {
             // Motion owns this entire contact, even if the finger returns to its starting point.
         } else if (result == HT_TOUCH_TAP && s.touch_brake) {
             // DOWN already stopped desktop inertia. This entire tap is only a brake.
@@ -2228,7 +2248,7 @@ uint32_t habitat_next_wake_ms(void)
     if ((s.view == HOME || s.view == AGENT) && pressed_action.kind == A_PET && s.touch_down && !s.touch_cancelled &&
         gesture.live && !gesture.moved && !gesture.guarded) {
         uint32_t elapsed = now - s.touch_started;
-        uint32_t due = s.quick_open ? 5000 : 650;
+        uint32_t due = 650;
         uint32_t left = elapsed >= due ? 1 : due - elapsed;
         if (left < delay) delay = left;
     }
@@ -3014,13 +3034,13 @@ static void question_load(const cJSON *questions)
         q->can_text=!q->multi && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item,"canText"));
         if (!cJSON_IsString(key) || !q->key[0] || strlen(key->valuestring)>=sizeof q->key ||
             !cJSON_IsString(prompt) || !q->prompt[0] || strlen(prompt->valuestring)>=sizeof q->prompt ||
-            !ht_can_display(q->prompt,&ht_mono_20,348,256)) s.q.supported=false;
+            !ht_can_display(q->prompt,UI_FONT,348,256)) s.q.supported=false;
         const cJSON *option;
         cJSON_ArrayForEach(option,options) {
             if (q->count==OPTION_MAX) { s.q.supported=false; break; }
             if (!cJSON_IsString(option) || !option->valuestring[0]) { s.q.supported=false; continue; }
             if (strlen(option->valuestring)>=sizeof q->options[0] ||
-                !ht_can_display(option->valuestring,&ht_mono_20,348,256)) s.q.supported=false;
+                !ht_can_display(option->valuestring,UI_FONT,348,256)) s.q.supported=false;
             COPY(q->options[q->count++],option->valuestring);
         }
         if (!q->count) s.q.supported=false;
@@ -3412,7 +3432,7 @@ static bool draft_page(const cJSON *p, ht_draft_page_t *page)
     page->can_undo = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "canUndo"));
     page->locked = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "locked"));
     page->can_send = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "canSend")) &&
-        ht_can_display(page->text, &ht_mono_20, 348, 512);
+        ht_can_display(page->text, UI_FONT, 348, 512);
     return true;
 }
 void ui_voice_draft(const cJSON *p)
@@ -3501,7 +3521,7 @@ void ui_voice_question(const cJSON *p)
     voice_close();
     if (!q->can_text || !cJSON_IsString(draft) || !draft->valuestring[0] || strlen(draft->valuestring)>=sizeof q->draft ||
         !cJSON_IsString(text) || !text->valuestring[0] || strlen(text->valuestring)>1200 ||
-        !ht_can_display(text->valuestring,&ht_mono_20,348,1200)) {
+        !ht_can_display(text->valuestring,UI_FONT,348,1200)) {
         q->draft[0]=q->answer[0]=0; q->selected=0;
         COPY(s.q.speech_error,"Cannot show that answer. Say it again or use the terminal."); view(QUESTION);
     } else {

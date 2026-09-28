@@ -21,7 +21,11 @@ static const ht_font_t *glyph_font(const ht_font_t *font, uint32_t cp)
 {
     // Authored arrows in a recap use the same precomputed glyph as its marker.
     // Identical cell metrics: no scaling, allocation, or extra text runs.
-    return cp == 0x2197 && font == &ht_mono_20 ? &ht_open_20 : font;
+    // ht_open_20's cell is 12 x 28 — mono_20's exactly, which is what made this free. The recap now
+    // draws in mono_28 (17 x 38) and there is no open_28, so an authored arrow there renders a 12 px
+    // glyph in a 17 px cell: readable, visibly smaller than the words beside it, and better than the
+    // '?' the alternative gives. A precomputed 17 x 38 ↗ would settle it properly.
+    return cp == 0x2197 && (font == &ht_mono_20 || font == &ht_mono_28) ? &ht_open_20 : font;
 }
 static uint32_t font_codepoint(const ht_font_t *font, uint32_t cp)
 {

@@ -117,6 +117,15 @@ static void expression(char row[55], int y, int eye, const ht_tim_face_t *f)
     }
 }
 
+/*
+ * THE RECAP IS READ, so it takes the interface size; the chrome around it does not.
+ *
+ * At 17 x 38 a 408 px row holds 24 characters where mono_20 held 34. RECAP_MAX_CELLS is what keeps
+ * that honest rather than a silent truncation: the recap stops being a paragraph and becomes a
+ * headline, and the full text stays one tap away in the reader.
+ */
+#define RECAP_FONT (&ht_mono_28)
+#define RECAP_MAX_CELLS 60
 static void recap_lines(ht_scene_t *s, int y, int width, int rows, bool centered, const int *widths,
                         uint16_t ink, const char *recap)
 {
@@ -127,20 +136,25 @@ static void recap_lines(ht_scene_t *s, int y, int width, int rows, bool centered
     char marked[7 * HT_TEXT_BYTES + 3];
     size_t used = 0;
     const char *p = recap ? recap : "";
+    int cells = 0;
     while (*p) {
         const char *start = p;
         ht_utf8_next(&p);
         size_t bytes = (size_t)(p - start);
         if (used + bytes + 3 > sizeof marked) break;
+        // Cells, not bytes: a byte cap would cut an accented recap a third short of an English one,
+        // and it is the cell that costs the room.
+        if (cells >= RECAP_MAX_CELLS) break;
         memcpy(marked + used, start, bytes);
         used += bytes;
+        cells++;
     }
     while (used && marked[used - 1] == ' ') used--;
     marked[used] = 0;
     if (used && !(used >= 2 && !strcmp(marked + used - 2, " +")))
         strcpy(marked + used, " +");
     int start = s->count;
-    lines(s, y, width, rows, &ht_mono_20, ink, marked, true, widths);
+    lines(s, y, width, rows, RECAP_FONT, ink, marked, true, widths);
     // The host's continuation marker and the display's own row-overflow marker
     // both reserve " +". Replace only that final sign with the desktop action
     // glyph; keeping the space and cell width preserves wrapping and centering.
@@ -157,7 +171,7 @@ static void recap_lines(ht_scene_t *s, int y, int width, int rows, bool centered
             const char *p = word;
             int cells = 0;
             while (*p) { ht_utf8_next(&p); cells++; }
-            if (cells && cells + 2 <= (widths ? widths[i - start] : width) / ht_mono_20.width &&
+            if (cells && cells + 2 <= (widths ? widths[i - start] : width) / RECAP_FONT->width &&
                 strlen(word) + 3 <= sizeof r->text) {
                 strcpy(r->text, word);
                 strcat(r->text, " +");
@@ -166,9 +180,9 @@ static void recap_lines(ht_scene_t *s, int y, int width, int rows, bool centered
                 p = prev->text;
                 int kept = 0;
                 while (*p) { ht_utf8_next(&p); kept++; }
-                prev->w = kept * ht_mono_20.width;
+                prev->w = kept * RECAP_FONT->width;
                 prev->x = (HT_WIDTH - prev->w) / 2;
-                r->w = (cells + 2) * ht_mono_20.width;
+                r->w = (cells + 2) * RECAP_FONT->width;
                 r->x = (HT_WIDTH - r->w) / 2;
                 n = strlen(r->text);
             }
@@ -176,7 +190,7 @@ static void recap_lines(ht_scene_t *s, int y, int width, int rows, bool centered
         if ((n >= 2 && !strcmp(r->text + n - 2, " +")) ||
             (n == 1 && r->text[0] == '+')) {
             r->text[n - 1] = 0;
-            r->w -= ht_mono_20.width;
+            r->w -= RECAP_FONT->width;
             ht_text(s, r->x + r->w, r->y, ht_open_20.width, &ht_open_20,
                     ink, s->background, "\xe2\x86\x97");
         }
@@ -185,9 +199,9 @@ static void recap_lines(ht_scene_t *s, int y, int width, int rows, bool centered
     if (centered) {
         int bottom = y;
         for (int i = start; i < s->count; i++)
-            if (s->runs[i].text[0]) bottom = s->runs[i].y + ht_mono_20.height;
+            if (s->runs[i].text[0]) bottom = s->runs[i].y + RECAP_FONT->height;
         // y describes the full five-row area. Center the actual prose inside it.
-        int shift = (rows * ht_mono_20.height - (bottom - y)) / 2;
+        int shift = (rows * RECAP_FONT->height - (bottom - y)) / 2;
         for (int i = start; i < s->count; i++) s->runs[i].y += shift;
     }
 }
@@ -198,7 +212,7 @@ void ht_recap_lines(ht_scene_t *s, int y, uint16_t ink, const char *recap)
 }
 bool ht_octopus_short_recap(const char *recap)
 {
-    return recap && *recap && ht_text_rows(recap, &ht_mono_20, 324) <= 3;
+    return recap && *recap && ht_text_rows(recap, RECAP_FONT, 324) <= 2;
 }
 
 static void recipient(ht_scene_t *s, const ht_tim_face_t *f, int y)
@@ -249,10 +263,21 @@ void ht_octopus_face(ht_scene_t *s, const ht_tim_face_t *f, uint8_t frame, uint1
     // Keep slots stable through long titles and animation; damage stays local.
     static const int reading_widths[] = {396, 396, 384, 372, 348, 324, 276};
     static const int brief_widths[] = {372, 348, 324};
-    static const int roomy_widths[] = {408, 408, 396, 372, 348, 312};
+    /*
+     * FOUR ROWS FROM 212 — and the fourth is what makes 60 characters true.
+     *
+     * Three rows at 17 x 38 are 24 + 23 + 21 = 68 cells on paper. Measured, they carry about FIFTY
+     * characters of real prose: word wrap gives up part of every line break, and the desktop arrow
+     * takes the last two cells. A 60-character recap arrived cut at 50 — the cap was not the limit,
+     * the rows were.
+     *
+     * The portrait ends at 200 and the status band starts near 385, so 212 + 4 * 38 = 364 fits. The
+     * widths taper to the chord: 372 is the widest the fourth row can be at y=364.
+     */
+    static const int roomy_widths[] = {408, 408, 396, 372};
     if (result && f->roomy_reading) recap_lines(s,
-        brief ? HT_OCTOPUS_BRIEF_TEXT_Y : HT_OCTOPUS_READING_TEXT_Y,
-        brief ? 372 : 408, brief ? 3 : 6, false,
+        brief ? HT_OCTOPUS_BRIEF_TEXT_Y : 212,
+        brief ? 372 : 408, brief ? 3 : 4, false,
         brief ? brief_widths : roomy_widths, f->foreground, recap);
     else if (result) recap_lines(s, brief ? 252 : 194, brief ? 372 : 396,
         brief ? 3 : 7, false, brief ? brief_widths : reading_widths, f->foreground, recap);
