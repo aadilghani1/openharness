@@ -5,7 +5,8 @@ import 'package:flutter/widgets.dart';
 import '../logging/debug_surface.dart';
 
 /// Harness uses Command as a direct prefix for frequent workspace actions.
-/// T opens a tab, O opens projects, P finds harnesses, Shift-P opens commands, N creates a harness, S opens the Store,
+/// T opens a tab, N creates a harness. S opens Store, M machines, I models,
+/// O projects, P harnesses, and Shift-P commands.
 /// Shift-L chooses a layout. H/J/K/L and arrows focus panes; B routes a task.
 /// The same definitions feed live keys, help and search.
 ///
@@ -71,10 +72,10 @@ enum ShortcutAction {
   /// conversation where the engine can — the pane, its folder and its settings
   /// all stay. Asks first, unlike [cloneAgent]: the running process ends.
   restartAgent,
+  shareAgent,
   routeTask,
   orchestrate,
   team,
-  askOutsideSwarm,
   reload,
   showLayout,
   pinPane,
@@ -308,16 +309,6 @@ const List<AppShortcut> kAppShortcuts = [
 
   // --- actions --------------------------------------------------------------
   AppShortcut(
-    action: ShortcutAction.askOutsideSwarm,
-    activator: SingleActivator(
-      LogicalKeyboardKey.keyA,
-      meta: true,
-      shift: true,
-    ),
-    label: 'Ask outside this swarm',
-    group: ShortcutGroup.actions,
-  ),
-  AppShortcut(
     action: ShortcutAction.newAgent,
     activator: SingleActivator(LogicalKeyboardKey.keyN, meta: true),
     label: 'New Harness',
@@ -436,16 +427,21 @@ AppShortcut _platformShortcut(AppShortcut shortcut) => !kIsWeb
 /// screen. Live Swarm bindings, tooltips, and help all use this same catalog.
 const kSwarmShortcuts = [
   AppShortcut(
+    action: ShortcutAction.shareAgent,
+    activator: SingleActivator(
+      LogicalKeyboardKey.keyS,
+      meta: true,
+      shift: true,
+      includeRepeats: false,
+    ),
+    label: 'Share the focused agent',
+    group: ShortcutGroup.actions,
+  ),
+  AppShortcut(
     action: ShortcutAction.addAgent,
     activator: SingleActivator(LogicalKeyboardKey.keyO, meta: true),
     label: 'Open Harness',
     group: ShortcutGroup.actions,
-  ),
-  AppShortcut(
-    action: ShortcutAction.showHistory,
-    activator: SingleActivator(LogicalKeyboardKey.keyY, meta: true),
-    label: 'Show full history',
-    group: ShortcutGroup.navigate,
   ),
   AppShortcut(
     action: ShortcutAction.newSwarm,

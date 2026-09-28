@@ -11,11 +11,11 @@ import '../logging/debug_surface.dart';
 /// rail, the search filter and the pane all read this list, so a section cannot
 /// be listed without a screen behind it or reachable without a row.
 enum SettingsSection {
-  experimental(LucideIcons.flaskConical300, 'Experimental'),
   account(LucideIcons.user300, 'Account'),
   usage(LucideIcons.chartNoAxesColumn300, 'Usage'),
   customize(LucideIcons.palette300, 'Customize'),
   notifications(LucideIcons.bell300, 'Notifications'),
+  experimental(LucideIcons.flaskConical300, 'Experimental'),
   devices(LucideIcons.zap300, 'Autonomous robots'),
   shortcuts(LucideIcons.keyboard300, 'Keyboard shortcuts'),
   debug(LucideIcons.bug300, 'Debug'),
@@ -94,9 +94,9 @@ const _kSettingsGroups = [
     // the app looks; a sound is not a look, and somebody turning one off does not think to look
     // under Appearance for it.
     SettingsSection.notifications,
+    SettingsSection.experimental,
     SettingsSection.devices,
     SettingsSection.account,
-    SettingsSection.experimental,
   ]),
   // Debug and Tracking sit between the two things they are most often reached
   // from: the keys that open them, and the version a report has to name. The

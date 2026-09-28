@@ -32,6 +32,8 @@ dependencies:
   archive: ^4.0.9
   flutter:
     sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
   # Natural ordering for numbered agents, projects, and completion candidates.
   collection: ^1.19.1
 

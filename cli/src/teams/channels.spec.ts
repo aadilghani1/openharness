@@ -104,7 +104,7 @@ describe('tab channels', () => {
     expect(f.service.list(owner).teams).toEqual([])
     expect(f.sent).toEqual([])
     expect(f.writeSettings).not.toHaveBeenCalled()
-    await expect(f.directory.request({ action: 'channel_cross_consult', tabId: 'devices', id: consultationId, from: mobile })).rejects.toThrow('Experimental')
+    await expect(f.directory.request({ action: 'channel_consult', tabId: 'devices', id: consultationId, from: mobile })).rejects.toThrow('Experimental')
     await f.directory.request({ action: 'channel_configure', enabled: true })
     await f.tick()
     expect(f.sent.map(s => s.agentId).sort()).toEqual(['firmware', 'mobile'])
@@ -121,48 +121,21 @@ describe('tab channels', () => {
     await f.tick()
     expect(f.sent.filter(s => s.id.endsWith(':question'))).toHaveLength(1)
   })
-  it('the outside-swarm shortcut is explicit, deduplicated, and permits peer search from a solo tab', async () => {
-    const f = fixture()
-    await f.directory.refresh()
-    const payload = { action: 'channel_cross_consult', tabId: 'api', from: backend, id: consultationId }
-    const first = await f.directory.request(payload)
-    expect(await f.directory.request(payload)).toEqual(first)
-    await f.tick()
-    const prompt = f.sent.filter(s => s.agentId === 'backend')
-    expect(prompt).toHaveLength(1)
-    expect(prompt[0].text).toContain('Explicit instruction from the user: Ask outside this swarm')
-    expect(prompt[0].text).toContain('harness channel list')
-    expect(prompt[0].text).toContain('--cross-channel')
-    expect(f.read('api').consultations[0].outsideSwarm).toBe(true)
-  })
-  it('cross-channel work is explicit, preserves both rosters and records the result in source history', async () => {
+  it('refuses cross-swarm requests without creating an exchange or instruction', async () => {
     const f = fixture()
     await f.directory.refresh()
     await f.tick()
     f.sent.length = 0
-    const request = { action: 'channel_cross_ask', tabId: 'devices', targetTabId: 'api', from: mobile,
-      to: f.member('backend', 'api').id, text: 'What is the API contract?', id: questionId }
-    await expect(f.directory.request(request)).rejects.toThrow('explicit')
-    expect(f.read().exchanges).toHaveLength(0)
-    const result = await f.directory.request({ ...request, crossChannel: true })
-    expect(await f.directory.request({ ...request, crossChannel: true })).toEqual(result)
-    const bridge = f.ledger(result.teamId as string)
-    f.service.setState(channelTeamId('devices'), 'paused', owner)
+    for (const action of ['channel_cross_consult', 'channel_cross_ask']) {
+      await expect(f.directory.request({ action, tabId: 'devices', targetTabId: 'api',
+        from: mobile, to: f.member('backend', 'api').id, text: 'API?', id: questionId,
+        crossChannel: true })).rejects.toThrow()
+    }
     await f.tick()
     expect(f.sent).toHaveLength(0)
-    f.service.setState(channelTeamId('devices'), 'active', owner)
-    await f.tick()
-    expect(f.sent.filter(s => s.id.endsWith(':intro'))).toHaveLength(0)
-    expect(f.sent.filter(s => s.id.endsWith(':question')).map(s => s.agentId)).toEqual(['backend'])
-    const key: Actor = { kind: 'member', key: bridge.members[1].key }
-    f.service.reply(bridge.id, questionId, 'Use /api/v2.', [], key)
-    await f.tick()
-    const snapshot = await f.service.snapshot(channelTeamId('devices'), f.actor('mobile'))
-    expect((snapshot.members as unknown[])).toHaveLength(2)
-    expect(snapshot.externalExchanges).toEqual([expect.objectContaining({ targetTabId: 'api', state: 'answered', answer: expect.objectContaining({ text: 'Use /api/v2.' }) })])
+    expect(f.read().exchanges).toHaveLength(0)
+    expect(f.read().consultations).toHaveLength(0)
     expect(f.read('api').members).toHaveLength(1)
-    expect(() => f.service.ask(bridge.id, { id: 'd'.repeat(32), from: bridge.members[1].id, to: bridge.members[0].id, text: 'Unrelated task' }, key)).toThrow('explicit user direction')
-    expect(JSON.stringify(snapshot)).not.toContain(bridge.members[0].key)
   })
   it('automatically discovers peers and shared history only in its saved tab', async () => {
     const f = fixture()

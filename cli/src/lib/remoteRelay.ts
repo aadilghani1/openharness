@@ -34,6 +34,7 @@ import { warmStunUrls } from './stunSelect.js'
 import { RemoteViewerProxy } from './remoteViewerProxy.js'
 import { VIEWER_UP_TYPES } from './viewerWire.js'
 import { isWrapped } from './e2ee/core.js'
+import { admitRelayedPairFrame, isPairFrameType } from './e2ee/applicationFrames.js'
 
 const CONNECT_TIMEOUT_MS = 15_000
 const LINGER_MS = 30_000
@@ -238,6 +239,9 @@ export interface RemoteRelayPoolOptions {
   dialCooldownMs?: number
   /** Share one failure record between pools (the background pools all draw on the parent's). */
   dialFailures?: Map<string, { at: number; error: unknown }>
+  /** A fresh E2EE session to `machineId` is up (the trust group compares rosters then). Not passed on
+   *  to the background pools — the group's own exchange runs on one of those. */
+  onSessionReady?: (machineId: string) => void
 }
 
 export class RemoteRelayPool {
@@ -248,6 +252,7 @@ export class RemoteRelayPool {
   private readonly p2pEnabled: boolean
   private readonly lingerMs: number
   private readonly dialCooldownMs: number
+  private readonly onSessionReady: ((machineId: string) => void) | null
   /** Warm background pools per machine, each holding one lingering session nobody is attached to —
    *  see acquireIsolated(). A pool is either here (idle) or in a client's hands, never both. */
   private readonly idleIsolated = new Map<string, RemoteRelayPool[]>()
@@ -262,6 +267,7 @@ export class RemoteRelayPool {
     this.p2pEnabled = opts.p2p !== false
     this.lingerMs = opts.lingerMs ?? LINGER_MS
     this.dialCooldownMs = opts.dialCooldownMs ?? 0
+    this.onSessionReady = opts.onSessionReady ?? null
     this.lastDialFailure = opts.dialFailures ?? new Map()
   }
 
@@ -500,6 +506,7 @@ export class RemoteRelayPool {
           if (frame.type === 'e2e_welcome') {
             const ok = crypto.handleWelcome((frame.payload ?? {}) as Record<string, unknown>)
             if (!ok) { if (!settled) { settled = true; clearTimeout(timeout); reject(new RelayConnectError('E2EE_WELCOME_INVALID')) } ; return }
+            try { this.onSessionReady?.(machineId) } catch { /* an observer must not break the session */ }
             // Three ways p2p never even starts, and until now all three looked identical from outside —
             // the terminal just quietly stayed on the ws relay. The peer-version case is the important
             // one: a machine whose CLI predates p2p answers no offer, so NO amount of STUN or TURN can
@@ -569,6 +576,8 @@ export class RemoteRelayPool {
         // The relay cannot inject response bytes/headers into a local browser in plaintext.
         if (typeof frame.type === 'string' && VIEWER_UP_TYPES.has(frame.type)
           && (!isWrapped(frame.payload) || frame.payload.__e2e?.k !== 'p')) return
+        // Nor a question, a recap or an answer's result for the pair brain (applicationFrames.ts).
+        if (typeof frame.type === 'string' && isPairFrameType(frame.type) && !admitRelayedPairFrame(frame)) return
         const plain = crypto.unwrapIncoming(frame)
         if (!plain) return
         const type = typeof plain.type === 'string' ? plain.type : ''

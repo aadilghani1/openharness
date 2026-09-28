@@ -21,18 +21,16 @@ function excerpt(text: string, bytes: number): string {
 
 export function introduction(team: Team, member: Member, command: string): string {
   return `[Harness ${team.channel ? 'swarm' : 'team'}: ${team.name}]\nYou are ${member.name}${member.role ? ` — ${member.role}` : ''}.\n`
-    + (team.channel ? `This tab is your swarm and collaboration channel (tab ${team.channel.tabId}). Discover and consult relevant peers here autonomously when your current task needs help. Stay within this swarm unless the user explicitly asks for cross-swarm work. Switching the visible tab does not change this scope.\n` : 'The user connected these existing sessions as a team:\n')
+    + (team.channel ? `This tab is your swarm and collaboration channel (tab ${team.channel.tabId}). Discover and consult relevant peers here autonomously when your current task needs help. Stay within this swarm; cross-swarm consultation is not available. Switching the visible tab does not change this scope.\n` : 'The user connected these existing sessions as a team:\n')
     + `${team.members.filter(m => m.enabled).map(m => `${m.name}: ${excerpt(m.role || 'Teammate', 180)}`).join('\n')}\n\n`
     + `${rules}\n\nUse these shell commands (keep the member key private):\n`
     + `${command} members\n${command} history\n${command} ask <teammate-name> 'question' --id <32-hex-operation-id>\n`
     + `${command} inbox\n${command} reply <question-id> 'answer'\n${command} wait <question-id> --seconds 30\n`
     + 'Ask returns immediately. Keep doing independent work; the answer will return here. If you need to wait, use wait: incoming questions end the wait so you can answer them first. A timeout is not cancellation. Use the same question ID when retrying an uncertain ask.\n'
-    + (team.channel ? `For an explicitly requested cross-swarm consultation only: read harness channel --help. Your source tab is ${team.channel.tabId}, source machine ${member.machineId}, and source agent ${member.agentId}. Use --cross-channel with the named destination; never broaden scope just because no local peer fits.\n` : '')
     + 'Read members for complete roles and current membership. You can now continue your current work. No acknowledgment is needed.'
 }
 
-export function consultPrompt(team: Team, member: Member, command: string, outsideSwarm = false): string {
-  if (outsideSwarm) return `${introduction(team, member, command)}\n\nExplicit instruction from the user: Ask outside this swarm for your current task, then continue. You may now discover other swarms with harness channel list and read a relevant tab's members with harness channel --tab TARGET_TAB members. Honor any peer or tab the user already named; if that target is unavailable, report it instead of silently substituting someone else. Otherwise choose a relevant peer outside source tab ${team.channel!.tabId}, and send a focused question using harness channel --tab ${shellQuote(team.channel!.tabId)} ask 'question' --from-machine ${shellQuote(member.machineId)} --from-agent ${shellQuote(member.agentId)} --to-tab TARGET_TAB --to MEMBER_ID --cross-channel --id NEW_32_HEX_ID. Preserve the ID on retries. This permission applies only to finding help for your current task. It does not authorize unrelated work or broadcast. If no peer can help, continue independently. If there is no current task, do not invent one. Do not open a picker or simulate keyboard shortcuts.`
+export function consultPrompt(team: Team, member: Member, command: string): string {
   return `${introduction(team, member, command)}\n\nExplicit instruction from the user: Consult your swarm and continue your current task. Read members and the shared history, choose a relevant peer, ask a focused question for the context or code you need, and use the reply to proceed. If no peer can help, continue independently and explain the missing context. Do not open a picker or simulate keyboard shortcuts. Do not broadcast or invent a task if no current task needs help.`
 }
 

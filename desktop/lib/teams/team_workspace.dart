@@ -848,11 +848,6 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
             '${exchange['origin'] == 'owner' ? 'Requested by you' : 'Agent question'} · ${exchange['state']} · ${teamDeliveryLabel((exchange['delivery'] as Map?)?.cast<String, dynamic>())}',
             style: faint,
           ),
-          if (exchange['targetTabId'] != null)
-            Text(
-              'Explicit cross-swarm consultation · ${exchange['targetTabId']}',
-              style: faint,
-            ),
           _gap(),
           SelectableText(exchange['text'] as String? ?? '', style: style),
           if ((exchange['context'] as String? ?? '').isNotEmpty) ...[
@@ -985,7 +980,7 @@ class _TeamWorkspaceState extends State<TeamWorkspace> {
                             ).reversed.take(5)) ...[
                               _gap(),
                               Text(
-                                '${instruction['outsideSwarm'] == true ? 'Outside-swarm help' : 'Consult'} requested for ${_memberName(instruction['memberId'] as String?)} · ${teamDeliveryLabel((instruction['receipt'] as Map?)?.cast<String, dynamic>())}',
+                                'Consult requested for ${_memberName(instruction['memberId'] as String?)} · ${teamDeliveryLabel((instruction['receipt'] as Map?)?.cast<String, dynamic>())}',
                                 style: faint,
                               ),
                             ],

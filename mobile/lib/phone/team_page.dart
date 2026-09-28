@@ -81,17 +81,6 @@ class TeamPage extends StatelessWidget {
             machineName:
                 notifier.stateOf(machineId)?.machine.displayName ?? 'Machine',
             candidates: const [],
-            onConsult: agentId == null
-                ? null
-                : () async {
-                    final message = await notifier
-                        .channelController(tabId!, machineId)
-                        .consult(machineId, agentId!, outsideSwarm: true);
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context)
-                          .showSnackBar(SnackBar(content: Text(message)));
-                    }
-                  },
             onOpen: (machine, agent) =>
                 openAgent(context, notifier, machine, agent),
           ),
@@ -106,13 +95,11 @@ class PhoneTeamView extends StatefulWidget {
     required this.machineName,
     required this.candidates,
     required this.onOpen,
-    this.onConsult,
   });
   final TeamController controller;
   final String machineName;
   final List<PhoneTeamCandidate> candidates;
   final void Function(String machineId, String agentId) onOpen;
-  final VoidCallback? onConsult;
   @override
   State<PhoneTeamView> createState() => _PhoneTeamViewState();
 }
@@ -468,8 +455,6 @@ class _PhoneTeamViewState extends State<PhoneTeamView> {
       ),
       if (model.isChannel)
         text('This tab only · membership follows the tab.', faint: true),
-      if (widget.onConsult != null)
-        action('Ask outside this swarm', widget.onConsult),
       Wrap(
         children: [
           if (model.team!['state'] != 'archived')
@@ -573,11 +558,6 @@ class _PhoneTeamViewState extends State<PhoneTeamView> {
     final answer = (e['answer'] as Map?)?.cast<String, dynamic>();
     final fromName = (e['fromPeer'] as Map?)?['name'] ?? memberName(e['from']);
     return [
-      if (e['targetTabId'] != null)
-        text(
-          'Explicit cross-swarm consultation · ${e['targetTabId']}',
-          faint: true,
-        ),
       text(
         '${e['origin'] == 'owner' ? 'Requested by you' : 'Agent question'} · ${teamDeliveryLabel((e['delivery'] as Map?)?.cast<String, dynamic>())}',
         faint: true,

@@ -63,15 +63,7 @@ class TeamController extends ChangeNotifier {
   bool get pendingAdd => _addAttempts.containsKey(selectedId);
   List<Map<String, dynamic>> get members => teamRows(team?['members']);
   List<Map<String, dynamic>> get exchanges {
-    final rows = [
-      ...teamRows(team?['exchanges']).reversed,
-      for (final exchange in teamRows(team?['externalExchanges']))
-        {
-          ...exchange,
-          'questionId': exchange['id'],
-          'id': '${exchange['teamId']}/${exchange['id']}',
-        },
-    ];
+    final rows = [...teamRows(team?['exchanges']).reversed];
     if (isChannel) {
       rows.sort(
         (a, b) => ((b['createdAt'] as num?) ?? 0).compareTo(
@@ -205,29 +197,20 @@ class TeamController extends ChangeNotifier {
 
   /// The caller captures tab and agent before any await. Retries retain that
   /// instruction's identity, even after focus changes or the view is closed.
-  Future<String> consult(
-    String machineId,
-    String agentId, {
-    bool outsideSwarm = false,
-  }) {
-    final key = '$machineId/$agentId/$outsideSwarm';
-    return _consultFlights[key] ??=
-        _consult(machineId, agentId, key, outsideSwarm).whenComplete(() {
+  Future<String> consult(String machineId, String agentId) {
+    final key = '$machineId/$agentId';
+    return _consultFlights[key] ??= _consult(machineId, agentId, key)
+        .whenComplete(() {
           _consultFlights.remove(key);
         });
   }
 
-  Future<String> _consult(
-    String machineId,
-    String agentId,
-    String key,
-    bool outsideSwarm,
-  ) async {
+  Future<String> _consult(String machineId, String agentId, String key) async {
     if (channelTabId == null) return 'Choose a swarm tab first.';
     final attempt = _consultAttempts.putIfAbsent(
       key,
       () => {
-        'action': outsideSwarm ? 'channel_cross_consult' : 'channel_consult',
+        'action': 'channel_consult',
         'tabId': channelTabId,
         'id': teamOperationId(),
         'from': {'machineId': machineId, 'agentId': agentId},
@@ -240,7 +223,7 @@ class TeamController extends ChangeNotifier {
       error = null;
       final receipt = (result['consultation'] as Map?)?['receipt'] as Map?;
       _notify();
-      return '${outsideSwarm ? 'Ask outside this swarm' : 'Consult swarm'} · ${teamDeliveryLabel(receipt?.cast<String, dynamic>())}';
+      return 'Consult swarm · ${teamDeliveryLabel(receipt?.cast<String, dynamic>())}';
     } catch (e) {
       if (e is TeamRequestError && !e.uncertain) _consultAttempts.remove(key);
       final message =

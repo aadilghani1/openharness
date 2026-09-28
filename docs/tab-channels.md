@@ -24,25 +24,16 @@ with the correlated answer. A message goes to its recipient; reading shared hist
 does not notify all participants or start model work. Introductions, questions, and
 continuations can use the participants' existing model subscriptions.
 
-**Cmd+Shift+A — Ask outside this swarm** explicitly permits the focused agent to
-search other swarms for help with its current task. The agent uses the peer directory,
-chooses a relevant recipient, asks, and continues with the reply. It opens no picker
-and never types Cmd+P into an engine. Naming a recipient in the task pins that choice.
-The permission is limited to help for the current task; it does not authorize unrelated
-work or broadcasting. Ordinary same-swarm consultation needs no shortcut.
-The existing keymap adapts the binding by platform and supports remapping.
-The action captures its source tab and agent before awaiting any operation. Busy,
-draft, permission-dialog, offline, and uncertain delivery states use the existing
-durable mailbox. Repeated keys join an outstanding request; an uncertain retry keeps
-the same operation ID. A consult contains the introduction, so an unsent separate
-introduction for that agent is suppressed.
+Agents discover relevant peers and consult automatically within their tab. There is no
+consult shortcut or recipient picker. Cross-swarm requests and Cmd+Shift+A are deferred.
+Busy, draft, permission-dialog, offline, and uncertain delivery states use the existing
+durable mailbox; an uncertain retry keeps the same operation ID.
 
 Press **Cmd+Shift+P**, type **Swarm conversation**, and press Enter to read the roster and
 exchange history, inspect return delivery, open a participant, cancel a question,
 or pause/resume collaboration. The history contains actual peer questions, replies,
 and delivery states, not full terminal transcripts. Opening and closing the view only reads state.
-Mobile provides **Swarms** from machine views and **Swarm conversation** from the terminal;
-the terminal's conversation page also offers **Ask outside this swarm**.
+Mobile provides **Swarms** from machine views and **Swarm conversation** from the terminal.
 
 Turning the experiment off prevents new automatic swarm input and new questions.
 Known-unsent work and history are retained. Existing model turns are not interrupted.
@@ -62,8 +53,7 @@ old requests stay attributable. Closing a tab removes its active memberships whi
 retaining history on the host. Closing a history dialog leaves membership unchanged.
 
 A session shown in multiple tabs has a separate capability and roster in each.
-Every question carries its channel identity; rosters are never unioned. The consult
-shortcut supplies an unambiguous originating tab. Native terminal engines do not
+Every question carries its channel identity; rosters are never unioned. Every scoped command supplies an originating tab. Native terminal engines do not
 report the tab in which arbitrary typed text originated: when a session participates
 in several channels, agents must use the channel specified by the task or request
 clarification rather than infer scope from the last visible tab.
@@ -76,34 +66,16 @@ a 15-second poll, with fresh reads for new asks/consults. They keep known-unsent
 and pending replies across restarts. An unavailable directory never clears membership
 or causes a silent global fallback.
 
-## Explicit cross-channel work
+## Swarm boundaries
 
-Ordinary member discovery and `ask` are confined to that channel. The owner's CLI
-can make a specific cross-channel request after the user explicitly asks for it:
+Member discovery and questions stay inside the named tab. A member capability from one
+tab cannot inspect or message a different tab. Cross-swarm request actions are not
+available in this release, even with an explicit cross-channel flag. If no local peer
+fits, the agent continues independently or explains the missing context.
 
-```sh
-harness channel list
-harness channel --tab TARGET_TAB members
-harness channel --tab SOURCE_TAB ask 'Which pairing contract should I use?' \
-  --from-machine SOURCE_MACHINE --from-agent SOURCE_AGENT \
-  --to-tab TARGET_TAB --to TARGET_MEMBER --cross-channel --id OPERATION_ID
-```
-
-Use a fresh 32-character lowercase hex operation ID for a new request and preserve
-it on retry. `--text-file` accepts multiline questions. The source and target must
-be current members of their named channels. This creates a durable direct exchange
-between those two agents without adding either to the other tab. Its record appears
-in the source channel's shared history, labeled as explicitly requested cross-channel
-work. Answers return to the source agent. The destination receives the request in its
-existing session; it is not broadcast to the destination's channel. Pausing the source
-channel also holds these deliveries. Peers can make bounded follow-ups on the existing
-request; a new unrelated cross-channel request needs the explicit owner command again.
-
-This command uses the user's existing local/paired owner authority and is attributed
-as requested by the user. The explicit flag is an intentional API operation, not proof
-of a separately authenticated human click. Like the existing team CLI, it is not an OS
-sandbox between same-user agents that can already invoke owner commands. Agent prompts
-instruct them to use it only following explicit user direction.
+This is a collaboration scope, not an OS sandbox between same-user processes. Like
+other CLI commands, the advanced owner/team interface uses the user's local or paired
+machine authority. Agents are instructed to keep using their supplied scoped commands.
 
 Code answers are instructed to name their repository, worktree, branch/commit, and
 relevant uncommitted changes. There is no automatic checkout, merge, or file transfer;
@@ -140,17 +112,15 @@ harness channel --tab TAB_ID history --json
 The existing bounds apply: 100 retained ledgers per host, 500 exchanges per ledger,
 8 outstanding questions per sender, 30 new questions per minute per ledger, and four
 questions in a follow-up chain. A tab channel allows 32 current and 512 retained
-memberships, and 500 retained consult instructions. Source history includes the latest
-50 external exchanges; their full records remain in their direct ledgers. No retention
-deletion or automatic host failover is performed.
+memberships, and 500 retained consult instructions. No retention deletion or automatic host failover is performed.
 
 ## Verification
 
 Tests cover default-off behavior, explicit opt-in persistence, safe disable/re-enable,
 recipient restarts, failed directory reads, concurrent settings changes, automatic
 registration, tab isolation, shared history, removal/rejoin,
-closed tabs, stale membership, idempotent consults, explicit cross-channel requests,
-pause/resume, skipped shells, read-only views, focus changes during shortcut dispatch,
+closed tabs, stale membership, idempotent consults, rejected cross-swarm requests,
+pause/resume, skipped shells, read-only views, inactive cross-swarm shortcuts,
 and desktop/mobile rendering. The two-daemon fixture exercises actual local WebSockets,
 pairing, encrypted relays, explicit replies, and continuation; cloud routing and agent
 terminal responses are synthetic. Backend tests cover auth, owned-machine filtering,

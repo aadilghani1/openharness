@@ -37,6 +37,7 @@ class SampleApp extends StatelessWidget {
       grid.AppTheme.brightness.value = Brightness.dark;
       return MaterialApp(
         title: 'Harness sample',
+        debugShowCheckedModeBanner: false,
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         builder: (context, child) =>
             grid.BrightnessScope(child: child ?? const SizedBox.shrink()),

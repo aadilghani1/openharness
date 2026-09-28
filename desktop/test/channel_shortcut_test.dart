@@ -86,47 +86,21 @@ void main() {
     );
   }
 
-  testWidgets(
-    'outside-swarm shortcut captures the focused agent and tab without opening a picker or writing terminal keys',
-    (tester) async {
-      final connection = ChannelConnection();
-      final app = createApp(
-        connectionForTest: (_) => connection,
-        connected: true,
-      )..status = AppStatus.authenticated;
-      final map = MemoryKeymap();
-      final frames = <TerminalBinaryFrame>[];
-      app.adoptSessionForTest(terminal('a0', frames));
-      final originalTab = app.activeSwarmId;
-      await mount(tester, app, map);
-      await key(tester, LogicalKeyboardKey.keyA, cmd: true, shift: true);
-      await tester.pump();
-      expect(connection.calls, hasLength(1));
-      expect(
-        connection.calls.single,
-        containsPair('action', 'channel_cross_consult'),
-      );
-      expect(connection.calls.single['tabId'], originalTab);
-      expect(connection.calls.single['from'], {
-        'machineId': 'm',
-        'agentId': 'a0',
-      });
-      expect(find.byType(TeamWorkspace), findsNothing);
-      expect(frames, isEmpty);
-      app.newSwarm(name: 'Other work');
-      app.adoptSessionForTest(terminal('a1', frames));
-      connection.pending.complete({
-        'consultation': {
-          'receipt': {'state': 'queued'},
-        },
-      });
-      await tester.pumpAndSettle();
-      expect(connection.calls, hasLength(1));
-      expect(app.activeSwarmId, isNot(originalTab));
-      await tester.pumpWidget(const SizedBox());
-      app.dispose();
-      map.dispose();
-      await connection.close();
-    },
-  );
+  testWidgets('Cmd+Shift+A does not start cross-swarm work', (tester) async {
+    final connection = ChannelConnection();
+    final app = createApp(connectionForTest: (_) => connection, connected: true)
+      ..status = AppStatus.authenticated;
+    final map = MemoryKeymap();
+    final frames = <TerminalBinaryFrame>[];
+    app.adoptSessionForTest(terminal('a0', frames));
+    await mount(tester, app, map);
+    await key(tester, LogicalKeyboardKey.keyA, cmd: true, shift: true);
+    await tester.pump();
+    expect(connection.calls, isEmpty);
+    expect(find.byType(TeamWorkspace), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+    map.dispose();
+    await connection.close();
+  });
 }

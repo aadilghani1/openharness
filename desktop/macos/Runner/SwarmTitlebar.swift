@@ -61,6 +61,10 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         let state = call.arguments as? [String: Any] ?? [:]
         self.updateMachines(state["machines"] as? [[String: Any]] ?? [])
         result(nil)
+      case "daemonState":
+        // The paired daemon's face and voice. Repaints the slot (and the voice line) only.
+        self.strip.updateDaemon(call.arguments as? [String: Any] ?? [:])
+        result(nil)
       case "playAlert":
         // A named macOS system sound. Every Mac has these, so no audio asset ships with the app,
         // nothing has to be decoded, and the alert plays at whatever volume the person has set for
@@ -102,7 +106,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["focusedModel", "focusedContext", "harnessControls", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["daemon", "focusedModel", "focusedContext", "harnessControls", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -285,7 +289,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     add(file, "Clone Harness", "n", "cloneAgent", [.command, .shift])
     // ⌘⇧E: the pane's harness starts again where it is (Dart: `agent.restart`).
     add(file, "Restart Harness", "e", "restartAgent", [.command, .shift])
-    add(file, "Share Harness", "", "shareAgent")
+    add(file, "Share Harness", "s", "shareAgent", [.command, .shift])
     file.addItem(.separator())
     add(file, "New Tab", "t", "new")
     add(file, "Rename Tab", "r", "renameActive", [.command, .shift])
@@ -387,7 +391,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     historyMenu.addItem(.separator())
     appendHistorySection("Recently Visited", entries: visited, closed: false, trailingEdge: trailingEdge)
     historyMenu.addItem(.separator())
-    command("Show Full History", "y", "showHistory")
+    command("Show Full History", "", "showHistory")
     if let keymap { keymap.applyMenuKeys(to: historyMenu, context: flutterKeyContext) }
     let rowWidth = ceil(historyMenu.size.width * 1.2)
     historyMenu.minimumWidth = rowWidth
@@ -923,6 +927,31 @@ private final class SwarmStatusSymbolButton: SwarmIconButton {
   }
 }
 
+/// Flat primary action; Dart supplies the same colors and text as Flutter.
+private final class SwarmShareButton: SwarmIconButton {
+  var background = NSColor.clear { didSet { needsDisplay = true } }
+  var foreground = NSColor.white { didSet { needsDisplay = true } }
+  var preferredWidth: CGFloat {
+    let regularFont = font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    let cell = ("m" as NSString).size(withAttributes: [.font: regularFont]).width
+    return ceil(workspaceBarTextWidth(title, font: regularFont) + cell * 2)
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    background.setFill()
+    bounds.fill()
+    let regularFont = font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    let emphasized = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
+    let line = NSAttributedString(string: title, attributes: [
+      .font: emphasized ? workspaceBarEmphasisFont(regularFont) : regularFont,
+      .foregroundColor: foreground,
+    ])
+    let size = line.size()
+    line.draw(in: NSRect(x: (bounds.width - size.width) / 2,
+      y: (bounds.height - size.height) / 2, width: size.width, height: size.height))
+  }
+}
+
 private final class SwarmStripScrollView: NSScrollView {
   override func scrollWheel(with event: NSEvent) {
     let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
@@ -937,6 +966,20 @@ private final class SwarmStripScrollView: NSScrollView {
     contentView.scroll(to: origin)
     reflectScrolledClipView(contentView)
   }
+}
+
+/// A daemon glyph is at most eight printable ASCII cells. Anything else draws nothing.
+private func validDaemonGlyph(_ value: String?) -> String? {
+  validDaemonText(value, cells: 8)
+}
+
+/// Printable ASCII of at most [cells] cells, or nothing: the slot's ten cells
+/// (the glyph centred on its base sprite, a gutter each side, a shiny `*`) and
+/// the tally beside them (`+3 +1 egg`).
+private func validDaemonText(_ value: String?, cells: Int) -> String? {
+  guard let value, value.unicodeScalars.count <= cells,
+        value.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value <= 0x7e }) else { return nil }
+  return value
 }
 
 private func statusColor(_ value: Any?, fallback: NSColor) -> NSColor {
@@ -1217,6 +1260,161 @@ private final class SwarmContextButton: SwarmIconButton {
   }
 }
 
+/// Plain terminal symbols with fixed cell gutters: the daemon's eight cells plus a
+/// one-cell gutter each side, and its tally (`+3 +1 egg`) to their left. Only this
+/// control repaints when its face changes; it lays out again only when the tally's
+/// width does.
+private final class SwarmSymbolButton: SwarmIconButton {
+  var glyph = ""
+  /// The ten cells as Flutter drew them: the glyph centred on its version's base
+  /// sprite (so a baton never moves the face) and a shiny `*` in the left gutter.
+  var cells = ""
+  var tally = ""
+  let columns = 8
+  /// A hatch in flight or its reveal running: drawn at full ink, not clickable.
+  var busy = false
+  var foreground = NSColor.white
+  var tallyColor = NSColor.secondaryLabelColor
+  /// The grue on a light theme: a black patch behind its eight cells.
+  var patch: NSColor?
+  /// The pointer arrived: "I see you". Never moves keyboard focus.
+  var onEnter: (() -> Void)?
+  private var textFont: NSFont { font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
+  private var cellWidth: CGFloat { ceil(workspaceBarTextWidth("m", font: textFont)) }
+  var preferredWidth: CGFloat {
+    cellWidth * CGFloat(columns + 2 + (tally.isEmpty ? 0 : tally.count + 1))
+  }
+
+  override func mouseEntered(with event: NSEvent) {
+    super.mouseEntered(with: event)
+    if !isHidden { onEnter?() }
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    guard !glyph.isEmpty || !cells.isEmpty else { return }
+    let ink = isEnabled || busy ? foreground : foreground.withAlphaComponent(0.35)
+    let active = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
+    let drawFont = active ? workspaceBarEmphasisFont(textFont) : textFont
+    let attributes: [NSAttributedString.Key: Any] = [.font: drawFont, .foregroundColor: ink, .ligature: 0]
+    guard !cells.isEmpty else {
+      let size = (glyph as NSString).size(withAttributes: attributes)
+      (glyph as NSString).draw(at: NSPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2),
+        withAttributes: attributes)
+      return
+    }
+    let slotX = bounds.width - cellWidth * CGFloat(columns + 2)
+    let height = (cells as NSString).size(withAttributes: attributes).height
+    if let patch {
+      patch.setFill()
+      NSRect(x: slotX + cellWidth, y: bounds.midY - height / 2, width: cellWidth * CGFloat(columns), height: height).fill()
+    }
+    if !tally.isEmpty {
+      let tallyInk = isEnabled || busy ? tallyColor : tallyColor.withAlphaComponent(0.35)
+      (tally as NSString).draw(at: NSPoint(x: cellWidth, y: bounds.midY - height / 2),
+        withAttributes: [.font: drawFont, .foregroundColor: tallyInk, .ligature: 0])
+    }
+    (cells as NSString).draw(at: NSPoint(x: slotX, y: bounds.midY - height / 2), withAttributes: attributes)
+  }
+}
+
+/// The daemon's one line, where the status line's context sits: tmux's message
+/// line, yellow for what needs you and the bar's own dimmer ink for a reply.
+/// Right-aligned in the bar font, truncated rather than wrapped. A line from the
+/// pair brain is drawn exactly as sent, its keys first (`[y/n/g] ...`); each
+/// offered key in that bracket is clickable, and a click answers without taking
+/// focus. Until the line is armed (the window drew it, and what its keys do, a
+/// moment ago) its keys other than `g` are drawn faint and take no click.
+private final class SwarmVoiceLabel: NSView {
+  var text = "" { didSet { if text != oldValue { needsDisplay = true; setAccessibilityLabel(text) } } }
+  var actions: [(key: String, label: String)] = [] { didSet { needsDisplay = true } }
+  var armed = true { didSet { if armed != oldValue { needsDisplay = true } } }
+  /// Offered keys that are not armed yet: where they are in `text`.
+  private(set) var arming: [(key: String, range: NSRange)] = []
+  var color = NSColor.systemYellow { didSet { needsDisplay = true } }
+  var font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) { didSet { needsDisplay = true } }
+  var onAction: ((String) -> Void)?
+  private(set) var actionRects: [(key: String, rect: NSRect)] = []
+
+  override init(frame: NSRect) {
+    super.init(frame: frame)
+    setAccessibilityElement(true)
+    setAccessibilityRole(.staticText)
+  }
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+  override var mouseDownCanMoveWindow: Bool { actionRects.isEmpty }
+  override var acceptsFirstResponder: Bool { false }
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    let local = convert(point, from: superview)
+    return actionRects.contains(where: { $0.rect.contains(local) }) ? self : nil
+  }
+  override func mouseDown(with event: NSEvent) {
+    answer(at: convert(event.locationInWindow, from: nil))
+  }
+  /// The answer drawn at a point of this view, if any.
+  func answer(at local: NSPoint) {
+    if let hit = actionRects.first(where: { $0.rect.contains(local) }) { onAction?(hit.key) }
+  }
+
+  private func attributed(_ string: String) -> NSAttributedString {
+    NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color, .ligature: 0])
+  }
+
+  /// The line is drawn exactly as the brain sent it, right-aligned, keys first
+  /// (`[y/n/g] api@office: npm test`); it truncates at its tail, so the keys
+  /// always show. Each offered key inside that leading bracket is clickable.
+  /// Returns the line's rect.
+  private func layoutActions() -> NSRect {
+    let lineWidth = min(ceil(attributed(text).size().width), bounds.width)
+    let x0 = bounds.width - lineWidth
+    var rects: [(key: String, rect: NSRect)] = []
+    var faint: [(key: String, range: NSRange)] = []
+    let offered = Set(actions.map { $0.key })
+    if !offered.isEmpty, text.hasPrefix("["), let close = text.firstIndex(of: "]") {
+      let inside = text[text.index(after: text.startIndex)..<close]
+      var index = 1
+      for part in inside.split(separator: "/", omittingEmptySubsequences: false) {
+        let key = String(part)
+        if offered.contains(key) && !armed && key != "g" {
+          faint.append((key, NSRange(location: index, length: key.count)))
+        } else if offered.contains(key) {
+          let before = ceil(attributed(String(text.prefix(index))).size().width)
+          let width = ceil(attributed(key).size().width)
+          if before + width <= lineWidth {
+            rects.append((key, NSRect(x: x0 + before, y: 0, width: width, height: bounds.height)))
+          }
+        }
+        index += key.count + 1
+      }
+    }
+    actionRects = rects
+    arming = faint
+    return NSRect(x: x0, y: 0, width: lineWidth, height: bounds.height)
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    guard !text.isEmpty, bounds.width > 0 else { actionRects = []; return }
+    let lineRect = layoutActions()
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.alignment = .right
+    paragraph.lineBreakMode = .byTruncatingTail
+    let line = NSMutableAttributedString(string: text, attributes: [
+      .font: font, .foregroundColor: color, .ligature: 0, .paragraphStyle: paragraph,
+    ])
+    for key in arming {
+      line.addAttribute(.foregroundColor, value: color.withAlphaComponent(color.alphaComponent * 0.4), range: key.range)
+    }
+    let height = ceil(line.size().height)
+    line.draw(with: NSRect(x: lineRect.minX, y: (bounds.height - height) / 2, width: lineRect.width, height: height),
+      options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    // Offered keys are underlined, like the Flutter status line draws them.
+    color.setFill()
+    for hit in actionRects {
+      NSRect(x: hit.rect.minX, y: (bounds.height - height) / 2 + 1, width: hit.rect.width, height: 1).fill()
+    }
+  }
+}
+
 private final class SwarmTabStrip: NSView {
   private(set) var palette = SwarmNativePalette()
   var emit: ((String, Any?) -> Void)?
@@ -1227,7 +1425,15 @@ private final class SwarmTabStrip: NSView {
   fileprivate let focusedModelButton = SwarmContextButton()
   private var focusedModelTarget: [String: Any]?
   fileprivate let pullRequestButton = SwarmContextButton()
+  fileprivate let shareButton = SwarmShareButton()
+  private var shareTarget: [String: Any]?
   private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+  fileprivate let daemonButton = SwarmSymbolButton()
+  fileprivate let voiceLabel = SwarmVoiceLabel()
+  // What the status line holds, apart from whether the daemon's voice covers it.
+  private var hasFocusedModel = false
+  private var hasPullRequest = false
+  private(set) var voiceActive = false
   private var terminalForeground = NSColor(white: 0.85, alpha: 1)
   private var tabs: [SwarmTabButton] = []
   private var activeId = ""
@@ -1278,7 +1484,33 @@ private final class SwarmTabStrip: NSView {
     pullRequestButton.setAccessibilityLabel("Open pull request on GitHub")
     pullRequestButton.isHidden = true
     addSubview(pullRequestButton)
-    setAccessibilityChildren([scroll, newButton, focusedModelButton, contextButton, pullRequestButton])
+    voiceLabel.isHidden = true
+    voiceLabel.onAction = { [weak self] key in
+      guard let self, self.actionsEnabled, !self.voiceLabel.isHidden else { return }
+      // The plain channel path: an answer never moves keyboard focus.
+      self.emit?("daemonAnswer", ["key": key])
+    }
+    addSubview(voiceLabel)
+    daemonButton.isBordered = false
+    daemonButton.title = ""
+    daemonButton.isHidden = true
+    daemonButton.isEnabled = false
+    daemonButton.target = self
+    daemonButton.action = #selector(openDaemon)
+    daemonButton.onEnter = { [weak self] in
+      guard let self, self.actionsEnabled, !self.daemonButton.isHidden else { return }
+      self.emit?("daemonLook", nil)
+    }
+    addSubview(daemonButton)
+    shareButton.isBordered = false
+    shareButton.title = "[ Share ]"
+    shareButton.target = self
+    shareButton.action = #selector(shareFocusedAgent)
+    shareButton.isEnabled = false
+    shareButton.isHidden = true
+    shareButton.setAccessibilityLabel("Share")
+    addSubview(shareButton)
+    setAccessibilityChildren([scroll, newButton, focusedModelButton, contextButton, pullRequestButton, voiceLabel, daemonButton, shareButton])
     registerForDraggedTypes([swarmPasteboardType])
   }
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1314,16 +1546,34 @@ private final class SwarmTabStrip: NSView {
     focusedModelButton.contentPadding = ("m" as NSString).size(withAttributes: [.font: barFont]).width
     focusedModelTarget = state["focusedModel"] as? [String: Any]
     focusedModelButton.update(focusedModelTarget, enabled: actionsEnabled)
-    focusedModelButton.isHidden = focusedModelTarget == nil
+    hasFocusedModel = focusedModelTarget != nil
     contextButton.font = barFont
     contextButton.foreground = terminalForeground
     contextButton.update(state["focusedContext"] as? [String: Any], enabled: actionsEnabled)
     pullRequestButton.font = barFont
     pullRequestButton.foreground = terminalForeground
     pullRequestButton.update(state["pullRequest"] as? [String: Any], enabled: actionsEnabled)
-    pullRequestButton.isHidden = state["pullRequest"] == nil
+    shareTarget = state["shareAction"] as? [String: Any]
+    shareButton.isHidden = shareTarget == nil
+    shareButton.font = barFont
+    shareButton.title = shareTarget?["text"] as? String ?? "[ Share ]"
+    shareButton.isEnabled = actionsEnabled && shareTarget?["enabled"] as? Bool == true
+    shareButton.background = statusColor(shareTarget?["background"], fallback: .clear)
+    shareButton.foreground = statusColor(shareTarget?["foreground"], fallback: terminalForeground)
+    shareButton.toolTip = shareTarget?["tooltip"] as? String
+    shareButton.setAccessibilityLabel(shareTarget?["label"] as? String ?? "Share")
+    shareButton.setAccessibilityHelp(shareButton.toolTip)
+    hasPullRequest = state["pullRequest"] != nil
+    daemonButton.font = barFont
+    daemonButton.foreground = terminalForeground
+    voiceLabel.font = barFont
+    updateDaemon(state["daemon"] as? [String: Any] ?? [:])
     let rows = state["tabs"] as? [[String: Any]] ?? []
     let nextActiveId = state["activeId"] as? String ?? ""
+    // A closed tab left the keyboard on the strip (Dart's `tabStripFocused`):
+    // the selected tab is drawn focused, and Return goes into it. The keys stay
+    // with Flutter, so every shortcut keeps working while the strip holds them.
+    let tabsFocused = state["tabsFocused"] as? Bool == true
     revealActiveAfterLayout = revealActiveAfterLayout || nextActiveId != activeId
     activeId = nextActiveId
     let ids = rows.compactMap { $0["id"] as? String }
@@ -1340,6 +1590,7 @@ private final class SwarmTabStrip: NSView {
       tab.labelFont = barFont
       tab.foreground = terminalForeground
       tab.selected = id == activeId
+      tab.keyboardFocus = tabsFocused && id == activeId
       tab.actionsEnabled = actionsEnabled
       tab.attention = (row["attention"] as? Int ?? 0) > 0
       tab.emit = { [weak self, weak tab] method, args in
@@ -1356,6 +1607,7 @@ private final class SwarmTabStrip: NSView {
     // Moving frames alone leaves AppKit's child traversal in insertion order.
     document.setAccessibilityChildren(tabs)
     newButton.isEnabled = actionsEnabled
+    needsDisplay = true
     needsLayout = true
     layoutSubtreeIfNeeded()
     if ids != previousOrder {
@@ -1371,6 +1623,101 @@ private final class SwarmTabStrip: NSView {
     }
   }
 
+  /// Whether the slot may take its space now; tests replace it. By default:
+  /// no mouse button is held and the pointer is off this strip, so tabs never
+  /// move under a click.
+  var daemonMayAppear: (() -> Bool)?
+  /// The state that shows the slot, held until [daemonMayAppear] says yes.
+  private(set) var pendingDaemon: [String: Any]?
+  private var daemonRevealTimer: Timer?
+
+  private func daemonCanAppear() -> Bool {
+    if let gate = daemonMayAppear { return gate() }
+    guard NSEvent.pressedMouseButtons == 0 else { return false }
+    guard let window else { return true }
+    return !bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+  }
+
+  /// Try the held state again; the timer stops once it is shown or withdrawn.
+  func retryPendingDaemon() {
+    guard let pending = pendingDaemon else {
+      daemonRevealTimer?.invalidate()
+      daemonRevealTimer = nil
+      return
+    }
+    if daemonCanAppear() {
+      daemonRevealTimer?.invalidate()
+      daemonRevealTimer = nil
+      pendingDaemon = nil
+      updateDaemon(pending)
+    }
+  }
+
+  /// The daemon's face, tooltip and voice. A mood or voice change repaints the
+  /// slot and the voice line only; layout runs only when the slot appears or goes.
+  /// A hidden slot takes no space at all. It appears at the first quiet moment
+  /// (see [daemonMayAppear]); until then the bar stays exactly as it was.
+  func updateDaemon(_ state: [String: Any]) {
+    let wasHidden = daemonButton.isHidden
+    let wanted = state["visible"] as? Bool == true
+    if wanted && wasHidden && !daemonCanAppear() {
+      pendingDaemon = state
+      if daemonRevealTimer == nil {
+        daemonRevealTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+          self?.retryPendingDaemon()
+        }
+      }
+      return
+    }
+    pendingDaemon = nil
+    daemonRevealTimer?.invalidate()
+    daemonRevealTimer = nil
+    daemonButton.isHidden = !wanted
+    daemonButton.busy = state["busy"] as? Bool == true
+    daemonButton.isEnabled = actionsEnabled && !daemonButton.isHidden && !daemonButton.busy
+    daemonButton.state = state["open"] as? Bool == true ? .on : .off
+    daemonButton.glyph = validDaemonGlyph(state["glyph"] as? String) ?? ""
+    let previousWidth = daemonButton.preferredWidth
+    daemonButton.cells = validDaemonText(state["cell"] as? String, cells: daemonButton.columns + 2) ?? ""
+    daemonButton.tally = validDaemonText(state["tally"] as? String, cells: 16) ?? ""
+    daemonButton.foreground = statusColor(state["foreground"], fallback: terminalForeground)
+    daemonButton.tallyColor = statusColor(state["tallyColor"], fallback: terminalForeground.withAlphaComponent(0.62))
+    daemonButton.patch = state["patch"] is NSNumber ? statusColor(state["patch"], fallback: .black) : nil
+    let label = state["label"] as? String ?? "Daemon"
+    let detail = state["detail"] as? String ?? ""
+    daemonButton.toolTip = state["tooltip"] as? String ?? (detail.isEmpty ? label : label + "\n" + detail)
+    daemonButton.setAccessibilityLabel(label)
+    daemonButton.setAccessibilityValue("\(daemonButton.state == .on ? "Expanded" : "Collapsed"), \(detail)")
+    daemonButton.needsDisplay = true
+    let voice = daemonButton.isHidden ? "" : (state["voice"] as? String ?? "")
+    voiceLabel.color = statusColor(state["voiceColor"], fallback: .systemYellow)
+    voiceLabel.text = voice
+    voiceLabel.actions = voice.isEmpty ? [] : (state["voiceActions"] as? [[String: Any]] ?? []).compactMap { row in
+      guard let key = row["key"] as? String, let label = row["label"] as? String,
+            validDaemonGlyph(key) != nil, !key.isEmpty, key.count <= 2 else { return nil }
+      return (key: key, label: String(label.prefix(24)))
+    }
+    voiceLabel.armed = state["voiceArmed"] as? Bool ?? true
+    voiceActive = !voice.isEmpty
+    applyStatusVisibility()
+    // Layout runs only when the slot appears or goes, or its tally changes width.
+    if wasHidden != daemonButton.isHidden || previousWidth != daemonButton.preferredWidth {
+      needsLayout = true
+      needsDisplay = true
+      layoutSubtreeIfNeeded()
+    }
+  }
+
+  /// While the daemon speaks, its line replaces the status (tmux's message line).
+  /// Hidden flags only: frames stay where layout put them.
+  private func applyStatusVisibility() {
+    voiceLabel.isHidden = !voiceActive
+    contextButton.isHidden = voiceActive
+    focusedModelButton.isHidden = !hasFocusedModel || voiceActive
+    pullRequestButton.isHidden = !hasPullRequest || voiceActive
+    voiceLabel.needsDisplay = true
+  }
+
   override func layout() {
     super.layout()
     let active = tabs.first(where: { $0.swarmId == activeId })
@@ -1380,9 +1727,16 @@ private final class SwarmTabStrip: NSView {
     let cell = ceil(("m" as NSString).size(withAttributes: [.font: barFont]).width)
     let trailing = cell
     let toolHeight = workspaceBarControlHeight(barFont)
-    let statusRight = bounds.width - trailing
+    let shareWidth = shareButton.isHidden ? 0 : shareButton.preferredWidth
+    let shareSpace = shareWidth > 0 ? shareWidth + cell : 0
+    shareButton.frame = NSRect(x: bounds.width - trailing - shareWidth,
+      y: (bounds.height - toolHeight) / 2, width: shareWidth, height: toolHeight)
+    let daemonWidth = daemonButton.isHidden ? 0 : daemonButton.preferredWidth
+    let statusRight = bounds.width - trailing - shareSpace - daemonWidth
+    daemonButton.frame = NSRect(x: statusRight,
+      y: (bounds.height - toolHeight) / 2, width: daemonWidth, height: toolHeight)
     // Compact windows keep a scrolling tab list; context never overlaps it.
-    let available = max(0, bounds.width - cell * 7)
+    let available = max(0, bounds.width - cell * 7 - shareSpace - daemonWidth)
     let widths = tabs.map { min($0.preferredWidth, available * 0.45) }
     let total = widths.reduce(0, +)
     let occupied = min(total, available * 0.45)
@@ -1398,13 +1752,15 @@ private final class SwarmTabStrip: NSView {
     newButton.frame = NSRect(x: scroll.frame.maxX, y: (bounds.height - toolHeight) / 2,
       width: cell * 3, height: toolHeight)
     let statusWidth = max(0, statusRight - newButton.frame.maxX - cell * 2)
-    let prWidth = pullRequestButton.isHidden ? 0 : min(pullRequestButton.preferredWidth, statusWidth * 0.45)
+    voiceLabel.frame = NSRect(x: statusRight - statusWidth, y: (bounds.height - toolHeight) / 2,
+      width: statusWidth, height: toolHeight)
+    let prWidth = hasPullRequest ? min(pullRequestButton.preferredWidth, statusWidth * 0.45) : 0
     let joined = contextButton.isSegmented && pullRequestButton.isSegmented && prWidth > 0
     let prGap = prWidth > 0 && !joined ? cell : 0
     pullRequestButton.frame = NSRect(x: statusRight - prWidth, y: (bounds.height - toolHeight) / 2,
       width: prWidth, height: toolHeight)
     let remaining = max(0, statusWidth - prWidth - prGap)
-    let modelWidth = focusedModelButton.isHidden ? 0 : min(focusedModelButton.preferredWidth, remaining * 0.35)
+    let modelWidth = hasFocusedModel ? min(focusedModelButton.preferredWidth, remaining * 0.35) : 0
     let modelGap = modelWidth > 0 ? min(cell, remaining - modelWidth) : 0
     let contextWidth = min(contextButton.preferredWidth, max(0, remaining - modelWidth - modelGap))
     contextButton.frame = NSRect(x: statusRight - prWidth - prGap - contextWidth, y: (bounds.height - toolHeight) / 2,
@@ -1424,7 +1780,6 @@ private final class SwarmTabStrip: NSView {
     // A fine rule joins the flat tabs to the workspace.
     palette.workspace.setFill()
     NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
-
   }
   override func mouseDown(with event: NSEvent) {
     if ownsBackgroundDoubleClick(event) { window?.performZoom(nil) }
@@ -1453,10 +1808,20 @@ private final class SwarmTabStrip: NSView {
           let agentId = focusedModelTarget?["agentId"] as? String else { return }
     emit?("focusedModel", ["paneId": paneId, "agentId": agentId])
   }
+  @objc private func openDaemon() {
+    if actionsEnabled && daemonButton.isEnabled { emit?("daemon", nil) }
+  }
   @objc private func openFocusedPullRequest() {
     if actionsEnabled && pullRequestButton.isEnabled, let url = pullRequestButton.actionURL {
       emit?("focusedPullRequest", ["url": url])
     }
+  }
+  @objc private func shareFocusedAgent() {
+    guard actionsEnabled, shareButton.isEnabled,
+          let paneId = shareTarget?["paneId"] as? Int,
+          let machineId = shareTarget?["machineId"] as? String,
+          let agentId = shareTarget?["agentId"] as? String else { return }
+    emit?("shareAgent", ["paneId": paneId, "machineId": machineId, "agentId": agentId])
   }
   @objc private func newSwarm() {
     if actionsEnabled && newButton.isEnabled { emit?("new", nil) }
@@ -1493,6 +1858,9 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var preferredWidth: CGFloat { min(cellWidth * 24, ceil(max(label.size().width, emphasizedLabel.size().width) / cellWidth) * cellWidth + cellWidth * 2) }
   var selected = false { didSet { if selected != oldValue { invalidateLabel(); updateAccessibility() } } }
   var attention = false { didSet { if attention != oldValue { needsDisplay = true; updateAccessibility() } } }
+  /// The strip holds the keyboard on this, the selected tab — drawn like a
+  /// focused control, though the keys themselves stay in Flutter.
+  var keyboardFocus = false { didSet { if keyboardFocus != oldValue { needsDisplay = true; updateAccessibility() } } }
   var showsDivider = false { didSet { if showsDivider != oldValue { needsDisplay = true } } }
   var contentCenterY: CGFloat = 20
   var emit: ((String, Any?) -> Void)?
@@ -1593,7 +1961,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     return emphasized
   }
   override func draw(_ dirtyRect: NSRect) {
-    let active = actionsEnabled && (hovered || selectButton.hasKeyboardFocus || selectButton.isHighlighted)
+    let active = actionsEnabled &&
+      (hovered || keyboardFocus || selectButton.hasKeyboardFocus || selectButton.isHighlighted)
     let text = active ? emphasizedLabel : label
     if selected {
       palette.workspace.setFill()
@@ -1612,7 +1981,9 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     setAccessibilityLabel(name)
     selectButton.setAccessibilityLabel("Select \(name)")
     selectButton.setAccessibilityValue(selected ? "Selected" : "")
-    selectButton.setAccessibilityHelp(attention ? "Contains agents needing input" : nil)
+    let help = [attention ? "Contains agents needing input" : nil,
+      keyboardFocus ? "Keyboard is on the tabs. Press Return to type in this tab." : nil].compactMap { $0 }
+    selectButton.setAccessibilityHelp(help.isEmpty ? nil : help.joined(separator: ". "))
   }
   func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { actionsEnabled }
   override func mouseDown(with event: NSEvent) {

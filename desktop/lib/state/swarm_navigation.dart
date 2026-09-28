@@ -265,9 +265,11 @@ class ExternalSessionRef {
   /// processes writing one conversation.
   final bool open;
 
-  /// Where it is open: `terminal`, which Harness can take it over from, or
-  /// `app`, which it cannot. Null when it is not open, or the machine predates
-  /// taking over.
+  /// Where it is open: `terminal`, which Harness can take it over from; `app`,
+  /// which it cannot; `harness`, one of Harness's own panes whose agent the
+  /// machine is still binding; or `maybe` a terminal, whose process was started
+  /// on it and may have moved on (never stopped from here). Null when it is not
+  /// open, or the machine predates taking over.
   final String? openIn;
 
   /// Open, and only in a terminal: opening it here moves it, once asked.
@@ -278,9 +280,21 @@ class ExternalSessionRef {
     'claude-app' => 'Claude app',
     'codex-app' => 'Codex app',
     'editor' => 'editor',
+    'app' => 'app',
     _ => 'terminal',
   };
+
+  /// The engine, as a person calls it.
+  String get engineName => externalEngineName(engine);
 }
+
+/// An engine's name for a conversation Harness did not start: Claude Code and
+/// Codex by their products' names, every other engine by its own.
+String externalEngineName(String engine) => switch (engine) {
+  'claude' => 'Claude Code',
+  'codex' => 'Codex',
+  final other => engineIdentity(other).label,
+};
 
 String externalDestinationId(String machineId, String sessionId) =>
     'external:$machineId:$sessionId';
@@ -315,6 +329,7 @@ class SwarmDestination {
     this.members = const {},
     this.isStore = false,
     this.isCreate = false,
+    this.isNote = false,
     this.task,
     this.external,
     Iterable<String?> searchFields = const [],
@@ -375,6 +390,10 @@ class SwarmDestination {
   /// What the create row would start the new harness on: what was typed.
   final String? task;
 
+  /// A line the box answers with, not a place to go (`xyzzy`: "Nothing
+  /// happens."). Return never takes it.
+  final bool isNote;
+
   /// A conversation Harness did not start; opening it resumes it as a harness.
   final ExternalSessionRef? external;
   final bool current;
@@ -392,6 +411,7 @@ class SwarmDestination {
       !isGroup &&
       !isCommand &&
       !isCreate &&
+      !isNote &&
       !isModel &&
       !isStoreEntry &&
       pickerQuery == null &&

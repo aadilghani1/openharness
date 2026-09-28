@@ -30,6 +30,7 @@ class ModelSearchEntry {
     required this.status,
     this.local,
     this.api,
+    this.apiModel,
     this.subscription,
     this.node,
     this.searchAliases = const [],
@@ -42,6 +43,10 @@ class ModelSearchEntry {
   final String? node;
   final LocalModel? local;
   final ApiConnection? api;
+
+  /// One of [api]'s chat models: a row a harness can run on through that API ([api] is its API).
+  /// Null on the API's own row.
+  final ApiModel? apiModel;
   final Map<String, Object?>? subscription;
   final List<String> searchAliases;
   final ModelManagerController? controller;
@@ -73,6 +78,7 @@ class ModelSearchEntry {
   late final destination = SwarmDestination(
     id: id,
     modelId: id,
+    // An API's model is listed under its API's row, so it is named alone.
     title: sharedBy?.isNotEmpty == true ? '$name · $sharedBy' : name,
     detail: [source, node, status].whereType<String>().join(' · '),
     swarmId: null,
@@ -85,10 +91,16 @@ class ModelSearchEntry {
       status,
       local?.id,
       api?.host,
+      api?.name,
+      apiModel?.name,
       ...searchAliases,
     ],
   );
 }
+
+/// The row id of [modelId] on the API saved as [connectionId].
+String apiModelRowId(String connectionId, String modelId) =>
+    'model:apimodel:$connectionId:$modelId';
 
 class ModelSearchCatalog extends ChangeNotifier {
   ModelSearchCatalog(
@@ -114,6 +126,7 @@ class ModelSearchCatalog extends ChangeNotifier {
   void setVisible(bool visible) {
     if (_visible == visible) return;
     _visible = visible;
+    manager.apis.loadModels(wanted: visible);
     _machinesChanged();
     for (final controller in _hosts.values) {
       controller.setPanelVisible(visible);
@@ -156,6 +169,7 @@ class ModelSearchCatalog extends ChangeNotifier {
 
   Future<void> refresh({bool force = false}) async {
     _machinesChanged();
+    if (_visible) manager.apis.loadModels(reread: force);
     await Future.wait([
       manager.refresh(force: force),
       for (final controller in _hosts.values) controller.refresh(force: force),
@@ -296,7 +310,7 @@ class ModelSearchCatalog extends ChangeNotifier {
           status: '${row['status'] ?? 'Usage unavailable'}',
           subscription: row,
         ),
-      for (final api in manager.apis.connections)
+      for (final api in manager.apis.connections) ...[
         ModelSearchEntry(
           id: 'model:api:${api.id}',
           name: api.name,
@@ -304,6 +318,18 @@ class ModelSearchCatalog extends ChangeNotifier {
           status: api.host,
           api: api,
         ),
+        // Straight after their API, in the API's order: the list keeps a section's rows as built.
+        for (final model
+            in manager.apis.models[api.id]?.models ?? const <ApiModel>[])
+          ModelSearchEntry(
+            id: apiModelRowId(api.id, model.id),
+            name: model.id,
+            source: 'API',
+            status: api.name,
+            api: api,
+            apiModel: model,
+          ),
+      ],
     ];
     final order = {for (final (index, entry) in all.indexed) entry.id: index};
     all.sort((a, b) {

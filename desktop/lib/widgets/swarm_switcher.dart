@@ -842,7 +842,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                             // Every command wore the same ⌘: a column
                             // of identical marks says nothing. Its
                             // own key, at the right, says something.
-                            row.isCommand || row.pickerQuery != null
+                            row.isCommand ||
+                                    row.isNote ||
+                                    row.pickerQuery != null
                                 ? const SizedBox(width: 2)
                                 : row.isCreate
                                 ? const Icon(
@@ -1331,11 +1333,17 @@ class _SearchRowContentState extends State<_SearchRowContent> {
       final modelAction = row.isModel
           ? widget.search.modelRowAction(row)
           : null;
+      // A saved API heads its models: a marker says whether they are listed under it, and the end
+      // of its row how many there are. Its models sit one step in, under its name.
+      final apiRow = row.isModel ? widget.search.apiRowState(row) : null;
+      final underApi = row.isModel && widget.search.isApiModelRow(row);
       final style = terminalContentStyle(
-        color:
-            !widget.enabled ||
+        color: row.isNote
+            ? muted
+            : !widget.enabled ||
                 (row.isModel &&
                     !widget.search.isModelDownloadsRow(row) &&
+                    !widget.search.canExpandApi(row) &&
                     !widget.search.canSelectModel(row) &&
                     !widget.search.canGetModel(row))
             ? theme.foreground.withValues(alpha: .28)
@@ -1379,6 +1387,21 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                   children: [
                     // Match Cmd-N's empty two-cell gutter.
                     SizedBox(width: cell.width * 2),
+                    if (apiRow != null)
+                      SizedBox(
+                        width: cell.width * 2,
+                        child: Text(
+                          apiRow.hint == 'Tools'
+                              ? ''
+                              : apiRow.open
+                              ? '▾'
+                              : '▸',
+                          key: ValueKey('api-row-marker:${row.id}'),
+                          style: style,
+                        ),
+                      )
+                    else if (underApi)
+                      SizedBox(width: cell.width * 4),
                     if (widget.singleLine && snippet != null) ...[
                       // One line per result: the name, then where the words
                       // were said, the way fzf shows the matching line.
@@ -1409,7 +1432,15 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                                 style: style,
                               ),
                       ),
-                    if (modelAction != null) ...[
+                    if (apiRow != null) ...[
+                      SizedBox(width: cell.width * 2),
+                      Text(
+                        apiRow.hint,
+                        key: ValueKey('api-row-hint:${row.id}'),
+                        maxLines: 1,
+                        style: terminalContentStyle(color: muted),
+                      ),
+                    ] else if (modelAction != null) ...[
                       SizedBox(width: cell.width * 2),
                       Text(
                         modelAction,

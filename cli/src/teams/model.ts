@@ -59,10 +59,8 @@ export const Consultation = z.object({
   memberId: OperationId,
   createdAt: z.number(),
   receipt: Receipt,
-  outsideSwarm: z.boolean().default(false),
 })
 export type Consultation = z.infer<typeof Consultation>
-export const ChannelBridge = z.object({ sourceTabId: Id, targetTabId: Id })
 export const Team = z.object({
   protocol: z.literal(TEAM_PROTOCOL),
   id: OperationId,
@@ -75,7 +73,6 @@ export const Team = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
   channel: z.object({ tabId: Id, deskRevision: z.number().int().nonnegative(), closed: z.boolean().default(false) }).optional(),
-  bridge: ChannelBridge.optional(),
   members: z.array(Member).max(512),
   exchanges: z.array(Exchange).max(500),
   consultations: z.array(Consultation).max(500).default([]),
@@ -86,7 +83,6 @@ export const CreateTeam = z.object({
   name: z.string().trim().min(1).max(100),
   description: z.string().max(2000).default(''),
   members: z.array(MemberSpec).min(2).max(32),
-  bridge: ChannelBridge.optional(),
 })
 
 export const Delivery = z.object({

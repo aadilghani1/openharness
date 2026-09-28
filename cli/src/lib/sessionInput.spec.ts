@@ -283,7 +283,8 @@ describe('SessionInputController', () => {
     })
 
     controller.submit('s1', 'hello')
-    await vi.advanceTimersByTimeAsync(3_100 * 4)
+    // Past the old five-observation cutoff and both blind Enter retries.
+    await vi.advanceTimersByTimeAsync(60_000)
 
     expect(sendKey).not.toHaveBeenCalled()
     expect(onError).not.toHaveBeenCalled()
@@ -312,6 +313,43 @@ describe('SessionInputController', () => {
 
     expect(onError).not.toHaveBeenCalled()
     expect(sendKey).not.toHaveBeenCalled()   // and no stray Enter into a live composer
+    controller.forget('s1')
+  })
+
+  it('leaves a fresh Claude draft alone while a submitted voice message waits for background agents', async () => {
+    vi.useFakeTimers()
+    const sendKey = vi.fn(async () => true)
+    const onError = vi.fn()
+    const capture = vi.fn(async () => '❯ What are you working on?\n✻ Waiting for 4 background agents to finish\n────\n❯ a different draft I am still writing\n────')
+    const controller = new SessionInputController({
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async () => true, sendKey, capture, onError,
+    })
+    controller.submit('s1', 'What are you working on?')
+    await vi.advanceTimersByTimeAsync(30_000)
+    const observations = capture.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(capture).toHaveBeenCalledTimes(observations) // no permanent polling while Claude waits
+    expect(sendKey).not.toHaveBeenCalled() // never submits the unrelated draft
+    expect(onError).not.toHaveBeenCalled()
+    controller.onTurnStarted('s1', 'What are you working on?')
+    controller.onTurnEnded('s1')
+    expect(onError).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
+  it('reports uncertainty without blindly pressing Enter when the terminal shows no composer', async () => {
+    vi.useFakeTimers()
+    const sendKey = vi.fn(async () => true)
+    const onError = vi.fn()
+    const controller = new SessionInputController({
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async () => true, sendKey, capture: async () => 'Sign in required', onError,
+    })
+    controller.submit('s1', 'hello')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sendKey).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('could not be confirmed'))
     controller.forget('s1')
   })
 
@@ -350,7 +388,7 @@ describe('SessionInputController', () => {
     })
 
     controller.submit('s1', 'hello')
-    await vi.advanceTimersByTimeAsync(1_600 * 4)
+    await vi.advanceTimersByTimeAsync(60_000)
 
     expect(sendKey).not.toHaveBeenCalled()
     expect(onError).not.toHaveBeenCalled()
@@ -578,6 +616,17 @@ describe('delivery correlation', () => {
     await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'delivery-1', state: 'delivered' }))
     controller.onTurnStarted('s1', 'hello')
     expect(onDelivery.mock.calls.map(([event]) => event.state)).toEqual(['queued', 'delivered', 'started'])
+    controller.forget('s1')
+  })
+
+  it('does not claim a started receipt or press Enter when only composer clearance was observed', async () => {
+    vi.useFakeTimers()
+    const sendKey = vi.fn(async () => true)
+    const { controller, onDelivery } = setup({ sendKey, capture: async () => '› \n' })
+    controller.submit('s1', 'hello', 'delivery-1')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sendKey).not.toHaveBeenCalled()
+    expect(onDelivery.mock.calls.map(([event]) => event.state)).toEqual(['queued', 'delivered', 'unknown'])
     controller.forget('s1')
   })
 

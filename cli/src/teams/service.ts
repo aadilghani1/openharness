@@ -67,10 +67,6 @@ export class TeamService {
     this.store.write(team.id, team)
     this.teams.set(team.id, structuredClone(team))
     this.deps.changed?.(team.id, team.revision)
-    if (team.bridge) {
-      const source = this.teams.get(channelTeamId(team.bridge.sourceTabId))
-      if (source) this.commit(structuredClone(source))
-    }
   }
   private member(team: Team, actor: Actor, requested?: string, allowDeparted = false): Member | null {
     if (actor.kind === 'owner') {
@@ -92,15 +88,14 @@ export class TeamService {
     this.suppressed.clear()
   }
   private effectiveState(team: Team): Team['state'] {
-    if ((team.channel || team.bridge) && !this.channelsEnabled && team.state === 'active') return 'paused'
-    const source = team.bridge && this.teams.get(channelTeamId(team.bridge.sourceTabId))
-    return team.state === 'active' && source ? source.state : team.state
+    if (team.channel && !this.channelsEnabled && team.state === 'active') return 'paused'
+    return team.state
   }
   private active(team: Team): void {
-    requireTeam(!(team.channel || team.bridge) || this.channelsEnabled, 'CHANNELS_DISABLED', 'Enable Swarm collaboration in Settings → Experimental first.')
+    requireTeam(!team.channel || this.channelsEnabled, 'CHANNELS_DISABLED', 'Enable Swarm collaboration in Settings → Experimental first.')
     requireTeam(this.effectiveState(team) === 'active', 'TEAM_PAUSED', 'Team communication is paused or archived.')
   }
-  isChannel(teamId: string): boolean { const team = this.get(teamId); return !!(team.channel || team.bridge) }
+  isChannel(teamId: string): boolean { const team = this.get(teamId); return !!team.channel }
   private project(team: Team): Record<string, unknown> {
     const { creationHash: _creationHash, ...publicTeam } = team
     return { ...publicTeam, members: team.members.map(({ key: _key, ...member }) => member) }
@@ -123,14 +118,7 @@ export class TeamService {
     const members = await Promise.all(team.members.map(async ({ key: _key, ...member }) => ({ ...member,
       runtime: member.enabled ? await this.deps.runtime(member).catch(() => null) : null,
     })))
-    const externalExchanges = team.channel ? [...this.teams.values()]
-      .filter(t => t.bridge?.sourceTabId === team.channel!.tabId)
-      .flatMap(t => t.exchanges.map(e => ({ ...e, teamId: t.id, targetTabId: t.bridge!.targetTabId,
-        fromPeer: MemberSpec.parse(t.members.find(m => m.id === e.from)),
-        toPeer: MemberSpec.parse(t.members.find(m => m.id === e.to)),
-      })))
-      .sort((a, b) => b.createdAt - a.createdAt).slice(0, 50) : []
-    return { ...this.project(team), members, ...(team.channel ? { externalExchanges } : {}) }
+    return { ...this.project(team), members }
   }
   create(raw: unknown, actor: Actor): Promise<Record<string, unknown>> {
     this.owner(actor)
@@ -164,9 +152,7 @@ export class TeamService {
       members: input.members.map(m => {
         const memberId = id()
         return { ...m, id: memberId, key: randomBytes(32).toString('hex'), enabled: true, joinedAt: now,
-          introduction: input.bridge
-            ? { id: `team:${input.id}:${memberId}:intro`, state: 'cancelled' as const, updatedAt: now, reason: 'Explicit cross-channel questions include their reply commands.' }
-            : freshReceipt(`team:${input.id}:${memberId}:intro`, now) }
+          introduction: freshReceipt(`team:${input.id}:${memberId}:intro`, now) }
       }),
     }
     this.store.write(team.id, team)
@@ -240,7 +226,7 @@ export class TeamService {
     }
   }
 
-  consult(teamId: string, operationId: string, address: Address, actor: Actor, outsideSwarm = false): Consultation {
+  consult(teamId: string, operationId: string, address: Address, actor: Actor): Consultation {
     this.owner(actor)
     OperationId.parse(operationId)
     const team = this.get(teamId)
@@ -248,17 +234,17 @@ export class TeamService {
     const prior = team.consultations.find(c => c.id === operationId)
     if (prior) {
       const member = team.members.find(m => m.id === prior.memberId)
-      requireTeam(member?.machineId === address.machineId && member.agentId === address.agentId && prior.outsideSwarm === outsideSwarm, 'ID_CONFLICT', 'That instruction already belongs to another agent or scope.')
+      requireTeam(member?.machineId === address.machineId && member.agentId === address.agentId, 'ID_CONFLICT', 'That instruction already belongs to another agent or scope.')
       return structuredClone(prior)
     }
     this.active(team)
     const member = team.members.find(m => m.enabled && m.machineId === address.machineId && m.agentId === address.agentId)
     requireTeam(member, 'NOT_A_MEMBER', 'The focused agent is no longer in this tab.')
-    requireTeam(outsideSwarm || team.members.some(m => m.enabled && m.id !== member.id), 'NO_PEERS', 'Add another agent to this tab to consult a peer.')
+    requireTeam(team.members.some(m => m.enabled && m.id !== member.id), 'NO_PEERS', 'Add another agent to this tab to consult a peer.')
     requireTeam(team.consultations.length < 500, 'CHANNEL_FULL', 'This channel has reached its retained instruction limit.')
-    const pending = team.consultations.find(c => c.memberId === member.id && c.outsideSwarm === outsideSwarm && ['pending', 'queued', 'submitted', 'delivered', 'unknown'].includes(c.receipt.state))
+    const pending = team.consultations.find(c => c.memberId === member.id && ['pending', 'queued', 'submitted', 'delivered', 'unknown'].includes(c.receipt.state))
     if (pending) return structuredClone(pending)
-    const consultation: Consultation = { id: operationId, memberId: member.id, createdAt: this.now(), outsideSwarm,
+    const consultation: Consultation = { id: operationId, memberId: member.id, createdAt: this.now(),
       receipt: freshReceipt(`team:${team.id}:${operationId}:consult`, this.now()) }
     team.consultations.push(consultation)
     this.commit(team)
@@ -286,9 +272,6 @@ export class TeamService {
     }
     this.active(team)
     requireTeam(to.enabled && team.members.find(m => m.id === input.from)?.enabled, 'MEMBER_REMOVED', 'Both teammates must still be connected.')
-    if (team.bridge && actor.kind === 'member') {
-      requireTeam(input.parentId, 'CROSS_CHANNEL_EXPLICIT', 'A cross-channel peer can only follow up on its existing question. A new cross-channel request needs explicit user direction.')
-    }
     requireTeam(input.from !== to.id, 'SELF_MESSAGE', 'Choose another teammate.')
     requireTeam(team.exchanges.length < 500, 'TEAM_FULL', 'This team history is full. Archive it and create another team.')
     requireTeam(team.exchanges.filter(e => e.state === 'pending' && e.from === input.from).length < 8, 'TOO_MANY_QUESTIONS', 'This teammate already has eight unanswered questions.')
@@ -537,10 +520,10 @@ export class TeamService {
       if (receipt && ['queued', 'pending'].includes(receipt.state)) receipt = await this.deps.delivery(entry.member, 'release', { id: entry.receipt.id })
       if (!receipt || receipt.state === 'pending') {
         const command = memberCommand(team, entry.member, this.deps.command(entry.member))
-        const text = kind === 'intro' ? introduction(team, entry.member, command) : kind === 'consult' ? consultPrompt(team, entry.member, command, instruction!.outsideSwarm)
+        const text = kind === 'intro' ? introduction(team, entry.member, command) : kind === 'consult' ? consultPrompt(team, entry.member, command)
           : kind === 'question' ? questionPrompt(team, exchange!, command) : answerPrompt(team, exchange!, command)
         receipt = await this.deps.delivery(entry.member, 'send', { id: entry.receipt.id, agentId: entry.member.agentId, text,
-          ...(team.channel || team.bridge ? { channel: true } : {}),
+          ...(team.channel ? { channel: true } : {}),
           expiresAt: kind === 'intro' ? entry.member.introductionExpiresAt ?? entry.member.joinedAt + 86_400_000 : kind === 'consult' ? instruction!.createdAt + 900_000 : kind === 'question' ? exchange!.expiresAt : exchange!.answer!.at + 86_400_000 })
       }
       if (!receipt || this.stopped) return

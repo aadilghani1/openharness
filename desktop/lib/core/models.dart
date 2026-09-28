@@ -4,6 +4,7 @@ library;
 import 'package:flutter/foundation.dart' show immutable;
 
 import 'runtime_model_name.dart';
+import 'agent_git_context.dart';
 
 enum MachineAuthMode { managed, remote, self, provider }
 
@@ -317,6 +318,10 @@ class Agent {
   /// reconnect or a restart without anything being replayed.
   final GridWebSearch? gridWebSearch;
 
+  /// Where [gridModel] is served — the endpoint the engine was handed (a grid's relay, or a saved
+  /// API such as `https://openrouter.ai/api`). Null with no [gridModel], or from an older daemon.
+  final String? gridBaseUrl;
+
   /// How the daemon's picture has the grid this agent's model is on (`grid.state`), or null when
   /// it did not say — an agent on its own login, or an older daemon. Asleep or waking is what puts
   /// the "Starting up…" chip on its pane between a message and the first answer.
@@ -326,6 +331,9 @@ class Agent {
   final GridNote? gridNote;
   final String? parentAgentId;
   final AgentProject? project;
+  final AgentGitContext? gitContext;
+  AgentProject? get displayProject =>
+      gitContext?.displayProject(project) ?? project;
 
   /// The CLI's transcript/hook activity time, not its registry refresh time.
   final DateTime? lastActivityAt;
@@ -428,10 +436,12 @@ class Agent {
     this.modelName,
     this.gridModel,
     this.gridWebSearch,
+    this.gridBaseUrl,
     this.gridState,
     this.gridNote,
     this.parentAgentId,
     this.project,
+    this.gitContext,
     this.lastActivityAt,
     this.lastOpenedAt,
     this.tokensUsed,
@@ -560,10 +570,12 @@ class Agent {
       ),
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
+      gridBaseUrl: _safeUrl(grid?['baseUrl']),
       gridState: GridSectionState.parse(grid?['state']),
       gridNote: GridNote.fromWire(grid?['note']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
       project: AgentProject.fromJson(j['project']),
+      gitContext: AgentGitContext.fromJson(j['gitContext']),
       lastActivityAt: j['updatedAt'] is String
           ? DateTime.tryParse(j['updatedAt'] as String)
           : null,
@@ -606,6 +618,7 @@ class Agent {
 
   Agent copyWith({
     String? name,
+    AgentGitContext? gitContext,
     String? status,
     bool? terminalAvailable,
     DateTime? lastOpenedAt,
@@ -621,10 +634,12 @@ class Agent {
     modelName: modelName,
     gridModel: gridModel,
     gridWebSearch: gridWebSearch,
+    gridBaseUrl: gridBaseUrl,
     gridState: gridState,
     gridNote: gridNote,
     parentAgentId: parentAgentId,
     project: project,
+    gitContext: gitContext ?? this.gitContext,
     lastActivityAt: lastActivityAt,
     lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,
     tokensUsed: tokensUsed,
@@ -706,6 +721,14 @@ class Agent {
       return null;
     }
     return raw;
+  }
+
+  static String? _safeUrl(Object? raw) {
+    if (raw is! String || raw.isEmpty || raw.length > 2048) return null;
+    final uri = Uri.tryParse(raw);
+    return uri != null && (uri.scheme == 'https' || uri.scheme == 'http')
+        ? raw
+        : null;
   }
 
   static String? _safeLabel(Object? raw) {

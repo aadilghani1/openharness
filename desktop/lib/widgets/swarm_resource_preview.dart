@@ -7,6 +7,8 @@ import '../core/models.dart';
 import '../core/test_run.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
+import '../models/api_connections_controller.dart'
+    show ApiModels, contextWindowLabel;
 import '../models/model_search_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
@@ -329,7 +331,8 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         return true;
       }
       if (widget.search.canSelectModel(row) ||
-          widget.search.isModelDownloadsRow(row)) {
+          widget.search.isModelDownloadsRow(row) ||
+          widget.search.canExpandApi(row)) {
         _open();
         return true;
       }
@@ -635,14 +638,15 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
               row?.isModel != true ||
               widget.search.canSelectModel(row) ||
               widget.search.canGetModel(row) ||
-              widget.search.isModelDownloadsRow(row))
+              widget.search.isModelDownloadsRow(row) ||
+              widget.search.canExpandApi(row))
         '$enter ${managing
             ? 'select'
             : widget.search.canSelectModel(row)
             ? 'Use'
             : widget.search.canGetModel(row)
             ? 'Get'
-            : widget.search.isModelDownloadsRow(row)
+            : widget.search.isModelDownloadsRow(row) || widget.search.canExpandApi(row)
             ? widget.search.actionLabel(row)
             : _isManagement
             ? _machineSetup
@@ -776,8 +780,23 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           ),
         ];
       }
+      if (model?.apiModel != null) {
+        return [
+          _ResourceAction(
+            'Use',
+            !busy && search.canSelectModel(selected) ? _open : null,
+            command: 'picker.accept',
+          ),
+        ];
+      }
       if (api != null) {
         return [
+          if (search.canExpandApi(selected))
+            _ResourceAction(
+              search.actionLabel(selected),
+              _open,
+              command: 'picker.accept',
+            ),
           _ResourceAction(
             'Edit',
             busy ? null : () => _editApi(api.id),
@@ -883,6 +902,9 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       _apiFormOpen = false;
       _apiResource = null;
     });
+    // The editor owned the keys, and a removed widget reports no focus change: hand them back to
+    // the list, or arrows keep acting for a pane that is no longer there.
+    widget.search.setManaging(false);
     if (id?.isNotEmpty == true) {
       final search = widget.search;
       if (!search.rows.any((row) => row.modelId == 'model:api:$id')) {
@@ -1030,6 +1052,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         : seconds % 3600 == 0
         ? '${(seconds / 3600).toInt()}h'
         : '${seconds.toInt()}s';
+    if (entry.api != null) return _apiPreview(entry);
     return _details([
       entry.name,
       if (widget.search.modelUseErrorId == entry.id)
@@ -1082,16 +1105,70 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         else
           ?owner.error,
       ],
-      if (entry.api case final api?) ...[
-        api.baseUrl,
-        api.keyEnv,
-        'Available to harness tools on this computer.',
-      ],
       if (entry.subscription case final subscription?) ...[
         ...((subscription['details'] as List?) ?? const [])
             .map((detail) => '$detail')
             .where((detail) => detail != entry.status),
       ],
+    ], controls: true);
+  }
+
+  static const _kDetailLabelColumns = 9;
+
+  /// A saved API, or one of its models: a summary line, then labelled facts, then what it is for.
+  Widget _apiPreview(ModelSearchEntry entry) {
+    final api = entry.api!;
+    final listed = widget.search.models!.manager.apis.models[api.id];
+    final model = entry.apiModel;
+    if (model != null) {
+      final reason = widget.search.modelUseReason(row);
+      return _details([
+        entry.name,
+        [
+          api.name,
+          if (model.contextWindow case final window?)
+            '${contextWindowLabel(window)} context',
+        ].join(' · '),
+        '',
+        if (model.name case final name?) ('Name', name),
+        ('Via', '${api.name} · ${api.host}'),
+        '',
+        if (reason == null)
+          'Use runs this harness on it, with the key saved on '
+              '${widget.search.models!.manager.apis.hostLabel}.'
+        else if (reason == 'Other machine')
+          'Its key is saved on ${widget.search.models!.manager.apis.hostLabel}, '
+              'so only the harnesses there can run on it.'
+        else
+          reason,
+      ], controls: true);
+    }
+    final count = listed?.models.length ?? 0;
+    // One line for what the API is for: a harness runs on its models (Use), or harness agents call
+    // it (Tools) — fal.ai, Replicate, and any API that lists no models a coding agent can run on.
+    final summary = !api.servesModels || count > 0
+        ? null
+        : switch (listed) {
+            ApiModels(loading: true) => 'Loading models…',
+            ApiModels(error: _?) => 'Models unavailable',
+            _ => null,
+          };
+    return _details([
+      entry.name,
+      ['API', ?summary].join(' · '),
+      '',
+      ('URL', api.baseUrl),
+      if (count > 0)
+        (
+          'Use',
+          'pick one of its $count ${count == 1 ? 'model' : 'models'} to run a harness on it',
+        )
+      else if (summary == null)
+        (
+          'Tools',
+          'harness agents on this computer can call it with the saved key',
+        ),
+      if (listed?.error case final error?) ...['', error],
     ], controls: true);
   }
 
@@ -1133,11 +1210,16 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     ], controls: true);
   }
 
-  Widget _details(List<String> lines, {bool controls = false}) {
+  /// The preview's lines: the first is the title, `''` is a blank row, and a `(label, value)`
+  /// pair is a labelled row — [_kDetailLabelColumns] columns of label, the value wrapping beside it.
+  Widget _details(List<Object> lines, {bool controls = false}) {
     final cell = terminalCellSizeOf(context);
     final theme = terminalThemeFor(
       grid.AppTheme.palette.value,
       terminalThemeStore.value,
+    );
+    final muted = terminalContentStyle(
+      color: theme.foreground.withValues(alpha: .54),
     );
     return ListView(
       controller: _scroll,
@@ -1147,17 +1229,30 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       ),
       children: [
         for (var i = 0; i < lines.length; i++)
-          if (lines[i].isEmpty)
-            SizedBox(height: cell.height)
-          else
-            Text(
-              lines[i],
-              style: terminalContentStyle(
-                color: i == 0
-                    ? theme.foreground
-                    : theme.foreground.withValues(alpha: .54),
-              ),
+          switch (lines[i]) {
+            '' => SizedBox(height: cell.height),
+            (final String label, final String value) => Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: cell.width * _kDetailLabelColumns,
+                  child: Text(label, style: muted),
+                ),
+                Expanded(
+                  child: Text(
+                    value,
+                    style: terminalContentStyle(color: theme.foreground),
+                  ),
+                ),
+              ],
             ),
+            final line => Text(
+              '$line',
+              style: i == 0
+                  ? terminalContentStyle(color: theme.foreground)
+                  : muted,
+            ),
+          },
         if (controls) ...[SizedBox(height: cell.height), _actionButtons()],
       ],
     );

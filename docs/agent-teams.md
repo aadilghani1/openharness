@@ -7,8 +7,8 @@ Implementation and operating guide, September 27, 2026. Verification limits are 
 The default UI now uses [swarm tabs](tab-channels.md), September 28, 2026.
 Existing tab membership replaces manual team setup. Settings → Experimental → Swarm
 collaboration is off by default. Once enabled, agents consult peers in their tab
-automatically. Cmd+Shift+A explicitly permits the focused agent to ask outside its
-swarm; the conversation view shows shared history. The protocol
+automatically. Questions stay inside the tab; cross-swarm requests and Cmd+Shift+A
+are deferred. The conversation view shows shared history. The protocol
 below also supports standalone teams managed through the advanced CLI.
 
 Agents retain their own engine, context, repository, and session. For example, mobile

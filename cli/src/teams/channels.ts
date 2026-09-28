@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { Address, Id, OperationId, QuestionSpec, TeamError, requireTeam, type Member } from './model.js'
+import { Address, Id, OperationId, TeamError, requireTeam } from './model.js'
 import { channelTeamId, type TeamService } from './service.js'
 
 const Tab = z.object({ id: Id, name: z.string().min(1).max(100), channelHost: Id.optional(), panes: z.array(Address).max(32) })
@@ -80,7 +80,7 @@ export class ChannelDirectory {
 
   async request(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     requireTeam(payload.memberKey === undefined, 'CHANNEL_SCOPE', 'Use your supplied member commands to consult your own channel.')
-    const action = z.enum(['channel_settings', 'channel_configure', 'channel_list', 'channel_get', 'channel_consult', 'channel_cross_consult', 'channel_cross_ask']).parse(payload.action)
+    const action = z.enum(['channel_settings', 'channel_configure', 'channel_list', 'channel_get', 'channel_consult']).parse(payload.action)
     if (action === 'channel_configure') {
       requireTeam(this.deps.writeSettings, 'CHANNELS_UNSUPPORTED', 'Update Harness to configure swarm collaboration.')
       const enabled = z.boolean().parse(payload.enabled)
@@ -97,8 +97,7 @@ export class ChannelDirectory {
         return { enabled: updated.enabled, revision: updated.settingsRevision }
       } finally { this.disabling = false; this.configuring = false }
     }
-    if (action === 'channel_cross_ask') requireTeam(payload.crossChannel === true, 'CROSS_CHANNEL_EXPLICIT', 'Cross-channel work needs explicit user direction and --cross-channel.')
-    const desk = await this.refresh(action === 'channel_settings' || action === 'channel_consult' || action === 'channel_cross_consult' || action === 'channel_cross_ask')
+    const desk = await this.refresh(action === 'channel_settings' || action === 'channel_consult')
     if (action === 'channel_settings') return { enabled: desk.enabled, revision: desk.settingsRevision }
     requireTeam(desk.enabled && this.enabled, 'CHANNELS_DISABLED', 'Enable Swarm collaboration in Settings → Experimental first.')
     if (action === 'channel_list') return { revision: desk.revision, channels: desk.tabs.map(tab => ({
@@ -114,42 +113,8 @@ export class ChannelDirectory {
       return this.deps.forward(tab.channelHost, { ...payload, channelForwarded: true })
     }
     const teamId = channelTeamId(tabId)
-    if (action === 'channel_consult' || action === 'channel_cross_consult') return { teamId, machineId: tab.channelHost,
-      consultation: this.deps.service.consult(teamId, OperationId.parse(payload.id), Address.parse(payload.from), { kind: 'owner' }, action === 'channel_cross_consult') }
-    if (action === 'channel_cross_ask') {
-      OperationId.parse(payload.id)
-      z.string().trim().min(1).max(8000).parse(payload.text)
-      const targetTabId = Id.parse(payload.targetTabId)
-      requireTeam(targetTabId !== tabId, 'SAME_CHANNEL', 'Use the scoped ask command for a peer in your own channel.')
-      const source = await this.deps.service.snapshot(teamId, { kind: 'owner' })
-      requireTeam(source.state === 'active', 'TEAM_PAUSED', 'Collaboration in this channel is paused.')
-      const address = Address.parse(payload.from)
-      const from = (source.members as Member[]).find(m => m.enabled && m.machineId === address.machineId && m.agentId === address.agentId)
-      requireTeam(from, 'NOT_A_MEMBER', 'The source agent is no longer in this tab.')
-      const destination = await this.request({ action: 'channel_get', tabId: targetTabId })
-      const target = destination.team as Record<string, unknown>
-      requireTeam(target?.state === 'active', 'TEAM_PAUSED', 'Collaboration in the destination channel is paused.')
-      const to = (target.members as Member[]).find(m => m.enabled && (m.id === payload.to || m.name === payload.to))
-      requireTeam(to, 'MEMBER_NOT_FOUND', 'Read the destination channel’s members and choose an exact member ID or name.')
-      requireTeam(from.machineId !== to.machineId || from.agentId !== to.agentId, 'SELF_MESSAGE', 'Choose another agent.')
-      // One durable direct conversation per pair of channel participants. Neither
-      // tab's membership expands; ordinary scoped discovery remains unchanged.
-      const bridgeId = channelTeamId(JSON.stringify([tabId, targetTabId, Address.parse(from), Address.parse(to)]))
-      let bridge: Record<string, unknown>
-      try { bridge = await this.deps.service.snapshot(bridgeId, { kind: 'owner' }) }
-      catch (error) {
-        if (!(error instanceof TeamError) || error.code !== 'TEAM_NOT_FOUND') throw error
-        bridge = await this.deps.service.create({ id: bridgeId, name: 'Explicit cross-channel consultation',
-          bridge: { sourceTabId: tabId, targetTabId },
-          members: [{ ...Address.parse(from), name: from.name, role: from.role }, { ...Address.parse(to), name: to.name, role: to.role }],
-        }, { kind: 'owner' })
-      }
-      const participants = bridge.members as Member[]
-      const request = QuestionSpec.parse({ ...payload, from: participants[0].id, to: participants[1].id,
-        context: `Explicit cross-channel request from tab ${tabId} to tab ${targetTabId}. ${payload.context ?? ''}` })
-      return { teamId: bridgeId, machineId: this.deps.machineId,
-        exchange: this.deps.service.ask(bridgeId, request, { kind: 'owner' }) }
-    }
+    if (action === 'channel_consult') return { teamId, machineId: tab.channelHost,
+      consultation: this.deps.service.consult(teamId, OperationId.parse(payload.id), Address.parse(payload.from), { kind: 'owner' }) }
     return { team: await this.deps.service.snapshot(teamId, { kind: 'owner' }) }
   }
 

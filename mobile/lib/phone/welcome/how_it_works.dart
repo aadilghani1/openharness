@@ -22,9 +22,9 @@ class HowItWorksPage extends StatelessWidget {
     ('Agent', 'The AI that does the work: Claude Code, Codex, and others.'),
     (
       'Harness',
-      'One agent working in one project on one computer — a live terminal you '
-          'can watch and talk to. Start as many as you like; they keep going '
-          'when you close the app.',
+      'One session of an agent — Claude Code, say, working in one project on '
+          'one computer, in a live terminal you can watch and talk to. One agent '
+          'can run many; they keep going when you close the app.',
     ),
     (
       'Project',
@@ -33,8 +33,9 @@ class HowItWorksPage extends StatelessWidget {
     ),
     (
       'Phone password',
-      'Unlocks one computer from this phone, once. It sets up an end-to-end '
-          'encrypted link and never leaves your devices.',
+      'For a computer with no Harness app to show a code (a server): unlocks '
+          'it from this phone, once, over an end-to-end encrypted link. It never '
+          'leaves your devices. A Mac shows a code to scan instead.',
     ),
   ];
 

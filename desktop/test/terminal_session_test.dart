@@ -1337,7 +1337,13 @@ void main() {
 
     Future<void> acceptBegin() async {
       await pump();
-      expect(sent.single.type, 'terminal_chunked_upload_begin');
+      expect(
+        sent
+            .where((frame) => frame.type == 'terminal_chunked_upload_begin')
+            .single
+            .type,
+        'terminal_chunked_upload_begin',
+      );
       await session.handleFrame('terminal_chunked_upload_begin_result', {
         'streamId': streamId,
         'accepted': true,
@@ -1362,9 +1368,27 @@ void main() {
 
         final future = session.pasteImage(png);
         await acceptBegin();
-        expect(sent.single.payload, containsPair('uploadKind', 'image'));
-        expect(sent.single.payload, containsPair('totalBytes', png.length));
-        expect(sent.single.payload, isNot(contains('filename')));
+        expect(
+          sent
+              .where((frame) => frame.type == 'terminal_chunked_upload_begin')
+              .single
+              .payload,
+          containsPair('uploadKind', 'image'),
+        );
+        expect(
+          sent
+              .where((frame) => frame.type == 'terminal_chunked_upload_begin')
+              .single
+              .payload,
+          containsPair('totalBytes', png.length),
+        );
+        expect(
+          sent
+              .where((frame) => frame.type == 'terminal_chunked_upload_begin')
+              .single
+              .payload,
+          isNot(contains('filename')),
+        );
 
         await pump();
         expect(imagePastes(), hasLength(1));
@@ -1406,8 +1430,20 @@ void main() {
 
         final future = session.pasteFile('report.pdf', content);
         await acceptBegin();
-        expect(sent.single.payload, containsPair('uploadKind', 'file'));
-        expect(sent.single.payload, containsPair('filename', 'report.pdf'));
+        expect(
+          sent
+              .where((frame) => frame.type == 'terminal_chunked_upload_begin')
+              .single
+              .payload,
+          containsPair('uploadKind', 'file'),
+        );
+        expect(
+          sent
+              .where((frame) => frame.type == 'terminal_chunked_upload_begin')
+              .single
+              .payload,
+          containsPair('filename', 'report.pdf'),
+        );
 
         await pump();
         expect(filePastes(), hasLength(1));

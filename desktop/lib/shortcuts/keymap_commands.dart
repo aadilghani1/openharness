@@ -19,6 +19,7 @@ class HarnessCommand {
     this.context = KeymapContext.workspace,
     this.repeatable = false,
     this.hidden = false,
+    this.daemon = false,
   });
   final String id, label;
   final ShortcutGroup group;
@@ -61,7 +62,21 @@ class HarnessCommand {
 
   /// Review commands still use the shared keymap, but stay out of normal help.
   final bool hidden;
+
+  /// One of the daemon's (daemons/README.md): it exists only while this
+  /// window has daemons ([daemonCommandsActive]).
+  final bool daemon;
 }
+
+/// Whether the daemon's commands exist in this window: only while daemons are
+/// on (daemons/README.md, "Off switches"). Off, they are not bound at all:
+/// their keys (⌘⌥T) reach the pane as they did before daemons existed, and
+/// they are in no list, no help and no native keymap. The workspace sets it.
+final daemonCommandsActive = ValueNotifier<bool>(false);
+
+/// Whether [id] is a command this window has now.
+bool harnessCommandActive(String id) =>
+    harnessCommandById[id]?.daemon != true || daemonCommandsActive.value;
 
 final _workspaceKeysByPlatform =
     <TargetPlatform, Map<ShortcutAction, List<String>>>{};
@@ -340,12 +355,27 @@ final harnessCommands = <HarnessCommand>[
     nativeAction: 'newAgent',
   ),
   const HarnessCommand('agent.rename', 'Rename Harness', ShortcutGroup.actions),
+  const HarnessCommand(
+    'agent.work',
+    'Branches and pull requests',
+    ShortcutGroup.actions,
+    keywords: [
+      'branch',
+      'branches',
+      'pull requests',
+      'git',
+      'worktree',
+      'history',
+    ],
+  ),
   const HarnessCommand('agent.stop', 'Stop Harness', ShortcutGroup.actions),
   const HarnessCommand('agent.fork', 'Fork Harness', ShortcutGroup.actions),
   const HarnessCommand(
     'agent.share',
     'Share Harness',
     ShortcutGroup.actions,
+    action: ShortcutAction.shareAgent,
+    keywords: ['link', 'public', 'private', 'invite', 'collaborate'],
     nativeAction: 'shareAgent',
   ),
   const HarnessCommand(
@@ -479,13 +509,6 @@ final harnessCommands = <HarnessCommand>[
     ],
   ),
   const HarnessCommand(
-    'channel.ask_outside',
-    'Ask outside this swarm',
-    ShortcutGroup.actions,
-    action: ShortcutAction.askOutsideSwarm,
-    keywords: ['ask', 'swarm', 'channel', 'collaborate', 'peer', 'a2a'],
-  ),
-  const HarnessCommand(
     'app.customize',
     'Customize Harness',
     ShortcutGroup.actions,
@@ -498,6 +521,24 @@ final harnessCommands = <HarnessCommand>[
     extraKeys: ['cmd+s'],
     keywords: ['install', 'browse harnesses', 'packages', 'extensions'],
     nativeAction: 'store',
+  ),
+  const HarnessCommand(
+    'app.daemon',
+    'Daemon',
+    ShortcutGroup.actions,
+    keywords: ['hatch', 'egg', 'zoo', 'pair', 'nap', 'buddy', 'companion'],
+    nativeAction: 'daemon',
+    daemon: true,
+  ),
+  // ⌘⌥Space is macOS's Finder search; ⌘⌥ plus y, n, s or g answers the
+  // daemon's line. T for talk.
+  const HarnessCommand(
+    'app.daemon_talk',
+    'Talk to daemon',
+    ShortcutGroup.actions,
+    extraKeys: ['cmd+alt+t'],
+    keywords: ['ask', 'pair', 'daemon', 'chat', 'autonomy', 'lessons'],
+    daemon: true,
   ),
   const HarnessCommand(
     'app.settings',

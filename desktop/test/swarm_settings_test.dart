@@ -132,6 +132,8 @@ void main() {
         final toggle = find.byKey(
           const Key('experimental-swarm-collaboration'),
         );
+        await tester.ensureVisible(toggle);
+        await tester.pumpAndSettle();
         expect(tester.widget<Switch>(toggle).value, isFalse);
         expect(calls, [
           {'action': 'channel_settings'},

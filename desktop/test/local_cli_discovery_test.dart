@@ -767,11 +767,9 @@ void main() {
     expect(spawnCount, lessThan(6));
   });
 
-  // The bug this closes: a daemon that signed ITSELF out (its machine was deleted from another
-  // machine) exits, and the supervisor respawned it forever — every replacement starting without a
-  // session and exiting again, silently, for the app's whole lifetime.
+  // Signed-out daemons now serve local agents in guest mode, so supervision must continue.
   test(
-    'startSupervising stops respawning once the CLI reports it is signed out',
+    'startSupervising keeps the guest daemon alive after sign-out',
     () async {
       const computerId = '0123456789abcdef0123456789abcdef';
       final identityFile = File('${scratch.path}/computer-id')
@@ -806,13 +804,18 @@ void main() {
 
       await Future.delayed(const Duration(milliseconds: 300));
 
+      expect(spawnCount, greaterThan(0));
       expect(
         spawnCount,
-        0,
-        reason: 'a signed-out daemon must never be respawned',
+        lessThan(6),
+        reason: 'guest restarts retain the backoff',
       );
-      expect(signedOutCalls, 1, reason: 'the caller is told exactly once');
-      expect(timer.isActive, isFalse, reason: 'supervision stops for good');
+      expect(
+        signedOutCalls,
+        spawnCount,
+        reason: 'auth is checked once per spawn attempt',
+      );
+      expect(timer.isActive, isTrue);
     },
   );
 
