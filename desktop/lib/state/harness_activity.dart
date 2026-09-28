@@ -4,7 +4,7 @@ import '../widgets/engine_identity.dart' show isTerminalEngine;
 import 'app_state.dart';
 import 'swarm.dart';
 
-/// The TUI's vocabulary, ordered by a tab's most urgent member. Activity is
+/// The TUI's states, ordered by a tab's most urgent member. Activity is
 /// separate from unread results: a new turn always looks busy, not finished.
 enum HarnessActivity {
   needsInput('?', 'Needs your input'),
@@ -12,9 +12,9 @@ enum HarnessActivity {
   done('✓', 'Finished · unread'),
   working('⠋', 'Working'),
   starting('◌', 'Starting'),
-  idle('·', 'Idle'),
-  paused('‖', 'Paused'),
-  offline('○', 'Offline');
+  idle('', 'Idle'),
+  paused('||', 'Paused'),
+  offline('⊘', 'Offline');
 
   const HarnessActivity(this.mark, this.label);
   final String mark;

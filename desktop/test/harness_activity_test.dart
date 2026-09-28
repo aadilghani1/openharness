@@ -257,7 +257,11 @@ void main() {
       final titleRect = tester.getRect(
         find.byKey(const ValueKey('terminal-pane-title')),
       );
-      expect(find.text('·'), findsOneWidget);
+      expect(find.text('·'), findsNothing);
+      expect(
+        tester.getRect(find.byType(ActivityMark)).left,
+        greaterThan(titleRect.right),
+      );
       await app.handleEventForTest('m', {
         'type': 'turn_started',
         'agentId': 'a0',

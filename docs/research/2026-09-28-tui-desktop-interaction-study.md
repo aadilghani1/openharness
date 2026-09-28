@@ -12,17 +12,19 @@ stays put. Copy the behavior together with the visual detail.
 
 ## Built in this change
 
-The same eight status characters now occupy existing desktop pane headers and
-tabs. Only Working animates, with hn's ten Braille frames at 100 ms. The tab
+The same eight activity states now occupy existing desktop pane headers and
+tabs. Desktop review refined their presentation: marks follow names, Idle is
+blank, Paused uses two short ASCII pipes, and Offline uses a slashed circle.
+Only Working animates, with hn's ten Braille frames at 100 ms. The tab
 shows its most urgent member. Fixed cells, local clocks, visibility gating,
 Reduce Motion, accessible labels, and native/Flutter parity are part of the
 implementation. No additional toolbar, counter, or permanent legend.
 
 ```text
-1:? desktop     2:⠹ daemons     3:✓ tests     +
+1:desktop ?     2:daemons ⠹     3:tests ✓     +
 
-[engine] ? Review pull requests          x
-[engine] ⠹ Fix reconnect                 x
+[engine] Review pull requests ?          x
+[engine] Fix reconnect ⠹                 x
 ```
 
 See the [desktop activity contract](../../desktop/design/workspace-status-bar.md#harness-activity)

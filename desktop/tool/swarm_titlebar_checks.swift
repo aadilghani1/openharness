@@ -42,8 +42,8 @@ private extension SwarmTabStrip {
       ["mark": mark, "label": label, "working": working, "color": Int64(0xff64d2ff)]
     }
     let states: [(String, String)] = [("⠋", "Working"), ("?", "Needs your input"),
-      ("✗", "Failed"), ("✓", "Finished · unread"), ("·", "Idle"),
-      ("◌", "Starting"), ("‖", "Paused"), ("○", "Offline")]
+      ("✗", "Failed"), ("✓", "Finished · unread"), ("", "Idle"),
+      ("◌", "Starting"), ("||", "Paused"), ("⊘", "Offline")]
     update(["enabled": true, "activeId": "activity", "tabs": [
       ["id": "activity", "name": "desktop", "label": "1:desktop", "activity": payload("⠋", "Working", working: true)]
     ]])
@@ -66,7 +66,9 @@ private extension SwarmTabButton {
     }
     let width = preferredWidth
     let rect = activityRect
-    try checkTitlebar(labelText == "1:  desktop", "Activity reserves its cell after the tab number")
+    try checkTitlebar(labelText == "1:desktop  ", "Activity reserves its cell after the tab name")
+    try checkTitlebar(rect.minX > ("1:desktop" as NSString).size(withAttributes: [.font: labelFont]).width,
+      "The native activity follows the complete tab name")
     var pictures = Set<Data>()
     for frame in 0..<10 {
       // Sample inside each interval: Date's reference-epoch conversion can put
@@ -104,7 +106,8 @@ private extension SwarmTabButton {
               pixel.blueComponent - pixel.greenComponent > 0.04
           }
         }
-        try checkTitlebar(colored, "\(label) remains visible at tab width \(narrow)")
+        try checkTitlebar(colored == !mark.isEmpty,
+          "\(label) \(mark.isEmpty ? "stays unmarked" : "remains visible") at tab width \(narrow)")
       }
       frame.size.width = width
     }

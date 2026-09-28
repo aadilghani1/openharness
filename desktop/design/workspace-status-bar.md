@@ -4,7 +4,7 @@ One shared status line, using compact monospace text and measured character cell
 Follow the [terminal workspace design system](terminal-workspace.md).
 
 ```text
-1:? api  2:⠹ web  3:✓ blender  +          M2  autonomous-harness  (main)   [ Share ]
+1:api ?  2:web ⠹  3:blender ✓  +          M2  autonomous-harness  (main)   [ Share ]
 ```
 
 ## Tabs on the left
@@ -56,9 +56,9 @@ focus. Keep its New Tab tooltip and shortcut hint.
 
 ### Harness activity
 
-Use hn's one-character status vocabulary in two existing places: after the
-number in a tab (`2:⠹ web`), and between the engine icon and title in a pane
-header. Viewer headers show their owner's state. Shells, unknown agents, and
+Use hn's activity states in two existing places: after the tab name
+(`2:web ⠹`), and after the title in a pane header (`[engine] Session name ⠹`).
+Idle has no visible mark. Viewer headers show their owner's state. Shells, unknown agents, and
 utility tabs have no harness activity mark. Keep the existing engine icon.
 The mark replaces the native tab's old orange attention indicator; it adds no
 new bar, counter, badge, or permanent legend. Hover and accessibility descriptions
@@ -73,9 +73,9 @@ explain each symbol.
 | `✓` | Finished and unread | Green |
 | `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` | Working, one frame per 100 ms | Cyan |
 | `◌` | Starting | Yellow |
-| `·` | Idle | Muted foreground |
-| `‖` | Paused | Muted foreground |
-| `○` | Offline | Muted foreground |
+| None | Idle | — |
+| `\|\|` | Paused | Muted foreground |
+| `⊘` | Offline | Muted foreground |
 
 A tab shows its most urgent member in the order above, counting a harness and
 its viewers once. For an individual harness, offline/paused/launch state takes
@@ -85,7 +85,11 @@ turn does not clear the failure. A pane hidden by zoom or an inactive/utility
 tab is not seen. Existing unread storage remains an in-memory, bounded list;
 these marks are not a durable event history.
 
-Reserve one measured cell for the mark and one for the gap. Animate only the
+Reserve one measured cell for the mark and one for the gap, including when idle
+is blank, so state changes never move the names or adjacent tabs. Paused uses
+two ASCII pipes at 65% font size with quarter-cell negative letter spacing:
+short, thin strokes centered in the same cell. Keep native and Flutter metrics
+in sync. The question mark stays plain yellow. Animate only the
 mark, never the label, width, terminal, or method-channel payload. Long tabs
 shorten their names and scroll; preserve room for the number and mark. SF Mono
 does not contain Braille, so Flutter explicitly falls back to the platform's

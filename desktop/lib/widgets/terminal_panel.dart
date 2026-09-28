@@ -2646,11 +2646,6 @@ class _TerminalHeader extends StatelessWidget {
                 // 2026-09-15): a harness agent is its harness here, and the
                 // engine it runs on is the dialog's and the tooltip's to say.
                 const SizedBox(width: 10),
-                HarnessActivityMark(
-                  app: notifier,
-                  machineId: session.machineId,
-                  agentId: session.agentId,
-                ),
                 Expanded(
                   child: Row(
                     children: [
@@ -2678,6 +2673,11 @@ class _TerminalHeader extends StatelessWidget {
                             ),
                           ),
                         ),
+                      ),
+                      HarnessActivityMark(
+                        app: notifier,
+                        machineId: session.machineId,
+                        agentId: session.agentId,
                       ),
                       if (status != null || starting != null || !compact)
                         const SizedBox(width: 8),

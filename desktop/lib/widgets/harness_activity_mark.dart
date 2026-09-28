@@ -100,7 +100,7 @@ class ActivityClock extends ChangeNotifier with WidgetsBindingObserver {
 
 final _activityClock = ActivityClock();
 
-/// One character, with a stable semantic label outside the animated subtree.
+/// One status cell, with a stable semantic label outside the animated subtree.
 /// Only this repaint boundary changes on a tick, never the terminal or tab.
 class ActivityMark extends StatefulWidget {
   const ActivityMark({
@@ -171,30 +171,40 @@ class _ActivityMarkState extends State<ActivityMark> {
     final mark = _listening
         ? activitySpinnerFrames[clock.frame]
         : widget.activity.mark;
+    final cell = workspaceBarCellSizeOf(context);
+    var style =
+        workspaceBarTextStyle(
+          color: widget.color,
+          emphasized: widget.emphasized,
+        ).copyWith(
+          fontFamilyFallback: [
+            ...?workspaceBarTextStyle().fontFamilyFallback,
+            // SF Mono and Menlo lack Braille; the fixed cell still uses
+            // workspace metrics while the OS symbol font supplies dots.
+            'Apple Symbols',
+            'DejaVu Sans',
+          ],
+        );
+    if (widget.activity == HarnessActivity.paused) {
+      // Two short ASCII pipes, tightened into the same cell as every other
+      // mark. Keep these metrics in sync with SwarmTabButton's native drawing.
+      style = style.copyWith(
+        fontSize: workspaceBarFontSize * .65,
+        letterSpacing: -cell.width * .25,
+      );
+    }
     final child = Semantics(
       label: widget.activity.label,
       child: ExcludeSemantics(
         child: RepaintBoundary(
           child: SizedBox(
-            width: workspaceBarCellSizeOf(context).width,
+            width: cell.width,
             child: Text(
               mark,
               textAlign: TextAlign.center,
               maxLines: 1,
               overflow: TextOverflow.clip,
-              style:
-                  workspaceBarTextStyle(
-                    color: widget.color,
-                    emphasized: widget.emphasized,
-                  ).copyWith(
-                    fontFamilyFallback: [
-                      ...?workspaceBarTextStyle().fontFamilyFallback,
-                      // SF Mono and Menlo lack Braille; the fixed cell still uses
-                      // workspace metrics while the OS symbol font supplies dots.
-                      'Apple Symbols',
-                      'DejaVu Sans',
-                    ],
-                  ),
+              style: style,
             ),
           ),
         ),
@@ -238,9 +248,7 @@ class HarnessActivityMark extends StatelessWidget {
           terminalThemeStore.value,
         );
         return Padding(
-          padding: EdgeInsets.only(
-            right: workspaceBarCellSizeOf(context).width,
-          ),
+          padding: EdgeInsets.only(left: workspaceBarCellSizeOf(context).width),
           child: ActivityMark(
             activity: state,
             color: activityColor(

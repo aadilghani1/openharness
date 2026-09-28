@@ -271,13 +271,6 @@ class _WebPanePanelState extends State<WebPanePanel> {
               size: 17,
             ),
             const SizedBox(width: 10),
-            if (widget.pane.ownerAgentId case final ownerId?)
-              HarnessActivityMark(
-                app: widget.notifier,
-                machineId: widget.pane.machineId,
-                agentId: ownerId,
-                visible: widget.visible,
-              ),
             // The name, and one status after it — ready, or what stands in
             // the way, or where the work is — in the place a "Viewer" label
             // would only repeat what the pane shows. A status, not a history.
@@ -296,6 +289,13 @@ class _WebPanePanelState extends State<WebPanePanel> {
                         style: workspaceBarTextStyle(color: AppColors.text),
                       ),
                     ),
+                    if (widget.pane.ownerAgentId case final ownerId?)
+                      HarnessActivityMark(
+                        app: widget.notifier,
+                        machineId: widget.pane.machineId,
+                        agentId: ownerId,
+                        visible: widget.visible,
+                      ),
                     if (widget.verdict case final verdict?) ...[
                       Text(
                         '  ·  ',

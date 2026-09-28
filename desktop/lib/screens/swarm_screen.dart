@@ -6489,6 +6489,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                                   emphasized: emphasized,
                                                 ),
                                               ),
+                                              Flexible(
+                                                child: Text(
+                                                  names[swarm.id]!,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: workspaceBarTextStyle(
+                                                    color: theme.foreground,
+                                                    emphasized: emphasized,
+                                                  ),
+                                                ),
+                                              ),
+                                              SizedBox(width: cell.width),
                                               ListenableBuilder(
                                                 listenable: _tabScroll,
                                                 builder: (context, _) {
@@ -6522,19 +6535,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                                             offset,
                                                   );
                                                 },
-                                              ),
-                                              SizedBox(width: cell.width),
-                                              Flexible(
-                                                child: Text(
-                                                  names[swarm.id]!,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: workspaceBarTextStyle(
-                                                    color: theme.foreground,
-                                                    emphasized: emphasized,
-                                                  ),
-                                                ),
                                               ),
                                             ],
                                           ),

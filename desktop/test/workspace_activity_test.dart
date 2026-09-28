@@ -110,6 +110,12 @@ void main() {
         } else {
           expect(flutterState(first.id), HarnessActivity.needsInput);
           expect(flutterState(second.id), HarnessActivity.working);
+          expect(
+            tester
+                .getRect(find.byKey(ValueKey('tab-activity:${first.id}')))
+                .left,
+            greaterThan(tester.getRect(find.text('desktop')).right),
+          );
           // Two visible panes and the second tab: the hidden daemon pane is
           // retained but contributes no extra animation or terminal rebuilds.
           expect(find.byType(HarnessActivityMark), findsNWidgets(2));
@@ -162,7 +168,7 @@ void main() {
         app.markAgentSeen('m', 'a2');
         await tester.pump();
         if (native) {
-          expect(nativeActivity(second.id)['mark'], '·');
+          expect(nativeActivity(second.id)['mark'], isEmpty);
         } else {
           expect(flutterState(second.id), HarnessActivity.idle);
         }

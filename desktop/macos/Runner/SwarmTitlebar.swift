@@ -1948,7 +1948,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   }
   private var labelText: String {
     guard activityLabel != nil else { return displayLabel }
-    return labelPrefix + "  " + displayLabel.dropFirst(labelPrefix.count)
+    // Keep the trailing gap and status cell even when idle has no glyph.
+    return displayLabel + "  "
   }
   private var activityRect: NSRect {
     if bounds.width < minimumWidth {
@@ -1956,8 +1957,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     }
     let available = max(0, bounds.width - cellWidth * 2)
     let textWidth = min(available, label.size().width)
-    let prefixWidth = (labelPrefix as NSString).size(withAttributes: [.font: labelFont]).width
-    return NSRect(x: cellWidth + (available - textWidth) / 2 + prefixWidth,
+    return NSRect(x: cellWidth + (available - textWidth) / 2 + textWidth - cellWidth,
       y: 0, width: cellWidth, height: bounds.height)
   }
   /// The strip holds the keyboard on this, the selected tab — drawn like a
@@ -2074,27 +2074,31 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     if bounds.width >= minimumWidth {
       let y = contentCenterY - text.size().height / 2
       if activity != nil || attention {
-        // Truncate only the name. Truncating the combined label can put the
-        // ellipsis in the reserved activity cell in a narrow tab.
+        // Keep the number and trailing activity cell; only the name truncates.
+        let available = max(0, bounds.width - cellWidth * 2)
+        let x = cellWidth + (available - min(available, label.size().width)) / 2
         let prefix = text.attributedSubstring(from: NSRange(location: 0, length: labelPrefix.utf16.count))
-        prefix.draw(at: NSPoint(x: activityRect.minX - prefix.size().width, y: y))
-        let start = labelPrefix.utf16.count + 2
+        prefix.draw(at: NSPoint(x: x, y: y))
+        let start = labelPrefix.utf16.count
         let title = NSMutableAttributedString(attributedString:
-          text.attributedSubstring(from: NSRange(location: start, length: text.length - start)))
+          text.attributedSubstring(from: NSRange(location: start, length: text.length - start - 2)))
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
         paragraph.alignment = .left
         title.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: title.length))
-        let x = activityRect.maxX + cellWidth
-        title.draw(in: NSRect(x: x, y: y, width: max(0, bounds.width - cellWidth - x), height: text.size().height))
+        let titleX = x + prefix.size().width
+        title.draw(in: NSRect(x: titleX, y: y, width: max(0, activityRect.minX - cellWidth - titleX), height: text.size().height))
       } else {
         text.draw(in: NSRect(x: cellWidth, y: y,
           width: max(0, bounds.width - cellWidth * 2), height: text.size().height))
       }
     }
     if let activityMark {
+      let font = active ? workspaceBarEmphasisFont(labelFont) : labelFont
+      let paused = activityMark == "||"
       let marker = NSAttributedString(string: activityMark,
-        attributes: [.font: active ? workspaceBarEmphasisFont(labelFont) : labelFont,
+        attributes: [.font: paused ? NSFontManager.shared.convert(font, toSize: font.pointSize * 0.65) : font,
+          .kern: paused ? -cellWidth * 0.25 : 0,
           .foregroundColor: activity?.color ?? NSColor.systemOrange])
       NSGraphicsContext.saveGraphicsState()
       let padding = bounds.width < minimumWidth ? 0 : cellWidth
