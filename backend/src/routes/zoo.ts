@@ -1,5 +1,5 @@
 /**
- * The account's zoo — its daemons and eggs, the same on every client (lib/zoo.ts for the rules,
+ * The account's zoo — its individuals and eggs, the same on every client (lib/zoo.ts for the rules,
  * daemons/README.md for the contract).
  *
  *   GET  /api/zoo       → { revision, zoo }
@@ -10,14 +10,18 @@
  * retried from the fresh zoo, since the ops are idempotent and drop-on-missing. A hatch that lost the
  * race draws again against the fresh zoo; only the draw that was written is answered, and the same for
  * the eggs granted and the levels reached. After a change a client would draw (lib/zoo.ts `shownZoo`:
- * daemons, eggs, pair, dial, consent, habits — not a tally of turns or xp short of a level) every adapter
- * socket of the user hears `zoo_changed` (lib/adapterAccountPushes.ts), and so does every web and phone
- * socket (lib/webWs.ts). The revision moves with every write either way.
+ * individuals, eggs, pair, dial, consent, habits — not a tally of turns or xp short of a level) every
+ * adapter socket of the user hears `zoo_changed` (lib/adapterAccountPushes.ts), and so does every web and
+ * phone socket (lib/webWs.ts). The revision moves with every write either way.
  *
- * Every hatch of a daemon the account did not own takes that daemon's next serial (`DaemonMint`, an
- * atomic increment shared by every account) before the write; a duplicate takes none. A serial minted
- * for a write that lost the race is kept for the retry's hatch of the same daemon, so a race costs no
- * numbers; one the request never writes is a gap, never a number given twice.
+ * A zoo stored before individuals is read as individuals with uids derived from the account and the
+ * species (lib/zoo.ts `parseZoo`), so a client that read it can name them before and after the next write
+ * stores the new shape.
+ *
+ * Every hatch — a species the account owns too — takes that species' next serial (`DaemonMint`, an
+ * atomic increment shared by every account) before the write. A serial minted for a write that lost the
+ * race is kept for the retry's hatch of the same species, so a race costs no numbers; one the request
+ * never writes is a gap, never a number given twice.
  *
  * Dark unless the server's daemons switch is on (lib/daemonsSwitch.ts, `HARNESS_DAEMONS`): off, none of
  * this is registered and both paths answer the server's ordinary 404; on with an allowlist
@@ -40,7 +44,7 @@ const MINT_ATTEMPTS = 3
 
 async function readZoo(userId: string): Promise<ZooDoc> {
   const row = await prisma.zoo.findUnique({ where: { userId } })
-  return row ? { revision: row.revision, zoo: parseZoo(row.state) } : { revision: 0, zoo: emptyZoo() }
+  return row ? { revision: row.revision, zoo: parseZoo(row.state, { userId }) } : { revision: 0, zoo: emptyZoo() }
 }
 
 /** Which of the machines the turn reports name are this account's. Only those count as a machine
@@ -53,8 +57,8 @@ async function contextFor(userId: string, ops: ZooOp[]): Promise<ZooContext> {
   return { ownsMachine: (id) => owned.has(id) }
 }
 
-/** The next serial of `daemonId`: an atomic increment of its counter, which starts at 1 on the first
- *  hatch of that daemon anywhere. */
+/** The next serial of the species `daemonId`: an atomic increment of its counter, which starts at 1 on
+ *  the first hatch of that species anywhere. */
 async function mint(daemonId: string): Promise<number> {
   for (let attempt = 1; ; attempt++) {
     try {
@@ -72,18 +76,17 @@ async function mint(daemonId: string): Promise<number> {
   }
 }
 
-/** Serials minted during this request and not yet written, by daemon id, lowest first. */
+/** Serials minted during this request and not yet written, by species, lowest first. */
 type SerialPool = Map<string, number[]>
 
 /**
- * Give each daemon this request hatched new (not a duplicate) its serial: one kept from an attempt that
- * lost the race, or a fresh one. Returns what it used, so a lost race can put them back.
+ * Give each individual this request hatched its species' serial: one kept from an attempt that lost the
+ * race, or a fresh one. Returns what it used, so a lost race can put them back.
  */
 async function giveSerials(zoo: Zoo, hatched: Hatched[], pool: SerialPool): Promise<Array<[string, number]>> {
   const used: Array<[string, number]> = []
   for (const h of hatched) {
-    if (h.duplicate) continue
-    const d = zoo.daemons.find((x) => x.id === h.daemonId)
+    const d = zoo.daemons.find((x) => x.uid === h.uid)
     if (!d) continue
     const serial = pool.get(h.daemonId)?.shift() ?? await mint(h.daemonId)
     d.serial = serial

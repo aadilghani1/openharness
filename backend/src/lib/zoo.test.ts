@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  applyZooOps, drawWeights, easterHash, emptyZoo, parseZoo, zooOpSchema, zooOpsBodySchema, zooShownChanged,
-  ZOO_MAX_DAEMONS, ZOO_MAX_EGGS, type Rng, type Zoo, type ZooDaemon, type ZooOp,
+  applyZooOps, drawWeights, easterHash, emptyZoo, legacyUid, parseZoo, zooOpSchema, zooOpsBodySchema, zooShownChanged,
+  ZOO_FIRST_NEW, ZOO_MAX_DAEMONS, ZOO_MAX_EGGS, ZOO_NEW_AFTER, ZOO_SEED_MAX, type Rng, type Zoo, type ZooDaemon, type ZooOp,
 } from './zoo.js'
 import { DAEMON_ROSTER } from './daemonRoster.g.js'
 
@@ -12,8 +12,12 @@ const ALL = DAEMON_ROSTER.daemons.map((d) => d.id)
 const OUT = new Set(DAEMON_ROSTER.drops.filter((d) => 'release' in d && Date.parse(`${d.release}T00:00:00.000Z`) <= NOW.getTime()).map((d) => d.id))
 /** Drop 1's nine regulars: the numbered set. beastie is its secret, outside the set. */
 const REGULARS = DAEMON_ROSTER.daemons.filter((d) => OUT.has(d.drop) && d.rarity !== 'secret').map((d) => d.id)
+/** Drop 1, beastie included: every species a draw can give at NOW. */
+const INIT = DAEMON_ROSTER.daemons.filter((d) => OUT.has(d.drop)).map((d) => d.id)
 const HABITS = [...DAEMON_ROSTER.rules.firstEgg.habits]
 const XYZZY = '184858a00fd7971f810848266ebcecee5e8b69972c5ffaed622f5ee078671aed'
+const UID = /^[0-9a-f]{24}$/
+const WORD = 0x1_0000_0000
 
 /** A small seeded generator: realistic ids, reproducible runs. */
 function seeded(seed = 1): Rng {
@@ -43,14 +47,21 @@ function indexOf(zoo: Zoo, kind: string, id: string): number {
   }
   throw new Error(`${id} cannot come out of ${kind}`)
 }
+/** A readable uid for a test individual: its label in hex, padded to 24. */
+const uid = (label: string) => Buffer.from(label).toString('hex').padEnd(24, '0').slice(0, 24)
 const daemon = (id: string, extra: Partial<ZooDaemon> = {}): ZooDaemon =>
+  ({ uid: uid(id), id, seed: 0, shiny: false, xp: 0, bond: 0, version: '0.1', hatched: '2026-09-01T00:00:00.000Z', egg: 'first', ...extra })
+/** A daemon as stored before individuals: one record per species. */
+const old = (id: string, extra: Record<string, unknown> = {}) =>
   ({ id, hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 0, version: '0.1', ...extra })
 const zooOf = (patch: Partial<Zoo>): Zoo => ({ ...emptyZoo(), ...patch })
 const egg = (id: string, kind = 'first') => ({ id, kind, grantedAt: '2026-09-02T00:00:00.000Z' })
 const apply = (zoo: Zoo, ops: ZooOp[], rng: Rng = seeded()) => applyZooOps(zoo, ops, rng, NOW)
 const weightOf = (zoo: Zoo, kind: string) => Object.fromEntries(drawWeights(zoo, kind, NOW).map((w) => [w.id, w.weight / UNIT]))
+const eligible = (zoo: Zoo, kind: string) => drawWeights(zoo, kind, NOW).filter((w) => w.weight > 0).map((w) => w.id)
 const habits = (...keys: string[]): ZooOp[] => keys.map((key) => ({ op: 'zoo.habit', key }))
 const kinds = (zoo: Zoo) => zoo.eggs.map((e) => e.kind)
+const hatch = (eggId: string): ZooOp => ({ op: 'zoo.hatch', eggId })
 
 describe('first egg — habits', () => {
   it('asks for 3 habits, one of them a finished turn', () => {
@@ -90,7 +101,7 @@ describe('first egg — habits', () => {
     expect(zoo.habits).toEqual(['turn', 'split', 'find', 'elsewhere', 'machine', 'store', 'resume', 'days'])
     expect(kinds(zoo)).toEqual(['first', 'setup'])
     // Hatched and gone, every habit again: no second first or setup egg.
-    const hatched = apply(zoo, zoo.eggs.map((e) => ({ op: 'zoo.hatch' as const, eggId: e.id }))).zoo
+    const hatched = apply(zoo, zoo.eggs.map((e) => hatch(e.id))).zoo
     const again = apply(hatched, habits(...HABITS))
     expect(again.changed).toBe(false)
     expect(again.zoo.eggs).toEqual([])
@@ -105,7 +116,7 @@ describe('first egg — habits', () => {
     const full = zooOf({ habits: HABITS.slice(0, 5), firstEgg: true, eggs: Array.from({ length: ZOO_MAX_EGGS }, (_, i) => egg(`e${i}`, 'turn')) })
     const blocked = apply(full, habits(HABITS[5]))
     expect(blocked.zoo.setupEgg).toBe(false)
-    const roomy = apply(blocked.zoo, [{ op: 'zoo.hatch', eggId: 'e0' }]).zoo
+    const roomy = apply(blocked.zoo, [hatch('e0')]).zoo
     const granted = apply(roomy, habits(HABITS[5]))
     expect(granted.zoo.setupEgg).toBe(true)
     expect(kinds(granted.zoo).filter((k) => k === 'setup')).toHaveLength(1)
@@ -125,7 +136,7 @@ describe('first egg — habits', () => {
     const blocked = apply(full, [{ op: 'zoo.habit', key: HABITS[4] }])
     expect(blocked.zoo.firstEgg).toBe(false)
     expect(blocked.zoo.eggs).toHaveLength(ZOO_MAX_EGGS)
-    const roomy = apply(blocked.zoo, [{ op: 'zoo.hatch', eggId: 'e0' }]).zoo
+    const roomy = apply(blocked.zoo, [hatch('e0')]).zoo
     const granted = apply(roomy, [{ op: 'zoo.habit', key: HABITS[4] }])        // already counted: the grant still lands
     expect(granted.changed).toBe(true)
     expect(granted.zoo.firstEgg).toBe(true)
@@ -133,94 +144,162 @@ describe('first egg — habits', () => {
   })
 })
 
-describe('hatching', () => {
-  it('removes the egg, adds the daemon at 0.1 with no bond, and pairs the first one', () => {
+describe('hatching: every hatch is its own individual', () => {
+  it('removes the egg, adds an individual at 0.1 with its seed and uid, and pairs the first one', () => {
     const zoo = zooOf({ eggs: [egg('a'), egg('b', 'turn')] })
-    const rng = scripted([indexOf(zoo, 'first', 'yak'), 5])
-    const r = apply(zoo, [{ op: 'zoo.hatch', eggId: 'a' }], rng)
-    expect(r.hatched).toEqual([{ eggId: 'a', daemonId: 'yak', shiny: false }])
+    // The species, shiny, the seed (1 + the roll), then three 32-bit words of uid, in that order.
+    const rng = scripted([indexOf(zoo, 'first', 'yak'), 5, 41, 0xdeadbeef, 1, 0xffffffff])
+    const r = apply(zoo, [hatch('a')], rng)
+    expect(rng.calls).toEqual([expect.any(Number), DAEMON_ROSTER.rules.shinyOneIn, ZOO_SEED_MAX, WORD, WORD, WORD])
+    const yak: ZooDaemon = { uid: 'deadbeef00000001ffffffff', id: 'yak', seed: 42, shiny: false, xp: 0, bond: 0, version: '0.1', hatched: NOW.toISOString(), egg: 'first' }
+    expect(r.hatched).toEqual([{ eggId: 'a', daemonId: 'yak', ...yak }])
     expect(r.zoo.eggs.map((e) => e.id)).toEqual(['b'])
-    expect(r.zoo.daemons).toEqual([{ id: 'yak', hatchedAt: NOW.toISOString(), egg: 'first', shiny: false, bond: 0, xp: 0, version: '0.1' }])
-    expect(r.zoo.pair).toBe('yak')
-    const second = apply(r.zoo, [{ op: 'zoo.hatch', eggId: 'b' }], scripted([indexOf(r.zoo, 'turn', 'tim'), 9]))
+    expect(r.zoo.daemons).toEqual([yak])
+    expect(r.zoo.paired).toBe(yak.uid)
+    const second = apply(r.zoo, [hatch('b')], scripted([indexOf(r.zoo, 'turn', 'tim'), 9]))
     expect(second.zoo.daemons.map((d) => d.id)).toEqual(['yak', 'tim'])
-    expect(second.zoo.daemons[1].egg).toBe('turn')
-    expect(second.zoo.pair).toBe('yak')                                         // a pair is never replaced by a hatch
+    expect(second.zoo.daemons[1]).toMatchObject({ egg: 'turn', seed: expect.any(Number), uid: expect.stringMatching(UID) })
+    expect(second.zoo.daemons[1].uid).not.toBe(yak.uid)
+    expect(second.zoo.paired).toBe(yak.uid)                                     // a pair is never replaced by a hatch
+  })
+
+  it('draws every seed from 1 to 2^32 - 1: 0 is kept for the default traits', () => {
+    const zoo = zooOf({ eggs: [egg('a')] })
+    const low = apply(zoo, [hatch('a')], scripted([0, 1, 0]))
+    const high = apply(zoo, [hatch('a')], scripted([0, 1, ZOO_SEED_MAX - 1]))
+    expect([low.zoo.daemons[0].seed, high.zoo.daemons[0].seed]).toEqual([1, 4_294_967_295])
+    expect(ZOO_SEED_MAX).toBe(2 ** 32 - 1)
   })
 
   it('drops a hatch of an egg that is not there', () => {
-    const r = apply(zooOf({ eggs: [egg('a')] }), [{ op: 'zoo.hatch', eggId: 'gone' }])
+    const r = apply(zooOf({ eggs: [egg('a')] }), [hatch('gone')])
     expect(r).toMatchObject({ changed: false, hatched: [] })
     expect(r.zoo.eggs).toHaveLength(1)
   })
 
-  it('never draws a regular you own until you own every regular', () => {
-    const two = zooOf({ daemons: REGULARS.filter((id) => id !== 'tim' && id !== 'yak').map((id) => daemon(id)), eggs: [egg('a')] })
-    expect(Object.keys(weightOf(two, 'turn'))).toEqual(['tim', 'yak'])
-    for (let seed = 1; seed <= 40; seed++) {
-      expect(['tim', 'yak']).toContain(apply(two, [{ op: 'zoo.hatch', eggId: 'a' }], seeded(seed)).hatched[0].daemonId)
-    }
+  it('hatches a species you own as one more individual: its own uid and seed, never a merge, no xp to the one you have', () => {
+    const everyone = zooOf({ daemons: ALL.map((id) => daemon(id)), eggs: [egg('a'), egg('b'), egg('c')], paired: uid('tux') })
+    expect(weightOf(everyone, 'first')).toEqual({ tim: 60, gnu: 15, lynx: 15, mutt: 15, yak: 9, gopher: 9, bug: 9, tux: 6, auk: 6 })
+    const one = apply(everyone, [hatch('a')], scripted([indexOf(everyone, 'first', 'tim'), 1]))
+    expect(one.hatched).toEqual([expect.objectContaining({ eggId: 'a', daemonId: 'tim', id: 'tim', shiny: false, xp: 0, bond: 0, version: '0.1' })])
+    expect(one.hatched[0]).not.toHaveProperty('duplicate')
+    expect(one.zoo.daemons).toHaveLength(ALL.length + 1)                        // added, not merged
+    const tims = one.zoo.daemons.filter((d) => d.id === 'tim')
+    expect(tims[0]).toEqual(daemon('tim'))                                      // the one you had: untouched
+    expect(tims[1]).toEqual(expect.objectContaining({ uid: one.hatched[0].uid, seed: one.hatched[0].seed, hatched: NOW.toISOString() }))
+    expect(one.levelUps).toEqual([])
+    expect(one.zoo.paired).toBe(uid('tux'))                                     // a hatch never takes the pair
+    // A shiny one is its own shine: yours does not change.
+    const two = apply(one.zoo, [hatch('b')], scripted([indexOf(one.zoo, 'first', 'tim'), 0]))
+    expect(two.hatched[0]).toMatchObject({ daemonId: 'tim', shiny: true })
+    expect(two.zoo.daemons.filter((d) => d.id === 'tim').map((d) => d.shiny)).toEqual([false, false, true])
+    expect(new Set(two.zoo.daemons.map((d) => d.uid)).size).toBe(ALL.length + 2)
   })
 
-  it('keeps the secret outside the set: the regulars complete without it, and only a night or easter egg holds it', () => {
+  it('stops hatching at 256 individuals: the egg waits in the nest', () => {
+    expect(ZOO_MAX_DAEMONS).toBe(256)
+    const many = Array.from({ length: ZOO_MAX_DAEMONS }, (_, i) => daemon(REGULARS[i % REGULARS.length], { uid: i.toString(16).padStart(24, '0') }))
+    const full = zooOf({ daemons: many, eggs: [egg('a')] })
+    const rng = scripted([])
+    const r = apply(full, [hatch('a')], rng)
+    expect(r.changed).toBe(false)
+    expect(r.zoo.eggs.map((e) => e.id)).toEqual(['a'])
+    expect(rng.calls).toEqual([])                                               // nothing drawn
+    // One short of full, it hatches the 256th.
+    const room = apply(zooOf({ daemons: many.slice(1), eggs: [egg('a')] }), [hatch('a')])
+    expect(room.zoo.daemons).toHaveLength(ZOO_MAX_DAEMONS)
+  })
+
+  it('uses crypto by default', () => {
+    const r = applyZooOps(zooOf({ eggs: [egg('a')] }), [hatch('a')])
+    expect(ALL).toContain(r.hatched[0].daemonId)
+    expect(r.hatched[0].uid).toMatch(UID)
+    expect(r.hatched[0].seed).toBeGreaterThanOrEqual(1)
+    expect(r.hatched[0].seed).toBeLessThanOrEqual(ZOO_SEED_MAX)
+  })
+
+  it('makes uids unlike any individual\'s in the zoo', () => {
+    // The first three words spell the uid of the one already there; the next try does not.
+    const there = daemon('tim', { uid: '000000000000000000000000' })
+    const r = apply(zooOf({ daemons: [there], eggs: [egg('a')] }), [hatch('a')], scripted([0, 1, 0, 0, 0, 0], seeded(3)))
+    expect(r.zoo.daemons).toHaveLength(2)
+    expect(r.zoo.daemons[1].uid).toMatch(UID)
+    expect(r.zoo.daemons[1].uid).not.toBe(there.uid)
+  })
+})
+
+describe('the draw', () => {
+  it('gives the first four hatches of an account only species it does not own', () => {
+    expect(ZOO_FIRST_NEW).toBe(4)
+    for (let n = 0; n < ZOO_FIRST_NEW; n++) {
+      const owned = REGULARS.slice(0, n)
+      const zoo = zooOf({ daemons: owned.map((id) => daemon(id)) })
+      for (const kind of ['first', 'turn', 'week', 'marathon', 'night']) {
+        expect(eligible(zoo, kind).filter((id) => owned.includes(id)), `${kind} with ${n} owned`).toEqual([])
+      }
+    }
+    // Two individuals of one species are two hatches: the next two are still owed new ones.
+    const twoTims = zooOf({ daemons: [daemon('tim'), daemon('tim', { uid: uid('tim2') })] })
+    expect(eligible(twoTims, 'turn')).toEqual(REGULARS.filter((id) => id !== 'tim'))
+    // From the fifth hatch a species you own may come again.
+    const four = zooOf({ daemons: REGULARS.slice(0, 4).map((id) => daemon(id)) })
+    expect(eligible(four, 'turn')).toEqual(REGULARS)
+  })
+
+  it('weighs a rarity by how many of it are left while a new species is owed, and gives an empty rarity to nobody', () => {
+    expect(weightOf(emptyZoo(), 'turn')).toEqual({ tim: 15, gnu: 15, lynx: 15, mutt: 15, yak: 9, gopher: 9, bug: 9, tux: 6, auk: 6 })
+    expect(weightOf(zooOf({ daemons: [daemon('tim')] }), 'turn')).toMatchObject({ gnu: 20, lynx: 20, mutt: 20, yak: 9 })
+    const commons = ['tim', 'gnu', 'lynx', 'mutt'].map((id) => daemon(id))
+    // Four hatches in: nothing owed, every regular at its rarity's share, owned or not.
+    expect(weightOf(zooOf({ daemons: commons }), 'turn')).toEqual({ tim: 15, gnu: 15, lynx: 15, mutt: 15, yak: 9, gopher: 9, bug: 9, tux: 6, auk: 6 })
+    // Owed a new one with no common left: the commons' 60 goes nowhere.
+    expect(weightOf(zooOf({ daemons: commons, sinceNew: ZOO_NEW_AFTER }), 'turn')).toEqual({ yak: 9, gopher: 9, bug: 9, tux: 6, auk: 6 })
+  })
+
+  it('after 8 hatches in a row with no new species, the next is a new one, while an unowned regular is left', () => {
+    expect(ZOO_NEW_AFTER).toBe(8)
+    const seven = REGULARS.filter((id) => id !== 'tim' && id !== 'yak').map((id) => daemon(id))
+    const dry = (sinceNew: number) => zooOf({ daemons: seven, eggs: [egg('a', 'turn')], sinceNew })
+    expect(eligible(dry(ZOO_NEW_AFTER - 1), 'turn')).toEqual(REGULARS)
+    expect(eligible(dry(ZOO_NEW_AFTER), 'turn')).toEqual(['tim', 'yak'])
+    expect(eligible(dry(ZOO_NEW_AFTER + 40), 'turn')).toEqual(['tim', 'yak'])
+    for (let seed = 1; seed <= 60; seed++) {
+      const r = apply(dry(ZOO_NEW_AFTER), [hatch('a')], seeded(seed))
+      expect(['tim', 'yak']).toContain(r.hatched[0].daemonId)
+      expect(r.zoo.sinceNew).toBe(0)                                            // a new species starts the count again
+    }
+    // The count: one more for each hatch of a species owned, back to 0 on a new one.
+    const again = apply(dry(3), [hatch('a')], scripted([indexOf(dry(3), 'turn', 'gnu'), 1]))
+    expect(again.zoo.sinceNew).toBe(4)
+    const fresh = apply(dry(3), [hatch('a')], scripted([indexOf(dry(3), 'turn', 'tim'), 1]))
+    expect(fresh.zoo.sinceNew).toBe(0)
+    // Every regular owned: nothing is owed, however long the run, and beastie stays a secret.
+    const all = zooOf({ daemons: REGULARS.map((id) => daemon(id)), sinceNew: 50 })
+    expect(eligible(all, 'turn')).toEqual(REGULARS)
+    expect(eligible(all, 'night')).toEqual([...REGULARS, 'beastie'])
+  })
+
+  it('keeps the secret outside the set: only a night or easter egg holds it, and never twice', () => {
     const eggsWithSecret = Object.entries(DAEMON_ROSTER.rules.eggs).filter(([, e]) => e.weights.secret > 0).map(([k]) => k)
     expect(eggsWithSecret.sort()).toEqual(['easter', 'night'])
-    // Every regular owned, beastie not: the set is complete, so ordinary eggs give duplicates of regulars...
+    // Every regular owned, beastie not: ordinary eggs give regulars again, never beastie...
     const regulars = zooOf({ daemons: REGULARS.map((id) => daemon(id)), eggs: [egg('a')] })
     for (const kind of ['first', 'setup', 'turn', 'week', 'marathon', 'history']) {
       expect(Object.keys(weightOf(regulars, kind)), kind).toEqual(REGULARS)
     }
     for (let seed = 1; seed <= 40; seed++) {
-      const r = apply(regulars, [{ op: 'zoo.hatch', eggId: 'a' }], seeded(seed))
-      expect(r.hatched[0]).toMatchObject({ duplicate: true })
-      expect(r.hatched[0].daemonId).not.toBe('beastie')
+      const r = apply(regulars, [hatch('a')], seeded(seed))
+      expect(REGULARS).toContain(r.hatched[0].daemonId)
+      expect(r.zoo.daemons).toHaveLength(REGULARS.length + 1)
     }
-    // ...while a night egg can still hold beastie, beside the duplicates.
+    // ...while a night egg can still hold beastie, beside the regulars.
     expect(weightOf(regulars, 'night')).toMatchObject({ beastie: 8, tim: 12.5, bug: 40 })
-    // Not owning beastie never holds back duplicates, and owning it never counts toward the set.
+    // Not owning beastie never holds back the rest, and owning it never counts toward the set.
     const withBeastie = zooOf({ daemons: ['beastie', 'tim'].map((id) => daemon(id)) })
     expect(Object.keys(weightOf(withBeastie, 'turn'))).toEqual(REGULARS.filter((id) => id !== 'tim'))
-  })
-
-  it('merges a duplicate into the one you have: xp and levels, shiny, and a count', () => {
-    const everyone = zooOf({ daemons: ALL.map((id) => daemon(id)), eggs: [egg('a'), egg('b'), egg('c')], pair: 'tux' })
-    expect(weightOf(everyone, 'first')).toEqual({ tim: 60, gnu: 15, lynx: 15, mutt: 15, yak: 9, gopher: 9, bug: 9, tux: 6, auk: 6 })
-    const xp = DAEMON_ROSTER.rules.duplicateXp
-    expect(xp).toBe(150)
-    const one = apply(everyone, [{ op: 'zoo.hatch', eggId: 'a' }], scripted([indexOf(everyone, 'first', 'tim'), 1]))
-    expect(one.hatched).toEqual([{ eggId: 'a', daemonId: 'tim', shiny: false, duplicate: true, xp }])
-    expect(one.zoo.daemons).toHaveLength(ALL.length)                         // merged, not added
-    expect(one.zoo.daemons.find((d) => d.id === 'tim')).toEqual({ ...daemon('tim'), xp: 150, bond: 2, version: '1.0', dupes: 1 })
-    expect(one.levelUps).toEqual([{ id: 'tim', level: 2, version: '1.0' }])
-    expect(one.zoo.eggs.map((e) => e.id)).toEqual(['b', 'c'])
-    // A shiny duplicate makes the one you have shiny, and keeps counting.
-    const two = apply(one.zoo, [{ op: 'zoo.hatch', eggId: 'b' }], scripted([indexOf(one.zoo, 'first', 'tim'), 0]))
-    expect(two.hatched).toEqual([{ eggId: 'b', daemonId: 'tim', shiny: true, duplicate: true, xp }])
-    expect(two.zoo.daemons.find((d) => d.id === 'tim')).toMatchObject({ shiny: true, dupes: 2, xp: 300, bond: 3, version: '1.0' })
-    expect(two.levelUps).toEqual([{ id: 'tim', level: 3, version: '1.0' }])
-    // A plain duplicate never takes a shine away, and a duplicate at 2.0 gives xp but no level.
-    const top = zooOf({ daemons: ALL.map((id) => daemon(id, id === 'yak' ? { xp: 900, bond: 4, version: '2.0', shiny: true } : {})), eggs: [egg('x')] })
-    const three = apply(top, [{ op: 'zoo.hatch', eggId: 'x' }], scripted([indexOf(top, 'first', 'yak'), 1]))
-    expect(three.zoo.daemons.find((d) => d.id === 'yak')).toMatchObject({ shiny: true, dupes: 1, xp: 1050, bond: 4 })
-    expect(three.levelUps).toEqual([])
-    expect(three.zoo.pair).toBeNull()                                        // a duplicate never pairs
-    expect(two.zoo.pair).toBe('tux')
-  })
-
-  it('merges into the one you have even at the 64-daemon limit', () => {
-    const many = [...ALL, ...Array.from({ length: ZOO_MAX_DAEMONS - ALL.length }, (_, i) => `old-${i}`)]
-    const full = zooOf({ daemons: many.map((id) => daemon(id)), eggs: [egg('a')] })
-    const r = apply(full, [{ op: 'zoo.hatch', eggId: 'a' }], scripted([indexOf(full, 'first', 'tim'), 1]))
-    expect(r.hatched[0]).toMatchObject({ daemonId: 'tim', duplicate: true })
-    expect(r.zoo.daemons).toHaveLength(ZOO_MAX_DAEMONS)
-  })
-
-  it('weighs a rarity by how many of it are left, and gives an empty rarity to nobody', () => {
-    expect(weightOf(emptyZoo(), 'turn')).toEqual({ tim: 15, gnu: 15, lynx: 15, mutt: 15, yak: 9, gopher: 9, bug: 9, tux: 6, auk: 6 })
-    expect(weightOf(zooOf({ daemons: [daemon('tim')] }), 'turn')).toMatchObject({ gnu: 20, lynx: 20, mutt: 20, yak: 9 })
-    const noCommons = zooOf({ daemons: ['tim', 'gnu', 'lynx', 'mutt'].map((id) => daemon(id)) })
-    const w = weightOf(noCommons, 'turn')
-    expect(w).toEqual({ yak: 9, gopher: 9, bug: 9, tux: 6, auk: 6 })         // 39 in all: the commons' 60 went nowhere
+    // Owned, a secret never comes again: a night egg gives the regulars.
+    const owned = zooOf({ daemons: INIT.map((id) => daemon(id)) })
+    expect(eligible(owned, 'night')).toEqual(REGULARS)
   })
 
   it('makes tim the likely first hatch', () => {
@@ -231,7 +310,7 @@ describe('hatching', () => {
     expect(w.tim / total).toBeCloseTo(60 / 144, 5)                           // about 42%, 4 times any other common
     let tims = 0
     for (let seed = 1; seed <= 400; seed++) {
-      if (apply(zooOf({ eggs: [egg('a')] }), [{ op: 'zoo.hatch', eggId: 'a' }], seeded(seed)).hatched[0].daemonId === 'tim') tims++
+      if (apply(zooOf({ eggs: [egg('a')] }), [hatch('a')], seeded(seed)).hatched[0].daemonId === 'tim') tims++
     }
     expect(tims).toBeGreaterThan(120)
     expect(tims).toBeLessThan(220)
@@ -243,11 +322,11 @@ describe('hatching', () => {
     const zoo = zooOf({ eggs: [egg('f'), egg('n1', 'night'), egg('n2', 'night')], pity: 3 })
     expect(weightOf(zoo, 'night').beastie).toBe(8 + 3 * DAEMON_ROSTER.rules.pityPerMiss)
     expect(weightOf(zoo, 'first')).not.toHaveProperty('beastie')             // the pity never opens a first egg to it
-    const first = apply(zoo, [{ op: 'zoo.hatch', eggId: 'f' }], scripted([indexOf(zoo, 'first', 'tim'), 1]))
+    const first = apply(zoo, [hatch('f')], scripted([indexOf(zoo, 'first', 'tim'), 1]))
     expect(first.zoo.pity).toBe(3)
-    const miss = apply(first.zoo, [{ op: 'zoo.hatch', eggId: 'n1' }], scripted([indexOf(first.zoo, 'night', 'bug'), 1]))
+    const miss = apply(first.zoo, [hatch('n1')], scripted([indexOf(first.zoo, 'night', 'bug'), 1]))
     expect(miss.zoo.pity).toBe(4)
-    const hit = apply(miss.zoo, [{ op: 'zoo.hatch', eggId: 'n2' }], scripted([indexOf(miss.zoo, 'night', 'beastie'), 1]))
+    const hit = apply(miss.zoo, [hatch('n2')], scripted([indexOf(miss.zoo, 'night', 'beastie'), 1]))
     expect(hit.hatched[0].daemonId).toBe('beastie')
     expect(hit.zoo.pity).toBe(0)
   })
@@ -257,23 +336,29 @@ describe('hatching', () => {
     let zoo = zooOf({ eggs: Array.from({ length: 8 }, (_, i) => egg(`n${i}`, 'night')) })
     // Ordinary eggs in between never move the count.
     zoo = { ...zoo, eggs: [...zoo.eggs, egg('t1', 'turn'), egg('t2', 'turn')] }
-    zoo = apply(zoo, [{ op: 'zoo.hatch', eggId: 't1' }, { op: 'zoo.hatch', eggId: 't2' }], scripted([0, 1, 0, 1])).zoo
+    zoo = apply(zoo, [hatch('t1'), hatch('t2')], scripted([0, 1, 0, 0, 0, 0, 0, 1])).zoo
     expect(zoo.pity).toBe(0)
     for (let i = 0; i < 7; i++) {
-      // A roll of 0 lands on the first regular with any weight: seven misses in a row.
-      const r = apply(zoo, [{ op: 'zoo.hatch', eggId: `n${i}` }], scripted([0, 1]))
+      // A roll of 0 lands on the first species with any weight, never the secret: seven misses in a row.
+      const r = apply(zoo, [hatch(`n${i}`)], scripted([0, 1]))
       expect(r.hatched[0].daemonId).not.toBe('beastie')
       zoo = r.zoo
     }
     expect(zoo.pity).toBe(7)
     expect(drawWeights(zoo, 'night', NOW).map((w) => w.id)).toEqual(['beastie'])
     expect(drawWeights(zoo, 'turn', NOW).map((w) => w.id)).not.toContain('beastie')
-    const eighth = apply(zoo, [{ op: 'zoo.hatch', eggId: 'n7' }], scripted([0, 1]))
+    const eighth = apply(zoo, [hatch('n7')], scripted([0, 1]))
     expect(eighth.hatched[0].daemonId).toBe('beastie')
     expect(eighth.zoo.pity).toBe(0)
     // Owning beastie already, the count guarantees nothing: a night egg draws as usual.
-    const owned = zooOf({ daemons: [daemon('beastie')], pity: 7 })
+    const owned = zooOf({ daemons: REGULARS.slice(0, 4).map((id) => daemon(id)).concat(daemon('beastie')), pity: 7 })
     expect(Object.keys(weightOf(owned, 'night'))).toEqual(REGULARS)
+  })
+
+  it('puts the pity guarantee before a new species owed', () => {
+    const zoo = zooOf({ daemons: REGULARS.slice(0, 7).map((id) => daemon(id)), pity: 7, sinceNew: ZOO_NEW_AFTER })
+    expect(eligible(zoo, 'night')).toEqual(['beastie'])
+    expect(eligible(zoo, 'turn')).toEqual(REGULARS.slice(7))
   })
 
   it('boosts a night egg toward bug', () => {
@@ -284,68 +369,72 @@ describe('hatching', () => {
     expect(w.tim).toBe(50 / 4)
     expect(w.beastie).toBe(8)
     const zoo = zooOf({ eggs: [egg('n', 'night')] })
-    const r = apply(zoo, [{ op: 'zoo.hatch', eggId: 'n' }], scripted([indexOf(zoo, 'night', 'bug') + Math.floor(w.bug * UNIT) - 1, 1]))
+    const r = apply(zoo, [hatch('n')], scripted([indexOf(zoo, 'night', 'bug') + Math.floor(w.bug * UNIT) - 1, 1]))
     expect(r.hatched[0].daemonId).toBe('bug')
   })
 
-  it('makes a daemon shiny on a 1-in-shinyOneIn roll, independent of who hatched', () => {
+  it('makes an individual shiny on a 1-in-shinyOneIn roll, independent of who hatched', () => {
     const zoo = zooOf({ eggs: [egg('a')] })
     const lucky = scripted([indexOf(zoo, 'first', 'tim'), 0])
-    const r = apply(zoo, [{ op: 'zoo.hatch', eggId: 'a' }], lucky)
+    const r = apply(zoo, [hatch('a')], lucky)
     expect(lucky.calls[1]).toBe(DAEMON_ROSTER.rules.shinyOneIn)
-    expect(r.hatched[0]).toEqual({ eggId: 'a', daemonId: 'tim', shiny: true })
+    expect(r.hatched[0]).toMatchObject({ eggId: 'a', daemonId: 'tim', shiny: true })
     expect(r.zoo.daemons[0].shiny).toBe(true)
-    const plain = apply(zoo, [{ op: 'zoo.hatch', eggId: 'a' }], scripted([indexOf(zoo, 'first', 'tim'), DAEMON_ROSTER.rules.shinyOneIn - 1]))
+    const plain = apply(zoo, [hatch('a')], scripted([indexOf(zoo, 'first', 'tim'), DAEMON_ROSTER.rules.shinyOneIn - 1]))
     expect(plain.hatched[0].shiny).toBe(false)
   })
 
-  it('draws an easter egg that has nothing new to give as a duplicate rather than as nobody', () => {
-    const zoo = zooOf({ daemons: ['tux', 'auk', 'beastie'].map((id) => daemon(id)), eggs: [egg('x', 'easter')] })
+  it('draws an easter egg that has nothing new to give from what it can give, and owes the new one to the next hatch', () => {
+    // Legendaries and the secret owned, three hatches in: a new species is owed, and an easter egg (only
+    // legendaries and secrets) has none to give. It gives a legendary again rather than nobody.
+    const zoo = zooOf({ daemons: ['tux', 'auk', 'beastie'].map((id) => daemon(id)), eggs: [egg('x', 'easter'), egg('t', 'turn')] })
     expect(Object.fromEntries(Object.entries(weightOf(emptyZoo(), 'easter')).filter(([, w]) => w > 0))).toEqual({ tux: 45, auk: 45, beastie: 10 })
-    const w = drawWeights(zoo, 'easter', NOW)
-    expect(w.filter((x) => x.weight > 0).map((x) => x.id)).toEqual(['tux', 'auk', 'beastie'])
-    const r = apply(zoo, [{ op: 'zoo.hatch', eggId: 'x' }])
-    expect(['tux', 'auk', 'beastie']).toContain(r.hatched[0].daemonId)
+    expect(eligible(zoo, 'easter')).toEqual(['tux', 'auk'])
+    const r = apply(zoo, [hatch('x')])
+    expect(['tux', 'auk']).toContain(r.hatched[0].daemonId)
+    expect(r.zoo.sinceNew).toBe(1)
+    // Four hatches now, so the first-four rule is spent; the count carries on toward the next guarantee.
+    expect(eligible(r.zoo, 'turn')).toEqual(REGULARS)
   })
 
   it('leaves an egg of a kind the roster cannot draw where it is', () => {
     const zoo = zooOf({ eggs: [egg('q', 'comet'), egg('c', 'constructor')] })
     expect(drawWeights(zoo, 'constructor', NOW)).toEqual([])
-    expect(apply(zoo, [{ op: 'zoo.hatch', eggId: 'q' }, { op: 'zoo.hatch', eggId: 'c' }]).changed).toBe(false)
-  })
-
-  it('stops hatching at 64 daemons', () => {
-    const full = zooOf({ daemons: Array.from({ length: ZOO_MAX_DAEMONS }, () => daemon('tim')), eggs: [egg('a')] })
-    expect(apply(full, [{ op: 'zoo.hatch', eggId: 'a' }]).changed).toBe(false)
-  })
-
-  it('uses crypto by default', () => {
-    const r = applyZooOps(zooOf({ eggs: [egg('a')] }), [{ op: 'zoo.hatch', eggId: 'a' }])
-    expect(ALL).toContain(r.hatched[0].daemonId)
+    expect(apply(zoo, [hatch('q'), hatch('c')]).changed).toBe(false)
   })
 })
 
-describe('pair, nickname, easter', () => {
-  it('pairs only a daemon you own', () => {
-    const zoo = zooOf({ daemons: [daemon('tim'), daemon('yak')], pair: 'tim' })
-    expect(apply(zoo, [{ op: 'zoo.pair', id: 'yak' }]).zoo.pair).toBe('yak')
-    expect(apply(zoo, [{ op: 'zoo.pair', id: 'tim' }]).changed).toBe(false)
-    expect(apply(zoo, [{ op: 'zoo.pair', id: 'beastie' }]).changed).toBe(false)
+describe('pair, name, easter', () => {
+  const tim1 = daemon('tim')
+  const tim2 = daemon('tim', { uid: uid('tim2') })
+  const yak = daemon('yak')
+
+  it('pairs only an individual you own, by its uid', () => {
+    const zoo = zooOf({ daemons: [tim1, yak, tim2], paired: tim1.uid })
+    expect(apply(zoo, [{ op: 'zoo.pair', uid: tim2.uid }]).zoo.paired).toBe(tim2.uid)   // the second tim, not the first
+    expect(apply(zoo, [{ op: 'zoo.pair', uid: yak.uid }]).zoo.paired).toBe(yak.uid)
+    expect(apply(zoo, [{ op: 'zoo.pair', uid: tim1.uid }]).changed).toBe(false)
+    expect(apply(zoo, [{ op: 'zoo.pair', uid: uid('nobody') }]).changed).toBe(false)
+    // A uid is 24 lowercase hex; a species id or anything else refuses the request.
+    for (const bad of [{ uid: 'tim' }, { uid: tim1.uid.toUpperCase() }, { uid: tim1.uid.slice(1) }, { id: 'tim' }, { uid: tim1.uid, id: 'tim' }]) {
+      expect(zooOpSchema.safeParse({ op: 'zoo.pair', ...bad }).success, JSON.stringify(bad)).toBe(false)
+    }
   })
 
-  it('sets a 1-24 character printable nickname, clears it with null, and refuses anything else', () => {
-    const zoo = zooOf({ daemons: [daemon('tim'), daemon('tim')] })
-    const named = apply(zoo, [{ op: 'zoo.nickname', id: 'tim', nickname: 'timothy' }])
-    expect(named.zoo.daemons.map((d) => d.nickname)).toEqual(['timothy', undefined])   // the first one hatched
-    expect(apply(named.zoo, [{ op: 'zoo.nickname', id: 'tim', nickname: 'timothy' }]).changed).toBe(false)
-    const cleared = apply(named.zoo, [{ op: 'zoo.nickname', id: 'tim', nickname: null }])
-    expect(cleared.zoo.daemons[0]).not.toHaveProperty('nickname')
-    expect(apply(cleared.zoo, [{ op: 'zoo.nickname', id: 'tim', nickname: null }]).changed).toBe(false)
-    expect(apply(zoo, [{ op: 'zoo.nickname', id: 'yak', nickname: 'nope' }]).changed).toBe(false)
-    const parse = (nickname: unknown) => zooOpSchema.safeParse({ op: 'zoo.nickname', id: 'tim', nickname })
+  it('names the individual its uid names, 1-24 printable characters trimmed; null clears; anything else refuses', () => {
+    const zoo = zooOf({ daemons: [tim1, tim2] })
+    const named = apply(zoo, [{ op: 'zoo.nickname', uid: tim2.uid, name: 'pip' }])
+    expect(named.zoo.daemons.map((d) => d.name)).toEqual([undefined, 'pip'])
+    expect(apply(named.zoo, [{ op: 'zoo.nickname', uid: tim2.uid, name: 'pip' }]).changed).toBe(false)
+    const cleared = apply(named.zoo, [{ op: 'zoo.nickname', uid: tim2.uid, name: null }])
+    expect(cleared.zoo.daemons[1]).not.toHaveProperty('name')
+    expect(apply(cleared.zoo, [{ op: 'zoo.nickname', uid: tim2.uid, name: null }]).changed).toBe(false)
+    expect(apply(zoo, [{ op: 'zoo.nickname', uid: uid('nobody'), name: 'nope' }]).changed).toBe(false)
+    const parse = (name: unknown) => zooOpSchema.safeParse({ op: 'zoo.nickname', uid: tim1.uid, name })
     expect(parse('x'.repeat(24)).success).toBe(true)
-    expect(parse('  tim  ').data).toMatchObject({ nickname: 'tim' })
-    for (const bad of ['', '   ', 'x'.repeat(25), 'tïm', 'tab\there', 'emoji 🐱']) expect(parse(bad).success, bad).toBe(false)
+    expect(parse('  pip  ').data).toMatchObject({ name: 'pip' })
+    for (const bad of ['', '   ', 'x'.repeat(25), 'tïm', 'tab\there', 'emoji 🐱', 7]) expect(parse(bad).success, String(bad)).toBe(false)
+    expect(zooOpSchema.safeParse({ op: 'zoo.nickname', id: 'tim', nickname: 'pip' }).success).toBe(false)   // the old shape
   })
 
   it('grants one easter egg per word, once, and only for a word it knows', () => {
@@ -385,7 +474,7 @@ describe('easter words are not in the clear', () => {
 describe('autonomy — the pair brain\'s dial', () => {
   it('defaults to watch, and a stored zoo without one reads as watch', () => {
     expect(emptyZoo().autonomy).toBe('watch')
-    expect(parseZoo({ daemons: [daemon('tim')], pair: 'tim' }).autonomy).toBe('watch')
+    expect(parseZoo({ daemons: [daemon('tim')], paired: uid('tim') }).autonomy).toBe('watch')
     expect(parseZoo({ autonomy: 'act-on-key' }).autonomy).toBe('act-on-key')
     expect(parseZoo({ autonomy: 'yolo' }).autonomy).toBe('watch')
   })
@@ -436,44 +525,70 @@ describe('consent — the first-day question', () => {
 })
 
 describe('seed — a guest zoo on first sign-in', () => {
+  /** What a guest individual becomes: the account's own uid, the default traits, fresh at 0.1, local. */
+  const local = (d: ZooDaemon, uidNow: string): ZooDaemon =>
+    ({ uid: uidNow, id: d.id, seed: 0, ...(d.name ? { name: d.name } : {}), shiny: false, xp: 0, bond: 0, version: '0.1', hatched: d.hatched, egg: d.egg, origin: 'local' })
+
+  const gnu = daemon('gnu', { name: 'wanda', shiny: true, seed: 77, xp: 400, bond: 3, version: '1.0', serial: 9 })
+  const mutt = daemon('mutt', { egg: 'night', seed: 12 })
   const guest = {
-    daemons: [daemon('gnu', { nickname: 'wanda', shiny: true }), daemon('nope'), { id: 'yak' }, daemon('mutt', { egg: 'night' })],
+    daemons: [gnu, daemon('nope'), { id: 'yak' }, mutt],
     eggs: [egg('local-1'), egg('local-2', 'comet'), 'junk'],
-    pair: 'nope',
+    paired: mutt.uid,
     habits: ['turn', 'split', 'teleport'],
     firstEgg: true,
     pity: 2,
+    sinceNew: 6,
     easter: ['xyzzy', 'plugh'],
   }
 
-  it('takes what the roster knows, renames the eggs, marks them local, and pairs a daemon it kept', () => {
+  it('takes what the roster knows, makes each individual the account\'s own, marks it local, and keeps the guest\'s pair', () => {
     const r = apply(emptyZoo(), [{ op: 'zoo.seed', zoo: guest }])
     expect(r.changed).toBe(true)
     expect(r.zoo.daemons.map((d) => d.id)).toEqual(['gnu', 'mutt'])
-    // Self-reported: no shiny comes along; the nickname does.
-    expect(r.zoo.daemons[0]).toEqual({ ...daemon('gnu'), nickname: 'wanda', origin: 'local' })
+    // Self-reported: no rolled look, shine, xp, level or serial comes along; the name does. The uid is new.
+    const [g, m] = r.zoo.daemons
+    expect(g).toEqual(local(gnu, g.uid))
+    expect(m).toEqual(local(mutt, m.uid))
+    for (const d of r.zoo.daemons) expect(d.uid).toMatch(UID)
+    expect(g.uid).not.toBe(gnu.uid)
     expect(r.zoo.eggs).toEqual([{ id: expect.stringMatching(/^[a-z2-9]{10}$/), kind: 'first', grantedAt: '2026-09-02T00:00:00.000Z', origin: 'local' }])
-    // No pity, no easter words: those are the server's to count.
-    expect(r.zoo).toMatchObject({ pair: 'gnu', habits: ['turn', 'split'], firstEgg: true, setupEgg: false, pity: 0, easter: [] })
+    // No pity, no run toward a new species, no easter words: those are the server's to count.
+    expect(r.zoo).toMatchObject({ paired: m.uid, habits: ['turn', 'split'], firstEgg: true, setupEgg: false, pity: 0, sinceNew: 0, easter: [] })
   })
 
-  it('marks a guest\'s daemons local, with no serial (only the server mints)', () => {
-    const r = apply(emptyZoo(), [{ op: 'zoo.seed', zoo: { daemons: [daemon('tim', { serial: 7 } as Partial<ZooDaemon>), daemon('yak')], setupEgg: true } }])
-    expect(r.zoo.daemons).toEqual([{ ...daemon('tim'), origin: 'local' }, { ...daemon('yak'), origin: 'local' }])
+  it('reads a guest zoo from before individuals too: one individual per record, the old pair followed', () => {
+    const r = apply(emptyZoo(), [{ op: 'zoo.seed', zoo: {
+      daemons: [old('tim', { nickname: 'pip', dupes: 2, shiny: true }), old('yak'), old('tim', { hatchedAt: '2026-09-03T00:00:00.000Z' })],
+      pair: 'yak',
+    } }])
+    expect(r.zoo.daemons.map((d) => [d.id, d.name, d.seed, d.shiny, d.origin])).toEqual([
+      ['tim', 'pip', 0, false, 'local'], ['yak', undefined, 0, false, 'local'], ['tim', undefined, 0, false, 'local'],
+    ])
+    expect(r.zoo.daemons[2].hatched).toBe('2026-09-03T00:00:00.000Z')
+    expect(r.zoo.paired).toBe(r.zoo.daemons[1].uid)
+  })
+
+  it('marks a guest\'s individuals local, with no serial (only the server mints)', () => {
+    const r = apply(emptyZoo(), [{ op: 'zoo.seed', zoo: { daemons: [daemon('tim', { serial: 7 }), daemon('yak')], setupEgg: true } }])
+    expect(r.zoo.daemons).toEqual([local(daemon('tim'), r.zoo.daemons[0].uid), local(daemon('yak'), r.zoo.daemons[1].uid)])
+    expect(r.zoo.daemons[0]).not.toHaveProperty('serial')
+    expect(r.zoo.paired).toBe(r.zoo.daemons[0].uid)                             // no pair said: the first
     expect(r.zoo.setupEgg).toBe(true)
   })
 
   it('brings only what a client could not have made valuable: no secret, no egg that can hold one, no xp, no level', () => {
+    const beastie = daemon('beastie', { egg: 'easter' })
     const r = apply(emptyZoo(), [{ op: 'zoo.seed', zoo: {
-      daemons: [daemon('beastie', { egg: 'easter' }), daemon('tux', { xp: 900, bond: 4, version: '2.0', shiny: true, dupes: 3 })],
+      daemons: [beastie, daemon('tux', { xp: 900, bond: 4, version: '2.0', shiny: true, seed: 5 })],
       eggs: [egg('n', 'night'), egg('e', 'easter'), egg('w', 'week'), egg('t', 'turn'), egg('f', 'first')],
-      pity: 7, easter: ['xyzzy'], habits: ['turn'], pair: 'beastie',
+      pity: 7, easter: ['xyzzy'], habits: ['turn'], paired: beastie.uid,
     } }])
-    expect(r.zoo.daemons).toEqual([{ ...daemon('tux'), origin: 'local' }])
+    expect(r.zoo.daemons).toEqual([local(daemon('tux'), r.zoo.daemons[0].uid)])
     expect(r.zoo.eggs.map((e) => [e.kind, e.origin])).toEqual([['turn', 'local'], ['first', 'local']])
-    expect(r.zoo).toMatchObject({ pair: 'tux', pity: 0, easter: [] })
+    expect(r.zoo).toMatchObject({ paired: r.zoo.daemons[0].uid, pity: 0, easter: [] })
     // A secret alone is nothing to seed.
-    expect(apply(emptyZoo(), [{ op: 'zoo.seed', zoo: { daemons: [daemon('beastie')], eggs: [egg('n', 'night')] } }]).changed).toBe(false)
+    expect(apply(emptyZoo(), [{ op: 'zoo.seed', zoo: { daemons: [beastie], eggs: [egg('n', 'night')] } }]).changed).toBe(false)
   })
 
   it('applies only while the account zoo is empty', () => {
@@ -487,13 +602,14 @@ describe('seed — a guest zoo on first sign-in', () => {
     expect(apply(emptyZoo(), [{ op: 'zoo.seed', zoo: {} }]).changed).toBe(false)
   })
 
-  it('never seeds past the limits, and folds a guest\'s duplicates into one', () => {
+  it('never seeds past the limits: every guest individual one of the account\'s, up to 256', () => {
     const big = {
-      daemons: [...Array.from({ length: ZOO_MAX_DAEMONS + 6 }, () => daemon('tim')), daemon('tim', { shiny: true })],
+      daemons: Array.from({ length: ZOO_MAX_DAEMONS + 6 }, (_, i) => daemon('tim', { uid: i.toString(16).padStart(24, '0') })),
       eggs: Array.from({ length: ZOO_MAX_EGGS + 6 }, (_, i) => egg(`g${i}`)),
     }
     const r = apply(emptyZoo(), [{ op: 'zoo.seed', zoo: big }])
-    expect(r.zoo.daemons).toEqual([{ ...daemon('tim'), origin: 'local' }])
+    expect(r.zoo.daemons).toHaveLength(ZOO_MAX_DAEMONS)
+    expect(new Set(r.zoo.daemons.map((d) => d.uid)).size).toBe(ZOO_MAX_DAEMONS)
     expect(r.zoo.eggs).toHaveLength(ZOO_MAX_EGGS)
     expect(new Set(r.zoo.eggs.map((e) => e.id)).size).toBe(ZOO_MAX_EGGS)
   })
@@ -501,14 +617,15 @@ describe('seed — a guest zoo on first sign-in', () => {
 
 describe('the document', () => {
   it('replays a whole batch as a no-op', () => {
-    const start = zooOf({ daemons: [daemon('tim')], eggs: [egg('a')], habits: HABITS.slice(0, 3), pair: 'tim' })
+    const tim = daemon('tim')
+    const start = zooOf({ daemons: [tim], eggs: [egg('a')], habits: HABITS.slice(0, 3), paired: tim.uid })
     const ops: ZooOp[] = [
       { op: 'zoo.habit', key: HABITS[3] },
       { op: 'zoo.habit', key: HABITS[4] },
-      { op: 'zoo.hatch', eggId: 'a' },
+      hatch('a'),
       { op: 'zoo.easter', word: 'xyzzy' },
-      { op: 'zoo.nickname', id: 'tim', nickname: 'tim the enchanter' },
-      { op: 'zoo.pair', id: 'tim' },
+      { op: 'zoo.nickname', uid: tim.uid, name: 'tim the enchanter' },
+      { op: 'zoo.pair', uid: tim.uid },
       { op: 'zoo.seed', zoo: { daemons: [daemon('beastie')] } },
     ]
     const once = apply(start, ops)
@@ -519,9 +636,10 @@ describe('the document', () => {
   })
 
   it('never changes the zoo it was handed', () => {
-    const start = zooOf({ daemons: [daemon('tim')], eggs: [egg('a')], pair: 'tim' })
+    const tim = daemon('tim')
+    const start = zooOf({ daemons: [tim], eggs: [egg('a')], paired: tim.uid })
     const copy = structuredClone(start)
-    apply(start, [{ op: 'zoo.hatch', eggId: 'a' }, { op: 'zoo.nickname', id: 'tim', nickname: 'x' }, { op: 'zoo.habit', key: 'turn' }])
+    apply(start, [hatch('a'), { op: 'zoo.nickname', uid: tim.uid, name: 'x' }, { op: 'zoo.habit', key: 'turn' }])
     expect(start).toEqual(copy)
   })
 
@@ -529,40 +647,39 @@ describe('the document', () => {
     expect(parseZoo(null)).toEqual(emptyZoo())
     expect(parseZoo('junk')).toEqual(emptyZoo())
     expect(parseZoo([])).toEqual(emptyZoo())
+    const yak = { ...daemon('yak'), bond: -1 }
     const stored = parseZoo({
-      daemons: [daemon('tim'), daemon('retired'), { ...daemon('yak'), bond: -1 }, { ...daemon('gopher'), version: '9.9' }, { ...daemon('gnu'), extra: 1 }, daemon('Bad Id'), 'junk'],
+      daemons: [
+        daemon('tim'), daemon('retired'), yak, { ...daemon('gopher'), version: '9.9' }, { ...daemon('gnu'), extra: 1 }, daemon('Bad Id'), 'junk',
+        daemon('mutt', { uid: uid('tim') }),                                   // a uid already read
+        { ...daemon('lynx'), uid: 'ABCDEF000000000000000000' }, { ...daemon('lynx'), seed: -1 }, { ...daemon('lynx'), seed: 2 ** 32 },
+        { ...daemon('lynx'), seed: 1.5 }, { ...daemon('lynx'), hatched: 'yesterday' }, { ...daemon('lynx'), name: '' },
+        { ...daemon('lynx'), xp: undefined },
+      ],
       eggs: [egg('a'), egg('a'), { id: 'b' }, egg('c', 'turn'), egg('bad id')],
-      pair: 'yak',
+      paired: yak.uid,
       habits: ['turn', 'turn', 7, 'split'],
       firstEgg: 'yes',
       pity: -3,
+      sinceNew: 'many',
       easter: ['xyzzy', null],
     })
     // A well-formed id the roster lacks survives a read: a rolled-back roster must not eat a daemon.
     expect(stored.daemons.map((d) => d.id)).toEqual(['tim', 'retired'])
     expect(stored.eggs.map((e) => e.id)).toEqual(['a', 'c'])
-    expect(stored).toMatchObject({ pair: null, habits: ['turn', 'split'], firstEgg: false, setupEgg: false, pity: 0, easter: [XYZZY] })
-    expect(parseZoo({ pity: 1e12 }).pity).toBe(1_000_000)
-    expect(parseZoo({ daemons: Array.from({ length: 80 }, (_, i) => daemon(`d${i}`)) }).daemons).toHaveLength(ZOO_MAX_DAEMONS)
+    expect(stored).toMatchObject({ paired: null, habits: ['turn', 'split'], firstEgg: false, setupEgg: false, pity: 0, sinceNew: 0, easter: [XYZZY] })
+    expect(parseZoo({ pity: 1e12, sinceNew: 1e12 })).toMatchObject({ pity: 1_000_000, sinceNew: 1_000_000 })
+    const many = Array.from({ length: 300 }, (_, i) => daemon('tim', { uid: i.toString(16).padStart(24, '0') }))
+    expect(parseZoo({ daemons: many }).daemons).toHaveLength(ZOO_MAX_DAEMONS)
   })
 
-  it('reads a zoo stored with two records of one daemon as one, the first, counting the other', () => {
+  it('reads names, serials, seeds and origins, and trims a name', () => {
     const zoo = parseZoo({
-      daemons: [daemon('tim', { xp: 60, nickname: 'pip' }), daemon('yak'), daemon('tim', { shiny: true, xp: 400 }), daemon('tim', { dupes: 2 })],
-      pair: 'tim',
+      daemons: [daemon('tim', { serial: 42, seed: 13, name: '  pip ' }), daemon('gnu', { origin: 'local' }), { ...daemon('yak'), serial: 0 }, { ...daemon('mutt'), origin: 'mars' }],
+      paired: uid('gnu'),
     })
-    expect(zoo.daemons).toEqual([{ ...daemon('tim', { xp: 60, nickname: 'pip' }), bond: 1, shiny: true, dupes: 4 }, daemon('yak')])
-    expect(zoo.pair).toBe('tim')
-  })
-
-  it('reads serials, origins and duplicate counts, and drops a malformed one', () => {
-    const zoo = parseZoo({
-      daemons: [
-        daemon('tim', { serial: 42, dupes: 3 }), daemon('gnu', { origin: 'local' }),
-        { ...daemon('yak'), serial: 0 }, { ...daemon('gopher'), serial: 1.5 }, { ...daemon('mutt'), origin: 'mars' }, { ...daemon('lynx'), dupes: 0 },
-      ],
-    })
-    expect(zoo.daemons).toEqual([daemon('tim', { serial: 42, dupes: 3 }), daemon('gnu', { origin: 'local' })])
+    expect(zoo.daemons).toEqual([daemon('tim', { serial: 42, seed: 13, name: 'pip' }), daemon('gnu', { origin: 'local' })])
+    expect(zoo.paired).toBe(uid('gnu'))
   })
 
   it('takes between 1 and 64 ops, each one of the eight', () => {
@@ -570,6 +687,8 @@ describe('the document', () => {
     expect(zooOpsBodySchema.safeParse({ ops: Array.from({ length: 65 }, () => ({ op: 'zoo.habit', key: 'turn' })) }).success).toBe(false)
     expect(zooOpsBodySchema.safeParse({ ops: [{ op: 'zoo.draw', daemonId: 'beastie' }] }).success).toBe(false)
     expect(zooOpsBodySchema.safeParse({ ops: [{ op: 'zoo.hatch', eggId: 'a', daemonId: 'beastie' }] }).success).toBe(false)   // no client-sent results
+    expect(zooOpsBodySchema.safeParse({ ops: [{ op: 'zoo.hatch', eggId: 'a', seed: 7 }] }).success).toBe(false)             // nor seeds
+    expect(zooOpsBodySchema.safeParse({ ops: [{ op: 'zoo.pair', id: 'tim' }] }).success).toBe(false)                       // the old pair
   })
 
   it('makes egg ids unlike any egg in the nest', () => {
@@ -581,15 +700,93 @@ describe('the document', () => {
   })
 })
 
-describe('what a client draws (zoo_changed goes out only when it moves)', () => {
-  const tim: ZooDaemon = { id: 'tim', hatchedAt: '2026-09-01T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 5, version: '0.1' }
-  const base = (): Zoo => ({ ...emptyZoo(), daemons: [{ ...tim }], pair: 'tim' })
+describe('a zoo stored before individuals', () => {
+  const USER = 'user-1'
+  const stored = {
+    daemons: [
+      old('tim', { nickname: 'pip', xp: 400, bond: 3, version: '1.0', serial: 42, dupes: 3, shiny: true }),
+      old('yak', { egg: 'turn', hatchedAt: '2026-09-05T00:00:00.000Z' }),
+      old('gnu', { origin: 'local' }),
+      old('lynx', { xp: undefined, bond: 2 }),
+    ],
+    eggs: [egg('a', 'turn')],
+    pair: 'yak',
+    pity: 3,
+    habits: ['turn'],
+  }
 
-  it('ignores a tally: progress, batch ids, lesson ids, pity, easter hashes, xp short of a level', () => {
+  it('reads each record as one individual: seed 0, its name, its hatch, its serial; the dupes dropped', () => {
+    const zoo = parseZoo(stored, { userId: USER })
+    expect(zoo.daemons).toEqual([
+      { uid: legacyUid(USER, 'tim'), id: 'tim', seed: 0, serial: 42, name: 'pip', shiny: true, xp: 400, bond: 3, version: '1.0', hatched: '2026-09-01T00:00:00.000Z', egg: 'first' },
+      { uid: legacyUid(USER, 'yak'), id: 'yak', seed: 0, shiny: false, xp: 0, bond: 0, version: '0.1', hatched: '2026-09-05T00:00:00.000Z', egg: 'turn' },
+      { uid: legacyUid(USER, 'gnu'), id: 'gnu', seed: 0, shiny: false, xp: 0, bond: 0, version: '0.1', hatched: '2026-09-01T00:00:00.000Z', egg: 'first', origin: 'local' },
+      // Stored before xp: the least xp its bond needs, as before.
+      { uid: legacyUid(USER, 'lynx'), id: 'lynx', seed: 0, shiny: false, xp: 150, bond: 2, version: '1.0', hatched: '2026-09-01T00:00:00.000Z', egg: 'first' },
+    ])
+    for (const d of zoo.daemons) expect(d.uid).toMatch(UID)
+    expect(zoo.paired).toBe(legacyUid(USER, 'yak'))
+    expect(zoo).toMatchObject({ eggs: [egg('a', 'turn')], pity: 3, sinceNew: 0, habits: ['turn'] })
+  })
+
+  it('derives the same uids on every read, a different set for another account', () => {
+    expect(parseZoo(stored, { userId: USER })).toEqual(parseZoo(structuredClone(stored), { userId: USER }))
+    const other = parseZoo(stored, { userId: 'user-2' }).daemons.map((d) => d.uid)
+    const mine = parseZoo(stored, { userId: USER }).daemons.map((d) => d.uid)
+    expect(other.filter((u) => mine.includes(u))).toEqual([])
+    expect(legacyUid(USER, 'tim')).toBe(legacyUid(USER, 'tim'))
+    expect(legacyUid(USER, 'tim')).not.toBe(legacyUid(USER, 'yak'))
+  })
+
+  it('is idempotent: stored in the new shape and read again, nothing changes', () => {
+    const first = parseZoo(stored, { userId: USER })
+    const written = JSON.parse(JSON.stringify(first))
+    expect(written).not.toHaveProperty('pair')
+    expect(parseZoo(written, { userId: USER })).toEqual(first)
+    // Whoever reads it next (another account's id, or none) reads the stored uids, not derived ones.
+    expect(parseZoo(written, { userId: 'someone-else' })).toEqual(first)
+    expect(parseZoo(written)).toEqual(first)
+  })
+
+  it('gives a second record of one species (from before duplicates merged) its own individual and uid', () => {
+    const zoo = parseZoo({ daemons: [old('tim', { xp: 60 }), old('yak'), old('tim', { shiny: true }), old('tim', { dupes: 2 })], pair: 'tim' }, { userId: USER })
+    expect(zoo.daemons.map((d) => [d.id, d.shiny, d.xp])).toEqual([['tim', false, 60], ['yak', false, 0], ['tim', true, 0], ['tim', false, 0]])
+    expect(zoo.daemons.map((d) => d.uid)).toEqual([legacyUid(USER, 'tim'), legacyUid(USER, 'yak'), legacyUid(USER, 'tim', 1), legacyUid(USER, 'tim', 2)])
+    expect(new Set(zoo.daemons.map((d) => d.uid)).size).toBe(4)
+    expect(zoo.paired).toBe(legacyUid(USER, 'tim'))                               // the first of the old pair's species
+  })
+
+  it('takes ops by the uids it read, before and after the zoo is written in the new shape', () => {
+    const read = parseZoo(stored, { userId: USER })
+    const timUid = legacyUid(USER, 'tim')
+    const ops: ZooOp[] = [{ op: 'zoo.pair', uid: timUid }, { op: 'zoo.nickname', uid: legacyUid(USER, 'gnu'), name: 'wanda' }]
+    const r = apply(read, ops)
+    expect(r.zoo.paired).toBe(timUid)
+    expect(r.zoo.daemons.find((d) => d.id === 'gnu')?.name).toBe('wanda')
+    // Written, read back: the same ops again land on the same individuals and change nothing.
+    const back = parseZoo(JSON.parse(JSON.stringify(r.zoo)), { userId: USER })
+    expect(apply(back, ops).changed).toBe(false)
+  })
+
+  it('drops the old pair when its species is not in the zoo, and a malformed old record like any other', () => {
+    const zoo = parseZoo({ daemons: [old('tim'), old('yak', { bond: -1 }), old('gnu', { dupes: 0 }), { ...old('lynx'), extra: 1 }], pair: 'yak' }, { userId: USER })
+    expect(zoo.daemons.map((d) => d.id)).toEqual(['tim'])
+    expect(zoo.paired).toBeNull()
+    // A `paired` in the document is the new shape: an old `pair` beside it is ignored.
+    expect(parseZoo({ daemons: [old('tim')], paired: null, pair: 'tim' }, { userId: USER }).paired).toBeNull()
+  })
+})
+
+describe('what a client draws (zoo_changed goes out only when it moves)', () => {
+  const tim = daemon('tim', { xp: 5 })
+  const base = (): Zoo => ({ ...emptyZoo(), daemons: [{ ...tim }], paired: tim.uid })
+
+  it('ignores a tally: progress, batch ids, lesson ids, pity, the run toward a new species, easter hashes, xp short of a level', () => {
     const after = base()
     after.progress = { ...after.progress, turns: 12, days: { '2026-09-26': 12 }, batches: ['b1'], lessons: ['l1'], held: [] }
     after.daemons[0]!.xp = 30
     after.pity = 3
+    after.sinceNew = 5
     after.easter = ['abc']
     expect(zooShownChanged(base(), after)).toBe(false)
   })
@@ -598,12 +795,12 @@ describe('what a client draws (zoo_changed goes out only when it moves)', () => 
     const changes: Array<(z: Zoo) => void> = [
       (z) => { z.daemons[0]!.bond = 1 },
       (z) => { z.daemons[0]!.version = '1.0' },
-      (z) => { z.daemons[0]!.nickname = 'timmy' },
+      (z) => { z.daemons[0]!.name = 'timmy' },
       (z) => { z.daemons[0]!.shiny = true },
-      (z) => { z.daemons[0]!.dupes = 1 },
-      (z) => { z.daemons.push({ ...tim, id: 'yak' }) },
+      (z) => { z.daemons[0]!.serial = 7 },
+      (z) => { z.daemons.push({ ...tim, uid: uid('tim2') }) },
       (z) => { z.eggs.push({ id: 'e1', kind: 'turn', grantedAt: '2026-09-26T00:00:00.000Z' }) },
-      (z) => { z.pair = null },
+      (z) => { z.paired = null },
       (z) => { z.autonomy = 'suggest' },
       (z) => { z.consent = { watching: true, at: '2026-09-26T00:00:00.000Z' } },
       (z) => { z.habits = ['split'] },
