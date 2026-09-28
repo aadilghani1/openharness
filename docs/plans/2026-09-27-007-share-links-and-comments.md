@@ -1,5 +1,7 @@
 # Share links and comments
 
+Release versions and final verification: [September 28 release record](2026-09-28-010-sharing-release.md).
+
 Requested: share an agent from desktop or web, copy a public or private link, let recipients view in a browser, and add simple collaboration through comments.
 
 Build on existing owner-authorized E2EE observer sharing. Keep terminal input, control leases, resizing, arbitrary files, and other agents out of the observer protocol.

@@ -1,5 +1,7 @@
 # Web release readiness
 
+This development record is followed by the [September 28 release record](2026-09-28-010-sharing-release.md), including the final combined validation and publication versions.
+
 User objective: bring the latest desktop features to the web, test the complete browser experience, and prepare the website for a public release. Continue using the shared Flutter source; do not replace feature parity with a separate, reduced web interface.
 
 ## Current source and evidence

@@ -35,10 +35,11 @@ JavaScript/CanvasKit; WebAssembly app compilation is not validated yet.
 
 The entry page inlines Flutter's generated bootstrap to start the app without
 an extra loader request. Keep entry pages and release metadata `no-store`.
-Serve static JavaScript, CanvasKit, fonts, and images with ETags and
-`Cache-Control: public, max-age=0, must-revalidate`: browsers reuse unchanged
-bytes while checking for every deployment. Do not use `no-store` for these
-assets or long-lived immutable caching with their unversioned filenames.
+The production host serves JavaScript, CanvasKit and assets from a directory
+containing the release version and archive checksum, with immutable caching.
+Each fresh entry points to that release's assets. This matters because the CDN
+can extend cache lifetimes even when the origin requests revalidation. Local
+previews using stable filenames should use ETags and `max-age=0, must-revalidate`.
 
 The existing backend handles browser OAuth. Local previews on `127.0.0.1`,
 `localhost`, or `[::1]` use its existing loopback authorization endpoint, returning
@@ -55,7 +56,7 @@ Use `--dart-define=HARNESS_ANALYTICS_DISABLED=true` for isolated previews.
 
 The Flutter source remains in this package. The existing website deployment in
 `autonomous-ai/autonomous-code` serves its compiled files under `/harness-web/`,
-with `/` and `/auth/callback` opening the Flutter app. It also serves the desktop
+with `/`, `/s/:id` and `/auth/callback` opening the Flutter app. It also serves the desktop
 downloads and installer redirects.
 
 Push a `vX.Y.Z_web` tag on a tested commit to run **Release web bundle**. CI builds
@@ -64,6 +65,10 @@ with Flutter 3.47.2 and publishes the archive, SHA-256, and
 website's `apps/web/harness-web-release.json`, verify the website build, and use
 its existing `scripts/release-web.sh` release procedure. Its build checks the
 archive's checksum before including it in the image; ArgoCD deploys that image.
+The host configures Flutter's entrypoint, asset and CanvasKit URLs under
+`/harness-web/releases/<version>-<archive-checksum-prefix>/` and does not start
+the deprecated generated service worker. Public routes and the base href stay
+stable; legacy asset paths remain available for tabs opened before deployment.
 For a local production build, run `bash scripts/build-web-release.sh X.Y.Z`.
 `FLUTTER_BIN` can select an SDK installed outside `PATH`. Output is under
 `build/web-release/` and `build/web-dist/`; the ordinary local preview is separate.
