@@ -11,6 +11,7 @@ import 'package:harness_mobile/shared/widgets/app_dialog.dart'
     show kDialogVeilBlur, kSheetVeilOpacity;
 import 'package:harness_mobile/state/app_state.dart';
 
+import '../demo/sample_mode.dart' show SampleMode;
 import 'agents_page.dart' show openNewAgent;
 import 'find_models.dart';
 import 'tty.dart';
@@ -490,6 +491,20 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                       ],
                     ),
                   ),
+                  if (SampleMode.ofNotifier(widget.notifier) != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        Tty.origin,
+                        4,
+                        Tty.origin,
+                        0,
+                      ),
+                      child: TtyText(
+                        'Sample harnesses',
+                        color: Tty.of(context).faint,
+                        size: TtySize.meta,
+                      ),
+                    ),
                   const SizedBox(height: 4),
                   Expanded(
                     child: switch ((_search.isModelMode, widget.showing)) {
@@ -505,7 +520,6 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                         key: _results,
                         notifier: widget.notifier,
                         controller: _search,
-                        fzf: true,
                         showing: widget.showing,
                         onOpen: _close,
                         onNewHarness: newAgent == null

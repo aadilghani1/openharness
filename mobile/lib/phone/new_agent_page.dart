@@ -13,6 +13,7 @@ import 'package:harness_mobile/core/git_project.dart';
 import 'package:harness_mobile/core/project_folder.dart';
 import 'package:harness_mobile/widgets/remote_folder_picker.dart';
 
+import '../demo/sample_mode.dart' show SampleMode;
 import 'agent_index.dart';
 import 'branch_picker_sheet.dart';
 import 'phone_navigation.dart';
@@ -218,8 +219,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
       );
       return;
     }
-    if (voice.status == VoiceInputStatus.idle)
+    if (voice.status == VoiceInputStatus.idle) {
       unawaited(voice.startListening());
+    }
   }
 
   /// Takes back what the form was left holding — see [NewAgentDraft].
@@ -655,9 +657,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
     });
   }
 
-  /// Options unfolded: branch, approvals and profile shown rather than left on their defaults.
-  bool _optionsOpen = false;
-
   /// The last Start did not take: the button says Try Again, and every value stays.
   bool _failed = false;
 
@@ -699,8 +698,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
       // Typing the task, the keyboard leaves room for one line of the choices, not four cut ones.
       final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
       final summary = [
-        if (_engine != null) _engineName(_engine!),
         if (_folder != null || _project != null) _projectValue,
+        if (_engine != null) _engineName(_engine!),
         if (_repository != null) _worktree ? 'worktree' : _branchTitle,
         if (_permissionModes.isNotEmpty)
           (_permissionModeChoice?.label ?? 'Auto-approve'),
@@ -738,6 +737,15 @@ class _NewAgentPageState extends State<NewAgentPage> {
                           weight: FontWeight.w600,
                         ),
                       ),
+                      if (SampleMode.ofNotifier(widget.notifier) != null)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: TtyText(
+                            'Sample',
+                            color: tty.faint,
+                            size: TtySize.meta,
+                          ),
+                        ),
                       // No Cancel: a swipe right goes back, the way a swipe left came in.
                       const SizedBox(height: 44),
                     ],
@@ -751,8 +759,11 @@ class _NewAgentPageState extends State<NewAgentPage> {
                       Tty.origin,
                       4,
                     ),
+                    // Where "harness" is taught: the moment somebody makes their first one. The agent
+                    // is Claude Code or Codex; a harness is one session of it — the owner: "you have
+                    // 1 agent codex but you have multiple harnesses (sessions) with it."
                     child: TtyText(
-                      'Nothing running yet. Start your first harness.',
+                      'A harness is one session of an agent. Start your first.',
                       color: tty.faint,
                       size: TtySize.meta,
                     ),
@@ -763,206 +774,235 @@ class _NewAgentPageState extends State<NewAgentPage> {
                     label: 'harness',
                     value: summary.isEmpty ? 'Choose an agent' : summary,
                     onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
-                  )
-                else
-                  Expanded(
-                    child: ListView(
-                      keyboardDismissBehavior:
-                          ScrollViewKeyboardDismissBehavior.onDrag,
-                      padding: EdgeInsets.zero,
+                  ),
+                // ⚠️ **The dock scrolls once nothing else can give way.** The rows above it go first,
+                // as they always have; with none left, a dock taller than what is left used to
+                // overflow — an SE typing its task at the largest text size lost the foot of the
+                // field and Start with it. Held to the height below the header, it scrolls instead,
+                // pinned to its foot, so the field being typed into and Start stay on the keys.
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, box) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        TtyFormRow(
-                          label: 'agent',
-                          value: _engine == null
-                              ? 'Choose an agent'
-                              : _engineName(_engine!),
-                          valueColor: _engine == null ? tty.green : null,
-                          detail: _engine == null
-                              ? null
-                              : _engineNote(_engine!),
-                          onTap: _creating
-                              ? null
-                              : () => unawaited(_chooseAgent()),
-                        ),
-                        TtyFormRow(
-                          label: 'project',
-                          value: _folder == null && _project == null
-                              ? 'Choose a project'
-                              : _projectValue,
-                          valueColor: _folder == null && _project == null
-                              ? tty.green
-                              : null,
-                          detail: null,
-                          onTap: _creating
-                              ? null
-                              : () => unawaited(_chooseProject()),
-                        ),
-                        // Options, folded as the desktop folds them: branch, approvals and profile
-                        // sit on their defaults until asked for.
-                        TtyFormRow(
-                          label: 'options',
-                          // Left as it is nearly every time: folded to `[+]`.
-                          value: _optionsOpen ? '[−]' : '[+]',
-                          chevron: false,
-                          onTap: () =>
-                              setState(() => _optionsOpen = !_optionsOpen),
-                        ),
-                        if (_optionsOpen &&
-                            (info != null || _gitLoading || _gitFailed))
-                          TtyFormRow(
-                            label: 'branch',
-                            valueColor: info == null && !_gitLoading
-                                ? tty.faint
-                                : null,
-                            value: _gitLoading
-                                ? 'Reading…'
-                                : info == null
-                                ? 'No answer from the computer'
-                                : _worktree
-                                ? 'New worktree'
-                                : _branchTitle,
-                            detail: info == null
-                                ? null
-                                : _worktree
-                                ? 'from $_branchTitle, in its own folder'
-                                : _branchNote,
-                            onTap: info == null || _creating
-                                ? null
-                                : () => unawaited(_chooseBranch(info)),
+                        if (typing)
+                          const Spacer()
+                        else
+                          Expanded(
+                            child: ListView(
+                              keyboardDismissBehavior:
+                                  ScrollViewKeyboardDismissBehavior.onDrag,
+                              padding: EdgeInsets.zero,
+                              children: [
+                                TtyFormRow(
+                                  label: 'agent',
+                                  value: _engine == null
+                                      ? 'Choose an agent'
+                                      : _engineName(_engine!),
+                                  valueColor: _engine == null
+                                      ? tty.green
+                                      : null,
+                                  detail: _engine == null
+                                      ? null
+                                      : _engineNote(_engine!),
+                                  onTap: _creating
+                                      ? null
+                                      : () => unawaited(_chooseAgent()),
+                                ),
+                                TtyFormRow(
+                                  label: 'project',
+                                  value: _folder == null && _project == null
+                                      ? 'Choose a project'
+                                      : _projectValue,
+                                  valueColor:
+                                      _folder == null && _project == null
+                                      ? tty.green
+                                      : null,
+                                  detail: null,
+                                  onTap: _creating
+                                      ? null
+                                      : () => unawaited(_chooseProject()),
+                                ),
+                                // ⚠️ **Open, not folded behind `[+]` as the desktop folds them.** On a
+                                // phone the rows below sit over an empty half-screen, and they are the
+                                // two things worth seeing before a harness starts from a couch: which
+                                // branch it writes to, and what it may do without asking.
+                                if (info != null || _gitLoading || _gitFailed)
+                                  TtyFormRow(
+                                    label: 'branch',
+                                    valueColor: info == null && !_gitLoading
+                                        ? tty.faint
+                                        : null,
+                                    value: _gitLoading
+                                        ? 'Reading…'
+                                        : info == null
+                                        ? 'No answer from the computer'
+                                        : _worktree
+                                        ? 'New worktree'
+                                        : _branchTitle,
+                                    detail: info == null
+                                        ? null
+                                        : _worktree
+                                        ? 'from $_branchTitle, in its own folder'
+                                        : _branchNote,
+                                    onTap: info == null || _creating
+                                        ? null
+                                        : () => unawaited(_chooseBranch(info)),
+                                  ),
+                                if (_permissionModes.isNotEmpty)
+                                  TtyFormRow(
+                                    label: 'approvals',
+                                    value: mode?.label ?? 'Auto-approve',
+                                    detail: mode?.detail,
+                                    valueColor: (mode?.risky ?? false)
+                                        ? tty.red
+                                        : null,
+                                    onTap: _creating
+                                        ? null
+                                        : () => unawaited(_chooseApprovals()),
+                                  ),
+                                if (_showsCodexProfile)
+                                  TtyFormRow(
+                                    label: 'profile',
+                                    value: _codexProfile?.label ?? 'Default',
+                                    onTap: _creating
+                                        ? null
+                                        : () => unawaited(_chooseProfile()),
+                                  ),
+                              ],
+                            ),
                           ),
-                        if (_optionsOpen && _permissionModes.isNotEmpty)
-                          TtyFormRow(
-                            label: 'approvals',
-                            value: mode?.label ?? 'Auto-approve',
-                            detail: mode?.detail,
-                            valueColor: (mode?.risky ?? false) ? tty.red : null,
-                            onTap: _creating
-                                ? null
-                                : () => unawaited(_chooseApprovals()),
+                        // The dock: the task, then Start. It rides the keyboard.
+                        ConstrainedBox(
+                          constraints: BoxConstraints(maxHeight: box.maxHeight),
+                          child: SingleChildScrollView(
+                            reverse: true,
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                Tty.origin,
+                                20,
+                                Tty.origin,
+                                12,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  // A first harness has nothing to go on: three first tasks to tap, the kind
+                                  // that shows what an agent does in a minute.
+                                  // Only for a first harness — once something is
+                                  // running, somebody knows what to ask, and the
+                                  // chips were filler over the form.
+                                  if (nothingRunning &&
+                                      _task.text.trim().isEmpty &&
+                                      !_creating)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 8),
+                                      child: Wrap(
+                                        spacing: 8,
+                                        runSpacing: 8,
+                                        children: [
+                                          for (final idea in const [
+                                            'Explain this project to me',
+                                            'Find a bug and fix it',
+                                            'Run the tests',
+                                          ])
+                                            _Suggestion(
+                                              text: idea,
+                                              onTap: () => setState(() {
+                                                _task.value = TextEditingValue(
+                                                  text: idea,
+                                                  selection:
+                                                      TextSelection.collapsed(
+                                                        offset: idea.length,
+                                                      ),
+                                                );
+                                              }),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: TtyText(
+                                          'task (optional)',
+                                          color: tty.faint,
+                                          size: TtySize.meta,
+                                        ),
+                                      ),
+                                      if (count > 1800)
+                                        TtyText(
+                                          '$count/$kFirstTaskMaxLength',
+                                          color: count > kFirstTaskMaxLength
+                                              ? tty.red
+                                              : tty.faint,
+                                          size: TtySize.meta,
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  TtyField(
+                                    controller: _task,
+                                    hint: 'What should it do?',
+                                    lines: 6,
+                                    maxLength: kFirstTaskMaxLength,
+                                    action: TextInputAction.newline,
+                                    onChanged: (_) => setState(() {}),
+                                    trailing: [
+                                      Align(
+                                        alignment: Alignment.bottomRight,
+                                        child: ListenableBuilder(
+                                          listenable:
+                                              _voiceIfAny ?? const _Silent(),
+                                          builder: (context, _) {
+                                            final status = _voiceIfAny?.status;
+                                            return TtyFieldMic(
+                                              live:
+                                                  status ==
+                                                      VoiceInputStatus
+                                                          .listening ||
+                                                  status ==
+                                                      VoiceInputStatus.starting,
+                                              onTap: _creating ? null : _talk,
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (_error != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: Text(
+                                        '✗ ${_error!}',
+                                        style: tty.style(
+                                          color: tty.red,
+                                          size: TtySize.meta,
+                                        ),
+                                      ),
+                                    ),
+                                  const SizedBox(height: 10),
+                                  TtyPrimaryButton(
+                                    // Says what it will do: start, or choose what is still missing first.
+                                    label: _failed
+                                        ? 'Try Again'
+                                        : ready
+                                        ? 'Start'
+                                        : _engine == null
+                                        ? 'Choose an agent'
+                                        : 'Choose a project',
+                                    busy: _creating,
+                                    busyLabel: 'Starting…',
+                                    // Never a dead button: with a choice missing, Start opens its chooser.
+                                    onPressed: () => unawaited(_start()),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
-                        if (_optionsOpen && _showsCodexProfile)
-                          TtyFormRow(
-                            label: 'profile',
-                            value: _codexProfile?.label ?? 'Default',
-                            onTap: _creating
-                                ? null
-                                : () => unawaited(_chooseProfile()),
-                          ),
+                        ),
                       ],
                     ),
-                  ),
-                if (typing) const Spacer(),
-                // The dock: the task, then Start. It rides the keyboard.
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    Tty.origin,
-                    20,
-                    Tty.origin,
-                    12,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // A first harness has nothing to go on: three first tasks to tap, the kind
-                      // that shows what an agent does in a minute.
-                      if (_task.text.trim().isEmpty && !_creating)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              for (final idea in const [
-                                'Explain this project to me',
-                                'Find a bug and fix it',
-                                'Run the tests',
-                              ])
-                                _Suggestion(
-                                  text: idea,
-                                  onTap: () => setState(() {
-                                    _task.value = TextEditingValue(
-                                      text: idea,
-                                      selection: TextSelection.collapsed(
-                                        offset: idea.length,
-                                      ),
-                                    );
-                                  }),
-                                ),
-                            ],
-                          ),
-                        ),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TtyText(
-                              'task (optional)',
-                              color: tty.faint,
-                              size: TtySize.meta,
-                            ),
-                          ),
-                          if (count > 1800)
-                            TtyText(
-                              '$count/$kFirstTaskMaxLength',
-                              color: count > kFirstTaskMaxLength
-                                  ? tty.red
-                                  : tty.faint,
-                              size: TtySize.meta,
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      TtyField(
-                        controller: _task,
-                        hint: 'What should it do?',
-                        lines: 6,
-                        maxLength: kFirstTaskMaxLength,
-                        action: TextInputAction.newline,
-                        onChanged: (_) => setState(() {}),
-                        trailing: [
-                          Align(
-                            alignment: Alignment.bottomRight,
-                            child: ListenableBuilder(
-                              listenable: _voiceIfAny ?? const _Silent(),
-                              builder: (context, _) {
-                                final status = _voiceIfAny?.status;
-                                return TtyFieldMic(
-                                  live:
-                                      status == VoiceInputStatus.listening ||
-                                      status == VoiceInputStatus.starting,
-                                  onTap: _creating ? null : _talk,
-                                );
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (_error != null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Text(
-                            '✗ ${_error!}',
-                            style: tty.style(
-                              color: tty.red,
-                              size: TtySize.meta,
-                            ),
-                          ),
-                        ),
-                      const SizedBox(height: 10),
-                      TtyPrimaryButton(
-                        // Says what it will do: start, or choose what is still missing first.
-                        label: _failed
-                            ? 'Try Again'
-                            : ready
-                            ? 'Start'
-                            : _engine == null
-                            ? 'Choose an agent'
-                            : 'Choose a project',
-                        busy: _creating,
-                        busyLabel: 'Starting…',
-                        // Never a dead button: with a choice missing, Start opens its chooser.
-                        onPressed: () => unawaited(_start()),
-                      ),
-                    ],
                   ),
                 ),
               ],
@@ -1167,8 +1207,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
         for (final folder in [
           ...notifier.projectHistory.recent(id),
           for (final agent in machine.agents)
-            if (agent.project?.root ?? agent.project?.cwd case final path?)
-              path,
+            ?(agent.project?.root ?? agent.project?.cwd),
         ])
           if (folder.isNotEmpty && !_isHarnessWorktree(folder)) folder,
       };

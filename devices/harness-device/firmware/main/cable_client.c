@@ -424,6 +424,34 @@ static void handle_swarms(const cJSON *p)
         n++;
     }
     ui_swarms_replace(rows, n, str_of(p, "selected"));
+
+    /* …and the selected tab's shape, which rides the same frame so the two can never be read half
+     * updated: a grid drawn against the previous tab's rectangles puts agents where they are not. */
+    static cable_tile_t tiles[SWARM_TILES_MAX];
+    int tn = 0;
+    const cJSON *ti = NULL;
+    cJSON_ArrayForEach(ti, cJSON_GetObjectItemCaseSensitive(p, "tiles")) {
+        if (tn >= SWARM_TILES_MAX) break;
+        const cJSON *x1 = cJSON_GetObjectItemCaseSensitive(ti, "x1");
+        const cJSON *y1 = cJSON_GetObjectItemCaseSensitive(ti, "y1");
+        const cJSON *x2 = cJSON_GetObjectItemCaseSensitive(ti, "x2");
+        const cJSON *y2 = cJSON_GetObjectItemCaseSensitive(ti, "y2");
+        if (!cJSON_IsNumber(x1) || !cJSON_IsNumber(y1) || !cJSON_IsNumber(x2) || !cJSON_IsNumber(y2)) continue;
+        tiles[tn].x1 = (int16_t)x1->valuedouble;
+        tiles[tn].y1 = (int16_t)y1->valuedouble;
+        tiles[tn].x2 = (int16_t)x2->valuedouble;
+        tiles[tn].y2 = (int16_t)y2->valuedouble;
+        /* The daemon already refuses an empty rectangle, so a bad one here is a wire fault rather
+         * than a shape — drop it rather than draw nothing at that seat. */
+        if (tiles[tn].x2 <= tiles[tn].x1 || tiles[tn].y2 <= tiles[tn].y1) continue;
+        const cJSON *a = cJSON_GetObjectItemCaseSensitive(ti, "a");
+        snprintf(tiles[tn].agent_id, sizeof(tiles[tn].agent_id), "%s",
+                 cJSON_IsString(a) ? a->valuestring : "");
+        tn++;
+    }
+    /* Tagged with the tab these rectangles are OF — the same `selected` the rows above carry, read
+     * from the same frame so the two can never disagree. */
+    ui_tiles_replace(tiles, tn, str_of(p, "selected"));
 }
 
 static void session_up(const cJSON *p)

@@ -36,7 +36,7 @@ List<PhoneCommand> phoneSearchCommands(
         title: 'New Harness',
         detail: ready.length == 1
             ? 'On ${ready.first.machine.displayName}'
-            : 'Choose a computer, then an agent',
+            : 'Choose an agent and a project',
         run: () =>
             openNewAgent(context, notifier, ready.first.machine.machineId),
       ),

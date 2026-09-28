@@ -4,7 +4,7 @@ import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
 
-import 'dart:ui' show Color;
+import 'dart:ui' show Color, Rect;   // Rect: activeTileShape, the same one pane_preset.dart returns
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart'
@@ -2312,9 +2312,37 @@ class AppNotifier extends ChangeNotifier {
       for (final pane in panes)
         if (onDial(pane)) pane.agentId!,
     ];
+    // THE ACTIVE SWARM'S SHAPE, for a device with a face big enough to draw it.
+    //
+    // This used to say "names and member ids only — the layout inside a swarm is this window's
+    // business", and for the round dial that was right: 466px of circle holds one tile, so there was no
+    // shape to send. The square device draws the tab as a grid, and a grid that does not follow the
+    // window is worse than no grid — it puts an agent somewhere it is not (owner, 2026-09-27: "change
+    // layout trên app, dưới device ko thấy change theo").
+    //
+    // RECTANGLES, NOT A PRESET NAME. Sending `cols3` would make the far side re-derive the geometry
+    // from it, which is the duplication `pane_preset.dart` exists to prevent — and it could not express
+    // `auto` (whose column count this window MEASURES) or a manual resize at all. These are the very
+    // rectangles this window laid out, in thousandths so they cross as integers.
+    //
+    // ONE ROW PER PANE, including the ones the device cannot drive: a shell or a viewer holds its place
+    // in the grid, and dropping it would leave the shape with a hole in it. `agentId` is empty for
+    // those, which is how the far side knows to draw it as a pane rather than as an agent.
+    final shape = activeTileShape;
+    final activeTiles = shape == null
+        ? const <Map<String, Object>>[]
+        : [
+            for (var i = 0; i < shape.length && i < panes.length; i++)
+              {
+                'x1': (shape[i].left * 1000).round(),
+                'y1': (shape[i].top * 1000).round(),
+                'x2': (shape[i].right * 1000).round(),
+                'y2': (shape[i].bottom * 1000).round(),
+                'agentId': panes[i].agentId ?? '',
+              },
+          ];
     // The swarms travel with the tiles: the dial names the one on screen above the agent and offers
-    // the others, and a pick there comes back as `dial_swarm`. Names and member ids only — the layout
-    // inside a swarm is this window's business.
+    // the others, and a pick there comes back as `dial_swarm`.
     final swarmRows = [
       for (final swarm in swarms)
         {
@@ -2365,6 +2393,9 @@ class AppNotifier extends ChangeNotifier {
             .sendTerminalFrame('app_swarms', {
               'active': activeSwarmId,
               'swarms': swarmRows,
+              // Only the active one's. It is the only grid the device draws, and sending every tab's
+              // geometry would be two dozen shapes to carry one.
+              'tiles': activeTiles,
             })
             .catchError((_) => false),
       );
@@ -9921,6 +9952,24 @@ class AppNotifier extends ChangeNotifier {
   /// Only `auto` needs telling: it measures the window, so it is the one shape
   /// whose columns are not in its own description. Reported by the grid as it
   /// builds; null until then, and then the shape's own guess stands.
+  /// The rectangles the active swarm's tiles actually occupy, as fractions of
+  /// the grid — a manual arrangement when there is one, the chosen preset
+  /// otherwise, and null when neither can describe this many panes.
+  ///
+  /// Written once and read from every place that needs to know where a tile is:
+  /// the two wrap helpers, the neighbour walk, and the cable. It used to be
+  /// copied out at each of those, which is the bug `pane_preset.dart` opens by
+  /// warning about — a shape described twice drifts, and the copy on the cable
+  /// would have drifted onto another screen.
+  List<Rect>? get activeTileShape {
+    final count = panes.length;
+    if (count < 1) return null;
+    final shape = activeSwarm.arranged?.tiles.length == count
+        ? activeSwarm.arranged!.tiles
+        : presetFor(count)?.tilesFor(count, columns: gridColumns);
+    return (shape != null && shape.length == count) ? shape : null;
+  }
+
   int? get gridColumns => activeSwarm.gridColumns;
   set gridColumns(int? value) => activeSwarm.gridColumns = value;
 
@@ -9953,10 +10002,8 @@ class AppNotifier extends ChangeNotifier {
   int? _wrapVertically(int delta) {
     final count = panes.length;
     if (count < 2) return null;
-    final shape = activeSwarm.arranged?.tiles.length == count
-        ? activeSwarm.arranged!.tiles
-        : presetFor(count)?.tilesFor(count, columns: gridColumns);
-    if (shape == null || shape.length != count) return null;
+    final shape = activeTileShape;
+    if (shape == null) return null;
     final at = panes.indexWhere((pane) => pane.id == focusedPaneId);
     if (at < 0) return null;
 
@@ -10046,10 +10093,8 @@ class AppNotifier extends ChangeNotifier {
   int? _neighbour({required int dx, required int dy}) {
     final count = panes.length;
     if (count < 2) return null;
-    final shape = activeSwarm.arranged?.tiles.length == count
-        ? activeSwarm.arranged!.tiles
-        : presetFor(count)?.tilesFor(count, columns: gridColumns);
-    if (shape == null || shape.length != count) return null;
+    final shape = activeTileShape;
+    if (shape == null) return null;
     final at = panes.indexWhere((pane) => pane.id == focusedPaneId);
     if (at < 0) return null;
 

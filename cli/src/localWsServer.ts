@@ -206,7 +206,22 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
   }
   if (swarms.length === 0) return null
   const active = typeof p.active === 'string' && swarms.some((s) => s.id === p.active) ? p.active : swarms[0].id
-  return { active, swarms }
+  // Absent from a window that predates the field, and absent is the honest answer: the far side falls
+  // back to deriving a shape from the count, which is what it did before any window sent one.
+  const tiles: AppSwarms['tiles'] = []
+  for (const row of Array.isArray(p.tiles) ? p.tiles : []) {
+    if (!row || typeof row !== 'object') continue
+    const t = row as Record<string, unknown>
+    const n = (v: unknown): number | null =>
+      typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1000, Math.round(v))) : null
+    const x1 = n(t.x1), y1 = n(t.y1), x2 = n(t.x2), y2 = n(t.y2)
+    // A tile with no area is not a tile. Dropping it here rather than on the device keeps the far
+    // side's rule simple: every row it receives is drawable.
+    if (x1 === null || y1 === null || x2 === null || y2 === null || x2 <= x1 || y2 <= y1) continue
+    tiles.push({ x1, y1, x2, y2, agentId: typeof t.agentId === 'string' ? t.agentId : '' })
+    if (tiles.length === 24) break   // the window's own ceiling, same as the rows above
+  }
+  return { active, swarms, tiles }
 }
 
 function binaryBytes(raw: RawData): Uint8Array {

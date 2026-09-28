@@ -288,6 +288,7 @@ class TerminalSession extends ChangeNotifier {
     _showingKeptScreen = true;
     notifyListeners();
   }
+
   int _lastRenderedSeq = -1;
   int _framesSinceAck = 0;
   int _renderedSinceAckBytes = 0;
@@ -438,7 +439,13 @@ class TerminalSession extends ChangeNotifier {
     }
     cols = _clampCols(initialCols);
     rows = _clampRows(initialRows);
-    if (!preserveTerminal) terminal = _newTerminal()..resize(cols, rows);
+    // ⚠️ A kept screen ([seedScreen]) is kept through the open, which is the
+    // whole of its job: it is seeded just before the first open, and a fresh
+    // terminal here threw it away in the same breath — the page then drew a
+    // blank terminal where the reader's last screen should have been, with
+    // [hasScreen] telling it not to show the skeleton either.
+    final keep = preserveTerminal || _showingKeptScreen;
+    if (!keep) terminal = _newTerminal()..resize(cols, rows);
     status = TerminalSessionStatus.opening;
     _openRequestId =
         'term_${DateTime.now().microsecondsSinceEpoch}_${Random.secure().nextInt(1 << 31)}';
@@ -455,7 +462,7 @@ class TerminalSession extends ChangeNotifier {
         }
         cols = _clampCols(measured.cols);
         rows = _clampRows(measured.rows);
-        if (!preserveTerminal) terminal.resize(cols, rows);
+        if (!keep) terminal.resize(cols, rows);
         notifyListeners();
       } on TimeoutException {
         // Keep the conservative fallback when the terminal viewport cannot be
@@ -622,6 +629,13 @@ class TerminalSession extends ChangeNotifier {
         if (!watching) takeover = false;
         _resyncTimer?.cancel();
         _resyncTimer = null;
+        // ⚠️ Cancelled first: a second `terminal_ready` for this same open is
+        // real — the open-timeout path resends the SAME request, so a reply
+        // that was only slow and the reply to the resend both match while no
+        // screen has landed yet. Overwritten, the first timer ran on unowned
+        // for the life of the process, beating twice as often and still
+        // beating after [dispose].
+        _heartbeat?.cancel();
         _heartbeat = Timer.periodic(
           const Duration(seconds: 5),
           (_) => unawaited(_sendHeartbeat()),
@@ -1154,7 +1168,7 @@ class TerminalSession extends ChangeNotifier {
   /// write it to disk on its own (REMOTE) machine and paste that path as text. Only meaningful for
   /// a genuinely remote pane: a LOCAL file already has a valid path on this same machine, so
   /// callers should paste that path directly via [pasteText] instead and never reach this method
-  /// at all — see [MachineState.isLocalMachine].
+  /// at all. A phone has no local pane.
   ///
   /// The caller must check [MachineState.terminalPasteFileAvailable] first, same reason
   /// [pasteImage] checks `terminalImagePasteAvailable`: an older CLI does not know this binary kind
@@ -1388,8 +1402,6 @@ class TerminalSession extends ChangeNotifier {
   void scroll(int phase, int dy, int velocity) {
     _viewport?.scroll(phase, dy, velocity);
   }
-
-  void find(TerminalFindAction action) => _viewport?.find(action);
 
   bool focusInput() => _viewport?.focusInput() ?? false;
 

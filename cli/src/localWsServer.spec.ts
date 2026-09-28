@@ -299,7 +299,10 @@ describe('local CLI WebSocket', () => {
       // No count at all, from a window too old to send one: as many tiles as agents, which is what
       // this row meant before the field existed.
       { id: 's2', name: 'Launch', agentIds: [], panes: 0 },
-    ] }])
+    // This window sent no `tiles`, which is how every window behaved until it had a device with a
+    // face big enough to draw one. Empty is the honest reading, and the device falls back to
+    // deriving the shape from the count exactly as it does today.
+    ], tiles: [] }])
     // Like app_panes: a fact about this desk, so the machine never sees it.
     expect(backend.frames.map((frame) => frame.type)).toEqual([])
 

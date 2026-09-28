@@ -9,7 +9,7 @@ i2c_master_bus_handle_t board_i2c_get(void)
 {
     if (s_bus) return s_bus;
     i2c_master_bus_config_t cfg = {
-        .i2c_port = I2C_NUM_0,
+        .i2c_port = BSP_I2C_PORT,
         .sda_io_num = BSP_I2C_SDA,
         .scl_io_num = BSP_I2C_SCL,
         .clk_source = I2C_CLK_SRC_DEFAULT,

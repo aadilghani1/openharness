@@ -48,7 +48,7 @@ const REMOTE: FleetMachine = { machineId: 'other', name: 'office-imac', state: '
 
 /** The window, open on one tab that holds these panes in this order. */
 function onTab(host: DaemonCableHost, agentIds: string[], id = 't1'): void {
-  host.setSwarms({ active: id, swarms: [{ id, name: 'Tab', agentIds, panes: agentIds.length }] })
+  host.setSwarms({ active: id, swarms: [{ id, name: 'Tab', agentIds, panes: agentIds.length }], tiles: [] })
   host.setDesk(agentIds)
 }
 
@@ -629,6 +629,7 @@ describe('DaemonCableHost.listSwarms', () => {
         { id: 'shell', name: 'harness-2', agentIds: [], panes: 1 },
         { id: 'fresh', name: 'New Harness', agentIds: [], panes: 0 },
       ],
+      tiles: [],
     })
     expect(host.listSwarms()).toEqual({
       selected: 'work',
@@ -639,13 +640,14 @@ describe('DaemonCableHost.listSwarms', () => {
         // Nothing on it at all — still nothing the dial can offer, which was always the intent.
         { id: 'fresh', name: 'New Harness', agents: 0, panes: 0 },
       ],
+      tiles: [],
     })
   })
 
   it('says nothing at all while no window is connected', () => {
     const host = new DaemonCableHost(wiring(), fleetOf([]))
     host.setSwarms(null)
-    expect(host.listSwarms()).toEqual({ selected: '', swarms: [] })
+    expect(host.listSwarms()).toEqual({ selected: '', swarms: [], tiles: [] })
   })
 })
 

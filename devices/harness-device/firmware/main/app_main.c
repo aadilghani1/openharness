@@ -43,23 +43,14 @@ static const char *TAG = "app";
 // that carries them from its cache into the UI.
 #define MAX_PROJECTS CABLE_MAX_AGENTS
 
-// ── boot button ─────────────────────────────────────────────────────────────────────────────────────
+// ── factory reset ───────────────────────────────────────────────────────────────────────────────────
 
-// BOOT (GPIO0) held at power-on = factory reset. All that is left to clear is the screen brightness and
+// A button held through power-on = factory reset. All that is left to clear is the screen brightness and
 // the voice language — the credentials this used to wipe do not exist any more.
-static bool boot_button_held(void)
-{
-    gpio_config_t io = {
-        .pin_bit_mask = 1ULL << BSP_BOOT_BUTTON,
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-    };
-    gpio_config(&io);
-    // Two reads a moment apart: a single sample catches the pin mid-transition on a cold boot.
-    if (gpio_get_level(BSP_BOOT_BUTTON) != 0) return false;
-    vTaskDelay(pdMS_TO_TICKS(50));
-    return gpio_get_level(BSP_BOOT_BUTTON) == 0;
-}
+//
+// WHICH button, and whether there is one at all, is the board's to answer (board.h): the dial reads BOOT,
+// and the Pro has nothing it could read, because its only switch is the one that just turned it on.
+static bool boot_button_held(void) { return board_factory_reset_requested(); }
 
 // ── the agent list ──────────────────────────────────────────────────────────────────────────────────
 
