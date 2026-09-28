@@ -29,14 +29,20 @@ host XDG config directory. The existing test fails with a temporary XDG root
 before the isolation fix. Equivalent lockfile and Cursor-fixture fixes landed
 in main with PR #365 during verification; the final rebase retains main's
 versions and drops the duplicate repair commits.
+The newly merged native TUI fixture exposed another race on Linux ARM64: pane
+death can be visible before its queued `pane-died` hook runs. The fixture now
+waits for delivery and then requires exactly one hook for every rapid exit.
+Missing hooks still time out, and duplicate hooks still fail with engine/index
+diagnostics. The complete fixture passes locally against `hn` and tmux.
 
 ## Validation
 
-The complete local suites were rerun after rebasing onto `0eeef83b` (including
-PR #411's Git-context changes), on macOS 26.6.2 arm64, Node 22.23.1, and Flutter
-3.47.2.
+The final base is `02496104` (PR #365). The complete CLI suite was rerun after
+that integration. Desktop files are unchanged from the complete desktop run
+on `0eeef83b`, including PR #411's Git-context changes. Local checks use macOS
+26.6.2 arm64, Node 22.23.1, and Flutter 3.47.2.
 
-- CLI typecheck and build pass. Full suite: **5,768 passed, 37 skipped**.
+- CLI typecheck and build pass. Full suite: **5,786 passed, 37 skipped**.
 - Desktop: **3,872 passed, 12 skipped**. Analysis has **12 existing informational
   notices in vendored xterm**, no errors or warnings.
 - Native macOS terminal integration: **2 passed**. The normal debug
@@ -48,6 +54,9 @@ PR #411's Git-context changes), on macOS 26.6.2 arm64, Node 22.23.1, and Flutter
   surviving shell all pass.
 - Live Hermes-style Python bootstrap: discovery, healthy validation, failed
   process-query handling, recovery, and locale/timezone-stable lock identity pass.
+- Native TUI acceptance passes: retained exits/signals and exactly-once hooks,
+  history, holder-crash recovery, respawn, startup typeahead, first paint without
+  a terminal-identification reply, and the actual 1×1 PTY size.
 - Installed-engine multiplexer suite on macOS with tmux **3.5a**: **9 passed,
   9 skipped**. Discovery and process-only deletion preserve the pane for Claude
   **2.1.283**, Codex **0.154.0**, OpenCode **1.18.32**, Pi **0.85.1**, Hermes
