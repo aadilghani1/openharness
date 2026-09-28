@@ -1,5 +1,11 @@
 # hn (harness-tui) — handoff, 2026-09-27
 
+> **Status update, 2026-09-28:** the user authorized merging PR #365. See the
+> [merge verification record](2026-09-28-hn-merge-verification.md) for the current
+> revisions, completed reviews, checks and limits. Release and installation remain
+> separate actions. The original handoff below is preserved as dated history;
+> its draft-only instruction and open-item list are not the current status.
+
 Where the "make hn a 10/10 terminal-native tool" work stands, and how to carry on.
 
 ## The goal (the user's words, short)
