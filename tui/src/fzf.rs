@@ -447,6 +447,38 @@ impl Query {
     /// Some term asks for something (not only `!x`): fzf sorts only then.
     pub fn sortable(&self) -> bool { self.sets.iter().any(|s| s.iter().any(|t| !t.inv)) }
 
+    /// Match the same Boolean groups against a line and optional unanchored metadata.
+    /// Extra fields may satisfy a term, including the term an inverse match excludes.
+    pub fn matches_with_extra(&self, line: &[char], extra: impl Fn(&str, bool, bool) -> bool) -> bool {
+        self.sets.iter().all(|set| set.iter().any(|term| {
+            let unanchored = !matches!(term.kind, Kind::Prefix | Kind::Suffix | Kind::Equal);
+            let found = run(term, line, self.forward, self.v1).is_some()
+                || unanchored && extra(&term.text.iter().collect::<String>(), term.case_sensitive, term.inv);
+            found != term.inv
+        }))
+    }
+
+    pub fn positive_terms(&self) -> Vec<String> {
+        self.sets.iter().flatten().filter(|t| !t.inv).map(|t| t.text.iter().collect()).collect()
+    }
+
+    /// The index accepts ANDed words, not fzf syntax. A required positive term discovers
+    /// candidates for every branch; otherwise ask each alternative of a positive OR group.
+    /// The complete expression must still filter the returned candidates.
+    pub fn discovery_queries(&self) -> Vec<String> {
+        let text = |term: &Term| term.text.iter().collect::<String>();
+        let usable = |term: &Term| !term.inv && text(term).split(|c: char| !c.is_alphanumeric()).any(|w| w.chars().count() >= 2);
+        let required: Vec<String> = self.sets.iter().filter(|s| s.len() == 1 && usable(&s[0])).map(|s| text(&s[0])).collect();
+        if !required.is_empty() { return vec![required.join(" ")] }
+        let terms: Vec<&Term> = match self.sets.iter().filter(|s| s.iter().all(&usable)).min_by_key(|s| s.len()) {
+            Some(set) => set.iter().collect(),
+            None => self.sets.iter().flatten().filter(|t| usable(t)).collect(),
+        };
+        let mut queries = Vec::new();
+        for term in terms { let q = text(term); if !queries.contains(&q) { queries.push(q) } }
+        queries
+    }
+
     /// fzf's extendedMatch over one line: every set satisfied (a set by its first term that
     /// matches; a `!term` by its absence), the scores summed.
     pub fn matches(&self, line: &[char]) -> Option<Hit> {

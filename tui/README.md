@@ -8,23 +8,26 @@ curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash    # installs har
 hn                                                                 # or: harness tui
 ```
 
-vim is vi improved: every vi key works, and more. hn is that for tmux — every tmux key and
-`~/.tmux.conf` line works, with every harness on every machine behind them. What tmux users have
-asked for over the years, and what hn does about it: [docs/tmux-improved.md](docs/tmux-improved.md).
+hn follows tmux 3.5a's keys, commands, formats and `~/.tmux.conf`, with your harnesses on
+every machine behind them. What tmux users have asked for over the years, and what hn does
+about it: [docs/tmux-improved.md](docs/tmux-improved.md).
 
 ![Three harnesses on two machines, side by side](docs/panes.png)
 
 ![C-b s: every harness on every machine, the one waiting on you nearest the prompt](docs/launcher.png)
 
-<sub>Screens from the demo fleet in `tests/mock-daemon.mjs` (`MOCK_DEMO=1`).</sub>
+<sub>Rendered from demo-fleet terminal captures (`tests/mock-daemon.mjs`, `MOCK_DEMO=1`),
+with animations off and a demo hostname.</sub>
 
-It is a **client of the same daemon the desktop app uses**. Nothing runs inside it: the agents
-live in the daemon's tmux on their own machines, and each pane is a live stream of one of them.
-Close it, lose the connection, reopen it anywhere — everything is where you left it, because
-your tabs are the account's **desk**, the same tabs the desktop and the phone show.
+It connects to the **same daemon the desktop app uses**: agents run on their own machines,
+and each agent pane streams its terminal. Daemon-backed tabs share the account's **desk**
+with the desktop and phone. With no daemon available, hn opens local shells instead; a private
+PTY supervisor keeps them running through detach, reconnect and a client crash. These local
+sessions stay on this computer and remain intact when Harness reconnects.
 
 On a fresh server `hn` signs in (over SSH the login prints a URL and takes the pasted
-callback), starts the daemon, then opens — as `tmux new -A` does: your tabs if the desk has any,
+callback), starts the daemon, then opens. If sign-in or daemon startup fails, it still opens
+a local shell. Like `tmux new -A`, it restores your tabs if the desk has any,
 else window 0 is a shell on this computer, in the folder you ran `hn` in. `C-b s` finds every
 harness. Closing the last window ends `hn` (`[exited]`, as tmux says it); `C-b d` detaches.
 
@@ -67,7 +70,8 @@ never a tmux server you have running.
 
 Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pane`, `break-pane`
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same sizes, the same
-pane numbers and the same active pane after each. Some defaults differ, and your `.tmux.conf`
+pane numbers and the same active pane after each. Use `set -g @hn-animations off` to keep
+working and loading indicators still. Some defaults differ, and your `.tmux.conf`
 overrides each: `pane-border-status top` (each pane's title row: its harness's state and name, and
 its project and branch where the pane has room), `allow-set-title off` (a pane's title is its
 harness's name, not what the program sets), `history-limit 10000` (agents print a lot; tmux keeps

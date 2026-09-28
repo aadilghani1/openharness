@@ -29,8 +29,17 @@ pub fn text(app: &App, fmt: &str, window: Option<usize>) -> String {
 
 /// tmux's format_expand ([time]: format_expand_time) for a window and a pane.
 pub fn expand(app: &App, fmt: &str, window: usize, pane: Option<u64>, time: bool) -> String {
-    let mut es = Es { app, window, pane, time, nojobs: false, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None };
+    let mut es = Es { app, window, pane, time, nojobs: false, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None, trace: None };
     expand1(&mut es, fmt)
+}
+
+/// display-message -v prints the expansion decisions as tmux's FORMAT_VERBOSE does.
+pub fn verbose(app: &App, fmt: &str, window: usize, pane: Option<u64>) -> (String, Vec<String>) {
+    let trace = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut es = Es { app, window, pane, time: true, nojobs: false, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None, trace: Some(trace.clone()) };
+    let out = expand1(&mut es, fmt);
+    let lines = trace.borrow().clone();
+    (out, lines)
 }
 
 /// tmux's format_table, in its order: what display -a lists.
@@ -55,18 +64,18 @@ pub fn every(app: &App, window: usize, pane: Option<u64>) -> Vec<String> {
 /// A format for a session not in front (another client's, or a list's row): its session_*
 /// values its own, as a #{S:} loop expands them.
 pub fn expand_session(app: &App, fmt: &str, session: u32) -> String {
-    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: (session != app.session_id).then_some(session), window_of: None, format_type: Some(crate::tree::FORMAT_SESSION) };
+    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: (session != app.session_id).then_some(session), window_of: None, format_type: Some(crate::tree::FORMAT_SESSION), trace: None };
     expand1(&mut es, fmt)
 }
 
 /// A format for window [k] (of session_windows) of a session not in front (another client's).
 pub fn expand_session_window(app: &App, fmt: &str, session: u32, k: usize) -> String {
-    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: Some(session), window_of: Some(k), format_type: Some(crate::tree::FORMAT_WINDOW) };
+    let mut es = Es { app, window: app.active, pane: None, time: false, nojobs: false, depth: 0, now: now_secs(), session: Some(session), window_of: Some(k), format_type: Some(crate::tree::FORMAT_WINDOW), trace: None };
     expand1(&mut es, fmt)
 }
 
 pub fn expand_nojobs(app: &App, fmt: &str) -> String {
-    let mut es = Es { app, window: app.active, pane: app.focused(), time: false, nojobs: true, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None };
+    let mut es = Es { app, window: app.active, pane: app.focused(), time: false, nojobs: true, depth: 0, now: now_secs(), session: None, window_of: None, format_type: None, trace: None };
     expand1(&mut es, fmt)
 }
 
@@ -88,11 +97,15 @@ struct Es<'a> {
     session: Option<u32>,
     window_of: Option<usize>,
     format_type: Option<u8>,
+    trace: Option<std::rc::Rc<std::cell::RefCell<Vec<String>>>>,
 }
 
 impl<'a> Es<'a> {
     fn at(&self, window: usize, pane: Option<u64>) -> Es<'a> {
-        Es { app: self.app, window, pane, time: self.time, nojobs: self.nojobs, depth: self.depth, now: self.now, session: self.session, window_of: self.window_of, format_type: self.format_type }
+        Es { app: self.app, window, pane, time: self.time, nojobs: self.nojobs, depth: self.depth, now: self.now, session: self.session, window_of: self.window_of, format_type: self.format_type, trace: self.trace.clone() }
+    }
+    fn log(&self, text: impl AsRef<str>) {
+        if let Some(trace) = &self.trace { trace.borrow_mut().push(format!("#{}{}", " ".repeat(self.depth.min(10) as usize), text.as_ref())) }
     }
 }
 
@@ -232,8 +245,9 @@ fn alias(c: u8) -> Option<&'static str> {
 fn expand1(es: &mut Es, fmt: &str) -> String {
     if fmt.is_empty() || es.depth >= LOOP_LIMIT { return String::new() }
     es.depth += 1;
+    es.log(format!("expanding format: {fmt}"));
     let timed;
-    let fmt = if es.time && fmt.contains('%') { timed = strftime(es.app, fmt, es.now); timed.as_str() } else { fmt };
+    let fmt = if es.time && fmt.contains('%') { timed = strftime(es.app, fmt, es.now); if timed != fmt { es.log(format!("after time expanded: {timed}")) } timed.as_str() } else { fmt };
     let b = fmt.as_bytes();
     let mut out = String::new();
     let mut i = 0;
@@ -266,6 +280,7 @@ fn expand1(es: &mut Es, fmt: &str) -> String {
             b'{' => {
                 let Some(k) = skip(&b[hash..], b"}") else { break };
                 let end = hash + k;
+                es.log(format!("found #{{}}: {}", &fmt[i..end]));
                 match replace(es, &fmt[i..end]) { Some(v) => out.push_str(&v), None => break }
                 i = end + 1;
             }
@@ -286,7 +301,7 @@ fn expand1(es: &mut Es, fmt: &str) -> String {
             _ => {
                 let name = if style_end.map(|e| i > e).unwrap_or(true) { alias(ch) } else { None };
                 match name {
-                    Some(name) => match replace(es, name) { Some(v) => out.push_str(&v), None => break },
+                    Some(name) => { es.log(format!("found #{}: {name}", ch as char)); match replace(es, name) { Some(v) => out.push_str(&v), None => break } },
                     None => {
                         out.push('#');
                         // Not an ASCII letter: the character goes out whole, from its first byte.
@@ -296,6 +311,7 @@ fn expand1(es: &mut Es, fmt: &str) -> String {
             }
         }
     }
+    es.log(format!("result is: {out}"));
     es.depth -= 1;
     out
 }
@@ -519,7 +535,9 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
     } else if copy.contains("#{") {
         expand1(es, copy)
     } else {
-        find(es, copy, &f, time_format.as_deref()).unwrap_or_default()
+        let found = find(es, copy, &f, time_format.as_deref());
+        match &found { Some(value) => es.log(format!("format '{copy}' found: {value}")), None => es.log(format!("format '{copy}' not found")) }
+        found.unwrap_or_default()
     };
     if f.expand { value = expand1(es, &value) }
     else if f.expandtime { let saved = es.time; es.time = true; value = expand1(es, &value); es.time = saved }
@@ -538,6 +556,7 @@ fn replace(es: &mut Es, key: &str) -> Option<String> {
     if width > 0 { value = pad(&value, width as usize, false) } else if width < 0 { value = pad(&value, width.unsigned_abs() as usize, true) }
     if f.length { value = value.len().to_string() }
     if f.width { value = format_width(&value).to_string() }
+    es.log(format!("replaced '{key}' with '{value}'"));
     Some(value)
 }
 
@@ -640,9 +659,23 @@ fn matches(fm: &Mod, pattern: &str, text: &str) -> String {
     let flags = fm.argv.first().map(String::as_str).unwrap_or("");
     let icase = flags.contains('i');
     let hit = if flags.contains('r') {
-        regex::RegexBuilder::new(pattern).case_insensitive(icase).build().map(|r| r.is_match(text)).unwrap_or(false)
+        posix_match(pattern, text, icase)
     } else if icase { glob(&pattern.to_lowercase(), &text.to_lowercase()) } else { glob(pattern, text) };
     if hit { "1".into() } else { "0".into() }
+}
+
+/// tmux uses the platform's POSIX extended expressions, including its escape rules.
+fn posix_match(pattern: &str, text: &str, icase: bool) -> bool {
+    let (Ok(pattern), Ok(text)) = (std::ffi::CString::new(pattern), std::ffi::CString::new(text)) else { return false };
+    let mut re = std::mem::MaybeUninit::<libc::regex_t>::uninit();
+    // regcomp initializes regex_t on success; regexec and regfree then use that object.
+    unsafe {
+        if libc::regcomp(re.as_mut_ptr(), pattern.as_ptr(), libc::REG_EXTENDED | if icase { libc::REG_ICASE } else { 0 }) != 0 { return false }
+        let mut re = re.assume_init();
+        let hit = libc::regexec(&re, text.as_ptr(), 0, std::ptr::null_mut(), 0) == 0;
+        libc::regfree(&mut re);
+        hit
+    }
 }
 
 /// fnmatch(3): `*`, `?`, `[…]` (and `[!…]`), `\` quoting.
@@ -678,9 +711,8 @@ fn search_pane(es: &Es, fm: &Mod, term: &str) -> String {
     let tab = es.app.tabs.get(es.window);
     let Some(pane) = es.pane.or_else(|| tab.and_then(|t| t.focus)).and_then(|p| es.app.panes.get(&p)) else { return "0".into() };
     let icase = flags.contains('i');
-    let re = if flags.contains('r') { regex::RegexBuilder::new(term).case_insensitive(icase).build().ok() } else { None };
     for (i, line) in pane.text_range(Some(0), None).lines().enumerate() {
-        let hit = match &re { Some(r) => r.is_match(line), None => if icase { glob(&format!("*{}*", term.to_lowercase()), &line.to_lowercase()) } else { glob(&format!("*{term}*"), line) } };
+        let hit = if flags.contains('r') { posix_match(term, line, icase) } else if icase { glob(&format!("*{}*", term.to_lowercase()), &line.to_lowercase()) } else { glob(&format!("*{term}*"), line) };
         if hit { return (i + 1).to_string() }
     }
     "0".into()
@@ -696,14 +728,14 @@ fn expression(es: &mut Es, fm: &Mod, copy: &str) -> Option<String> {
     let (l, r) = choose(es, copy, true)?;
     let num = |s: &str| -> Option<f64> { if s.is_empty() { Some(0.0) } else { s.trim_start().parse::<f64>().ok() } };
     let (mut a, mut b) = (num(&l)?, num(&r)?);
-    if !fp { a = a.trunc(); b = b.trunc() }
+    if !fp { a = (a as i64) as f64; b = (b as i64) as f64 }
     let t = |x: bool| if x { 1.0 } else { 0.0 };
     let v = match op {
         "+" => a + b, "-" => a - b, "*" => a * b, "/" => a / b, "%" | "m" => a % b,
         "==" => t((a - b).abs() < 1e-9), "!=" => t((a - b).abs() > 1e-9),
         ">" => t(a > b), "<" => t(a < b), ">=" => t(a >= b), _ => t(a <= b),
     };
-    Some(if fp { format!("{v:.prec$}") } else { format!("{:.prec$}", v.trunc()) })
+    Some(if fp { format!("{v:.prec$}") } else { format!("{:.prec$}", (v as i64) as f64) })
 }
 
 /// tmux's regsub: every match replaced; `\0`–`\9` in the replacement are the groups.
@@ -1220,7 +1252,10 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "session_path" => app.session_path.clone().unwrap_or_else(|| std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default()),
         // The session the client was in before this one.
         "client_last_session" => app.last_session.and_then(|l| app.session_list().into_iter().find(|(i, _)| *i == l)).map(|(_, n)| n).unwrap_or_default(),
-        "pane_dead_status" | "pane_start_command" => String::new(),
+        "pane_dead_status" => pane.and_then(|p| p.dead.as_ref()).and_then(|e| e.status).map(|s| s.to_string()).unwrap_or_default(),
+        "pane_dead_signal" => pane.and_then(|p| p.dead.as_ref()).and_then(|e| e.signal).map(|s| crate::local::signal_name(s)).unwrap_or_default(),
+        "pane_dead_time" => pane.and_then(|p| p.dead.as_ref()).map(|e| e.time.to_string()).unwrap_or_default(),
+        "pane_start_command" => String::new(),
         // Its session group (new -t): none when it is in none (tmux's NULL), but _grouped.
         "session_group" | "session_group_size" | "session_group_list" | "session_group_attached" | "session_group_many_attached" | "session_group_attached_list" | "session_grouped" => app.session_group_value(app.session_id, name).unwrap_or_default(),
         // The sessions its window is in (link-window, a group).
@@ -1262,7 +1297,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             out
         }
         "pane_last" => (focus.is_some() && focus == tab.and_then(|t| t.last_focus())).then_some("1").unwrap_or("0").into(),
-        "pane_dead" => pane.map(|p| matches!(p.phase, crate::pane::Phase::Card { .. })).unwrap_or(false).then_some("1").unwrap_or("0").into(),
+        "pane_dead" => pane.map(|p| p.dead.is_some() || matches!(p.phase, crate::pane::Phase::Card { .. })).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "pane_start_path" => agent.map(|a| a.cwd.clone()).unwrap_or_default(),
         "alternate_on" => pane.map(|p| p.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         // The pane's terminal modes, as tmux keeps them (MODE_INSERT, MODE_KCURSOR …).
@@ -1318,9 +1353,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // Where the window is on the lastw stack, from 1; 0 when it isn't (the current one).
         "window_stack_index" => tab.and_then(|t| app.lastw.iter().position(|id| *id == t.id)).map(|i| (i + 1).to_string()).unwrap_or_else(|| "0".into()),
         // Every client of the session shows its current window.
-        "window_active_clients" => if window == app.active { attached(app).to_string() } else { "0".into() },
-        "window_active_sessions" => "1".into(),
-        "window_active_sessions_list" => app.session_name(),
+        "window_active_sessions" | "window_active_sessions_list" | "window_active_clients" | "window_active_clients_list" => tab.map(|t| app.active_window_value(t.wid(), name)).unwrap_or_default(),
         // A cell's pixels (TIOCGWINSZ's over its cells, as tty_resize has them): the client's (0
         // when the terminal does not say; none with no terminal), the window's (16x32, tmux's
         // DEFAULT_XPIXEL/YPIXEL, then).
@@ -1507,6 +1540,18 @@ fn restyle(mut style: Style, base: Style, spec: &str) -> Style {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn format_regex_uses_posix_extended_expressions() {
+        assert!(super::posix_match("^(foo|bar)[[:digit:]]+$", "foo12", false));
+        assert!(!super::posix_match("^foo$", "FOO", false));
+        assert!(super::posix_match("^foo$", "FOO", true));
+        assert!(!super::posix_match("(?i)foo", "foo", false));
+        assert!(!super::posix_match("[", "foo", false));
+        // The platform's regcomp is also tmux's: Darwin does not give \b Perl semantics.
+        #[cfg(target_os = "macos")]
+        assert!(!super::posix_match(r"\bfoo", "foo", false));
+    }
+
     #[test]
     fn a_short_name_keeps_whole_words() {
         use super::short_name;

@@ -417,7 +417,7 @@ pub fn name(chord: &Chord) -> String {
     if chord.mods.contains(KeyModifiers::CONTROL) { out.push_str("C-") }
     if chord.mods.contains(KeyModifiers::ALT) { out.push_str("M-") }
     if chord.mods.contains(KeyModifiers::SUPER) { out.push_str("D-") }
-    let shifted_letter = matches!(chord.code, KeyCode::Char(c) if c.is_alphabetic());
+    let shifted_letter = !chord.mods.contains(KeyModifiers::CONTROL) && matches!(chord.code, KeyCode::Char(c) if c.is_alphabetic());
     if chord.mods.contains(KeyModifiers::SHIFT) && !shifted_letter { out.push_str("S-") }
     out.push_str(&match chord.code {
         KeyCode::Char(' ') => "Space".into(),
@@ -517,6 +517,15 @@ mod tests {
         assert_eq!(name(&parse("C-b").unwrap()), "C-b");
         assert_eq!(name(&parse("M-1").unwrap()), "M-1");
         assert_eq!(name(&parse("S").unwrap()), "S");
+    }
+
+    #[test]
+    fn explicit_shift_control_spelling_remains_distinct() {
+        assert_eq!(parse("C-H").unwrap(), parse("C-h").unwrap());
+        assert_ne!(parse("C-S-H").unwrap(), parse("C-H").unwrap());
+        assert_eq!(name(&parse("C-S-H").unwrap()), "C-S-H");
+        assert_eq!(name(&parse("C-S-h").unwrap()), "C-S-h");
+        assert_eq!(name(&parse("S-h").unwrap()), "H");
     }
 
     #[test]

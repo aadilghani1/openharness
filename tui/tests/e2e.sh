@@ -198,6 +198,31 @@ tmux_ send-keys -t t C-b '&'
 expect "C-b & asks first" "(y/n)"
 tmux_ send-keys -t t y
 wait_eq "C-b & kills the window's shell" $((before + 1)) dial "(d.deleted || []).length"
+# A question hook is bound to its original request, even when its shell test finishes later.
+# Hold the callback until the replacement question is visible, without relying on a timing race.
+hook_question() { push "{\"type\":\"commander_question\",\"agentId\":\"$claude\",\"dbSessionId\":\"$csess\",\"payload\":{\"requestId\":\"$1\",\"questions\":[{\"q\":\"$2\",\"options\":[\"Yes\",\"No\"]}]}}"; }
+hook_close() { push "{\"type\":\"commander_question_close\",\"agentId\":\"$claude\",\"dbSessionId\":\"$csess\",\"payload\":{\"requestId\":\"$1\",\"agentId\":\"$claude\",\"dbSessionId\":\"$csess\"}}"; }
+hook_started() { [ -f "$home/hook-started" ] && echo yes; }
+hn set-hook -g harness-needs "if-shell \"touch '$home/hook-started'; while [ ! -e '$home/hook-release' ]; do sleep 0.02; done\" \"answer-harness 1\""
+hook_question q-hook-old 'Original question?'
+wait_eq "the question hook started its shell check" yes hook_started
+hn set-hook -gu harness-needs
+hook_close q-hook-old
+hook_question q-hook-new 'Replacement question?'
+# The picker proves that hn received the replacement before the old callback is released.
+tmux_ send-keys -t t C-b A
+expect "replacement question is visible" "Replacement question?"
+tmux_ send-keys -t t Escape
+touch "$home/hook-release"
+expect "the old hook refuses the replacement question" "question changed since the hook ran"
+wait_eq "the replacement was not answered" 0 dial "(d.answers || []).filter(a => a.requestId === 'q-hook-new').length"
+hook_close q-hook-new
+# Preserve ordinary asynchronous answering and the hook's harness when another pane is focused.
+hn set-hook -g harness-needs 'run-shell "sleep 0.05" ; answer-harness 2'
+hook_question q-hook-same 'Unchanged question?'
+wait_eq "an unchanged hook question answers on its own harness" No dial "(d.answers || []).find(a => a.requestId === 'q-hook-same' && a.agentId === '$claude')?.answers['Unchanged question?']"
+hn set-hook -gu harness-needs
+
 tmux_ resize-window -t t -x 30 -y 8
 sleep 0.3
 tmux_ resize-window -t t -x 120 -y 32

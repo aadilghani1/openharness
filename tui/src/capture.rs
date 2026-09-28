@@ -41,12 +41,12 @@ impl Default for Look {
 }
 
 // GRID_ATTR_* in the order grid_string_cells_code writes them, and their codes.
-const ATTRS: [(u16, u32); 12] = [
+const ATTRS: [(u16, u32); 13] = [
     (1 << 0, 1),   // BRIGHT
     (1 << 1, 2),   // DIM
     (1 << 2, 3),   // ITALICS
     (1 << 3, 4),   // UNDERSCORE
-    (1 << 4, 5),   // BLINK (alacritty keeps none)
+    (1 << 4, 5),   // BLINK
     (1 << 5, 7),   // REVERSE
     (1 << 6, 8),   // HIDDEN
     (1 << 7, 9),   // STRIKETHROUGH
@@ -54,6 +54,7 @@ const ATTRS: [(u16, u32); 12] = [
     (1 << 9, 43),  // UNDERSCORE_3
     (1 << 10, 44), // UNDERSCORE_4
     (1 << 11, 45), // UNDERSCORE_5
+    (1 << 12, 53), // OVERLINE (tmux capture-pane spells this 5:3)
 ];
 
 fn colour(c: Color, default: u32) -> u32 {
@@ -79,6 +80,7 @@ fn look(cell: &Cell) -> Look {
     if f.contains(Flags::DIM) { attr |= 1 << 1 }
     if f.contains(Flags::ITALIC) { attr |= 1 << 2 }
     if f.contains(Flags::UNDERLINE) { attr |= 1 << 3 }
+    if f.contains(Flags::BLINK) { attr |= 1 << 4 }
     if f.contains(Flags::INVERSE) { attr |= 1 << 5 }
     if f.contains(Flags::HIDDEN) { attr |= 1 << 6 }
     if f.contains(Flags::STRIKEOUT) { attr |= 1 << 7 }
@@ -86,6 +88,7 @@ fn look(cell: &Cell) -> Look {
     if f.contains(Flags::UNDERCURL) { attr |= 1 << 9 }
     if f.contains(Flags::DOTTED_UNDERLINE) { attr |= 1 << 10 }
     if f.contains(Flags::DASHED_UNDERLINE) { attr |= 1 << 11 }
+    if f.contains(Flags::OVERLINE) { attr |= 1 << 12 }
     Look { fg: colour(cell.fg, 8), bg: colour(cell.bg, 8), us: cell.underline_color().map(|c| colour(c, 8)).unwrap_or(8), attr }
 }
 
@@ -193,6 +196,34 @@ pub fn line_of(pane: &Pane, value: Option<&str>, start: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tmux_attributes_survive_chunked_output_and_reconnect() {
+        let mut source = Pane::new(1, "local", "source", 20, 4);
+        source.enable_local();
+        for byte in b"\x1b[1;21mDOUBLE\x1b[0m\r\n\x1b[5mBLINK\x1b[25mPLAIN\r\n\x1b[53mOVER\x1b[55mPLAIN\r\n\x1b[21;6;53mALL" {
+            source.feed(&[*byte]);
+        }
+        let grid = source.term.grid();
+        assert!(grid[Line(0)][Column(0)].flags.contains(Flags::BOLD | Flags::DOUBLE_UNDERLINE));
+        assert!(grid[Line(1)][Column(0)].flags.contains(Flags::BLINK));
+        assert!(!grid[Line(1)][Column(5)].flags.contains(Flags::BLINK));
+        assert!(grid[Line(2)][Column(0)].flags.contains(Flags::OVERLINE));
+        assert!(!grid[Line(2)][Column(4)].flags.contains(Flags::OVERLINE));
+        assert!(grid[Line(3)][Column(0)].flags.contains(Flags::DOUBLE_UNDERLINE | Flags::BLINK | Flags::OVERLINE));
+        let f = Flags2 { sequences: true, empty_cells: true, trim: true, ..Default::default() };
+        let before = history(&source, 0, 3, f);
+        assert!(before.starts_with("\x1b[1;4:2mDOUBLE\x1b[0m"));
+        assert!(before.contains("\x1b[5mBLINK\x1b[0mPLAIN"));
+        assert!(before.contains("\x1b[5:3mOVER\x1b[0mPLAIN"));
+        let mut mirror = Pane::new(2, "local", "mirror", 20, 4);
+        mirror.keyframe(20, 4, &source.local_snapshot(b""));
+        assert_eq!(before, history(&mirror, 0, 3, f));
+        // The cursor's attributes, not just already-painted cells, survive a snapshot.
+        source.feed(b"NEXT\x1b[0mPLAIN");
+        mirror.feed(b"NEXT\x1b[0mPLAIN");
+        assert_eq!(history(&source, 0, 3, f), history(&mirror, 0, 3, f));
+    }
 
     #[test]
     fn codes_as_grid_string_cells_code_writes_them() {

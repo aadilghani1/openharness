@@ -38,6 +38,38 @@ pub fn mark_headless(socket: &std::path::Path) { let _ = std::fs::write(socket.w
 /// with no target goes, as tmux's cmd_find_best_client takes the client used last.
 pub fn mark_active() { if let Some(here) = here() { let _ = std::fs::write(here.with_extension("activity"), b""); } }
 
+/// A terminal's usable dimensions, kept beside its socket. A command can use its invoking
+/// client's size even when its target belongs to another client, without asking that client's
+/// event loop while it might already be waiting on this one.
+pub fn publish_size(size: (u16, u16)) {
+    let Some(own) = here() else { return };
+    let value = format!("{},{}", size.0, size.1);
+    let write = |socket: &std::path::Path| {
+        let path = socket.with_extension("size");
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(&value) { let _ = std::fs::write(path, &value); }
+    };
+    write(&own);
+    if CLAIMED.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Some(name) = own.file_stem().and_then(|s| s.to_str()).and_then(|s| s.split('@').next()) { write(&own.with_file_name(format!("{name}.sock"))); }
+    }
+}
+
+fn saved_size(socket: &std::path::Path) -> Option<(u16, u16)> {
+    if is_headless(socket) { return None }
+    let value = std::fs::read_to_string(socket.with_extension("size")).ok()?;
+    let (x, y) = value.split_once(',')?;
+    let size = (x.parse().ok()?, y.parse().ok()?);
+    (size.0 > 0 && size.1 > 0).then_some(size)
+}
+
+/// The command's client is its enclosing pane's client, or the attached client used last.
+/// This is independent of the socket chosen for its target session.
+fn command_size(target: &std::path::Path) -> Option<(u16, u16)> {
+    if let Some(inside) = std::env::var("HN_SOCKET").ok().filter(|s| !s.is_empty()) { return saved_size(std::path::Path::new(&inside)) }
+    let name = target.file_stem()?.to_str()?.split('@').next()?;
+    busiest(name).and_then(|c| saved_size(&c)).or_else(|| saved_size(target))
+}
+
 /// Of this name's clients with a terminal, the one used last, ahead of a detached server.
 pub fn busiest(name: &str) -> Option<PathBuf> {
     let attached: Vec<PathBuf> = clients_of(name).into_iter().filter(|p| !is_headless(p)).collect();
@@ -100,6 +132,7 @@ fn accept(listener: tokio::net::UnixListener, sink: mpsc::UnboundedSender<Event>
                 let words: Vec<String> = request.get("argv").or(Some(&request)).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
                 let cwd = request.get("cwd").and_then(Value::as_str).map(str::to_string);
                 let stdin = request.get("stdin").and_then(Value::as_str).map(str::to_string);
+                let client_size = serde_json::from_value::<(u16, u16)>(request["client_size"].clone()).ok().filter(|(x, y)| *x > 0 && *y > 0);
                 let passed = request.get("forwarded").and_then(Value::as_bool).unwrap_or(false);
                 // From a shell outside hn (not its jobs', not another client's): no client's.
                 let outside = !passed && !request.get("inside").and_then(Value::as_bool).unwrap_or(false);
@@ -111,6 +144,7 @@ fn accept(listener: tokio::net::UnixListener, sink: mpsc::UnboundedSender<Event>
                     app.cli_tx = Some(tx);
                     app.cli_code = 0;
                     app.cli_cwd = cwd;
+                    app.cli_size = client_size;
                     app.cli_stdin = stdin;
                     app.cli_outside = outside;
                     FORWARDED.store(passed, std::sync::atomic::Ordering::Relaxed);
@@ -151,7 +185,7 @@ pub fn claim_name() {
     let Ok(listener) = tokio::net::UnixListener::from_std(std_listener) else { return };
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&primary, std::fs::Permissions::from_mode(0o600)); }
     if let Some(own) = here() {
-        if let Ok(port) = std::fs::read_to_string(own.with_extension("port")) { let _ = std::fs::write(primary.with_extension("port"), port); }
+        for ext in ["port", "size"] { if let Ok(value) = std::fs::read_to_string(own.with_extension(ext)) { let _ = std::fs::write(primary.with_extension(ext), value); } }
         // The primary name is now an alias of this client, including whether it has a
         // terminal. A former owner's marker must never turn a server into an attached UI.
         if is_headless(&own) { mark_headless(&primary); }
@@ -261,7 +295,7 @@ fn sweep(dir: &std::path::Path) {
         if stem != name && !stem.strip_prefix(&name).is_some_and(|s| s.starts_with('@')) { continue }
         if p.extension().map(|x| x == "sock").unwrap_or(false) && std::os::unix::net::UnixStream::connect(&p).is_err() {
             let _ = std::fs::remove_file(&p);
-            for ext in ["port", "headless", "activity"] { let _ = std::fs::remove_file(p.with_extension(ext)); }
+            for ext in ["port", "headless", "activity", "size"] { let _ = std::fs::remove_file(p.with_extension(ext)); }
         }
         if p.extension().map(|x| x == "port").unwrap_or(false) && !p.with_extension("sock").exists() { let _ = std::fs::remove_file(&p); }
     }
@@ -298,6 +332,7 @@ pub fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
 pub fn gone(path: &std::path::Path) {
     let _ = std::fs::remove_file(path.with_extension("port"));
     let _ = std::fs::remove_file(path.with_extension("activity"));
+    let _ = std::fs::remove_file(path.with_extension("size"));
     let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
     let primary = dir().join(format!("{name}.sock"));
     if path == primary { return }
@@ -341,14 +376,17 @@ pub fn alive(socket: Option<&str>, name: Option<&str>) -> bool {
 /// A command run by another client, from this one's loop (a command naming a session that
 /// client has; that client giving a session up): what it printed, its errors and its status —
 /// none when it does not answer in time.
-pub fn ask(path: &std::path::Path, words: &[String]) -> Option<crate::app::Reply> {
+pub fn ask(path: &std::path::Path, words: &[String]) -> Option<crate::app::Reply> { ask_with_size(path, words, None) }
+
+/// Forward a user command while retaining its invoking terminal's geometry.
+pub fn ask_with_size(path: &std::path::Path, words: &[String], size: Option<(u16, u16)>) -> Option<crate::app::Reply> {
     use std::io::{BufRead, Write};
     // Serving another client's command: never wait on a client (it may be the one waiting).
     if forwarded() { return None }
     let mut s = std::os::unix::net::UnixStream::connect(path).ok()?;
     s.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
     s.set_write_timeout(Some(std::time::Duration::from_secs(2))).ok()?;
-    writeln!(s, "{}", json!({ "argv": words, "cwd": find_cwd(), "forwarded": true })).ok()?;
+    writeln!(s, "{}", json!({ "argv": words, "cwd": find_cwd(), "forwarded": true, "client_size": size })).ok()?;
     let mut line = String::new();
     std::io::BufReader::new(&s).read_line(&mut line).ok()?;
     let reply: Value = serde_json::from_str(line.trim()).ok()?;
@@ -411,7 +449,7 @@ pub async fn call_at(path: &std::path::Path, words: &[String]) -> Option<i32> {
                 let stdin = if reads_stdin { let mut s = String::new(); let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut s); Some(s) } else { None };
                 // From one of a client's own jobs (its $HN_SOCKET): that client is the command's client.
                 let inside = std::env::var("HN_SOCKET").map(|s| !s.is_empty()).unwrap_or(false);
-                if write.write_all(format!("{}\n", json!({ "argv": words, "cwd": cwd, "stdin": stdin, "inside": inside })).as_bytes()).await.is_err() { return Some(1) }
+                if write.write_all(format!("{}\n", json!({ "argv": words, "cwd": cwd, "stdin": stdin, "inside": inside, "client_size": command_size(path) })).as_bytes()).await.is_err() { return Some(1) }
                 let mut line = String::new();
                 let _ = BufReader::new(read).read_line(&mut line).await;
                 let reply: Value = serde_json::from_str(line.trim()).unwrap_or(Value::Null);

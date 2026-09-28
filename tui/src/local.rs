@@ -80,15 +80,22 @@ enum Event {
     Client(Uuid, mpsc::Sender<Message>),
     Message(Uuid, Message),
     Gone(Uuid),
-    Output(String, Vec<u8>),
-    Eof(String),
+    Output(String, Uuid, Vec<u8>),
+    Eof(String, Uuid),
 }
 
 struct Client { tx: mpsc::Sender<Message>, selected: bool }
 struct Stream { client: Uuid, seq: u64, input: u64, readonly: bool }
 struct Shell {
     agent: Value,
-    pty: tty::Pty,
+    pty: Option<tty::Pty>,
+    pid: u32,
+    payload: Value,
+    generation: Uuid,
+    death: Option<crate::pane::Exit>,
+    death_drawn: bool,
+    eof: bool,
+    waiting: bool,
     input: mpsc::UnboundedSender<Vec<u8>>,
     reader: tokio::task::JoinHandle<()>,
     pane: Pane,
@@ -112,14 +119,14 @@ fn error(clients: &mut HashMap<Uuid, Client>, id: Uuid, ty: &str, request: &Valu
     reply(clients, id, &format!("{ty}_result"), request, json!({"error":code,"detail":detail.to_string()}));
 }
 fn size(p: &Value) -> (u16, u16) {
-    (p["cols"].as_u64().unwrap_or(80).clamp(2, 300) as u16, p["rows"].as_u64().unwrap_or(24).clamp(2, 120) as u16)
+    (p["cols"].as_u64().unwrap_or(80).clamp(1, 300) as u16, p["rows"].as_u64().unwrap_or(24).clamp(1, 120) as u16)
 }
 fn winsize(cols: u16, rows: u16) -> WindowSize { WindowSize { num_cols: cols, num_lines: rows, cell_width: 0, cell_height: 0 } }
 
 /// Reading and writing use the same nonblocking PTY, with backpressure on output and
 /// complete writes for input. In particular, a large paste is never truncated at EAGAIN.
-async fn drive(file: std::fs::File, id: String, mut input: mpsc::UnboundedReceiver<Vec<u8>>, events: mpsc::Sender<Event>) {
-    let Ok(fd) = AsyncFd::new(file) else { let _ = events.send(Event::Eof(id)).await; return };
+async fn drive(file: std::fs::File, id: String, generation: Uuid, mut input: mpsc::UnboundedReceiver<Vec<u8>>, events: mpsc::Sender<Event>) {
+    let Ok(fd) = AsyncFd::new(file) else { let _ = events.send(Event::Eof(id, generation)).await; return };
     let mut queue: VecDeque<Vec<u8>> = VecDeque::new();
     let mut offset = 0;
     let mut bytes = vec![0; 32 * 1024];
@@ -130,7 +137,7 @@ async fn drive(file: std::fs::File, id: String, mut input: mpsc::UnboundedReceiv
                 let Ok(mut ready) = ready else { break };
                 match ready.try_io(|fd| (&*fd.get_ref()).read(&mut bytes)) {
                     Ok(Ok(0)) | Ok(Err(_)) => break,
-                    Ok(Ok(n)) => if events.send(Event::Output(id.clone(), bytes[..n].to_vec())).await.is_err() { return },
+                    Ok(Ok(n)) => if events.send(Event::Output(id.clone(), generation, bytes[..n].to_vec())).await.is_err() { return },
                     Err(_) => {}
                 }
             }
@@ -145,7 +152,7 @@ async fn drive(file: std::fs::File, id: String, mut input: mpsc::UnboundedReceiv
             }
         }
     }
-    let _ = events.send(Event::Eof(id)).await;
+    let _ = events.send(Event::Eof(id, generation)).await;
 }
 
 impl Shell {
@@ -172,18 +179,41 @@ impl Shell {
         for key in std::env::vars().map(|(k,_)| k).chain(["ALACRITTY_WINDOW_ID".into(), "WINDOWID".into(), "USER".into(), "HOME".into()]) {
             if !env.contains_key(&key) { args.extend(["-u".into(), key]); }
         }
-        args.extend([shell.clone(), "-l".into(), "-i".into()]);
+        // The final pane dimensions are known at terminal_open. Stop before exec so even
+        // an immediate `stty size` sees that size, keeping one PID across the bootstrap.
+        args.extend(["/bin/sh".into(), "-c".into(), "kill -STOP $$; exec \"$@\"".into(), "hn-local-shell".into()]);
+        if let Some(command) = payload["command"].as_str() { args.extend([shell.clone(), "-c".into(), command.into()]); }
+        else { args.extend([shell.clone(), "-l".into(), "-i".into()]); }
         let options = tty::Options { shell: Some(tty::Shell::new("/usr/bin/env".into(), args)), working_directory: Some(cwd.clone()), env, drain_on_exit: true };
         let pty = tty::new(&options, winsize(80, 24), 0)?;
+        // Observe, without reaping, only this newly forked child's stop (or an exec error).
+        loop {
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let got = unsafe { libc::waitid(libc::P_PID, pty.child().id() as libc::id_t, &mut info, libc::WSTOPPED | libc::WEXITED | libc::WNOWAIT) };
+            if got == 0 && info.si_code == libc::CLD_STOPPED {
+                // Consume only the known stop; macOS can otherwise surface this WNOWAIT
+                // record again while asking for an exit, even after SIGCONT.
+                unsafe { libc::waitid(libc::P_PID, pty.child().id() as libc::id_t, &mut info, libc::WSTOPPED); }
+                break
+            }
+            if got < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted { continue }
+            return Err(io::Error::other("local shell bootstrap failed"));
+        }
         let file = pty.file().try_clone()?;
         let tty = unsafe { let p = libc::ptsname(pty.file().as_raw_fd()); if p.is_null() { String::new() } else { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() } };
         let (input, rx) = mpsc::unbounded_channel();
-        let reader = tokio::spawn(drive(file, id.clone(), rx, events));
+        let generation = Uuid::new_v4();
+        let reader = tokio::spawn(drive(file, id.clone(), generation, rx, events));
         let label = shell.rsplit('/').next().unwrap_or("sh");
         let agent = json!({"id":id,"sessionId":id,"name":label,"engine":"terminal","status":"active","launch":{"state":"ready"},"terminal":{"available":true},"project":{"cwd":cwd,"root":cwd,"name":""}});
         let mut pane = Pane::new(0, MACHINE, &id, 80, 24);
         pane.enable_local();
-        Ok(Self { agent, pty, input, reader, pane, tail: Tail::default(), streams: HashMap::new(), controller: None, ended: false, exited: None, tty })
+        let pid = pty.child().id();
+        Ok(Self { agent, pty: Some(pty), pid, payload: payload.clone(), generation, death: None, death_drawn: false, eof: false, waiting: true, input, reader, pane, tail: Tail::default(), streams: HashMap::new(), controller: None, ended: false, exited: None, tty })
+    }
+
+    fn start(&mut self) {
+        if self.waiting { self.waiting = false; unsafe { libc::kill(self.pid as i32, libc::SIGCONT); } }
     }
 
     fn keyframe(&mut self, stream: Uuid, clients: &mut HashMap<Uuid, Client>) {
@@ -200,7 +230,7 @@ impl Shell {
 
     fn resize(&mut self, cols: u16, rows: u16, clients: &mut HashMap<Uuid, Client>) {
         if (cols, rows) == (self.pane.cols, self.pane.rows) { return }
-        self.pty.on_resize(winsize(cols, rows));
+        if let Some(pty) = &mut self.pty { pty.on_resize(winsize(cols, rows)); }
         self.pane.resize_local(cols, rows);
         let ids: Vec<_> = self.streams.keys().copied().collect();
         for stream in ids { self.keyframe(stream, clients) }
@@ -237,26 +267,31 @@ async fn connection(stream: UnixStream, id: Uuid, events: mpsc::Sender<Event>) {
     let _ = events.send(Event::Gone(id)).await;
 }
 
-fn child_exited(pid: u32) -> bool {
+fn child_exited(pid: u32) -> Option<crate::pane::Exit> {
     // SAFETY: a zeroed output record, a child we own, and WNOWAIT leave wait/reaping to Pty.
     unsafe {
         let mut info: libc::siginfo_t = std::mem::zeroed();
-        libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOHANG | libc::WNOWAIT) == 0 && info.si_pid() > 0
+        if libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOHANG | libc::WNOWAIT) != 0 || info.si_pid() == 0 { return None }
+        if !matches!(info.si_code, libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED) { return None }
+        let status = info.si_status();
+        Some(crate::pane::Exit { id: Uuid::new_v4().to_string(), status: (info.si_code == libc::CLD_EXITED).then_some(status), signal: (info.si_code != libc::CLD_EXITED).then_some(status), time: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64 })
     }
 }
 
-fn reap(shell: Shell) -> tokio::task::JoinHandle<()> {
-    shell.reader.abort();
+fn reap(mut shell: Shell) -> tokio::task::JoinHandle<()> { shell.reader.abort(); reap_pty(shell.pty.take()) }
+
+fn reap_pty(pty: Option<tty::Pty>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn_blocking(move || {
-        let pid = shell.pty.child().id() as i32;
+        let Some(pty) = pty else { return };
+        let pid = pty.child().id() as i32;
         // The shell has its own session/process group. Stop its jobs with it, including a
         // foreground program which has moved to a separate process group on this PTY.
-        let foreground = unsafe { libc::tcgetpgrp(shell.pty.file().as_raw_fd()) };
+        let foreground = unsafe { libc::tcgetpgrp(pty.file().as_raw_fd()) };
         let groups: Vec<_> = [pid, foreground].into_iter().filter(|group| *group > 1 && (*group == pid || unsafe { libc::getsid(*group) } == pid)).collect();
         for group in &groups { unsafe { libc::kill(-*group, libc::SIGHUP); } }
         std::thread::sleep(Duration::from_millis(100));
         for group in groups { if group == pid || unsafe { libc::getsid(group) } == pid { unsafe { libc::kill(-group, libc::SIGKILL); } } }
-        drop(shell);
+        drop(pty);
     })
 }
 
@@ -285,24 +320,29 @@ pub async fn run(_port: u16) -> io::Result<()> {
                 for shell in shells.values_mut().filter(|s| !s.ended) {
                     // Leave the child unreaped until Pty::drop. Its PID cannot be reused while
                     // cleanup signals its process group, and final output can still drain.
-                    if shell.exited.is_none() && child_exited(shell.pty.child().id()) { shell.exited = Some(Instant::now()); }
+                    if shell.exited.is_none() { if let Some(death) = child_exited(shell.pid) { shell.exited = Some(Instant::now()); shell.death = Some(death); } }
                 }
                 // Let the PTY reader drain final output before announcing exit. A background
                 // job retaining the slave must not keep its exited shell alive forever.
-                let finished: Vec<_> = shells.iter().filter(|(_,s)| s.exited.is_some_and(|at| at.elapsed() >= Duration::from_millis(300))).map(|(id,_)| id.clone()).collect();
-                for id in finished { if let Some(mut shell) = shells.remove(&id) { shell.close(&mut clients, "exited"); reaping.push(reap(shell)); } }
+                for shell in shells.values_mut().filter(|s| !s.ended && s.exited.is_some_and(|at| s.eof || at.elapsed() >= Duration::from_millis(300))) {
+                    shell.ended = true;
+                    shell.agent["status"] = json!("stopped");
+                    shell.reader.abort();
+                    reaping.push(reap_pty(shell.pty.take()));
+                    for (id, stream) in &shell.streams { send(&mut clients, stream.client, envelope("terminal_closed", json!({"streamId":id.to_string(),"reason":"exited","exit":shell.death}))); }
+                }
                 reaping.retain(|task| !task.is_finished());
                 for shell in shells.values_mut() {
                     shell.streams.retain(|_,s| clients.contains_key(&s.client));
                     if shell.controller.is_some_and(|s| !shell.streams.contains_key(&s)) { shell.controller = None }
                 }
-                if clients.is_empty() && shells.values().all(|s| s.ended) { if empty.elapsed() > Duration::from_secs(3) { break } } else { empty = Instant::now() }
+                if clients.is_empty() && shells.is_empty() { if empty.elapsed() > Duration::from_secs(3) { break } } else { empty = Instant::now() }
             }
             event = rx.recv() => match event {
                 Some(Event::Client(id, client)) => { clients.insert(id, Client { tx: client, selected: false }); }
                 Some(Event::Gone(id)) => { clients.remove(&id); }
-                Some(Event::Eof(id)) => { if let Some(mut shell) = shells.remove(&id) { shell.close(&mut clients, "exited"); reaping.push(reap(shell)); } }
-                Some(Event::Output(id, bytes)) => if let Some(shell) = shells.get_mut(&id) {
+                Some(Event::Eof(id, generation)) => { if let Some(shell) = shells.get_mut(&id).filter(|s| s.generation == generation) { shell.eof = true; } }
+                Some(Event::Output(id, generation, bytes)) => if let Some(shell) = shells.get_mut(&id).filter(|s| s.generation == generation) {
                     shell.tail.advance(&bytes);
                     shell.pane.feed(&bytes);
                     for reply in shell.pane.take_local_replies() { let _ = shell.input.send(reply); }
@@ -352,12 +392,44 @@ pub async fn run(_port: u16) -> io::Result<()> {
                                 Err(e) => error(&mut clients, client, ty, &p, "SHELL_START_FAILED", e),
                             }
                         }
+                        "agent_restart" => {
+                            let Some(id) = p["agentId"].as_str().map(str::to_string) else { continue };
+                            let Some(mut old) = shells.remove(&id) else { error(&mut clients, client, ty, &p, "NOT_FOUND", "no such local shell"); continue };
+                            let mut payload = old.payload.clone();
+                            for key in ["command", "cwd"] { if p[key].is_string() { payload[key] = p[key].clone() } }
+                            match Shell::new(id.clone(), &payload, tx.clone()) {
+                                Ok(mut shell) => {
+                                    shell.resize(old.pane.cols, old.pane.rows, &mut clients);
+                                    shell.pane.inherit_history(&old.pane);
+                                    shell.start();
+                                    shell.streams = std::mem::take(&mut old.streams);
+                                    shell.controller = old.controller.take();
+                                    for (sid, stream) in &shell.streams { send(&mut clients, stream.client, envelope("terminal_restarted", json!({"streamId":sid.to_string()}))); }
+                                    for sid in shell.streams.keys().copied().collect::<Vec<_>>() { shell.keyframe(sid, &mut clients); }
+                                    let agent = shell.agent.clone(); shells.insert(id, shell); reaping.push(reap(old));
+                                    reply(&mut clients, client, "agent_restart_result", &p, json!({"agent":agent}));
+                                }
+                                Err(e) => { shells.insert(id, old); error(&mut clients, client, ty, &p, "SHELL_START_FAILED", e); }
+                            }
+                        }
+                        "terminal_remain" => {
+                            let Some(shell) = p["agentId"].as_str().and_then(|id| shells.get_mut(id)) else { continue };
+                            if !shell.ended || shell.death_drawn || shell.death.as_ref().map(|e| e.id.as_str()) != p["exitId"].as_str() { continue }
+                            shell.death_drawn = true;
+                            let text = p["text"].as_str().unwrap_or("");
+                            if !text.is_empty() {
+                                let bytes = format!("\x1b[?6l\x1b[r\x1b[0m\x1b[{};1H\r\n{text}", shell.pane.rows);
+                                shell.pane.feed(bytes.as_bytes());
+                                let streams: Vec<_> = shell.streams.keys().copied().collect();
+                                for id in streams { shell.keyframe(id, &mut clients) }
+                            }
+                        }
                         "agent_delete" => {
                             if let Some(mut shell) = p["agentId"].as_str().and_then(|id| shells.remove(id)) { shell.close(&mut clients, "deleted"); reaping.push(reap(shell)) }
                             reply(&mut clients, client, "agent_delete_result", &p, json!({}));
                         }
                         "terminal_open" => {
-                            let Some(shell) = p["agentId"].as_str().and_then(|id| shells.get_mut(id)).filter(|s| !s.ended) else { reply(&mut clients, client, "terminal_error", &p, json!({"code":"TERMINAL_AGENT_NOT_FOUND"})); continue };
+                            let Some(shell) = p["agentId"].as_str().and_then(|id| shells.get_mut(id)) else { reply(&mut clients, client, "terminal_error", &p, json!({"code":"TERMINAL_AGENT_NOT_FOUND"})); continue };
                             shell.streams.retain(|_,s| clients.contains_key(&s.client));
                             if shell.controller.is_some_and(|s| !shell.streams.contains_key(&s)) { shell.controller = None }
                             let stream = Uuid::new_v4();
@@ -365,10 +437,10 @@ pub async fn run(_port: u16) -> io::Result<()> {
                             if !readonly {
                                 if let Some(old) = shell.controller.take().and_then(|id| shell.streams.remove(&id).map(|s|(id,s))) { send(&mut clients, old.1.client, envelope("terminal_closed", json!({"streamId":old.0.to_string(),"takenBy":{"name":"another terminal"}}))); }
                                 shell.controller = Some(stream);
-                                let (cols, rows) = size(&p); shell.resize(cols, rows, &mut clients);
+                                let (cols, rows) = size(&p); shell.resize(cols, rows, &mut clients); shell.start();
                             }
                             shell.streams.insert(stream, Stream { client, seq: 0, input: 0, readonly });
-                            reply(&mut clients, client, "terminal_ready", &p, json!({"streamId":stream.to_string(),"readOnly":readonly,"heldBy":{"name":"another terminal"}}));
+                            reply(&mut clients, client, "terminal_ready", &p, json!({"streamId":stream.to_string(),"readOnly":readonly,"heldBy":{"name":"another terminal"},"exit":shell.death}));
                             shell.keyframe(stream, &mut clients);
                         }
                         "terminal_close" | "terminal_resize" | "terminal_resync" => {
@@ -380,11 +452,11 @@ pub async fn run(_port: u16) -> io::Result<()> {
                         }
                         "terminal_info" => {
                             let Some(shell) = p["agentId"].as_str().and_then(|id| shells.get(id)) else { error(&mut clients, client, ty, &p, "NOT_FOUND", "no such local shell"); continue };
-                            let pid = shell.pty.child().id();
-                            let group = unsafe { libc::tcgetpgrp(shell.pty.file().as_raw_fd()) };
+                            let pid = shell.pid;
+                            let group = shell.pty.as_ref().map(|pty| unsafe { libc::tcgetpgrp(pty.file().as_raw_fd()) }).unwrap_or(0);
                             let foreground = if group > 0 { group as u32 } else { pid };
-                            let cwd = process_cwd(foreground).or_else(|| process_cwd(pid)).or_else(|| shell.pane.cwd.clone()).unwrap_or_else(|| shell.agent["project"]["cwd"].as_str().unwrap_or("").to_string());
-                            let command = process_name(foreground).unwrap_or_default();
+                            let cwd = (!shell.ended).then(|| process_cwd(foreground).or_else(|| process_cwd(pid))).flatten().or_else(|| shell.pane.cwd.clone()).unwrap_or_else(|| shell.agent["project"]["cwd"].as_str().unwrap_or("").to_string());
+                            let command = if shell.ended { String::new() } else { process_name(foreground).unwrap_or_default() };
                             reply(&mut clients, client, "terminal_info_result", &p, json!({"pid":pid,"tty":shell.tty,"path":cwd,"command":command}));
                         }
                         "fs_list_dir" => reply(&mut clients, client, "fs_list_dir_result", &p, json!({"path":std::env::var("HOME").unwrap_or_default(),"entries":[]})),
@@ -471,3 +543,20 @@ fn process_name(pid: u32) -> Option<String> {
 fn process_name(pid: u32) -> Option<String> { std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|s| s.trim_end().to_string()) }
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn process_name(_: u32) -> Option<String> { None }
+
+/// tmux uses sys_signame on macOS/BSD and a numeric fallback on Linux.
+pub fn signal_name(signal: i32) -> String {
+    if cfg!(target_os = "linux") { return signal.to_string() }
+    #[cfg(target_os = "macos")]
+    match signal { libc::SIGEMT => return "emt".into(), libc::SIGINFO => return "info".into(), _ => {} }
+    match signal {
+        libc::SIGHUP => "HUP", libc::SIGINT => "INT", libc::SIGQUIT => "QUIT", libc::SIGILL => "ILL",
+        libc::SIGTRAP => "TRAP", libc::SIGABRT => "ABRT", libc::SIGBUS => "BUS", libc::SIGFPE => "FPE",
+        libc::SIGKILL => "KILL", libc::SIGSEGV => "SEGV", libc::SIGPIPE => "PIPE", libc::SIGALRM => "ALRM",
+        libc::SIGTERM => "TERM", libc::SIGUSR1 => "USR1", libc::SIGUSR2 => "USR2", libc::SIGXCPU => "XCPU",
+        libc::SIGXFSZ => "XFSZ", libc::SIGCHLD => "CHLD", libc::SIGCONT => "CONT",
+        libc::SIGSTOP => "STOP", libc::SIGTSTP => "TSTP", libc::SIGTTIN => "TTIN", libc::SIGTTOU => "TTOU",
+        libc::SIGURG => "URG", libc::SIGVTALRM => "VTALRM", libc::SIGPROF => "PROF",
+        libc::SIGWINCH => "WINCH", libc::SIGIO => "IO", libc::SIGSYS => "SYS", _ => return signal.to_string(),
+    }.to_ascii_lowercase()
+}

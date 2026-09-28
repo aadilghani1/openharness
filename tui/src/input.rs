@@ -588,7 +588,10 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             if machine.is_none() && project.is_none() && *filter == Filter::All { rows.extend(modal::session_rows(app)) }
             // What the query found by what was said in them: the conversations Harness did not
             // start among the rows, and every hit's row in the list whatever its line says.
-            if machine.is_none() && project.is_none() { rows.extend(modal::external_rows(app)) }
+            if machine.is_none() && project.is_none() {
+                let mut seen = std::collections::HashSet::new();
+                rows.extend(modal::external_rows(app).into_iter().filter(|r| seen.insert(r.id.clone())));
+            }
             // The list holds still while it is open: a row keeps the place it had when the list
             // opened, whatever its harness does meanwhile (new ones come after) — typing re-ranks.
             match &picker.hold {
@@ -597,12 +600,19 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             }
             // A row found by what was said in it shows where (its words lit as a match is), in
             // place of its detail — part of its line, so fzf lights what the query found there.
+            picker.said_text = rows.iter().map(|r| (r.id.clone(), crate::picker::line(r))).collect();
             for r in rows.iter_mut() {
                 let hit = app.said.iter().find(|s| s.turn >= 0 && (if s.external.is_some() { format!("external:{}:{}", s.machine, s.session_id) } else { format!("{}:{}", s.machine, s.agent_id) }) == r.id);
                 if let Some(h) = hit { r.detail = vec![ratatui::text::Span::styled(modal::snippet_line(&h.snippet), ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM))]; r.volatile_detail = false }
             }
             picker.said = app.said.iter().map(|s| if s.external.is_some() { format!("external:{}:{}", s.machine, s.session_id) } else { format!("{}:{}", s.machine, s.agent_id) }).collect();
             picker.said_query = app.said_for.clone();
+            for hit in &app.said {
+                let id = if hit.external.is_some() { format!("external:{}:{}", hit.machine, hit.session_id) } else { format!("{}:{}", hit.machine, hit.agent_id) };
+                let text = picker.said_text.entry(id).or_default();
+                text.push(' ');
+                text.push_str(&hit.snippet.replace(['\u{2}', '\u{3}'], ""));
+            }
             picker.set_rows(rows);
             picker.status = modal::open_status(app, *filter);
             picker.hints = vec![("enter", "go"), ("M-1..9", "answer"), ("M-m", "read"), ("C-v", "beside"), ("C-x", "below"), ("M-enter", "here"), ("M-a", "type an answer"), ("M-s", "message"), ("M-r", "restart"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
@@ -1029,7 +1039,7 @@ fn harness_preview(picker: &mut Picker) {
         theme::parse_preview_window(&mut pw, spec);
         // …and its look (a border, info, a scroll offset) over the narrow layout too; where
         // the preview goes and its size are that layout's own.
-        let look: Vec<&str> = spec.split(',').filter(|t| { let t = t.trim(); !(matches!(t, "up" | "down" | "left" | "right" | "top" | "bottom") || t.starts_with('<') || t.trim_end_matches('%').parse::<f64>().is_ok()) }).collect();
+        let look: Vec<&str> = spec.split(',').filter(|t| { let t = t.trim(); !(matches!(t, "up" | "down" | "left" | "right" | "top" | "bottom") || t.starts_with('<') || !t.trim_end_matches('%').is_empty() && t.trim_end_matches('%').chars().all(|c| c.is_ascii_digit())) }).collect();
         if let (Some(alt), false) = (pw.alternative.as_deref_mut(), look.is_empty()) { theme::parse_preview_window(alt, &look.join(",")) }
     }
     picker.preview_window = Some(pw);
@@ -1154,7 +1164,8 @@ fn configure_local_shell(app: &App, machine: &str, payload: &mut serde_json::Val
 
 pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placement: Placement, cwd: Option<String>, command: Option<String>) {
     let machine = shell_machine(app, focused.as_ref());
-    if crate::local::is_local(&machine) { app.keep_local_shell_session() }
+    let local = crate::local::is_local(&machine);
+    if local { app.keep_local_shell_session() }
     // The folder: -c, else where the pane's shell says it is now (OSC 7), else where it started.
     let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
     let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
@@ -1163,6 +1174,9 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
     configure_local_shell(app, &machine, &mut payload);
     app.modal = None;
+    // The local supervisor starts commands directly and remembers them for respawn.
+    if local { payload["command"] = json!(command); }
+    let command = if local { None } else { command };
     // A command runs as tmux runs a window's (default-shell -c): in place of the shell, so the pane
     // goes when it ends (it was typed into the shell, which stayed, and into its history — the
     // leading blank keeps it out of a history that ignores those).
@@ -1882,6 +1896,20 @@ fn end_word(chars: &[char], at: usize, ws: &str) -> usize {
     idx - 1
 }
 
+fn schedule_said(app: &mut App, kind: &PickerKind, picker: &Picker) {
+    // search(...) changes the effective expression without changing the displayed input.
+    // Schedule after change bindings, so the entire action chain has taken effect.
+    let expression = picker.search.as_deref().unwrap_or(&picker.query);
+    let wanted = if matches!(kind, PickerKind::Open { machine: None, project: None, .. }) && crate::picker::scope_of(&picker.query).is_none() && !crate::picker::said_searches(expression).is_empty() { expression.to_string() } else { String::new() };
+    if wanted != app.said_want {
+        app.said_want = wanted;
+        app.said_pending = 0;
+        app.said_generation = app.said_generation.wrapping_add(1);
+        if !app.said_want.is_empty() { app.said_due = Some(Instant::now() + Duration::from_millis(150)) }
+        else { app.said_due = None; app.said.clear(); app.said_for.clear() }
+    }
+}
+
 /// fzf's keys: ↑ C-k C-p away from the prompt, ↓ C-j C-n toward it (the list reads bottom-up);
 /// Tab marks; C-t/C-x/C-v open in a new window / below / beside (fzf.vim); C-/ the preview.
 fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker) {
@@ -1918,6 +1946,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             picker.defer_filter = false;
             if picker.query != previous_query && picker.search == previous_search { picker.search = Some(previous_search.unwrap_or(previous_query)); }
         }
+        schedule_said(app, &kind, &picker);
         app.modal = Some(Modal::Picker { kind, picker });
         return;
     }
@@ -2071,18 +2100,6 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         }
     }
     let mut kind = kind;
-    // C-b s: what was said, searched on every machine a moment after the last key.
-    if picker.query != before && matches!(kind, PickerKind::Open { machine: None, project: None, .. }) && crate::picker::scope_of(&picker.query).is_none() {
-        // (Only the words it must find: `!x`, `|` groups and fzf's `'` `^` `$` are the list's.)
-        let q = crate::picker::said_terms(&picker.query);
-        if q != app.said_want {
-            app.said_want = q.clone();
-            app.said_pending = 0;
-            app.said_generation = app.said_generation.wrapping_add(1);
-            if !q.is_empty() { app.said_due = Some(Instant::now() + Duration::from_millis(150)) }
-            else { app.said_due = None; app.said.clear(); app.said_for.clear() }
-        }
-    }
     if picker.query != before {
         // Marks belong to one list: switching scope (> commands, @ machines…) drops them.
         let scope = |q: &str| crate::picker::scope_of(q);
@@ -2100,6 +2117,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             }
         }
     }
+    schedule_said(app, &kind, &picker);
     if matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) { if let Some(id) = picker.current_id() { ensure_recent(app, &id) } }
     app.modal = Some(Modal::Picker { kind, picker });
 }
@@ -2165,6 +2183,7 @@ fn action_arg<'a>(a: &'a str, name: &str) -> Option<&'a str> {
 fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, multi: bool) -> End {
     let len = picker.visible.len() as i64;
     for action in split_chain(actions) {
+        let multi = picker.multi_override.map(|n| n > 0).unwrap_or(multi);
         match action.as_str() {
             "half-page-up" => crate::ui::page(picker, up, true), "half-page-down" => crate::ui::page(picker, -up, true),
             "top" | "first" => picker.move_by(-len), "last" => picker.move_by(len),
@@ -2236,6 +2255,7 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
                 if !spec.is_empty() { pw.hidden = false; theme::parse_preview_window(&mut pw, spec) }
                 picker.preview = true;
                 picker.preview_cells = None;
+                picker.preview_reposition.set(true);
                 picker.preview_window = Some(pw);
             }
             "yank" => picker.yank(),
@@ -2272,10 +2292,10 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             a if action_arg(a, "change-header").is_some() => picker.header_text = action_arg(a, "change-header").map(str::to_string),
             a if action_arg(a, "change-footer").is_some() => { let v: Vec<String> = action_arg(a, "change-footer").unwrap_or("").split('\n').map(str::to_string).collect(); theme::opts_change(|o| o.footer = v) }
             a if action_arg(a, "change-border-label").is_some() => { let v = action_arg(a, "change-border-label").unwrap_or("").to_string(); theme::opts_change(|o| o.border_label = v) }
-            a if action_arg(a, "change-list-label").is_some() => { let v = theme::strip_ansi(action_arg(a, "change-list-label").unwrap_or("")); theme::opts_change(|o| o.list_label = v) }
-            a if action_arg(a, "change-input-label").is_some() => { let v = theme::strip_ansi(action_arg(a, "change-input-label").unwrap_or("")); theme::opts_change(|o| o.input_label = v) }
-            a if action_arg(a, "change-header-label").is_some() => { let v = theme::strip_ansi(action_arg(a, "change-header-label").unwrap_or("")); theme::opts_change(|o| o.header_label = v) }
-            a if action_arg(a, "change-footer-label").is_some() => { let v = theme::strip_ansi(action_arg(a, "change-footer-label").unwrap_or("")); theme::opts_change(|o| o.footer_label = v) }
+            a if action_arg(a, "change-list-label").is_some() => { let v = action_arg(a, "change-list-label").unwrap_or("").to_string(); theme::opts_change(|o| o.list_label = v) }
+            a if action_arg(a, "change-input-label").is_some() => { let v = action_arg(a, "change-input-label").unwrap_or("").to_string(); theme::opts_change(|o| o.input_label = v) }
+            a if action_arg(a, "change-header-label").is_some() => { let v = action_arg(a, "change-header-label").unwrap_or("").to_string(); theme::opts_change(|o| o.header_label = v) }
+            a if action_arg(a, "change-footer-label").is_some() => { let v = action_arg(a, "change-footer-label").unwrap_or("").to_string(); theme::opts_change(|o| o.footer_label = v) }
             a if action_arg(a, "change-preview-label").is_some() => { let v = action_arg(a, "change-preview-label").unwrap_or("").to_string(); theme::opts_change(|o| o.preview_label = Some(v)) }
             "accept-non-empty" => { if !picker.visible.is_empty() { return End::Accept } }
             "accept" => return End::Accept,

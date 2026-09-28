@@ -39,6 +39,7 @@ fn box_set(lines: &str) -> (&'static str, &'static str, &'static str, &'static s
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    theme::set_animations(app.options.animations());
     app.renumber();
     // automatic-rename as of this frame: a pane that went into a mode ([tmux]) or out of one is
     // named so in the window list it is drawn with.
@@ -53,7 +54,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let status = Rect::new(0, if app.status_top { 0 } else { area.height - lines }, area.width, lines);
     let body = app.body();
     // The window in front at the terminal's size, whatever brought it there.
-    if app.tab().root.as_ref().is_some_and(|r| r.size() != (body.width, body.height)) { app.fit_panes() }
+    let window_area = app.window_area(app.tab());
+    if app.tab().root.as_ref().is_some_and(|r| r.size() != (window_area.width, window_area.height)) { app.fit_panes() }
     let buf = frame.buffer_mut();
     let mut cursor: Option<Position> = None;
     // A list takes the window (with --height, only its bottom rows: the panes stay in view).
@@ -90,6 +92,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let size = *buf.area();
         let (w, h) = (width.min(size.width), height.min(size.height));
         let area = Rect::new(px.min(size.width - w), py.min(size.height - h), w, h);
+        crate::term_out::clear_extras(area);
         let style = crate::draw::style_over(if look.style.is_empty() { "default" } else { &look.style }, Style::default());
         let border = crate::draw::style_over(if look.border_style.is_empty() { "default" } else { &look.border_style }, style);
         for y in area.y..area.y + h { for x in area.x..area.x + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(style); } } }
@@ -140,6 +143,7 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
     let (tl, tr, bl, br, hz, vt, lj, rj) = box_set(&lines);
     let (w, h) = (m.width + 4, m.items.len() as u16 + 2);
     let (x0, y0) = (m.x, m.y);
+    crate::term_out::clear_extras(Rect::new(x0, y0, w, h));
     let put = |buf: &mut Buffer, x: u16, y: u16, s: &str, st: Style| { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(s); c.set_style(st); } };
     for y in y0..y0 + h { for x in x0..x0 + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(style); } } }
     let (x1, y1) = (x0 + w - 1, y0 + h - 1);
@@ -195,6 +199,7 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
     // (A third of the window at most: the panes stay in view above it.)
     let height = (rows_needed as u16 + 2).min((body.height / 3).max(4)).min(body.height);
     let area = Rect::new(body.x, body.y + body.height - height, body.width, height);
+    crate::term_out::clear_extras(area);
     for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
     let border = Style::default();
     for x in area.x..area.x + area.width { buf.set_string(x, area.y, "─", border); buf.set_string(x, area.y + area.height - 1, "─", border) }
@@ -420,6 +425,7 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
 
 /// tmux's status line — or, while there is one, the prompt, question or message that takes it.
 fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> {
+    crate::term_out::clear_extras(rect);
     // A message replaces only message-line, leaving all other status-format rows visible.
     status_formats(buf, app, rect);
     let line = app.options.get("message-line", "", None).and_then(|n| n.parse::<u16>().ok()).unwrap_or(0).min(rect.height.saturating_sub(1));
@@ -954,6 +960,7 @@ fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
 /// `  4/7 ───` (144, separator 59), the prompt `> ` (110). Returns where the cursor goes.
 fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, search_busy: bool) -> Position {
     let frame = fzf_frame(body, picker);
+    crate::term_out::clear_extras(frame.screen);
     picker.screen_area.set(frame.screen);
     // (A --height list is drawn over the panes: its rows are its own.)
     for y in frame.screen.y..frame.screen.y + frame.screen.height {
@@ -1123,7 +1130,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, sea
     const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     const ASCII_SPINNER: [&str; 8] = ["-", "\\", "|", "/", "-", "\\", "|", "/"];
     let frames: &[&str] = if theme::fzf().unicode { &SPINNER } else { &ASCII_SPINNER };
-    let spinner = frames[(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 100) as usize % frames.len()];
+    let spinner = frames[if theme::animations() { (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 100) as usize % frames.len() } else { 0 }];
     let w = ia.width as i32;
     let put = |pbuf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { pbuf.set_stringn(ia.x + x as u16, y, s, (w - x) as usize, st); } };
     let bar = |pbuf: &mut Buffer, x: i32, y: u16, n: i32| {
@@ -2052,47 +2059,73 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: 
     // harness, a machine or a command do, where nothing says otherwise.
     let lines: Vec<Line> = match pw.wrap { None if !matches!(kind, PickerKind::Buffers) => text.into_iter().flat_map(|l| wrap_line(l, iw)).collect(), _ => text };
     let total = lines.len();
-    // A new row's preview starts where follow or +N says — a session's latest turns at their end
-    // (the newest at the bottom, as its terminal has them), once they have come.
+    let header = if pw.header_lines < total.min(height) { pw.header_lines } else { 0 };
+    let body_height = height.saturating_sub(header);
+    let first_body = pw.header_lines.min(u16::MAX as usize);
+    // Explicit +N wins over hn's initial position at a conversation's latest turn. When
+    // an asynchronous tail first arrives, apply it to those lines rather than the placeholder.
     let bottom_up = crate::preview::bottom_up(app, kind, &id);
-    if picker.preview_fresh.replace(false) {
-        *picker.preview_bottom.borrow_mut() = None;
-        picker.preview_following.set(pw.follow);
-        if !pw.follow { if let Some(n) = scroll_offset(&pw.scroll, height) { picker.preview_scroll.set(n.min(total.saturating_sub(1)).min(u16::MAX as usize) as u16) } }
+    let fresh = picker.preview_fresh.replace(false);
+    if fresh { *picker.preview_bottom.borrow_mut() = None }
+    let new_tail = bottom_up && picker.preview_bottom.borrow().as_deref() != Some(id.as_str());
+    if new_tail { *picker.preview_bottom.borrow_mut() = Some(id.clone()) }
+    let auto_bottom = bottom_up && pw.scroll.is_empty();
+    if fresh || new_tail {
+        picker.preview_following.set(pw.follow || auto_bottom);
+        if !pw.follow {
+            let offset = scroll_offset(&pw.scroll, height.saturating_sub(first_body)).unwrap_or(first_body);
+            picker.preview_scroll.set(offset.min(total.saturating_sub(1)).max(first_body).min(u16::MAX as usize) as u16);
+        }
     }
-    if bottom_up && picker.preview_bottom.borrow().as_deref() != Some(id.as_str()) { *picker.preview_bottom.borrow_mut() = Some(id.clone()); picker.preview_following.set(true) }
-    if (pw.follow || bottom_up) && picker.preview_following.get() { picker.preview_scroll.set(picker.preview_scroll.get().max(total.saturating_sub(height).min(u16::MAX as usize) as u16)) }
-    // The rows it fills from its offset (fzf: a wrapped line takes as many as it needs).
-    let draw_from = |offset: usize| -> (Vec<Line<'static>>, bool) {
+    let reposition = picker.preview_reposition.replace(false);
+    if reposition {
+        let offset = scroll_offset(&pw.scroll, height.saturating_sub(first_body)).unwrap_or(first_body);
+        picker.preview_scroll.set(offset.min(total.saturating_sub(1)).max(first_body).min(u16::MAX as usize) as u16);
+        picker.preview_following.set(pw.follow);
+    }
+    // Following advances on new preview output. A change-preview-window scroll expression
+    // takes effect immediately, even when follow remains enabled for future output.
+    if !reposition && (fresh || new_tail || total != picker.preview_lines.get()) && (pw.follow || auto_bottom) && picker.preview_following.get() { picker.preview_scroll.set(picker.preview_scroll.get().max(total.saturating_sub(body_height).min(u16::MAX as usize) as u16)) }
+    // ~N stays at the top; scrolling and paging operate on the remaining body.
+    let draw_from = |offset: usize, room: usize| -> (Vec<Line<'static>>, bool) {
         let mut rows = Vec::new();
         for line in lines.iter().skip(offset) {
             let parts = if fzf_wrap { char_wrap(line, iw, &o.wrap_sign) } else { vec![line.clone()] };
-            for p in parts { if rows.len() >= height { return (rows, true) } rows.push(p) }
+            for p in parts { if rows.len() >= room { return (rows, true) } rows.push(p) }
         }
         (rows, false)
     };
-    let (_, filled_at_top) = draw_from(0);
-    // Scrollable (fzf): past the top, or more lines than rows, or a wrapped text that fills them.
-    let scrollable = height > 0 && (total > height || (fzf_wrap && filled_at_top) || picker.preview_scroll.get() > 0);
-    let most = if scrollable { total.saturating_sub(1).min(u16::MAX as usize) as u16 } else { 0 };
+    let (_, filled_at_top) = draw_from(header, body_height);
+    let scrollable = height > 0 && (total > height || (fzf_wrap && filled_at_top) || picker.preview_scroll.get() as usize > first_body);
+    let most = if scrollable { total.saturating_sub(1).max(first_body).min(u16::MAX as usize) as u16 } else { first_body as u16 };
+    picker.preview_min.set(first_body as u16);
     picker.preview_max.set(most);
     picker.preview_lines.set(total);
     picker.preview_rows.set(inner.height);
-    let offset = picker.preview_scroll.get().min(most) as usize;
-    let (rows, _) = draw_from(offset);
+    let offset = picker.preview_scroll.get().max(first_body as u16).min(most) as usize;
+    let (mut rows, _) = draw_from(0, header);
+    let (body, _) = draw_from(if header == 0 { offset.saturating_sub(first_body) } else { offset }, body_height);
+    rows.extend(body);
     for (i, line) in rows.into_iter().enumerate() {
         let line = Line::from(line.spans.into_iter().map(|sp| { let st = if sp.style.fg.is_none() { Style { fg: text_fg, ..sp.style } } else { sp.style }; Span::styled(sp.content, st) }).collect::<Vec<_>>());
         buf.set_line(inner.x, inner.y + i as u16, &line, inner.width);
     }
-    // getScrollbar(1, lines, height, min(lines - height, offset)): the thumb, in its colour.
+    // The scrollbar covers only the body below fixed headers.
     picker.preview_bar.set(None);
-    if let (Some(bar), true) = (&scrollbar, total > height && height > 0) {
-        let thumb = (height * height / total).max(1);
-        picker.preview_bar.set(Some((pb.bar_x, inner.y, height, total, thumb)));
-        let at = offset.min(total - height);
-        let start = if total == height { 0 } else { ((height - thumb) * at / (total - height)).min(height - thumb) };
-        for i in 0..thumb { buf.set_string(pb.bar_x, inner.y + (start + i) as u16, bar, pal.preview_scrollbar.style()); }
+    let body_total = total.saturating_sub(header);
+    // fzf updates the scrollbar below ~N only. If an action adds fixed headers without
+    // resizing the window, its existing cells above that point are retained too.
+    let mut bar_cells = picker.preview_bar_cells.borrow_mut();
+    if bar_cells.0 != inner || bar_cells.1.len() != height { *bar_cells = (inner, vec![false; height]) }
+    for mark in bar_cells.1.iter_mut().skip(first_body) { *mark = false }
+    if let (Some(_), true) = (&scrollbar, body_total > body_height && body_height > 0 && first_body < height) {
+        let thumb = (body_height * body_height / body_total).max(1);
+        picker.preview_bar.set(Some((pb.bar_x, inner.y + header as u16, body_height, body_total, thumb)));
+        let at = offset.saturating_sub(header).min(body_total - body_height);
+        let start = ((body_height - thumb) * at / (body_total - body_height)).min(body_height - thumb);
+        for i in 0..thumb { bar_cells.1[header + start + i] = true }
     }
+    if let Some(bar) = &scrollbar { for (row, marked) in bar_cells.1.iter().enumerate() { if *marked { buf.set_string(pb.bar_x, inner.y + row as u16, bar, pal.preview_scrollbar.style()); } } }
     // Its offset, N/M, at the top right in the info colour reversed (not with noinfo).
     let mark = format!("{}/{}", offset + 1, total);
     if scrollable && pw.info && (mark.width() as u16) < inner.width {
@@ -2247,6 +2280,7 @@ fn display_panes(buf: &mut Buffer, app: &App) {
 /// (clock-mode-style 12: `%l:%M AM`) in blocks of clock-mode-colour from the middle — as plain
 /// text when the pane is too small for them.
 fn clock(buf: &mut Buffer, app: &App, rect: Rect) {
+    crate::term_out::clear_extras(rect);
     for y in rect.y..rect.y + rect.height { for x in rect.x..rect.x + rect.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
     let tab_id = app.tab().id.clone();
     let colour = app.options.get("clock-mode-colour", &tab_id, None).and_then(|c| crate::tmuxconf::colour(&c)).unwrap_or(Color::Blue);
@@ -2345,6 +2379,7 @@ pub(crate) fn map_color(color: AColor, colors: &alacritty_terminal::term::color:
 
 /// The pane's terminal, cell for cell. Returns where the cursor goes when this pane has it.
 fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window: (Option<Color>, Option<Color>)) -> Option<Position> {
+    crate::term_out::clear_extras(area);
     if let Some(bg) = window.1 { buf.set_style(area, Style::default().bg(bg)) }
     match &pane.phase {
         // Opening: nothing to show yet. Lost (the machine's link down), the last screen is kept, as
@@ -2387,6 +2422,7 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
         let mut mods = Modifier::empty();
         if cell.flags.contains(Flags::BOLD) { mods |= Modifier::BOLD }
         if cell.flags.contains(Flags::ITALIC) { mods |= Modifier::ITALIC }
+        if cell.flags.contains(Flags::BLINK) { mods |= Modifier::SLOW_BLINK }
         if cell.flags.intersects(Flags::ALL_UNDERLINES) { mods |= Modifier::UNDERLINED }
         if cell.flags.contains(Flags::DIM) || dim_fg { mods |= Modifier::DIM }
         if cell.flags.contains(Flags::STRIKEOUT) { mods |= Modifier::CROSSED_OUT }
@@ -2399,7 +2435,8 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
         if let Some(uc) = cell.underline_color() { style = style.underline_color(map_color(uc, colors, true).0) }
         let underline = if cell.flags.contains(Flags::DOUBLE_UNDERLINE) { 2 } else if cell.flags.contains(Flags::UNDERCURL) { 3 } else if cell.flags.contains(Flags::DOTTED_UNDERLINE) { 4 } else if cell.flags.contains(Flags::DASHED_UNDERLINE) { 5 } else { 0 };
         let link = cell.hyperlink().map(|h| std::sync::Arc::<str>::from(h.uri()));
-        if underline != 0 || link.is_some() { crate::term_out::set_extra(area.x + col, area.y + row as u16, crate::term_out::Extra { underline, link }) }
+        let overline = cell.flags.contains(Flags::OVERLINE);
+        if underline != 0 || link.is_some() || overline { crate::term_out::set_extra(area.x + col, area.y + row as u16, crate::term_out::Extra { underline, link, overline }) }
         let target = buf.cell_mut((area.x + col, area.y + row as u16));
         let Some(target) = target else { continue };
         if cell.c == '\0' {
@@ -2444,7 +2481,7 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
         let col = &col.saturating_sub(hshift);
         if col + 1 < area.width && row < area.height { return Some(Position::new(area.x + col + 1, area.y + row)) }
     }
-    if !mode.contains(TermMode::SHOW_CURSOR) || matches!(pane.phase, Phase::Watching(_)) { return None }
+    if pane.dead.is_some() || !mode.contains(TermMode::SHOW_CURSOR) || matches!(pane.phase, Phase::Watching(_)) { return None }
     let row = cursor_point.line.0 + offset;
     let col = (cursor_point.column.0 as u16).saturating_sub(hshift);
     (row >= 0 && (row as u16) < area.height && col < area.width).then(|| Position::new(area.x + col, area.y + row as u16))

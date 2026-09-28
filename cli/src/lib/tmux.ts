@@ -139,7 +139,7 @@ function hasCursorPackageEntrypoint(args: string): boolean {
  */
 function hermesInlineLauncher(row: Pick<ProcessRow, 'args'>): boolean {
   // argv[0], not `comm`: macOS prints comm through a 16-column field here, so every absolute path
-  // reaches this parser as `/Users/duynguyen` and its basename names a person, not an interpreter.
+  // can reach this parser as a truncated home directory, not the interpreter executable.
   const tokens = argvTokens(row.args)
   if (!/^python(?:\d+(?:\.\d+)*)?$/.test(basename(tokens[0] ?? '').toLowerCase())) return false
   const inline = row.args.search(/\s-(?:c|-command)\s/)

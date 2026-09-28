@@ -151,6 +151,16 @@ jobs:
           HN_LOCAL_TEST_PREFIX: hn-local-test-ci
         run: python3 -u tests/local-shells.py
 
+      - name: Native terminal exits, startup input and small PTYs
+        env:
+          HN_NATIVE_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
+          HN_NATIVE_TEST_PORT: 19433
+          HN_NATIVE_TEST_PREFIX: hnt19fixnativeci
+        run: python3 -u tests/native-terminal.py
+
+      - name: Terminal attributes and attribute-only repaints
+        run: python3 -u tests/terminal-attributes.py target/${{ matrix.target }}/release/harness-tui
+
   backend-desk:
     runs-on: ubuntu-latest
     timeout-minutes: 10

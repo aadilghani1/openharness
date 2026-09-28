@@ -19,3 +19,8 @@ unicode-width = "0.2.2"
 unicode-segmentation = "1.13"
 libc = "0.2"
 uuid = { version = "1.26.1", features = ["v4"] }
+
+# Retain tmux pane attributes unsupported by the upstream renderer.
+[patch.crates-io]
+alacritty_terminal = { path = "vendor/alacritty_terminal" }
+vte = { path = "vendor/vte" }

@@ -608,12 +608,12 @@ fn parse_label_pos(s: &str) -> (i64, bool) {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreviewWindow {
     pub position: char, pub size: Size, pub border: String, pub wrap: Option<bool>, pub hidden: bool, pub follow: bool,
-    pub info: bool, pub scroll: String, pub threshold: usize, pub alternative: Option<Box<PreviewWindow>>,
+    pub info: bool, pub scroll: String, pub header_lines: usize, pub threshold: usize, pub alternative: Option<Box<PreviewWindow>>,
 }
 
 impl Default for PreviewWindow {
     fn default() -> Self {
-        PreviewWindow { position: 'r', size: Size { size: 50.0, percent: true }, border: "rounded".into(), wrap: None, hidden: false, follow: false, info: true, scroll: String::new(), threshold: 0, alternative: None }
+        PreviewWindow { position: 'r', size: Size { size: 50.0, percent: true }, border: "rounded".into(), wrap: None, hidden: false, follow: false, info: true, scroll: String::new(), header_lines: 0, threshold: 0, alternative: None }
     }
 }
 
@@ -664,6 +664,7 @@ pub fn parse_preview_window(pw: &mut PreviewWindow, input: &str) {
             "follow" => pw.follow = true, "nofollow" => pw.follow = false,
             "info" => pw.info = true, "noinfo" => pw.info = false,
             t if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) || t.ends_with('%') && t[..t.len() - 1].chars().all(|c| c.is_ascii_digit()) && t.len() > 1 => { if let Some(s) = parse_size(t) { pw.size = s } }
+            t if t.starts_with('~') => { if let Ok(n) = t[1..].parse() { pw.header_lines = n } }
             t if t.starts_with('+') || t.starts_with('-') || t.starts_with('/') => pw.scroll = t.to_string(),
             _ => {}
         }
@@ -1144,12 +1145,16 @@ pub fn most_urgent(states: impl Iterator<Item = State>) -> Option<State> {
     states.min_by_key(rank)
 }
 
+thread_local! { static ANIMATIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) }; }
+pub fn set_animations(on: bool) { ANIMATIONS.with(|a| a.set(on)) }
+pub fn animations() -> bool { ANIMATIONS.with(|a| a.get()) }
+
 /// A spinner frame for things in motion (working dots, connecting cards).
 pub fn spinner(_tick: u64) -> &'static str {
     // fzf's frames, in its order.
     const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     let frame = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() / 100).unwrap_or(0);
-    FRAMES[frame as usize % FRAMES.len()]
+    FRAMES[if animations() { frame as usize % FRAMES.len() } else { 0 }]
 }
 
 #[cfg(test)]

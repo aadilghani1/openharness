@@ -64,6 +64,10 @@ pub enum Phase {
     Card { title: String, detail: String, keys: Vec<(String, String)> },
 }
 
+/// A reaped native process, with an identity that survives client handoff and changes on respawn.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Exit { pub id: String, pub status: Option<i32>, pub signal: Option<i32>, pub time: i64 }
+
 pub struct Pane {
     pub id: u64,
     pub machine_id: String,
@@ -75,6 +79,7 @@ pub struct Pane {
     pub listener: Listener,
     pub stream: Option<Uuid>,
     pub phase: Phase,
+    pub dead: Option<Exit>,
     /// The far pane's size — what the grid is.
     pub cols: u16,
     pub rows: u16,
@@ -383,6 +388,17 @@ impl Handler for TmuxScreen<'_> {
 }
 
 impl Pane {
+    /// respawn resets the visible screen and terminal modes but retains the window's history.
+    pub fn inherit_history(&mut self, old: &Pane) {
+        let mut grid = old.local.as_ref().and_then(|s| s.main.as_ref()).unwrap_or_else(|| old.term.grid()).clone();
+        grid.cursor = Default::default();
+        grid.saved_cursor = Default::default();
+        grid.reset_region(..);
+        *self.term.grid_mut() = grid;
+        self.times = old.times.clone();
+        self.hist_marks = old.hist_marks.clone();
+    }
+
     /// The cursor the program in this pane asked for (DECSCUSR), as crossterm spells it.
     pub fn cursor_style(&self) -> crossterm::cursor::SetCursorStyle {
         use crossterm::cursor::SetCursorStyle as S;
@@ -415,7 +431,7 @@ impl Pane {
             local_replies: Vec::new(),
             listener,
             stream: None,
-            phase: Phase::Connecting("Connecting…".into()),
+            phase: Phase::Connecting("Connecting…".into()), dead: None,
             cols,
             rows,
             want: (0, 0),
@@ -1088,7 +1104,7 @@ mod tests {
 mod osc7_tests {
     #[test]
     fn reads_the_folder() {
-        assert_eq!(super::osc7(b"x\x1b]7;file://mac.lan/Users/me/my%20code\x07y").map(|p| p.1).as_deref(), Some("/Users/me/my code"));
+        assert_eq!(super::osc7(b"x\x1b]7;file://mac.lan/tmp/my%20code\x07y").map(|p| p.1).as_deref(), Some("/tmp/my code"));
         assert_eq!(super::osc7(b"\x1b]7;file:///tmp\x1b\\"), Some(("file:///tmp".to_string(), "/tmp".to_string())));
         assert_eq!(super::osc7(b"plain"), None);
         assert_eq!(super::osc7_unfinished(b"ab\x1b]7;file:///t"), b"\x1b]7;file:///t");

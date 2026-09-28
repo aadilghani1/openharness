@@ -210,6 +210,9 @@ impl Store {
     /// panes' title rows), where you have not set them yourself.
     pub fn tmux_look(&self) -> bool { self.get("@hn-look", "", None).as_deref() == Some("tmux") }
 
+    /// Reduce motion independently of the status/pane appearance.
+    pub fn animations(&self) -> bool { !matches!(self.get("@hn-animations", "", None).as_deref(), Some("off" | "0" | "no")) }
+
     /// The default for a name: hn's, or tmux's under `@hn-look tmux`.
     fn default_of(&self, name: &str) -> Option<&'static String> {
         if LOOK.contains(&name) && self.tmux_look() { tmux_defaults().get(name) } else { defaults().get(name) }
@@ -378,6 +381,10 @@ impl Store {
         let mut rows: BTreeMap<String, (String, bool)> = BTreeMap::new();
         if global || inherited {
             for (k, v) in self.global_rows(if scope == Scope::Pane { Scope::Window } else { scope }) { rows.insert(k, (v, !global)); }
+        }
+        if inherited && scope == Scope::Pane {
+            if let Some(map) = self.windows.get(window) { for (k, v) in map { rows.insert(k.clone(), (v.clone(), true)); } }
+            rows.retain(|k, _| k.starts_with('@') || find(k).is_some_and(|o| o.pane));
         }
         if !global {
             if let Some(map) = self.map(scope, false, window, pane) {
@@ -605,6 +612,22 @@ mod tests {
         assert_eq!(s.set("status-keys", Some("EMACS"), &g, "w", 1), Err("unknown value: EMACS".into()));
         assert_eq!(s.set("mode-keys", Some("Vi"), &g, "w", 1), Err("unknown value: Vi".into()));
         assert_eq!((s.server.clone(), s.global_session.clone(), s.global_window.clone()), before);
+    }
+
+    #[test]
+    fn pane_show_inherits_only_pane_options_and_keeps_local_precedence() {
+        let mut s = Store::default();
+        let w = SetFlags { window: true, ..Default::default() };
+        let p = SetFlags { pane: true, ..Default::default() };
+        s.set("window-style", Some("fg=red"), &w, "w", 1).unwrap();
+        s.set("automatic-rename", Some("off"), &w, "w", 1).unwrap();
+        assert_eq!(s.show(Some("window-style"), &p, true, false, Which::Options, "w", 1).unwrap(), vec!["window-style* fg=red"]);
+        s.set("window-style", Some("fg=blue"), &p, "w", 1).unwrap();
+        assert_eq!(s.show(Some("window-style"), &p, true, false, Which::Options, "w", 1).unwrap(), vec!["window-style fg=blue"]);
+        assert_eq!(s.show(Some("window-style"), &p, true, true, Which::Options, "w", 2).unwrap(), vec!["fg=red"]);
+        let rows = s.show(None, &p, true, false, Which::Options, "w", 1).unwrap();
+        assert_eq!(rows.len(), 14);
+        assert!(rows.iter().all(|r| find(r.split([' ', '*']).next().unwrap()).is_some_and(|o| o.pane)));
     }
 
     #[test]

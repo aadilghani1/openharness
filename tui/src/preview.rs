@@ -175,7 +175,7 @@ fn plan(a: &crate::fleet::Agent, working: bool) -> Vec<Line<'static>> {
 fn turns(app: &App, session: &str, tail: &Value) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let rows: Vec<Value> = tail.get("rows").and_then(Value::as_array).cloned().unwrap_or_default();
-    let words: Vec<String> = app.said_for.split_whitespace().map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()).filter(|w| w.chars().count() >= 2).collect();
+    let words: Vec<String> = crate::fzf::Query::parse(&app.said_for, crate::fzf::Case::Ignore, true, true).positive_terms().into_iter().filter(|w| w.chars().count() >= 2).collect();
     let first = rows.first().and_then(|r| r.get("turn")).and_then(Value::as_i64).unwrap_or(0);
     if let Some(hit) = app.said.iter().find(|h| h.session_id == session && h.turn >= 0 && h.turn < first) {
         out.push(Line::from(vec![Span::styled("Matched earlier", Style::default().fg(theme::fzf().hl).add_modifier(Modifier::BOLD)), dim(format!(" · {}", ago(hit.at)))]));

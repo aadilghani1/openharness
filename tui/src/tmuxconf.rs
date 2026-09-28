@@ -463,7 +463,7 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
             // tmux parses it; several are one command's words.
             let rest = &words[i + 1..];
             let command = if rest.len() == 1 { rest[0].strip_prefix(BLOCK).unwrap_or(&rest[0]).trim().to_string() } else { rest.iter().map(|w| quote_word(w)).collect::<Vec<_>>().join(" ") };
-            if command.is_empty() { return Err(format!("bind {key} without a command")) }
+            if command.is_empty() { return Ok(()) }
             let command = expand_alias(&command, &s.aliases);
             match named {
                 Some(t) => {

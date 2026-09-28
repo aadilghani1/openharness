@@ -463,7 +463,7 @@ pub struct App {
     /// Where the startup shell stands: the desk has answered (or there is none), and whether
     /// the shell was asked for.
     desk_answered: bool,
-    shell_asked: bool,
+    pub(crate) shell_asked: bool,
     pub prefix: bool,
     /// When the prefix was pressed: a pause after it shows the keys (which-key).
     pub prefix_at: Option<Instant>,
@@ -528,6 +528,8 @@ pub struct App {
     pub status_ranges: Vec<(u16, crate::draw::Range)>,
     /// Terminal frames for a stream no pane has yet — the keyframe can outrun `terminal_ready`.
     orphans: HashMap<Uuid, (Instant, Vec<proto::Frame>)>,
+    /// Native exit notices can race the same terminal_ready callback as its first frame.
+    orphan_exits: HashMap<Uuid, (Instant, pane::Exit)>,
     /// Desk writes sent and not yet answered; while any are out, the desk is not reconciled.
     desk_inflight: u32,
     /// The desk moved while writes were out: fetch it once they land.
@@ -675,6 +677,8 @@ pub struct App {
     pub cli_code: i32,
     /// That shell's folder: where run-shell and if-shell run what it asked (tmux's client cwd).
     pub cli_cwd: Option<String>,
+    /// The invoking client's usable size, independent of the target session's owner.
+    pub cli_size: Option<(u16, u16)>,
     /// The command came from a shell outside hn: with no -t, it is for the session used last
     /// (cmd_find_from_nothing), not the one this client shows.
     pub cli_outside: bool,
@@ -708,6 +712,8 @@ pub struct App {
     /// Event hooks waiting to run (notify_add queues them; they run once the event's work is
     /// done).
     pub pending_hooks: std::collections::VecDeque<crate::commands::Item>,
+    /// Geometry changes are notified after the session selected its new current window.
+    pending_resize_hooks: Vec<String>,
     /// Errors said so far (a command that failed fires command-error, not its after- hook).
     pub errors: u64,
     /// A config file's errors (cfg_add_cause), shown in the current pane's view mode once there
@@ -857,6 +863,7 @@ impl App {
             cli_tx: None,
             cli_code: 0,
             cli_cwd: None,
+            cli_size: None,
             cli_outside: false,
             origin: None,
             format_buffer: None,
@@ -871,6 +878,7 @@ impl App {
             insert_next: std::collections::VecDeque::new(),
             hook_state: None,
             pending_hooks: std::collections::VecDeque::new(),
+            pending_resize_hooks: Vec::new(),
             errors: 0,
             pipes: HashMap::new(),
             config_causes: Vec::new(),
@@ -952,6 +960,7 @@ impl App {
             first_frame: false,
             status_ranges: Vec::new(),
             orphans: HashMap::new(),
+            orphan_exits: HashMap::new(),
             desk_inflight: 0,
             desk_stale: false,
             lastw: Vec::new(),
@@ -1469,9 +1478,21 @@ impl App {
                 let revision = payload.get("revision").and_then(Value::as_i64).unwrap_or(i64::MAX);
                 if revision > self.desk_revision && self.desk_mode != DeskMode::Off { self.fetch_desk() }
             }
+            "terminal_restarted" => {
+                let stream = payload["streamId"].as_str().and_then(|s| Uuid::parse_str(s).ok());
+                if let Some(pane) = self.panes.values_mut().find(|p| p.stream.is_some() && p.stream == stream) {
+                    pane.dead = None; pane.phase = Phase::Live; pane.dirty = true;
+                    if let Some(agent) = self.fleet.agents.get_mut(&(pane.machine_id.clone(), pane.agent_id.clone())) { agent.status = "active".into(); }
+                }
+            }
             "terminal_closed" => {
                 let stream = payload.get("streamId").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok());
-                let Some(pane) = self.panes.values_mut().find(|p| p.stream.is_some() && p.stream == stream) else { return };
+                let death = crate::local::is_local(machine_id).then(|| serde_json::from_value::<pane::Exit>(payload["exit"].clone()).ok()).flatten();
+                let Some(pane) = self.panes.values_mut().find(|p| p.stream.is_some() && p.stream == stream) else {
+                    if let (Some(stream), Some(death)) = (stream, death) { if self.orphan_exits.len() < 16 { self.orphan_exits.insert(stream, (Instant::now(), death)); } }
+                    return
+                };
+                if let Some(death) = death { let id = pane.id; self.local_ended(id, death); return }
                 pane.stream = None;
                 pane.dirty = true;
                 if let Some(taken) = payload.get("takenBy") {
@@ -1636,6 +1657,7 @@ impl App {
         let stream = reply.as_ref().ok().filter(|(ty, _)| ty == "terminal_ready").and_then(|(_, p)| p.get("streamId").and_then(Value::as_str)).and_then(|s| Uuid::parse_str(s).ok());
         let current = self.panes.get(&pane_id).map(|p| p.open_token == token).unwrap_or(false);
         if !current {
+            if let Some(stream) = stream { self.orphans.remove(&stream); self.orphan_exits.remove(&stream); }
             // The pane went away (or opened again) while this was in flight: give the terminal back,
             // or this window would hold its keyboard lease with nothing on screen.
             if let (Some(stream), Some(link)) = (stream, self.links.get(machine_id).and_then(|s| s.link.clone())) {
@@ -1674,6 +1696,10 @@ impl App {
                 // What it runs, asked now rather than at the next two-second look: a shell's window
                 // is named for it (automatic-rename) from the start, as tmux names it.
                 self.refresh_pane_info(pane_id);
+                if crate::local::is_local(machine_id) {
+                    let death = stream.and_then(|id| self.orphan_exits.remove(&id).map(|(_, death)| death)).or_else(|| serde_json::from_value::<pane::Exit>(payload["exit"].clone()).ok());
+                    if let Some(death) = death { self.local_ended(pane_id, death) }
+                }
             }
             Ok((_, payload)) => {
                 let code = payload.get("code").and_then(Value::as_str).unwrap_or("TERMINAL_OPEN_FAILED").to_string();
@@ -1688,6 +1714,36 @@ impl App {
             }
         }
         if let Some(pane) = self.panes.get_mut(&pane_id) { pane.dirty = true }
+    }
+
+    /// Native process death is distinct from losing a stream. Keep a requested dead pane's
+    /// grid and status, and remember the exit identity so handoff never repeats pane-died.
+    fn local_ended(&mut self, pane_id: u64, death: pane::Exit) {
+        if matches!(self.modal, Some(crate::modal::Modal::Popup { pane, .. }) if pane == pane_id) { self.close_popup(); return }
+        let Some(owner) = self.session_of_pane(pane_id) else { return };
+        let back = self.session_id;
+        if owner != back { self.swap_session(owner); }
+        let Some(window) = self.tabs.iter().position(|t| t.panes().contains(&pane_id)) else { return };
+        let pane = self.panes.get_mut(&pane_id).unwrap();
+        let fresh = pane.dead.as_ref().map(|e| &e.id) != Some(&death.id);
+        pane.dead = Some(death.clone()); pane.phase = Phase::Live; pane.dirty = true;
+        let key = (pane.machine_id.clone(), pane.agent_id.clone());
+        if let Some(agent) = self.fleet.agents.get_mut(&key) { agent.status = "stopped".into(); }
+        if fresh {
+            let remain = self.options.get("remain-on-exit", &self.tabs[window].id, Some(pane_id)).unwrap_or_default();
+            if remain == "on" || remain == "failed" && (death.status != Some(0)) {
+                let format = self.options.get("remain-on-exit-format", &self.tabs[window].id, Some(pane_id)).unwrap_or_default();
+                let text = crate::format::expand(self, &format, window, Some(pane_id), false);
+                if let Some(link) = self.link(&key.0) { link.send("terminal_remain", json!({"agentId":key.1,"exitId":death.id,"text":text})); }
+                crate::commands::notify(self, "pane-died", Some(window), Some(pane_id));
+                self.save_sessions();
+            } else {
+                crate::commands::notify(self, "pane-exited", Some(window), Some(pane_id));
+                crate::commands::run_pending_hooks(self);
+                self.close_pane(pane_id);
+            }
+        }
+        if owner != back { self.swap_session(back); }
     }
 
     /// The stream ended with nobody taking it: say why, from the agent's state.
@@ -1739,7 +1795,7 @@ impl App {
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         let Some(stream) = pane.stream else { return };
         // select-pane -d: input to this pane is off until select-pane -e.
-        if pane.read_only || pane.input_off { return }
+        if pane.read_only || pane.input_off || pane.dead.is_some() { return }
         let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone()) else { return };
         pane.scroll_bottom();
         if pane.input_at.is_none() { pane.input_at = Some(Instant::now()) }
@@ -1752,7 +1808,7 @@ impl App {
     pub fn send_paste(&mut self, pane_id: u64, text: &str) {
         let Some(pane) = self.panes.get(&pane_id) else { return };
         let Some(stream) = pane.stream else { return };
-        if pane.input_off { return }
+        if pane.input_off || pane.dead.is_some() { return }
         let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone()) else { return };
         link.send_binary(proto::encode(Kind::Paste, stream, 0, text.as_bytes()));
     }
@@ -1775,10 +1831,12 @@ impl App {
     /// window's own size from the top left.
     pub fn window_area(&self, tab: &Tab) -> Rect {
         // (A window not in front is as big as it was when last in front, or made.)
-        let front = self.tabs.get(self.active).map(|t| t.id == tab.id).unwrap_or(false);
-        if !self.headless && (front || tab.root.is_none()) { return self.body() }
+        let front = self.swap_back.is_none_or(|b| b == self.session_id) && self.tabs.get(self.active).map(|t| t.id == tab.id).unwrap_or(false);
+        let manual = self.options.get("window-size", &tab.id, None).as_deref() == Some("manual");
+        let creating = front && self.return_to.is_some() && tab.size.is_some();
+        if !self.headless && self.swap_back.is_none_or(|b| b == self.session_id) && !manual && !creating && (front || tab.root.is_none()) { return self.body() }
         let (w, h) = tab.root.as_ref().map(|r| r.size()).unwrap_or_else(|| tab.size.unwrap_or(self.default_size()));
-        Rect::new(0, 0, w, h)
+        Rect::new(0, if front && !self.headless { self.body().y } else { 0 }, w, h)
     }
 
     /// Windows no terminal shows — every window, with no terminal; a session in the background's
@@ -1832,16 +1890,24 @@ impl App {
         // Every window's cells follow the client's size (tmux resizes its windows to it), with the
         // title rows counted when the window shows them.
         let body = self.body();
+        let onscreen = self.swap_back.is_none_or(|b| b == self.session_id);
+        if onscreen { crate::ipc::publish_size((body.width, body.height)) }
+        let mut resized = Vec::new();
         for i in 0..self.tabs.len() {
             let status = self.pane_status(&self.tabs[i]);
-            // window-size latest: shown here, it is this terminal's size.
-            self.tabs[i].size = None;
+            let manual = self.options.get("window-size", &self.tabs[i].id, None).as_deref() == Some("manual");
+            let creating = self.tabs[i].root.is_none() || (i == self.active && self.return_to.is_some());
+            let size = if manual { self.tabs[i].size.or_else(|| self.tabs[i].root.as_ref().map(|r| r.size())) }
+                else if creating && self.tabs[i].size.is_some() { self.tabs[i].size }
+                else { self.tabs[i].size = None; (onscreen && i == self.active).then_some((body.width, body.height)) };
             if let Some(root) = self.tabs[i].root.as_mut() {
                 root.status = status;
-                // server_client_check_window_resize: only the window in front takes the
-                // terminal's size; the others keep theirs until they are gone to.
-                if i == self.active && root.size() != (body.width, body.height) { root.resize(body.width, body.height) }
+                if let Some(size) = size { if root.size() != size { root.resize(size.0, size.1); resized.push(i) } }
             }
+        }
+        for i in resized {
+            let id = self.tabs[i].id.clone();
+            if !self.pending_resize_hooks.contains(&id) { self.pending_resize_hooks.push(id) }
         }
         self.rects = self.compute_rects();
         let visible: Vec<(u64, Rect)> = self.rects.clone();
@@ -1898,6 +1964,7 @@ impl App {
     /// The command a shell ran is done: what it printed, its errors and its exit status go back —
     /// or, for split-window/new-window -P, once the new pane is there.
     pub fn finish_cli(&mut self) {
+        self.cli_size = None;
         let out = self.capture.take().unwrap_or_default();
         let err = self.capture_err.take().unwrap_or_default();
         let Some(tx) = self.cli_tx.take() else { return };
@@ -2416,6 +2483,23 @@ impl App {
         })
     }
 
+    /// Sessions and clients whose current window is this shared window.
+    pub fn active_window_value(&self, wid: u64, key: &str) -> String {
+        let mut sessions: Vec<(u32, String)> = self.session_list().into_iter().filter(|(id, _)| {
+            let active = if *id == self.session_id { self.tabs.get(self.active).map(|t| t.wid()) }
+                else if let Some(s) = self.sessions.iter().find(|s| s.id == *id) { s.tabs.get(s.active).map(|t| t.wid()) }
+                else { self.remote_rows().into_iter().find(|r| r.id == *id).and_then(|r| r.wids.get(r.active).copied()) };
+            active == Some(wid)
+        }).collect();
+        sessions.sort_by_key(|(id, _)| *id);
+        if key == "window_active_sessions" { return sessions.len().to_string() }
+        if key == "window_active_sessions_list" { return sessions.into_iter().map(|(_, n)| n).collect::<Vec<_>>().join(",") }
+        let mut clients: Vec<_> = sessions.into_iter().flat_map(|(id, _)| self.session_clients(id)).collect();
+        clients.sort_by_key(|(created, _)| *created);
+        clients.dedup();
+        if key == "window_active_clients" { clients.len().to_string() } else { clients.into_iter().map(|(_, tty)| tty).collect::<Vec<_>>().join(",") }
+    }
+
     /// A window of a session not in front ([k]th of session_windows), for a #{W:} loop inside a
     /// #{S:} one: its index, name, pane count and whether it is the session's current window.
     pub fn stash_window_value(&self, id: u32, k: usize, key: &str) -> Option<String> {
@@ -2437,6 +2521,7 @@ impl App {
             "window_index" => num.to_string(),
             "window_name" => name,
             "window_panes" => panes.to_string(),
+            "window_active_sessions" | "window_active_sessions_list" | "window_active_clients" | "window_active_clients_list" => self.session_wids(id).get(k).map(|wid| self.active_window_value(*wid, key)).unwrap_or_default(),
             "window_active" => (current as u8).to_string(),
             "window_flags" => flags().replacen('#', "##", 1),
             "window_raw_flags" => flags(),
@@ -2710,6 +2795,7 @@ impl App {
         let shell = self.options.get("default-shell", "", None).filter(|s| !s.is_empty()).or_else(|| std::env::var("SHELL").ok()).unwrap_or_else(|| "sh".into());
         let program = command.as_deref().and_then(|c| c.split_whitespace().next()).unwrap_or(&shell).rsplit('/').next().unwrap_or("sh").to_string();
         let mut tab = Tab::new(window.unwrap_or(&program));
+        tab.first_named = true;
         if window.is_some() {
             tab.named = true;
             self.options.windows.entry(tab.id.clone()).or_default().insert("automatic-rename".into(), "off".into());
@@ -2905,13 +2991,13 @@ impl App {
     /// number, @id, layout, focus, zoom, and each pane's harness, whether hn made it (a shell, ended
     /// when its window is killed by whichever client does it), and its %id.
     pub fn window_json(&self, t: &Tab, num: Option<usize>) -> Value {
-        let panes: Vec<Value> = t.panes().iter().filter_map(|p| self.panes.get(p)).map(|p| json!([p.machine_id, p.agent_id, self.shells.contains(&(p.machine_id.clone(), p.agent_id.clone())), p.id])).collect();
+        let panes: Vec<Value> = t.panes().iter().filter_map(|p| self.panes.get(p)).map(|p| json!([p.machine_id, p.agent_id, self.shells.contains(&(p.machine_id.clone(), p.agent_id.clone())), p.id, p.dead])).collect();
         let focus = t.focus.and_then(|f| t.panes().iter().position(|p| *p == f)).unwrap_or(0);
         // Its own options (set -w) and its panes' (set -p), kept with it wherever it goes.
         let options = self.options.windows.get(&t.id).cloned().unwrap_or_default();
         let pane_options: serde_json::Map<String, Value> = t.panes().iter().filter_map(|p| self.options.panes.get(p).map(|m| (p.to_string(), json!(m)))).collect();
         let titles: serde_json::Map<String, Value> = t.panes().iter().filter_map(|p| self.panes.get(p).filter(|x| !x.title.is_empty()).map(|x| (p.to_string(), json!(x.title)))).collect();
-        json!({ "id": t.id, "home": t.home, "titles": titles, "name": t.name, "named": t.named, "num": num, "wid": t.wid(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus, "alerts": t.alerts, "zoomed": t.zoomed && panes.len() > 1, "options": options, "pane_options": pane_options })
+        json!({ "id": t.id, "home": t.home, "titles": titles, "name": t.name, "named": t.named, "first_named": t.first_named, "num": num, "wid": t.wid(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus, "alerts": t.alerts, "zoomed": t.zoomed && panes.len() > 1, "options": options, "pane_options": pane_options })
     }
 
     /// A window's own state that a client leaving keeps for the next (the desk's windows, whose
@@ -2921,7 +3007,7 @@ impl App {
         let pane_options: serde_json::Map<String, Value> = t.panes().iter().filter_map(|p| self.options.panes.get(p).map(|m| (p.to_string(), json!(m)))).collect();
         let titles: serde_json::Map<String, Value> = t.panes().iter().filter_map(|p| self.panes.get(p).filter(|x| !x.title.is_empty()).map(|x| (p.to_string(), json!(x.title)))).collect();
         let shells: Vec<_> = t.panes().iter().filter_map(|p| self.panes.get(p)).map(|p| (p.machine_id.clone(), p.agent_id.clone())).filter(|key| self.shells.contains(key)).collect();
-        json!({ "id": t.id, "home": t.home, "options": options, "pane_options": pane_options, "zoomed": t.zoomed, "titles": titles, "focus": t.focus, "shells": shells })
+        json!({ "id": t.id, "home": t.home, "first_named": t.first_named, "options": options, "pane_options": pane_options, "zoomed": t.zoomed, "titles": titles, "focus": t.focus, "shells": shells })
     }
 
     /// The desk session's own state from the file: on the desk session (in front or kept), its
@@ -2969,6 +3055,7 @@ impl App {
     /// A window's own options and its panes', as window_json keeps them, taken on for [tab].
     pub fn take_window_options(&mut self, tab: &mut Tab, win: &Value) {
         tab.home = win.get("home").and_then(Value::as_bool).unwrap_or(false);
+        tab.first_named = win.get("first_named").and_then(Value::as_bool).unwrap_or_else(|| win.get("name").and_then(Value::as_str).is_some_and(|n| !n.is_empty()));
         let options = options_from(&json!({ "options": win.get("options").cloned().unwrap_or(Value::Null) }));
         tab.sync = options.get("synchronize-panes").map(|v| v == "on").unwrap_or(tab.sync);
         if options.is_empty() { self.options.windows.remove(&tab.id); } else { self.options.windows.insert(tab.id.clone(), options); }
@@ -3009,6 +3096,9 @@ impl App {
         // Each pane with its id (%N) as it was.
         let kept: Vec<Option<u64>> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter(|p| p.get(1).is_some()).map(|p| p.get(3).and_then(Value::as_u64)).collect()).unwrap_or_default();
         let ids: Vec<u64> = panes.iter().enumerate().map(|(i, (m, a))| self.new_pane_as(m, a, kept.get(i).copied().flatten())).collect();
+        for (id, saved) in ids.iter().zip(win["panes"].as_array().into_iter().flatten()) {
+            if let Some(pane) = self.panes.get_mut(id) { pane.dead = serde_json::from_value(saved.get(4).cloned().unwrap_or(Value::Null)).ok(); }
+        }
         // And the window its id (@N).
         let name = win.get("name").and_then(Value::as_str).unwrap_or("");
         let mut tab = match win.get("wid").and_then(Value::as_u64).filter(|w| self.session_of_window(*w).is_none()) { Some(wid) => Tab::with_wid(name, wid), None => Tab::new(name) };
@@ -3266,6 +3356,7 @@ impl App {
                 if !desk { if let Some(desk_id) = self.sessions.iter().find(|s| s.desk).map(|s| s.id) { self.swap_session(desk_id); self.sessions.retain(|s| s.id != gone) } }
                 self.quit = true;
                 self.exited = true;
+                if !self.headless { crate::commands::notify(self, "client-detached", None, None) }
             }
         }
         self.save_sessions();
@@ -3728,7 +3819,7 @@ impl App {
             let here = self.tabs.iter().position(|t| &t.id == tab_id);
             let tab = match here { Some(i) => Some(&mut self.tabs[i]), None => self.sessions.iter_mut().flat_map(|s| s.tabs.iter_mut()).find(|t| &t.id == tab_id) };
             match tab {
-                Some(t) if t.root.is_none() => { t.root = Some(Node::new(id, w, h)); t.focus = Some(id) }
+                Some(t) if t.root.is_none() => { let (w, h) = t.size.unwrap_or((w, h)); t.root = Some(Node::new(id, w, h)); t.focus = Some(id) }
                 _ => { self.end_shell(id); self.drop_pane(id); return }
             }
             if here == Some(self.active) { self.open_stream(id, true) }
@@ -3798,7 +3889,8 @@ impl App {
             (_, true) => {
                 let body = self.body();
                 let tab = self.tab_mut();
-                tab.root = Some(Node::new(id, body.width, body.height));
+                let (w, h) = tab.size.unwrap_or((body.width, body.height));
+                tab.root = Some(Node::new(id, w, h));
                 tab.focus = Some(id);
             }
             (Placement::Replace, false) => {
@@ -4213,6 +4305,7 @@ impl App {
         HooksSeen {
             ready: true,
             session_id: self.session_id,
+            titles: self.panes.iter().map(|(id, p)| (*id, (p.title.clone(), p.osc_title.clone()))).collect(),
             windows: self.tabs.iter().map(|t| (t.id.clone(), t.has_wid(), t.name.clone(), t.focus, t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default())).collect(),
             current: self.tabs.get(self.active).map(|t| t.id.clone()),
             client,
@@ -4225,9 +4318,11 @@ impl App {
     pub fn hooks_seen_now(&mut self) { if self.hooks_seen.ready { self.hooks_seen = self.hooks_snapshot() } }
 
     pub fn notify_changes(&mut self) {
+        let resized = std::mem::take(&mut self.pending_resize_hooks);
         let focus_events = self.options.get("focus-events", "", None).as_deref() == Some("on");
         let mut now = self.hooks_snapshot();
         let before = std::mem::replace(&mut self.hooks_seen, now.clone());
+        if self.quit && self.exited { return }
         // Another session in front: client-session-changed, and its windows are not new.
         if before.ready && before.session_id != now.session_id {
             crate::commands::notify(self, "client-session-changed", Some(self.active), None);
@@ -4238,6 +4333,11 @@ impl App {
             if let Some(p) = self.focused() { self.update_focus(p, &mut now.focused, false) }
             self.hooks_seen.focused = now.focused;
             return;
+        }
+        for (id, title) in &now.titles {
+            if before.titles.get(id).is_some_and(|old| old != title) {
+                if let Some(w) = self.tabs.iter().position(|t| t.panes().contains(id)) { crate::commands::notify(self, "pane-title-changed", Some(w), Some(*id)) }
+            }
         }
         let at = |app: &App, id: &str| app.tabs.iter().position(|t| t.id == id);
         // (An empty window never numbered was never one: the one a client started in.)
@@ -4255,6 +4355,7 @@ impl App {
             if &old.3 != focus && old.3.is_some() { crate::commands::notify(self, "window-pane-changed", Some(w), None) }
         }
         if before.current != now.current && before.current.is_some() { let (sid, name) = (self.session_id, self.session_name()); crate::commands::notify_session(self, "session-window-changed", sid, &name, None) }
+        for id in resized { if let Some(w) = at(self, &id) { self.layout_changed(w) } }
         // Pane focus (window_pane_update_focus), where tmux looks again: a window's active pane
         // that changed and a window that became current only with focus-events; a window whose
         // active pane went away (window_lost_pane), and the client's own focus, always.
@@ -5184,26 +5285,31 @@ impl App {
         if !self.said_due.is_some_and(|d| Instant::now() >= d) { return }
         self.said_due = None;
         let query = self.said_want.clone();
+        let searches = crate::picker::said_searches(&query);
         let generation = self.said_generation;
         self.said_pending = 0;
         let machines: Vec<String> = self.fleet.machines.iter().filter(|m| m.usable()).map(|m| m.id.clone()).collect();
         for machine in machines {
-            let Some(link) = self.link(&machine) else { continue };
-            self.said_pending += 1;
-            let (q, m, query) = (query.clone(), machine.clone(), query.clone());
-            self.spawn(async move { link.rpc("session_search", json!({ "query": q, "limit": 20 }), Duration::from_secs(10)).await }, move |app, reply| {
-                if app.said_want != query || app.said_generation != generation { return }
-                app.said_pending = app.said_pending.saturating_sub(1);
-                if app.said_for != query { app.said.clear(); app.said_for = query.clone() }
-                app.said.retain(|s| s.machine != m);
-                // (A daemon without session search finds nothing this way.)
-                if let Ok(reply) = reply { app.said.extend(said_hits(&m, &reply)) }
-                // On the best match, it stays on the best match as the answers come (fzf keeps
-                // its cursor's place, not its item, as results arrive).
-                let top = matches!(&app.modal, Some(crate::modal::Modal::Picker { picker, .. }) if picker.cursor == 0);
-                crate::input::refill(app);
-                if top { if let Some(crate::modal::Modal::Picker { picker, .. }) = app.modal.as_mut() { picker.to_top() } }
-            });
+            for search in &searches {
+                let Some(link) = self.link(&machine) else { continue };
+                self.said_pending += 1;
+                let (q, m, query) = (search.clone(), machine.clone(), query.clone());
+                self.spawn(async move { link.rpc("session_search", json!({ "query": q, "limit": 20 }), Duration::from_secs(10)).await }, move |app, reply| {
+                    if app.said_want != query || app.said_generation != generation { return }
+                    app.said_pending = app.said_pending.saturating_sub(1);
+                    if app.said_for != query { app.said.clear(); app.said_for = query.clone() }
+                    // Alternatives and machines contribute to the same generation. Keep their
+                    // union, including different snippets of one conversation, without duplicates.
+                    if let Ok(reply) = reply {
+                        for hit in said_hits(&m, &reply) {
+                            if !app.said.iter().any(|s| s.machine == hit.machine && s.session_id == hit.session_id && s.turn == hit.turn && s.snippet == hit.snippet) { app.said.push(hit) }
+                        }
+                    }
+                    let top = matches!(&app.modal, Some(crate::modal::Modal::Picker { picker, .. }) if picker.cursor == 0);
+                    crate::input::refill(app);
+                    if top { if let Some(crate::modal::Modal::Picker { picker, .. }) = app.modal.as_mut() { picker.to_top() } }
+                });
+            }
         }
     }
 
@@ -5272,6 +5378,7 @@ impl App {
         // display-panes goes away after display-panes-time, as in tmux.
         if matches!(self.modal, Some(crate::modal::Modal::DisplayPanes { until: Some(until), .. }) if Instant::now() >= until) { self.modal = None }
         self.orphans.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(10));
+        self.orphan_exits.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(10));
         for pane in self.panes.values_mut() { pane.settle_predictions() }
         let now = Instant::now();
         for agent in self.fleet.agents.values_mut() {
@@ -5383,7 +5490,7 @@ pub struct Pipe { out: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>, id: 
 /// and layout), the current window, the focused pane, the session's name, and which panes are
 /// in a mode.
 #[derive(Default, Clone)]
-pub struct HooksSeen { ready: bool, session_id: u32, windows: Vec<(String, Option<u64>, String, Option<u64>, String)>, current: Option<String>, client: bool, modes: Vec<u64>, focused: Vec<u64> }
+pub struct HooksSeen { ready: bool, session_id: u32, titles: HashMap<u64, (String, String)>, windows: Vec<(String, Option<u64>, String, Option<u64>, String)>, current: Option<String>, client: bool, modes: Vec<u64>, focused: Vec<u64> }
 
 /// gethostname(3), as tmux's #{host} reads it (`mac.lan`, not `hostname -s`'s `mac`).
 pub fn full_hostname() -> String {

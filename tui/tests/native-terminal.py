@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""Guarded native PTY/death/startup comparisons against tmux 3.5a.
+
+Run after a release build. Optional HN_NATIVE_TEST_BINARY, HN_NATIVE_TEST_PORT
+(19430..19439), HN_NATIVE_TEST_PREFIX (hnt19fixnative...). No daemon is started.
+"""
+import fcntl
+import os
+from pathlib import Path
+import pty
+import re
+import select
+import shlex
+import shutil
+import signal
+import socket
+import struct
+import subprocess
+import tempfile
+import termios
+import threading
+import time
+
+TUI = Path(__file__).resolve().parents[1]
+PORT = int(os.environ.get('HN_NATIVE_TEST_PORT', '19433'))
+PREFIX = os.environ.get('HN_NATIVE_TEST_PREFIX', f'hnt19fixnative{os.getpid()}')
+if not 19430 <= PORT <= 19439 or not re.fullmatch(r'hnt19fixnative[A-Za-z0-9_-]+', PREFIX):
+    raise SystemExit('refusing non-test native terminal port/socket')
+TMUX = shutil.which('tmux')
+if not TMUX:
+    raise SystemExit('tmux is required')
+BASE = Path(tempfile.mkdtemp(prefix='hnnt-', dir='/tmp')).resolve()
+HOME = BASE / 'home'
+HOME.mkdir()
+HN = BASE / 'hn'
+shutil.copy2(os.environ.get('HN_NATIVE_TEST_BINARY', TUI / 'target/release/harness-tui'), HN)
+ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ') if k in os.environ}
+ENV.update(HOME=str(HOME), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(PORT),
+           SHELL='/bin/sh', TERM='xterm-256color', HARNESS_TUI_DESK='off',
+           HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', PS1='$ ')
+CONF = BASE / 'tmux.conf'
+CONF.write_text('set -g default-shell /bin/sh\nset -g @hn-look tmux\n'
+                'set -g automatic-rename off\nset -g status off\n'
+                'set -g pane-border-status off\n')
+clients = []
+
+
+def argv(kind, *args):
+    assert 19430 <= PORT <= 19439 and PREFIX.startswith('hnt19fixnative')
+    prefix = [HN, '-L', PREFIX, '--port', PORT] if kind == 'hn' else [TMUX, '-L', PREFIX + 'ref']
+    return list(map(str, [*prefix, '-f', CONF, *args]))
+
+
+def cli(kind, *args, check=True):
+    p = subprocess.run(argv(kind, *args), env=ENV, cwd=BASE, text=True, capture_output=True, timeout=12)
+    if check and p.returncode:
+        raise AssertionError((kind, args, p.returncode, p.stdout, p.stderr))
+    return p
+
+
+def same(*args):
+    h, t = (cli(kind, *args, check=False) for kind in ('hn', 'tmux'))
+    assert (h.returncode, h.stdout, h.stderr) == (t.returncode, t.stdout, t.stderr), (args, h, t)
+    return h.stdout.strip()
+
+
+def both(*args):
+    for kind in ('hn', 'tmux'):
+        cli(kind, *args)
+
+
+def wait(fn, label, seconds=8):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        try:
+            if answer := fn():
+                return answer
+        except (AssertionError, subprocess.TimeoutExpired):
+            pass
+        time.sleep(.04)
+    raise AssertionError(label)
+
+
+def owned():
+    out = subprocess.check_output(['ps', '-ax', '-o', 'pid=,command='], text=True)
+    found = []
+    for row in out.splitlines():
+        parts = row.strip().split(None, 1)
+        if len(parts) == 2 and parts[1].startswith(str(HN) + ' ') and f'-L {PREFIX} ' in parts[1]:
+            found.append((int(parts[0]), parts[1]))
+    return found
+
+
+class Terminal:
+    def __init__(self, kind, *args, cols=80, rows=24):
+        master, slave = pty.openpty()
+        self.fd, self.data, self.reading = master, bytearray(), True
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+
+        def setup():
+            os.setsid()
+            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+        self.proc = subprocess.Popen(argv(kind, *args), stdin=slave, stdout=slave, stderr=slave,
+                                     env=ENV, cwd=BASE, preexec_fn=setup)
+        os.close(slave)
+        self.thread = threading.Thread(target=self.read, daemon=True)
+        self.thread.start()
+        clients.append(self)
+
+    def read(self):
+        while self.reading:
+            if select.select([self.fd], [], [], .1)[0]:
+                try:
+                    chunk = os.read(self.fd, 65536)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                self.data.extend(chunk)
+
+    def write(self, text):
+        os.write(self.fd, text)
+
+    def stop(self):
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            self.proc.wait(timeout=3)
+        self.reading = False
+        self.thread.join(timeout=1)
+        os.close(self.fd)
+        clients.remove(self)
+
+
+def stop_servers():
+    both('kill-server')
+    wait(lambda: not owned(), 'native processes cleaned')
+
+
+with socket.socket() as probe:
+    probe.bind(('127.0.0.1', PORT))
+try:
+    both('new-session', '-d', '-s', 'work')
+    both('set', '-g', '@died', '')
+    both('set-hook', '-g', 'pane-died', 'set -agF @died "#{window_index}:#{pane_dead_status}:#{pane_dead_signal},"')
+    both('set', '-g', 'remain-on-exit-format', 'DEAD:#{pane_dead_status}:#{pane_dead_signal}')
+    both('set', '-g', 'remain-on-exit', 'on')
+    both('new-window', '-d', '-t', 'work:4', 'printf "HISTORY_MARK\\n"; exit 7')
+    wait(lambda: same('list-panes', '-t', 'work:4', '-F', '#{pane_dead}:#{pane_dead_status}') == '1:7', 'retained exit 7')
+    wait(lambda: same('show', '-gv', '@died') == '4:7:,', 'pane-died once')
+    assert 'HISTORY_MARK' in same('capture-pane', '-p', '-S', '-1000', '-t', 'work:4')
+    both('respawn-window', '-t', 'work:4', 'printf "RESPAWN_MARK\\n"; exit 9')
+    wait(lambda: same('show', '-gv', '@died') == '4:7:,4:9:,', 'respawn death')
+    both('respawn-pane', '-t', 'work:4')
+    wait(lambda: same('show', '-gv', '@died') == '4:7:,4:9:,4:9:,', 'original command reused')
+    history = same('capture-pane', '-p', '-S', '-1000', '-t', 'work:4')
+    assert history.count('HISTORY_MARK') == 1 and history.count('RESPAWN_MARK') == 2
+    both('set', '-g', 'remain-on-exit', 'failed')
+    both('new-window', '-d', '-t', 'work:5', 'exit 0')
+    wait(lambda: same('list-windows', '-t', 'work', '-F', '#{window_index}') == '0\n4', 'successful exit removed')
+    both('new-window', '-d', '-t', 'work:6', 'kill -TERM $$')
+    wait(lambda: re.fullmatch(r'1::.+', same('list-panes', '-t', 'work:6', '-F', '#{pane_dead}:#{pane_dead_status}:#{pane_dead_signal}')), 'signal exit retained')
+    died = same('show', '-gv', '@died')
+    ui = Terminal('hn', 'attach-session', '-t', 'work:4')
+    wait(lambda: b'DEAD:9:' in ui.data and ui.proc.poll() is None, 'dead pane on actual UI')
+    ui.write(b'\x02d')
+    ui.proc.wait(timeout=4)
+    ui.stop()
+    wait(lambda: any('--headless' in command for _, command in owned()), 'headless handoff')
+    for pid, command in owned():
+        if '--headless' in command:
+            os.kill(pid, signal.SIGKILL)
+    time.sleep(.15)
+    ui = Terminal('hn', 'attach-session', '-t', 'work:4')
+    wait(lambda: b'DEAD:9:' in ui.data and ui.proc.poll() is None, 'dead snapshot after holder crash')
+    assert cli('hn', 'show', '-gv', '@died').stdout.strip() == died
+    recovered = cli('hn', 'capture-pane', '-p', '-S', '-1000', '-t', 'work:4').stdout
+    assert recovered.count('HISTORY_MARK') == 1 and recovered.count('RESPAWN_MARK') == 2
+    both('respawn-pane', '-t', 'work:4', 'sleep 30')
+    wait(lambda: same('list-panes', '-t', 'work:4', '-F', '#{pane_dead}:#{pane_dead_status}') == '0:', 'live respawn')
+    same('respawn-pane', '-t', 'work:4', 'exit 8')
+    both('set', '-g', 'remain-on-exit', 'on')
+    for index in range(10, 22):
+        both('new-window', '-d', '-t', f'work:{index}', f'printf "FAST_{index}\\n"; exit 7')
+    for index in range(10, 22):
+        wait(lambda: same('list-panes', '-t', f'work:{index}', '-F', '#{pane_dead}:#{pane_dead_status}') == '1:7', f'fast exit {index}')
+        for kind in ('hn', 'tmux'):
+            assert cli(kind, 'show', '-gv', '@died').stdout.split(',').count(f'{index}:7:') == 1
+            capture = cli(kind, 'capture-pane', '-p', '-S', '-1000', '-t', f'work:{index}').stdout
+            wait(lambda: cli(kind, 'capture-pane', '-p', '-S', '-1000', '-t', f'work:{index}').stdout.count(f'FAST_{index}') == 1, f'{kind} fast output {index}: {capture!r}')
+    stop_servers()
+    ui.proc.wait(timeout=4)
+    ui.stop()
+    print('PASS retained exits/signals, hooks, history, crash recovery and respawn', flush=True)
+
+    for delay in (0, .1):
+        for kind in ('hn', 'tmux'):
+            marker = BASE / f'{kind}-typeahead'
+            marker.unlink(missing_ok=True)
+            ui = Terminal(kind, 'new-session', '-s', 'work')
+            wait(lambda: b'\x1b[c' in ui.data or b'\x1b[0c' in ui.data, 'DA1 query')
+            time.sleep(delay)
+            ui.write(('printf kept > ' + shlex.quote(str(marker)) + '\r').encode())
+            time.sleep(.15)
+            ui.write(b'\x1b[?1;2c')
+            wait(marker.exists, f'{kind} typeahead at {delay}s')
+            cli(kind, 'kill-server')
+            ui.proc.wait(timeout=4)
+            ui.stop()
+            time.sleep(.15)
+    print('PASS immediate/delayed startup typeahead through delayed DA1', flush=True)
+
+    for kind in ('hn', 'tmux'):
+        start = time.monotonic()
+        ui = Terminal(kind, 'new-session', '-s', 'work')
+        wait(lambda: b'\x1b[?1049h' in ui.data, 'first screen without DA1')
+        elapsed = time.monotonic() - start
+        assert elapsed < .6, (kind, elapsed)
+        print(f'PASS {kind} first screen without DA1: {elapsed:.3f}s', flush=True)
+        cli(kind, 'kill-server')
+        ui.proc.wait(timeout=4)
+        ui.stop()
+        time.sleep(.15)
+        tiny = BASE / f'{kind}-size'
+        ui = Terminal(kind, 'new-session', '-s', 'tiny', f'stty size > {shlex.quote(str(tiny))}; sleep 2', cols=1, rows=1)
+        wait(tiny.exists, f'{kind} tiny initial size')
+        assert tiny.read_text().strip() == '1 1', (kind, tiny.read_text())
+        assert cli(kind, 'display-message', '-p', '-t', 'tiny:0', '#{pane_width}x#{pane_height}').stdout.strip() == '1x1'
+        cli(kind, 'kill-server')
+        ui.proc.wait(timeout=4)
+        ui.stop()
+    print('PASS native PTY starts at the actual 1x1 pane size', flush=True)
+finally:
+    for kind in ('hn', 'tmux'):
+        try:
+            cli(kind, 'kill-server', check=False)
+        except subprocess.TimeoutExpired:
+            pass
+    for ui in list(clients):
+        ui.stop()
+    for pid, _ in owned():
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    wait(lambda: not owned(), 'final native process cleanup')
+    print(f'Test files: {BASE}', flush=True)

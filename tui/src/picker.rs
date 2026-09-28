@@ -82,6 +82,7 @@ pub struct Picker {
     /// How far the preview can scroll, its lines and its height (the preview sets them as it
     /// draws): fzf's offset goes until the last line is at the top, a page is the window's height.
     pub preview_max: std::cell::Cell<u16>,
+    pub preview_min: std::cell::Cell<u16>,
     pub preview_lines: std::cell::Cell<usize>,
     pub preview_rows: std::cell::Cell<u16>,
     pub title: String,
@@ -129,6 +130,7 @@ pub struct Picker {
     /// A row's preview not drawn yet (it starts where --preview-window's +N or follow says), and
     /// whether it follows its end (follow, until scrolled up from it).
     pub preview_fresh: std::cell::Cell<bool>,
+    pub preview_reposition: std::cell::Cell<bool>,
     pub preview_following: std::cell::Cell<bool>,
     /// The row whose preview was last put at its end (a session's turns read bottom up).
     pub preview_bottom: std::cell::RefCell<Option<String>>,
@@ -161,6 +163,7 @@ pub struct Picker {
     /// thumb's length), and whether the mouse is dragging it.
     pub preview_bar: std::cell::Cell<Option<(u16, u16, usize, usize, usize)>>,
     pub preview_bar_drag: bool,
+    pub preview_bar_cells: std::cell::RefCell<(ratatui::layout::Rect, Vec<bool>)>,
     pub border_drag: bool,
     pub preview_cells: Option<i64>,
     /// change-preview-window and toggle-preview-wrap: the preview window as they left it (and
@@ -197,6 +200,7 @@ pub struct Picker {
     /// C-b s: the rows its query found by what was said in them (best first), and that query.
     pub said: Vec<String>,
     pub said_query: String,
+    pub said_text: HashMap<String, String>,
     /// change-header: the header row's text instead of the keys' hints.
     pub header_text: Option<String>,
     /// unbind / toggle-bind: keys that do nothing in this list now.
@@ -261,6 +265,7 @@ impl Picker {
             preview_drag: None,
             preview_bar: Default::default(),
             preview_bar_drag: false,
+            preview_bar_cells: Default::default(),
             border_drag: false,
             preview_cells: None,
             preview_window: None,
@@ -279,6 +284,7 @@ impl Picker {
             landed: None,
             said: Vec::new(),
             said_query: String::new(),
+            said_text: HashMap::new(),
             unbound: Default::default(),
             multi_override: None,
             excluded: Default::default(),
@@ -286,6 +292,7 @@ impl Picker {
             search: None,
             preview_of: None,
             preview_fresh: std::cell::Cell::new(true),
+            preview_reposition: Default::default(),
             preview_following: Default::default(),
             preview_bottom: Default::default(),
             wrap: crate::theme::fzf_opts().wrap,
@@ -296,6 +303,7 @@ impl Picker {
             prompt_at: Default::default(),
             box_rows: Default::default(),
             preview_max: Default::default(),
+            preview_min: Default::default(),
             preview_lines: Default::default(),
             preview_rows: Default::default(),
             kill: String::new(),
@@ -333,8 +341,8 @@ impl Picker {
         // A conversation Harness did not start is listed only for the query that found it — or,
         // while you type on (the query's words growing or shrinking), for the one before, until
         // the machines answer the new one (no row blinking out on every key).
-        let terms = said_terms(query);
-        let found_now = !self.said_query.is_empty() && (self.said_query == terms || (!terms.is_empty() && (terms.starts_with(&self.said_query) || self.said_query.starts_with(&terms))));
+        let found_now = !self.said_query.is_empty() && !query.trim().is_empty()
+            && (self.said_query == query || query.starts_with(&self.said_query) || self.said_query.starts_with(query));
         let offered = |r: &Row| !r.id.starts_with("external:") || (found_now && self.said.contains(&r.id));
         if query.trim().is_empty() {
             self.visible = self.rows.iter().enumerate().filter(|(_, r)| !self.excluded.contains(&r.id) && offered(r)).map(|(i, _)| (i, Vec::new())).collect();
@@ -344,38 +352,6 @@ impl Picker {
             let o = crate::theme::fzf_opts();
             let case = match o.case { Some(true) => crate::fzf::Case::Respect, Some(false) => crate::fzf::Case::Ignore, None => crate::fzf::Case::Smart };
             let q = if o.no_extended { crate::fzf::Query::plain(query, case, !o.exact, !o.literal) } else { crate::fzf::Query::parse(query, case, !o.exact, !o.literal) }.searching(&o.tiebreak).v1(o.algo_v1);
-            // (Each word's case read as fzf reads a term's: +i, -i, or smart — an upper-case letter.)
-            // (Under +x there are no words: the query is one term, and no keyword answers it.)
-            let words: Vec<(String, bool)> = query.split_whitespace().filter(|_| !o.no_extended).map(|w| {
-                let w = w.trim_start_matches('\'');
-                let sensitive = o.case.unwrap_or(w != w.to_lowercase());
-                (if sensitive { w.to_string() } else { w.to_lowercase() }, sensitive)
-            }).collect();
-            // `!word` (and `!'word`) standing alone — unanchored (`^`, `$` are about the line as
-            // drawn) and in no `|` group (the group's other terms may answer): not only a row
-            // whose line says it, but one whose keywords do; and in a live list, where the line's
-            // changing parts are left out of matching (so a row does not come and go as they
-            // change), one whose line says it where you can see it. The rest are fzf.rs's alone.
-            let alone: Vec<(String, bool)> = words.iter().enumerate().filter(|(i, _)| {
-                let bar = |j: Option<usize>| j.and_then(|j| words.get(j)).map(|(w, _)| w == "|").unwrap_or(false);
-                !bar(i.checked_sub(1)) && !bar(Some(i + 1))
-            }).filter_map(|(_, (w, s))| w.strip_prefix('!').map(|r| (r.trim_start_matches('\'').to_string(), *s))).filter(|(w, _)| !w.is_empty() && !w.starts_with('^') && !w.ends_with('$')).collect();
-            let negated = alone.clone();
-            let unanchored = alone;
-            let words: Vec<(String, bool)> = words.into_iter().filter(|(w, _)| !w.starts_with('!')).collect();
-            // The keywords by fzf's OR groups (`webapp | api`: either).
-            let mut groups: Vec<Vec<(String, bool)>> = Vec::new();
-            let mut or_next = false;
-            for (w, s) in words {
-                // (A `|` with nothing before it is a term of its own, as fzf reads it — one no
-                // keyword answers.)
-                // (…and one right after another `|` is a term too, as in fzf: `login | | uber`.)
-                if w == "|" && !groups.is_empty() && !or_next { or_next = true; continue }
-                // (An anchored term is about the line as drawn: no keyword answers it.)
-                let w = if w.starts_with('^') || w.ends_with('$') { String::new() } else { w };
-                match groups.last_mut() { Some(g) if or_next => g.push((w, s)), _ => groups.push(vec![(w, s)]) }
-                or_next = false;
-            }
             let live_tiebreak: Vec<crate::fzf::Tiebreak> = o.tiebreak.iter().copied().filter(|t| *t != crate::fzf::Tiebreak::Length).collect();
             let mut scored: Vec<(Vec<i64>, usize, Vec<u32>)> = Vec::new();
             // Where the right column lines up (ui's right_edge): the widest line, at most the width.
@@ -384,14 +360,16 @@ impl Picker {
             for (index, row) in self.rows.iter().enumerate() {
                 if row.disabled || self.excluded.contains(&row.id) || !offered(row) { continue }
                 let keywords = format!("{} {}", row.label, row.extra);
-                if negated.iter().any(|(w, s)| w.chars().count() >= 3 && names_word(&keywords, w, *s)) { continue }
                 let chars: Vec<char> = if self.live { steady_line(row, self.text_w, edge) } else { line(row).chars().collect() };
-                // (A keyword hit still has to keep out of what the query excludes from the line.)
-                let seen = if negated.is_empty() { String::new() } else { line(row) };
-                let clear = |w: &str, sensitive: bool| if sensitive { !seen.contains(w) } else { !seen.to_lowercase().contains(w) };
-                let shown = self.live && !unanchored.is_empty() && unanchored.iter().any(|(w, sensitive)| { let l = line(row); if *sensitive { l.contains(w.as_str()) } else { l.to_lowercase().contains(w.as_str()) } });
+                let seen = line(row);
+                let with_keywords = !o.no_extended && q.matches_with_extra(&chars, |word, sensitive, inverse| {
+                    let keyword = (word.chars().count() >= 3 || STATE_WORDS.contains(&word)) && names_word(&keywords, word, sensitive);
+                    keyword || inverse && self.live && if sensitive { seen.contains(word) } else { seen.to_lowercase().contains(word) }
+                });
+                // Negated metadata is part of its original OR group, never removed before
+                // grouping: (bindings OR !zz) AND $ still requires the literal dollar.
+                if !o.no_extended && !with_keywords { continue }
                 match q.matches(&chars) {
-                    Some(_) if shown => {}
                     Some(hit) => {
                         // A live list's rows are its order (by urgency), as fzf's are over lines
                         // drawn to one width: length decides nothing between them.
@@ -402,7 +380,7 @@ impl Picker {
                     }
                     // The keywords behind a row (engine, machine, branch): whole words of three
                     // letters or more find it, after everything that matched what you see.
-                    None if !groups.is_empty() && groups.iter().all(|g| g.iter().any(|(w, sensitive)| (w.chars().count() >= 3 || STATE_WORDS.contains(&w.as_str())) && names_word(&keywords, w, *sensitive))) && negated.iter().all(|(w, s)| clear(w, *s)) => hidden.push(index),
+                    None if with_keywords => hidden.push(index),
                     None => {}
                 }
             }
@@ -410,12 +388,17 @@ impl Picker {
             if sorted { scored.sort_by(|a, b| a.0.cmp(&b.0)) }
             // Rows its keywords name (`codex`: the Codex harnesses) come before rows the query
             // found only as letters scattered through the line (c…o…d…e…x in `gpu-box`).
-            let plain: Vec<String> = groups.iter().flatten().filter(|(w, _)| w.chars().count() >= 3).map(|(w, _)| w.to_lowercase()).collect();
+            let plain: Vec<String> = q.positive_terms().into_iter().filter(|w| w.chars().count() >= 3).map(|w| w.to_lowercase()).collect();
             let scattered = |i: usize| !plain.is_empty() && !plain.iter().any(|w| line(&self.rows[i]).to_lowercase().contains(w.as_str()));
             // What was said in them (session search, on the machines), in the order the machines
             // ranked it — kept out by the query's `!` terms, as any row is.
-            let excluded_by = |i: usize| { let r = &self.rows[i]; let text = format!("{} {} {}", line(r), r.label, r.extra); negated.iter().any(|(w, s)| if *s { text.contains(w.as_str()) } else { text.to_lowercase().contains(w.as_str()) }) };
-            let said_all: Vec<usize> = if found_now { self.said.iter().filter_map(|id| self.rows.iter().position(|r| &r.id == id && !r.disabled && !self.excluded.contains(&r.id))).filter(|i| !excluded_by(*i)).collect() } else { Vec::new() };
+            let said_all: Vec<usize> = if found_now {
+                self.said.iter().filter_map(|id| self.rows.iter().position(|r| &r.id == id && !r.disabled && !self.excluded.contains(&r.id))).filter(|i| {
+                    let row = &self.rows[*i];
+                    let text = format!("{} {} {}", line(row), row.extra, self.said_text.get(&row.id).map(String::as_str).unwrap_or(""));
+                    q.matches(&text.chars().collect::<Vec<_>>()).is_some()
+                }).collect()
+            } else { Vec::new() };
             // Rows its keywords name, or where what was said found it, before rows the query found
             // only as letters scattered through the line.
             let (weak, strong): (Vec<_>, Vec<_>) = if hidden.is_empty() && said_all.is_empty() { (Vec::new(), scored) } else { scored.into_iter().partition(|(_, i, _)| scattered(*i) && !said_all.contains(i)) };
@@ -470,9 +453,9 @@ impl Picker {
 
     /// scrollPreviewTo: kept in range, and following again once back at the end.
     pub fn preview_to(&mut self, to: i64) {
-        let at = to.clamp(0, self.preview_max.get() as i64);
+        let at = to.clamp(self.preview_min.get().min(self.preview_max.get()) as i64, self.preview_max.get() as i64);
         self.preview_scroll.set(at as u16);
-        self.preview_following.set(at >= self.preview_lines.get() as i64 - self.preview_rows.get() as i64);
+        self.preview_following.set(at >= self.preview_lines.get() as i64 - (self.preview_rows.get() as i64 - self.preview_min.get() as i64));
     }
 
     /// preview-page-*: the window's height; preview-half-page-*: half of it.
@@ -808,7 +791,7 @@ impl Picker {
         if thumb == 0 || height <= thumb || total <= height { return true }
         let at = (y as i64 - top as i64 - thumb as i64 / 2).clamp(0, (height - thumb) as i64);
         let offset = ((at as f64) * (total - height) as f64 / (height - thumb) as f64).ceil() as i64;
-        self.preview_to(offset);
+        self.preview_to(offset + self.preview_min.get() as i64);
         true
     }
 
@@ -1061,40 +1044,64 @@ mod colon_tests {
     }
 }
 
-/// What C-b s asks the machines' session search for, from an fzf query: the words it must find
-/// (fzf's exact `'`, anchors `^` `$` taken off), not those it must not (`!word`) nor a `|` group's
-/// (the search wants every word; either of two is no word it must have). Empty: nothing to ask.
-pub fn said_terms(query: &str) -> String {
-    let words: Vec<&str> = query.split_whitespace().collect();
-    let mut out: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < words.len() {
-        // A group: this word and those joined to it by `|`.
-        let mut j = i;
-        while j + 2 < words.len() + 1 && words.get(j + 1) == Some(&"|") { j += 2 }
-        if j == i {
-            let w = words[i];
-            if !w.starts_with('!') && w != "|" {
-                let t = w.trim_start_matches('\'').trim_start_matches('^').trim_end_matches('$');
-                if !t.is_empty() { out.push(t.to_string()) }
-            }
-        }
-        i = j + 1;
-    }
-    let text = out.join(" ");
-    if text.chars().filter(|c| c.is_alphanumeric()).count() >= 2 { text } else { String::new() }
+/// The effective fzf expression's positive index queries. The picker applies the complete
+/// expression to the discovered title, metadata and snippets before admitting a row.
+pub fn said_searches(query: &str) -> Vec<String> {
+    let o = crate::theme::fzf_opts();
+    let case = match o.case { Some(true) => crate::fzf::Case::Respect, Some(false) => crate::fzf::Case::Ignore, None => crate::fzf::Case::Smart };
+    let q = if o.no_extended { crate::fzf::Query::plain(query, case, !o.exact, !o.literal) } else { crate::fzf::Query::parse(query, case, !o.exact, !o.literal) };
+    q.discovery_queries()
 }
 
 #[cfg(test)]
 mod said_tests {
     #[test]
-    fn only_the_words_it_must_find() {
-        assert_eq!(super::said_terms("nfc"), "nfc");
-        assert_eq!(super::said_terms("'device !nfc"), "device");
-        assert_eq!(super::said_terms("!nfc"), "");
-        assert_eq!(super::said_terms("decimal !billing"), "decimal");
-        assert_eq!(super::said_terms("nfc | decimal"), "");
-        assert_eq!(super::said_terms("^fix login$ api | web"), "fix login");
-        assert_eq!(super::said_terms("a"), "");
+    fn discovery_keeps_or_alternatives_and_escaped_words() {
+        let queries = |s| crate::fzf::Query::parse(s, crate::fzf::Case::Smart, true, true).discovery_queries();
+        assert_eq!(queries("nfc"), ["nfc"]);
+        assert_eq!(queries("'device !nfc"), ["device"]);
+        assert!(queries("!nfc").is_empty());
+        assert_eq!(queries("decimal !billing"), ["decimal"]);
+        assert_eq!(queries("nfc | decimal"), ["nfc", "decimal"]);
+        assert_eq!(queries("^fix login$ api | web"), ["fix login"]);
+        assert_eq!(queries(r"'keep\ awake | reader"), ["keep awake", "reader"]);
+        assert!(queries("a").is_empty());
+    }
+
+    #[test]
+    fn discovery_does_not_bypass_the_complete_expression() {
+        use super::{Picker, Row};
+        let mut p = Picker::new("test", "");
+        p.said = vec!["external:nfc".into(), "external:billing".into()];
+        p.said_query = "nfc | decimal".into();
+        p.said_text.insert("external:nfc".into(), "reader drops a tap".into());
+        p.said_text.insert("external:billing".into(), "invoices use Decimal".into());
+        p.rows = vec![Row::new("external:nfc", "Continue NFC device chat"), Row::new("external:billing", "Refactor billing")];
+        p.set_query("nfc | decimal");
+        assert_eq!(p.visible.len(), 2);
+        p.set_query("nfc | decimal !billing");
+        assert_eq!(p.visible.len(), 1);
+        assert_eq!(p.current_id().as_deref(), Some("external:nfc"));
+        p.set_query("nfc | decimal missing");
+        assert!(p.visible.is_empty());
+        p.said_query = "reader".into();
+        p.search = Some("reader".into());
+        p.query.clear();
+        p.refilter();
+        assert_eq!(p.current_id().as_deref(), Some("external:nfc"));
+    }
+
+    #[test]
+    fn keyword_negation_keeps_its_or_group() {
+        use super::{Picker, Row};
+        let mut p = Picker::new("test", "");
+        p.set_rows(vec![Row::new("a", "key bindings").extra("codex"), Row::new("b", "key bindings $").extra("claude")]);
+        p.set_query("bindings | !zz $");
+        assert_eq!(p.visible.len(), 1);
+        assert_eq!(p.current_id().as_deref(), Some("b"));
+        p.set_query("codex | !claude $");
+        assert!(p.visible.is_empty());
+        p.set_query("codex !zz");
+        assert_eq!(p.current_id().as_deref(), Some("a"));
     }
 }

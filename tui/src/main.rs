@@ -39,6 +39,7 @@ mod picker;
 mod proto;
 mod theme;
 mod term_out;
+mod term_input;
 mod tmuxconf;
 mod ui;
 
@@ -348,10 +349,12 @@ async fn run(config: config::Config) -> io::Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
     // Keys on their own thread: crossterm's reader blocks, and a keystroke must never wait on the loop.
     let keys = tx.clone();
-    std::thread::spawn(move || loop {
-        match crossterm::event::read() {
-            Ok(event) => { if keys.send(Event::Input(event)).is_err() { break } }
-            Err(_) => break,
+    std::thread::spawn(move || term_input::read(keys));
+    let resize = tx.clone();
+    tokio::spawn(async move {
+        let Ok(mut changes) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change()) else { return };
+        while changes.recv().await.is_some() {
+            if let Ok((cols, rows)) = terminal::size() { if resize.send(Event::Input(crossterm::event::Event::Resize(cols, rows))).is_err() { break } }
         }
     });
     let ticks = tx.clone();
@@ -430,6 +433,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     let mut need_draw = true;
     let mut mouse_all = false;
     let mut cursor_colour: Option<String> = None;
+    let mut startup_input = std::collections::VecDeque::new();
+    let mut input_ready = app.focused().is_some();
     loop {
         // Wait for something — or for the frame we owe to come due.
         let wait = if need_draw { frame_budget.saturating_sub(last_draw.elapsed()) } else { Duration::from_secs(3600) };
@@ -438,9 +443,14 @@ async fn run(config: config::Config) -> io::Result<()> {
             _ = tokio::time::sleep(wait) => None,
         };
         let mut refill = false;
-        let apply = |app: &mut app::App, event: Event, refill: &mut bool| {
+        let apply = |app: &mut app::App, event: Event, refill: &mut bool, startup: &mut std::collections::VecDeque<crossterm::event::Event>| {
             match event {
-                Event::Input(input) => { input::handle(app, input); *refill = true }
+                Event::Input(input) => {
+                    // Input can arrive before the first shell has even been requested. Keep
+                    // its decoded events until that pane exists, including bracketed paste.
+                    if !input_ready && matches!(input, crossterm::event::Event::Key(_) | crossterm::event::Event::Paste(_)) { startup.push_back(input); }
+                    else { input::handle(app, input); *refill = true }
+                }
                 Event::Machine { machine_id, generation, event } => {
                     if !matches!(event, crate::event::MachineEvent::Terminal(_)) { *refill = true }
                     app.on_machine(machine_id, generation, event)
@@ -450,9 +460,13 @@ async fn run(config: config::Config) -> io::Result<()> {
                 Event::Animate => {},
             }
         };
-        if let Some(event) = first { apply(&mut app, event, &mut refill); need_draw = true }
+        if let Some(event) = first { apply(&mut app, event, &mut refill, &mut startup_input); need_draw = true }
         // Everything else already waiting goes into the same frame.
-        while let Ok(event) = rx.try_recv() { apply(&mut app, event, &mut refill); need_draw = true }
+        while let Ok(event) = rx.try_recv() { apply(&mut app, event, &mut refill, &mut startup_input); need_draw = true }
+        if !input_ready && (app.focused().is_some() || app.shell_asked && app.starting_shell.is_none()) {
+            input_ready = true;
+            while let Some(event) = startup_input.pop_front() { input::handle(&mut app, event); refill = true; }
+        }
         // The event hooks for what that changed, then any waiting; a config's errors, once there
         // is a pane to show them in.
         app.notify_changes();
@@ -492,6 +506,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         if all != mouse_all { execute!(term.backend_mut(), term_out::Mouse(if all { 2 } else { 1 }))?; mouse_all = all }
         app.flush_acks();
         if refill && matches!(app.modal, Some(modal::Modal::Picker { .. })) { input::refill(&mut app) }
+        if std::mem::take(&mut app.redraw_all) { term.clear()?; need_draw = true; }
         if need_draw && last_draw.elapsed() >= frame_budget {
             // (The backend makes each frame's changes one synchronized update, and writes nothing
             // for a frame that changed nothing.)

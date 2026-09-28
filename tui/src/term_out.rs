@@ -17,6 +17,7 @@ use ratatui::style::{Color, Modifier};
 pub struct TmuxBackend<W: Write> {
     inner: CrosstermBackend<W>,
     shadow: Vec<Vec<Cell>>,
+    extra_shadow: std::collections::HashMap<(u16, u16), Extra>,
     /// A frame with several changes is one synchronized update (?2026), closed at its flush.
     syncing: bool,
     /// The cursor as last written: a frame that changes nothing writes nothing (an idle hn is
@@ -40,10 +41,10 @@ fn risky(symbol: &str) -> bool {
 }
 
 /// What the terminal was last told: colours, attributes, the underline's style, the open link.
-struct Pen { fg: Color, bg: Color, ul: Color, modifier: Modifier, style: u8, link: Option<std::sync::Arc<str>> }
+struct Pen { fg: Color, bg: Color, ul: Color, modifier: Modifier, style: u8, overline: bool, link: Option<std::sync::Arc<str>> }
 
 impl Pen {
-    fn new() -> Pen { Pen { fg: Color::Reset, bg: Color::Reset, ul: Color::Reset, modifier: Modifier::empty(), style: 0, link: None } }
+    fn new() -> Pen { Pen { fg: Color::Reset, bg: Color::Reset, ul: Color::Reset, modifier: Modifier::empty(), style: 0, overline: false, link: None } }
 
     /// A cell's attributes (as tmux's tty_attributes writes them) and its symbol.
     fn put(&mut self, w: &mut impl Write, cell: &Cell, extra: Option<&Extra>, usstyle: bool, links: bool) -> io::Result<()> {
@@ -57,7 +58,7 @@ impl Pen {
             // wanted is set again.
             if !(self.modifier - modifier).is_empty() {
                 w.write_all(b"\x1b[0m")?;
-                (self.fg, self.bg, self.ul, self.modifier, self.style) = (Color::Reset, Color::Reset, Color::Reset, Modifier::empty(), 0);
+                (self.fg, self.bg, self.ul, self.modifier, self.style, self.overline) = (Color::Reset, Color::Reset, Color::Reset, Modifier::empty(), 0, false);
             }
             for (flag, code) in ATTRS { if modifier.contains(flag) && !self.modifier.contains(flag) { write!(w, "\x1b[{code}m")?; if code == 4 { self.style = 1 } } }
             self.modifier = modifier;
@@ -66,6 +67,8 @@ impl Pen {
         // terminal reads one, else a plain one.
         let want = if !cell.modifier.contains(Modifier::UNDERLINED) { 0 } else if usstyle { extra.map(|e| e.underline).filter(|u| *u >= 2).unwrap_or(1) } else { 1 };
         if want != self.style && want > 0 { if want == 1 { w.write_all(b"\x1b[4:1m")? } else { write!(w, "\x1b[4:{want}m")? } self.style = want }
+        let overline = extra.is_some_and(|e| e.overline);
+        if overline != self.overline { w.write_all(if overline { b"\x1b[53m" } else { b"\x1b[55m" })?; self.overline = overline; }
         if fg != self.fg { write!(w, "\x1b[{}m", sgr(fg, 30))?; self.fg = fg; }
         if bg != self.bg { write!(w, "\x1b[{}m", sgr(bg, 40))?; self.bg = bg; }
         if usstyle && ul != self.ul { write!(w, "\x1b[{}m", sgr_underline(ul))?; self.ul = ul; }
@@ -81,7 +84,7 @@ impl Pen {
     /// Everything back to the terminal's defaults (and so known).
     fn reset(&mut self, w: &mut impl Write) -> io::Result<()> {
         if self.link.is_some() { w.write_all(b"\x1b]8;;\x1b\\")? }
-        if self.fg != Color::Reset || self.bg != Color::Reset || self.ul != Color::Reset || !self.modifier.is_empty() || self.style != 0 {
+        if self.fg != Color::Reset || self.bg != Color::Reset || self.ul != Color::Reset || !self.modifier.is_empty() || self.style != 0 || self.overline {
             w.write_all(b"\x1b[0m")?;
         }
         *self = Pen::new();
@@ -93,7 +96,7 @@ impl Pen {
 /// curly, 4 dotted, 5 dashed — tmux's 4:N) and its link (OSC 8). Kept by position for the frame
 /// being drawn (ui's pane_body), and written with the cell when the outer terminal reads them.
 #[derive(Clone, PartialEq, Default, Debug)]
-pub struct Extra { pub underline: u8, pub link: Option<std::sync::Arc<str>> }
+pub struct Extra { pub underline: u8, pub overline: bool, pub link: Option<std::sync::Arc<str>> }
 
 struct Frame { extras: std::collections::HashMap<(u16, u16), Extra>, usstyle: bool, links: bool }
 static FRAME: std::sync::Mutex<Option<Frame>> = std::sync::Mutex::new(None);
@@ -106,6 +109,13 @@ pub fn begin_frame(usstyle: bool, links: bool) {
 
 pub fn set_extra(x: u16, y: u16, extra: Extra) {
     if let Ok(mut f) = FRAME.lock() { if let Some(f) = f.as_mut() { f.extras.insert((x, y), extra); } }
+}
+
+/// An overlay owns its cells; pane metadata underneath must not bleed through it.
+pub fn clear_extras(area: ratatui::layout::Rect) {
+    if let Ok(mut frame) = FRAME.lock() { if let Some(frame) = frame.as_mut() {
+        frame.extras.retain(|&(x, y), _| !area.contains(Position::new(x, y)));
+    } }
 }
 
 /// Whether the outer terminal reads styled underlines with their colour (usstyle) and links
@@ -131,7 +141,7 @@ pub fn outer_features(features: &[String]) -> (bool, bool) {
 }
 
 impl<W: Write> TmuxBackend<W> {
-    pub fn new(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), syncing: false, cursor_at: None, cursor_shown: None } }
+    pub fn new(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), extra_shadow: Default::default(), syncing: false, cursor_at: None, cursor_shown: None } }
 
     fn row_risky(&self, y: u16) -> bool { self.shadow.get(y as usize).map(|r| r.iter().any(|c| risky(c.symbol()))).unwrap_or(false) }
 
@@ -181,49 +191,23 @@ impl crossterm::Command for Mouse {
 
 /// What the terminal said it is (XDA, `CSI > q`: `iTerm2 3.5.4`, `tmux 3.5a`, `kitty(0.36.4)`),
 /// as tmux asks it at attach; None when it said nothing.
-static TERMINAL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+static TERMINAL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static TERMINAL_ANSWERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Ask the terminal what it is (XDA), DA1 after it — which every terminal answers, and after the
-/// XDA answer when there is one — read before the keys' reader starts (so neither answer reaches
-/// it); a second and a half at most, for a link that slow.
+/// Query without waiting: the normal input reader separates replies from typeahead.
 pub fn ask_terminal() {
-    let answer = (|| -> Option<String> {
-        use std::os::fd::AsRawFd;
-        let find = |buf: &[u8], pat: &[u8]| buf.windows(pat.len()).position(|w| w == pat);
-        let mut out = io::stdout();
-        out.write_all(b"\x1b[>q\x1b[c").ok()?;
-        out.flush().ok()?;
-        let fd = io::stdin().as_raw_fd();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
-        let mut buf: Vec<u8> = Vec::new();
-        loop {
-            // DA1's answer (ESC [ ? … c) ends it.
-            let mut from = 0;
-            let mut done = false;
-            while let Some(i) = find(&buf[from..], b"\x1b[?") {
-                let at = from + i + 3;
-                match buf[at..].iter().position(|b| !(b.is_ascii_digit() || *b == b';')) { Some(k) if buf[at + k] == b'c' => { done = true; break } Some(k) => from = at + k, None => break }
-            }
-            if done { break }
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() { break }
-            let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
-            if unsafe { libc::poll(&mut pfd, 1, left.as_millis() as i32) } <= 0 { break }
-            let mut chunk = [0u8; 512];
-            let n = unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
-            if n <= 0 { break }
-            buf.extend_from_slice(&chunk[..n as usize]);
-        }
-        // DCS > | text ST
-        let start = find(&buf, b"\x1bP>|")? + 4;
-        let end = find(&buf[start..], b"\x1b\\").or_else(|| buf[start..].iter().position(|b| *b == 0x07))?;
-        Some(String::from_utf8_lossy(&buf[start..start + end]).to_string())
-    })();
-    let _ = TERMINAL.set(answer);
+    let mut out = io::stdout();
+    let _ = out.write_all(b"\x1b[>q\x1b[c");
+    let _ = out.flush();
+}
+
+pub fn terminal_answer(answer: Option<String>) -> bool {
+    let first = !TERMINAL_ANSWERED.swap(true, std::sync::atomic::Ordering::Relaxed);
+    answer.map(|name| TERMINAL.set(name).is_ok()).unwrap_or(false) || first
 }
 
 /// The terminal's own name for itself (XDA), when it gave one.
-pub fn terminal_name() -> Option<&'static str> { TERMINAL.get().and_then(|o| o.as_deref()) }
+pub fn terminal_name() -> Option<&'static str> { TERMINAL.get().map(String::as_str) }
 
 /// A terminal that says what it is and is one tmux gives 24-bit colour (tty_default_features:
 /// iTerm2, tmux, WezTerm, foot, XTerm, mintty) — or one of today's that has it too.
@@ -260,7 +244,7 @@ pub fn colours_for(term: &str, colorterm: &str, features: &[String], overrides: 
     if matches!(term, "xterm-kitty" | "xterm-ghostty" | "alacritty" | "wezterm" | "foot") { return 1 << 24 }
     // (One that did not say — Terminal.app — gets the 256 its terminfo has; asked or not, a
     // 256-colour one hn could not ask is taken as 24-bit but Terminal.app.)
-    if term.contains("256color") { return if apple || TERMINAL.get().is_some() { 256 } else { 1 << 24 } }
+    if term.contains("256color") { return if apple || TERMINAL_ANSWERED.load(std::sync::atomic::Ordering::Relaxed) { 256 } else { 1 << 24 } }
     if term.contains("16color") { return 16 }
     if term.is_empty() { return 256 }
     if matches!(term, "vt100" | "vt102" | "vt220" | "dumb") { return 0 }
@@ -370,7 +354,19 @@ impl<W: Write> Backend for TmuxBackend<W> {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
-        let cells: Vec<(u16, u16, Cell)> = content.map(|(x, y, c)| (x, y, c.clone())).collect();
+        let mut cells: Vec<(u16, u16, Cell)> = content.map(|(x, y, c)| (x, y, c.clone())).collect();
+        let frame = FRAME.lock().ok();
+        let frame = frame.as_ref().and_then(|f| f.as_ref());
+        let extras = frame.map(|f| f.extras.clone()).unwrap_or_default();
+        // Ratatui cannot compare underline styles, links or overline. Redraw those
+        // cells even when their text and ordinary attributes have not changed.
+        let changed: std::collections::HashSet<(u16, u16)> = self.extra_shadow.keys().chain(extras.keys()).copied()
+            .filter(|p| self.extra_shadow.get(p) != extras.get(p)).collect();
+        for (x, y) in changed {
+            if cells.iter().any(|(cx, cy, _)| *cx == x && *cy == y) { continue }
+            if let Some(cell) = self.shadow.get(y as usize).and_then(|row| row.get(x as usize)) { cells.push((x, y, cell.clone())); }
+        }
+        self.extra_shadow = extras;
         // Nothing changed: nothing written.
         if cells.is_empty() { return Ok(()) }
         // A row that holds (or held) a cluster the terminal may count otherwise is written again
@@ -383,8 +379,6 @@ impl<W: Write> Backend for TmuxBackend<W> {
         // A single-cell update fits in the writer's one buffered flush; synchronizing it
         // adds sixteen bytes to an ordinary one-byte echo without hiding any redraw.
         if !self.syncing && (cells.len() > 1 || !whole.is_empty()) { self.inner.write_all(b"\x1b[?2026h")?; self.syncing = true }
-        let frame = FRAME.lock().ok();
-        let frame = frame.as_ref().and_then(|f| f.as_ref());
         let (usstyle, links) = frame.map(|f| (f.usstyle, f.links)).unwrap_or((false, false));
         let extra_at = |x: u16, y: u16| frame.and_then(|f| f.extras.get(&(x, y)));
         // CrosstermBackend writes through to its writer.
@@ -433,8 +427,8 @@ impl<W: Write> Backend for TmuxBackend<W> {
         self.cursor_at = Some(p);
         self.inner.set_cursor_position(p)
     }
-    fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.cursor_at = None; self.cursor_shown = None; self.inner.clear() }
-    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> { if matches!(clear_type, ClearType::All) { self.shadow.clear() } self.inner.clear_region(clear_type) }
+    fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.extra_shadow.clear(); self.cursor_at = None; self.cursor_shown = None; self.inner.clear() }
+    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> { if matches!(clear_type, ClearType::All) { self.shadow.clear(); self.extra_shadow.clear() } self.inner.clear_region(clear_type) }
     fn append_lines(&mut self, n: u16) -> io::Result<()> { self.cursor_at = None; self.inner.append_lines(n) }
     fn size(&self) -> io::Result<Size> { self.inner.size() }
     fn window_size(&mut self) -> io::Result<WindowSize> { self.inner.window_size() }
@@ -489,6 +483,27 @@ mod tests {
         assert_eq!(grid[Line(0)][Column(0)].fg, AnsiColor::Named(NamedColor::Red));
         assert_eq!(grid[Line(0)][Column(1)].fg, AnsiColor::Named(NamedColor::Foreground));
         assert_eq!(grid[Line(0)][Column(1)].bg, AnsiColor::Named(NamedColor::Background));
+    }
+
+    #[test]
+    fn pane_attributes_are_written_and_reset_independently() {
+        let mut written = Vec::new();
+        let mut pen = Pen::new();
+        let mut cell = Cell::default();
+        cell.set_char('X').set_style(ratatui::style::Style::default().add_modifier(Modifier::UNDERLINED | Modifier::SLOW_BLINK));
+        pen.put(&mut written, &cell, Some(&Extra { underline: 2, overline: true, link: None }), true, false).unwrap();
+        // Removing only overline must not disturb blink or double underline.
+        cell.set_char('Y');
+        pen.put(&mut written, &cell, Some(&Extra { underline: 2, ..Default::default() }), true, false).unwrap();
+        pen.reset(&mut written).unwrap();
+        written.push(b'Z');
+        let mut pane = crate::pane::Pane::new(1, "local", "rendered", 20, 4);
+        pane.feed(&written);
+        use alacritty_terminal::{index::{Column, Line}, term::cell::Flags};
+        assert!(pane.term.grid()[Line(0)][Column(0)].flags.contains(Flags::DOUBLE_UNDERLINE | Flags::BLINK | Flags::OVERLINE));
+        assert!(pane.term.grid()[Line(0)][Column(1)].flags.contains(Flags::DOUBLE_UNDERLINE | Flags::BLINK));
+        assert!(!pane.term.grid()[Line(0)][Column(1)].flags.contains(Flags::OVERLINE));
+        assert_eq!(pane.term.grid()[Line(0)][Column(2)].flags, Flags::empty());
     }
 
     #[test]

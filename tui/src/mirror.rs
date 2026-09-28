@@ -82,7 +82,10 @@ fn fill(app: &mut App, stash: &mut Stash, row: &Value, mut old: Vec<Tab>, size: 
         tab.name = name.to_string();
         tab.named = win.get("named").and_then(Value::as_bool).unwrap_or(false);
         let layout = win.get("layout").and_then(Value::as_str).unwrap_or("");
-        tab.root = Node::from_tmux(layout, &ids, size.0, size.1).or_else(|| crate::layout::arrange(crate::layout::Named::Tiled, &ids, size.0, size.1, crate::layout::Status::Top, crate::app::DESK_MAIN, ("0", "0")));
+        // A shared window keeps its own geometry. Only the active nonmanual window is fitted
+        // to this terminal later; inactive and explicitly resized windows retain their size.
+        let (w, h) = Node::tmux_size(layout).unwrap_or(size);
+        tab.root = Node::from_tmux(layout, &ids, w, h).or_else(|| crate::layout::arrange(crate::layout::Named::Tiled, &ids, w, h, crate::layout::Status::Top, crate::app::DESK_MAIN, ("0", "0")));
         tab.order = ids.clone();
         tab.focus = ids.get(win.get("focus").and_then(Value::as_u64).unwrap_or(0) as usize).or(ids.first()).copied();
         tab.zoomed = win.get("zoomed").and_then(Value::as_bool).unwrap_or(false) && ids.len() > 1;
