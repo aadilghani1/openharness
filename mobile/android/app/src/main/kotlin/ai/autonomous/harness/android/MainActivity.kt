@@ -56,6 +56,17 @@ class MainActivity : FlutterActivity() {
           main.post { result.success(png) }
         }.start()
       }
+
+    // `harness/app_task` — "Exit" in the question back asks at the app's root (Dart:
+    // `lib/phone/exit_app.dart`). The task goes to the background, as the system's own back does at
+    // a launcher activity since Android 12, rather than being finished: the engine and its sockets
+    // stay up, and opening the app again lands where it was. False when the task did not move, and
+    // Dart then falls back to `SystemNavigator.pop`.
+    MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "harness/app_task")
+      .setMethodCallHandler { call, result ->
+        if (call.method != "moveToBack") { result.notImplemented(); return@setMethodCallHandler }
+        result.success(moveTaskToBack(true))
+      }
   }
 
   /** The first image on the clipboard, or null. The description is checked before any item, so a

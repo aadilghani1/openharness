@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
 
 import '../p2p/phone_terminal_p2p.dart';
 import 'agent_home.dart';
+import 'exit_app.dart';
 import 'phone_shell_scope.dart';
 
 /// The signed-in phone app: one page stack, rooted in [AgentHome] — the terminal the phone opens
@@ -149,7 +152,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// below, or `canPop` would answer with whatever was true when the shell last happened to build.
   bool _canPop = false;
 
-  /// Android's back button: the stack's own pages first, then the system.
+  /// Android's back button: the stack's own pages first, then the question before leaving the app.
   ///
   /// The notification is used only as a SIGNAL that the stack moved, and the answer is then read
   /// from the navigator itself.
@@ -174,9 +177,20 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
 
   void _handleBack(bool didPop, Object? result) {
     if (didPop) return;
-    _navigator.currentState?.maybePop().then((_) {
-      if (mounted) _syncCanPop();
-    });
+    unawaited(_back());
+  }
+
+  /// The stack's own pages first; what is left is leaving the app, which Android asks about.
+  ///
+  /// ⚠️ **The stack is ASKED, rather than judged by its `canPop`.** `maybePop` answers false only
+  /// when the root has nothing to close. `canPop` is false at the root even while something there
+  /// holds the press itself — Find over the terminal, whose own [PopScope] steps out of it — and
+  /// back used to leave the app from under an open Find because of it.
+  Future<void> _back() async {
+    final handled = await _navigator.currentState?.maybePop() ?? false;
+    if (!mounted) return;
+    _syncCanPop();
+    if (!handled && confirmsExitOnBack) await confirmExitApp(context);
   }
 
   @override
@@ -187,8 +201,10 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       listenable: widget.notifier,
       builder: (context, _) => PopScope<Object?>(
         // False while the stack has somewhere to go back to, so the gesture reaches [_handleBack]
-        // instead of leaving the app. True at its root: the press then belongs to the system.
-        canPop: !_canPop,
+        // instead of leaving the app. True at its root: the press then belongs to the system —
+        // except on Android, where the root asks before the app is left ([confirmExitApp]), so
+        // every press is the shell's.
+        canPop: !confirmsExitOnBack && !_canPop,
         onPopInvokedWithResult: _handleBack,
         child: NotificationListener<NavigationNotification>(
           onNotification: _onNavigation,

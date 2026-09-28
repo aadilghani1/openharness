@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import '../exit_app.dart';
 import '../tty.dart';
 import '../tty_controls.dart';
 import 'connect_code.dart';
@@ -215,9 +216,15 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     final tty = Tty.of(context);
     final signingIn = widget.notifier.signingIn;
     return PopScope(
-      canPop: _step == _Step.hello,
+      // The first screen lets the press go to the system — except on Android, which asks before
+      // the app is left ([confirmExitApp]) and so keeps it here too.
+      canPop: !confirmsExitOnBack && _step == _Step.hello,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
+        if (_step == _Step.hello) {
+          unawaited(confirmExitApp(context));
+          return;
+        }
         _go(_step == _Step.code ? _Step.email : _Step.hello);
       },
       child: Scaffold(
