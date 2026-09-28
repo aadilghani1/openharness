@@ -47,11 +47,9 @@ Future<Map<String, List<List<double>>>> measureStatusBar(
     await tester.pump(const Duration(milliseconds: 100));
     final bar = find.byKey(const ValueKey('workspace-status-bar'));
     out['${width.toInt()}'] = [
+      box(tester.getRect(find.byKey(const ValueKey('workspace-tab-bar')))),
       box(tester.getRect(bar)),
-      for (final element
-          in find
-              .descendant(of: bar, matching: find.byType(WorkspaceBarControl))
-              .evaluate())
+      for (final element in find.byType(WorkspaceBarControl).evaluate())
         box(tester.getRect(find.byWidget(element.widget))),
       box(tester.getRect(find.byKey(const ValueKey('workspace-pane-context')))),
     ];

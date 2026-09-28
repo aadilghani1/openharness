@@ -17,9 +17,13 @@ Standalone actions can use brackets, such as `[ Customize Harness ]`, instead
 of rounded buttons with pictograms. A checkbox is
 `[x]` or `[ ]`. Harness search has no prefix; `#` selects projects and `>` selects
 commands as editable text. `@`, `:`, and `*` scope machines, models, and Store
-inside the same picker. The top bar keeps focused model, machine, and project links plus `+` for New
-Tab. Leave global search in Cmd-P and the app menu. Keep descriptive tooltips
-and accessible names.
+inside the same picker. The top row keeps tabs, `+`, a plain search icon, the
+notification bell, and the rounded Harness Store button. The bottom row holds focused
+machine/repo/branch/PR links on the left and the model selector on the right.
+Keep descriptive tooltips and accessible names. Search and bell are deliberate
+icon exceptions; the bell shows a count only when there is something to see.
+Store restores its colorful polymath mark and a quiet filled pill. The bottom
+context has no separate background or divider.
 
 There is no broadly understood ASCII pencil. Keep `[ Customize Harness ]` after
 customization as well as before it. The same action should retain its name and
@@ -52,7 +56,7 @@ text shows a hand cursor and bold text on hover, press, and keyboard focus.
 Preserve the underlying colors, including filled status segments. Reserve both
 text weights during layout so emphasis never shifts neighboring controls.
 Resting controls stay unboxed, except the optional Share action: its flat
-primary accent fill makes collaboration visible at the top-right corner.
+primary accent fill makes collaboration visible in the bottom row, before the model.
 Settings → Experimental → Share button enables it; it is off by default.
 Tooltips describe the
 action, not merely the text. Omit a tooltip that repeats the visible name;
@@ -122,7 +126,7 @@ status, or progress to decorate a theme.
 ## Make context useful
 
 Show the focused pane's model, machine, compact project name, branch, and PR in the
-shared app bar. A dependent viewer uses its owner's context. Keep internal
+bottom status bar. A dependent viewer uses its owner's context. Keep internal
 worktree paths and machinery out of everyday labels.
 
 Machine opens the shared picker scoped to that machine. Project opens its harnesses across

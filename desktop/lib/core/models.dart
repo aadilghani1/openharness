@@ -306,6 +306,9 @@ class Agent {
   /// of [gridModel], which determines subscription versus local-model routing.
   final String? modelName;
 
+  /// Effort reported with [modelName], never inferred from a model default.
+  final String? modelEffort;
+
   /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
   ///
   /// Read by the daemon off the live process on every discovery, never bookkept — so it is the
@@ -434,6 +437,7 @@ class Agent {
     this.engineIconHint,
     this.codexHome,
     this.modelName,
+    this.modelEffort,
     this.gridModel,
     this.gridWebSearch,
     this.gridBaseUrl,
@@ -554,6 +558,11 @@ class Agent {
     final usage = j['tokenUsage'];
     final total = usage is Map ? usage['totalTokens'] : null;
     final validTokens = total is int && total >= 0 && total <= 9007199254740991;
+    final model = runtimeModelDetails(
+      j['selectedModel'],
+      agentId: j['id'] as String,
+      engine: _safeEngine(j['engine']),
+    );
     return Agent(
       id: j['id'] as String,
       sessionId: _safeLabel(j['sessionId']),
@@ -563,11 +572,8 @@ class Agent {
       engineDisplayName: _safeLabel(j['engineDisplayName']),
       engineIconHint: _safeLabel(j['engineIconHint']),
       codexHome: j['engine'] == 'codex' ? _safeCodexHome(j['codexHome']) : null,
-      modelName: runtimeModelName(
-        j['selectedModel'],
-        agentId: j['id'] as String,
-        engine: _safeEngine(j['engine']),
-      ),
+      modelName: model?.name,
+      modelEffort: model?.effort,
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
       gridBaseUrl: _safeUrl(grid?['baseUrl']),
@@ -632,6 +638,7 @@ class Agent {
     engineIconHint: engineIconHint,
     codexHome: codexHome,
     modelName: modelName,
+    modelEffort: modelEffort,
     gridModel: gridModel,
     gridWebSearch: gridWebSearch,
     gridBaseUrl: gridBaseUrl,

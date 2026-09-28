@@ -523,9 +523,9 @@ void main() {
         find.byKey(const ValueKey('harness-start-search')),
         findsOneWidget,
       );
-      expect(find.byKey(const ValueKey('swarm-search-button')), findsNothing);
+      expect(find.byKey(const ValueKey('swarm-search-button')), findsOneWidget);
       expect(find.text('Machines'), findsNothing);
-      await openHarnessPicker(tester);
+      await tester.tap(find.byKey(const ValueKey('swarm-search-button')));
       await tester.pump();
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),

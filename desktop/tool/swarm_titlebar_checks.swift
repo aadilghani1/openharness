@@ -18,6 +18,8 @@ private final class TitlebarMouseUpProbe: NSResponder {
 
 private extension NSView {
   func renderedBitmap() -> NSBitmapImageRep {
+    precondition(bounds.width >= 1 && bounds.height >= 1,
+      "Cannot render empty \(type(of: self)) at \(frame), after \(titlebarCheckCount) checks")
     let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
       pixelsWide: Int(bounds.width), pixelsHigh: Int(bounds.height),
       bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -66,6 +68,7 @@ private extension SwarmTabButton {
       ["mark": mark, "label": label, "color": Int64(0xff64d2ff)]
     }
     let width = preferredWidth
+    let displayedWidth = frame.width
     let rect = activityRect
     try checkTitlebar(label.string == "1:desktop" && activitySpace == cellWidth * 2,
       "Activity measures its gap and cell separately from the tab name")
@@ -90,7 +93,7 @@ private extension SwarmTabButton {
         "\(label) occupies the same reserved cell")
       try checkTitlebar(toolTip == label && selectButton.accessibilityHelp() == label,
         "\(label) has readable hover and accessibility descriptions")
-      for narrow in [CGFloat(28), CGFloat(56), width] {
+      for narrow in [CGFloat(28), CGFloat(56), width, displayedWidth] {
         frame.size.width = narrow
         let bitmap = renderedBitmap()
         if let capture = ProcessInfo.processInfo.environment["HARNESS_ACTIVITY_CAPTURE_DIR"] {
@@ -111,7 +114,7 @@ private extension SwarmTabButton {
         try checkTitlebar(colored == !mark.isEmpty,
           "\(label) \(mark.isEmpty ? "stays unmarked" : "remains visible") at tab width \(narrow)")
       }
-      frame.size.width = width
+      frame.size.width = displayedWidth
     }
   }
 
@@ -484,8 +487,8 @@ private extension SwarmTabStrip {
           try checkTitlebar(daemonButton.frame.maxX <= bounds.width &&
             daemonButton.frame.minX >= pullRequestButton.frame.maxX &&
             contextButton.frame.maxX <= pullRequestButton.frame.minX &&
-            newButton.frame.maxX < contextButton.frame.minX,
-            "Daemon, PR, context, and tabs do not overlap at \(width)px / \(size)pt")
+            contextButton.superview === statusBar && newButton.frame.maxX < searchButton.frame.minX,
+            "Footer controls and top navigation do not overlap at \(width)px / \(size)pt")
           try checkTitlebar(abs(daemonButton.frame.width - ceil(workspaceBarTextWidth("m", font: daemonButton.font!)) * 10) < 0.5,
             "Eight cells plus a one-cell gutter each side at \(size)pt")
           try checkActiveVisible()
@@ -493,9 +496,9 @@ private extension SwarmTabStrip {
       }
     }
     let tab = tabs[0]
-    try checkTitlebar(pullRequestButton.frame.maxX == daemonButton.frame.minX &&
-      daemonButton.frame.height == newButton.frame.height &&
-      daemonButton.frame.midY == newButton.frame.midY,
+    try checkTitlebar(pullRequestButton.frame.maxX <= daemonButton.frame.minX &&
+      daemonButton.frame.height == focusedModelButton.frame.height &&
+      daemonButton.frame.midY == focusedModelButton.frame.midY,
       "The daemon follows the focused context and shares the controls' height and inner gutters")
     scroll.contentView.scroll(to: .zero)
     let scrollFrame = scroll.frame, visible = scroll.documentVisibleRect
@@ -570,11 +573,11 @@ private extension SwarmTabStrip {
       voiceLabel.color == statusColor(0xffd7af5f, fallback: .clear) &&
       voiceLabel.accessibilityLabel() == voiceLabel.text && voiceLabel.accessibilityRole() == .staticText,
       "The daemon's line shows in the message colour")
-    try checkTitlebar(contextButton.isHidden && pullRequestButton.isHidden && focusedModelButton.isHidden,
-      "Its line replaces the context, PR and model while it speaks")
+    try checkTitlebar(contextButton.isHidden && pullRequestButton.isHidden && !focusedModelButton.isHidden,
+      "Its line replaces the left context while the model stays available on the right")
     try checkTitlebar(unmoved(), "Speaking moves no tab, status control or the slot")
-    try checkTitlebar(voiceLabel.frame.maxX == daemonButton.frame.minX &&
-      voiceLabel.frame.minX == newButton.frame.maxX + ceil(("m" as NSString).size(withAttributes: [.font: daemonButton.font!]).width) * 2,
+    try checkTitlebar(voiceLabel.frame.maxX < daemonButton.frame.minX &&
+      voiceLabel.frame.minX == ceil(("m" as NSString).size(withAttributes: [.font: daemonButton.font!]).width),
       "The line spans the status area up to the slot")
     let voicePixels = voiceLabel.renderedPixels()
     daemon["voice"] = String(repeating: "a very long line ", count: 40)
@@ -583,7 +586,7 @@ private extension SwarmTabStrip {
       "A long line truncates in place")
     state["daemon"] = daemon
     update(state)
-    try checkTitlebar(contextButton.isHidden && pullRequestButton.isHidden && focusedModelButton.isHidden && !voiceLabel.isHidden,
+    try checkTitlebar(contextButton.isHidden && pullRequestButton.isHidden && !focusedModelButton.isHidden && !voiceLabel.isHidden,
       "A workspace update while it speaks keeps the message line")
     try checkTitlebar(unmoved(), "A workspace update while it speaks lays out as if the status were shown")
     // The pair brain's line, exactly as sent, keys first: each offered key in
@@ -618,9 +621,9 @@ private extension SwarmTabStrip {
     emit = previousEmit
     try checkTitlebar(events == ["daemonAnswer"] && (answered.first as? [String: String])?["key"] == "y",
       "Clicking a key sends exactly that key, and the line itself is not a button")
-    try checkTitlebar(voiceLabel.hitTest(voiceLabel.convert(onLine, to: self)) == nil &&
-      voiceLabel.hitTest(voiceLabel.convert(NSPoint(x: yes.midX, y: yes.midY), to: self)) === voiceLabel,
-      "Only the keys take the pointer; the rest still drags the window")
+    try checkTitlebar(voiceLabel.hitTest(voiceLabel.convert(onLine, to: statusBar)) == nil &&
+      voiceLabel.hitTest(voiceLabel.convert(NSPoint(x: yes.midX, y: yes.midY), to: statusBar)) === voiceLabel,
+      "Only the offered keys take the pointer")
     try checkTitlebar(unmoved(), "Keys move nothing in the bar")
     // Until the line is armed (drawn, with its detail, a moment ago) its keys
     // are drawn faint and take no click; [g] opens at any time.
@@ -632,7 +635,7 @@ private extension SwarmTabStrip {
     let unarmedPixels = voiceLabel.renderedPixels()
     try checkTitlebar(voiceLabel.actionRects.map(\.key) == ["g"] && voiceLabel.arming.map(\.key) == ["y", "n"] &&
       voiceLabel.arming[0].range == NSRange(location: 1, length: 1) &&
-      voiceLabel.hitTest(voiceLabel.convert(NSPoint(x: yes.midX, y: yes.midY), to: self)) == nil,
+      voiceLabel.hitTest(voiceLabel.convert(NSPoint(x: yes.midX, y: yes.midY), to: statusBar)) == nil,
       "An unarmed line's y and n are faint and take no click; its g still opens")
     daemon["voiceArmed"] = true
     updateDaemon(daemon)
@@ -726,6 +729,49 @@ private extension SwarmTabStrip {
       "Workspace teardown hides the daemon")
   }
 
+  func checkNotifications() throws {
+    var state: [String: Any] = ["enabled": true, "unread": 9,
+      "tabs": [["id": "work", "name": "Desktop"]], "activeId": "work",
+      "focusedContext": ["text": "Office project", "segments": [["text": "Office project"]]]]
+    var calls: [String] = []
+    emit = { method, _ in calls.append(method) }
+    for width in [CGFloat(360), CGFloat(640), CGFloat(1280)] {
+      setFrameSize(NSSize(width: width, height: 40))
+      update(state)
+      try checkTitlebar(notificationsButton.isEnabled && notificationsButton.frame.width > 0 &&
+        notificationsButton.frame.maxX <= bounds.width &&
+        searchButton.frame.maxX <= notificationsButton.frame.minX &&
+        notificationsButton.frame.maxX <= storeButton.frame.minX &&
+        storeButton.frame.maxX <= bounds.width &&
+        newButton.frame.maxX < searchButton.frame.minX &&
+        contextButton.superview === statusBar,
+        "Search, bell and Store stay visible after the tabs at width \(width)")
+      let frame = notificationsButton.frame
+      state["unread"] = 101
+      update(state)
+      try checkTitlebar(notificationsButton.frame == frame,
+        "Unread count changes do not move the native toolbar")
+    }
+    try checkTitlebar(notificationsButton.accessibilityLabel() == "Notifications" &&
+      notificationsButton.accessibilityValue() as? String == "101 unread",
+      "The native bell exposes its exact count even when its badge reads 99+")
+    notificationsButton.performClick(nil)
+    searchButton.performClick(nil)
+    storeButton.performClick(nil)
+    try checkTitlebar(calls == ["notificationInbox", "sessions", "store"],
+      "Top actions open the existing notifications, search and Store surfaces")
+    state["enabled"] = false
+    update(state)
+    notificationsButton.performClick(nil)
+    searchButton.performClick(nil)
+    storeButton.performClick(nil)
+    try checkTitlebar(!notificationsButton.isEnabled && !searchButton.isEnabled && !storeButton.isEnabled && calls.count == 3,
+      "A modal prevents the bell from dispatching another action")
+    update([:])
+    try checkTitlebar(notificationsButton.count == 0 && !notificationsButton.isEnabled,
+      "Teardown clears the unread badge and disables the bell")
+  }
+
   func checkShareAction() throws {
     let target: [String: Any] = ["text": "[ Share ]", "label": "Share Website launch",
       "tooltip": "Share Website launch · ⇧⌘S", "enabled": true,
@@ -749,8 +795,8 @@ private extension SwarmTabStrip {
         shareButton.frame.width == shareButton.preferredWidth &&
         shareButton.frame.maxX <= bounds.width &&
         contextButton.frame.maxX < shareButton.frame.minX &&
-        newButton.frame.maxX < shareButton.frame.minX,
-        "Share stays prominent at the right edge without overlapping tabs or context at width \(width)")
+        shareButton.superview === statusBar,
+        "Share stays in the footer without overlapping context at width \(width)")
       update(hidden)
       try checkTitlebar(barFrames() == withoutShare,
         "Turning Share off restores the original toolbar layout at width \(width)")
@@ -811,12 +857,15 @@ private extension SwarmTabStrip {
       "Numbered tabs use 13 pt SF Mono regular")
     try checkTitlebar(tabs[0].drawnFont == tabs[1].drawnFont && contextButton.font == tabs[0].labelFont,
       "Active tabs, inactive tabs, and pane context share one font")
-    for control in [newButton] {
-      try checkTitlebar(control.font == contextButton.font && control.frame.midY == contextButton.frame.midY,
-        "Status symbols share the terminal font and centered text baseline")
+    for control in [newButton, storeButton] {
+      try checkTitlebar(control.font == contextButton.font && control.frame.midY == bounds.midY &&
+        contextButton.frame.midY == statusBar.bounds.midY,
+        "Top actions and footer context share a font and center within their own rows")
     }
-    try checkTitlebar(tabs[0].frame.width < tabs[1].frame.width,
-      "Each tab occupies its own text width and fixed cell gutters")
+    try checkTitlebar(tabs[0].frame.width == tabs[0].preferredWidth &&
+      tabs[1].frame.width == tabs[1].preferredWidth &&
+      tabs[0].frame.width < tabs[1].frame.width,
+      "Tabs keep their label widths instead of expanding to fill the row")
     try checkTitlebar(tabs[0].menu?.font == menuFont, "Native context menus retain the system menu font")
 
   }
@@ -886,8 +935,9 @@ private extension SwarmTabStrip {
         "Powerline context and PR are adjacent at width \(width)")
       try checkTitlebar(contextButton.nextBackground == pullRequestButton.firstBackground,
         "The closing arrow joins into the PR background")
-      try checkTitlebar(newButton.frame.maxX < contextButton.frame.minX &&
-        pullRequestButton.frame.maxX <= bounds.width, "Joined status stays clear of tabs and window edges")
+      try checkTitlebar(contextButton.superview === statusBar && pullRequestButton.superview === statusBar &&
+        contextButton.frame.minX >= 0 && pullRequestButton.frame.maxX <= statusBar.bounds.width,
+        "Joined status stays inside its separate footer")
     }
     setFrameSize(originalSize)
     update(prState)
@@ -969,9 +1019,10 @@ private extension SwarmTabStrip {
     update(linked)
     try checkTitlebar(!focusedModelButton.isHidden && focusedModelButton.isEnabled,
       "Focused model has its own enabled status control")
-    try checkTitlebar(focusedModelButton.frame.maxX < contextButton.frame.minX &&
-      focusedModelButton.frame.height == newButton.frame.height,
-      "Model sits before machine/repo with the shared control height")
+    try checkTitlebar(focusedModelButton.frame.minX > pullRequestButton.frame.maxX &&
+      focusedModelButton.frame.height == contextButton.frame.height &&
+      focusedModelButton.frame.maxX <= statusBar.bounds.width,
+      "Model sits on the right of the footer opposite machine/repo/branch/PR")
     try checkTitlebar(focusedModelButton.toolTip == "Switch model · Subscription or local models",
       "Model hint explains switching without repeating the visible name")
     let modelResting = focusedModelButton.renderedPixels()
@@ -1008,11 +1059,11 @@ private extension SwarmTabStrip {
     try tabs[0].checkDoubleClickIsolation()
     try checkTitlebar(tabs.count == 24 && newButton.isEnabled, "All overflow tabs and New Tab remain available")
     try checkTitlebar(scroll.frame.maxX <= newButton.frame.minX &&
-      newButton.frame.maxX < contextButton.frame.minX, "Tabs are left of the right-aligned focused context")
+      newButton.frame.maxX < searchButton.frame.minX, "Tabs precede the search, bell and Store controls")
     try checkTitlebar(tabs[0].frame.width < 120 && tabs[0].displayLabel == "1:code",
-      "Short numbered labels use text-sized widths")
-    try checkTitlebar(subviews.count == 8 && pullRequestButton.isHidden && focusedModelButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
-      "Context links fill the bar; standalone search and management controls are absent")
+      "Overflow tabs keep a readable minimum width and their numbered names")
+    try checkTitlebar(subviews.count == 5 && statusBar.subviews.count == 6 && pullRequestButton.isHidden && focusedModelButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
+      "Navigation lives in the titlebar and focused context lives in the footer")
     let controls = [newButton]
     for (control, symbol) in zip(controls, ["+"]) {
       try checkTitlebar(control.image == nil && control.title == symbol && !control.isBordered,
@@ -1060,8 +1111,8 @@ private extension SwarmTabStrip {
     needsLayout = true
     layoutSubtreeIfNeeded()
     try checkActiveVisible()
-    try checkTitlebar(newButton.frame.maxX < contextButton.frame.minX &&
-      contextButton.frame.maxX <= bounds.width, "Narrow windows have no overlapping controls")
+    try checkTitlebar(newButton.frame.maxX < searchButton.frame.minX &&
+      contextButton.frame.maxX <= statusBar.bounds.width, "Narrow windows have no overlapping controls")
     let original = tabs[0]
     let reversed = Array(rows.reversed())
     update(state(reversed, active: "swarm-0"))
@@ -1518,10 +1569,20 @@ private extension SwarmTitlebar {
       "tabs": [["id": "startup-check", "name": "Synthetic swarm"]],
       "activeId": "startup-check", "enabled": true, "palette": startupColors,
     ])
+    window.contentView?.layoutSubtreeIfNeeded()
+    try checkTitlebar(strip.statusBar.superview === window.contentView && !strip.statusBar.isHidden &&
+      strip.statusBar.frame.width == window.contentView!.bounds.width &&
+      strip.statusBar.frame.minY == window.contentView!.bounds.minY &&
+      strip.statusBar.frame.height == strip.preferredStatusBarHeight,
+      "The native footer spans the content bottom without adding another titlebar row")
+    try checkTitlebar(strip.statusBar.isAccessibilityElement() &&
+      strip.statusBar.accessibilityParent() as? NSView === strip &&
+      strip.accessibilityChildren()?.contains(where: { $0 as? NSView === strip.statusBar }) == true,
+      "The footer remains in the native accessibility tree outside Flutter-owned children")
     // SwarmScreen.dispose sends this when sign-in or setup takes its place.
     _ = try messenger.receive("update", arguments: ["tabs": [], "enabled": false])
-    try checkTitlebar(window.backgroundColor == startupPalette.tabBar,
-      "Leaving the workspace preserves the saved native background")
+    try checkTitlebar(window.backgroundColor == startupPalette.tabBar && strip.statusBar.isHidden,
+      "Leaving the workspace hides the footer and preserves the saved native background")
     try strip.checkStartupPalette(startupPalette)
     try window.checkContentCommand()
     try checkTitlebar(window.firstResponder === window.contentInput,
@@ -1911,6 +1972,7 @@ do {
   try strip.checkAgentIdentity()
   try strip.checkSharedTypography()
   try strip.checkShareAction()
+  try strip.checkNotifications()
   try strip.checkActivityMarks()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
   try strip.checkDaemon()
