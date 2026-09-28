@@ -308,6 +308,10 @@ void main() {
       expect(tester.getSize(control).height, 28);
       await hover.moveTo(Offset.zero);
       await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(find.text('GPT-6 Astra')).style!.fontWeight,
+        FontWeight.normal,
+      );
       await mount('GPT-5.6 Sol');
       expect(find.text('GPT-5.6 Sol'), findsOneWidget);
       expect(find.text('GPT-6 Astra'), findsNothing);

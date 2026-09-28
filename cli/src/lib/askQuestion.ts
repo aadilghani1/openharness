@@ -80,6 +80,13 @@ export interface QuestionView {
   multi: boolean
   /** The "Type something." row, when the dialog offers free text. */
   typeRow: QuestionRow | null
+  /**
+   * A permission prompt's WHOLE dialog, every line as painted (ANSI stripped), from its frame to its last
+   * row. `question` is one line clipped for a device's screen; a command that wraps — `npm test &&` on one
+   * line, `git push` on the next — is only whole here. What the pair brain's floor reads (pair/classify.ts),
+   * and part of the dialog's fingerprint, so two prompts that differ below their first line are two ids.
+   */
+  dialog?: string
 }
 
 export interface ReviewView {
@@ -497,9 +504,18 @@ export function parsePermissionPane(lines: string[]): { view: QuestionView; inde
   // Single-select, and no free-text row: every option here is a choice to be TAPPED. Verified on live
   // panes for claude, codex, devin and grok \u2014 one digit selects and submits, exactly as `rowKeys` assumes.
   return {
-    view: { kind: 'question', permission: true, question: permissionTitle(lines, start), rows, multi: false, typeRow: null },
+    view: { kind: 'question', permission: true, question: permissionTitle(lines, start), rows, multi: false, typeRow: null, dialog: permissionDialog(lines, start, end) },
     index: start,
   }
+}
+
+/** Every line of the dialog, untruncated: from its opening rule (or, with no frame, up to 12 lines above
+ *  the rows) to its last row — never reaching back past the end of an earlier dialog. */
+function permissionDialog(lines: string[], start: number, end: number): string {
+  const floor = earlierDialogEnd(lines, start, 25)
+  const rule = frameTop(lines, start, floor)
+  const top = rule >= 0 ? rule + 1 : Math.max(0, start - 12, floor + 1)
+  return lines.slice(top, end + 1).map((line) => line.trimEnd()).filter((line) => !ANY_RULE_RE.test(line)).join('\n').trim()
 }
 
 export function parseQuestionPane(capture: string): PaneView {
@@ -599,9 +615,40 @@ function locateQuestionPane(capture: string): FoundDialog | null {
       rows: answerable,
       multi: checkbox,
       typeRow: rows.find((r) => TYPE_ROW.test(r.label)) ?? null,
+      dialog: dialogAbove(lines, start, footer),
     },
     at: footer,
   }
+}
+
+/**
+ * A footer-anchored dialog, whole: up to 12 lines above its rows — stopping at a rule, a tab bar, the
+ * agent's own output (a `•`/`⏺` bullet) or the end of an earlier dialog — down to its last row. Codex puts
+ * the command it asks about here (`$ …`, wrapped over as many lines as it takes), with its reason and
+ * environment.
+ */
+function dialogAbove(lines: string[], start: number, footer: number): string {
+  let top = start
+  const floor = earlierDialogEnd(lines, start, 12)
+  for (let i = start - 1; i > floor && start - i <= 12; i--) {
+    const line = lines[i].trim()
+    if (/^[•⏺●]/.test(line) || /[←→]/.test(line) || /^[─━═-]{6,}$/.test(line)) break
+    top = i
+  }
+  return lines.slice(top, footer).map((line) => line.trimEnd()).join('\n').trim()
+}
+
+/**
+ * A dialog that asks to RUN or CHANGE something (an approval), whichever parser read it: a framed
+ * permission prompt, or a footer dialog whose first row approves, whose rows include a rejection, and
+ * which names a command (`$ …`) or asks "would you like to run / make …". What the pair's floor treats as
+ * a permission prompt (pair/classify.ts); nothing else reads it.
+ */
+export function isApprovalDialog(view: QuestionView): boolean {
+  if (view.permission) return true
+  if (!view.rows.length || !APPROVE_RE.test(view.rows[0].label) || !view.rows.some((row) => REJECT_RE.test(row.label))) return false
+  const text = view.dialog ?? view.question
+  return /(^|\n)\s*\$ /.test(text) || /would you like to (run|make|apply|execute|edit|write)/i.test(text)
 }
 
 /** Match an answer to a row. The device stores option labels in an 80-byte buffer, so a long label comes
@@ -974,7 +1021,7 @@ export interface QuestionWatcherDeps {
   /** Skip the capture entirely when no device is listening — nothing would consume the question. */
   hasDevice: () => boolean
   /** A dialog is open on screen. Fires ONCE per distinct question (until it changes or closes). */
-  onQuestion: (sessionId: string, requestId: string, questions: ShapedQuestion[]) => void
+  onQuestion: (sessionId: string, requestId: string, questions: ShapedQuestion[], detail?: { permission: boolean; dialog: string }) => void
   /**
    * An announced dialog LEFT the screen — answered somewhere else, or abandoned.
    *
@@ -1185,14 +1232,80 @@ export class QuestionWatcher {
       options: view.rows.map((r) => r.label),
       multi: view.multi,
       ...(view.typeRow && !view.multi && !view.permission ? { canText: true } : {}),
-    }])
+    }], { permission: isApprovalDialog(view), dialog: view.dialog ?? view.question })
 
   }
 }
 
-/** What makes two captures the SAME dialog: its words, its options, its arity. */
+/**
+ * What makes two captures the SAME dialog: its words, its options, its arity — and, when the parser kept
+ * the whole dialog, what it says below its first line (a command that differs only on its second line is
+ * another prompt).
+ *
+ * ⚠️ NOT the raw `dialog`. The id is recomputed every 1.5s poll and again at the moment an answer is typed,
+ * so it may only change when the QUESTION does. The raw dialog changes on its own: Hermes and Muse paint a
+ * live timer inside it (`(01m30s · ↓ 82 tok)`, `(21s · esc to interrupt)`), and every engine moves its
+ * `❯`/`›`/`>` cursor and ticks its `[✔]` boxes in place. Hashed raw, a question was re-announced as new on
+ * every poll — the needs-you alert, the sound, the dial push, again and again — and every answer from a
+ * dial, a device or the cable was refused as STALE_QUESTION. `dialogSignature` is the dialog with all of
+ * that taken out; the raw text still goes, unchanged, to the pair's floor (isApprovalDialog, pair/sensor).
+ */
 function fingerprintOf(view: QuestionView): string {
-  return `${view.question}|${view.rows.map((r) => r.label).join('|')}|${view.multi}`
+  const base = `${view.question}|${view.rows.map((r) => r.label).join('|')}|${view.multi}`
+  return view.dialog === undefined ? base : `${base}|${dialogSignature(view.dialog)}`
+}
+
+// A live status group: an elapsed time (`21s`, `30.5s`, `01m30s`, `1h02m`), a token counter (`↓ 82 tok`,
+// `1.2k tokens`) or `esc to interrupt` inside one pair of parentheses. Units hug their digits, as every
+// engine paints them, so `(see 2 files)` or `(tokens.json)` is never mistaken for one.
+const TIMER_GROUP = String.raw`\([^()\n]*?(?:\b\d+(?:\.\d+)?(?:ms|s|m|h)\b|\b\d+m\d+s\b|\b\d+h\d+m\b|\d+(?:\.\d+)?k?\s*tok(?:en)?s?\b|esc to interrupt)[^()\n]*\)`
+const TIMER_GROUP_RE = new RegExp(TIMER_GROUP, 'i')
+const TIMER_GROUPS_RE = new RegExp(TIMER_GROUP, 'gi')
+// The same, outside parentheses: `↓ 82 tokens · esc to interrupt`.
+const STATUS_BITS_RE = /[↑↓]\s*\d+(?:\.\d+)?k?\s*tok(?:en)?s?\b|\besc to interrupt\b/i
+// A bare elapsed time, with no parentheses and no ` · ` to mark it: a status line that is only a word or
+// three and a duration — a verb in -ing/-ed (`waiting 3s`, `thinking 4s`, `Churned for 4s`) or anything
+// trailing off in an ellipsis (`Waiting… 12s`, `Fetch Bitcoin price… 1m33s`). A command's own number stays:
+// `sleep 30s` and `retry after 30s` are neither.
+const DURATION = String.raw`(?:\d+h\d+m(?:\d+s)?|\d+m\d+s|\d+(?:\.\d+)?m?s)`
+const WORDS = String.raw`(?:\p{L}[\p{L}'’-]*\s+){0,2}\p{L}[\p{L}'’-]*`
+const BARE_TIMER_LINE_RE = new RegExp(String.raw`^${WORDS}(?:(?<=ing|ed)(?:\s+for)?\s+|\s*(?:…|\.{3})\s*)${DURATION}$`, 'iu')
+// …and one hung off the end of a longer line, after an ellipsis or a column gap: grok's right-aligned
+// `Waiting on answers for Which color should I report?             4.2s`. Only the time goes.
+const TRAILING_TIMER_RE = new RegExp(String.raw`(?:(?<=…|\.{3})\s*|\s{2,})${DURATION}$`, 'u')
+// Codex's cursor readout under its request_user_input rows: `option 2/4 | tab to add notes`.
+const CURSOR_READOUT_RE = /^option\s+\d+\s*\/\s*\d+\b/i
+// Whatever leads a line and moves on its own: a cursor (`❯ › > ▶`), a spinner frame (braille, `✻`, `◐`,
+// Muse's `◇`/`◆`) or a box/tab state (`☐ ☒ ✔ ○ ● ◉`).
+const LEAD_MARKS_RE = /^(?:[❯›>▶►▸➤\u2800-\u28ff✻✽✶✳✢✺✹✸✷◐◓◑◒◴◵◶◷◇◆☐☑☒✔✓✗✘○◯●◉◎]\s*)+/u
+// A row's own state right after its number, or at the start of an unnumbered row: `[ ]`, `[✔]`, `(•)`, `◉`.
+const ROW_STATE_RE = /^(\d+[.)]\s+|)(?:\[[^\]\n]?\]|\([^)\n]?\)|[☐☑☒✔✓○◯●◉◎])\s*/u
+// Box drawing: frames and rules redraw to the pane's width.
+const BOX_RE = /[\u2500-\u257f]+/g
+
+/**
+ * The dialog as a person reads it, with nothing that changes while it waits: status lines (a live timer,
+ * bare or in parentheses, a token counter, `esc to interrupt`) and Codex's cursor readout dropped; cursor marks, spinner frames
+ * and checkbox/radio state stripped; frames and whitespace collapsed. Every word of the prompt stays —
+ * two commands that differ anywhere are still two signatures.
+ */
+function dialogSignature(dialog: string): string {
+  const out: string[] = []
+  for (const raw of dialog.replace(/\u00a0/g, ' ').split('\n')) {
+    let line = raw.replace(BOX_RE, ' ').trim()
+    if (CURSOR_READOUT_RE.test(line)) continue
+    line = line.replace(LEAD_MARKS_RE, '')
+    const row = /^\d+[.)]\s/.test(line)
+    // A line that carries a live timer is the engine's status line (Hermes' `💻 curl … (01m30s · ↓ 82 tok)`
+    // under its frame, Muse's `◇ Calling tools (21s · esc to interrupt)` above its rule, a bare `waiting 3s`),
+    // not the prompt: the prompt is always painted on lines of its own. A ROW keeps its words; only the
+    // group goes.
+    if (!row && (TIMER_GROUP_RE.test(line) || STATUS_BITS_RE.test(line) || BARE_TIMER_LINE_RE.test(line))) continue
+    if (!row) line = line.replace(TRAILING_TIMER_RE, '')
+    line = line.replace(TIMER_GROUPS_RE, ' ').replace(ROW_STATE_RE, '$1').replace(/\s+/g, ' ').trim()
+    if (line) out.push(line)
+  }
+  return out.join('\n')
 }
 
 function hash(value: string): string {

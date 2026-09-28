@@ -208,28 +208,30 @@ void main() {
     },
   );
 
-  testWidgets(
-    'close view and close swarm shortcuts keep shared sessions alive',
-    (tester) async {
-      final app = createApp();
-      app.machineStates['m']!.nodeOnline = true;
-      final session = terminal('a0', []);
-      app.adoptSessionForTest(session);
-      final original = app.activeSwarm;
-      app.newSwarm();
-      await app.addAgentToSwarm('m', 'a0');
-      await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyW, shift: true);
-      expect(app.swarms.length, 2);
-      expect(app.panes, isEmpty);
-      expect(original.panes.single.session, same(session));
-      await chord(tester, LogicalKeyboardKey.keyW);
-      expect(app.swarms.single, same(original));
-      expect(app.panes.single.session, same(session));
-      await tester.pumpWidget(const SizedBox());
-      app.dispose();
-    },
-  );
+  testWidgets('closing the final view or its tab keeps shared sessions alive', (
+    tester,
+  ) async {
+    final app = createApp();
+    app.machineStates['m']!.nodeOnline = true;
+    final session = terminal('a0', []);
+    app.adoptSessionForTest(session);
+    final original = app.activeSwarm;
+    app.newSwarm();
+    await app.addAgentToSwarm('m', 'a0');
+    await mount(tester, app);
+    await chord(tester, LogicalKeyboardKey.keyW, shift: true);
+    expect(app.swarms, [original]);
+    expect(app.panes.single.session, same(session));
+    app.newSwarm();
+    await app.addAgentToSwarm('m', 'a0');
+    await tester.pumpAndSettle();
+    expect(app.swarms.length, 2);
+    await chord(tester, LogicalKeyboardKey.keyW);
+    expect(app.swarms.single, same(original));
+    expect(app.panes.single.session, same(session));
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
 
   testWidgets(
     'keyboard pane actions replace header controls and keep other views alive',
@@ -347,6 +349,12 @@ void main() {
 
       await activate('close', {'id': second});
       expect(app.activeSwarmId, first);
+      // The closed tab's neighbour is shown; the keyboard waits on the strip.
+      expect(app.tabStripFocused, isTrue);
+      expect(tester.testTextInput.hasAnyClients, isFalse);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyY);
+      expect(input, hasLength(1));
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       expect(tester.testTextInput.hasAnyClients, isTrue);
       tester.testTextInput.enterText('y');
       await tester.idle();

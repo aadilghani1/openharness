@@ -38,6 +38,8 @@ import 'package:harness_mobile/widgets/terminal_panel.dart';
 import 'agent_model_sections.dart';
 import 'agent_model_sheet.dart';
 import 'agents_page.dart' show openNewAgent;
+import 'daemon_chip.dart';
+import 'daemon_scope.dart';
 import 'delete_agent.dart';
 import 'held_height.dart';
 import 'phone_sheet.dart';
@@ -522,6 +524,7 @@ class _TerminalPageState extends State<TerminalPage>
     if (!mounted) return;
     final view = _questionWatcher?.view;
     final open = view != null && view.answerable;
+    _tellDaemon(open ? view : null);
     // VoiceOver hears it too, once per question: the keys appearing beside the mic and the
     // terminal repainting say nothing to someone who cannot see them.
     if (open && view.question != _questionAnnounced) {
@@ -543,6 +546,31 @@ class _TerminalPageState extends State<TerminalPage>
     });
     if (_questionWatcher?.queued == null) _queueRaisedFor = null;
     _raiseForQuestion();
+  }
+
+  /// The daemon on this phone, cached so a page going can take its report back
+  /// (a disposed page cannot look its scope up).
+  DaemonHostState? _daemon;
+
+  /// Tell the daemon a question is open on this page, or that it went. The
+  /// machine's own question frame never reaches a phone on the relay, so a
+  /// dialog read off the screen is how the daemon learns a harness needs you.
+  void _tellDaemon(QuestionPaneView? view) {
+    final host = _daemon ??= DaemonScope.maybeOf(context);
+    if (host == null) return;
+    final agent = widget.notifier
+        .stateOf(widget.machineId)
+        ?.agents
+        .where((a) => a.id == widget.agentId)
+        .firstOrNull;
+    host.noteQuestion(
+      this,
+      machineId: widget.machineId,
+      agentId: widget.agentId,
+      key: view?.fingerprint,
+      who: agent?.displayName ?? 'a harness',
+      question: view?.question ?? '',
+    );
   }
 
   /// The question VoiceOver was last told about, so a repaint of the same dialog is not said twice.
@@ -743,6 +771,11 @@ class _TerminalPageState extends State<TerminalPage>
     _barMessage.dispose();
     _scrollback.dispose();
     widget.notifier.removeListener(_onNotifier);
+    _daemon?.noteQuestion(
+      this,
+      machineId: widget.machineId,
+      agentId: widget.agentId,
+    );
     _questionWatcher?.removeListener(_onQuestionPane);
     _questionWatcher?.dispose();
     _cancelSettle();
@@ -2065,6 +2098,12 @@ class _TerminalPageState extends State<TerminalPage>
                                   : _askingElsewhere(),
                               onHold: _openLastHarness,
                               onFind: _openSearch,
+                              // The paired daemon at the title's right end: its
+                              // sprite, a tap from its sheet. Nothing outside the
+                              // signed-in shell (the sample). See `daemon_chip.dart`.
+                              daemon: const DaemonChip(
+                                margin: EdgeInsets.only(left: 12),
+                              ),
                               onTap: () {
                                 if (agent == null) return;
                                 _showActions(

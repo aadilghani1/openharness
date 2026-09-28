@@ -141,6 +141,29 @@ class ApiClient {
     return unwrapApiResponse(res) as Map<String, dynamic>?;
   }
 
+  // -- the zoo: the account's daemons and eggs (daemons/README.md), proxied like the desk --
+
+  /// `{revision, zoo}`; null when daemons are off: a 404 (the server's switch, harnessd's
+  /// `DAEMONS_OFF`, or a harnessd that predates the zoo) or signed out (401). A 5xx throws: it
+  /// is not an answer (daemons/README.md, "Off switches").
+  Future<Map<String, dynamic>?> zoo() async {
+    final res = await _dio.get('/api/zoo');
+    if (res.statusCode == 404 || res.statusCode == 401) return null;
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
+  /// Apply [ops] in order; answers `{revision, zoo, hatched}`. Null under the same two
+  /// conditions as [zoo].
+  Future<Map<String, dynamic>?> zooOps(List<Map<String, dynamic>> ops) async {
+    final res = await _dio.post(
+      '/api/zoo/ops',
+      data: {'ops': ops},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    if (res.statusCode == 404 || res.statusCode == 401) return null;
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
   // -- pairing a phone (Harness ▸ Add Phone…) --
 
   /// `POST /api/pair` — hand THIS computer's daemon the one-time code the Add

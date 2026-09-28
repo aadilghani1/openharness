@@ -46,6 +46,9 @@ import 'session_preview.dart';
 import 'terminal_pane.dart';
 import 'desk_sync.dart';
 import 'phone_desk.dart';
+import '../daemons/daemon_habits.dart';
+import '../daemons/individual_art.dart';
+import '../daemons/zoo_client.dart';
 import 'swarm.dart';
 import '../terminal/terminal_binary.dart';
 import '../ws/ws_conn.dart';
@@ -390,6 +393,66 @@ class AppNotifier extends ChangeNotifier {
     read: () => api.desk(),
     write: (ops) => api.deskOps(ops),
     onChanged: notifyListeners,
+  );
+
+  // ── the zoo: the account's daemons and eggs ──────────────────────────────
+  //
+  // `daemons/zoo_client.dart` holds it. Its own document, like the desk and
+  // separate from it: read on sign-in, on `zoo_changed`, and when the app comes
+  // back to the front. The closures read `api` lazily for the desk's reason.
+  late final ZooClient zoo = ZooClient(
+    read: () => api.zoo(),
+    write: (ops) => api.zooOps(ops),
+  );
+
+  /// Individuals' own plates, drawn by harnessd on one of the account's
+  /// computers and asked for over the sealed `pair_plate_get` frame
+  /// (`daemons/individual_art.dart`). Until one arrives, and where none can
+  /// be asked, the species plate is shown in the individual's colours.
+  late final IndividualArt individualArt = IndividualArt(
+    request: requestIndividualPlate,
+  );
+
+  /// Ask the account's connected computers for an
+  /// individual's plates (`pair_plate_get { uid, id, seed, size, version,
+  /// mood }` → `pair_plate { ..., frames, frameMs }`). The first that answers
+  /// wins; a computer whose harnessd predates individual art says
+  /// `UNSUPPORTED` or stays silent (a sealed frame it cannot open), which is a
+  /// timeout and the next one. A first render can take tens of seconds;
+  /// the recoloured species plate remains visible while it draws.
+  Future<Map<String, dynamic>?> requestIndividualPlate(
+    Map<String, dynamic> payload,
+  ) async {
+    if (_disposed || (_pool == null && connectionForTest == null)) return null;
+    final machines = [
+      for (final machine in machineStates.values)
+        if (machine.connectionStatus == ConnectionStatus.connected &&
+            !machine.needsLink &&
+            machine.nodeOnline != false)
+          machine,
+    ];
+    for (final machine in machines) {
+      try {
+        final answer = await _conn(machine.machine.machineId).request(
+          'pair_plate_get',
+          payload: payload,
+          timeout: const Duration(minutes: 2),
+        );
+        if (answer['error'] == null && answer['frames'] is List) return answer;
+      } catch (_) {
+        // Too old, asleep, or not there: the next one.
+      }
+    }
+    return null;
+  }
+
+  /// The first egg's habits this phone can see for itself — see
+  /// `daemons/daemon_habits.dart` for which, and why the rest are left to the
+  /// computers. The days it was used are kept where the layout is: nowhere in
+  /// a test.
+  late final PhoneHabits daemonHabits = PhoneHabits(
+    zoo,
+    storage: _paneLayout?.storage,
   );
 
   /// The account's tabs, in the desk's order. Empty where the desk has nothing
@@ -1281,6 +1344,8 @@ class AppNotifier extends ChangeNotifier {
     // over REST rather than from any machine — so they can land before the
     // first machine has finished dialling.
     _desk.ensure();
+    // The zoo the same way: the daemon on the chip is account state.
+    zoo.ensure();
     try {
       // The request already in flight (above).
       final failure = await machineRefresh;
@@ -1348,6 +1413,7 @@ class AppNotifier extends ChangeNotifier {
     pendingPairing = null;
     _awaitingFirstMessage = null;
     _desk.reset();
+    zoo.reset();
     analyticsAccount.clear();
     unawaited(_pool?.closeAll());
     _pool = null;
@@ -1474,6 +1540,9 @@ class AppNotifier extends ChangeNotifier {
     // The desk belongs to the account, not to the phone: its tabs go with the
     // session, writes this phone never managed to send included.
     _desk.reset();
+    // The zoo is the account's too.
+    zoo.reset();
+    individualArt.reset();
     currentUser = null;
     machines = [];
     machineStates.clear();
@@ -1980,6 +2049,7 @@ class AppNotifier extends ChangeNotifier {
     final links = peerLinks;
     return links is DirectLink && _paneLayout != null ? links.syncGroup : null;
   }
+
   final Map<String, DateTime> _groupSyncedAt = {};
   static const _groupResync = Duration(minutes: 5);
 
@@ -2229,6 +2299,7 @@ class AppNotifier extends ChangeNotifier {
     // The desk is joined here as well, should the boot not have got that far —
     // [PhoneDesk.ensure] makes that once.
     _desk.ensure();
+    zoo.ensure();
     try {
       await refreshMachines();
       if (!_authWorkCurrent(revision)) return;
@@ -3307,8 +3378,7 @@ class AppNotifier extends ChangeNotifier {
         'MEDIA_TOO_LARGE' => 'Remote previews support files up to 512 MB. Use a smaller export or transfer this file separately.',
         'MEDIA_CHANGED' => 'The file changed while downloading. Wait for it to finish generating and try again.',
         'MEDIA_UNSUPPORTED' => 'This file is not a supported image or video.',
-        'MEDIA_INVALID_REQUEST' =>
-          'This file is outside the folders Harness reads for this harness. Use one in its working folder or a temp folder.',
+        'MEDIA_INVALID_REQUEST' => 'This file is outside the folders Harness reads for this harness. Use one in its working folder or a temp folder.',
         'AGENT_NOT_FOUND' =>
           'This harness is no longer available. Reconnect and try again.',
         'NOT_TEXT' || 'FILE_TOO_LARGE' => 'Update the Harness CLI on this remote machine to open media previews.',
@@ -4085,6 +4155,8 @@ class AppNotifier extends ChangeNotifier {
       return unconfirmed;
     }
     _agentResumes.remove(key);
+    // A paused harness came back from this phone: a first-egg habit.
+    daemonHabits.resumed();
     if (_disposed || machineStates[machine.machine.machineId] != machine) {
       return const RestartAgentResult();
     }
@@ -5307,6 +5379,12 @@ class AppNotifier extends ChangeNotifier {
         // machines mean one GET.
         _desk.noticeRevision(payload['revision']);
         return;
+      case 'zoo_changed':
+        // The account's daemons and eggs changed — an egg earned on a computer,
+        // a hatch or a pair switch on another client. Once per machine, like
+        // `desk_changed`; [ZooClient.noticeRevision] makes that one GET.
+        zoo.noticeRevision(payload['revision']);
+        return;
       case 'node_status':
         final online = payload['online'] == true;
         await _applyNodeStatus(machine, online);
@@ -5636,6 +5714,9 @@ class AppNotifier extends ChangeNotifier {
     // whatever they were when the phone went into a pocket, until something
     // else happened to change them.
     unawaited(_desk.refresh());
+    // The zoo too, for the same reason: a `zoo_changed` sent while the phone
+    // was in a pocket reached nobody.
+    if (status == AppStatus.authenticated) unawaited(zoo.refresh());
   }
 
   /// The app went into a pocket: stop the reads that only make sense in front
@@ -5671,6 +5752,9 @@ class AppNotifier extends ChangeNotifier {
     sessionPreviews.dispose();
     agentNotices.dispose();
     _desk.dispose();
+    daemonHabits.dispose();
+    individualArt.dispose();
+    zoo.dispose();
     super.dispose();
   }
 }

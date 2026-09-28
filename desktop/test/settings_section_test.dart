@@ -34,6 +34,7 @@ void main() {
       SettingsSection.usage,
       SettingsSection.customize,
       SettingsSection.notifications,
+      SettingsSection.experimental,
       SettingsSection.devices,
       SettingsSection.account,
       SettingsSection.shortcuts,

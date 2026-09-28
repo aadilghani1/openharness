@@ -254,6 +254,61 @@ describe('the desk proxy', () => {
   })
 })
 
+describe('the zoo proxy', () => {
+  it('reads the zoo ungated and writes its ops only with the local header, body passed through', async () => {
+    const zoo = { daemons: [], eggs: [], pair: null, habits: [], firstEgg: false, pity: 0, easter: [] }
+    const ops = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { revision: 2, zoo, hatched: [], echo: body } } }))
+    const deskRead = vi.fn()
+    const { base } = await start({
+      onZooRead: async () => ({ status: 200, body: { success: true, data: { revision: 1, zoo } } }),
+      onZooOps: ops,
+      onDeskRead: deskRead,
+    })
+    const read = await fetch(`${base}/api/zoo`)
+    expect(await read.json()).toEqual({ success: true, data: { revision: 1, zoo } })
+    expect(deskRead).not.toHaveBeenCalled()                  // its own document: a zoo read never reads the desk
+
+    const refused = await fetch(`${base}/api/zoo/ops`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"ops":[]}' })
+    expect(refused.status).toBe(403)
+    expect(ops).not.toHaveBeenCalled()
+
+    const body = { ops: [{ op: 'zoo.habit', key: 'turn' }] }
+    const written = await fetch(`${base}/api/zoo/ops`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: JSON.stringify(body) })
+    expect(((await written.json()) as { data: unknown }).data).toMatchObject({ revision: 2, hatched: [], echo: body })
+    expect(ops).toHaveBeenCalledWith(body)
+
+    const bad = await fetch(`${base}/api/zoo/ops`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{nope' })
+    expect(bad.status).toBe(400)
+  })
+
+  it('passes a signed-out answer through as it came, the way the desk does', async () => {
+    const signedOut = { status: 401, body: { success: false, error: { code: 'NOT_SIGNED_IN', message: 'Not signed in' } } }
+    const { base } = await start({ onZooRead: async () => signedOut, onZooOps: async () => signedOut })
+    const read = await fetch(`${base}/api/zoo`)
+    expect(read.status).toBe(401)
+    expect(await read.json()).toEqual(signedOut.body)
+    const write = await fetch(`${base}/api/zoo/ops`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"ops":[{"op":"zoo.habit","key":"turn"}]}' })
+    expect(write.status).toBe(401)
+  })
+
+  it('passes a daemons-off answer through as it came: the window hides daemons on the 404', async () => {
+    const off = { status: 404, body: { success: false, error: { code: 'DAEMONS_OFF', message: 'Daemons are off for this account or on this computer.' } } }
+    const { base } = await start({ onZooRead: async () => off, onZooOps: async () => off })
+    const read = await fetch(`${base}/api/zoo`)
+    expect(read.status).toBe(404)
+    expect(await read.json()).toEqual(off.body)
+    const write = await fetch(`${base}/api/zoo/ops`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"ops":[{"op":"zoo.habit","key":"turn"}]}' })
+    expect(write.status).toBe(404)
+    expect(await write.json()).toEqual(off.body)
+  })
+
+  it('answers 503 on a daemon built without the zoo', async () => {
+    const { base } = await start()
+    expect((await fetch(`${base}/api/zoo`)).status).toBe(503)
+    expect((await fetch(`${base}/api/zoo/ops`, { method: 'POST', headers: { 'x-adapter-local': '1' }, body: '{}' })).status).toBe(503)
+  })
+})
+
 describe('the Harness Store proxy', () => {
   it('forwards a store read with its path and query, and a store write only with the local header', async () => {
     const calls: Array<[string, string, unknown]> = []

@@ -3,7 +3,7 @@ import cors from '@fastify/cors'
 import Fastify from 'fastify'
 import http from 'http'
 import net from 'net'
-import { env } from './config/env.js'
+import { DAEMONS, env } from './config/env.js'
 import { registerJsonBodyParser } from './lib/jsonBodyParser.js'
 import { errorHandler } from './middlewares/errorHandler.js'
 import { registerAuthMiddleware } from './middlewares/authMiddleware.js'
@@ -12,6 +12,8 @@ import { voiceRoutes } from './routes/voice.js'
 import { harnessShareRoutes } from './routes/harnessShares.js'
 import { harnessLinkRoutes } from './routes/harnessLinks.js'
 import { deskRoutes } from './routes/desk.js'
+import { zooRoutes } from './routes/zoo.js'
+import { describeDaemonsSwitch } from './lib/daemonsSwitch.js'
 import { handleObserverUpgrade } from './lib/observerWs.js'
 import { deviceAuthRoutes } from './routes/deviceAuth.js'
 import { healthRoutes, authRoutes, userRoutes, machineRoutes, planRoutes, gridRoutes, deviceRoutes, mobileRoutes, appRoutes, analyticsRoutes, agentRouteRoutes, storeRoutes } from './routes/index.js'
@@ -167,6 +169,10 @@ async function start(): Promise<void> {
   await app.register(harnessShareRoutes)
   await app.register(harnessLinkRoutes)
   await app.register(deskRoutes)          // the account's tabs, the same on every computer (lib/desk.ts)
+  // The account's daemons and eggs, the same on every client (lib/zoo.ts). Dark unless HARNESS_DAEMONS is
+  // on (lib/daemonsSwitch.ts): off, nothing is registered and /api/zoo answers the ordinary 404.
+  await app.register(zooRoutes, { daemons: DAEMONS })
+  logger.info(describeDaemonsSwitch(DAEMONS))
 
   // Dedicated public subdomain app-proxy on its own port (Host-header routed → tunnelled to the node app).
   const appProxyServer = startSubdomainProxy()

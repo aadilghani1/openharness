@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../logging/debug_surface.dart';
+import 'experimental_features.dart';
 
 /// A Settings navigation entry. Customize returns to the workspace and opens
 /// its side panel; the other entries select a Settings page.
@@ -15,6 +16,7 @@ enum SettingsSection {
   usage(LucideIcons.chartNoAxesColumn300, 'Usage'),
   customize(LucideIcons.palette300, 'Customize'),
   notifications(LucideIcons.bell300, 'Notifications'),
+  experimental(LucideIcons.flaskConical300, 'Experimental'),
   devices(LucideIcons.zap300, 'Autonomous robots'),
   shortcuts(LucideIcons.keyboard300, 'Keyboard shortcuts'),
   debug(LucideIcons.bug300, 'Debug'),
@@ -63,6 +65,8 @@ List<SettingsGroup> get settingsGroups =>
 List<SettingsGroup> settingsGroupsFor({required bool debugSurface}) {
   bool visible(SettingsSection section) =>
       (!kIsWeb || section != SettingsSection.devices) &&
+      (section != SettingsSection.experimental ||
+          ExperimentalFeature.values.any((feature) => feature.available)) &&
       (debugSurface || !_kDeveloperSections.contains(section));
   return [
     for (final group in _kSettingsGroups)
@@ -93,6 +97,7 @@ const _kSettingsGroups = [
     // the app looks; a sound is not a look, and somebody turning one off does not think to look
     // under Appearance for it.
     SettingsSection.notifications,
+    SettingsSection.experimental,
     SettingsSection.devices,
     SettingsSection.account,
   ]),
