@@ -610,7 +610,7 @@ void main() {
       app.activeSwarm.focusedPaneId = 1;
       final context = WorkspacePaneContext.focused(app)!;
       expect(context.text, 'Test host:api  (fix)');
-      expect(context.detail, contains('/worktrees/random-name'));
+      expect(context.detail, isNot(contains('/worktrees/random-name')));
       for (final style in StatusLineStyle.values) {
         final text = context.format(PromptPrefs(statusStyle: style)).text;
         expect(text, isNot(contains('random-name')));

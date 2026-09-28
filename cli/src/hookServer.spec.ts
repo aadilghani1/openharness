@@ -84,6 +84,46 @@ describe('process-owned hook server', () => {
     expect(handlers.onRegistered).not.toHaveBeenCalled()
   })
 
+  it('accepts a Herdr hint from a hook installed by an earlier build, and resolves by its tmux pane only', async () => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        engine: 'codex',
+        tmuxPane: '%41',
+        sessionId: '019fea92-e31a-7692-9c35-f616e9d458b7',
+        runtimeHints: [
+          { backend: 'tmux', paneId: '%41' },
+          { backend: 'herdr', paneId: 'w1:p1', sessionName: 'default', socketPath: '/tmp/herdr.sock' },
+        ],
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(resolveHookAgent).toHaveBeenCalledWith({
+      engine: 'codex', tmuxPane: '%41', runtimeHints: [{ backend: 'tmux', paneId: '%41' }], callerPid: undefined,
+    })
+  })
+
+  it('ignores a hook whose only terminal is a Herdr pane', async () => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        engine: 'claude',
+        sessionId: 'session-1',
+        runtimeHints: [{ backend: 'herdr', paneId: 'w1:p1', sessionName: 'default' }],
+      }),
+    })
+
+    expect(await response.json()).toEqual({ ignored: true, reason: 'not_in_terminal' })
+    expect(resolveHookAgent).not.toHaveBeenCalled()
+  })
+
   it('rejects hooks outside configured terminal contexts before attempting process resolution', async () => {
     const resolveHookAgent = vi.fn(async () => null)
     const { handlers, base, headers } = await start({ resolveHookAgent })
@@ -355,6 +395,14 @@ describe('requests must name this server', () => {
     expect(onLogs).not.toHaveBeenCalled()
   })
 
+  it('serves a status that has to read before it answers', async () => {
+    // A harness's `updatedAt` is when its conversation last moved, which is read from its transcript.
+    const { base } = await start({ onStatus: async () => ({ sessions: [{ id: 'a', updatedAt: 42 }] }) })
+    const res = await fetch(`${base}/api/status`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ sessions: [{ id: 'a', updatedAt: 42 }] })
+  })
+
   it('still serves loopback names, and the dashboard from its own origin', async () => {
     const { base } = await start({ onStatus: () => ({ ok: true }) })
     const port = new URL(base).port
@@ -402,6 +450,26 @@ describe('the daemon socket', () => {
         r.end()
       })
       expect(tcp).toBe(403)
+    } finally {
+      await started.localSocket?.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('hands out a phone sign-in code over the socket only — never on the loopback port', async () => {
+    const dir = mkdtempSync('/tmp/hsock-')
+    const socketPath = join(dir, 'daemon.sock')
+    const onAuthHandoff = vi.fn(async () => ({ status: 200, body: { success: true, data: { code: 'hnh_x', expiresIn: 90 } } }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onAuthHandoff }, { socketPath })
+    server = started.server
+    try {
+      const local = { 'x-adapter-local': '1' }
+      expect(await viaSocket(socketPath, 'POST', '/api/auth/handoff', local)).toBe(200)
+      expect(await viaSocket(socketPath, 'POST', '/api/auth/handoff')).toBe(403)
+      const port = (started.server.address() as { port: number }).port
+      const tcp = await fetch(`http://127.0.0.1:${port}/api/auth/handoff`, { method: 'POST', headers: local })
+      expect(tcp.status).toBe(403)
+      expect(onAuthHandoff).toHaveBeenCalledTimes(1)
     } finally {
       await started.localSocket?.close()
       rmSync(dir, { recursive: true, force: true })

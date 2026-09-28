@@ -9,7 +9,7 @@ import { basename, join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { readCodexRolloutMeta } from './engines/codex/rollout.js'
-import { hermesSessionSource } from './engines/hermes/reader.js'
+import { hermesSessionSource, isHermesInteractiveSource } from './engines/hermes/reader.js'
 import { hermesDbPath, listHermesHomes } from './engines/hermes/home.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
@@ -31,8 +31,7 @@ import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib
  *
  * Caller ancestry — the hook's process descends from the engine we registered — is the strong one and
  * always wins. It is not always available: Cursor posts its hooks from outside the pane's process tree,
- * on tmux and on Herdr alike, so requiring ancestry rejected every hook that engine ever sent and no
- * session bound at all.
+ * so requiring ancestry rejected every hook that engine ever sent and no session bound at all.
  *
  * Only Cursor may use the weaker runtime evidence: the hook named a pane carrying exactly one Cursor
  * agent, and the caller already proved it can read the 0600 hook credential. Other engines must match
@@ -111,7 +110,7 @@ export interface HookServerHandlers {
   /** `harness remote-password status` — whether one is set, and its fingerprint. */
   onRemotePasswordStatus?: () => PairOutcome
   /** Local dashboard status snapshot (GET /api/status). */
-  onStatus?: () => Record<string, unknown>
+  onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   /** Recent adapter log tail (GET /api/logs). */
   onLogs?: () => string
   /** Stop the adapter from the local dashboard (POST /api/stop). */
@@ -125,6 +124,9 @@ export interface HookServerHandlers {
   onMachineDelete?: (machineId: string) => Promise<PairOutcome>
   /** GET /api/auth/me — proxy the signed-in user's profile from backend. */
   onAuthMe?: () => Promise<PairOutcome>
+  /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
+   *  Add Phone QR), minted by backend against this daemon's own session. */
+  onAuthHandoff?: () => Promise<PairOutcome>
   onSharedHarnesses?: () => Promise<PairOutcome>
   /** GET /api/desk — the account's tabs, the same on every computer; proxied like the machine list. */
   onDeskRead?: () => Promise<PairOutcome>
@@ -187,6 +189,9 @@ function validHookBody(value: unknown): value is BoundHookBody {
         if (Object.keys(hint).some((field) => field !== 'backend' && field !== 'paneId')
           || typeof hint.paneId !== 'string' || !/^%\d+$/.test(hint.paneId)) return false
       } else if (hint.backend === 'herdr') {
+        // A hook script installed by an earlier build still sends these from inside a Herdr pane. The
+        // backend is retired and `normalizedRuntimeHints` drops the hint, but the rest of the body is
+        // still good evidence, so the shape stays accepted rather than failing the whole request.
         if (Object.keys(hint).some((field) => !['backend', 'paneId', 'sessionName', 'socketPath'].includes(field))
           || !optionalBoundedString(hint.paneId, 200) || !hint.paneId
           || !optionalBoundedString(hint.sessionName, 64)
@@ -218,16 +223,6 @@ function normalizedRuntimeHints(body: RegisterInput): HookTerminalHint[] {
   if (Array.isArray(body.runtimeHints) && body.runtimeHints.length <= 4) {
     for (const hint of body.runtimeHints) {
       if (hint?.backend === 'tmux' && /^%\d+$/.test(hint.paneId)) hints.push({ backend: 'tmux', paneId: hint.paneId })
-      if (hint?.backend === 'herdr'
-        && typeof hint.paneId === 'string' && hint.paneId.length <= 200
-        && (hint.sessionName === undefined || (typeof hint.sessionName === 'string' && hint.sessionName.length <= 64))
-        && (hint.socketPath === undefined || (typeof hint.socketPath === 'string' && hint.socketPath.length <= 4_096))) {
-        hints.push({
-          backend: 'herdr', paneId: hint.paneId,
-          ...(hint.sessionName ? { sessionName: hint.sessionName } : {}),
-          ...(hint.socketPath ? { socketPath: hint.socketPath } : {}),
-        })
-      }
     }
   }
   if (body.tmuxPane && /^%\d+$/.test(body.tmuxPane)
@@ -356,7 +351,7 @@ async function awaitHermesKind(body: RegisterInput, handlers: HookServerHandlers
       break
     }
     if (source === null) continue
-    if (source !== '' && source !== 'cli') {
+    if (!isHermesInteractiveSource(source)) {
       console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · hermes_subagent`)
       return
     }
@@ -446,7 +441,7 @@ export function startHookServer(
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(LOCAL_WEB_HTML); return
       }
       if (req.method === 'GET' && url === '/api/status') {
-        json(200, handlers.onStatus ? handlers.onStatus() : { supported: false }); return
+        json(200, handlers.onStatus ? await handlers.onStatus() : { supported: false }); return
       }
       if (req.method === 'GET' && url === '/api/logs') {
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(handlers.onLogs ? handlers.onLogs() : ''); return
@@ -685,6 +680,16 @@ export function startHookServer(
         const me = handlers.onAuthMe
         if (!me) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(me); return
+      }
+      // Add Phone: a code that SIGNS A PHONE IN to this account — the one local route whose answer is
+      // a credential. So not the CSRF header, which any local process can send, but the daemon's
+      // owner-only socket: the filesystem has already said this is the user who signed in. Another
+      // account on a shared computer reaches the loopback port, never the socket. A client on TCP is
+      // refused, and the Add Phone QR goes without the code (the phone asks for an emailed one).
+      if (req.method === 'POST' && url === '/api/auth/handoff') {
+        if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onAuthHandoff) { json(503, { error: 'UNAVAILABLE' }); return }
+        await proxied(handlers.onAuthHandoff); return
       }
       if (req.method === 'PATCH' && url.startsWith('/api/machines/')) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }

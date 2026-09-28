@@ -631,11 +631,15 @@ export class E2eeManager {
         if (!slot.isk || !slot.th) { this.failPwPair(connId, 'TIMEOUT'); return true }
         const opened = C.aeadOpen(C.pairKey(slot.isk, ci), 4, C.utf8('e2e-id'), C.b64d(String(p.enc)))
         if (!opened) { this.failPwPair(connId, 'WRONG_PASSWORD', true); return true }
-        const joinerId = JSON.parse(new TextDecoder().decode(opened)) as { id: string; sig: string }
+        const joinerId = JSON.parse(new TextDecoder().decode(opened)) as { id: string; sig: string; label?: unknown }
         if (!C.pairBindVerify(C.b64d(joinerId.id), slot.th, C.b64d(joinerId.sig))) { this.failPwPair(connId, 'WRONG_PASSWORD', true); return true }
         // Full success: trust the joiner exactly as if it were a paired browser session (same call/role
         // onSetupClaim uses) — this is what lets it relay through this machine's data plane.
-        this.store.addPaired(joinerId.id, 'harness link', this.now(), 'web')
+        //
+        // Named by the joiner when it says who it is ("Dee's iPhone"), inside the sealed identity, so the
+        // name is as authenticated as the key — and so the Mac's list of paired devices reads as devices.
+        // A joiner that predates the field (`harness link connect`, an older phone) stays "harness link".
+        this.store.addPaired(joinerId.id, pairedLabel(joinerId.label) ?? 'harness link', this.now(), 'web')
         this.store.notePwSuccess()
         const fp = this.fingerprint()
         this.deps.sendTo(connId, { type: 'e2e_pw_pake', payload: { sid: slot.sidB64, round: 5, ok: true, fingerprint: fp } })
@@ -794,4 +798,11 @@ function hex8(): string {
   let s = ''
   for (let i = 0; i < 4; i++) s += b[i].toString(16).padStart(2, '0')
   return s
+}
+
+/** A joiner's name for itself, fit to show in a list: text only, one line, 60 characters at most. */
+function pairedLabel(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const label = raw.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60)
+  return label || null
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -78,7 +79,12 @@ class ViewerKeyStore {
   static const _peersKey = 'viewer_e2ee_machine_peers';
 
   /// Minted on first use and kept: every linked machine has pinned it.
-  Future<E2eeIdentity> identity() => _identity ??= _loadOrMintIdentity();
+  Future<E2eeIdentity> identity() => _identity ??= _heldUnlessItFails(
+    _loadOrMintIdentity(),
+    forget: (failed) {
+      if (identical(_identity, failed)) _identity = null;
+    },
+  );
 
   Future<E2eeIdentity> _loadOrMintIdentity() async {
     final stored = await _storage.read(_seedKey);
@@ -89,7 +95,30 @@ class ViewerKeyStore {
   }
 
   /// Newest link first. Read once and held — see [_peers].
-  Future<List<MachinePeer>> peers() => _peers ??= _readPeers();
+  Future<List<MachinePeer>> peers() => _peers ??= _heldUnlessItFails(
+    _readPeers(),
+    forget: (failed) {
+      if (identical(_peers, failed)) _peers = null;
+    },
+  );
+
+  /// [pending], to be held as the answer — unless it fails, in which case it is let go of.
+  ///
+  /// ⚠️ **A failed read is not an answer.** The store throws when the state file is locked or
+  /// caught mid-rename, and both reads held here are on the dial path (`viewerRelayCodecs` asks
+  /// before every connect and reconnect). Held, that one rejected future was handed to every dial
+  /// after it for the life of the process: a machine that met a locked file once never connected
+  /// again until the app was killed — the very failure `WsConn.connect` keeps retryable on purpose.
+  static Future<T> _heldUnlessItFails<T>(
+    Future<T> pending, {
+    required void Function(Future<T> failed) forget,
+  }) {
+    // A listener of its own, so the caller still sees the failure and nothing goes unhandled.
+    unawaited(
+      pending.then<void>((_) {}, onError: (Object _) => forget(pending)),
+    );
+    return pending;
+  }
 
   Future<List<MachinePeer>> _readPeers() async {
     final raw = await _storage.read(_peersKey);
@@ -128,7 +157,9 @@ class ViewerKeyStore {
   /// False when [machineId] was not linked.
   Future<bool> unlink(String machineId) async {
     final current = await peers();
-    final remaining = current.where((peer) => peer.machineId != machineId).toList();
+    final remaining = current
+        .where((peer) => peer.machineId != machineId)
+        .toList();
     if (remaining.length == current.length) return false;
     await _write(remaining);
     return true;
@@ -149,8 +180,7 @@ class ViewerKeyStore {
       _peersKey,
       jsonEncode([for (final peer in peers) peer.toJson()]),
     );
-    final sorted = [...peers]
-      ..sort((a, b) => b.linkedAt.compareTo(a.linkedAt));
+    final sorted = [...peers]..sort((a, b) => b.linkedAt.compareTo(a.linkedAt));
     _peers = Future.value(sorted);
   }
 }

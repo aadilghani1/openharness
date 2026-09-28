@@ -111,6 +111,8 @@ class WebPeer {
 class PwPeer {
   identity = C.newIdentity()
   peerPub?: Uint8Array
+  /** What this joiner calls itself in its sealed identity; unset is a joiner that predates the field. */
+  label?: string
   private pr?: { sid: Uint8Array; sidB64: string; stretched: Uint8Array; y?: bigint; Ya?: Uint8Array; isk?: Uint8Array; th?: Uint8Array }
 
   async intent(password: string): Promise<Frame> {
@@ -146,7 +148,8 @@ class PwPeer {
       if (!C.pairBindVerify(C.b64d(adId.id), pr.th!, C.b64d(adId.sig))) throw new Error('adapter bind sig failed')
       this.peerPub = C.b64d(adId.id) // pin
 
-      const sealed = C.aeadSeal(C.pairKey(pr.isk!, ci), 4, C.utf8('e2e-id'), C.utf8(JSON.stringify({ id: C.b64e(this.identity.pub), sig: C.b64e(C.pairBindSig(this.identity.priv, pr.th!)) })))
+      const claim = { id: C.b64e(this.identity.pub), sig: C.b64e(C.pairBindSig(this.identity.priv, pr.th!)), ...(this.label !== undefined ? { label: this.label } : {}) }
+      const sealed = C.aeadSeal(C.pairKey(pr.isk!, ci), 4, C.utf8('e2e-id'), C.utf8(JSON.stringify(claim)))
       return { type: 'e2e_pw_pake', payload: { sid: pr.sidB64, round: 4, enc: C.b64e(sealed) } }
     }
     return null // round 5 (ok/error) — nothing to send
@@ -402,6 +405,24 @@ describe('E2eeManager persistent remote-password pairing', () => {
     const paired = mgr.listPaired()
     expect(paired.length).toBe(1)
     expect(paired[0]).toMatchObject({ fingerprint: C.fingerprint(joiner.identity.pub), label: 'harness link', role: 'web' })
+  })
+
+  it('a joiner that names itself is listed by that name — one clean line of it', async () => {
+    const { mgr, takeLast } = machine()
+    await mgr.setRemotePassword(PASSWORD)
+    for (const [conn, label, shown] of [
+      ['pw-a', "Dee's iPhone", "Dee's iPhone"],
+      ['pw-b', '  two\nlines\u0007 ', 'two lines'],
+      ['pw-c', 'x'.repeat(90), 'x'.repeat(60)],
+      ['pw-d', '   ', 'harness link'],
+    ] as const) {
+      const joiner = new PwPeer()
+      joiner.label = label
+      mgr.handleFrame(conn, await joiner.intent(PASSWORD))
+      mgr.handleFrame(conn, joiner.onPake(takeLast('e2e_pw_pake'))!)
+      mgr.handleFrame(conn, joiner.onPake(takeLast('e2e_pw_pake'))!)
+      expect(mgr.listPaired().find((p) => p.fingerprint === C.fingerprint(joiner.identity.pub))?.label).toBe(shown)
+    }
   })
 
   it('a wrong password fails the confirmation MAC at round 2 and pins nobody', async () => {

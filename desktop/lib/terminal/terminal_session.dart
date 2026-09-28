@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:archive/archive.dart' show ZLibDecoder;
 import 'package:xterm/xterm.dart';
 
 import '../core/crash_log.dart';
@@ -837,7 +837,7 @@ class TerminalSession extends ChangeNotifier {
   Uint8List? _decodeBinaryBytes(TerminalBinaryFrame frame) {
     try {
       return frame.compressed
-          ? Uint8List.fromList(ZLibDecoder().convert(frame.bytes))
+          ? const ZLibDecoder().decodeBytes(frame.bytes, verify: true)
           : frame.bytes;
     } catch (_) {
       return null;
@@ -1292,7 +1292,36 @@ class TerminalSession extends ChangeNotifier {
 
   void find(TerminalFindAction action) => _viewport?.find(action);
 
+  Map<String, dynamic> selectPassage(Map<String, dynamic> command) {
+    final viewport = _viewport;
+    return viewport is TerminalPassageViewport
+        ? (viewport as TerminalPassageViewport).selectPassage(command)
+        : {'ok': false, 'error': 'Open the terminal pane first.'};
+  }
+
+  Future<Map<String, dynamic>> searchPassage(
+    Map<String, dynamic> command,
+  ) async {
+    final viewport = _viewport;
+    return viewport is TerminalPassageSearchViewport
+        ? (viewport as TerminalPassageSearchViewport).searchPassage(command)
+        : {'ok': false, 'error': 'Open the terminal pane first.'};
+  }
+
   bool focusInput() => _viewport?.focusInput() ?? false;
+
+  TerminalReadingBookmark? bookmarkReading() {
+    final viewport = _viewport;
+    return viewport is TerminalReadingViewport
+        ? (viewport as TerminalReadingViewport).bookmarkReading()
+        : null;
+  }
+
+  bool showLatestReading() {
+    final viewport = _viewport;
+    return viewport is TerminalLatestViewport &&
+        (viewport as TerminalLatestViewport).showLatestReading();
+  }
 
   /// Coalescing windows for the two things the user drives directly.
   ///

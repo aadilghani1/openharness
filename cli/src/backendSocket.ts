@@ -1,4 +1,4 @@
-import { readGitPullRequest } from './lib/gitPullRequest.js'
+import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
 import type { HarnessShareOwner } from './sharing/owner.js'
 import { SHARE_REQUEST_TYPES } from './sharing/protocol.js'
 import { AutonomousDeviceRelay } from './lib/autonomous-device/relay.js'
@@ -61,6 +61,7 @@ import { OrchestratorError } from './orchestrator/model.js'
 import { orchestratorRequest } from './orchestrator/wire.js'
 import { shellQuote } from './orchestrator/prompts.js'
 import type { SessionInputDelivery } from './lib/sessionInput.js'
+import type { QuestionAnswerResult } from './lib/askQuestion.js'
 import { engineLabel } from './lib/agentNames.js'
 import { DSH_ID_RE, dshSupportedEngines } from './dsh/manifest.js'
 import { refreshDshRegistry } from './dsh/catalog.js'
@@ -79,6 +80,7 @@ import { codexMessagesToEvents, windowCodexLines } from './engines/codex/normali
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
 import { parseHostTheme, type HostTheme } from './lib/hostTheme.js'
 import { cursorMessagesToEvents, windowCursorLines } from './engines/cursor/normalizer.js'
+import { cursorConfigDir, cursorDataDir } from './engines/cursor/home.js'
 import { loadCursorReplayTaskLinks } from './engines/cursor/subagent.js'
 import { opencodeMessagesToEvents, windowOpencodeMessages } from './engines/opencode/normalizer.js'
 import { kiloMessagesToEvents, windowKiloMessages } from './engines/kilo/normalizer.js'
@@ -152,6 +154,10 @@ const HANDSHAKE_TIMEOUT_MS = 15_000
  *  whatever is resolved. Well under the app's 12s `grid_models_list` timeout, leaving that RPC room
  *  for its own `grid` spawns; a reconcile slower than this lands by the next open. */
 const GRID_ATTACH_WAIT_MS = 6_000
+/** An `agent_update {opened: true}` for an agent opened less than this long ago is answered but not
+ *  stamped or broadcast: a person flicking between two tabs, or two apps opening the same agent at
+ *  once, would otherwise push a frame to every client for each flick. Exported for the spec. */
+export const AGENT_OPENED_THROTTLE_MS = 3_000
 const BASE_DELAY_MS = 1_000
 const MAX_DELAY_MS = 30_000
 const QUEUE_MAX = 2_000
@@ -498,6 +504,10 @@ export class BackendSocket {
      *  folder (lib/sessionSearch/external.ts). Null for a new conversation. Shape-checked here; cli.ts
      *  checks it is one it found, not open elsewhere, and not already a harness. */
     resumeSessionId?: string | null
+    /** A conversation open in a terminal, taken over from it: `idle` stops that terminal's process
+     *  only between turns, `now` whatever it is doing (then tells it to continue), `wait` when its
+     *  turn ends. Absent, one open elsewhere is refused and the refusal says whether it is busy. */
+    takeOver?: 'idle' | 'now' | 'wait' | null
   }) =>
     Promise<{ ok: true; session: RegisteredSession } | { ok: false; error: string; detail?: string }>) | null = null
   /** Called on `dsh_install` — cli.ts clones/sets up/doctors the harness and reports each phase. */
@@ -611,7 +621,7 @@ export class BackendSocket {
   /** Called when a device answers an AskUserQuestion (`question_response`) — cli.ts drives the CLI's own
    *  terminal dialog (option digit / free text), since a remote machine has no
    *  programmatic answer channel the way the hosted runtime’s brain does. */
-  onQuestionAnswer: ((payload: { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }) => void) | null = null
+  onQuestionAnswer: ((payload: { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }) => Promise<QuestionAnswerResult> | void) | null = null
   /** Called when this machine was deleted/revoked (a `machine_revoked` down-frame, or a 401/403 on the
    *  upgrade) — CLI clears the saved SSO session and shuts down instead of retrying forever. */
   onRevoked: (() => void) | null = null
@@ -1773,7 +1783,7 @@ export class BackendSocket {
             const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
             const before = typeof payload.before === 'string' ? payload.before : undefined
             const messages = await readDevinMessages(DEVIN_DB, sessionId)
-            const timestamp = new Date(s.updatedAt).toISOString()
+            const timestamp = new Date(s.touchedAt).toISOString()
             if (!limit) {
               reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: devinMessagesToEvents(messages), timestamp, engine: s.engine })
               return
@@ -1794,7 +1804,7 @@ export class BackendSocket {
             const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
             const before = typeof payload.before === 'string' ? payload.before : undefined
             const messages = await readHermesMessages(await hermesDbForSession(s), sessionId)
-            const timestamp = new Date(s.updatedAt).toISOString()
+            const timestamp = new Date(s.touchedAt).toISOString()
             if (!limit) {
               reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: hermesMessagesToEvents(messages), timestamp, engine: s.engine })
               return
@@ -1815,7 +1825,7 @@ export class BackendSocket {
             const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
             const before = typeof payload.before === 'string' ? payload.before : undefined
             const messages = await readOpencodeMessages(OPENCODE_DB, sessionId)
-            const timestamp = new Date(s.updatedAt).toISOString()
+            const timestamp = new Date(s.touchedAt).toISOString()
             if (!limit) {
               reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: opencodeMessagesToEvents(messages), timestamp, engine: s.engine })
               return
@@ -1840,7 +1850,7 @@ export class BackendSocket {
             const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
             const before = typeof payload.before === 'string' ? payload.before : undefined
             const messages = await readKiloMessages(KILO_DB, sessionId)
-            const timestamp = new Date(s.updatedAt).toISOString()
+            const timestamp = new Date(s.touchedAt).toISOString()
             if (!limit) {
               reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: kiloMessagesToEvents(messages), timestamp, engine: s.engine })
               return
@@ -1860,7 +1870,7 @@ export class BackendSocket {
               id: sessionId,
               title: projectDisplayName(s),
               events: [],
-              timestamp: new Date(s.updatedAt).toISOString(),
+              timestamp: new Date(s.touchedAt).toISOString(),
               engine: s.engine,
               hasMore: false,
               oldestCursor: null,
@@ -1880,7 +1890,7 @@ export class BackendSocket {
             const fullEvents = s.engine === 'codex'
               ? codexMessagesToEvents(lines, codexSubagentResolverFor(s.codexHome))
               : s.engine === 'cursor'
-                ? cursorMessagesToEvents(lines, sessionId, await loadCursorReplayTaskLinks(env.CURSOR_HOME, sessionId))
+                ? cursorMessagesToEvents(lines, sessionId, await loadCursorReplayTaskLinks(cursorConfigDir(), sessionId, cursorDataDir()))
                 : s.engine === 'muse'
                   ? museMessagesToEvents(lines)
                   : s.engine === 'amp'
@@ -1956,7 +1966,7 @@ export class BackendSocket {
               ? cursorMessagesToEvents(
                   w.window,
                   sessionId,
-                  await loadCursorReplayTaskLinks(env.CURSOR_HOME, sessionId),
+                  await loadCursorReplayTaskLinks(cursorConfigDir(), sessionId, cursorDataDir()),
                   'startIndex' in w && typeof w.startIndex === 'number' ? w.startIndex : 0,
                   'initialTodos' in w && Array.isArray(w.initialTodos) ? w.initialTodos : [],
                 )
@@ -2193,7 +2203,16 @@ export class BackendSocket {
           if (!projectId) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
           const hasName = Object.prototype.hasOwnProperty.call(payload, 'name')
           const hasProfile = Object.prototype.hasOwnProperty.call(payload, 'selectedModel')
-          if (!hasName && !hasProfile) { reply(type, requestId, { error: 'MISSING_UPDATE' }); return }
+          // An app OPENED this agent — see RegisteredSession.lastOpenedAt. Only a literal `true`: a
+          // client that means "opened" says so, and anything else is not an update at all. A client
+          // reaching this handler is already one that may change the agent — a shared harness's
+          // observer never gets here (sharing/owner.ts answers everything but terminal frames with
+          // VIEW_ONLY) — so an open is taken from the local window, a paired web/phone session and a
+          // remote desktop relayed through its own daemon alike.
+          const hasOpened = payload.opened === true
+          // An older client, and a request carrying none of the three, still get MISSING_UPDATE — which
+          // is also what a client learns from a daemon that predates `opened`.
+          if (!hasName && !hasProfile && !hasOpened) { reply(type, requestId, { error: 'MISSING_UPDATE' }); return }
           const name = typeof payload.name === 'string' ? payload.name.trim() : ''
           if (hasName && !name) { reply(type, requestId, { error: 'MISSING_NAME' }); return }
           let s = registry.resolve(projectId)
@@ -2215,8 +2234,27 @@ export class BackendSocket {
             s = registry.rename(projectId, name) ?? s
             this.onAgentRename?.(s, name)
           }
+          // Throttled on the stamp the row already carries, so a repeat inside the window is answered
+          // with the current frame but moves nothing and tells no one. A stamp from the future (the
+          // clock was set back) never throttles: the next open corrects it.
+          let opened = false
+          if (hasOpened) {
+            const since = Date.now() - (s.lastOpenedAt ?? 0)
+            if (!s.lastOpenedAt || since < 0 || since >= AGENT_OPENED_THROTTLE_MS) {
+              s = registry.markOpened(s.agentId) ?? s
+              opened = true
+            }
+          }
           const agent = await this.toProject(s)
           reply(type, requestId, { agent })
+          // Every app sorts by the same stamp, so every app hears it: the web audience — the phone,
+          // other desktops, and this computer's own windows — through `send`. Not the device: the dial
+          // lists agents in creation order and has nothing to reorder. Not for an agent whose terminal
+          // this daemon cannot see either, the rule `syncSession` (cli.ts) keeps: that row is not in
+          // `agents_list`, and a push would put it back on every screen.
+          if (opened && registry.terminalAvailable(s.agentId)) {
+            this.send({ type: 'agent_synced', payload: { agent } })
+          }
           if (hasName) {
             const renamed = { type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } }
             this.send(renamed)          // every OTHER web client on this machine (group-encrypted)
@@ -2347,13 +2385,22 @@ export class BackendSocket {
           // conversation is created with applies to it.
           let resumeSessionId: string | null = null
           if (payload.resumeSessionId !== undefined && payload.resumeSessionId !== null) {
-            if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9-]{8,80}$/.test(payload.resumeSessionId)) {
+            // Engines' ids: uuids, `ses_…` (OpenCode, Kilo), `20260927_101500_ab12cd` (Hermes), slugs
+            // (Devin), Pi's custom ids with dots. One word, never a path.
+            if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(payload.resumeSessionId)) {
               reply(type, requestId, { error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
             }
             if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || dsh || prompt || agent) {
               reply(type, requestId, { error: 'INVALID_SESSION', detail: 'a resumed conversation takes no new folder, grid, harness, prompt or agent' }); return
             }
             resumeSessionId = payload.resumeSessionId
+          }
+          let takeOver: 'idle' | 'now' | 'wait' | null = null
+          if (payload.takeOver !== undefined && payload.takeOver !== null) {
+            if (!resumeSessionId || (payload.takeOver !== 'idle' && payload.takeOver !== 'now' && payload.takeOver !== 'wait')) {
+              reply(type, requestId, { error: 'INVALID_SESSION', detail: 'takeOver is idle, now or wait, with a resumeSessionId' }); return
+            }
+            takeOver = payload.takeOver
           }
           const input = {
             engine,
@@ -2368,6 +2415,7 @@ export class BackendSocket {
             name,
             agent,
             resumeSessionId,
+            takeOver,
           }
           const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input
           if (creationId !== undefined) {
@@ -2630,7 +2678,18 @@ export class BackendSocket {
           const id = payload.agentId
           const agent = typeof id === 'string' ? registry.resolve(id) : undefined
           if (!agent?.cwd) { reply(type, requestId, { status: 'unavailable' }); return }
-          void readGitPullRequest(agent.cwd).then(result => reply(type, requestId, result))
+          const requested = payload.context
+          if (requested !== undefined && (!requested || typeof requested !== 'object'
+            || typeof (requested as Record<string, unknown>).cwd !== 'string'
+            || typeof (requested as Record<string, unknown>).branch !== 'string'
+            || (requested as Record<string, unknown>).remote !== null && typeof (requested as Record<string, unknown>).remote !== 'string')) {
+            reply(type, requestId, { status: 'unavailable' }); return
+          }
+          void readSessionGitPullRequest(agent, {
+            expected: requested as import('./lib/sessionGitPullRequest.js').ExpectedGitContext | undefined,
+            history: payload.history === true, offset: typeof payload.offset === 'number' ? payload.offset : undefined,
+          }).then(result => reply(type, requestId, result))
+            .catch(() => reply(type, requestId, { status: 'unavailable' }))
           return
         }
 
@@ -2751,7 +2810,15 @@ export class BackendSocket {
           // A device answered an AskUserQuestion. There's no control channel into an interactive CLI, so
           // cli.ts keys the answer straight into that session's tmux dialog.
           const p = payload as { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }
-          this.onQuestionAnswer?.(p)
+          const answered = this.onQuestionAnswer?.(p)
+          // Detached: driving a dialog takes seconds of keystrokes and repaints. The outcome goes back
+          // under the QUESTION's requestId, so the client that answered can say why nothing happened —
+          // STALE_QUESTION when the dialog changed before the answer arrived and nothing was typed.
+          if (answered) {
+            void answered
+              .then((result) => reply(type, requestId, result.ok ? { ok: true } : { error: result.error, detail: result.detail }))
+              .catch(() => reply(type, requestId, { error: 'ANSWER_FAILED', detail: 'The answer could not be entered.' }))
+          }
           return
         }
 

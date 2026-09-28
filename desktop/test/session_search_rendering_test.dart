@@ -307,7 +307,15 @@ void main() {
     (tester) async {
       const session = '01a0c4ad-de5e-7000-8000-000000000001';
       const busy = '01a0c4ad-de5e-7000-8000-000000000002';
-      Map<String, dynamic> external(String id, {required bool open}) => {
+      const movable = '01a0c4ad-de5e-7000-8000-000000000003';
+      const binding = '01a0c4ad-de5e-7000-8000-000000000004';
+      const inApp = '01a0c4ad-de5e-7000-8000-000000000005';
+      const maybe = '01a0c4ad-de5e-7000-8000-000000000006';
+      Map<String, dynamic> external(
+        String id, {
+        required bool open,
+        String? openIn,
+      }) => {
         'agentId': '',
         'sessionId': id,
         'engine': 'codex',
@@ -324,6 +332,7 @@ void main() {
           'cwd': '/work/cohorts',
           'origin': open ? 'terminal' : 'codex-app',
           'open': open,
+          'openIn': ?openIn,
         },
       };
       final connection = TailConnection(
@@ -331,6 +340,10 @@ void main() {
           'retention cohorts': [
             external(session, open: false),
             external(busy, open: true),
+            external(movable, open: true, openIn: 'terminal'),
+            external(binding, open: true, openIn: 'harness'),
+            external(inApp, open: true, openIn: 'app'),
+            external(maybe, open: true, openIn: 'maybe'),
           ],
         },
         tail: (payload) => {
@@ -410,6 +423,27 @@ void main() {
         search.sessionUnavailable(open),
         contains('Open in another terminal'),
       );
+      // A machine that can take one over from its terminal says so: it opens.
+      final inTerminal = search.rows.firstWhere(
+        (row) => row.external?.sessionId == movable,
+      );
+      expect(search.sessionUnavailable(inTerminal), isNull);
+      expect(search.canSubmit(inTerminal), isTrue);
+      // One of Harness's own panes has it (an agent still being bound), or an app does: not here.
+      final bound = search.rows.firstWhere(
+        (row) => row.external?.sessionId == binding,
+      );
+      expect(search.sessionUnavailable(bound), 'Already in Harness');
+      expect(search.canSubmit(bound), isFalse);
+      final heldByApp = search.rows.firstWhere(
+        (row) => row.external?.sessionId == inApp,
+      );
+      expect(search.sessionUnavailable(heldByApp), 'Open in an app');
+      final guessed = search.rows.firstWhere(
+        (row) => row.external?.sessionId == maybe,
+      );
+      expect(search.sessionUnavailable(guessed), 'May be open in a terminal');
+      expect(search.canSubmit(guessed), isFalse);
 
       // Previewed like any session: what it is, where it ran, its latest turn.
       while (search.selected?.id != row.id) {

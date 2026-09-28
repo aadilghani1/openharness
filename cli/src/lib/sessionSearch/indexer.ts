@@ -31,7 +31,7 @@ export interface SearchSource {
    * registry's bookkeeping time. Newest sessions are indexed first, and a database-backed history
    * is read again when this moves.
    */
-  updatedAt: number
+  changedAt: number
   /**
    * The whole history, for an engine that keeps it in a database rather than a transcript file
    * (OpenCode, Kilo, Hermes, Devin). Read in full when the session changed: there is no offset to
@@ -103,7 +103,7 @@ export interface SessionSearchIndexOptions {
    * Which sessions are open in a running process right now (external.ts `OpenSessions`), so a
    * conversation Harness did not start says whether a terminal still has it. `known` never waits.
    */
-  openSessions?: { known(): ReadonlySet<string>; fresh(): Promise<ReadonlySet<string>> }
+  openSessions?: { known(): ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>; fresh(): Promise<ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>> }
   /** Looks again for conversations Harness did not start, before each sweep lists its sources. */
   discover?: () => Promise<unknown>
   /** Between full sweeps. */
@@ -201,7 +201,7 @@ export class SessionSearchIndex {
       const indexed = this.opts.store.session(sessionId)
       if (indexed && !agents.has(indexed.agentId) && !this.sources.has(sessionId)) this.opts.store.removeSession(sessionId)
     }
-    const newest = [...this.sources.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+    const newest = [...this.sources.values()].sort((a, b) => b.changedAt - a.changedAt)
     for (const source of newest) this.queue.add(source.sessionId)
     void this.drain()
   }
@@ -212,7 +212,12 @@ export class SessionSearchIndex {
     // Whether a terminal still has it, as last looked: a search never waits for a process table.
     if (hits.some((hit) => hit.external) && this.opts.openSessions) {
       const open = this.opts.openSessions.known()
-      for (const hit of hits) if (hit.external) hit.external.open = open.has(hit.sessionId)
+      for (const hit of hits) {
+        if (!hit.external) continue
+        hit.external.open = open.has(hit.sessionId)
+        const where = open.get(hit.sessionId)
+        if (where) hit.external.openIn = where
+      }
     }
     const indexed = this.opts.store.counts().sessions
     return { hits, indexed, pending: this.queue.size, tookMs: Math.round((performance.now() - started) * 10) / 10 }
@@ -245,7 +250,8 @@ export class SessionSearchIndex {
     if (tail && session && !session.agentId) {
       // A preview of a conversation Harness did not start says whether a terminal has it, as of now.
       const open = await this.opts.openSessions?.fresh().catch(() => null)
-      tail.external = { title: session.title ?? '', cwd: session.cwd ?? '', origin: session.origin ?? '', open: open?.has(sessionId) ?? false }
+      const where = open?.get(sessionId)
+      tail.external = { title: session.title ?? '', cwd: session.cwd ?? '', origin: session.origin ?? '', open: open?.has(sessionId) ?? false, ...(where ? { openIn: where } : {}) }
     }
     return tail
   }
@@ -299,7 +305,7 @@ export class SessionSearchIndex {
       if (!source.sessionId) continue
       const known = next.get(source.sessionId)
       // One session can be listed live and stopped at once: the fresher record wins.
-      if (!known || source.updatedAt > known.updatedAt) next.set(source.sessionId, source)
+      if (!known || source.changedAt > known.changedAt) next.set(source.sessionId, source)
     }
     this.sources = next
     this.sourcesReadAt = Date.now()
@@ -323,7 +329,7 @@ export class SessionSearchIndex {
         path: existing?.path ?? source.transcriptPath ?? '', header,
         size: existing?.size ?? 0, mtime: existing?.mtime ?? 0,
         resumeOffset: existing?.resumeOffset ?? 0, resumeTurn: existing?.resumeTurn ?? 0,
-        lastAt: existing?.lastAt ?? (source.updatedAt || null), turns: 0,
+        lastAt: existing?.lastAt ?? (source.changedAt || null), turns: 0,
         ...externalFields(source, knownTitle),
       }, NO_TURN_DELETE, [])
       return
@@ -365,7 +371,9 @@ export class SessionSearchIndex {
       size: file.size, mtime,
       resumeOffset: open ? open.offset : end,
       resumeTurn: open ? open.turn : collector.next,
-      lastAt: lastAt ?? (resume ? existing.lastAt : null) ?? mtime,
+      // Lines with no time of their own (Cursor's) date the session by when its conversation last
+      // moved, as its engine says, before the file's own time.
+      lastAt: lastAt ?? (resume ? existing.lastAt : null) ?? (source.external && source.changedAt ? source.changedAt : mtime),
       turns: 0,
       ...externalFields(source, title),
     }
@@ -396,10 +404,13 @@ export class SessionSearchIndex {
    */
   private async historyPass(source: SearchSource, existing: IndexedSession | undefined, dirty: boolean): Promise<void> {
     const store = this.opts.store
-    const stamp = source.updatedAt
+    const stamp = source.changedAt
+    // A conversation Harness did not start is headed by its own title and folder, as a transcript's is.
+    const headed = (title: string) => ({ header: headerFor(source, title), ...externalFields(source, title) })
     if (existing && !dirty && existing.mtime === stamp) {
-      if (existing.header !== source.header || existing.agentId !== source.agentId) {
-        store.writeSession({ ...existing, header: source.header, agentId: source.agentId }, NO_TURN_DELETE, [])
+      const again = source.external ? headed(existing.title ?? '') : { header: source.header }
+      if (existing.header !== again.header || existing.agentId !== source.agentId) {
+        store.writeSession({ ...existing, ...again, agentId: source.agentId }, NO_TURN_DELETE, [])
       }
       return
     }
@@ -412,14 +423,16 @@ export class SessionSearchIndex {
     }
     const { closed, open } = collector.finish()
     const turns = open ? [...closed, open] : closed
+    const title = source.external ? titleLine(source.external.title || turns.find((turn) => turn.ask)?.ask || '') : ''
+    const head = source.external ? headed(title) : { header: source.header }
     // The size field holds the fingerprint: how much conversation there was when last read.
     const fingerprint = turns.reduce((sum, turn) => sum + turn.ask.length + turn.answer.length + turn.tools.length + 1, 0)
     if (existing && existing.size === fingerprint && existing.mtime === stamp
-      && existing.header === source.header && existing.agentId === source.agentId) return
+      && existing.header === head.header && existing.agentId === source.agentId) return
     const changed = !existing || existing.size !== fingerprint
     store.writeSession({
       sessionId: source.sessionId, agentId: source.agentId, engine: source.engine, path: '',
-      header: source.header, size: fingerprint, mtime: stamp, resumeOffset: 0, resumeTurn: 0,
+      ...head, size: fingerprint, mtime: stamp, resumeOffset: 0, resumeTurn: 0,
       // Its turns carry no time: the session's is its activity stamp, or now for a turn just seen.
       lastAt: !changed ? existing!.lastAt : dirty ? Math.max(Date.now(), stamp) : stamp || null,
       turns: 0,

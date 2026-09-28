@@ -97,7 +97,7 @@ jobs:
       - run: npx tsc --noEmit
 
       # 1,871 tests over 144 files, ~30s. The four `*.real.spec.ts` / `localE2e.spec.ts` suites that
-      # need a live tmux, Herdr or Cursor are gated behind RUN_* env vars and stay skipped here —
+      # need a live tmux or Cursor are gated behind RUN_* env vars and stay skipped here —
       # `npm run test:tmux-real` and friends are how those are run, on a machine that has them.
       - run: npx vitest run
 
