@@ -358,3 +358,11 @@ and `desktop/lib/terminal/terminal_theme.dart`. Back uses secondary neutral ink.
 Native tests cover short/long layouts, exact partial redraws, rim bounds, post-DMA
 ordering, locked/sleeping frames, stale replacements, counter rollover, read/Open
 idempotence, questions, bounded receipts and muted/active bell transitions.
+
+### Renderer reference
+
+Actual native-renderer output for the centered inbox cards and empty bell in
+`.orange.7`; these are test fixtures, not customer conversations. A quieter empty
+bell is planned as a separate follow-up.
+
+![Inbox card layouts and empty bell](assets/inbox-review-20260928.png)
