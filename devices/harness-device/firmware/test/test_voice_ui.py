@@ -50,7 +50,7 @@ static ht_workspace_t workspace;
 static struct {
     bool quick_open, coasting, ready, connected, loading, nap, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_review_preview, voice_draft_append, voice_search, touch_down, touch_cancelled;
     int pet_pose, view, voice_return, offset, pressed, active;
-    uint32_t pet_until, nap_until, voice_started, voice_second, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
+    uint32_t pet_until, nap_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
     int voice_question_index;
     char title[80], message[256], voice_target[64], pending_focus[64], pending_machine[64], opening_notice[48];
     struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],token[48]; struct { bool can_text; } item[4]; } q;

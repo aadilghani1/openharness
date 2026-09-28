@@ -81,9 +81,11 @@ bool ht_character_motion_step(ht_character_motion_t *m, const ht_character_anima
     animate = animate && octopus_perf_animate();
 #endif
     bool changed = ht_character_reaction_tick(&m->reaction, now, mood, quiet, visible, down, x, level, activity);
-    bool running = animate && visible && !quiet && !down && mood != HT_CHARACTER_LISTENING &&
+    bool running = animate && visible && !quiet && !down &&
         mood != HT_CHARACTER_ASLEEP && mood != HT_CHARACTER_OFFLINE;
-    uint8_t rate = mood == HT_CHARACTER_IDLE ? 2 : 1;
+    // The body keeps its gentle idle pace while listening. Microphone-driven
+    // mouth/eye reactions remain independent and continue at their own cadence.
+    uint8_t rate = mood == HT_CHARACTER_IDLE || mood == HT_CHARACTER_LISTENING ? 2 : 1;
     uint8_t old_frame = m->frame;
     if (m->animation != a) {
         changed = true;

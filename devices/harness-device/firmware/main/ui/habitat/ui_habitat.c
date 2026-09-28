@@ -197,7 +197,7 @@ static EXT_RAM_BSS_ATTR struct {
     char model_agent[ID_MAX], model_selected[192];
     char stop_agent[ID_MAX];
     int brightness;
-    uint32_t voice_started, voice_second;
+    uint32_t voice_started;
     bool voice_open, voice_start_pending, voice_waiting, voice_carry;
     bool voice_review, voice_review_preview, voice_draft_append, voice_search;
     uint32_t voice_draft_revision;
@@ -214,7 +214,7 @@ static EXT_RAM_BSS_ATTR struct {
     int quick_choice;
     uint32_t coast_until;
     uint32_t character_activity;
-    uint8_t activity_phase;
+    uint8_t status_phase;
     int start_x, start_y, last_x, last_y;
     uint32_t touch_started;
     char pattern[32];
@@ -591,18 +591,20 @@ static ht_character_mood_t character_mood(void)
         return HT_CHARACTER_WORKING;
     return HT_CHARACTER_IDLE;
 }
-static bool activity_animated(void)
+static bool status_animated(void)
 {
+    if (s.nap || s.quiet || s.locked || display_is_asleep() || s.touch_down || s.quick_open)
+        return false;
+    if (s.view == VOICE) return !s.voice_review_preview;
     const agent_t *a = active();
     return (s.view == HOME || s.view == AGENT) && a && a->busy && s.connected &&
-        !s.loading && !s.nap && !s.quiet && !s.locked && !display_is_asleep() &&
-        !s.touch_down && !s.quick_open && !s.straight_title &&
+        !s.loading && !s.straight_title &&
         !carry.active && !carry.error[0] && !visit.available;
 }
 static void surface_tick(uint32_t now)
 {
-    uint8_t phase = activity_animated() ? ht_shimmer_phase(now) : 0;
-    if (phase != s.activity_phase) { s.activity_phase = phase; change(); }
+    uint8_t phase = status_animated() ? ht_shimmer_phase(now) : 0;
+    if (phase != s.status_phase) { s.status_phase = phase; change(); }
     bool main = s.view == HOME || s.view == AGENT;
     bool inbox = s.view == INBOX && s.offset >= 0 && s.offset < s.notice_count;
     bool visible = !s.locked && !display_is_asleep() && (main || s.view == VOICE || inbox);
@@ -719,9 +721,9 @@ static void render_home(ht_scene_t *f)
         f_.status = "scrolling";
     }
     ht_character_face(f, &character, &f_, ACCENT, recap);
-    s.activity_phase = activity_animated() ? ht_shimmer_phase(ms()) : 0;
+    s.status_phase = status_animated() ? ht_shimmer_phase(ms()) : 0;
     for (int i = 0; i < f->count; i++)
-        if (f->runs[i].arc == 2) f->runs[i].shimmer = s.activity_phase;
+        if (f->runs[i].arc == 2) f->runs[i].shimmer = s.status_phase;
     if ((carry.active || carry.error[0]) && visit.available) {
         footer_control(f, 95, 156, "[return]", A_RETURN, s.connected && !visit.pending);
         footer_control(f, 263, 108, "[drop]", A_CARRY_DROP, true);
@@ -1005,11 +1007,10 @@ static void render_voice(ht_scene_t *f)
     char draft_detail[64];
     snprintf(draft_detail, sizeof draft_detail, s.voice_draft_append ? "Add to your message" : "Replace part %d / %d",
         draft.page.position, draft.page.total);
-    if (s.voice_start_pending) COPY(status, "Starting...");
-    else if (!audio_client_recording() || s.voice_waiting) COPY(status, (s.voice_return == FORM || s.voice_search) ? "Finding..." : question_view(s.voice_return) || s.voice_return == DRAFT || s.voice_review ? "Writing..." : "Sending...");
+    if (s.voice_start_pending) COPY(status, "Starting");
+    else if (!audio_client_recording() || s.voice_waiting) COPY(status, (s.voice_return == FORM || s.voice_search) ? "Finding" : question_view(s.voice_return) || s.voice_return == DRAFT || s.voice_review ? "Writing" : "Sending");
     else if (s.voice_review_preview) COPY(status, "Release to review");
-    else snprintf(status, sizeof(status), "Listening %lu:%02lu", (unsigned long)(s.voice_second / 60),
-                  (unsigned long)(s.voice_second % 60));
+    else COPY(status, "Listening");
     ht_character_face_t f_ = {.recipient = s.voice_target, .status = status,
         .hint = "",
         .mood = !s.voice_start_pending && !s.voice_waiting && audio_client_recording() ? HT_CHARACTER_LISTENING : HT_CHARACTER_WORKING,
@@ -1020,6 +1021,9 @@ static void render_voice(ht_scene_t *f)
         .carrying = s.voice_carry};
     f_.focus = f_.detail && *f_.detail;
     ht_character_face(f, &character, &f_, ACCENT, NULL);
+    s.status_phase = status_animated() ? ht_shimmer_phase(ms()) : 0;
+    for (int i = 0; i < f->count; i++)
+        if (f->runs[i].arc == 2) f->runs[i].shimmer = s.status_phase;
     s.hits[s.hit_count++] = (hit_t){{33, 97, 400, 274}, A_PET, 0, true};
 }
 static void render_selection(ht_scene_t *f)
@@ -1680,7 +1684,6 @@ static void dispatch(action_t a)
             else if (a.value == 5 || a.value == 6) COPY(s.voice_target, draft.page.name);
             else COPY(s.voice_target, target >= 0 ? s.agents[target].name : "harness");
             s.voice_started = ms();
-            s.voice_second = 0;
             view(VOICE);
             ESP_LOGI("habitat", "voice queued generation=%lu", (unsigned long)a.revision);
         }
@@ -2305,7 +2308,7 @@ uint32_t habitat_next_wake_ms(void)
     if (visit.pending && delay > 100) delay = 100;
     if (s.view == FORM && delay > 100) delay = 100;
     if (character.motion.next_ms && character.motion.next_ms < delay) delay = character.motion.next_ms;
-    if (activity_animated()) {
+    if (status_animated()) {
         uint32_t due = ht_shimmer_wake_ms(now);
         if (due < delay) delay = due;
     }
@@ -2371,10 +2374,6 @@ void habitat_tick(void)
     if (s.voice_open) {
         display_bump_activity();
         uint32_t second = (now - s.voice_started) / 1000;
-        if (second != s.voice_second) {
-            s.voice_second = second;
-            change();
-        }
         // Recording is explicitly started and finished by the person. The energy estimate can
         // miss quiet speech and normal gaps between syllables; it must never discard their words.
         // Keep the existing duration cap, using the same finalization as tapping Done.

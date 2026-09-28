@@ -51,10 +51,20 @@ static void clocks(void)
         held = c.motion.phase;
         for (uint32_t t = 4101; t < 4225; t++) {
             tick(&c, t, HT_CHARACTER_LISTENING, false, true, false, 0);
-            assert(c.motion.reaction.pose.level == 4 && c.motion.phase == held);
+            assert(c.motion.reaction.pose.level == 4 && c.motion.running && c.motion.rate == 2);
         }
         tick(&c, 4225, HT_CHARACTER_LISTENING, false, true, false, 0);
-        assert(!c.motion.reaction.pose.level && c.motion.phase == held);
+        assert(!c.motion.reaction.pose.level &&
+               c.motion.phase == (held + 62) % c.motion.animation->duration);
+        // A silent microphone must not freeze the body; every authored frame
+        // remains reachable at half speed during a complete listening cycle.
+        bool listening_seen[256] = {0};
+        for (uint32_t t=4226;t<=4225+c.motion.animation->duration*2u;t++) {
+            tick(&c,t,HT_CHARACTER_LISTENING,false,true,false,0);
+            assert(!c.motion.reaction.pose.level);
+            listening_seen[c.motion.frame]=true;
+        }
+        for (unsigned f=0;f<c.motion.animation->frames;f++) assert(listening_seen[f]);
         for (int state = 0; state < 4; state++) {
             ht_character_mood_t mood = state == 2 ? HT_CHARACTER_ASLEEP :
                 state == 3 ? HT_CHARACTER_OFFLINE : HT_CHARACTER_WORKING;

@@ -53,9 +53,9 @@ static struct {
     char pattern[32], voice_target[CABLE_NAME_MAX];
     int pattern_mask, pattern_len, view, voice_return, offset, active, count, pressed, hit_count;
     int draft_drag, tab_drag, quick_choice, start_x, start_y, last_x, last_y, tab_count, machine_count, model_count, notice_count, pet_pose;
-    uint32_t touch_started, voice_second, coast_until, character_activity, pet_until, last_celebration;
+    uint32_t touch_started, coast_until, character_activity, pet_until, last_celebration;
     uint32_t notice_sequence;
-    uint8_t activity_phase;
+    uint8_t status_phase;
     cable_swarm_t tabs[SWARMS_MAX];
     struct { char id[64], name[96], state[16]; bool local; } machines[2];
     char selected_tab[ID_MAX], pending_focus[ID_MAX], opening_notice[ID_MAX], title[80], message[256];
@@ -182,7 +182,7 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
-for name in ['copy', 'recap_preview', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'workspace_index', 'workspace_failed', 'ui_scroll_reportable', 'control', 'home_footer', 'footer_control', 'text', 'center', 'heading', 'render_companion', 'choose_character', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'activity_animated', 'surface_tick', 'render_quick', 'command_face', 'render_workspace_preview', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'workspace_index', 'workspace_failed', 'ui_scroll_reportable', 'control', 'home_footer', 'footer_control', 'text', 'center', 'heading', 'render_companion', 'choose_character', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'status_animated', 'surface_tick', 'render_quick', 'command_face', 'render_workspace_preview', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -1304,7 +1304,8 @@ int main(int argc, char **argv) {
     for(int i=0;i<scene.count;i++) {
         assert(!strstr(scene.runs[i].text,"discard"));
         if(strstr(scene.runs[i].text,"Listening")) {
-            assert(scene.runs[i].arc==2); listening_arc=true;
+            assert(!strcmp(scene.runs[i].text,"Listening") && scene.runs[i].arc==2 && scene.runs[i].shimmer);
+            listening_arc=true;
         }
     }
     assert(listening_arc && !action_enabled(A_VOICE_ABORT));
@@ -1318,6 +1319,35 @@ int main(int argc, char **argv) {
 
     reset(); tap(1000,233,220); tap(1200,233,422);
     assert(s.voice_open && s.view==VOICE && !stops); // Bottom caption never discards a capture.
+
+    // Recording has a steady word (no clock to rerotate) over a moving body.
+    // Both the silent mic and Sending retain visible progress without dots.
+    reset(); tap(1000,233,220);
+    unsigned first_frame=character.motion.frame;
+    bool moved_while_listening=false;
+    for(int i=0;i<32;i++) {
+        fake_ms=2000+i*256; surface_tick(fake_ms); scene_take();
+        moved_while_listening |= character.motion.frame != first_frame;
+        assert(character.motion.running && character.motion.rate==2);
+        bool animated=false;
+        for(int j=0;j<scene.count;j++) if(scene.runs[j].arc==2) {
+            assert(!strcmp(scene.runs[j].text,"Listening") && scene.runs[j].shimmer);
+            animated=true;
+        }
+        assert(animated && !stops && !strcmp(target,"a"));
+        char label[40];snprintf(label,sizeof label,"listening-live-%02d",i);portrait(dir,label);
+    }
+    assert(moved_while_listening);
+    s.quiet=true;surface_tick(fake_ms);scene_take();
+    assert(!character.motion.running);
+    for(int j=0;j<scene.count;j++)assert(!scene.runs[j].shimmer);
+    s.quiet=false;tap(fake_ms+1000,233,220);assert(stops==1);
+    s.voice_waiting=true;recording=false;surface_tick(fake_ms);scene_take();portrait(dir,"sending-shimmer");
+    bool sending=false;
+    for(int j=0;j<scene.count;j++)if(scene.runs[j].arc==2) {
+        assert(!strcmp(scene.runs[j].text,"Sending") && scene.runs[j].shimmer);sending=true;
+    }
+    assert(sending);
 
     reset(); habitat_touch(true,233,220,1000); s.active=1; input_cancel();
     habitat_touch(false,233,220,1075); assert(!starts);

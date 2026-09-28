@@ -33,7 +33,7 @@ on the top curve, the fixed small creature, and the summary beneath it.
 **Working** is the fallback when no more specific native activity is available.
 The name and activity stay visible together. Current work has a soft left-to-right
 highlight sweep followed by a pause, matching the supplied terminal recording.
-The title stays still. Quiet mode, sleeping, touches and voice stop the sweep.
+The title stays still. Quiet mode, sleeping and touches pause the sweep.
 Curved glyph masks stay cached; only the old and new highlight bands redraw.
 The 2.048-second cycle has 20 steps at 64 ms, then a 768 ms rest.
 Tapping a visible pane name opens the pane picker. Idle has no hidden caption
@@ -56,8 +56,12 @@ reach the inbox.
 
 The central tap always starts voice, including over a summary or a letter.
 It never requires a first tap to dismiss the summary. During capture, the pane
-name stays on the top curve and `Listening m:ss` follows the bottom curve. One
-tap on the creature stops and sends; the recording screen has no Discard button.
+name stays on the top curve and animated `Listening` follows the bottom curve.
+The timer is hidden. Tim keeps moving at the gentle idle pace, with microphone
+reactions layered over his body motion. One tap on the creature stops and sends; the recording screen has no Discard button.
+`Sending` uses the same cached-mask highlight sweep, without trailing dots.
+Starting, Finding and Writing use the same treatment during their voice states.
+Removing the displayed timer leaves recording duration guards unchanged.
 Cancelling capture through the existing host lifecycle restores the previous
 result. There is no duplicate bottom label on the home screen.
 
@@ -198,3 +202,27 @@ release report, actual renderer previews, host-only sweep benchmark and OTA
 receipt. A previous full check caught the old summary-bottom bound (380 px);
 it was updated to keep at least 16 px above the inbox controls at y=400, and
 the complete check passed on the final inputs.
+
+
+## Listening and sending motion — 2026-09-28
+
+Orange trial revision `0.0.87-tim.orange.3` shows only `Listening`, with the
+same cached brightness sweep as `Working`. `Sending` has the sweep and no
+trailing dots. Tim keeps the idle body pace while recording, with independent
+microphone reactions. Quiet mode and touches still pause motion. Recording
+duration limits and dispatch behavior are unchanged.
+
+The image is 777,968 bytes, 32 bytes larger than orange.2. The full bridge,
+796 host tests, native ASan/UBSan and both-character touch/replay checks passed.
+The listening traffic limit now includes idle body motion: native simulation
+transfers 25,772,160 pixel bytes/minute versus idle's 25,499,360. This is a
+render-traffic measure, not ESP32 timing. The existing extra 2.5 MB/minute
+allowance for microphone reactions is now applied above idle body traffic.
+
+USB OTA verified the image, but the updater stalled closing USB and the dial
+did not answer after reboot or USB reset. The updater was stopped, its lease
+removed and the existing host restored. A user power cycle recovered the dial;
+it reported orange.3 at 15:51:20Z. Desktop/CLI hashes stayed unchanged.
+Artifacts and the full recovery receipt: `/private/tmp/harness-orange-tim-voice/`.
+Inbox gestures and layout remain under discussion; this revision does not
+change them.

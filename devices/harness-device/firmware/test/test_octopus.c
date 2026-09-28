@@ -57,13 +57,13 @@ static void clock_checks(void)
     assert(m.phase == held); // no catch-up jump when the finger lifts
     tick(&m, 4100, HT_TIM_LISTENING, false, true, false, 4);
     assert(m.reaction.pose.level == 4);
-    uint8_t frame = m.frame;
+    held = m.phase;
     for (uint32_t t = 4101; t < 4225; t++) {
         tick(&m, t, HT_TIM_LISTENING, false, true, false, 0);
-        assert(m.reaction.pose.level == 4 && m.frame == frame);
+        assert(m.reaction.pose.level == 4 && m.running && m.rate == 2);
     }
     tick(&m, 4225, HT_TIM_LISTENING, false, true, false, 0);
-    assert(!m.reaction.pose.level && m.frame == frame);
+    assert(!m.reaction.pose.level && m.phase == (held + 62) % HT_OCTOPUS_DURATION);
     for (int state = 0; state < 4; state++) {
         ht_tim_mood_t mood = state == 2 ? HT_TIM_ASLEEP : state == 3 ? HT_TIM_OFFLINE : HT_TIM_WORKING;
         tick(&m, 5000, mood, state == 0, state != 1, false, 0);
@@ -248,7 +248,9 @@ static void traffic_checks(void)
                mode == 0 ? "idle" : mode == 1 ? "working" : mode == 2 ? "microphone" : "recap", frames, pixels * 2);
         if (mode == 0) idle_bytes = pixels * 2;
         if (mode == 3) assert(pixels * 2 < idle_bytes);
-        if (mode == 2) assert(pixels * 2 < 2500000); // face-only capture must stay inexpensive
+        // Listening now includes the requested idle body motion. Keep the old
+        // 2.5 MB/min allowance for microphone reactions on top of that motion.
+        if (mode == 2) assert(pixels * 2 < idle_bytes + 2500000);
     }
 }
 
