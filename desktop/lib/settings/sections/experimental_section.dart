@@ -99,61 +99,55 @@ class _SwarmCollaborationSetting extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = controller;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        MergeSemantics(
-          child: SettingRow(
-            title: 'Swarm collaboration',
-            detail:
-                'Let agents in the same tab automatically consult each other. '
-                'Off by default. This setting applies to your account.',
-            control: SizedBox(
-              width: SettingRow.controlWidth,
-              child: Row(
-                children: [
-                  Switch(
-                    key: const Key('experimental-swarm-collaboration'),
-                    value: state.enabled,
-                    onChanged: state.loaded && !state.saving
-                        ? (on) => unawaited(state.setEnabled(on))
-                        : null,
-                  ),
-                  Flexible(
-                    child: Text(
-                      state.saving
-                          ? 'Saving…'
-                          : !state.loaded
-                          ? state.error == null
-                                ? 'Loading…'
-                                : 'Unavailable'
-                          : state.enabled
-                          ? 'On'
-                          : 'Off',
-                    ),
-                  ),
-                ],
+    final status = state.saving
+        ? 'Saving…'
+        : !state.loaded && state.error == null
+        ? 'Loading…'
+        : null;
+    return SettingRow(
+      title: 'Swarm collaboration',
+      detail:
+          'Let agents automatically consult only peers in the same tab. '
+          'Off by default. This setting applies to your account.',
+      control: Semantics(
+        label: 'Swarm collaboration',
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Switch(
+            key: const Key('experimental-swarm-collaboration'),
+            value: state.enabled,
+            onChanged: state.loaded && !state.saving
+                ? (on) => unawaited(state.setEnabled(on))
+                : null,
+          ),
+        ),
+      ),
+      footer: DefaultTextStyle.merge(
+        style: Theme.of(context).textTheme.bodySmall,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Use “Swarm conversation” in the command palette to inspect '
+              'their questions and replies.',
+            ),
+            if (status != null) ...[
+              const SizedBox(height: 8),
+              Semantics(liveRegion: true, child: Text(status)),
+            ],
+            if (state.error case final error?) ...[
+              const SizedBox(height: 8),
+              Semantics(liveRegion: true, child: Text(error)),
+              TextButton(
+                onPressed: state.saving
+                    ? null
+                    : () => unawaited(state.refresh()),
+                child: const Text('Refresh setting'),
               ),
-            ),
-          ),
+            ],
+          ],
         ),
-        const SizedBox(height: 16),
-        const Text(
-          'Agents consult only peers in their tab. '
-          'Use “Swarm conversation” in the command palette to inspect their questions and replies.',
-        ),
-        if (state.error case final error?) ...[
-          const SizedBox(height: 12),
-          Semantics(liveRegion: true, child: Text(error)),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton(
-              onPressed: state.saving ? null : () => unawaited(state.refresh()),
-              child: const Text('Refresh setting'),
-            ),
-          ),
-        ],
-      ],
+      ),
     );
   }
 }
