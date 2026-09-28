@@ -6,6 +6,13 @@ experience.** Linux builds exist, with feature parity still in progress; Windows
 planned and its runner is unexercised. Native embedded harness viewers require macOS;
 the browser renders managed viewers on their connected machine.
 
+`hn view` can open a viewer companion at `/?viewer=1&machine=<id>&agent=<id>`.
+This owner-only destination uses normal sign-in and machine linking. It does not restore or
+save the workspace, join the shared desk, or attach a terminal. OAuth returns to the same
+viewer after sign-in. The existing website root rewrite serves it without a new route.
+Publish the browser build before the corresponding native hn release so the entry point
+recognizes the viewer destination.
+
 The browser target uses this same Flutter package and `lib/main.dart`: workspace,
 tabs, pickers, settings, state, and the patched xterm renderer are shared. Browser
 support is available as a public preview at

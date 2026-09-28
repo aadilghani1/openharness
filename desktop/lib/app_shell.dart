@@ -34,6 +34,8 @@ import 'widgets/update_notice.dart';
 import 'widgets/window_chrome.dart';
 import 'sharing/shared_agent_location.dart';
 import 'sharing/shared_agent_page.dart';
+import 'viewer/viewer_location.dart';
+import 'viewer/viewer_page.dart';
 
 /// The screen an app puts up once someone is signed in — the desktop's swarm of
 /// panes, or the phone's one-agent-at-a-time shell. It is the only thing the two
@@ -282,7 +284,18 @@ class _RootShellState extends ConsumerState<RootShell>
           case AppStatus.unauthenticated:
             screen = LoginScreen(notifier: app);
           case AppStatus.authenticated:
-            screen = widget.authenticatedScreen(app);
+            final viewerLocation = kIsWeb
+                ? ViewerLocation.parse(Uri.base)
+                : null;
+            screen = viewerLocation != null
+                ? ViewerPage(app: app, location: viewerLocation)
+                : kIsWeb && ViewerLocation.isRoute(Uri.base)
+                ? const Center(
+                    child: Text(
+                      'This viewer link is incomplete. Run hn view again.',
+                    ),
+                  )
+                : widget.authenticatedScreen(app);
         }
         // Preserve the fragment pin while dialogs navigate; an OAuth callback can restore it later.
         if (kIsWeb) _sharedLocation ??= SharedAgentLocation.parse(Uri.base);

@@ -199,6 +199,34 @@ it reversed, so you know before you start more agents),
 (another window has the pane to type in, and who), and `#{waiting}` (the harnesses waiting on
 you).
 
+## Graphical viewers
+
+For a Blender, CAD, video or other domain harness, run `view` from `C-b :` or choose
+`open-viewer` in the command list. The harness preview shows when its viewer is ready.
+
+```sh
+hn view                          # current hn pane
+hn view -t 'My Blender scene'     # by harness name or id, without opening a terminal pane
+hn view -p -t 'My Blender scene'  # print its URL, without launching a browser
+hn view -c                       # copy its browser-app link through the terminal clipboard
+hn view -w                       # open in the authenticated browser app even on this machine
+```
+
+On a local desktop, the current machine's viewer opens directly in your default browser.
+Over SSH, `hn` prints a link you open on your own computer; it never launches a browser on the
+SSH host. A harness on another linked machine uses the same browser-app link. Sign in as its
+owner and link the machine if this browser has not done so before. The URL contains machine
+and harness identifiers, not credentials, and does not grant access or create a public share.
+
+The browser companion opens only that viewer. It does not restore your desk, attach a terminal,
+or take the keyboard from `hn`. Closing either view leaves the harness running. Browser-based
+remote viewers use Harness's existing encrypted interactive-viewer transport, which requires
+Chrome or Chromium on the harness machine for rendering. Local direct viewers do not need that
+renderer. A missing renderer is reported in the viewer with a retry action.
+
+`-p` also works for scripts and terminals without clipboard support. Browser launch failure
+prints the link instead. No tmux key bindings are changed.
+
 ## From a shell
 
 As `tmux` is: any tmux command, run in the client you have open, its output printed here.

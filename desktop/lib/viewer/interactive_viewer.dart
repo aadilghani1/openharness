@@ -375,6 +375,11 @@ class _InteractiveViewerState extends State<RemoteViewerSurface> {
                 },
                 child: Image.memory(
                   bytes,
+                  // A viewer frame can be smaller than the viewport (the renderer caps its
+                  // resolution). Keep painting and pointer coordinates on the same surface,
+                  // including while the first image codec is still decoding.
+                  width: _size.width,
+                  height: _size.height,
                   fit: BoxFit.fill,
                   gaplessPlayback: true,
                   excludeFromSemantics: true,

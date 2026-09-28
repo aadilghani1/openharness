@@ -42,6 +42,7 @@ mod term_out;
 mod term_input;
 mod tmuxconf;
 mod ui;
+mod viewer;
 
 use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};

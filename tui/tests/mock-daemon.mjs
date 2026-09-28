@@ -44,6 +44,13 @@ const agents = DEMO ? {
   [LOCAL]: [agent(randomUUID(), 'Mock Claude', 'claude'), agent(randomUUID(), 'Mock Codex', 'codex'), agent(randomUUID(), 'Mock paused', 'claude', 'stopped')],
   [REMOTE]: [agent(randomUUID(), 'Remote shell', 'terminal')],
 }
+// Opt-in viewer fixtures, so the normal terminal roster and its tests keep their identities.
+if (process.env.MOCK_VIEWER === '1') {
+  agents[LOCAL].push({ ...agent('mock-blender', 'Mock Blender', 'claude'), dsh: 'autonomous/blender',
+    viewerName: '3D Viewer', viewerUrl: `http://127.0.0.1:${port}/test-viewer?file=model.glb` })
+  agents[REMOTE].push({ ...agent('remote-blender', 'Remote Blender', 'claude'), dsh: 'autonomous/blender',
+    viewerName: '3D Viewer', viewerUrl: 'http://127.0.0.1:19679/?file=model.glb' })
+}
 // Claude Code and Codex conversations on this machine that Harness did not start (session_search's
 // `external` hits): two closed, one still open in a terminal (not to be opened twice).
 const HOUR = 3_600_000
@@ -138,7 +145,7 @@ let demoAsked = false
 
 const json = (res, body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success: true, data: body })) }
 const server = http.createServer((req, res) => {
-  if (req.url === '/api/status') return json(res, { machineId: LOCAL, signedIn: true, version: 'mock' })
+  if (req.url === '/api/status') return json(res, { machineId: LOCAL, signedIn: true, version: 'mock', webUrl: process.env.MOCK_WEB_URL || 'https://harness.example' })
   if (req.url === '/api/machines') return json(res, { machines: [
     { machineId: LOCAL, name: DEMO ? 'studio' : 'mock-local', status: 'running' },
     { machineId: REMOTE, name: DEMO ? 'gpu-box' : 'mock-remote', status: 'running' },

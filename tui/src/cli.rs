@@ -85,6 +85,7 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
     let name = name.map(str::to_string);
     let cmd = args.first()?.as_str();
     match cmd {
+        "view" | "open-viewer" => Some(crate::viewer::cli(port, &args[1..], socket.as_deref(), name.as_deref()).await),
         // Every harness on every machine (hn's; `ls` is tmux's list-sessions).
         // The running client knows each one's state (what it asks, does, did); with none, the
         // daemons' rosters.
@@ -400,7 +401,7 @@ async fn offline(port: u16, args: &[String], name: Option<&str>) -> i32 {
     }
 }
 
-async fn machines(port: u16) -> Result<(String, Vec<(String, String, bool)>), String> {
+pub(crate) async fn machines(port: u16) -> Result<(String, Vec<(String, String, bool)>), String> {
     let status = http_json(port, "GET", "/api/status", None).await.map_err(|e| format!("the daemon is not running ({e}) — harness start"))?;
     let local = status.get("machineId").and_then(Value::as_str).unwrap_or("").to_string();
     let reply = http_json(port, "GET", "/api/machines", None).await.unwrap_or(json!({}));
@@ -417,7 +418,7 @@ async fn machines(port: u16) -> Result<(String, Vec<(String, String, bool)>), St
     Ok((local, out))
 }
 
-async fn roster(port: u16, machine: &str) -> Vec<crate::fleet::Agent> {
+pub(crate) async fn roster(port: u16, machine: &str) -> Vec<crate::fleet::Agent> {
     let (tx, _rx) = mpsc::unbounded_channel();
     let link = Link::spawn(port, machine, 0, tx);
     let reply = link.rpc("agents_list", json!({}), Duration::from_secs(8)).await.unwrap_or(json!({}));
