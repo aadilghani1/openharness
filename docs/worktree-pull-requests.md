@@ -6,21 +6,30 @@ for locating code, not user-facing identities.
 
 ## Display and navigation
 
-The focused bar shows the branch checked out for the session, plus its matching
-PR link when there is one. If more than one branch is checked out in associated
-checkouts, it shows `2 branches` (or the corresponding count). A historical branch
-does not increase this count. A dependent viewer uses its owner's context.
+The focused bar shows the branch at the most recent confirmed Git work location,
+plus its matching PR link when there is one. Other checked-out branches appear
+as a compact count, for example `ship-hn · +3`. This is recent work, not a claim
+that an agent is executing there now. Hovering explains the observation time.
+Without a unique recent location, one checked-out branch appears by name and
+multiple branches appear as `2 branches` (or the corresponding count). Historical
+branches do not increase this count. A dependent viewer uses its owner's context.
 
-Click the branch, or use **Branches and pull requests** in the desktop command picker. Details list checked-out and previously recorded branches, followed
-by their PR links, titles, head/base branches and GitHub states. Open and draft
-PRs precede completed work. Temporary folder names and subdirectory lists are
-not shown. Matching repository and branch names are one visible branch even
-when several local copies exist; different repositories remain distinct.
+Click the branch, or use **Branches and pull requests** in the desktop command
+picker. Each branch appears once, with its PR links, titles and GitHub states
+directly beneath it. Recent work leads, followed by branches with open or draft
+PRs. Completed work folds into **Completed**, except PRs on the recent work
+branch, whose state remains visible. The repository appears once when shared.
+Hover or accessibility inspection exposes full titles, head/base branches and
+GitHub check times. Short lists fit their content; long lists scroll within a
+bounded dialog. Temporary folder names and subdirectory lists are not shown.
+Matching repository and branch names are one visible branch even when several
+local copies exist; different repositories remain distinct.
 
 | Fact | Source |
 | --- | --- |
 | Session's assigned checkout | Harness's saved launch/resume association |
 | Checked-out branch | Git, read directly on the owning machine |
+| Recent work branch | Most recent successful location observation, resolved through current Git facts |
 | Branch history | Saved Git observations for this conversation |
 | Additional checkout association | Previously verified observations or successful tool activity |
 | PR identity and state | GitHub, matched by head repository and branch, or a recorded PR URL |
@@ -36,6 +45,10 @@ every branch in the shared repository to every agent, infer ownership from a
 branch prefix or GitHub author, or pretend that the last command's directory is
 the session's one current branch. Engine activity can add associations and PR
 URLs. Formats the reader cannot understand add nothing and remove nothing.
+Recent work is an optional refinement: missing activity never hides known Git
+branches. A later command outside Git retains the last useful Git context.
+One observation spanning different branches or partially unresolved locations
+does not choose an arbitrary branch.
 
 ## Freshness and history
 
@@ -63,7 +76,8 @@ executing transcript text. Existing v3 checkpoints replay available transcripts
 once to recover missed batched receipts; later v4 reads stay incremental.
 
 Registry `cwd` and the legacy `project` field keep their launch/resume meaning.
-The additive `gitContext.checkouts` contains verified Git snapshots. List and
+The additive `gitContext.checkouts` contains verified Git snapshots; optional
+`gitContext.recentWork` selects one of them with its observation time. List and
 push frames use the same projection and versions. Older clients remain readable;
 the desktop groups the snapshots into branch identities. PR badge responses
 are bound to the displayed repository, branch and checkout, and stale replies

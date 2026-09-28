@@ -92,6 +92,30 @@ Map<String, dynamic> manyPrFixture() {
 }
 
 void main() {
+  test('the recent Git branch leads the header and binds its PR request', () {
+    final fixture = gitFixture();
+    final recent = fixture['current'] as Map<String, dynamic>;
+    fixture['state'] = 'multiple';
+    fixture['current'] = null;
+    fixture['checkouts'] = [
+      {...recent, 'cwd': '/home', 'root': '/home', 'branch': 'original'},
+      recent,
+    ];
+    fixture['recentWork'] = {'project': recent, 'at': '2026-09-27T13:00:00Z'};
+    final context = AgentGitContext.fromJson(fixture)!;
+    expect(context.branchLabel, 'hn/preview-fix · +1');
+    expect(context.displayProject(null)?.branch, 'hn/preview-fix');
+    expect(context.requestIdentity?['cwd'], '/ship-hn');
+    expect(
+      context.branchRows.where(context.isRecentBranch).single.branch,
+      'hn/preview-fix',
+    );
+    fixture['recentWork'] = {
+      'project': {...recent, 'branch': 'unverified'},
+      'at': '2026-09-27T13:00:00Z',
+    };
+    expect(AgentGitContext.fromJson(fixture)!.branchLabel, '2 branches');
+  });
   test('multiple checked-out branches are named without exposing temporary folders', () {
     final fixture = gitFixture();
     final project = fixture['current'] as Map<String, dynamic>;
