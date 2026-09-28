@@ -585,6 +585,7 @@ fn run_queue(app: &mut App, mut queue: Queue) {
             let focus = |app: &App| app.tabs.iter().chain(app.sessions.iter().flat_map(|s| s.tabs.iter())).map(|t| (t.id.clone(), t.focus)).collect::<Vec<_>>();
             let before_focus = selecting.then(|| focus(app));
             let pending_before = app.pending_hooks.len();
+            let shell_before = app.starting_shell.clone();
             app.chain_follows = !queue.is_empty();
             // A hook about a session not in front (its own after- hook): run there.
             let there = hook.as_ref().and_then(|h| h.session).filter(|s| *s != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|x| x.id == *s && x.mirror.is_none()));
@@ -599,6 +600,8 @@ fn run_queue(app: &mut App, mut queue: Queue) {
                 }
                 None => run_words(app, &words),
             }
+            let creates_pane = words.first().and_then(|w| crate::cmd::find(w).ok()).is_some_and(|e| matches!(e.name, "new-session" | "new-window" | "split-window"));
+            let started_shell = app.starting_shell.as_ref().filter(|_| creates_pane).filter(|current| shell_before.as_ref().is_none_or(|before| !std::sync::Arc::ptr_eq(before, current))).cloned();
             // cmdq_fire_command: a command that failed fires command-error, one that did not its
             // after- hook — not a command a hook ran.
             let selected = before_focus.as_ref().is_none_or(|before| *before != focus(app));
@@ -606,6 +609,7 @@ fn run_queue(app: &mut App, mut queue: Queue) {
             if words.first().and_then(|w| crate::cmd::find(w).ok()).is_some_and(|e| e.name == "new-session") {
                 hooks.extend(app.pending_hooks.split_off(pending_before.min(app.pending_hooks.len())));
             }
+            let made_hooks: Vec<_> = hooks.iter().filter_map(|item| item.hook.as_ref()).filter(|state| state.made).cloned().collect();
             app.origin = None;
             app.mouse_ev = saved;
             app.hook_state = saved_hook;
@@ -615,15 +619,39 @@ fn run_queue(app: &mut App, mut queue: Queue) {
             // A shell on its way (new-session, new-window, split-window …): what comes after it
             // waits for its pane, as tmux's queue has the pane before the next command runs —
             // and so does the shell that ran the chain.
-            if !queue.is_empty() && app.starting_shell.is_some() {
-                let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-                app.shell_waiters.push((app.starting_shell.as_ref().unwrap().clone(), tx));
-                let waiting = (app.capture.take(), app.capture_err.take(), app.cli_tx.take(), app.cli_code, app.cli_cwd.clone(), app.cli_size);
-                app.spawn(async move { let _ = tokio::time::timeout(std::time::Duration::from_secs(90), rx).await; }, move |app, _| {
-                    let (cap, err, tx, code, cwd, size) = waiting;
+            if let Some(request) = started_shell.filter(|_| !queue.is_empty() || app.capture.is_some()) {
+                let (tx, rx) = tokio::sync::oneshot::channel::<crate::app::ShellCompletion>();
+                app.shell_waiters.push((request, tx));
+                let waiting = (app.capture.take(), app.capture_err.take(), app.cli_tx.take(), app.cli_code, app.cli_cwd.clone(), app.cli_size, app.cli_stdin.take(), app.cli_outside);
+                app.spawn(async move {
+                    tokio::time::timeout(std::time::Duration::from_secs(90), rx).await.ok().and_then(Result::ok)
+                        .unwrap_or_else(|| Err("create pane did not complete".into()))
+                }, move |app, result| {
+                    let (mut cap, mut err, tx, code, cwd, size, stdin, outside) = waiting;
                     let from_shell = cap.is_some();
-                    if from_shell { app.capture = cap; app.capture_err = err; app.cli_tx = tx; app.cli_code = code; app.cli_cwd = cwd; app.cli_size = size }
-                    run_queue(app, queue);
+                    let succeeded = result.is_ok();
+                    let (out, errors) = match result {
+                        Ok((out, (session, tab, pane))) => {
+                            // Freeze this command's hooks to its own pane, including hooks that
+                            // themselves suspend for run-shell or if-shell.
+                            for item in &mut queue {
+                                if let Some(state) = item.hook.as_mut().filter(|state| made_hooks.iter().any(|made| std::sync::Arc::ptr_eq(made, state))) {
+                                    let state = std::sync::Arc::make_mut(state);
+                                    state.target = Some((tab.clone(), pane)); state.session = Some(session); state.made = false;
+                                }
+                            }
+                            (out, Vec::new())
+                        }
+                        Err(error) => (Vec::new(), vec![error]),
+                    };
+                    if from_shell {
+                        cap.as_mut().unwrap().extend(out);
+                        err.get_or_insert_with(Vec::new).extend(errors);
+                        app.capture = cap; app.capture_err = err; app.cli_tx = tx;
+                        app.cli_code = if succeeded { code } else { 1 };
+                        app.cli_cwd = cwd; app.cli_size = size; app.cli_stdin = stdin; app.cli_outside = outside;
+                    }
+                    if succeeded { run_queue(app, queue) }
                     if from_shell && app.capture.is_some() { app.finish_cli() }
                 });
                 return;
@@ -1835,10 +1863,21 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 let (sid, sname, wid, w) = (app.session_id, app.session_name(), app.tabs[app.active].wid(), app.tabs[app.active].name.clone());
                 notify_session(app, "window-linked", sid, &sname, Some((wid, w)));
             }
-            // -d: made, not visited: its shell starts there, and you stay where you were.
-            if flag(words, "-d") { app.return_to = Some((was_id, last_before)) }
             if flag(words, "-P") { app.print_new = Some(opt(words, "-F").unwrap_or_else(|| "#{session_name}:#{window_index}.#{pane_index}".into())) }
-            input::new_shell_from(app, from, Placement::Auto(None), cwd, command);
+            // The reply can arrive after another window was selected or created.
+            // Bind it to this window, never to the later active window.
+            app.tab_mut().home = false;
+            let tab = app.tab().id.clone();
+            input::new_shell_from(app, from, Placement::Fill(tab), cwd, command);
+            // -d never visits the new window, even while its shell is still being created.
+            // A later completion must not restore stale selection or last-window history.
+            if flag(words, "-d") {
+                if let Some(i) = app.tabs.iter().position(|t| t.id == was_id) {
+                    app.active = i; app.lastw = last_before;
+                    app.home_order.borrow_mut().clear();
+                    app.fit_panes();
+                }
+            }
         }
         "split-window" => {
             // tmux's split-window [-bdfhIvPZ] [-c dir] [-l size] [-t target] [-F fmt] [command]: a

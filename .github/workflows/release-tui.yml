@@ -45,6 +45,8 @@ jobs:
           (cd cli && npm ci --no-audit --no-fund)
           (cd tui && cargo build --locked --release)
           tui/tests/e2e.sh
+      - name: Native terminal lifecycle and concurrent window creation
+        run: python3 -u tui/tests/native-terminal.py
 
   build:
     needs: test

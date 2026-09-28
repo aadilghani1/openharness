@@ -137,6 +137,170 @@ def stop_servers():
     wait(lambda: not owned(), 'native processes cleaned')
 
 
+def async_creation():
+    """Hold only our supervisor so pending creation ownership is deterministic."""
+    requests = []
+    stopped = None
+
+    def start(*args):
+        process = subprocess.Popen(argv('hn', *args), env=ENV, cwd=BASE,
+                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        requests.append(process)
+        return process
+
+    def result(process, timeout=8):
+        out, err = process.communicate(timeout=timeout)
+        return process.returncode, out, err
+
+    def quick(*args):
+        reply = result(start(*args), timeout=3)
+        assert reply[0] == 0, (args, reply)
+        return reply[1].strip()
+
+    def reserved(index):
+        return str(index) in quick('list-windows', '-t', 'async', '-F', '#I').splitlines()
+
+    def supervisor():
+        found = [pid for pid, command in owned() if command.endswith(' --local-server')]
+        assert len(found) == 1, found
+        return found[0]
+
+    def pause():
+        nonlocal stopped
+        assert stopped is None
+        stopped = supervisor()
+        os.kill(stopped, signal.SIGSTOP)
+
+    def resume():
+        nonlocal stopped
+        if stopped is not None:
+            try:
+                os.kill(stopped, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+            stopped = None
+
+    def children(pid):
+        rows = subprocess.check_output(['ps', '-ax', '-o', 'pid=,ppid='], text=True)
+        return {int(child) for child, parent in (row.split() for row in rows.splitlines())
+                if int(parent) == pid}
+
+    def creation(index, printed):
+        command = f'printf "ASYNC_{index}\\n"; exit 7'
+        args = ['new-window', '-d', '-t', f'async:{index}']
+        if printed:
+            args += ['-P', '-F', f'REPLY_{index}:#I:#{{pane_start_command}}']
+        return [*args, command]
+
+    focus_format = '#{window_index}:#{session_stack}'
+    focus_args = ('display', '-p', '-t', 'async', focus_format)
+    try:
+        both('new-session', '-d', '-s', 'async')
+        both('new-window', '-d', '-t', 'async:1', '-n', 'anchor')
+        wait(lambda: same('list-windows', '-t', 'async', '-F', '#I:#{window_panes}') == '0:1\n1:1', 'async anchors ready')
+        both('set', '-g', 'remain-on-exit', 'on')
+        both('select-window', '-t', 'async:1')
+        both('select-window', '-t', 'async:0')
+        before = same(*focus_args)
+
+        # The plain command must wait too; the two -P requests must each own their output.
+        pause()
+        pending = []
+        for index, printed in ((4, False), (5, True), (6, True)):
+            args = creation(index, printed)
+            process = start(*args)
+            wait(lambda index=index: reserved(index), f'pending window {index} reserved')
+            pending.append((index, args, process))
+            assert quick(*focus_args) == before, ('detached creation changed focus/history', index)
+        assert quick('display', '-p', 'READ_WHILE_PENDING') == 'READ_WHILE_PENDING'
+        assert all(process.poll() is None for _, _, process in pending), 'creation answered before its shell existed'
+
+        # A later explicit selection wins even when the earlier creation replies arrive later.
+        both('select-window', '-t', 'async:1')
+        selected = same(*focus_args)
+        expected = {}
+        for index, args, _ in pending:
+            reference = cli('tmux', *args)
+            expected[index] = reference.returncode, reference.stdout, reference.stderr
+        resume()
+        for index, _, process in pending:
+            reply = result(process)
+            assert reply == expected[index], (index, reply, expected[index])
+            wait(lambda index=index: same('list-panes', '-t', f'async:{index}', '-F', '#{pane_dead}:#{pane_dead_status}') == '1:7', f'async exit {index}')
+            assert f'ASYNC_{index}' in same('display', '-p', '-t', f'async:{index}', '#{pane_start_command}')
+            for kind in ('hn', 'tmux'):
+                wait(lambda kind=kind, index=index: cli(kind, 'capture-pane', '-p', '-S', '-1000', '-t', f'async:{index}').stdout.count(f'ASYNC_{index}') == 1,
+                     f'{kind} async output {index}')
+                capture = cli(kind, 'capture-pane', '-p', '-S', '-1000', '-t', f'async:{index}').stdout
+                assert all(f'ASYNC_{other}' not in capture for other in (4, 5, 6) if other != index), (kind, index, capture)
+        assert same(*focus_args) == selected, 'a delayed creation stole the newer selection/history'
+
+        # Two completions can arrive before either hook continuation: its target must remain
+        # the pane that request made, including across run-shell's asynchronous wait.
+        both('set', '-g', '@async_created', '')
+        both('set-hook', '-g', 'after-new-window',
+             'run-shell "sleep 0.15"; set -agF @async_created "#{window_index}:#{pane_start_command}|"')
+        pause()
+        pending = []
+        for index in (8, 9):
+            args = creation(index, True)
+            process = start(*args)
+            wait(lambda index=index: reserved(index), f'hooked pending window {index} reserved')
+            pending.append((index, args, process))
+        expected = {}
+        for index, args, _ in pending:
+            reference = cli('tmux', *args)
+            expected[index] = reference.returncode, reference.stdout, reference.stderr
+        resume()
+        for index, _, process in pending:
+            reply = result(process)
+            assert reply == expected[index], (index, reply, expected[index])
+            wait(lambda index=index: same('list-panes', '-t', f'async:{index}', '-F', '#{pane_dead}:#{pane_dead_status}') == '1:7', f'hooked async exit {index}')
+        expected_hooks = sorted(f'{index}:' + cli('tmux', 'display', '-p', '-t', f'async:{index}', '#{pane_start_command}').stdout.strip() for index in (8, 9))
+        for kind in ('hn', 'tmux'):
+            wait(lambda kind=kind: sorted(filter(None, cli(kind, 'show', '-gv', '@async_created').stdout.strip().split('|'))) == expected_hooks,
+                 f'{kind} delayed creation hooks keep their own targets')
+        assert same(*focus_args) == selected, 'hooked detached creation changed focus/history'
+        both('set-hook', '-gu', 'after-new-window')
+
+        # If the reserved target is killed before the RPC responds, failure belongs to that
+        # caller and the newly returned shell must be deleted. Real tmux creates synchronously;
+        # compare its final killed-window state, not this artificial cancellation's exit code.
+        local_pid = supervisor()
+        baseline_children = children(local_pid)
+        pause()
+        args = ['new-window', '-d', '-P', '-t', 'async:20', 'exec sleep 30']
+        cancelled = start(*args)
+        wait(lambda: reserved(20), 'cancelled target reserved')
+        assert cancelled.poll() is None, 'cancelled creation answered before completion'
+        quick('kill-window', '-t', 'async:20')
+        cli('tmux', *args)
+        cli('tmux', 'kill-window', '-t', 'async:20')
+        resume()
+        code, out, err = result(cancelled)
+        assert code != 0 and err and not out, ('killed target must fail its caller', code, out, err)
+        assert '20' not in same('list-windows', '-t', 'async', '-F', '#I').splitlines()
+        wait(lambda: children(local_pid) == baseline_children, 'cancelled shell left no supervisor child')
+        assert same(*focus_args) == selected
+        stop_servers()
+        print('PASS concurrent creation replies, detached selection, delayed hooks and cancelled-target cleanup', flush=True)
+    finally:
+        resume()
+        for process in requests:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.communicate(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate(timeout=3)
+        for kind in ('hn', 'tmux'):
+            try:
+                cli(kind, 'kill-server', check=False)
+            except subprocess.TimeoutExpired:
+                pass
+
+
 with socket.socket() as probe:
     probe.bind(('127.0.0.1', PORT))
 try:
@@ -206,6 +370,8 @@ try:
     ui.proc.wait(timeout=4)
     ui.stop()
     print('PASS retained exits/signals, hooks, history, crash recovery and respawn', flush=True)
+
+    async_creation()
 
     for delay in (0, .1):
         for kind in ('hn', 'tmux'):

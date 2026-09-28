@@ -1071,7 +1071,7 @@ pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cw
     let machine = shell_machine(app, focused.as_ref());
     let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
     let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
-    let Some(link) = app.link(&machine) else { app.say("That machine is not connected", theme::DANGER); return };
+    let Some(link) = app.link(&machine) else { app.print_new = None; return app.error("That machine is not connected") };
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
     configure_local_shell(app, &machine, &mut payload);
@@ -1169,7 +1169,7 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
     // The folder: -c, else where the pane's shell says it is now (OSC 7), else where it started.
     let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
     let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
-    let Some(link) = app.link(&machine) else { app.say("That machine is not connected", theme::DANGER); return };
+    let Some(link) = app.link(&machine) else { app.print_new = None; return app.error("That machine is not connected") };
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
     configure_local_shell(app, &machine, &mut payload);
@@ -1186,6 +1186,9 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
     app.starting_shell = Some(buffered.clone());
     let tab = match &placement { Placement::Fill(id) => id.clone(), Placement::At(at) => at.tab.clone(), _ => app.tab().id.clone() };
     app.shell_inputs.insert(tab, buffered.clone());
+    // Completion state belongs to this request, including concurrent -d/-P callers.
+    let print_new = app.print_new.take();
+    let from_cli = app.capture.is_some();
     // The session it was asked for in (a command's `-t work:` puts another in front for a moment):
     // where it goes when it comes, in front again for as long as that takes.
     // (A window's own: the session that has it — new -d's new session is not the one in front.)
@@ -1203,92 +1206,72 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
             let back = app.session_id;
             app.swap_back = Some(back);
             app.swap_session(session);
-            shell_made(app, machine, placement, reply, &buffered);
+            shell_made(app, machine, placement, reply, &buffered, print_new, from_cli);
             app.swap_back = None;
             app.swap_session(back);
             app.fit_panes();
             app.save_sessions();
             return;
         }
-        shell_made(app, machine, placement, reply, &buffered);
+        shell_made(app, machine, placement, reply, &buffered, print_new, from_cli);
     });
 }
 
-/// A shell the machine made (agent_create's reply): into its place.
 fn take_shell_input(app: &mut App, buffered: &crate::app::ShellInput) -> Vec<Vec<u8>> {
     if app.starting_shell.as_ref().is_some_and(|current| std::sync::Arc::ptr_eq(current, buffered)) { app.starting_shell = None }
     app.shell_inputs.retain(|_, current| !std::sync::Arc::ptr_eq(current, buffered));
     std::mem::take(&mut *buffered.lock().unwrap())
 }
 
-fn shell_made(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>, buffered: &crate::app::ShellInput) {
-    let typed = take_shell_input(app, buffered);
-    shell_placed(app, machine, placement, reply, typed);
-    // Release only the commands waiting for this shell; another request may still be pending.
+/// A shell the machine made (agent_create's reply): into its place.
+fn shell_made(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>, buffered: &crate::app::ShellInput, print_new: Option<String>, from_cli: bool) {
+    let typed = std::mem::take(&mut *buffered.lock().unwrap());
+    let result = shell_placed(app, machine, placement, reply, typed, print_new);
+    // Keep the pending window's initial size through placement and its first stream open.
+    if app.starting_shell.as_ref().is_some_and(|current| std::sync::Arc::ptr_eq(current, buffered)) { app.starting_shell = None }
+    app.shell_inputs.retain(|_, current| !std::sync::Arc::ptr_eq(current, buffered));
+    if !from_cli {
+        match &result {
+            Ok((out, _)) => for line in out { app.say(line.clone(), theme::WARN) },
+            Err(error) => app.say(error.clone(), theme::DANGER),
+        }
+    }
+    // Release only this request's waiters, carrying its output, target and failure too.
     for (request, tx) in std::mem::take(&mut app.shell_waiters) {
-        if std::sync::Arc::ptr_eq(&request, buffered) { let _ = tx.send(()); }
+        if std::sync::Arc::ptr_eq(&request, buffered) { let _ = tx.send(result.clone()); }
         else { app.shell_waiters.push((request, tx)); }
     }
 }
 
-fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>, typed: Vec<Vec<u8>>) {
-        match reply {
-            Ok(reply) => {
-                let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) else { app.say("The machine made no shell", theme::DANGER); return };
-                app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
-                app.shells.insert((machine.clone(), id.to_string()));
-                app.open_agent(&machine, id, placement);
-                // new-window -d: made in the background; back to where you were — never left, as
-                // tmux sees it (nothing cleared or raised there). The new window is activity
-                // (window_create), flagged as it is not the current one.
-                if let Some((back, last)) = app.return_to.take() {
-                    if let Some(i) = app.tabs.iter().position(|t| t.id == back) {
-                        app.active = i;
-                        app.lastw = last;
-                        app.home_order.borrow_mut().clear();
-                        if let Some(f) = app.tabs[i].focus { app.seen(f) }
-                        app.fit_panes();
-                    }
-                    if let Some((w, _)) = app.find_pane(&machine, id) { app.tabs[w].touch(); app.alert(w, crate::app::ACTIVITY) }
-                }
-                if let Some((w, pane)) = app.find_pane(&machine, id) {
-                    app.last_made = Some((app.tabs[w].id.clone(), pane));
-                    if let Some(p) = app.panes.get_mut(&pane) {
-                        p.queued.extend(typed);
-                        p.start_command = reply.pointer("/agent/startCommand").and_then(serde_json::Value::as_str).map(str::to_string);
-                    }
-                    // -P: what was made, printed (to the shell waiting on it).
-                    if let Some(fmt) = app.print_new.take() {
-                        let line: String = crate::format::spans_for_pane(app, &fmt, w, pane, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect();
-                        match app.held_reply.take() { Some(tx) => { let _ = tx.send((vec![line], Vec::new(), 0)); } None => app.say(line, theme::WARN) }
-                    }
-                }
-                // -P for a pane made in a session not in front (new -d -s x -P, libtmux's every
-                // session): printed from there. The shell waiting on it is always answered — every
-                // command after it waits behind it.
-                if let Some(fmt) = app.print_new.take() {
-                    let line = match app.find_pane_anywhere(&machine, id) {
-                        Some((sid, _, pane)) if sid != app.session_id => {
-                            let (back, before) = (app.session_id, app.swap_back);
-                            app.swap_back = Some(back);
-                            let line = if app.swap_session(sid) {
-                                app.tabs.iter().position(|t| t.panes().contains(&pane)).map(|w| crate::format::spans_for_pane(app, &fmt, w, pane, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect::<String>()).unwrap_or_default()
-                            } else { String::new() };
-                            app.swap_session(back);
-                            app.swap_back = before;
-                            line
-                        }
-                        _ => String::new(),
-                    };
-                    match app.held_reply.take() { Some(tx) => { let _ = tx.send((vec![line], Vec::new(), 0)); } None => app.say(line, theme::WARN) }
-                }
-            }
-            Err(e) => {
-                if let Some(tx) = app.held_reply.take() { let _ = tx.send((Vec::new(), vec![format!("create pane failed: {e}")], 1)); }
-                app.print_new = None;
-                app.say(format!("Could not start a shell: {e}"), theme::DANGER)
-            }
-        }
+fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>, typed: Vec<Vec<u8>>, print_new: Option<String>) -> crate::app::ShellCompletion {
+    let reply = reply.map_err(|e| format!("create pane failed: {e}"))?;
+    let id = reply.pointer("/agent/id").and_then(|v| v.as_str()).ok_or("The machine made no shell")?;
+    app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+    app.shells.insert((machine.clone(), id.to_string()));
+    let new_window = matches!(&placement, Placement::Fill(_));
+    app.open_agent(&machine, id, placement);
+    let (session, _, pane) = app.find_pane_anywhere(&machine, id).ok_or("create pane failed: target window or pane disappeared")?;
+    if let Some(p) = app.panes.get_mut(&pane) {
+        p.queued.extend(typed);
+        p.start_command = reply.pointer("/agent/startCommand").and_then(serde_json::Value::as_str).map(str::to_string);
+    }
+    // A new session's first pane may belong to a session not currently in front.
+    let (back, before) = (app.session_id, app.swap_back);
+    if session != back { app.swap_back = Some(back); app.swap_session(session); }
+    let Some(w) = app.tabs.iter().position(|t| t.panes().contains(&pane)) else {
+        if session != back { app.swap_session(back); app.swap_back = before; }
+        return Err("create pane failed: target session disappeared".into())
+    };
+    let tab = app.tabs[w].id.clone();
+    if new_window {
+        app.tabs[w].touch();
+        if w != app.active { app.alert(w, crate::app::ACTIVITY) }
+    }
+    let out = print_new.map(|fmt| {
+        crate::format::spans_for_pane(app, &fmt, w, pane, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect()
+    }).into_iter().collect();
+    if session != back { app.swap_session(back); app.swap_back = before; }
+    Ok((out, (session, tab, pane)))
 }
 
 fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>) { create_in(app, machine, what, cwd, message, false) }

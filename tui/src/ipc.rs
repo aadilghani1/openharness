@@ -157,7 +157,7 @@ fn accept(listener: tokio::net::UnixListener, sink: mpsc::UnboundedSender<Event>
                     if app.capture.is_some() { app.finish_cli() }
                 });
                 let _ = sink.send(Event::Apply(Box::new(move |app: &mut crate::app::App| app.run_cli(&asked, job))));
-                let (mut out, err, code) = rx.await.unwrap_or_default();
+                let (mut out, err, code) = rx.await.unwrap_or_else(|_| (Vec::new(), vec!["command did not complete".into()], 1));
                 // A last line marked bare (show-buffer's data without a newline) is printed bare.
                 let bare = out.last().map(|l| l.ends_with(crate::app::BARE)).unwrap_or(false);
                 if let Some(l) = out.last_mut() { if let Some(s) = l.strip_suffix(crate::app::BARE) { *l = s.to_string() } }

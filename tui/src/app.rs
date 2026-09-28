@@ -202,6 +202,9 @@ pub type Reply = (Vec<String>, Vec<String>, i32);
 /// Type-ahead belongs to the shell request that will receive it, even if another starts first.
 pub type ShellInput = std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>;
 
+/// One shell request's printed output and exact session/window/pane, or its error.
+pub type ShellCompletion = Result<(Vec<String>, (u32, String, u64)), String>;
+
 /// A Claude Code or Codex conversation on a machine that Harness did not start (a session_search
 /// hit with `external`): offered on the home page and found by C-b s, and resumed as a harness.
 #[derive(Clone, Debug)]
@@ -473,9 +476,6 @@ pub struct App {
     pub home_moved: bool,
     /// More commands of the same line or binding wait behind the one running.
     pub chain_follows: bool,
-    /// The window and pane a shell was last made in (new-window's, split-window's): what their
-    /// after- hooks are about.
-    pub last_made: Option<(String, u64)>,
     /// The Claude Code and Codex conversations Harness did not start that the home page offers
     /// (each machine's session index, asked once each time the page shows), and the machines
     /// asked so far.
@@ -663,8 +663,6 @@ pub struct App {
     /// select-pane -m: the marked pane (join-pane and swap-pane take it as their source).
     pub marked: Option<u64>,
     pub marked_session: Option<u32>,
-    /// new-window -d: the window to go back to (and the last window then) once its shell is up.
-    pub return_to: Option<(String, Vec<String>)>,
     pub held_reply: Option<tokio::sync::oneshot::Sender<Reply>>,
     /// A command that waits for what it opened (display-menu; command-prompt and confirm-before
     /// without -b): the shell that ran it is answered when that closes (CMD_RETURN_WAIT).
@@ -747,7 +745,7 @@ pub struct App {
     pub shell_inputs: HashMap<String, ShellInput>,
     /// Commands waiting for a shell on its way to have its pane (a chain after new-session,
     /// new-window, split-window): told when it has come (or failed).
-    pub shell_waiters: Vec<(ShellInput, tokio::sync::oneshot::Sender<()>)>,
+    pub shell_waiters: Vec<(ShellInput, tokio::sync::oneshot::Sender<ShellCompletion>)>,
     /// `hn new … \; cmd …` / `hn attach … \; cmd …`: the chain after the command that started this
     /// client, run once its session is there (and its first shell, for new).
     pub start_then: Vec<String>,
@@ -856,7 +854,6 @@ impl App {
             back_from: None,
             marked: None,
             marked_session: None,
-            return_to: None,
             held_reply: None,
             wait_cli: false,
             waiting_reply: None,
@@ -924,7 +921,6 @@ impl App {
             home_cursor: 0,
             home_moved: false,
             chain_follows: false,
-            last_made: None,
             home_external: Vec::new(),
             home_asked: HashSet::new(),
             home_shown: false,
@@ -1833,7 +1829,7 @@ impl App {
         // (A window not in front is as big as it was when last in front, or made.)
         let front = self.swap_back.is_none_or(|b| b == self.session_id) && self.tabs.get(self.active).map(|t| t.id == tab.id).unwrap_or(false);
         let manual = self.options.get("window-size", &tab.id, None).as_deref() == Some("manual");
-        let creating = front && self.return_to.is_some() && tab.size.is_some();
+        let creating = self.shell_inputs.contains_key(&tab.id) && tab.size.is_some();
         if !self.headless && self.swap_back.is_none_or(|b| b == self.session_id) && !manual && !creating && (front || tab.root.is_none()) { return self.body() }
         let (w, h) = tab.root.as_ref().map(|r| r.size()).unwrap_or_else(|| tab.size.unwrap_or(self.default_size()));
         Rect::new(0, if front && !self.headless { self.body().y } else { 0 }, w, h)
@@ -1896,7 +1892,7 @@ impl App {
         for i in 0..self.tabs.len() {
             let status = self.pane_status(&self.tabs[i]);
             let manual = self.options.get("window-size", &self.tabs[i].id, None).as_deref() == Some("manual");
-            let creating = self.tabs[i].root.is_none() || (i == self.active && self.return_to.is_some());
+            let creating = self.tabs[i].root.is_none() || self.shell_inputs.contains_key(&self.tabs[i].id);
             let size = if manual { self.tabs[i].size.or_else(|| self.tabs[i].root.as_ref().map(|r| r.size())) }
                 else if creating && self.tabs[i].size.is_some() { self.tabs[i].size }
                 else { self.tabs[i].size = None; (onscreen && i == self.active).then_some((body.width, body.height)) };
@@ -3826,7 +3822,9 @@ impl App {
                 Some(t) if t.root.is_none() => { let (w, h) = t.size.unwrap_or((w, h)); t.root = Some(Node::new(id, w, h)); t.focus = Some(id) }
                 _ => { self.end_shell(id); self.drop_pane(id); return }
             }
-            if here == Some(self.active) { self.open_stream(id, true) }
+            // A newly created shell must start even if its window is now in the background.
+            self.open_stream(id, true);
+            if let Some(index) = here.filter(|i| !self.tabs[*i].first_named) { self.name_tab_after_first_at(index) }
             self.fit_panes();
             if here.is_some() && self.session_desk { self.desk_pane_added(tab_id, machine_id, agent_id) }
             self.save_sessions();
@@ -3857,8 +3855,8 @@ impl App {
         }
         let id = self.new_pane(machine_id, agent_id);
         if let Placement::At(at) = &placement {
-            let Some(t) = self.tabs.iter().position(|x| x.id == at.tab) else { self.drop_pane(id); return };
-            if !self.split_at(t, id, at) { self.drop_pane(id); self.error("no space for new pane"); return }
+            let Some(t) = self.tabs.iter().position(|x| x.id == at.tab) else { self.end_shell(id); self.drop_pane(id); return };
+            if !self.split_at(t, id, at) { self.end_shell(id); self.drop_pane(id); self.error("no space for new pane"); return }
             let tab = &mut self.tabs[t];
             tab.add_pane(id, at.pane, at.before, at.full);
             // The new shell's first output is the window's activity (its time, not an alert).
@@ -4159,12 +4157,14 @@ impl App {
         if rect.width as f32 >= rect.height as f32 * 2.2 { Dir::Horizontal } else { Dir::Vertical }
     }
 
-    fn name_tab_after_first(&mut self) {
-        let tab = &self.tabs[self.active];
+    fn name_tab_after_first(&mut self) { self.name_tab_after_first_at(self.active) }
+
+    fn name_tab_after_first_at(&mut self, index: usize) {
+        let tab = &self.tabs[index];
         if tab.named || tab.home { return }
         let Some(first) = tab.panes().first().copied() else { return };
         let name = self.panes.get(&first).and_then(|p| self.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone());
-        if let Some(name) = name { self.tabs[self.active].name = name }
+        if let Some(name) = name { self.tabs[index].name = name }
     }
 
     pub fn sync_titles(&mut self) {
@@ -4688,9 +4688,6 @@ impl App {
         if let Some(found) = self.mouse_ev.as_ref().filter(|m| m.valid).and_then(|m| crate::mouse::mouse_pane(self, m)) { return Some(found) }
         // A hook's commands: the pane (window) it is about — for a command's that made one, the
         // one it made.
-        if let Some((tab, pane)) = self.hook_state.as_ref().filter(|h| h.made).and(self.last_made.clone()) {
-            if let Some(w) = self.tabs.iter().position(|t| t.id == tab) { return Some((w, pane)) }
-        }
         if let Some((tab, pane)) = self.hook_state.as_ref().and_then(|h| h.target.clone()) {
             if let Some(w) = self.tabs.iter().position(|t| t.id == tab) { return Some((w, pane)) }
         }
