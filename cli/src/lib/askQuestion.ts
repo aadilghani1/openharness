@@ -760,7 +760,11 @@ export class AskQuestionController {
       console.warn(`[question] no terminal target for ${sessionId.slice(0, 8)} — answer dropped`)
       return { ok: false, error: 'AGENT_NOT_FOUND', detail: 'That agent is no longer running.' }
     }
-    if (this.driving.has(sessionId)) {
+    if (remembered) {
+      const owner = this.deps.getSession(remembered)
+      if ((owner?.agentId || owner?.sessionId) !== terminalTarget) return STALE_CHANGED
+    }
+    if (this.driving.has(terminalTarget)) {
       console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · already driving this dialog`)
       return { ok: false, error: 'ANSWER_BUSY', detail: 'Another answer is already being entered for this agent.' }
     }
@@ -775,7 +779,7 @@ export class AskQuestionController {
     // The ids the watcher could have announced this dialog under: the session it was remembered for, and
     // the session as the registry knows it now.
     const owners = [...new Set([remembered, session?.sessionId].filter((id): id is string => !!id))]
-    this.driving.add(sessionId)
+    this.driving.add(terminalTarget)
     try {
       const result = await this.drive(terminalTarget, answers, this.deps.getSession(sessionId)?.engine ?? 'claude', payload.allowPermissions !== false, { requestId, owners }, payload.expectedQuestions ? payload : undefined)
       this.pending.delete(requestId)
@@ -783,7 +787,7 @@ export class AskQuestionController {
       console.log(`[question] ${sessionId.slice(0, 8)} answered from device · ${outcome} (req=${requestId || 'none'})`)
       return result
     } finally {
-      this.driving.delete(sessionId)
+      this.driving.delete(terminalTarget)
       release?.()
     }
   }
@@ -948,7 +952,8 @@ export class AskQuestionController {
 
   /** True while a dialog is being keyed — the watcher pauses so a half-driven dialog isn't re-announced. */
   isDriving(sessionId: string): boolean {
-    return this.driving.has(sessionId)
+    const session = this.deps.getSession(sessionId)
+    return this.driving.has(session?.agentId || session?.sessionId || sessionId)
   }
 
   /** Free-text answer (a voice answer is always free text): open the "Type something." row, type, Enter. */

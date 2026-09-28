@@ -116,36 +116,29 @@ function hasCursorPackageEntrypoint(args: string): boolean {
     /cursor-agent[\/\\]versions[\/\\][^/\\]+[\/\\]index\.js$/i.test(token))
 }
 
-/**
- * Hermes launches itself as inline source, so its argv names no script at all.
- *
- * `~/.hermes/hermes-agent/.hermes/bin/hermes` is a `sh` stub that `exec`s Hermes' own vendored
- * interpreter with the whole launcher as `-c` text:
- *
- *   ~/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3 -I -c 'import os, re, sys
- *   …sys.path.insert(0, "<root>/hermes-agent")…from hermes_cli.main import main…sys.exit(main())'
- *
- * The stub is exec'd away, so `comm` is `python3`, and `processEntrypoint` correctly refuses to read
- * inline source as an entrypoint — nothing on this row carries the engine's name anywhere the matcher
- * looks. Measured on 0.21.5+2144.g7b761da: a New Harness pane was retained six seconds after starting
- * ("engine process absent after 2 confirmed scans") over a Hermes that was running and drawing its
- * dashboard, and selecting it again spent the whole readiness budget before RESUME_UNCONFIRMED.
- *
- * BOTH markers are required, and each rules out a different false positive. The sys.path root alone is
- * also in `hermes-acp`, the other stub in that bin, identical but for `from acp_adapter.entry import
- * main` — an ACP adapter is not the harness's engine. The `hermes_cli` import alone is a word that
- * could appear in a prompt; a prompt is not python source that has also just put Hermes' own package
- * root on the path. Together they are the launcher and nothing else, wherever HERMES_HOME puts it.
- */
+/** Hermes' managed launchers exec Python -I -c with a path bootstrap, then either import main
+ * or run it through runpy. Require that executable prefix and actual code, never a script argument
+ * or a quoted mention. argv[0] is authoritative here: macOS can truncate an absolute `comm` path.
+ * Keep the standalone hook's copy in sync. */
 function hermesInlineLauncher(row: Pick<ProcessRow, 'args'>): boolean {
-  // argv[0], not `comm`: macOS prints comm through a 16-column field here, so every absolute path
-  // can reach this parser as a truncated home directory, not the interpreter executable.
-  const tokens = argvTokens(row.args)
-  if (!/^python(?:\d+(?:\.\d+)*)?$/.test(basename(tokens[0] ?? '').toLowerCase())) return false
-  const inline = row.args.search(/\s-(?:c|-command)\s/)
-  if (inline < 0) return false
-  const source = row.args.slice(inline)
-  return /[\/\\]hermes-agent['"]/.test(source) && /\b(?:from|import)\s+hermes_cli\b/.test(source)
+  const args = row.args.trim()
+  if (!/^python(?:\d+(?:\.\d+)*)?$/.test(basename(argvTokens(args)[0] ?? '').toLowerCase())) return false
+  const prefix = /^(?:"[^"]+"|'[^']+'|\S+)(?:\s+-(?:I|E|s|S|u|B|O{1,2}|q))*\s+-c\s+/.exec(args)
+  if (!prefix) return false
+  const source = args.slice(prefix[0].length).replace(/^["']/, '')
+  // Mask string literals before looking for Python statements. A print/prompt containing a whole
+  // launcher is still data. Keep literal values only to identify runpy's exact entry module.
+  const literals: string[] = []
+  const code = source.replace(/(['"])(?:\\[\s\S]|(?!\1)[^\\])*?\1/g, (literal) => {
+    literals.push(literal.slice(1, -1))
+    return `__literal${literals.length - 1}__`
+  })
+  if (!/^import\s+(?:(?:os|re|sys|runpy)\s*,\s*)*(?:sys|runpy)[;\s]+(?:os\.environ\.pop\(__literal\d+__,\s*None\)[;\s]+)*sys\.path\.insert\(\s*0,\s*__literal\d+__\s*\)/.test(code)) return false
+  if (/\bimport\s+hermes_bootstrap\b/.test(code)
+    && /\bfrom\s+hermes_cli\.main\s+import\s+main\b/.test(code)
+    && /\bsys\.exit\(\s*main\(\)\s*\)/.test(code)) return true
+  const run = /\brunpy\.run_module\(\s*__literal(\d+)__\s*,\s*run_name\s*=\s*__literal(\d+)__(?:\s*,\s*alter_sys\s*=\s*True)?\s*\)/.exec(code)
+  return !!run && literals[Number(run[1])] === 'hermes_cli.main' && literals[Number(run[2])] === '__main__'
 }
 
 function agentAliasCandidate(row: Pick<ProcessRow, 'executable' | 'args'>): boolean {
@@ -160,7 +153,7 @@ function agentAliasCandidate(row: Pick<ProcessRow, 'executable' | 'args'>): bool
  * `comm` can itself contain spaces: Command Code rewrites its argv to `⌘ <session title>` and macOS
  * prints that verbatim as the command name. Splitting comm off as a single `\S+` therefore shifted every
  * later field — `startMarker` came out as `"<rest of title> Thu Jul 30"` instead of a start time, so it
- * changed whenever Command Code renamed the session, `validateSessionRuntime` saw a different process,
+ * changed whenever Command Code renamed the session, runtime validation saw a different process,
  * and the reaper evicted a live pane ~10s after its first turn (observed four times on one session; the
  * pane went on serving turn-stop hooks after being declared "gone"). It also silently defeated the
  * PID-reuse guard that startMarker exists for.
@@ -747,7 +740,7 @@ type PaneProcessLookup =
   | { ok: true; identity: ProcessIdentity }
   | { ok: false; unknown: boolean; reason: string }
 
-async function lookupPaneEngineProcess(
+export async function lookupPaneEngineProcess(
   pane: string,
   engine: RegisteredSession['engine'],
 ): Promise<PaneProcessLookup> {
@@ -844,11 +837,6 @@ export async function resolvePaneEngineProcess(
  */
 export const LSTART_MARKER_RE =
   /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4}$/
-
-/** Pane + engine process validation. A saved identity prevents PID reuse from reviving a stale entry. */
-export async function validateSessionRuntime(session: RegisteredSession): Promise<boolean> {
-  return (await checkSessionRuntime(session)).state === 'alive'
-}
 
 /**
  * The same check, but three-valued and with a reason — the reaper needs both.

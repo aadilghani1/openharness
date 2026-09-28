@@ -39,6 +39,42 @@ describe('shapeQuestions', () => {
   })
 })
 
+describe('question answers stay with one agent', () => {
+  const first = { agentId: 'a1', sessionId: 's1', engine: 'claude' } as RegisteredSession
+  const second = { agentId: 'a2', sessionId: 's2', engine: 'claude' } as RegisteredSession
+  const getSession = (id: string) => [first, second].find((s) => s.agentId === id || s.sessionId === id)
+
+  it('refuses a remembered question redirected to another agent with the same dialog', async () => {
+    const keys: string[] = []
+    const controller = new AskQuestionController({
+      getSession, capture: async () => fixture('single'),
+      sendKey: async (target) => { keys.push(target); return true },
+      sendText: async () => true, wait: async () => {},
+    })
+    const requestId = questionRequestId('s1', asQuestion(parseQuestionPane(fixture('single'))))
+    controller.remember(requestId, 's1')
+    expect(await controller.answer({ agentId: 'a2', requestId, answers: { q: 'Tea' } }))
+      .toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(keys).toEqual([])
+  })
+
+  it('serializes answers by agent even when clients use different aliases', async () => {
+    let release!: (screen: string) => void
+    const capture = new Promise<string>((resolve) => { release = resolve })
+    const controller = new AskQuestionController({
+      getSession, capture: () => capture,
+      sendKey: async () => true, sendText: async () => true,
+    })
+    const firstAnswer = controller.answer({ sessionId: 's1', answers: { q: 'Tea' } })
+    expect(controller.isDriving('a1')).toBe(true)
+    expect(await controller.answer({ agentId: 'a1', answers: { q: 'Tea' } }))
+      .toMatchObject({ ok: false, error: 'ANSWER_BUSY' })
+    release('No dialog')
+    await firstAnswer
+    expect(controller.isDriving('s1')).toBe(false)
+  })
+})
+
 describe('the Hermes clarify dialog', () => {
   // Real capture from hermes on a live pane: the SAME dialog Claude paints (`❯ 1. Xanh` rows, a footer
   // reading "Enter to confirm") wrapped in a box-drawing frame. Peeling the frame is the whole adaptation

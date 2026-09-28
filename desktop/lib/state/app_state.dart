@@ -1719,6 +1719,7 @@ class AppNotifier extends ChangeNotifier {
   String? signOutError;
   Future<void>? _logoutInFlight;
   Future<void>? _workspaceCleanup;
+  bool _guestDeskRestorePending = false;
 
   AppNotifier({
     required AppConfig config,
@@ -3201,8 +3202,13 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     if (from != null) {
-      await _reseatDesk(from: from, to: current, dropOthers: isGuest);
-      if (!_authWorkCurrent(revision)) return;
+      final restored = await _reseatDesk(
+        from: from,
+        to: current,
+        dropOthers: isGuest,
+        revision: revision,
+      );
+      if (!_authWorkCurrent(revision) || !restored) return;
     }
     // ONLY ONCE THE DESK REALLY NAMES THIS MACHINE.
     //
@@ -3250,41 +3256,27 @@ class AppNotifier extends ChangeNotifier {
   /// the store. Reusing the cold-start restore is what keeps this from becoming a
   /// second, subtly different way to build a grid.
   ///
-  /// [revision] is the sign-out's own, when it has one: the explicit sign-out
-  /// already invalidated the previous work, and a second invalidation here would
-  /// orphan its own wait. A session that ended underneath us passes none and
-  /// invalidates for itself — the in-flight work belongs to the account that
-  /// just left.
-  Future<void> _becomeGuest({String? banner, int? revision}) async {
-    revision ??= _invalidateAuthWork();
-    final before = localMachineState?.machine.machineId;
+  /// Both callers invalidate old account work before clearing its workspace.
+  /// Reuse that revision so the expiry explanation survives the guest restore.
+  Future<void> _becomeGuest({
+    String? banner,
+    String? previousMachineId,
+    required int revision,
+  }) async {
+    _guestDeskRestorePending = true;
     signedIn = false;
     currentUser = null;
     analyticsAccount.clear();
-    // The desk is the ACCOUNT's document (`Desk{userId}`): a guest has none, and
-    // the tabs closing here are this window leaving the account, not the person
-    // closing them — so nothing is sent.
-    _deskRetry?.cancel();
-    _deskRetry = null;
-    _desk.reset();
-    _stopAllOfflineRetries();
-    _stopAllLinkRetries();
-    _stopAllAgentSyncTimers();
-    _clearAllTurnActivity();
-    // Every connection goes: the daemon this window was talking to is being
-    // replaced by one with a different identity, and a remote lane was borrowed
-    // from the account that is changing hands.
-    await _pool?.closeAll();
+    if (banner != null) {
+      _lastError = banner;
+      _lastErrorRetryable = true;
+    }
+    // Account teardown already removed private remote content. Finish closing
+    // its transports before restoring this computer from the saved desk.
+    await _workspaceCleanup;
     if (!_authWorkCurrent(revision)) return;
-    machines = [];
-    machinesAreStale = false;
-    machineStates.clear();
-    sessionPreviews.clear();
-    sessionTails.clear();
-    gridPictures.clear();
-    _stopWakeFollowers();
-    expandedMachines.clear();
-    selectedMachineId = null;
+    final before = previousMachineId ?? await _paneLayout?.loadLocalMachineId();
+    if (!_authWorkCurrent(revision)) return;
     _ensurePool();
     notifyListeners();
     try {
@@ -3309,10 +3301,25 @@ class AppNotifier extends ChangeNotifier {
       // Remote tiles leave with the account — a guest has no machine to attach
       // them to, and a tile waiting forever reads as broken rather than as
       // signed out. This computer's follow it to the id the daemon serves now.
-      await _reseatDesk(from: before ?? after, to: after, dropOthers: true);
+      final restored = await _reseatDesk(
+        from: before ?? after,
+        to: after,
+        dropOthers: true,
+        revision: revision,
+        persistCurrent: false,
+      );
       if (!_authWorkCurrent(revision)) return;
+      if (!restored) {
+        // Keep the restore pending and the old identity intact. The unchanged
+        // saved layout may still contain private remote panes, so do not read it
+        // back into the guest workspace until the filtered write succeeds.
+        status = AppStatus.authenticated;
+        notifyListeners();
+        return;
+      }
       await _paneLayout?.saveLocalMachineId(after);
       if (!_authWorkCurrent(revision)) return;
+      _guestDeskRestorePending = false;
     }
     // A guest ends on the desk, whichever screen it started from.
     status = AppStatus.authenticated;
@@ -3331,32 +3338,77 @@ class AppNotifier extends ChangeNotifier {
   /// the file is rewritten, and the cold-start restore reads it back; tiles whose
   /// machines are already connected are attached straight away rather than
   /// waiting for a connect event that already happened.
-  Future<void> _reseatDesk({
+  ///
+  /// The tiles detaching is teardown a sign-in waits for, and a sign-in that
+  /// started meanwhile ([revision] superseded) owns the grid from there: this
+  /// leaves it empty rather than restoring the desk this re-seat was for, and
+  /// that sign-in's own bootstrap restores the file and follows the id.
+  Future<bool> _reseatDesk({
     required String from,
     required String to,
     required bool dropOthers,
+    required int revision,
+    bool persistCurrent = true,
+  }) {
+    final previous = _workspaceCleanup;
+    var restored = false;
+    return _trackWorkspaceCleanup(() async {
+      await previous;
+      if (!_authWorkCurrent(revision)) return;
+      restored = await _reseatDeskAfterCleanup(
+        from: from,
+        to: to,
+        dropOthers: dropOthers,
+        revision: revision,
+        persistCurrent: persistCurrent,
+      );
+    }()).then((_) => restored);
+  }
+
+  Future<bool> _reseatDeskAfterCleanup({
+    required String from,
+    required String to,
+    required bool dropOthers,
+    required int revision,
+    required bool persistCurrent,
   }) async {
     final store = _paneLayout;
-    if (store == null) return;
-    _persistLayout();
+    if (store == null) return true;
+    // After sign-out the live grid is intentionally empty. Saving it here
+    // would destroy the local work we are about to recover.
+    if (persistCurrent) _persistLayout();
     await store.flushSwarms();
-    await store.rekeyMachine(from: from, to: to, dropOthers: dropOthers);
-    if (_disposed) return;
+    if (!_authWorkCurrent(revision)) return false;
+    if (!await store.rekeyMachine(from: from, to: to, dropOthers: dropOthers)) {
+      if (_authWorkCurrent(revision)) {
+        _lastError =
+            'Could not restore this computer’s saved workspace. Try again.';
+        _lastErrorRetryable = true;
+      }
+      return false;
+    }
+    if (_disposed) return false;
+    // The file and the id it is keyed by move together, whatever happens next:
+    // a sign-in that overtakes this re-seat finds the desk through that id.
+    await store.saveLocalMachineId(to);
+    if (_disposed) return false;
     await _closeAllPanes(persist: false);
-    if (_disposed) return;
+    if (_disposed) return false;
     _closedHistory.clear();
     final starter = Swarm(id: 'swarm-${_nextSwarmId++}');
     swarms
       ..clear()
       ..add(starter);
     _activeSwarmId = starter.id;
+    if (!_authWorkCurrent(revision)) return false;
     await _restorePaneLayout();
-    if (_disposed) return;
+    if (!_authWorkCurrent(revision)) return false;
     for (final machine in machineStates.values) {
       // A restore at launch, or a machine re-seated under it.
       _attachPendingPanes(machine, intent: AttachIntent.automatic);
     }
     _announceAppFocus();
+    return true;
   }
 
   /// The local daemon (`harness start`) must be up before any local REST/WS call can work — unlike
@@ -3565,7 +3617,7 @@ class AppNotifier extends ChangeNotifier {
     if (status == AppStatus.unauthenticated || isGuest) {
       return; // idempotent: several sources can race here
     }
-    _invalidateAuthWork();
+    final revision = _invalidateAuthWork();
     cliLogin.cancel();
     _sessionExpired = true;
     currentUser = null;
@@ -3573,10 +3625,11 @@ class AppNotifier extends ChangeNotifier {
     pendingAuthorizeUrl = null;
     _awaitingFirstMessage = null;
     analyticsAccount.clear();
+    final previousMachineId = localMachineState?.machine.machineId;
+    _clearAccountWorkspace();
     // A VIEWER has nowhere to be but its login screen — no daemon, nothing of
     // its own to show.
-    if (viewer != null) {
-      _clearAccountWorkspace();
+    if (viewer != null || localManualFixture != null) {
       _lastError = message;
       _lastErrorRetryable = true;
       status = AppStatus.unauthenticated;
@@ -3587,8 +3640,18 @@ class AppNotifier extends ChangeNotifier {
     // and goes on serving this computer, so the agents that were running are
     // still running. This computer's tiles stay (under the id it serves now),
     // the other machines' leave, and the banner says why the list got shorter.
+    //
+    // The work was invalidated above, so the guest transition runs under THIS
+    // revision: invalidating again would clear [sessionExpired], and the banner
+    // would read as a failed sign-in rather than as the session having ended.
     _closedHistory.clear();
-    unawaited(_becomeGuest(banner: message));
+    unawaited(
+      _becomeGuest(
+        banner: message,
+        previousMachineId: previousMachineId,
+        revision: revision,
+      ),
+    );
   }
 
   /// Remove the old account's live objects without overwriting its saved desk.
@@ -3643,25 +3706,32 @@ class AppNotifier extends ChangeNotifier {
       ..add(starter);
     _activeSwarmId = starter.id;
     _autoPickedAgent = false;
+    _trackWorkspaceCleanup(
+      Future.wait<void>([panesClosed, if (pool != null) pool.closeAll()]),
+    );
+  }
+
+  /// The old account's terminals detaching and its connections closing, which
+  /// a sign-in waits for (see [login]) so it cannot overtake them: a new
+  /// session must not be set up while the last one is still being torn down.
+  /// Joins any teardown already in flight; completes when all of it has, and
+  /// never with an error.
+  Future<void> _trackWorkspaceCleanup(Future<void> work) {
     late final Future<void> cleanup;
-    cleanup =
-        Future.wait<void>([
-              ?_workspaceCleanup,
-              panesClosed,
-              if (pool != null) pool.closeAll(),
-            ])
-            .then<void>(
-              (_) {},
-              onError: (Object error) {
-                debugPrint('account connection cleanup failed: $error');
-              },
-            )
-            .whenComplete(() {
-              if (identical(_workspaceCleanup, cleanup)) {
-                _workspaceCleanup = null;
-              }
-            });
+    cleanup = Future.wait<void>([?_workspaceCleanup, work])
+        .then<void>(
+          (_) {},
+          onError: (Object error) {
+            debugPrint('account connection cleanup failed: $error');
+          },
+        )
+        .whenComplete(() {
+          if (identical(_workspaceCleanup, cleanup)) {
+            _workspaceCleanup = null;
+          }
+        });
     _workspaceCleanup = cleanup;
+    return cleanup;
   }
 
   void _startUpdateChecking() {
@@ -3886,6 +3956,7 @@ class AppNotifier extends ChangeNotifier {
 
   Future<void> login() async {
     if (_disposed || signingIn || signingOut || signOutError != null) return;
+    final wasGuest = isGuest;
     final revision = _invalidateAuthWork();
     _closedHistory.clear();
     _monitorHarnesses.clear();
@@ -3928,6 +3999,7 @@ class AppNotifier extends ChangeNotifier {
       if (!_authWorkCurrent(revision) || status != AppStatus.authenticated) {
         return;
       }
+      _guestDeskRestorePending = false;
       analytics.signedIn();
       // Restarts the clock even if `_trackAppOpened` already started one: this
       // person met the login screen, so their wait begins where the launch's
@@ -3935,7 +4007,7 @@ class AppNotifier extends ChangeNotifier {
       _armFirstMessage('sign_in');
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
-      status = AppStatus.unauthenticated;
+      status = wasGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
       _lastError = error.toString();
       _lastErrorRetryable = true;
       // A short code, never `error.toString()` — a CLI failure carries paths
@@ -3946,6 +4018,9 @@ class AppNotifier extends ChangeNotifier {
       analytics.signInFailed(
         error is CliNotAvailableException ? 'cli_missing' : 'failed',
       );
+      if (wasGuest && _guestDeskRestorePending && !signedIn) {
+        unawaited(_becomeGuest(revision: revision));
+      }
     } finally {
       // Takes the in-app browser view down once the redirect has landed; a no-op
       // where the page opened in a browser of its own.
@@ -4016,14 +4091,19 @@ class AppNotifier extends ChangeNotifier {
   /// cancelled attempt and cannot change a subsequent sign-in.
   void cancelLogin() {
     if (_disposed || !canCancelLogin) return;
-    _invalidateAuthWork();
+    final revision = _invalidateAuthWork();
     signingIn = false;
     pendingAuthorizeUrl = null;
-    status = AppStatus.unauthenticated;
+    status = isGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
     _lastError = null;
     _lastErrorRetryable = false;
     cliLogin.cancel();
     notifyListeners();
+    // Cancellation can supersede the guest restore while old terminals are
+    // still detaching. Resume that restore under the new revision.
+    if (isGuest && _guestDeskRestorePending) {
+      unawaited(_becomeGuest(revision: revision));
+    }
   }
 
   Future<void> logout() {
@@ -4048,6 +4128,7 @@ class AppNotifier extends ChangeNotifier {
 
   Future<void> _logout() async {
     final revision = _invalidateAuthWork();
+    final previousMachineId = localMachineState?.machine.machineId;
     cliLogin.cancel();
     signingIn = false;
     signingOut = true;
@@ -4060,7 +4141,10 @@ class AppNotifier extends ChangeNotifier {
     // and becomes a guest — the daemon comes back signed out and keeps serving
     // this computer, so signing out of the account is not a reason to take the
     // agents off the screen. The rebind at the end sits the desk back down.
-    if (viewer != null) status = AppStatus.unauthenticated;
+    // The local-manual dev fixture goes back to the login screen too: it has
+    // no daemon of its own, and a guest desk would be served by the REAL CLI.
+    final becomesGuest = viewer == null && localManualFixture == null;
+    if (!becomesGuest) status = AppStatus.unauthenticated;
     currentUser = null;
     analyticsAccount.clear();
     notifyListeners();
@@ -4090,8 +4174,10 @@ class AppNotifier extends ChangeNotifier {
     // The CLI restarts its daemon signed out (`harness logout` does it itself),
     // so this window waits for that one and sits its desk back down on the id it
     // serves. In the background: the person asked to sign out, and that is done.
-    if (viewer == null && didClear) {
-      unawaited(_becomeGuest(revision: revision));
+    if (becomesGuest && didClear) {
+      unawaited(
+        _becomeGuest(previousMachineId: previousMachineId, revision: revision),
+      );
     }
   }
 
@@ -5336,6 +5422,10 @@ class AppNotifier extends ChangeNotifier {
   Future<void> _performRetryMachines({required bool automatic}) async {
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
+    if (isGuest && _guestDeskRestorePending) {
+      await _becomeGuest(revision: revision);
+      return;
+    }
     // Re-verify the daemon first: a retry that skips straight to `refreshMachines()` can hit
     // the exact same "daemon not connected yet" timeout the button was pressed to escape.
     try {
@@ -5354,10 +5444,10 @@ class AppNotifier extends ChangeNotifier {
     if (!_authWorkCurrent(revision) || status == AppStatus.unauthenticated) {
       return;
     }
-    if (currentUser == null) unawaited(_loadProfile());
+    if (signedIn && currentUser == null) unawaited(_loadProfile());
     // A boot that found the daemon still connecting finishes THROUGH here (see
     // `_loadProfile`), so the desk is joined here as well — once.
-    _deskEnsure(revision);
+    if (signedIn) _deskEnsure(revision);
     try {
       if (!await refreshMachines() || !_authWorkCurrent(revision)) return;
       if (!automatic) _lastError = null;
@@ -7394,8 +7484,7 @@ class AppNotifier extends ChangeNotifier {
         'MEDIA_TOO_LARGE' => 'Remote previews support files up to 512 MB. Use a smaller export or transfer this file separately.',
         'MEDIA_CHANGED' => 'The file changed while downloading. Wait for it to finish generating and try again.',
         'MEDIA_UNSUPPORTED' => 'This file is not a supported image or video.',
-        'MEDIA_INVALID_REQUEST' =>
-          'This file is outside the folders Harness reads for this agent. Use one in its working folder or a temp folder.',
+        'MEDIA_INVALID_REQUEST' => 'This file is outside the folders Harness reads for this agent. Use one in its working folder or a temp folder.',
         'AGENT_NOT_FOUND' =>
           'This agent is no longer available. Reconnect and try again.',
         'NOT_TEXT' || 'FILE_TOO_LARGE' => 'Update the Harness CLI on this remote machine to open media previews.',

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { processStartMarker } from './processLiveness.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { ProcessIdentity, RegisteredSession, RegisterInput } from './registry.js'
 
@@ -364,7 +365,7 @@ describe('registry remote display names', () => {
     mkdirSync(lockDir, { mode: 0o700 })
     writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
       pid: process.pid,
-      startMarker: 'different-process-generation',
+      startMarker: '', generationMarker: `${processStartMarker(process.pid)}-earlier`,
       token: 'stale-owner',
     }), { mode: 0o600 })
 

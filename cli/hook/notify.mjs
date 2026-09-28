@@ -450,6 +450,31 @@ function processEntrypoint(args) {
   return tokens[index] || ''
 }
 
+/** Hermes' managed launchers exec Python -I -c with a path bootstrap, then either import main
+ * or run it through runpy. Require that executable prefix and actual code, never a script argument
+ * or a quoted mention. argv[0] is authoritative here: macOS can truncate an absolute `comm` path.
+ * Keep the standalone hook's copy in sync. */
+function hermesInlineLauncher(row) {
+  const args = row.args.trim()
+  if (!/^python(?:\d+(?:\.\d+)*)?$/.test(basename(argvTokens(args)[0] ?? '').toLowerCase())) return false
+  const prefix = /^(?:"[^"]+"|'[^']+'|\S+)(?:\s+-(?:I|E|s|S|u|B|O{1,2}|q))*\s+-c\s+/.exec(args)
+  if (!prefix) return false
+  const source = args.slice(prefix[0].length).replace(/^["']/, '')
+  // Mask string literals before looking for Python statements. A print/prompt containing a whole
+  // launcher is still data. Keep literal values only to identify runpy's exact entry module.
+  const literals = []
+  const code = source.replace(/(['"])(?:\\[\s\S]|(?!\1)[^\\])*?\1/g, (literal) => {
+    literals.push(literal.slice(1, -1))
+    return `__literal${literals.length - 1}__`
+  })
+  if (!/^import\s+(?:(?:os|re|sys|runpy)\s*,\s*)*(?:sys|runpy)[;\s]+(?:os\.environ\.pop\(__literal\d+__,\s*None\)[;\s]+)*sys\.path\.insert\(\s*0,\s*__literal\d+__\s*\)/.test(code)) return false
+  if (/\bimport\s+hermes_bootstrap\b/.test(code)
+    && /\bfrom\s+hermes_cli\.main\s+import\s+main\b/.test(code)
+    && /\bsys\.exit\(\s*main\(\)\s*\)/.test(code)) return true
+  const run = /\brunpy\.run_module\(\s*__literal(\d+)__\s*,\s*run_name\s*=\s*__literal(\d+)__(?:\s*,\s*alter_sys\s*=\s*True)?\s*\)/.exec(code)
+  return !!run && literals[Number(run[1])] === 'hermes_cli.main' && literals[Number(run[2])] === '__main__'
+}
+
 const ENGINE_COMMANDS = {
   claude: 'claude', codex: 'codex', cursor: 'agent', hermes: 'hermes', commandcode: 'cmd',
   devin: 'devin', muse: 'muse', grok: 'grok', agy: 'agy', copilot: 'copilot',
@@ -545,6 +570,7 @@ function processMatchScore(row, engine, ownership, allowAgentHint = false) {
     return /command-code[\/\\]dist[\/\\]index\.mjs$/.test(entrypoint) ? 2 : 0
   }
   if (engine === 'devin') return /devin[\/\\]cli[\/\\]_versions[\/\\][^/\\]+[\/\\]bin[\/\\]devin$/.test(entrypoint) ? 2 : 0
+  if (engine === 'hermes' && hermesInlineLauncher(row)) return 2
   if (engine === 'hermes') return /hermes-agent[\/\\]hermes$/.test(entrypoint)
     || /^(?:hermes|hermes_cli)(?:\.|$)/.test(entrypoint) ? 2 : 0
   if (engine === 'muse') return /^muse-bin-/.test(executable) || /^muse-bin-/.test(entrybase) ? 3 : 0
@@ -837,9 +863,9 @@ function processStartMarker(pid) {
   } catch { /* non-Linux or exited process; use ps below */ }
   try {
     const started = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], {
-      encoding: 'utf8', timeout: 1000,
+      encoding: 'utf8', timeout: 1000, env: { ...psEnv(), TZ: 'UTC' },
     }).trim()
-    return started ? `ps:${started}` : null
+    return started ? `ps-c:${started}` : null
   } catch { return null }
 }
 
@@ -848,7 +874,23 @@ function processAlive(pid, startMarker = '') {
   try { process.kill(pid, 0) } catch (error) { if (error?.code !== 'EPERM') return false }
   if (!startMarker) return true
   const current = processStartMarker(pid)
-  return current === null || current === startMarker
+  // Pre-upgrade ps markers may use another locale; a mismatch is not death.
+  const comparable = current !== null && ['linux:', 'ps-c:'].some(
+    (prefix) => startMarker.startsWith(prefix) && current.startsWith(prefix),
+  )
+  return !comparable || current === startMarker
+}
+
+
+// The legacy field stays empty for ps-c so old readers fall back to PID liveness during upgrade.
+function processLockIdentity(pid) {
+  const generationMarker = processStartMarker(pid) || ''
+  return { startMarker: generationMarker.startsWith('ps-c:') ? '' : generationMarker, generationMarker }
+}
+
+function lockStartMarker(owner) {
+  return typeof owner?.generationMarker === 'string' ? owner.generationMarker
+    : typeof owner?.startMarker === 'string' ? owner.startMarker : ''
 }
 
 async function withRegistryLock(registryFile, fn) {
@@ -857,7 +899,7 @@ async function withRegistryLock(registryFile, fn) {
   try {
     secureStateDirectory(dataDir)
   } catch { return }
-  const processMarker = processStartMarker(process.pid) || ''
+  const processIdentity = processLockIdentity(process.pid)
   for (let i = 0; i < LOCK_RETRIES; i++) {
     if (remainingBudget(750) < 50) return
     const token = randomUUID()
@@ -868,7 +910,7 @@ async function withRegistryLock(registryFile, fn) {
       const ownerFile = join(lockDir, 'owner.json')
       const ownerFd = openSync(ownerFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
       try {
-        writeFileSync(ownerFd, JSON.stringify({ pid: process.pid, startMarker: processMarker, token }))
+        writeFileSync(ownerFd, JSON.stringify({ pid: process.pid, ...processIdentity, token }))
         fsyncSync(ownerFd)
       } finally { closeSync(ownerFd) }
       try {
@@ -888,12 +930,12 @@ async function withRegistryLock(registryFile, fn) {
           || (ownerStat.mode & 0o777) !== 0o600) return
         const owner = JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8'))
         const ownerPid = Number(owner?.pid)
-        const ownerStartMarker = typeof owner?.startMarker === 'string' ? owner.startMarker : ''
+        const ownerStartMarker = lockStartMarker(owner)
         const ownerToken = typeof owner?.token === 'string' ? owner.token : ''
         if (!processAlive(ownerPid, ownerStartMarker) && ownerPid > 0 && ownerToken) {
           const current = JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8'))
           if (Number(current?.pid) === ownerPid
-            && current?.startMarker === ownerStartMarker
+            && lockStartMarker(current) === ownerStartMarker
             && current?.token === ownerToken
             && !processAlive(ownerPid, ownerStartMarker)) {
             rmSync(lockDir, { recursive: true, force: true })
