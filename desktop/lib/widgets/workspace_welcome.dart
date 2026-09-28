@@ -471,7 +471,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     final agent = row.agentId == null
         ? null
         : machine?.agents.where((agent) => agent.id == row.agentId).firstOrNull;
-    final at = row.lastActivityAt;
+    final at = _sessions!.lastUsedAt(row);
     final readAt = _sessions!.readAt;
     final age = at == null
         ? ''
