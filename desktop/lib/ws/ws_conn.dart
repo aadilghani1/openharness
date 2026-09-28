@@ -88,6 +88,7 @@ class WsConn {
   /// Retained only for fixture constructor compatibility. Local transport ignores it.
   final String? localApiKey;
   final String? observerShareId;
+  final bool observerLink;
   bool get _directObserver => !isLocal && observerShareId != null;
   final int localProtocolVersion;
 
@@ -194,6 +195,7 @@ class WsConn {
     this.localTransport,
     this.localApiKey,
     this.observerShareId,
+    this.observerLink = false,
     this.localProtocolVersion = 1,
     this.fixedReconnectDelay,
     this.relayCodecs,
@@ -246,7 +248,9 @@ class WsConn {
     );
     try {
       final token = isLocal ? null : await accessTokenProvider(false, null);
-      if (!isLocal && (token == null || token.isEmpty)) {
+      if (!isLocal &&
+          !(_directObserver && observerLink) &&
+          (token == null || token.isEmpty)) {
         throw StateError('WebSocket credential is missing');
       }
       if (_closing) return;
@@ -289,13 +293,17 @@ class WsConn {
           queryParameters: {
             ...base.queryParameters,
             'autonomousEnv': autonomousEnv,
-            if (_directObserver) 'share': observerShareId!,
+            if (_directObserver)
+              (observerLink ? 'link' : 'share'): observerShareId!,
           },
         );
       }
       final socket = isLocal ? _localSocket() : null;
       final channel = !isLocal
-          ? WebSocketChannel.connect(uri, protocols: [token!])
+          ? WebSocketChannel.connect(
+              uri,
+              protocols: token == null || token.isEmpty ? null : [token],
+            )
           : socket != null
           ? await _connectLocalSocket(uri, socket) ??
                 WebSocketChannel.connect(uri)
@@ -578,11 +586,26 @@ class WsConn {
     'terminal_sync',
     'dial_scroll',
     'dial_focus',
+    'dial_selection',
+    'app_selection_result',
+    'dial_visit',
+    'app_visit_result',
+    'dial_form',
+    'app_form_result',
     'ping',
     'pong',
   };
 
-  static bool _worthLogging(String type) => !_unlogged.contains(type);
+  static bool _worthLogging(String type) =>
+      !_unlogged.contains(type) &&
+      !type.startsWith('phone_pair') &&
+      !type.startsWith('viewer_surface') &&
+      !type.startsWith('api_connections') &&
+      !type.startsWith('orchestrator') &&
+      !type.startsWith('command_bar') &&
+      !type.startsWith('route_') &&
+      !type.startsWith('harness_share_') &&
+      !type.startsWith('observer_');
 
   Future<Map<String, dynamic>> request(
     String type, {

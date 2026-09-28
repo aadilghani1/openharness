@@ -9,6 +9,7 @@ import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
+import 'package:harness_mobile/phone/new_agent_draft.dart';
 import 'package:harness_mobile/phone/welcome/how_it_works.dart';
 import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/phone/welcome/focus_hints.dart';
@@ -91,7 +92,42 @@ class _Conn extends WsConn {
     String type, {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
-  }) async => {};
+  }) async => switch (type) {
+    'engines_probe' => {
+      'engines': [
+        {'engine': 'claude', 'installed': true},
+        {'engine': 'codex', 'installed': true, 'supportsCodexHome': true},
+      ],
+    },
+    'git_project_info' => {
+      'isGit': true,
+      'branch': 'main',
+      'defaultRef': 'refs/heads/main',
+      'branches': [
+        {'ref': 'refs/heads/main', 'name': 'main'},
+      ],
+    },
+    'grid_models_list' => {
+      'supportsModelLaunch': true,
+      'localModelEngines': ['claude', 'codex'],
+      'grids': [
+        {
+          'name': 'own',
+          'own': true,
+          'models': [
+            {'id': 'qwen-coder', 'node': 'studio'},
+          ],
+        },
+        {
+          'name': 'team-grid',
+          'models': [
+            {'id': 'shared-coder', 'node': 'server'},
+          ],
+        },
+      ],
+    },
+    _ => {},
+  };
 }
 
 Future<void> _loadFont(
@@ -174,6 +210,7 @@ void main() {
 
   setUp(() async {
     if (skip) return;
+    newAgentDraft = null;
     notifier = AppNotifier(
       config: AppConfig.dev,
       authSession: AuthSession(),
@@ -267,6 +304,7 @@ void main() {
 
   tearDown(() {
     if (skip) return;
+    newAgentDraft = null;
     voice.dispose();
     language.dispose();
     notifier.dispose();
@@ -630,6 +668,46 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     await shoot(tester, key, '4d-new-agent-chooser');
+  });
+
+  Future<GlobalKey> expandedNew(WidgetTester tester, String engine) async {
+    final key = await pumpScreen(
+      tester,
+      NewAgentPage(notifier: notifier, machineId: 'm', voice: voice),
+    );
+    await tester.tap(find.text('agent'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    final choice = find
+        .text(engine == 'codex' ? 'Codex' : 'Claude Code', findRichText: true)
+        .last;
+    await tester.ensureVisible(choice);
+    await tester.tap(choice);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('options'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      find.text(engine == 'codex' ? 'OpenAI' : 'Anthropic'),
+      findsOneWidget,
+    );
+    if (engine == 'codex') expect(find.text('profile'), findsOneWidget);
+    return key;
+  }
+
+  for (final engine in ['claude', 'codex']) {
+    testWidgets('new, $engine options', skip: skip, (tester) async {
+      final key = await expandedNew(tester, engine);
+      await shoot(tester, key, '4f-new-$engine-options');
+    });
+  }
+
+  testWidgets('new, models', skip: skip, (tester) async {
+    final key = await expandedNew(tester, 'codex');
+    await tester.tap(find.text('model'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await shoot(tester, key, '4g-new-models');
   });
 
   testWidgets('settings', skip: skip, (tester) async {

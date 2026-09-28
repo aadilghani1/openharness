@@ -7,8 +7,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../analytics/analytics.dart';
+import '../teams/team_controller.dart';
 import '../api/api_client.dart';
 import '../viewer/direct_auth_api.dart';
+import '../viewer/direct_link.dart';
+import '../viewer/group_sync.dart';
 import '../viewer/viewer_services.dart';
 import '../auth/auth_session.dart';
 import '../auth/peer_link_client.dart';
@@ -44,6 +47,9 @@ import 'session_preview.dart';
 import 'terminal_pane.dart';
 import 'desk_sync.dart';
 import 'phone_desk.dart';
+import '../daemons/daemon_habits.dart';
+import '../daemons/individual_art.dart';
+import '../daemons/zoo_client.dart';
 import 'swarm.dart';
 import '../terminal/terminal_binary.dart';
 import '../ws/ws_conn.dart';
@@ -388,6 +394,66 @@ class AppNotifier extends ChangeNotifier {
     read: () => api.desk(),
     write: (ops) => api.deskOps(ops),
     onChanged: notifyListeners,
+  );
+
+  // ── the zoo: the account's daemons and eggs ──────────────────────────────
+  //
+  // `daemons/zoo_client.dart` holds it. Its own document, like the desk and
+  // separate from it: read on sign-in, on `zoo_changed`, and when the app comes
+  // back to the front. The closures read `api` lazily for the desk's reason.
+  late final ZooClient zoo = ZooClient(
+    read: () => api.zoo(),
+    write: (ops) => api.zooOps(ops),
+  );
+
+  /// Individuals' own plates, drawn by harnessd on one of the account's
+  /// computers and asked for over the sealed `pair_plate_get` frame
+  /// (`daemons/individual_art.dart`). Until one arrives, and where none can
+  /// be asked, the species plate is shown in the individual's colours.
+  late final IndividualArt individualArt = IndividualArt(
+    request: requestIndividualPlate,
+  );
+
+  /// Ask the account's connected computers for an
+  /// individual's plates (`pair_plate_get { uid, id, seed, size, version,
+  /// mood }` → `pair_plate { ..., frames, frameMs }`). The first that answers
+  /// wins; a computer whose harnessd predates individual art says
+  /// `UNSUPPORTED` or stays silent (a sealed frame it cannot open), which is a
+  /// timeout and the next one. A first render can take tens of seconds;
+  /// the recoloured species plate remains visible while it draws.
+  Future<Map<String, dynamic>?> requestIndividualPlate(
+    Map<String, dynamic> payload,
+  ) async {
+    if (_disposed || (_pool == null && connectionForTest == null)) return null;
+    final machines = [
+      for (final machine in machineStates.values)
+        if (machine.connectionStatus == ConnectionStatus.connected &&
+            !machine.needsLink &&
+            machine.nodeOnline != false)
+          machine,
+    ];
+    for (final machine in machines) {
+      try {
+        final answer = await _conn(machine.machine.machineId).request(
+          'pair_plate_get',
+          payload: payload,
+          timeout: const Duration(minutes: 2),
+        );
+        if (answer['error'] == null && answer['frames'] is List) return answer;
+      } catch (_) {
+        // Too old, asleep, or not there: the next one.
+      }
+    }
+    return null;
+  }
+
+  /// The first egg's habits this phone can see for itself — see
+  /// `daemons/daemon_habits.dart` for which, and why the rest are left to the
+  /// computers. The days it was used are kept where the layout is: nowhere in
+  /// a test.
+  late final PhoneHabits daemonHabits = PhoneHabits(
+    zoo,
+    storage: _paneLayout?.storage,
   );
 
   /// The account's tabs, in the desk's order. Empty where the desk has nothing
@@ -899,6 +965,7 @@ class AppNotifier extends ChangeNotifier {
     PaneLayoutStore? paneLayoutStore,
     SystemNotices? systemNotices,
     MachineCache? machineCache,
+    GroupSync? groupSync,
     this.turnActivityTimeout = const Duration(seconds: 12),
   }) : _paneLayout = paneLayoutStore,
        // On the same terms as the stores below: no layout store means a test,
@@ -935,6 +1002,7 @@ class AppNotifier extends ChangeNotifier {
            ) {
     this.cliLogin = cliLogin ?? this.viewer.login;
     this.peerLinks = peerLinks ?? this.viewer.links;
+    _groupSyncOverride = groupSync;
     _autonomousEnv = this.config.autonomousEnv;
     api = _newApiClient();
   }
@@ -1277,6 +1345,8 @@ class AppNotifier extends ChangeNotifier {
     // over REST rather than from any machine — so they can land before the
     // first machine has finished dialling.
     _desk.ensure();
+    // The zoo the same way: the daemon on the chip is account state.
+    zoo.ensure();
     try {
       // The request already in flight (above).
       final failure = await machineRefresh;
@@ -1344,6 +1414,7 @@ class AppNotifier extends ChangeNotifier {
     pendingPairing = null;
     _awaitingFirstMessage = null;
     _desk.reset();
+    zoo.reset();
     analyticsAccount.clear();
     unawaited(_pool?.closeAll());
     _pool = null;
@@ -1470,9 +1541,20 @@ class AppNotifier extends ChangeNotifier {
     // The desk belongs to the account, not to the phone: its tabs go with the
     // session, writes this phone never managed to send included.
     _desk.reset();
+    // The zoo is the account's too.
+    zoo.reset();
+    individualArt.reset();
     currentUser = null;
     machines = [];
     machineStates.clear();
+    for (final controller in _teamControllers.values) {
+      controller.dispose();
+    }
+    _teamControllers.clear();
+    for (final controller in _channelControllers.values) {
+      controller.dispose();
+    }
+    _channelControllers.clear();
     // ⚠️ The warm-start cache is this account's machine ids, so it goes with the
     // session. Left behind, the next launch would dial the previous account's
     // machines before its own fetch could say they are not its own — reaching
@@ -1568,6 +1650,8 @@ class AppNotifier extends ChangeNotifier {
       unawaited(_applyNodeStatus(machine, true));
       unawaited(_loadMachineData(machine, force: true));
       _startAgentSyncTimer(machineId);
+      // A session came up: the moment to compare trust groups with this machine.
+      unawaited(_syncGroup(machineId));
     } else if (nextStatus == ConnectionStatus.reconnecting ||
         nextStatus == ConnectionStatus.disconnected) {
       _stopAgentSyncTimer(machineId);
@@ -1924,6 +2008,8 @@ class AppNotifier extends ChangeNotifier {
       await _pool?.closeMachine(targetId);
       _connectMachine(state);
     }
+    // One password, the whole group: this machine learns the phone's other machines, and they it.
+    unawaited(_syncGroup(targetId, spread: true));
     return null;
   }
 
@@ -1958,7 +2044,81 @@ class AppNotifier extends ChangeNotifier {
       await _pool?.closeMachine(state.machine.machineId);
       _connectMachine(state);
     }
+    unawaited(_syncGroup(result.linkedMachineId ?? machineId, spread: true));
     return null;
+  }
+
+  /// A test's stand-in for the trust-group roster swap; null uses [DirectLink.syncGroup].
+  late final GroupSync? _groupSyncOverride;
+
+  /// The trust-group roster swap (`viewer/group_sync.dart`). Only the app's own [DirectLink] dials
+  /// for it — a test that hands over fake links, or has no layout store (no state file), never does.
+  GroupSync? get _groupSync {
+    if (_groupSyncOverride case final sync?) return sync;
+    final links = peerLinks;
+    return links is DirectLink && _paneLayout != null ? links.syncGroup : null;
+  }
+
+  final Map<String, DateTime> _groupSyncedAt = {};
+  static const _groupResync = Duration(minutes: 5);
+
+  /// Swaps trust-group rosters with [machineId], at most every few minutes per machine — any
+  /// session this phone opens is the moment. With [spread] (a machine was just linked) or when the
+  /// swap taught this phone a new machine, every other linked machine hears of it straight away.
+  Future<void> _syncGroup(String machineId, {bool spread = false}) async {
+    final sync = _groupSync;
+    if (sync == null) return;
+    final now = DateTime.now();
+    final last = _groupSyncedAt[machineId];
+    if (!spread && last != null && now.difference(last) < _groupResync) return;
+    _groupSyncedAt[machineId] = now;
+    // Fire-and-forget from the connection handler: a state file that is locked for a moment must not
+    // surface as an unhandled error. The next session retries.
+    try {
+      final label = phoneClientDescriptor().name;
+      final outcome = await sync(machineId, label: label);
+      await _afterGroupSync(outcome);
+      if (!spread && outcome.pinned.isEmpty) return;
+      for (final other in [...machineStates.keys]) {
+        if (other == machineId || machineStates[other]?.nodeOnline == false) {
+          continue;
+        }
+        if (await viewer.keys.peer(other) == null) continue;
+        _groupSyncedAt[other] = DateTime.now();
+        await _afterGroupSync(await sync(other, label: label));
+      }
+    } catch (_) {
+      _groupSyncedAt.remove(machineId);
+    }
+  }
+
+  /// What a roster swap changed, applied to the machines on screen: a machine the group removed wants
+  /// its password again; a machine waiting for one that the group has now vouched for is dialed.
+  Future<void> _afterGroupSync(GroupSyncOutcome outcome) async {
+    var changed = false;
+    for (final id in outcome.unpinned) {
+      final machine = machineStates[id];
+      if (machine == null || machine.needsLink) continue;
+      machine.needsLink = true;
+      machine.agentLoadStatus = AgentLoadStatus.needsLink;
+      await _pool?.closeMachine(id);
+      _markSessionsUnreachable(
+        machine,
+        'This machine left your group. Enter its password to reconnect.',
+      );
+      changed = true;
+    }
+    for (final machine in [...machineStates.values]) {
+      if (!machine.needsLink) continue;
+      final id = machine.machine.machineId;
+      if (await viewer.keys.peer(id) == null) continue;
+      machine.needsLink = false;
+      machine.agentLoadStatus = AgentLoadStatus.idle;
+      await _pool?.closeMachine(id);
+      _connectMachine(machine);
+      changed = true;
+    }
+    if (changed) notifyListeners();
   }
 
   List<LinkedMachine> linkedMachines = [];
@@ -2148,6 +2308,7 @@ class AppNotifier extends ChangeNotifier {
     // The desk is joined here as well, should the boot not have got that far —
     // [PhoneDesk.ensure] makes that once.
     _desk.ensure();
+    zoo.ensure();
     try {
       await refreshMachines();
       if (!_authWorkCurrent(revision)) return;
@@ -3151,10 +3312,12 @@ class AppNotifier extends ChangeNotifier {
   /// timeout, not an `UNSUPPORTED`, which is why this asks with a short one and
   /// treats every failure alike: a machine that cannot say has nothing to add,
   /// and it must never hold up the figures of the ones that can.
-  Future<List<MachineUsage>> readRemoteUsage() async {
+  Future<List<MachineUsage>> readRemoteUsage({String? machineId}) async {
     final remotes = [
       for (final machine in machineStates.values)
-        if (machine.connectionStatus == ConnectionStatus.connected) machine,
+        if (machine.connectionStatus == ConnectionStatus.connected &&
+            (machineId == null || machine.machine.machineId == machineId))
+          machine,
     ];
     final answers = await Future.wait([
       for (final machine in remotes) _readMachineUsage(machine),
@@ -3224,8 +3387,7 @@ class AppNotifier extends ChangeNotifier {
         'MEDIA_TOO_LARGE' => 'Remote previews support files up to 512 MB. Use a smaller export or transfer this file separately.',
         'MEDIA_CHANGED' => 'The file changed while downloading. Wait for it to finish generating and try again.',
         'MEDIA_UNSUPPORTED' => 'This file is not a supported image or video.',
-        'MEDIA_INVALID_REQUEST' =>
-          'Use a full path or a path inside this harness’s working folder.',
+        'MEDIA_INVALID_REQUEST' => 'This file is outside the folders Harness reads for this harness. Use one in its working folder or a temp folder.',
         'AGENT_NOT_FOUND' =>
           'This harness is no longer available. Reconnect and try again.',
         'NOT_TEXT' || 'FILE_TOO_LARGE' => 'Update the Harness CLI on this remote machine to open media previews.',
@@ -3255,6 +3417,50 @@ class AppNotifier extends ChangeNotifier {
       );
     } catch (error) {
       return {'error': 'UNREACHABLE'};
+    }
+  }
+
+  final _teamControllers = <String, TeamController>{};
+  final _channelControllers = <String, TeamController>{};
+  TeamController channelController(String tabId, String gatewayMachineId) =>
+      _channelControllers.putIfAbsent(tabId, () {
+        late final TeamController controller;
+        controller = TeamController(
+          channelTabId: tabId,
+          request: (payload) => teamRequest(
+            controller.team?['machineId'] as String? ?? gatewayMachineId,
+            payload,
+          ),
+        );
+        return controller;
+      });
+  TeamController teamController(String machineId) =>
+      _teamControllers.putIfAbsent(
+        machineId,
+        () => TeamController(
+          request: (payload) => teamRequest(machineId, payload),
+        ),
+      );
+
+  Future<Map<String, dynamic>> teamRequest(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      return await _conn(
+        machineId,
+      ).request('team', payload: payload, timeout: const Duration(seconds: 35));
+    } on WsRequestFailure catch (e) {
+      throw TeamRequestError(
+        e.code == 'UNSUPPORTED'
+            ? 'Update Harness on this machine to use agent collaboration.'
+            : e.toString(),
+        uncertain: const {
+          'UNCONFIRMED',
+          'DISCONNECTED',
+          'TEAM_UNAVAILABLE',
+        }.contains(e.code),
+      );
     }
   }
 
@@ -3414,6 +3620,7 @@ class AppNotifier extends ChangeNotifier {
     ProjectFolderRequest? projectFolder,
     String? permissionMode,
     String? codexHome,
+    GridModel? model,
     String? swarmId,
     AgentCreationAttempt? attempt,
     String? prompt,
@@ -3438,6 +3645,8 @@ class AppNotifier extends ChangeNotifier {
           ? false
           : permissionModeApproves(permissionMode),
       'codexHome': ?codexHome,
+      'gridModel': ?model?.id,
+      'gridName': ?model?.grid,
     };
     return _create(machineId, choices, swarmId: swarmId, attempt: creation);
   }
@@ -3549,6 +3758,31 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     final connection = _conn(machineId);
+    // Recheck before launch: a selected model may have stopped since the picker
+    // opened. Status checks never repeat this or send a second creation.
+    if (!creation.awaitingConfirmation && choices['gridModel'] != null) {
+      final models = await gridModels(machineId);
+      if (!models.reachable) {
+        return creation._complete(
+          'Could not verify models on $machineName. Refresh models or use your subscription.',
+        );
+      }
+      if (!models.supportsModelLaunch) {
+        return creation._complete(
+          'Update Harness CLI on $machineName to choose a model before starting.',
+        );
+      }
+      if (!models.canRunLocally(choices['engine'] as String) ||
+          !models.sections.any(
+            (section) =>
+                section.name == choices['gridName'] &&
+                section.models.any((model) => model.id == choices['gridModel']),
+          )) {
+        return creation._complete(
+          'The selected model is unavailable. Refresh models or use your subscription.',
+        );
+      }
+    }
     final operation = creation.awaitingConfirmation
         ? 'agent_create_status'
         : 'agent_create';
@@ -3974,6 +4208,8 @@ class AppNotifier extends ChangeNotifier {
       return unconfirmed;
     }
     _agentResumes.remove(key);
+    // A paused harness came back from this phone: a first-egg habit.
+    daemonHabits.resumed();
     if (_disposed || machineStates[machine.machine.machineId] != machine) {
       return const RestartAgentResult();
     }
@@ -4059,6 +4295,7 @@ class AppNotifier extends ChangeNotifier {
               .toList();
       final capable = response['localModelEngines'];
       return GridModels(
+        supportsModelLaunch: response['supportsModelLaunch'] == true,
         gridName: response['gridName'] as String?,
         // The own grid's list, which an older daemon sends on its own.
         models: parseModels(response['models']),
@@ -5195,6 +5432,12 @@ class AppNotifier extends ChangeNotifier {
         // machines mean one GET.
         _desk.noticeRevision(payload['revision']);
         return;
+      case 'zoo_changed':
+        // The account's daemons and eggs changed — an egg earned on a computer,
+        // a hatch or a pair switch on another client. Once per machine, like
+        // `desk_changed`; [ZooClient.noticeRevision] makes that one GET.
+        zoo.noticeRevision(payload['revision']);
+        return;
       case 'node_status':
         final online = payload['online'] == true;
         await _applyNodeStatus(machine, online);
@@ -5524,6 +5767,9 @@ class AppNotifier extends ChangeNotifier {
     // whatever they were when the phone went into a pocket, until something
     // else happened to change them.
     unawaited(_desk.refresh());
+    // The zoo too, for the same reason: a `zoo_changed` sent while the phone
+    // was in a pocket reached nobody.
+    if (status == AppStatus.authenticated) unawaited(zoo.refresh());
   }
 
   /// The app went into a pocket: stop the reads that only make sense in front
@@ -5544,6 +5790,14 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
+    for (final controller in _teamControllers.values) {
+      controller.dispose();
+    }
+    _teamControllers.clear();
+    for (final controller in _channelControllers.values) {
+      controller.dispose();
+    }
+    _channelControllers.clear();
     _disposed = true;
     _closedHistory.clear();
     _stopAllOfflineRetries();
@@ -5559,6 +5813,9 @@ class AppNotifier extends ChangeNotifier {
     sessionPreviews.dispose();
     agentNotices.dispose();
     _desk.dispose();
+    daemonHabits.dispose();
+    individualArt.dispose();
+    zoo.dispose();
     super.dispose();
   }
 }

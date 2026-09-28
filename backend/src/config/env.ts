@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import { z } from 'zod'
+import { parseDaemonsSwitch } from '../lib/daemonsSwitch.js'
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -16,6 +17,9 @@ const envSchema = z.object({
   // Same MongoDB (and database) as the agent-manager — backend owns `users` +
   // `machines`; reads `managers`/`machine_nodes` via raw queries when needed.
   DATABASE_URL: z.string().default('mongodb://localhost:27017/harness?replicaSet=rs0'),
+  // Module availability only. Each account must separately opt in in Experimental;
+  // no settings record means OFF. False disables the whole module for operators.
+  HARNESS_CHANNELS: z.string().default('true').transform(v => v === 'true'),
 
   // Redis for the cross-instance data bus. Behind a load balancer an agent's web socket and its
   // manager socket may land on different backend instances; Redis pub/sub bridges them
@@ -175,6 +179,13 @@ const envSchema = z.object({
   // Comma-separated emails granted role=admin on first creation.
   ADMIN_EMAILS: z.string().default(''),
 
+  // The daemons (daemons/README.md, "Off switches"): OFF unless 'true'. Off, the zoo routes are not
+  // registered at all (/api/zoo answers the ordinary 404) and nothing publishes or hears `zoo_changed`,
+  // which every client reads as "daemons are off". HARNESS_DAEMONS_USERS, with it on: comma-separated user
+  // ids or emails who alone see the zoo (the rest get the same 404); empty is everyone. lib/daemonsSwitch.ts.
+  HARNESS_DAEMONS: z.string().default('false'),
+  HARNESS_DAEMONS_USERS: z.string().default(''),
+
   // Device voice STT (PCM arrives on /api/device-ws → batch STT). VOICE_PROVIDER selects the backend:
   //   'deepgram' → needs DEEPGRAM_API_KEY
   //   'gemini'   → needs GEMINI_API_KEY (model via GEMINI_STT_MODEL)
@@ -254,3 +265,6 @@ export const env = validateEnv()
 export const ADMIN_EMAILS = new Set(
   env.ADMIN_EMAILS.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
 )
+
+/** Whether this server has daemons, and for whom (lib/daemonsSwitch.ts). Off by default. */
+export const DAEMONS = parseDaemonsSwitch(env.HARNESS_DAEMONS, env.HARNESS_DAEMONS_USERS)

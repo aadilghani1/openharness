@@ -767,8 +767,9 @@ void main() {
     expect(spawnCount, lessThan(6));
   });
 
+  // Signed-out daemons now serve local agents in guest mode, so supervision must continue.
   test(
-    'startSupervising keeps the local guest daemon running after sign-out',
+    'startSupervising keeps the guest daemon alive after sign-out',
     () async {
       const computerId = '0123456789abcdef0123456789abcdef';
       final identityFile = File('${scratch.path}/computer-id')
@@ -803,15 +804,16 @@ void main() {
 
       await Future.delayed(const Duration(milliseconds: 300));
 
+      expect(spawnCount, greaterThan(0));
       expect(
         spawnCount,
-        greaterThan(0),
-        reason: 'guest mode still needs the local daemon',
+        lessThan(6),
+        reason: 'guest restarts retain the backoff',
       );
       expect(
         signedOutCalls,
         spawnCount,
-        reason: 'auth is checked at each backed-off spawn',
+        reason: 'auth is checked once per spawn attempt',
       );
       expect(timer.isActive, isTrue);
     },

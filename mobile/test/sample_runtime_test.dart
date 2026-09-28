@@ -146,6 +146,34 @@ void main() {
     },
   );
 
+  test(
+    'the sample offers model creation and keeps the selected model',
+    () async {
+      final catalog = await runtime.notifier.gridModels('sample-studio');
+      expect(catalog.supportsModelLaunch, isTrue);
+      final model = catalog.sections.first.models.first;
+      final result = await connection.request(
+        'agent_create',
+        payload: {
+          'engine': 'codex',
+          'cwd': '~/code/api',
+          'gridModel': model.id,
+          'gridName': model.grid,
+        },
+      );
+      final agent = result['agent'] as Map;
+      expect(agent['grid'], {'model': model.id, 'gridName': model.grid});
+      expect(
+        runtime.notifier
+            .stateOf('sample-studio')!
+            .agents
+            .firstWhere((item) => item.id == agent['id'])
+            .gridModel,
+        model.id,
+      );
+    },
+  );
+
   test('missing harnesses and unsupported requests fail explicitly', () async {
     await expectLater(
       connection.request('agent_recent', payload: {'agentId': 'gone'}),

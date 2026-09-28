@@ -156,7 +156,8 @@ These are AI persona reviews of offline artifacts. They establish the visual sco
 - The mic stays where it is; the terminal is full screen under it.
 - Keep the word "harness" (harness = session; one agent, many harnesses). Teaching it is fine; renaming it is not.
 - No scroll-position indicator. The "api-fix asking" label stays.
-- New Harness keeps branch/worktree, approvals and profile under collapsed `Options [+]`. Default creation must not ask users to revisit these settings.
+- New Harness keeps Model, Approvals, Profile, Branch and Worktree under collapsed `Options [+]`. Default creation must not ask users to revisit these settings.
+- Branch and Worktree are **separate rows**, matching desktop Cmd-N. Branch picks the branch; Worktree toggles a separate working folder without changing that choice. Model offers the subscription and available models on own/shared machines; Profile applies to Codex on its subscription.
 - The Agent chooser shows the full scrollable list, with recently used engine choices first; no `more` gate.
 - Opening the Project chooser focuses its always-visible search field; opening Find focuses its search field too.
 - PRs only. The user merges and releases; nothing is merged or released without their explicit word.
@@ -165,8 +166,10 @@ These are AI persona reviews of offline artifacts. They establish the visual sco
 
 ### State
 
-- The user's build-46 review and a [twelve-hour change audit](2026-09-28-mobile-ui-change-audit.md) record the four corrections above, implemented for local iPhone build **47**. They supersede conflicting panel recommendations. Follow-up validation: **1,621 tests** and **25 renders** pass; analyzer clean outside the same 12 third-party informational findings. The coverage figures above were measured on build 46. The user requested an iPhone install only, not TestFlight.
-- Branch `phone-overnight-polish`; [PR #398](https://github.com/autonomous-ai/openharness/pull/398) contains the continuation and main integration. The user explicitly authorized merging and a local iPhone install for manual review. Check the PR for the resulting merge commit; no store release was requested.
+- **TestFlight 1.0.0 (49)** was uploaded on 2026-09-28 using the existing Xcode account after the user authorized TestFlight release. Apple accepted the upload and began processing it. The latest merged mobile source passes **1,643 offline tests**; production archive/IPA builds pass, and analysis is clean outside the same 12 third-party infos. [Release PR #409](https://github.com/autonomous-ai/openharness/pull/409) records the release and prepares build 50. See the [release notes](../../mobile/RELEASE.md) for the non-blocking WebRTC symbol warning.
+- [PR #402](https://github.com/autonomous-ai/openharness/pull/402) implements the user's desktop-parity request: separate Branch/Worktree controls and a Model chooser, all under collapsed Options. **1,636 tests** pass (28 conditional render skips), **28 screen renders** pass, and refreshed coverage is **88.9%** (18,622/20,957 lines, excluding `third_party/`). Analysis has only the same 12 third-party informational findings. Signed build **48** is installed and its version verified on the review iPhone. [Brief team handoff](2026-09-28-mobile-team-handoff.md).
+- The user's build-46 review and a [twelve-hour change audit](2026-09-28-mobile-ui-change-audit.md) record the four corrections above, merged in [PR #401](https://github.com/autonomous-ai/openharness/pull/401) for local iPhone build **47**. They supersede conflicting panel recommendations. Follow-up validation: **1,621 tests** and **25 renders** pass; analyzer clean outside the same 12 third-party informational findings. The original overnight coverage figures were measured on build 46. The user requested an iPhone install only, not TestFlight.
+- [PR #398](https://github.com/autonomous-ai/openharness/pull/398) merged the overnight polish, cleanup and main integration. The user explicitly authorized the merges and local iPhone installs for manual review; no store release was requested.
 - Merged into it and finished: `coverage-rest` (coverage engineer), `desktop-cut` (the desktop's half of the notifier), and the phone-screens and state-core engineers' passes. No engineer is still running.
 - Never commit `mobile/ios/Runner.xcodeproj/project.pbxproj`. It carries the local signing team and stays modified in the worktree.
 
@@ -183,7 +186,7 @@ The runtime is a standalone Flutter package in `mobile/`; agents run on linked c
 | `lib/{auth,api,viewer,e2ee,ws,p2p}/` | Sign-in/linking, backend API, encrypted relay and WebRTC transport |
 | `lib/{core,settings,shared,theme}/` | Models, preferences and shared UI foundations |
 | `lib/demo/` | Offline sample runtime, including its own entry point |
-| `test/`, `test/render/`, `integration_test/` | Regression tests, 25 screen renders and the sample simulator tour |
+| `test/`, `test/render/`, `integration_test/` | Regression tests, 28 screen renders and the sample simulator tour |
 
 The full tests run from `mobile/` in the monorepo: protocol checks read CLI source, and a branch-history UI test imports a desktop font fixture. Desktop-only routing, local CLI transport and grid controls have been removed. The new `session_work_page.dart` preserves main's current branch and PR-history UI.
 
@@ -191,8 +194,8 @@ The full tests run from `mobile/` in the monorepo: protocol checks read CLI sour
 
 From `mobile/`, with Flutter 3.47.2:
 
-- **Everything:** `flutter test`, about one minute. For coverage, `flutter test --coverage`, then read `coverage/lcov.info`.
-- **Screen renders:** `PHONE_RENDER_DIR=<dir> flutter test test/render/phone_screens_render_test.dart`. It writes 25 PNGs, one per screen. The fixture terminal is 42 columns, so canned lines must fit in 42.
+- **Everything:** `flutter test`, about two minutes. For coverage, `flutter test --coverage`, then read `coverage/lcov.info`.
+- **Screen renders:** `PHONE_RENDER_DIR=<dir> flutter test test/render/phone_screens_render_test.dart`. It writes 28 PNGs, including expanded Options and Model selection. The fixture terminal is 42 columns, so canned lines must fit in 42.
 - **Walk-through on the iOS simulator, sample mode only:** `HARNESS_JOURNEY_OUT=<dir> flutter drive --driver=test_driver/journey_driver.dart --target=integration_test/tour_test.dart`.
 
 ### Rules
@@ -235,6 +238,7 @@ From `mobile/`, with Flutter 3.47.2:
 
 ### Outside this branch
 
-- **Desktop PR #393** ("Your phones", with Remove, on the Mac) is waiting for the user to merge it.
-- **Website `/pair` page:** PR autonomous-ai/autonomous-code#4 needs a `_web` tag to deploy.
-- **TestFlight** is blocked until someone is on the release Mac, which has the App Store Connect key. Until then, the phone is a local `devicectl` install only.
+- **Desktop [PR #393](https://github.com/autonomous-ai/openharness/pull/393)** is merged: Add Phone lists/removes paired devices; password pairing retains the authenticated device name. Validated on current main with 18 desktop tests, 23 CLI pairing tests and clean analysis of the changed desktop files.
+- **Mobile PR #321** (clipboard image paste) remains open. The user limited merges to their own PRs; this PR belongs to another author and was not changed.
+- **Website [PR #4](https://github.com/autonomous-ai/autonomous-code/pull/4)** is merged: the `/pair` landing page and phone setup redirects. Its page test, redirect assertions and production build pass; changed files have no lint errors. Deployment still needs a `_web` release tag; no website release was made.
+- **TestFlight:** the user subsequently authorized release, and build **49** was uploaded through Xcode. The API-key environment used by `release-ios.sh` is still unconfigured on this Mac; the existing Xcode account supplied signing and upload authentication. No App Store review submission was made.

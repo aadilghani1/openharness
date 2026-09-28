@@ -145,6 +145,39 @@ else()   # esp32s3 — the round dial
 
 endif()
 
+# Shared protocol/audio guards are also used by the stock renderer on both boards.
+list(APPEND BOARD_SRCS "cable_scroll.c" "cable_json_guard.c" "cable_features.c"
+    "voice_buffer.c" "audio_probe.c" "ui/ui_perf.c")
+
+# Habitat replaces the round dial's renderer only; the Pro keeps its native panel and UI.
+if(DEVICE_HABITAT)
+    if(NOT IDF_TARGET STREQUAL "esp32s3")
+        message(FATAL_ERROR "DEVICE_HABITAT requires the 466-pixel ESP32-S3 round dial")
+    endif()
+    list(FILTER BOARD_SRCS EXCLUDE REGEX "^ui/")
+    list(REMOVE_ITEM BOARD_SRCS "audio_client.c")
+    list(APPEND BOARD_SRCS "audio_client_habitat.c" "ui/ui_perf.c"
+        "ui/habitat/display_habitat.c"
+        "ui/habitat/touch_habitat.c"
+        "ui/habitat/ui_habitat.c"
+        "ui/habitat/terminal.c"
+        "ui/habitat/scroll.c"
+        "ui/habitat/workspace.c"
+        "ui/habitat/selection.c"
+        "ui/habitat/carry.c"
+        "ui/habitat/visit.c"
+        "ui/habitat/form.c"
+        "ui/habitat/draft.c"
+        "ui/habitat/gestures.c"
+        "ui/habitat/tim.c"
+        "ui/habitat/octopus.c"
+        "ui/habitat/ascii_clip.c"
+        "ui/habitat/octopus_font.c"
+        "ui/habitat/command_face.c"
+        "ui/habitat/fonts.c"
+    )
+endif()
+
 idf_component_register(
     SRCS ${BOARD_SRCS}
     INCLUDE_DIRS
@@ -157,6 +190,19 @@ idf_component_register(
 # snprintf() is bounded (it truncates, never overflows), but -O2 enables a noisy
 # format-truncation analysis that errors on safe same-size copies. Keep it as a warning, not error.
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-format-truncation)
+
+if(DEVICE_PERF_BENCH)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_PERF_BENCH=1)
+endif()
+
+# Event-tagged A/B profiling of the connected octopus. Never part of a daily image.
+if(DEVICE_OCTOPUS_BENCH)
+    if(NOT DEVICE_PERF_BENCH OR NOT DEVICE_HABITAT OR DEVICE_CREATURE_GALLERY)
+        message(FATAL_ERROR "DEVICE_OCTOPUS_BENCH requires Habitat + PERF, without the gallery")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_OCTOPUS_BENCH=1)
+    target_sources(${COMPONENT_LIB} PRIVATE "ui/habitat/perf_bench.c")
+endif()
 
 # PROD build override: `idf.py -DDEVICE_FORCE_PROD=1 build` (into a separate build dir) forces the
 # production backend and ignores any local provisioned_config.h — no need to move the header, so the LOCAL
@@ -189,4 +235,64 @@ endif()
 if(BOARD_PROBE AND NOT IDF_TARGET STREQUAL "esp32p4")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE BOARD_PROBE=1)
     target_sources(${COMPONENT_LIB} PRIVATE "board/board_probe.c")
+endif()
+
+if(DEVICE_HABITAT)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_HABITAT=1)
+endif()
+
+if(DEVICE_TRANSPORT_BENCH)
+    if(NOT DEVICE_HABITAT OR DEVICE_CREATURE_GALLERY OR DEVICE_LAYOUT_BENCH)
+        message(FATAL_ERROR "DEVICE_TRANSPORT_BENCH requires the normal Habitat renderer")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_TRANSPORT_BENCH=1)
+    target_sources(${COMPONENT_LIB} PRIVATE "ui/habitat/transport_bench.c"
+        "../test/reference91/cable_frame_ref.c")
+endif()
+
+# Opt-in, local-only ASCII visual study. Omitted entirely from normal firmware.
+if(DEVICE_CREATURE_GALLERY)
+    if(NOT DEVICE_HABITAT)
+        message(FATAL_ERROR "DEVICE_CREATURE_GALLERY requires DEVICE_HABITAT")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_CREATURE_GALLERY=1)
+    target_sources(${COMPONENT_LIB} PRIVATE
+        "ui/habitat/creature_gallery.c"
+        "ui/habitat/creature_font.c")
+endif()
+
+# One-boot layout CPU profiling. Never enabled in the daily device image.
+if(DEVICE_LAYOUT_BENCH)
+    if(NOT DEVICE_HABITAT OR DEVICE_CREATURE_GALLERY OR DEVICE_OCTOPUS_BENCH)
+        message(FATAL_ERROR "DEVICE_LAYOUT_BENCH requires the connected Habitat UI only")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_LAYOUT_BENCH=1)
+    target_sources(${COMPONENT_LIB} PRIVATE "ui/habitat/layout_bench.c" "ui/habitat/scroll_bench.c")
+    if(DEVICE_LAYOUT_BASELINE STREQUAL "82")
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_LAYOUT_BASELINE82=1)
+    elseif(DEVICE_LAYOUT_BASELINE STREQUAL "79")
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_LAYOUT_BASELINE79=1)
+        target_sources(${COMPONENT_LIB} PRIVATE "../test/reference79/terminal_ref.c")
+    else()
+        target_sources(${COMPONENT_LIB} PRIVATE
+            "../test/reference48/terminal_ref.c" "../test/reference48/octopus_ref.c")
+    endif()
+    target_include_directories(${COMPONENT_LIB} PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/../test" "${CMAKE_CURRENT_LIST_DIR}/ui/habitat")
+endif()
+
+# One-shot fault injection, omitted from daily builds. A retained marker makes
+# the reboot after the injected stall resume normal operation instead of looping.
+if(DEVICE_RENDER_FAULT)
+    if(NOT DEVICE_HABITAT OR DEVICE_CREATURE_GALLERY OR DEVICE_LAYOUT_BENCH OR DEVICE_OCTOPUS_BENCH)
+        message(FATAL_ERROR "DEVICE_RENDER_FAULT requires the normal Habitat renderer")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_RENDER_FAULT=1)
+endif()
+
+if(DEVICE_RENDER_STRESS)
+    if(NOT DEVICE_HABITAT OR DEVICE_CREATURE_GALLERY OR DEVICE_LAYOUT_BENCH OR DEVICE_OCTOPUS_BENCH OR DEVICE_RENDER_FAULT)
+        message(FATAL_ERROR "DEVICE_RENDER_STRESS requires the normal Habitat renderer without fault injection")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_RENDER_STRESS=1)
 endif()

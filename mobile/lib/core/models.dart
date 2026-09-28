@@ -638,6 +638,9 @@ class GridSection {
 /// grid with nothing on it", because the two need different sentences in front
 /// of a person.
 class GridModels {
+  /// The daemon accepts a grid model on agent_create. Older daemons silently
+  /// ignore that field, so starting on a model requires explicit support.
+  final bool supportsModelLaunch;
   final String? gridName;
   final List<GridModel> models;
 
@@ -667,6 +670,7 @@ class GridModels {
   const GridModels({
     required this.gridName,
     required this.models,
+    this.supportsModelLaunch = false,
     this.grids = const [],
     this.localModelEngines,
     this.gridCli,
@@ -677,7 +681,8 @@ class GridModels {
   /// nothing is known — including which engines it would have offered, or
   /// whether it has a `grid`.
   const GridModels.unreachable()
-    : gridName = null,
+    : supportsModelLaunch = false,
+      gridName = null,
       models = const [],
       grids = const [],
       localModelEngines = null,

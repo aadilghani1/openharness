@@ -113,3 +113,11 @@
 // tile is what the carousel already is. The dial's home stays the carousel.
 #define UI_DESK_GRID   0
 
+// ── the notification pill ───────────────────────────────────────────────────────────────────────────
+// WHAT SHIPPED, unchanged: a small badge in the top band, where a 466 circle has room for a small badge
+// and nothing else. The square's version is a corner control and is sized for a thumb — see its file.
+#define NOTIF_FAB_PAD_H    13
+#define NOTIF_FAB_PAD_V    4
+#define NOTIF_PILL_FONT    (&lv_font_montserrat_22)
+#define NOTIF_PILL_GAP     6
+

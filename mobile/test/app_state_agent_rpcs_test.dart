@@ -126,6 +126,147 @@ void main() {
       },
     );
 
+    const selectedModel = GridModel(
+      id: 'coder',
+      node: 'server',
+      grid: 'team-grid',
+    );
+    const launchModels = {
+      'supportsModelLaunch': true,
+      'localModelEngines': ['codex'],
+      'grids': [
+        {
+          'name': 'team-grid',
+          'models': [
+            {'id': 'coder', 'node': 'server'},
+          ],
+        },
+      ],
+    };
+
+    for (final (name, answer, engine, message) in [
+      (
+        'old CLI',
+        {...launchModels, 'supportsModelLaunch': false},
+        'codex',
+        'Update Harness CLI',
+      ),
+      (
+        'unsupported engine',
+        launchModels,
+        'cursor',
+        'selected model is unavailable',
+      ),
+      (
+        'stopped model',
+        {...launchModels, 'grids': []},
+        'codex',
+        'selected model is unavailable',
+      ),
+      (
+        'same id on another grid',
+        {
+          ...launchModels,
+          'grids': [
+            {
+              'name': 'other-grid',
+              'models': [
+                {'id': 'coder'},
+              ],
+            },
+          ],
+        },
+        'codex',
+        'selected model is unavailable',
+      ),
+    ]) {
+      test('model creation stops before launch for $name', () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        rig.conn('m').answers['grid_models_list'] = (_) => answer;
+        final attempt = AgentCreationAttempt();
+        expect(
+          await rig.app.createAgent(
+            'm',
+            engine: engine,
+            folder: '/work',
+            model: selectedModel,
+            attempt: attempt,
+          ),
+          contains(message),
+        );
+        expect(attempt.awaitingConfirmation, isFalse);
+        expect(rig.conn('m').payloadsOf('agent_create'), isEmpty);
+      });
+    }
+
+    test(
+      'model verification timeout does not start on the subscription',
+      () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        rig.conn('m').answers['grid_models_list'] = (_) =>
+            throw const WsRequestTimeout('grid_models_list');
+        expect(
+          await rig.app.createAgent(
+            'm',
+            engine: 'codex',
+            folder: '/work',
+            model: selectedModel,
+          ),
+          contains('Could not verify models'),
+        );
+        expect(rig.conn('m').payloadsOf('agent_create'), isEmpty);
+      },
+    );
+
+    test(
+      'model creation sends its grid once; a lost receipt only checks status',
+      () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        rig.conn('m').answers['grid_models_list'] = (_) => launchModels;
+        rig.conn('m').answers['agent_create'] = (_) =>
+            throw const WsRequestTimeout('agent_create');
+        final attempt = AgentCreationAttempt();
+        expect(
+          await rig.app.createAgent(
+            'm',
+            engine: 'codex',
+            folder: '/work',
+            model: selectedModel,
+            attempt: attempt,
+          ),
+          contains('Check status'),
+        );
+        final sent = rig.conn('m').payloadsOf('agent_create').single;
+        expect(sent['gridModel'], 'coder');
+        expect(sent['gridName'], 'team-grid');
+        expect(attempt.awaitingConfirmation, isTrue);
+        // Losing the model must not prevent asking whether the harness started.
+        rig.conn('m').answers['grid_models_list'] = (_) =>
+            throw const WsRequestTimeout('grid_models_list');
+        rig.conn('m').answers['agent_create_status'] = (p) => created(p, 'new');
+        expect(
+          await measured(
+            rig,
+            'm',
+            rig.app.createAgent(
+              'm',
+              engine: 'codex',
+              folder: '/work',
+              model: selectedModel,
+              attempt: attempt,
+            ),
+          ),
+          isNull,
+        );
+        expect(rig.conn('m').payloadsOf('grid_models_list'), hasLength(1));
+        expect(rig.conn('m').payloadsOf('agent_create'), hasLength(1));
+        expect(rig.conn('m').payloadsOf('agent_create_status'), hasLength(1));
+      },
+    );
+
     test('a refusal before anything launched is said, and final', () async {
       final rig = await signedInWith({'m': []});
       addTearDown(rig.app.dispose);
@@ -1144,6 +1285,17 @@ void main() {
     );
 
     test(
+      'a model subscription reading asks only its selected computer',
+      () async {
+        final rig = await signedInWith({'m': [], 'n': []});
+        addTearDown(rig.app.dispose);
+        await rig.app.readRemoteUsage(machineId: 'n');
+        expect(rig.conn('m').asked, isNot(contains('usage_read')));
+        expect(rig.conn('n').asked, contains('usage_read'));
+      },
+    );
+
+    test(
       'usage is read from each connected machine, and silence adds nothing',
       () async {
         final rig = await signedInWith({
@@ -1226,7 +1378,7 @@ void main() {
         ('MEDIA_TOO_LARGE', '512 MB'),
         ('MEDIA_CHANGED', 'changed while downloading'),
         ('MEDIA_UNSUPPORTED', 'not a supported'),
-        ('MEDIA_INVALID_REQUEST', 'full path'),
+        ('MEDIA_INVALID_REQUEST', 'outside the folders'),
         ('AGENT_NOT_FOUND', 'harness is no longer available'),
         ('NOT_TEXT', 'Update the Harness CLI'),
         ('WHATEVER', 'could not read this file'),

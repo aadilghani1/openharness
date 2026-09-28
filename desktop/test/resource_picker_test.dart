@@ -1627,7 +1627,30 @@ void main() {
     expect(find.text('https://api.deepseek.com'), findsWidgets);
     expect(find.byType(Dialog), findsNothing);
     final name = find.byKey(const ValueKey('api-form-input:name'));
+    bool focused(Finder input) =>
+        tester.widget<TextField>(input).focusNode!.hasFocus;
     await tester.enterText(name, 'Draft API');
+    // Tab walks the form as any form does: its fields, then its buttons, then out to the list.
+    await key(tester, LogicalKeyboardKey.tab);
+    expect(focused(find.byKey(const ValueKey('api-form-input:url'))), isTrue);
+    await key(tester, LogicalKeyboardKey.tab);
+    expect(focused(find.byKey(const ValueKey('api-form-input:key'))), isTrue);
+    await key(tester, LogicalKeyboardKey.tab);
+    expect(
+      tester
+          .widget<Focus>(
+            find
+                .descendant(
+                  of: find.byKey(const ValueKey('api-form:save')),
+                  matching: find.byType(Focus),
+                )
+                .first,
+          )
+          .focusNode!
+          .hasFocus,
+      isTrue,
+    );
+    expect(controller.managing, isTrue);
     await key(tester, LogicalKeyboardKey.tab);
     expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
     expect(controller.managing, isFalse);

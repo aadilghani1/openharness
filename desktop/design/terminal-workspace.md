@@ -31,6 +31,10 @@ User content and embedded viewers retain their own visual language.
 ## Keyboard is the primary path
 
 Every workspace action needs an existing command or a clear keyboard interaction.
+Cmd-S opens the Store tab, Cmd-M opens Machines (`@`), and Cmd-I opens Models (`:`).
+History remains available from its menu without a default shortcut. Cmd-Y and Cmd-U
+have no default workspace action. On macOS, Minimize remains available from the
+yellow window button and the Window menu; Cmd-M belongs to Machines inside Harness.
 Resolve shortcut hints from the live keymap. Cmd-N creates a harness, Cmd-O opens projects (`#`), Cmd-P searches harnesses, and Cmd-Shift-P opens
 commands (`>`) in the shared picker. Cmd-I opens models with `:` already entered;
 typing Shift is unnecessary. From a live harness pane, Enter uses a served or
@@ -47,7 +51,10 @@ Keep mouse access useful without adding duplicate floating controls. Clickable
 text shows a hand cursor and bold text on hover, press, and keyboard focus.
 Preserve the underlying colors, including filled status segments. Reserve both
 text weights during layout so emphasis never shifts neighboring controls.
-Resting controls stay unboxed. Tooltips describe the
+Resting controls stay unboxed, except the optional Share action: its flat
+primary accent fill makes collaboration visible at the top-right corner.
+Settings → Experimental → Share button enables it; it is off by default.
+Tooltips describe the
 action, not merely the text. Omit a tooltip that repeats the visible name;
 show the full name when truncated, or a different underlying name. A model
 selector says `Switch model · Subscription or local models`; include its full
@@ -104,11 +111,11 @@ shared app bar. A dependent viewer uses its owner's context. Keep internal
 worktree paths and machinery out of everyday labels.
 
 Machine opens the shared picker scoped to that machine. Project opens its harnesses across
-known checkouts and machines. With session Git context, Branch opens Work details:
-current observed checkout, launch workspace, observed branches and PR history.
+known checkouts and machines. With session Git context, Branch opens Branches and pull requests: checked-out and recorded branches,
+with PR history. Temporary checkout paths stay out of these labels and details.
 Older daemons keep exact-branch project search. Hide detached commit hashes from
-the bar. Ambiguous or unavailable work is plain context text, without a branch
-symbol. These are navigation actions; they do not check out a branch.
+the bar. Multiple branches or unavailable Git data use plain context text, without a
+branch symbol. These are navigation actions; they do not check out a branch.
 The PR label opens that PR. Each field gets its own accessible link, tooltip, and
 the shared hover treatment, including in joined Agnoster segments.
 

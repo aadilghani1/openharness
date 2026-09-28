@@ -313,6 +313,15 @@ void ui_voice_route_abort(void);
 // One short line from the cabled Mac (a routing refusal, a send that did not land). Releases the routing
 // overlay first, then shows the message for ~2s over whatever is on screen.
 void ui_cable_toast(const char *msg);
+void ui_selection_state(const struct cJSON *payload);
+void ui_draft_state(const struct cJSON *p);
+void ui_voice_draft(const struct cJSON *p);
+void ui_voice_question(const struct cJSON *p);
+void ui_voice_form(const struct cJSON *p);
+void ui_form_state(const struct cJSON *payload);
+void ui_carry_state(const struct cJSON *payload);
+void ui_visit_state(const struct cJSON *payload);
+void ui_voice_error(const char *msg);
 // Backend daily voice quota. Status caps the current recording to the remaining allowance; exceeded
 // stops capture, restores the previous screen and shows a short non-fatal toast.
 void ui_voice_quota_status(int remaining_seconds);
@@ -407,3 +416,10 @@ bool ui_lock_active(void);
 // One line on the log whenever what covers the face changes (screen, overlay, drawer, lock, sleep).
 // Called from the LVGL task every loop; cheap when nothing changed.
 void ui_log_state_if_changed(void);
+
+void ui_question_state(const struct cJSON *payload);
+void ui_answer_receipt(const struct cJSON *payload);
+
+void ui_voice_search(const struct cJSON *p);
+
+void ui_workspace_applied(const char *tab, uint32_t generation);

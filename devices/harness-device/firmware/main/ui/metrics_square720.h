@@ -137,6 +137,41 @@
 #define DESK_STRIP_H       52
 #define DESK_TAB_H         52
 #define DESK_TAB_NAME_MAX  300
+// THE TOP BAND IS THE TABS' AND NOTHING ELSE'S.
+//
+// The bell had a seat here for one build, and it cost twice. With nothing to report the seat was an
+// empty 84px gap that read as a bug; to make the seat at all the strip had to give up the width, which
+// pushed the last tab under a fade — and a fade is a gradient, not an affordance, so the screen stopped
+// saying there were more tabs at all (owner, 2026-09-28, two photos).
+//
+// The bell went to the bottom-right corner instead, where this face had room going spare. See
+// NOTIF_FAB_* below and the align in ui_screens.c.
+#define DESK_STRIP_W       (UI_FACE_W - 2 * DESK_STRIP_X)
+
+// ── the notification button, bottom right ───────────────────────────────────────────────────────────
+// A FLOATING control, not a reserved one: it is drawn only when something is waiting, so it can sit
+// over whatever is behind it — the desk's corner tile, the empty air under an agent — and cost nothing
+// on every screen where the count is zero, which is most of them.
+#define NOTIF_FAB_MARGIN   SCREEN_PAD
+
+// 30% SMALLER AND HALF LIT, because it is not news — it is a count that sits there.
+//
+// At 64px in full blue it was the brightest thing on a face that is on all day, in the corner the eye
+// rests in, saying only "two things are waiting" (owner, 2026-09-28: "nó sáng quá gây distract"). A
+// notification the size of a button and the brightness of an alert asks to be dealt with now; this one
+// does not. So it keeps its corner and stops shouting from it.
+//
+// Every number below is the old one times 0.7, and the font follows: montserrat_22's line box is ~26,
+// so 26 + 2*10 = NOTIF_FAB_H, and the circle is still full rather than a ring around a small mark.
+#define NOTIF_FAB_H        46
+#define NOTIF_FAB_PAD_H    15
+#define NOTIF_FAB_PAD_V    10
+#define NOTIF_PILL_FONT    (&lv_font_montserrat_22)
+#define NOTIF_PILL_GAP     7
+// On the OBJECT, not on the background: the fill, the glyph and the count dim together, so it reads as
+// one quiet control rather than as bright text on a faded disc.
+#define NOTIF_FAB_OPA      LV_OPA_50
+#define NOTIF_FAB_SHADOW   17
 
 #define DESK_MARK_LG   40
 #define DESK_MARK_MD   32

@@ -415,7 +415,7 @@ void main() {
         }
 
         expect(resourceScope('@'), findsOneWidget);
-        expect(find.text('Add machine'), findsOneWidget);
+        expect(resourceSearch(tester).rows.last.title, 'Add machine');
         expect(app.activeSwarm, same(tab));
         expect(app.panes, isEmpty);
         expect(tester.takeException(), isNull);

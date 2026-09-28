@@ -14,6 +14,8 @@ const int e2eVersion = 1;
 /// fails nowhere on the phone: the frame simply leaves in the clear, and the machine refuses it with
 /// E2EE_REQUIRED (for terminal_* the relay drops it as TERMINAL_FRAME_REJECTED).
 const Set<String> encryptedDownTypes = {
+  'team',
+  'team_delivery',
   'message',
   'question_response',
   'agents_list',
@@ -46,6 +48,8 @@ const Set<String> encryptedDownTypes = {
   'git_project_info',
   // The harness's branch and pull-request history is a machine RPC too.
   'git_pull_request',
+  // The trust-group roster swap (`viewer/group_sync.dart`): the keys every member trusts.
+  'group_sync',
   'codex_profiles_list',
   'codex_profile_link',
   // Asks the machine to read its OWN agent accounts' usage (cli/src/lib/accountUsage.ts). Missing
@@ -79,6 +83,9 @@ const Set<String> encryptedDownTypes = {
   'p2p_ice_candidate',
   'p2p_abort',
   'p2p_promote',
+  // An individual daemon's plates, asked of harnessd (daemons/README.md, "Individual art"): one of the
+  // pair brain's machine-to-machine frames (`PAIR_REQUESTS` in applicationFrames.ts), always sealed.
+  'pair_plate_get',
 };
 
 /// Requests an older CLI took in the clear and a current one refuses unsealed — applicationFrames.ts

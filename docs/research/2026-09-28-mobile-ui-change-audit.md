@@ -17,6 +17,15 @@ The four requested behaviors are implemented for local iPhone build **47**. Its 
 
 Exposing advanced options came from the review panel. The `more` gate and unfocused Find predate this continuation; they were retained in the shipped build. The earlier explanation implying they were newly introduced here was inaccurate. Panel preferences do not supersede the user's specified interaction design.
 
+## Desktop parity requested after build 47
+
+Local build **48** adds the user's explicit Cmd-N corrections:
+
+- **Branch** opens the branch picker directly. **Worktree** is a separate `[x]` / `[ ]` row; toggling it preserves the chosen branch. Both remain under collapsed Options.
+- **Model** offers the agent's subscription, models on the user's machines and shared models. The selected model/grid is sent with creation; a fresh capability/catalog check prevents an older CLI or stopped model from silently starting on the subscription.
+- Expanded order is Model, Approvals, Profile (Codex subscription only), Branch, Worktree. Cancelling keeps the draft; changing computers clears its model selection.
+- The offline sample supports the same model choice. Three additional screen renders cover expanded Claude/Codex options and the model picker.
+
 ## Overnight UI/UX changes now in build 46
 
 The [comparison after PR #387](https://github.com/autonomous-ai/openharness/compare/244cfe71...e0daa25c) contains these changes and the reliability work.

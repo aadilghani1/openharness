@@ -6,7 +6,8 @@ import 'package:harness_mobile/phone/agent_swipe.dart';
 import 'package:harness_mobile/phone/new_agent_draft.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
 import 'package:harness_mobile/phone/find_row.dart';
-import 'package:harness_mobile/phone/tty_controls.dart' show TtyFieldMic;
+import 'package:harness_mobile/phone/tty_controls.dart'
+    show TtyFieldMic, TtyFormRow;
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'edge_fixture.dart';
@@ -23,6 +24,26 @@ void main() {
         {'engine': 'claude', 'installed': true},
         {'engine': 'codex', 'installed': true, 'supportsCodexHome': true},
         {'engine': 'opencode', 'installed': false, 'installable': false},
+      ],
+    },
+    'grid_models_list': {
+      'supportsModelLaunch': true,
+      'localModelEngines': ['claude', 'codex', 'opencode'],
+      'grids': [
+        {
+          'name': 'own',
+          'own': true,
+          'models': [
+            {'id': 'qwen-coder', 'node': 'studio'},
+          ],
+        },
+        {
+          'name': 'team-grid',
+          'own': false,
+          'models': [
+            {'id': 'shared-coder', 'node': 'server'},
+          ],
+        },
       ],
     },
     'codex_profiles_list': {
@@ -53,9 +74,10 @@ void main() {
     bool twoMachines = false,
     bool makesProjects = true,
     List<Agent>? agents,
+    Map<String, Map<String, dynamic>> overrides = const {},
   }) async {
     setPhone(tester, largePhone);
-    final conn = EdgeConn(answers, startsAgents);
+    final conn = EdgeConn({...answers, ...overrides}, startsAgents);
     if (!makesProjects) {
       conn.capabilities = {...conn.capabilities, 'features': {}};
     }
@@ -198,41 +220,186 @@ void main() {
     await close(tester, app);
   });
 
-  testWidgets('the branch: this folder, a new worktree, another branch, a '
-      'new name', (tester) async {
+  TtyFormRow formRow(WidgetTester tester, String label) =>
+      tester.widget<TtyFormRow>(
+        find.byWidgetPredicate(
+          (widget) => widget is TtyFormRow && widget.label == label,
+        ),
+      );
+
+  for (final worktree in [false, true]) {
+    testWidgets(
+      'branch and worktree are independent; create with worktree $worktree',
+      (tester) async {
+        final (:app, :conn) = await openNew(tester);
+        expect(find.text('branch'), findsNothing);
+        expect(find.text('worktree'), findsNothing);
+        await tapInView(tester, find.text('options'));
+        await frames(tester);
+        expect(formRow(tester, 'branch').value, 'main');
+        expect(formRow(tester, 'worktree').value, '[x]');
+
+        await choose(tester, 'branch', 'fix/login');
+        expect(formRow(tester, 'branch').value, 'fix/login');
+        expect(formRow(tester, 'worktree').value, '[x]');
+        await tapInView(tester, find.text('worktree'));
+        await frames(tester);
+        expect(formRow(tester, 'worktree').value, '[ ]');
+        expect(formRow(tester, 'branch').value, 'fix/login');
+        if (worktree) {
+          await tapInView(tester, find.text('worktree'));
+          await frames(tester);
+        }
+        // Collapsing Options must keep both choices.
+        await tapInView(tester, find.text('options'));
+        await frames(tester);
+        await tapInView(tester, find.text('Start'));
+        await frames(tester, count: 20);
+        final payload = conn.payloads['agent_create']!.single;
+        expect(payload['projectSource'], worktree ? 'worktree' : 'branch');
+        expect(payload['branchRef'], 'refs/heads/fix/login');
+        expect(payload.containsKey('cwd'), isFalse);
+        expect(payload.containsKey('gridModel'), isFalse);
+        await close(tester, app);
+      },
+    );
+  }
+
+  testWidgets('a new branch name works with Worktree off', (tester) async {
     final (:app, :conn) = await openNew(tester);
-    expect(find.text('branch'), findsNothing);
     await tapInView(tester, find.text('options'));
     await frames(tester);
-    expect(find.text('branch'), findsOneWidget);
-
-    await choose(tester, 'branch', 'New Worktree');
-    expect(find.textContaining('in its own folder'), findsWidgets);
-    await choose(tester, 'branch', 'main');
-
-    await choose(tester, 'branch', '+ Other Branch');
-    // The branch picker: pick an existing one.
-    await tapInView(tester, find.text('fix/login', findRichText: true).last);
+    await tapInView(tester, find.text('worktree'));
     await frames(tester);
-
-    // And a new name, cleaned the way Git takes it.
-    await choose(tester, 'branch', '+ Other Branch');
-    final typeOne = find.textContaining('New branch', findRichText: true);
-    if (typeOne.evaluate().isNotEmpty) {
-      await tester.tap(typeOne.last);
-      await frames(tester);
-      await tester.enterText(find.byType(TextField).last, 'fix the login');
-      await tester.pump();
-      expect(find.text('Git will call it fix-the-login'), findsOneWidget);
-      await tester.tap(find.text('Use'));
-      await frames(tester);
-    }
-
+    await choose(tester, 'branch', 'New branch…');
+    await tester.enterText(find.byType(TextField).last, 'fix the login');
+    await tester.pump();
+    expect(find.text('Git will call it fix-the-login'), findsOneWidget);
+    await tester.tap(find.text('Use'));
+    await frames(tester);
+    expect(formRow(tester, 'branch').value, 'fix-the-login');
+    expect(formRow(tester, 'worktree').value, '[ ]');
     await tapInView(tester, find.text('Start'));
     await frames(tester, count: 20);
-    expect(conn.payloads['agent_create'], hasLength(1));
+    final payload = conn.payloads['agent_create']!.single;
+    expect(payload['projectSource'], 'branch');
+    expect(payload['branchName'], 'fix-the-login');
     await close(tester, app);
   });
+
+  for (final (model, grid) in [
+    ('qwen-coder', 'own'),
+    ('shared-coder', 'team-grid'),
+  ]) {
+    testWidgets(
+      'starts directly on $model from $grid without a Codex profile',
+      (tester) async {
+        final (:app, :conn) = await openNew(tester);
+        await choose(tester, 'agent', 'Codex');
+        await tapInView(tester, find.text('options'));
+        await frames(tester);
+        await choose(tester, 'profile', 'work');
+        await tapInView(tester, find.text('model'));
+        await frames(tester);
+        expect(find.text('Subscription'), findsOneWidget);
+        expect(find.text('On your machines'), findsOneWidget);
+        expect(find.text('Shared · team-grid'), findsOneWidget);
+        expect(tester.testTextInput.isVisible, isTrue);
+        tester.testTextInput.updateEditingValue(TextEditingValue(text: model));
+        await frames(tester);
+        await tapInView(tester, find.text(model, findRichText: true).last);
+        await frames(tester);
+        expect(formRow(tester, 'model').value, model);
+        expect(find.text('profile'), findsNothing);
+        await tapInView(tester, find.text('Start'));
+        await frames(tester, count: 20);
+        final payload = conn.payloads['agent_create']!.single;
+        expect(payload['gridModel'], model);
+        expect(payload['gridName'], grid);
+        expect(payload.containsKey('codexHome'), isFalse);
+        expect(conn.payloads['agent_retarget'], isNull);
+        await close(tester, app);
+      },
+    );
+  }
+
+  testWidgets(
+    'model, branch and Worktree survive Cancel; subscription restores profile',
+    (tester) async {
+      final (:app, :conn) = await openNew(tester);
+      await choose(tester, 'agent', 'Codex');
+      await tapInView(tester, find.text('options'));
+      await frames(tester);
+      await choose(tester, 'profile', 'work');
+      await choose(tester, 'model', 'qwen-coder');
+      await choose(tester, 'branch', 'fix/login');
+      await tapInView(tester, find.text('worktree'));
+      await frames(tester);
+      await tester.binding.handlePopRoute();
+      await frames(tester, count: 6);
+      expect(newAgentDraft?.model?.id, 'qwen-coder');
+      expect(newAgentDraft?.branchRef, 'refs/heads/fix/login');
+      expect(newAgentDraft?.worktree, isFalse);
+      await tester.tap(find.text('focus'));
+      await frames(tester);
+      await tapInView(tester, find.text('options'));
+      await frames(tester);
+      expect(formRow(tester, 'model').value, 'qwen-coder');
+      expect(formRow(tester, 'branch').value, 'fix/login');
+      expect(formRow(tester, 'worktree').value, '[ ]');
+      await choose(tester, 'model', 'OpenAI');
+      expect(formRow(tester, 'profile').value, 'work');
+      await tapInView(tester, find.text('Start'));
+      await frames(tester, count: 20);
+      final payload = conn.payloads['agent_create']!.single;
+      expect(payload['codexHome'], '/home/ada/.codex-work');
+      expect(payload.containsKey('gridModel'), isFalse);
+      await close(tester, app);
+    },
+  );
+
+  testWidgets('changing computers drops the old computer model selection', (
+    tester,
+  ) async {
+    final (:app, :conn) = await openNew(tester, twoMachines: true);
+    await tapInView(tester, find.text('options'));
+    await frames(tester);
+    await choose(tester, 'model', 'qwen-coder');
+    await choose(tester, 'project', 'api');
+    expect(formRow(tester, 'model').value, 'Anthropic');
+    await tapInView(tester, find.text('Start'));
+    await frames(tester, count: 20);
+    expect(
+      conn.payloads['agent_create']!.single.containsKey('gridModel'),
+      isFalse,
+    );
+    await close(tester, app);
+  });
+
+  testWidgets(
+    'an older CLI keeps subscription creation and explains missing models',
+    (tester) async {
+      final (:app, :conn) = await openNew(
+        tester,
+        overrides: {'grid_models_list': {}},
+      );
+      await tapInView(tester, find.text('options'));
+      await frames(tester);
+      await tapInView(tester, find.text('model'));
+      await frames(tester);
+      expect(find.textContaining('Update Harness CLI'), findsOneWidget);
+      expect(find.text('qwen-coder', findRichText: true), findsNothing);
+      await tapInView(tester, find.text('Anthropic', findRichText: true).last);
+      await frames(tester);
+      await tapInView(tester, find.text('Start'));
+      await frames(tester, count: 20);
+      expect(
+        conn.payloads['agent_create']!.single.containsKey('gridModel'),
+        isFalse,
+      );
+      await close(tester, app);
+    },
+  );
 
   testWidgets('the project: a folder on another computer moves the harness '
       'there', (tester) async {
@@ -271,13 +438,13 @@ void main() {
       const TextEditingValue(text: 'api'),
     );
     await frames(tester);
-      expect(
-        find.descendant(
-          of: find.byType(FindRow),
-          matching: find.text('api', findRichText: true),
-        ),
-        findsOneWidget,
-      );
+    expect(
+      find.descendant(
+        of: find.byType(FindRow),
+        matching: find.text('api', findRichText: true),
+      ),
+      findsOneWidget,
+    );
     expect(find.text('web', findRichText: true), findsNothing);
     await close(tester, app);
   });

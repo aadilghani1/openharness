@@ -47,6 +47,26 @@ Setting up a second machine: create a Team Key at App Store Connect ▸ Users an
 The script validates before uploading, which is what catches a duplicate build number or a missing
 icon size in thirty seconds instead of in an email twenty minutes later.
 
+### Upload with an existing Xcode account
+
+If the release script stops at `no credentials`, an Apple account already signed into Xcode can
+also sign and upload. Select the Autonomous Inc. team, then build the same production archive:
+
+```bash
+cd mobile
+flutter build ipa --release --export-method app-store
+```
+
+Export that archive with `xcodebuild -exportArchive -allowProvisioningUpdates`, using an export
+options plist with `method = app-store-connect`, `destination = upload`, `signingStyle = automatic`,
+`teamID = 54DJVWMJCC` and `manageAppVersionAndBuildNumber = false`. The archive is
+`mobile/build/ios/archive/Runner.xcarchive`. This uses Xcode's account session; it does not configure
+API-key credentials for `release-ios.sh`.
+
+Build 49 used this path. Apple accepted the upload and started processing it. Xcode reported a
+non-blocking missing dSYM for the vendored WebRTC framework; native crashes inside that framework
+may lack symbolicated stacks until the matching symbols are supplied.
+
 ### Already uploaded
 
 | Build | When | Where it went |
@@ -92,9 +112,10 @@ icon size in thirty seconds instead of in an email twenty minutes later.
 | `1.0.0 (46)` | 2026-09-25 | TestFlight. The search sheet lifts to full screen while a search is typed; a machine that locks out remote-password attempts says so (OH-5, #353); the browser setup links are gone (OH-2, #348) |
 | `1.0.0 (47)` | 2026-09-25 | TestFlight. The tabs/search sheet closes the easy way: Close beside the field, a pull of 120pt instead of half the screen, and a pull from anywhere on a list already at its top. The terminal keeps a snapshot's colours as tmux carried them (a wrapped dim line no longer turns bright after a resize or reconnect) — the fix is in the CLI, so it shows once the machine runs it; a truncated 38/48 colour no longer fails the renderer, and palette slot 15 is bright white |
 | `1.0.0 (48)` | 2026-09-26 | TestFlight. Paste in the terminal's ⋯ sheet: the clipboard's text as one paste, or, with no text, its image as an attachment (iOS and Android, #321 by jaylfc). The pager no longer counts an agent it is about to close against its cap of open streams, so the page ahead attaches after a swipe |
+| `1.0.0 (49)` | 2026-09-28 | TestFlight upload accepted; processing started. Phone polish and cleanup, full recent-first Agent picker, Project/Find search autofocus, collapsed Options with separate Branch/Worktree controls and Model choices, and trusted-device group sync from main. 1,643 offline tests pass; analyzer clean outside existing third-party infos. |
 
-`pubspec.yaml` is therefore at `1.0.0+30`: the repo always holds the NEXT build number, so a release
-runs clean without anyone having to remember the last one.
+`pubspec.yaml` is now at `1.0.0+50`, the next build number. Build 49 is already uploaded; do not
+upload it again. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 

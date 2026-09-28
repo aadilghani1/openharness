@@ -252,6 +252,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
     widget.notifier.focusedPaneId,
     widget.notifier.paneFocusRequest,
     widget.notifier.zoomedPaneId,
+    widget.notifier.tabStripFocused,
   );
 
   @override
@@ -330,7 +331,11 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
         ModalRoute.of(context)?.isCurrent == false) {
       return;
     }
-    if (app.focusedPane?.session?.focusInput() != true) {
+    // A closed tab left the keyboard on the tab strip: the tab shown now does
+    // not take it until the person goes into it. The screen focuses the strip.
+    if (app.tabStripFocused) return;
+    if (app.focusedPane?.session?.focusInput() != true &&
+        app.focusedPane?.focusViewerInput?.call() != true) {
       // Blank pages and not-yet-mounted destinations must release the old
       // terminal's text client immediately, without focusing welcome search.
       _idleFocus.requestFocus();
@@ -1232,6 +1237,7 @@ class _PaneCell extends StatelessWidget {
             child: _FileDropZone(
               notifier: notifier,
               pane: pane,
+              visible: visible,
               child: _SwapZone(
                 notifier: notifier,
                 paneId: pane.id,
@@ -1626,11 +1632,13 @@ class _FileDropZone extends StatefulWidget {
   const _FileDropZone({
     required this.notifier,
     required this.pane,
+    required this.visible,
     required this.child,
   });
 
   final AppNotifier notifier;
   final TerminalPane pane;
+  final bool visible;
   final Widget child;
 
   @override
@@ -1640,10 +1648,21 @@ class _FileDropZone extends StatefulWidget {
 class _FileDropZoneState extends State<_FileDropZone> {
   bool _hovering = false;
 
+  bool get _active =>
+      mounted && widget.visible && widget.notifier.panes.contains(widget.pane);
+
+  bool _canDeliver(TerminalSession session, String streamId) =>
+      _active &&
+      identical(widget.pane.session, session) &&
+      session.streamId == streamId &&
+      session.acceptsInput;
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     return DropTarget(
+      key: ValueKey('pane-file-drop-${widget.pane.id}'),
+      enable: widget.visible && (widget.pane.session?.acceptsInput ?? false),
       onDragEntered: (_) => setState(() => _hovering = true),
       onDragExited: (_) => setState(() => _hovering = false),
       onDragDone: (details) async {
@@ -1705,10 +1724,11 @@ class _FileDropZoneState extends State<_FileDropZone> {
   }
 
   Future<void> _handleDrop(List<DropItem> files) async {
-    if (files.isEmpty) return;
-    widget.notifier.focusPane(widget.pane.id);
+    if (files.isEmpty || !_active) return;
     final session = widget.pane.session;
-    if (session == null) return; // pane not attached to a live session yet
+    if (session == null || !session.acceptsInput) return;
+    final streamId = session.streamId!;
+    widget.notifier.focusPane(widget.pane.id);
     final machine = widget.notifier.stateOf(widget.pane.machineId);
 
     final images = <DropItem>[];
@@ -1734,7 +1754,7 @@ class _FileDropZoneState extends State<_FileDropZone> {
     // Only the first image: several back-to-back would race the same OS clipboard + single Ctrl+V
     // nudge on the daemon side — see pasteImage's own doc.
     if (images.isNotEmpty) {
-      await _dropImage(images.first, machine, session);
+      await _dropImage(images.first, machine, session, streamId);
       if (images.length > 1) {
         final ignored = images.length - 1;
         _toast(
@@ -1745,7 +1765,7 @@ class _FileDropZoneState extends State<_FileDropZone> {
 
     // Every non-image file, independently — no shared resource to race over.
     for (final item in others) {
-      await _dropFile(item, machine, session);
+      await _dropFile(item, machine, session, streamId);
     }
   }
 
@@ -1753,7 +1773,9 @@ class _FileDropZoneState extends State<_FileDropZone> {
     DropItem item,
     MachineState? machine,
     TerminalSession session,
+    String streamId,
   ) async {
+    if (!_canDeliver(session, streamId)) return;
     // Not "cannot receive a native image paste" — that's a real capability gap, this is just a
     // race between the drop landing and machine state loading. Conflating the two would send the
     // user to fix a machine that is perfectly fine.
@@ -1769,6 +1791,7 @@ class _FileDropZoneState extends State<_FileDropZone> {
       return;
     }
     final png = await ensurePngBytes(raw);
+    if (!_canDeliver(session, streamId)) return;
     if (png == null) {
       _toast('${item.name} is not a readable image');
       return;
@@ -1780,6 +1803,7 @@ class _FileDropZoneState extends State<_FileDropZone> {
     // the chunked-upload path, which is for a genuinely remote machine's DIFFERENT clipboard.
     if (machine.isLocalMachine) {
       final wrote = await NativeClipboard.writeImagePng(png);
+      if (!_canDeliver(session, streamId)) return;
       if (!wrote) {
         _toast('Could not set the clipboard on this machine');
         return;
@@ -1805,7 +1829,9 @@ class _FileDropZoneState extends State<_FileDropZone> {
     DropItem item,
     MachineState? machine,
     TerminalSession session,
+    String streamId,
   ) async {
+    if (!_canDeliver(session, streamId)) return;
     // Same reasoning as _dropImage: null here is a transient race, not "this machine can't do
     // this" — say so distinctly rather than falling through to the remote/upload branch below,
     // which would silently take the wire for what might actually be a local pane.
@@ -1834,6 +1860,7 @@ class _FileDropZoneState extends State<_FileDropZone> {
       _toast('Could not read ${item.name}');
       return;
     }
+    if (!_canDeliver(session, streamId)) return;
     if (bytes.length > terminalLocalPasteFileMaxPayloadBytes) {
       _toast(
         '${item.name} is larger than ${_mb(terminalLocalPasteFileMaxPayloadBytes)}',

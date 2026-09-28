@@ -34,7 +34,9 @@ class SessionWorkDialog extends StatefulWidget {
 class _SessionWorkDialogState extends State<SessionWorkDialog> {
   AgentGitContext? _data;
   bool _loading = false;
+  bool? _showCompleted;
   String? _error;
+  int? _nextOffset;
   int _revision = 0, _visiblePrs = 4;
   final _unavailable = <String>{};
   @override
@@ -61,6 +63,9 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
       _loading = false;
       final raw = result['gitContext'];
       if (raw is Map && result['history'] is Map) {
+        _nextOffset = result['nextOffset'] is int
+            ? result['nextOffset'] as int
+            : null;
         _data =
             AgentGitContext.fromJson({...raw, 'history': result['history']}) ??
             _data;
@@ -76,7 +81,7 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
           }
         }
       } else {
-        _error = 'Work history is unavailable. Showing saved observations.';
+        _error = 'History unavailable · showing saved data';
       }
     });
   }
@@ -116,34 +121,99 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
           color: theme.foreground.withValues(alpha: .65),
         );
         final data = _data;
-        final current =
-            data?.current ?? (data == null ? widget.agent.project : null);
+        final branches = [...?data?.branchRows];
+        branches.sort((a, b) {
+          final recent =
+              (data?.isRecentBranch(b) == true ? 1 : 0) -
+              (data?.isRecentBranch(a) == true ? 1 : 0);
+          if (recent != 0) return recent;
+          bool open(AgentBranchRow row) => row.pullRequests.any(
+            (pr) => pr.state == 'Open' || pr.state == 'Draft',
+          );
+          final review = (open(b) ? 1 : 0) - (open(a) ? 1 : 0);
+          if (review != 0) return review;
+          final checked = (b.checkedOut ? 1 : 0) - (a.checkedOut ? 1 : 0);
+          return checked != 0 ? checked : a.branch.compareTo(b.branch);
+        });
+        final repositories = branches.map((row) => row.repository).toSet();
+        final commonRepository = repositories.length == 1
+            ? repositories.single
+            : null;
+        String repositoryName(String repository) =>
+            repository.replaceFirst(RegExp(r'^github\.com/'), '');
         final prs = [...?data?.pullRequests];
         int rank(AgentWorkPr pr) => switch (pr.state) {
           'Open' || 'Draft' => 0,
           'Merged' || 'Closed' => 2,
           _ => 1,
         };
-        prs.sort((a, b) {
+        int comparePrs(AgentWorkPr a, AgentWorkPr b) {
           final order = rank(a).compareTo(rank(b));
           if (order != 0) return order;
           final recency = b.at.compareTo(a.at);
           return recency != 0
               ? recency
               : a.url.toString().compareTo(b.url.toString());
-        });
-        Widget line(String text, {bool dim = false}) => SizedBox(
+        }
+
+        prs.sort(comparePrs);
+        bool completed(AgentWorkPr pr) =>
+            pr.state == 'Merged' || pr.state == 'Closed';
+        final showCompleted =
+            _showCompleted ?? (prs.isNotEmpty && prs.every(completed));
+        final recentUrls = branches
+            .where((b) => data?.isRecentBranch(b) == true)
+            .expand((b) => b.pullRequests.map((pr) => pr.url))
+            .toSet();
+        final completedCount = prs
+            .where((pr) => completed(pr) && !recentUrls.contains(pr.url))
+            .length;
+        bool completedBranch(AgentBranchRow branch) =>
+            data?.isRecentBranch(branch) != true &&
+            branch.pullRequests.isNotEmpty &&
+            branch.pullRequests.every(completed);
+        final ongoingPrs =
+            prs
+                .where((pr) => !completed(pr) || recentUrls.contains(pr.url))
+                .toList()
+              ..sort((a, b) {
+                final recent =
+                    (recentUrls.contains(b.url) ? 1 : 0) -
+                    (recentUrls.contains(a.url) ? 1 : 0);
+                return recent != 0 ? recent : comparePrs(a, b);
+              });
+        final completedPrs = prs
+            .where((pr) => completed(pr) && !recentUrls.contains(pr.url))
+            .toList();
+        final visibleUrls = {
+          ...ongoingPrs.take(_visiblePrs).map((pr) => pr.url),
+          if (showCompleted)
+            ...completedPrs.take(_visiblePrs).map((pr) => pr.url),
+        };
+        final groupedUrls = branches
+            .expand((branch) => branch.pullRequests.map((pr) => pr.url))
+            .toSet();
+        final ungrouped = prs.where(
+          (pr) => visibleUrls.contains(pr.url) && !groupedUrls.contains(pr.url),
+        );
+        Widget text(String value, {bool dim = false}) => Text(
+          value,
+          style: dim ? muted : style,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        );
+        Widget line(String value, {bool dim = false}) => SizedBox(
           height: cell.height,
           child: Tooltip(
-            message: text,
-            child: Text(
-              text,
-              style: dim ? muted : style,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
+            message: value,
+            child: text(value, dim: dim),
           ),
         );
+        final summary = [
+          if (commonRepository != null) repositoryName(commonRepository),
+          '${branches.length} ${branches.length == 1 ? 'branch' : 'branches'}',
+          '${prs.length} ${prs.length == 1 ? 'PR' : 'PRs'}',
+        ].join(' · ');
         return Dialog(
           backgroundColor: theme.background,
           elevation: 0,
@@ -155,73 +225,56 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
             borderRadius: BorderRadius.circular(kTerminalCornerRadius),
             side: terminalPaneBorder(focused: true),
           ),
-          child: SizedBox(
-            width: cell.width * 84,
-            height: math.max(
-              0,
-              math.min(
-                MediaQuery.sizeOf(context).height - cell.height * 4,
-                cell.height * 30,
+          child: ConstrainedBox(
+            key: const ValueKey('work-dialog-surface'),
+            constraints: BoxConstraints(
+              maxHeight: math.max(
+                0,
+                math.min(
+                  MediaQuery.sizeOf(context).height - cell.height * 4,
+                  cell.height * 28,
+                ),
               ),
             ),
-            child: Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: cell.width * 2,
-                vertical: cell.height,
-              ),
-              child: Focus(
-                onKeyEvent: (node, event) {
-                  if (event is! KeyDownEvent) return KeyEventResult.ignored;
-                  if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                    FocusScope.of(context).nextFocus();
-                    return KeyEventResult.handled;
-                  }
-                  if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-                    FocusScope.of(context).previousFocus();
-                    return KeyEventResult.handled;
-                  }
-                  return KeyEventResult.ignored;
-                },
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    line('${widget.agent.displayName} · Work'),
-                    line(
-                      widget.online
-                          ? data?.explanation ?? 'Session workspace'
-                          : 'Offline · last known work',
-                      dim: true,
-                    ),
-                    SizedBox(height: cell.height),
-                    Expanded(
-                      child: ListView(
-                        children: [
-                          line(
-                            current?.branch ??
-                                data?.branchLabel ??
-                                'No branch observed',
-                          ),
-                          if (current != null)
-                            line(current.root ?? current.cwd, dim: true),
-                          if (data?.observedAt case final at?)
-                            line(
-                              'Work observed ${localWorkTime(at)}',
-                              dim: true,
-                            ),
-                          SizedBox(height: cell.height),
-                          line('Launch workspace', dim: true),
-                          line(widget.agent.project?.cwd ?? 'Unavailable'),
-                          SizedBox(height: cell.height),
-                          line('Pull requests (${prs.length})'),
-                          if (prs.isEmpty)
-                            line(
-                              'No pull requests observed for this session.',
-                              dim: true,
-                            ),
-                          for (final pr in prs.take(_visiblePrs)) ...[
-                            SizedBox(
-                              key: ValueKey('work-pr-row-${pr.url}'),
-                              height: cell.height,
+            child: SizedBox(
+              width: cell.width * 80,
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: cell.width * 2,
+                  vertical: cell.height,
+                ),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final compact = constraints.maxWidth < cell.width * 52;
+                    final rows = <Widget>[];
+                    void separate() {
+                      if (rows.isNotEmpty) {
+                        rows.add(SizedBox(height: cell.height));
+                      }
+                    }
+
+                    void addPr(AgentWorkPr pr) {
+                      final number = '#${pr.url.pathSegments.last}';
+                      final state = pr.state ?? 'Unknown';
+                      final title =
+                          pr.title ?? pr.url.pathSegments.take(2).join('/');
+                      final details = [
+                        '$number · $title · $state',
+                        pr.url.pathSegments.take(2).join('/'),
+                        if (pr.headBranch != null)
+                          '${pr.headBranch}${pr.baseBranch == null ? '' : ' → ${pr.baseBranch}'}',
+                        if (pr.checkedAt != null)
+                          'Checked ${localWorkTime(pr.checkedAt!)}',
+                        'Open on GitHub',
+                      ].join('\n');
+                      rows.add(
+                        Padding(
+                          key: ValueKey('work-pr-row-${pr.url}'),
+                          padding: EdgeInsets.only(left: cell.width * 2),
+                          child: SizedBox(
+                            height: cell.height,
+                            child: Tooltip(
+                              message: details,
                               child: TextButton(
                                 key: ValueKey('work-pr-${pr.url}'),
                                 onPressed: () => unawaited(_open(pr.url)),
@@ -251,98 +304,272 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
                                                 : Colors.transparent,
                                           ),
                                     ),
-                                child: Tooltip(
-                                  message: '${pr.title ?? ''} · ${pr.url}',
-                                  child: Text(
-                                    '#${pr.url.pathSegments.last}  ${pr.state ?? 'State unknown'}  ${pr.title ?? pr.url.pathSegments.take(2).join('/')}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    semanticsLabel:
-                                        '${pr.title ?? ''} · ${pr.url} · ${pr.state ?? 'State unknown'} · Open on GitHub',
+                                child: Semantics(
+                                  label: details.replaceAll('\n', ' · '),
+                                  excludeSemantics: true,
+                                  child: Row(
+                                    children: [
+                                      if (compact)
+                                        Expanded(child: text(number))
+                                      else ...[
+                                        SizedBox(
+                                          width: cell.width * 7,
+                                          child: text(number, dim: true),
+                                        ),
+                                        Expanded(child: text(title)),
+                                      ],
+                                      SizedBox(width: cell.width * 2),
+                                      text(state, dim: true),
+                                    ],
                                   ),
                                 ),
                               ),
                             ),
-                            if (pr.headBranch case final branch?)
-                              line(
-                                '${pr.url.pathSegments.take(2).join('/')} · $branch${pr.baseBranch == null ? '' : ' → ${pr.baseBranch}'}',
-                                dim: true,
-                              ),
-                            if (_unavailable.contains(pr.url.toString()))
-                              line(
-                                'GitHub unavailable · showing last known state',
-                                dim: true,
-                              )
-                            else if (pr.checkedAt case final at?)
-                              line('Checked ${localWorkTime(at)}', dim: true),
-                          ],
-                          if (prs.length > _visiblePrs)
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: TerminalTextAction(
-                                label: 'Show more',
-                                onPressed: _loading
-                                    ? null
-                                    : () {
-                                        final offset = _visiblePrs;
-                                        setState(() => _visiblePrs += 4);
-                                        if (widget.online) {
-                                          unawaited(_refresh(offset));
-                                        }
-                                      },
+                          ),
+                        ),
+                      );
+                      if (compact) {
+                        rows.add(
+                          Padding(
+                            padding: EdgeInsets.only(left: cell.width * 2),
+                            child: MouseRegion(
+                              cursor: SystemMouseCursors.click,
+                              child: GestureDetector(
+                                onTap: () => unawaited(_open(pr.url)),
+                                child: ExcludeSemantics(
+                                  child: line(title, dim: true),
+                                ),
                               ),
                             ),
-                          SizedBox(height: cell.height),
-                          line('Observed branches'),
-                          if (data?.branches.isEmpty ?? true)
-                            line('No branch history observed yet.', dim: true),
-                          for (final branch
-                              in data?.branches ?? <AgentWorkBranch>[]) ...[
-                            line(
-                              '${branch.branch}${branch.cwd == current?.root && branch.branch == current?.branch ? '  · current' : ''}',
+                          ),
+                        );
+                      }
+                      if (_unavailable.contains(pr.url.toString())) {
+                        rows.add(
+                          Padding(
+                            padding: EdgeInsets.only(left: cell.width * 2),
+                            child: line(
+                              'GitHub unavailable · saved status',
+                              dim: true,
                             ),
-                            line(branch.cwd, dim: true),
-                          ],
-                          if (data?.state == 'multiple' ||
-                              data?.state == 'uncertain' ||
-                              data?.state == 'unavailable') ...[
-                            SizedBox(height: cell.height),
-                            line('Recent work locations'),
-                            for (final location
-                                in data?.locations ?? <AgentWorkLocation>[])
-                              line(location.cwd, dim: true),
-                          ],
-                          SizedBox(height: cell.height),
+                          ),
+                        );
+                      }
+                    }
+
+                    void addBranch(AgentBranchRow branch) {
+                      final visiblePrs =
+                          branch.pullRequests
+                              .where((pr) => visibleUrls.contains(pr.url))
+                              .toList()
+                            ..sort(comparePrs);
+                      // Keep checked-out and PR-less branches visible. Completed groups
+                      // outside this page appear with their PRs when Show more is chosen.
+                      if (!branch.checkedOut &&
+                          branch.pullRequests.isNotEmpty &&
+                          visiblePrs.isEmpty) {
+                        return;
+                      }
+                      separate();
+                      if (commonRepository == null &&
+                          branch.repository != null) {
+                        rows.add(
+                          line(repositoryName(branch.repository!), dim: true),
+                        );
+                      }
+                      rows.add(
+                        SizedBox(
+                          height: cell.height,
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Tooltip(
+                                  message: branch.branch,
+                                  child: text(branch.branch),
+                                ),
+                              ),
+                              if (branch.checkedOut && !compact) ...[
+                                SizedBox(width: cell.width * 2),
+                                Tooltip(
+                                  message: data?.isRecentBranch(branch) == true
+                                      ? data!.explanation
+                                      : 'Branch currently checked out in a location associated with this session.',
+                                  child: text(
+                                    data?.isRecentBranch(branch) == true
+                                        ? 'Recent work'
+                                        : 'Checked out',
+                                    dim: true,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      );
+                      if (branch.checkedOut && compact) {
+                        rows.add(
                           line(
-                            data?.truncated == true
-                                ? 'Older observations are omitted.'
-                                : 'History includes observed work; earlier work may be missing.',
+                            data?.isRecentBranch(branch) == true
+                                ? 'Recent work'
+                                : 'Checked out',
                             dim: true,
                           ),
-                        ],
-                      ),
-                    ),
-                    if (_error != null) line(_error!),
-                    SizedBox(
-                      width: double.infinity,
-                      child: Wrap(
-                        alignment: WrapAlignment.spaceBetween,
+                        );
+                      }
+                      for (final pr in visiblePrs) {
+                        addPr(pr);
+                      }
+                    }
+
+                    for (final branch in branches.where(
+                      (b) => !completedBranch(b),
+                    )) {
+                      addBranch(branch);
+                    }
+                    final otherOpenPrs = ungrouped.where(
+                      (pr) => !completed(pr),
+                    );
+                    if (otherOpenPrs.isNotEmpty) {
+                      separate();
+                      rows.add(line('Pull requests', dim: true));
+                      for (final pr in otherOpenPrs) {
+                        addPr(pr);
+                      }
+                    }
+                    if (completedCount > 0) {
+                      separate();
+                      rows.add(
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TerminalTextAction(
+                            key: const ValueKey('work-completed'),
+                            label: showCompleted
+                                ? 'Hide completed'
+                                : 'Completed ($completedCount)',
+                            padding: EdgeInsets.zero,
+                            onPressed: () =>
+                                setState(() => _showCompleted = !showCompleted),
+                          ),
+                        ),
+                      );
+                      if (showCompleted) {
+                        for (final branch in branches.where(completedBranch)) {
+                          addBranch(branch);
+                        }
+                        final completedPrs = ungrouped.where(completed);
+                        if (completedPrs.isNotEmpty) {
+                          separate();
+                          for (final pr in completedPrs) {
+                            addPr(pr);
+                          }
+                        }
+                      }
+                    }
+                    if (rows.isEmpty) {
+                      rows.add(
+                        line(
+                          _loading
+                              ? 'Reading session history…'
+                              : 'No branches or pull requests recorded.',
+                          dim: true,
+                        ),
+                      );
+                    }
+                    if (_nextOffset != null ||
+                        ongoingPrs.length > _visiblePrs ||
+                        showCompleted && completedPrs.length > _visiblePrs) {
+                      separate();
+                      rows.add(
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TerminalTextAction(
+                            label: 'Show more',
+                            padding: EdgeInsets.zero,
+                            onPressed: _loading
+                                ? null
+                                : () {
+                                    final offset = _nextOffset ?? _visiblePrs;
+                                    setState(() => _visiblePrs += 4);
+                                    if (widget.online) {
+                                      unawaited(_refresh(offset));
+                                    }
+                                  },
+                          ),
+                        ),
+                      );
+                    }
+                    return Focus(
+                      onKeyEvent: (node, event) {
+                        if (event is! KeyDownEvent) {
+                          return KeyEventResult.ignored;
+                        }
+                        if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                          FocusScope.of(context).nextFocus();
+                          return KeyEventResult.handled;
+                        }
+                        if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                          FocusScope.of(context).previousFocus();
+                          return KeyEventResult.handled;
+                        }
+                        return KeyEventResult.ignored;
+                      },
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (widget.online)
-                            TerminalTextAction(
-                              label: _loading ? 'Refreshing…' : 'Refresh',
-                              onPressed: _loading
-                                  ? null
-                                  : () => unawaited(_refresh(0)),
+                          line('${widget.agent.displayName} · Branches & PRs'),
+                          if (compact && commonRepository != null) ...[
+                            line(repositoryName(commonRepository), dim: true),
+                            line(
+                              '${branches.length} branches · ${prs.length} PRs',
+                              dim: true,
                             ),
-                          TerminalTextAction(
-                            label: 'Close',
-                            onPressed: () => Navigator.of(context).pop(),
+                          ] else
+                            line(summary, dim: true),
+                          if (!widget.online)
+                            line('Offline · saved data', dim: true)
+                          else if (data?.state == 'unavailable' ||
+                              data?.state == 'uncertain')
+                            line('Git unavailable · saved history', dim: true),
+                          SizedBox(height: cell.height),
+                          Flexible(
+                            child: ListView.builder(
+                              key: const ValueKey('work-branch-list'),
+                              shrinkWrap: true,
+                              itemExtent: cell.height,
+                              itemCount: rows.length,
+                              itemBuilder: (_, index) => rows[index],
+                            ),
+                          ),
+                          if (data?.truncated == true)
+                            line('Some earlier history is omitted.', dim: true),
+                          if (_error != null) line(_error!),
+                          SizedBox(height: cell.height),
+                          SizedBox(
+                            width: double.infinity,
+                            child: Wrap(
+                              alignment: WrapAlignment.spaceBetween,
+                              children: [
+                                if (widget.online)
+                                  TerminalTextAction(
+                                    label: _loading ? 'Refreshing…' : 'Refresh',
+                                    padding: EdgeInsets.zero,
+                                    onPressed: _loading
+                                        ? null
+                                        : () => unawaited(_refresh(0)),
+                                  ),
+                                TerminalTextAction(
+                                  label: 'Close',
+                                  padding: EdgeInsets.zero,
+                                  onPressed: () => Navigator.of(context).pop(),
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
-                    ),
-                  ],
+                    );
+                  },
                 ),
               ),
             ),

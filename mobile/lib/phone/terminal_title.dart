@@ -16,7 +16,8 @@ import 'tty_controls.dart';
 /// ⚠️ **The whole title is one button: its menu** (rename, restart, paste…). Nothing else is drawn
 /// to tap — no `…`, no state words: the terminal says when it is loading. Holding it goes back to
 /// the last harness. Find is a swipe right, and `api-fix asking` — a harness elsewhere waiting on
-/// you — is the one word that opens it from here.
+/// you — is the one word that opens it from here. The paired daemon, when there is one, sits at the
+/// right end ([daemon]): a tap on it opens its own sheet, not the menu.
 ///
 /// It floats over the terminal's top rows only while the output is followed at its end, and slides
 /// away while the history is read back (see `TerminalChromeScroll`) — so it can afford three rows.
@@ -30,6 +31,7 @@ class TerminalTitle extends StatelessWidget {
     this.branch,
     this.asking,
     this.onHold,
+    this.daemon,
     this.sample = false,
   });
 
@@ -52,6 +54,11 @@ class TerminalTitle extends StatelessWidget {
 
   /// Holding the title: back to the last harness (tmux's `prefix L`, vim's `:b#`).
   final VoidCallback? onHold;
+
+  /// The paired daemon's chip (`daemon_chip.dart`), at the title's right end, centred on its
+  /// block. It takes its own taps, keeps its own gap from the names, and draws nothing — taking no
+  /// room — outside the signed-in shell or with daemons off.
+  final Widget? daemon;
 
   /// Four terminal rows: three lines of text and half a row of air above and below.
   static double heightOf(Tty tty) => 4 * tty.row;
@@ -196,6 +203,7 @@ class TerminalTitle extends StatelessWidget {
                         ),
                       ),
                     ),
+                  ?daemon,
                 ],
               ),
             ),

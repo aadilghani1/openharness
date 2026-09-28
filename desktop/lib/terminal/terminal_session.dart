@@ -128,6 +128,9 @@ class _ActiveUpload {
 /// reopen. Transport loss still freezes input until the user opens a session.
 class TerminalSession extends ChangeNotifier {
   static const protocolVersion = 3;
+
+  /// [errorCode] after [transportLost]: the link dropped, not the terminal.
+  static const disconnectedCode = 'TERMINAL_DISCONNECTED';
   static const minCols = 40;
   static const maxCols = 300;
   static const minRows = 12;
@@ -1292,7 +1295,36 @@ class TerminalSession extends ChangeNotifier {
 
   void find(TerminalFindAction action) => _viewport?.find(action);
 
+  Map<String, dynamic> selectPassage(Map<String, dynamic> command) {
+    final viewport = _viewport;
+    return viewport is TerminalPassageViewport
+        ? (viewport as TerminalPassageViewport).selectPassage(command)
+        : {'ok': false, 'error': 'Open the terminal pane first.'};
+  }
+
+  Future<Map<String, dynamic>> searchPassage(
+    Map<String, dynamic> command,
+  ) async {
+    final viewport = _viewport;
+    return viewport is TerminalPassageSearchViewport
+        ? (viewport as TerminalPassageSearchViewport).searchPassage(command)
+        : {'ok': false, 'error': 'Open the terminal pane first.'};
+  }
+
   bool focusInput() => _viewport?.focusInput() ?? false;
+
+  TerminalReadingBookmark? bookmarkReading() {
+    final viewport = _viewport;
+    return viewport is TerminalReadingViewport
+        ? (viewport as TerminalReadingViewport).bookmarkReading()
+        : null;
+  }
+
+  bool showLatestReading() {
+    final viewport = _viewport;
+    return viewport is TerminalLatestViewport &&
+        (viewport as TerminalLatestViewport).showLatestReading();
+  }
 
   /// Coalescing windows for the two things the user drives directly.
   ///
@@ -1556,7 +1588,7 @@ class TerminalSession extends ChangeNotifier {
     streamId = null;
     linkMode = null;
     status = TerminalSessionStatus.error;
-    errorCode = 'TERMINAL_DISCONNECTED';
+    errorCode = disconnectedCode;
     errorMessage = message;
     _abortActiveUpload();
     notifyListeners();

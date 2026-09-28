@@ -5,6 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/core/codex_profiles.dart';
 import 'package:harness_mobile/core/first_task.dart';
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/core/permission_modes.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -18,6 +19,7 @@ import 'agent_index.dart';
 import 'branch_picker_sheet.dart';
 import 'phone_navigation.dart';
 import 'new_agent_draft.dart';
+import 'new_agent_model_sheet.dart';
 import 'phone_status.dart';
 import 'new_agent_chooser.dart';
 import 'tty.dart';
@@ -31,10 +33,8 @@ import 'voice_input_controller.dart';
 /// open a folder browser on top — a sheet that has to be dismissed to reach the
 /// browser, and rebuilt after it, loses the other choice on the way.
 ///
-/// The desktop asks the same two things (`widgets/new_agent_dialog.dart`) and a
-/// few more it has room for — a Codex profile, a split to place the pane into,
-/// a permission bypass. A phone shows one agent at a time, so there is no split
-/// to aim at, and the rest belong to the machine that already knows them.
+/// Agent and project are the default flow. Model, approvals, Codex profile,
+/// branch and the independent worktree toggle live under Options, as on desktop.
 class NewAgentPage extends StatefulWidget {
   const NewAgentPage({
     super.key,
@@ -83,6 +83,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
   String? _error;
   bool _creating = false;
   bool _optionsOpen = false;
+  GridModel? _model;
 
   /// Codex state folders this machine reported, and the one chosen. Null is the
   /// machine's own default `CODEX_HOME`, which is what the desktop dialog calls
@@ -260,6 +261,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
     _git = draft.git;
     _gitFolder = draft.gitFolder;
     _codexProfile = draft.codexProfile;
+    _model = draft.model;
     _task.text = draft.task ?? '';
   }
 
@@ -290,6 +292,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       git: _git,
       gitFolder: _gitFolder,
       codexProfile: _codexProfile,
+      model: _model,
       task: _task.text,
     );
   }
@@ -326,6 +329,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       _codexProfiles = const [];
       _codexProfile = null;
       _codexProfilesLoaded = false;
+      _model = null;
       _error = null;
     });
     _askMachine();
@@ -490,6 +494,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// to be new enough to be told.
   bool get _showsCodexProfile =>
       _engine == 'codex' &&
+      _model == null &&
       _machine?.engines['codex']?.supportsCodexHome == true;
 
   MachineState? get _machine => widget.notifier.stateOf(_machineId);
@@ -639,6 +644,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       // Only for Codex, and only when chosen: omitted, the machine launches
       // with its own default CODEX_HOME.
       codexHome: _showsCodexProfile ? _codexProfile?.path : null,
+      model: _model,
       attempt: creation,
       prompt: _engine != null && takesFirstTask(_engine!) ? _task.text : null,
     );
@@ -833,28 +839,16 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                           () => _optionsOpen = !_optionsOpen,
                                         ),
                                 ),
-                                if (_optionsOpen &&
-                                    (info != null || _gitLoading || _gitFailed))
+                                if (_optionsOpen && _engine != null)
                                   TtyFormRow(
-                                    label: 'branch',
-                                    valueColor: info == null && !_gitLoading
-                                        ? tty.faint
-                                        : null,
-                                    value: _gitLoading
-                                        ? 'Reading…'
-                                        : info == null
-                                        ? 'No answer from the computer'
-                                        : _worktree
-                                        ? 'New worktree'
-                                        : _branchTitle,
-                                    detail: info == null
+                                    label: 'model',
+                                    value:
+                                        _model?.id ??
+                                        modelSubscriptionLabel(_engine!),
+                                    detail: _model?.node,
+                                    onTap: _creating
                                         ? null
-                                        : _worktree
-                                        ? 'from $_branchTitle, in its own folder'
-                                        : _branchNote,
-                                    onTap: info == null || _creating
-                                        ? null
-                                        : () => unawaited(_chooseBranch(info)),
+                                        : () => unawaited(_chooseModel()),
                                   ),
                                 if (_optionsOpen && _permissionModes.isNotEmpty)
                                   TtyFormRow(
@@ -876,6 +870,46 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                         ? null
                                         : () => unawaited(_chooseProfile()),
                                   ),
+                                if (_optionsOpen) ...[
+                                  TtyFormRow(
+                                    label: 'branch',
+                                    valueColor: info == null ? tty.faint : null,
+                                    value: _gitLoading
+                                        ? 'Reading…'
+                                        : _gitFailed
+                                        ? 'No answer from the computer'
+                                        : info != null
+                                        ? _branchTitle
+                                        : _project != null
+                                        ? 'Available after creation'
+                                        : _folder == null
+                                        ? 'Choose a project'
+                                        : 'Not a Git repository',
+                                    detail: info == null ? null : _branchNote,
+                                    onTap: info == null || _creating
+                                        ? null
+                                        : () => unawaited(_pickBranch(info)),
+                                  ),
+                                  Semantics(
+                                    checked: info != null && _worktree,
+                                    child: TtyFormRow(
+                                      label: 'worktree',
+                                      value: info != null && _worktree
+                                          ? '[x]'
+                                          : '[ ]',
+                                      valueColor: info == null
+                                          ? tty.faint
+                                          : null,
+                                      chevron: false,
+                                      onTap: info == null || _creating
+                                          ? null
+                                          : () => setState(() {
+                                              _worktree = !_worktree;
+                                              _error = null;
+                                            }),
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),
@@ -1020,53 +1054,28 @@ class _NewAgentPageState extends State<NewAgentPage> {
     },
   );
 
-  /// The branch row: this folder as it is, or a new worktree — and any other branch behind them.
-  Future<void> _chooseBranch(GitProjectInfo info) async {
-    final here = info.branch ?? 'This folder';
-    final picked = await showNewAgentChooser<String>(
+  Future<void> _chooseModel() async {
+    final engine = _engine;
+    if (engine == null) return;
+    final machineId = _machineId;
+    final choice = await showNewAgentModelSheet(
       context,
-      title: 'Branch',
-      hint: 'Search branches',
-      items: [
-        ChooserItem(
-          value: 'here',
-          title: here,
-          subtitle: 'this folder, as it is',
-          selected: !_worktree && _branchName == null,
-        ),
-        ChooserItem(
-          value: 'worktree',
-          title: 'New Worktree',
-          subtitle: 'a new branch from $here, in its own folder',
-          selected: _worktree,
-        ),
-      ],
-      actions: const [
-        ChooserItem(
-          value: 'other',
-          title: 'Other Branch',
-          subtitle: 'start from another branch, or name a new one',
-        ),
-      ],
+      notifier: widget.notifier,
+      machineId: machineId,
+      engine: engine,
+      selected: _model,
+      profileLabel: engine == 'codex' ? _codexProfile?.label : null,
     );
-    if (picked == null || !mounted) return;
-    switch (picked) {
-      case 'here':
-        setState(() {
-          _worktree = false;
-          _branchRef = defaultBranchRef(info, worktree: false);
-          _branchName = null;
-          _error = null;
-        });
-      case 'worktree':
-        setState(() {
-          _worktree = true;
-          _branchRef = defaultBranchRef(info, worktree: true);
-          _error = null;
-        });
-      case 'other':
-        await _pickBranch(info);
+    if (choice == null ||
+        !mounted ||
+        machineId != _machineId ||
+        engine != _engine) {
+      return;
     }
+    setState(() {
+      _model = choice.model;
+      _error = null;
+    });
   }
 
   /// A home folder written the way a shell prints it.

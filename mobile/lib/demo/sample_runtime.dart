@@ -317,6 +317,7 @@ class SampleRuntime implements SampleHarnessHost {
                 'installed': engine == 'claude' || engine == 'codex',
                 'installable': true,
                 'command': engine,
+                if (engine == 'codex') 'supportsCodexHome': true,
               },
           ],
         };
@@ -373,6 +374,7 @@ class SampleRuntime implements SampleHarnessHost {
         // Find's `:` — the models a sample harness could run on: this computer's own, as a
         // real machine lists them.
         return {
+          'supportsModelLaunch': true,
           'gridName': 'home',
           'localModelEngines': ['claude', 'codex', 'opencode'],
           'grids': [
@@ -436,6 +438,9 @@ class SampleRuntime implements SampleHarnessHost {
     );
     (agent['project'] as Map)['cwd'] = cwd;
     (agent['project'] as Map)['root'] = cwd;
+    if (payload['gridModel'] case final String model) {
+      agent['grid'] = {'model': model, 'gridName': payload['gridName']};
+    }
     final harness = SampleHarness(
       machineId: machineId,
       agent: agent,

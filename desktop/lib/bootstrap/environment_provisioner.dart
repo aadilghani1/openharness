@@ -1051,8 +1051,7 @@ class EnvironmentProvisioner {
     emit(
       step: EnvironmentStep.tmux,
       status: EnvironmentStepStatus.unavailable,
-      output:
-          'tmux does not exist on Windows — terminals come from Herdr instead.',
+      output: 'tmux does not exist on Windows.',
     );
   }
 
