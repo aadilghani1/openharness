@@ -1,5 +1,10 @@
 # Onboarding review · 24 September 2026
 
+Historical proposal. [Open the local interactive concept](review/developer-onboarding.html)
+or [all local reviews](review/index.html). The current [workspace design](terminal-workspace.md)
+and [dialog rules](terminal-dialogs.md) take precedence for implementation. Findings and
+test counts below describe the September 24 review.
+
 Audience: **a developer bringing an existing project**, confirmed in this review. Scope: first launch, first useful session, returning to work, and discovering additional features. Reviewed against `f867ff23`, with the existing local CmdN, launch feedback, toolbar, and pane-closing changes preserved.
 
 ## Recommendation

@@ -1,0 +1,312 @@
+:root {
+  color-scheme: dark;
+  --review-bg: #1c1d1b;
+  --review-ink: #e3e5dd;
+  --review-muted: #b0b3a8;
+  --review-rule: #505448;
+  --review-accent: #c1d5a8;
+}
+html[data-theme="light"] {
+  color-scheme: light;
+  --review-bg: #f4f4ef;
+  --review-ink: #292d25;
+  --review-muted: #616658;
+  --review-rule: #b7bbae;
+  --review-accent: #385224;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  padding: 24px 24px 64px;
+  background: var(--review-bg);
+  color: var(--review-ink);
+  font:
+    14px/1.7 Menlo,
+    Consolas,
+    monospace;
+}
+body > header,
+body > main,
+body > footer {
+  max-width: 1080px;
+  margin-inline: auto;
+}
+a {
+  color: var(--review-accent);
+  text-underline-offset: 4px;
+}
+button,
+input,
+select {
+  font: inherit;
+}
+button,
+select {
+  cursor: pointer;
+}
+:focus-visible {
+  outline: 2px solid var(--review-accent);
+  outline-offset: 4px;
+}
+[hidden] {
+  display: none !important;
+}
+.review-skip {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  padding: 10px;
+  background: var(--review-bg);
+  z-index: 100;
+  transform: translateY(-150%);
+}
+.review-skip:focus {
+  transform: none;
+}
+.review-nav {
+  display: flex;
+  gap: 6px 22px;
+  flex-wrap: wrap;
+  margin-bottom: 30px;
+}
+.review-nav a {
+  text-decoration: none;
+  padding-block: 8px;
+}
+.review-nav [aria-current="page"] {
+  text-decoration: underline;
+}
+.review-kicker {
+  color: var(--review-accent);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.review-heading {
+  font:
+    600 clamp(26px, 5vw, 40px) / 1.2 -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  margin: 10px 0 16px;
+  letter-spacing: -0.03em;
+}
+.review-lede {
+  max-width: 76ch;
+  color: var(--review-muted);
+}
+.review-notice {
+  max-width: 82ch;
+  border-left: 2px solid var(--review-accent);
+  padding: 8px 16px;
+  margin: 24px 0;
+  font-size: 12px;
+}
+.review-tools {
+  margin: 24px 0;
+  border-block: 1px solid var(--review-rule);
+  padding: 16px 0;
+}
+.review-tools h2 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--review-muted);
+}
+.review-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px 22px;
+}
+.review-field {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+.review-field select,
+.review-field input:not([type="checkbox"]) {
+  max-width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  background: var(--review-bg);
+  color: var(--review-ink);
+  border: 1px solid var(--review-rule);
+  border-radius: 0;
+}
+.review-field select {
+  min-height: 34px;
+}
+.review-field input[type="checkbox"] {
+  accent-color: var(--review-accent);
+}
+.review-field input[type="range"] {
+  padding: 0;
+  width: 180px;
+  accent-color: var(--review-accent);
+}
+.review-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+}
+.review-tools button,
+.review-fixture button {
+  color: var(--review-ink);
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 7px 0;
+  text-align: left;
+}
+.review-tools button:hover,
+.review-fixture button:hover {
+  font-weight: 600;
+}
+.review-fixture {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 22px;
+  margin: 20px 0;
+  color: var(--review-muted);
+}
+.review-footer {
+  margin-top: 36px;
+  padding-top: 20px;
+  border-top: 1px solid var(--review-rule);
+  font-size: 11px;
+  color: var(--review-muted);
+}
+.review-footer a {
+  display: inline-block;
+  margin-right: 18px;
+}
+.review-index {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+}
+.review-destination {
+  text-decoration: none;
+  color: var(--review-ink);
+  border: 1px solid var(--review-rule);
+  padding: 24px;
+}
+.review-destination h2 {
+  margin: 10px 0;
+  font:
+    500 20px/1.4 -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+.review-destination p {
+  font-size: 12px;
+  color: var(--review-muted);
+}
+html[data-theme="light"] #harness-creature-lookbook {
+  color-scheme: light;
+  --pet-paper: #f7f7f1;
+  --pet-panel: #eeeee6;
+  --pet-ink: #303429;
+  --pet-dim: #616652;
+  --pet-line: #b3b8a5;
+  --pet-focus: #385224;
+}
+html[data-theme="light"] #harness-onboarding-concept {
+  color-scheme: light;
+  --h-surface: #f7f7f1;
+  --h-inset: #fff;
+  --h-ink: #303429;
+  --h-dim: #616652;
+  --h-line: #929b80;
+  --h-rule: #c5cbb8;
+  --h-accent: #385224;
+  --h-warning: #795500;
+}
+html #harness-onboarding-concept .h-primary {
+  background: transparent;
+  padding: 7px 0;
+  color: var(--h-accent);
+}
+html #harness-onboarding-concept .h-primary:hover {
+  background: transparent;
+}
+html #harness-onboarding-concept button {
+  border-radius: 0;
+}
+html #harness-onboarding-concept button:hover {
+  font-weight: 600;
+}
+html #harness-creature-lookbook button {
+  border-radius: 0;
+}
+html[data-theme="light"] #harness-creature-lookbook button:hover,
+html[data-theme="light"]
+  #harness-creature-lookbook
+  button[aria-pressed="true"] {
+  background: #dee4d2;
+}
+html[data-theme="light"]
+  #harness-creature-lookbook
+  .pose-button[aria-pressed="true"]
+  .glyph {
+  color: #293823;
+}
+html #harness-creature-lookbook .sheet-scroll {
+  max-height: 65vh;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+html #harness-creature-lookbook thead th {
+  position: sticky;
+  top: 0;
+  background: var(--pet-paper);
+  z-index: 2;
+}
+html #harness-creature-lookbook tbody th {
+  position: sticky;
+  left: 0;
+  background: var(--pet-paper);
+  z-index: 1;
+}
+html #harness-creature-lookbook .status-sample {
+  min-width: 0;
+}
+@media (max-width: 600px) {
+  body {
+    padding: 16px 14px 48px;
+  }
+  .review-nav {
+    gap: 4px 16px;
+  }
+  .review-field {
+    max-width: 100%;
+  }
+}
+@media (max-width: 360px) {
+  html #egg-status-review .egg-tools {
+    display: none;
+  }
+}
+@media (pointer: coarse) {
+  .review-nav a,
+  .review-tools button,
+  .review-field select,
+  .review-toggle {
+    min-height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}

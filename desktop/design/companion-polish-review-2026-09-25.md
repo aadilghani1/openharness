@@ -1,5 +1,9 @@
 # Companion polish review — 2026-09-25
 
+Historical review and verification record. [Open the local reviews](review/index.html)
+for the early creature and egg concepts; the later daemon design lives on the `daemons`
+branch. Test counts below describe this review, not a fresh run of the current branch.
+
 Three independent AI reviewers examined the terminal workflow, companion
 behavior, and ASCII layout. This was source, test, and synthetic UI review;
 it was not recruited-developer research or a conversion study.
