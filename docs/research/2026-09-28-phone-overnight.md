@@ -77,7 +77,7 @@ Five personas each reviewed renders of every phone screen. In round 2 they also 
 - **VoiceOver:** it can cancel a voice take, hears "Asking: …" when a question opens, and reads the line above the mic as a live region.
 - **Copy:** "5 harnesses", "Leave the sample" (both places), "Choose an agent and a project".
 - **The scan page** says the link is end-to-end encrypted, which was the first-time user's trust gap.
-- **New** shows branch, approvals and profile all the time. The `[+]` toggle is gone; it hid the two things worth checking before a harness starts, over an empty half-screen.
+- **New:** the panel-driven pass exposed branch, approvals and profile. **The user rejected this in the build-46 review:** restore collapsed `Options [+]`, matching desktop. This is a user decision, not an open design proposal.
 - **Settings:** Usage, Computers and Phone name join the account group. There is no lone Usage card, and Phone name is no longer filed under *terminal*.
 - **"Stop this harness…"** stays small at the foot of the menu but is now red; faint grey read as disabled.
 - **Form rows** put the label on the value's first line; "approvals" used to sit beside its note.
@@ -156,12 +156,16 @@ These are AI persona reviews of offline artifacts. They establish the visual sco
 - The mic stays where it is; the terminal is full screen under it.
 - Keep the word "harness" (harness = session; one agent, many harnesses). Teaching it is fine; renaming it is not.
 - No scroll-position indicator. The "api-fix asking" label stays.
+- New Harness keeps branch/worktree, approvals and profile under collapsed `Options [+]`. Default creation must not ask users to revisit these settings.
+- The Agent chooser shows the full scrollable list, with recently used engine choices first; no `more` gate.
+- Opening the Project chooser focuses its always-visible search field; opening Find focuses its search field too.
 - PRs only. The user merges and releases; nothing is merged or released without their explicit word.
 
 ## Handoff for the mobile team
 
 ### State
 
+- The user's build-46 review and a [twelve-hour change audit](2026-09-28-mobile-ui-change-audit.md) record the four corrections above, implemented for local iPhone build **47**. They supersede conflicting panel recommendations. Follow-up validation: **1,621 tests** and **25 renders** pass; analyzer clean outside the same 12 third-party informational findings. The coverage figures above were measured on build 46. The user requested an iPhone install only, not TestFlight.
 - Branch `phone-overnight-polish`; [PR #398](https://github.com/autonomous-ai/openharness/pull/398) contains the continuation and main integration. The user explicitly authorized merging and a local iPhone install for manual review. Check the PR for the resulting merge commit; no store release was requested.
 - Merged into it and finished: `coverage-rest` (coverage engineer), `desktop-cut` (the desktop's half of the notifier), and the phone-screens and state-core engineers' passes. No engineer is still running.
 - Never commit `mobile/ios/Runner.xcodeproj/project.pbxproj`. It carries the local signing team and stays modified in the worktree.

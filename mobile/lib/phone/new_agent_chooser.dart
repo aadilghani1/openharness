@@ -46,15 +46,14 @@ class ChooserItem<T> {
 /// and New: a title, a search field for long lists, the list growing down with `✓` on the
 /// current value, and the `+` actions ending it. A tap picks and closes.
 ///
-/// [fold] keeps a long list short: past that many items a `more` row stands in for the rest, until
-/// it is tapped or something is typed.
+/// Long lists scroll in full. [autofocusSearch] always shows the search field and opens its keyboard.
 Future<T?> showNewAgentChooser<T>(
   BuildContext context, {
   required String hint,
   required List<ChooserItem<T>> items,
   List<ChooserItem<T>> actions = const [],
   String? title,
-  int? fold,
+  bool autofocusSearch = false,
 }) => showModalBottomSheet<T>(
   context: context,
   useRootNavigator: true,
@@ -72,7 +71,7 @@ Future<T?> showNewAgentChooser<T>(
       hint: hint,
       items: items,
       actions: actions,
-      fold: fold,
+      autofocusSearch: autofocusSearch,
     ),
   ),
 );
@@ -83,14 +82,14 @@ class _Chooser<T> extends StatefulWidget {
     required this.hint,
     required this.items,
     required this.actions,
-    this.fold,
+    required this.autofocusSearch,
   });
 
   final String title;
   final String hint;
   final List<ChooserItem<T>> items;
   final List<ChooserItem<T>> actions;
-  final int? fold;
+  final bool autofocusSearch;
 
   @override
   State<_Chooser<T>> createState() => _ChooserState<T>();
@@ -100,7 +99,6 @@ class _ChooserState<T> extends State<_Chooser<T>> {
   final _controller = TextEditingController();
   final _focus = FocusNode();
   String _query = '';
-  bool _unfolded = false;
 
   @override
   void dispose() {
@@ -124,10 +122,6 @@ class _ChooserState<T> extends State<_Chooser<T>> {
       for (final item in widget.items)
         if (item.matches(query)) item,
     ];
-    final fold = widget.fold;
-    final folded =
-        fold != null && !_unfolded && query.isEmpty && matches.length > fold;
-    final shown = folded ? matches.take(fold).toList() : matches;
     final terms = query.isEmpty
         ? const <String>[]
         : query.split(RegExp(r'\s+'));
@@ -151,13 +145,13 @@ class _ChooserState<T> extends State<_Chooser<T>> {
             ],
           ),
         ),
-        // Search where there is something to search: a long list that is not folded.
-        if (widget.items.length > 8 && widget.fold == null)
+        if (widget.items.length > 8 || widget.autofocusSearch)
           Padding(
             padding: const EdgeInsets.fromLTRB(Tty.origin, 4, Tty.origin, 4),
             child: TtyField(
               controller: _controller,
               focus: _focus,
+              autofocus: widget.autofocusSearch,
               hint: widget.hint,
               action: TextInputAction.search,
               onChanged: (value) => setState(() => _query = value),
@@ -173,7 +167,7 @@ class _ChooserState<T> extends State<_Chooser<T>> {
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             padding: EdgeInsets.only(bottom: media.padding.bottom + 16),
             children: [
-              for (final item in shown)
+              for (final item in matches)
                 FindRow(
                   title: item.title,
                   detail: item.subtitle,
@@ -186,12 +180,6 @@ class _ChooserState<T> extends State<_Chooser<T>> {
                   stateColor: item.selected ? tty.green : tty.red,
                   enabled: item.enabled,
                   onTap: () => _choose(item),
-                ),
-              if (folded)
-                FindRow(
-                  title: 'more',
-                  detail: '${matches.length - shown.length} others, A to Z',
-                  onTap: () => setState(() => _unfolded = true),
                 ),
               if (matches.isEmpty)
                 Padding(

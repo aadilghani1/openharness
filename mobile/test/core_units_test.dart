@@ -6,6 +6,7 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/agent_output_stats.dart';
+import 'package:harness_mobile/core/agent_preference.dart';
 import 'package:harness_mobile/core/device_name.dart';
 import 'package:harness_mobile/core/fuzzy_match.dart';
 import 'package:harness_mobile/core/git_project.dart';
@@ -687,6 +688,46 @@ void main() {
   });
 
   group('kept between launches', () {
+    test(
+      'agent recency migrates the old preference and survives reopening',
+      () async {
+        final storage = MemoryKeyValueStore()
+          ..values['new_agent_engine'] = 'claude';
+        final preference = AgentPreference(storage);
+        await preference.load();
+        expect(preference.recent, ['claude']);
+        await preference.select('codex');
+        await preference.select('opencode');
+        await preference.select('codex');
+        final reopened = AgentPreference(storage);
+        await reopened.load();
+        expect(reopened.value, 'codex');
+        expect(reopened.recent, ['codex', 'opencode', 'claude']);
+      },
+    );
+
+    test('bad agent history keeps the saved default usable', () async {
+      final storage = MemoryKeyValueStore()
+        ..values['new_agent_engine'] = 'codex'
+        ..values['new_agent_engine_history_v1'] = '{broken';
+      final preference = AgentPreference(storage);
+      await preference.load();
+      expect(preference.recent, ['codex']);
+      await preference.select('claude');
+      expect(preference.recent, ['claude', 'codex']);
+    });
+
+    test(
+      'failed persistence keeps agent recency for the current run',
+      () async {
+        final preference = AgentPreference(_Broken());
+        await preference.select('claude');
+        await preference.select('codex');
+        expect(preference.value, 'codex');
+        expect(preference.recent, ['codex', 'claude']);
+      },
+    );
+
     test('recent folders, per machine, newest first and valid only', () async {
       final storage = MemoryKeyValueStore()
         ..values['new_agent_projects_v1'] = jsonEncode({

@@ -47,8 +47,7 @@ import 'phone_search_results.dart';
 /// ⚠️ **Full height, and a keyboard lifts only its foot.** It runs up under the status bar; a
 /// keyboard, when it comes, takes the drawer's foot onto its own top rather than covering the rows.
 ///
-/// ⚠️ **The field is not focused on the way in.** The recent agents are what the sheet is opened to
-/// read, and a keyboard would cover half of them.
+/// The field takes focus on opening so a query can be typed immediately.
 ///
 /// ⚠️ **Not a route.** Pushed, the sheet would sit in a navigator above the shell, and an agent
 /// opened from it would be pushed over the shell rather than take the home screen (see
@@ -452,8 +451,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   SizedBox(height: media.padding.top + 8),
-                  // The field at the top, like ⌘P: the list grows down from it. The keyboard stays
-                  // down until the field is tapped — the list is usually the answer.
+                  // The field takes the keyboard on entry, like ⌘P.
                   // No Cancel: a swipe left is the way out, as it was the way in.
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
@@ -463,6 +461,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                           child: TtyField(
                             controller: _controller,
                             focus: _focus,
+                            autofocus: true,
                             hint: _search.canGoBack
                                 ? 'Search in ${_search.scopeName}'
                                 : _search.hint.replaceAll('…', ''),

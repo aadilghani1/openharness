@@ -1139,23 +1139,15 @@ class _TerminalPageState extends State<TerminalPage>
     if (mounted) setState(() {});
   }
 
-  /// Brings the search sheet up over the terminal, reading the account's tabs
-  /// with its field not yet focused — see [TerminalSearchOverlay].
+  /// Brings Find up over the terminal with its search field focused.
   ///
-  /// ⚠️ **The terminal is held from THIS frame, though no keyboard is coming
-  /// yet.** The sheet's field raises one the moment it is tapped, and by then
-  /// the terminal must already be ignoring it — see [_heldForSearch] for what
-  /// it does with that keyboard otherwise.
+  /// Hold the terminal before Find takes the keyboard — see [_heldForSearch].
   void _openSearch({bool animate = true}) {
     if (_searching) return;
     _keyboardBeforeSearch = _keyboardIsUp;
     _keyboardUpAtSearch = _keyboardUp;
     _searchHoldTimer?.cancel();
-    // ⚠️ **Whatever holds the keys lets go of them.** The sheet opens with its
-    // field NOT focused, so nothing takes focus from the terminal the way the
-    // search once did by focusing itself — and a terminal on a hardware
-    // keyboard keeps its focus with no inset to show for it, so it would go on
-    // typing into the shell from under the dimming.
+    // Release even a hardware keyboard before the search field mounts.
     FocusManager.instance.primaryFocus?.unfocus();
     setState(() {
       _searching = true;

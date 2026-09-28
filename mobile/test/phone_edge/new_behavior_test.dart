@@ -5,6 +5,7 @@ import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/agent_swipe.dart';
 import 'package:harness_mobile/phone/new_agent_draft.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
+import 'package:harness_mobile/phone/find_row.dart';
 import 'package:harness_mobile/phone/tty_controls.dart' show TtyFieldMic;
 import 'package:harness_mobile/state/app_state.dart';
 
@@ -155,8 +156,11 @@ void main() {
     await choose(tester, 'agent', 'Codex');
     expect(find.text('Codex', findRichText: true), findsWidgets);
 
-    // The approvals and the Codex profile are on the page, not folded away.
-    expect(find.text('options'), findsNothing);
+    expect(find.text('profile'), findsNothing);
+    expect(find.text('approvals'), findsNothing);
+    expect(find.text('branch'), findsNothing);
+    await tapInView(tester, find.text('options'));
+    await frames(tester);
     await choose(tester, 'profile', 'work');
     await tapInView(tester, find.text('approvals'));
     await frames(tester);
@@ -164,6 +168,11 @@ void main() {
     expect(modes, findsOneWidget);
     await tester.tapAt(tester.getCenter(find.byType(ModalBarrier).last));
     await frames(tester);
+
+    // Collapsing Options hides the rows without discarding the chosen profile.
+    await tapInView(tester, find.text('options'));
+    await frames(tester);
+    expect(find.text('profile'), findsNothing);
 
     await tapInView(tester, find.text('Start'));
     await frames(tester, count: 20);
@@ -179,12 +188,7 @@ void main() {
     final (:app, conn: _) = await openNew(tester);
     await tapInView(tester, find.text('agent'));
     await frames(tester);
-    // Behind `more`: the rest, A to Z.
-    final more = find.text('more');
-    if (more.evaluate().isNotEmpty) {
-      await tester.tap(more.first);
-      await frames(tester);
-    }
+    expect(find.text('more'), findsNothing);
     await tester.scrollUntilVisible(
       find.text('not installed'),
       200,
@@ -197,6 +201,9 @@ void main() {
   testWidgets('the branch: this folder, a new worktree, another branch, a '
       'new name', (tester) async {
     final (:app, :conn) = await openNew(tester);
+    expect(find.text('branch'), findsNothing);
+    await tapInView(tester, find.text('options'));
+    await frames(tester);
     expect(find.text('branch'), findsOneWidget);
 
     await choose(tester, 'branch', 'New Worktree');
@@ -234,6 +241,44 @@ void main() {
     expect(find.text('mini:api', findRichText: true), findsWidgets);
     await tapInView(tester, find.text('Start'));
     await frames(tester, count: 20);
+    await close(tester, app);
+  });
+
+  testWidgets('agents are offered in most recently used order', (tester) async {
+    final (:app, conn: _) = await openNew(tester);
+    await app.agentPreference.select('claude');
+    await app.agentPreference.select('opencode');
+    await app.agentPreference.select('codex');
+    await tapInView(tester, find.text('agent'));
+    await frames(tester);
+    final titles = tester
+        .widgetList<FindRow>(find.byType(FindRow))
+        .map((row) => row.title)
+        .toList();
+    expect(titles.take(3), ['Codex', 'OpenCode', 'Claude Code']);
+    expect(find.text('more'), findsNothing);
+    await close(tester, app);
+  });
+
+  testWidgets('the project picker is ready to type without tapping its field', (
+    tester,
+  ) async {
+    final (:app, conn: _) = await openNew(tester, twoMachines: true);
+    await tapInView(tester, find.text('project'));
+    await frames(tester);
+    expect(tester.testTextInput.isVisible, isTrue);
+    tester.testTextInput.updateEditingValue(
+      const TextEditingValue(text: 'api'),
+    );
+    await frames(tester);
+      expect(
+        find.descendant(
+          of: find.byType(FindRow),
+          matching: find.text('api', findRichText: true),
+        ),
+        findsOneWidget,
+      );
+    expect(find.text('web', findRichText: true), findsNothing);
     await close(tester, app);
   });
 
@@ -385,6 +430,8 @@ void main() {
     await tester.pumpWidget(
       phoneApp(NewAgentPage(notifier: app, machineId: 'm')),
     );
+    await frames(tester);
+    await tapInView(tester, find.text('options'));
     await frames(tester);
     expect(
       find.text('No answer from the computer', findRichText: true),

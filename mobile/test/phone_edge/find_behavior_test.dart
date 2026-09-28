@@ -150,6 +150,20 @@ void main() {
     await close(tester, app);
   });
 
+  testWidgets('Find accepts a query immediately on opening', (tester) async {
+    final (:app, closes: _, opened: _, voice: _, stt: _) = await openFind(
+      tester,
+    );
+    expect(tester.testTextInput.isVisible, isTrue);
+    tester.testTextInput.updateEditingValue(
+      const TextEditingValue(text: 'working'),
+    );
+    await frames(tester);
+    expect(find.text('working', findRichText: true), findsWidgets);
+    expect(find.text('paused-work', findRichText: true), findsNothing);
+    await close(tester, app);
+  });
+
   testWidgets('a paused harness the machine cannot bring back says why', (
     tester,
   ) async {

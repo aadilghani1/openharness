@@ -5,7 +5,11 @@ import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
 
 void main() {
-  Future<void> open(WidgetTester tester, {int count = 3, int? fold}) async {
+  Future<void> open(
+    WidgetTester tester, {
+    int count = 3,
+    bool autofocusSearch = false,
+  }) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.reset);
@@ -18,7 +22,7 @@ void main() {
                 context,
                 title: 'Agent',
                 hint: 'Search agents',
-                fold: fold,
+                autofocusSearch: autofocusSearch,
                 items: [
                   for (var i = 0; i < count; i++)
                     ChooserItem(value: i, title: 'Agent $i'),
@@ -48,21 +52,31 @@ void main() {
     expect(find.byType(BottomSheet), findsNothing);
   });
 
-  testWidgets('expanded long chooser scrolls to its last choice', (
+  testWidgets('the full chooser scrolls to its last choice without more', (
     tester,
   ) async {
-    await open(tester, count: 20, fold: 2);
-    await tester.tap(find.text('more', findRichText: true));
-    await tester.pumpAndSettle();
+    await open(tester, count: 20);
+    expect(find.text('more', findRichText: true), findsNothing);
     await tester.scrollUntilVisible(
       find.text('Agent 19', findRichText: true),
       250,
-      scrollable: find.byType(Scrollable),
+      scrollable: find.byType(Scrollable).last,
     );
     await tester.tap(find.text('Agent 19', findRichText: true));
     await tester.pumpAndSettle();
     expect(find.byType(BottomSheet), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a short searchable chooser accepts typing on entry', (
+    tester,
+  ) async {
+    await open(tester, autofocusSearch: true);
+    expect(tester.testTextInput.isVisible, isTrue);
+    tester.testTextInput.updateEditingValue(const TextEditingValue(text: '2'));
+    await tester.pumpAndSettle();
+    expect(find.text('Agent 2', findRichText: true), findsOneWidget);
+    expect(find.text('Agent 0', findRichText: true), findsNothing);
   });
 
   testWidgets('search choices remain above the keyboard', (tester) async {

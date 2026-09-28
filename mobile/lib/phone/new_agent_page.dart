@@ -82,6 +82,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
   String? _engine = 'claude';
   String? _error;
   bool _creating = false;
+  bool _optionsOpen = false;
 
   /// Codex state folders this machine reported, and the one chosen. Null is the
   /// machine's own default `CODEX_HOME`, which is what the desktop dialog calls
@@ -700,9 +701,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
       final summary = [
         if (_folder != null || _project != null) _projectValue,
         if (_engine != null) _engineName(_engine!),
-        if (_repository != null) _worktree ? 'worktree' : _branchTitle,
-        if (_permissionModes.isNotEmpty)
-          (_permissionModeChoice?.label ?? 'Auto-approve'),
       ].join(' · ');
       return Scaffold(
         backgroundColor: tty.ground,
@@ -823,11 +821,20 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                       ? null
                                       : () => unawaited(_chooseProject()),
                                 ),
-                                // ⚠️ **Open, not folded behind `[+]` as the desktop folds them.** On a
-                                // phone the rows below sit over an empty half-screen, and they are the
-                                // two things worth seeing before a harness starts from a couch: which
-                                // branch it writes to, and what it may do without asking.
-                                if (info != null || _gitLoading || _gitFailed)
+                                // The owner's default flow matches desktop: choose agent and project.
+                                // Worktree, approvals and profile stay behind Options.
+                                TtyFormRow(
+                                  label: 'options',
+                                  value: _optionsOpen ? '[-]' : '[+]',
+                                  chevron: false,
+                                  onTap: _creating
+                                      ? null
+                                      : () => setState(
+                                          () => _optionsOpen = !_optionsOpen,
+                                        ),
+                                ),
+                                if (_optionsOpen &&
+                                    (info != null || _gitLoading || _gitFailed))
                                   TtyFormRow(
                                     label: 'branch',
                                     valueColor: info == null && !_gitLoading
@@ -849,7 +856,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                         ? null
                                         : () => unawaited(_chooseBranch(info)),
                                   ),
-                                if (_permissionModes.isNotEmpty)
+                                if (_optionsOpen && _permissionModes.isNotEmpty)
                                   TtyFormRow(
                                     label: 'approvals',
                                     value: mode?.label ?? 'Auto-approve',
@@ -861,7 +868,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                         ? null
                                         : () => unawaited(_chooseApprovals()),
                                   ),
-                                if (_showsCodexProfile)
+                                if (_optionsOpen && _showsCodexProfile)
                                   TtyFormRow(
                                     label: 'profile',
                                     value: _codexProfile?.label ?? 'Default',
@@ -1148,21 +1155,21 @@ class _NewAgentPageState extends State<NewAgentPage> {
   }
 
   Future<void> _chooseAgent() async {
+    await widget.notifier.agentPreference.load();
+    if (!mounted) return;
     final machine = _machine;
-    // Claude Code and Codex first — what nearly everyone runs — then the rest A to Z behind `more`.
-    const first = ['claude', 'codex'];
+    final recent = widget.notifier.agentPreference.recent;
     final ids = {for (final identity in _engines) identity.id, ?_engine};
     final ordered = [
-      for (final id in first)
+      for (final id in recent)
         if (ids.contains(id)) id,
-      ...(ids.where((id) => !first.contains(id)).toList()
+      ...(ids.where((id) => !recent.contains(id)).toList()
         ..sort((a, b) => _engineName(a).compareTo(_engineName(b)))),
     ];
     final picked = await showNewAgentChooser<String>(
       context,
       title: 'Agent',
       hint: 'Search agents',
-      fold: ordered.where(first.contains).length,
       items: [
         for (final id in ordered)
           ChooserItem(
@@ -1229,6 +1236,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       context,
       title: 'Project',
       hint: 'Search projects',
+      autofocusSearch: true,
       actions: [
         ChooserItem(
           value: const _ProjectChoice.open(),

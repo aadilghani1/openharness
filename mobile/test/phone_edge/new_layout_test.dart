@@ -67,6 +67,8 @@ void main() {
       );
       addTearDown(app.dispose);
       await pumpNew(tester, app, scale, brightness);
+      await tapInView(tester, find.text('options'));
+      await frames(tester);
     });
   });
 
