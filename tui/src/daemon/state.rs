@@ -92,6 +92,9 @@ pub struct Daemons {
     pub frame_due: Option<Instant>,
     // ── the pair brain, and what is open over the window ──
     pub brain: Brain,
+    pub gallery: super::art::Gallery,
+    pub zoo_selected: usize,
+    pub zoo_top: usize,
     pub overlay: Option<super::overlay::Overlay>,
 }
 
@@ -101,7 +104,7 @@ impl Daemons {
             settings: Settings::load(), tim_off: false, zoo: ZooDoc::default(), zoo_state: ZooState::Unknown, fetching: false, refetch: false, reported: Vec::new(), retry_at: None, retry: RETRY_FIRST, keys_on: false, fetched_gen: None,
             held: None, last_done: None, blink: None, last_look: None, step: 0, last_step: None, back_at: None, nap_until: None, boop_until: None, egg_until: None,
             last_key: Instant::now(), pause_at: None, idle_sent: false, away_since: None, focus_back: None, focus_sent: None, presence_gen: None, table_up: false, frame_due: None,
-            brain: Brain::default(), overlay: None,
+            brain: Brain::default(), gallery: Default::default(), zoo_selected: 0, zoo_top: 0, overlay: None,
         }
     }
 
@@ -114,7 +117,7 @@ impl Daemons {
 
     /// The paired daemon's name (its nickname when it has one), or `your daemon`.
     pub fn name(&self) -> String {
-        self.zoo.zoo.paired().map(|(mine, d)| mine.nickname.clone().unwrap_or_else(|| d.id.clone())).unwrap_or_else(|| "your daemon".into())
+        self.zoo.zoo.paired().map(|(mine, _)| mine.called()).unwrap_or_else(|| "your daemon".into())
     }
 
     /// The habits the nest counts: the account's, and (signed out) this computer's.
@@ -201,10 +204,11 @@ pub fn cell(app: &App) -> Option<String> {
     if !app.daemons.zoo_state.on() { return None }
     let centred = |s: &str| render::status_cell(r, s, s.len());
     let zoo = app.daemons.zoo.zoo.clone();
-    let hatching = matches!(app.daemons.overlay, Some(super::overlay::Overlay::Hatch(_)));
+    if let Some(super::overlay::Overlay::Hatch(rv)) = &app.daemons.overlay {
+        return Some(centred(&super::hatch::line(rv, Instant::now(), app.daemons.lid().as_deref())))
+    }
     let fresh_egg = app.daemons.egg_until.map(|t| Instant::now() < t).unwrap_or(false);
-    let egg_look = zoo.eggs.first().and_then(|e| r.rules.eggs.get(&e.kind)).map(|e| e.look.clone());
-    if let Some((mine, d)) = zoo.paired().filter(|_| !hatching && !fresh_egg) {
+    if let Some((mine, d)) = zoo.paired().filter(|_| !fresh_egg) {
         let vi = r.version_index(&mine.version());
         let m = mood(app);
         let lid = if app.terminal_focused { app.daemons.lid() } else { None };
@@ -214,15 +218,15 @@ pub fn cell(app: &App) -> Option<String> {
             "back" => app.daemons.back_at.map(|b| b.elapsed().as_millis() as u64).unwrap_or(0),
             _ => app.daemons.step * if vi == last { d.work_ms } else { 130 },
         };
-        let sprite = render::sprite(r, d, vi, m, Opts { t, lid: lid.as_deref(), motion: moving });
-        let mut s = render::status_cell(r, &sprite, render::base_width(r, d, vi));
+        let traits = mine.traits();
+        let sprite = render::individual_sprite(r, d, traits.as_ref(), vi, m, Opts { t, lid: lid.as_deref(), motion: moving });
+        let mut s = render::status_cell(r, &sprite, render::look_base_width(r, render::individual(d, traits.as_ref()), vi));
         // Shiny: a `*` in the left gutter.
         if mine.shiny { s.replace_range(0..1, "*") }
         return Some(s);
     }
-    if let Some(look) = egg_look { return Some(centred(&look)) }
-    let stage = render::nest_stage(r, &app.daemons.habits());
-    Some(centred(&r.rules.nest[stage]))
+    let eggs = super::zoo::eggs_shown(&zoo, app.daemons.zoo_state == ZooState::Account, &app.daemons.habits(), &super::zoo::local_today());
+    super::zoo::nearest(&eggs).map(|e| centred(&render::egg_line(r, &e.kind, e.stage(), app.daemons.lid().as_deref(), "")))
 }
 
 /// `#{daemon}` (and `#{tim}`): the cell, bold when it wants you, dim asleep.
@@ -250,7 +254,7 @@ pub fn describe(app: &App) -> String {
     match (&d.zoo_state, d.zoo.zoo.paired()) {
         (ZooState::Unknown, _) => "the zoo has not answered yet".into(),
         (ZooState::Off, _) => "the daemons are off here".into(),
-        (ZooState::Account, Some((mine, r))) => format!("{} {} · {} · bond {} · {} xp · {}{quiet}", mine.nickname.clone().unwrap_or(r.id.clone()), mine.version(), r.rarity, mine.bond, mine.xp, mood(app)),
+        (ZooState::Account, Some((mine, r))) => format!("{} {} · {} · bond {} · {} xp · {}{quiet}", mine.title(), mine.version(), r.rarity, mine.bond, mine.xp, mood(app)),
         (ZooState::Account, None) if !d.zoo.zoo.eggs.is_empty() => format!("an egg is ready — {} hatches it{quiet}", app.keymap.key_for_name("switch-client -T daemon").map(|k| format!("{k} h")).unwrap_or("C-b Z h".into())),
         (ZooState::SignedOut, _) => format!("the nest ({} habits) — sign in to hatch{quiet}", d.habits().len()),
         _ => format!("the nest ({} habits){quiet}", d.habits().len()),

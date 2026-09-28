@@ -23,6 +23,7 @@ expect() { # expect <what> <text> [timeout-ms]
 cleanup() { tmux_ kill-server 2>/dev/null || true; kill "$mock" ${mock_off:-} ${mock_out:-} 2>/dev/null || true; rm -rf "$home"; }
 trap cleanup EXIT
 # E2E_SNAPSHOTS=<dir>: the daemons' screens, as capture-pane printed them, kept there.
+[ -z "${E2E_SNAPSHOTS:-}" ] || mkdir -p "$E2E_SNAPSHOTS"
 snap() { [ -n "${E2E_SNAPSHOTS:-}" ] && screen > "$E2E_SNAPSHOTS/$1.txt"; return 0; }
 
 # harnessd's Unix socket is in ADAPTER_DATA_DIR (the scratch home here): the mock serves it beside the
@@ -193,30 +194,33 @@ tmux_ send-keys -t t y
 wait_eq "C-b & kills the window's shell" $((before + 1)) dial "(d.deleted || []).length"
 # ── the daemons (daemons/README.md; tui/docs/daemons.md) ──
 # The mock's zoo has the first egg waiting (MOCK_ZOO=egg): the status line shows it.
-wait_eq "#{daemon}: the waiting egg in the status cell (ten cells)" '  \_O_/   ' hn display -p '#{daemon}'
-expect "the egg in the status line" '\_O_/   '
+wait_eq "#{daemon}: the waiting egg in the status cell (ten cells)" ' \_(oo)_/ ' hn display -p '#{daemon}'
+expect "the egg in the status line" '\_(oo)_/'
 wait_eq "prefix Z enters the daemon table (a key tmux leaves unbound)" 1 sh -c "HOME=$home $bin -L $client list-keys -T prefix Z | grep -c 'switch-client -T daemon'"
 tmux_ send-keys -t t C-b Z
 expect "C-b Z: the daemon's keys" "Hatch an egg"
 snap table
 tmux_ send-keys -t t h
 expect "h: the hatch, full screen" "─ hatch ─"
-# tim is drawn filled: its 0.1 plate, at the reveal size (56 columns) since 120 x 32 has room for all of it.
-expect "the hatchling as a silhouette first (the reveal plate, every glyph a #)" "###################"
+# The new opening rocks, bursts and drops the shell before the hatchling rises.
+expect "the hatchling as a silhouette first (every glyph a #)" "########" 6500
 snap hatch-silhouette
-expect "then the plate itself, its idle loop running" "##########%%%%"
+expect "then the plate itself, its idle loop running" "#####%" 6500
 snap hatch-plate
-expect "its name as a banner" "| |_  (_)  _ __"
+expect "its name as a banner" "| |_  (_)  _ __" 15000
 expect "fork() returned 0." "fork() returned 0."
 snap hatch-fork
 expect "then its card, with the server's serial" "tim 0.1  #0042"
 snap hatch-card
-tmux_ send-keys -t t Space
-expect "then what it sees, before it watches anything" "What tim sees"
+expect "the hatch names its individual" "name it:"
+tmux_ send-keys -t t -l pip
+tmux_ send-keys -t t Enter
+wait_eq "the name is saved by uid" "000000000000000000000001 pip" dial "d.zooOps.filter(o => o.op === 'zoo.nickname').map(o => o.uid + ' ' + o.name).join()"
+expect "then what it sees, before it watches anything" "What pip sees"
 snap consent
 tmux_ send-keys -t t y
 wait_eq "y: zoo.consent { watching: true }" "true" dial "d.zooOps.filter(o => o.op === 'zoo.consent').map(o => o.watching).join()"
-wait_eq "tim is paired, in the status line" "tim" hn display -p '#{daemon_name}'
+wait_eq "pip is paired, in the status line" "pip" hn display -p '#{daemon_name}'
 wait_eq "#{daemon}: tim's face in the status cell (its one-line sprite)" '  (o o)   ' hn display -p '#{daemon}'
 expect "tim in the status line, once its reply has gone" "(o o)" 7000
 snap status-tim
@@ -240,7 +244,7 @@ tmux_ send-keys -t t C-b Z t
 expect "t: the talk prompt" "(talk)"
 tmux_ send-keys -t t "hello tim" Enter
 wait_eq "daemon_talk over the socket" "hello tim" dial "d.daemon.filter(f => f.type === 'daemon_talk').map(f => f.text).join()"
-expect "the pair's words, after its nick" "<tim> heard you: hello tim"
+expect "the pair's words, after its nick" "<pip> heard you: hello tim"
 # The brief on return: at most five items, the line first.
 push '{"type":"daemon_brief","payload":{"desk":"local","line":"reattached. 1 done.","items":[{"id":"b1","kind":"done","machineId":"mock0000000000000000000000000001","line":"Mock Claude: all 42 tests pass"}]}}'
 expect "the brief on return" "reattached. 1 done."
@@ -273,7 +277,7 @@ wait_eq "switched off: no prefix Z" 0 sh -c "HOME=$home $bin -L $client list-key
 # …and on again: zoo_changed asks, and it all comes back.
 curl -s -X POST "http://127.0.0.1:$port/test/zoo-mode?mode=egg" >/dev/null
 push '{"type":"zoo_changed","payload":{"revision":999}}'
-wait_eq "on again after zoo_changed" "tim" hn display -p '#{daemon_name}'
+wait_eq "on again after zoo_changed" "pip" hn display -p '#{daemon_name}'
 wait_eq "prefix Z back" 1 sh -c "HOME=$home $bin -L $client list-keys -T prefix Z | grep -c 'switch-client -T daemon'"
 # The zoo: the box back and what's next.
 tmux_ send-keys -t t C-b Z z
@@ -293,15 +297,16 @@ echo "$out" | grep -qF "| #01/09  DROP 1: INIT            COMMON |" || fail "hn 
 echo "✓ hn card prints the card"
 # A filled daemon's card is its portrait plate: byte for byte what daemons/tools/card.mjs draws.
 out=$(hn card tim --version 2.0)
-hatched=$(curl -s "http://127.0.0.1:$port/api/zoo" | node -e "const v = JSON.parse(require('fs').readFileSync(0, 'utf8')); console.log((v.data ?? v).zoo.daemons.find(d => d.id === 'tim').hatchedAt.slice(0, 10))")
+hatched=$(curl -s "http://127.0.0.1:$port/api/zoo" | node -e "const v = JSON.parse(require('fs').readFileSync(0, 'utf8')); console.log((v.data ?? v).zoo.daemons.find(d => d.id === 'tim').hatched.slice(0, 10))")
 want=$(node --input-type=module -e "
 import { readFileSync } from 'node:fs'
 import { cardLines } from '$here/../../daemons/tools/card.mjs'
+import { rollTraits } from '$here/../../daemons/tools/render.mjs'
 const roster = JSON.parse(readFileSync('$here/../../daemons/roster.json', 'utf8'))
 const plates = JSON.parse(readFileSync('$here/../../daemons/plates.json', 'utf8'))
 const tim = roster.daemons.find(d => d.id === 'tim')
 const plate = plates.daemons.tim.portrait['2.0'].idle[0].split('\\n')
-console.log(cardLines(roster, tim, { version: '2.0', plate, serial: 42, hatched: '$hatched', egg: 'first' }).join('\\n'))")
+console.log(cardLines(roster, tim, { version: '2.0', plate, name: 'pip', traits: rollTraits(roster, 'tim', 17), serial: 42, hatched: '$hatched', egg: 'first' }).join('\\n'))")
 [ "$out" = "$want" ] || fail "hn card tim --version 2.0 is not card.mjs's card:
 $out
 --- card.mjs ---
@@ -315,6 +320,27 @@ echo "$out" | grep -qF "no daemon is called tmux" || fail "hn card tmux: a daemo
 echo "✓ hn card: a version it knows; a daemon on hold is not one it knows"
 hn card --svg | grep -qF "<svg" || fail "hn card --svg"
 echo "✓ hn card --svg"
+# A repeated species is a second individual: name, select, pair and fetch its own art.
+curl -s -X POST "http://127.0.0.1:$port/test/zoo-egg" >/dev/null
+hn set -g @daemon-motion off
+tmux_ send-keys -t t C-b Z h
+expect "another tim gets its own serial" "tim 0.1  #0043"
+expect "the second individual can be named" "name it:"
+tmux_ send-keys -t t -l dot
+tmux_ send-keys -t t Enter
+wait_eq "the second name is separate" "dot" dial "d.zooOps.filter(o => o.op === 'zoo.nickname').at(-1).name"
+tmux_ send-keys -t t C-b Z z
+tmux_ send-keys -t t j
+expect "the selected individual heads the zoo" "dot the tim"
+tmux_ send-keys -t t Enter
+wait_eq "pairing addresses the second uid" "000000000000000000000002" dial "d.zooOps.filter(o => o.op === 'zoo.pair').at(-1).uid"
+wait_eq "the paired name is dot" "dot" hn display -p '#{daemon_name}'
+wait_eq "the selected individual art uses the trusted socket" "true" dial "d.daemon.some(f => f.type === 'daemon_plate_get' && f.uid === '000000000000000000000002' && f.trusted)"
+snap zoo-individuals
+tmux_ send-keys -t t k Enter
+wait_eq "the first tim stays independently pairable" "pip" hn display -p '#{daemon_name}'
+tmux_ send-keys -t t Escape
+hn set -g @daemon-motion on
 # Quiet: no line nobody asked for.
 hn set -g @daemon-quiet on
 push "{\"type\":\"daemon_say\",\"payload\":{\"id\":\"f1\",\"about\":{\"machineId\":\"mock0000000000000000000000000002\",\"agentId\":\"x\"},\"mood\":\"fail\",\"line\":\"remote failed: tests\",\"actions\":[],\"ttlMs\":5200}}"
@@ -338,7 +364,7 @@ tmux_ new-session -d -s o -x 120 -y 32 "HN_SOCKET_NAME=$client-off HOME=$home_of
 waited=0; until tmux_ capture-pane -p -t o | grep -qF "Mock terminal (mock)"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 5000 ] && fail "the off client started no shell"; done
 sleep 0.8
 [ -z "$(HOME=$home_off $bin -L $client-off display -p '#{daemon}')" ] || fail "#{daemon} with the daemons off"
-tmux_ capture-pane -p -t o | tail -1 | grep -qF '\_O_/' && fail "a status cell with the daemons off"
+tmux_ capture-pane -p -t o | tail -1 | grep -qF '\_(oo)_/' && fail "a status cell with the daemons off"
 [ "$(HOME=$home_off $bin -L $client-off list-keys | grep -c 'switch-client -T daemon')" = 0 ] || fail "prefix Z bound with the daemons off"
 off=$(curl -s "http://127.0.0.1:$port_off/test/dial" | node -e "const d = JSON.parse(require('fs').readFileSync(0, 'utf8')).data; console.log(d.daemon.length + d.zooOps.length)")
 [ "$off" = 0 ] || fail "daemon_* frames or zoo ops with the daemons off ($off)"
@@ -363,10 +389,19 @@ out=$(HOME=$home_off "$bin" --port "$port_out" tim 2>&1 || true)
 echo "$out" | grep -qF "the daemons are off here" || fail "hn tim with { enabled: false }: $out"
 echo "✓ { enabled: false } is off too"
 
+curl -s -X POST "http://127.0.0.1:$port/test/zoo-egg" >/dev/null
+hn set -g @daemon-motion off
+tmux_ send-keys -t t C-b Z h
+expect "a reduced-motion hatch starts at its card" "name it:"
 tmux_ resize-window -t t -x 30 -y 8
-sleep 0.3
+expect "a tiny hatch keeps its name prompt visible" "name it:"
+tmux_ send-keys -t t NPage
+expect "the tiny hatch card scrolls with its prompt pinned" "name it:"
+snap hatch-small
+tmux_ send-keys -t t Escape
 tmux_ resize-window -t t -x 120 -y 32
 expect "survives a tiny window" "Mock Codex"
+hn set -g @daemon-motion on
 tmux_ send-keys -t t C-b d
 sleep 0.5
 tmux_ has-session -t t 2>/dev/null && screen | grep -q "Mock" && fail "C-b d did not detach"

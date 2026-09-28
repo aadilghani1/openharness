@@ -232,7 +232,7 @@ impl Traits {
         m.insert("marks".into(), json!(self.marks));
         m.insert("extra".into(), json!(self.extra));
         m.insert("oddEye".into(), json!(self.odd_eye));
-        for (k, v) in &self.props { m.insert(k.clone(), json!(v)); }
+        for (k, v) in &self.props { m.insert(k.clone(), if v.fract() == 0.0 { json!(*v as i64) } else { json!(v) }); }
         m.insert("temper".into(), json!(self.temper()));
         m.insert("accent".into(), json!(self.accent));
         Value::Object(m)

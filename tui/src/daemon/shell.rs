@@ -53,7 +53,8 @@ pub async fn run(args: &[String], port: u16, socket: Option<&str>, name: Option<
         "zoo" => {
             if state == ZooState::Unknown { return Some(1) }
             // The paired daemon's portrait at rest (idle, its first frame), as text.
-            let rows = zoo_rows(&state, &doc, &habits(&state, &doc), &local_today(), now_ms(), Some(Face { mood: "idle", frame: 0 }));
+            let own = if let Some((o, _)) = doc.zoo.paired() { super::art::fetch(port, o, super::plates::PORTRAIT, &o.version(), "idle").await } else { None };
+            let rows = zoo_rows(&state, &doc, &habits(&state, &doc), &local_today(), now_ms(), Some(Face { mood: "idle", frame: 0, own: own.as_ref(), uid: None }));
             let text: Vec<&str> = rows.iter().map(Row::text).collect();
             crate::cli::out(&(text.join("\n").trim_end().to_string() + "\n"));
             0
@@ -69,7 +70,7 @@ pub async fn run(args: &[String], port: u16, socket: Option<&str>, name: Option<
             }
             if state == ZooState::SignedOut { eprintln!("hn: no zoo — sign in to hatch (harness login)"); return Some(1) }
             if state != ZooState::Account { return Some(1) }
-            let mine = match &id { Some(i) => doc.zoo.owned(i), None => doc.zoo.paired().map(|(m, _)| m) };
+            let mine = match &id { Some(i) => doc.zoo.find(i), None => doc.zoo.paired().map(|(m, _)| m) };
             let Some(mine) = mine else {
                 eprintln!("hn: {}", match &id { Some(i) if roster().shown(i).is_some() => format!("you have not hatched {i}"), Some(i) => format!("no daemon is called {i}"), None => "no daemon yet — hatch one first".into() });
                 return Some(1);
@@ -77,6 +78,7 @@ pub async fn run(args: &[String], port: u16, socket: Option<&str>, name: Option<
             let d = roster().shown(&mine.id)?;
             let mut o = super::hooks::card_opts(mine);
             if version.is_some() { o.version = version }
+            o.plate = super::art::fetch(port, mine, super::plates::PORTRAIT, o.version.as_deref().unwrap_or("0.1"), "idle").await.and_then(|a| a.frame(0).map(|f| f.rows()));
             if svg { crate::cli::out(&super::card::card_svg(roster(), d, &o)); return Some(0) }
             let text = super::card::card_lines(roster(), d, &o).join("\n");
             crate::cli::out(&format!("{text}\n"));
@@ -105,15 +107,16 @@ pub async fn run(args: &[String], port: u16, socket: Option<&str>, name: Option<
             let line = match (&state, doc.zoo.paired()) {
                 (ZooState::Account, Some((mine, d))) => {
                     let vi = r.version_index(&mine.version());
-                    let cell = super::render::status_cell(r, &super::render::sprite(r, d, vi, "idle", super::render::Opts::still()), super::render::base_width(r, d, vi));
-                    format!("{cell} {} {} · {} · bond {} · {} xp", mine.nickname.clone().unwrap_or(d.id.clone()), mine.version(), d.rarity, mine.bond, mine.xp)
+                    let cell = super::render::status_cell(r, &super::render::individual_sprite(r, d, mine.traits().as_ref(), vi, "idle", super::render::Opts::still()), super::render::look_base_width(r, super::render::individual(d, mine.traits().as_ref()), vi));
+                    format!("{cell} {} {} · {} · bond {} · {} xp", mine.title(), mine.version(), d.rarity, mine.bond, mine.xp)
                 }
-                (ZooState::Account, None) if !doc.zoo.eggs.is_empty() => format!("{}  an egg is ready — hn hatch", r.rules.eggs.get(&doc.zoo.eggs[0].kind).map(|e| e.look.clone()).unwrap_or_default()),
+                (ZooState::Account, None) if !doc.zoo.eggs.is_empty() => format!("{}  an egg is ready — hn hatch", super::render::egg_line(r, &doc.zoo.eggs[0].kind, "p4", None, "")),
                 _ => {
                     let h = habits(&state, &doc);
-                    let stage = super::render::nest_stage(r, &h);
+                    let eggs = super::zoo::eggs_shown(&doc.zoo, state == ZooState::Account, &h, &local_today());
+                    let line = super::zoo::nearest(&eggs).map(|e| super::render::egg_line(r, &e.kind, e.stage(), None, "")).unwrap_or_default();
                     let why = if state == ZooState::SignedOut { " — sign in to hatch" } else { "" };
-                    format!("{}  the nest ({} habits){why}", r.rules.nest[stage], h.len())
+                    format!("{}  the nest ({} habits){why}", line, h.len())
                 }
             };
             println!("{line}");

@@ -83,6 +83,7 @@ pub fn set_state(app: &mut App, state: ZooState) {
     if !on {
         app.daemons.overlay = None;
         app.daemons.brain = Default::default();
+        app.daemons.gallery.reset();
         if app.key_table.as_deref() == Some("daemon") { app.key_table = None }
     }
 }
@@ -251,7 +252,7 @@ fn take(app: &mut App, doc: ZooDoc) {
     if first { return report_habits(app) }
     let now = &app.daemons.zoo.zoo;
     let arrived = now.eggs.iter().any(|e| !before.zoo.eggs.iter().any(|b| b.id == e.id));
-    let grew = now.paired().zip(before.zoo.paired()).map(|((a, _), (b, _))| a.id == b.id && a.bond > b.bond).unwrap_or(false);
+    let grew = now.paired().zip(before.zoo.paired()).map(|((a, _), (b, _))| a.uid() == b.uid() && a.bond > b.bond).unwrap_or(false);
     if arrived && !now.daemons.is_empty() { app.daemons.egg_until = Some(Instant::now() + Duration::from_secs(3)); app.daemons.blink("ack"); brain::wake(app, 3050) }
     if grew { app.daemons.blink("slow"); brain::wake(app, 200) }
     report_habits(app);
@@ -319,24 +320,26 @@ pub fn hatch(app: &mut App, egg: Option<String>) {
     let Some(e) = zoo.eggs.iter().find(|e| egg.as_ref().map(|id| &e.id == id).unwrap_or(true)).cloned() else {
         return brain::reply(app, if zoo.daemons.is_empty() { "no egg yet — the nest grows with your habits (C-b Z z)" } else { "no egg to hatch — work earns them" });
     };
-    let reveal = Reveal::new(&e.id, &e.kind, state::motion(app), app.daemons.settings.hatches >= 3, zoo.consent.is_none());
+    let reveal = Reveal::new(&e.kind, state::motion(app), app.daemons.settings.hatches >= 3, zoo.consent.is_none());
     app.daemons.overlay = Some(Overlay::Hatch(Box::new(reveal)));
     brain::wake(app, 40);
     let egg_id = e.id.clone();
     ops(app, vec![op("zoo.hatch", json!({ "eggId": e.id }))], move |app, r| {
         let outcome = r.map_err(|e| e.to_string()).and_then(|v| {
             let h = v.get("hatched").and_then(Value::as_array).and_then(|a| a.iter().find(|h| h.get("eggId").and_then(Value::as_str) == Some(&egg_id)).cloned()).ok_or("that egg is gone".to_string())?;
-            let id = h.get("daemonId").and_then(Value::as_str).unwrap_or("").to_string();
+            let id = h.get("daemonId").or_else(|| h.get("id")).and_then(Value::as_str).unwrap_or("").to_string();
+            let uid = h.get("uid").and_then(Value::as_str).unwrap_or("").to_string();
             let was = zoo.owned(&id).cloned();
-            let now = app.daemons.zoo.zoo.owned(&id).cloned().unwrap_or_default();
+            let now = app.daemons.zoo.zoo.find(if uid.is_empty() { &id } else { &uid }).cloned().unwrap_or_default();
             let grew = v.get("levelUps").and_then(Value::as_array).and_then(|a| a.iter().find(|l| l.get("id").and_then(Value::as_str) == Some(&id)))
                 .map(|l| (l.get("level").and_then(Value::as_u64).unwrap_or(0) as u32, l.get("version").and_then(Value::as_str).unwrap_or("0.1").to_string()));
             let duplicate = h.get("duplicate").and_then(Value::as_bool).unwrap_or(false);
             let shiny = h.get("shiny").and_then(Value::as_bool).unwrap_or(false);
             Ok(Outcome {
+                uid, seed: now.seed,
                 daemon: id, shiny: shiny || (duplicate && now.shiny), serial: h.get("serial").and_then(Value::as_u64), duplicate, xp: h.get("xp").and_then(Value::as_u64).unwrap_or(0), grew,
                 old_version: was.as_ref().map(|w| w.version()).unwrap_or_else(|| "0.1".into()), hatched: now.hatched_day().or_else(|| Some(super::zoo::local_today())),
-                nickname: now.nickname.clone(), total_xp: now.xp, became_shiny: duplicate && shiny && !was.map(|w| w.shiny).unwrap_or(false), count: now.dupes + 1,
+                nickname: now.name.clone(), total_xp: now.xp, became_shiny: duplicate && shiny && !was.map(|w| w.shiny).unwrap_or(false), count: now.dupes + 1,
             })
         });
         app.daemons.settings.hatches += 1;
@@ -361,22 +364,49 @@ pub fn consent(app: &mut App, watching: bool) {
 
 /// The paired daemon's card, as a fenced code block, to the clipboard (OSC 52).
 pub fn copy_card(app: &mut App) {
-    let Some(text) = card_text(&app.daemons.zoo, None) else { return brain::reply(app, "no daemon yet — hatch one first") };
+    copy_individual_card(app, None)
+}
+
+pub fn copy_individual_card(app: &mut App, uid: Option<&str>) {
+    let Some(mine) = uid.and_then(|u| app.daemons.zoo.zoo.find(u)).or_else(|| app.daemons.zoo.zoo.paired().map(|(o, _)| o)).cloned() else { return brain::reply(app, "no daemon yet — hatch one first") };
+    let Some(d) = super::roster::roster().shown(&mine.id) else { return };
+    let mut opts = card_opts(&mine);
+    opts.plate = super::art::get(app, &mine, super::plates::PORTRAIT, &mine.version(), "idle").and_then(|a| a.frame(0).map(|f| f.rows()));
+    let text = super::card::card_lines(super::roster::roster(), d, &opts).join("\n");
     crate::clipboard::store(&format!("```\n{text}\n```\n"));
-    brain::reply(app, format!("{}'s card is copied", app.daemons.name()));
+    brain::reply(app, format!("{}'s card is copied", mine.called()));
+}
+
+pub fn pair_selected(app: &mut App) {
+    let Some(mine) = app.daemons.zoo.zoo.shown().nth(app.daemons.zoo_selected).map(|(o, _)| o.clone()) else { return };
+    let fields = if mine.uid.is_empty() { json!({ "id": mine.id }) } else { json!({ "uid": mine.uid }) };
+    ops(app, vec![op("zoo.pair", fields)], |app, r| { if let Err(e) = r { brain::reply(app, e.to_string()) } });
+}
+
+/// Keep the card open on failure so the optional name can be retried.
+pub fn name_hatch(app: &mut App, uid: String, name: String) {
+    ops(app, vec![op("zoo.nickname", json!({ "uid": uid, "name": name }))], move |app, r| {
+        let Some(Overlay::Hatch(rv)) = app.daemons.overlay.as_mut() else { return };
+        if rv.outcome.as_ref().map(|o| o.uid.as_str()) != Some(&uid) { return }
+        rv.saving = false;
+        match r {
+            Ok(_) => { let next = rv.consent_next; super::overlay::close_hatch(app, next); }
+            Err(e) => rv.name_error = Some(e.to_string()),
+        }
+    });
 }
 
 /// A daemon's card from the zoo: the paired one, or `id` when it is yours.
 pub fn card_text(doc: &ZooDoc, id: Option<&str>) -> Option<String> {
     let zoo = &doc.zoo;
-    let mine = match id { Some(id) => zoo.owned(id)?, None => zoo.paired()?.0 };
+    let mine = match id { Some(id) => zoo.find(id)?, None => zoo.paired()?.0 };
     let d = super::roster::roster().shown(&mine.id)?;
     let o = card_opts(mine);
     Some(super::card::card_lines(super::roster::roster(), d, &o).join("\n"))
 }
 
 pub fn card_opts(mine: &super::zoo::Owned) -> super::card::CardOpts {
-    super::card::CardOpts { version: Some(mine.version()), shiny: mine.shiny, serial: mine.serial.map(|s| s.to_string()), nickname: mine.nickname.clone(), hatched: mine.hatched_day(), egg: mine.egg.clone() }
+    super::card::CardOpts { version: Some(mine.version()), shiny: mine.shiny, serial: mine.serial.map(|s| s.to_string()), name: mine.name.clone(), hatched: mine.hatched_day(), egg: mine.egg.clone(), traits: (mine.seed != 0).then(|| mine.traits()).flatten(), plate: None }
 }
 
 // ── the status line, formats, commands, options ──────────────────────────────
@@ -405,7 +435,11 @@ pub fn command(app: &mut App, words: &[String]) {
         "detail" => brain::detail(app),
         "dismiss" => { if app.daemons.overlay.take().is_none() { brain::dismiss(app) } }
         "talk" => brain::talk(app, &rest),
-        "zoo" => { app.daemons.overlay = Some(Overlay::Zoo); look(app); presence(app, json!({ "doneSeen": true })) }
+        "zoo" => {
+            app.daemons.zoo_selected = app.daemons.zoo.zoo.shown().position(|(o, _)| app.daemons.zoo.zoo.is_paired(o)).unwrap_or(0);
+            app.daemons.zoo_top = 0;
+            app.daemons.overlay = Some(Overlay::Zoo); look(app); presence(app, json!({ "doneSeen": true }))
+        }
         "hatch" => hatch(app, (!rest.is_empty()).then_some(rest)),
         "card" => copy_card(app),
         "consent" => { if app.daemons.zoo.zoo.paired().is_some() { app.daemons.overlay = Some(Overlay::Consent { name: app.daemons.name() }) } else { brain::reply(app, "no daemon yet — hatch one first") } }

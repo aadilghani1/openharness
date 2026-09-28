@@ -43,7 +43,7 @@ fn t(s: impl Into<String>) -> Row { Row::Text(s.into(), Ink::Plain) }
 
 /// The paired daemon's portrait over the zoo: its mood, and the frame of that mood's loop.
 #[derive(Clone, Copy, Debug)]
-pub struct Face<'a> { pub mood: &'a str, pub frame: usize }
+pub struct Face<'a> { pub mood: &'a str, pub frame: usize, pub own: Option<&'a plates::Art>, pub uid: Option<&'a str> }
 
 /// The zoo as rows: the paired daemon (its portrait, with a `face`), the box back, what you own, the
 /// eggs and the meters — or, before any hatch, the nest and its habits. Shared by the popup and
@@ -54,20 +54,25 @@ pub fn zoo_rows(state: &ZooState, doc: &ZooDoc, habits: &[String], today: &str, 
     let mut out = Vec::new();
     let account = *state == ZooState::Account;
     if account && !zoo.daemons.is_empty() {
-        if let Some((mine, d)) = zoo.paired() {
+        if let Some((mine, d)) = face.and_then(|f| f.uid).and_then(|uid| zoo.find(uid)).and_then(|o| Some((o, r.shown(&o.id)?))).or_else(|| zoo.paired()) {
             if let Some(f) = face {
-                out.extend(hatch::art(d, PORTRAIT, &mine.version(), f.mood, f.frame, mine.shiny, None).into_iter().map(|(s, ink)| Row::Text(s, ink)));
+                let traits = (mine.seed != 0).then(|| mine.traits()).flatten();
+                out.extend(hatch::art(d, traits.as_ref(), f.own, PORTRAIT, &mine.version(), f.mood, f.frame, mine.shiny, None).into_iter().map(|(s, ink)| Row::Text(s, ink)));
                 out.push(t(""));
             }
             let levels = &r.rules.bond.levels;
             let next = levels.get(mine.bond as usize + 1).map(|n| format!("{}/{n} xp", mine.xp)).unwrap_or(format!("{} xp", mine.xp));
-            let name = mine.nickname.as_ref().map(|n| format!("{n} the {}", d.id)).unwrap_or(d.id.clone());
-            let serial = mine.serial.map(|s| format!(" · #{s:04}")).unwrap_or_default();
-            out.push(Row::Text(format!("{name} {} · {}{} · paired · bond {} · {next}{serial}", mine.version(), if mine.shiny { "shiny " } else { "" }, d.rarity, mine.bond), Ink::Bold));
+            let name = mine.title();
+            let serial = if mine.name.is_some() { mine.serial.map(|s| format!(" · #{s:04}")).unwrap_or_default() } else { String::new() };
+            let paired = if zoo.is_paired(mine) { "paired" } else { "selected" };
+            out.push(Row::Text(format!("{name} {} · {}{} · {paired} · bond {} · {next}{serial}", mine.version(), if mine.shiny { "shiny " } else { "" }, d.rarity, mine.bond), Ink::Bold));
             for l in words(&format!("{} · {}", d.lineage(), d.lore), 64) { out.push(Row::Text(l, Ink::Faint)) }
             out.push(t(""));
         }
-        let owned: Vec<Shelved> = zoo.daemons.iter().map(|o| Shelved { id: o.id.clone(), dupes: o.dupes }).collect();
+        let owned: Vec<Shelved> = r.daemons.iter().filter_map(|d| {
+            let n = zoo.daemons.iter().filter(|o| o.id == d.id).count();
+            (n > 0).then(|| Shelved { id: d.id.clone(), dupes: n.saturating_sub(1) as u32 })
+        }).collect();
         let shelf = shelf_lines(r, &owned, None, now_ms);
         let set: Vec<&super::roster::Daemon> = r.daemons.iter().filter(|d| d.drop == r.drops[0].id).collect();
         for (i, line) in shelf.iter().enumerate() {
@@ -78,25 +83,43 @@ pub fn zoo_rows(state: &ZooState, doc: &ZooDoc, habits: &[String], today: &str, 
             } else { out.push(t(line.clone())) }
         }
         out.push(t(""));
-        for o in &zoo.daemons {
-            let Some(d) = r.shown(&o.id) else { continue };
-            let mut bits = vec![format!("{:<6} {:<4}", o.id, o.version()), format!("bond {}", o.bond), format!("{} xp", o.xp)];
-            if o.dupes > 0 { bits.push(format!("x{}", o.dupes + 1)) }
-            if o.shiny { bits.push("shiny".into()) }
-            if let Some(n) = &o.nickname { bits.push(format!("\"{n}\"")) }
-            if zoo.pair.as_deref() == Some(&o.id) { bits.push("paired".into()) }
-            out.push(Row::Text(format!("  {}", bits.join(" · ")), if d.dark_only { Ink::Dark(d.colour(o.shiny)) } else { Ink::Colour(d.colour(o.shiny)) }));
+        for d in &r.daemons {
+            if r.shown(&d.id).is_none() { continue }
+            let all: Vec<_> = zoo.daemons.iter().filter(|o| o.id == d.id).collect();
+            if all.is_empty() { continue }
+            out.push(Row::Text(format!("{} · {} individuals", d.id, all.len()), Ink::Bold));
+            if let Some(cat) = &d.traits {
+                let traits: Vec<_> = all.iter().filter_map(|o| o.traits()).collect();
+                let colours: Vec<_> = cat.colours.iter().filter(|c| traits.iter().any(|t| t.colour == c.name)).map(|c| c.name.clone()).collect();
+                let marks: Vec<_> = cat.marks.iter().filter(|(m, _)| m.is_some() && traits.iter().any(|t| &t.marks == m)).map(|(m, _)| m.clone().unwrap_or_else(|| "none".into())).collect();
+                let extras: Vec<_> = cat.extras.iter().filter(|e| e.name.is_some() && traits.iter().any(|t| t.extra == e.name)).map(|e| e.name.clone().unwrap_or_else(|| "none".into())).collect();
+                for (label, seen, total) in [("colours", colours, cat.colours.len()), ("markings", marks, cat.marks.iter().filter(|(m, _)| m.is_some()).count()), ("extras", extras, cat.extras.iter().filter(|e| e.name.is_some()).count())] {
+                    for line in words(&format!("  {label}: {}/{} · {}", seen.len(), total, seen.join(", ")), 64) { out.push(Row::Text(line, Ink::Faint)) }
+                }
+            }
+            for o in all {
+                let selected = face.and_then(|f| f.uid) == Some(o.uid());
+                let paired = if zoo.is_paired(o) { " · paired" } else { "" };
+                let traits = o.traits();
+                let sprite = render::individual_sprite(r, d, traits.as_ref(), r.version_index(&o.version()), "idle", render::Opts::still());
+                out.push(Row::Text(format!("{} {sprite:<8} {} {} · bond {} · {} xp{}{paired}", if selected { ">" } else { " " }, o.title(), o.version(), o.bond, o.xp, if o.shiny { " · shiny" } else { "" }), if selected { Ink::Bold } else { Ink::Colour(d.colour(o.shiny)) }));
+                if o.seed != 0 { if let Some((flags, rarity)) = o.flags() {
+                    for line in words(&format!("  {flags} · {}", super::card::one_in_text(rarity)), 64) { out.push(t(line)) }
+                } }
+            }
+            out.push(t(""));
         }
         out.push(t(""));
     } else {
         // Before the first hatch: the nest (or the egg), and the habits that make it.
         let first = &r.rules.first_egg;
-        let stage = render::nest_stage(r, habits);
+        let progress = render::habit_progress(r, habits, "first");
+        let stage = render::egg_stage(progress.0, progress.1, false);
         let known: Vec<&String> = habits.iter().filter(|h| first.habits.iter().any(|x| &x.key == *h)).collect();
         let turn = first.require.iter().all(|k| habits.contains(k));
         let counted = if turn { known.len().min(first.need) } else { known.len().min(first.need.saturating_sub(1)) };
-        let head = if account && !zoo.eggs.is_empty() { format!("the first egg is ready   {}", r.rules.eggs.get(&zoo.eggs[0].kind).map(|e| e.look.clone()).unwrap_or_default()) }
-            else { format!("the nest   {}   {counted} of {} toward the first egg", r.rules.nest[stage], first.need) };
+        let head = if account && !zoo.eggs.is_empty() { format!("the first egg is ready   {}", render::egg_line(r, &zoo.eggs[0].kind, "p4", None, "")) }
+            else { format!("the nest   {}   {counted} of {} toward the first egg", render::egg_line(r, "first", stage, None, ""), first.need) };
         out.push(Row::Text(head, Ink::Bold));
         out.push(t(format!("  {}, and any {} more:", first.habits.iter().find(|h| first.require.contains(&h.key)).map(|h| h.label.to_lowercase()).unwrap_or_default(), first.need.saturating_sub(first.require.len()))));
         for h in &first.habits {
@@ -112,7 +135,7 @@ pub fn zoo_rows(state: &ZooState, doc: &ZooDoc, habits: &[String], today: &str, 
         if eggs.is_empty() { out.push(Row::Text("no egg waiting".into(), Ink::Faint)) } else {
             let mut kinds: Vec<(String, usize)> = Vec::new();
             for e in eggs { match kinds.iter_mut().find(|(k, _)| *k == e.kind) { Some(k) => k.1 += 1, None => kinds.push((e.kind.clone(), 1)) } }
-            let looks = kinds.iter().map(|(k, n)| format!("{} x{n}", r.rules.eggs.get(k).map(|e| e.look.clone()).unwrap_or(k.clone()))).collect::<Vec<_>>().join("  ");
+            let looks = kinds.iter().map(|(k, n)| format!("{} x{n}", render::egg_line(r, k, "p4", None, ""))).collect::<Vec<_>>().join("  ");
             out.push(Row::Text(format!("eggs: {looks} waiting — h hatches"), Ink::Bold));
         }
         if !zoo.daemons.is_empty() || zoo.first_egg {
@@ -122,6 +145,16 @@ pub fn zoo_rows(state: &ZooState, doc: &ZooDoc, habits: &[String], today: &str, 
         }
         if zoo.first_egg && !zoo.setup_egg {
             out.push(t(format!("habits: {}/{} toward the setup egg", zoo.habits.len(), r.rules.setup_egg.need)));
+        }
+    }
+    // Waiting and earning eggs, each at its own cracking stage. Repeated
+    // ready eggs share one plate and keep their count in the heading above.
+    let mut drawn = std::collections::HashSet::new();
+    for e in super::zoo::eggs_shown(zoo, account, habits, today) {
+        if !drawn.insert((e.kind.clone(), e.stage())) { continue }
+        out.push(t(format!("{} egg · {}", e.kind, e.words())));
+        if let Some(f) = plates::egg_frame(&e.kind, PORTRAIT, e.stage(), face.map(|f| f.frame).unwrap_or(0)) {
+            out.extend(plates::paint_egg(&e.kind, f, plates::Light { name: "plain", dim: false }, 3).into_iter().map(|(row, ink)| Row::Text(row, Ink::Paint(ink))));
         }
     }
     out
@@ -160,7 +193,7 @@ fn ink_style(ink: Ink, plain: bool) -> Style {
         Ink::Cyan => c(Color::Cyan).add_modifier(Modifier::BOLD),
         Ink::Yellow => c(Color::Yellow).add_modifier(Modifier::BOLD),
         // Inked glyph by glyph (put_rows).
-        Ink::Plate(_) => Style::default(),
+        Ink::Plate(_) | Ink::Paint(_) => Style::default(),
     }
 }
 
@@ -196,7 +229,13 @@ fn put_rows(buf: &mut Buffer, inner: Rect, rows: &[Row], top: usize, base: Style
                     buf.set_string(x0 + i as u16, y, ch.to_string(), style);
                 }
             }
-            Row::Text(s, ink) => { buf.set_stringn(x0, y, s, inner.width as usize, base.patch(ink_style(*ink, plain))); }
+            Row::Text(s, Ink::Paint(p)) => {
+                for (i, ch) in s.chars().enumerate().take(inner.width as usize) {
+                    let style = p.style(i, ch, mode).map(|g| base.patch(g)).unwrap_or(base);
+                    buf.set_string(x0 + i as u16, y, ch.to_string(), style);
+                }
+            }
+            Row::Text(s, ink) => { buf.set_stringn(x0, y, s, inner.width as usize, base.patch(ink_style(ink.clone(), plain))); }
             Row::Shelf(s, colours) => {
                 for (c, chunk) in s.as_bytes().chunks(10).enumerate() {
                     let x = x0 + (c * 10) as u16;
@@ -251,44 +290,61 @@ pub fn draw(buf: &mut Buffer, app: &mut App) -> bool {
             // A plate at the reveal size when all of the reveal fits in the box, else the portrait size.
             let room = Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), area.height.saturating_sub(2));
             rv.size = hatch::fit(&rv, room.width as usize, room.height as usize);
+            if let Some(o) = rv.outcome.as_ref().and_then(|o| app.daemons.zoo.zoo.find(if o.uid.is_empty() { &o.daemon } else { &o.uid })).cloned() {
+                for size in [rv.size, PORTRAIT] {
+                    if let Some(art) = super::art::get(app, &o, size, &o.version(), "idle") { rv.offer(size, art, now) }
+                }
+            }
             let f = hatch::frame(&rv, now);
             let fill = if f.black && !plain { Style::default().bg(Color::Black).fg(Color::Gray) } else { Style::default() };
             let inner = frame_box(buf, area, " hatch ", fill);
-            let rows: Vec<Row> = f.rows.iter().map(|(s, ink)| Row::Text(s.clone(), *ink)).collect();
+            let rows: Vec<Row> = f.rows.iter().map(|(s, ink)| Row::Text(s.clone(), ink.clone())).collect();
             // A fixed place (the reveal's tallest moment, or the card's height; its width): rows are
             // added below, and the art never moves.
             let tallest = hatch::extent(&rv, rv.size).1.max(26) as u16;
             let (w, h) = (hatch::width(rv.size) as u16, rows.len() as u16);
             let top = inner.height.saturating_sub(h.max(tallest)) / 2;
             let region = Rect::new(inner.x + inner.width.saturating_sub(w) / 2, inner.y + top, w.min(inner.width), h.min(inner.height - top));
-            put_rows(buf, region, &rows, 0, fill, mode, false);
+            if rv.done(now) && rv.naming() {
+                let at = rows.iter().position(|r| r.text().trim_start().starts_with("name it:")).unwrap_or(rows.len());
+                let foot = &rows[at..];
+                let footer_height = (foot.len() as u16).min(inner.height);
+                let height = inner.height.saturating_sub(footer_height);
+                rv.card_top = rv.card_top.min(at.saturating_sub(height as usize));
+                put_rows(buf, Rect::new(region.x, inner.y, region.width, height), &rows[..at], rv.card_top, fill, mode, false);
+                put_rows(buf, Rect::new(region.x, inner.y + height, region.width, footer_height), foot, 0, fill, mode, false);
+            } else {
+                put_rows(buf, region, &rows, 0, fill, mode, false);
+            }
             if let Some(ms) = hatch::next_in(&rv, now) { animate(app, ms) }
             app.daemons.overlay = Some(Overlay::Hatch(rv));
             took = true;
         }
         Some(Overlay::Zoo) => {
-            // The paired daemon's portrait in its mood; a plate runs that mood's loop while motion is
-            // on and the terminal is in front (else its first frame).
             let clock = super::zoo::now_ms().max(0) as u64;
             let moving = super::state::motion(app) && app.terminal_focused;
-            let mood = super::state::mood(app);
-            let paired = app.daemons.zoo.zoo.paired();
-            let loop_len = paired.map(|(mine, d)| plates::frames(&d.id, PORTRAIT, &mine.version(), mood).len()).unwrap_or(0);
-            let face = Face { mood, frame: if moving { plates::frame_at(clock, loop_len) } else { 0 } };
+            let count = app.daemons.zoo.zoo.shown().count();
+            app.daemons.zoo_selected = app.daemons.zoo_selected.min(count.saturating_sub(1));
+            let selected = app.daemons.zoo.zoo.shown().nth(app.daemons.zoo_selected).map(|(o, _)| o.clone());
+            let mood = if selected.as_ref().map(|o| app.daemons.zoo.zoo.pair_uid() == Some(o.uid())).unwrap_or(false) { super::state::mood(app) } else { "idle" };
+            let own = selected.as_ref().and_then(|o| super::art::get(app, o, PORTRAIT, &o.version(), mood));
+            let loop_len = own.as_ref().map(|a| a.frames.len()).unwrap_or_else(|| selected.as_ref().map(|o| plates::frames(&o.id, PORTRAIT, &o.version(), mood).len()).unwrap_or(0));
+            let frame_ms = own.as_ref().map(|a| a.frame_ms).unwrap_or(plates::plates().frame_ms).max(1);
+            let face = Face { mood, frame: if moving && loop_len > 0 { (clock / frame_ms) as usize % loop_len } else { 0 }, own: own.as_deref(), uid: selected.as_ref().map(|o| o.uid()) };
             let d = &app.daemons;
-            let (today, now) = (super::zoo::local_today(), super::zoo::now_ms());
-            let mut rows = zoo_rows(&d.zoo_state, &d.zoo, &d.habits(), &today, now, Some(face));
-            // No room for the portrait: the zoo without it.
-            if rows.len() + 4 > body.height as usize { rows = zoo_rows(&d.zoo_state, &d.zoo, &d.habits(), &today, now, None) }
-            rows.push(t(""));
-            let hatch = if d.zoo_state == ZooState::Account && !d.zoo.zoo.eggs.is_empty() { "h hatch · " } else { "" };
-            let card = if d.zoo.zoo.paired().is_some() { "c copy card · " } else { "" };
-            rows.push(Row::Text(format!("{hatch}{card}Esc close"), Ink::Faint));
+            let rows = zoo_rows(&d.zoo_state, &d.zoo, &d.habits(), &super::zoo::local_today(), super::zoo::now_ms(), Some(face));
             let w = rows.iter().map(|r| r.text().len()).max().unwrap_or(40) as u16 + 6;
-            let rect = centred(body, w.max(56), rows.len() as u16 + 2);
+            let rect = centred(body, w.max(56), (rows.len() as u16).saturating_add(3));
             let inner = frame_box(buf, rect, " zoo ", Style::default());
-            put_rows(buf, inner, &rows, 0, Style::default(), mode, false);
-            if moving && loop_len > 1 { animate(app, Duration::from_millis(plates::next_frame_in(clock))) }
+            let room = inner.height.saturating_sub(3) as usize;
+            let top = app.daemons.zoo_top.min(rows.len().saturating_sub(room));
+            app.daemons.zoo_top = top;
+            put_rows(buf, Rect::new(inner.x, inner.y, inner.width, room as u16), &rows, top, Style::default(), mode, false);
+            let foot = ["j/k select · Enter pair · h hatch · c card", "PgUp/PgDn scroll · Esc close"];
+            for (i, text) in foot.iter().take(inner.height as usize).enumerate() {
+                buf.set_stringn(inner.x, inner.y + inner.height.saturating_sub(2) + i as u16, text, inner.width as usize, Style::default().add_modifier(Modifier::DIM));
+            }
+            if moving { animate(app, Duration::from_millis(frame_ms)) }
             app.daemons.overlay = Some(Overlay::Zoo);
             took = true;
         }
@@ -390,14 +446,41 @@ pub fn key(app: &mut App, key: &KeyEvent) -> bool {
         Overlay::Hatch(rv) => {
             let now = Instant::now();
             if esc { close_hatch(app, false); return true }
-            if rv.done(now) { let next = rv.consent_next; close_hatch(app, next); return true }
+            if rv.done(now) {
+                if rv.naming() {
+                    if rv.saving { return true }
+                    match key.code {
+                        KeyCode::PageDown => rv.card_top += 5,
+                        KeyCode::PageUp => rv.card_top = rv.card_top.saturating_sub(5),
+                        KeyCode::Enter => {
+                            let uid = rv.outcome.as_ref().map(|o| o.uid.clone()).unwrap_or_default();
+                            let name = rv.name.trim().to_string();
+                            let next = rv.consent_next;
+                            if name.is_empty() || uid.is_empty() { close_hatch(app, next) }
+                            else { rv.saving = true; rv.name_error = None; super::hooks::name_hatch(app, uid, name) }
+                        }
+                        KeyCode::Backspace => { rv.name.pop(); }
+                        _ => if let Some(c) = ch { hatch::type_name(rv, c) },
+                    }
+                    return true
+                }
+                let next = rv.consent_next; close_hatch(app, next); return true
+            }
             if rv.skippable && rv.outcome.is_some() { rv.skipped = true }
             true
         }
         Overlay::Zoo => {
-            match ch {
-                Some('h') | Some('\n') => { app.daemons.overlay = None; super::hooks::hatch(app, None) }
-                Some('c') => { super::hooks::copy_card(app) }
+            match key.code {
+                KeyCode::Down | KeyCode::Char('j') => { app.daemons.zoo_selected = (app.daemons.zoo_selected + 1).min(app.daemons.zoo.zoo.shown().count().saturating_sub(1)); app.daemons.zoo_top = 0; }
+                KeyCode::Up | KeyCode::Char('k') => { app.daemons.zoo_selected = app.daemons.zoo_selected.saturating_sub(1); app.daemons.zoo_top = 0; }
+                KeyCode::PageDown | KeyCode::Char(' ') => app.daemons.zoo_top += 10,
+                KeyCode::PageUp => app.daemons.zoo_top = app.daemons.zoo_top.saturating_sub(10),
+                KeyCode::Enter => { super::hooks::pair_selected(app) }
+                KeyCode::Char('h') => { app.daemons.overlay = None; super::hooks::hatch(app, None) }
+                KeyCode::Char('c') => {
+                    let uid = app.daemons.zoo.zoo.shown().nth(app.daemons.zoo_selected).map(|(o, _)| o.uid().to_string());
+                    super::hooks::copy_individual_card(app, uid.as_deref());
+                }
                 _ if esc || matches!(ch, Some('q' | 'z')) => app.daemons.overlay = None,
                 _ => {}
             }
@@ -444,23 +527,23 @@ mod tests {
 
     #[test]
     fn the_zoo_as_rows() {
-        let doc: ZooDoc = serde_json::from_value(json!({ "revision": 2, "zoo": { "daemons": [{ "id": "tim", "bond": 1, "xp": 60, "version": "0.1", "serial": 42 }, { "id": "yak", "version": "1.0", "dupes": 1, "shiny": true }, { "id": "vim", "version": "2.0" }],
+        let doc: ZooDoc = serde_json::from_value(json!({ "revision": 2, "zoo": { "daemons": [{ "id": "tim", "bond": 1, "xp": 60, "version": "0.1", "serial": 42 }, { "uid": "yak-one", "id": "yak", "version": "1.0", "shiny": true }, { "uid": "yak-two", "id": "yak", "version": "0.1" }, { "id": "vim", "version": "2.0" }],
             "eggs": [{ "id": "e", "kind": "turn" }, { "id": "f", "kind": "turn" }], "pair": "tim", "habits": ["turn", "split", "find"], "firstEgg": true, "progress": { "turns": 52, "days": { "2026-09-26": 4 } } } })).unwrap();
         let now = super::super::card::day_number("2026-09-27").unwrap() * 86_400_000;
         let rows = zoo_rows(&ZooState::Account, &doc, &[], "2026-09-26", now, None);
         let text: Vec<&str> = rows.iter().map(Row::text).collect();
-        assert_eq!(text[0], "tim 0.1 · common · paired · bond 1 · 60/150 xp · #0042");
+        assert_eq!(text[0], "tim #0042 0.1 · common · paired · bond 1 · 60/150 xp");
         assert!(text.contains(&"zoo: drop 1 init  2/9"));
         assert!(text.iter().any(|l| l.starts_with("~(o o)~   [ ? ]")), "{text:?}");
         assert!(text.iter().any(|l| l.contains("yak x2")));
-        assert!(text.iter().any(|l| l.starts_with("  yak    1.0  · bond 0 · 0 xp · x2 · shiny")), "{text:?}");
+        assert!(text.iter().any(|l| l.contains("yak 1.0 · bond 0 · 0 xp · shiny")), "{text:?}");
         // vim's drop is on hold: a record of it is never shown.
         assert!(!text.iter().any(|l| l.contains("vim ") && !l.contains("Named the way vim")), "{text:?}");
-        assert!(text.contains(&"eggs: \\_O_/ x2 waiting — h hatches"));
+        assert!(text.contains(&"eggs: \\_(oo)_/ x2 waiting — h hatches"));
         assert!(text.contains(&"next egg: 12/40 turns · today 4/20 (the day's cap)"));
         assert!(text.contains(&"habits: 3/6 toward the setup egg"));
         // With a face: tim's portrait plate over it all, in its mood and frame, down its gradient.
-        let faced = zoo_rows(&ZooState::Account, &doc, &[], "2026-09-26", now, Some(Face { mood: "work", frame: 2 }));
+        let faced = zoo_rows(&ZooState::Account, &doc, &[], "2026-09-26", now, Some(Face { mood: "work", frame: 2, own: None, uid: None }));
         let plate = plates::rows("tim", PORTRAIT, "0.1", "work", 2);
         let tim = roster().daemon("tim").unwrap();
         for (i, row) in plate.iter().enumerate() {
@@ -469,9 +552,9 @@ mod tests {
         assert_eq!(faced[plate.len()].text(), "");
         assert_eq!(faced[plate.len() + 1].text(), text[0]);
         // Signed out: the nest, its habits, and how to hatch.
-        let nest = zoo_rows(&ZooState::SignedOut, &ZooDoc::default(), &["split".into(), "find".into()], "2026-09-26", 0, Some(Face { mood: "idle", frame: 0 }));
+        let nest = zoo_rows(&ZooState::SignedOut, &ZooDoc::default(), &["split".into(), "find".into()], "2026-09-26", 0, Some(Face { mood: "idle", frame: 0, own: None, uid: None }));
         let text: Vec<&str> = nest.iter().map(Row::text).collect();
-        assert_eq!(text[0], "the nest   \\_.._/   2 of 3 toward the first egg");
+        assert_eq!(text[0], "the nest   \\_(*')_/   2 of 3 toward the first egg");
         assert!(text.contains(&"  [ ] Finish a turn in a harness  (needed)") && text.contains(&"  [x] Run two harnesses side by side"));
         assert!(text.contains(&"sign in to hatch: harness login"));
     }
@@ -481,7 +564,7 @@ mod tests {
         let tim = roster().daemon("tim").unwrap();
         let ink = Ink::Plate(plates::PlateInk::of(tim, false, 0, 2));
         let mut buf = Buffer::empty(Rect::new(0, 0, 12, 1));
-        put_rows(&mut buf, Rect::new(0, 0, 12, 1), &[Row::Text("|.#@ |".into(), ink)], 0, Style::default(), Mode::Xterm, false);
+        put_rows(&mut buf, Rect::new(0, 0, 12, 1), &[Row::Text("|.#@ |".into(), ink.clone())], 0, Style::default(), Mode::Xterm, false);
         let cell = |x: u16| buf.cell((x, 0)).unwrap().clone();
         // The border and the space keep the row's style; ink takes the plate's.
         assert_eq!((cell(0).symbol(), cell(0).fg), ("|", Color::Reset));
@@ -492,7 +575,7 @@ mod tests {
         assert_eq!((cell(4).symbol(), cell(4).fg), (" ", Color::Reset));
         // NO_COLOR: the plain text.
         let mut plain = Buffer::empty(Rect::new(0, 0, 12, 1));
-        put_rows(&mut plain, Rect::new(0, 0, 12, 1), &[Row::Text("|.#@ |".into(), ink)], 0, Style::default(), Mode::Plain, false);
+        put_rows(&mut plain, Rect::new(0, 0, 12, 1), &[Row::Text("|.#@ |".into(), ink.clone())], 0, Style::default(), Mode::Plain, false);
         assert!((0..6).all(|x| plain.cell((x, 0)).unwrap().fg == Color::Reset && plain.cell((x, 0)).unwrap().modifier.is_empty()));
         assert_eq!((0..6).map(|x| plain.cell((x, 0)).unwrap().symbol().to_string()).collect::<String>(), "|.#@ |");
     }

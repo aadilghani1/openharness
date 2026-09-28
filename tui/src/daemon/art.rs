@@ -22,22 +22,23 @@ use super::zoo::Owned;
 use crate::app::App;
 use crate::daemon::Link;
 
-/// How long an answer may take (harnessd renders a model's frames, a few hundred ms each size).
-pub const ASK_FOR: Duration = Duration::from_secs(20);
+/// A first render takes tens of seconds; the species plate stays visible while it draws.
+pub const ASK_FOR: Duration = Duration::from_secs(120);
 /// A request that failed is not asked again for this long.
 pub const RETRY_AFTER: Duration = Duration::from_secs(60);
 
-/// (uid, size, version, mood).
-pub type Key = (String, String, String, String);
+/// (uid, species, seed, size, version, mood).
+pub type Key = (String, String, u64, String, String, String);
 
 #[derive(Clone, Debug)]
 pub enum Held { Asked(Instant), Ready(Arc<Art>), Failed(Instant) }
 
 /// What hn holds of individuals' art.
 #[derive(Default)]
-pub struct Gallery { pub art: HashMap<Key, Held> }
+pub struct Gallery { pub art: HashMap<Key, Held>, generation: u64 }
 
 impl Gallery {
+    pub fn reset(&mut self) { self.generation += 1; self.art.clear() }
     pub fn ready(&self, key: &Key) -> Option<Arc<Art>> { match self.art.get(key) { Some(Held::Ready(a)) => Some(a.clone()), _ => None } }
 
     /// Whether to ask for it now: never asked, or failed long enough ago, or asked so long ago that
@@ -58,7 +59,7 @@ pub fn has_own(o: &Owned) -> bool {
     o.seed != 0 && super::roster::roster().shown(&o.id).map(|d| d.plate && d.traits.is_some()).unwrap_or(false)
 }
 
-pub fn key(o: &Owned, size: &str, version: &str, mood: &str) -> Key { (o.uid().to_string(), size.into(), version.into(), mood.into()) }
+pub fn key(o: &Owned, size: &str, version: &str, mood: &str) -> Key { (o.uid().to_string(), o.id.clone(), o.seed, size.into(), version.into(), mood.into()) }
 
 /// The request's payload.
 pub fn ask(o: &Owned, size: &str, version: &str, mood: &str) -> Value {
@@ -74,26 +75,47 @@ pub fn parse(v: &Value) -> Result<Art, String> {
         let mats = f.get("mats").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| rows.split('\n').map(|r| ".".repeat(r.len())).collect::<Vec<_>>().join("\n"));
         Ok(Framed { rows, mats })
     }).collect::<Result<_, String>>()?;
-    if frames.is_empty() { return Err("no frames".into()) }
+    if frames.is_empty() || frames.len() > 8 { return Err("invalid frame count".into()) }
     // Printable ASCII only, as every plate (the art rules): anything else is not drawn from here.
     if frames.iter().any(|f| f.rows.bytes().any(|b| b != b'\n' && !(0x20..0x7f).contains(&b))) { return Err("not printable".into()) }
-    let frame_ms = v.get("frameMs").and_then(Value::as_u64).filter(|ms| *ms > 0).unwrap_or(super::plates::plates().frame_ms);
+    let (height, width) = (frames[0].rows().len(), frames[0].rows().first().map(String::len).unwrap_or(0));
+    let max_width = if v.get("size").and_then(Value::as_str) == Some("portrait") { 28 } else { 56 };
+    if height > 64 || width == 0 || width > max_width { return Err("invalid dimensions".into()) }
+    for f in &frames {
+        let (rows, mats) = (f.rows(), f.mats());
+        if rows.len() != height || mats.len() != height || rows.iter().chain(mats.iter()).any(|r| r.len() != width) {
+            return Err("inconsistent dimensions".into())
+        }
+        if mats.iter().any(|r| r.bytes().any(|b| !b".magse p".contains(&b))) { return Err("invalid material".into()) }
+    }
+    let frame_ms = v.get("frameMs").and_then(Value::as_u64).filter(|ms| (40..=2000).contains(ms)).unwrap_or(super::plates::plates().frame_ms);
     Ok(Art { frames, frame_ms })
 }
 
 /// An individual's art at a size, version and mood: what hn holds, or None while it is asked for
 /// (the answer draws again) — and asked for when it is due and harnessd's socket is there.
 pub fn get(app: &mut App, o: &Owned, size: &str, version: &str, mood: &str) -> Option<Arc<Art>> {
-    if !has_own(o) { return None }
+    if !app.daemons.zoo_state.on() || !has_own(o) { return None }
     let key = key(o, size, version, mood);
     if let Some(a) = app.daemons.gallery.ready(&key) { return Some(a) }
     let now = Instant::now();
     if !app.daemons.gallery.due(&key, now) { return None }
     let link = app.link(&app.fleet.local_id).filter(Link::over_socket)?;
+    if app.daemons.gallery.art.len() >= 96 {
+        if let Some(old) = app.daemons.gallery.art.iter().find(|(_, held)| !matches!(held, Held::Asked(_))).map(|(k, _)| k.clone()) {
+            app.daemons.gallery.art.remove(&old);
+        } else { return None }
+    }
     app.daemons.gallery.art.insert(key.clone(), Held::Asked(now));
     let payload = ask(o, size, version, mood);
+    let expected = payload.clone();
+    let generation = app.daemons.gallery.generation;
     app.spawn(async move { link.request("daemon_plate_get", payload, ASK_FOR).await }, move |app, r| {
-        let held = match r.map_err(|e| e.to_string()).and_then(|(_, v)| parse(&v)) {
+        if generation != app.daemons.gallery.generation || !app.daemons.zoo_state.on() { return }
+        let held = match r.map_err(|e| e.to_string()).and_then(|(_, v)| {
+            if ["uid", "size", "version", "mood"].iter().any(|k| v.get(k) != expected.get(k)) { return Err("wrong individual art".into()) }
+            parse(&v)
+        }) {
             Ok(art) => Held::Ready(Arc::new(art)),
             Err(_) => Held::Failed(Instant::now()),
         };
@@ -120,7 +142,9 @@ pub async fn fetch(port: u16, o: &Owned, size: &str, version: &str, mood: &str) 
         false
     }).await.unwrap_or(false);
     if !connected || !link.over_socket() { return None }
-    let (_, v) = link.request("daemon_plate_get", ask(o, size, version, mood), Duration::from_secs(10)).await.ok()?;
+    let payload = ask(o, size, version, mood);
+    let (_, v) = link.request("daemon_plate_get", payload.clone(), ASK_FOR).await.ok()?;
+    if ["uid", "size", "version", "mood"].iter().any(|k| v.get(k) != payload.get(k)) { return None }
     parse(&v).ok()
 }
 
@@ -155,5 +179,24 @@ mod tests {
         assert!(!g.due(&k, now) && g.ready(&k).is_none());
         g.art.insert(k.clone(), Held::Failed(now));
         assert!(!g.due(&k, now) && g.due(&k, now + RETRY_AFTER));
+    }
+
+    #[test]
+    fn malformed_art_never_reaches_the_terminal() {
+        let frame = |rows: &str, mats: &str| json!({ "rows": rows, "mats": mats });
+        for frames in [
+            vec![frame("##\n#", "..\n.")],
+            vec![frame("##", ".")],
+            vec![frame("##", ".z")],
+            vec![frame("é", "..")],
+            vec![frame("##", ".."), frame("###", "...")],
+            vec![frame(&"#".repeat(29), &".".repeat(29))],
+            vec![frame("#", "."); 9],
+        ] {
+            assert!(parse(&json!({ "size": "portrait", "frames": frames })).is_err());
+        }
+        let art = parse(&json!({ "size": "portrait", "frameMs": 0,
+            "frames": [frame("#", ".")] })).unwrap();
+        assert_eq!(art.frame_ms, super::super::plates::plates().frame_ms);
     }
 }

@@ -11,8 +11,9 @@ it chose where the contract leaves room. It replaces `tim.rs` and `~/.harness/tu
 |---|---|
 | roster and banner (`include_str!` of `daemons/roster.json`, `banner.json`) | `src/daemon/roster.rs` |
 | plates (`include_str!` of `daemons/plates.json`, parsed on first use) and their colour (bake.mjs `plateColor`) | `src/daemon/plates.rs` |
-| renderer: sprite, portrait, status cell, base width, banner, nest stage (render.mjs) | `src/daemon/render.rs` |
+| renderer: traits, individual sprites, status cells, banners and egg stages (render.mjs) | `src/daemon/render.rs` |
 | cards and shelves, text and SVG (card.mjs) | `src/daemon/card.rs` |
+| individual art requests, validation and in-memory cache | `src/daemon/art.rs` |
 | harnessd's Unix socket | `src/daemon/socket.rs` |
 | the zoo's shape, `daemon.json` (Quiet, habits seen here, days) | `src/daemon/zoo.rs` |
 | moods, blinks, work steps, the status cell, `#{daemon}` | `src/daemon/state.rs` |
@@ -22,8 +23,9 @@ it chose where the contract leaves room. It replaces `tim.rs` and `~/.harness/tu
 | where the rest of hn calls in (one line each), the zoo's reads and writes, habits | `src/daemon/hooks.rs` |
 | `hn zoo`, `hn card`, `hn hatch`, `hn talk`, `hn lessons`, `hn tim` | `src/daemon/shell.rs` |
 
-`cargo test` checks every sprite, portrait, status cell, card, nest and banner in
-`daemons/frames.json` byte for byte, and every cell of `plateColors` in truecolor. Change the roster,
+`cargo test` checks every sprite, portrait, status cell, card, egg stage, egg one-liner, trait roll,
+individual sprite and banner in `daemons/frames.json` byte for byte, and every cell of `plateColors`,
+`eggColors` and `individualColors` in truecolor. Change the roster,
 run `node daemons/tools/generate.mjs`, and the test says whether the port still draws what the
 reference draws.
 
@@ -33,8 +35,11 @@ Drop 1 is `init`: ten daemons drawn filled (`plate: true`), tim the octopus amon
 `tty` are on hold (`hold: true`, no dates): hn never shows them — no shelf, no silhouettes, no count,
 and a record of one in a zoo is passed over (`dropState` is hidden for a hold before any date).
 
-A filled daemon keeps its one-line sprite in the status line. Everywhere else it is its plate from
-`plates.json`: the `portrait` size (28 columns) over the zoo and on the card (idle, frame 0), and the
+A filled daemon keeps its individual one-line sprite in the status line. Elsewhere it asks harnessd
+for its own plate over the Unix socket (`daemon_plate_get` / `daemon_plate`), with the species plate
+painted in its colour family while the render is pending or the socket is unavailable. Seed 0 uses
+the baked species plate without a request. Art stays in memory, is validated before display, and is
+cleared when the daemons turn off. The sizes are the `portrait` size (28 columns) over the zoo and on the card (idle, frame 0), and the
 `reveal` size (56) in the hatch when the whole reveal fits the terminal, else the portrait size. A
 plate runs its mood's loop, a frame every `frameMs` (170 ms), while `@daemon-motion` is on and the
 terminal is in front; else it shows frame 0.
@@ -74,7 +79,9 @@ it is up, the table's keys show over the window as the prefix's which-key does.
 `#{daemon}` (and `#{tim}`, the old name) is the paired daemon's ten-cell status cell — eight cells and
 a gutter each side, the sprite centred on its version's base width — in the status line's own
 colours, never the daemon's: bold while something needs you, dim asleep, a `*` in the left gutter
-when it is shiny. Before the first hatch it is the waiting egg, else the nest for the habits done.
+when it is shiny. Rare extras have their own sprites; fidgety individuals step at half the usual
+work interval. Before the first hatch, and during an egg notice, it shows the nearest earning or
+ready egg (`p0` through `p4`). During a hatch it follows the opening and rising hatchling.
 `#{daemon_tally}` is `+1 egg` while eggs wait; `#{daemon_name}` and `#{daemon_mood}` are there for a
 status line of your own. The default `status-right` has `#{daemon_tally}#{daemon}` before the clock.
 
@@ -112,6 +119,13 @@ slow blink. A first read is a baseline.
   guest daemons; the habits it kept are reported once there is an account.
 - **Not answering** (a 5xx, or no answer): not off. What was shown stays (nothing, before a first
   answer), and it is asked again after five minutes, doubling to six hours, or at a reconnect.
+
+Every hatch is an individual with a uid, seed, serial and optional name. The zoo groups them by
+species, with flags, `1 in N` and a log of colours, markings and extras collected. `j`/`k` selects an
+individual; its portrait heads the zoo. Enter pairs it by uid, `c` copies its card, and PgUp/PgDn
+scrolls the collection and the earning eggs. The species shelf counts distinct species and shows
+how many individuals belong to each. Names are displayed as `pip the tim`, or `tim #0042` when
+unnamed. Older records remain readable as seed-0 individuals.
 
 `~/.harness/tui/daemon.json` keeps Quiet, the habits seen here, the days hn ran and how many hatches
 it showed. The first time, `tim.json`'s `off` becomes Quiet and `tim.json` goes (its species was
@@ -163,26 +177,25 @@ over TCP says so and sends nothing): harnessd refuses `daemon_*` writes over TCP
 ## Hatching
 
 `prefix Z h`, `h` in the zoo, or `hn hatch` from a shell (the running hn does it): a popup over the
-whole window. The egg wobbles until harnessd answers `zoo.hatch` (two wobbles at least), then tells
-the rarity at the crack — a rare's shell glows cyan, a legendary's pop throws yellow `*'.` sparks, a
-secret's stage is pitch black first — pops, and the 0.1 portrait appears as `#` in the faint colour
-for 1200 ms, fills with its colour (a plate in its gradient, its idle loop running; line art blinks),
-and its name types in as a banner (`banner.json`); then the rarity stamp, `fork() returned 0.`, its
-first words and the card, with the server's serial. The reveal is laid out in a fixed place (its
-tallest moment, or the card's height; its width), so nothing moves as rows arrive. A duplicate has
-no new name: `another tux. +150 xp.` (`yours is shiny now.` when it was), and a level-up morphs the
-portrait into the new version in three dithered frames of 160 ms. From the fourth
-hatch any key skips to the card; Escape closes. Reduce Motion goes straight to the card.
+whole window. The filled egg rocks until harnessd answers `zoo.hatch`, bursts with the rarity's
+light, and its two shell halves tumble aside. A secret dims the shell and darkens the stage. The
+hatchling rises out of the bottom half, appears briefly as a silhouette, then fills with its colours
+and individual art. Its species banner, rarity stamp, `fork() returned 0.` and card follow. The
+layout holds the art still as rows arrive. Every hatch, including another of the same species, gets
+its own card, serial and optional name prompt; there is no duplicate merge XP. From the fourth hatch
+any key skips to the card. Reduce Motion goes straight to it.
 
-While nobody has answered the consent, the card's next key shows **what the daemon sees** (the
-README's words): `y` sends `zoo.consent { watching: true }`, `n` false, Escape asks later
-(`:daemon consent`).
+At the card, type a name and Enter to save `zoo.nickname { uid, name }`, or leave it blank to skip.
+Escape closes. The name prompt stays visible on small terminals, with PgUp/PgDn to scroll the card.
+A failed save leaves the prompt available to retry. While nobody has answered the consent, Enter
+continues to **what the daemon sees** (the README's words): `y` sends `zoo.consent { watching: true }`,
+`n` false, Escape asks later (`:daemon consent`).
 
 ## From a shell
 
 ```
 hn zoo                     your daemon's portrait, the box back, what you own, eggs, the meters (or the nest)
-hn card [daemon] [--version v] [--svg]
+hn card [uid|name|species#serial|species] [--version v] [--svg]
                            a card as text (copied with OSC 52 at a terminal) or SVG; a filled
                            daemon's shows its portrait plate at the card's version
 hn hatch                   the running hn hatches an egg
@@ -200,7 +213,8 @@ hn tim                     one line about it
 and sizes, the zoo's rows, the key table coming and going) and `tests/e2e.sh` against `tests/mock-daemon.mjs`, which serves harnessd's Unix socket in
 `ADAPTER_DATA_DIR`, a zoo (`MOCK_ZOO=egg|tim|nest|signedout|off|disabled`, `MOCK_HATCH`,
 `MOCK_SHINY`, and `POST /test/zoo-mode` to flip the switch) and the pair brain's frame rules (shown
-before a key, 400 ms, the socket only). The e2e hatches, consents, answers a keys-first line through
+before a key, 400 ms, the socket only). The e2e hatches and names two tims, pairs each independently by uid, requests their art only over
+the trusted socket, consents, answers a keys-first line through
 the table, replaces a line by its id, takes pushed `daemon_state` (a need, then `pair: null`), switches
 the daemons off and on again under a running hn, talks, reads the brief and the zoo, prints a card
 (`hn card tim --version 2.0` byte for byte against `daemons/tools/card.mjs`), checks Quiet, and runs

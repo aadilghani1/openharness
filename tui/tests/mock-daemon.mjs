@@ -139,21 +139,20 @@ let demoAsked = false
 
 // The account's zoo (daemons/README.md, "The zoo"), as backend/src/lib/zoo.ts keeps it — just enough
 // of its rules for hn: habits grant the first egg, a hatch draws MOCK_HATCH (tim) with serial 42, a
-// daemon you own merges as a duplicate (+150 xp, levels on rules.bond.levels), consent and pair.
+// fresh uid and seed on every hatch (even the same species), consent, naming and pairing by uid.
 // MOCK_ZOO: `egg` (the first egg waiting, the default), `tim` (tim paired, watching), `nest` (one
 // habit, no egg), `signedout` (401, as harnessd answers with no account), `off` (the daemons switched
 // off on the server: 404), `disabled` (the same switch as `{ enabled: false }`).
 const ROSTER = JSON.parse(readFileSync(join(here, '../../daemons/roster.json'), 'utf8'))
+const PLATES = JSON.parse(readFileSync(join(here, '../../daemons/plates.json'), 'utf8'))
 let ZOO_MODE = process.env.MOCK_ZOO || 'egg'
 const today = new Date().toISOString().slice(0, 10)
-const zooDoc = { revision: 1, zoo: { daemons: [], eggs: [], pair: null, autonomy: 'watch', consent: null, habits: [], firstEgg: false, setupEgg: false, pity: 0, easter: [],
+const zooDoc = { revision: 1, zoo: { daemons: [], eggs: [], paired: null, autonomy: 'watch', consent: null, habits: [], firstEgg: false, setupEgg: false, pity: 0, easter: [],
   progress: { turns: 12, days: { [today]: 3 }, weeks: [], nights: [], machines: [], marathon: [], history: [], held: [], batches: [], lessons: [] } } }
 if (ZOO_MODE === 'egg') Object.assign(zooDoc.zoo, { habits: ['turn', 'split', 'find'], firstEgg: true, eggs: [{ id: 'egg-1', kind: 'first', grantedAt: now }] })
 if (ZOO_MODE === 'nest') Object.assign(zooDoc.zoo, { habits: ['split'] })
-if (ZOO_MODE === 'tim') Object.assign(zooDoc.zoo, { habits: ['turn', 'split', 'find'], firstEgg: true, pair: 'tim', consent: { watching: true, at: now },
-  daemons: [{ id: 'tim', hatchedAt: '2026-09-26', egg: 'first', shiny: false, bond: 1, xp: 60, version: '0.1', serial: 42 }], eggs: [{ id: 'egg-2', kind: 'turn', grantedAt: now }] })
-const levelOf = (xp) => ROSTER.rules.bond.levels.filter((at) => xp >= at).length - 1
-const versionOf = (level) => Object.entries(ROSTER.rules.bondForVersion).filter(([, at]) => level >= at).map(([v]) => v).pop()
+if (ZOO_MODE === 'tim') Object.assign(zooDoc.zoo, { habits: ['turn', 'split', 'find'], firstEgg: true, paired: '000000000000000000000001', consent: { watching: true, at: now },
+  daemons: [{ uid: '000000000000000000000001', id: 'tim', seed: 17, hatched: '2026-09-26', egg: 'first', shiny: false, bond: 1, xp: 60, version: '0.1', serial: 42 }], eggs: [{ id: 'egg-2', kind: 'turn', grantedAt: now }] })
 let eggs = 10
 function applyZoo(ops) {
   const zoo = zooDoc.zoo
@@ -173,22 +172,16 @@ function applyZoo(ops) {
       zoo.eggs = zoo.eggs.filter((e) => e !== egg); changed = true
       const id = process.env.MOCK_HATCH || 'tim'
       const shiny = process.env.MOCK_SHINY === '1'
-      const mine = zoo.daemons.find((d) => d.id === id)
-      if (mine) {
-        const before = mine.bond
-        mine.xp += ROSTER.rules.duplicateXp; mine.dupes = (mine.dupes || 0) + 1; if (shiny) mine.shiny = true
-        mine.bond = levelOf(mine.xp); mine.version = versionOf(mine.bond)
-        out.hatched.push({ eggId: egg.id, daemonId: id, shiny, duplicate: true, xp: ROSTER.rules.duplicateXp })
-        if (mine.bond > before) out.levelUps.push({ id, level: mine.bond, version: mine.version })
-      } else {
-        zoo.daemons.push({ id, hatchedAt: today, egg: egg.kind, shiny, bond: 0, xp: 0, version: '0.1', serial: 42 })
-        out.hatched.push({ eggId: egg.id, daemonId: id, shiny, serial: 42 })
-        if (!zoo.pair) zoo.pair = id
-      }
+      const count = zoo.daemons.length
+      const born = { uid: (count + 1).toString(16).padStart(24, '0'), id, seed: count ? 42 : 17,
+        hatched: today, egg: egg.kind, shiny, bond: 0, xp: 0, version: '0.1', serial: 42 + count }
+      zoo.daemons.push(born)
+      out.hatched.push({ eggId: egg.id, daemonId: id, ...born })
+      zoo.paired ??= born.uid
     }
     if (op.op === 'zoo.consent') { zoo.consent = { watching: op.watching === true, at: new Date().toISOString() }; if (op.watching) zoo.autonomy = 'watch'; changed = true }
-    if (op.op === 'zoo.pair' && zoo.daemons.some((d) => d.id === op.id)) { zoo.pair = op.id; changed = true }
-    if (op.op === 'zoo.nickname') { const d = zoo.daemons.find((x) => x.id === op.id); if (d) { d.nickname = op.nickname || undefined; changed = true } }
+    if (op.op === 'zoo.pair' && zoo.daemons.some((d) => d.uid === op.uid)) { zoo.paired = op.uid; changed = true }
+    if (op.op === 'zoo.nickname') { const d = zoo.daemons.find((x) => x.uid === op.uid); if (d) { d.name = op.name || undefined; changed = true } }
   }
   if (changed) {
     zooDoc.revision++
@@ -202,6 +195,12 @@ const json = (res, body) => { res.writeHead(200, { 'content-type': 'application/
 const handler = (req, res) => {
   // The e2e flips the server's daemons switch (POST /test/zoo-mode?mode=off), as HARNESS_DAEMONS would.
   if (req.url.startsWith('/test/zoo-mode') && req.method === 'POST') { ZOO_MODE = new URL(req.url, 'http://x').searchParams.get('mode') || 'egg'; return json(res, { mode: ZOO_MODE }) }
+  if (req.url === '/test/zoo-egg' && req.method === 'POST') {
+    zooDoc.zoo.eggs.push({ id: `egg-${++eggs}`, kind: 'turn', grantedAt: new Date().toISOString() })
+    zooDoc.revision++
+    for (const ws of windows) ws.send(JSON.stringify({ type: 'zoo_changed', payload: { revision: zooDoc.revision } }))
+    return json(res, zooDoc)
+  }
   if (req.url === '/api/zoo' && req.method === 'GET') dial.zooReads++
   if (req.url.startsWith('/api/zoo') && ZOO_MODE === 'off') { res.writeHead(404, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ success: false, error: { code: 'NOT_FOUND', message: 'Not found' } })) }
   if (req.url.startsWith('/api/zoo') && ZOO_MODE === 'disabled') return json(res, { enabled: false })
@@ -334,9 +333,16 @@ wss.on('connection', (ws, req, trusted) => {
     // line this connection acknowledged as drawn at least 400 ms before.
     if (type.startsWith('daemon_')) {
       dial.daemon.push({ type, trusted: !!trusted, machine, at: Date.now(), ...payload })
-      const result = { daemon_act: 'daemon_act_result', daemon_talk: 'daemon_talk_result', daemon_confirm: 'daemon_confirm_result' }[type]
+      const result = { daemon_act: 'daemon_act_result', daemon_talk: 'daemon_talk_result', daemon_confirm: 'daemon_confirm_result', daemon_plate_get: 'daemon_plate' }[type]
       const answer = (body) => result && send(result, { requestId: payload.requestId, ...(type === 'daemon_act' ? { id: payload.id } : {}), ...(type === 'daemon_confirm' ? { kind: payload.kind, nonce: payload.nonce } : {}), ...body })
       if (!trusted) return answer({ ok: false, error: 'LOCAL_SOCKET_REQUIRED' })
+      if (type === 'daemon_plate_get') {
+        const { uid, size, version, mood } = payload
+        const mine = zooDoc.zoo.daemons.find((d) => d.uid === uid)
+        const frames = mine && PLATES.daemons[mine.id]?.[size]?.[version]?.[mood]
+        return answer(frames ? { uid, size, version, mood, frameMs: PLATES.frameMs,
+          frames: frames.map((rows) => ({ rows, mats: rows.replace(/[^\n]/g, '.') })) } : { error: 'NO_ART' })
+      }
       if (type === 'daemon_shown') { shown.set(payload.id, Date.now()); return }
       if (type === 'daemon_presence') return
       if (type === 'daemon_talk') {

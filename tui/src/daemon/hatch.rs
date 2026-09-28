@@ -89,6 +89,9 @@ pub struct Reveal {
     pub card_art: Option<Arc<Art>>,
     /// The name being typed at the card.
     pub name: String,
+    pub name_error: Option<String>,
+    pub saving: bool,
+    pub card_top: usize,
 }
 
 /// How a row is drawn: its ink. A plate's row is inked glyph by glyph (plates.rs), a painted row
@@ -117,7 +120,7 @@ struct Times { rock: u64, burst: u64, tumble: u64, open: u64, rise: u64, hold: u
 
 impl Reveal {
     pub fn new(egg_kind: &str, motion: bool, skippable: bool, consent_next: bool) -> Reveal {
-        Reveal { egg_kind: egg_kind.into(), started: Instant::now(), answered: None, outcome: None, error: None, motion, skippable, skipped: false, consent_next, size: PORTRAIT, rise_art: None, card_art: None, name: String::new() }
+        Reveal { egg_kind: egg_kind.into(), started: Instant::now(), answered: None, outcome: None, error: None, motion, skippable, skipped: false, consent_next, size: PORTRAIT, rise_art: None, card_art: None, name: String::new(), name_error: None, saving: false, card_top: 0 }
     }
 
     fn ms(&self, now: Instant) -> u64 { now.saturating_duration_since(self.started).as_millis() as u64 }
@@ -498,7 +501,9 @@ fn card_frame(rv: &Reveal, o: &Outcome) -> Frame {
     out.push((String::new(), Ink::Plain));
     // A name for it, optional: typed here, sent as zoo.nickname by its uid.
     out.push((format!("name it: {}_{}", rv.name, " ".repeat(NAME_MAX - rv.name.len().min(NAME_MAX))), Ink::Bold));
-    out.push(("Enter: done · Esc: later".into(), Ink::Faint));
+    if let Some(error) = &rv.name_error { out.push((error.clone(), Ink::Yellow)) }
+    out.push((if rv.saving { "saving..." } else { "Enter: done · Esc: later" }.into(), Ink::Faint));
+    out.push(("PgUp/PgDn: scroll card".into(), Ink::Faint));
     Frame { rows: out, black: secret, done: true }
 }
 
