@@ -12,6 +12,7 @@ import 'phone_destination.dart';
 import 'phone_search_catalog.dart';
 import 'phone_search_commands.dart';
 import 'phone_search_rank.dart';
+import 'phone_status.dart';
 
 /// What the box finds, said in the box.
 ///
@@ -277,11 +278,13 @@ class PhoneSearchController extends ChangeNotifier {
   bool canSubmit(PhoneDestination row) => switch (row.kind) {
     // Stopped work counts: the tap resumes it first — see [AgentEntry.isOpenable].
     PhoneDestinationKind.agent => row.entry?.isOpenable ?? false,
-    // A locked machine opens its password form, which is the thing to do about
-    // it; a switched-off one has nothing to take a password.
-    PhoneDestinationKind.machine => _catalog.any(
-      (entry) => entry.id == row.id && entry.isMachine,
-    ),
+    // A switched-off one has nothing to take a password and no harnesses to
+    // list: the tap narrowed Find to an empty list. Dimmed instead, and sunk
+    // under the machines that answer by the end of [_filter].
+    PhoneDestinationKind.machine =>
+      row.machine != null &&
+          phoneMachineStatusOf(row.machine!) != PhoneMachineStatus.offline &&
+          _catalog.any((entry) => entry.id == row.id && entry.isMachine),
     PhoneDestinationKind.project => _catalog.any(
       (entry) => entry.id == row.id && entry.isProject,
     ),

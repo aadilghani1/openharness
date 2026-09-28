@@ -17,6 +17,7 @@ import 'phone_search_catalog.dart' show phoneAgentId;
 import 'phone_search_commands.dart';
 import 'phone_search_controller.dart';
 import 'phone_search_rank.dart';
+import 'phone_status.dart';
 import 'resume_agent.dart';
 import 'search_result_text.dart'
     show phoneResultMatches, snippetLead, snippetRuns;
@@ -338,9 +339,14 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       );
     }
     if (entry == null) {
+      final machine = row.isMachine ? _machineStateOf(row, tty) : null;
       return FindRow(
         title: row.title,
         detail: row.detail,
+        // A locked machine's line is the one thing on it to act on.
+        detailColor: (machine?.asks ?? false) ? tty.text : null,
+        state: machine?.word,
+        stateColor: machine?.color,
         terms: terms,
         selected: selected,
         enabled: openable,
@@ -390,6 +396,40 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
           ? widget.onOpen
           : () => _tap(row),
     );
+  }
+
+  /// A machine's word at the right edge, in a harness row's colours: green for one that answers,
+  /// yellow for one that needs something from the person, faint for the rest. Read off the
+  /// machine live, like the harness rows' words; the line under it comes with the catalog, which
+  /// rebuilds on the same changes (`PhoneSearchCatalogCache`). Null for a row without its machine.
+  ({String word, Color color, bool asks})? _machineStateOf(
+    PhoneDestination row,
+    Tty tty,
+  ) {
+    final machine = row.machine;
+    if (machine == null) return null;
+    return switch (phoneMachineStatusOf(machine)) {
+      PhoneMachineStatus.ready => (
+        word: 'online',
+        color: tty.green,
+        asks: false,
+      ),
+      PhoneMachineStatus.needsPassword => (
+        word: 'locked',
+        color: tty.yellow,
+        asks: true,
+      ),
+      PhoneMachineStatus.connecting => (
+        word: 'connecting',
+        color: tty.faint,
+        asks: false,
+      ),
+      PhoneMachineStatus.offline => (
+        word: 'offline',
+        color: tty.faint,
+        asks: false,
+      ),
+    };
   }
 
   ({String word, Color color}) _stateOf(
