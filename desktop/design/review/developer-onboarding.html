@@ -1,0 +1,346 @@
+<section id="harness-onboarding-concept" aria-label="Developer onboarding concept">
+  <style>
+    #harness-onboarding-concept {
+      --h-surface: #252624;
+      --h-inset: #1b1c1a;
+      --h-ink: #d9dcd6;
+      --h-dim: #acb0a7;
+      --h-line: #61665c;
+      --h-rule: #41443e;
+      --h-accent: #b4d68f;
+      --h-warning: #e0c48b;
+      color-scheme: dark;
+      color: var(--h-ink);
+      font: 14px/1.6 Menlo, Monaco, Consolas, monospace;
+      width: 100%;
+    }
+    #harness-onboarding-concept * { box-sizing: border-box; }
+    #harness-onboarding-concept [hidden] { display: none !important; }
+    #harness-onboarding-concept .h-window { background: var(--h-surface); border: 1px solid var(--h-line); border-radius: 4px; }
+    #harness-onboarding-concept .h-chrome { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 20px; padding: 16px 22px; border-bottom: 1px solid var(--h-rule); }
+    #harness-onboarding-concept .h-body { padding: 28px 24px; min-height: 350px; }
+    #harness-onboarding-concept .h-title { color: var(--h-dim); }
+    #harness-onboarding-concept .h-dim { color: var(--h-dim); }
+    #harness-onboarding-concept .h-green { color: var(--h-accent); }
+    #harness-onboarding-concept .h-warning { color: var(--h-warning); }
+    #harness-onboarding-concept h2 { font: 500 19px/1.5 Menlo, Monaco, Consolas, monospace; margin: 0 0 10px; }
+    #harness-onboarding-concept p { margin: 0 0 20px; }
+    #harness-onboarding-concept .h-welcome { padding: 24px 0 12px; }
+    #harness-onboarding-concept button { font: inherit; color: var(--h-ink); cursor: pointer; background: transparent; border: 0; border-radius: 2px; padding: 7px 0; text-align: left; }
+    #harness-onboarding-concept button:hover { color: var(--h-accent); }
+    #harness-onboarding-concept button:disabled { cursor: default; color: var(--h-dim); }
+    #harness-onboarding-concept .h-primary { background: #373c31; color: #d7ebbf; padding: 8px 12px; }
+    #harness-onboarding-concept .h-primary:hover { background: #404836; }
+    #harness-onboarding-concept .h-primary:disabled { background: var(--h-rule); }
+    #harness-onboarding-concept .h-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; margin-top: 22px; }
+    #harness-onboarding-concept .h-secondary { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 4px 22px; }
+    #harness-onboarding-concept .h-form { display: grid; grid-template-columns: 85px minmax(0, 1fr); gap: 16px; align-items: start; }
+    #harness-onboarding-concept label { padding-top: 7px; color: var(--h-dim); }
+    #harness-onboarding-concept input, #harness-onboarding-concept select, #harness-onboarding-concept textarea { width: 100%; min-width: 0; border: 1px solid var(--h-line); border-radius: 2px; padding: 7px 10px; font: inherit; color: var(--h-ink); background: var(--h-inset); }
+    #harness-onboarding-concept textarea { min-height: 96px; resize: vertical; }
+    #harness-onboarding-concept .h-small { font-size: 12px; }
+    #harness-onboarding-concept .h-summary { margin-top: 8px; overflow-wrap: anywhere; }
+    #harness-onboarding-concept details { margin-top: 18px; }
+    #harness-onboarding-concept summary { cursor: pointer; color: var(--h-dim); padding: 5px 0; }
+    #harness-onboarding-concept .h-settings { margin: 12px 0 0 18px; display: grid; gap: 8px; }
+    #harness-onboarding-concept .h-settings label { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; }
+    #harness-onboarding-concept .h-settings select { width: auto; max-width: 100%; }
+    #harness-onboarding-concept .h-status { padding: 12px 0; margin: 10px 0 0; }
+    #harness-onboarding-concept .h-footer { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 22px; border-top: 1px solid var(--h-rule); color: var(--h-dim); }
+    #harness-onboarding-concept .h-prompt-label { display: block; padding: 0; margin-bottom: 8px; }
+    #harness-onboarding-concept .h-starters { margin: 8px 0 14px; display: flex; flex-wrap: wrap; gap: 6px 20px; }
+    #harness-onboarding-concept .h-starters button { color: var(--h-accent); }
+    #harness-onboarding-concept .h-output { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; margin: 18px 0 24px; }
+    #harness-onboarding-concept .h-question { color: var(--h-dim); overflow-wrap: anywhere; margin-bottom: 18px; }
+    #harness-onboarding-concept .h-recent { margin-top: 22px; padding: 16px 0; border-top: 1px solid var(--h-rule); border-bottom: 1px solid var(--h-rule); }
+    #harness-onboarding-concept .h-discovery { padding-top: 18px; margin-top: 20px; border-top: 1px solid var(--h-rule); }
+    #harness-onboarding-concept .h-discovery p { margin: 6px 0; }
+    #harness-onboarding-concept .h-guide details { border-top: 1px solid var(--h-rule); margin: 0; padding: 7px 0; }
+    #harness-onboarding-concept .h-guide summary { color: var(--h-ink); }
+    #harness-onboarding-concept .h-guide p { margin: 10px 0 12px; color: var(--h-dim); }
+    @media (max-width: 430px) {
+      #harness-onboarding-concept .h-body { padding: 22px 16px; }
+      #harness-onboarding-concept .h-chrome, #harness-onboarding-concept .h-footer { padding-left: 16px; padding-right: 16px; }
+      #harness-onboarding-concept .h-form { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+      #harness-onboarding-concept .h-form label { margin-top: 6px; }
+      #harness-onboarding-concept input, #harness-onboarding-concept select, #harness-onboarding-concept textarea { font-size: 16px; }
+    }
+    @media (pointer: coarse) { #harness-onboarding-concept button, #harness-onboarding-concept summary { min-height: 44px; } }
+  </style>
+  <div class="h-window">
+    <header class="h-chrome">
+      <span class="h-title" data-slot="title">Harness</span>
+      <button type="button" data-action="close-pane" hidden>Close pane ×</button>
+      <span class="h-small h-dim" data-slot="location">This Mac</span>
+    </header>
+    <main class="h-body">
+      <div data-view="welcome" class="h-welcome">
+        <h2>Your project. Your coding agent.</h2>
+        <p class="h-dim">Start with a folder you already work in.</p>
+        <div class="h-actions">
+          <button type="button" class="h-primary" data-action="open">[ Open a project… ]</button>
+        </div>
+        <div class="h-secondary">
+          <button type="button" data-action="clone">Clone repository…</button>
+          <button type="button" data-action="new">New project…</button>
+        </div>
+      </div>
+
+      <form data-view="project" hidden>
+        <div class="h-form">
+          <label for="h-project">Project</label>
+          <div>
+            <input id="h-project" name="project" value="~/projects/atlas-api" autocomplete="off" spellcheck="false" required>
+            <div class="h-small h-dim h-summary" data-slot="project-hint">Use an existing folder on this Mac.</div>
+          </div>
+          <label for="h-agent">Agent</label>
+          <div>
+            <select id="h-agent" name="agent">
+              <option>Claude Code</option>
+              <option>Codex</option>
+            </select>
+            <div class="h-small h-green h-summary" data-slot="readiness">✓ Installed · signed in</div>
+          </div>
+        </div>
+        <details>
+          <summary>Model, branch &amp; more</summary>
+          <div class="h-settings">
+            <span class="h-small h-dim">Model: agent default · Account: existing account</span>
+            <label>Work in
+              <select id="h-placement" aria-label="Where this harness works">
+                <option value="worktree">A new worktree from main</option>
+                <option value="folder">This folder on its current branch</option>
+              </select>
+            </label>
+            <span class="h-small h-dim">Permissions: standard agent prompts</span>
+          </div>
+        </details>
+        <p class="h-small h-dim h-summary" data-slot="placement" style="margin-top:18px">Creates a new worktree from main.</p>
+        <div class="h-status" role="status" aria-live="polite" data-slot="launch-status" hidden></div>
+        <div class="h-actions">
+          <button type="button" class="h-primary" data-slot="start" data-action="start">[ Start Harness ]</button>
+          <button type="button" data-action="back">Back</button>
+        </div>
+      </form>
+
+      <div data-view="terminal" hidden>
+        <p class="h-small h-green" data-slot="session-ready">✓ Claude Code is ready</p>
+        <form data-form="task">
+          <label class="h-prompt-label" for="h-task">What would you like to work on?</label>
+          <textarea id="h-task" name="task" placeholder="Ask about this project, or describe a change…" required></textarea>
+          <div class="h-starters" data-slot="starters">
+            <button type="button" data-action="explain">Explain this codebase ↗</button>
+            <button type="button" data-action="find">Find a feature ↗</button>
+          </div>
+          <div class="h-actions">
+            <button class="h-primary" type="button" data-action="send">[ Send ]</button>
+          </div>
+        </form>
+      </div>
+
+      <div data-view="answer" hidden>
+        <div class="h-question" data-slot="question"></div>
+        <div class="h-small h-green" role="status" aria-live="polite" data-slot="reply-state">✓ Response complete</div>
+        <pre class="h-output" data-slot="reply"></pre>
+        <div class="h-actions" data-slot="answer-actions">
+          <button type="button" class="h-primary" data-action="continue">[ Continue this task ]</button>
+          <button type="button" data-action="second">Start another task</button>
+        </div>
+      </div>
+
+      <div data-view="return" hidden>
+        <h2>Pick up where you left off.</h2>
+        <div class="h-recent">
+          <span data-slot="recent-project">atlas-api</span>
+          <div class="h-small h-dim">Your recent harness · on this Mac</div>
+        </div>
+        <div class="h-actions">
+          <button type="button" class="h-primary" data-action="resume">[ Open Harness ]</button>
+          <span class="h-small h-green">⌘O</span>
+          <button type="button" data-action="open">New Harness</button>
+        </div>
+      </div>
+
+      <div data-view="parallel" hidden>
+        <h2>Work side by side.</h2>
+        <p class="h-dim">Keep this task open while another agent works in a second pane.</p>
+        <div class="h-small h-dim">Your project and agent are already selected.</div>
+        <div class="h-actions">
+          <button type="button" class="h-primary" data-action="prepare-second">[ Set up second task ]</button>
+          <button type="button" data-action="skip-parallel">Not now</button>
+        </div>
+      </div>
+
+      <div data-view="explore" class="h-guide" hidden>
+        <h2>Explore Harness</h2>
+        <details>
+          <summary>Work on two things at once</summary>
+          <p>Add a pane for a second task. Use a separate worktree when both agents will change the same repository.</p>
+          <button type="button" data-action="second">Try working side by side →</button>
+        </details>
+        <details>
+          <summary>Find your way around faster</summary>
+          <p>Use command search or the optional keyboard tour. Learn pane navigation and zoom when you need more room.</p>
+        </details>
+        <details>
+          <summary>Run a task with a local model</summary>
+          <p>Explore Models when you want local execution. Choose a compatible model, check its requirements, then use it in your project.</p>
+        </details>
+        <details>
+          <summary>Continue on another computer</summary>
+          <p>Open Machines when you want access elsewhere. Connect to your other computer and open the work already running there.</p>
+        </details>
+        <details>
+          <summary>Try another kind of work</summary>
+          <p>Browse the Harness Store for a workflow with an example you want to try.</p>
+        </details>
+        <div class="h-actions"><button type="button" data-action="return-from-explore">← Back</button></div>
+      </div>
+    </main>
+    <footer class="h-footer">
+      <span class="h-small" role="status" aria-live="polite" data-slot="footer">Start with the tools you already use.</span>
+      <button type="button" class="h-small" data-action="explore">Explore Harness</button>
+    </footer>
+  </div>
+  <script>
+    (() => {
+      const root = document.getElementById('harness-onboarding-concept');
+      const one = s => root.querySelector(s);
+      const slot = s => one('[data-slot="' + s + '"]');
+      const state = { stage: 'welcome', readiness: 'ready', starters: true, agent: 'Claude Code' };
+      const stages = ['welcome', 'project', 'terminal', 'answer', 'return', 'parallel', 'explore'];
+      let entry = 'open';
+      let lastStage = 'welcome';
+      let secondTask = false;
+      let busy = false;
+      let clock = 0;
+      let ticks = 0;
+      let replyTimer = 0;
+      let question = '';
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const exampleReply = 'Here is the shape of this project:\n\n  src/routes/     request handlers\n  src/services/   business logic\n  test/           integration tests\n\nTo follow a request end to end, start with the\nhealth route, then follow its service and test.';
+      const projectName = () => one('#h-project').value.trim().replace(/\/$/, '').split('/').pop() || 'Your project';
+      function stop() { clearInterval(clock); clearTimeout(replyTimer); busy = false; }
+      function persist() {
+        if (window.openai && typeof window.openai.setWidgetState === 'function') {
+          window.openai.setWidgetState({ modelContent: { concept: 'developer-onboarding', stage: state.stage, readiness: state.readiness, agent: state.agent, starters: state.starters }, privateContent: null }).catch(() => {});
+        }
+      }
+      function restore(saved) {
+        const data = saved && saved.modelContent;
+        if (!data || data.concept !== 'developer-onboarding') return;
+        if (stages.includes(data.stage)) state.stage = data.stage;
+        if (['ready', 'auth', 'missing'].includes(data.readiness)) state.readiness = data.readiness;
+        if (['Claude Code', 'Codex'].includes(data.agent)) state.agent = data.agent;
+        if (typeof data.starters === 'boolean') state.starters = data.starters;
+      }
+      function render() {
+        root.querySelectorAll('[data-view]').forEach(v => { v.hidden = v.dataset.view !== state.stage; });
+        const inSession = state.stage === 'terminal' || state.stage === 'answer';
+        slot('title').textContent = inSession ? projectName() : state.stage === 'project' ? (secondTask ? 'New Harness · second pane' : 'New Harness') : 'Harness';
+        one('[data-action="close-pane"]').hidden = !inSession;
+        slot('location').hidden = inSession;
+        one('#h-agent').value = state.agent;
+        slot('session-ready').textContent = '✓ ' + state.agent + ' is ready' + (secondTask ? ' · second pane' : '');
+        slot('readiness').textContent = state.readiness === 'ready' ? '✓ Installed · signed in' : state.readiness === 'auth' ? 'Sign in to your ' + state.agent + ' account to continue.' : state.agent + ' will be installed when you start.';
+        slot('readiness').className = 'h-small h-summary ' + (state.readiness === 'ready' ? 'h-green' : 'h-warning');
+        slot('project-hint').textContent = entry === 'clone' ? 'Clone into a new folder on this Mac.' : entry === 'new' ? 'Create a new project folder on this Mac.' : 'Use an existing folder on this Mac.';
+        const newTree = one('#h-placement').value === 'worktree';
+        slot('placement').textContent = entry === 'new' ? 'Creates a new project folder.' : newTree ? 'Creates a new worktree from main.' : 'Works in this folder on its current branch.';
+        slot('start').textContent = busy ? '[ ' + '|/-\\'[ticks % 4] + ' Starting… ]' : state.readiness === 'auth' ? '[ Sign in to ' + state.agent + '… ]' : state.readiness === 'missing' ? '[ Install & start ]' : '[ Start Harness ]';
+        one('[data-view="project"]').querySelectorAll('input, select, button').forEach(el => { el.disabled = busy && el.dataset.action !== 'back'; });
+        slot('launch-status').hidden = !busy || state.stage !== 'project';
+        slot('starters').hidden = !state.starters;
+        slot('recent-project').textContent = projectName();
+        slot('question').textContent = '> ' + (question || 'Explain this codebase. Do not change any files.');
+        slot('reply-state').textContent = busy && state.stage === 'answer' ? 'Reading project…' : '✓ Response complete · example reply';
+        slot('reply').textContent = busy && state.stage === 'answer' ? '' : exampleReply;
+        slot('answer-actions').hidden = busy;
+        slot('footer').textContent = state.stage === 'welcome' ? 'Start with the tools you already use.' : state.stage === 'project' ? 'Project and settings stay here if you come back.' : state.stage === 'explore' ? 'Try these when they are useful to you.' : state.stage === 'parallel' ? 'A second task, with your first one still in view.' : 'Your work stays within reach.';
+        one('[data-action="explore"]').hidden = state.stage === 'explore' || busy;
+      }
+      function go(stage) { stop(); state.stage = stage; render(); persist(); }
+      function launch() {
+        if (busy) return;
+        if (!one('#h-project').reportValidity()) return;
+        if (state.readiness === 'auth') {
+          state.readiness = 'ready';
+          render();
+          slot('readiness').textContent = '✓ Sign-in complete · your project is still selected';
+          persist();
+          return;
+        }
+        const install = state.readiness === 'missing';
+        busy = true;
+        ticks = 0;
+        slot('launch-status').textContent = install ? 'Installing ' + state.agent + '…' : 'Preparing project…';
+        render();
+        clock = setInterval(() => {
+          ticks += 1;
+          slot('start').textContent = reducedMotion ? '[ Starting… ]' : '[ ' + '|/-\\'[ticks % 4] + ' Starting… ]';
+          if (ticks === 5) slot('launch-status').textContent = install ? 'Checking installation…' : 'Starting ' + state.agent + '…';
+          if (ticks === 10) { state.readiness = 'ready'; one('#h-task').value = ''; go('terminal'); }
+        }, 150);
+      }
+      function sendTask() {
+        if (!one('#h-task').reportValidity()) return;
+        question = one('#h-task').value.trim();
+        if (!question || busy) return;
+        state.stage = 'answer'; busy = true; render(); persist();
+        replyTimer = setTimeout(() => { busy = false; render(); }, 900);
+      }
+      root.addEventListener('click', e => {
+        const button = e.target.closest('button[data-action]');
+        if (!button) return;
+        const action = button.dataset.action;
+        if (['open', 'clone', 'new'].includes(action)) {
+          entry = action; secondTask = false;
+          one('#h-project').value = action === 'clone' ? 'https://github.com/example/atlas-api' : action === 'new' ? '~/projects/my-project' : '~/projects/atlas-api';
+          go('project');
+        } else if (action === 'start') launch();
+        else if (action === 'send') sendTask();
+        else if (action === 'back') go('welcome');
+        else if (action === 'close-pane') go('return');
+        else if (action === 'resume') go('answer');
+        else if (action === 'continue') { one('#h-task').value = ''; go('terminal'); }
+        else if (action === 'second') go('parallel');
+        else if (action === 'prepare-second') { secondTask = true; go('project'); }
+        else if (action === 'skip-parallel') go(question ? 'answer' : 'welcome');
+        else if (action === 'explore') { lastStage = state.stage; go('explore'); }
+        else if (action === 'return-from-explore') go(lastStage);
+        else if (action === 'explain' || action === 'find') {
+          one('#h-task').value = action === 'explain' ? 'Explain the structure of this codebase and how a request moves through it. Do not change any files.' : 'Help me find where a feature is implemented. Ask which feature I am investigating before making changes.';
+          one('#h-task').focus();
+        }
+      });
+      one('[data-view="project"]').addEventListener('submit', e => { e.preventDefault(); launch(); });
+      one('[data-view="project"]').addEventListener('keydown', e => {
+        if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); launch(); }
+      });
+      one('#h-agent').addEventListener('change', e => { state.agent = e.target.value; render(); persist(); });
+      one('#h-placement').addEventListener('change', render);
+      one('[data-form="task"]').addEventListener('submit', e => {
+        e.preventDefault(); sendTask();
+      });
+      restore(window.openai && window.openai.widgetState);
+      render();
+      window.addEventListener('openai:set_globals', e => {
+        const globals = e.detail && e.detail.globals;
+        if (globals && Object.prototype.hasOwnProperty.call(globals, 'widgetState')) { stop(); restore(globals.widgetState); render(); }
+      });
+      if (globalThis.Tweak) {
+        const tweak = new Tweak({ container: root, onChange: () => { stop(); render(); persist(); } });
+        tweak.addSelect(state, 'stage', { label: 'Journey moment', options: [
+          { label: 'First launch', value: 'welcome' }, { label: 'Project selected', value: 'project' },
+          { label: 'First task', value: 'terminal' }, { label: 'First result', value: 'answer' },
+          { label: 'Return visit', value: 'return' }, { label: 'A second task', value: 'parallel' },
+          { label: 'Explore features', value: 'explore' }
+        ] });
+        tweak.addSelect(state, 'readiness', { label: 'Agent readiness', options: [
+          { label: 'Installed and signed in', value: 'ready' }, { label: 'Sign-in needed', value: 'auth' }, { label: 'Installation needed', value: 'missing' }
+        ] });
+        tweak.addToggle(state, 'starters', { label: 'Offer first-task suggestions' });
+      }
+    })();
+  </script>
+</section>

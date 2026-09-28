@@ -1,0 +1,309 @@
+<div id="egg-status-review" aria-label="Terminal companion egg">
+  <style>
+    #egg-status-review {
+      --egg-bg: light-dark(#eeeeec, #1e1e1e);
+      --egg-fg: light-dark(#303431, #bec6d0);
+      --egg-muted: light-dark(#656964, #929590);
+      --egg-hover: light-dark(#dededb, #313131);
+      --egg-edge: light-dark(#cececa, #40403e);
+      --egg-warm: light-dark(#805b24, #c9b58d);
+      --egg-gold: light-dark(#8c5900, #f0c575);
+      --egg-bright: light-dark(#734600, #ffe0a1);
+      --egg-green: light-dark(#42732e, #a5d786);
+      --egg-pop: light-dark(#f8f8f5, #262625);
+      --egg-tone: var(--egg-gold);
+      color: var(--egg-fg);
+      font: 400 13px/1.6 "SF Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+      font-variant-ligatures: none;
+      padding-bottom: 48px;
+      position: relative;
+    }
+    #egg-status-review * { box-sizing: border-box; }
+    #egg-status-review .egg-bar {
+      background: var(--egg-bg);
+      border-block: 1px solid var(--egg-edge);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 8px 12px;
+      min-width: 0;
+    }
+    #egg-status-review .egg-context {
+      display: flex;
+      gap: 16px;
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    #egg-status-review .egg-project {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #egg-status-review .egg-tools {
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+      color: var(--egg-muted);
+    }
+    #egg-status-review .egg-tool {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 4ch;
+      height: 28px;
+    }
+    #egg-status-review .egg-resident {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      font: inherit;
+      color: var(--egg-tone);
+      padding: 0 1ch;
+      margin-left: 1ch;
+      width: 11ch;
+      height: 28px;
+      flex-shrink: 0;
+      transition: color 240ms ease;
+    }
+    #egg-status-review .egg-resident:hover,
+    #egg-status-review .egg-resident:focus-visible {
+      background: var(--egg-hover);
+    }
+    #egg-status-review .egg-face {
+      display: block;
+      white-space: pre;
+      width: 9ch;
+      text-align: left;
+    }
+    #egg-status-review .egg-caption {
+      position: absolute;
+      right: 0;
+      top: 54px;
+      max-width: 100%;
+      padding: 3px 10px;
+      color: var(--egg-fg);
+      background: var(--egg-pop);
+      border: 1px solid var(--egg-edge);
+      visibility: hidden;
+    }
+    #egg-status-review:has(.egg-resident:hover) .egg-caption,
+    #egg-status-review:has(.egg-resident:focus-visible) .egg-caption,
+    #egg-status-review[data-speaking="true"] .egg-caption {
+      visibility: visible;
+    }
+    #egg-status-review .egg-sr {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+    @media (max-width: 570px) {
+      #egg-status-review .egg-branch { display: none; }
+      #egg-status-review .egg-bar { gap: 8px; }
+      #egg-status-review .egg-context { gap: 10px; }
+    }
+    @media (max-width: 420px) {
+      #egg-status-review .egg-project { display: none; }
+      #egg-status-review .egg-tool { width: 3ch; }
+    }
+    @media (pointer: coarse) {
+      #egg-status-review .egg-resident { height: 44px; }
+      #egg-status-review .egg-caption { top: 70px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #egg-status-review .egg-resident { transition: none; }
+    }
+  </style>
+  <div class="egg-bar">
+    <div class="egg-context" aria-hidden="true">
+      <span>Codex</span>
+      <span class="egg-project">M2:harnesses</span>
+      <span class="egg-branch">(main)</span>
+    </div>
+    <div class="egg-tools" aria-hidden="true">
+      <span class="egg-tool">&gt;</span>
+      <span class="egg-tool">@</span>
+      <span class="egg-tool">:</span>
+      <span class="egg-tool">*</span>
+    </div>
+    <button class="egg-resident cursor-interaction" type="button" aria-label="An egg. Ready to hatch. Click to meet your companion." aria-describedby="egg-review-caption">
+      <span class="egg-face" aria-hidden="true">  \_O_/  </span>
+    </button>
+  </div>
+  <div class="egg-caption" id="egg-review-caption">Your companion is ready. Click to hatch.</div>
+  <span class="egg-sr" aria-live="polite" id="egg-review-announcement"></span>
+  <script>
+    (() => {
+      const root = document.getElementById('egg-status-review');
+      const face = root.querySelector('.egg-face');
+      const button = root.querySelector('.egg-resident');
+      const caption = root.querySelector('.egg-caption');
+      const announcement = root.querySelector('#egg-review-announcement');
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+      const state = { shape: 'nest', stage: 'ready', motion: true };
+      const variants = {
+        shell: { waiting: '(o)', ready: '(o)', wobble: ['(o)', '(/)', '(\\)', '(/)', '(o)'] },
+        nest: { waiting: '\\_O_/', ready: '\\_O_/', wobble: ['\\_O_/', '\\_/_/', '\\_\\_/', '\\_/_/', '\\_O_/'] }
+      };
+      let timers = [];
+      let generation = 0;
+      let hatching = false;
+      let active = true;
+
+      function later(fn, ms) {
+        const id = setTimeout(() => {
+          timers = timers.filter(item => item !== id);
+          if (root.isConnected && !document.hidden && active) fn();
+        }, ms);
+        timers.push(id);
+      }
+
+      function stop() {
+        timers.forEach(clearTimeout);
+        timers = [];
+        generation += 1;
+      }
+
+      function cells(text, offset = 0) {
+        const start = Math.max(0, Math.min(9 - text.length, Math.floor((9 - text.length) / 2) + offset));
+        return (' '.repeat(start) + text).padEnd(9, ' ');
+      }
+
+      function draw(text, offset = 0, tone = null) {
+        face.textContent = cells(text, offset);
+        root.style.setProperty('--egg-tone', tone || (state.stage === 'hatched' ? 'var(--egg-green)' : state.stage === 'ready' ? 'var(--egg-gold)' : 'var(--egg-warm)'));
+      }
+
+      function save() {
+        if (window.openai?.setWidgetState) {
+          window.openai.setWidgetState({
+            modelContent: { eggShape: state.shape, previewStage: state.stage, motion: state.motion },
+            privateContent: { ...state }
+          }).catch(() => {});
+        }
+      }
+
+      function baseFace() {
+        return state.stage === 'hatched' ? '=^o.o^=' : variants[state.shape][state.stage];
+      }
+
+      function wobble() {
+        if (!state.motion || reduced.matches || state.stage === 'hatched' || hatching) return;
+        const token = generation;
+        const resting = baseFace();
+        const frames = state.stage === 'ready' ? variants[state.shape].wobble : [resting, resting, resting, resting];
+        const shifts = [0, -1, 1, 0, 0];
+        frames.forEach((frame, index) => later(() => {
+          if (token !== generation) return;
+          draw(frame, shifts[index] || 0, state.stage === 'ready' ? 'var(--egg-bright)' : null);
+        }, index * 150));
+        later(() => { if (token === generation) draw(resting); }, frames.length * 150 + 180);
+        later(wobble, state.stage === 'ready' ? 8000 : 18000);
+      }
+
+      function render() {
+        stop();
+        hatching = false;
+        root.dataset.speaking = 'false';
+        draw(baseFace());
+        const description = state.stage === 'ready'
+          ? 'Your companion is ready. Click to hatch.'
+          : state.stage === 'waiting'
+            ? 'A companion is inside. Keep exploring.'
+            : 'Your companion. Click to say hello.';
+        caption.textContent = description;
+        button.setAttribute('aria-label', state.stage === 'hatched' ? description : 'An egg. ' + description);
+        button.setAttribute('aria-disabled', 'false');
+        if (active && !document.hidden) later(wobble, 700);
+      }
+
+      function finishHatch() {
+        state.stage = 'hatched';
+        render();
+        caption.textContent = '"oh. you\'re my human."';
+        root.dataset.speaking = 'true';
+        announcement.textContent = 'Your companion hatched: a cat.';
+        later(() => { root.dataset.speaking = 'false'; }, 4200);
+        save();
+      }
+
+      button.addEventListener('click', () => {
+        if (hatching) return;
+        if (state.stage === 'waiting') {
+          stop();
+          root.dataset.speaking = 'true';
+          draw(variants[state.shape].waiting, -1);
+          later(() => { draw(baseFace()); }, 180);
+          later(render, 3000);
+          return;
+        }
+        if (state.stage === 'hatched') {
+          stop();
+          draw('=^u.u^=');
+          caption.textContent = '"prrr. hello to you too."';
+          root.dataset.speaking = 'true';
+          announcement.textContent = 'Your companion purrs.';
+          later(render, 2200);
+          return;
+        }
+        stop();
+        hatching = true;
+        button.setAttribute('aria-disabled', 'true');
+        caption.textContent = 'Something is waking up...';
+        root.dataset.speaking = 'true';
+        if (!state.motion || reduced.matches) { finishHatch(); return; }
+        const frames = state.shape === 'shell'
+          ? ['(/)', '(\\)', '(/)', '(x)', '( )', '( . )', '(o.o)', '=^o.o^=']
+          : ['\\_/_/', '\\_\\_/', '\\_x_/', '\\_ _/', '\\ . /', '\\o.o/', '=^o.o^='];
+        frames.forEach((frame, index) => later(() => draw(frame, 0, 'var(--egg-bright)'), index * 180));
+        later(finishHatch, frames.length * 180 + 160);
+      });
+
+      function applySaved(value) {
+        const saved = value?.privateContent;
+        if (!saved) return;
+        if (saved.shape === 'shell' || saved.shape === 'nest') state.shape = saved.shape;
+        if (['waiting', 'ready', 'hatched'].includes(saved.stage)) state.stage = saved.stage;
+        if (typeof saved.motion === 'boolean') state.motion = saved.motion;
+      }
+
+      applySaved(window.openai?.widgetState);
+      render();
+      window.addEventListener('openai:set_globals', event => {
+        const saved = event.detail?.globals?.widgetState;
+        if (saved) { applySaved(saved); render(); }
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) stop();
+        else if (hatching) finishHatch();
+        else render();
+      });
+      reduced.addEventListener('change', render);
+      const observer = new IntersectionObserver(entries => {
+        active = entries[0].isIntersecting;
+        if (active) {
+          if (hatching) finishHatch();
+          else render();
+        } else stop();
+      });
+      observer.observe(root);
+
+      if (globalThis.Tweak) {
+        const tweak = new Tweak({ container: root, onChange: () => { render(); save(); } });
+        tweak.addSelect(state, 'shape', { label: 'Egg shape', options: [
+          { label: 'Shell (o)', value: 'shell' },
+          { label: 'Nest \\_O_/', value: 'nest' }
+        ] });
+        tweak.addSelect(state, 'stage', { label: 'State', options: [
+          { label: 'Growing', value: 'waiting' },
+          { label: 'Ready to hatch', value: 'ready' },
+          { label: 'Companion', value: 'hatched' }
+        ] });
+        tweak.addToggle(state, 'motion', { label: 'Animate' });
+      }
+    })();
+  </script>
+</div>

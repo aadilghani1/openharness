@@ -1,0 +1,534 @@
+<div id="harness-creature-lookbook" aria-label="Terminal creature lookbook">
+  <style>
+    #harness-creature-lookbook {
+      --pet-paper: #191a18;
+      --pet-panel: #20211e;
+      --pet-ink: #e3e5dd;
+      --pet-dim: #a4a79b;
+      --pet-line: #45483f;
+      --pet-focus: #c1d5a8;
+      --pet-font: Menlo, Consolas, monospace;
+      --pet-size: 16px;
+      color-scheme: dark;
+      color: var(--pet-ink);
+      font: 400 14px/1.5 var(--pet-font);
+      width: 100%;
+    }
+    #harness-creature-lookbook * { box-sizing: border-box; }
+    #harness-creature-lookbook .book {
+      background: var(--pet-paper);
+      border: 1px solid var(--pet-line);
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    #harness-creature-lookbook .book-title,
+    #harness-creature-lookbook .section-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 6px 16px;
+      margin: 0;
+    }
+    #harness-creature-lookbook .book-title {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--pet-line);
+    }
+    #harness-creature-lookbook h2,
+    #harness-creature-lookbook h3 {
+      font: 500 14px/1.5 var(--pet-font);
+      color: var(--pet-ink);
+      margin: 0;
+    }
+    #harness-creature-lookbook .dim,
+    #harness-creature-lookbook .section-title > span { color: var(--pet-dim); font-size: 12px; }
+    #harness-creature-lookbook .specimen {
+      background: var(--pet-panel);
+      padding: 20px;
+      border-bottom: 1px solid var(--pet-line);
+    }
+    #harness-creature-lookbook .specimen-body {
+      display: grid;
+      grid-template-columns: minmax(210px, .95fr) minmax(0, 1.05fr);
+      gap: 24px;
+      align-items: center;
+      padding: 18px 0 14px;
+    }
+    #harness-creature-lookbook .enlarged {
+      display: block;
+      font: 400 32px/1.8 var(--pet-font);
+      font-variant-ligatures: none;
+      text-align: center;
+      white-space: pre;
+      letter-spacing: 0;
+      background: none;
+      color: var(--pet-ink);
+      border: 0;
+      padding: 0;
+      margin: 0;
+    }
+    #harness-creature-lookbook .quote { margin: 6px 0 0; min-height: 3em; color: var(--pet-ink); }
+    #harness-creature-lookbook .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 18px; }
+    #harness-creature-lookbook button {
+      appearance: none;
+      font: 400 12px/1.5 var(--pet-font);
+      background: transparent;
+      color: var(--pet-ink);
+      border: 1px solid var(--pet-line);
+      border-radius: 3px;
+      padding: 7px 10px;
+      cursor: pointer;
+    }
+    #harness-creature-lookbook button:hover { background: #30332a; }
+    #harness-creature-lookbook button:focus-visible { outline: 2px solid var(--pet-focus); outline-offset: 2px; }
+    #harness-creature-lookbook button[aria-pressed="true"] { background: #353a2e; border-color: var(--pet-focus); }
+    #harness-creature-lookbook .actual-size {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding-top: 12px;
+      border-top: 1px solid var(--pet-line);
+    }
+    #harness-creature-lookbook .status-sample {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      min-width: max-content;
+      flex: 1;
+    }
+    #harness-creature-lookbook .status-path { color: var(--pet-dim); font-size: 12px; flex: 1; }
+    #harness-creature-lookbook .glyph {
+      display: inline-block;
+      width: 9ch;
+      flex-shrink: 0;
+      font: 400 var(--pet-size)/1.5 var(--pet-font);
+      font-variant-ligatures: none;
+      letter-spacing: 0;
+      white-space: pre;
+      color: var(--pet-ink);
+      background: transparent;
+      text-align: center;
+      border: 0;
+      padding: 0;
+    }
+    #harness-creature-lookbook .sheet { padding: 20px 12px 8px; }
+    #harness-creature-lookbook .sheet > .section-title { padding: 0 8px 12px; }
+    #harness-creature-lookbook .sheet-scroll { overflow-x: auto; }
+    #harness-creature-lookbook table { border-collapse: collapse; width: 100%; min-width: 660px; table-layout: auto; }
+    #harness-creature-lookbook th { font-weight: 400; }
+    #harness-creature-lookbook thead th {
+      padding: 8px 2px 10px;
+      color: var(--pet-dim);
+      font-size: 12px;
+      text-align: center;
+      border-bottom: 1px solid var(--pet-line);
+    }
+    #harness-creature-lookbook thead th:first-child { text-align: left; padding-left: 8px; }
+    #harness-creature-lookbook tbody th {
+      text-align: left;
+      font-size: 12px;
+      color: var(--pet-dim);
+      white-space: nowrap;
+      padding: 8px;
+    }
+    #harness-creature-lookbook tbody td { padding: 3px 1px; text-align: center; }
+    #harness-creature-lookbook tbody tr { border-bottom: 1px solid #2c2e28; }
+    #harness-creature-lookbook tbody tr:last-child { border-bottom: 0; }
+    #harness-creature-lookbook .pose-button {
+      border: 1px solid transparent;
+      display: block;
+      padding: 5px 0;
+      margin: 0 auto;
+      width: 100%;
+      min-width: max-content;
+    }
+    #harness-creature-lookbook .pose-button[aria-pressed="true"] .glyph { color: #e7f0da; }
+    #harness-creature-lookbook .families { padding: 18px 20px; border-top: 1px solid var(--pet-line); }
+    #harness-creature-lookbook .family-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px 24px;
+      margin: 16px 0 0;
+    }
+    #harness-creature-lookbook .family-name { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
+    #harness-creature-lookbook .family-note { color: var(--pet-dim); font-size: 12px; margin-top: 3px; }
+    #harness-creature-lookbook .egg-section { padding: 18px 20px; border-top: 1px solid var(--pet-line); }
+    #harness-creature-lookbook .egg-frames { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 16px 10px; margin: 18px 0 16px; }
+    #harness-creature-lookbook .egg-step { text-align: center; flex: 1; min-width: 64px; }
+    #harness-creature-lookbook .egg-step .glyph { width: auto; min-width: 5ch; display: block; margin: 0 auto 4px; }
+    #harness-creature-lookbook .egg-step span { font-size: 11px; color: var(--pet-dim); }
+    #harness-creature-lookbook .egg-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+    #harness-creature-lookbook .hatch-result { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 28px; }
+    #harness-creature-lookbook .book-footer {
+      padding: 12px 20px;
+      border-top: 1px solid var(--pet-line);
+      font-size: 11px;
+      color: var(--pet-dim);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 6px 12px;
+    }
+    #harness-creature-lookbook .a11y-status {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    @media (max-width: 540px) {
+      #harness-creature-lookbook .specimen-body { grid-template-columns: 1fr; gap: 4px; padding: 12px 0 4px; }
+      #harness-creature-lookbook .enlarged { font-size: 28px; }
+      #harness-creature-lookbook .quote { min-height: 0; }
+      #harness-creature-lookbook .family-list { grid-template-columns: 1fr; }
+      #harness-creature-lookbook .status-path { display: none; }
+      #harness-creature-lookbook .book-title,
+      #harness-creature-lookbook .specimen,
+      #harness-creature-lookbook .families,
+      #harness-creature-lookbook .egg-section { padding-left: 14px; padding-right: 14px; }
+    }
+    @media (pointer: coarse) {
+      #harness-creature-lookbook button { min-height: 44px; }
+    }
+  </style>
+
+  <div class="book">
+    <header class="book-title">
+      <h2>companion lookbook / 01</h2>
+      <span class="dim">6 creatures · 12 moods</span>
+    </header>
+
+    <section class="specimen" aria-label="Selected creature preview">
+      <div class="section-title">
+        <h3 id="pet-selected-title">Cat / content</h3>
+        <span id="pet-temperament">dry humor · quietly affectionate</span>
+      </div>
+      <div class="specimen-body">
+        <code class="enlarged" id="pet-large" aria-label="Cat, content"> =^o.o^= </code>
+        <div>
+          <span class="dim">a little voice</span>
+          <p class="quote" id="pet-quote">“i'll be here. supervising.”</p>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" id="pet-play-mood">[ play mood ]</button>
+        <button type="button" id="pet-play-habit">[ whisker twitch ]</button>
+      </div>
+      <div class="actual-size">
+        <span class="dim" id="pet-size-label">in the terminal / 16 px</span>
+        <div class="status-sample" aria-label="Single-line terminal status preview">
+          <span class="status-path">~/project</span>
+          <code class="glyph" id="pet-small" aria-label="Cat, content"> =^o.o^= </code>
+          <span class="dim" id="pet-status-name">cat</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="sheet" aria-label="All creatures and moods">
+      <div class="section-title">
+        <h3>the whole collection</h3>
+        <span>select a pose to inspect</span>
+      </div>
+      <div class="sheet-scroll">
+        <table aria-label="Six creatures in twelve moods">
+          <thead><tr><th scope="col">mood</th><th scope="col">cat</th><th scope="col">mouse</th><th scope="col">snail</th><th scope="col">fish</th><th scope="col">spider</th><th scope="col">bat</th></tr></thead>
+          <tbody id="pet-mood-sheet"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="families" aria-label="Creature personalities and gestures">
+      <div class="section-title"><h3>the little things</h3><span>one signature habit each</span></div>
+      <div class="family-list" id="pet-family-list"></div>
+    </section>
+
+    <section class="egg-section" aria-label="Egg and hatch sequence">
+      <div class="section-title"><h3>before hello</h3><span>the egg</span></div>
+      <div class="egg-frames">
+        <div class="egg-step"><code class="glyph">(_)</code><span>sleeping</span></div>
+        <div class="egg-step"><code class="glyph">~(_)</code><span>stirring</span></div>
+        <div class="egg-step"><code class="glyph">(/)</code><span>cracking</span></div>
+        <div class="egg-step"><code class="glyph">\ /</code><span>opening</span></div>
+        <div class="egg-step"><code class="glyph" id="pet-hatch-final">=^o.o^=</code><span>hello</span></div>
+      </div>
+      <div class="egg-actions">
+        <button type="button" id="pet-play-hatch">[ hatch this creature ]</button>
+        <div class="hatch-result"><code class="glyph" id="pet-egg-live" aria-label="Unhatched egg">   (_)   </code><span class="dim" id="pet-hatch-label">a small beginning</span></div>
+      </div>
+    </section>
+
+    <footer class="book-footer"><span>ASCII only · one line per pose</span><span>draft collection / names are yours to choose</span></footer>
+  </div>
+  <div class="a11y-status" id="pet-announcement" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const root = document.getElementById('harness-creature-lookbook');
+      const byId = id => root.querySelector('#' + id);
+      const moods = [
+        ['content', 'content'], ['curious', 'curious'], ['focused', 'focused'],
+        ['waiting', 'waiting'], ['happy', 'happy'], ['celebrating', 'celebrating'],
+        ['puzzled', 'puzzled'], ['grumpy', 'grumpy'], ['sad', 'sad'],
+        ['startled', 'startled'], ['affectionate', 'affectionate'], ['asleep', 'asleep']
+      ];
+      const creatures = [
+        {
+          id: 'cat', name: 'Cat', temperament: 'dry humor · quietly affectionate',
+          habit: 'whisker twitch', note: 'Whiskers twitch. Pretends the celebration was your idea.',
+          poses: ['=^o.o^=', '=^o.o^=?', '=^>.<^=', '=^o_o^=', '=^n.n^=', '=^*.*^=', '=^o.O^=', '=^>_>^=', '=^;.;^=', '=^O.O^=', '=^u.u^=', '=^-.-^='],
+          quotes: ["i'll be here. supervising.", 'what does that little thing do?', 'shh. the humans are thinking.', 'i have reserved this warm spot.', 'acceptable. very acceptable.', 'i always knew you had it.', 'that is certainly one way to do it.', 'i would like to speak to the compiler.', 'a small sigh. then we try again.', 'oh. we meant to do that?', 'oh. you came back.', 'wake me when you need me.'],
+          blink: '=^-.-^=',
+          habitFrames: ['=^o.o^=', '-^o.o^-', '=^o.o^=', '=^o.-^=', '=^o.o^='],
+          celebrateFrames: ['=^n.n^=', '=^*.*^=', '*=^n.n^=*', '=^*.*^=', '=^n.n^=']
+        },
+        {
+          id: 'mouse', name: 'Mouse', temperament: 'curious · easily fascinated',
+          habit: 'tail curl', note: 'Sniffs at new things. Curls its tail when pleased.',
+          poses: ['<:3)~~~', '<o3)~~?', '<.3)---', '<:3)__~', '<^3)~~~', '<*3)~~!', '<o3)~?~', '<-3)===', '<;3)___', '<O3)!!!', '<^3)~~<3', '<-3)___'],
+          quotes: ['there is probably something interesting in here.', 'can we look inside?', 'tiny paws. serious work.', 'i found a crumb. we can share.', 'oh! that worked!', 'we did the thing! the whole thing!', 'i may have taken the wrong tunnel.', 'this cable has offended me.', 'that was a little bump.', 'that was a very big noise.', 'i saved the best crumb for you.', 'one tiny nap.'],
+          blink: '<-3)~~~',
+          habitFrames: ['<:3)~~~', '<:3)~~_', '<:3)~_~', '<:3)~~@', '<^3)~~~'],
+          celebrateFrames: ['<^3)~~~', ' <:3)~~!', '<*3)~~!', ' <:3)~~!', '<^3)~~~']
+        },
+        {
+          id: 'snail', name: 'Snail', temperament: 'calm · quietly wise',
+          habit: 'slow stretch', note: 'Peeks out, stretches, and takes its time.',
+          poses: ['__@/oo', '__@/oO', '__@/..', '___@/oo', '__@/^^', '~_@/^^!', '__@/o?', '__@/--', '__@/;;', '__@/OO!', '__@/uu', '__@___z'],
+          quotes: ['we have time.', 'let us have a closer look.', 'one small step. then another.', 'waiting is one of my skills.', 'a little further than yesterday.', 'a historic day for small feet.', 'perhaps another path around it.', 'i am retreating to my office.', 'some days are uphill.', 'i was not prepared for speed.', 'anywhere with you is a good pace.', 'home is right here.'],
+          blink: '__@/--',
+          habitFrames: ['__@___', '__@/..', '__@/oo', '_@_/oo', '__@/oo'],
+          celebrateFrames: ['__@/^^', '_@_/^^', '~_@/^^!', '_@_/^^', '__@/^^']
+        },
+        {
+          id: 'fish', name: 'Fish', temperament: 'excitable · easily distracted',
+          habit: 'one bubble', note: 'Makes a bubble, follows it, forgets why.',
+          poses: ['><(o)>', '><(o)>?', '><(.)>', '><(o)>.', '><(^)>', '><(*)>o', '><(?)>', '><(-)>', '><(;)>', '><(O)>!', '><(u)><3', '><(-)>z'],
+          quotes: ['just swimming through.', 'ooh. shiny.', 'i have one thought. holding it.', 'blub.', 'that went swimmingly.', 'BIG bubble moment.', 'have we been around this rock before?', 'blub. with emphasis.', 'a little rain in my ocean.', 'BLUB?!', 'my favorite part of the pond is here.', 'drifting.'],
+          blink: '><(-)>',
+          habitFrames: ['><(o)>', '><(o)>.', '><(o)>o', '><(o)>O', '><(o)>'],
+          celebrateFrames: ['><(^)>', '><(*)>.', '><(*)>o', '><(*)>O', '><(^)>']
+        },
+        {
+          id: 'spider', name: 'Spider', temperament: 'meticulous · loves making things',
+          habit: 'weave a thread', note: 'Busy feet. Quietly adds one more thread.',
+          poses: ['/\\oo/\\', '/\\oO/\\', '/\\../\\', '/_oo_\\', '/\\^^/\\', '\\/^^\\/', '/\\o?/\\', '/\\--/\\', '/_;;_\\', '\\\\OO//', '/\\uu/\\', '/_--_\\'],
+          quotes: ['a good corner to build in.', 'how is that held together?', 'every thread has a purpose.', 'i can hold this end.', 'all the threads line up.', 'look what we made!', 'there is a knot somewhere.', 'someone touched my perfectly good web.', 'we can mend this.', 'that was not in the blueprint.', 'i made you a little corner.', 'eight feet off duty.'],
+          blink: '/\\--/\\',
+          habitFrames: ['/\\oo/\\', '/|oo|\\', '/\\oo/\\-', '/|oo|\\--', '/\\oo/\\'],
+          celebrateFrames: ['/\\^^/\\', '\\/^^\\/', '\\\\^^//', '\\/^^\\/', '/\\^^/\\']
+        },
+        {
+          id: 'bat', name: 'Bat', temperament: 'mischievous · fond of quiet hours',
+          habit: 'wing flutter', note: 'A tiny flutter, then hangs around with you.',
+          poses: ['\\^oo^/', '\\^oO^/', '\\^..^/', '/^oo^\\', '\\^nn^/', '\\^**^/', '\\^o?^/', '\\^--^/', '/^;;^\\', '\\^OO^/', '\\^uu^/', '/^--^\\'],
+          quotes: ['nice cave you have here.', 'i heard something interesting.', 'echo. echo. found it.', 'just hanging around.', 'a very good little adventure.', 'a completely necessary victory lap.', 'the echo came back funny.', 'i object. very quietly.', 'a quiet corner for a moment.', 'who turned on the sun?', 'my favorite person to hang with.', 'folding up for a while.'],
+          blink: '\\^--^/',
+          habitFrames: ['/^oo^\\', '-^oo^-', '\\^oo^/', '-^oo^-', '/^oo^\\'],
+          celebrateFrames: ['/^nn^\\', '-^**^-', '\\^**^/', '-^**^-', '/^nn^\\']
+        }
+      ];
+      const state = { creature: 'cat', mood: 'content', font: 'Menlo', size: 16 };
+      const design = { font: 'Menlo', size: 16 };
+      const timers = new Set();
+      let animationToken = 0;
+      let hatchToken = 0;
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const center = text => {
+        const gap = Math.max(0, 9 - text.length);
+        return ' '.repeat(Math.floor(gap / 2)) + text + ' '.repeat(Math.ceil(gap / 2));
+      };
+      const creature = () => creatures.find(item => item.id === state.creature) || creatures[0];
+      const moodIndex = () => Math.max(0, moods.findIndex(item => item[0] === state.mood));
+      const schedule = (fn, delay) => {
+        const timer = setTimeout(() => { timers.delete(timer); if (root.isConnected) fn(); }, delay);
+        timers.add(timer);
+      };
+      function save() {
+        if (window.openai && typeof window.openai.setWidgetState === 'function') {
+          window.openai.setWidgetState({
+            modelContent: { creature: state.creature, mood: state.mood, font: design.font, glyphSize: design.size },
+            privateContent: null
+          }).catch(() => {});
+        }
+      }
+      function drawFrame(text) {
+        byId('pet-large').textContent = center(text);
+        byId('pet-small').textContent = center(text);
+      }
+      function renderSelection() {
+        animationToken++;
+        hatchToken++;
+        const pet = creature();
+        const index = moodIndex();
+        const mood = moods[index][1];
+        const face = pet.poses[index];
+        root.dataset.creature = pet.id;
+        root.dataset.mood = state.mood;
+        byId('pet-selected-title').textContent = pet.name + ' / ' + mood;
+        byId('pet-temperament').textContent = pet.temperament;
+        byId('pet-quote').textContent = '“' + pet.quotes[index] + '”';
+        byId('pet-status-name').textContent = pet.id;
+        byId('pet-play-habit').textContent = '[ ' + pet.habit + ' ]';
+        byId('pet-large').setAttribute('aria-label', pet.name + ', ' + mood);
+        byId('pet-small').setAttribute('aria-label', pet.name + ', ' + mood);
+        byId('pet-hatch-final').textContent = pet.poses[0];
+        byId('pet-egg-live').textContent = center('(_)');
+        byId('pet-egg-live').setAttribute('aria-label', 'Unhatched egg');
+        byId('pet-hatch-label').textContent = 'a small beginning';
+        byId('pet-play-hatch').textContent = '[ hatch this creature ]';
+        root.querySelectorAll('.pose-button').forEach(button => {
+          button.setAttribute('aria-pressed', String(button.dataset.creature === pet.id && button.dataset.mood === state.mood));
+        });
+        drawFrame(face);
+      }
+      function select(petId, mood) {
+        state.creature = petId;
+        state.mood = mood;
+        renderSelection();
+        byId('pet-announcement').textContent = creature().name + ', ' + moods[moodIndex()][1] + '. ' + creature().quotes[moodIndex()];
+        save();
+      }
+      function playFrames(frames, durations) {
+        const token = ++animationToken;
+        if (reduceMotion) {
+          drawFrame(frames[Math.floor(frames.length / 2)]);
+          schedule(() => { if (token === animationToken) drawFrame(creature().poses[moodIndex()]); }, 900);
+          return;
+        }
+        let elapsed = 0;
+        frames.forEach((frame, index) => {
+          schedule(() => { if (token === animationToken) drawFrame(frame); }, elapsed);
+          elapsed += durations ? durations[index] : 300;
+        });
+        schedule(() => { if (token === animationToken) drawFrame(creature().poses[moodIndex()]); }, elapsed);
+      }
+      function playMood() {
+        const pet = creature();
+        const pose = pet.poses[moodIndex()];
+        let frames;
+        let times;
+        if (state.mood === 'celebrating') {
+          frames = pet.celebrateFrames;
+          times = [340, 220, 360, 220, 520];
+        } else if (state.mood === 'asleep') {
+          frames = [pose, pose + '.', pose, pose + 'z', pose];
+          times = [650, 500, 650, 500, 650];
+        } else if (state.mood === 'startled') {
+          frames = [pet.poses[0], pose, pet.poses[0], pose, pose];
+          times = [350, 180, 120, 350, 500];
+        } else if (state.mood === 'affectionate') {
+          const heartPose = pose.includes('<3') ? pose : pose + '<3';
+          frames = [pose, pet.blink, pose, heartPose, pose];
+          times = [500, 130, 450, 650, 500];
+        } else {
+          frames = [pose, pet.blink, pose, pose, pet.blink, pose];
+          times = [600, 110, 700, 250, 110, 450];
+        }
+        playFrames(frames, times);
+      }
+      function renderDesign() {
+        root.style.setProperty('--pet-size', design.size + 'px');
+        const fonts = {
+          Menlo: 'Menlo, Consolas, monospace',
+          'SF Mono': '"SFMono-Regular", "SF Mono", Menlo, monospace',
+          Courier: '"Courier New", Courier, monospace'
+        };
+        root.style.setProperty('--pet-font', fonts[design.font] || fonts.Menlo);
+        byId('pet-size-label').textContent = 'in the terminal / ' + design.size + ' px';
+      }
+      function applySaved(snapshot) {
+        const saved = snapshot && (snapshot.modelContent || snapshot);
+        if (!saved) return;
+        if (creatures.some(item => item.id === saved.creature)) state.creature = saved.creature;
+        if (moods.some(item => item[0] === saved.mood)) state.mood = saved.mood;
+        if (['Menlo', 'SF Mono', 'Courier'].includes(saved.font)) design.font = saved.font;
+        if (Number.isFinite(saved.glyphSize) && saved.glyphSize >= 14 && saved.glyphSize <= 20) design.size = saved.glyphSize;
+      }
+
+      const sheet = byId('pet-mood-sheet');
+      moods.forEach((mood, index) => {
+        const tr = document.createElement('tr');
+        const th = document.createElement('th');
+        th.scope = 'row';
+        th.textContent = mood[1];
+        tr.appendChild(th);
+        creatures.forEach(pet => {
+          const td = document.createElement('td');
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'pose-button';
+          button.dataset.creature = pet.id;
+          button.dataset.mood = mood[0];
+          button.setAttribute('aria-label', pet.name + ', ' + mood[1]);
+          button.setAttribute('aria-pressed', 'false');
+          const code = document.createElement('code');
+          code.className = 'glyph';
+          code.textContent = center(pet.poses[index]);
+          button.appendChild(code);
+          button.addEventListener('click', () => select(pet.id, mood[0]));
+          td.appendChild(button);
+          tr.appendChild(td);
+        });
+        sheet.appendChild(tr);
+      });
+      const familyList = byId('pet-family-list');
+      creatures.forEach(pet => {
+        const item = document.createElement('div');
+        const heading = document.createElement('div');
+        heading.className = 'family-name';
+        const code = document.createElement('code');
+        code.className = 'glyph';
+        code.textContent = center(pet.poses[0]);
+        const name = document.createElement('span');
+        name.textContent = pet.name;
+        heading.append(code, name);
+        const note = document.createElement('div');
+        note.className = 'family-note';
+        note.textContent = pet.note;
+        item.append(heading, note);
+        familyList.appendChild(item);
+      });
+
+      byId('pet-play-mood').addEventListener('click', playMood);
+      byId('pet-play-habit').addEventListener('click', () => playFrames(creature().habitFrames, [450, 250, 350, 450, 450]));
+      byId('pet-play-hatch').addEventListener('click', () => {
+        const pet = creature();
+        const token = ++hatchToken;
+        const frames = ['(_)', '~(_)', '(_)~', '(/)', '(X)', '\\ /', pet.poses[9], pet.blink, pet.poses[0]];
+        byId('pet-hatch-label').textContent = 'someone is waking up...';
+        const finish = () => {
+          if (token !== hatchToken) return;
+          byId('pet-egg-live').textContent = center(pet.poses[0]);
+          byId('pet-egg-live').setAttribute('aria-label', pet.name + ' has hatched');
+          byId('pet-hatch-label').textContent = 'hello, little ' + pet.id + '.';
+          byId('pet-play-hatch').textContent = '[ hatch again ]';
+          byId('pet-announcement').textContent = pet.name + ' has hatched.';
+        };
+        if (reduceMotion) { finish(); return; }
+        frames.forEach((frame, index) => schedule(() => {
+          if (token === hatchToken) byId('pet-egg-live').textContent = center(frame);
+        }, index * 350));
+        schedule(finish, frames.length * 350);
+      });
+
+      applySaved(window.openai && window.openai.widgetState);
+      renderDesign();
+      renderSelection();
+      window.addEventListener('openai:set_globals', event => {
+        if (event.detail && event.detail.globals && event.detail.globals.widgetState) {
+          applySaved(event.detail.globals.widgetState);
+          renderDesign();
+          renderSelection();
+        }
+      });
+      if (globalThis.Tweak) {
+        const tweak = new Tweak({ container: root, onChange: () => { renderDesign(); save(); } });
+        tweak.addSlider(design, 'size', { label: 'Actual glyph size', min: 14, max: 20, step: 1, unit: 'px' });
+        tweak.addSelect(design, 'font', { label: 'Terminal font', options: ['Menlo', 'SF Mono', 'Courier'] });
+      }
+      window.addEventListener('pagehide', () => { timers.forEach(clearTimeout); timers.clear(); }, { once: true });
+    })();
+  </script>
+</div>
