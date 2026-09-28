@@ -99,6 +99,8 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 
     /// Grow number of columns in each row, reflowing if necessary.
     fn grow_columns(&mut self, reflow: bool, columns: usize) {
+        // hn permits one-column panes: their wide cells have no room for a spacer.
+        let clipped_wide = self.columns == 1;
         // Check if a row needs to be wrapped.
         let should_reflow = |row: &Row<T>| -> bool {
             let len = Column(row.len());
@@ -119,6 +121,10 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         let mut rows = self.raw.take_all();
 
         for (i, mut row) in rows.drain(..).enumerate().rev() {
+            if clipped_wide && row[Column(0)].flags().contains(Flags::WIDE_CHAR) {
+                row.grow(2);
+                row[Column(1)].flags_mut().insert(Flags::WIDE_CHAR_SPACER);
+            }
             // Check if reflowing should be performed.
             let last_row = match reversed.last_mut() {
                 Some(last_row) if should_reflow(last_row) => last_row,
@@ -286,8 +292,24 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                     },
                 };
 
+                // hn: a one-column pane clips wide cells rather than perpetually
+                // moving their two-cell representation into the next one-cell row.
+                if columns == 1 && row[Column(0)].flags().contains(Flags::WIDE_CHAR) {
+                    if wrapped.first().is_some_and(|c| c.flags().contains(Flags::WIDE_CHAR_SPACER)) {
+                        wrapped.remove(0);
+                    }
+                    if wrapped.is_empty() {
+                        if i == self.lines - self.cursor.point.line.0 as usize - 1 {
+                            self.cursor.point.column = Column(0);
+                            self.cursor.input_needs_wrap = false;
+                        }
+                        new_raw.push(row);
+                        break;
+                    }
+                }
+
                 // Insert spacer if a wide char would be wrapped into the last column.
-                if row.len() >= columns
+                if columns > 1 && row.len() >= columns
                     && row[Column(columns - 1)].flags().contains(Flags::WIDE_CHAR)
                 {
                     let mut spacer = T::default();

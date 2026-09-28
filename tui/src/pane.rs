@@ -113,6 +113,8 @@ pub struct Pane {
     /// What tmux on the pane's machine says it runs, and where (the daemon's terminal_info):
     /// #{pane_current_command}, #{pane_current_path}, #{pane_pid}, #{pane_tty}.
     pub fg_command: Option<String>,
+    /// The shell command supplied at creation or respawn, retained after the process exits.
+    pub start_command: Option<String>,
     pub live_path: Option<String>,
     pub remote_pid: Option<u64>,
     pub remote_tty: Option<String>,
@@ -230,6 +232,17 @@ impl Handler for TmuxScreen<'_> {
         }
         // screen_write_combine: ASCII never joins a cell, even after a ZWJ.
         if c.is_ascii() { self.0.input(c); return }
+        // tmux clips a wide glyph in a one-column pane and leaves its cursor on
+        // that cell. Alacritty's normal wide path requires a second spacer cell.
+        if self.0.columns() == 1 && c.width() == Some(2) {
+            self.0.input(' ');
+            let grid = self.0.grid_mut();
+            let point = grid.cursor.point;
+            grid[point].c = c;
+            grid[point].flags.insert(Flags::WIDE_CHAR);
+            grid.cursor.input_needs_wrap = false;
+            return;
+        }
         let zero = c.width() == Some(0);
         let modifier = matches!(c, '\u{1f1e6}'..='\u{1f1ff}' | '\u{1f3fb}'..='\u{1f3ff}');
         let force_wide = c == '\u{fe0f}' || modifier;
@@ -420,7 +433,7 @@ impl Pane {
 impl Pane {
     pub fn new(id: u64, machine_id: &str, agent_id: &str, cols: u16, rows: u16) -> Pane {
         let listener = Listener::default();
-        let (cols, rows) = (cols.max(2), rows.max(2));
+        let (cols, rows) = (cols.max(1), rows.max(1));
         Pane {
             id,
             machine_id: machine_id.to_string(),
@@ -450,6 +463,7 @@ impl Pane {
             queued: Vec::new(),
             cwd: None,
             fg_command: None,
+            start_command: None,
             live_path: None,
             remote_pid: None,
             remote_tty: None,
@@ -482,8 +496,8 @@ impl Pane {
     }
 
     pub fn resize_local(&mut self, cols: u16, rows: u16) {
-        self.cols = cols.max(2);
-        self.rows = rows.max(2);
+        self.cols = cols.max(1);
+        self.rows = rows.max(1);
         self.term.resize(Size(self.cols, self.rows));
         if let Some(state) = &mut self.local { state.resize(self.cols as usize, self.rows as usize); }
     }
@@ -500,8 +514,8 @@ impl Pane {
 
     /// A keyframe: the whole screen again, from nothing, at the far pane's size.
     pub fn keyframe(&mut self, cols: u16, rows: u16, bytes: &[u8]) {
-        self.cols = cols.max(2);
-        self.rows = rows.max(2);
+        self.cols = cols.max(1);
+        self.rows = rows.max(1);
         self.term = Term::new(config(), &Size(self.cols, self.rows), self.listener.clone());
         self.parser = Processor::new();
         self.in_screen_title = false;
@@ -1085,6 +1099,39 @@ mod tests {
         assert_eq!(pane.term.grid()[Line(0)][Column(5)].c, '!');
         pane.feed(b"\x1b[?1049hZ\x1b[?1049l");
         assert_eq!(pane.term.grid()[Line(0)][Column(5)].c, '!');
+    }
+
+    #[test]
+    fn one_cell_grid_matches_native_size() {
+        use alacritty_terminal::index::{Column, Line};
+        let mut pane = Pane::new(1, "local", "tiny", 1, 1);
+        pane.enable_local();
+        pane.feed(b"TOP\x1b[1;1HBOTTOM>");
+        assert_eq!((pane.term.columns(), pane.term.screen_lines()), (1, 1));
+        assert_eq!(pane.term.grid()[Line(0)][Column(0)].c, '>');
+        pane.resize_local(80, 24);
+        pane.feed("\x1b[H中⚠️X".as_bytes());
+        pane.resize_local(1, 1);
+        pane.feed("\x1b[2J\x1b[H中X".as_bytes());
+        assert_eq!((pane.cols, pane.rows), (1, 1));
+        assert_eq!((pane.term.columns(), pane.term.screen_lines()), (1, 1));
+        assert_eq!(pane.term.grid()[Line(0)][Column(0)].c, 'X');
+        // At this clipped margin tmux's cursor stays at column zero, so a later
+        // wide scalar replaces the base instead of joining it as in a wider pane.
+        for (text, expected) in [("👍🏽", '🏽'), ("👨‍👩‍👧", '👧')] {
+            pane.feed(b"\x1b[2J\x1b[H");
+            pane.feed(text.as_bytes());
+            assert_eq!(pane.term.grid()[Line(0)][Column(0)].c, expected);
+        }
+        pane.feed("\x1b[H⚠️".as_bytes());
+        let snapshot = pane.local_snapshot(&[]);
+        let mut restored = Pane::new(2, "local", "copy", 80, 24);
+        restored.keyframe(1, 1, &snapshot);
+        assert_eq!((restored.term.columns(), restored.term.screen_lines()), (1, 1));
+        assert_eq!(restored.term.grid()[Line(0)][Column(0)].c, '⚠');
+        restored.resize_local(20, 4);
+        restored.feed("\x1b[H👍🏽X".as_bytes());
+        assert_eq!(restored.term.grid()[Line(0)][Column(2)].c, 'X');
     }
 
     #[test]

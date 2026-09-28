@@ -1174,6 +1174,7 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
     configure_local_shell(app, &machine, &mut payload);
     app.modal = None;
+    let start_command = command.clone();
     // The local supervisor starts commands directly and remembers them for respawn.
     if local { payload["command"] = json!(command); }
     let command = if local { None } else { command };
@@ -1192,7 +1193,12 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
         Placement::Fill(tab) if !app.tabs.iter().any(|t| &t.id == tab) => app.sessions.iter().find(|s| s.tabs.iter().any(|t| &t.id == tab)).map(|s| s.id).unwrap_or(app.session_id),
         _ => app.session_id,
     };
-    app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(60)).await }, move |app, reply| {
+    app.spawn(async move {
+        link.rpc("agent_create", payload, Duration::from_secs(60)).await.map(|mut reply| {
+            if reply.get("agent").is_some() { reply["agent"]["startCommand"] = json!(start_command); }
+            reply
+        })
+    }, move |app, reply| {
         if session != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|s| s.id == session) {
             let back = app.session_id;
             app.swap_back = Some(back);
@@ -1247,7 +1253,10 @@ fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Res
                 }
                 if let Some((w, pane)) = app.find_pane(&machine, id) {
                     app.last_made = Some((app.tabs[w].id.clone(), pane));
-                    if let Some(p) = app.panes.get_mut(&pane) { p.queued.extend(typed) }
+                    if let Some(p) = app.panes.get_mut(&pane) {
+                        p.queued.extend(typed);
+                        p.start_command = reply.pointer("/agent/startCommand").and_then(serde_json::Value::as_str).map(str::to_string);
+                    }
                     // -P: what was made, printed (to the shell waiting on it).
                     if let Some(fmt) = app.print_new.take() {
                         let line: String = crate::format::spans_for_pane(app, &fmt, w, pane, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect();

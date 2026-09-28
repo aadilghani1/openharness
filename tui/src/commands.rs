@@ -284,11 +284,18 @@ fn pane_alive(app: &App, p: u64) -> bool {
 
 /// Restart the harness in a pane (respawn-pane, respawn-window).
 fn respawn(app: &mut App, p: u64, command: Option<String>, cwd: Option<String>) {
+    let start_command = command.clone();
     let Some((machine, agent)) = app.panes.get(&p).map(|x| (x.machine_id.clone(), x.agent_id.clone())) else { return };
     let Some(link) = app.link(&machine) else { return app.say("That machine is not connected", theme::WARN) };
     if crate::local::is_local(&machine) {
         app.spawn(async move { link.rpc("agent_restart", serde_json::json!({"agentId":agent,"command":command,"cwd":cwd}), std::time::Duration::from_secs(30)).await }, move |app, reply| match reply {
-            Ok(_) => { if let Some(pane) = app.panes.get_mut(&p) { pane.dead = None; } app.relist(&machine); app.open_stream(p, true); }
+            Ok(_) => {
+                if let Some(pane) = app.panes.get_mut(&p) {
+                    pane.dead = None;
+                    if start_command.is_some() { pane.start_command = start_command; }
+                }
+                app.relist(&machine); app.open_stream(p, true);
+            }
             Err(e) => app.error(format!("respawn pane failed: {e}")),
         });
         return;
@@ -303,6 +310,7 @@ fn respawn(app: &mut App, p: u64, command: Option<String>, cwd: Option<String>) 
     });
     app.spawn(async move { link.rpc("agent_restart", serde_json::json!({ "agentId": agent }), std::time::Duration::from_secs(120)).await.map(|r| (r, link, agent)) }, move |app, reply| match reply {
         Ok((_, link, agent)) => {
+            if shell && start_command.is_some() { if let Some(pane) = app.panes.get_mut(&p) { pane.start_command = start_command; } }
             if let Some(text) = typed { link.send("message", serde_json::json!({ "agentId": agent, "content": text })); }
             app.relist(&machine)
         }
@@ -2844,7 +2852,14 @@ fn run_words_in(app: &mut App, words: &[String]) {
             let panes = app.tabs[w].panes();
             if !flag(words, "-k") && panes.iter().any(|p| pane_alive(app, *p)) { return app.error(format!("respawn window failed: window {}:{} still active", app.session_name(), app.win_num(w))) }
             let (command, cwd) = (shell_command(words), opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty()));
-            for p in panes { respawn(app, p, command.clone(), cwd.clone()) }
+            // spawn_window keeps the first pane, discards the other splits, and selects
+            // this window. respawn-pane leaves both the layout and selection alone.
+            if let Some(&first) = panes.first() {
+                for p in panes.into_iter().skip(1) { app.close_pane(p) }
+                app.tabs[w].set_active(first);
+                respawn(app, first, command, cwd);
+            }
+            app.select_tab(w);
         }
         "set-buffer" => {
             // tmux's set-buffer [-aw] [-b buffer-name] [-n new-buffer-name] data: -n renames (the

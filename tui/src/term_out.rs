@@ -224,14 +224,11 @@ static COLOURS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new
 pub fn set_colours(n: u32) { COLOURS.store(n, std::sync::atomic::Ordering::Relaxed) }
 
 /// The terminal's colours from its name and what it says of itself, and what the config says of
-/// it: 24-bit with COLORTERM truecolor or 24bit, a `-direct` terminal, or terminal-features' RGB
-/// (terminal-overrides' Tc or RGB) for its name — and for a 256-colour one, which tmux asks what
-/// it is (XDA) and finds 24-bit in every such terminal it knows (iTerm2, kitty, WezTerm, Ghostty,
-/// foot, tmux…); hn cannot ask, so takes it at that, except Terminal.app, which does not answer
-/// and gets the 256. Else 16 for a 16-colour one, 8 for xterm, screen, linux and their kin, none
-/// for vt100 and dumb.
+/// it: 24-bit with COLORTERM truecolor or 24bit, a `-direct` terminal, an explicit RGB
+/// feature/override, or a recognized terminal name. A query still awaiting a reply leaves
+/// the TERM entry's colour limit intact. Else 16 for a 16-colour one, 8 for xterm, screen,
+/// linux and their kin, none for vt100 and dumb.
 pub fn colours_for(term: &str, colorterm: &str, features: &[String], overrides: &[String]) -> u32 {
-    let apple = std::env::var("TERM_PROGRAM").as_deref() == Ok("Apple_Terminal");
     let says = |list: &[String], caps: &[&str]| list.iter().any(|f| {
         let mut parts = f.split(':');
         let pat = parts.next().unwrap_or("");
@@ -242,9 +239,8 @@ pub fn colours_for(term: &str, colorterm: &str, features: &[String], overrides: 
     // over ssh from iTerm2): its features, as tmux adds them.
     if modern_terminal() { return 1 << 24 }
     if matches!(term, "xterm-kitty" | "xterm-ghostty" | "alacritty" | "wezterm" | "foot") { return 1 << 24 }
-    // (One that did not say — Terminal.app — gets the 256 its terminfo has; asked or not, a
-    // 256-colour one hn could not ask is taken as 24-bit but Terminal.app.)
-    if term.contains("256color") { return if apple || TERMINAL_ANSWERED.load(std::sync::atomic::Ordering::Relaxed) { 256 } else { 1 << 24 } }
+    // A missing or delayed capability reply is not evidence of RGB support.
+    if term.contains("256color") { return 256 }
     if term.contains("16color") { return 16 }
     if term.is_empty() { return 256 }
     if matches!(term, "vt100" | "vt102" | "vt220" | "dumb") { return 0 }
@@ -512,6 +508,8 @@ mod tests {
         assert_eq!(super::find_rgb(0, 64, 128), 24);
         assert_eq!(super::TO16[208], 9);
         assert_eq!(super::colours_for("xterm-16color", "", &[], &[]), 16);
+        assert_eq!(super::colours_for("xterm-256color", "", &[], &[]), 256);
+        assert_eq!(super::colours_for("screen-256color", "", &[], &[]), 256);
         assert_eq!(super::colours_for("xterm-256color", "truecolor", &[], &[]), 1 << 24);
         assert_eq!(super::colours_for("xterm-256color", "", &["xterm*:RGB".to_string()], &[]), 1 << 24);
         assert_eq!(super::colours_for("xterm", "", &[], &[]), 8);

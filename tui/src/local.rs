@@ -457,7 +457,7 @@ pub async fn run(_port: u16) -> io::Result<()> {
                             let foreground = if group > 0 { group as u32 } else { pid };
                             let cwd = (!shell.ended).then(|| process_cwd(foreground).or_else(|| process_cwd(pid))).flatten().or_else(|| shell.pane.cwd.clone()).unwrap_or_else(|| shell.agent["project"]["cwd"].as_str().unwrap_or("").to_string());
                             let command = if shell.ended { String::new() } else { process_name(foreground).unwrap_or_default() };
-                            reply(&mut clients, client, "terminal_info_result", &p, json!({"pid":pid,"tty":shell.tty,"path":cwd,"command":command}));
+                            reply(&mut clients, client, "terminal_info_result", &p, json!({"pid":pid,"tty":shell.tty,"path":cwd,"command":command,"startCommand":shell.payload["command"]}));
                         }
                         "fs_list_dir" => reply(&mut clients, client, "fs_list_dir_result", &p, json!({"path":std::env::var("HOME").unwrap_or_default(),"entries":[]})),
                         "message" => if let Some(shell) = p["agentId"].as_str().and_then(|id| shells.get(id)) {

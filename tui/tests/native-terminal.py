@@ -148,11 +148,17 @@ try:
     both('new-window', '-d', '-t', 'work:4', 'printf "HISTORY_MARK\\n"; exit 7')
     wait(lambda: same('list-panes', '-t', 'work:4', '-F', '#{pane_dead}:#{pane_dead_status}') == '1:7', 'retained exit 7')
     wait(lambda: same('show', '-gv', '@died') == '4:7:,', 'pane-died once')
+    original_command = same('display', '-p', '-t', 'work:4', '#{pane_start_command}')
+    assert 'HISTORY_MARK' in original_command
     assert 'HISTORY_MARK' in same('capture-pane', '-p', '-S', '-1000', '-t', 'work:4')
     both('respawn-window', '-t', 'work:4', 'printf "RESPAWN_MARK\\n"; exit 9')
     wait(lambda: same('show', '-gv', '@died') == '4:7:,4:9:,', 'respawn death')
+    assert same('display', '-p', '-t', 'work', '#{window_index}') == '4'
+    respawn_command = same('display', '-p', '-t', 'work:4', '#{pane_start_command}')
+    assert 'RESPAWN_MARK' in respawn_command
     both('respawn-pane', '-t', 'work:4')
     wait(lambda: same('show', '-gv', '@died') == '4:7:,4:9:,4:9:,', 'original command reused')
+    assert same('display', '-p', '-t', 'work:4', '#{pane_start_command}') == respawn_command
     history = same('capture-pane', '-p', '-S', '-1000', '-t', 'work:4')
     assert history.count('HISTORY_MARK') == 1 and history.count('RESPAWN_MARK') == 2
     both('set', '-g', 'remain-on-exit', 'failed')
@@ -174,11 +180,19 @@ try:
     ui = Terminal('hn', 'attach-session', '-t', 'work:4')
     wait(lambda: b'DEAD:9:' in ui.data and ui.proc.poll() is None, 'dead snapshot after holder crash')
     assert cli('hn', 'show', '-gv', '@died').stdout.strip() == died
+    assert same('display', '-p', '-t', 'work:4', '#{pane_start_command}') == respawn_command
     recovered = cli('hn', 'capture-pane', '-p', '-S', '-1000', '-t', 'work:4').stdout
     assert recovered.count('HISTORY_MARK') == 1 and recovered.count('RESPAWN_MARK') == 2
     both('respawn-pane', '-t', 'work:4', 'sleep 30')
     wait(lambda: same('list-panes', '-t', 'work:4', '-F', '#{pane_dead}:#{pane_dead_status}') == '0:', 'live respawn')
     same('respawn-pane', '-t', 'work:4', 'exit 8')
+    both('split-window', '-d', '-t', 'work:4', 'sleep 30')
+    first_id = same('list-panes', '-t', 'work:4', '-F', '#{pane_id}').splitlines()[0]
+    both('select-window', '-t', 'work:0')
+    both('respawn-window', '-k', '-t', 'work:4', 'printf "WHOLE_WINDOW\\n"; exit 9')
+    wait(lambda: same('list-panes', '-t', 'work:4', '-F', '#{pane_id}:#{pane_dead}:#{pane_dead_status}') == first_id + ':1:9', 'whole-window respawn keeps only the first pane')
+    assert same('display', '-p', '-t', 'work', '#{window_index}') == '4'
+    assert 'WHOLE_WINDOW' in same('display', '-p', '-t', 'work:4', '#{pane_start_command}')
     both('set', '-g', 'remain-on-exit', 'on')
     for index in range(10, 22):
         both('new-window', '-d', '-t', f'work:{index}', f'printf "FAST_{index}\\n"; exit 7')

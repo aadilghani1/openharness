@@ -12,6 +12,9 @@ Local changes are marked `hn` in the relevant source:
   so streamed snapshots retain overline.
 - `alacritty_terminal/src/term/cell.rs`: widen cell flags to retain blink and
   overline, including otherwise blank cells during scrollback reflow.
+- `alacritty_terminal/src/grid/resize.rs`: permit one-column panes with clipped
+  wide glyphs; avoid endlessly reflowing a two-cell glyph into a one-cell row
+  and restore its spacer when the pane grows.
 - `alacritty_terminal/src/term/mod.rs`: handle both blink variants (tmux treats
   them alike), blink reset and overline attributes in the cursor template.
 

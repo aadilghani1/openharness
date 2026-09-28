@@ -1255,7 +1255,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_dead_status" => pane.and_then(|p| p.dead.as_ref()).and_then(|e| e.status).map(|s| s.to_string()).unwrap_or_default(),
         "pane_dead_signal" => pane.and_then(|p| p.dead.as_ref()).and_then(|e| e.signal).map(|s| crate::local::signal_name(s)).unwrap_or_default(),
         "pane_dead_time" => pane.and_then(|p| p.dead.as_ref()).map(|e| e.time.to_string()).unwrap_or_default(),
-        "pane_start_command" => String::new(),
+        "pane_start_command" => pane.and_then(|p| p.start_command.as_deref()).map(crate::options::escape).unwrap_or_default(),
         // Its session group (new -t): none when it is in none (tmux's NULL), but _grouped.
         "session_group" | "session_group_size" | "session_group_list" | "session_group_attached" | "session_group_many_attached" | "session_group_attached_list" | "session_grouped" => app.session_group_value(app.session_id, name).unwrap_or_default(),
         // The sessions its window is in (link-window, a group).

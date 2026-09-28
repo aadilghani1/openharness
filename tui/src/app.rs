@@ -2051,6 +2051,7 @@ impl App {
             let Some(p) = app.panes.get_mut(&pane_id) else { return };
             let text = |k: &str| info.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
             p.fg_command = text("command");
+            if info.get("startCommand").is_some() { p.start_command = text("startCommand"); }
             p.live_path = text("path");
             p.remote_pid = info.get("pid").and_then(Value::as_u64);
             p.remote_tty = text("tty");
@@ -2991,7 +2992,7 @@ impl App {
     /// number, @id, layout, focus, zoom, and each pane's harness, whether hn made it (a shell, ended
     /// when its window is killed by whichever client does it), and its %id.
     pub fn window_json(&self, t: &Tab, num: Option<usize>) -> Value {
-        let panes: Vec<Value> = t.panes().iter().filter_map(|p| self.panes.get(p)).map(|p| json!([p.machine_id, p.agent_id, self.shells.contains(&(p.machine_id.clone(), p.agent_id.clone())), p.id, p.dead])).collect();
+        let panes: Vec<Value> = t.panes().iter().filter_map(|p| self.panes.get(p)).map(|p| json!([p.machine_id, p.agent_id, self.shells.contains(&(p.machine_id.clone(), p.agent_id.clone())), p.id, p.dead, p.start_command])).collect();
         let focus = t.focus.and_then(|f| t.panes().iter().position(|p| *p == f)).unwrap_or(0);
         // Its own options (set -w) and its panes' (set -p), kept with it wherever it goes.
         let options = self.options.windows.get(&t.id).cloned().unwrap_or_default();
@@ -3097,7 +3098,10 @@ impl App {
         let kept: Vec<Option<u64>> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter(|p| p.get(1).is_some()).map(|p| p.get(3).and_then(Value::as_u64)).collect()).unwrap_or_default();
         let ids: Vec<u64> = panes.iter().enumerate().map(|(i, (m, a))| self.new_pane_as(m, a, kept.get(i).copied().flatten())).collect();
         for (id, saved) in ids.iter().zip(win["panes"].as_array().into_iter().flatten()) {
-            if let Some(pane) = self.panes.get_mut(id) { pane.dead = serde_json::from_value(saved.get(4).cloned().unwrap_or(Value::Null)).ok(); }
+            if let Some(pane) = self.panes.get_mut(id) {
+                pane.dead = serde_json::from_value(saved.get(4).cloned().unwrap_or(Value::Null)).ok();
+                pane.start_command = saved.get(5).and_then(Value::as_str).map(str::to_string);
+            }
         }
         // And the window its id (@N).
         let name = win.get("name").and_then(Value::as_str).unwrap_or("");
