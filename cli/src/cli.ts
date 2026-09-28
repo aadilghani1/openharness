@@ -42,6 +42,7 @@ import { DialLog } from './cable/dialLog.js'
 import { buildLogBundle, bundleFileName, redactSecretsInText } from './lib/logBundle.js'
 import { CableSession } from './cable/cableSession.js'
 import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor } from './cable/cableHost.js'
+import { terminalActivity } from './cable/terminalActivity.js'
 
 import { MachineListCache, machineListCachePath, withStaleMarker } from './device/machineList.js'
 import { DeviceLink } from './device/deviceLink.js'
@@ -158,6 +159,9 @@ import { autonomousDeviceLocalRequest } from './lib/autonomous-device/localApi.j
 import { runAutonomousDeviceCommand } from './lib/autonomous-device/command.js'
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from './localWsServer.js'
 import { createWindowRouter } from './cable/windowRoute.js'
+import { WindowSelection } from './cable/windowSelection.js'
+import { WindowVisit } from './cable/windowVisit.js'
+import { WindowForm } from './cable/windowForm.js'
 import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
 import { foldTranscript, lastTurnTextFromRawLines, lineToEvents, newTurnState, type LiveEvent, type TurnState } from './lib/normalize.js'
@@ -1813,6 +1817,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let autonomousDeviceDirect: AutonomousDeviceDirect | undefined
   let deviceStoreRef: ReturnType<typeof createDeviceStore> | undefined
   let autonomousDeviceService: AutonomousDeviceService | undefined
+  let appFormWindow: { machineId: string; connId: string } | undefined
   let appVoiceFocus: { machineId: string; agentId: string; connId: string } | undefined
   let backendRef: BackendSocket | undefined
   let fullReconcile: (announceDevice?: boolean) => Promise<void> = async () => {}
@@ -3995,18 +4000,43 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     log: (line) => console.log(`[cable] ${line}`),
   })
 
+  const windowSelection: WindowSelection = new WindowSelection({
+    focus: () => appVoiceFocus,
+    send: (connId, payload) => localWsServer.sendToWindow(connId, { type: 'dial_selection', payload }),
+  })
+  const windowForm = new WindowForm({
+    focus: () => appFormWindow,
+    send: (connId, payload) => localWsServer.sendToWindow(connId, { type: 'dial_form', payload }),
+    log: (line) => console.log(`[cable] ${line}`),
+  })
+  const windowVisit = new WindowVisit({
+    focus: () => appVoiceFocus,
+    send: (connId, payload) => localWsServer.sendToWindow(connId, { type: 'dial_visit', payload }),
+  })
   const localWsServer = attachLocalWsServer(hookServer, {
     localSocketServer: localSocket?.server ?? null,
     shareRelay,
+    onSelectionReply: (connId, machineId, payload) => windowSelection.reply(connId, machineId, payload),
+    onVisitReply: (connId, machineId, payload) => windowVisit.reply(connId, machineId, payload),
+    onFormReply: (connId, machineId, payload) => windowForm.reply(connId, machineId, payload),
+    onAppDisconnect: (machineId, connId) => {
+      if (appFormWindow?.connId === connId) appFormWindow = undefined
+      if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
+      windowForm.disconnected(connId)
+      windowSelection.focusChanged()
+      autonomousDeviceService?.appFocus(machineId, null, connId)
+    },
     // The window and the dial are one desk: opening an agent in the app brings the dial to it, switching
     // the dial's machine first when the app moved to another one.
     onDevicePrepareOpened: (operationId, agentId) => deviceStoreRef?.acknowledgeReveal(operationId, agentId),
     onAppFocusState: (machineId, agentId, connId, expectedRevision) => {
       // A delayed automatic selection cannot replace a newer explicit user choice.
       if (expectedRevision && autonomousDeviceService?.focusSnapshot().focusRevision !== expectedRevision) return false
+      appFormWindow = { machineId, connId }
       if (agentId === null) {
         if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
       } else appVoiceFocus = { machineId, agentId, connId }
+      windowSelection.focusChanged()
       autonomousDeviceService?.appFocus(machineId, agentId, connId)
     },
     onAppFocus: (machineId, agentId) => { void cableRef?.followApp(machineId, agentId) },
@@ -5952,6 +5982,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
   const cableHost = new DaemonCableHost({
+    activityText: async (agentId) => {
+      const session = registry.resolve(agentId)
+      if (!session || (session.engine !== 'claude' && session.engine !== 'codex')) return null
+      const screen = await terminals.capture(session, { mode: 'visible', ansi: false })
+      return terminalActivity(session.engine, screen.state === 'succeeded' ? screen.value : null)
+    },
     machineName: () => { try { return readFileSync(MACHINE_NAME_FILE, 'utf8').trim() || 'This machine' } catch { return 'This machine' } },
     machineId: () => backend.machineId,
     computerId: () => computerId(),
@@ -5964,6 +6000,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // — keyed by the REQUEST id rather than by the question key `onQuestionAnswer` expects, so the answer
     // named a question that does not exist.
     answer: (agentId, requestId, answers) => { void backend.onQuestionAnswer?.({ agentId, requestId, answers }) },
+    answerReviewed: async answer => (await questions.answer({ agentId: answer.agentId, requestId: answer.requestId,
+      answers: answer.answers, expectedQuestions: answer.questions, selectedLabels: answer.selections, freeTextKeys: answer.freeTextKeys })).ok,
     recent: (id, n) => mirror.recent(registry.resolve(id)?.sessionId || id, n),
     recentAsks: (id) => mirror.recentAsks(registry.resolve(id)?.sessionId || id),
     runtimeProfile: (session) => runtimeProfiles.selectedModel(session),
@@ -6001,6 +6039,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     dialStatus: (status) => backend.sendLocal({ type: 'dial_status', payload: status }),
     // Words spoken on the overview belong to whichever agent the window's palette picks.
     routeInWindow: (text, cmd) => windowRouter.ask(text, cmd),
+    selectPassage: command => windowSelection.command(command),
+    clearSelection: () => windowSelection.cancel(),
+    visit: command => windowVisit.command(command),
+    clearVisit: () => windowVisit.cancel(),
+    form: command => windowForm.command(command),
+    clearForm: () => windowForm.clear(),
     log: (line) => console.log(`[cable] ${line}`),
   }, fleet)
   cableHostRef = cableHost
@@ -6127,6 +6171,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // the wheel is not pointed at still belongs to a tile the user can see — and dropping it is what a
     // tile that never leaves "Working…" looks like from the outside.
 
+    if (event.kind === 'questionClosed') { void cable.questionClose(event.agentId, event.requestId); return }
     if (event.kind === 'question') { void cable.question(event.agentId, event.requestId, event.questions); return }
     if (event.kind === 'processing') void cable.turnStarted(event.agentId, event.text)
     else if (event.kind === 'done') void cable.turnDone(event.agentId)

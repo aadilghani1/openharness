@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "esp_task_wdt.h"
 #include "lvgl.h"
+#include "ui_perf.h"
 
 
 static const char *TAG = "display";
