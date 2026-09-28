@@ -53,17 +53,24 @@ export function pairEngineArgs(engine: PairEngine, mcpCommand: readonly string[]
   ]
 }
 
-/** The instructions: who it is (the paired daemon's roster entry), what it may do, and the floor. */
-export function pairInstructions(daemonId: string): string {
+/**
+ * The instructions: who it is (the paired individual: its species' roster entry, and the name the person gave
+ * it, `pip the tim`), what it may do, and the floor.
+ */
+export function pairInstructions(daemonId: string, name: string | null = null): string {
   const daemon = rosterDaemon(daemonId)
   const lines = daemon ? Object.entries(daemon.lines).map(([mood, line]) => `- ${mood}: "${line}"`).join('\n') : ''
   const family = daemon?.family?.map(([name, year]) => `${name} (${year})`).join(' -> ') ?? ''
   const tools = CONTROL_TOOLS.map((tool) => `- \`${tool.name}\` (${tool.kind}): ${tool.description}`).join('\n')
-  return `# You are ${daemonId}
+  const who = personaName(daemonId, name)
+  const named = who !== daemonId
+    ? `\nThat is the name the person gave you when you hatched: you are one ${daemonId} of many, and this one is theirs.\n`
+    : ''
+  return `# You are ${who}
 
-You are **${daemonId}**, the person's paired daemon in Harness: a small creature that lives in their
+You are **${who}**, the person's paired daemon in Harness: a small creature that lives in their
 terminal status line and watches every harness (coding agent session) on every one of their machines.
-${daemon ? `\n${daemon.lore}\nFamily: ${family}.\nYour first words were: "${daemon.first}"\n` : ''}
+${named}${daemon ? `\n${daemon.lore}\nFamily: ${family}.\nYour first words were: "${daemon.first}"\n` : ''}
 Your voice, from your own status-line lines (\`{who}\` a harness, \`{q}\` a question, \`{recap}\` what a
 turn did, \`{n}\` a count, \`{summary}\` a brief):
 ${lines}
@@ -107,14 +114,23 @@ Everything you do is journaled on the machine that owns the harness, with you as
 `
 }
 
-export interface PairPackageInput { daemonId: string; engine: PairEngine; mcpCommand: readonly string[]; tokenFile: string }
+/**
+ * What the pair is called in its instructions: the individual's name (`pip the tim`, pair/individuals.ts),
+ * kept to letters, digits, spaces and `.'_-#` so a name cannot shape the text around it; else the species.
+ */
+export function personaName(daemonId: string, name: string | null): string {
+  const clean = (name ?? '').replace(/[^A-Za-z0-9 .'_#-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 48)
+  return clean || daemonId
+}
+
+export interface PairPackageInput { daemonId: string; name?: string | null; engine: PairEngine; mcpCommand: readonly string[]; tokenFile: string }
 
 /** The package files for this daemon on this engine. Its revision changes when any of that does. */
 export function pairPackage(input: PairPackageInput): BundledFiles {
   const manifest = {
     spec: 1,
     id: PAIR_HARNESS_ID,
-    name: `Pair: ${input.daemonId}`.slice(0, 40),
+    name: `Pair: ${personaName(input.daemonId, input.name ?? null)}`.slice(0, 40),
     description: 'Your paired daemon, as a conversation: it watches every harness and drives them within the autonomy you set.',
     category: 'Pair',
     author: 'Autonomous',
@@ -131,7 +147,7 @@ export function pairPackage(input: PairPackageInput): BundledFiles {
   }
   return {
     'harness.json': { content: `${JSON.stringify(manifest, null, 2)}\n`, executable: false },
-    'AGENTS.md': { content: pairInstructions(input.daemonId), executable: false },
+    'AGENTS.md': { content: pairInstructions(input.daemonId, input.name ?? null), executable: false },
   }
 }
 
@@ -142,7 +158,10 @@ export function packageRevision(files: BundledFiles): string {
 export interface PairHarnessRow { agentId: string; status: 'live' | 'stopped' }
 
 export interface PairHarnessDeps {
+  /** The paired individual's species (a roster id). */
   pairedDaemon: () => string | null
+  /** What the person calls it, `pip the tim`; null or absent: its species. */
+  pairedName?: () => string | null
   /** An installed engine to run it on, Claude first; null when neither is here. */
   engine: () => Promise<PairEngine | null>
   /** How this machine runs `harness` (the launcher, else this process's node and cli.js). */
@@ -192,14 +211,14 @@ export class PairHarness {
     if (!daemonId) return { ok: false, error: 'PAIR_OFF', detail: 'Nothing is paired: hatch or pair a daemon first.' }
     const engine = await this.deps.engine()
     if (!engine) return { ok: false, error: 'NO_ENGINE', detail: 'The pair runs on Claude Code or Codex; neither is installed here.' }
-    const files = pairPackage({ daemonId, engine, mcpCommand: this.deps.mcpCommand(), tokenFile: this.deps.token.file })
+    const files = pairPackage({ daemonId, name: this.deps.pairedName?.() ?? null, engine, mcpCommand: this.deps.mcpCommand(), tokenFile: this.deps.token.file })
     if (!this.deps.install(files)) return { ok: false, error: 'INSTALL_FAILED', detail: 'The pair harness could not be installed. Try again.' }
     const revision = packageRevision(files)
     const saved = this.saved()
     const rows = this.deps.find()
     const current = rows.find((row) => row.agentId === saved?.agentId) ?? null
     this.touch()
-    // Another daemon, another engine, a newer CLI: another harness. The old one is paused, never deleted.
+    // Another daemon (or its new name), another engine, a newer CLI: another harness. The old one is paused, never deleted.
     if (current && saved?.revision !== revision) {
       if (current.status === 'live') await this.deps.stop(current.agentId).catch(() => {})
     } else if (current?.status === 'live') {
