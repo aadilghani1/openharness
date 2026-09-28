@@ -24,9 +24,11 @@ reviewed-question and spoken-answer validation and adds only the missing guards.
 The process-launch portability integration cases now have an explicit 15-second
 test budget. A full run under simultaneous native-build load exceeded the old
 five-second unit-test default. Production subprocess deadlines are unchanged.
-The Cursor hook fixture also pins both of its temporary config/data roots:
-Linux CI exposed its accidental reliance on an unset host XDG config directory.
-The existing test fails with a temporary XDG root before this isolation fix.
+Linux CI also exposed the Cursor hook fixture's accidental reliance on an unset
+host XDG config directory. The existing test fails with a temporary XDG root
+before the isolation fix. Equivalent lockfile and Cursor-fixture fixes landed
+in main with PR #365 during verification; the final rebase retains main's
+versions and drops the duplicate repair commits.
 
 ## Validation
 
