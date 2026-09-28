@@ -30,65 +30,93 @@ is `docs/research/2026-09-27-daemons-rollout.md`.
   stays the creature. Nothing is renamed; it is only a word in docs and a few UI strings.
 - All PRs are drafts titled `WIP:`. Do not merge.
 
-## Branches and PRs
+## Continuation completed (2026-09-27)
+
+Step 2 is implemented and validated. The server, CLI and phone WIP branches have been integrated
+into `daemons`; the completed base has been integrated into desktop and hn. Keep all three PRs as
+**WIP drafts**. Deployment and enabling the feature are still separate work under the rollout plan.
 
 | branch | PR | state |
 |---|---|---|
-| `daemons` | #369 (base main) | Green. Synced with main (merge 2f19cd72). Drop init, plates, colour, held drops, and step 1 of the eggs/individuals spec (the contract: shader materials, egg model, trait-aware models, roster catalogues and one-liners, references, fixtures, cards, README; 5483f911..9707a57f). This handoff. |
-| `daemons-desktop` | #370 (base daemons) | Synced with main and the contract (merge 34e77980). **WIP cfae86b9: unfinished**, may not compile. |
-| `hn-daemons` | #375 (base ship-hn) | Synced with ship-hn (a40236ae) and the contract (merge 4201a737). **WIP c5668e3c: unfinished**, may not compile. |
-| `daemons-server` | none | From `daemons` 9707a57f. **WIP 14a94361: unfinished** (zoo individuals, draw rules, tests half-updated). Merge into `daemons` when green. |
-| `daemons-cli` | none | From `daemons` 9707a57f. **WIP b6dddf93: unfinished** (the individual-art service: plateRender.ts, individuals.ts, a worker, frames). Merge into `daemons` when green. |
-| `daemons-phone` | none | From `daemons` 9707a57f. **WIP c46b7dc3: unfinished** (phone eggs and individuals). Merge into `daemons` when green. |
+| `daemons` | #369 (base main) | Server, CLI and phone complete. Backend and CLI suites, phone suite, type checks, CLI builds and generated-contract check pass. |
+| `daemons-desktop` | #370 (base daemons) | Complete. All 236 daemon tests and targeted analysis pass. The full suite has the same 32 unrelated failures documented below. |
+| `hn-daemons` | #375 (base ship-hn) | Complete. 138 Rust tests, build, CLI type check, generated-contract check and isolated mock end-to-end suite pass. |
+| `daemons-server`, `daemons-cli`, `daemons-phone` | none | Original WIP source branches; their work is integrated into `daemons`. Continue from the three PR branches above. |
 | `fix/pane-close-launch-feedback` | #366 | Separate fix, draft. |
-| `fix/stale-question-answer` | #367 | Separate fix (question-answer safety), draft; land before #369. |
+| `fix/stale-question-answer` | #367 | Separate question-answer safety fix, draft; land before #369. |
 
-The WIP commits were saved when the agents building them stopped at a usage limit mid-task; each
-commit message says so. Local backup refs of the branches before the sync exist only on the original
-machine (`backup/*-20260927`).
+The main continuation commits are `d7bd9c2e` (base/phone/CLI), `e73b0c68` (desktop), and
+`a48cb30e` (hn). The original WIP commits are preserved in their ancestry. Existing sibling
+worktrees were left intact; continuation work used isolated branches and worktrees.
 
-## What is left (step 2 of the spec)
+## What is complete
 
-Read the spec's "Step 2 protocol" first: it fixes the zoo shape, the ops, and the plate frames so the
-parts can be built in parallel.
+- **Server:** individuals with crypto seeds and species serials, UID-based pairing/naming, legacy
+  seed-0 reads, the 256-individual limit, first-four-new and ninth-new draw rules. Repeated species
+  hatch into new individuals without merging XP. Schema and race tests use the new contract.
+- **Harness background process:** art is drawn by a worker in development and bundled builds,
+  cached under the adapter data directory by source/species/seed, and pre-rendered for new hatches.
+  Local requests require the Unix socket; phone requests and replies use sealed application frames.
+  Disabling daemons drops pending work and stale results. The pair brain selects individuals by UID.
+- **Phone:** earning eggs, opening animation, optional hatch names, individuals grouped by species,
+  trait logs/flags/rarity, UID pairing and individual art with a recoloured species fallback. Late
+  responses from a former account are discarded; malformed art is rejected. Art requests allow time
+  for a first render and can try another connected machine.
+- **Desktop:** completed the same egg/individual flows; corrected naming and pairing to send only
+  the strict UID-based payloads, validated individual art responses, and fixed hatch notifications
+  during widget construction. Regression tests name/pair two tims independently and compare all
+  shared egg, trait, sprite and colour fixtures.
+- **hn:** individual status sprites and fidgety timing, opening eggs, optional names, grouped
+  collection/trait logs, selection and pairing by UID, individual art on the private socket, and
+  named individual cards. Name prompts remain visible on small terminals; cards and collections
+  scroll. Mock integration tests hatch/name two tims, switch their pairing, verify trusted art
+  requests, exercise reduced motion and a 30-by-8 hatch, and check off/signed-out behavior.
 
-1. **Server** (`daemons-server`, backend/): the zoo holds individuals (uid, id, seed, serial, name,
-   shiny, xp, bond, version, hatched, egg); `paired` is a uid; hatch adds a new individual even for an
-   owned species; first-4-new and 9th-new rules; ops by uid (`pair`, `zoo.nickname`); old zoos read as
-   individuals (seed 0, deterministic uid); limit 256; tests for all of it; full backend suite green.
-2. **Harness background process** (`daemons-cli`, cli/): render an individual's plates with the
-   generated models (`cli/src/pair/plates/*.g.ts`, `bakeModel`) off the event loop, cache on disk keyed
-   by (PLATE_SOURCE, species, seed), pre-render at hatch, serve `daemon_plate_get`/`daemon_plate` on the
-   Unix socket and sealed `pair_plate_get`/`pair_plate` for the phone (applicationFrames.ts, never
-   core.ts); the pair brain reads the paired uid's species and name. Full cli suite green.
-3. **Phone** (`daemons-phone`, mobile/), **desktop** (`daemons-desktop`, desktop/), **hn**
-   (`hn-daemons`, tui/): follow the contract (the roster no longer has `rules.nest`, `rules.egg`,
-   `eggs[kind].look`; frames.json has no `nests`), port the references and match every frames.json
-   fixture, eggs as plates with the cracking stages and one-liners, the hatch sequence and the optional
-   name prompt, the zoo as individuals grouped by species with flags, `1 in N` and a trait log, the
-   status line's individual one-liner, individual art from the harness process with the recoloured
-   species plate as the fallback.
-4. Merge `daemons-server`, `daemons-cli`, `daemons-phone` into `daemons`; merge `daemons` into
-   `daemons-desktop` and `hn-daemons`; run every suite; push the three PR branches (drafts, WIP).
-5. Later: release per the rollout doc (server dark, CLI, apps, then on for the founder via
-   `HARNESS_DAEMONS_USERS`).
+Every client matches the shared `frames.json` references. The pinned E2EE `core.ts` is unchanged.
+Desktop and phone screens were also rendered and inspected using mocked widget tests, including
+the desktop two-tim collection and the phone at 320 points with large text. No real desktop app was
+launched.
 
-## How to build and test
+## Validation and how to repeat it
 
-- Roster and copies: `node daemons/tools/generate.mjs` (writes; baking plates takes minutes, cached by
-  a hash), `--check` in CI (~10 s). Cards: `node --test daemons/tools/card.test.mjs`.
-- Backend: `cd backend && npm test` (755 passed on `daemons`); `npx tsc --noEmit` shows 5 Prisma
-  `harnessSession` errors that come from main.
-- CLI: `cd cli && env -u TMUX -u TMUX_PANE npx vitest run` with the cli's stub tmux; one known flaky
-  test in `hookNotify.spec.ts`.
-- Phone: Flutter 3.47.2 (`flutter test` in mobile/; 609 passed after the sync).
-- Desktop: Flutter 3.47.2 (`flutter test` in desktop/; 32 failures also fail on main 93f148d6:
-  workspace_account_lifecycle x8, terminal_panel_presentation x4, workspace_expiry_screen x4,
-  signout_recovery x2, boot_flow_widget x4, machines_manager x4, and one each in orchestrator,
-  local_cli_discovery, environment_setup_screen, open_picker_rendering, first_workspace,
-  environment_recheck_timer).
-- hn: `cd tui && env -u TMUX cargo test` (123 passed after the sync) and `tests/e2e.sh` against its
-  mock (set `HN_TMPDIR` to a fresh temp dir so its sockets stay out of the shared /tmp/hn-<uid>).
+| area | latest result | command |
+|---|---|---|
+| Contract | current | `node daemons/tools/generate.mjs --check` |
+| Cards | 13 passed | `node --test daemons/tools/card.test.mjs` |
+| Backend | 993 passed, 11 skipped | `cd backend && npm test` |
+| Backend types | clean after local Prisma generation | `npx prisma generate` then `npx tsc --noEmit` in backend/ |
+| CLI | 6312 passed, 63 skipped | `npx vitest run --maxWorkers=1` in cli/, with the isolation below |
+| CLI types/builds | clean | `npx tsc --noEmit`, `node build.mjs`, `node build-bundle.mjs` in cli/ |
+| Phone | 623 passed, 24 skipped | Flutter 3.47.2, `flutter test` in mobile/ |
+| Phone feature/E2EE recheck | 139 passed; targeted analysis clean | daemon tests plus encrypted-down-type tests; analyze daemon/phone/state files |
+| Desktop full suite | 3988 passed, 12 skipped, 32 known baseline failures | Flutter 3.47.2, `flutter test` in desktop/ |
+| Desktop final daemon suite | 236 passed; targeted analysis clean | `flutter test test/daemons test/daemon_workspace_test.dart test/daemon_review_render_test.dart test/daemon_off_test.dart` |
+| hn | 138 passed; build succeeded | `env -u TMUX -u TMUX_PANE cargo test --offline`, `cargo build --offline` in tui/ |
+| hn integration | all checks passed | `tests/e2e.sh` in tui/ against its mock, with fresh `HN_TMPDIR` and `HARNESS_TUI_BIN` pointing at the built binary |
+
+The desktop full run preceded the final additional two-tim render/interaction test; that test and
+the complete daemon suite passed afterward. The 32 full-suite failures match the previously
+recorded main baseline: workspace_account_lifecycle x8, terminal_panel_presentation x4,
+workspace_expiry_screen x4, signout_recovery x2, boot_flow_widget x4, machines_manager x4, and one
+each in orchestrator, local_cli_discovery, environment_setup_screen, open_picker_rendering,
+first_workspace and environment_recheck_timer. These are not new daemon failures.
+
+Use a stub `tmux` first on PATH for unit/widget suites and unset `TMUX`, `TMUX_PANE`,
+`RUN_REAL_TMUX_DISCOVERY` and `RUN_REAL_TMUX_STREAM`. CLI Vitest isolates adapter/runtime state in
+its setup. The complete CLI suite passed with one worker; the parallel run hit timing-sensitive
+failures, so use `--maxWorkers=1` for this validation. No production daemon is needed.
+
+For hn's integration test, use the real tmux executable only through the script's private
+`tmux -L harness-tui-e2e-<pid>` server, with `TMUX`/`TMUX_PANE` unset and `HN_TMPDIR` set to a fresh
+temporary directory. The script supplies temporary HOME/adapter data, starts only its mock, and
+cleans up its own server/processes. `E2E_SNAPSHOTS` keeps the screens and card. Widget screenshots
+use `HARNESS_DAEMON_CAPTURE_DIR`.
+
+## What is left
+
+Release later according to `2026-09-27-daemons-rollout.md`: land the prerequisite fixes, server dark,
+CLI, apps, then enable for the founder via `HARNESS_DAEMONS_USERS`. Keep the current PRs as drafts;
+this continuation does not authorize merging them or launching a worktree app against real state.
 
 ## Safety rules for whoever continues
 
