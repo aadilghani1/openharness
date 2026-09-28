@@ -140,8 +140,14 @@ models first, followed by models served on the user's machines. Keep the
 undownloaded catalog collapsed behind **[ Get models ]**; Enter expands it in
 place and selects the first catalog row. **[ Hide catalog ]** collapses it.
 Explicit searches also include matching catalog models. Shared rows show only
-the model and sharing machine's label, separated by ` · `. Filtering preserves
-the groups.
+the model and sharing machine's label, separated by ` · `. An API heads its models:
+`▸`/`▾` before its name says whether they are listed, and the end of its row says
+how many (`378 models`) or `Tools` for one no harness can run on. Its models
+stay folded until Enter on its row, and explicit searches include matching ones,
+always under their own API and never interleaved with another's. Model rows are
+indented under the API's name, show only the model, and say **Use** for a
+harness on this computer. Filtering
+preserves the groups.
 
 A plain right-aligned **Use** identifies a model the current pane can use;
 **Get** identifies a model that can be downloaded. Other model rows are dimmed,
@@ -169,7 +175,10 @@ uses it, on a Get row gets it, on a machine enters management, and on a harness
 opens it. Arrow keys walk controls while the right pane owns focus; they must
 not change the resource behind them. Left/Right retain normal cursor movement
 in text fields, and move between adjacent buttons. Enter/Space activate focused
-buttons. Escape backs out of an inline form, then returns to search while
+buttons. An inline form with text fields (Cmd-P's API editor) is the one place
+Tab stays inside the pane: it walks the fields, then reaches the buttons, and
+the next Tab leaves for the list; Shift-Tab walks back and leaves from the
+first field. Escape backs out of an inline form, then returns to search while
 preserving the query and selection. Hints use the live keymap. Only the active
 pane shows a selection highlight.
 Typing selects the first match and replaces the hints with its preview. Arrows

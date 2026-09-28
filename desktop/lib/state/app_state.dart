@@ -5541,12 +5541,23 @@ class AppNotifier extends ChangeNotifier {
   /// model, a busy agent, a machine that cannot resolve its Local models — so nothing in the
   /// terminal ever says why, and until this existed the click simply did nothing. One sentence, in
   /// the app's own words (`retargetRefusalMessage`); the daemon's detail names the grid.
-  void _reportRetargetRefusal(String machineId, String agentId, String code) {
+  void _reportRetargetRefusal(
+    String machineId,
+    String agentId,
+    String code, {
+    bool api = false,
+    String? detail,
+  }) {
     final agent = machineStates[machineId]?.agents
         .where((a) => a.id == agentId)
         .firstOrNull;
     final label = engineIdentity(agent?.engine).label;
-    _lastError = retargetRefusalMessage(code, engineLabel: label);
+    _lastError = retargetRefusalMessage(
+      code,
+      engineLabel: label,
+      api: api,
+      detail: detail,
+    );
     _lastErrorRetryable = false;
     notifyListeners();
   }
@@ -5577,6 +5588,40 @@ class AppNotifier extends ChangeNotifier {
       );
     } on WsRequestFailure catch (failure) {
       _reportRetargetRefusal(machineId, agentId, failure.code);
+    } catch (_) {
+      // See `clearAgentGrid`: a transport failure is not a refusal, and the next frame is the truth.
+    }
+  }
+
+  /// Point one agent at [modelId] of the API saved as [connectionId] on this computer.
+  ///
+  /// Same rule as [retargetAgentToGridModel]: the app names the model, and the daemon reads the
+  /// endpoint and key from its own store — the key never reaches the app. Only an agent on this
+  /// computer can use its saved APIs; the daemon refuses any other.
+  Future<void> retargetAgentToApiModel(
+    String machineId,
+    String agentId, {
+    required String connectionId,
+    required String modelId,
+  }) async {
+    try {
+      await _conn(machineId).request(
+        'agent_retarget',
+        payload: {
+          'agentId': agentId,
+          'apiConnection': connectionId,
+          'apiModel': modelId,
+        },
+        timeout: const Duration(seconds: 40),
+      );
+    } on WsRequestFailure catch (failure) {
+      _reportRetargetRefusal(
+        machineId,
+        agentId,
+        failure.code,
+        api: true,
+        detail: failure.detail,
+      );
     } catch (_) {
       // See `clearAgentGrid`: a transport failure is not a refusal, and the next frame is the truth.
     }
@@ -5752,8 +5797,9 @@ class AppNotifier extends ChangeNotifier {
 
   Future<Map<String, dynamic>> apiConnections(
     String machineId,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
     final machine = stateOf(machineId);
     if (machine == null ||
         machine.machine.isShared ||
@@ -5769,7 +5815,7 @@ class AppNotifier extends ChangeNotifier {
     return connection.request(
       'api_connections',
       payload: payload,
-      timeout: const Duration(seconds: 10),
+      timeout: timeout,
     );
   }
 
