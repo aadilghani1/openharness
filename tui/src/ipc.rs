@@ -38,10 +38,10 @@ pub fn mark_headless(socket: &std::path::Path) { let _ = std::fs::write(socket.w
 /// with no target goes, as tmux's cmd_find_best_client takes the client used last.
 pub fn mark_active() { if let Some(here) = here() { let _ = std::fs::write(here.with_extension("activity"), b""); } }
 
-/// Of this name's clients with a terminal, the one used last — when there are several.
+/// Of this name's clients with a terminal, the one used last, ahead of a detached server.
 pub fn busiest(name: &str) -> Option<PathBuf> {
     let attached: Vec<PathBuf> = clients_of(name).into_iter().filter(|p| !is_headless(p)).collect();
-    if attached.len() < 2 { return None }
+    if attached.is_empty() { return None }
     let when = |p: &PathBuf| std::fs::metadata(p.with_extension("activity")).and_then(|m| m.modified()).or_else(|_| std::fs::metadata(p).and_then(|m| m.modified())).ok();
     attached.into_iter().max_by_key(|p| when(p))
 }
@@ -150,7 +150,17 @@ pub fn claim_name() {
     let _ = std_listener.set_nonblocking(true);
     let Ok(listener) = tokio::net::UnixListener::from_std(std_listener) else { return };
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&primary, std::fs::Permissions::from_mode(0o600)); }
-    if let Some(port) = here().and_then(|h| std::fs::read_to_string(h.with_extension("port")).ok()) { let _ = std::fs::write(primary.with_extension("port"), port); }
+    if let Some(own) = here() {
+        if let Ok(port) = std::fs::read_to_string(own.with_extension("port")) { let _ = std::fs::write(primary.with_extension("port"), port); }
+        // The primary name is now an alias of this client, including whether it has a
+        // terminal. A former owner's marker must never turn a server into an attached UI.
+        if is_headless(&own) { mark_headless(&primary); }
+        else { let _ = std::fs::remove_file(primary.with_extension("headless")); }
+        let stamp = std::fs::metadata(own.with_extension("activity")).or_else(|_| std::fs::metadata(&own)).and_then(|m| m.modified());
+        if let Ok(stamp) = stamp {
+            if let Ok(file) = std::fs::File::create(primary.with_extension("activity")) { let _ = file.set_times(std::fs::FileTimes::new().set_modified(stamp)); }
+        }
+    }
     CLAIMED.store(true, std::sync::atomic::Ordering::Relaxed);
     accept(listener, sink);
 }
@@ -242,9 +252,17 @@ fn find_cwd() -> Option<String> {
 /// Remove sockets nobody answers on (a client that was killed), and the ports beside them.
 fn sweep(dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
     for e in entries.flatten() {
         let p = e.path();
-        if p.extension().map(|x| x == "sock").unwrap_or(false) && std::os::unix::net::UnixStream::connect(&p).is_err() { let _ = std::fs::remove_file(&p); let _ = std::fs::remove_file(p.with_extension("port")); }
+        // Starting one namespace must not remove another server's closed socket: tmux
+        // keeps it so later commands distinguish a stopped server from one never started.
+        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if stem != name && !stem.strip_prefix(&name).is_some_and(|s| s.starts_with('@')) { continue }
+        if p.extension().map(|x| x == "sock").unwrap_or(false) && std::os::unix::net::UnixStream::connect(&p).is_err() {
+            let _ = std::fs::remove_file(&p);
+            for ext in ["port", "headless", "activity"] { let _ = std::fs::remove_file(p.with_extension(ext)); }
+        }
         if p.extension().map(|x| x == "port").unwrap_or(false) && !p.with_extension("sock").exists() { let _ = std::fs::remove_file(&p); }
     }
 }

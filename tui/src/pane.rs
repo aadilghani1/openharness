@@ -25,7 +25,7 @@ pub const MAX_COLS: u16 = 300;
 pub const MAX_ROWS: u16 = 120;
 
 #[derive(Clone, Default)]
-pub struct Listener(Arc<Mutex<Vec<AlacEvent>>>);
+pub struct Listener(Arc<Mutex<Vec<AlacEvent>>>, Arc<std::sync::atomic::AtomicBool>);
 
 impl EventListener for Listener {
     fn send_event(&self, event: AlacEvent) {
@@ -33,6 +33,7 @@ impl EventListener for Listener {
             AlacEvent::Title(_) | AlacEvent::ResetTitle | AlacEvent::Bell | AlacEvent::ClipboardStore(..) => {
                 self.0.lock().unwrap().push(event)
             }
+            AlacEvent::PtyWrite(_) | AlacEvent::ColorRequest(..) | AlacEvent::TextAreaSizeRequest(_) | AlacEvent::ClipboardLoad(..) if self.1.load(std::sync::atomic::Ordering::Relaxed) => self.0.lock().unwrap().push(event),
             _ => {}
         }
     }
@@ -69,6 +70,8 @@ pub struct Pane {
     pub agent_id: String,
     pub term: Term<Listener>,
     parser: Processor,
+    local: Option<crate::local::ScreenState>,
+    local_replies: Vec<Vec<u8>>,
     pub listener: Listener,
     pub stream: Option<Uuid>,
     pub phase: Phase,
@@ -189,7 +192,7 @@ fn config() -> Config { Config { scrolling_history: HISTORY.load(std::sync::atom
 /// tmux combines VS16, skin tones, regional indicators and the character after a ZWJ
 /// into the preceding cell. Alacritty handles only zero-width scalars, so adapt printable
 /// input before it reaches the grid; every ANSI operation still uses Alacritty's handler.
-struct TmuxScreen<'a>(&'a mut Term<Listener>);
+struct TmuxScreen<'a>(&'a mut Term<Listener>, Option<&'a mut crate::local::ScreenState>);
 
 macro_rules! forward_screen {
     ($($name:ident($($arg:ident: $ty:ty),*);)*) => { $(
@@ -259,6 +262,61 @@ impl Handler for TmuxScreen<'_> {
         }
     }
 
+
+    fn set_private_mode(&mut self, mode: ansi::PrivateMode) {
+        if let Some(state) = &mut self.1 {
+            if mode == ansi::NamedPrivateMode::SwapScreenAndSetRestoreCursor.into() && !self.0.mode().contains(TermMode::ALT_SCREEN) {
+                let mut main = self.0.grid().clone();
+                main.saved_cursor = main.cursor.clone();
+                state.main = Some(main);
+                std::mem::swap(&mut state.keyboard, &mut state.main_keyboard);
+            }
+        }
+        self.0.set_private_mode(mode);
+    }
+    fn unset_private_mode(&mut self, mode: ansi::PrivateMode) {
+        if let Some(state) = &mut self.1 {
+            if mode == ansi::NamedPrivateMode::SwapScreenAndSetRestoreCursor.into() && self.0.mode().contains(TermMode::ALT_SCREEN) {
+                state.main = None;
+                std::mem::swap(&mut state.keyboard, &mut state.main_keyboard);
+            }
+        }
+        self.0.unset_private_mode(mode);
+    }
+    fn set_scrolling_region(&mut self, top: usize, bottom: Option<usize>) {
+        if let Some(state) = &mut self.1 {
+            let bottom = bottom.unwrap_or(self.0.screen_lines());
+            if top < bottom { state.margins = (top.min(self.0.screen_lines()), bottom.min(self.0.screen_lines())); }
+        }
+        self.0.set_scrolling_region(top, bottom);
+    }
+    fn set_active_charset(&mut self, index: ansi::CharsetIndex) {
+        if let Some(state) = &mut self.1 { state.charset = index; }
+        self.0.set_active_charset(index);
+    }
+    fn set_horizontal_tabstop(&mut self) {
+        if let Some(state) = &mut self.1 { if let Some(tab) = state.tabs.get_mut(self.0.grid().cursor.point.column.0) { *tab = true; } }
+        self.0.set_horizontal_tabstop();
+    }
+    fn clear_tabs(&mut self, mode: ansi::TabulationClearMode) {
+        if let Some(state) = &mut self.1 {
+            match mode { ansi::TabulationClearMode::All => state.tabs.fill(false), ansi::TabulationClearMode::Current => { if let Some(tab) = state.tabs.get_mut(self.0.grid().cursor.point.column.0) { *tab = false; } } }
+        }
+        self.0.clear_tabs(mode);
+    }
+    fn reset_state(&mut self) {
+        if let Some(state) = &mut self.1 { **state = crate::local::ScreenState::new(self.0.columns(), self.0.screen_lines()); }
+        self.0.reset_state();
+    }
+    fn push_keyboard_mode(&mut self, mode: ansi::KeyboardModes) {
+        if let Some(state) = &mut self.1 { if state.keyboard.len() >= 4096 { state.keyboard.remove(0); } state.keyboard.push(mode); }
+        self.0.push_keyboard_mode(mode);
+    }
+    fn pop_keyboard_modes(&mut self, n: u16) {
+        if let Some(state) = &mut self.1 { state.keyboard.truncate(state.keyboard.len().saturating_sub(n as usize)); }
+        self.0.pop_keyboard_modes(n);
+    }
+
     forward_screen! {
         set_title(a0: Option<String>);
         set_cursor_style(a0: Option<ansi::CursorStyle>);
@@ -282,7 +340,6 @@ impl Handler for TmuxScreen<'_> {
         bell();
         substitute();
         newline();
-        set_horizontal_tabstop();
         scroll_up(a0: usize);
         scroll_down(a0: usize);
         insert_blank_lines(a0: usize);
@@ -295,21 +352,15 @@ impl Handler for TmuxScreen<'_> {
         restore_cursor_position();
         clear_line(a0: ansi::LineClearMode);
         clear_screen(a0: ansi::ClearMode);
-        clear_tabs(a0: ansi::TabulationClearMode);
         set_tabs(a0: u16);
-        reset_state();
         reverse_index();
         terminal_attribute(a0: ansi::Attr);
         set_mode(a0: ansi::Mode);
         unset_mode(a0: ansi::Mode);
         report_mode(a0: ansi::Mode);
-        set_private_mode(a0: ansi::PrivateMode);
-        unset_private_mode(a0: ansi::PrivateMode);
         report_private_mode(a0: ansi::PrivateMode);
-        set_scrolling_region(a0: usize, a1: Option<usize>);
         set_keypad_application_mode();
         unset_keypad_application_mode();
-        set_active_charset(a0: ansi::CharsetIndex);
         configure_charset(a0: ansi::CharsetIndex, a1: ansi::StandardCharset);
         set_color(a0: usize, a1: ansi::Rgb);
         dynamic_color_sequence(a0: String, a1: usize, a2: &str);
@@ -324,8 +375,6 @@ impl Handler for TmuxScreen<'_> {
         set_hyperlink(a0: Option<ansi::Hyperlink>);
         set_mouse_cursor_icon(a0: ansi::cursor_icon::CursorIcon);
         report_keyboard_mode();
-        push_keyboard_mode(a0: ansi::KeyboardModes);
-        pop_keyboard_modes(a0: u16);
         set_keyboard_mode(a0: ansi::KeyboardModes, a1: ansi::KeyboardModesApplyBehavior);
         set_modify_other_keys(a0: ansi::ModifyOtherKeys);
         report_modify_other_keys();
@@ -362,6 +411,8 @@ impl Pane {
             agent_id: agent_id.to_string(),
             term: Term::new(config(), &Size(cols, rows), listener.clone()),
             parser: Processor::new(),
+            local: None,
+            local_replies: Vec::new(),
             listener,
             stream: None,
             phase: Phase::Connecting("Connecting…".into()),
@@ -407,6 +458,29 @@ impl Pane {
             mark_carry: Vec::new(),
         }
     }
+
+    /// Only the persistent PTY owner answers terminal queries. Mirror panes still drop them.
+    pub fn enable_local(&mut self) {
+        self.listener.1.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.local = Some(crate::local::ScreenState::new(self.cols as usize, self.rows as usize));
+    }
+
+    pub fn resize_local(&mut self, cols: u16, rows: u16) {
+        self.cols = cols.max(2);
+        self.rows = rows.max(2);
+        self.term.resize(Size(self.cols, self.rows));
+        if let Some(state) = &mut self.local { state.resize(self.cols as usize, self.rows as usize); }
+    }
+
+    pub fn local_snapshot(&self, tail: &[u8]) -> Vec<u8> {
+        let state = self.local.as_ref().expect("only the local PTY owner takes snapshots");
+        // screen's title string is stripped before parsing; preserve that separate parser
+        // state too, so reconnecting in its middle cannot print the rest of the title.
+        let tail = if self.in_screen_title { [b"\x1bk".as_slice(), if self.pending_esc { b"\x1b" } else { b"" }].concat() } else { tail.to_vec() };
+        state.snapshot(&self.term, &self.osc_title, self.osc7_url.as_deref(), &tail)
+    }
+
+    pub fn take_local_replies(&mut self) -> Vec<Vec<u8>> { std::mem::take(&mut self.local_replies) }
 
     /// A keyframe: the whole screen again, from nothing, at the far pane's size.
     pub fn keyframe(&mut self, cols: u16, rows: u16, bytes: &[u8]) {
@@ -477,6 +551,10 @@ impl Pane {
                 AlacEvent::Bell => self.bell = true,
                 // OSC 52: for the app to pass on as set-clipboard says.
                 AlacEvent::ClipboardStore(_, text) => self.copied.push(text),
+                AlacEvent::PtyWrite(text) if self.local.is_some() => self.local_replies.push(text.into_bytes()),
+                AlacEvent::ColorRequest(index, format) if self.local.is_some() => self.local_replies.push(format(self.term.colors()[index].unwrap_or_else(|| crate::local::colour(index))).into_bytes()),
+                AlacEvent::TextAreaSizeRequest(format) if self.local.is_some() => self.local_replies.push(format(alacritty_terminal::event::WindowSize { num_cols: self.cols, num_lines: self.rows, cell_width: 0, cell_height: 0 }).into_bytes()),
+                AlacEvent::ClipboardLoad(_, format) if self.local.is_some() => self.local_replies.push(format("").into_bytes()),
                 _ => {}
             }
         }
@@ -486,7 +564,10 @@ impl Pane {
     fn advance(&mut self, bytes: &[u8], when: i64) {
         if bytes.is_empty() { return }
         let before = self.term.grid().history_size();
-        self.parser.advance(&mut TmuxScreen(&mut self.term), bytes);
+        self.parser.advance(&mut TmuxScreen(&mut self.term, self.local.as_mut()), bytes);
+        // The local supervisor has no renderer: apply synchronized updates immediately so
+        // queries and reconnect snapshots see all PTY output, including a partial frame.
+        if self.local.is_some() { self.parser.stop_sync(&mut TmuxScreen(&mut self.term, self.local.as_mut())); }
         let after = self.term.grid().history_size();
         let rows = self.term.screen_lines();
         if self.screen_marks.len() != rows { self.screen_marks.resize(rows, 0) }

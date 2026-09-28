@@ -62,7 +62,6 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("show-buffer", "showb", "Print a buffer (-b name)"),
     ("respawn-pane", "respawnp", "Restart the harness in this pane"),
     ("suspend-client", "suspendc", "Suspend (C-z); fg brings it back"),
-    ("tim", "tim", "tim, the creature in the status line: how it is (set -g @tim off hides it)"),
     ("display-popup", "popup", "A shell (or a command: display-popup -E lazygit) floating over the window"),
     ("list-commands", "lscm", "Every command"),
     ("display-menu", "menu", "A menu: display-menu -T title name key command …"),
@@ -566,6 +565,10 @@ fn run_queue(app: &mut App, mut queue: Queue) {
         let job = match wait_job(app, &words).unwrap_or_else(|| shell_job(app, &words)) { Ok(j) => j, Err(e) => { app.error(e); app.origin = None; app.mouse_ev = saved; app.hook_state = saved_hook; continue } };
         let Some(Job { command, cwd, delay, background, done, wait }) = job else {
             let errors = app.errors;
+            // select-pane inserts its after hook only when it actually changes the active pane.
+            let selecting = words.first().and_then(|w| crate::cmd::find(w).ok()).is_some_and(|e| e.name == "select-pane");
+            let focus = |app: &App| app.tabs.iter().chain(app.sessions.iter().flat_map(|s| s.tabs.iter())).map(|t| (t.id.clone(), t.focus)).collect::<Vec<_>>();
+            let before_focus = selecting.then(|| focus(app));
             app.chain_follows = !queue.is_empty();
             // A hook about a session not in front (its own after- hook): run there.
             let there = hook.as_ref().and_then(|h| h.session).filter(|s| *s != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|x| x.id == *s && x.mirror.is_none()));
@@ -582,7 +585,8 @@ fn run_queue(app: &mut App, mut queue: Queue) {
             }
             // cmdq_fire_command: a command that failed fires command-error, one that did not its
             // after- hook — not a command a hook ran.
-            let hooks = if hook.is_none() { command_hooks(app, &words, app.errors != errors) } else { Queue::new() };
+            let selected = before_focus.as_ref().is_none_or(|before| *before != focus(app));
+            let hooks = if hook.is_none() && (app.errors != errors || selected) { command_hooks(app, &words, app.errors != errors) } else { Queue::new() };
             app.origin = None;
             app.mouse_ev = saved;
             app.hook_state = saved_hook;
@@ -702,6 +706,7 @@ fn command_hooks(app: &mut App, words: &[String], failed: bool) -> Queue {
     let name = if failed { "command-error".to_string() } else { format!("after-{}", entry.name) };
     if !crate::options::is_hook(&name) || name == "after-queue" { return Queue::new() }
     let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).unwrap_or_default();
+    if !failed && entry.name == "select-pane" && args.has('l') != 0 { return Queue::new() }
     // cmdq_insert_hook: the hook of the command's target session (its options), run about it.
     // (What a kill- command named is gone: its hook is about where you are, as tmux's.)
     let killed = matches!(entry.name, "kill-pane" | "kill-window" | "kill-session");
@@ -1173,11 +1178,9 @@ fn run_words(app: &mut App, words: &[String]) {
 }
 
 /// What follows an option set (its value now [now]; [global]: -g, else for window [tab]): what
-/// hn keeps outside the store — the prefix, the mouse, tim, a window's synchronize-panes …
+/// hn keeps outside the store — the prefix, the mouse, a window's synchronize-panes …
 fn after_set(app: &mut App, name: &str, now: Option<String>, global: bool, tab: Option<usize>) {
     let name = name.to_string();
-    // tim: `set -g @tim off` hides the creature (kept), `on` brings it back.
-    if name == "@tim" { app.tim.set_off(matches!(now.as_deref(), Some("off" | "0" | "no"))); return }
     // alerts_reset_all: every window's silence timer starts again.
     if name == "monitor-silence" { for t in app.tabs.iter_mut() { t.last_output = std::time::Instant::now() } }
     if name.starts_with('@') && now.is_none() { app.opts.user.remove(&name); return }
@@ -1785,8 +1788,8 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 && app.options.get("@hn-new-window", "", None).as_deref() != Some("shell")
                 // (tmux's look is tmux's C-b c too.)
                 && app.options.get("@hn-look", "", None).as_deref() != Some("tmux");
-            // No machine to make its shell on (the daemon down): tmux's error, and no window made.
-            let machine = from.as_ref().map(|(m, _)| m.clone()).unwrap_or(app.fleet.local_id.clone());
+            // Use the local shell service when the local daemon is unavailable.
+            let machine = input::shell_machine(app, from.as_ref());
             if app.link(&machine).is_none() { return app.error("create window failed: the daemon is not running (harness start)") }
             app.new_tab_at(idx);
             if bare {
@@ -2653,7 +2656,14 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 Some(t) => match pane_target(app, &t) { Some(tp) => tp, None => return app.error(format!("can't find pane: {t}")) },
                 None => app.current().unwrap_or((app.active, 0)),
             };
-            if flag(words, "-R") { return notify(app, &name, Some(tab), Some(pane)) }
+            if flag(words, "-R") {
+                // notify_hook inserts these commands in the caller's queue, so display -p
+                // and asynchronous hook commands reply to the shell that requested them.
+                let pending = app.pending_hooks.len();
+                notify(app, &name, Some(tab), Some(pane));
+                app.insert_next.extend(app.pending_hooks.split_off(pending));
+                return;
+            }
             let f = crate::options::SetFlags { global: flag(words, "-g"), pane: flag(words, "-p"), window: flag(words, "-w"), unset: flag(words, "-u"), append: flag(words, "-a"), ..Default::default() };
             let mut value = args.get(1).cloned();
             if let (Some(v), Some(o)) = (value.as_ref(), crate::options::find(&name)) {
@@ -3204,7 +3214,6 @@ fn run_words_in(app: &mut App, words: &[String]) {
             };
             input::popup(app, (x, y, w, h), !flag(words, "-B") && look.lines != "none", cwd, command, title, flag(words, "-E"), look);
         }
-        "tim" => { let l = crate::tim::line(app); app.say(l, theme::WARN) }
         // run-shell runs as a job (shell_job); nothing to run gets here.
         "run-shell" | "run" => {}
         "send-prefix" => {

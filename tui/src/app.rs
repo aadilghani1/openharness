@@ -733,8 +733,6 @@ pub struct App {
     /// Windows killed (not only unlinked) since the links were last synced: gone from every
     /// session that has them.
     pub killed_windows: Vec<String>,
-    /// tim, the creature in the status line.
-    pub tim: crate::tim::Tim,
     /// Shells hn made for split-window / new-window: they end with their pane.
     pub shells: HashSet<(String, String)>,
     /// Keys typed while a split's shell starts, for it.
@@ -885,7 +883,6 @@ impl App {
             session_path: None,
             session_group: None,
             killed_windows: Vec::new(),
-            tim: crate::tim::Tim::load(),
             shells: HashSet::new(),
             starting_shell: None,
             shell_inputs: HashMap::new(),
@@ -1099,9 +1096,40 @@ impl App {
             }
             Err(_) => {
                 app.daemon_down = true;
+                app.fleet.local_id = crate::local::MACHINE.into();
+                app.ensure_local_shells();
+                // A local shell belongs to a normal persisted session. It is never uploaded
+                // as a Harness desk pane if the daemon starts later.
+                if app.session_desk && app.mirror.is_none() && app.tabs.iter().all(|t| t.root.is_none()) {
+                    app.keep_local_shell_session();
+                }
+                app.desk_loaded = true;
+                app.desk_answered = true;
+                app.maybe_start_shell();
                 app.retry_boot();
             }
         });
+    }
+
+    /// Once a desk window contains a local PTY, keep this client's windows as an ordinary
+    /// session. They survive daemon reconnect without sending local pane ids to the desk.
+    pub fn keep_local_shell_session(&mut self) {
+        if !self.session_desk { return }
+        let name = self.has_windows().then(|| self.session_name());
+        self.session_desk = false;
+        let old = self.session_id;
+        self.session_id = self.alloc_session_id();
+        if self.first_session == old { self.first_session = self.session_id; }
+        if self.session_alias.is_none() { self.session_alias = Some(name.unwrap_or_else(|| self.session_id.to_string())); }
+        for tab in &mut self.tabs { tab.on_desk = false; }
+        self.desk_layouts.clear();
+    }
+
+    fn ensure_local_shells(&mut self) {
+        if self.fleet.machine(crate::local::MACHINE).is_none() {
+            self.fleet.machines.insert(0, Machine { id: crate::local::MACHINE.into(), name: hostname(), local: true, status: "running".into(), reach: Reach::Unknown });
+        }
+        self.connect(crate::local::MACHINE);
     }
 
     fn retry_boot(&mut self) {
@@ -1167,7 +1195,7 @@ impl App {
                 // seen.json again when its list comes back.
                 self.seen_rostered.remove(&machine_id);
                 if let Some(machine) = self.fleet.machine_mut(&machine_id) { machine.reach = Reach::Ready }
-                if machine_id == self.fleet.local_id { self.daemon_down = false; crate::dial::reconnected(self) }
+                if machine_id == self.fleet.local_id && !crate::local::is_local(&machine_id) { self.daemon_down = false; crate::dial::reconnected(self) }
                 self.relist(&machine_id);
                 // Its home folder, so its paths read `~/…` like this machine's do.
                 if !self.homes.contains_key(&machine_id) {
@@ -1178,7 +1206,8 @@ impl App {
                         });
                     }
                 }
-                if machine_id == self.fleet.local_id && !self.desk_loaded { self.load_desk() }
+                if crate::local::is_local(&machine_id) { self.maybe_start_shell(); }
+                else if machine_id == self.fleet.local_id && !self.desk_loaded { self.load_desk() }
                 if machine_id == self.fleet.local_id { self.release_cli() }
                 // Every pane of this machine that lost its stream gets it back.
                 let ids: Vec<u64> = self.panes.values().filter(|p| p.machine_id == machine_id && p.stream.is_none() && !matches!(p.phase, Phase::Card { .. })).map(|p| p.id).collect();
@@ -1189,7 +1218,10 @@ impl App {
                 if let Some(machine) = self.fleet.machine_mut(&machine_id) {
                     machine.reach = if needs_link { Reach::NeedsLink } else if machine.online() { Reach::Error(error.to_string()) } else { Reach::Offline };
                 }
-                if machine_id == self.fleet.local_id && matches!(error.code.as_str(), "DAEMON_UNREACHABLE" | "HEARTBEAT_TIMEOUT") { self.daemon_down = true }
+                if machine_id == self.fleet.local_id && !crate::local::is_local(&machine_id) && matches!(error.code.as_str(), "DAEMON_UNREACHABLE" | "HEARTBEAT_TIMEOUT" | "DISCONNECTED") {
+                    self.daemon_down = true;
+                    self.ensure_local_shells();
+                }
                 for pane in self.panes.values_mut().filter(|p| p.machine_id == machine_id) {
                     pane.stream = None;
                     pane.opening = false;
@@ -1330,8 +1362,6 @@ impl App {
                     if aborted { agent.did = Some("Interrupted".into()) } else if agent.errored { } else if let Some(line) = fleet::first_line(&said) { agent.did = Some(line) }
                     let name = agent.name.clone();
                     let mine = opened.contains(&agent.key());
-                    // tim hatches on the first turn finished while you watch, and is pleased after each.
-                    if mine { self.tim.turn_done() }
                     // Done and not yet read — any harness's turn (not a re-read, not a sub-agent's)
                     // that ended where you were not looking: the focused pane, with the terminal
                     // focused. A visible pane beside the one you type in is not being read.
@@ -1945,7 +1975,7 @@ impl App {
         let Some(p) = self.panes.get(&pane_id) else { return };
         // (No terminal open here for it is fine: the daemon's tmux knows what runs in it — a
         // window not on screen is named from it too, as tmux names every window.)
-        if p.machine_id != self.fleet.local_id { return }
+        if p.machine_id != self.fleet.local_id && !crate::local::is_local(&p.machine_id) { return }
         let (machine, agent) = (p.machine_id.clone(), p.agent_id.clone());
         let Some(link) = self.link(&machine) else { return };
         self.spawn(async move { link.rpc("terminal_info", json!({ "agentId": agent }), Duration::from_secs(3)).await }, move |app, reply| {
@@ -1994,7 +2024,6 @@ impl App {
         }
         let (o, n) = (&mut self.opts, &s.options);
         macro_rules! take { ($($f:ident),*) => { $( if n.$f.is_some() { o.$f = n.$f.clone() } )* } }
-        if let Some(off) = s.options.tim_off { self.tim.off = off }
         take!(status_left, status_right, status_left_length, status_right_length, window_status_format, window_status_current_format,
             window_status_current_style, window_status_separator, renumber_windows, border_titles, mode_keys_emacs, status, status_justify, window_status_style, pane_border_format, main_pane_width, main_pane_height, copy_command, status_keys_vi);
         self.fit_panes();
@@ -3036,7 +3065,7 @@ impl App {
         // A headless hn (tmux's server with no client) hands everything to the first client that
         // attaches: one holder of the sessions again, as tmux has one server.
         if !self.headless {
-            let held: HashSet<String> = doc["sessions"].as_array().map(|rows| rows.iter().filter(|r| r.get("headless").and_then(Value::as_bool).unwrap_or(false)).filter_map(live_owner).collect()).unwrap_or_default();
+            let held: HashSet<String> = doc["sessions"].as_array().map(|rows| rows.iter().filter(|r| r.get("headless").and_then(Value::as_bool).unwrap_or(false)).filter_map(live_owner).filter(|owner| Some(owner) != me.as_ref()).collect()).unwrap_or_default();
             for owner in &held { let _ = crate::ipc::ask(std::path::Path::new(owner), &["hn-hand-over".into()]); }
         }
         // The rows no client has are read and made this client's while the file is held: two
@@ -3047,7 +3076,10 @@ impl App {
         for row in doc["sessions"].as_array().cloned().unwrap_or_default() {
             let name = row.get("name").and_then(Value::as_str).map(str::to_string);
             if row.get("desk").and_then(Value::as_bool).unwrap_or(false) {
-                if name.is_some() && self.session_desk { self.session_alias = name }
+                // A local fallback may have kept the initial desk name for its ordinary
+                // shell session. Its stale desk metadata must not shadow that live session.
+                let ordinary = name.as_ref().is_some_and(|name| doc["sessions"].as_array().is_some_and(|rows| rows.iter().any(|r| r["desk"].as_bool() != Some(true) && r["name"].as_str() == Some(name))));
+                if name.is_some() && self.session_desk && !ordinary { self.session_alias = name }
                 self.take_desk_row(&row);
                 continue
             }
@@ -3680,6 +3712,8 @@ impl App {
     /// A pane for a harness, with the id it had ([id]: a session moved from another client, a
     /// desk's pane), else a new one (tmux's %N, unique among the clients of this server name).
     pub fn new_pane_as(&mut self, machine_id: &str, agent_id: &str, id: Option<u64>) -> u64 {
+        if crate::local::is_local(machine_id) { self.ensure_local_shells(); }
+        let id = id.or_else(|| crate::local::is_local(machine_id).then(|| crate::local::pane_id(agent_id)).flatten());
         let id = id.filter(|i| !self.panes.contains_key(i)).unwrap_or_else(|| crate::ids::next(crate::ids::Kind::Pane));
         let (cols, rows) = pane::stream_size(self.size.0, self.size.1.saturating_sub(2));
         self.panes.insert(id, Pane::new(id, machine_id, agent_id, cols, rows));
@@ -4916,6 +4950,7 @@ impl App {
     }
 
     fn desk_pane_added(&mut self, tab_id: &str, machine_id: &str, agent_id: &str) {
+        if crate::local::is_local(machine_id) { return }
         let Some(index) = self.tabs.iter().position(|t| t.id == tab_id) else { return };
         let mut ops = Vec::new();
         // The ids this client gave them are every client's for them (%N, @N).
@@ -4943,7 +4978,7 @@ impl App {
     /// reconciled only when none of this window's writes are still out — reconciling to a desk that
     /// has the tab but not yet its pane would close the tab this window just made.
     pub fn desk_ops(&mut self, ops: Vec<Value>) {
-        if self.desk_mode != DeskMode::Sync || ops.is_empty() { return }
+        if self.desk_mode != DeskMode::Sync || !self.session_desk || ops.is_empty() { return }
         // A layout's tmux form (layout.tmux) goes only to a desk that keeps it: one that refuses
         // it (a backend from before it) is sent the layout without it from then on.
         let strip = |ops: &[Value]| -> Vec<Value> { ops.iter().cloned().map(|mut o| { if let Some(l) = o.get_mut("layout").and_then(Value::as_object_mut) { l.remove("tmux"); } o }).collect() };

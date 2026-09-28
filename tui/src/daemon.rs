@@ -40,6 +40,9 @@ enum Out {
     Binary(Vec<u8>),
 }
 
+trait SocketIo: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> SocketIo for T {}
+
 type Pending = Arc<Mutex<HashMap<String, (String, oneshot::Sender<(String, Value)>)>>>;
 
 #[derive(Clone)]
@@ -65,7 +68,16 @@ impl Link {
                 let _ = sink.send(Event::Machine { machine_id: id.clone(), generation, event });
             };
             let url = format!("ws://127.0.0.1:{port}/api/local-ws");
-            let connect = tokio::time::timeout(Duration::from_secs(20), tokio_tungstenite::connect_async(url)).await;
+            // Local shells use the same protocol on a private Unix socket. The rest of the
+            // request, heartbeat, ordering and reconnect machinery remains shared.
+            let connect = tokio::time::timeout(Duration::from_secs(20), async {
+                let io: Box<dyn SocketIo> = if crate::local::is_local(&id) {
+                    Box::new(crate::local::connect(port).await.map_err(tokio_tungstenite::tungstenite::Error::Io)?)
+                } else {
+                    Box::new(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.map_err(tokio_tungstenite::tungstenite::Error::Io)?)
+                };
+                tokio_tungstenite::client_async(&url, io).await
+            }).await;
             let (ws, _) = match connect {
                 Ok(Ok(ok)) => ok,
                 Ok(Err(error)) => { emit(MachineEvent::Failed(RpcError::new("DAEMON_UNREACHABLE", error.to_string()))); return }
@@ -91,11 +103,11 @@ impl Link {
                         emit(MachineEvent::Failed(RpcError::new("TIMEOUT", "the machine did not answer in time")));
                         return;
                     }
+                    _ = tokio::time::sleep_until(ping.as_ref().map(|(at, _)| *at + Duration::from_secs(10)).unwrap_or_else(tokio::time::Instant::now)), if ping.is_some() => {
+                        emit(MachineEvent::Closed(RpcError::new("HEARTBEAT_TIMEOUT", "the daemon stopped answering")));
+                        break;
+                    }
                     _ = heartbeat.tick(), if selected => {
-                        if ping.as_ref().is_some_and(|(at, _)| at.elapsed() >= Duration::from_secs(10)) {
-                            emit(MachineEvent::Closed(RpcError::new("HEARTBEAT_TIMEOUT", "the daemon stopped answering")));
-                            break;
-                        }
                         if ping.is_none() {
                             ping_id += 1;
                             let bytes = ping_id.to_be_bytes().to_vec();

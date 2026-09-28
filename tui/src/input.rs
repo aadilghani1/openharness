@@ -50,9 +50,8 @@ fn typing(app: &App) -> bool {
 fn on_key(app: &mut App, key: KeyEvent) {
     let chord = keys::of(&key);
     app.key_name = Some(keys::name(&chord));
-    // A message goes on the next key, as tmux's does; and tim notices you are back.
+    // A message goes on the next key, as tmux's does.
     app.toast = None;
-    app.tim.touched = std::time::Instant::now();
     // display-panes (cmd_display_panes_key), before any table: a number, or a letter for 10 on,
     // runs its template for that pane (select-pane) and closes it — as does one no pane has;
     // any other key (every key with -N) closes it and goes on as it would have.
@@ -252,7 +251,6 @@ fn on_paste(app: &mut App, text: String) {
 }
 
 fn on_mouse(app: &mut App, mouse: MouseEvent) {
-    app.tim.touched = std::time::Instant::now();
     // tmux asks the terminal for bare motion only when a pane here wants it (or a menu opened by
     // the mouse): the rest of the motion hn is sent never happened, as far as tmux is concerned.
     if matches!(mouse.kind, MouseEventKind::Moved) && !app.wants_motion() { return }
@@ -1060,12 +1058,13 @@ fn new_what(app: &mut App, machine: String) {
 /// display-popup: a shell in a box over the window, running `command` then leaving (-E).
 pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cwd: Option<String>, command: Option<String>, title: String, close_on_exit: bool, look: crate::modal::PopupLook) {
     let focused = focused_agent(app);
-    let machine = focused.as_ref().map(|(m, _)| m.clone()).unwrap_or(app.fleet.local_id.clone());
-    let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone());
+    let machine = shell_machine(app, focused.as_ref());
+    let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
     let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
     let Some(link) = app.link(&machine) else { app.say("That machine is not connected", theme::DANGER); return };
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
+    configure_local_shell(app, &machine, &mut payload);
     app.modal = None;
     // The command runs in the shell's place (-E: the popup goes when it ends) or in it; a leading
     // space keeps it out of the shell's history, `clear` off the screen.
@@ -1135,14 +1134,34 @@ pub fn next_attention(app: &mut App, back: bool) {
 }
 
 /// The same, for the pane `from` (new-window reads it before the new window takes the focus).
+pub fn shell_machine(app: &App, focused: Option<&(String, String)>) -> String {
+    let machine = focused.map(|(m,_)| m.clone()).unwrap_or(app.fleet.local_id.clone());
+    if app.daemon_down && app.fleet.machine(&machine).is_some_and(|m| m.local) { crate::local::MACHINE.into() } else { machine }
+}
+
+fn configure_local_shell(app: &App, machine: &str, payload: &mut serde_json::Value) {
+    if crate::local::is_local(machine) {
+        payload["paneId"] = json!(crate::ids::next(crate::ids::Kind::Pane));
+        let shell = app.options.session.get("default-shell").or_else(|| app.options.global_session.get("default-shell")).cloned()
+            .or_else(|| std::env::var("SHELL").ok()).filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
+        payload["shell"] = json!(shell);
+        payload["term"] = json!(app.options.get("default-terminal", "", None).unwrap_or_else(|| "tmux-256color".into()));
+        let mut env: serde_json::Map<String, serde_json::Value> = app.global_env.iter().map(|(k,v)| (k.clone(), if v.hidden { serde_json::Value::Null } else { json!(v.value) })).collect();
+        env.extend(app.session_env.iter().map(|(k,v)| (k.clone(), if v.hidden { serde_json::Value::Null } else { json!(v.value) })));
+        payload["environment"] = json!(env);
+    }
+}
+
 pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placement: Placement, cwd: Option<String>, command: Option<String>) {
-    let machine = focused.as_ref().map(|(m, _)| m.clone()).unwrap_or(app.fleet.local_id.clone());
+    let machine = shell_machine(app, focused.as_ref());
+    if crate::local::is_local(&machine) { app.keep_local_shell_session() }
     // The folder: -c, else where the pane's shell says it is now (OSC 7), else where it started.
-    let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone());
+    let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
     let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
     let Some(link) = app.link(&machine) else { app.say("That machine is not connected", theme::DANGER); return };
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
+    configure_local_shell(app, &machine, &mut payload);
     app.modal = None;
     // A command runs as tmux runs a window's (default-shell -c): in place of the shell, so the pane
     // goes when it ends (it was typed into the shell, which stayed, and into its history — the

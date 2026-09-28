@@ -11,7 +11,8 @@ port="${E2E_PORT:-19297}"
 unset TMUX TMUX_PANE HN_SOCKET
 client="${HN_SOCKET_NAME:-e2e}-$$"
 sock="harness-tui-e2e-$$"
-home="$(mktemp -d)"
+home="$(mktemp -d /tmp/hn-e2e.XXXXXX)"
+export HN_TMPDIR="$home"
 tmux_() { tmux -L "$sock" "$@"; }
 screen() { tmux_ capture-pane -p -t t; }
 fail() { echo "✗ $1"; echo "--- screen ---"; screen || true; exit 1; }

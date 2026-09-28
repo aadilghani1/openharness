@@ -2,7 +2,6 @@
 //!
 //!   hn list-harnesses (lsh)                every harness on every machine
 //!   hn send-message -t <harness> <text>    a message to a harness (a turn, as if typed and sent)
-//!   hn tim                                 tim, the creature
 //!
 //! (`hn ls` and `hn send` are tmux's: list-sessions and send-keys.)
 //!
@@ -27,6 +26,8 @@ pub struct Flags { pub help: bool, pub long_help: bool, pub version: bool, pub k
     pub shell_command: Option<String>,
     /// --headless: tmux's server with no client attached (started for a script's commands).
     pub headless: bool,
+    /// Internal persistent PTY owner, used when Harness is unavailable.
+    pub local_server: bool,
     /// -C: control mode, which hn does not have.
     pub control: bool }
 
@@ -43,6 +44,7 @@ pub fn flags(args: &[String]) -> Result<Flags, String> {
             "--keys" => f.keys = true,
             "--licenses" => f.licenses = true,
             "--headless" => f.headless = true,
+            "--local-server" => f.local_server = true,
             "--port" => { i += 1; f.port = Some(args.get(i).and_then(|p| p.parse().ok()).ok_or("--port needs a port")?) }
             _ if a.starts_with("--") => return Err(format!("unknown option -- {}", &a[2..])),
             _ => {
@@ -99,7 +101,6 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
             else if cmd == "send-message" { Some(send(port, &args[1..]).await) }
             else { eprintln!("no server running"); Some(1) }
         }
-        "tim" => { println!("{}", crate::tim::cli_line()); Some(0) }
         // attach / a: the client itself, as `tmux attach` is.
         "attach" | "attach-session" | "a" | "at" => None,
         // new-session: a client here, as `tmux new` from a shell is — unless it is -d (a session

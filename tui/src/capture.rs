@@ -207,3 +207,7 @@ mod tests {
         assert_eq!(code(&plain, &Look { fg: FLAG_RGB | 0x10_20_30, ..plain }, false), "\x1b[38;2;16;32;48m");
     }
 }
+
+/// Attribute encoding shared with the persistent local terminal's reconnect keyframe.
+pub(crate) fn cell_style(cell: &Cell) -> String { code(&Look::default(), &look(cell), false) }
+pub(crate) fn cell_style_change(last: &Cell, cell: &Cell) -> String { code(&look(last), &look(cell), false) }

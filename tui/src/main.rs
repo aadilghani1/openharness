@@ -29,6 +29,7 @@ mod format;
 mod fzf;
 mod input;
 mod layout;
+mod local;
 mod modal;
 mod mouse;
 mod options;
@@ -38,7 +39,6 @@ mod picker;
 mod proto;
 mod theme;
 mod term_out;
-mod tim;
 mod tmuxconf;
 mod ui;
 
@@ -193,6 +193,7 @@ async fn run_headless(config: config::Config, port: u16) -> io::Result<()> {
         // (exit-empty off: it stays with none, as tmux's server does.)
         if !app.holds_sessions() && !app.harness_hooks() && app.options.get("exit-empty", "", None).as_deref() != Some("off") && app.cli_held.is_empty() && busy.elapsed() > Duration::from_secs(2) && app.last_cli.elapsed() > Duration::from_secs(2) { break }
     }
+    if app.forget_sessions { local::stop().await; }
     format::kill_jobs(&app);
     // (What its last hooks changed — a session-closed hook's option — reaches the others.)
     app.server_dirty = true;
@@ -264,6 +265,10 @@ async fn run(config: config::Config) -> io::Result<()> {
     };
     let explicit = f.port.or(from_env);
     let port = explicit.unwrap_or(18473u16);
+    if f.local_server {
+        if let Some(n) = &f.name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } }
+        return local::run(port).await;
+    }
     // tmux's server with no client attached: sessions held for a script's commands.
     if f.headless {
         if let Some(n) = &f.name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } }
@@ -512,6 +517,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         }
     }
     // Its #() jobs ended, as tmux's server ends its jobs.
+    if app.forget_sessions { local::stop().await; }
     format::kill_jobs(&app);
     // (What its last hooks changed reaches the others.)
     app.server_dirty = true;

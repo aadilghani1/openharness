@@ -49,7 +49,6 @@ pub struct Options {
     pub status_justify: Option<String>,
     pub window_status_style: Option<(Option<Color>, Option<Color>)>,
     pub pane_border_format: Option<String>,
-    pub tim_off: Option<bool>,
     pub user: std::collections::BTreeMap<String, String>,
     /// main-pane-width / -height: cells, or 1000 + a percentage.
     pub main_pane_width: Option<u16>,
@@ -403,7 +402,6 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 "pane-border-status" => s.options.border_titles = Some(value != "off"),
                 "mode-keys" => s.options.mode_keys_emacs = Some(value == "emacs"),
                 "status" => s.options.status = on_off(value),
-                "@tim" => s.options.tim_off = Some(matches!(value, "off" | "0" | "no")),
                 // A user option (themes, plugins): kept, for #{@name} and show -v.
                 n if n.starts_with('@') => { s.options.user.insert(n.to_string(), value.to_string()); }
                 "pane-border-style" => { let (fg, _) = style(value); s.look.border = fg }
