@@ -110,6 +110,13 @@ export interface HookServerHandlers {
   onClearRemotePassword?: () => PairOutcome
   /** `harness remote-password status` — whether one is set, and its fingerprint. */
   onRemotePasswordStatus?: () => PairOutcome
+  /** `harness link connect` — the machine this one just linked pinned it back, so trust that machine
+   *  here too (the mutual half of the link). Goes through the daemon: it holds paired.json in memory. */
+  onTrustLinkedPeer?: (peer: { pub: string; machineId: string; label: string }) => PairOutcome
+  /** `harness group list|sync|remove` — the trust group this machine belongs to (groupSyncer.ts). */
+  onGroupList?: () => PairOutcome
+  onGroupSync?: () => PairOutcome
+  onGroupRemove?: (selector: string) => PairOutcome
   /** Local dashboard status snapshot (GET /api/status). */
   onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   /** Recent adapter log tail (GET /api/logs). */
@@ -651,6 +658,40 @@ export function startHookServer(
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onClearRemotePassword) { json(503, { error: 'UNAVAILABLE' }); return }
         const out = handlers.onClearRemotePassword(); json(out.status, out.body); return
+      }
+
+      // `harness link connect` → trust the machine just linked back, on the daemon's live E2EE state.
+      if (req.method === 'POST' && url === '/api/link/trust-peer') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onTrustLinkedPeer) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: { pub?: unknown; machineId?: unknown; label?: unknown }
+        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
+        const isKey = typeof body.pub === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(body.pub) // 32-byte Ed25519, base64
+        if (!isKey || typeof body.machineId !== 'string' || !/^[a-f0-9]{32}$/.test(body.machineId)) { json(400, { error: 'BAD_PEER' }); return }
+        const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 60) : body.machineId
+        const out = handlers.onTrustLinkedPeer({ pub: body.pub as string, machineId: body.machineId, label })
+        json(out.status, out.body); return
+      }
+
+      // `harness group list` → the trust group's members. Read-only (keys and labels, no secrets).
+      if (req.method === 'GET' && url === '/api/group') {
+        if (!handlers.onGroupList) { json(503, { error: 'UNAVAILABLE' }); return }
+        const out = handlers.onGroupList(); json(out.status, out.body); return
+      }
+      // `harness group sync` → compare rosters with every reachable member now.
+      if (req.method === 'POST' && url === '/api/group/sync') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onGroupSync) { json(503, { error: 'UNAVAILABLE' }); return }
+        const out = handlers.onGroupSync(); json(out.status, out.body); return
+      }
+      // `harness group remove <id|#|fp>` / `harness link unlink` → drop a member everywhere.
+      if (req.method === 'POST' && url === '/api/group/remove') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onGroupRemove) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: { selector?: unknown }
+        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
+        if (typeof body.selector !== 'string' || !body.selector.trim()) { json(400, { error: 'MISSING_SELECTOR' }); return }
+        const out = handlers.onGroupRemove(body.selector.trim()); json(out.status, out.body); return
       }
 
       // `harness remote-password status` → whether one is set, and its fingerprint. Read-only, same

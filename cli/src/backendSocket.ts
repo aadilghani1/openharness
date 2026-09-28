@@ -99,7 +99,8 @@ import { hermesDbForSession } from './lib/hermesHome.js'
 import { readDevinMessages } from './engines/devin/reader.js'
 import { readOpencodeMessages } from './engines/opencode/reader.js'
 import { readKiloMessages } from './engines/kilo/reader.js'
-import { E2eeManager, type PairResult } from './lib/e2ee/manager.js'
+import { E2eeManager, type LinkedPeer, type PairResult } from './lib/e2ee/manager.js'
+import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import {
   decodeTerminalHop,
@@ -521,6 +522,8 @@ export class BackendSocket {
   onTerminalHandoff: ((tmuxPane: string) => string | null) | null = null
   /** What the daemon knows about an agent's DSH companions (viewer URL, verdict); null when nothing. */
   harnessSharing: HarnessShareOwner | null = null
+  /** Answers the trust group's roster exchange (`group_sync`); null until the daemon wires it. */
+  groupSync: { handle: (peerPub: string, payload: Record<string, unknown>) => Record<string, unknown> } | null = null
   dshFrameProvider: ((session: RegisteredSession) => AgentDshContext | null) | null = null
   viewerTargetProvider: ((agentId: string) => string | null) | null = null
   readonly viewerForwarder = new ViewerForwarder({
@@ -706,6 +709,10 @@ export class BackendSocket {
   private readonly directDeviceSinks = new Map<string, (frame: Record<string, unknown>) => void>()
   private readonly directDevicePins = new Map<string, string>()
   onDirectDeviceRevoked?: (fingerprint: string) => void
+  /** A peer linked here over the remote password (after it is trusted and, for a machine, pinned back). */
+  onPeerLinked?: (peer: LinkedPeer) => void
+  /** A person unpaired this identity here (not the trust group removing it). */
+  onUnpaired?: (identityPub: string) => void
   /** A connection that is, or is pairing as, an Autonomous device — what the device dump records. */
   private isDeviceConn(connId: string): boolean {
     return this.directDeviceSinks.has(connId) || this.e2ee.sessionRole(connId) === 'device'
@@ -778,6 +785,15 @@ export class BackendSocket {
       onIdentityPaired: (connId, pub) => { if (this.directDeviceSinks.has(connId)) this.directDevicePins.set(connId, pub) },
       onIdentityRevoked: identity => { this.autonomousDeviceRelay?.revoke(identity); this.onDirectDeviceRevoked?.(fingerprint(b64d(identity))) },
       onSessionDropped: (connId) => this.viewerForwarder.closeConnection(connId),
+      onPeerLinked: (peer) => {
+        // The mutual half of a password link: a machine that proved this one's password is pinned back,
+        // so this machine can dial it without that machine's own password.
+        if (peer.kind === 'machine' && peer.machineId && peer.machineId !== this.machineId) {
+          new MachinePeerStore().pin(peer.machineId, peer.pub, peer.label)
+        }
+        this.onPeerLinked?.(peer)
+      },
+      onUnpaired: (pub) => this.onUnpaired?.(pub),
     })
     this.terminalP2p = new TerminalP2pResponderPool({
       sendSignal: (connId, type, payload) => this.sendP2pSignal(connId, type, payload),
@@ -816,6 +832,17 @@ export class BackendSocket {
   /** `harness remote-password clear` — remove the persistent remote password. */
   clearRemotePassword(): void {
     this.e2ee.clearRemotePassword()
+  }
+  /** `harness link connect` — trust the machine this one just linked as a client too (mutual link). */
+  trustPeer(peer: LinkedPeer): void {
+    this.e2ee.trustPeer(peer)
+  }
+  /** Stop trusting `pub` here (unlink / trust-group removal); true when it was trusted. */
+  untrustPeer(pub: string): boolean {
+    return this.e2ee.untrustPeer(pub)
+  }
+  pairedPeers(): ReturnType<E2eeManager['pairedPeers']> {
+    return this.e2ee.pairedPeers()
   }
   /** `harness remote-password status` — whether one is set, and its fingerprint. */
   remotePasswordStatus(): ReturnType<E2eeManager['remotePasswordStatus']> {
@@ -1656,6 +1683,15 @@ export class BackendSocket {
       void orchestratorRequest(this.orchestration(), payload)
         .then(result => reply(type, requestId, result))
         .catch(() => reply(type, requestId, { error: 'ORCHESTRATOR_FAILED' }))
+      return
+    }
+
+    // Trust-group roster exchange: only over an E2EE session, from the identity that session proved —
+    // the roster carries the keys this machine trusts, and the peer's own entry must be that identity.
+    if (type === 'group_sync') {
+      const peerPub = local ? null : this.e2ee.sessionIdentity(connId)
+      if (!peerPub || this.e2ee.sessionRole(connId) !== 'web' || !this.groupSync) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+      try { reply(type, requestId, this.groupSync.handle(peerPub, payload)) } catch { reply(type, requestId, { error: 'GROUP_SYNC_FAILED' }) }
       return
     }
 

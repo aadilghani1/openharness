@@ -42,6 +42,8 @@ const Set<String> encryptedDownTypes = {
   'fs_list_dir',
   'project_preview',
   'git_project_info',
+  // The trust-group roster swap (`viewer/group_sync.dart`): the keys every member trusts.
+  'group_sync',
   'codex_profiles_list',
   'codex_profile_link',
   // Asks the machine to read its OWN agent accounts' usage (cli/src/lib/accountUsage.ts). Missing

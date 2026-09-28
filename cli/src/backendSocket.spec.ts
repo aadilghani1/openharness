@@ -1057,6 +1057,19 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('refuses a trust-group roster swap that is not over an E2EE session (a local client has no identity)', async () => {
+    const socket = new BackendSocket('token')
+    const handle = vi.fn(() => ({}))
+    socket.groupSync = { handle }
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:group', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.handleLocalFrame('local:group', { type: 'group_sync', payload: { requestId: 'g1', members: [] } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'group_sync_result', payload: { requestId: 'g1', error: 'UNSUPPORTED' } }))
+    expect(handle).not.toHaveBeenCalled()
+    await socket.unregisterLocalClient('local:group')
+    await socket.stop()
+  })
+
   it('serves machine stats locally without blocking the next RPC while sampling', async () => {
     let finish!: (value: machineResources.MachineResources) => void
     const read = vi.spyOn(machineResources, 'readMachineResources').mockImplementation(
