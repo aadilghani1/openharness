@@ -31,8 +31,12 @@ if [[ "${2:-}" == "--status-preview" ]]; then
   check_source="$desktop_dir/tool/status_theme_preview.swift"
 fi
 cat "$desktop_dir/macos/Runner/HarnessKeymap.swift" \
-  "$desktop_dir/macos/Runner/SwarmTitlebar.swift" \
-  "$check_source" > "$check_dir/main.swift"
+  "$desktop_dir/macos/Runner/SwarmTitlebar.swift" > "$check_dir/main.swift"
+# The titlebar also arranges the shared application menu. Compile that helper
+# from production without pulling in MainFlutterWindow's app boot machinery.
+sed -n '/^enum HarnessAppMenu {$/,$p' \
+  "$desktop_dir/macos/Runner/MainFlutterWindow.swift" >> "$check_dir/main.swift"
+cat "$check_source" >> "$check_dir/main.swift"
 xcrun swiftc -swift-version 5 "${optimization[@]}" -module-cache-path "$check_dir/module-cache" \
   -F "$framework_dir" -framework FlutterMacOS \
   -Xlinker -rpath -Xlinker "$framework_dir" \

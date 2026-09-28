@@ -226,6 +226,29 @@ picker; focused context links keep their scope.
 Leave a window drag area between tabs and context and prevent overlap in
 narrow windows. Native menus and commands remain available.
 
+Only while daemons are on (the account's `GET /api/zoo` answered 200, or a
+person enabled the hidden local preview with Command-Option-Shift-D), the daemon sits at the far right, directly
+after the focused context and PR. Off, or before that is known, nothing is
+reserved for it and the bar is exactly the one described above; when it turns
+on, the slot waits for a quiet moment (no button held, the pointer off the
+bar) so tabs never move under a click. On:
+the paired daemon's sprite, or the nest while the first egg incubates
+(`\_O_/` `~\_O_/~` `\_.._/` `\_o.o_/`). Its one-cell inner gutters provide
+separation; add no extra gap or divider. Use the same 13 pt workspace font as
+the status line with ligatures off, and reserve eight character cells plus
+one-cell gutters, the sprite centred on its version's base sprite, so moods,
+work frames and a nap's `z` never move nearby text. It draws in the status
+line's own text colour, never its daemon colour (those fail contrast on a
+status bar). A shiny daemon's `*` sits in the left gutter. To its left, dim, a
+small tally: `+3` turns finished since you looked, `+1 egg` while eggs wait.
+Its name and progress belong in the tooltip and panel, never beside the
+sprite. Clicking a ready egg hatches it; otherwise a click boops the daemon and
+opens its panel. When something needs you or failed, its one line replaces the
+context, PR and model in the terminal's yellow for 5.2 s, like tmux's message
+line; a reply to a click is dim. Mood and frame updates repaint only the slot.
+The contract is [daemons/README.md](../../daemons/README.md); the desktop's
+choices are in [Daemons on the desktop](daemons.md).
+
 Data rules live in `lib/state/workspace_status.dart`; prompt formatting lives in
 `lib/shared/theme/status_line_style.dart`. Flutter draws the fallback bar in
 `SwarmScreen`; macOS draws `SwarmTabStrip` in `macos/Runner/SwarmTitlebar.swift`.

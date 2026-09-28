@@ -114,6 +114,30 @@ temporary directory. The script supplies temporary HOME/adapter data, starts onl
 cleans up its own server/processes. `E2E_SNAPSHOTS` keeps the screens and card. Widget screenshots
 use `HARNESS_DAEMON_CAPTURE_DIR`.
 
+## Experimental desktop test preview (2026-09-28)
+
+On the desktop branch, open **Settings → Experimental → Focus-bar creature**.
+This replaces the hidden activation shortcut; that binding and command are
+removed. Experimental is the shared home for future feature toggles. The
+switch saves its choice on this computer and applies it before the first frame.
+It works signed in or out with no server rollout. It starts with tim and a
+ready turn egg; the panel supports hatching, naming, pairing and temporary
+motion/quiet settings. Only the on/off preference persists: the test collection
+clears on window close, is never uploaded, and sends no creature/brain frames.
+Individual artwork uses the bundled fallback. The old Account preview switch
+remains removed. See `desktop/design/daemons.md` for behavior and validation.
+
+Validation: 316 distinct Flutter tests passed across the focused settings,
+startup, creature and keyboard suites. Targeted Dart analysis is clean. The
+native keyboard bridge passed 161 checks and the AppKit titlebar passed 1,091.
+Real-font settings renders cover light/dark at the minimum window size and
+1.8× text; creature panel renders cover 640 and 1,280 points. Tests use synthetic
+state and stubbed tmux. No live desktop app was launched.
+
+This does not authorize merging the draft PRs or launching a worktree app
+against real state. Test distribution uses the normal Desktop internal build
+workflow with self-update disabled.
+
 ## What is left
 
 Release later according to `2026-09-27-daemons-rollout.md`: land the prerequisite fixes, server dark,

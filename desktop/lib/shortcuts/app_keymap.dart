@@ -207,6 +207,7 @@ List<ShortcutRow> effectiveShortcutRows(
   return [
     for (final command in harnessCommands)
       if (!command.hidden &&
+          harnessCommandActive(command.id) &&
           (command.context == KeymapContext.workspace ||
               (contextKind == KeymapContext.project &&
                   command.context == KeymapContext.picker) ||

@@ -4,6 +4,7 @@ import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../notify/alert_sounds.dart';
 import '../notify/system_notifications.dart';
+import '../settings/experimental_features.dart';
 
 /// Every preference that has to be in place BEFORE the first frame.
 ///
@@ -25,6 +26,7 @@ Future<void> loadPersistedSettings({
   AlertSoundStore? alertSounds,
   ScreenAlertStore? screenAlerts,
   DesktopNotificationStore? desktopNotifications,
+  ExperimentalFeaturesStore? experimentalFeatures,
 }) async {
   // Independent stores may load together, but all must finish before runApp.
   // Font and appearance share a serialized file store; each reads its related
@@ -46,5 +48,6 @@ Future<void> loadPersistedSettings({
     (alertSounds ?? alertSoundStore).load(),
     (screenAlerts ?? screenAlertStore).load(),
     (desktopNotifications ?? desktopNotificationStore).load(),
+    (experimentalFeatures ?? experimentalFeaturesStore).load(),
   ]);
 }
