@@ -19,7 +19,6 @@ works the same on a headless Linux server; the app is not required on a machine,
 | `harness dsh list` · `harness dsh update <owner/name>` | Installed harness package versions and available updates · update one package while preserving its workspaces. |
 | `harness machines [list] [--json]` · `harness machines delete <id>` | This account's machines · remove another machine (never this one). |
 | `harness pair <code>` · `harness pairings` · `harness unpair <#\|fp\|--all>` | Pair a browser with the code the web client shows; list; unpair. |
-| `harness browser-link` | Print a reusable seven-day setup link for browsers. |
 | `harness remote-password set\|status\|clear` | This machine's persistent password for machine-to-machine links. |
 | `harness link connect <id> [--name=<label>]` · `harness link list` · `harness link unlink <id>` | Let this machine reach another of yours, terminating E2EE here; list; unlink. |
 | `harness remote` | From a Harness terminal tile: choose another of your machines (linking it on the spot if needed), open a terminal there and move this tile to it. |
@@ -49,6 +48,11 @@ What it answers: `agents_list`, `agent_create`, `agent_restart`, `agent_retarget
 `usage_read`, `question_response`, `voice_route`, `message`, `cancel`, and `terminal_open` for a
 binary terminal channel with scroll, resync and paste. The same frames travel from the web client
 over the relay.
+
+`question_response` carries the `requestId` of the `commander_question` it answers, and its
+`question_response_result` comes back under that same id, to that client alone (sealed, over the relay):
+`{ ok: true }` once the answer is typed, or `{ error: "STALE_QUESTION", detail }` when the dialog on
+screen is no longer that question — nothing is typed then.
 
 Engines report in over HTTP on the same port: `POST /api/hook/session-start`, `session-end`,
 `turn-start`, `turn-stop`, `tool-start`, authenticated by a per-install token the daemon writes into

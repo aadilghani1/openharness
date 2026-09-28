@@ -46,6 +46,10 @@ void main() {
       addTearDown(map.dispose);
       addTearDown(projects.dispose);
       await seedPreviews(app);
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       app.adoptSessionForTest(terminal('a69', []));
       tester.view.devicePixelRatio = 1;
       tester.view.physicalSize = const Size(1280, 800);
@@ -292,7 +296,7 @@ void main() {
     },
   );
 
-  testWidgets('Open Harness builds a small window and Tab reaches later rows', (
+  testWidgets('Open Harness builds a small window and arrow keys reach later rows', (
     tester,
   ) async {
     final app = createApp();
@@ -355,7 +359,7 @@ void main() {
     expect(rows.evaluate().length, lessThan(search.rows.length));
     final visited = <String>{};
     for (var step = 0; step < 35; step++) {
-      await key(tester, LogicalKeyboardKey.tab);
+      await key(tester, LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
       final selected = search.selected;
       if (selected != null) {

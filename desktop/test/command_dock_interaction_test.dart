@@ -29,6 +29,10 @@ void main() {
   ) async {
     final app = createApp();
     seedMixedAgents(app);
+    app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    await app.agentPreference.remember('codex');
+    await app.projectHistory.select('m', '/work/openharness');
     final map = MemoryKeymap();
     addTearDown(app.dispose);
     addTearDown(map.dispose);
@@ -72,7 +76,21 @@ void main() {
           terminalAvailable: true,
           lastActivityAt: DateTime.now().subtract(const Duration(minutes: 33)),
         ),
-        ...app.machineStates['m']!.agents.skip(1),
+        // Quiet for hours, though opened a moment ago in some client: an open
+        // is not work, so the age is the conversation's — three hours.
+        () {
+          final quiet = app.machineStates['m']!.agents[1];
+          return Agent(
+            id: quiet.id,
+            name: quiet.name,
+            engine: quiet.engine,
+            project: quiet.project,
+            terminalAvailable: true,
+            lastActivityAt: DateTime.now().subtract(const Duration(hours: 3)),
+            lastOpenedAt: DateTime.now().subtract(const Duration(minutes: 5)),
+          );
+        }(),
+        ...app.machineStates['m']!.agents.skip(2),
       ];
       await configured.mount(tester, app, map);
       await openHarnessPicker(tester);
@@ -84,6 +102,19 @@ void main() {
       expect(
         find.descendant(of: row, matching: find.text('33m')),
         findsOneWidget,
+      );
+      final opened = find.byKey(ValueKey(agentDestinationId('m', 'a1')));
+      expect(
+        find.descendant(of: opened, matching: find.text('3h')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Tooltip>(
+              find.descendant(of: opened, matching: find.byType(Tooltip)),
+            )
+            .message,
+        startsWith('Last active '),
       );
       expect(
         find.descendant(of: row, matching: find.byType(SearchResultText)),
@@ -136,7 +167,10 @@ void main() {
         expect(tester.widget<TextField>(input).cursorWidth, 2);
         expect(find.byKey(const ValueKey('swarm-search-prompt')), findsNothing);
         expect(find.text('Harness:'), findsNothing);
-        expect(find.text('[ New Harness ]'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('new-harness-field-start')),
+          findsNothing,
+        );
         expect(find.text('Select Item'), findsNothing);
         expect(find.byKey(const ValueKey('swarm-search-hints')), findsNothing);
         final search = tester

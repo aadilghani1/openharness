@@ -11,11 +11,15 @@ are the detailed implementation references for this system.
 
 ## Text is the interface
 
-Use meaningful names and familiar terminal punctuation. Prefer `[ New Harness ]`
-and `[ Customize Harness ]` to rounded buttons with pictograms. A checkbox is
+Use meaningful names and familiar terminal punctuation. Menu actions such as
+`New Harness` use plain text and the same row highlight as other choices.
+Standalone actions can use brackets, such as `[ Customize Harness ]`, instead
+of rounded buttons with pictograms. A checkbox is
 `[x]` or `[ ]`. Harness search has no prefix; `#` selects projects and `>` selects
-commands as editable text. Small, established actions may use `+`,
-`@`, `:`, and `*`, with a descriptive tooltip and accessible name.
+commands as editable text. `@`, `:`, and `*` scope machines, models, and Store
+inside the same picker. The top bar keeps focused model, machine, and project links plus `+` for New
+Tab. Leave global search in Cmd-P and the app menu. Keep descriptive tooltips
+and accessible names.
 
 There is no broadly understood ASCII pencil. Keep `[ Customize Harness ]` after
 customization as well as before it. The same action should retain its name and
@@ -28,8 +32,14 @@ User content and embedded viewers retain their own visual language.
 
 Every workspace action needs an existing command or a clear keyboard interaction.
 Resolve shortcut hints from the live keymap. Cmd-N creates a harness, Cmd-O opens projects (`#`), Cmd-P searches harnesses, and Cmd-Shift-P opens
-commands (`>`) in the shared picker. Cmd-T opens a tab, Cmd-W closes a tab, and
-Cmd-Shift-W closes the focused pane view. Cmd-Q quits the app. Enter activates, Space toggles, and Escape backs out or dismisses.
+commands (`>`) in the shared picker. Cmd-I opens models with `:` already entered;
+typing Shift is unnecessary. From a live harness pane, Enter uses a served or
+downloaded model for that pane, starting installed weights when necessary; Tab
+switches between the list and controls. In Cmd-N, Tab switches between fields
+and their choices. Up/Down navigates the active pane and Enter activates.
+Cmd-P's model scope uses the same behavior. Cmd-T opens a tab, Cmd-W closes a tab, and
+Cmd-Shift-W closes the focused pane view. Cmd-Q quits the app. Enter activates,
+Space toggles, and Escape backs out or dismisses.
 
 Closing a pane removes its view immediately, without a minimize animation.
 
@@ -65,9 +75,11 @@ actions use `terminalContentStyle()` and follow the terminal font preference.
 
 ## Keep surfaces quiet
 
-First launch uses the same New Tab page as every later visit: “Follow your
-curiosity.” with New Harness, Open Harness, and Harness Store shortcuts. Keep
-this page independent of onboarding progress; no checklist or automatic dialog.
+First launch uses the same New Tab page as every later visit: “Harness like a
+boss.” followed by five clickable shortcuts: Start an agent, Manage all your
+agents, Deploy a local model, Manage all your machines, and Build beyond code.
+Resolve the shortcut hints from the live keymap; unbound actions remain clickable.
+Keep this page independent of onboarding progress; no checklist or automatic dialog.
 
 ![Shared first-launch and New Tab welcome](images/workspace-welcome.png)
 
@@ -92,9 +104,11 @@ shared app bar. A dependent viewer uses its owner's context. Keep internal
 worktree paths and machinery out of everyday labels.
 
 Machine opens the shared picker scoped to that machine. Project opens its harnesses across
-known checkouts and machines. Branch narrows that project to the exact named
-branch. Hide detached commit hashes from the bar. These are navigation actions;
-they do not check out a branch.
+known checkouts and machines. With session Git context, Branch opens Branches and pull requests: checked-out and recorded branches,
+with PR history. Temporary checkout paths stay out of these labels and details.
+Older daemons keep exact-branch project search. Hide detached commit hashes from
+the bar. Multiple branches or unavailable Git data use plain context text, without a
+branch symbol. These are navigation actions; they do not check out a branch.
 The PR label opens that PR. Each field gets its own accessible link, tooltip, and
 the shared hover treatment, including in joined Agnoster segments.
 

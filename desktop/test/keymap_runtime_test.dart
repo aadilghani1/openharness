@@ -110,31 +110,44 @@ void main() {
       final app = createApp();
       addTearDown(map.dispose);
       addTearDown(app.dispose);
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       await mount(tester, app, map);
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       final box = tester
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
-      for (final (forward, backward) in [
-        (LogicalKeyboardKey.keyJ, LogicalKeyboardKey.keyK),
-        (LogicalKeyboardKey.keyL, LogicalKeyboardKey.keyH),
-      ]) {
-        await key(tester, forward, ctrl: true);
-        expect(box.field, NewHarnessField.harness);
-        await key(tester, backward, ctrl: true);
-        expect(box.field, NewHarnessField.launch);
-        await key(tester, forward, ctrl: true);
-        await key(tester, LogicalKeyboardKey.enter);
-        final cursor = box.cursor;
-        final engine = box.engine;
-        await key(tester, forward, ctrl: true);
-        expect(box.cursor, (cursor + 1) % box.options.length);
-        await key(tester, backward, ctrl: true);
-        expect(box.cursor, cursor);
-        expect(box.engine, engine);
-        await key(tester, LogicalKeyboardKey.escape);
-        await key(tester, backward, ctrl: true);
-      }
+      bool selected(String row) =>
+          tester
+              .widget<Semantics>(find.byKey(ValueKey('new-harness-field-$row')))
+              .properties
+              .selected ==
+          true;
+      await key(tester, LogicalKeyboardKey.keyJ, ctrl: true);
+      expect(selected('agent'), isTrue);
+      await key(tester, LogicalKeyboardKey.keyK, ctrl: true);
+      expect(selected('start'), isTrue);
+      await key(tester, LogicalKeyboardKey.keyJ, ctrl: true);
+      await key(tester, LogicalKeyboardKey.enter);
+      expect(box.field, NewHarnessField.harness);
+      final cursor = box.cursor;
+      final engine = box.engine;
+      await key(tester, LogicalKeyboardKey.keyJ, ctrl: true);
+      expect(box.cursor, (cursor + 1) % box.options.length);
+      await key(tester, LogicalKeyboardKey.keyK, ctrl: true);
+      expect(box.cursor, cursor);
+      expect(box.engine, engine);
+      // Remapped Tab switches panes without walking rows or applying a choice.
+      await key(tester, LogicalKeyboardKey.keyH, ctrl: true);
+      expect(harnessChoicesActive(tester), isFalse);
+      expect(selected('agent'), isTrue);
+      expect(box.engine, engine);
+      await key(tester, LogicalKeyboardKey.keyL, ctrl: true);
+      expect(harnessChoicesActive(tester), isTrue);
+      expect(box.engine, engine);
+      await key(tester, LogicalKeyboardKey.escape);
       await focusLaunchRow(tester, 'advanced');
       final expanded = box.advancedOpen;
       await key(tester, LogicalKeyboardKey.arrowRight);
@@ -156,6 +169,10 @@ void main() {
       final app = createApp();
       addTearDown(map.dispose);
       addTearDown(app.dispose);
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       await mount(tester, app, map, native: true);
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       final form = find.byType(NewHarnessForm);

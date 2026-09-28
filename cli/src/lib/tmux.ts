@@ -116,6 +116,38 @@ function hasCursorPackageEntrypoint(args: string): boolean {
     /cursor-agent[\/\\]versions[\/\\][^/\\]+[\/\\]index\.js$/i.test(token))
 }
 
+/**
+ * Hermes launches itself as inline source, so its argv names no script at all.
+ *
+ * `~/.hermes/hermes-agent/.hermes/bin/hermes` is a `sh` stub that `exec`s Hermes' own vendored
+ * interpreter with the whole launcher as `-c` text:
+ *
+ *   ~/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3 -I -c 'import os, re, sys
+ *   …sys.path.insert(0, "<root>/hermes-agent")…from hermes_cli.main import main…sys.exit(main())'
+ *
+ * The stub is exec'd away, so `comm` is `python3`, and `processEntrypoint` correctly refuses to read
+ * inline source as an entrypoint — nothing on this row carries the engine's name anywhere the matcher
+ * looks. Measured on 0.21.5+2144.g7b761da: a New Harness pane was retained six seconds after starting
+ * ("engine process absent after 2 confirmed scans") over a Hermes that was running and drawing its
+ * dashboard, and selecting it again spent the whole readiness budget before RESUME_UNCONFIRMED.
+ *
+ * BOTH markers are required, and each rules out a different false positive. The sys.path root alone is
+ * also in `hermes-acp`, the other stub in that bin, identical but for `from acp_adapter.entry import
+ * main` — an ACP adapter is not the harness's engine. The `hermes_cli` import alone is a word that
+ * could appear in a prompt; a prompt is not python source that has also just put Hermes' own package
+ * root on the path. Together they are the launcher and nothing else, wherever HERMES_HOME puts it.
+ */
+function hermesInlineLauncher(row: Pick<ProcessRow, 'args'>): boolean {
+  // argv[0], not `comm`: macOS prints comm through a 16-column field here, so every absolute path
+  // reaches this parser as `/Users/duynguyen` and its basename names a person, not an interpreter.
+  const tokens = argvTokens(row.args)
+  if (!/^python(?:\d+(?:\.\d+)*)?$/.test(basename(tokens[0] ?? '').toLowerCase())) return false
+  const inline = row.args.search(/\s-(?:c|-command)\s/)
+  if (inline < 0) return false
+  const source = row.args.slice(inline)
+  return /[\/\\]hermes-agent['"]/.test(source) && /\b(?:from|import)\s+hermes_cli\b/.test(source)
+}
+
 function agentAliasCandidate(row: Pick<ProcessRow, 'executable' | 'args'>): boolean {
   if (basename(row.executable).toLowerCase() === 'agent') return true
   return basename(processEntrypoint(row.args)).toLowerCase() === 'agent'
@@ -467,6 +499,9 @@ function heuristicEngineProcessMatchScore(
   // Cursor's launcher can retain argv[0]=agent while the Node package path appears later in argv.
   if (engine === 'cursor' && hasCursorPackageEntrypoint(row.args)) return 3
 
+  // Hermes' own launcher, read out of the inline source it runs as. See `hermesInlineLauncher`.
+  if (engine === 'hermes' && hermesInlineLauncher(row)) return 2
+
   const signature = ENGINE_PROCESS_SIGNATURES[engine]
   if (signature.basenames.some((pattern) => pattern.test(executable) || pattern.test(entrybase))) return 3
   if (signature.entrypoints.some((pattern) => pattern.test(entrypoint))) return 2
@@ -604,14 +639,18 @@ const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: string[]
   claude: { flags: ['--resume', '-r'], id: /^[0-9a-f-]{16,}$/i, unless: ['--fork-session'] },
   codex: { flags: ['resume'], id: /^[0-9a-f-]{16,}$/i },
   cursor: { flags: ['--resume'], id: /^[0-9a-f-]{16,}$/i },
-  opencode: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/ },
+  // `--fork` continues from the id but writes a NEW session, so the id in argv is the parent's.
+  opencode: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/, unless: ['--fork'] },
   // Kilo inherits opencode's resume flags and its `ses_` id prefix — measured on this machine's kilo.db:
   // `ses_024a007fdffe11yG68JPxsHJly`. `--fork` is deliberately NOT here: it CONTINUES from an id but
   // writes a NEW session, so the id in argv is the parent's and would bind the agent to the wrong row.
-  kilo: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/ },
+  kilo: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/, unless: ['--fork'] },
   pi: { flags: ['--session', '--session-id'], id: /^[0-9a-f][0-9a-f-]{7,}$/i },
   // Hermes ids are timestamps: 20260728_115628_f2c86a.
-  hermes: { flags: ['--resume'], id: /^\d{8}_\d{6}_[0-9a-z]+$/i },
+  // Hermes ids are timestamps (20260728_115628_f2c86a), or uuids for an editor's (ACP) sessions.
+  hermes: { flags: ['--resume', '-r'], id: /^(?:\d{8}_\d{6}_[0-9a-z]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i },
+  // `devin -r <id>` / `--resume <id>`: ids are word slugs (`brisk-otter`).
+  devin: { flags: ['--resume', '-r'], id: /^[a-z0-9]+(?:-[a-z0-9]+)+$/ },
   commandcode: { flags: ['--resume', '-r', '--session'], id: /^[0-9a-f-]{16,}$/i },
   // `muse resume <uuid>` names the session; `muse resume --last` does not, so that form falls through
   // to the scan in sessionRepair instead.
@@ -860,8 +899,8 @@ export async function checkSessionRuntime(session: RegisteredSession): Promise<R
   return { state: 'alive' }
 }
 
-// A short single-line message can be pasted without bracketed-paste settling. Anything longer or
-// multi-line uses bracketed paste and waits before Enter (see sendToTmux).
+// Short single-line messages need no settling delay, but still need bracketed-paste boundaries:
+// Codex treats Enter immediately after an unbracketed text burst as a pasted newline, not submit.
 const INJECT_FASTPATH_MAXLEN = 500
 // Base settle time before the submit Enter; grows with length (Claude needs time to ingest a big paste
 // and collapse it to `[Pasted text]` before a clean Enter counts as submit rather than paste content).
@@ -1007,18 +1046,18 @@ async function tmuxPasteText(pane: string, content: string, bracketed: boolean):
  * Type a message into a tmux pane and submit it — the web-chat/device → terminal injection point.
  *
  * All text is loaded into a uniquely named tmux buffer over stdin so prompt bytes never enter argv,
- * environment, logs, or child-process error strings. Short single-line input is pasted literally and
- * submitted immediately.
+ * environment, logs, or child-process error strings. Every message is bracketed-pasted as one unit
+ * (`paste-buffer -p`) so the terminal can distinguish the paste from the separate submit Enter.
+ * Short single-line input is submitted immediately after that explicit paste boundary.
  *
- * Long/multiline input is bracketed-pasted as one unit (`paste-buffer -p`), allowed to settle, then
- * submitted with a separate Enter. (Verified: reliably submits up to ~28 KB.)
+ * Long/multiline input is allowed to settle before Enter. (Verified: reliably submits up to ~28 KB.)
  */
 export function sendToTmux(pane: string, text: string): Promise<boolean> {
   const content = text.replace(/[\r\n]+$/, '') // strip trailing newlines so the submit Enter isn't doubled
   return (async () => {
-    const bracketed = content.length > INJECT_FASTPATH_MAXLEN || content.includes('\n')
-    if (!(await tmuxPasteText(pane, content, bracketed))) return false
-    if (bracketed) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
+    const needsSettle = content.length > INJECT_FASTPATH_MAXLEN || content.includes('\n')
+    if (!(await tmuxPasteText(pane, content, true))) return false
+    if (needsSettle) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
     return tmuxEnter(pane)
   })()
 }

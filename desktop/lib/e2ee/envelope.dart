@@ -13,6 +13,9 @@ const int e2eVersion = 1;
 /// to the CLI's own list, because a type missing here fails nowhere: the frame simply leaves in the
 /// clear, and for terminal_* the relay then drops it as TERMINAL_FRAME_REJECTED.
 const Set<String> encryptedDownTypes = {
+  'harness_share_list',
+  'harness_share_invite',
+  'harness_share_remove',
   // Harness's application RPC extensions (CLI e2ee/applicationFrames.ts).
   'grid_fleet_capabilities',
   'grid_fleet_run',
@@ -20,6 +23,7 @@ const Set<String> encryptedDownTypes = {
   'machine_resources',
   'grid_fleet_models_list',
   'grid_fleet_model_start',
+  'grid_fleet_model_download',
   'grid_fleet_model_stop',
   'message',
   'question_response',
@@ -38,6 +42,8 @@ const Set<String> encryptedDownTypes = {
   'fs_list_dir',
   'project_preview',
   'git_project_info',
+  // The trust-group roster swap (`viewer/group_sync.dart`): the keys every member trusts.
+  'group_sync',
   'codex_profiles_list',
   'codex_profile_link',
   // Asks the machine to read its OWN agent accounts' usage (cli/src/lib/accountUsage.ts). Missing
@@ -46,6 +52,10 @@ const Set<String> encryptedDownTypes = {
   'usage_read',
   // The pane colours this client paints with, for the machine's tmux sessions (cli/src/lib/hostTheme.ts).
   'theme_set',
+  // What somebody searches their conversations for (cli/src/lib/sessionSearch/).
+  'session_search',
+  // Which conversation somebody is previewing, from the same index.
+  'session_tail',
   'device_e2ee_pair',
   'e2ee_pairings_list',
   'e2ee_pairing_unpair',
@@ -68,6 +78,27 @@ const Set<String> encryptedDownTypes = {
   'p2p_abort',
   'p2p_promote',
 };
+
+/// Requests an older CLI took in the clear and a current one refuses unsealed — applicationFrames.ts
+/// `STRICT_DOWN_TYPES`. Sealed only for a machine whose welcome says `strictDown`: an older one would
+/// never open the envelope and would read the request as empty.
+const Set<String> strictDownTypes = {
+  'dsh_install',
+  'dsh_update',
+  'dsh_remove',
+  'dsh_list',
+  'agent_retarget',
+  'engines_probe',
+  'grid_models_list',
+  'cancel',
+  'claude_login_status',
+  'speaking',
+};
+
+/// Whether [type] goes sealed to a machine — applicationFrames.ts `encryptDownFrameFor`.
+bool sealsDown(String type, {required bool strictDown}) =>
+    encryptedDownTypes.contains(type) ||
+    (strictDown && strictDownTypes.contains(type));
 
 Uint8List _aad(
   int v,

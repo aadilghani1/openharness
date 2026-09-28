@@ -15,6 +15,7 @@ import 'link_page.dart';
 import 'phone_card.dart';
 import 'phone_fab.dart';
 import 'new_agent_page.dart';
+import 'voice_input_controller.dart';
 import 'phone_header.dart';
 import 'phone_navigation.dart';
 import 'phone_sheet.dart';
@@ -27,19 +28,10 @@ class AgentsPage extends StatelessWidget {
     super.key,
     required this.notifier,
     required this.machineId,
-    this.embedded = false,
   });
 
   final AppNotifier notifier;
   final String machineId;
-
-  /// Whether this is a PAGE INSIDE the machine pager rather than a route of its own.
-  ///
-  /// The route then belongs to [MachineSwipeHost], and the two places this page would navigate have
-  /// to stop: the padlock empty state's push of a [LinkPage] over the pager, and the pop after
-  /// unlinking, which would drop the person back to the tab from a page they were swiping through.
-  /// Both become a rebuild instead — [MachinePage] watches `needsLink` and draws the form itself.
-  final bool embedded;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -90,11 +82,7 @@ class AgentsPage extends StatelessWidget {
               ),
               if (machine != null)
                 Expanded(
-                  child: _AgentsBody(
-                    notifier: notifier,
-                    machine: machine,
-                    embedded: embedded,
-                  ),
+                  child: _AgentsBody(notifier: notifier, machine: machine),
                 ),
             ],
           ),
@@ -168,10 +156,6 @@ class AgentsPage extends StatelessWidget {
           ?.showSnackBar(SnackBar(content: Text(error)));
       return;
     }
-    // Inside the pager the page has already become the password form — `needsLink` is now true and
-    // [MachinePage] rebuilds on it — so there is nothing to leave, and popping would take the whole
-    // pager with it.
-    if (embedded) return;
     // The page is now showing a machine this phone can no longer open; the list behind it is where
     // the re-link starts.
     Navigator.of(context).maybePop();
@@ -179,17 +163,10 @@ class AgentsPage extends StatelessWidget {
 }
 
 class _AgentsBody extends StatelessWidget {
-  const _AgentsBody({
-    required this.notifier,
-    required this.machine,
-    required this.embedded,
-  });
+  const _AgentsBody({required this.notifier, required this.machine});
 
   final AppNotifier notifier;
   final MachineState machine;
-
-  /// See [AgentsPage.embedded] — here it decides what the padlock empty state's button does.
-  final bool embedded;
 
   String get _machineId => machine.machine.machineId;
 
@@ -203,17 +180,11 @@ class _AgentsBody extends StatelessWidget {
         title: 'This machine needs its password',
         message: 'Every machine has its own. Enter it once to link this phone.',
         action: FilledButton(
-          // Embedded, the form is this same page a rebuild away: clearing the dismissal is the whole
-          // move, and [MachinePage] draws [LinkPage] on the next frame. Pushing a route instead
-          // would stack a second screen over the pager — and that screen's own `pushReplacement`
-          // would then replace the pager once the password landed.
-          onPressed: embedded
-              ? () => notifier.revisitLinkPrompt(_machineId)
-              : () => Navigator.of(context).pushReplacement(
-                  phoneRoute(
-                    (_) => LinkPage(notifier: notifier, machineId: _machineId),
-                  ),
-                ),
+          onPressed: () => Navigator.of(context).pushReplacement(
+            phoneRoute(
+              (_) => LinkPage(notifier: notifier, machineId: _machineId),
+            ),
+          ),
           child: const Text('Enter password'),
         ),
       );
@@ -303,7 +274,16 @@ Future<void> showAgentActions(
 Future<void> openNewAgent(
   BuildContext context,
   AppNotifier notifier,
-  String machineId,
-) => Navigator.of(context).push(
-  phoneRoute((_) => NewAgentPage(notifier: notifier, machineId: machineId)),
+  String machineId, {
+  String? folder,
+  VoiceInputController? voice,
+}) => Navigator.of(context).push(
+  phoneRoute(
+    (_) => NewAgentPage(
+      notifier: notifier,
+      machineId: machineId,
+      folder: folder,
+      voice: voice,
+    ),
+  ),
 );

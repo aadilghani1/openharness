@@ -66,15 +66,15 @@ export class StoppedAgentStore {
       active: false,
       launch: { state: 'ready' },
       defaultName: projectDisplayName(session),
-      updatedAt: Date.now(),
+      touchedAt: Date.now(),
     }
-    // Herdr-only snapshots omit the legacy alias just like registry persistence.
+    // A snapshot without a tmux pane omits the legacy alias just like registry persistence.
     if (!snapshot.tmuxPane) delete (snapshot as Partial<RegisteredSession>).tmuxPane
     atomicWriteJson(join(this.directory, `${session.agentId}.json`), { version: 1, session: snapshot })
   }
 
   /** Correct one field of an archive in place — the folder a Claude row drifted out of (cwdRepair.ts).
-   *  Not `save`: that recomputes the name and stamps `updatedAt`, and a repair must not reorder the
+   *  Not `save`: that recomputes the name and stamps `touchedAt`, and a repair must not reorder the
    *  catalog or rename anything. Nothing else on the row changes. */
   patch(agentId: string, patch: Partial<Pick<RegisteredSession, 'cwd'>>): boolean {
     const saved = this.get(agentId)

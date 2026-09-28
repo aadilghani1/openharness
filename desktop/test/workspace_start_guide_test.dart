@@ -155,6 +155,22 @@ Future<void> _mount(
 }
 
 void main() {
+  Future<void> chooseProject(WidgetTester tester) async {
+    await openLaunchRow(tester, 'agent');
+    await typeHarnessQuery(tester, 'Codex');
+    await key(tester, LogicalKeyboardKey.enter);
+    await openLaunchRow(tester, 'project');
+    await tester.tap(
+      find.byKey(
+        ValueKey('new-harness-option-${NewHarnessController.newProjectId}'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await key(tester, LogicalKeyboardKey.enter);
+    await typeHarnessQuery(tester, 'first-project');
+    await key(tester, LogicalKeyboardKey.enter);
+  }
+
   setUp(() {
     newHarnessOpensInBox = true;
   });
@@ -170,7 +186,7 @@ void main() {
         addTearDown(app.dispose);
         addTearDown(journey.dispose);
         await _mount(tester, app, onboarding: journey);
-        expect(find.text('Follow your curiosity.'), findsOneWidget);
+        expect(find.text('Harness like a boss.'), findsOneWidget);
         expect(find.text('○'), findsNothing);
         expect(app.panes, isEmpty);
 
@@ -183,6 +199,7 @@ void main() {
         expect(find.byType(NewHarnessForm), findsOneWidget);
         expect(app.launches, isEmpty);
         expect(journey.completed(OnboardingStep.harnesses), isFalse);
+        await chooseProject(tester);
         if (keyboard) {
           await startHarness(tester);
         } else {
@@ -192,7 +209,7 @@ void main() {
         }
         await tester.pumpAndSettle();
         expect(app.launches, hasLength(1));
-        expect(app.launches.single.project?.isGenerated, isTrue);
+        expect(app.launches.single.project?.folderName, 'first-project');
         expect(find.byType(NewHarnessForm), findsNothing);
         expect(find.byType(TerminalView), findsOneWidget);
         expect(
@@ -220,7 +237,7 @@ void main() {
         await key(tester, LogicalKeyboardKey.keyT, cmd: true);
         await tester.pumpAndSettle();
         expect(find.byType(WorkspaceWelcome), findsOneWidget);
-        expect(find.text('Follow your curiosity.'), findsOneWidget);
+        expect(find.text('Harness like a boss.'), findsOneWidget);
         expect(find.text('✓'), findsNothing);
         expect(find.text('○'), findsNothing);
         expect(app.launches, hasLength(1));
@@ -241,6 +258,7 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     await tester.pumpAndSettle();
     final start = find.byKey(const ValueKey('new-harness-field-start'));
+    await chooseProject(tester);
     await startHarness(tester);
     await tester.pump();
     expect(find.text('Starting harness…'), findsOneWidget);
@@ -262,12 +280,13 @@ void main() {
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(find.byType(NewHarnessForm), findsNothing);
-    expect(find.text('Follow your curiosity.'), findsOneWidget);
+    expect(find.text('Harness like a boss.'), findsOneWidget);
     expect(find.text('○'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('welcome-agent.new')));
     await tester.pumpAndSettle();
     app.creation = null;
+    await chooseProject(tester);
     await tester.tap(start);
     await tester.pumpAndSettle();
     expect(app.launches, hasLength(2));
@@ -287,7 +306,7 @@ void main() {
     await _mount(tester, app);
     final search = find.byKey(const ValueKey('swarm-search-input'));
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
-    expect(find.text('Follow your curiosity.'), findsOneWidget);
+    expect(find.text('Harness like a boss.'), findsOneWidget);
     expect(find.byType(NewHarnessForm), findsNothing);
     expect(search, findsNothing);
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
@@ -297,7 +316,7 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
     final tab = app.activeSwarmId;
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
-    expect(find.text('Follow your curiosity.'), findsOneWidget);
+    expect(find.text('Harness like a boss.'), findsOneWidget);
     expect(search, findsNothing);
     await openHarnessPicker(tester);
     await tester.pump();
