@@ -598,7 +598,8 @@ class AppNotifier extends ChangeNotifier {
   /// mood }` → `pair_plate { ..., frames, frameMs }`). The first that answers
   /// wins; a computer whose harnessd predates individual art says
   /// `UNSUPPORTED` or stays silent (a sealed frame it cannot open), which is a
-  /// short timeout and the next one. Null when none could.
+  /// timeout and the next one. A first render can take tens of seconds;
+  /// the recoloured species plate remains visible while it draws.
   Future<Map<String, dynamic>?> requestIndividualPlate(
     Map<String, dynamic> payload,
   ) async {
@@ -612,11 +613,12 @@ class AppNotifier extends ChangeNotifier {
     ]..sort((a, b) => (b.isLocalMachine ? 1 : 0) - (a.isLocalMachine ? 1 : 0));
     for (final machine in machines) {
       try {
-        return await _conn(machine.machine.machineId).request(
+        final answer = await _conn(machine.machine.machineId).request(
           'pair_plate_get',
           payload: payload,
-          timeout: const Duration(seconds: 8),
+          timeout: const Duration(minutes: 2),
         );
+        if (answer['error'] == null && answer['frames'] is List) return answer;
       } catch (_) {
         // Too old, asleep, or not there: the next one.
       }

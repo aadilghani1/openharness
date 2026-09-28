@@ -87,14 +87,16 @@ export function zooIndividuals(zoo: unknown): ZooIndividual[] {
 export function pairedIndividual(zoo: unknown): ZooIndividual | null {
   if (!zoo || typeof zoo !== 'object') return null
   const z = zoo as { paired?: unknown; pair?: unknown }
-  const key = typeof z.paired === 'string' ? z.paired : typeof z.pair === 'string' ? z.pair : null
+  const key = Object.hasOwn(z, 'paired')
+    ? typeof z.paired === 'string' ? z.paired : null
+    : typeof z.pair === 'string' ? z.pair : null
   if (!key) return null
   const all = zooIndividuals(zoo)
   const byUid = all.find((d) => d.uid === key)
   if (byUid) return byUid
   if (!isPairDaemonId(key)) return null
   // The old shape: `pair` is a species id, one record per species.
-  return all.find((d) => d.id === key && d.uid === null) ?? all.find((d) => d.id === key) ?? null
+  return all.find((d) => d.id === key && d.uid === null) ?? null
 }
 
 /** How an individual is called: `pip the tim`, or `tim #0042` unnamed, or plain `tim` without a serial. */

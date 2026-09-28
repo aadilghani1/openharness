@@ -232,7 +232,7 @@ describe('the draw', () => {
   it('gives the first four hatches of an account only species it does not own', () => {
     expect(ZOO_FIRST_NEW).toBe(4)
     for (let n = 0; n < ZOO_FIRST_NEW; n++) {
-      const owned = REGULARS.slice(0, n)
+      const owned: string[] = REGULARS.slice(0, n)
       const zoo = zooOf({ daemons: owned.map((id) => daemon(id)) })
       for (const kind of ['first', 'turn', 'week', 'marathon', 'night']) {
         expect(eligible(zoo, kind).filter((id) => owned.includes(id)), `${kind} with ${n} owned`).toEqual([])

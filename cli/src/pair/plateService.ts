@@ -37,6 +37,8 @@ import { gunzip, gzip } from 'node:zlib'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import { DAEMONS_OFF, DAEMONS_OFF_DETAIL } from '../lib/daemonsSwitch.js'
 import { isPairDaemonId } from './protocol.js'
 import { isSeed, isUid, zooIndividuals, type ZooIndividual } from './individuals.js'
@@ -162,10 +164,12 @@ export class InlinePlateRenderer implements PlateRenderer {
   close(): void { this.closed++ }
 }
 
-/** The worker when the build carries its source, else drawing in-thread. */
+/** Source runs use the development loader inside the worker too: art must never block terminal I/O. */
 export function defaultPlateRenderer(): PlateRenderer {
   const source = typeof __PLATE_WORKER__ === 'string' ? __PLATE_WORKER__ : ''
-  return source ? new WorkerPlateRenderer(source) : new InlinePlateRenderer()
+  if (source) return new WorkerPlateRenderer(source)
+  const require = createRequire(import.meta.url)
+  return new WorkerPlateRenderer(`require(${JSON.stringify(require.resolve('tsx/cjs'))}); require(${JSON.stringify(fileURLToPath(new URL('./plateWorker.ts', import.meta.url)))});`)
 }
 
 // ── requests ───────────────────────────────────────────────────────────────────────────────────────────
@@ -246,7 +250,7 @@ export class PlateService {
   private evicting: Promise<void> | null = null
   private evictAgain = false
   private seen: Set<string> | null = null
-  private lastZoo: ZooIndividual[] = []
+  private lastZoo: ZooIndividual[] | null = null
   private counts = { renders: 0, hits: 0, misses: 0, evicted: 0 }
 
   constructor(private readonly deps: PlateServiceDeps) {
@@ -269,6 +273,8 @@ export class PlateService {
     const waiting = this.queue.splice(0)
     for (const q of waiting) q.reject(new PlateError(DAEMONS_OFF, DAEMONS_OFF_DETAIL))
     this.renderer.close()
+    this.inflight.clear()
+    this.loading.clear()
     this.memory.clear()
     this.touched.clear()
     this.seen = null
@@ -283,10 +289,12 @@ export class PlateService {
   /** `daemon_plate_get` / `pair_plate_get`: the answer's fields (the transport adds `requestId`). */
   async get(payload: Record<string, unknown>): Promise<PlateAnswer | PlateRefusal> {
     if (!this.on) return { error: DAEMONS_OFF, detail: DAEMONS_OFF_DETAIL }
+    const generation = this.generation
     const req = parsePlateRequest(payload)
     if ('error' in req) return req
     try {
       const unit = await this.unit(req, 'request')
+      if (!this.on || generation !== this.generation) throw new PlateError(DAEMONS_OFF, DAEMONS_OFF_DETAIL)
       const frames = unit[req.mood]
       if (!Array.isArray(frames) || !frames.length) return { error: 'RENDER_FAILED', detail: `no ${req.mood} loop was drawn` }
       return { uid: req.uid, size: req.size, version: req.version, mood: req.mood, frames, frameMs: plateRules().plate.frameMs }
@@ -333,6 +341,7 @@ export class PlateService {
   private async fetch(job: PlateJob, key: string, flight: Flight): Promise<PlateUnit> {
     const generation = this.generation
     const entry = await this.load(job)
+    if (generation !== this.generation || !this.on) throw new PlateError(DAEMONS_OFF, DAEMONS_OFF_DETAIL)
     const cached = entry.units[unitKey(job)]
     if (cached) {
       this.counts.hits++
@@ -343,7 +352,7 @@ export class PlateService {
     this.counts.misses++
     const unit = await this.enqueue(job, key, flight)
     if (generation !== this.generation || !this.on) throw new PlateError(DAEMONS_OFF, DAEMONS_OFF_DETAIL)
-    await this.persist(job, unit).catch((err) => this.log(`[plates] could not keep ${fileKey(job)}: ${err instanceof Error ? err.message : String(err)}`))
+    await this.persist(job, unit, generation).catch((err) => this.log(`[plates] could not keep ${fileKey(job)}: ${err instanceof Error ? err.message : String(err)}`))
     return unit
   }
 
@@ -366,7 +375,7 @@ export class PlateService {
     this.drawing = true
     const started = performance.now()
     const generation = this.generation
-    this.renderer.render(next.job).then(
+    Promise.resolve().then(() => this.renderer.render(next.job)).then(
       (unit) => {
         this.counts.renders++
         const seconds = ((performance.now() - started) / 1000).toFixed(1)
@@ -383,6 +392,7 @@ export class PlateService {
   }
 
   private prerenderNew(): void {
+    if (this.lastZoo === null) return
     const first = this.seen === null
     const seen = (this.seen ??= new Set())
     const now = this.now()
@@ -390,7 +400,7 @@ export class PlateService {
       if (!d.uid || seen.has(d.uid)) continue
       seen.add(d.uid)
       // The first read is a baseline: what hatched before it is drawn when someone asks, unless it is new.
-      if (first && !(d.hatched !== null && now - d.hatched < PLATE_RECENT_HATCH_MS)) continue
+      if (first && !(d.hatched !== null && now >= d.hatched && now - d.hatched < PLATE_RECENT_HATCH_MS)) continue
       if (!hasPlateModel(d.id) || !d.version || !(plateRules().versions as readonly string[]).includes(d.version)) continue
       for (const size of PLATE_SIZES) {
         this.unit({ id: d.id, seed: d.seed, size, version: d.version }, 'prerender').catch(() => {})
@@ -410,12 +420,14 @@ export class PlateService {
     if (held) { this.remember(key); return Promise.resolve(held) }
     const reading = this.loading.get(key)
     if (reading) return reading
+    const generation = this.generation
     const read = this.readEntry(job).then((entry) => {
+      if (generation !== this.generation || !this.on) return entry
       const again = this.memory.get(key)
       if (again) return again
-      if (this.on) this.keep(key, entry)
+      this.keep(key, entry)
       return entry
-    }).finally(() => this.loading.delete(key))
+    }).finally(() => { if (this.loading.get(key) === read) this.loading.delete(key) })
     this.loading.set(key, read)
     return read
   }
@@ -435,24 +447,28 @@ export class PlateService {
   }
 
   /** Add a drawn unit to its individual's file. Writes to one file run one after another. */
-  private persist(job: PlateJob, unit: PlateUnit): Promise<void> {
+  private persist(job: PlateJob, unit: PlateUnit, generation: number): Promise<void> {
     const key = fileKey(job)
+    const current = () => this.on && this.generation === generation
     const previous = this.writes.get(key) ?? Promise.resolve()
     const write = previous.catch(() => {}).then(async () => {
-      if (!this.on) return
+      if (!current()) return
       const entry = await this.load(job)
+      if (!current()) return
       entry.units[unitKey(job)] = unit
-      if (this.on) this.keep(key, entry)
+      this.keep(key, entry)
       await mkdir(this.folder(), { recursive: true, mode: 0o700 })
       const body = await gzipAsync(Buffer.from(JSON.stringify(entry)))
+      if (!current()) return
       const tmp = `${this.file(key)}.${randomBytes(4).toString('hex')}.tmp`
       await writeFile(tmp, body, { mode: 0o600 })
+      if (!current()) { await unlink(tmp).catch(() => {}); return }
       await rename(tmp, this.file(key)).catch(async (err) => { await unlink(tmp).catch(() => {}); throw err })
       this.touched.set(key, this.now())
     })
-    const settled = write.finally(() => { if (this.writes.get(key) === settled) this.writes.delete(key) })
+    const settled = write.catch(() => {}).finally(() => { if (this.writes.get(key) === settled) this.writes.delete(key) })
     this.writes.set(key, settled)
-    return write.then(() => this.evictSoon())
+    return write.then(() => current() ? this.evictSoon() : undefined)
   }
 
   private keep(key: string, entry: Entry): void {

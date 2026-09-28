@@ -25,8 +25,9 @@ import 'zoo.dart';
 /// Ask a computer for art: the `pair_plate_get` payload (without its
 /// `requestId`, which the transport adds) in, the `pair_plate` payload out,
 /// or null when no computer answered.
-typedef PlateRequest =
-    Future<Map<String, dynamic>?> Function(Map<String, dynamic> payload);
+typedef PlateRequest = Future<Map<String, dynamic>?> Function(
+  Map<String, dynamic> payload,
+);
 
 class IndividualArt extends ChangeNotifier {
   IndividualArt({
@@ -51,6 +52,7 @@ class IndividualArt extends ChangeNotifier {
   final _asking = <String, Future<void>>{};
   final _failed = <String, DateTime>{};
   bool _disposed = false;
+  int _generation = 0;
 
   static String _key(
     String id,
@@ -106,9 +108,12 @@ class IndividualArt extends ChangeNotifier {
     if (_asking.containsKey(key)) return;
     final failed = _failed[key];
     if (failed != null && _now().difference(failed) < retryAfter) return;
-    _asking[key] = _fetch(key, daemon, size, version, mood).whenComplete(
-      () => _asking.remove(key),
-    );
+    late Future<void> pending;
+    pending = _fetch(key, daemon, size, version, mood, _generation)
+        .whenComplete(() {
+          if (identical(_asking[key], pending)) _asking.remove(key);
+        });
+    _asking[key] = pending;
   }
 
   Future<void> _fetch(
@@ -117,6 +122,7 @@ class IndividualArt extends ChangeNotifier {
     PlateSize size,
     String version,
     DaemonMood mood,
+    int generation,
   ) async {
     Map<String, dynamic>? answer;
     try {
@@ -131,8 +137,11 @@ class IndividualArt extends ChangeNotifier {
     } catch (error) {
       debugPrint('daemons: plate for ${daemon.id} ${daemon.seed}: $error');
     }
-    if (_disposed) return;
-    final frames = answer == null ? null : _read(answer, size, version, mood);
+    if (_disposed || generation != _generation) return;
+    final frames =
+        answer == null || (answer['uid'] != null && answer['uid'] != daemon.uid)
+        ? null
+        : _read(answer, size, version, mood);
     if (frames == null) {
       _failed[key] = _now();
       return;
@@ -160,7 +169,7 @@ class IndividualArt extends ChangeNotifier {
     if (answer['version'] != null && answer['version'] != version) return null;
     if (answer['mood'] != null && answer['mood'] != mood.name) return null;
     final raw = answer['frames'];
-    if (raw is! List || raw.isEmpty) return null;
+    if (raw is! List || raw.isEmpty || raw.length > 8) return null;
     final rules = roster.rules.plate;
     final cols = rules?.cols[size.name] ?? 56;
     final maxRows =
@@ -169,7 +178,18 @@ class IndividualArt extends ChangeNotifier {
     final frames = <PlateFrame>[];
     int? width, height;
     for (final f in raw) {
-      if (f is! Map || f['rows'] is! String) return null;
+      if (f is! Map || f['rows'] is! String || f['mats'] is! String) {
+        return null;
+      }
+      final rows = (f['rows'] as String).split('\n');
+      final mats = (f['mats'] as String).split('\n');
+      if (rows.length != mats.length) return null;
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].length != mats[i].length ||
+            !RegExp(r'^[.magse p]*$').hasMatch(mats[i])) {
+          return null;
+        }
+      }
       final frame = PlateFrame.parse(f['rows'] as String, f['mats'] as String?);
       height ??= frame.rows.length;
       width ??= frame.rows.first.length;
@@ -188,6 +208,9 @@ class IndividualArt extends ChangeNotifier {
 
   /// Signed out: nothing more is asked, and what failed may be asked again.
   void reset() {
+    _generation++;
+    _asking.clear();
+    _art.clear();
     _failed.clear();
   }
 

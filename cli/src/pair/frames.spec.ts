@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as C from '../lib/e2ee/core.js'
 import { RelaySessionCrypto } from '../lib/e2ee/relayClient.js'
 import {
-  admitRelayedPairFrame, encryptDownFrame, encryptRpcResult, PAIR_PUSHES, PAIR_REQUESTS, PAIR_RESULTS,
+  admitRelayedPairFrame, encryptDownFrame, encryptRpcResult, PAIR_PUSHES, PAIR_REQUESTS, PAIR_RESULTS, PLATE_REQUEST, PLATE_RESULT,
 } from '../lib/e2ee/applicationFrames.js'
 import { BackendSocket } from '../backendSocket.js'
 import type { PairEvent, PairService, PairSnapshot } from './protocol.js'
@@ -55,6 +55,32 @@ function fakeService(overrides: Partial<PairService> = {}): PairService & { push
 afterEach(() => vi.restoreAllMocks())
 
 describe('pair frames are sealed application frames', () => {
+  it('seals individual-art requests and replies to their requesting connection', async () => {
+    const socket = new BackendSocket('token')
+    const { crypto, sent } = pairedPeer(socket, 'phone')
+    const payload = { uid: 'a'.repeat(24), id: 'tim', seed: 13, size: 'portrait', version: '0.1', mood: 'idle' }
+    const answer = { uid: payload.uid, size: 'portrait', version: '0.1', mood: 'idle', frames: [{ rows: 'o', mats: '.' }], frameMs: 170 }
+    socket.plateService = { get: vi.fn(async () => answer) }
+    const dispatch = (socket as unknown as { dispatchDown: (f: Frame, c: string, t?: string) => Promise<void> }).dispatchDown.bind(socket)
+    try {
+      expect(encryptDownFrame(PLATE_REQUEST)).toBe(true)
+      expect(encryptRpcResult(PLATE_RESULT)).toBe(true)
+      expect(admitRelayedPairFrame({ type: PLATE_RESULT, payload: answer })).toBe(false)
+      await dispatch({ type: PLATE_REQUEST, payload: { requestId: 'plain', ...payload } }, 'phone')
+      expect(socket.plateService.get).not.toHaveBeenCalled()
+      expect(crypto.unwrapIncoming(sent.shift()!.frame)).toMatchObject({ type: PLATE_RESULT, payload: { error: 'E2EE_REQUIRED' } })
+      await dispatch(crypto.wrapOutgoing({ type: PLATE_REQUEST, payload: { requestId: 'sealed', ...payload } }), 'phone')
+      await vi.waitFor(() => expect(sent.length).toBe(1))
+      const reply = sent.shift()!
+      expect(reply.connId).toBe('phone')
+      expect(reply.frame.type).toBe(PLATE_RESULT)
+      expect(reply.frame.payload).not.toHaveProperty('frames')
+      expect(crypto.unwrapIncoming(reply.frame)?.payload).toEqual({ requestId: 'sealed', ...answer })
+      await dispatch({ type: PLATE_REQUEST, payload: { requestId: 'tcp', ...payload } }, 'local', 'local')
+      expect(socket.plateService.get).toHaveBeenCalledTimes(1)
+    } finally { await socket.stop() }
+  })
+
   it('registers every request, result and push, and nothing else under pair_', () => {
     expect([...PAIR_REQUESTS].sort()).toEqual(['pair_answer', 'pair_journal', 'pair_list', 'pair_pause', 'pair_read',
       'pair_resume', 'pair_send', 'pair_start', 'pair_stop', 'pair_watch'])

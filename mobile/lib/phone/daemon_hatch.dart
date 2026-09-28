@@ -966,7 +966,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
                 _done,
                 key: const ValueKey('daemon-hatch-done'),
                 hint: _typedName == null
-                    ? 'Keeps it unnamed; its sheet can name it later'
+                    ? 'Keeps it unnamed'
                     : 'Gives it this name on every device',
                 filled: true,
               ),
@@ -1164,7 +1164,9 @@ class DaemonNameField extends StatelessWidget {
     textInputAction: TextInputAction.done,
     autocorrect: false,
     enableSuggestions: false,
-    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\x20-\x7e]'))],
+    inputFormatters: [
+      FilteringTextInputFormatter.allow(RegExp(r'[\x20-\x7e]')),
+    ],
     onSubmitted: (_) => onSubmitted(),
     cursorColor: DaemonInk.yellow,
     style: DaemonInk.mono(size: 16, color: DaemonInk.bright),

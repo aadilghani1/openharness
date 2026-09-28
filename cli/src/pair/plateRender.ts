@@ -45,6 +45,9 @@ export function renderPlateUnit(job: PlateJob): PlateUnit {
   const model = (PLATE_MODELS as unknown as Record<string, { model: Model }>)[job.id].model
   const traits = rollTraits(PLATE_ROSTER, job.id, job.seed)
   const narrowed = { ...rules, versions: [job.version], plate: { ...rules.plate, cols: { [job.size]: cols } } }
-  const baked = bakeModel(model, narrowed, { traits, mats: true }) as Record<string, Record<string, PlateUnit>>
+  // The generated JavaScript's default destructuring infers only `mats` in TypeScript. Describe its
+  // actual options at this boundary; the model and shader remain generated from the reference.
+  const bake = bakeModel as (model: Model, rules: unknown, options: { traits: unknown; mats: boolean }) => Record<string, Record<string, PlateUnit>>
+  const baked = bake(model, narrowed, { traits, mats: true })
   return baked[job.size][job.version]
 }

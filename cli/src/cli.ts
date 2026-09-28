@@ -3845,7 +3845,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const pair = paired && isRosterDaemon(paired.id) ? paired : null
       const at = zoo?.consent?.at
       zooPair = {
-        known: true, pair: pair?.id ?? null, name: pair?.name ? individualName(pair) : null,
+        known: true, pair: pair?.id ?? null, name: pair ? individualName(pair) : null,
         autonomy: isAutonomy(zoo?.autonomy) ? zoo.autonomy : DEFAULT_AUTONOMY,
         consent: zoo?.consent?.watching === true, consentAt: typeof at === 'string' && at.length <= 64 ? at : null,
       }
