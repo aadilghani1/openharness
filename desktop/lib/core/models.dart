@@ -72,16 +72,19 @@ class SharedHarness {
     required this.name,
     this.engine,
     required this.expiresAt,
+    this.ownerPublicKey,
   });
   final String id, agentId, name;
   final String? engine;
   final DateTime expiresAt;
+  final String? ownerPublicKey;
   factory SharedHarness.fromJson(Map<String, dynamic> j) => SharedHarness(
     id: j['id'] as String,
     agentId: j['agentId'] as String,
     name: j['name'] as String,
     engine: j['engine'] as String?,
     expiresAt: DateTime.parse(j['expiresAt'] as String),
+    ownerPublicKey: j['ownerPublicKey'] as String?,
   );
 }
 
