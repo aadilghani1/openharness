@@ -214,7 +214,7 @@ class SwarmSearchController extends ChangeNotifier {
     final local = entry.local;
     final owner = entry.controller ?? catalog.manager;
     return local != null
-        ? catalog.localStatus(local, controller: owner)
+        ? catalog.localStatusWord(local, controller: owner)
         : entry.status;
   }
 

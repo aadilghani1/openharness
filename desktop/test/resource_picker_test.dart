@@ -748,9 +748,10 @@ void main() {
         await key(tester, LogicalKeyboardKey.keyI, cmd: true);
         expect(search(tester).modelSelectionEngine, 'codex');
         expect(search(tester).selected!.title, 'OpenAI');
+        // The top-5 catalog models are surfaced without pressing "Get models".
         expect(
           search(tester).rows.any((row) => row.modelId == 'model:local:qwen'),
-          isFalse,
+          isTrue,
         );
         for (final heading in [
           'Subscriptions',

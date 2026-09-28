@@ -372,6 +372,28 @@ class ModelSearchCatalog extends ChangeNotifier {
         : 'Suggested';
   }
 
+  /// The inline status word for a list row: a short word with no progress
+  /// percentage (the percentage lives in the pane/detail). Operation and pending
+  /// states map to their bare label so the row never repeats the "42%".
+  String localStatusWord(LocalModel model, {ModelManagerController? controller}) {
+    final owner = controller ?? manager;
+    final operation = owner.operationFor(model);
+    if (operation?.active == true) return operation!.label;
+    if (owner.pendingId == model.id) {
+      return owner.pendingDownload
+          ? 'Downloading'
+          : owner.pendingStart
+          ? 'Starting'
+          : 'Stopping';
+    }
+    if (operation?.failed == true) return 'Failed';
+    return model.running
+        ? 'Running'
+        : model.downloaded
+        ? 'Downloaded'
+        : 'Suggested';
+  }
+
   @override
   void dispose() {
     manager.app.removeListener(_machinesChanged);
