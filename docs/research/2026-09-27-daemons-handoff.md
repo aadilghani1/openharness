@@ -7,6 +7,44 @@ is `docs/research/2026-09-27-daemons-rollout.md`. The review pages the owner app
 the lookbook as reviewed, the overnight report) are in `daemons/review/`: open them from disk in a
 browser, and keep new review pages there too, never as hosted artifacts.
 
+## Desktop release continuation (2026-09-28)
+
+The owner subsequently authorised merging and releasing the desktop app with
+the creature behind **Settings → Experimental → Focus-bar creature**. This
+supersedes the earlier draft-only instructions for that work. PR #370 is
+merged into `daemons`; this branch includes the desktop client and is integrated
+with `main` through `0e4724cd`. The tab-close and launch-progress prerequisite
+from #366 is included here; #367 is already on main.
+
+The release uses the normal desktop tag workflow. The server, harness CLI,
+phone and hn release steps, and the server allowlist, remain separate work.
+The Experimental preview needs none of them: it uses a window-only test
+collection, defaults off, and sends no creature or brain frames.
+
+Integration preserves current main's Share action, API models, account and
+terminal fixes, strict question matching, trust groups and E2EE core. The
+disabled-creature layout reference was measured independently on main
+`0e4724cd`, including Share. Both native and Flutter bars place the creature
+beside Share.
+
+Current desktop validation: the full suite passed 4,164 tests and skipped 12;
+its only two failures were the obsolete pre-Share layout reference. After
+replacing that reference and incorporating the latest API-model changes,
+all 453 affected desktop tests passed, with clean `dart analyze lib test`.
+The native keyboard bridge passed 161 checks, viewer dispatch 9, and AppKit
+1,100. Eight rendered workspace captures passed and the on/off layout was
+inspected. Backend: 1,001 passed, 11 skipped, typecheck clean. Phone: 1,780
+passed, 28 skipped. Generated contracts and all 13 card tests pass. All use
+synthetic state; no live app or real tmux server was launched.
+
+CLI typecheck is clean. The full run passed 7,045 cases and skipped 39; its
+17 failures were an obsolete prefix-matching assertion and process-inspection
+fixtures blocked by an additional macOS sandbox. The assertion now enforces
+main's exact-question rule. All affected suites pass on recheck: 103 process
+tests and 654 question, local-socket, encrypted-routing and API-model tests.
+Vitest's temporary data/auth/runtime directories and the tmux stub stay in
+place for the process checks.
+
 ## Decisions (all made by the product owner)
 
 - **Drop 1 is `init`** (init(8), PID 1, the parent of every daemon): ten animals hiding in Unix names,
@@ -30,7 +68,8 @@ browser, and keep new review pages there too, never as hosted artifacts.
   `HARNESS_DAEMONS` (off by default: routes not registered).
 - **Naming**: user-facing text calls the harness CLI's background process `harnessd` so "daemon"
   stays the creature. Nothing is renamed; it is only a word in docs and a few UI strings.
-- All PRs are drafts titled `WIP:`. Do not merge.
+- The original review kept PRs as `WIP:` drafts. The desktop release approval
+  above supersedes that instruction for the desktop release stack.
 
 ## Continuation completed (2026-09-27)
 
@@ -134,15 +173,19 @@ Real-font settings renders cover light/dark at the minimum window size and
 1.8× text; creature panel renders cover 640 and 1,280 points. Tests use synthetic
 state and stubbed tmux. No live desktop app was launched.
 
-This does not authorize merging the draft PRs or launching a worktree app
-against real state. Test distribution uses the normal Desktop internal build
-workflow with self-update disabled.
+The initial preview was distributed with the normal Desktop internal build
+workflow, with self-update disabled. The later desktop merge/release approval
+is recorded above. It does not permit launching a worktree app against real
+state.
 
 ## What is left
 
-Release later according to `2026-09-27-daemons-rollout.md`: land the prerequisite fixes, server dark,
-CLI, apps, then enable for the founder via `HARNESS_DAEMONS_USERS`. Keep the current PRs as drafts;
-this continuation does not authorize merging them or launching a worktree app against real state.
+Publish the approved Experimental desktop preview through the normal desktop
+release workflow after landing the tested integration. The wider account-based
+feature still follows `2026-09-27-daemons-rollout.md`: server dark, CLI, phone and
+hn, then enable for the founder via `HARNESS_DAEMONS_USERS`. Those deployments
+and the allowlist change are separate from this desktop release. Never launch
+a worktree app against real state.
 
 ## Local review polish · 28 September
 
@@ -163,4 +206,5 @@ remains unverified because the browser tool rejected local-file URLs.
   input into a client that can reach real harnesses.
 - The repo is public: no personal paths, usernames or emails in commits.
 - `core.ts` (the E2EE keystone) is hash-pinned: new sealed frames go in `applicationFrames.ts`.
-- Keep PRs as drafts; do not merge.
+- Follow the current release scope above; the earlier draft-only rule was
+  superseded by the owner's desktop merge/release approval.

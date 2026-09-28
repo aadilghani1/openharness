@@ -5,6 +5,12 @@ the test evidence behind it. The feature itself is described in `daemons/README.
 `daemons/BRAIN.md` and `daemons/LEARNING.md`; the end-to-end run is in
 `docs/research/2026-09-27-daemons-e2e.md`.
 
+**2026-09-28 desktop preview:** the owner approved a desktop release with the
+opt-in **Settings → Experimental → Focus-bar creature**. That window-only
+preview works before the account-based rollout below and changes no server
+flag or allowlist. The desktop prerequisite from #366 is included in #369;
+#367 is already on main. See the handoff's latest continuation for validation.
+
 ## What ships where
 
 | part | change | how it ships |
@@ -31,7 +37,8 @@ Nothing changes for anyone until the server says so.
   `~/.config/harness/pair.jsonc`. It beats the server.
 - **Clients:** a 404 from `/api/zoo` or `DAEMONS_OFF` on any daemon reply hides everything: no status
   slot or reserved space (the desktop's off bar is tested against the base layout at five widths), no
-  keys, no habits, no frames. Guests on the desktop are off unless they turn on "Daemons (preview)".
+  keys, no habits, no frames. The desktop's separate Experimental switch selects
+  a temporary local test collection; explicit off suppresses all creatures.
 
 ## Order
 
