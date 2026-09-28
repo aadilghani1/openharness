@@ -12,11 +12,11 @@ import { join } from 'node:path'
 
 import { AuthSessionManager, readAuthSession } from '../lib/authSession.js'
 import { registry, projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { fetchRelease, loadImage, shouldOffer } from './fwPush.js'
+import { fetchRelease, loadImage, otaKeyForBoard, shouldOffer } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
 
-import type { AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
+import type { AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
 
@@ -392,12 +392,13 @@ export class DaemonCableHost implements CableHost {
     return this.unread
   }
 
-  listSwarms(): { selected: string; swarms: CableSwarm[] } {
+  listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] } {
     const app = this.swarms
-    if (!app) return { selected: '', swarms: [] }
+    if (!app) return { selected: '', swarms: [], tiles: [] }
     return {
       selected: app.active,
       swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, panes: s.panes })),
+      tiles: app.tiles,
     }
   }
 
@@ -831,13 +832,24 @@ export class DaemonCableHost implements CableHost {
   /**
    * The image to offer, or null for "nothing to do".
    *
-   * Null covers three different situations on purpose, because the dial reacts to all of them the same
-   * way — by carrying on: the dial is current, it is running a dev build that must not be touched, or the
-   * manifest is unreachable. An update is an opportunity here, never a condition of working.
+   * Null covers four different situations on purpose, because the device reacts to all of them the same
+   * way — by carrying on: it is current, it is running a dev build that must not be touched, the manifest
+   * is unreachable, or WE DO NOT KNOW WHICH BOARD THIS IS. An update is an opportunity here, never a
+   * condition of working.
+   *
+   * That fourth case is the one with teeth. The manifest has always been per-board, but this call used to
+   * take the default key and so always resolved the round dial's entry — harmless while a dial was the
+   * only thing that could plug in, and a brick the moment a Pro could: its ESP32-P4 cannot run an
+   * ESP32-S3 image, and the cable that would let us put it right is the firmware that just stopped.
    */
-  async firmwareFor(runningVersion: string): Promise<{ version: string; image: Buffer; sha256: string } | null> {
+  async firmwareFor(runningVersion: string, hw?: string): Promise<{ version: string; image: Buffer; sha256: string } | null> {
     if (env.CABLE_FW_DISABLE) return null
-    const release = await fetchRelease(env.CABLE_FW_MANIFEST_URL)
+    const key = otaKeyForBoard(hw)
+    if (!key) {
+      this.log(`cable: not offering firmware — unknown board "${hw}"`)
+      return null
+    }
+    const release = await fetchRelease(env.CABLE_FW_MANIFEST_URL, key)
     if (!release || !shouldOffer(runningVersion, release.version)) return null
     const image = await loadImage(release, join(env.ADAPTER_DATA_DIR, 'firmware'))
     if (!image) return null

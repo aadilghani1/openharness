@@ -5,6 +5,9 @@ import { WebSocket } from 'ws'
 import type { Frame, LocalClientSink } from './backendSocket.js'
 import { attachLocalWsServer, type LocalWsBackend, type LocalWsServer, type LocalWsServerOptions } from './localWsServer.js'
 import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
+import { listenLocalSocket } from './lib/localSocket.js'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 
 const machineId = 'machine-123'
 const streamId = '00112233-4455-6677-8899-aabbccddeeff'
@@ -70,6 +73,35 @@ describe('local CLI WebSocket', () => {
     const port = (server.address() as AddressInfo).port
     return `ws://127.0.0.1:${port}/api/local-ws`
   }
+
+  it('serves the same endpoint over the daemon socket, with no Host to name and no Origin allowed', async () => {
+    const dir = mkdtempSync('/tmp/hsock-')
+    const socketPath = join(dir, 'daemon.sock')
+    const backend = new FakeBackend()
+    const unix = await listenLocalSocket((_req, res) => { res.statusCode = 404; res.end() }, socketPath)
+    await start(backend, { localSocketServer: unix.server })
+    const url = `ws+unix://${socketPath}:/api/local-ws`
+    try {
+      // No port, no loopback Host — refused on TCP, served here.
+      const ws = new WebSocket(url, { headers: { host: 'rebind.evil.example' } })
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+      expect(await connected).toMatchObject({ type: 'connected', payload: { machineId, transport: 'local' } })
+      expect(backend.connId).toMatch(/^local:/)
+      ws.close()
+
+      // A browser still has no business here, whichever way it arrived.
+      const browser = new WebSocket(url, { headers: { origin: 'http://localhost' } })
+      const status = await new Promise<number>((resolve) => browser.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))
+      expect(status).toBe(403)
+    } finally {
+      await local?.close()
+      local = null
+      await unix.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 
   it('refuses an upgrade whose Host is not a loopback name for this port', async () => {
     const url = await start(new FakeBackend())
@@ -267,7 +299,10 @@ describe('local CLI WebSocket', () => {
       // No count at all, from a window too old to send one: as many tiles as agents, which is what
       // this row meant before the field existed.
       { id: 's2', name: 'Launch', agentIds: [], panes: 0 },
-    ] }])
+    // This window sent no `tiles`, which is how every window behaved until it had a device with a
+    // face big enough to draw one. Empty is the honest reading, and the device falls back to
+    // deriving the shape from the count exactly as it does today.
+    ], tiles: [] }])
     // Like app_panes: a fact about this desk, so the machine never sees it.
     expect(backend.frames.map((frame) => frame.type)).toEqual([])
 

@@ -161,6 +161,25 @@ typedef struct {
     int  panes;
 } cable_swarm_t;
 
+/*
+ * ONE TILE OF THE SELECTED TAB'S GRID, exactly where the window put it.
+ *
+ * Unit rectangle in THOUSANDTHS of the grid — integers on the wire, scaled to whatever face reads
+ * them. `agent_id` is empty for a tile this device cannot drive (a shell, a viewer); it still holds
+ * its place, because a shape with a tile missing is not that shape.
+ *
+ * RELAYED, NEVER DERIVED. The device used to guess the shape from the agent count via the app's
+ * `PanePreset.defaultFor`, which is right until somebody picks a different preset — and it could never
+ * express `auto` (whose column count the window MEASURES against its own width) or a hand-dragged
+ * resize at all. An empty list means a daemon or a window too old to send one, and the guess is still
+ * there behind it.
+ */
+#define SWARM_TILES_MAX 24   // the window's own ceiling, same as the rows above
+typedef struct {
+    int16_t x1, y1, x2, y2;   // 0..1000
+    char    agent_id[ID_MAX];
+} cable_tile_t;
+
 // One row of the window's unread list, as `notif.replace` carries it. `summary` is the last recap for
 // a finished turn and empty for a question — the dial kept that question's own text from when it asked.
 typedef struct {

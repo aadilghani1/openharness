@@ -82,7 +82,7 @@ function makeHost(over: Partial<CableHost> = {}) {
     listMachines: async () => ({ machines: [LOCAL_ROW], source: 'backend' as const }),
     selectedMachine: () => 'mac-local',
     selectMachine: async () => ({ ok: true as const }),
-    listSwarms: () => ({ selected: '', swarms: [] }),
+    listSwarms: () => ({ selected: '', swarms: [], tiles: [] }),
     listUnread: () => [],
     selectSwarm: vi.fn(),
     appName: () => 'harness',
@@ -204,13 +204,13 @@ describe('cable session', () => {
   })
 
   it('names the swarms once and again only when they change, and relays a pick', async () => {
-    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Workshop', agents: 2, panes: 2 }, { id: 's2', name: 'Launch', agents: 0, panes: 0 }] }
+    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Workshop', agents: 2, panes: 2 }, { id: 's2', name: 'Launch', agents: 0, panes: 0 }], tiles: [] }
     const host = makeHost({ listSwarms: () => swarms })
     const { session, port } = await connect(host)
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
     await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
     expect(port.sent.filter((m) => m.t === 'swarms')).toEqual([
-      { t: 'swarms', selected: 's1', items: [{ id: 's1', name: 'Workshop', agents: 2, panes: 2 }, { id: 's2', name: 'Launch', agents: 0, panes: 0 }] },
+      { t: 'swarms', selected: 's1', items: [{ id: 's1', name: 'Workshop', agents: 2, panes: 2 }, { id: 's2', name: 'Launch', agents: 0, panes: 0 }], tiles: [] },
     ])
 
     // Ticks with nothing new say nothing new — the same rule as the wheel.
@@ -232,13 +232,13 @@ describe('cable session', () => {
     // The change this field exists for: a terminal opened on a tab that holds no agent moves the
     // TILE count and nothing else. A diff watching only `agents` swallowed that push and left the
     // dial showing a row it still believed was empty — the row it would then refuse to list.
-    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 0 }] }
+    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 0 }], tiles: [] }
     const host = makeHost({ listSwarms: () => swarms })
     const { session, port } = await connect(host)
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
     await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(1))
 
-    swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 1 }] }
+    swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 1 }], tiles: [] }
     await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(2))
     expect(port.sent.filter((m) => m.t === 'swarms')[1]).toMatchObject({
       items: [{ id: 's1', agents: 0, panes: 1 }],

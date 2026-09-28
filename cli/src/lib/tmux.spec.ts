@@ -218,6 +218,37 @@ describe('tmux process primitives', () => {
     expect(engineProcessMatchScore({ executable: '2.1.246', args: '2.1.246' }, 'claude')).toBe(0)
   })
 
+  it('reads Hermes out of the inline source it runs as', () => {
+    // 0.21.5+2144.g7b761da, copied off `ps` on this machine. The `sh` stub in
+    // `~/.hermes/hermes-agent/.hermes/bin/hermes` execs Hermes' own interpreter with the whole
+    // launcher as `-c` text, so argv names no script and `comm` is a python. Nothing here carried
+    // the engine's name anywhere the matcher looked, and a running Hermes read as absent: its pane
+    // was retained six seconds after New Harness, then failed RESUME_UNCONFIRMED ten minutes later.
+    const python = '/Users/demo/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3'
+    const launcher = (entry: string) => `${python} -I -c import os, re, sys`
+      + ` sys.path.insert(0, '/Users/demo/.hermes/hermes-agent')`
+      + ` import hermes_bootstrap from ${entry} import main sys.exit(main())`
+    // macOS prints `comm` through a 16-column field beside lstart, so every absolute path arrives
+    // truncated. The interpreter has to be read from argv[0] or this row scores on a home directory.
+    const comm = '/Users/demo'
+    expect(engineProcessMatchScore({ executable: comm, args: launcher('hermes_cli.main') }, 'hermes')).toBe(2)
+    // `hermes-acp` is the other stub in that bin, identical but for its entry module. An ACP adapter
+    // is not the harness's engine, and the sys.path root alone would have claimed it.
+    expect(engineProcessMatchScore({ executable: comm, args: launcher('acp_adapter.entry') }, 'hermes')).toBe(0)
+    // Inline source stays unreadable as an entrypoint for everyone else: a prompt may say anything.
+    expect(engineProcessMatchScore({
+      executable: comm,
+      args: `${python} -I -c print('x') compare hermes_cli and codex`,
+    }, 'hermes')).toBe(0)
+    expect(engineProcessMatchScore({
+      executable: 'python3',
+      args: `python3 worker.py from hermes_cli.main import main /Users/demo/.hermes/hermes-agent'`,
+    }, 'hermes')).toBe(0)
+    // And the shapes that already worked keep working.
+    expect(engineProcessMatchScore({ executable: 'hermes', args: 'hermes --resume 20260728_115628_f2c86a' }, 'hermes')).toBe(3)
+    expect(engineProcessMatchScore({ executable: comm, args: `${python} -m hermes_cli.main` }, 'hermes')).toBe(2)
+  })
+
   it('reads an engine through the ori launcher, before and after its exec', () => {
     // `ori claude` computes an environment and then execve's the vendor binary away, so for all but the
     // first ~100ms the pane row IS `claude` — that case must keep scoring exactly as a bare launch does.
@@ -280,7 +311,13 @@ describe('tmux process primitives', () => {
     expect(resumeSessionId('grok', 'grok -r 53d3843c-724e-47ff-ae3a-9fedfa328bba'))
       .toBe('53d3843c-724e-47ff-ae3a-9fedfa328bba')
     expect(resumeSessionId('commandcode', 'cmd -r Greeting')).toBeNull()
-    expect(resumeSessionId('devin', 'devin --resume 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
+    // Devin's ids are word slugs; a bare word is not one.
+    expect(resumeSessionId('devin', 'devin --resume brisk-otter')).toBe('brisk-otter')
+    expect(resumeSessionId('devin', 'devin -r blue-agustinia --model x')).toBe('blue-agustinia')
+    expect(resumeSessionId('devin', 'devin -r latest')).toBeNull()
+    // Hermes takes -r too; opencode's --fork names the parent, never the session.
+    expect(resumeSessionId('hermes', 'hermes -r 20260927_101500_ab12cd')).toBe('20260927_101500_ab12cd')
+    expect(resumeSessionId('opencode', 'opencode -s ses_abc --fork')).toBeNull()
   })
 
   it('reads a claude/codex resume id from argv, but never the parent of a fork', () => {

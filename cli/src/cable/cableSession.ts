@@ -177,10 +177,31 @@ export interface CableSwarm {
   panes: number
 }
 
+/**
+ * ONE TILE OF THE ACTIVE SWARM'S GRID, exactly where the window put it.
+ *
+ * Unit rectangle in THOUSANDTHS of the grid, so it crosses as integers and a device can scale it to
+ * whatever face it has. `agentId` is empty for a tile the device cannot drive — a shell, a viewer —
+ * which still holds its place, because a shape with a tile missing is not that shape.
+ *
+ * Relayed, never computed here. The window is the only side that knows whether this grid came from a
+ * preset, from `auto` (whose column count it measures against its own width) or from a hand-dragged
+ * resize, and the one rule `pane_preset.dart` asks of everybody is that the shape is described once.
+ */
+export interface CableTile {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  agentId: string
+}
+
 /** The window's swarms as it last described them, or null while no window is connected. */
 export interface AppSwarms {
   active: string
   swarms: Array<{ id: string; name: string; agentIds: string[]; panes: number }>
+  /** The ACTIVE swarm's grid. Empty from a window that predates the field, or one with no panes. */
+  tiles: CableTile[]
 }
 
 /** Why the list is as short as it is. The dial renders this, instead of drawing an empty wheel. */
@@ -216,7 +237,7 @@ export interface CableHost {
    */
   selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }>
   /** The window's swarms and which is on screen. Empty with no window: the dial then draws no swarm line. */
-  listSwarms(): { selected: string; swarms: CableSwarm[] }
+  listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] }
   /** The dial picked a swarm. Relayed to the window, which switches and re-describes its desk. */
   selectSwarm(swarmId: string): void
   appName(): string
@@ -288,7 +309,7 @@ export interface CableHost {
    * The image to offer a dial running `runningVersion`, or null for "nothing to do" — which covers a
    * dial that is current, a dev build that must not be touched, and an unreachable manifest.
    */
-  firmwareFor?(runningVersion: string): Promise<{ version: string; image: Buffer; sha256: string } | null>
+  firmwareFor?(runningVersion: string, hw?: string): Promise<{ version: string; image: Buffer; sha256: string } | null>
   /**
    * A dial greeted us, or the port went away.
    *
@@ -352,6 +373,8 @@ export class CableSession {
   private decoder = new CableDecoder()
   private timer: NodeJS.Timeout | null = null
   private greetedMac: string | null = null
+  /** The board this device says it is (`hello.hw`). Decides which firmware it may be offered. */
+  private greetedHw: string | undefined
   private greetedFw: string | null = null
   private lastRx = 0
   private stopped = false
@@ -724,6 +747,7 @@ export class CableSession {
         // from the log on 2026-08-24.
         const fw = str('fw') ?? '?'
         const hw = str('hw')
+        this.greetedHw = hw || undefined
         if (mac !== this.greetedMac || fw !== this.greetedFw) {
           const returning = mac === this.greetedMac
           this.greetedMac = mac
@@ -962,7 +986,9 @@ export class CableSession {
 
   private async maybeOfferFirmware(runningVersion: string): Promise<void> {
     if (!this.host.firmwareFor || this.transfer || !runningVersion) return
-    const candidate = await this.host.firmwareFor(runningVersion).catch(() => null)
+    // The BOARD goes with the version. Which manifest entry this device's image comes from is decided
+    // from its own hello, never defaulted — see otaKeyForBoard.
+    const candidate = await this.host.firmwareFor(runningVersion, this.greetedHw).catch(() => null)
     // Keyed by DIAL as well as version. Holding bare version strings made this a statement about the
     // image rather than about the board: offer 0.0.42 to one dial, swap in a second still on 0.0.41, and
     // the second was refused because that version had been offered — to someone else. It then sat on the
@@ -1279,17 +1305,28 @@ export class CableSession {
   }
 
   private async syncSwarmsNow(force: boolean): Promise<void> {
-    const { selected, swarms } = this.host.listSwarms()
+    const { selected, swarms, tiles } = this.host.listSwarms()
     // `panes` belongs in the key as much as `agents` does. Opening a terminal on a tab that holds no
     // agent moves only the tile count, and a key blind to it would swallow that push and leave the
     // dial showing a tab it still believes is empty — the very row this field exists to keep.
-    const key = `${selected}|${swarms.map((s) => `${s.id}:${s.name}:${s.agents}:${s.panes}`).join('|')}`
+    // The active tab's SHAPE belongs in the key too, and it is the only part of this that can change
+    // with no row changing at all: re-arranging four panes moves every tile and leaves the counts
+    // exactly where they were, which a key blind to it would swallow — leaving the device drawing the
+    // shape the tab used to have.
+    const shape = tiles.map((t) => `${t.x1},${t.y1},${t.x2},${t.y2},${t.agentId}`).join(';')
+    const key = `${selected}|${swarms.map((s) => `${s.id}:${s.name}:${s.agents}:${s.panes}`).join('|')}|${shape}`
     if (!force && key === this.lastSwarmsKey) return
     this.lastSwarmsKey = key
     this.log(`cable: swarms → ${swarms.length}${selected ? ` (on ${selected})` : ''}${force ? ' [push]' : ''}`)
     // ONE frame, not a begin/row/end stream: two dozen rows of an id, a name and a count fit in a
     // kilobyte, and the dial replaces the whole list on arrival either way.
-    await this.send({ t: 'swarms', selected, items: swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agents, panes: s.panes })) })
+    await this.send({
+      t: 'swarms', selected,
+      items: swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agents, panes: s.panes })),
+      // Flat quads plus an id, rather than objects: this is read by a C parser on a device, and four
+      // numbers in a row cost it nothing to walk.
+      tiles: tiles.map((t) => ({ x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2, a: t.agentId })),
+    })
   }
 
   // ── machines ──────────────────────────────────────────────────────────────────────────────────────
