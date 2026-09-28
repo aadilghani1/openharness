@@ -72,27 +72,37 @@ export async function installTui(log: (line: string) => void): Promise<string> {
   return target
 }
 
-/**
- * Whether these arguments open hn (a client, which needs this computer signed in and its daemon up),
- * rather than run a command in the hn already open (`hn list-panes`, `hn send-keys …`: tmux's command
- * line, which needs neither) or only print something (--help, --version, --keys). Read as hn reads
- * its own arguments (tui/src/cli.rs): -f, -L and -S take a value, the first other word is a command.
- */
-export function opensClient(argv: string[]): boolean {
+/** Read only the global flags needed for bootstrap; hn validates the full command line. */
+function clientPort(argv: string[], fallback: number): number | null {
+  let port = fallback
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
-    if (a === '--') return i + 1 >= argv.length
-    if (!a.startsWith('-') || a === '-') return false
-    if (a === '--help' || a === '--version' || a === '--keys' || a === '--licenses') return false
-    if (a === '--port') { i++; continue }
-    if (a.startsWith('--')) return true
+    if (a === '--') return i + 1 >= argv.length ? port : null
+    if (!a.startsWith('-') || a === '-') return null
+    if (a === '--port') {
+      const value = argv[++i]
+      if (!value || !/^\+?\d+$/.test(value) || Number(value) > 65535 || Number(value) === 0) return null
+      port = Number(value)
+      continue
+    }
+    if (a.startsWith('--')) return null
     const flags = a.slice(1)
     for (let j = 0; j < flags.length; j++) {
-      if (flags[j] === 'h' || flags[j] === 'V') return false
-      if ('fLS'.includes(flags[j])) { if (j + 1 === flags.length) i++; break }
+      // Help, shell commands, control mode and invalid flags need no daemon.
+      if ('hVCc'.includes(flags[j])) return null
+      if ('fLST'.includes(flags[j])) {
+        if (j + 1 === flags.length && argv[++i] === undefined) return null
+        break
+      }
+      if (!'2ulvND'.includes(flags[j])) return null
     }
   }
-  return true
+  return port
+}
+
+/** Only opening the default client bootstraps Harness; scripts and information commands do not. */
+export function opensClient(argv: string[]): boolean {
+  return clientPort(argv, 1) !== null
 }
 
 async function daemonUp(port: number): Promise<boolean> {
@@ -100,9 +110,9 @@ async function daemonUp(port: number): Promise<boolean> {
 }
 
 /** This CLI, run again: `harness login`, `harness start`. Their output is the person's to read. */
-function runSelf(args: string[]): number {
+function runSelf(args: string[], port: number): number {
   const script = process.argv[1]
-  const result = spawnSync(process.execPath, [...process.execArgv, ...(script ? [script] : []), ...args], { stdio: 'inherit', env: { ...process.env, HARNESS_SELF: '1' } })
+  const result = spawnSync(process.execPath, [...process.execArgv, ...(script ? [script] : []), ...args], { stdio: 'inherit', env: { ...process.env, PORT: String(port), HARNESS_SELF: '1' } })
   return result.status ?? 1
 }
 
@@ -113,11 +123,11 @@ function runSelf(args: string[]): number {
 async function ensureDaemon(port: number, signedIn: () => boolean): Promise<boolean> {
   if (!signedIn()) {
     console.log('\n  This computer is not signed in to Harness yet.')
-    if (runSelf(['login']) !== 0 || !signedIn()) return false
+    if (runSelf(['login'], port) !== 0 || !signedIn()) return false
   }
   if (await daemonUp(port)) return true
   console.log('  Starting the Harness daemon…')
-  runSelf(['start'])
+  if (runSelf(['start'], port) !== 0) return false
   for (let i = 0; i < 60; i++) {
     if (await daemonUp(port)) return true
     await new Promise((resolve) => setTimeout(resolve, 250))
@@ -131,7 +141,10 @@ export async function tuiCommand(argv: string[], opts: { port: number; signedIn?
     try { await installTui((line) => console.log(line)); return 0 } catch (error) { console.error(`  ✗ ${(error as Error).message}`); return 1 }
   }
   if (argv[0] === '--where') { console.log(findTuiBinary() ?? '(not installed)'); return 0 }
-  if (opensClient(argv) && opts.signedIn && !(await ensureDaemon(opts.port, opts.signedIn))) return 1
+  const port = clientPort(argv, opts.port)
+  if (port !== null && opts.signedIn && !(await ensureDaemon(port, opts.signedIn))) {
+    console.log('  Opening a local shell; Harness will reconnect when available.')
+  }
   let binary = findTuiBinary()
   if (!binary) {
     try { binary = await installTui((line) => console.log(line)) } catch (error) {
@@ -142,7 +155,7 @@ export async function tuiCommand(argv: string[], opts: { port: number; signedIn?
   const result = spawnSync(binary, argv, {
     stdio: 'inherit',
     // How the TUI runs this CLI back (`harness link connect` for a machine it has to link).
-    env: { ...process.env, PORT: String(opts.port), HARNESS_CLI: process.execPath, HARNESS_SELF: '1', HARNESS_CLI_ARGS: JSON.stringify([...process.execArgv, process.argv[1] ?? '']) },
+    env: { ...process.env, PORT: String(port ?? opts.port), HARNESS_CLI: process.execPath, HARNESS_SELF: '1', HARNESS_CLI_ARGS: JSON.stringify([...process.execArgv, process.argv[1] ?? '']) },
   })
   if (result.error) { console.error(`  ✗ Could not start ${binary}: ${result.error.message}`); return 1 }
   return result.status ?? 0
