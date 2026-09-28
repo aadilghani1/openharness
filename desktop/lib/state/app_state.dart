@@ -59,6 +59,7 @@ import 'harness_placement.dart';
 import 'desk_sync.dart';
 import 'pane_layout_store.dart';
 import 'terminal_pane.dart';
+import 'device_visit.dart';
 import 'swarm.dart';
 import '../terminal/terminal_binary.dart';
 import '../update/desktop_updater.dart';
@@ -9528,6 +9529,38 @@ class AppNotifier extends ChangeNotifier {
   Future<void> selectAgentFromDial(String machineId, String agentId) =>
       focusAgentFromDevice(machineId, agentId);
 
+  /// A device Finder choice names an existing view, sometimes one exact tile.
+  /// Reveal it without retrying a stream or treating device focus as a local
+  /// keyboard/mouse takeover. A vanished tile must not turn into an Add.
+  bool revealAgentViewFromDevice(
+    String machineId,
+    String agentId, {
+    String? swarmId,
+    int? paneId,
+  }) {
+    if (_disposed) return false;
+    if (paneId == null) {
+      return _fromDevice(
+        () => revealAgentView(machineId, agentId, preferredSwarmId: swarmId),
+      );
+    }
+    final owner = swarms.where((s) => s.id == swarmId).firstOrNull;
+    final pane = owner?.panes
+        .where(
+          (p) =>
+              p.id == paneId &&
+              p.machineId == machineId &&
+              p.agentId == agentId,
+        )
+        .firstOrNull;
+    if (owner == null || pane == null) return false;
+    return _fromDevice(() {
+      selectSwarm(owner.id, attachPending: false);
+      focusPane(pane.id, reveal: true);
+      return true;
+    });
+  }
+
   /// Bring [agentId]'s tile forward because a device asked — the dial's
   /// carousel, the WiFi device's focus. The tab switches, the tile gets the
   /// keyboard and `app_focus` goes back to the daemon, exactly as
@@ -11312,6 +11345,352 @@ class AppNotifier extends ChangeNotifier {
         machine.agents.any((a) => a.id == pane.agentId && a.terminalAvailable);
   }
 
+  DeviceVisit? _deviceVisit;
+  bool Function()? deviceNavigationAllowed;
+  Future<Map<String, dynamic>> Function(String, Map<String, dynamic>)?
+  deviceFormCommand;
+
+  Future<Map<String, dynamic>?> formFromDevice(
+    String connectionMachineId,
+    Map<String, dynamic> command,
+  ) async {
+    final id = command['formId'], request = command['requestId'];
+    bool identifier(Object? value) =>
+        value is String && RegExp(r'^[a-zA-Z0-9-]{1,64}$').hasMatch(value);
+    if (!identifier(id) ||
+        !identifier(request) ||
+        !const [
+          'open',
+          'state',
+          'move',
+          'activate',
+          'back',
+          'close',
+          'query.begin',
+          'query',
+          'query.cancel',
+        ].contains(command['op']) ||
+        (command['surface'] != null &&
+            !const ['new', 'find'].contains(command['surface'])) ||
+        (command['queryId'] != null && !identifier(command['queryId'])) ||
+        (command['text'] != null &&
+            (command['text'] is! String ||
+                (command['text'] as String).length > 240)) ||
+        (command['revision'] != null && command['revision'] is! int) ||
+        (command['delta'] != null &&
+            (command['delta'] is! int ||
+                (command['delta'] as int).abs() > 8))) {
+      return null;
+    }
+    final reply = <String, dynamic>{'formId': id, 'requestId': request};
+    final expires = command['expiresAt'];
+    if (_disposed ||
+        !inForeground ||
+        viewer != null ||
+        expires is! int ||
+        expires <= DateTime.now().millisecondsSinceEpoch ||
+        stateOf(connectionMachineId)?.machine.isShared != false) {
+      return {
+        ...reply,
+        'ok': false,
+        'active': false,
+        'error': 'Return to the Harness window first.',
+      };
+    }
+    final result =
+        await deviceFormCommand?.call(connectionMachineId, command) ??
+        {
+          'ok': false,
+          'active': false,
+          'error': 'Open the Harness workspace first.',
+        };
+    return {...reply, ...result};
+  }
+
+  /// A hand on this desk visits an alert or the latest output and returns.
+  /// Replies use the original socket, even if the destination is on another
+  /// machine. No command here approves a request or retakes a terminal.
+  Map<String, dynamic>? visitFromDevice(
+    String connectionMachineId,
+    Map<String, dynamic> command,
+  ) {
+    final id = command['visitId'];
+    final request = command['requestId'];
+    final op = command['op'];
+    bool identifier(Object? value) =>
+        value is String && RegExp(r'^[a-zA-Z0-9-]{1,64}$').hasMatch(value);
+    if (!identifier(id) ||
+        !identifier(request) ||
+        !const ['open', 'latest', 'back', 'cancel'].contains(op)) {
+      return null;
+    }
+    final reply = <String, dynamic>{'visitId': id, 'requestId': request};
+    Map<String, dynamic> fail(String text) => {
+      ...reply,
+      'ok': false,
+      'error': text,
+      'active':
+          _deviceVisit?.id == id &&
+          _deviceVisit?.connectionMachineId == connectionMachineId,
+    };
+    void clear() {
+      _deviceVisit?.dispose();
+      _deviceVisit = null;
+    }
+
+    if (op == 'cancel') {
+      if (_deviceVisit?.id == id &&
+          _deviceVisit?.connectionMachineId == connectionMachineId) {
+        clear();
+      }
+      return {
+        ...reply,
+        'ok': true,
+        'active': false,
+        'agentId': focusedPane?.agentId,
+      };
+    }
+    final expires = command['expiresAt'];
+    if (_disposed ||
+        !inForeground ||
+        viewer != null ||
+        expires is! int ||
+        expires <= DateTime.now().millisecondsSinceEpoch ||
+        stateOf(connectionMachineId)?.machine.isShared != false) {
+      return fail('Return to the Harness window first.');
+    }
+    if (deviceNavigationAllowed?.call() != true) {
+      return fail('Close the picker and return to the terminal.');
+    }
+    bool atVisit(DeviceVisit v) =>
+        activeSwarmId == v.visitingSwarm &&
+        identical(focusedPane, v.visiting) &&
+        focusedPane?.machineId == v.visitingMachine &&
+        focusedPane?.agentId == v.visitingAgent;
+    final previous = _deviceVisit;
+    if (op == 'back') {
+      if (previous == null ||
+          previous.id != id ||
+          previous.connectionMachineId != connectionMachineId) {
+        return fail('The previous visit has ended.');
+      }
+      if (!atVisit(previous)) {
+        clear();
+        return fail('The pane changed. Choose your workspace from controls.');
+      }
+      final origin = swarms
+          .where((s) => s.id == previous.originSwarm)
+          .firstOrNull;
+      if (origin == null ||
+          !origin.panes.contains(previous.origin) ||
+          previous.origin.machineId != previous.originMachine ||
+          previous.origin.agentId != previous.originAgent) {
+        clear();
+        return fail('Your previous pane has closed.');
+      }
+      final restored = previous.bookmark.restore();
+      _fromDevice(() {
+        selectSwarm(origin.id, attachPending: false);
+        focusPane(previous.origin.id, reveal: true);
+      });
+      clear();
+      return {
+        ...reply,
+        'ok': true,
+        'active': false,
+        'agentId': focusedPane?.agentId,
+        if (!restored)
+          'note': 'Returned. The earlier text is no longer available.',
+      };
+    }
+    final fromMachine = command['fromMachineId'];
+    final fromAgent = command['fromAgentId'];
+    final machineId = command['machineId'];
+    final agentId = command['agentId'];
+    final latest = op == 'latest';
+    if (focusedPane?.machineId != fromMachine ||
+        focusedPane?.agentId != fromAgent ||
+        machineId is! String ||
+        agentId is! String ||
+        _dialFocusMachine(command, agentId) != machineId ||
+        (latest && (machineId != fromMachine || agentId != fromAgent)) ||
+        stateOf(machineId)?.machine.isShared != false) {
+      return fail('The pane changed. Choose the action again.');
+    }
+    if (previous != null &&
+        previous.id == id &&
+        (previous.connectionMachineId != connectionMachineId ||
+            !atVisit(previous))) {
+      return fail('The pane changed. Open the alert again.');
+    }
+    // Validate that a picker, composer, or another route does not own input.
+    final bookmark = focusedPane?.session?.bookmarkReading();
+    if (bookmark == null) {
+      return fail('Close the picker and return to the terminal.');
+    }
+    if (latest && focusedPane?.session?.showLatestReading() != true) {
+      bookmark.dispose();
+      return fail(
+        'Latest output needs local terminal scrollback. Keep scrolling this program.',
+      );
+    }
+    final DeviceVisit visit;
+    if (previous != null && previous.id == id) {
+      bookmark.dispose();
+      visit = previous;
+    } else {
+      clear();
+      final pane = focusedPane!;
+      final agent = stateOf(pane.machineId)?.agents
+          .where((a) => a.id == pane.agentId)
+          .firstOrNull;
+      visit = DeviceVisit(
+        id: id as String,
+        connectionMachineId: connectionMachineId,
+        originSwarm: activeSwarmId,
+        origin: pane,
+        label: latest
+            ? 'Your reading'
+            : (agent?.name ?? activeSwarm.name).characters.take(48).toString(),
+        bookmark: bookmark,
+      );
+    }
+    // Membership and focus change synchronously. A network attachment may
+    // finish later, but must not delay the return token or move focus again.
+    if (!latest) {
+      unawaited(openAgentFromDial(machineId, agentId).catchError((_) {}));
+    }
+    if (focusedPane?.machineId != machineId ||
+        focusedPane?.agentId != agentId) {
+      visit.dispose();
+      _deviceVisit = null;
+      return fail('That agent could not be opened.');
+    }
+    if (!latest &&
+        identical(focusedPane, visit.origin) &&
+        activeSwarmId == visit.originSwarm) {
+      visit.dispose();
+      _deviceVisit = null;
+      return {
+        ...reply,
+        'ok': true,
+        'active': false,
+        'agentId': focusedPane?.agentId,
+      };
+    }
+    visit.visiting = focusedPane;
+    visit.visitingSwarm = activeSwarmId;
+    visit.visitingMachine = machineId;
+    visit.visitingAgent = agentId;
+    _deviceVisit = visit;
+    return {
+      ...reply,
+      'ok': true,
+      'active': true,
+      'label': visit.label,
+      'agentId': focusedPane?.agentId,
+    };
+  }
+
+  /// Reading context for the physical device. A cancel can clear its old pane;
+  /// all other operations require the named pane to remain visibly focused.
+  ({Map<String, dynamic> reply, TerminalSession? session})?
+  _devicePassageTarget(
+    String connectionMachineId,
+    Map<String, dynamic> command,
+  ) {
+    final id = command['selectionId'];
+    final request = command['requestId'];
+    final agentId = command['agentId'];
+    final machineId = command['machineId'];
+    final revision = command['revision'];
+    final op = command['op'];
+    bool identifier(Object? v) =>
+        v is String && RegExp(r'^[a-zA-Z0-9-]{1,64}$').hasMatch(v);
+    if (!identifier(id) ||
+        !identifier(request) ||
+        agentId is! String ||
+        agentId.isEmpty ||
+        agentId.length > 200 ||
+        machineId != connectionMachineId ||
+        revision is! int ||
+        revision < 1 ||
+        revision > 0x7fffffff ||
+        !const [
+          'begin',
+          'step',
+          'extend',
+          'pin',
+          'cancel',
+          'search',
+          'match',
+          'lines',
+        ].contains(op)) {
+      return null;
+    }
+    final reply = <String, dynamic>{
+      'selectionId': id,
+      'requestId': request,
+      'agentId': agentId,
+      'machineId': machineId,
+      'revision': revision,
+    };
+    TerminalSession? session;
+    if (op == 'cancel') {
+      session = allPanes
+          .where((p) => p.machineId == machineId && p.agentId == agentId)
+          .map((p) => p.session)
+          .whereType<TerminalSession>()
+          .firstOrNull;
+    } else if (inForeground &&
+        focusedPane?.machineId == machineId &&
+        focusedPane?.agentId == agentId &&
+        focusedPane?.isWeb != true &&
+        stateOf(connectionMachineId)?.machine.isShared != true) {
+      session = focusedPane?.session;
+    }
+    return (reply: reply, session: session);
+  }
+
+  Map<String, dynamic>? selectDevicePassage(
+    String connectionMachineId,
+    Map<String, dynamic> command,
+  ) {
+    if (const ['search', 'match'].contains(command['op'])) return null;
+    final target = _devicePassageTarget(connectionMachineId, command);
+    if (target == null) return null;
+    return {
+      ...target.reply,
+      ...?target.session?.selectPassage(command),
+      if (target.session == null) ...{
+        'ok': false,
+        'error': 'Select that terminal pane in Harness first.',
+      },
+    };
+  }
+
+  Future<Map<String, dynamic>?> searchDevicePassage(
+    String connectionMachineId,
+    Map<String, dynamic> command,
+  ) async {
+    if (!const ['search', 'match'].contains(command['op'])) return null;
+    final target = _devicePassageTarget(connectionMachineId, command);
+    if (target == null) return null;
+    final result = await target.session?.searchPassage(command);
+    // Search yields during long scans. The owning window must still be active
+    // when it returns; no result can silently move to a different terminal.
+    final current = _devicePassageTarget(connectionMachineId, command);
+    return {
+      ...target.reply,
+      if (target.session != null && identical(current?.session, target.session))
+        ...?result
+      else ...{
+        'ok': false,
+        'error': 'Select that terminal pane in Harness first.',
+      },
+    };
+  }
+
   /// Resolve a dial agent to the machine that owns it.
   ///
   /// New CLIs state the machine explicitly. Older CLIs only sent an agent id;
@@ -11416,6 +11795,32 @@ class AppNotifier extends ChangeNotifier {
           (payload['dy'] as num?)?.round() ?? 0,
           (payload['velocity'] as num?)?.round() ?? 0,
         );
+        return;
+      case 'dial_selection':
+        final reply = const ['search', 'match'].contains(payload['op'])
+            ? await searchDevicePassage(machineId, payload)
+            : selectDevicePassage(machineId, payload);
+        if (reply != null) {
+          await _pool?[machineId]?.sendTerminalFrame(
+            'app_selection_result',
+            reply,
+          );
+        }
+        return;
+      case 'dial_visit':
+        final result = visitFromDevice(machineId, payload);
+        if (result != null) {
+          await _pool?[machineId]?.sendTerminalFrame(
+            'app_visit_result',
+            result,
+          );
+        }
+        return;
+      case 'dial_form':
+        final result = await formFromDevice(machineId, payload);
+        if (result != null) {
+          await _pool?[machineId]?.sendTerminalFrame('app_form_result', result);
+        }
         return;
       case 'device_focus':
         unawaited(ensureDeviceFocus(payload));
@@ -11854,6 +12259,7 @@ class AppNotifier extends ChangeNotifier {
   @override
   void dispose() {
     viewer?.auth.dispose();
+    _deviceVisit?.dispose();
     _modelManager?.dispose();
     _modelsMenu?.dispose();
     for (final project in _orchestratorProjects.values) {

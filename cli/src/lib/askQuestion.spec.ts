@@ -453,7 +453,7 @@ describe('QuestionWatcher', () => {
     await w.tick()
     expect(w.seen).toHaveLength(1)
     expect(w.seen[0].questions).toEqual([
-      { key: 'Which drink would you like?', q: 'Which drink would you like?', options: ['Tea', 'Coffee'], multi: false },
+      { key: 'Which drink would you like?', q: 'Which drink would you like?', options: ['Tea', 'Coffee'], multi: false, canText: true },
     ])
   })
 
@@ -1237,6 +1237,93 @@ describe('the dialog read is the LAST one on the pane (regression: an answered d
       // The whole capture under the other's whole capture, and this dialog alone right under the other's.
       expect({ other, read: readIn(file, [paneOf(other), paneOf(file)].join('\n')) }).toEqual({ other, read: alone })
       expect({ other, read: readIn(file, [paneOf(other).trimEnd(), own].join('\n')) }).toEqual({ other, read: alone })
+    }
+  })
+})
+
+describe('reviewed device answers', () => {
+  const reviewed = [{ key: 'drink', q: 'Which drink would you like?', options: ['Tea', 'Coffee'], multi: false }]
+  it('checks the exact question and choices before pressing a key', async () => {
+    for (const expectedQuestions of [
+      [{ ...reviewed[0], q: 'May I delete the project?' }],
+      [{ ...reviewed[0], options: ['Tea', 'Delete files'] }],
+      [{ ...reviewed[0], multi: true }],
+    ]) {
+      const h = machine([fixture('single')])
+      expect(await h.controller.answer({ agentId: 's1', answers: { drink: 'Tea' }, expectedQuestions })).toMatchObject({ ok: false })
+      expect(h.keys).toEqual([])
+      expect(h.texts).toEqual([])
+    }
+  })
+  it('uses the exact displayed label and never falls through to free text or review submission', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    expect(await h.controller.answer({ agentId: 's1', answers: { drink: 'Coffee' }, expectedQuestions: reviewed })).toEqual({ ok: true })
+    expect(h.keys).toEqual(['2'])
+    for (const capture of [fixture('single'), fixture('review')]) {
+      const invalid = machine([capture])
+      expect(await invalid.controller.answer({ agentId: 's1', answers: { drink: 'Cof' }, expectedQuestions: reviewed })).toMatchObject({ ok: false })
+      expect(invalid.keys).toEqual([])
+      expect(invalid.texts).toEqual([])
+    }
+  })
+  it('does not report a complete submission after only part of a reviewed batch', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    expect(await h.controller.answer({ agentId: 's1', answers: { drink: 'Tea', size: 'S' },
+      expectedQuestions: [...reviewed, { key: 'size', q: 'Which size?', options: ['S', 'M'], multi: false }] })).toMatchObject({ ok: false })
+    expect(h.keys).toEqual(['1'])
+  })
+  it('clears unreviewed checks and keeps comma-containing options intact', async () => {
+    const capture = 'Pick formats\n  1. [ ] CSV, UTF-8\n  2. [✔] JSON\n  3. [ ] XML\nEnter to select · ↑/↓ to navigate · Esc to cancel'
+    const h = machine([capture, CLOSED])
+    expect(await h.controller.answer({ agentId: 's1', answers: { formats: 'CSV, UTF-8' },
+      selectedLabels: { formats: ['CSV, UTF-8'] }, expectedQuestions: [
+        { key: 'formats', q: 'Pick formats', options: ['CSV, UTF-8', 'JSON', 'XML'], multi: true }],
+    })).toEqual({ ok: true })
+    expect(h.keys).toEqual(['1', '2', 'Tab'])
+    expect(h.texts).toEqual([])
+  })
+})
+
+
+describe('reviewed answer input validation', () => {
+  it('refuses malformed review metadata and an unreadable capture before input', async () => {
+    const malformed = machine([fixture('single')])
+    expect(await malformed.controller.answer({ agentId: 's1', answers: { key: 'Tea' }, expectedQuestions: {} as never })).toMatchObject({ ok: false })
+    expect(malformed.keys).toEqual([])
+    const unreadable = machine([null as never])
+    expect(await unreadable.controller.answer({ agentId: 's1', answers: { key: 'Tea' }, expectedQuestions: [
+      { key: 'key', q: 'Which drink would you like?', options: ['Tea','Coffee'], multi: false }],
+    })).toMatchObject({ ok: false })
+    expect(unreadable.keys).toEqual([])
+  })
+})
+
+describe('reviewed spoken answers', () => {
+  const expectedQuestions = [{ key: 'drink', q: 'Which drink would you like?', options: ['Tea','Coffee'], multi: false, canText: true }]
+  it('types the exact draft, including option-like words, through the explicit text editor', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    expect(await h.controller.answer({ agentId: 's1', answers: { drink: 'Coffee' },
+      expectedQuestions, freeTextKeys: ['drink'] })).toEqual({ ok: true })
+    expect(h.keys).toEqual(['3','Enter']); expect(h.texts).toEqual(['Coffee'])
+  })
+  it('refuses missing editors, changed questions and control bytes without any input', async () => {
+    for (const [capture,text] of [
+      [fixture('single').replace('3. Type something.',''), 'Coffee'],
+      [fixture('single').replace('Which drink would you like?','Allow this command?'),'Coffee'],
+      [fixture('single'),'Coffee\u001b[0m'],
+    ]) {
+      const h = machine([capture])
+      expect(await h.controller.answer({ agentId: 's1', answers: { drink: text },
+        expectedQuestions, freeTextKeys: ['drink'] })).toMatchObject({ ok: false })
+      expect(h.keys).toEqual([]); expect(h.texts).toEqual([])
+    }
+  })
+  it('never treats unreviewed or malformed text metadata as a normal answer', async () => {
+    for (const extra of [{ freeTextKeys: {} }, { freeTextKeys: ['wrong'] },
+      { freeTextKeys: ['drink'], expectedQuestions: undefined }]) {
+      const h = machine([fixture('single')])
+      expect(await h.controller.answer({ agentId: 's1', answers: { drink: 'Coffee' }, expectedQuestions, ...extra } as never)).toMatchObject({ ok: false })
+      expect(h.keys).toEqual([])
     }
   })
 })

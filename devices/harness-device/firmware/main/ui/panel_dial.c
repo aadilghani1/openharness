@@ -13,6 +13,7 @@
 #include "board.h"
 #include "board_pins.h"
 #include "display.h"
+#include "ui_perf.h"
 
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -63,6 +64,7 @@ static const co5300_lcd_init_cmd_t s_co5300_init_cmds[] = {
 // has started, so it is always valid by then).
 static bool on_color_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *e, void *ctx)
 {
+    ui_perf_flush_done();
     if (s_disp) lv_display_flush_ready(s_disp);
     return false;
 }
@@ -74,6 +76,7 @@ static void lvgl_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
     // Asleep: the panel is off — don't push pixels (events still update the offscreen tree and are
     // shown on wake). Ack immediately so LVGL doesn't block waiting for the (skipped) DMA done.
     if (display_is_asleep()) { lv_display_flush_ready(disp); return; }
+    ui_perf_flush((size_t)(area->x2-area->x1+1)*(area->y2-area->y1+1)*2);
     esp_lcd_panel_draw_bitmap(s_panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px);
 }
 

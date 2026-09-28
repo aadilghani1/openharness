@@ -899,8 +899,8 @@ export async function checkSessionRuntime(session: RegisteredSession): Promise<R
   return { state: 'alive' }
 }
 
-// A short single-line message can be pasted without bracketed-paste settling. Anything longer or
-// multi-line uses bracketed paste and waits before Enter (see sendToTmux).
+// Short single-line messages need no settling delay, but still need bracketed-paste boundaries:
+// Codex treats Enter immediately after an unbracketed text burst as a pasted newline, not submit.
 const INJECT_FASTPATH_MAXLEN = 500
 // Base settle time before the submit Enter; grows with length (Claude needs time to ingest a big paste
 // and collapse it to `[Pasted text]` before a clean Enter counts as submit rather than paste content).
@@ -1046,18 +1046,18 @@ async function tmuxPasteText(pane: string, content: string, bracketed: boolean):
  * Type a message into a tmux pane and submit it — the web-chat/device → terminal injection point.
  *
  * All text is loaded into a uniquely named tmux buffer over stdin so prompt bytes never enter argv,
- * environment, logs, or child-process error strings. Short single-line input is pasted literally and
- * submitted immediately.
+ * environment, logs, or child-process error strings. Every message is bracketed-pasted as one unit
+ * (`paste-buffer -p`) so the terminal can distinguish the paste from the separate submit Enter.
+ * Short single-line input is submitted immediately after that explicit paste boundary.
  *
- * Long/multiline input is bracketed-pasted as one unit (`paste-buffer -p`), allowed to settle, then
- * submitted with a separate Enter. (Verified: reliably submits up to ~28 KB.)
+ * Long/multiline input is allowed to settle before Enter. (Verified: reliably submits up to ~28 KB.)
  */
 export function sendToTmux(pane: string, text: string): Promise<boolean> {
   const content = text.replace(/[\r\n]+$/, '') // strip trailing newlines so the submit Enter isn't doubled
   return (async () => {
-    const bracketed = content.length > INJECT_FASTPATH_MAXLEN || content.includes('\n')
-    if (!(await tmuxPasteText(pane, content, bracketed))) return false
-    if (bracketed) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
+    const needsSettle = content.length > INJECT_FASTPATH_MAXLEN || content.includes('\n')
+    if (!(await tmuxPasteText(pane, content, true))) return false
+    if (needsSettle) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
     return tmuxEnter(pane)
   })()
 }

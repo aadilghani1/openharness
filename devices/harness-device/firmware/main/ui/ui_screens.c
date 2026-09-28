@@ -509,7 +509,7 @@ typedef struct {
     // every machine at once, in the same order the desktop app's rail reads them. `machine_id` is what a
     // machine row uses to find its first agent to land on; `machine` is the name the tile draws.
     char machine_id[48];
-    char machine[NAME_MAX];
+    char machine[CABLE_NAME_MAX];
     char mode[8];        // MODEL: per-agent autonomy for voice turns — "plan" | "" (empty = auto/bypass)
 
     // Runtime model/effort (REMOTE machines). selected_model = opaque runtime-v1:<sid>:<engine>:<model>@<effort>,
@@ -7978,7 +7978,7 @@ static EXT_RAM_BSS_ATTR struct {
     bool active;
     char request_id[80];
     char who[64];                // the asker's name, from the frame — it may be on a tab the dial does not hold
-    char machine[NAME_MAX];      // and its machine's name, shown when it is not the cabled computer
+    char machine[CABLE_NAME_MAX];      // and its machine's name, shown when it is not the cabled computer
     char project[48];
     qitem_t q[Q_MAX];
     char answer[Q_MAX][256];     // chosen label(s) or transcript, per question
@@ -8121,10 +8121,10 @@ static void q_render(void)
         int ai = s_q.who[0] ? -1 : find_proj(s_q.project);
         const char *nm = s_q.who[0] ? s_q.who : (ai >= 0 && s_proj[ai].name[0]) ? s_proj[ai].name : "Agent";
         const char *here = cable_client_machine_name();
-        static char who[64 + NAME_MAX + 4];
+        static char who[64 + CABLE_NAME_MAX + 4];
         char nmf[64]; utf8_filter(nm, nmf, sizeof(nmf));
         if (s_q.machine[0] && strcmp(s_q.machine, here ? here : "") != 0) {
-            char mf[NAME_MAX]; utf8_filter(s_q.machine, mf, sizeof(mf));
+            char mf[CABLE_NAME_MAX]; utf8_filter(s_q.machine, mf, sizeof(mf));
             snprintf(who, sizeof who, "%s \xC2\xB7 %s", nmf, mf);
         } else {
             snprintf(who, sizeof who, "%s", nmf);
@@ -8460,6 +8460,17 @@ static void machine_toast(const char *msg)
 // The cabled Mac has one short thing to say — a routing refusal, a delivery that did not land. It arrives
 // as the answer to a wait, so the loading overlay comes down FIRST and the message is shown over whatever
 // is on screen; leaving the overlay up behind a toast would say "still working" next to "it failed".
+void ui_voice_error(const char *msg) { ui_cable_toast(msg); }
+
+void ui_selection_state(const struct cJSON *payload) { (void)payload; }
+void ui_draft_state(const cJSON *p) { (void)p; }
+void ui_voice_draft(const cJSON *p) { (void)p; }
+void ui_voice_question(const cJSON *p) { (void)p; }
+void ui_voice_form(const cJSON *p) { (void)p; }
+void ui_form_state(const struct cJSON *payload) { (void)payload; }
+void ui_carry_state(const struct cJSON *payload) { (void)payload; }
+void ui_visit_state(const struct cJSON *payload) { (void)payload; }
+
 void ui_cable_toast(const char *msg)
 {
     ui_voice_route_abort();
@@ -9643,3 +9654,10 @@ void ui_log_state_if_changed(void)
         }
     }
 }
+
+void ui_question_state(const cJSON *p) { (void)p; }
+void ui_answer_receipt(const cJSON *p) { (void)p; }
+
+void ui_voice_search(const cJSON *p) { (void)p; }
+
+void ui_workspace_applied(const char *tab, uint32_t generation) { (void)tab; (void)generation; }

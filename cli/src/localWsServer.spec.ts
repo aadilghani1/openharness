@@ -8,6 +8,7 @@ import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } fro
 import { listenLocalSocket } from './lib/localSocket.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { WindowForm } from './cable/windowForm.js'
 
 const machineId = 'machine-123'
 const streamId = '00112233-4455-6677-8899-aabbccddeeff'
@@ -120,6 +121,61 @@ describe('local CLI WebSocket', () => {
     ws.send(JSON.stringify({ type: 'device_prepare_opened', payload: { operationId: 'invalid', agentId: 'a' } }))
     ws.send(JSON.stringify({ type: 'device_prepare_opened', payload: { operationId: 'a'.repeat(64), agentId: 'agent1' } }))
     await vi.waitFor(() => expect(opened).toHaveBeenCalledExactlyOnceWith('a'.repeat(64), 'agent1'))
+    expect(backend.frames).toEqual([])
+    ws.close()
+  })
+
+  it.each(['selection', 'visit', 'form'])('addresses one window for %s and consumes its result locally', async kind => {
+    const backend = new FakeBackend(), reply = vi.fn()
+    const ws = new WebSocket(await start(backend, { [kind === 'form' ? 'onFormReply' : kind === 'visit' ? 'onVisitReply' : 'onSelectionReply']: reply }))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    expect(local!.sendToWindow('unknown', { type: `dial_${kind}`, payload: {} })).toBe(false)
+    const request = onceMessage(ws)
+    expect(local!.sendToWindow(backend.connId!, { type: `dial_${kind}`, payload: { requestId: 'selection' } })).toBe(true)
+    expect(await request).toEqual({ type: `dial_${kind}`, payload: { requestId: 'selection' } })
+    ws.send(JSON.stringify({ type: `app_${kind}_result`, payload: { text: 'private selected text' } }))
+    await vi.waitFor(() => expect(reply).toHaveBeenCalledWith(backend.connId, machineId, { text: 'private selected text' }))
+    expect(backend.frames).toEqual([])
+    const id = backend.connId!
+    ws.close()
+    await vi.waitFor(() => expect(local!.sendToWindow(id, { type: `dial_${kind}`, payload: {} })).toBe(false))
+  })
+
+  it.each(['selection', 'visit', 'form'])('keeps %s on this desk and ignores upstream gestures', async kind => {
+    const backend = new FakeBackend(), reply = vi.fn(), focus = vi.fn()
+    const relayed: Frame[] = [], received: Frame[] = []
+    let upstream: LocalClientSink | undefined
+    const relayPool = {
+      acquire: async (_id: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+        upstream = sink
+        sink.sendFrame({ type: 'connected', payload: { machineId: 'remote', e2ee: false } })
+        return { send: async (frame: Frame) => { relayed.push(frame) }, sendBinary: async () => {}, detach: () => {} }
+      },
+      acquireIsolated: async () => { throw new Error('unused') }, invalidate: () => {},
+    }
+    const ws = new WebSocket(await start(backend, {
+      autonomousEnv: 'test', [kind === 'form' ? 'onFormReply' : kind === 'visit' ? 'onVisitReply' : 'onSelectionReply']: reply, onAppFocusState: focus,
+      relayPool: relayPool as unknown as NonNullable<LocalWsServerOptions['relayPool']>,
+    }))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'remote', localProtocolVersion: 1 } }))
+    await connected
+    ws.on('message', raw => received.push(JSON.parse(raw.toString())))
+    ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'remote-agent' } }))
+    await vi.waitFor(() => expect(focus).toHaveBeenCalled())
+    const connId = focus.mock.calls[0][2] as string
+    upstream!.sendFrame({ type: `dial_${kind}`, payload: { requestId: 'upstream' } })
+    const selection = onceMessage(ws)
+    expect(local!.sendToWindow(connId, { type: `dial_${kind}`, payload: { requestId: 'from-device' } })).toBe(true)
+    expect((await selection).payload).toEqual({ requestId: 'from-device' })
+    ws.send(JSON.stringify({ type: `app_${kind}_result`, payload: { text: 'quoted remote output' } }))
+    await vi.waitFor(() => expect(reply).toHaveBeenCalledWith(connId, 'remote', { text: 'quoted remote output' }))
+    expect(relayed.some(frame => frame.type === `app_${kind}_result`)).toBe(false)
+    expect(received.filter(frame => frame.type === `dial_${kind}`)).toHaveLength(1)
     expect(backend.frames).toEqual([])
     ws.close()
   })
@@ -335,6 +391,7 @@ describe('local CLI WebSocket', () => {
     // And a window that MOVED without opening anything now says so — which is every click on a pane
     // that already holds a live session, the case the dial used to miss entirely.
     ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'agent-focused' } }))
+    ws.send(JSON.stringify({ type: 'terminal_open', payload: { agentId: 'background-restored' } }))
     await new Promise((resolve) => setTimeout(resolve, 20))
 
     expect(moves).toEqual([
@@ -343,17 +400,19 @@ describe('local CLI WebSocket', () => {
     ])
     // Consumed locally: it describes a hand at this desk, and the machine has no use for an unknown
     // frame type arriving on every pane click.
-    expect(backend.frames.map((frame) => frame.type)).toEqual(['terminal_open'])
+    expect(backend.frames.map((frame) => frame.type)).toEqual(['terminal_open', 'terminal_open'])
     ws.close()
   })
 
   it('reports only explicit voice focus and clears by originating connection', async () => {
     const backend = new FakeBackend()
     const states: Array<{ machine: string; agent: string | null; conn: string }> = []
+    const disconnected = vi.fn()
     server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
     local = attachLocalWsServer(server, {
       machineId, backend,
       onAppFocusState: (machine, agent, conn) => states.push({ machine, agent, conn }),
+      onAppDisconnect: disconnected,
     })
     await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
     const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
@@ -371,8 +430,101 @@ describe('local CLI WebSocket', () => {
     expect(states[1]).toEqual({ ...states[0], agent: null })
     expect(backend.frames.map(frame => frame.type)).toEqual(['terminal_open', 'terminal_open'])
     ws.close()
-    await vi.waitFor(() => expect(states).toHaveLength(3))
-    expect(states[2]).toEqual(states[1])
+    await vi.waitFor(() => expect(disconnected).toHaveBeenCalledExactlyOnceWith(machineId, states[0].conn))
+    expect(states).toHaveLength(2)
+  })
+
+  it('keeps Find on the live desktop when a background or replaced socket closes', async () => {
+    const backend = new FakeBackend(), disconnected = vi.fn()
+    let focused: { machineId: string; connId: string } | undefined
+    const form = new WindowForm({ focus: () => focused,
+      send: (conn, payload) => local!.sendToWindow(conn, { type: 'dial_form', payload }) })
+    const url = await start(backend, {
+      onAppFocusState: (machineId, _agent, connId) => { focused = { machineId, connId } },
+      onAppDisconnect: (machine, conn) => {
+        disconnected(machine, conn)
+        if (focused?.connId === conn) focused = undefined
+        form.disconnected(conn)
+      },
+      onFormReply: (conn, machine, payload) => form.reply(conn, machine, payload),
+    })
+    const connect = async () => {
+      const ws = new WebSocket(url)
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+      await connected
+      return { ws, connId: backend.connId! }
+    }
+    const select = async (client: Awaited<ReturnType<typeof connect>>, agentId: string | null) => {
+      client.ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId } }))
+      await vi.waitFor(() => expect(focused?.connId).toBe(client.connId))
+    }
+    const close = async (client: Awaited<ReturnType<typeof connect>>) => {
+      client.ws.close()
+      await vi.waitFor(() => expect(backend.unregisters).toContain(client.connId))
+    }
+    const ready = async (client: Awaited<ReturnType<typeof connect>>, id: string) => {
+      const received = onceMessage(client.ws)
+      const result = form.command({ op: 'open', surface: 'find', formId: id })
+      const frame = await received
+      expect(frame.type).toBe('dial_form')
+      client.ws.send(JSON.stringify({ type: 'app_form_result', payload: {
+        ...(frame.payload as Record<string, unknown>), ok: true, active: true, revision: 1, position: 0, total: 0,
+        busy: false, enabled: false, canQuery: true, title: 'Find Harness', label: 'Say a name',
+      } }))
+      expect(await result).toMatchObject({ ok: true, active: true, canQuery: true })
+    }
+    const desktop = await connect()
+    await select(desktop, null) // An empty workspace can still open Find.
+    const background = await connect()
+    await close(background)
+    expect(focused?.connId).toBe(desktop.connId)
+    await ready(desktop, 'find-after-background-close')
+
+    const replacement = await connect()
+    await select(replacement, 'selected-pane')
+    await close(desktop) // The old connection closes after the new one reports focus.
+    expect(focused?.connId).toBe(replacement.connId)
+    await ready(replacement, 'find-after-reconnect')
+    await close(replacement)
+    expect(focused).toBeUndefined()
+    expect(disconnected).toHaveBeenCalledTimes(3)
+    expect(await form.command({ op: 'open', surface: 'find', formId: 'find-offline' }))
+      .toMatchObject({ ok: false, active: false })
+    expect(backend.frames).toEqual([])
+    expect(backend.binaries).toEqual([])
+  })
+
+  it('keeps background connections from stealing selection and releases compatibility mode on disconnect', async () => {
+    const backend = new FakeBackend(), dial = vi.fn()
+    const url = await start(backend, { onAppFocus: dial })
+    const select = async () => {
+      const ws = new WebSocket(url)
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+      await connected
+      return ws
+    }
+    const selected = await select()
+    selected.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'hn' } }))
+    await vi.waitFor(() => expect(dial).toHaveBeenCalledExactlyOnceWith(machineId, 'hn'))
+
+    const background = await select()
+    background.send(JSON.stringify({ type: 'terminal_open', payload: { agentId: 'firmware' } }))
+    await vi.waitFor(() => expect(backend.frames).toHaveLength(1))
+    expect(dial).toHaveBeenCalledTimes(1)
+    selected.send(JSON.stringify({ type: 'app_focus', payload: { agentId: null } }))
+    selected.send(JSON.stringify({ type: 'terminal_open', payload: { agentId: 'another-background' } }))
+    await vi.waitFor(() => expect(backend.frames).toHaveLength(2))
+    expect(dial).toHaveBeenCalledTimes(1) // a cleared selection must also stay clear
+
+    selected.close()
+    await vi.waitFor(() => expect(backend.unregisters).toHaveLength(1))
+    background.send(JSON.stringify({ type: 'terminal_open', payload: { agentId: 'legacy-window' } }))
+    await vi.waitFor(() => expect(dial).toHaveBeenLastCalledWith(machineId, 'legacy-window'))
+    background.close()
   })
 
   it('keeps stale automatic focus off the dial and forwards its revision for validation', async () => {
@@ -387,10 +539,12 @@ describe('local CLI WebSocket', () => {
     ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
     await connected
     ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'first', focusRevision: 'old:0' } }))
+    ws.send(JSON.stringify({ type: 'terminal_open', payload: { agentId: 'background' } }))
     await vi.waitFor(() => expect(focus).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(backend.frames).toHaveLength(1))
     expect(focus).toHaveBeenCalledWith(machineId, 'first', expect.any(String), 'old:0')
     expect(dial).not.toHaveBeenCalled()
-    expect(backend.frames).toHaveLength(0)
+    expect(backend.frames.map((frame) => frame.type)).toEqual(['terminal_open'])
     ws.close()
   })
 
