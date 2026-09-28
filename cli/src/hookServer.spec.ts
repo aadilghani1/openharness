@@ -84,6 +84,46 @@ describe('process-owned hook server', () => {
     expect(handlers.onRegistered).not.toHaveBeenCalled()
   })
 
+  it('accepts a Herdr hint from a hook installed by an earlier build, and resolves by its tmux pane only', async () => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        engine: 'codex',
+        tmuxPane: '%41',
+        sessionId: '019fea92-e31a-7692-9c35-f616e9d458b7',
+        runtimeHints: [
+          { backend: 'tmux', paneId: '%41' },
+          { backend: 'herdr', paneId: 'w1:p1', sessionName: 'default', socketPath: '/tmp/herdr.sock' },
+        ],
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(resolveHookAgent).toHaveBeenCalledWith({
+      engine: 'codex', tmuxPane: '%41', runtimeHints: [{ backend: 'tmux', paneId: '%41' }], callerPid: undefined,
+    })
+  })
+
+  it('ignores a hook whose only terminal is a Herdr pane', async () => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        engine: 'claude',
+        sessionId: 'session-1',
+        runtimeHints: [{ backend: 'herdr', paneId: 'w1:p1', sessionName: 'default' }],
+      }),
+    })
+
+    expect(await response.json()).toEqual({ ignored: true, reason: 'not_in_terminal' })
+    expect(resolveHookAgent).not.toHaveBeenCalled()
+  })
+
   it('rejects hooks outside configured terminal contexts before attempting process resolution', async () => {
     const resolveHookAgent = vi.fn(async () => null)
     const { handlers, base, headers } = await start({ resolveHookAgent })

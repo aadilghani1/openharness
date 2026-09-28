@@ -398,8 +398,8 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * `TmuxControlStream.open` reads `paneMeta` first and refuses a missing pane and a multi-pane
    * window. Dropping the check also takes a whole-process-table `ps` scan off every terminal open.
    *
-   * `expected` stays in the signature because `TerminalBackend` defines it and Herdr may still want
-   * it; it is intentionally unused here.
+   * `expected` stays in the signature because `TerminalBackend` defines it; it is intentionally
+   * unused here.
    */
   async openStream(
     runtime: TmuxRuntimeRef,
