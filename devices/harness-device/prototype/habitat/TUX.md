@@ -57,10 +57,12 @@ reach the inbox.
 The central tap always starts voice, including over a summary or a letter.
 It never requires a first tap to dismiss the summary. During capture, the pane
 name stays on the top curve and animated `Listening` follows the bottom curve.
-The timer is hidden. Tim keeps moving at the gentle idle pace, with microphone
+The timer is hidden. Listening uses a 1.024-second sweep cycle, twice the speed
+of the working/status sweep. Tim keeps moving at the gentle idle pace, with microphone
 reactions layered over his body motion. One tap on the creature stops and sends; the recording screen has no Discard button.
-`Sending` uses the same cached-mask highlight sweep, without trailing dots.
-Starting, Finding and Writing use the same treatment during their voice states.
+Once recording stops, `Listening` disappears. There is no `Sending` label; the
+companion keeps moving until the host accepts the message or returns an error.
+Starting, Finding and Writing retain the normal status sweep during their voice states.
 Removing the displayed timer leaves recording duration guards unchanged.
 Cancelling capture through the existing host lifecycle restores the previous
 result. There is no duplicate bottom label on the home screen.
@@ -226,3 +228,34 @@ it reported orange.3 at 15:51:20Z. Desktop/CLI hashes stayed unchanged.
 Artifacts and the full recovery receipt: `/private/tmp/harness-orange-tim-voice/`.
 Inbox gestures and layout remain under discussion; this revision does not
 change them.
+
+
+## Connection and update wordmark — 2026-09-28
+
+Boot/loading, the disconnected home surface, remote-offline/unpaired prompts,
+firmware transfer and restart use one centered `Harness` wordmark on the
+existing charcoal canvas. There is no companion, footer, hint or tap target on
+that surface. The scene is static, and hidden character animation pauses.
+A handshake alone keeps the wordmark visible; the companion returns once the
+pane roster has loaded. Pairing codes and actionable error screens retain
+their own content.
+
+This replaces the disconnected face whose bottom status and controls hint
+could overlap. The final orange.4 image is 777,280 bytes. It also removes the normal
+voice `Sending` label and doubles the `Listening` sweep speed; Working and
+other activity labels retain their existing pace. Existing fonts and colours are reused with no new assets.
+
+
+The orange trial dial received the final orange.4 image by verified USB OTA
+and reconnected on that version at 16:08:38Z. The installer now closes USB
+before the device's delayed reboot and bounds that close; this update completed
+without a manual power cycle. The existing desktop and CLI hashes match.
+The production reference was not updated.
+
+Validation: 796 host tests, full native ASan/UBSan, framed bridge replay and
+both-character touch tests passed. The tests cover the static wordmark through
+loading, offline and OTA, returning after the roster arrives, inactive touch
+targets, a 32 ms Listening step versus 64 ms Working step, clock wrap, removal
+of Listening as soon as capture stops, and continued companion motion.
+Artifacts: `/private/tmp/harness-orange-tim-listening/`; image SHA-256
+`920f40bc252dda2c7311ae303492abd8fa5e17fc7a3aaa01699dacaa6f3ffe32`.

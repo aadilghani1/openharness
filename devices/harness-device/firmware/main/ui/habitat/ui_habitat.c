@@ -238,6 +238,7 @@ static ht_gesture_t gesture;
 static ht_character_t character;
 static action_t pressed_action;
 static bool queue(action_t a);
+static const char *voice_status(void);
 static uint32_t ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 static void copy(char *dst, size_t cap, const char *src)
 {
@@ -506,6 +507,10 @@ static void center(ht_scene_t *f, int y, const char *t, uint16_t c)
 {
     ht_center(f, y, UI_FONT, c, t);
 }
+static void render_brand(ht_scene_t *f)
+{
+    center(f, (466 - UI_FONT->height) / 2, "Harness", FG);
+}
 static void control(ht_scene_t *f, int x, int y, int w, const char *label, action_kind_t a,
                     int value, bool enabled)
 {
@@ -595,19 +600,30 @@ static bool status_animated(void)
 {
     if (s.nap || s.quiet || s.locked || display_is_asleep() || s.touch_down || s.quick_open)
         return false;
-    if (s.view == VOICE) return !s.voice_review_preview;
+    if (s.view == VOICE) return !s.voice_review_preview && voice_status()[0];
     const agent_t *a = active();
     return (s.view == HOME || s.view == AGENT) && a && a->busy && s.connected &&
         !s.loading && !s.straight_title &&
         !carry.active && !carry.error[0] && !visit.available;
 }
+static unsigned status_speed(void)
+{
+    return s.view == VOICE && !s.voice_start_pending && !s.voice_waiting &&
+        audio_client_recording() ? 2 : 1;
+}
+static uint32_t status_wake_ms(uint32_t now)
+{
+    unsigned speed = status_speed();
+    return (ht_shimmer_wake_ms(now * speed) + speed - 1) / speed;
+}
 static void surface_tick(uint32_t now)
 {
-    uint8_t phase = status_animated() ? ht_shimmer_phase(now) : 0;
+    uint8_t phase = status_animated() ? ht_shimmer_phase(now * status_speed()) : 0;
     if (phase != s.status_phase) { s.status_phase = phase; change(); }
     bool main = s.view == HOME || s.view == AGENT;
     bool inbox = s.view == INBOX && s.offset >= 0 && s.offset < s.notice_count;
-    bool visible = !s.locked && !display_is_asleep() && (main || s.view == VOICE || inbox);
+    bool visible = !s.locked && !display_is_asleep() &&
+        ((main && s.connected && !s.loading) || s.view == VOICE || inbox);
     uint32_t held = now - s.touch_started;
     bool review_preview = cable_client_supports(CABLE_FEATURE_DRAFT) &&
         visible && s.view == VOICE && s.voice_open && !s.voice_search &&
@@ -684,6 +700,7 @@ static void render_workspace_preview(ht_scene_t *f)
 static void render_home(ht_scene_t *f)
 {
     s.caption_arc = (ht_rect_t){0};
+    if (!s.connected || s.loading) { render_brand(f); return; }
     if (s.quick_open) { render_quick(f); return; }
     if (workspace.touching && workspace.moved && !workspace.cancelled) { render_workspace_preview(f); return; }
     agent_t *a = active();
@@ -697,12 +714,10 @@ static void render_home(ht_scene_t *f)
         (a->tool[0] ? a->tool : "Working") : "";
     bool named = a && ((recap && *recap) || activity[0]);
     char status[100];
-    if (!s.connected) COPY(status, "Reconnect Harness");
-    else if (s.loading) COPY(status, "Connecting...");
-    else if (!a) COPY(status, "Choose a pane");
+    if (!a) COPY(status, "Choose a pane");
     else COPY(status, activity);
     ht_character_face_t f_ = {.recipient = named ? a->name : "", .status = status,
-        .hint = (s.connected && !s.loading) ? "" : "hold for controls",
+        .hint = "",
         .detail = "", .unread = s.notice_count > 0,
         .mood = character_mood(), .pose = character.motion.reaction.pose, .straight_title = s.straight_title,
         .footer_action = carry.active || carry.error[0] || visit.available,
@@ -1001,17 +1016,20 @@ static void render_list(ht_scene_t *f)
     }
     page_controls(f, count);
 }
+static const char *voice_status(void)
+{
+    if (s.voice_start_pending) return "Starting";
+    if (!audio_client_recording() || s.voice_waiting)
+        return (s.voice_return == FORM || s.voice_search) ? "Finding" :
+            question_view(s.voice_return) || s.voice_return == DRAFT || s.voice_review ? "Writing" : "";
+    return s.voice_review_preview ? "Release to review" : "Listening";
+}
 static void render_voice(ht_scene_t *f)
 {
-    char status[64];
     char draft_detail[64];
     snprintf(draft_detail, sizeof draft_detail, s.voice_draft_append ? "Add to your message" : "Replace part %d / %d",
         draft.page.position, draft.page.total);
-    if (s.voice_start_pending) COPY(status, "Starting");
-    else if (!audio_client_recording() || s.voice_waiting) COPY(status, (s.voice_return == FORM || s.voice_search) ? "Finding" : question_view(s.voice_return) || s.voice_return == DRAFT || s.voice_review ? "Writing" : "Sending");
-    else if (s.voice_review_preview) COPY(status, "Release to review");
-    else COPY(status, "Listening");
-    ht_character_face_t f_ = {.recipient = s.voice_target, .status = status,
+    ht_character_face_t f_ = {.recipient = s.voice_target, .status = voice_status(),
         .hint = "",
         .mood = !s.voice_start_pending && !s.voice_waiting && audio_client_recording() ? HT_CHARACTER_LISTENING : HT_CHARACTER_WORKING,
         .pose = character.motion.reaction.pose, .ink = FG, .foreground = FG, .dim = DIM, .primary_title = true,
@@ -1021,7 +1039,7 @@ static void render_voice(ht_scene_t *f)
         .carrying = s.voice_carry};
     f_.focus = f_.detail && *f_.detail;
     ht_character_face(f, &character, &f_, ACCENT, NULL);
-    s.status_phase = status_animated() ? ht_shimmer_phase(ms()) : 0;
+    s.status_phase = status_animated() ? ht_shimmer_phase(ms() * status_speed()) : 0;
     for (int i = 0; i < f->count; i++)
         if (f->runs[i].arc == 2) f->runs[i].shimmer = s.status_phase;
     s.hits[s.hit_count++] = (hit_t){{33, 97, 400, 274}, A_PET, 0, true};
@@ -1254,8 +1272,10 @@ bool habitat_scene_take(ht_scene_t *f)
             }
         page_controls(f, s.model_count);
         break;
-    case MESSAGE:
     case OTA:
+        render_brand(f);
+        break;
+    case MESSAGE:
         heading(f, s.title);
         ht_wrap(f, 65, 161, 336, 5, 0, UI_FONT, FG, s.message);
         break;
@@ -2309,7 +2329,7 @@ uint32_t habitat_next_wake_ms(void)
     if (s.view == FORM && delay > 100) delay = 100;
     if (character.motion.next_ms && character.motion.next_ms < delay) delay = character.motion.next_ms;
     if (status_animated()) {
-        uint32_t due = ht_shimmer_wake_ms(now);
+        uint32_t due = status_wake_ms(now);
         if (due < delay) delay = due;
     }
     if ((s.view == HOME || s.view == AGENT) && pressed_action.kind == A_PET && s.touch_down && !s.touch_cancelled &&
@@ -3703,10 +3723,10 @@ void ui_voice_error(const char *message)
     ht_gesture_guard(&gesture, ms());
     display_unlock();
 }
-void ui_show_connecting(const char *step) { ui_show_error("Connecting", step); }
+void ui_show_connecting(const char *step) { (void)step; ui_enter_boot_loading(); }
 void ui_enter_remote_offline(void)
 {
-    ui_show_error("Machine offline", "Open Harness on that computer.");
+    ui_enter_boot_loading();
 }
 void ui_enter_link_guide(void)
 {
@@ -3727,27 +3747,25 @@ void ui_show_e2ee_pair(const char *code, int seconds)
     ui_show_error("Pair machine", code);
 }
 void ui_show_e2ee_paired(const char *fingerprint) { ui_show_error("Machine paired", fingerprint); }
-void ui_show_unpaired(void) { ui_show_error("Connect Harness", "Plug into your computer."); }
-void ui_show_ota_restarting(void) { ui_show_error("Update ready", "Restarting..."); }
+void ui_show_unpaired(void) { ui_enter_boot_loading(); }
+void ui_show_ota_restarting(void)
+{
+    display_lock();
+    view(OTA);
+    display_unlock();
+}
 void ui_ota_boot_show(const char *version)
 {
+    (void)version;
     audio_client_abort();
     display_lock();
     voice_close();
-    display_unlock();
-    ui_show_error("Updating", version);
-    display_lock();
-    s.view = OTA;
-    change();
+    view(OTA);
     display_unlock();
 }
 void ui_ota_boot_pct(int percent)
 {
-    display_lock();
-    snprintf(s.message, sizeof(s.message), "Writing firmware\n\n%d%%\n\nKeep the cable connected.",
-             percent);
-    change();
-    display_unlock();
+    (void)percent; // Static wordmark; transfer progress stays in the host logs.
 }
 bool ui_voice_is_recording(void) { return audio_client_recording(); }
 bool ui_voice_is_active(void) { return audio_client_active(); }

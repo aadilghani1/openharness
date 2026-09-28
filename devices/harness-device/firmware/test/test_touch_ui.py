@@ -182,7 +182,7 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
-for name in ['copy', 'recap_preview', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'workspace_index', 'workspace_failed', 'ui_scroll_reportable', 'control', 'home_footer', 'footer_control', 'text', 'center', 'heading', 'render_companion', 'choose_character', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'status_animated', 'surface_tick', 'render_quick', 'command_face', 'render_workspace_preview', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'workspace_index', 'workspace_failed', 'ui_scroll_reportable', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'render_companion', 'choose_character', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_quick', 'command_face', 'render_workspace_preview', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -252,7 +252,8 @@ code += r'''
 static ht_scene_t scene;
 static void scene_take(void) {
     ht_scene_clear(&scene, BG); s.hit_count = 0;
-    if (s.view == DRAFT) render_draft(&scene);
+    if (s.view == OTA) render_brand(&scene);
+    else if (s.view == DRAFT) render_draft(&scene);
     else if (s.view == DRAFT_OPTIONS) render_draft_options(&scene);
     else if (s.view == QUESTION) render_question(&scene);
     else if (s.view == CHOICE) render_choices(&scene);
@@ -842,7 +843,7 @@ static void pane_memory_checks(const char *dir) {
     fake_ms+=3400; surface_tick(fake_ms); scene_take();
     assert(!active()->tool[0] && status_is("Working"));
     s.nap=true; scene_take(); assert(!status_is("Working")); s.nap=false;
-    s.connected=false; scene_take(); assert(!status_is("Working") && status_is("Reconnect Harness")); s.connected=true;
+    s.connected=false; scene_take(); assert(scene.count==1 && !strcmp(scene.runs[0].text,"Harness")); s.connected=true;
     ui_project_emit("a",NULL,"activity","Working",NULL);
     strcpy(active()->name,"hn"); scene_take(); portrait(dir,"short-name-working");
     strcpy(active()->name,"firmware v2");
@@ -976,9 +977,11 @@ int main(int argc, char **argv) {
     assert(!visit.pending && visit.available && carry.active && !carry_drops && s.view==MESSAGE);
     congestion=false; view(HOME); scene_take(); tap(1700,173,410); assert(visit.pending && carry.active);
     carry_return_setup(true); s.connected=false; scene_take();
-    assert(!action_enabled(A_RETURN) && action_enabled(A_CARRY_DROP));
+    assert(!action_enabled(A_RETURN) && !action_enabled(A_CARRY_DROP));
     tap(1000,173,410); assert(!visit.pending && carry.active);
-    tap(1700,317,410); assert(!carry.active && carry_drops==1);
+    tap(1700,317,410); assert(carry.active && !carry_drops);
+    s.connected=true; scene_take();
+    tap(2400,317,410); assert(!carry.active && carry_drops==1);
     // Expiry changes the carry identity. An old finger cannot drop a new quote.
     carry_return_setup(true); habitat_touch(true,317,410,1000);
     assert(ht_carry_tick(&carry,300250)); scene_take(); portrait(dir,"carry-expired-return");
@@ -1321,7 +1324,7 @@ int main(int argc, char **argv) {
     assert(s.voice_open && s.view==VOICE && !stops); // Bottom caption never discards a capture.
 
     // Recording has a steady word (no clock to rerotate) over a moving body.
-    // Both the silent mic and Sending retain visible progress without dots.
+    // Listening alone gets the faster sweep; transmission keeps the moving body.
     reset(); tap(1000,233,220);
     unsigned first_frame=character.motion.frame;
     bool moved_while_listening=false;
@@ -1338,16 +1341,25 @@ int main(int argc, char **argv) {
         char label[40];snprintf(label,sizeof label,"listening-live-%02d",i);portrait(dir,label);
     }
     assert(moved_while_listening);
+    fake_ms=12288;surface_tick(fake_ms);scene_take();assert(s.status_phase==1);
+    fake_ms=12320;surface_tick(fake_ms);scene_take();assert(s.status_phase==2);
+    assert(status_wake_ms(12321)==31 && status_wake_ms(UINT32_MAX)==1);
+    fake_ms=13312;surface_tick(fake_ms);scene_take();assert(s.status_phase==1);
     s.quiet=true;surface_tick(fake_ms);scene_take();
     assert(!character.motion.running);
     for(int j=0;j<scene.count;j++)assert(!scene.runs[j].shimmer);
     s.quiet=false;tap(fake_ms+1000,233,220);assert(stops==1);
-    s.voice_waiting=true;recording=false;surface_tick(fake_ms);scene_take();portrait(dir,"sending-shimmer");
-    bool sending=false;
-    for(int j=0;j<scene.count;j++)if(scene.runs[j].arc==2) {
-        assert(!strcmp(scene.runs[j].text,"Sending") && scene.runs[j].shimmer);sending=true;
+    s.voice_waiting=true;recording=false;surface_tick(fake_ms);scene_take();portrait(dir,"voice-transmitting");
+    assert(character.motion.running && !status_animated());
+    for(int j=0;j<scene.count;j++) {
+        assert(scene.runs[j].arc!=2 && !scene.runs[j].shimmer);
+        assert(!strstr(scene.runs[j].text,"Listening") && !strstr(scene.runs[j].text,"Sending"));
     }
-    assert(sending);
+    s.voice_return=FORM; fake_ms=16384; surface_tick(fake_ms); scene_take();
+    assert(status_is("Finding") && status_speed()==1 && status_wake_ms(16385)==63);
+    s.view=HOME; active()->busy=true; fake_ms=18432; surface_tick(fake_ms); scene_take(); assert(s.status_phase==1);
+    fake_ms+=32; surface_tick(fake_ms); assert(s.status_phase==1);
+    fake_ms+=32; surface_tick(fake_ms); assert(s.status_phase==2);
 
     reset(); habitat_touch(true,233,220,1000); s.active=1; input_cancel();
     habitat_touch(false,233,220,1075); assert(!starts);
@@ -1375,7 +1387,19 @@ int main(int argc, char **argv) {
     assert(s.view==HOME && !starts);
     reset(); active()->busy=true; scene_take(); tap(1000,233,41); assert(s.view==AGENTS && !starts);
     reset(); s.connected=false; scene_take(); portrait(dir,"offline");
+    assert(scene.count==1 && !strcmp(scene.runs[0].text,"Harness") && !s.hit_count);
+    assert(!scene.runs[0].arc && !scene.runs[0].shimmer);
+    ht_rect_t brand=ht_run_bounds(&scene.runs[0]);
+    assert(abs(brand.x*2+brand.w-466)<=1 && abs(brand.y*2+brand.h-466)<=1);
     tap(1000,233,220); assert(!starts);
+    surface_tick(1500); assert(!character.motion.running);
+    // Handshake alone is not ready: retain the wordmark until the roster lands.
+    s.connected=true; s.loading=true; scene_take(); portrait(dir,"connecting");
+    assert(scene.count==1 && !strcmp(scene.runs[0].text,"Harness") && !s.hit_count);
+    surface_tick(2000); assert(!character.motion.running);
+    ui_land_after_reload(); scene_take(); assert(scene.count>1);
+    s.view=OTA; scene_take(); portrait(dir,"updating");
+    assert(scene.count==1 && !strcmp(scene.runs[0].text,"Harness") && !s.hit_count);
     reset(); s.count=0; s.active=-1; scene_take();
     tap(1000,233,220); assert(!starts);
     // Hold previews do not execute. A later slide chooses a destination, never scrolls or talks.
