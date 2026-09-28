@@ -34,6 +34,10 @@ death can be visible before its queued `pane-died` hook runs. The fixture now
 waits for delivery and then requires exactly one hook for every rapid exit.
 Missing hooks still time out, and duplicate hooks still fail with engine/index
 diagnostics. The complete fixture passes locally against `hn` and tmux.
+The ARM64 rerun confirmed that fix, then exposed first paint occurring before
+the command socket was ready. Cleanup now waits for session readiness after
+measuring first paint; the tiny-PTY check waits for its file contents, not just
+file creation. Timing and exact-size assertions remain intact.
 
 ## Validation
 

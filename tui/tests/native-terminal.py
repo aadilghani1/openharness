@@ -238,13 +238,17 @@ try:
         elapsed = time.monotonic() - start
         assert elapsed < .6, (kind, elapsed)
         print(f'PASS {kind} first screen without DA1: {elapsed:.3f}s', flush=True)
+        # First paint can precede the command socket on a fast host. Measure it above,
+        # but do not race cleanup against the session still being created.
+        wait(lambda: cli(kind, 'has-session', '-t', 'work', check=False).returncode == 0,
+             f'{kind} first-screen session ready for cleanup')
         cli(kind, 'kill-server')
         ui.proc.wait(timeout=4)
         ui.stop()
         time.sleep(.15)
         tiny = BASE / f'{kind}-size'
         ui = Terminal(kind, 'new-session', '-s', 'tiny', f'stty size > {shlex.quote(str(tiny))}; sleep 2', cols=1, rows=1)
-        wait(tiny.exists, f'{kind} tiny initial size')
+        wait(lambda: tiny.exists() and tiny.read_text().strip(), f'{kind} tiny initial size written')
         assert tiny.read_text().strip() == '1 1', (kind, tiny.read_text())
         assert cli(kind, 'display-message', '-p', '-t', 'tiny:0', '#{pane_width}x#{pane_height}').stdout.strip() == '1x1'
         cli(kind, 'kill-server')
