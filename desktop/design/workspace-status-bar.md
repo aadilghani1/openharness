@@ -292,12 +292,11 @@ the status line with ligatures off, and reserve eight character cells plus
 one-cell gutters, the sprite centred on its version's base sprite, so moods,
 work frames and a nap's `z` never move nearby text. It draws in the status
 line's own text colour, never its daemon colour (those fail contrast on a
-status bar). A shiny daemon's `*` sits in the left gutter. After the sprite, dim,
-show labeled counts: `3 done, 1 egg`. The creature separates its counts from
-the Git branch count; never put an unlabeled `+N` beside the branch context.
-Done means turns finished since you looked, and eggs means unhatched eggs.
-Keep the creature's click target still while hovered, retaining cleared count
-space until the pointer leaves.
+status bar). A shiny daemon's `*` sits in the left gutter. Show only the egg
+or creature in this fixed slot: no completed-turn count, egg count, or label
+beside it. Additional eggs, progress, and activity details belong in the panel.
+The slot keeps the same width while work finishes, eggs arrive, and the pointer
+enters or leaves, so neither the creature nor its neighbors move.
 Its name and progress belong in the tooltip and panel, never beside the
 sprite. Clicking a ready egg hatches it; otherwise a click boops the daemon and
 opens its panel. When something needs you or failed, its one line replaces the

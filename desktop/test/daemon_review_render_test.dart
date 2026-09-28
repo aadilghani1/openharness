@@ -1,5 +1,5 @@
 // Real-font review captures of the daemon: the status slot in every mood and
-// nest stage (with its tally, a shiny `*`, alerts and replies), the hatch
+// nest stage (with a shiny `*`, alerts and replies), the hatch
 // reveal's frames and rarity tells (drop init's plates at the reveal size),
 // and the panel (the zoo's box back with a portrait plate, the card, a calm
 // unreachable machine, light themes). Always checks that nothing overflows;
@@ -287,7 +287,7 @@ Widget _bar(
 void main() {
   setUpAll(_fonts);
 
-  testWidgets('status slot: nest stages, versions, moods, tally and voice', (
+  testWidgets('status slot: nest stages, versions, moods and voice', (
     tester,
   ) async {
     final rows = <(String, DaemonFace)>[];
@@ -359,7 +359,7 @@ void main() {
       'gopher shiny',
       await _face(tester, _paired('gopher', shiny: true)),
     ));
-    // Finished turns: a count beside the slot, never a line.
+    // Finished turns: the face reacts without adding a count or a line.
     final done = await _face(tester, _paired('tim'));
     done
       ..sync(const DaemonWatch(turns: {'m': 0}))
@@ -990,7 +990,8 @@ void main() {
     );
     expect(find.text('api@office Bash: npm test'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-answer-y')), findsWidgets);
-    expect(find.text('3 done'), findsOneWidget);
+    expect(find.text('3 done'), findsNothing,
+        reason: 'finished turns affect the face without adding a bar count');
     await tester.pumpWidget(const SizedBox());
     for (final (_, face) in rows) {
       face.sync(const DaemonWatch());
@@ -1983,7 +1984,7 @@ void main() {
   }
 
   for (final (native, width) in [(false, 640.0), (false, 1280.0), (true, 1280.0)]) {
-    testWidgets('creature counts separate from Git at $width native=$native', (tester) async {
+    testWidgets('creature alone beside Git at $width native=$native', (tester) async {
       final appearance = appearancePrefsStore.value;
       appearancePrefsStore.value = appearance.copyWith(
         prompt: const PromptPrefs(statusStyle: StatusLineStyle.powerlevel10kRainbow),
@@ -2030,7 +2031,7 @@ void main() {
       });
       await _capture(
         tester,
-        'creature-counts-${width.toInt()}-${native ? 'native' : 'flutter'}',
+        'creature-only-${width.toInt()}-${native ? 'native' : 'flutter'}',
         Size(width, 240),
         (_) => SwarmScreen(
           notifier: app,
@@ -2048,21 +2049,24 @@ void main() {
         },
       );
       if (native) {
-        expect((state!['daemon'] as Map)['tally'], '1 done, 2 eggs');
+        final daemon = state!['daemon'] as Map;
+        expect((daemon['cell'] as String).length, 10);
+        expect(daemon.containsKey('tally'), isFalse);
+        expect(daemon.containsKey('tallyCells'), isFalse);
         if (_output case final output?) {
           await tester.runAsync(() async {
-            await File('$output/creature-counts-native.json').writeAsString(jsonEncode(state));
+            await File('$output/creature-only-native.json').writeAsString(jsonEncode(state));
             await File('$output/catalog.json').writeAsString(jsonEncode([
-              {'id': 'creature-counts-native', 'label': 'Git branches | creature | completed turns and unhatched eggs'},
+              {'id': 'creature-only-native', 'label': 'Git branches | creature'},
             ]));
           });
         }
       } else {
-        final count = find.byKey(const ValueKey('daemon-slot-tally'));
-        expect(tester.widget<Text>(count).data, '1 done, 2 eggs');
-        expect(tester.getRect(find.byKey(const ValueKey('daemon-slot-glyph'))).right,
-            lessThanOrEqualTo(tester.getRect(count).left));
-        expect(tester.getRect(count).right, lessThanOrEqualTo(width));
+        final slot = find.byKey(const ValueKey('daemon-slot'));
+        final cell = workspaceBarCellSizeOf(tester.element(slot));
+        expect(find.descendant(of: slot, matching: find.byType(Text)), findsOneWidget);
+        expect(tester.getRect(slot).width, cell.width * 10);
+        expect(tester.getRect(slot).right, lessThanOrEqualTo(width));
       }
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 11));

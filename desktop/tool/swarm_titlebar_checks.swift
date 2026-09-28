@@ -398,8 +398,7 @@ private extension SwarmTabStrip {
     daemonButton.mouseEntered(with: pointer)
     daemonButton.mouseExited(with: pointer)
     daemonButton.mouseEntered(with: pointer)
-    try checkTitlebar(events == ["daemonLook", "daemonLeave", "daemonLook"],
-      "Each hover entry emits one look and each exit releases the held count width")
+    try checkTitlebar(events == ["daemonLook", "daemonLook"], "Each hover entry emits one look")
     daemonButton.mouseExited(with: pointer)
     // Voice: tmux's message line replaces the status, and nothing moves.
     daemon["voice"] = "pip: two agents idle. nothing needs you."
@@ -500,7 +499,7 @@ private extension SwarmTabStrip {
     try checkTitlebar(voiceLabel.isHidden && !contextButton.isHidden && !pullRequestButton.isHidden &&
       !focusedModelButton.isHidden && unmoved(),
       "Silence restores the status exactly where it was")
-    // The ten cells as Flutter drew them, the tally beside them, the grue's patch.
+    // The ten cells as Flutter drew them and the grue's patch. No count labels.
     let cellWidth = ceil(workspaceBarTextWidth("m", font: daemonButton.font!))
     daemon["glyph"] = "[o o]"
     daemon["cell"] = "  [o o]   "
@@ -515,48 +514,18 @@ private extension SwarmTabStrip {
     daemon["cell"] = "*  [o o]  "
     updateDaemon(daemon)
     try checkTitlebar(daemonButton.cells.hasPrefix("*") && unmoved(), "A shiny daemon's * sits in the gutter")
+    let spriteOnly = daemonButton.renderedPixels()
+    // Obsolete count fields cannot widen the slot or draw extra labels.
     daemon["tally"] = "3 done, 1 egg"
-    daemon["foreground"] = 0xffffffff
+    daemon["tallyCells"] = 13
     daemon["tallyColor"] = 0xff808080
     updateDaemon(daemon)
-    try checkTitlebar(abs(daemonButton.frame.width - cellWidth * CGFloat(10 + 1 + 13)) < 0.5 &&
-      daemonButton.frame.maxX == daemonFrame.maxX && contextButton.frame.maxX <= daemonButton.frame.minX,
-      "The labeled tally widens the control and the status makes room")
-    let counted = daemonButton.renderedBitmap()
-    var brightColumns = Set<Int>(), mutedColumns = Set<Int>()
-    for y in 0..<counted.pixelsHigh {
-      for x in 0..<counted.pixelsWide {
-        guard let color = counted.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
-              color.alphaComponent > 0.8 else { continue }
-        if color.redComponent > 0.8 { brightColumns.insert(x) }
-        if (0.45...0.55).contains(color.redComponent) { mutedColumns.insert(x) }
-      }
-    }
-    try checkTitlebar(!brightColumns.isEmpty && !mutedColumns.isEmpty &&
-      brightColumns.max()! < Int(cellWidth * 10) && mutedColumns.min()! >= Int(cellWidth * 10),
-      "The native creature draws before its dim counts, separating them from Git")
-    let countedFrame = daemonButton.frame
-    daemon["tallyCells"] = 13
-    daemon["tally"] = "1 egg"
-    updateDaemon(daemon)
-    try checkTitlebar(daemonButton.frame == countedFrame,
-      "Clearing done on hover preserves the native creature's click target")
-    events.removeAll()
-    daemonButton.mouseExited(with: pointer)
-    try checkTitlebar(events == ["daemonLeave"], "Pointer exit lets Flutter release the held count width")
-    daemon["tallyCells"] = nil
-    updateDaemon(daemon)
-    try checkTitlebar(daemonButton.frame.width < countedFrame.width,
-      "The count's empty space is released when hover ends")
-    daemon["tally"] = "999+ done, 999+ eggs"
-    updateDaemon(daemon)
-    try checkTitlebar(daemonButton.tally == "999+ done, 999+ eggs",
-      "The largest bounded labeled tally is retained by native validation")
-    daemon["tally"] = "3 done, and far too many words for this slot"
-    updateDaemon(daemon)
-    try checkTitlebar(daemonButton.tally.isEmpty && daemonButton.frame == daemonFrame,
-      "A tally that is not short printable ASCII draws nothing")
+    try checkTitlebar(abs(daemonButton.frame.width - cellWidth * 10) < 0.5 && unmoved() &&
+      daemonButton.renderedPixels() == spriteOnly,
+      "Only the creature occupies the native focus bar, without count labels or reserved space")
     daemon["tally"] = nil
+    daemon["tallyCells"] = nil
+    daemon["tallyColor"] = nil
     daemon["cell"] = "   .   .  "
     daemon["patch"] = 0xff000000
     updateDaemon(daemon)
@@ -588,8 +557,8 @@ private extension SwarmTabStrip {
     daemonButton.performClick(nil)
     daemonButton.mouseEntered(with: pointer)
     daemonButton.mouseExited(with: pointer)
-    try checkTitlebar(events == ["daemonLeave"] && !daemonButton.isEnabled,
-      "A modal disables the daemon's click and look but still releases held width on exit")
+    try checkTitlebar(events.isEmpty && !daemonButton.isEnabled,
+      "A modal disables the daemon's click and look")
     update([:])
     try checkTitlebar(daemonButton.isHidden && !daemonButton.isEnabled && voiceLabel.isHidden,
       "Workspace teardown hides the daemon")
@@ -1025,10 +994,9 @@ private extension SwarmTabStrip {
     let beforeLook = messenger.calls.count, pendingReplies = messenger.replies.count
     daemonButton.mouseEntered(with: hover)
     daemonButton.mouseExited(with: hover)
-    try checkTitlebar(messenger.calls.count == beforeLook + 2 &&
-      messenger.calls.suffix(2).map(\.method) == ["daemonLook", "daemonLeave"] &&
+    try checkTitlebar(messenger.calls.count == beforeLook + 1 && messenger.calls.last?.method == "daemonLook" &&
       messenger.replies.count == pendingReplies && window.firstResponder === window.contentInput,
-      "Hovering the daemon sends entry and exit without moving keyboard focus")
+      "Hovering the daemon sends one look and never moves keyboard focus")
     updateDaemon([:])
     let current = tabs[0].accessibilityChildren()!.first as! NSButton
     window.makeFirstResponder(current)

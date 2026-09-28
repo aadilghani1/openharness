@@ -767,8 +767,8 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('finished turns are labeled after the creature, cleared when you '
-      'look; Quiet and Motion are switches in the panel', (tester) async {
+  testWidgets('finished turns keep the creature alone and still in the bar; '
+      'Quiet and Motion are switches in the panel', (tester) async {
     app.stateOf('m')!
       ..nodeOnline = true
       ..connectionStatus = ConnectionStatus.connected;
@@ -777,6 +777,7 @@ void main() {
     app.adoptSessionForTest(terminal('a0', []));
     app.adoptSessionForTest(terminal('a1', []));
     await tester.pump();
+    final beforeTurns = tester.getRect(slot);
     // a1 is in front: its turn is seen already; a0's is not.
     for (final id in ['a0', 'a1']) {
       await app.handleMachineEventForTest('m', {
@@ -791,17 +792,10 @@ void main() {
     await tester.pump();
     final focused = app.focusedPane!.agentId;
     expect(focused, isNotNull);
-    expect(
-      tester.widget<Text>(find.byKey(const ValueKey('daemon-slot-tally'))).data,
-      '1 done',
-    );
-    expect(
-      tester.getRect(find.byKey(const ValueKey('daemon-slot-glyph'))).right,
-      lessThanOrEqualTo(
-        tester.getRect(find.byKey(const ValueKey('daemon-slot-tally'))).left,
-      ),
-      reason: 'the creature separates its counts from Git context',
-    );
+    expect(tester.getRect(slot), beforeTurns,
+        reason: 'finished turns do not take more focus-bar space');
+    expect(find.descendant(of: slot, matching: find.byType(Text)), findsOneWidget,
+        reason: 'only the creature is drawn, without labels or counts');
     expect(find.byKey(const ValueKey('daemon-voice')), findsNothing);
     final glyphTarget = find.byKey(const ValueKey('daemon-slot-glyph'));
     final beforeHover = tester.getRect(glyphTarget);
@@ -812,13 +806,13 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-slot-tally')), findsNothing);
     expect(tester.getRect(glyphTarget), beforeHover,
-        reason: 'reading a count must not move the creature away from the click');
+        reason: 'hover must not move the creature away from the click');
     await tester.tapAt(beforeHover.center);
     await tester.pump();
     await mouse.moveTo(Offset.zero);
     await tester.pump();
-    expect(tester.getRect(glyphTarget).left, greaterThan(beforeHover.left),
-        reason: 'the unused count space is released after the pointer leaves');
+    expect(tester.getRect(glyphTarget), beforeHover,
+        reason: 'leaving the creature keeps the same fixed slot');
     expect(find.byKey(const ValueKey('daemon-slot-tally')), findsNothing);
     // The switches are on the settings tab: 4.
     await key(tester, LogicalKeyboardKey.digit4);
@@ -902,11 +896,8 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(
-      tester.widget<Text>(find.byKey(const ValueKey('daemon-slot-tally'))).data,
-      '1 egg',
-      reason: 'an egg waits beside the slot until it is opened',
-    );
+    expect(find.descendant(of: slot, matching: find.byType(Text)), findsOneWidget,
+        reason: 'additional eggs wait in the panel, without a bar count');
     await tester.tap(slot);
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('daemon-egg:turn')));
@@ -924,7 +915,7 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('native hears the ten cells and the tally', (tester) async {
+  testWidgets('native hears only the ten cells, without count labels', (tester) async {
     final states = <Map>[];
     const channel = MethodChannel('harness/swarm_tabs');
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
@@ -956,7 +947,9 @@ void main() {
     );
     await tester.pump();
     expect(states.last['cell'], '* (o o)   ');
-    expect(states.last['tally'], '1 egg');
+    expect(states.last.containsKey('tally'), isFalse);
+    expect(states.last.containsKey('tallyCells'), isFalse);
+    expect(states.last.containsKey('tallyColor'), isFalse);
     expect(states.last['patch'], isNull, reason: 'a dark theme');
     await unmount(tester);
   });
@@ -1252,12 +1245,8 @@ void main() {
           ],
         ),
       );
-      expect(
-        tester
-            .widget<Text>(find.byKey(const ValueKey('daemon-slot-tally')))
-            .data,
-        '3 done',
-      );
+      expect(find.descendant(of: slot, matching: find.byType(Text)), findsOneWidget,
+          reason: 'remote completions do not add a focus-bar count');
       expect(glyph(tester), '(o o)', reason: 'asleep is never a failure');
       // It acted within rules: drawn like done.
       await frame(tester, 'daemon_say', {

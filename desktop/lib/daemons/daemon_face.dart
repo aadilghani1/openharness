@@ -1,6 +1,5 @@
 /// The paired daemon's face in the status line: its mood, its blinks, the
-/// frames it steps through while agents work, the small tally beside it and
-/// the one line it says.
+/// frames it steps through while agents work and the one line it says.
 ///
 /// The rules are the README's (`daemons/README.md`, Moods, Motion and blinks,
 /// Voice). Moods come from work, never from the clock: there is no idle timer.
@@ -226,7 +225,7 @@ class DaemonFace extends ChangeNotifier {
   final _turns = <String, int>{}, _fails = <String, int>{};
   bool _baselined = false;
 
-  // The tally: finished turns since you looked, and while you were away.
+  // Activity details: finished turns since you looked, and while you were away.
   int _doneCount = 0, _doneWhileAway = 0;
   Timer? _seenTimer;
 
@@ -447,36 +446,6 @@ class DaemonFace extends ChangeNotifier {
       daemonShown ? baseWidth(roster, d, versionIndex) : null,
     );
     return daemonShown && shiny ? '*${c.substring(1)}' : c;
-  }
-
-  /// After the creature: `3 done, 1 egg`. Label both counts so they cannot
-  /// be mistaken for the neighboring Git branch count. Keep the bar bounded;
-  /// the tooltip and accessibility detail retain the exact counts. Empty
-  /// before the first hatch (the slot is the egg) and during a reveal.
-  String get tally {
-    if (!visible || _revealing || def == null) return '';
-    final eggs = eggsWaiting;
-    final done = doneCount;
-    String count(int value) => value > 999 ? '999+' : '$value';
-    return [
-      if (done > 0) '${count(done)} done',
-      if (eggs > 0) '${count(eggs)} ${eggs == 1 ? 'egg' : 'eggs'}',
-    ].join(', ');
-  }
-
-  bool _pointerInside = false;
-  int _heldTallyCells = 0;
-
-  /// Keep the click target still when looking clears a count. Empty space
-  /// is released once the pointer leaves; new counts can still grow it.
-  int get tallyCells =>
-      _heldTallyCells > tally.length ? _heldTallyCells : tally.length;
-
-  void setPointerInside(bool inside) {
-    if (_pointerInside == inside) return;
-    _pointerInside = inside;
-    _heldTallyCells = inside ? tally.length : 0;
-    _update(force: true);
   }
 
   /// `tim: bell in codex@office: run the migration?` while it speaks; a line
@@ -1120,7 +1089,7 @@ class DaemonFace extends ChangeNotifier {
   /// the window's own alerts; `ask` (the pair wants your key) is yellow and at
   /// once; `say` (the pair answering you) is a dim reply; `auto` (a rule or
   /// the pair acted) is dim, and the face shows it as done. A finished turn
-  /// or a return is never a line (the tally and the brief carry them). A
+  /// or a return is never a line (the expression and brief carry them). A
   /// second line with the same id replaces it in place, with the time the
   /// brain says it has left.
   void sayFromBrain(DaemonSay say) {
@@ -1302,12 +1271,6 @@ class DaemonFace extends ChangeNotifier {
 
   void _update({DaemonMood? before, bool force = false}) {
     if (_disposed) return;
-    if (!visible) {
-      _pointerInside = false;
-      _heldTallyCells = 0;
-    } else if (_pointerInside && tally.length > _heldTallyCells) {
-      _heldTallyCells = tally.length;
-    }
     final now = mood;
     _runMotion(now);
     final glyph = this.glyph;
