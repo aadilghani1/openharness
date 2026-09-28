@@ -3,7 +3,8 @@
 Harness Desktop is the native Flutter client for browsing Harness machines and
 interacting with their terminal-backed agents. **macOS is the primary supported and tested
 experience.** Linux builds exist, with feature parity still in progress; Windows support is
-planned and its runner is unexercised. Embedded harness viewers currently require macOS.
+planned and its runner is unexercised. Native embedded harness viewers require macOS;
+the browser renders managed viewers on their connected machine.
 
 The browser target uses this same Flutter package and `lib/main.dart`: workspace,
 tabs, pickers, settings, state, and the patched xterm renderer are shared. Browser
@@ -71,9 +72,14 @@ For a local production build, run `bash scripts/build-web-release.sh X.Y.Z`.
 
 - Authenticated access to existing machines uses the shared viewer services and
   encrypted relay. Link a machine from the browser before controlling it.
-- Existing account-bound sharing invitations open read-only through the observer
-  relay, with the owner's identity verified. Public, anonymous session URLs and
-  published snapshots are the next product layer; they are not implemented here.
+- **Share** on an agent creates one browser link. Private links require sign-in
+  with an invited email; public links open without an account. Viewers receive
+  only that agent's read-only output through the encrypted observer relay, with
+  the owner's identity pinned in the link. Sign-in returns to the same link.
+  Comments travel through that channel and persist on the owner's machine;
+  posting requires sign-in. Authors can remove their comments and owners can
+  moderate the thread. **Stop sharing** removes link and invitation access.
+  The owner's machine must be online; published snapshots are not included.
 - Login, linked machines, preferences, and cached workspace metadata persist in
   this origin's local storage across tabs and browser restarts. Only the pending
   OAuth transaction is tab-local. Browser locks serialize token refresh and
@@ -93,10 +99,37 @@ For a local production build, run `bash scripts/build-web-release.sh X.Y.Z`.
   Control keys keep their usual behavior. The shared shortcut sheet and welcome
   hints show the active bindings.
 - Agent processes and files stay on their host machines. Local provisioning,
-  desktop updates, device pairing, local usage ledgers, keyboard config files,
-  native file previews/image clipboard, and embedded native webviews remain
-  desktop capabilities. Remote terminals and streamed image viewers reuse the
-  shared UI. Closing the browser does not stop a running agent.
+  desktop updates, hardware firmware, local usage ledgers, keyboard config files,
+  system notifications, and native image clipboard remain desktop capabilities. Closing the browser
+  does not stop a running agent.
+- **Work from your phone** on the welcome page shows the same QR setup as
+  desktop. In a browser it pairs the phone with the selected linked computer,
+  over an encrypted owner connection. The computer name stays visible and fixed
+  while the QR is open. A browser without a linked computer offers the machine
+  picker first.
+- API connections, model controls and orchestrator projects run on a linked
+  computer. Editors keep their destination while open; reopening model controls
+  selects the current computer. API keys are saved on that computer, not in
+  browser preferences. The command bar uses the same daemon decision service
+  and requires the same provider configuration; local navigation still works
+  without it. Sending a task remains a separate confirmed action.
+- Managed viewer panes accept mouse, keyboard and text input through an
+  encrypted owner connection. Their isolated Chromium renderer runs on the
+  agent machine and must be installed there. Shared-link viewers remain read
+  only. Streams are bounded to four interactive surfaces per connection/eight
+  per daemon, with an idle timeout; native dialogs, browser downloads, audio and
+  OS clipboard bridging are not provided by this stream. These capabilities
+  require an updated daemon; older hosts receive update guidance.
+
+The disposable full-stack fixture also accepts
+`HARNESS_WORKSPACE_BROWSER_CHECK=$PWD/desktop/scripts/check-workspace.cjs` and
+`HARNESS_SHARE_BROWSER_CHECK=$PWD/desktop/scripts/check-sharing.cjs` when running
+`npm run test:sharing-e2e` from `cli/` (set the paths from the repository root).
+It launches fixture accounts and daemons, signs into the browser through an SSO
+stand-in, then uses real password linking, encrypted RPCs, terminal/viewer input,
+API storage and shared links. No real user home or credentials are used. See
+[the readiness record](../docs/plans/2026-09-27-008-web-release-readiness.md)
+for the build origin, service prerequisites and current verification evidence.
 
 Keep product changes in the existing shared screens and state. Add platform
 adapters only for browser/native capabilities, following the conditional stores,

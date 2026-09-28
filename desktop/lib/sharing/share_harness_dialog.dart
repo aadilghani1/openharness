@@ -1,13 +1,17 @@
 import 'dart:async';
 
-import '../shared/widgets/labeled_field.dart';
+import 'package:flutter/services.dart';
 
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/widgets/app_dialog.dart';
-import '../shared/widgets/app_select_field.dart';
-import '../shared/widgets/skeleton.dart';
+import '../terminal/terminal_text.dart';
+import '../terminal/terminal_theme.dart';
+import '../terminal/terminal_theme_store.dart';
+import '../widgets/box_chrome.dart';
+import '../widgets/terminal_prompt.dart';
+import '../widgets/terminal_text_action.dart';
+import 'harness_comments.dart';
 import '../state/app_state.dart';
 import '../ws/ws_conn.dart';
 
@@ -22,8 +26,8 @@ Future<void> showShareHarnessDialog(
   String machineId,
   String agentId,
   String name,
-) => showAppDialog<void>(
-  context: context,
+) => showTerminalPrompt<void>(
+  context,
   builder: (_) => ShareHarnessDialog(
     name: name,
     manage: (action, payload) =>
@@ -49,6 +53,8 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
   bool _loading = true, _busy = false;
   String? _error, _notice;
   int _days = 30;
+  Map<String, dynamic>? _link;
+  bool _collaboration = false, _comments = false, _manualCopy = false;
   Timer? _presence;
   int _revision = 0;
   bool _refreshing = false;
@@ -75,6 +81,10 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
       ? error.detail!
       : 'Could not reach this harness. Check the connection and try again.';
   void _accept(Map<String, dynamic> response) {
+    _collaboration = response['collaboration'] == true;
+    _link = response['link'] is Map
+        ? Map<String, dynamic>.from(response['link'] as Map)
+        : null;
     _shares = [
       for (final row in response['shares'] as List? ?? const [])
         Map<String, dynamic>.from(row as Map),
@@ -175,181 +185,351 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
     }
   }
 
+  Future<void> _linkAction(String visibility, {bool copy = false}) async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _revision++;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      if (!copy || _link == null || _link?['visibility'] == 'off') {
+        _accept(await widget.manage('link', {'visibility': visibility}));
+      }
+      if (copy && _link?['pending'] != true && _link?['error'] == null) {
+        final url = _link?['url'] as String?;
+        if (url == null) throw StateError('Link unavailable');
+        await Clipboard.setData(ClipboardData(text: url));
+        _manualCopy = false;
+        if (mounted) setState(() => _notice = 'Link copied.');
+      } else if (mounted) {
+        setState(
+          () => _notice =
+              _link?['error'] as String? ??
+              (_link?['pending'] == true
+                  ? 'Saved. Waiting for the connection before the link is ready.'
+                  : visibility == 'off'
+                  ? 'Sharing stopped.'
+                  : 'Access updated.'),
+        );
+      }
+    } catch (error) {
+      _manualCopy = copy && _link?['url'] != null;
+      if (mounted) {
+        setState(
+          () => _error = copy && _link?['url'] != null
+              ? 'Could not copy. Select the link below and copy it.'
+              : _message(error),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    return AlertDialog(
-      title: Row(
-        children: [
-          const Icon(Icons.people_outline, size: 22),
-          const SizedBox(width: 12),
-          const Expanded(child: Text('Share harness')),
-        ],
-      ),
-      content: SizedBox(
-        width: 520,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(context).height * .65,
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  widget.name,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Let people watch your agent and its live output.',
-                  style: TextStyle(color: grid.AppPalette.textSecondary),
-                ),
-                const SizedBox(height: 22),
-                const FieldLabel('Add people by email'),
-                TextField(
-                  controller: _emails,
-                  autofocus: true,
-                  enabled: !_busy && !_loading,
-                  keyboardType: TextInputType.emailAddress,
-                  maxLines: 2,
-                  minLines: 1,
-                  decoration: const InputDecoration(
-                    hintText: 'ken@example.com, diego@example.com',
+    return ListenableBuilder(
+      listenable: Listenable.merge([terminalFontStore, terminalThemeStore]),
+      builder: (context, _) {
+        final cell = terminalCellSizeOf(context);
+        final theme = terminalThemeFor(
+          grid.AppTheme.palette.value,
+          terminalThemeStore.value,
+        );
+        final style = terminalContentStyle(color: theme.foreground);
+        final muted = style.copyWith(
+          color: theme.foreground.withValues(alpha: .6),
+        );
+        final isPublic = _link?['visibility'] == 'public';
+        final disabled = _busy || _loading;
+        final gap = SizedBox(height: cell.height);
+        Widget action(String label, VoidCallback? run) =>
+            TerminalTextAction(label: label, onPressed: run);
+        return TerminalPromptKeys(
+          cancel: () => Navigator.of(context).pop(),
+          child: Dialog(
+            backgroundColor: theme.background,
+            surfaceTintColor: Colors.transparent,
+            elevation: 0,
+            insetPadding: EdgeInsets.symmetric(
+              horizontal: cell.width * 2,
+              vertical: cell.height * 2,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(kTerminalCornerRadius),
+              side: terminalPaneBorder(focused: true),
+            ),
+            child: DefaultTextStyle(
+              style: style,
+              child: SizedBox(
+                width: cell.width * 68,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.sizeOf(context).height * .8,
                   ),
-                  onSubmitted: (_) => _invite(),
-                  onChanged: (_) => setState(() {}),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    const Icon(Icons.visibility_outlined, size: 16),
-                    const SizedBox(width: 8),
-                    const Text('Can view'),
-                    const Spacer(),
-                    AppSelectField<int>(
-                      value: _days,
-                      width: 156,
-                      options: const [
-                        SelectOption(value: 7, label: 'Expires in 7 days'),
-                        SelectOption(value: 30, label: 'Expires in 30 days'),
-                        SelectOption(value: 90, label: 'Expires in 90 days'),
-                      ],
-                      onChanged: (value) {
-                        if (!_busy) setState(() => _days = value);
-                      },
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: cell.width * 2,
+                      vertical: cell.height,
                     ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: _busy || _loading || _emails.text.trim().isEmpty
-                      ? null
-                      : _invite,
-                  child: Text(_busy ? 'Saving…' : 'Share harness'),
-                ),
-                if (_error != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Semantics(
-                      liveRegion: true,
-                      child: Text(
-                        _error!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Share ${widget.name}',
+                                overflow: TextOverflow.ellipsis,
+                                style: style.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            if (_collaboration)
+                              action(
+                                _comments ? 'Access' : 'Comments',
+                                () => setState(() => _comments = !_comments),
+                              ),
+                            action('Done', () => Navigator.of(context).pop()),
+                          ],
                         ),
-                      ),
+                        gap,
+                        if (_comments)
+                          Flexible(
+                            child: SizedBox(
+                              height: cell.height * 25,
+                              child: HarnessComments(manage: widget.manage),
+                            ),
+                          )
+                        else
+                          Flexible(
+                            child: SingleChildScrollView(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  if (_loading) const Text('Loading sharing…'),
+                                  if (!_loading && !_collaboration)
+                                    const Text(
+                                      'Update Harness on this machine to share browser links and comments.',
+                                    ),
+                                  if (_collaboration) ...[
+                                    Wrap(
+                                      children: [
+                                        action(
+                                          '${!isPublic ? 'x' : ' '} Private',
+                                          disabled
+                                              ? null
+                                              : () => _linkAction('private'),
+                                        ),
+                                        action(
+                                          '${isPublic ? 'x' : ' '} Public',
+                                          disabled
+                                              ? null
+                                              : () => _linkAction('public'),
+                                        ),
+                                      ],
+                                    ),
+                                    Text(
+                                      isPublic
+                                          ? 'Anyone with the link can view live output and comments.'
+                                          : 'Only the emails you add can view and comment.',
+                                      style: muted,
+                                    ),
+                                    gap,
+                                    Wrap(
+                                      children: [
+                                        action(
+                                          _busy ? 'Saving…' : 'Copy link',
+                                          disabled
+                                              ? null
+                                              : () => _linkAction(
+                                                  'private',
+                                                  copy: true,
+                                                ),
+                                        ),
+                                        if (_link != null &&
+                                            _link?['visibility'] != 'off')
+                                          action(
+                                            'Stop sharing',
+                                            disabled
+                                                ? null
+                                                : () => _linkAction('off'),
+                                          ),
+                                      ],
+                                    ),
+                                    if (_manualCopy && _link?['url'] is String)
+                                      Padding(
+                                        padding: EdgeInsets.only(
+                                          top: cell.height,
+                                        ),
+                                        child: SelectableText(
+                                          _link!['url'] as String,
+                                          style: muted,
+                                        ),
+                                      ),
+                                    if (_link?['error'] != null)
+                                      Text('${_link!['error']}'),
+                                    gap,
+                                  ],
+                                  if (!isPublic) ...[
+                                    const Text('Add people by email'),
+                                    TextField(
+                                      controller: _emails,
+                                      autofocus: true,
+                                      enabled: !disabled,
+                                      keyboardType: TextInputType.emailAddress,
+                                      maxLines: 2,
+                                      minLines: 1,
+                                      style: style,
+                                      cursorColor: theme.cursor,
+                                      decoration: InputDecoration(
+                                        hintText: 'name@example.com, another@example.com',
+                                        hintStyle: muted,
+                                        filled: false,
+                                        border: InputBorder.none,
+                                        enabledBorder: InputBorder.none,
+                                        focusedBorder: InputBorder.none,
+                                        contentPadding: EdgeInsets.symmetric(
+                                          vertical: cell.height / 2,
+                                        ),
+                                      ),
+                                      onSubmitted: (_) => _invite(),
+                                      onChanged: (_) => setState(() {}),
+                                    ),
+                                    Wrap(
+                                      crossAxisAlignment:
+                                          WrapCrossAlignment.center,
+                                      children: [
+                                        const Text('Expires in '),
+                                        for (final days in [7, 30, 90])
+                                          action(
+                                            '${_days == days ? 'x ' : ''}$days days',
+                                            disabled
+                                                ? null
+                                                : () => setState(
+                                                    () => _days = days,
+                                                  ),
+                                          ),
+                                        action(
+                                          'Add people',
+                                          disabled ||
+                                                  _emails.text.trim().isEmpty
+                                              ? null
+                                              : _invite,
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                  if (_error != null)
+                                    Padding(
+                                      padding: EdgeInsets.only(
+                                        top: cell.height,
+                                      ),
+                                      child: Semantics(
+                                        liveRegion: true,
+                                        child: Text(
+                                          _error!,
+                                          style: style.copyWith(
+                                            color: theme.red,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  if (_notice != null)
+                                    Padding(
+                                      padding: EdgeInsets.only(
+                                        top: cell.height,
+                                      ),
+                                      child: Semantics(
+                                        liveRegion: true,
+                                        child: Text(_notice!),
+                                      ),
+                                    ),
+                                  gap,
+                                  if (!_loading && !isPublic && _shares.isEmpty)
+                                    Text(
+                                      'No invited people yet.',
+                                      style: muted,
+                                    ),
+                                  for (final share
+                                      in isPublic
+                                          ? <Map<String, dynamic>>[]
+                                          : _shares)
+                                    Padding(
+                                      padding: EdgeInsets.only(
+                                        bottom: cell.height,
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: Text(
+                                                  '${share['email']}',
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                              action(
+                                                'Remove',
+                                                _busy
+                                                    ? null
+                                                    : () => _remove(
+                                                        share['id'] as String,
+                                                      ),
+                                              ),
+                                            ],
+                                          ),
+                                          Text(
+                                            _recipientStatus(share),
+                                            style: muted,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  Text(
+                                    'Keep your machine online while people watch. Viewers can comment; they cannot control your agent.',
+                                    style: muted,
+                                  ),
+                                  if (_error != null && !_busy)
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: action('Retry', () => _load()),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
-                if (_notice != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Semantics(liveRegion: true, child: Text(_notice!)),
-                  ),
-                const SizedBox(height: 24),
-                const Text(
-                  'People with access',
-                  style: TextStyle(fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 10),
-                if (_loading)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Skeleton(height: 44),
-                  ),
-                if (!_loading && _shares.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Text(
-                      'Only you have access.',
-                      style: TextStyle(color: grid.AppPalette.textSecondary),
-                    ),
-                  ),
-                for (final share in _shares) _recipient(share),
-                const SizedBox(height: 18),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: grid.AppSurface.recess,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    'They’ll find this harness in Machines → Shared with you using the invited email. '
-                    'Keep your machine online while they watch. You can remove access at any time.',
-                    style: grid.AppType.body(height: 1.5),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
-        ),
-      ),
-      actions: [
-        if (_error != null && !_busy)
-          TextButton(onPressed: () => _load(), child: const Text('Retry')),
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Done'),
-        ),
-      ],
+        );
+      },
     );
   }
 
-  Widget _recipient(Map<String, dynamic> share) {
-    final email = share['email'] as String;
-    final watching = (share['watching'] as num? ?? 0) > 0;
+  String _recipientStatus(Map<String, dynamic> share) {
     final expires = DateTime.tryParse(share['expiresAt'] as String? ?? '')
         ?.toLocal();
-    final subtitle =
-        share['error'] as String? ??
+    return share['error'] as String? ??
         (share['pending'] == true
             ? 'Waiting for connection'
             : share['expired'] == true
             ? 'Expired · add again to renew'
-            : watching
+            : (share['watching'] as num? ?? 0) > 0
             ? 'Watching now · Can view'
             : 'Can view${expires == null ? '' : ' · Until ${expires.month}/${expires.day}/${expires.year}'}');
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: CircleAvatar(
-        radius: 16,
-        backgroundColor: grid.AppSurface.recess,
-        child: Text(
-          email.substring(0, 1).toUpperCase(),
-          style: grid.AppType.label(),
-        ),
-      ),
-      title: Text(
-        email,
-        overflow: TextOverflow.ellipsis,
-        style: grid.AppType.label(),
-      ),
-      subtitle: Text(subtitle, style: grid.AppType.body()),
-      trailing: TextButton(
-        onPressed: _busy ? null : () => _remove(share['id'] as String),
-        child: const Text('Remove'),
-      ),
-    );
   }
 }

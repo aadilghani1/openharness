@@ -10,11 +10,13 @@
 import { ENCRYPTED_RPC_RESULT_TYPES, isEncryptedDownType } from './core.js'
 import { SHARE_REQUEST_TYPES, SHARE_RESULT_TYPES } from '../../sharing/protocol.js'
 import { VIEWER_DOWN_TYPES } from '../viewerWire.js'
+export const OWNER_COMMAND_TYPES = new Set(['command_bar', 'route_task', 'route_send'])
 
 const FLEET_REQUESTS = new Set(['grid_fleet_capabilities', 'grid_fleet_run', 'grid_fleet_cancel',
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop'])
 const FLEET_RESULTS = new Set([...FLEET_REQUESTS].map(type => `${type}_result`))
-const MACHINE_REQUESTS = new Set(['git_project_info', 'git_pull_request', 'machine_resources', 'api_connections'])
+// `group_sync`: the trust-group roster exchange (groupSyncer.ts) — keys, so always sealed.
+const MACHINE_REQUESTS = new Set(['git_project_info', 'git_pull_request', 'machine_resources', 'api_connections', 'group_sync', 'phone_pair', 'viewer_surface', 'orchestrator', ...OWNER_COMMAND_TYPES])
 const MACHINE_RESULTS = new Set([...MACHINE_REQUESTS].map(type => `${type}_result`))
 export const encryptDownFrame = (type: string): boolean =>
   isEncryptedDownType(type) || MACHINE_REQUESTS.has(type) || FLEET_REQUESTS.has(type) || SHARE_REQUEST_TYPES.has(type) || VIEWER_DOWN_TYPES.has(type)

@@ -9,6 +9,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../analytics/analytics.dart';
 import '../api/api_client.dart';
 import '../viewer/direct_auth_api.dart';
+import '../viewer/direct_link.dart';
+import '../viewer/group_sync.dart';
 import '../viewer/viewer_services.dart';
 import '../auth/auth_session.dart';
 import '../auth/peer_link_client.dart';
@@ -899,6 +901,7 @@ class AppNotifier extends ChangeNotifier {
     PaneLayoutStore? paneLayoutStore,
     SystemNotices? systemNotices,
     MachineCache? machineCache,
+    GroupSync? groupSync,
     this.turnActivityTimeout = const Duration(seconds: 12),
   }) : _paneLayout = paneLayoutStore,
        // On the same terms as the stores below: no layout store means a test,
@@ -935,6 +938,7 @@ class AppNotifier extends ChangeNotifier {
            ) {
     this.cliLogin = cliLogin ?? this.viewer.login;
     this.peerLinks = peerLinks ?? this.viewer.links;
+    _groupSyncOverride = groupSync;
     _autonomousEnv = this.config.autonomousEnv;
     api = _newApiClient();
   }
@@ -1568,6 +1572,8 @@ class AppNotifier extends ChangeNotifier {
       unawaited(_applyNodeStatus(machine, true));
       unawaited(_loadMachineData(machine, force: true));
       _startAgentSyncTimer(machineId);
+      // A session came up: the moment to compare trust groups with this machine.
+      unawaited(_syncGroup(machineId));
     } else if (nextStatus == ConnectionStatus.reconnecting ||
         nextStatus == ConnectionStatus.disconnected) {
       _stopAgentSyncTimer(machineId);
@@ -1924,6 +1930,8 @@ class AppNotifier extends ChangeNotifier {
       await _pool?.closeMachine(targetId);
       _connectMachine(state);
     }
+    // One password, the whole group: this machine learns the phone's other machines, and they it.
+    unawaited(_syncGroup(targetId, spread: true));
     return null;
   }
 
@@ -1958,7 +1966,80 @@ class AppNotifier extends ChangeNotifier {
       await _pool?.closeMachine(state.machine.machineId);
       _connectMachine(state);
     }
+    unawaited(_syncGroup(result.linkedMachineId ?? machineId, spread: true));
     return null;
+  }
+
+  /// A test's stand-in for the trust-group roster swap; null uses [DirectLink.syncGroup].
+  late final GroupSync? _groupSyncOverride;
+
+  /// The trust-group roster swap (`viewer/group_sync.dart`). Only the app's own [DirectLink] dials
+  /// for it — a test that hands over fake links, or has no layout store (no state file), never does.
+  GroupSync? get _groupSync {
+    if (_groupSyncOverride case final sync?) return sync;
+    final links = peerLinks;
+    return links is DirectLink && _paneLayout != null ? links.syncGroup : null;
+  }
+  final Map<String, DateTime> _groupSyncedAt = {};
+  static const _groupResync = Duration(minutes: 5);
+
+  /// Swaps trust-group rosters with [machineId], at most every few minutes per machine — any
+  /// session this phone opens is the moment. With [spread] (a machine was just linked) or when the
+  /// swap taught this phone a new machine, every other linked machine hears of it straight away.
+  Future<void> _syncGroup(String machineId, {bool spread = false}) async {
+    final sync = _groupSync;
+    if (sync == null) return;
+    final now = DateTime.now();
+    final last = _groupSyncedAt[machineId];
+    if (!spread && last != null && now.difference(last) < _groupResync) return;
+    _groupSyncedAt[machineId] = now;
+    // Fire-and-forget from the connection handler: a state file that is locked for a moment must not
+    // surface as an unhandled error. The next session retries.
+    try {
+      final label = phoneClientDescriptor().name;
+      final outcome = await sync(machineId, label: label);
+      await _afterGroupSync(outcome);
+      if (!spread && outcome.pinned.isEmpty) return;
+      for (final other in [...machineStates.keys]) {
+        if (other == machineId || machineStates[other]?.nodeOnline == false) {
+          continue;
+        }
+        if (await viewer.keys.peer(other) == null) continue;
+        _groupSyncedAt[other] = DateTime.now();
+        await _afterGroupSync(await sync(other, label: label));
+      }
+    } catch (_) {
+      _groupSyncedAt.remove(machineId);
+    }
+  }
+
+  /// What a roster swap changed, applied to the machines on screen: a machine the group removed wants
+  /// its password again; a machine waiting for one that the group has now vouched for is dialed.
+  Future<void> _afterGroupSync(GroupSyncOutcome outcome) async {
+    var changed = false;
+    for (final id in outcome.unpinned) {
+      final machine = machineStates[id];
+      if (machine == null || machine.needsLink) continue;
+      machine.needsLink = true;
+      machine.agentLoadStatus = AgentLoadStatus.needsLink;
+      await _pool?.closeMachine(id);
+      _markSessionsUnreachable(
+        machine,
+        'This machine left your group. Enter its password to reconnect.',
+      );
+      changed = true;
+    }
+    for (final machine in [...machineStates.values]) {
+      if (!machine.needsLink) continue;
+      final id = machine.machine.machineId;
+      if (await viewer.keys.peer(id) == null) continue;
+      machine.needsLink = false;
+      machine.agentLoadStatus = AgentLoadStatus.idle;
+      await _pool?.closeMachine(id);
+      _connectMachine(machine);
+      changed = true;
+    }
+    if (changed) notifyListeners();
   }
 
   List<LinkedMachine> linkedMachines = [];
@@ -3227,7 +3308,7 @@ class AppNotifier extends ChangeNotifier {
         'MEDIA_CHANGED' => 'The file changed while downloading. Wait for it to finish generating and try again.',
         'MEDIA_UNSUPPORTED' => 'This file is not a supported image or video.',
         'MEDIA_INVALID_REQUEST' =>
-          'Use a full path or a path inside this harness’s working folder.',
+          'This file is outside the folders Harness reads for this harness. Use one in its working folder or a temp folder.',
         'AGENT_NOT_FOUND' =>
           'This harness is no longer available. Reconnect and try again.',
         'NOT_TEXT' || 'FILE_TOO_LARGE' => 'Update the Harness CLI on this remote machine to open media previews.',

@@ -6,7 +6,7 @@ import '../core/models.dart';
 import '../state/app_state.dart';
 import '../ws/ws_conn.dart';
 
-/// The desktop retains public metadata only. Keys travel once to the local CLI;
+/// The UI retains public metadata only. Keys travel once to the selected daemon;
 /// replies, preferences, and provider rows never contain them.
 class ApiConnection {
   const ApiConnection(this.data);
@@ -40,12 +40,38 @@ class ApiConnection {
 }
 
 class ApiConnectionsController extends ChangeNotifier {
-  ApiConnectionsController(this.app) {
+  ApiConnectionsController(this.app, {String? machineId})
+    : _machineId =
+          machineId ??
+          (app.viewer == null
+              ? null
+              : app.ownedActionMachine?.machine.machineId) {
     app.addListener(_observe);
-    _owner = app.localMachineState;
+    _owner = _target;
     _connected = available;
   }
   final AppNotifier app;
+  String? _machineId;
+  MachineState? get _target {
+    if (_machineId != null) return app.stateOf(_machineId!);
+    if (app.viewer == null) return app.localMachineState;
+    final machine = app.ownedActionMachine;
+    _machineId = machine?.machine.machineId;
+    return machine;
+  }
+
+  String get hostLabel => app.viewer == null && _machineId == null
+      ? 'this computer'
+      : _owner?.machine.displayName ?? 'a connected machine';
+  String get _connectMessage => 'Connect $hostLabel to manage APIs.';
+
+  /// Called between panels, never while an API editor is open.
+  void useMachine(String machineId) {
+    if (_disposed || saving || machineId == _machineId) return;
+    _machineId = machineId;
+    _observe();
+  }
+
   MachineState? _owner;
   bool _disposed = false;
   bool _connected = false;
@@ -54,22 +80,27 @@ class ApiConnectionsController extends ChangeNotifier {
   bool loading = false, saving = false, loaded = false;
   String? error;
 
-  bool get available => _owner?.connectionStatus == ConnectionStatus.connected;
+  bool get available =>
+      _owner != null &&
+      !_owner!.machine.isShared &&
+      !_owner!.needsLink &&
+      _owner!.nodeOnline != false &&
+      _owner!.connectionStatus == ConnectionStatus.connected;
   void _changed() {
     if (!_disposed) notifyListeners();
   }
 
   void _observe() {
-    if (identical(_owner, app.localMachineState)) {
+    if (identical(_owner, _target)) {
       if (_connected != available) {
         _connected = available;
-        if (!_connected) error = 'Connect this computer to manage APIs.';
+        if (!_connected) error = _connectMessage;
         _changed();
         if (_connected) unawaited(refresh());
       }
       return;
     }
-    _owner = app.localMachineState;
+    _owner = _target;
     _connected = available;
     _revision++;
     connections = [];
@@ -88,7 +119,7 @@ class ApiConnectionsController extends ChangeNotifier {
     if (_disposed || saving) return false;
     final owner = _owner;
     if (owner == null || !available) {
-      error = 'Connect this computer to manage APIs.';
+      error = _connectMessage;
       _changed();
       return false;
     }
@@ -99,9 +130,7 @@ class ApiConnectionsController extends ChangeNotifier {
     error = null;
     _changed();
     bool current() =>
-        !_disposed &&
-        revision == _revision &&
-        identical(owner, app.localMachineState);
+        !_disposed && revision == _revision && identical(owner, _target);
     try {
       final answer = await app.apiConnections(owner.machine.machineId, payload);
       if (!current()) return false;
@@ -111,7 +140,7 @@ class ApiConnectionsController extends ChangeNotifier {
         return false;
       }
       if (answer['connections'] is! List || answer['presets'] is! List) {
-        error = 'Update Harness on this computer to connect APIs.';
+        error = 'Update Harness on $hostLabel to connect APIs.';
         return false;
       }
       List<ApiConnection> rows(String key) => (answer[key] as List)

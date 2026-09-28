@@ -330,7 +330,8 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
         ModalRoute.of(context)?.isCurrent == false) {
       return;
     }
-    if (app.focusedPane?.session?.focusInput() != true) {
+    if (app.focusedPane?.session?.focusInput() != true &&
+        app.focusedPane?.focusViewerInput?.call() != true) {
       // Blank pages and not-yet-mounted destinations must release the old
       // terminal's text client immediately, without focusing welcome search.
       _idleFocus.requestFocus();

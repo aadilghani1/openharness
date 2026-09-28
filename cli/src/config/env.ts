@@ -136,7 +136,9 @@ const envSchema = z.object({
   AUTONOMOUS_ENV: z.enum(['prod', 'stag']).default('prod'),
   // Web app base URL — used to print the agent's chat link on `adapter start`. Local: http://localhost:3000.
   WEB_URL: z.string().default('https://harness.autonomous.ai'),
-  // Set to '1' to let the New Agent folder browser (fs_list_dir) list directories outside $HOME.
+  // Set to '1' to lift the path fences shared by lib/pathContainment.ts: the New Agent folder browser
+  // (fs_list_dir), the project preview, git_project_info, and media previews all stop measuring what
+  // they were asked for against the folders they are allowed to read.
   // Off by default so a fat-fingered path or a compromised relay hop can't walk the whole filesystem.
   HARNESS_FS_BROWSE_UNRESTRICTED: z.string().optional(),
   // Where Claude Code writes its per-session JSONL transcripts.

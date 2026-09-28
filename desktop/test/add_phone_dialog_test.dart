@@ -7,13 +7,17 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/config.dart';
+import 'package:harness/auth/auth_session.dart';
+import 'package:harness/viewer/viewer_services.dart';
+import 'package:harness/viewer/viewer_key_store.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/add_phone_dialog.dart';
 
 import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount;
-import 'swarm_state_test.dart' show createApp;
+import 'swarm_state_test.dart' show createApp, MemoryStore;
 
 /// The alphabet the Add Phone contract names. The code must come from it —
 /// and, see [kPhonePairCodeAlphabet], from the part both normalisers agree on.
@@ -66,6 +70,7 @@ Future<void> _open(
   AppNotifier app,
   PhonePairCall pair, {
   PhoneSignInCodeCall? signInCode,
+  VoidCallback? onConnectMachine,
   PairedDevicesCall? listDevices,
   RemovePairedDeviceCall? removeDevice,
 }) async {
@@ -85,6 +90,7 @@ Future<void> _open(
       app,
       pair: pair,
       signInCode: signInCode ?? _FakeSignIn().call,
+      onConnectMachine: onConnectMachine,
       listDevices: listDevices ?? () async => null,
       removeDevice: removeDevice ?? (_) async => false,
     ),
@@ -101,6 +107,81 @@ String _status(WidgetTester tester) =>
     tester.widget<Text>(find.byKey(const ValueKey('add-phone-status'))).data!;
 
 void main() {
+  AppNotifier browserApp() {
+    final storage = MemoryStore();
+    final session = AuthSession(storage: storage);
+    return AppNotifier(
+        config: AppConfig.dev,
+        authSession: session,
+        viewer: ViewerServices(
+          config: AppConfig.dev,
+          session: session,
+          keys: ViewerKeyStore(storage: storage),
+        ),
+      )
+      ..status = AppStatus.authenticated
+      ..signedIn = true
+      ..currentUser = const CurrentUserProfile(email: 'browser@example.test');
+  }
+
+  testWidgets(
+    'browser QR targets a linked computer and keeps that destination',
+    (tester) async {
+      final app = browserApp();
+      addTearDown(app.dispose);
+      for (final id in ['a', 'b']) {
+        app.machineStates[id] =
+            MachineState(
+                Machine(
+                  machineId: id,
+                  name: 'Computer $id',
+                  authMode: MachineAuthMode.remote,
+                ),
+              )
+              ..connectionStatus = ConnectionStatus.connected
+              ..nodeOnline = true;
+      }
+      app.selectedMachineId = 'b';
+      final daemon = _FakeDaemon(List.filled(3, _failed('NO_INTENT')));
+      await _open(tester, app, daemon.call);
+      final before = _qrData(tester);
+      expect(Uri.splitQueryString(Uri.parse(before).fragment)['m'], 'b');
+      expect(find.text('Computer b'), findsOneWidget);
+      app.selectedMachineId = 'a';
+      app.notifyListeners();
+      await tester.pump();
+      expect(_qrData(tester), before);
+      expect(daemon.codes, hasLength(1));
+      await tester.pumpWidget(const SizedBox());
+      expect(daemon.tokens.single.isCancelled, isTrue);
+    },
+  );
+
+  testWidgets('browser without a linked computer offers the machine picker', (
+    tester,
+  ) async {
+    final app = browserApp();
+    addTearDown(app.dispose);
+    app.machineStates['unlinked'] = MachineState(
+      const Machine(machineId: 'unlinked', authMode: MachineAuthMode.remote),
+    )..needsLink = true;
+    var opened = false;
+    final daemon = _FakeDaemon([]);
+    await _open(
+      tester,
+      app,
+      daemon.call,
+      onConnectMachine: () => opened = true,
+    );
+    expect(find.byType(PhonePairQr), findsNothing);
+    expect(daemon.codes, isEmpty);
+    await tester.tap(find.text('[ Connect a machine ]'));
+    await tester.pump();
+    expect(opened, isTrue);
+    expect(find.byType(AddPhoneDialog), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   group('the QR payload', () {
     test('is the /pair link with everything in the fragment', () {
       final link = phonePairLink(

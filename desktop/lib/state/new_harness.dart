@@ -33,7 +33,8 @@ import 'pane_arrangement.dart';
 /// The app, including Store Open/Try, uses the box with inline advanced options.
 /// Legacy form tests leave this off; dock
 /// journeys enable it explicitly.
-bool newHarnessOpensInBox = !kUnderTest;
+bool newHarnessOpensInBox =
+    !kUnderTest || const bool.fromEnvironment('HARNESS_CURRENT_WORKSPACE');
 
 /// A launch command with inherited arguments. Arrows select a launch argument;
 /// a focused prompt edits one argument at a time. Enter

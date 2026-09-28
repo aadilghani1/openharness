@@ -1378,7 +1378,7 @@ void main() {
         ('MEDIA_TOO_LARGE', '512 MB'),
         ('MEDIA_CHANGED', 'changed while downloading'),
         ('MEDIA_UNSUPPORTED', 'not a supported'),
-        ('MEDIA_INVALID_REQUEST', 'full path'),
+        ('MEDIA_INVALID_REQUEST', 'outside the folders'),
         ('AGENT_NOT_FOUND', 'harness is no longer available'),
         ('NOT_TEXT', 'Update the Harness CLI'),
         ('WHATEVER', 'could not read this file'),

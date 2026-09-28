@@ -387,7 +387,11 @@ class ApiException implements Exception {
 }
 
 bool isUnauthorizedError(Object error) =>
-    error is DioException && error.response?.statusCode == 401 ||
+    error is AccessTokenFailure && error.signedOut ||
+    error is DioException &&
+        (error.response?.statusCode == 401 ||
+            error.error is AccessTokenFailure &&
+                (error.error as AccessTokenFailure).signedOut) ||
     error is ApiException && error.status == 401;
 
 /// Unwraps the backend's `{success, data, error}` envelope, which both legs

@@ -49,6 +49,11 @@ void main() {
       await tester.pump();
       revision.value = 1;
       await tester.pump();
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: const Offset(1, 100));
+      await mouse.moveTo(tester.getCenter(find.text(session.agentName)));
+      await tester.pump();
+      expect(find.byTooltip('Close Pane').hitTestable(), findsOneWidget);
       for (final label in ['Zoom Pane', 'Stop Harness']) {
         expect(find.byTooltip(label), findsNothing);
       }
@@ -190,6 +195,7 @@ void main() {
         tester.widget<Text>(find.text('Renamed terminal')).style!.fontFamily,
         workspaceBarTextStyle().fontFamily,
       );
+      await mouse.removePointer();
       await tester.pumpWidget(const SizedBox());
       revision.dispose();
       session.dispose();
@@ -198,7 +204,7 @@ void main() {
   );
   for (final local in [true, false]) {
     testWidgets(
-      '${local ? 'local' : 'remote'} compact pane controls stay visible without moving the title or terminal',
+      '${local ? 'local' : 'remote'} compact headers keep the title and close control stable',
       (tester) async {
         final app = createApp();
         app.stateOf('m')!.localOnly = local;
@@ -259,7 +265,11 @@ void main() {
               .length,
           0,
         );
-        expect(find.byType(GridModelPicker), findsNothing);
+        expect(
+          find.byType(GridModelPicker),
+          findsNothing,
+          reason: 'The focused model is in the workspace status bar.',
+        );
         expect(find.byTooltip('Close Pane').hitTestable(), findsNothing);
         for (final label in ['Zoom Pane', 'Stop Harness']) {
           expect(find.byTooltip(label).hitTestable(), findsNothing);
@@ -299,7 +309,7 @@ void main() {
     );
   }
   testWidgets(
-    'narrow compact headers preserve identity and close controls at large text',
+    'narrow headers preserve identity and close control at large text',
     (tester) async {
       final app = createApp();
       final session = terminal('a0', []);
@@ -346,10 +356,9 @@ void main() {
         expect(tester.getSize(title).width, greaterThan(64));
         expect(tester.takeException(), isNull);
         final titleBefore = tester.getRect(title);
-        final picker = find.byType(GridModelPicker);
-        expect(picker, findsNothing);
+        expect(find.byType(GridModelPicker), findsNothing);
         final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-        await mouse.addPointer(location: Offset.zero);
+        await mouse.addPointer(location: const Offset(1, 100));
         await mouse.moveTo(tester.getCenter(title));
         await tester.pump();
         expect(find.byTooltip('Close Pane').hitTestable(), findsOneWidget);

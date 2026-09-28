@@ -181,7 +181,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool _commandBarOpen = false;
   bool _commandActionInFlight = false;
   FocusNode? _commandReturnFocus;
-  bool get _hasCommandBar => widget.commandBarEnabled && app.viewer == null;
+  bool get _hasCommandBar => widget.commandBarEnabled;
   late final _commandBar = CommandBarController(
     catalog: () => buildCommandBarCatalog(
       app,
@@ -194,7 +194,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     resolve:
         widget.commandResolver ??
         (request, cancel) =>
-            app.api.resolveCommandBar(request, cancelToken: cancel),
+            app.resolveCommandBar(request, cancelToken: cancel),
   )..addListener(_commandChanged);
   final _canvasFocus = FocusNode(
     debugLabel: 'Swarm canvas',
@@ -248,6 +248,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool _newHarnessHidden = false;
   bool _routeIsCurrent = true;
   String? _linkDialogMachineId;
+  bool _browserMachineSetupHandled = false;
   String? _nativeState;
   List<Object?>? _machinesPresentation;
   ModelsMenuController? _modelsMenu;
@@ -1849,8 +1850,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   /// Harness ▸ Add Phone… and `> add phone`: the QR a phone scans to sign in
   /// and pair with this computer. See `widgets/add_phone_dialog.dart`.
-  Future<void> _addPhone() =>
-      _dialog(() => showAddPhoneDialog(context, app, keymap: _keymap));
+  Future<void> _addPhone() => _dialog(
+    () => showAddPhoneDialog(
+      context,
+      app,
+      keymap: _keymap,
+      onConnectMachine: () => unawaited(_openMachines()),
+    ),
+  );
 
   /// Settings, by section, as rows of the box: `> usage` goes straight to
   /// Settings ▸ Usage. A palette that finds a setting by name is how an editor
@@ -1870,6 +1877,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   Future<void> _openMachines({String? initialMachineId}) async {
+    _browserMachineSetupHandled = true;
     _onboarding.acknowledge(OnboardingStep.machines);
     _openResourcePicker('@');
     if (initialMachineId != null && _search?.isMachineMode == true) {
@@ -3755,7 +3763,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _maybeLink() {
-    final machine = app.stateOf(app.selectedMachineId ?? '');
+    if (kIsWeb && app.requestedMachineLink == null) {
+      _maybeInitialBrowserMachines();
+      return;
+    }
+    final machine = app.stateOf(
+      app.requestedMachineLink ?? app.selectedMachineId ?? '',
+    );
     if (machine == null ||
         !machine.needsLink ||
         machine.isLocalMachine ||
@@ -3770,11 +3784,68 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _linkDialogMachineId = machine.machine.machineId;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (mounted) {
+        app.acknowledgeMachineLinkRequest(machine.machine.machineId);
         await _openMachines(initialMachineId: machine.machine.machineId);
       }
       // Keep the prompt's identity until the picker closes. Otherwise Escape
       // would immediately reopen it on the next workspace update.
       if (_search?.isMachineMode != true) _linkDialogMachineId = null;
+    });
+  }
+
+  bool get _hasConnectedBrowserMachine => app.machineStates.values.any(
+    (machine) =>
+        !machine.machine.isShared &&
+        !machine.needsLink &&
+        machine.nodeOnline != false &&
+        machine.connectionStatus == ConnectionStatus.connected,
+  );
+
+  bool get _browserMachineSetupReady =>
+      app.machineInventoryLoaded &&
+      !app.machinesLoading &&
+      !app.machinesAreStale &&
+      app.machineListError == null &&
+      !app.machineStates.values.any(
+        (machine) =>
+            !machine.machine.isShared &&
+            !machine.needsLink &&
+            machine.nodeOnline != false &&
+            (machine.connectionStatus == ConnectionStatus.connecting ||
+                machine.connectionStatus == ConnectionStatus.reconnecting),
+      ) &&
+      !_dialogOpen &&
+      !_commandBarOpen &&
+      !_spokenPaletteOpen &&
+      _newHarness == null &&
+      _search == null &&
+      _routeIsCurrent;
+
+  void _maybeInitialBrowserMachines() {
+    if (_browserMachineSetupHandled) return;
+    if (_hasConnectedBrowserMachine) {
+      _browserMachineSetupHandled = true;
+      return;
+    }
+    // Discovery and saved links restore asynchronously. An unlinked row must
+    // not cover the workspace while another machine is still reconnecting.
+    if (!_browserMachineSetupReady) return;
+    _browserMachineSetupHandled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // A connection or a deliberate user action may have won this frame.
+      if (!mounted ||
+          _hasConnectedBrowserMachine ||
+          !_browserMachineSetupReady) {
+        return;
+      }
+      final selected = app.stateOf(app.selectedMachineId ?? '');
+      unawaited(
+        _openMachines(
+          initialMachineId: selected?.needsLink == true
+              ? selected!.machine.machineId
+              : null,
+        ),
+      );
     });
   }
 
@@ -3931,11 +4002,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           !machine.machine.isShared &&
           !isTerminalEngine(pane!.session!.engineId);
     }
-    if (id == 'keyboard.quick_start' ||
-        id == 'keyboard.practice' ||
-        id == 'app.onboarding_review' ||
-        // A viewer has no daemon of its own to pair a phone with.
-        id == 'app.add_phone') {
+    if (id == 'app.onboarding_review') {
       return app.viewer == null;
     }
     if (id == 'agent.rename' ||
@@ -4281,7 +4348,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                         WorkspacePaneContext.focused(app),
                         menuOnly: true,
                       ),
-                    if (_learning.active && app.viewer == null)
+                    if (_learning.active)
                       WorkspaceQuickStart(
                         learning: _learning,
                         onCommand: _runShortcut,
@@ -4453,15 +4520,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                                         onCommands:
                                                             _showSearchCommands,
                                                         onQuickStart:
-                                                            _learning.offer &&
-                                                                app.viewer ==
-                                                                    null
+                                                            _learning.offer
                                                             ? _startQuickStart
                                                             : null,
                                                         onPractice:
-                                                            app.viewer == null
-                                                            ? _practiceKeyboard
-                                                            : null,
+                                                            _practiceKeyboard,
                                                         onNew: () => _newAgent(
                                                           placement:
                                                               HarnessPlacement

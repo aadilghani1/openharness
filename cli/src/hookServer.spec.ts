@@ -414,6 +414,40 @@ describe('requests must name this server', () => {
   })
 })
 
+describe('the trust group endpoints', () => {
+  const local = { 'x-adapter-local': '1', 'content-type': 'application/json' }
+  const key = Buffer.alloc(32, 7).toString('base64')
+  const machineId = 'a'.repeat(32)
+
+  it('trust-peer takes only a real key and machine id, and trims the label', async () => {
+    const onTrustLinkedPeer = vi.fn(() => ({ status: 200, body: { ok: true } }))
+    const { base } = await start({ onTrustLinkedPeer })
+    const post = (body: unknown, headers: Record<string, string> = local) =>
+      fetch(`${base}/api/link/trust-peer`, { method: 'POST', headers, body: JSON.stringify(body) })
+    for (const bad of [{ pub: 'x', machineId }, { pub: key, machineId: 'nope' }, { machineId }, { pub: `${key}AA`, machineId }]) {
+      expect((await post(bad)).status, JSON.stringify(bad)).toBe(400)
+    }
+    expect((await post({ pub: key, machineId }, { 'content-type': 'application/json' })).status).toBe(403)
+    expect((await post({ pub: key, machineId, label: `  ${'n'.repeat(80)} ` })).status).toBe(200)
+    expect(onTrustLinkedPeer).toHaveBeenCalledTimes(1)
+    expect(onTrustLinkedPeer).toHaveBeenCalledWith({ pub: key, machineId, label: 'n'.repeat(60) })
+  })
+
+  it('group remove and sync are local writes; list is readable', async () => {
+    const onGroupRemove = vi.fn(() => ({ status: 200, body: { label: 'b', fingerprint: 'fp' } }))
+    const onGroupSync = vi.fn(() => ({ status: 200, body: { ok: true } }))
+    const onGroupList = vi.fn(() => ({ status: 200, body: { members: [] } }))
+    const { base } = await start({ onGroupRemove, onGroupSync, onGroupList })
+    expect((await fetch(`${base}/api/group/remove`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"selector":"1"}' })).status).toBe(403)
+    expect((await fetch(`${base}/api/group/sync`, { method: 'POST' })).status).toBe(403)
+    expect((await fetch(`${base}/api/group/remove`, { method: 'POST', headers: local, body: '{"selector":"  "}' })).status).toBe(400)
+    expect((await fetch(`${base}/api/group/remove`, { method: 'POST', headers: local, body: '{"selector":" 1 "}' })).status).toBe(200)
+    expect(onGroupRemove).toHaveBeenCalledWith('1')
+    expect((await fetch(`${base}/api/group/sync`, { method: 'POST', headers: local })).status).toBe(200)
+    expect(await (await fetch(`${base}/api/group`)).json()).toEqual({ members: [] })
+  })
+})
+
 describe('the daemon socket', () => {
   function viaSocket(socketPath: string, method: string, path: string, headers: Record<string, string> = {}): Promise<number> {
     return new Promise((resolve, reject) => {

@@ -2385,19 +2385,51 @@ void ui_init(void)
     lv_obj_set_style_bg_color(s_notif_pill, lv_color_hex(0x006fff), 0);   // Figma blue 🔔 badge
     lv_obj_set_style_bg_opa(s_notif_pill, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(s_notif_pill, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_hor(s_notif_pill, 13, 0);
-    lv_obj_set_style_pad_ver(s_notif_pill, 4, 0);
+    lv_obj_set_style_pad_hor(s_notif_pill, NOTIF_FAB_PAD_H, 0);
+    lv_obj_set_style_pad_ver(s_notif_pill, NOTIF_FAB_PAD_V, 0);
+#if UI_DESK_GRID
+    /*
+     * BOTTOM RIGHT, floating, and only when there is something to say.
+     *
+     * The top band belongs to the tabs. Down here the face had room going spare — an agent tile's
+     * words end around y=560 and the grid's last row is the only thing that comes near — and a control
+     * that appears and disappears is exactly what a corner is for: nothing reserves the space, so there
+     * is no state in which the screen looks like it is missing a piece.
+     */
+    /*
+     * NO min_height. The size comes from the glyphs.
+     *
+     * It was pinned to 64px while the bell inside stayed at montserrat_14 — a 14px mark in a 64px
+     * circle, with 25px of empty blue all round it. That is not a control, it is a hole with a dot in
+     * it (owner, 2026-09-28: "vẽ vòng tròn to đùng, cái icon noti bé tí, nhìn như lỗi UI").
+     *
+     * So the glyphs are sized for this face and the padding is what makes the circle: montserrat_30
+     * for both, 14px of vertical padding, and the box lands at NOTIF_FAB_H on its own — full, and
+     * still the right size for a thumb.
+     */
+    lv_obj_set_style_opa(s_notif_pill, NOTIF_FAB_OPA, 0);
+    lv_obj_set_style_shadow_width(s_notif_pill, NOTIF_FAB_SHADOW, 0);
+    lv_obj_set_style_shadow_opa(s_notif_pill, LV_OPA_40, 0);
+    lv_obj_set_style_shadow_color(s_notif_pill, lv_color_black(), 0);
+    lv_obj_align(s_notif_pill, LV_ALIGN_BOTTOM_RIGHT, -NOTIF_FAB_MARGIN, -NOTIF_FAB_MARGIN);
+#else
     lv_obj_align(s_notif_pill, LV_ALIGN_TOP_MID, 0, 22);
+#endif
     lv_obj_set_style_bg_opa(s_notif_pill, LV_OPA_80, LV_STATE_PRESSED);   // it presses now, so it says so
+#if UI_DESK_GRID
+    // …and at half opacity a background that merely goes to 80% is not a visible press. The whole
+    // control comes UP to full on touch instead: quiet until a thumb is on it, then plainly lit.
+    lv_obj_set_style_opa(s_notif_pill, LV_OPA_COVER, LV_STATE_PRESSED);
+#endif
     lv_obj_set_flex_flow(s_notif_pill, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(s_notif_pill, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(s_notif_pill, 6, 0);
+    lv_obj_set_style_pad_column(s_notif_pill, NOTIF_PILL_GAP, 0);
     { lv_obj_t *bell = lv_label_create(s_notif_pill);
-      lv_obj_set_style_text_font(bell, &lv_font_montserrat_14, 0);
+      lv_obj_set_style_text_font(bell, NOTIF_PILL_FONT, 0);
       lv_obj_set_style_text_color(bell, COL_FG, 0);
       lv_label_set_text(bell, LV_SYMBOL_BELL);
       s_notif_pill_lbl = lv_label_create(s_notif_pill);
-      lv_obj_set_style_text_font(s_notif_pill_lbl, &lv_font_montserrat_22, 0);
+      lv_obj_set_style_text_font(s_notif_pill_lbl, NOTIF_PILL_FONT, 0);
       lv_obj_set_style_text_color(s_notif_pill_lbl, COL_FG, 0);
       lv_label_set_text(s_notif_pill_lbl, "0"); }
     lv_obj_add_flag(s_notif_pill, LV_OBJ_FLAG_HIDDEN);
@@ -6368,9 +6400,21 @@ static void desk_only_agent(char *out, size_t cap)
  */
 static void tabline_sync(void)
 {
+    /*
+     * THE OVERVIEW IS IN A TAB TOO, and used to be on the hidden list with Settings and Machines.
+     *
+     * That was wrong on its own terms — the Overview names the machine whose window owns these very
+     * tabs — and it became visibly wrong the moment the bottom-edge swipe started landing there: the
+     * line vanished and, if nothing re-armed a landing, never came back. Which is exactly how it looks
+     * from the outside: plug the device into another computer, plug it back, and the tabs are gone
+     * (owner, 2026-09-28).
+     *
+     * Settings, Machines and the pickers stay hidden. Those are not in a tab, and a tab line over them
+     * is an offer to leave a screen that has its own job.
+     */
     const bool want = !display_is_asleep() && !s_notif_open && s_swarm_count > 0 &&
                       (s_desk_open ||
-                       (lv_screen_active() == scr_projects && !s_overview_active &&
+                       (lv_screen_active() == scr_projects &&
                         !s_settings_active && !s_machines_active));
     if (!want) { set_hidden(s_tabline, true); return; }
 
@@ -6378,7 +6422,7 @@ static void tabline_sync(void)
         s_tabline = lv_obj_create(lv_layer_top());
         lv_obj_remove_style_all(s_tabline);
         lv_obj_set_pos(s_tabline, DESK_STRIP_X, DESK_STRIP_Y);
-        lv_obj_set_size(s_tabline, UI_FACE_W - 2 * DESK_STRIP_X, DESK_STRIP_H);
+        lv_obj_set_size(s_tabline, DESK_STRIP_W, DESK_STRIP_H);
         lv_obj_set_flex_flow(s_tabline, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(s_tabline, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_column(s_tabline, 6, 0);
@@ -6577,11 +6621,16 @@ void ui_home_overview(void)
     if (s_bright_dragging) return;   // a brightness-slider drag on Settings is not a home swipe (mirror ui_swipe_*)
     ui_notif_close();   // no-op if closed; takes/releases the lock itself (must not nest inside our lock)
 #if UI_DESK_GRID
-    // On a face with room for the shape, HOME IS THE SHAPE. The carousel still exists — it is what walks
-    // between agents once you are in one — but it stops being how you find anything, so the gesture that
-    // used to land on the Overview ring lands on the desk instead.
-    ui_desk_open();
-    return;
+    // THE BOTTOM-EDGE SWIPE MEANS THE OVERVIEW ON BOTH FACES.
+    //
+    // It used to open the desk here, on the reading that a face with room for the shape should make the
+    // shape its home. The desk IS still where this board lands and what back goes to — but that is not
+    // the same as owning this gesture, and giving it away left the Overview with no way in at all: the
+    // desk covers the carousel, so the one screen that names the machine and carries Settings and the
+    // fleet count could only be reached by leaving the grid sideways (owner, 2026-09-28).
+    //
+    // The desk has its own way back (pinch, or the back key) and does not need this one too.
+    ui_desk_close();
 #endif
     display_lock();
     swarm_picker_close();
@@ -6682,8 +6731,16 @@ static void notif_badge_apply(void)
     }
     // The Overview has its own bell on the lower arc, with the count as a badge; the top-edge pill is
     // for the agent tiles, which have no seat for one.
+#if UI_DESK_GRID
+    // The same rule the tab line keeps: everywhere you are inside a tab, which now includes the
+    // Overview and the desk. In the corner it collides with nothing, so the reasons it used to be
+    // hidden on those two — a top band it had to share — are gone with the seat.
+    bool show = n > 0 && !display_is_asleep() && lv_screen_active() == scr_projects
+                && !s_settings_active && !s_machines_active && !s_notif_open;
+#else
     bool show = n > 0 && !display_is_asleep() && lv_screen_active() == scr_projects
                 && !s_settings_active && !s_machines_active && !s_notif_open && !s_overview_active;
+#endif
     set_hidden(s_notif_pill, !show);
     if (show && s_notif_pill_lbl) { char b[8]; snprintf(b, sizeof b, "%d", n); lv_label_set_text(s_notif_pill_lbl, b); }
     if (s_overview_bell_badge) {

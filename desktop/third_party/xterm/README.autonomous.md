@@ -13,6 +13,17 @@ fix and the regression in `test/terminal_session_test.dart` passes against it.
 
 ## Local patches
 
+- **Browser accessibility input and editor switching**
+  (`lib/src/ui/custom_text_edit.dart`). The browser's text-input strategy needs
+  an editable semantics node when accessibility is enabled. The custom adapter
+  now publishes its editing value and focus through one such node, while the
+  enclosing `Focus` omits duplicate semantics. That prevents switching between
+  terminal and remote-viewer editors from deactivating the new DOM editor.
+  Read-only surfaces stay read-only; native input uses its existing path.
+  `semanticLabel` lets the viewer reuse the IME adapter. Validation includes
+  the native input regressions and `desktop/scripts/check-workspace.cjs`, which
+  checks actual received terminal bytes and remote viewer input after switching.
+
 - **Linux clipboard and Meta keys leave shell editing intact**
   (`lib/src/ui/shortcut/shortcuts.dart`, `lib/src/terminal_view.dart`,
   `lib/src/core/input/handler.dart`). Linux uses Ctrl-Shift-C/V/A for clipboard

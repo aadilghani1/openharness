@@ -204,6 +204,53 @@ describe('agent_update opened: one "last used" for every app', () => {
 })
 
 describe('viewer forwarding authentication', () => {
+  it.each(['command_bar', 'route_task', 'route_send'])('requires a sealed owner session for %s', async type => {
+    const socket = new BackendSocket('token'), internals = socket as any
+    const request = vi.spyOn(socket.ownerCommands, 'request').mockResolvedValue({ ok: true })
+    vi.spyOn(internals.e2ee, 'hasSession').mockReturnValue(true)
+    const role = vi.spyOn(internals.e2ee, 'sessionRole').mockReturnValue('web')
+    const clear = { type, payload: { requestId: 'one', text: 'fixture task' } }
+    vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue(clear)
+    const sealedReply = vi.spyOn(internals.e2ee, 'wrapRpcReply').mockReturnValue({ type: `${type}_result`, payload: { __e2e: 'sealed' } })
+    await internals.dispatchDown(clear, 'remote')
+    expect(request).not.toHaveBeenCalled()
+    const sealed = { type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
+    role.mockReturnValue('device')
+    await internals.dispatchDown(sealed, 'remote')
+    expect(request).not.toHaveBeenCalled()
+    role.mockReturnValue('web')
+    await internals.dispatchDown(sealed, 'remote')
+    expect(request).toHaveBeenCalledWith('remote', type, clear.payload)
+    expect(sealedReply).toHaveBeenCalledWith('remote', `${type}_result`, 'one', { ok: true })
+    await socket.stop()
+  })
+
+  it('allows interactive viewers only on a sealed owner web connection or trusted loopback', async () => {
+    const socket = new BackendSocket('token')
+    const internals = socket as any
+    const request = vi.spyOn(socket.interactiveViewers, 'request').mockResolvedValue({ data: 'jpeg' })
+    vi.spyOn(internals.e2ee, 'hasSession').mockReturnValue(true)
+    const role = vi.spyOn(internals.e2ee, 'sessionRole').mockReturnValue('web')
+    const clear = { type: 'viewer_surface', payload: { requestId: 'one', surfaceId: 'surface', agentId: 'a', op: 'frame' } }
+    vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue(clear)
+    const reply = vi.spyOn(internals.e2ee, 'wrapRpcReply').mockReturnValue({ type: 'viewer_surface_result', payload: { __e2e: 'sealed' } })
+    await internals.dispatchDown(clear, 'remote')
+    expect(request).not.toHaveBeenCalled()
+    const sealed = { type: 'viewer_surface', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
+    role.mockReturnValue('device')
+    await internals.dispatchDown(sealed, 'remote')
+    expect(request).not.toHaveBeenCalled()
+    role.mockReturnValue('web')
+    await internals.dispatchDown(sealed, 'remote')
+    expect(request).toHaveBeenCalledWith('remote', clear.payload)
+    expect(reply).toHaveBeenCalledWith('remote', 'viewer_surface_result', 'one', { data: 'jpeg' })
+    socket.registerLocalClient('local:viewer', { sendFrame: () => true, sendBinary: () => true })
+    await internals.dispatchDown(clear, 'local:viewer')
+    expect(request).toHaveBeenCalledWith('local:viewer', clear.payload)
+    await socket.unregisterLocalClient('local:viewer')
+    await socket.stop()
+  })
+
   it('requires encryption and a web-role session remotely, while permitting trusted local clients', async () => {
     const socket = new BackendSocket('token')
     const internals = socket as any
@@ -787,7 +834,8 @@ describe('BackendSocket outbound queue', () => {
       type: 'git_project_info', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-request' } },
     } })
     await vi.waitFor(() => expect(wrap).toHaveBeenCalledWith('viewer-a', 'git_project_info_result', 'preview-1', preview))
-    expect(read).toHaveBeenCalledWith('/remote/workspace', { refresh })
+    // The fence travels with the request — no registered agents here, so it is the home folder alone.
+    expect(read).toHaveBeenCalledWith('/remote/workspace', { refresh, knownRoots: [] })
     expect(parseSent(ws)).toContainEqual(expect.objectContaining({ targetConnId: 'viewer-a', frame: {
       type: 'git_project_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
     } }))
@@ -859,7 +907,7 @@ describe('BackendSocket outbound queue', () => {
       type: 'git_project_info', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-request' } },
     } })
     await vi.waitFor(() => expect(wrap).toHaveBeenCalledWith('viewer-a', 'git_project_info_result', 'git-error', { error: 'UNAVAILABLE' }))
-    expect(read).toHaveBeenCalledWith('', { refresh: false })
+    expect(read).toHaveBeenCalledWith('', { refresh: false, knownRoots: [] })
     await socket.stop()
   })
 
@@ -1054,6 +1102,19 @@ describe('BackendSocket outbound queue', () => {
     }))
 
     await socket.unregisterLocalClient('local:test')
+    await socket.stop()
+  })
+
+  it('refuses a trust-group roster swap that is not over an E2EE session (a local client has no identity)', async () => {
+    const socket = new BackendSocket('token')
+    const handle = vi.fn(() => ({}))
+    socket.groupSync = { handle }
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:group', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.handleLocalFrame('local:group', { type: 'group_sync', payload: { requestId: 'g1', members: [] } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'group_sync_result', payload: { requestId: 'g1', error: 'UNSUPPORTED' } }))
+    expect(handle).not.toHaveBeenCalled()
+    await socket.unregisterLocalClient('local:group')
     await socket.stop()
   })
 

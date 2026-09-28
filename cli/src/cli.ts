@@ -4,6 +4,7 @@ import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/st
 import { mutateDsh } from './dsh/service.js'
 import { HarnessShareOwner } from './sharing/owner.js'
 import { HarnessGrantStore } from './sharing/grants.js'
+import { HarnessCollaborationStore } from './sharing/collaboration.js'
 import { HarnessShareRelay, type SharedMachineReference } from './sharing/relay.js'
 import { SharedViewerPool } from './sharing/viewer.js'
 import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './lib/e2ee/core.js'
@@ -182,7 +183,10 @@ import { E2eeStore } from './lib/e2ee/store.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { b64e } from './lib/e2ee/core.js'
 import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
-import { connectWithPassword } from './lib/e2ee/relayClient.js'
+import { connectWithPassword, type PwConnectProgress } from './lib/e2ee/relayClient.js'
+import type { LinkedPeer } from './lib/e2ee/manager.js'
+import { GroupSyncer, relayRequester, SELF_STAMP } from './lib/e2ee/groupSyncer.js'
+import { TrustGroupStore, type GroupMember } from './lib/e2ee/trustGroup.js'
 import {
   startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate,
   fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild,
@@ -421,6 +425,10 @@ every future connect, until you change or clear it:
                                (--name=<label> names the machine in messages instead of its id)
   harness link list            list machines this one has linked
   harness link unlink <id>     remove a linked machine's trust
+  harness group list           machines and phones that trust each other through links: link one
+                               machine and every member reaches it both ways, no more passwords
+  harness group sync           compare with every reachable member now (it also happens on its own)
+  harness group remove <id>    drop a member (machine id, # or fingerprint) from every member
   (both \`remote-password set\` and \`link connect\` prompt for the password interactively, or read one
   line from stdin with --stdin; add --json for NDJSON output instead of the human-readable text)
 
@@ -1741,6 +1749,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onUrl: (agentId, url) => {
       dshFrameFor(agentId).viewerUrl = url
       backendRef?.viewerForwarder.refresh(agentId)
+      backendRef?.interactiveViewers.refresh(agentId)
       syncCompanion(agentId)
     },
     log: (line) => console.log(line),
@@ -1832,6 +1841,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // not. Both are just "the id this daemon serves under" to everything downstream — the local
   // websocket binds clients to it, the app selects by it — and the backend binds a machine to the
   // computer id at login, so a sign-in ADOPTS this machine rather than minting a second one.
+  // The trust group (lib/e2ee/groupSyncer.ts). Built once the relay pool exists, far below; the hook
+  // handlers and the backend callbacks declared before then reach it through this.
+  let groupSyncer: GroupSyncer | null = null
   const backend = new BackendSocket(session?.machineId ?? computerId(), auth, (connected) => {
     if (!connected) return
     const sessions = registry.advertised()
@@ -3509,6 +3521,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     machineId: () => backend.machineId,
     identity: sharingIdentity.getIdentity(),
     grants: new HarnessGrantStore(join(env.ADAPTER_DATA_DIR, 'harness-shares.json')),
+    collaboration: new HarnessCollaborationStore(join(env.ADAPTER_DATA_DIR, 'harness-collaboration.json')),
+    autonomousEnv: env.AUTONOMOUS_ENV,
     terminals, resolveAgent: (id) => registry.resolve(id),
     send: (id, type, payload) => backend.sendObserver(id, type, payload),
     publish: (method, path, body) => proxyBackend(method, path, body),
@@ -3881,6 +3895,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     onClearRemotePassword: () => { backend.clearRemotePassword(); return { status: 200, body: { ok: true } } },
     onRemotePasswordStatus: () => ({ status: 200, body: backend.remotePasswordStatus() }),
+    onTrustLinkedPeer: (peer) => {
+      backend.trustPeer({ ...peer, kind: 'machine' })
+      groupSyncer?.linked({ ...peer, kind: 'machine' })
+      return { status: 200, body: { ok: true } }
+    },
+    onGroupList: () => ({ status: 200, body: { self: groupSelf(), members: new TrustGroupStore().list() } }),
+    onGroupSync: () => { void groupSyncer?.syncAll(); return { status: 200, body: { ok: true } } },
+    onGroupRemove: (selector) => {
+      const found = findGroupMember(selector)
+      if (!found.ok) return { status: found.error === 'AMBIGUOUS' ? 409 : 404, body: { error: found.error } }
+      groupSyncer?.remove(found.pub)
+      return { status: 200, body: { label: found.label, fingerprint: found.fingerprint } }
+    },
     // Local dashboard (GET /api/status): adapter health + computer fingerprint + local pairings. It
     // deliberately does NOT expose chat/transcripts — those live in the cloud web (WEB_URL/commander).
     onStatus: async () => ({
@@ -3989,7 +4016,30 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     env.BACKEND_WS_URL.replace(/\/$/, ''),
     relayIdentityStore.getIdentity(),
     new MachinePeerStore(),
+    { onSessionReady: (machineId) => groupSyncer?.sessionOpened(machineId) },
   )
+  // Every machine and phone linked to this one, directly or through another member, trusts every other:
+  // rosters are swapped over any session that opens, and pushed on whenever they change.
+  groupSyncer = new GroupSyncer({
+    store: new TrustGroupStore(),
+    peers: new MachinePeerStore(),
+    self: groupSelf,
+    trust: (peer) => backend.trustPeer(peer),
+    untrust: (pub) => { backend.untrustPeer(pub) },
+    paired: () => backend.pairedPeers(),
+    request: relayRequester(relayPool, () => readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV),
+    dropSessions: (machineId) => { relayPool.invalidate(machineId); relayPool.invalidateIsolated(machineId) },
+    reachable: () => {
+      // Only a list the backend answered says who is offline; otherwise try every member.
+      const { machines, source } = machineListCache.list()
+      return source !== 'backend' ? null : new Set(machines.filter((m) => m.state !== 'offline').map((m) => m.machineId))
+    },
+    log: (line) => console.log(line),
+  })
+  backend.groupSync = groupSyncer
+  backend.onPeerLinked = (peer) => groupSyncer?.linked(peer)
+  backend.onUnpaired = (pub) => groupSyncer?.unpaired(pub)
+  if (session?.machineId) groupSyncer.start()
   // Spoken tasks go to the WINDOW to be routed, not to the copy of the router in this process.
   //
   // Built here because both ends need it: the local socket hands it the window's replies, and the cable
@@ -4120,7 +4170,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // first fifteen they can SEE. An earlier cut put open tiles first, on the theory that working on
     // something is a statement about relevance; it is, but it also made the fifteen unpredictable from
     // the screen, and predictable beat clever here (owner's call).
-    onRouteTask: async (text) => {
+    onRouteTask: backend.ownerCommands.onRouteTask = async (text) => {
       const host = cableHostRef
       if (!host) return { agentId: '', machineId: '', name: '', confidence: 0, reason: 'no agent list yet', candidates: [], weighed: 0, machines: 0, via: '' }
       // Whatever the daemon knows right now. This also kicks a refresh of the remote machines, so a list
@@ -4239,7 +4289,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A window that connects after the dial did has missed the `dial_status` that announced it.
     dialStatus: () => cableHostRef?.currentDialStatus() ?? { attached: false },
     openQuestions: () => [...openQuestions.values()],
-    onRouteSend: (agentId, text) => {
+    onRouteSend: backend.ownerCommands.onRouteSend = (agentId, text) => {
       const sent = cableHostRef?.sendTurn(agentId, text) ?? { ok: false as const, machine: '', reason: 'no agent list yet' }
       console.log(`[route] ⌘K → ${sid(agentId)} · bytes=${Buffer.byteLength(text, 'utf8')}`
         + (sent.ok ? '' : ` · REFUSED: ${sent.reason}${sent.machine ? ` (${sent.machine})` : ''}`))
@@ -6778,51 +6828,36 @@ async function linkConnectCommand(machineId: string | undefined, stdin: boolean,
     console.log('  this proves you know it; nothing needs approving there.\n')
     password = await promptPassword(`  Remote password for ${machineId}: `)
   }
-  const auth = new AuthSessionManager(backendHttpBase())
-  let accessToken: string
-  try {
-    accessToken = await auth.accessToken()
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err)
-    const message = `Could not refresh this computer's SSO session (${detail}). Run: harness login`
-    if (json) console.log(JSON.stringify({ ok: false, error: 'AUTH_FAILED', message }))
-    else console.error(`\n  ✗ ${message}\n`)
-    process.exit(1)
-    return
-  }
-  const store = new E2eeStore()
-  store.init()
-  const result = await connectWithPassword({
-    targetMachineId: machineId,
-    password,
-    selfIdentity: store.getIdentity(),
-    accessToken,
-    backendWsBase: env.BACKEND_WS_URL.replace(/\/$/, ''),
-    autonomousEnv: session.autonomousEnv,
-    onProgress: json ? (stage) => console.log(JSON.stringify({ stage })) : undefined,
-  })
+  const result = await linkMachineWithPassword(machineId, password, displayName, json ? (stage) => console.log(JSON.stringify({ stage })) : undefined)
   if (!result.ok) {
-    const message = humanizeLinkError(result.error, displayName || machineId, result.retryAt)
     if (json) {
-      console.log(JSON.stringify({ ok: false, error: result.error, message, ...(result.retryAt !== undefined ? { retryAt: result.retryAt } : {}) }))
+      console.log(JSON.stringify({ ok: false, error: result.error, message: result.message, ...(result.retryAt !== undefined ? { retryAt: result.retryAt } : {}) }))
     } else {
-      console.error(`\n  ✗ ${message}\n`)
+      console.error(`\n  ✗ ${result.message}\n`)
     }
     process.exit(1)
     return
   }
-  new MachinePeerStore().pin(machineId, b64e(result.peerPub), 'harness link', Date.now())
-  if (json) { console.log(JSON.stringify({ ok: true, fingerprint: result.fingerprint, machineId })); process.exit(0) }
-  console.log(`\n  ✓ Linked machine ${machineId}`)
-  console.log(`    fingerprint  ${result.fingerprint}   — verify it matches \`harness remote-password status\`'s output on the other machine\n`)
+  if (json) { console.log(JSON.stringify({ ok: true, fingerprint: result.fingerprint, machineId, mutual: result.mutual })); process.exit(0) }
+  console.log(`\n  ✓ Linked machine ${machineId}${result.mutual ? ' — both ways' : ''}`)
+  console.log(`    fingerprint  ${result.fingerprint}   — verify it matches \`harness remote-password status\`'s output on the other machine`)
+  if (!result.mutual) console.log(`    ${machineId} runs an older harness: it can't reach this machine back until it is updated and linked again.`)
+  console.log('')
   process.exit(0)
 }
 
 /**
  * The link itself, as `harness link connect` and `harness remote` both do it: this computer's SSO
  * token and identity, the remote password proved against THAT machine, and its peer pinned here.
+ * This machine says who it is inside the handshake, so a target that understands it pins it back;
+ * when it did (`mutual`), that machine is trusted here as a client too — one link, both directions.
  */
-async function linkMachineWithPassword(machineId: string, password: string, displayName?: string): Promise<{ ok: true; fingerprint: string } | { ok: false; error: string; message: string }> {
+async function linkMachineWithPassword(
+  machineId: string,
+  password: string,
+  displayName?: string,
+  onProgress?: (stage: PwConnectProgress) => void,
+): Promise<{ ok: true; fingerprint: string; mutual: boolean } | { ok: false; error: string; message: string; retryAt?: number }> {
   const session = readAuthSession()
   if (!session) return { ok: false, error: 'NOT_SIGNED_IN', message: 'Not signed in. Run: harness login' }
   const auth = new AuthSessionManager(backendHttpBase())
@@ -6842,10 +6877,55 @@ async function linkMachineWithPassword(machineId: string, password: string, disp
     accessToken,
     backendWsBase: env.BACKEND_WS_URL.replace(/\/$/, ''),
     autonomousEnv: session.autonomousEnv,
+    onProgress,
+    self: { kind: 'machine', label: hostname(), ...(session.machineId ? { machineId: session.machineId } : {}) },
   })
-  if (!result.ok) return { ok: false, error: result.error, message: humanizeLinkError(result.error, displayName || machineId, result.retryAt) }
-  new MachinePeerStore().pin(machineId, b64e(result.peerPub), 'harness link', Date.now())
-  return { ok: true, fingerprint: result.fingerprint }
+  if (!result.ok) return { ok: false, error: result.error, message: humanizeLinkError(result.error, displayName || machineId, result.retryAt), retryAt: result.retryAt }
+  const label = displayName || machineId
+  new MachinePeerStore().pin(machineId, b64e(result.peerPub), label, Date.now())
+  const mutual = result.mutual && !!session.machineId
+  if (mutual) await trustLinkedMachine({ pub: b64e(result.peerPub), machineId, kind: 'machine', label })
+  return { ok: true, fingerprint: result.fingerprint, mutual }
+}
+
+/** Trust a just-linked machine as a client of THIS one. The running daemon holds paired.json in memory
+ *  (and rewrites it whole), so the write has to go through it; with no daemon, the file is written directly. */
+async function trustLinkedMachine(peer: LinkedPeer): Promise<void> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/link/trust-peer`, {
+      method: 'POST',
+      headers: { 'x-adapter-local': '1', 'content-type': 'application/json' },
+      body: JSON.stringify(peer),
+    })
+    if (res.ok) return
+  } catch { /* fall back to the disk-backed store below */ }
+  const store = new E2eeStore()
+  store.init()
+  if (!store.isPaired(peer.pub)) store.addPaired(peer.pub, peer.label, Date.now(), 'web', { machineId: peer.machineId, kind: peer.kind })
+  // The daemon seeds the group from this pin and pairing when it next starts, and syncs from there.
+}
+
+/** This machine as its trust group knows it — see groupSyncer.ts's SELF_STAMP for the stamp. */
+let groupSelfPub: string | null = null
+function groupSelf(): GroupMember {
+  groupSelfPub ??= b64e(new E2eeStore().init().pub)
+  const machineId = readAuthSession()?.machineId
+  return { pub: groupSelfPub, kind: 'machine', label: hostname(), at: SELF_STAMP, ...(machineId ? { machineId } : {}) }
+}
+
+/** A trust-group member by machine id, list number, or fingerprint (full or unique prefix). */
+function findGroupMember(selector: string): { ok: true; pub: string; label: string; fingerprint: string } | { ok: false; error: 'NOT_FOUND' | 'AMBIGUOUS' } {
+  const members = new TrustGroupStore().list()
+  const norm = (v: string): string => v.toUpperCase().replace(/[·\s-]/g, '')
+  const byIndex = /^\d+$/.test(selector) ? members[Number(selector) - 1] : undefined
+  const byMachine = members.find((m) => m.machineId === selector)
+  const hit = byMachine ?? byIndex ?? (() => {
+    const matches = members.filter((m) => norm(m.fingerprint).startsWith(norm(selector)))
+    return matches.length > 1 ? 'AMBIGUOUS' as const : matches[0]
+  })()
+  if (hit === 'AMBIGUOUS') return { ok: false, error: 'AMBIGUOUS' }
+  if (!hit || !selector.trim()) return { ok: false, error: 'NOT_FOUND' }
+  return { ok: true, pub: hit.pub, label: hit.label, fingerprint: hit.fingerprint }
 }
 
 /** `harness link list` — machines this one has linked (CLI-to-CLI/machine-node trust, not browsers). */
@@ -6867,15 +6947,72 @@ async function linkListCommand(): Promise<void> {
 /** `harness link unlink <machineId>` — remove a linked machine's trust pin. */
 async function linkUnlinkCommand(machineId: string | undefined): Promise<void> {
   if (!machineId) { console.error('Usage: harness link unlink <machineId>   (see: harness link list)'); process.exit(1) }
-  const removed = new MachinePeerStore().unlink(machineId)
+  // Through the daemon: the machine leaves the trust group, so every other member drops it too.
+  const viaGroup = await daemonGroupRemove(machineId as string)
+  const removed = new MachinePeerStore().unlink(machineId as string) || viaGroup
   if (!removed) {
     console.error(`\n  ✗ No linked machine matches "${machineId}".`)
     console.error('  ▸ Run `harness link list` to see what\'s linked.\n')
     process.exit(1)
     return
   }
-  console.log(`\n  ✓ Unlinked ${machineId}\n`)
+  console.log(`\n  ✓ Unlinked ${machineId}${viaGroup ? ' — and removed from your trust group' : ''}\n`)
   process.exit(0)
+}
+
+/** Ask the running daemon to remove a trust-group member; false when there is no daemon or no match. */
+async function daemonGroupRemove(selector: string): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/group/remove`, {
+      method: 'POST',
+      headers: { 'x-adapter-local': '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ selector }),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+/** `harness group list|sync|remove` — every machine and phone that trusts every other through links. */
+async function groupCommand(sub: string | undefined, arg: string | undefined, json: boolean): Promise<void> {
+  if (!sub || sub === 'list') {
+    const members = new TrustGroupStore().list()
+    if (json) { console.log(JSON.stringify({ members })); process.exit(0) }
+    if (!members.length) {
+      console.log('\n  No trust group yet. Link another machine (`harness link connect <machineId>`) or a phone to start one.\n')
+      process.exit(0)
+    }
+    console.log('\n  Trust group — each of these reaches every other without a password:\n')
+    members.forEach((m, i) => {
+      const id = m.kind === 'machine' ? m.machineId : 'viewer app'
+      console.log(`   ${String(i + 1).padStart(2)}. ${m.label}  ${id}  ${m.fingerprint}`)
+    })
+    console.log('')
+    process.exit(0)
+  }
+  if (sub === 'sync') {
+    try {
+      const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/group/sync`, { method: 'POST', headers: { 'x-adapter-local': '1' } })
+      if (!res.ok) throw new Error(String(res.status))
+    } catch {
+      console.error('\n  ✗ Harness is not running here. Run: harness start\n')
+      process.exit(1)
+    }
+    console.log('\n  ✓ Comparing with every reachable member now.\n')
+    process.exit(0)
+  }
+  if (sub === 'remove') {
+    if (!arg) { console.error('Usage: harness group remove <machineId|#|fingerprint>   (see: harness group list)'); process.exit(1) }
+    if (!(await daemonGroupRemove(arg as string))) {
+      console.error(`\n  ✗ Could not remove "${arg}" — no member matches, or harness is not running here (harness start).\n`)
+      process.exit(1)
+    }
+    console.log(`\n  ✓ Removed ${arg} from the trust group. Every member drops it as they sync.\n`)
+    process.exit(0)
+  }
+  console.error(`Unknown command: group ${sub}`)
+  process.exit(1)
 }
 
 /** One row of `GET /api/machines`. Only the fields this CLI shows are declared. */
@@ -7313,6 +7450,9 @@ switch (cmd) {
     else if (args[0] === 'list') linkListCommand().catch(onError)
     else if (args[0] === 'unlink') linkUnlinkCommand(args[1]).catch(onError)
     else { console.error(`Unknown command: link ${args[0] ?? ''}`); usage(1) }
+    break
+  case 'group':
+    groupCommand(args[0], args[1], flags.includes('--json')).catch(onError)
     break
   case 'remote-password':
     if (args[0] === 'set') remotePasswordSetCommand(flags.includes('--json'), flags.includes('--stdin')).catch(onError)

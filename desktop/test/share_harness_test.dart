@@ -97,7 +97,114 @@ void main() {
     'expired': expired,
     'watching': watching,
   };
-  final submit = find.widgetWithText(FilledButton, 'Share harness');
+  final submit = find.widgetWithText(TextButton, '[ Add people ]');
+
+  Future<void> capture(WidgetTester tester, String state) async {
+    final output = Platform.environment['HARNESS_SHARE_SCREENSHOT'];
+    if (output == null) return;
+    await tester.pump(const Duration(milliseconds: 300));
+    final boundary = tester.renderObject<RenderRepaintBoundary>(
+      find.byKey(const Key('sharing-dialog-preview')),
+    );
+    await tester.runAsync(() async {
+      final image = await boundary.toImage();
+      final png = await image.toByteData(format: ui.ImageByteFormat.png);
+      await File('$output.$state.png').writeAsBytes(png!.buffer.asUint8List());
+      image.dispose();
+    });
+  }
+
+  testWidgets(
+    'one stable browser link can be copied, made public/private and stopped',
+    (tester) async {
+      Map<String, dynamic>? link;
+      final changes = <String>[];
+      String? clipboard;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipboard = (call.arguments as Map)['text'] as String;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      await show(tester, (action, payload) async {
+        if (action == 'link') {
+          changes.add(payload['visibility'] as String);
+          link = {
+            'visibility': payload['visibility'],
+            'pending': false,
+            'error': null,
+            'url': 'https://harness.example/s/fixture#key=pinned',
+          };
+        }
+        return {'collaboration': true, 'link': link, 'shares': []};
+      });
+      expect(
+        find.text('Only the emails you add can view and comment.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('[ Copy link ]'));
+      await tester.pump();
+      expect(changes, ['private']);
+      expect(clipboard, 'https://harness.example/s/fixture#key=pinned');
+      expect(find.text('Link copied.'), findsOneWidget);
+      await capture(tester, 'private');
+      await tester.tap(find.textContaining('Public').first);
+      await tester.pump();
+      expect(changes.last, 'public');
+      expect(find.textContaining('Anyone with the link'), findsOneWidget);
+      await capture(tester, 'public');
+      await tester.tap(find.text('[ Copy link ]'));
+      await tester.pump();
+      expect(changes, [
+        'private',
+        'public',
+      ], reason: 'copying never silently changes visibility');
+      await tester.tap(find.textContaining('Private').first);
+      await tester.pump();
+      expect(changes.last, 'private');
+      await tester.tap(find.text('[ Stop sharing ]'));
+      await tester.pump();
+      expect(changes.last, 'off');
+      expect(find.text('Sharing stopped.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'a pending link is not copied and an older daemon keeps actionable update guidance',
+    (tester) async {
+      await show(
+        tester,
+        (action, _) async => {
+          'collaboration': true,
+          'shares': [],
+          'link': action == 'list'
+              ? null
+              : {
+                  'visibility': 'private',
+                  'pending': true,
+                  'error': null,
+                  'url': 'https://harness.example/s/pending#key=pin',
+                },
+        },
+      );
+      await tester.tap(find.text('[ Copy link ]'));
+      await tester.pump();
+      expect(find.textContaining('Waiting for the connection'), findsOneWidget);
+      expect(find.text('Link copied.'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets('agent-pane entry point manages the exact selected harness', (
     tester,
@@ -125,8 +232,8 @@ void main() {
     await tester.tap(find.text('Share'));
     await tester.pumpAndSettle();
     expect(app.calls, [('machine', 'agent', 'list')]);
-    expect(find.text('Climate dashboard'), findsOneWidget);
-    await tester.tap(find.text('Done'));
+    expect(find.text('Share Climate dashboard'), findsOneWidget);
+    await tester.tap(find.text('[ Done ]'));
     await tester.pumpAndSettle();
     app.dispose();
   });
@@ -153,9 +260,7 @@ void main() {
           'shares': [person('ken@example.com')],
         };
       });
-      await tester.tap(find.text('Expires in 30 days'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Expires in 7 days').last);
+      await tester.tap(find.text('[ 7 days ]'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'diego@example.com');
       tester
@@ -165,7 +270,7 @@ void main() {
       await tester.pump();
       expect(invites.single['days'], 7);
       expect(find.text('This harness cannot be shared yet.'), findsOneWidget);
-      await tester.tap(find.widgetWithText(TextButton, 'Remove'));
+      await tester.tap(find.widgetWithText(TextButton, '[ Remove ]'));
       await tester.pump();
       expect(removing, isTrue);
       expect(find.textContaining('Check the connection'), findsOneWidget);
@@ -192,8 +297,8 @@ void main() {
         }
         return {'shares': shares};
       });
-      expect(find.text('Only you have access.'), findsOneWidget);
-      expect(find.text('Can view'), findsOneWidget);
+      expect(find.text('No invited people yet.'), findsOneWidget);
+      expect(find.textContaining('cannot control your agent'), findsOneWidget);
       await tester.enterText(
         find.byType(TextField),
         'KEN@example.com; diego@example.com, ken@example.com',
@@ -208,7 +313,7 @@ void main() {
       });
       expect(find.text('2 people now have view-only access.'), findsOneWidget);
       expect(find.text('Watching now · Can view'), findsOneWidget);
-      expect(find.textContaining('Shared with you'), findsOneWidget);
+      expect(find.textContaining('Keep your machine online'), findsOneWidget);
       expect(tester.takeException(), isNull);
       // Optional artifact for visual review; no golden files or production filesystem writes.
       final output = Platform.environment['HARNESS_SHARE_SCREENSHOT'];
@@ -224,7 +329,7 @@ void main() {
           image.dispose();
         });
       }
-      await tester.tap(find.widgetWithText(TextButton, 'Remove').first);
+      await tester.tap(find.widgetWithText(TextButton, '[ Remove ]').first);
       await tester.pump();
       expect(calls.last.$1, 'remove');
       expect(calls.last.$2, {'id': 'ken@example.com'});
@@ -232,7 +337,7 @@ void main() {
       expect(find.text('Access removed.'), findsOneWidget);
       await tester.pump(const Duration(seconds: 5));
       expect(calls.last.$1, 'list');
-      await tester.tap(find.text('Done'));
+      await tester.tap(find.text('[ Done ]'));
       await tester.pumpAndSettle();
       expect(find.text('Share harness'), findsNothing);
     },
@@ -250,10 +355,7 @@ void main() {
         }
         return {'shares': []};
       });
-      expect(
-        tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
-        isNull,
-      );
+      expect(tester.widget<TextButton>(submit).onPressed, isNull);
       for (final invalid in [
         'bad',
         List.generate(21, (i) => 'a$i@example.com').join(','),
@@ -269,11 +371,8 @@ void main() {
       await tester.pump();
       await tester.tap(submit);
       await tester.pump();
-      expect(find.text('Saving…'), findsOneWidget);
-      expect(
-        tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
-        isNull,
-      );
+      expect(tester.widget<TextField>(find.byType(TextField)).enabled, isFalse);
+      expect(tester.widget<TextButton>(submit).onPressed, isNull);
       await tester.pump(const Duration(seconds: 5));
       expect(invites, 1);
       pending.complete({
@@ -327,14 +426,14 @@ void main() {
         findsOneWidget,
       );
       fails = false;
-      await tester.tap(find.text('Retry'));
+      await tester.tap(find.text('[ Retry ]'));
       await tester.pump();
-      expect(find.text('Only you have access.'), findsOneWidget);
-      expect(find.text('Retry'), findsNothing);
+      expect(find.text('No invited people yet.'), findsOneWidget);
+      expect(find.text('[ Retry ]'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       final pending = Completer<Map<String, dynamic>>();
       await show(tester, (_, _) => pending.future);
-      await tester.tap(find.text('Done'));
+      await tester.tap(find.text('[ Done ]'));
       await tester.pumpAndSettle();
       pending.complete({'shares': []});
       await tester.pump();
