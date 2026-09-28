@@ -619,6 +619,59 @@ void main() {
     },
   );
 
+  for (final custom in [false, true]) {
+    test(
+      'closing term keeps the revealed office tab name (custom=$custom)',
+      () async {
+        final storage = MemoryStore();
+        final app = createApp(store: storage);
+        addTearDown(app.dispose);
+        final machine = app.stateOf('m')!;
+        machine.agents = const [
+          Agent(id: 'a0', name: 'Code', engine: 'codex'),
+          Agent(id: 'a1', name: 'Terminal', engine: 'terminal'),
+          Agent(id: 'a2', name: 'Other terminal', engine: 'terminal'),
+        ];
+        app.renameSwarm(app.activeSwarmId, 'growth');
+        app.newSwarm(name: 'term');
+        final term = app.activeSwarm;
+        await app.addAgentToSwarm('m', 'a2');
+        app.newSwarm();
+        final office = app.activeSwarm;
+        await app.addAgentToSwarm('m', 'a0');
+        await app.addAgentToSwarm('m', 'a1');
+        if (custom) app.renameSwarm(office.id, 'office');
+        final expected = custom ? 'office' : 'Test host';
+        final panes = office.panes.toList();
+        expect(workspaceTabNames(app)[office.id], expected);
+
+        app.selectSwarm(term.id);
+        await app.closeSwarm(term.id);
+        expect(app.activeSwarm, same(office));
+        expect(workspaceTabNames(app)[office.id], expected);
+        expect(office.panes, orderedEquals(panes));
+        expect(office.nameIsCustom, custom);
+
+        app.reopenClosedSwarm();
+        expect(workspaceTabNames(app)[term.id], 'term');
+        expect(workspaceTabNames(app)[office.id], expected);
+        await app.closeSwarm(term.id);
+        await app.flushPaneLayout();
+
+        final restored = createApp(store: storage);
+        addTearDown(restored.dispose);
+        restored.stateOf('m')!.agents = machine.agents;
+        await restored.restorePaneLayoutForTest();
+        expect(workspaceTabNames(restored)[office.id], expected);
+        expect(restored.swarms.any((tab) => tab.id == term.id), isFalse);
+        expect(
+          restored.swarms.singleWhere((tab) => tab.id == office.id).nameIsCustom,
+          custom,
+        );
+      },
+    );
+  }
+
   test('project names distinguish code tabs while a distinct harness keeps its type', () {
     final app = createApp();
     addTearDown(app.dispose);

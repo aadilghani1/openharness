@@ -11103,6 +11103,13 @@ class AppNotifier extends ChangeNotifier {
   }
 
   Future<void> _deskJoin(int authRevision) async {
+    // Edits remain available while the first read is pending. Remember the
+    // existing desk tabs now so its eventual reply cannot undo a rename,
+    // close, or move made during that wait. New/local tabs are seeded below.
+    final beforeRead = _deskProjection()
+        .where((tab) => isDeskId(tab.id))
+        .toList();
+    final beforeReadIds = beforeRead.map((tab) => tab.id).toSet();
     Map<String, dynamic>? raw;
     try {
       raw = await api.desk();
@@ -11131,6 +11138,10 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     final own = _deskProjection();
+    final duringRead = deskDiff(
+      beforeRead,
+      own.where((tab) => beforeReadIds.contains(tab.id)).toList(),
+    );
     final unknown = own
         .where((t) => !doc.tabs.any((d) => d.id == t.id))
         .toList();
@@ -11145,6 +11156,7 @@ class AppNotifier extends ChangeNotifier {
         'tabs': [for (final t in unknown) t.toJson()],
       });
     }
+    _desk.pending.addAll(duringRead);
     appLog.info(
       'desk',
       'joined at rev ${doc.revision} · ${doc.tabs.length} on the desk · ${unknown.length} of ours to seed',
