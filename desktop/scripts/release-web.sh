@@ -1,29 +1,24 @@
 #!/usr/bin/env bash
-# Ship the browser app to harness.autonomous.ai from THIS repo, end to end:
+# Ship the browser app to harness.autonomous.ai from THIS repo:
 #
-#   1. tag this commit vX.Y.Z_web and push it — ../.github/workflows/release-web.yml builds the bundle
-#      and publishes the archive, its SHA-256 and harness-web-release.json as a GitHub Release;
-#   2. wait for that run, download the manifest;
-#   3. open a PR on the website repo pinning apps/web/harness-web-release.json to it, and merge it;
-#   4. run the website's OWN scripts/release-web.sh on its main — that tag (its own vA.B.C_web line)
-#      builds the website image with the bundle inside, and ArgoCD rolls it out.
+#   1. tag this commit vX.Y.Z_web and push it;
+#   2. ../.github/workflows/release-web.yml builds the Flutter bundle, bakes it into website/'s image,
+#      pushes gcr.io/autonomous-ecm/autonomous-code-website:<tag> and :latest — ArgoCD rolls it out —
+#      and publishes the bundle as a GitHub Release;
+#   3. this script waits for that run and checks the release's manifest.
 #
-# The website keeps serving the app (its next.config rewrites `/`, `/s/:id` and `/auth/callback` into
-# /harness-web/, and its build verifies the archive's checksum); this script only drives it, so
-# nobody has to open the website repo for a web release. Its version line is left to its script.
+# The website used to live in autonomous-ai/autonomous-code, and this script then opened a PR there
+# and ran that repo's own release. It lives in website/ now, so one tag ships both.
 #
 # Usage (from the repo root, `make release-web ARGS=...` runs the same thing):
 #   bash desktop/scripts/release-web.sh              # bump the patch of the last v*_web tag and ship
-#   bash desktop/scripts/release-web.sh --dry-run    # print the plan, tag/push/merge nothing
+#   bash desktop/scripts/release-web.sh --dry-run    # print the plan, tag/push nothing
 #   bash desktop/scripts/release-web.sh --minor      # bump the MINOR version
-#   bash desktop/scripts/release-web.sh 0.2.0        # an explicit version
+#   bash desktop/scripts/release-web.sh 1.3.0        # an explicit version
 #
-# RESUMING: every step skips itself when already done, so after a failure (CI red, PR not mergeable)
-# re-run with the SAME explicit version — `bash desktop/scripts/release-web.sh 0.1.5`. An existing tag
-# for that version is reused rather than moved.
-#
-# ⚠️ Step 4 releases the website's whole main, not only the bundle: the script lists any website commits
-# since its last release so you can see what else goes live.
+# RESUMING: after a failure, re-run with the SAME explicit version — an existing tag is reused rather
+# than moved, and the script only waits for its run. A tag whose build failed is not retried by moving
+# it: fix forward and cut the next version.
 #
 # Requires: git, gh (signed in, with push access to both repos).
 set -euo pipefail
@@ -34,9 +29,12 @@ cd "$ROOT"
 # --- config (all overridable via env) ---
 BRANCH="${BRANCH:-main}"
 WORKFLOW="${WORKFLOW:-release-web.yml}"
-WEBSITE_REPO="${WEBSITE_REPO:-autonomous-ai/autonomous-code}"
-WEBSITE_BRANCH="${WEBSITE_BRANCH:-main}"
-WEBSITE_MANIFEST="${WEBSITE_MANIFEST:-apps/web/harness-web-release.json}"
+# The image's tag line predates this repo's: autonomous-code pushed v1.1.x–v1.2.x_web (v1.2.24_web
+# last, on 2026-09-28) before the website moved here, while this repo's own v*_web tags (bundle-only
+# then) were on 0.1.x. ArgoCD's image updater only rolls out a tag newer than the one it runs, so
+# versions never go below the floor: the first release from here bumps the MINOR, to 1.3.1, clear of
+# anything that line pushed. Raise the floor if a higher tag ever lands in the registry some other way.
+VERSION_FLOOR="${VERSION_FLOOR:-1.3.0}"
 RUN_APPEAR_TIMEOUT="${RUN_APPEAR_TIMEOUT:-180}"   # seconds for the tag's workflow run to show up
 
 DRY_RUN=0
@@ -79,7 +77,7 @@ git fetch --tags --quiet origin
 LAST_VER="$(git tag -l 'v*_web' \
   | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+_web$' || true; } \
   | sed -E 's/^v//; s/_web$//' | sort -V | tail -1)"
-LAST_VER="${LAST_VER:-0.0.0}"
+LAST_VER="$(printf '%s\n%s\n' "${LAST_VER:-0.0.0}" "$VERSION_FLOOR" | sort -V | tail -1)"
 if [ -n "$NEW_VER" ]; then
   VER="$NEW_VER"
 else
@@ -104,38 +102,23 @@ fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-SITE="$WORK/site"
 
-say "bundle  : $TAG @ ${SHA:0:8}  $(git log -1 --format=%s "$SHA" | cut -c1-60)$([ "$TAG_EXISTS" -eq 1 ] && echo '  (tag exists — resuming)')"
-say "website : $WEBSITE_REPO $WEBSITE_BRANCH → $WEBSITE_MANIFEST"
-
-# --- what else the website release will carry ---
-gh repo clone "$WEBSITE_REPO" "$SITE" -- --quiet --filter=blob:none --branch "$WEBSITE_BRANCH" >/dev/null 2>&1 \
-  || die "could not clone $WEBSITE_REPO"
-SITE_LAST_TAG="$(git -C "$SITE" tag -l 'v*_web' | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+_web$' || true; } | sort -V | tail -1)"
-if [ -n "$SITE_LAST_TAG" ]; then
-  PENDING="$(git -C "$SITE" log --oneline "$SITE_LAST_TAG..HEAD")"
-  if [ -n "$PENDING" ]; then
-    say "website commits since $SITE_LAST_TAG that will ALSO go live:"
-    echo "$PENDING" | sed 's/^/      /'
-  fi
-fi
+say "release : $TAG @ ${SHA:0:8}  $(git log -1 --format=%s "$SHA" | cut -c1-60)$([ "$TAG_EXISTS" -eq 1 ] && echo '  (tag exists — resuming)')"
+say "image   : gcr.io/autonomous-ecm/autonomous-code-website:$TAG (+ :latest)"
 
 if [ "$DRY_RUN" -eq 1 ]; then
-  say "DRY RUN — the website's release script would then cut:"
-  (cd "$SITE" && bash scripts/release-web.sh --dry-run) | sed 's/^/      /'
-  say "DRY RUN — nothing tagged, pushed or merged."
+  say "DRY RUN — nothing tagged or pushed."
   exit 0
 fi
 
-# --- 1. the bundle tag ---
+# --- 1. the tag ---
 if [ "$TAG_EXISTS" -eq 0 ]; then
   git tag -a "$TAG" -m "Harness web $VER" "$SHA"
   git push origin "$TAG"
   say "pushed $TAG"
 fi
 
-# --- 2. the bundle release: wait for CI unless it is already published ---
+# --- 2. the build: wait for CI unless its release (its last step) already exists ---
 if ! gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null | grep -qx 'harness-web-release.json'; then
   RUN_ID=""
   for _ in $(seq 1 $((RUN_APPEAR_TIMEOUT / 5))); do
@@ -145,47 +128,13 @@ if ! gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null | grep
     sleep 5
   done
   [ -n "$RUN_ID" ] || die "no $WORKFLOW run appeared for $TAG — check: gh run list --workflow $WORKFLOW"
-  say "waiting for the bundle build: https://github.com/$REPO/actions/runs/$RUN_ID"
+  say "waiting for the image build: https://github.com/$REPO/actions/runs/$RUN_ID"
   gh run watch "$RUN_ID" --exit-status >/dev/null \
-    || die "bundle build failed — fix it, delete the tag, and release again: gh run view $RUN_ID --log-failed"
+    || die "build failed — fix it and cut the next version: gh run view $RUN_ID --log-failed"
 fi
 gh release download "$TAG" -p harness-web-release.json -D "$WORK" --clobber
 grep -q "\"version\": \"$VER\"" "$WORK/harness-web-release.json" \
   || die "the release's manifest is not for $VER"
-say "bundle published: https://github.com/$REPO/releases/tag/$TAG"
+say "image pushed, bundle published: https://github.com/$REPO/releases/tag/$TAG"
 
-# --- 3. pin the website to it (skipped when its main already does) ---
-if ! cmp -s "$WORK/harness-web-release.json" "$SITE/$WEBSITE_MANIFEST"; then
-  PR_BRANCH="harness-web-$VER"
-  PR_STATE="$(gh pr view "$PR_BRANCH" --repo "$WEBSITE_REPO" --json state -q .state 2>/dev/null || true)"
-  if [ "$PR_STATE" != "OPEN" ] && [ "$PR_STATE" != "MERGED" ]; then
-    git -C "$SITE" checkout -q -B "$PR_BRANCH"
-    cp "$WORK/harness-web-release.json" "$SITE/$WEBSITE_MANIFEST"
-    git -C "$SITE" add "$WEBSITE_MANIFEST"
-    git -C "$SITE" commit -q -m "chore(web): ship Harness web $VER" \
-      -m "Pins $WEBSITE_MANIFEST to $REPO@${SHA:0:8} ($TAG)."
-    git -C "$SITE" push -q --force-with-lease origin "$PR_BRANCH"
-    gh pr create --repo "$WEBSITE_REPO" --base "$WEBSITE_BRANCH" --head "$PR_BRANCH" \
-      --title "chore(web): ship Harness web $VER" \
-      --body "Pins \`$WEBSITE_MANIFEST\` to [$TAG](https://github.com/$REPO/releases/tag/$TAG) (\`$REPO@${SHA:0:8}\`). Opened by \`make release-web\` in $REPO." >/dev/null
-  fi
-  if [ "$PR_STATE" != "MERGED" ]; then
-    gh pr merge "$PR_BRANCH" --repo "$WEBSITE_REPO" --squash --delete-branch >/dev/null \
-      || die "could not merge $(gh pr view "$PR_BRANCH" --repo "$WEBSITE_REPO" --json url -q .url) — merge it, then re-run with $VER"
-  fi
-  say "website pinned to $VER"
-  git -C "$SITE" fetch -q origin "$WEBSITE_BRANCH"
-  git -C "$SITE" checkout -q -B "$WEBSITE_BRANCH" "origin/$WEBSITE_BRANCH"
-fi
-cmp -s "$WORK/harness-web-release.json" "$SITE/$WEBSITE_MANIFEST" \
-  || die "$WEBSITE_REPO $WEBSITE_BRANCH does not pin $VER after the merge — someone else changed it; check before releasing"
-
-# --- 4. the website release, by the website's own script (skipped when its last release already pins it) ---
-if [ -n "$SITE_LAST_TAG" ] && git -C "$SITE" show "$SITE_LAST_TAG:$WEBSITE_MANIFEST" 2>/dev/null \
-  | cmp -s - "$WORK/harness-web-release.json"; then
-  say "website $SITE_LAST_TAG already ships $VER — nothing to release"
-  exit 0
-fi
-(cd "$SITE" && bash scripts/release-web.sh)
-say "done — once the website build is deployed, https://harness.autonomous.ai/harness-web/release.json reports $VER"
-say "watch : gh run list --repo $WEBSITE_REPO --workflow 'Docker production web build' --limit 3"
+say "done — once ArgoCD rolls $TAG out, https://harness.autonomous.ai/harness-web/release.json reports $VER"
