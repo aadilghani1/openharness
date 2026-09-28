@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../core/models.dart' show Agent;
@@ -115,8 +116,47 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
     _focus.addListener(_onFocus);
   }
 
+  /// The route's entrance, watched once — see [_raiseKeyboard].
+  Animation<double>? _entrance;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_entrance != null) return;
+    final entrance = ModalRoute.of(context)?.animation;
+    if (entrance == null) return;
+    _entrance = entrance;
+    if (entrance.isCompleted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _raiseKeyboard());
+    } else {
+      entrance.addStatusListener(_onEntrance);
+    }
+  }
+
+  void _onEntrance(AnimationStatus status) {
+    if (!status.isCompleted) return;
+    _entrance?.removeStatusListener(_onEntrance);
+    _raiseKeyboard();
+  }
+
+  /// ⚠️ `autofocus` alone left the phone with no keyboard. The phone's `⋯` sheet
+  /// pops and this dialog pushes in the same frame, and the autofocus landed
+  /// while the sheet was still leaving — the field came up unfocused, or focused
+  /// with the keyboard never shown. So once the dialog has finished arriving the
+  /// focus is asked for again, and a field that already holds it asks for the
+  /// keyboard outright (a no-op where there is no soft keyboard).
+  void _raiseKeyboard() {
+    if (!mounted || _busy) return;
+    if (_focus.hasFocus) {
+      unawaited(SystemChannels.textInput.invokeMethod<void>('TextInput.show'));
+    } else {
+      _focus.requestFocus();
+    }
+  }
+
   @override
   void dispose() {
+    _entrance?.removeStatusListener(_onEntrance);
     _controller.dispose();
     _focus.dispose();
     super.dispose();

@@ -337,6 +337,24 @@ class _TerminalPageState extends State<TerminalPage>
   /// — or [_searchHoldLimit], so a keyboard that never reports zero cannot hold
   /// the terminal still for good.
   bool _heldForSearch = false;
+
+  /// The keyboard up belongs to a field OUTSIDE this page — the rename dialog
+  /// over the `⋯` sheet, any dialog with a text field — so the terminal must
+  /// not read it as its own. Held from the tick the keyboard rises until the
+  /// inset reaches zero again.
+  ///
+  /// ⚠️ **Without it, what was typed into the dialog went to the shell.** The
+  /// dialog focused its field and raised the keyboard; [_keyboardIsUp] went
+  /// true from that inset; [_shouldFocus] followed it and the panel took focus
+  /// — and the input connection — back from the dialog ~300ms after it opened.
+  /// The same fault [_heldForSearch] fixes for search, which is inside this
+  /// page; a dialog is not, so this one is decided by where the focus that
+  /// raised the keyboard lives.
+  ///
+  /// ⚠️ Not [ModalRoute.isCurrent]: this page is a tab's root in `PhoneShell`'s
+  /// nested Navigator, and sheets and dialogs are pushed on the ROOT one, so
+  /// the page stays "current" under them.
+  bool _heldForCover = false;
   Timer? _searchHoldTimer;
   static const _searchHoldLimit = Duration(milliseconds: 800);
 
@@ -1253,6 +1271,25 @@ class _TerminalPageState extends State<TerminalPage>
     // shell at the half-risen height before the settle began — two SIGWINCHes
     // and two redraws for one keyboard. A page arriving under a keyboard already
     // up costs one needless 80ms hold, and nothing else.
+    // The keyboard's first frame up says whose it is: the field that raised it
+    // already holds the focus. One outside this page's route is a dialog's —
+    // see [_heldForCover]. Zero ends the hold, covered or not.
+    if (up && _lastInset <= 0) {
+      final primary = FocusManager.instance.primaryFocus;
+      final scope = FocusScope.of(context);
+      // ⚠️ **A SCOPE holding the focus is nobody holding it.** With no field
+      // focused anywhere, `primaryFocus` is a [FocusScopeNode] — the enclosing
+      // scope, which by definition is not inside this page — and reading that
+      // as "a dialog's keyboard" held the terminal off its own. A field in a
+      // dialog is an ordinary [FocusNode]; only that is worth standing back for.
+      _heldForCover =
+          primary != null &&
+          primary is! FocusScopeNode &&
+          primary != scope &&
+          !primary.ancestors.contains(scope);
+    } else if (!up) {
+      _heldForCover = false;
+    }
     final previous = _lastInset;
     _lastInset = inset;
     // Search's keyboard has finished leaving: the terminal may read the
@@ -1358,6 +1395,7 @@ class _TerminalPageState extends State<TerminalPage>
   bool get _shouldFocus =>
       widget.isActive &&
       !_heldForSearch &&
+      !_heldForCover &&
       (_keyboardIsUp || _keyboardRequested);
 
   /// A tap on the terminal while no keyboard is up or coming: the keyboard.
@@ -2347,7 +2385,11 @@ class _TerminalPageState extends State<TerminalPage>
   /// page hands it only what the page alone knows, whether this is still the terminal on screen.
   PhoneSheetAction _pasteAction(TerminalSession session) => PhoneSheetAction(
     icon: LucideIcons.clipboardPaste300,
-    label: 'Paste',
+    // ⚠️ Named for WHERE it reads, not for the verb. The sheet's other rows act
+    // on the agent and the machine; "Paste" alone left it open which clipboard
+    // was meant — and the phone's is the surprising answer, since the agent runs
+    // somewhere else. See [pasteClipboard], which says the same in its doc.
+    label: 'Paste from clipboard',
     onTap: () {
       final messenger = ScaffoldMessenger.maybeOf(context);
       unawaited(
@@ -2374,27 +2416,6 @@ class _TerminalPageState extends State<TerminalPage>
   );
 
   /// What acts on this agent and can be taken back — the first card of its sheet.
-  /// Pastes the phone's clipboard into the terminal, the way a desktop's ⌘V does — the pane's raw
-  /// paste where the computer takes one, bracketed paste where it does not.
-  Future<void> _pasteClipboard() async {
-    final session = widget.notifier
-        .paneOfAgent(widget.machineId, widget.agentId)
-        ?.session;
-    if (session == null || !session.acceptsInput) return;
-    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-    if (!mounted) return;
-    if (text == null || text.isEmpty) {
-      _flash('the clipboard has no text', error: true);
-      return;
-    }
-    final machine = widget.notifier.stateOf(widget.machineId);
-    if (machine != null && machine.terminalPasteRawAvailable) {
-      await session.pasteText(text);
-    } else {
-      session.terminal.paste(text);
-    }
-  }
-
   List<PhoneSheetAction> _agentActions(Agent agent) => [
     PhoneSheetAction(
       icon: LucideIcons.gitBranch300,
@@ -2418,11 +2439,11 @@ class _TerminalPageState extends State<TerminalPage>
         ),
       ),
     ),
-    PhoneSheetAction(
-      icon: LucideIcons.clipboardPaste300,
-      label: 'Paste from clipboard',
-      onTap: () => unawaited(_pasteClipboard()),
-    ),
+    // ⚠️ **"Paste from clipboard" was here, and it was the SECOND paste row in
+    // one sheet.** It did less than the one above ([_pasteAction]): text only,
+    // no image; no `Clipboard.hasStrings` first, so iOS asked for permission
+    // twice; and no check that the pane it was tapped on is still the pane the
+    // text lands in. The capable one stays; this one goes.
     // Stop what it is doing — Esc, as in the terminal — only while it is doing something. First,
     // because when it is wanted it is wanted now.
     if (_agentWorking)
