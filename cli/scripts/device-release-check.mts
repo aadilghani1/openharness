@@ -159,6 +159,13 @@ for(const end of ['done','summary','error','focus','disconnect'])await check(`la
  const count=x.sent.length;finish('Stale...');await work;assert.equal(x.sent.length,count)
 })
 await check('native-footer-clears-when-absent',async()=>{const x=setup();x.host.activityText=async()=>null;await x.session.refreshFocusedActivity();assert.deepEqual(plain(x.sent),[{t:'turn.activity',agentId:'a',text:''}])})
+await check('busy-without-native-footer',async()=>{
+ const x=setup();x.host.activityText=async()=>null
+ await x.session.turnStarted('a');await x.session.refreshFocusedActivity()
+ assert(x.sent.some(m=>m.t==='turn.started'))
+ assert.deepEqual(plain(x.sent.at(-1)),{t:'turn.activity',agentId:'a',text:''})
+ traces.push({id:'busy-without-native-footer',frames:x.frames.map(b=>b.toString('hex')),expect:{status:'',display_status:'Working',busy:true,recap:false}})
+})
 await check('capture-failure-is-not-completion',async()=>{const x=setup();x.host.activityText=async()=>{throw new Error('capture unavailable')};await x.session.refreshFocusedActivity();assert.deepEqual(plain(x.sent),[])})
 await check('working-to-result-and-next-turn',async()=>{
  const x=setup();x.host.activityText=async()=> 'Working';await x.session.refreshFocusedActivity()
@@ -175,6 +182,44 @@ for(const chunk of [1,7,4096])await check(`tab-roundtrip-fragments-${chunk}`,asy
  await until(()=>x.sent.some(m=>m.t==='agents.end'));assert.equal(x.sent.find(m=>m.t==='agent').id,'a');assert.equal(x.sent.find(m=>m.t==='agents.end').tab,'tab-a')
 })
 await check('reconnect-and-repeated-hello',async()=>{const x=setup();x.session.greetedMac=null;await x.feed({t:'hello',product:'harness',mac:'fixture',fw:'fixture',proto:3});await until(()=>x.sent.some(m=>m.t==='agents.end'));const count=x.sent.filter(m=>m.t==='agents.end').length;await x.feed({t:'hello',product:'harness',mac:'fixture',fw:'fixture',proto:3});await settle();assert.equal(x.sent.filter(m=>m.t==='agents.end').length,count);assert.equal(x.sent.filter(m=>m.t==='welcome').length,2)})
+const fleetImport=ast.statements.find(n=>ts.isImportDeclaration(n)&&ts.isStringLiteral(n.moduleSpecifier)&&n.moduleSpecifier.text.startsWith('./device-usb-fleet')) as ts.ImportDeclaration|undefined
+if(fleetImport)await check('built-usb-fleet-default-discovery-three-dials-and-disconnect',async()=>{
+ const {CableFleet}=await import(new URL((fleetImport.moduleSpecifier as ts.StringLiteral).text,`file://${path.resolve(bundle)}`).href)
+ const bindings=fleetImport.importClause?.namedBindings
+ assert(bindings&&ts.isNamedImports(bindings))
+ const fleetName=bindings.elements.find(e=>(e.propertyName??e.name).text==='CableFleet')?.name.text
+ assert(fleetName)
+ const constructors=nodes.filter((n):n is ts.NewExpression=>ts.isNewExpression(n)&&n.expression.getText(ast)===fleetName)
+ assert.equal(constructors.length,1,'Check the actual deployed USB fleet configuration')
+ const config=constructors[0].arguments?.[4]
+ const defaults=config?vm.runInNewContext(`(${config.getText(ast)})`,{process:{env:{}}}):{}
+ const x=setup(),peers:any[]=[];let attached=0,gone=0,status:any
+ x.host.onDialAttached=()=>{attached++};x.host.onDialGone=()=>{gone++};x.host.onDialStatus=(s:any)=>{status=s}
+ let present=['tim','tux','production'].map(id=>({path:`/dev/${id}`,serialNumber:id,vendorId:0x303a,productId:0x1001}))
+ const fleet=new CableFleet(Session,x.host,out,class {daemon(){}device(){}greeted(){}tick(){}}, {
+  ...defaults,
+  intervalMs:60000,discover:async()=>present,
+  open:async(portPath:string,onData:any,onClosed:any)=>{
+   const decoder=new CableDecoder(),p:any={path:portPath,isOpen:true,sent:[],
+    write:async(bytes:Uint8Array)=>decoder.feed(bytes,f=>{if(f.type===CableType.Json)p.sent.push(JSON.parse(Buffer.from(f.payload).toString()))}),
+    close:async()=>{if(p.isOpen){p.isOpen=false;onClosed('fixture unplug')}},
+    say:(m:any)=>onData(Buffer.from(encodeCableFrame(CableType.Json,Buffer.from(JSON.stringify(m)))))}
+   peers.push(p);return p
+  },
+ })
+ try {
+  fleet.start();await until(()=>peers.length===3);await settle()
+  for(const p of peers)p.say({t:'hello',product:'harness',mac:p.path,fw:p.path==='/dev/production'?'0.0.86':'fixture',proto:3})
+  await until(()=>peers.every(p=>p.sent.some((m:any)=>m.t==='agents.end')))
+  assert.equal(attached,1);assert(fleet.isConnected)
+  await fleet.turnStarted('a','Working')
+  for(const p of peers)assert(p.sent.some((m:any)=>m.t==='turn.started'&&m.agentId==='a'))
+  present=present.slice(1);await fleet.scan()
+  assert.equal(peers[0].isOpen,false);assert(peers.slice(1).every(p=>p.isOpen));assert.equal(gone,0);assert.equal(status.attached,true)
+  await fleet.turnDone('a');for(const p of peers.slice(1))assert(p.sent.some((m:any)=>m.t==='turn.done'))
+  present=[];await fleet.scan();assert.equal(gone,1);assert.equal(status.attached,false)
+ } finally {await fleet.stop()}
+})
 const report={artifact:path.resolve(bundle),sha256:hash,bytes:Buffer.byteLength(code),scope:'Exact built CableSession class and activity wiring, real wire encoder/decoder, isolated app/terminal fixtures; no real app actions, microphone or network.',cases:results,passed:results.filter(r=>r.status==='passed').length,total:results.length}
 fs.writeFileSync(path.join(out,'bridge-report.json'),JSON.stringify(report,null,2)+'\n')
 fs.writeFileSync(path.join(out,'firmware-traces.json'),JSON.stringify(traces,null,2)+'\n')

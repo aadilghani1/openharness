@@ -89,11 +89,11 @@ static void scene(ht_scene_t *s, const ht_octopus_motion_t *m)
         assert(r->x >= 0 && r->y >= 0 && r->x + r->w <= HT_WIDTH && r->y + r->font->height <= HT_HEIGHT);
         assert(ht_can_display(r->text, r->font, r->w ? r->w : r->font->width, 1));
         if (recap && r->font == &ht_octopus_font_4)
-            assert(r->y >= 92 && r->y + r->font->height <= 200);
+            assert(r->y >= HT_CHARACTER_READING_Y && r->y + r->font->height <= HT_CHARACTER_READING_TEXT_Y);
         if (recap && r->font == &ht_octopus_font_6)
-            assert(r->y >= 96 && r->y + r->font->height <= 258);
-        if (recap && r->font == &ht_mono_20 && r->text[0] && !r->arc && r->y >= 190 && r->y < 400)
-            assert(r->y >= 224 && r->y + r->font->height <= 392);
+            assert(r->y >= HT_CHARACTER_BRIEF_Y && r->y + r->font->height <= HT_CHARACTER_BRIEF_TEXT_Y);
+        if (recap && r->font == &ht_mono_28 && r->text[0] && !r->arc && r->y >= 190 && r->y < 400)
+            assert(r->y >= HT_CHARACTER_READING_TEXT_Y && r->y + r->font->height <= 380);
     }
 }
 
@@ -138,29 +138,19 @@ static void text_checks(void)
     for (unsigned n=0;n<sizeof examples/sizeof examples[0];n++) {
         ht_scene_t s; ht_scene_clear(&s,0);
         ht_octopus_face(&s,&face,0,0xffff,examples[n]);
-        char shown[512]=""; const ht_run_t *last=NULL,*arrow=NULL;
+        char shown[512]=""; const ht_run_t *last=NULL;
         for (int i=0;i<s.count;i++) {
             const ht_run_t *r=&s.runs[i];
-            if (r->font==&ht_open_20) { assert(!arrow); arrow=r; continue; }
-            if (r->arc || r->font!=&ht_mono_28 || r->y<194 || r->y>390 || !r->text[0]) continue;
+            assert(r->font!=&ht_open_20 && r->font!=&ht_nav_32);
+            if (r->arc || r->font!=&ht_mono_28 || r->y<190 || r->y>380 || !r->text[0]) continue;
             if (shown[0]) strcat(shown," ");
             strcat(shown,r->text); last=r;
             assert(r->w<=408 && ht_can_display(r->text,r->font,r->w,1));
         }
-        assert(last);
-        assert(arrow && !strcmp(arrow->text,"\xe2\x86\x97"));
-        assert(last->text[strlen(last->text)-1]==' ');
-        assert(arrow->x==last->x+last->w && arrow->y==last->y);
-        assert(arrow->x+arrow->w<=431);
-        assert(!strchr(shown,'+'));
-        shown[strlen(shown)-1]=0; // The space before the consistently present arrow.
-        // COMPLETE PROSE IS RETAINED UP TO THE CAP, and the cap is now the contract. This held for
-        // every example below index 6, the longest of which is 101 characters. At ht_mono_28 four
-        // rows hold 92 cells and RECAP_MAX_CELLS stops at 60, so examples 4 (78) and 5 (101) are
-        // deliberately cut. Indices 0-3 are 18, 26, 28 and 60 characters and must still arrive
-        // whole — which is what stops the cap quietly becoming a smaller number.
-        if (n<4) assert(!strcmp(shown,examples[n]));
-        else assert(!strstr(shown,"..."));
+        assert(last && !strchr(shown,'+'));
+        if (n<5) assert(!strcmp(shown,examples[n])); // Complete prose is retained.
+        if (n==5) assert(strstr(shown,"...")); // The fixed larger font may clip long prose.
+        if (n==7) assert(strstr(shown,"first...")); // Only clipped prose gets a marker.
     }
 }
 
@@ -168,55 +158,35 @@ static void orphan_marker_checks(void)
 {
     ht_scene_t s; ht_scene_clear(&s, 0);
     ht_recap_lines(&s, 253, 0xffff, "The desktop sorts by last activity only (newest first +");
-    // 19 cells a row at ht_mono_28, not 28 — the same sentence breaks a word earlier and its tail no
-    // longer fits three rows. What is under test survives: the host's "+" never reaches the glass,
-    // the arrow takes its place, and it stays attached to the last word.
-    assert(!strcmp(s.runs[1].text, "by last activity"));
-    assert(!strcmp(s.runs[2].text, "only (newest "));
-    assert(s.runs[3].font == &ht_open_20);
-    assert(s.runs[3].x == s.runs[2].x + s.runs[2].w);
-    assert(s.runs[3].y == s.runs[2].y);
-    // A very long unbroken token cannot move as a word. Still draw the glyph,
-    // never the internal marker; preserve the full token on its own row.
-    ht_scene_clear(&s, 0);
-    // Sixteen characters, not twenty-eight: a row is 336 / 17 = 19 cells now, and a 28-character
-    // token could not be "preserved on its own row" by any layout. The property is unchanged — an
-    // unbroken token is never split and the arrow follows it. The trailing space is the arrow's seat.
-    ht_recap_lines(&s, 253, 0xffff, "abcdefghijklmnop +");
-    assert(!strcmp(s.runs[0].text, "abcdefghijklmnop "));
-    assert(s.runs[3].font == &ht_open_20);
-    for (int i = 0; i < s.count; i++) assert(!strchr(s.runs[i].text, '+'));
+    assert(s.count==3 && !strcmp(s.runs[1].text,"activity only (newest"));
+    assert(!strcmp(s.runs[2].text,"first..."));
     // A literal C++ is not a continuation marker.
     ht_scene_clear(&s, 0);
     ht_recap_lines(&s, 253, 0xffff, "Built with C++");
-    assert(!strcmp(s.runs[0].text, "Built with C++ "));
-    assert(s.count == 4 && s.runs[3].font == &ht_open_20);
-    // This actual completed answer contains an authored arrow, not a suffix.
-    // Preserve it within prose, alongside the one consistently added marker.
+    assert(s.count==3 && !strcmp(s.runs[0].text,"Built with C++"));
+    // An authored arrow inside prose is preserved; no action glyph is appended.
     ht_scene_clear(&s, 0);
-    // Shorter than the sentence it replaces: three rows of 19 cells hold about fifty characters, and
-    // the authored arrow has to survive INSIDE them to be worth asserting. Same case — a literal "+"
-    // in prose, and an arrow the host wrote rather than one the device added.
-    ht_recap_lines(&s, 253, 0xffff, "A + alone escaped conversion to \xe2\x86\x97.");
-    assert(s.count == 4 && s.runs[3].font == &ht_open_20);
-    bool arrow = false;
-    for (int i = 0; i < s.count; i++) {
-        assert(ht_can_display(s.runs[i].text, s.runs[i].font, 336, 1));
-        arrow |= strstr(s.runs[i].text, "\xe2\x86\x97.") != NULL;
+    ht_recap_lines(&s, 253, 0xffff,
+        "It was a wrapping bug: a + alone on a new line escaped conversion to \xe2\x86\x97.");
+    assert(s.count==3);
+    bool arrow=false;
+    for(int i=0;i<s.count;i++) {
+        assert(ht_can_display(s.runs[i].text,s.runs[i].font,336,1));
+        arrow |= strstr(s.runs[i].text,"\xe2\x86\x97.")!=NULL;
     }
     assert(arrow);
     ht_scene_clear(&s, 0);
     ht_recap_lines(&s, 253, 0xffff, "");
-    assert(s.count == 3); // No summary, no floating arrow.
-    for (int i=0; i<s.count; i++) assert(!s.runs[i].text[0]);
-    // A long cached UTF-8 message remains bounded and gets exactly one marker.
+    assert(s.count==3);
+    for(int i=0;i<s.count;i++) assert(!s.runs[i].text[0]);
+    // A long cached UTF-8 message stays bounded without splitting a codepoint.
     char long_text[1024];
-    for (int i=0; i<300; i++) memcpy(long_text+i*2,"\xc3\xa9",2);
+    for(int i=0;i<300;i++) memcpy(long_text+i*2,"\xc3\xa9",2);
     long_text[600]=0;
     ht_scene_clear(&s,0);
     ht_recap_lines(&s,253,0xffff,long_text);
-    assert(s.count==4 && s.runs[3].font==&ht_open_20);
-    for (int i=0; i<s.count; i++)
+    assert(s.count==3 && strstr(s.runs[2].text,"..."));
+    for(int i=0;i<s.count;i++)
         assert(ht_can_display(s.runs[i].text,s.runs[i].font,336,1));
 }
 

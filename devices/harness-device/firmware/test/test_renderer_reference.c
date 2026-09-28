@@ -8,6 +8,19 @@ static uint16_t old_pixels[HT_WIDTH*HT_HEIGHT], new_pixels[HT_WIDTH*HT_HEIGHT];
 static uint16_t region_pixels[HT_WIDTH*HT_HEIGHT];
 static ht_scene_t previous_old, previous_new, old_scene, new_scene;
 
+static ht_scene_t artwork_only(ht_scene_t scene)
+{
+    unsigned kept=0;
+    for(unsigned i=0;i<scene.count;i++) {
+        const ht_run_t *r=&scene.runs[i];
+        if(!r->arc && r->y>=194 && r->y<400 &&
+           (r->font==&ht_mono_20 || r->font==&ht_open_20)) continue;
+        scene.runs[kept++]=*r;
+    }
+    scene.count=kept;
+    return scene;
+}
+
 int main(void)
 {
     const char *recaps[]={NULL,"The change is ready to try.",
@@ -25,6 +38,15 @@ int main(void)
             const char *recap=recaps[layout%3];
             ht48_octopus_face(&old_scene,&f,frame,ht_rgb(0xc8a9f0),recap);
             ht_octopus_face(&new_scene,&f,frame,ht_rgb(0xc8a9f0),recap);
+            if(recap) {
+                // Summary punctuation intentionally changed: the open action is
+                // now a separate inbox control. Keep exact legacy artwork checks,
+                // then give both rasterizers the same current summary content.
+                ht_scene_t old_art=artwork_only(old_scene),new_art=artwork_only(new_scene);
+                assert(old_art.count==new_art.count);
+                assert(!memcmp(old_art.runs,new_art.runs,old_art.count*sizeof(ht_run_t)));
+                old_scene=new_scene;
+            }
             if(old_scene.count!=new_scene.count || memcmp(old_scene.runs,new_scene.runs,old_scene.count*sizeof(ht_run_t))) {
                 fprintf(stderr,"Scene mismatch layout=%d mood=%d frame=%d\n",layout,mood,frame);return 1;
             }
