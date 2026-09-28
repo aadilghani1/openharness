@@ -134,6 +134,18 @@ Final checks on 2026-09-27:
   [the PR assets](../../.github/assets/session-git-context/README.md); generated
   build products and the remaining captures stay outside the source diff.
 
+Pre-merge validation after rebasing onto `aae13041` (PR #396), on macOS 26.6.2
+with Node 22.23.1 and Flutter 3.47.2 / Dart 3.13.2:
+
+- Full CLI suite: 5,252 tests passed, 63 skipped; 310 files passed and 7 skipped.
+  TypeScript check and production build passed. The opt-in real-engine and
+  multiplexer suites were not enabled. The first sandboxed attempt was stopped
+  after process-access restrictions; the complete run outside that sandbox
+  passed using the suite's isolated data/runtime directories.
+- Desktop's 35 tests and changed-file analysis passed again after the rebase.
+- Phone sources were unaffected by the rebase; the 35-test and analysis results
+  above apply to the final sources.
+
 The automated Git integration uses real temporary repositories, linked worktrees
 and JSONL transcripts, with deterministic GitHub responses. It exercises the
 same readers and frame/RPC service used in production, without touching a user's
