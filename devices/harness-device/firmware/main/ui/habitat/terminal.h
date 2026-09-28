@@ -27,6 +27,7 @@ typedef struct {
 typedef struct {
     int16_t x, y, w;
     uint8_t arc; // 0 = straight, 1 = upper arc, 2 = lower arc
+    uint8_t shimmer; // 0 = steady ink, 1..21 = cached-mask highlight sweep
     uint16_t fg, bg;
     const ht_font_t *font;
     char text[HT_TEXT_BYTES];
@@ -62,6 +63,9 @@ void ht_arc_status(ht_scene_t *scene, uint16_t fg, const char *text);
 // Same conservative bounds used for damage; useful for matching curved hit areas.
 ht_rect_t ht_run_bounds(const ht_run_t *run);
 uint32_t ht_arc_cache_builds(void);
+// A 1.28-second sweep and 0.768-second rest. Pure, wrap-safe integer clock.
+uint8_t ht_shimmer_phase(uint32_t now);
+uint32_t ht_shimmer_wake_ms(uint32_t now);
 #ifdef DEVICE_LAYOUT_BENCH
 void ht_arc_fast_sampling(bool enabled);
 void ht_arc_tight_bounds(bool enabled);

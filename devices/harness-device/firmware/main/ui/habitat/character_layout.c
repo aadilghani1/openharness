@@ -40,13 +40,15 @@ void ht_character_letter(ht_scene_t *s, const ht_character_face_t *f,
                          const ht_font_t *font, int x, int y)
 {
     static const char letter[4][12] = {
-        ".---------.", "|\\       /|", "| \\_____/ |", "'---------'"
+        "\\         /", "  \\     /  ", "    \\_/    ", "           "
     };
-    uint16_t ink = f->mood == HT_CHARACTER_OFFLINE || f->mood == HT_CHARACTER_ASLEEP
+    uint16_t paper = f->mood == HT_CHARACTER_OFFLINE || f->mood == HT_CHARACTER_ASLEEP
         ? f->dim : f->foreground;
+    // Reverse-video ASCII cells make unread mail a solid light envelope.
+    // Reuse the text ink so saved brightness still applies; no image asset.
     for (int row = 0; row < 4; row++)
         ht_ascii_text(s, x, y + row * font->height, 11 * font->width,
-                      font, ink, s->background, letter[row], 11);
+                      font, s->background, paper, letter[row], 11);
 }
 
 static void lines(ht_scene_t *s, int y, int width, int count, const ht_font_t *font,
@@ -145,7 +147,7 @@ void ht_character_layout(ht_scene_t *s, const ht_character_face_t *f, uint8_t fr
                          const char *recap, ht_character_painter_t paint)
 {
     // The outcome owns the reading space after a turn. Artwork and its label
-    // move together above the recap; the status footer stays fixed.
+    // move together above the recap; the home caption stays on the top curve.
     bool result = recap && *recap;
     // The live reading surface has one fixed small portrait for every summary.
     // Legacy benchmark scenes retain their original geometry for comparison.
@@ -165,7 +167,7 @@ void ht_character_layout(ht_scene_t *s, const ht_character_face_t *f, uint8_t fr
     static const int brief_widths[] = {372, 348, 324};
     // Larger summaries occupy the center of the circle, with the last row
     // above the footer. Narrow lower rows keep every glyph inside the bezel.
-    static const int roomy_widths[] = {408, 408, 408, 374};
+    static const int roomy_widths[] = {408, 408, 391, 340};
     if (result && f->roomy_reading) recap_lines(s, HT_CHARACTER_READING_TEXT_Y,
         408, HT_CHARACTER_RECAP_ROWS, false, roomy_widths, f->foreground, recap,
         &ht_mono_28, HT_CHARACTER_RECAP_CHARS);

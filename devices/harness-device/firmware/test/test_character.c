@@ -200,6 +200,10 @@ static void recap_budget(void)
             assert(rows <= 4 && chars <= 90);
             if (length <= 90) assert(!strcmp(input, visible));
             else assert(!strcmp(visible + strlen(visible) - 3, "..."));
+            ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
+            for (int y=0;y<HT_HEIGHT;y++) for (int x=0;x<HT_WIDTH;x++)
+                if (full[y*HT_WIDTH+x])
+                    assert((x-233)*(x-233)+(y-233)*(y-233)<230*230);
         }
 }
 

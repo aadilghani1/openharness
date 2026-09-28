@@ -17,20 +17,37 @@ any summary. Summary length never changes the creature size or position. All
 summaries use a fixed 28 px font, up to four rows, and at most 90 characters
 including any trailing ellipsis. Clipping prefers a whole-word boundary and
 counts UTF-8 characters rather than bytes. Complete summaries end naturally.
+The small portrait starts at y=92 and the summary at y=230, leaving more room
+below the top title and between the portrait and prose. Lower rows narrow to
+stay inside the circle; four rows retain the 90-character maximum.
 The inbox uses the same small portrait and text budget; the full result stays
 available on the desktop.
 Fixed **←** and **↗** controls sit 100 px apart below the text
 and return home and open the result on the desktop. Each has a 180 × 66 px touch
 target, and Open dims and disables while disconnected.
 
-The home screen has one label on the bottom curve. Idle shows the selected
-pane name. While working, it alternates between the pane name and live activity
-every three seconds, fading around the transition. **Working** is the fallback
-when no more specific native activity label is available. New tool updates do
-not restart the cycle. Tapping this label always opens the pane picker.
+The home screen has three states. Idle with no summary shows only the full-size
+creature. Working shows the pane name on the top curve, the full-size creature,
+and live activity on the bottom curve. A completed summary shows the pane name
+on the top curve, the fixed small creature, and the summary beneath it.
+**Working** is the fallback when no more specific native activity is available.
+The name and activity stay visible together. Current work has a soft left-to-right
+highlight sweep followed by a pause, matching the supplied terminal recording.
+The title stays still. Quiet mode, sleeping, touches and voice stop the sweep.
+Curved glyph masks stay cached; only the old and new highlight bands redraw.
+The 2.048-second cycle has 20 steps at 64 ms, then a 768 ms rest.
+Tapping a visible pane name opens the pane picker. Idle has no hidden caption
+target; hold and slide up opens panes from the creature in every home state.
 
-Unread updates appear as a letter held by the creature, replacing the separate
-`[n]` counter. Both characters share a 1.28-second delivery motion; arrivals
+The orange trial uses `-DDEVICE_DEFAULT_CHARACTER=tim -DDEVICE_HABITAT_ORANGE=1`.
+Tim and text actions use saturated orange `#ff6d00` on the existing charcoal, with
+neutral text and a light envelope. This is a compile-time palette; it adds no
+image assets, animation state, or allocations. Normal builds keep purple.
+
+Unread updates appear as a solid light envelope held by the creature, replacing
+the separate `[n]` counter. Reverse-video ASCII cells provide its filled paper
+and dark flap, using the existing text ink and saved brightness. Both characters
+share a 1.28-second delivery motion; arrivals
 during that motion coalesce. The letter remains until the updates are handled.
 Restoring history or returning from quiet mode does not replay the motion.
 It layers over the current mood and is put away during voice input. The letter
@@ -38,8 +55,11 @@ is part of the portrait, with no separate tap action. Hold and slide right to
 reach the inbox.
 
 The central tap always starts voice, including over a summary or a letter.
-It never requires a first tap to dismiss the summary. Discarding voice restores
-the previous result. The top pane label is omitted on the home screen.
+It never requires a first tap to dismiss the summary. During capture, the pane
+name stays on the top curve and `Listening m:ss` follows the bottom curve. One
+tap on the creature stops and sends; the recording screen has no Discard button.
+Cancelling capture through the existing host lifecycle restores the previous
+result. There is no duplicate bottom label on the home screen.
 
 To add a character, append a stable ID and registry entry, then supply its mood
 clips and painter for the five portrait sizes. Keep frame and colour data
@@ -148,3 +168,33 @@ and tested in this checkout; a simultaneous two-dial hardware trial remains open
 
 Desktop notification placement above the creature and the relevance policy for
 old-session/swarm-introduction notifications remain separate follow-up work.
+
+## Orange Tim refinement — 2026-09-28
+
+The orange trial dial (`90:70:69:F3:D8:54`, CST816S) rebooted and reconnected
+on `0.0.87-tim.orange.2` after verified USB OTA. This revision uses saturated
+`#ff6d00`, moves the summary portrait down 26 px and prose down 40 px, and adds
+the terminal-style brightness sweep to the bottom activity curve. It retains
+the three home states, curved voice status and filled letter described above.
+The letter's touch behavior is unchanged pending the interaction discussion.
+
+The application is 777,936 bytes, 1,328 bytes (0.17%) above orange.1. Its SHA-256
+is `8d4477e638f1be00b21fd78cbc6be0370b5cc09c47b296be6e09b61b64c4884a`.
+The sweep uses the unused byte beside the arc flag, 128 bytes of temporary
+colour-table stack space and one phase byte in UI state; it allocates no heap.
+It reuses the existing glyph masks and does not redraw the full screen.
+
+Validation: 796 host tests; full native ASan/UBSan, real bridge replay and touch
+soaks for both characters; original 64 arc pixel hashes unchanged; incremental
+shimmer frames match fresh renders, including skipped frames and clock wrap.
+Full 90-character summaries stay inside the round display. The installed CLI
+and desktop executable hashes remained unchanged. The production reference
+dial was not updated. Physical touch/audio and ESP32 timing for this revision
+remain separate from these automated checks; no new hardware latency claim
+is made.
+
+Artifacts: `/private/tmp/harness-orange-tim-layout/` contains the exact image,
+release report, actual renderer previews, host-only sweep benchmark and OTA
+receipt. A previous full check caught the old summary-bottom bound (380 px);
+it was updated to keep at least 16 px above the inbox controls at y=400, and
+the complete check passed on the final inputs.

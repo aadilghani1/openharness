@@ -92,8 +92,8 @@ static void scene(ht_scene_t *s, const ht_octopus_motion_t *m)
             assert(r->y >= HT_CHARACTER_READING_Y && r->y + r->font->height <= HT_CHARACTER_READING_TEXT_Y);
         if (recap && r->font == &ht_octopus_font_6)
             assert(r->y >= HT_CHARACTER_BRIEF_Y && r->y + r->font->height <= HT_CHARACTER_BRIEF_TEXT_Y);
-        if (recap && r->font == &ht_mono_28 && r->text[0] && !r->arc && r->y >= 190 && r->y < 400)
-            assert(r->y >= HT_CHARACTER_READING_TEXT_Y && r->y + r->font->height <= 380);
+        if (recap && r->font == &ht_mono_28 && r->text[0] && !r->arc && r->y >= HT_CHARACTER_READING_TEXT_Y && r->y < 400)
+            assert(r->y + r->font->height <= 384); // At least 16 px before inbox controls at y=400.
     }
 }
 

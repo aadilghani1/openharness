@@ -187,7 +187,6 @@ static EXT_RAM_BSS_ATTR struct {
     cable_notif_t notice[NOTICES];
     int notice_count;
     uint32_t notice_sequence;
-    ht_character_caption_t caption;
     question_t q;
     char message[256], title[80], pending_focus[ID_MAX], opening_notice[ID_MAX];
     char voice_target[CABLE_NAME_MAX];
@@ -215,6 +214,7 @@ static EXT_RAM_BSS_ATTR struct {
     int quick_choice;
     uint32_t coast_until;
     uint32_t character_activity;
+    uint8_t activity_phase;
     int start_x, start_y, last_x, last_y;
     uint32_t touch_started;
     char pattern[32];
@@ -373,10 +373,13 @@ static void activity_text(char *dst, size_t cap, const char *src)
 {
     // Keep the engine's word; trailing spinner dots unbalance the curved label.
     // This is presentation only. Do not alter dots inside a phrase or the recap.
+    while (src && (*src == ' ' || *src == '\t' || *src == '\r' || *src == '\n')) src++;
     copy(dst, cap, src);
     size_t n = strlen(dst);
+    while (n && (dst[n - 1] == ' ' || dst[n - 1] == '\t' || dst[n - 1] == '\r' || dst[n - 1] == '\n')) dst[--n] = 0;
     if (n >= 3 && (!memcmp(dst + n - 3, "...", 3) ||
-                   !memcmp(dst + n - 3, "\xe2\x80\xa6", 3))) dst[n - 3] = 0;
+                   !memcmp(dst + n - 3, "\xe2\x80\xa6", 3))) { n -= 3; dst[n] = 0; }
+    while (n && dst[n - 1] == ' ') dst[--n] = 0;
 }
 
 static int ensure(const char *id)
@@ -527,9 +530,9 @@ static bool hit_contains(const hit_t *hit, int x, int y, bool surface)
     r = s.caption_arc;
     if (x < r.x || x >= r.x + r.w || y < r.y || y >= r.y + r.h) return false;
     int dx = x - 233, dy = y - 233, radius = dx * dx + dy * dy;
-    // Follow the bottom label's visible extent without stealing the central
-    // companion. Its rising ends can sit well above the broad bottom target.
-    return y > 233 && radius >= 180 * 180 && radius <= 233 * 233;
+    // Follow the top label's visible extent without stealing the central
+    // companion. Long labels descend beyond the broad target at the top.
+    return y < 233 && radius >= 180 * 180 && radius <= 233 * 233;
 }
 static void footer_control(ht_scene_t *f, int x, int w, const char *label,
                            action_kind_t action, bool enabled)
@@ -588,8 +591,18 @@ static ht_character_mood_t character_mood(void)
         return HT_CHARACTER_WORKING;
     return HT_CHARACTER_IDLE;
 }
+static bool activity_animated(void)
+{
+    const agent_t *a = active();
+    return (s.view == HOME || s.view == AGENT) && a && a->busy && s.connected &&
+        !s.loading && !s.nap && !s.quiet && !s.locked && !display_is_asleep() &&
+        !s.touch_down && !s.quick_open && !s.straight_title &&
+        !carry.active && !carry.error[0] && !visit.available;
+}
 static void surface_tick(uint32_t now)
 {
+    uint8_t phase = activity_animated() ? ht_shimmer_phase(now) : 0;
+    if (phase != s.activity_phase) { s.activity_phase = phase; change(); }
     bool main = s.view == HOME || s.view == AGENT;
     bool inbox = s.view == INBOX && s.offset >= 0 && s.offset < s.notice_count;
     bool visible = !s.locked && !display_is_asleep() && (main || s.view == VOICE || inbox);
@@ -623,11 +636,6 @@ static void surface_tick(uint32_t now)
     if (ht_character_delivery_tick(&character, now, s.notice_count > 0, s.notice_sequence,
         visible && main && !s.quick_open && !s.quiet && !s.nap && s.connected && !s.touch_down))
         change();
-    if (main) {
-        agent_t *a = active();
-        if (ht_character_caption_tick(&s.caption, now, a ? a->id : "",
-            a && a->busy && s.connected && !s.loading && !s.nap)) change();
-    }
 }
 static void render_quick(ht_scene_t *f)
 {
@@ -677,7 +685,7 @@ static void render_home(ht_scene_t *f)
     if (s.quick_open) { render_quick(f); return; }
     if (workspace.touching && workspace.moved && !workspace.cancelled) { render_workspace_preview(f); return; }
     agent_t *a = active();
-    // Two alternating states: current work owns the large companion; only its
+    // Idle is only the creature. Current work adds name/status arcs; only a
     // completed result gets the reading layout. Never pair old prose with live work.
     const char *recap = a && !a->busy && a->recap_ready && s.connected && !s.loading &&
         !s.nap && !carry.active && !carry.error[0] ? a->preview : NULL;
@@ -685,19 +693,19 @@ static void render_home(ht_scene_t *f)
     // Keep its busy state visible while more specific activity is unavailable.
     const char *activity = a && a->busy && s.connected && !s.loading && !s.nap ?
         (a->tool[0] ? a->tool : "Working") : "";
-    ht_character_caption_tick(&s.caption, ms(), a ? a->id : "", activity[0] != 0);
+    bool named = a && ((recap && *recap) || activity[0]);
     char status[100];
     if (!s.connected) COPY(status, "Reconnect Harness");
     else if (s.loading) COPY(status, "Connecting...");
     else if (!a) COPY(status, "Choose a pane");
-    else COPY(status, s.caption.activity ? activity : a->name);
-    ht_character_face_t f_ = {.recipient = a ? a->name : "harness", .status = status,
+    else COPY(status, activity);
+    ht_character_face_t f_ = {.recipient = named ? a->name : "", .status = status,
         .hint = (s.connected && !s.loading) ? "" : "hold for controls",
         .detail = "", .unread = s.notice_count > 0,
         .mood = character_mood(), .pose = character.motion.reaction.pose, .straight_title = s.straight_title,
         .footer_action = carry.active || carry.error[0] || visit.available,
-        .ink = ht_character_caption_ink(FG, BG, s.caption.opacity), .foreground = FG, .dim = DIM,
-        .primary_title = true, .roomy_reading = true, .single_label = true};
+        .ink = FG, .foreground = FG, .dim = DIM,
+        .primary_title = true, .roomy_reading = true};
     char carried[128];
     if (carry.active) {
         snprintf(carried,sizeof(carried),"%d line%s from %.70s",carry.rows,carry.rows==1?"":"s",carry.source);
@@ -711,6 +719,9 @@ static void render_home(ht_scene_t *f)
         f_.status = "scrolling";
     }
     ht_character_face(f, &character, &f_, ACCENT, recap);
+    s.activity_phase = activity_animated() ? ht_shimmer_phase(ms()) : 0;
+    for (int i = 0; i < f->count; i++)
+        if (f->runs[i].arc == 2) f->runs[i].shimmer = s.activity_phase;
     if ((carry.active || carry.error[0]) && visit.available) {
         footer_control(f, 95, 156, "[return]", A_RETURN, s.connected && !visit.pending);
         footer_control(f, 263, 108, "[drop]", A_CARRY_DROP, true);
@@ -719,11 +730,11 @@ static void render_home(ht_scene_t *f)
     } else if (visit.available) {
         footer_control(f, 113, 240, "[ return ]", A_RETURN, s.connected && !visit.pending);
     }
-    if (!carry.active && !carry.error[0] && !visit.available) {
-        // The one bottom caption always opens the pane picker, including while
-        // it shows activity. Its meaning and target never alternate with the ink.
-        s.hits[s.hit_count++] = (hit_t){{83, 400, 300, 66}, A_AGENTS, 0, true};
-        for (int i = 0; i < f->count; i++) if (f->runs[i].arc == 2) {
+    if (named && !carry.active && !carry.error[0] && !visit.available) {
+        // The visible name opens the pane picker. Idle has no hidden title
+        // target; hold and slide up still opens panes from the creature.
+        s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
+        for (int i = 0; i < f->count; i++) if (f->runs[i].arc == 1) {
             ht_rect_t r = ht_run_bounds(&f->runs[i]);
             s.caption_arc = (ht_rect_t){r.x - 14, r.y - 14, r.w + 28, r.h + 28};
             break;
@@ -1000,7 +1011,7 @@ static void render_voice(ht_scene_t *f)
     else snprintf(status, sizeof(status), "Listening %lu:%02lu", (unsigned long)(s.voice_second / 60),
                   (unsigned long)(s.voice_second % 60));
     ht_character_face_t f_ = {.recipient = s.voice_target, .status = status,
-        .hint = "", .footer_action = true, .straight_title = s.straight_title,
+        .hint = "",
         .mood = !s.voice_start_pending && !s.voice_waiting && audio_client_recording() ? HT_CHARACTER_LISTENING : HT_CHARACTER_WORKING,
         .pose = character.motion.reaction.pose, .ink = FG, .foreground = FG, .dim = DIM, .primary_title = true,
         .detail = s.voice_search ? "Say a phrase from the output" : s.voice_return == DRAFT ? draft_detail :
@@ -1010,16 +1021,6 @@ static void render_voice(ht_scene_t *f)
     f_.focus = f_.detail && *f_.detail;
     ht_character_face(f, &character, &f_, ACCENT, NULL);
     s.hits[s.hit_count++] = (hit_t){{33, 97, 400, 274}, A_PET, 0, true};
-    /*
-     * "[discard]", 153 px, at y=400 — every number moved for a reason.
-     *
-     * It was "[ discard ]" in a run declared 144 px wide. Eleven cells at 17 px is 187, so ht_text
-     * clipped it to eight and the glass read "[ discar". Dropping the inner spaces brings it to nine
-     * cells / 153 px. And it could not stay at 413: that run is 413..451, where the circle is 164 px
-     * across, so the glyph bottoms met the rim. 400..438 sits inside a 220 px chord, and the status
-     * line above ends at 397.
-     */
-    control(f, 156, 400, 153, "[discard]", A_VOICE_ABORT, 0, true);
 }
 static void render_selection(ht_scene_t *f)
 {
@@ -2304,8 +2305,10 @@ uint32_t habitat_next_wake_ms(void)
     if (visit.pending && delay > 100) delay = 100;
     if (s.view == FORM && delay > 100) delay = 100;
     if (character.motion.next_ms && character.motion.next_ms < delay) delay = character.motion.next_ms;
-    if ((s.view == HOME || s.view == AGENT) && s.caption.next_ms && s.caption.next_ms < delay)
-        delay = s.caption.next_ms;
+    if (activity_animated()) {
+        uint32_t due = ht_shimmer_wake_ms(now);
+        if (due < delay) delay = due;
+    }
     if ((s.view == HOME || s.view == AGENT) && pressed_action.kind == A_PET && s.touch_down && !s.touch_cancelled &&
         gesture.live && !gesture.moved && !gesture.guarded) {
         uint32_t elapsed = now - s.touch_started;

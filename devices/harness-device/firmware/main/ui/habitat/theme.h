@@ -7,6 +7,10 @@
 #define HT_THEME_CANVAS    0x181818u
 #define HT_THEME_TEXT      0xefe7deu
 #define HT_THEME_SECONDARY 0xada6adu
+#ifdef DEVICE_HABITAT_ORANGE
+#define HT_THEME_ACCENT    0xff6d00u
+#else
 #define HT_THEME_ACCENT    0xc6aaefu
+#endif
 #define HT_THEME_SELECTION 0x392c4au
 #define HT_THEME_ERROR     0xe7a6adu
