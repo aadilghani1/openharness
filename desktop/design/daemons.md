@@ -250,6 +250,8 @@ brain the done count is its `daemon_state.done.count` (every machine; the toolti
 names the last few) and a look sends `daemon_presence { doneSeen: true }`;
 without one the window counts what it sees (a turn in the pane in front of you
 is already seen). Native lays out again only when the tally's width changes.
+While the pointer is over the creature, clearing a count retains its former
+space so the click target stays still. That space collapses on pointer exit.
 
 ![The native bar separates Git from labeled creature counts](images/daemon-status-counts.png)
 

@@ -1270,6 +1270,7 @@ private final class SwarmSymbolButton: SwarmIconButton {
   /// sprite (so a baton never moves the face) and a shiny `*` in the left gutter.
   var cells = ""
   var tally = ""
+  var tallyCells = 0
   let columns = 8
   /// A hatch in flight or its reveal running: drawn at full ink, not clickable.
   var busy = false
@@ -1279,15 +1280,22 @@ private final class SwarmSymbolButton: SwarmIconButton {
   var patch: NSColor?
   /// The pointer arrived: "I see you". Never moves keyboard focus.
   var onEnter: (() -> Void)?
+  var onExit: (() -> Void)?
   private var textFont: NSFont { font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
   private var cellWidth: CGFloat { ceil(workspaceBarTextWidth("m", font: textFont)) }
   var preferredWidth: CGFloat {
-    cellWidth * CGFloat(columns + 2 + (tally.isEmpty ? 0 : tally.count + 1))
+    let count = max(tally.count, tallyCells)
+    return cellWidth * CGFloat(columns + 2 + (count == 0 ? 0 : count + 1))
   }
 
   override func mouseEntered(with event: NSEvent) {
     super.mouseEntered(with: event)
     if !isHidden { onEnter?() }
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    super.mouseExited(with: event)
+    onExit?()
   }
 
   override func draw(_ dirtyRect: NSRect) {
@@ -1501,6 +1509,10 @@ private final class SwarmTabStrip: NSView {
       guard let self, self.actionsEnabled, !self.daemonButton.isHidden else { return }
       self.emit?("daemonLook", nil)
     }
+    daemonButton.onExit = { [weak self] in
+      guard let self, !self.daemonButton.isHidden else { return }
+      self.emit?("daemonLeave", nil)
+    }
     addSubview(daemonButton)
     shareButton.isBordered = false
     shareButton.title = "[ Share ]"
@@ -1680,6 +1692,8 @@ private final class SwarmTabStrip: NSView {
     let previousWidth = daemonButton.preferredWidth
     daemonButton.cells = validDaemonText(state["cell"] as? String, cells: daemonButton.columns + 2) ?? ""
     daemonButton.tally = validDaemonText(state["tally"] as? String, cells: 24) ?? ""
+    let heldCells = (state["tallyCells"] as? NSNumber)?.intValue ?? 0
+    daemonButton.tallyCells = max(daemonButton.tally.count, min(24, max(0, heldCells)))
     daemonButton.foreground = statusColor(state["foreground"], fallback: terminalForeground)
     daemonButton.tallyColor = statusColor(state["tallyColor"], fallback: terminalForeground.withAlphaComponent(0.62))
     daemonButton.patch = state["patch"] is NSNumber ? statusColor(state["patch"], fallback: .black) : nil

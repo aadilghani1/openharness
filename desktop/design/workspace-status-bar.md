@@ -286,6 +286,8 @@ status bar). A shiny daemon's `*` sits in the left gutter. After the sprite, dim
 show labeled counts: `3 done, 1 egg`. The creature separates its counts from
 the Git branch count; never put an unlabeled `+N` beside the branch context.
 Done means turns finished since you looked, and eggs means unhatched eggs.
+Keep the creature's click target still while hovered, retaining cleared count
+space until the pointer leaves.
 Its name and progress belong in the tooltip and panel, never beside the
 sprite. Clicking a ready egg hatches it; otherwise a click boops the daemon and
 opens its panel. When something needs you or failed, its one line replaces the

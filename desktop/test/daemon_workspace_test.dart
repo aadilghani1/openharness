@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -802,8 +803,22 @@ void main() {
       reason: 'the creature separates its counts from Git context',
     );
     expect(find.byKey(const ValueKey('daemon-voice')), findsNothing);
-    await tester.tap(slot);
+    final glyphTarget = find.byKey(const ValueKey('daemon-slot-glyph'));
+    final beforeHover = tester.getRect(glyphTarget);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(beforeHover.center);
     await tester.pump();
+    expect(find.byKey(const ValueKey('daemon-slot-tally')), findsNothing);
+    expect(tester.getRect(glyphTarget), beforeHover,
+        reason: 'reading a count must not move the creature away from the click');
+    await tester.tapAt(beforeHover.center);
+    await tester.pump();
+    await mouse.moveTo(Offset.zero);
+    await tester.pump();
+    expect(tester.getRect(glyphTarget).left, greaterThan(beforeHover.left),
+        reason: 'the unused count space is released after the pointer leaves');
     expect(find.byKey(const ValueKey('daemon-slot-tally')), findsNothing);
     // The switches are on the settings tab: 4.
     await key(tester, LogicalKeyboardKey.digit4);
