@@ -170,6 +170,10 @@ if(DEVICE_HABITAT)
         "ui/habitat/draft.c"
         "ui/habitat/gestures.c"
         "ui/habitat/tim.c"
+        "ui/habitat/character.c"
+        "ui/habitat/character_motion.c"
+        "ui/habitat/character_layout.c"
+        "ui/habitat/tux.c"
         "ui/habitat/octopus.c"
         "ui/habitat/ascii_clip.c"
         "ui/habitat/octopus_font.c"
@@ -239,6 +243,11 @@ endif()
 
 if(DEVICE_HABITAT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_HABITAT=1)
+    if(DEVICE_DEFAULT_CHARACTER STREQUAL "tux")
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_DEFAULT_CHARACTER_TUX=1)
+    elseif(DEFINED DEVICE_DEFAULT_CHARACTER AND NOT DEVICE_DEFAULT_CHARACTER STREQUAL "tim")
+        message(FATAL_ERROR "DEVICE_DEFAULT_CHARACTER must be tim or tux")
+    endif()
 endif()
 
 if(DEVICE_TRANSPORT_BENCH)

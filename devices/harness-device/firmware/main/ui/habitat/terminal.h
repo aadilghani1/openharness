@@ -15,8 +15,8 @@ typedef struct {
     const uint8_t *pixels;
 } ht_font_t;
 extern const ht_font_t ht_mono_16, ht_mono_20, ht_mono_24, ht_mono_28, ht_pixel_40;
-// One precomputed ↗ glyph with the same cell metrics as ht_mono_20.
-extern const ht_font_t ht_open_20;
+// Precomputed curved-label and larger inbox navigation glyphs.
+extern const ht_font_t ht_open_20, ht_nav_32;
 extern const uint8_t ht_mono_20_ink[224][4], ht_open_20_ink[1][4];
 // The lock's dot is the only 40 px glyph used by the daily UI. Keep its exact
 // pixels without retaining the other 94 glyphs of the gallery font in flash.
@@ -30,6 +30,9 @@ typedef struct {
     uint16_t fg, bg;
     const ht_font_t *font;
     char text[HT_TEXT_BYTES];
+    // Optional immutable RGB565 foreground per text cell (straight runs only).
+    // At least as many entries as text cells; storage outlives both scenes.
+    const uint16_t *colors;
 } ht_run_t;
 typedef struct {
     uint16_t background;

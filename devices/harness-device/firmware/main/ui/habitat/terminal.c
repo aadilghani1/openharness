@@ -363,7 +363,9 @@ void ht_damage(const ht_scene_t *a, const ht_scene_t *b, ht_damage_t *d)
                             pc = font_codepoint(old->font, pc);
                             qc = font_codepoint(old->font, qc);
                         }
-                        if (pc != qc) {
+                        if (pc != qc || (pc != ' ' &&
+                            (old->colors ? old->colors[cell] : old->fg) !=
+                            (next->colors ? next->colors[cell] : next->fg))) {
                             if (first < 0)
                                 first = cell;
                             last = cell;
@@ -668,13 +670,13 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
                 fill(out + (y - clip.y) * clip.w + x1 - clip.x, (size_t)(x2 - x1), be16(r->bg));
         uint16_t palette[4] = {be16(r->bg), blend(r->fg, r->bg, 1), blend(r->fg, r->bg, 2),
                                be16(r->fg)};
-        bool cached = glyph_cache_prepare(f, r->fg, r->bg);
+        bool cached = !r->colors && glyph_cache_prepare(f, r->fg, r->bg);
         bool ascii = f->first == 32 && f->last >= 126;
 #ifdef DEVICE_LAYOUT_BENCH
         ascii = ascii && raster_fast_ascii;
 #endif
         const char *p = r->text;
-        int gx = r->x;
+        int gx = r->x, cell = 0;
         while (*p && gx < x2) {
             uint32_t c = (uint8_t)*p;
             if (ascii && c < 128) {
@@ -685,6 +687,12 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
                 c = font_codepoint(f, c);
             }
             if (gx + f->width > x1 && c != ' ') {
+                if (r->colors) {
+                    uint16_t fg = r->colors[cell];
+                    palette[1] = blend(fg, r->bg, 1);
+                    palette[2] = blend(fg, r->bg, 2);
+                    palette[3] = be16(fg);
+                }
                 const ht_font_t *face = glyph_font(f, c);
                 size_t stride = ((size_t)face->width * face->height + 3) / 4;
                 const uint8_t *glyph = face->pixels + (c - face->first) * stride;
@@ -711,6 +719,7 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
                 }
             }
             gx += f->width;
+            cell++;
         }
     }
 }
