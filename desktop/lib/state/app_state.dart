@@ -3413,12 +3413,12 @@ class AppNotifier extends ChangeNotifier {
       'You were signed out on this computer. This computer\'s agents keep '
       'running; sign in again to reach your other machines.';
 
-  /// The session went away while the app was already running — send the user to [LoginScreen] with a
-  /// reason, and stop the background work that can only fail from here.
-  ///
-  /// Cold start already handles this: [bootstrap] asks the CLI whether it is signed in. The hole this
-  /// fills is the app that was ALREADY authenticated when the session disappeared underneath it,
-  /// where nothing re-checked and the daemon supervisor simply respawned `harness start` forever.
+  /// Inject the same account-expiry event the connection pool reports, without a real daemon.
+  @visibleForTesting
+  void expireSessionForTest(String message) => _signedOutAtRuntime(message);
+
+  /// A running session lost its account. Viewers return to login; desktop windows
+  /// keep this computer available as guests and explain how to reconnect remotely.
   void _signedOutAtRuntime(String message) {
     if (status == AppStatus.unauthenticated || isGuest) {
       return; // idempotent: several sources can race here

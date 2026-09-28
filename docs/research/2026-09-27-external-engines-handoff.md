@@ -1,5 +1,7 @@
 # Handoff: external sessions for every engine
 
+**Completed in the continuation:** see [the commit audit and completion report](2026-09-27-external-engines-completion.md). The sections below preserve the state at the original handoff.
+
 Continued from `external-engines` at `40f12db0` on branch `codex/external-engines`.
 Rebased onto `93f148d6` (`origin/main`, including #391 and #392) without conflicts.
 The original branch and worktree are preserved.
@@ -101,14 +103,13 @@ The 33 desktop failures shared with main are in these files:
   timestamps must apply to conversations indexed before this branch. Reader and rebuild tests
   cover schemas 8 and 9 as well as an older schema.
 
-## Left to do
+## Handoff checklist — resolved
 
-1. Review the PR against `main` and the baseline desktop failures above.
-2. Reconcile merge order with #388, which changes `turns.ts` and reserves schema 9. If #388 lands
-   first, keep schema 10 here after rebasing. If this branch lands first, #388 must use **11** when
-   it lands, so an index already written by schema 10 rebuilds for its context filtering too.
-3. The owner merges and releases (`make release-cli`, then the desktop release); never merge or
-   release without their explicit go-ahead.
+1. Rebased and merged the tested feature in #396; the six original patches are unchanged.
+2. Reconciled #388 with schema 11 and merged it; merged the separate Hermes timeout fix #390.
+3. Resolved the baseline desktop failures and all four engine bugs listed below.
+4. The owner authorized merging and releasing in the continuation. See the completion report
+   and the corresponding CLI/desktop GitHub releases for the final verification.
 
 ## Sandbox end-to-end recipe
 
@@ -126,7 +127,7 @@ Never run a test daemon or tmux against the person's real ones:
 - Afterwards, stop the sandbox daemon and kill both tmux servers. Check that no pane on the real
   server sits in the sandbox folder, and that no new `-wal`/`-shm` appeared in the engines' folders.
 
-## Found in Harness's own code, not changed here
+## Existing bugs recorded at handoff — fixed in the follow-up
 
 - Cursor's config and data folders are one `CURSOR_HOME` in `discovery.ts`, `subagent.ts` and
   `oneshot.ts`.
