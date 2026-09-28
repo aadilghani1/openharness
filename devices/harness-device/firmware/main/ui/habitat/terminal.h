@@ -27,6 +27,8 @@ extern const ht_font_t ht_mono_16, ht_mono_20, ht_mono_24, ht_mono_28, ht_pixel_
 // Precomputed curved-label and larger inbox navigation glyphs.
 extern const ht_font_t ht_open_20, ht_nav_32;
 extern const uint8_t ht_mono_20_ink[224][4], ht_open_20_ink[1][4];
+extern const ht_font_t ht_right_20, ht_right_28, ht_open_28;
+extern const uint8_t ht_right_20_ink[1][4];
 // One authored outline bell in a normal terminal cell, not an emoji font.
 #define HT_BELL "\xee\x80\x80"
 extern const ht_font_t ht_bell_20, ht_bell_28;

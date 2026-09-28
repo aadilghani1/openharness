@@ -1,8 +1,8 @@
 # Characters in Habitat
 
-Tim and Tux run the same Habitat application. Tap the character to talk. Hold
-to open Tabs, then tap **controls → Companion / gestures → Character** to switch.
-The choice is saved on the dial and survives a restart. Swapping artwork keeps
+Tim and Tux run the same Habitat application. Tap the character to talk; hold
+to open Tabs. The simplified picker has no Controls entry. The existing character
+preference is saved on the dial and survives a restart. Swapping artwork keeps
 the current pane, voice session, unread results, preferences and navigation.
 
 `firmware/main/ui/habitat/character.h` is the application interface. Characters
@@ -57,10 +57,10 @@ neutral text and a matching monochrome bell. This is a compile-time palette;
 normal builds keep purple.
 
 Notifications use a separate bottom bell with a broad 300 × 84 px target,
-starting below the central voice target. When empty, the bell is dim, has no
-zero count and does nothing on a tap. New unread messages make it bright with
-the unread count alongside. Tapping it opens the inbox; **Tabs → controls → Inbox** remains
-available for retained cards, including ones already read. Opening the inbox
+starting below the central voice target. When empty, the bell is absent and has
+no hit target. New unread messages make it visible with the unread count
+alongside. Tapping it opens the inbox, which retains cards that were already
+read until the host removes them. Opening the inbox
 chooses its first unread message. Completed and question messages use the same
 read-count rule, separate from whether a question remains unresolved. Tim and Tux no longer hold an envelope on any daily screen.
 The old letter art stays available to historical experiment renders.
@@ -422,3 +422,30 @@ read, while stale navigation and read tokens leave a newer message unread.
 Actual native renderer output, using test fixture content:
 
 ![Hold-to-switch tabs and notification states](assets/tabs-notifications-20260928.png)
+
+
+## Short swipes and neighboring tabs — 2026-09-28
+
+Orange revision `.orange.9` brings the previous and next names into view on
+either side of the centered tab. Neighboring names are dimmer and clipped to
+the safe central viewport. Short names align toward the visible edge of their
+page, moving smoothly into centered alignment as they approach the middle.
+Names wrap in a 12-cell column with up to six rows. Each visible name owns its
+tap, so tapping a neighbor opens that tab. There is no Controls entry; only a
+single centered Back arrow below the names.
+
+Page spacing is 228 px with 2:1 drag tracking. A slow 58 px swipe reliably
+advances one tab in either direction, down from 180–181 px. Flick projection
+is capped at half a page and release settles in 192 ms. Touching during a settle
+still only brakes it; roster changes still cancel stale contacts. Browsing sends
+no desktop requests. The previous hold, voice, scrolling and read-sync rules stay
+in place.
+
+The renderer now supports authored `→` in both normal recap text and curved
+labels. The recap-size `↗` also has its own correctly sized atlas instead of
+using the smaller title glyph. The three new glyphs occupy 408 pixel bytes,
+plus four bytes of curved ink bounds; no font engine, heap or framebuffer is
+added. The exact example `Egg → developing cracks → hatch → baby Tim → growing
+Tim → adult Tim.` is part of the native rendering fixtures.
+
+![Short swipes, neighboring names and text arrows](assets/tabs-peek-arrows-20260928.png)

@@ -27,7 +27,7 @@ bool ht_workspace_tick(ht_workspace_t *, uint32_t now);
 
 // Thumb-driven tab pages. Position is in glass pixels; all easing is integer.
 // Browsing never sends a request. Only a subsequent, settled tap may open a tab.
-enum { HT_TAB_PITCH = 360, HT_TAB_SETTLE_MS = 224 };
+enum { HT_TAB_PITCH = 228, HT_TAB_DRAG_GAIN = 2, HT_TAB_SETTLE_MS = 192 };
 typedef struct {
     int count, position, from, target, origin, x, last_x, velocity;
     uint32_t began, sampled, animation_at;

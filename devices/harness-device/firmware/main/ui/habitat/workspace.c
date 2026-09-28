@@ -122,12 +122,14 @@ bool ht_tab_carousel_move(ht_tab_carousel_t *c, int x, uint32_t now)
     int travel = bounded(c->x - x, -466, 466);
     if (!c->moved && abs(travel) < 12) return false;
     c->moved = true;
-    int old = c->position, position = c->origin + travel, end = (c->count - 1) * HT_TAB_PITCH;
+    // A slow 57 px swipe reaches the next page; no need to cross the dial.
+    int old = c->position, position = c->origin + travel * HT_TAB_DRAG_GAIN;
+    int end = (c->count - 1) * HT_TAB_PITCH;
     // Soft edges, with no accumulated overscroll to undo on reversal.
     c->position = position < 0 ? position / 4 : position > end ? end + (position - end) / 4 : position;
     uint32_t dt = now - c->sampled;
     if (dt) {
-        int speed = dt > 100 ? 0 : bounded((c->last_x - x) * 1000 / (int)dt, -3000, 3000);
+        int speed = dt > 100 ? 0 : bounded((c->last_x - x) * 1000 / (int)dt, -3000, 3000) * HT_TAB_DRAG_GAIN;
         c->velocity = dt > 100 ? 0 : (speed * 3 + c->velocity * 2) / 5;
         c->last_x = x; c->sampled = now;
     }
@@ -141,7 +143,8 @@ bool ht_tab_carousel_end(ht_tab_carousel_t *c, int x, bool horizontal, uint32_t 
     bool open = !c->moved && !c->braking;
     int projected = c->position;
     if (c->moved && now - c->began >= 25) {
-        int momentum = now - c->sampled < 100 ? c->velocity * 120 / 1000 : 0;
+        int momentum = now - c->sampled < 100 ?
+            bounded(c->velocity * 120 / 1000, -HT_TAB_PITCH / 2, HT_TAB_PITCH / 2) : 0;
         projected += momentum;
     }
     int index = bounded((projected + HT_TAB_PITCH / 2) / HT_TAB_PITCH, 0, c->count - 1);

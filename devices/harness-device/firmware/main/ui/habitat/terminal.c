@@ -39,14 +39,12 @@ static const ht_font_t *glyph_font(const ht_font_t *font, uint32_t cp)
         if (cp == 0x2713) return &ht_done_28;
         if (cp == 0x2717) return &ht_failed_28;
     }
-    // Authored arrows in a recap use the same precomputed glyph as its marker.
-    // Identical cell metrics: no scaling, allocation, or extra text runs.
-    // ht_open_20's cell is 12 x 28 — mono_20's exactly, which is what made this free. The recap now
-    // draws in mono_28 (17 x 38) and there is no open_28, so an authored arrow there renders a 12 px
-    // glyph in a 17 px cell: readable, visibly smaller than the words beside it, and better than the
-    // '?' the alternative gives. A precomputed 17 x 38 ↗ would settle it properly.
+    // Inline arrows use exactly the parent font's cell metrics. The raster
+    // indexes each cell by that width/height; a smaller atlas would overread.
+    // Three extra immutable glyphs, no scaling, allocation or extra text runs.
     if (font == &ht_mono_20 || font == &ht_mono_28) {
-        if (cp == 0x2197) return &ht_open_20;
+        if (cp == 0x2197) return font == &ht_mono_28 ? &ht_open_28 : &ht_open_20;
+        if (cp == 0x2192) return font == &ht_mono_28 ? &ht_right_28 : &ht_right_20;
         if (cp == 0xe000) return font == &ht_mono_28 ? &ht_bell_28 : &ht_bell_20;
     }
     return font;
@@ -680,6 +678,7 @@ static void arc_prepare(const ht_run_t *r, arc_cache_t *cache)
 #endif
         {
             const uint8_t *ink = f == &ht_open_20 ? ht_open_20_ink[0] :
+                f == &ht_right_20 ? ht_right_20_ink[0] :
                 f == &ht_bell_20 ? ht_bell_20_ink[0] : ht_mono_20_ink[c - f->first];
             // Source pixels outside this box are transparent. Include a full
             // bilinear halo and two destination pixels for fixed-point rounding.

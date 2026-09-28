@@ -454,6 +454,9 @@ static bool result_visible(void) {
     scene_take(); portrait(dir,"long-reading-inbox");
     ui_project_emit("a","session-a","summary","\xe2\x80\x9cReady\xe2\x80\x9d \xe2\x80\x94 don\xe2\x80\x99t change the \xe2\x80\x9c" "cache\xe2\x80\x9d.","\xe2\x80\x9cReady\xe2\x80\x9d \xe2\x80\x94 don\xe2\x80\x99t change the \xe2\x80\x9c" "cache\xe2\x80\x9d.");
     scene_take(); portrait(dir,"punctuation");
+    const char *growth="Egg → developing cracks → hatch → baby Tim → growing Tim → adult Tim.";
+    ui_project_emit("a","session-a","summary",growth,growth);
+    scene_take(); portrait(dir,"growth-arrows");
 
     reset();
     ui_project_emit("a","session-a","processing",NULL,NULL);
@@ -1370,22 +1373,30 @@ int main(int argc, char **argv) {
     }
     ui_notif_seen(NULL);assert(s.notice_count==NOTICES);
     ui_notif_replace(NULL,1000);assert(s.view==HOME&&!s.notice_count);
-    // Four larger names fit; the fifth and sixth remain reachable before UP.
+    // Centered name plus previous/next previews; all six remain reachable.
     workspace_setup(); s.tab_count=6;
     strcpy(s.tabs[4].id,"tab-4"); strcpy(s.tabs[4].name,"Tools");
     strcpy(s.tabs[5].id,"tab-5"); strcpy(s.tabs[5].name,"Notes");
     dispatch((action_t){.kind=A_TABS}); scene_take(); portrait(dir,"tabs-names");
-    assert(s.view==TABS && s.hit_count==3 && !action_enabled(A_UP) && !action_enabled(A_DOWN));
-    assert(action_enabled(A_HOME) && action_enabled(A_SETTINGS) && !action_enabled(A_MACHINES));
+    assert(s.view==TABS && s.hit_count==4 && !action_enabled(A_UP) && !action_enabled(A_DOWN));
+    assert(action_enabled(A_HOME) && !action_enabled(A_SETTINGS) && !action_enabled(A_MACHINES));
     assert(ht_tab_carousel_index(&tab_carousel)==1);
     for(int i=0;i<scene.count;i++) {
         assert(!strstr(scene.runs[i].text,"panes") && !strstr(scene.runs[i].text,"selected"));
         assert(scene.runs[i].bg==BG); // no list boxes or alternating row fills
     }
-    habitat_touch(true,400,233,3000); habitat_touch(true,120,233,3120); scene_take();
-    assert(tab_carousel.position==HT_TAB_PITCH+280 && !tab_switches && !starts && !moves);
+    bool previous_visible=false,next_visible=false;
+    for(int i=0;i<scene.count;i++) if(scene.runs[i].font==UI_FONT && !scene.runs[i].arc && scene.runs[i].w) {
+        const ht_run_t *r=&scene.runs[i];
+        if(r->x+r->w<=119) previous_visible=true;
+        if(r->x>=347) next_visible=true;
+        assert(strcmp(r->text,"controls"));
+    }
+    assert(previous_visible && next_visible);
+    habitat_touch(true,300,233,3000); habitat_touch(true,240,233,3120); scene_take();
+    assert(tab_carousel.position==HT_TAB_PITCH+120 && !tab_switches && !starts && !moves);
     portrait(dir,"tabs-dragging");
-    habitat_touch(false,80,233,3150); scene_take();
+    habitat_touch(false,220,233,3150); scene_take();
     assert(tab_carousel.animating && !tab_switches && !starts);
     surface_tick(3250); scene_take(); portrait(dir,"tabs-settling");
     // A touch brakes a moving page. It must never also open the old rendered target.
@@ -1394,6 +1405,11 @@ int main(int argc, char **argv) {
     int chosen=ht_tab_carousel_index(&tab_carousel);
     char chosen_id[ID_MAX]; COPY(chosen_id,s.tabs[chosen].id);
     tap(3900,233,233); assert(tab_switches==1 && !strcmp(tab_target,chosen_id));
+    // Tapping a visible neighbor opens that exact tab, never the centered name.
+    workspace_setup(); dispatch((action_t){.kind=A_TABS}); scene_take();
+    tap(4000,80,233); assert(tab_switches==1 && !strcmp(tab_target,"tab-0") && !starts);
+    workspace_setup(); dispatch((action_t){.kind=A_TABS}); scene_take();
+    tap(4000,386,233); assert(tab_switches==1 && !strcmp(tab_target,"tab-2") && !starts);
     // Vertical/out-and-back motion stays in the picker and never opens a tab.
     workspace_setup(); dispatch((action_t){.kind=A_TABS}); scene_take();
     habitat_touch(true,233,300,4000); habitat_touch(true,233,120,4100);
@@ -1414,8 +1430,8 @@ int main(int argc, char **argv) {
     scroll_reversed=true;
     for(int wanted=22;wanted>=0;wanted--) {
         uint32_t t=6000+(22-wanted)*1000;
-        habitat_touch(true,53,233,t); habitat_touch(true,413,233,t+300);
-        habitat_touch(false,413,233,t+450); surface_tick(t+700); scene_take();
+        habitat_touch(true,203,233,t); habitat_touch(true,263,233,t+300);
+        habitat_touch(false,263,233,t+450); surface_tick(t+700); scene_take();
         assert(ht_tab_carousel_index(&tab_carousel)==wanted && !tab_switches && !starts);
     }
     scroll_reversed=false;
@@ -1427,13 +1443,13 @@ int main(int argc, char **argv) {
     habitat_touch(false,233,233,30075); scene_take();
     assert(!tab_switches && !starts && s.hit_count==3 && ht_tab_carousel_index(&tab_carousel)==0);
     ui_swarms_replace(NULL,0,NULL); scene_take(); portrait(dir,"tabs-empty");
-    assert(s.hit_count==2 && action_enabled(A_HOME) && !action_enabled(A_TAB));
+    assert(s.hit_count==1 && action_enabled(A_HOME) && !action_enabled(A_TAB));
     workspace_setup(); s.connected=false; dispatch((action_t){.kind=A_TABS}); scene_take();
     assert(!action_enabled(A_TAB)); tap(32000,233,233); assert(!tab_switches && !starts);
-    // Long UTF-8 names wrap without painting into the rim. Footer controls stay reachable.
+    // Long names wrap without painting into the rim. The only footer is Back.
     workspace_setup(); strcpy(s.tabs[1].name,"A workspace with a longer name for device development");
     dispatch((action_t){.kind=A_TABS}); scene_take(); portrait(dir,"tabs-long-name");
-    tap(33000,288,420); assert(s.view==SETTINGS && !tab_switches && !starts);
+    tap(33000,233,420); assert(s.view==HOME && !tab_switches && !starts);
     reset(); s.view=INBOX; dispatch((action_t){.kind=A_NOTICE,.id="off-tab-agent"});
     assert(desktop_opens==1 && !strcmp(opened_agent,"off-tab-agent") && s.view==INBOX);
     assert(!visit.pending && !visit_sends && !starts); // Works with the shipping agent.open protocol.
@@ -1444,9 +1460,9 @@ int main(int argc, char **argv) {
     workspace_setup(); habitat_touch(true,233,230,1000);
     habitat_touch(true,233,230,1700); habitat_touch(true,100,230,1800);
     habitat_touch(false,100,230,1900); scene_take(); portrait(dir,"tabs-from-gesture");
-    habitat_touch(true,413,233,2000); habitat_touch(true,53,233,2300); habitat_touch(false,53,233,2450);
+    habitat_touch(true,263,233,2000); habitat_touch(true,203,233,2300); habitat_touch(false,203,233,2450);
     surface_tick(2700); scene_take();
-    habitat_touch(true,413,233,3000); habitat_touch(true,53,233,3300); habitat_touch(false,53,233,3450);
+    habitat_touch(true,263,233,3000); habitat_touch(true,203,233,3300); habitat_touch(false,203,233,3450);
     surface_tick(3700); scene_take(); tap(4000,233,233); // Research. The normal switch receipt still applies.
     assert(tab_switches==1 && !strcmp(tab_target,"tab-3") && s.loading && s.view==MESSAGE);
     uint32_t serial=workspace.serial;
@@ -1631,7 +1647,9 @@ int main(int argc, char **argv) {
         assert(s.view==TABS && !starts && !moves && !tab_switches && ht_tab_carousel_index(&tab_carousel)==1);
     }
     scene_take(); portrait(dir,"hold-tabs");
-    tap(2000,285,420); assert(s.view==SETTINGS && !starts); scene_take(); portrait(dir,"controls");
+    tap(2000,233,420); assert(s.view==HOME && !starts);
+    // Legacy controls remain covered without a Controls entry in the picker.
+    dispatch((action_t){.kind=A_SETTINGS}); scene_take(); portrait(dir,"controls");
     dispatch((action_t){.kind=A_SELECT_BEGIN});
     assert(s.view==SELECTION && !starts && selected_command.op==HT_SELECT_BEGIN);
     assert(ht_selection_reply(&selection,selection.request,"pick-test",true,1,"Which part should change?",1,false,NULL,1810));

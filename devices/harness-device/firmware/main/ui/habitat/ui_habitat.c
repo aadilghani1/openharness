@@ -1419,7 +1419,8 @@ static void tabs_move(int dy)
 static void tab_name(ht_scene_t *f, const char *name, int center_x, uint16_t ink)
 {
     int first = f->count;
-    ht_wrap(f, 0, 0, 340, 4, 0, UI_FONT, ink, name[0] ? name : "Untitled");
+    const int width = 12 * UI_FONT->width;
+    ht_wrap(f, 0, 0, width, 6, 0, UI_FONT, ink, name[0] ? name : "Untitled");
     while (f->count > first && !f->runs[f->count - 1].text[0]) f->count--;
     int rows = f->count - first;
     for (int i = first; i < f->count; i++) {
@@ -1427,7 +1428,14 @@ static void tab_name(ht_scene_t *f, const char *name, int center_x, uint16_t ink
         const char *p = r->text;
         int cells = 0;
         while (*p) { ht_utf8_next(&p); cells++; }
-        int x = center_x - cells * UI_FONT->width / 2;
+        int dx = center_x - 233;
+        if (dx < -HT_TAB_PITCH) dx = -HT_TAB_PITCH;
+        if (dx > HT_TAB_PITCH) dx = HT_TAB_PITCH;
+        // Center the chosen name. Neighbors align toward the visible edge of
+        // their own page so even a short name peeks in. Alignment moves smoothly
+        // with the page and never crosses the 24 px gap between names.
+        int x = center_x - cells * UI_FONT->width / 2 -
+            dx * (width - cells * UI_FONT->width) / (2 * HT_TAB_PITCH);
         p = r->text;
         // The moving names stay inside a central, round-screen-safe viewport.
         // Discard whole cells at its edges; no framebuffer or scissor allocation.
@@ -1451,17 +1459,27 @@ static void render_tabs(ht_scene_t *f)
         for (int i = current - 1; i <= current + 1; i++) {
             if (i < 0 || i >= s.tab_count) continue;
             int dx = i * HT_TAB_PITCH - tab_carousel.position;
-            if (abs(dx) >= 360) continue;
             uint16_t ink = !s.connected ? DIM : !strcmp(s.tabs[i].id, s.selected_tab) ? ACCENT : FG;
-            ink = ht_character_caption_ink(ink, BG, 255 - abs(dx) * 210 / HT_TAB_PITCH);
+            int fade = abs(dx) * 140 / HT_TAB_PITCH;
+            ink = ht_character_caption_ink(ink, BG, fade < 210 ? 255 - fade : 45);
             tab_name(f, s.tabs[i].name, 233 + dx, ink);
         }
-        s.hits[s.hit_count++] = (hit_t){{33, 110, 400, 252}, A_TAB, current, s.connected && !s.loading};
+        // Each visible name owns its tap; a swipe from any page only browses.
+        // Keep the centered page first for stable accessibility/test ordering.
+        for (int n = 0; n < 3; n++) {
+            int i = current + (n == 1 ? -1 : n == 2 ? 1 : 0);
+            if (i < 0 || i >= s.tab_count) continue;
+            int cx = 233 + i * HT_TAB_PITCH - tab_carousel.position;
+            int left = i ? cx - HT_TAB_PITCH / 2 : 33;
+            int right = i + 1 < s.tab_count ? cx + HT_TAB_PITCH / 2 : 433;
+            if (left < 33) left = 33;
+            if (right > 433) right = 433;
+            if (right > left) s.hits[s.hit_count++] = (hit_t){{left, 110, right - left, 252},
+                A_TAB, i, s.connected && !s.loading};
+        }
     }
-    ht_text(f, 125, 398, 28, &ht_nav_32, DIM, BG, "←");
-    s.hits[s.hit_count++] = (hit_t){{78, 381, 130, 74}, A_HOME, 0, true};
-    ht_text(f, 221, 398, 136, UI_FONT, DIM, BG, "controls");
-    s.hits[s.hit_count++] = (hit_t){{214, 381, 174, 74}, A_SETTINGS, 0, true};
+    ht_text(f, 223, 400, 20, &ht_nav_32, DIM, BG, "←");
+    s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, A_HOME, 0, true};
 }
 static void render_notice(ht_scene_t *f)
 {
@@ -2784,7 +2802,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         if (scrolled || s.touch_cancelled) {
             // Motion owns this entire contact, even if it returns to its start.
         } else if (tab_contact) {
-            int index = ht_tab_carousel_index(&tab_carousel);
+            int index = pressed_action.value;
             if (tab_tap && result == HT_TOUCH_TAP && pressed_action.kind == A_TAB && index >= 0 &&
                 index < s.tab_count && !strcmp(pressed_action.id, s.tabs[index].id)) dispatch(pressed_action);
             change();

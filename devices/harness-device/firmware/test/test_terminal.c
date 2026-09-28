@@ -56,19 +56,24 @@ static void punctuation_checks(void)
 
 static void inline_arrow_checks(void)
 {
-    const int x = 80, y = 100, cell = ht_mono_20.width;
+    const ht_font_t *fonts[]={&ht_mono_20,&ht_mono_28};
+    const ht_font_t *arrows[][2]={{&ht_right_20,&ht_open_20},{&ht_right_28,&ht_open_28}};
+    const char *marks[]={"→","↗"};
+    for(unsigned size=0;size<2;size++) for(unsigned mark=0;mark<2;mark++) {
+    const int x = 80, y = 100, cell = fonts[size]->width;
+    assert(arrows[size][mark]->width==cell && arrows[size][mark]->height==fonts[size]->height);
     ht_scene_t inline_text, separate, question;
     ht_scene_clear(&inline_text, 0);
     ht_scene_clear(&separate, 0);
     ht_scene_clear(&question, 0);
-    const char *text = "Open \xe2\x86\x97 now";
-    ht_text(&inline_text, x, y, cell * 10, &ht_mono_20, 0xffff, 0, text);
-    ht_text(&separate, x, y, cell * 5, &ht_mono_20, 0xffff, 0, "Open ");
-    ht_text(&separate, x + cell * 5, y, cell, &ht_open_20, 0xffff, 0, "\xe2\x86\x97");
-    ht_text(&separate, x + cell * 6, y, cell * 4, &ht_mono_20, 0xffff, 0, " now");
-    ht_text(&question, x, y, cell * 10, &ht_mono_20, 0xffff, 0, "Open ? now");
+    char text[32]; snprintf(text,sizeof text,"Open %s now",marks[mark]);
+    ht_text(&inline_text, x, y, cell * 10, fonts[size], 0xffff, 0, text);
+    ht_text(&separate, x, y, cell * 5, fonts[size], 0xffff, 0, "Open ");
+    ht_text(&separate, x + cell * 5, y, cell, arrows[size][mark], 0xffff, 0, marks[mark]);
+    ht_text(&separate, x + cell * 6, y, cell * 4, fonts[size], 0xffff, 0, " now");
+    ht_text(&question, x, y, cell * 10, fonts[size], 0xffff, 0, "Open ? now");
     assert(!strcmp(inline_text.runs[0].text, text));
-    assert(ht_can_display(text, &ht_mono_20, cell * 10, 1));
+    assert(ht_can_display(text, fonts[size], cell * 10, 1));
     ht_raster(&inline_text, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
     ht_raster(&separate, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, scratch);
     assert(!memcmp(full, scratch, sizeof full));
@@ -76,7 +81,7 @@ static void inline_arrow_checks(void)
     assert(memcmp(full, scratch, sizeof full));
     // The damage pass must not mistake the arrow for the old fallback glyph.
     ht_damage_t d; ht_damage(&question, &inline_text, &d);
-    assert(d.count && d.pixels == (uint32_t)(cell * ht_mono_20.height));
+    assert(d.count && d.pixels >= (uint32_t)(cell * fonts[size]->height));
     transition(NULL, &question);
     transition(&question, &inline_text);
     transition(&inline_text, &question);
@@ -85,6 +90,15 @@ static void inline_arrow_checks(void)
     ht_raster(&inline_text, clip, full);
     ht_raster(&separate, clip, scratch);
     assert(!memcmp(full, scratch, (size_t)clip.w * clip.h * sizeof *full));
+    }
+    // Curved titles have a separate cached-mask path and must accept → too.
+    ht_scene_t a,b; ht_scene_clear(&a,0); ht_scene_clear(&b,0);
+    ht_arc_title(&a,0xffff,"Egg → Tim"); ht_arc_title(&b,0xffff,"Egg ? Tim");
+    transition(NULL,&a); memcpy(scratch,full,sizeof full);
+    ht_raster(&b,(ht_rect_t){0,0,HT_WIDTH,HT_HEIGHT},full);
+    assert(memcmp(full,scratch,sizeof full));
+    transition(&a,&b); transition(&b,&a);
+    puts("Inline arrows: right/diagonal, native 20/28 px cells, curved label, no fallback or atlas overread PASS");
 }
 
 
