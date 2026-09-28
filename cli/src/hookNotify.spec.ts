@@ -75,7 +75,8 @@ function runHook(opts: RunHookOpts): Promise<string> {
       const executable = opts.processExecutable ?? (opts.processEngine === 'cursor' ? 'agent' : opts.processEngine)
       const processArgs = opts.processArgs ?? executable
       writeFileSync(join(binDir, 'tmux'), '#!/bin/sh\necho 7000\n', { mode: 0o755 })
-      writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' '7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}' '${process.pid} 7001 node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
+      const shellQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
+      writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)} '${process.pid} 7001 node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
       if (opts.processEngine === 'cursor') {
         const target = join(binDir, 'cursor-agent-target')
         writeFileSync(target, '#!/bin/sh\n', { mode: 0o755 })
@@ -577,6 +578,26 @@ describe('hook notify terminal scope', () => {
       })
       expect(() => readFileSync(join(dataDir, 'registry.json'), 'utf8')).toThrow()
     }
+  })
+
+  it.each([
+    "import sys, runpy; sys.path.insert(0, '/opt/custom'); runpy.run_module('hermes_cli.main', run_name='__main__')",
+    "import os, re, sys; sys.path.insert(0, '/opt/custom'); import hermes_bootstrap; from hermes_cli.main import main; sys.exit(main())",
+    "import os, sys, runpy; os.environ.pop('PYTHONHOME', None); sys.path.insert(0, '/opt/custom'); os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or '/home/demo/.hermes'; import hermes_bootstrap; runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)",
+  ])('offline Hermes discovery follows a managed Python bootstrap: %s', async (source) => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-hermes-launcher-'))
+    tmpDirs.push(dir)
+    const common = {
+      port: 9, tmuxPane: '%82', engine: 'hermes' as const, processEngine: 'hermes' as const,
+      processExecutable: '/home/demo/.her', hermesHome: join(dir, 'hermes'), hermesSource: 'cli' as const,
+      input: { hook_event_name: 'on_session_start', session_id: '20260810_120000_a1b2c3' },
+    }
+    await runHook({ ...common, dataDir: join(dir, 'data'), processArgs: `/opt/python3 -I -I -c ${source}` })
+    expect(JSON.parse(readFileSync(join(dir, 'data', 'registry.json'), 'utf8'))).toMatchObject([
+      { engine: 'hermes', tmuxPane: '%82', processIdentity: { pid: 7001 } },
+    ])
+    await runHook({ ...common, dataDir: join(dir, 'unrelated'), processArgs: `python3 worker.py -c ${source}` })
+    expect(() => readFileSync(join(dir, 'unrelated', 'registry.json'), 'utf8')).toThrow()
   })
 
   it('still binds a CLI Hermes session when its store is slow to answer, as on a loaded machine', async () => {

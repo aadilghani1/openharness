@@ -47,7 +47,7 @@ import { parseGridLaunchOverride, type GridLaunchOverride, type GridLaunchRecord
 import { commandcodeTranscriptPath } from '../engines/commandcode/transcript.js'
 import { agyTranscriptPath } from '../engines/agy/session.js'
 import { copilotTranscriptPath } from '../engines/copilot/session.js'
-import { lockOwnerAlive, processStartMarker } from './processLiveness.js'
+import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { mergeTerminalRuntimes, processIdentityKey, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
@@ -365,7 +365,7 @@ function removeRegistryLockOwnedBy(token: string): void {
 function withRegistryFileLock<T>(apply: () => T): T {
   secureStateDirectory(env.ADAPTER_DATA_DIR)
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
-  const processMarker = processStartMarker(process.pid) ?? ''
+  const processIdentity = processLockIdentity(process.pid)
   for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
     const token = randomUUID()
     let created = false
@@ -375,7 +375,7 @@ function withRegistryFileLock<T>(apply: () => T): T {
       const owner = join(LOCK_DIR, 'owner.json')
       const fd = openSync(owner, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
       try {
-        writeFileSync(fd, JSON.stringify({ pid: process.pid, startMarker: processMarker, token }))
+        writeFileSync(fd, JSON.stringify({ pid: process.pid, ...processIdentity, token }))
         fsyncSync(fd)
       } finally { closeSync(fd) }
       try {
@@ -397,10 +397,10 @@ function withRegistryFileLock<T>(apply: () => T): T {
         if (!ownerStat.isFile() || ownerStat.isSymbolicLink() || (uid !== null && ownerStat.uid !== uid)
           || (ownerStat.mode & 0o777) !== 0o600) throw new Error('registry lock owner has unsafe owner, mode, or type')
         const owner = JSON.parse(readFileSync(join(LOCK_DIR, 'owner.json'), 'utf8')) as {
-          pid?: unknown; startMarker?: unknown; token?: unknown
+          pid?: unknown; startMarker?: unknown; generationMarker?: unknown; token?: unknown
         }
         ownerPid = Number(owner.pid)
-        ownerStartMarker = typeof owner.startMarker === 'string' ? owner.startMarker : ''
+        ownerStartMarker = lockStartMarker(owner)
         ownerToken = typeof owner.token === 'string' ? owner.token : ''
       } catch (inspectionError) {
         if (inspectionError instanceof Error && inspectionError.message.startsWith('registry lock')) throw inspectionError
@@ -408,10 +408,10 @@ function withRegistryFileLock<T>(apply: () => T): T {
       if (ownerPid > 0 && ownerToken && !lockOwnerAlive(ownerPid, ownerStartMarker)) {
         try {
           const current = JSON.parse(readFileSync(join(LOCK_DIR, 'owner.json'), 'utf8')) as {
-            pid?: unknown; startMarker?: unknown; token?: unknown
+            pid?: unknown; startMarker?: unknown; generationMarker?: unknown; token?: unknown
           }
           if (Number(current.pid) === ownerPid
-            && current.startMarker === ownerStartMarker
+            && lockStartMarker(current) === ownerStartMarker
             && current.token === ownerToken
             && !lockOwnerAlive(ownerPid, ownerStartMarker)) {
             rmSync(LOCK_DIR, { recursive: true, force: true })

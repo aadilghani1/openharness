@@ -250,6 +250,25 @@ describe('tmux process primitives', () => {
     expect(engineProcessMatchScore({ executable: comm, args: `${python} -m hermes_cli.main` }, 'hermes')).toBe(2)
   })
 
+  it('recognizes managed Hermes runpy launchers without relying on their install directory', () => {
+    const bootstrap = "import os, sys, runpy; os.environ.pop('PYTHONHOME', None); os.environ.pop('PYTHONPATH', None); os.environ.pop('VIRTUAL_ENV', None); sys.path.insert(0, '/opt/custom install'); os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or str(__import__('hermes_constants').get_default_hermes_root()); import hermes_bootstrap; runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)"
+    const old = "import sys, runpy; sys.path.insert(0, '/opt/hermes-agent'); runpy.run_module('hermes_cli.main', run_name='__main__')"
+    for (const code of [bootstrap, old]) {
+      for (const source of [code, `\"${code}\"`]) {
+        expect(engineProcessMatchScore({ executable: '/home/demo/.her', args: `/opt/python3.14 -I -I -c ${source} --resume 20260927_101500_ab12cd` }, 'hermes')).toBe(2)
+      }
+    }
+    for (const args of [
+      `python3 worker.py -c ${bootstrap}`,
+      `node -c ${bootstrap}`,
+      `python3 -c print(\"${bootstrap}\")`,
+      `python3 -c ${bootstrap.replace('hermes_cli.main', 'acp_adapter.entry')}`,
+      "python3 -c import sys; sys.path.insert(0, '/opt/hermes-agent'); print('from hermes_cli.main import main')",
+    ]) {
+      expect(engineProcessMatchScore({ executable: 'python3', args }, 'hermes')).toBe(0)
+    }
+  })
+
   it('reads an engine through the ori launcher, before and after its exec', () => {
     // `ori claude` computes an environment and then execve's the vendor binary away, so for all but the
     // first ~100ms the pane row IS `claude` — that case must keep scoring exactly as a bare launch does.

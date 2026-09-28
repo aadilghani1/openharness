@@ -132,7 +132,6 @@ import {
   permissionModeFromArgv,
   clearPaneRemainOnExit,
   resolvePaneEngineProcess,
-  checkSessionRuntime,
   tmuxPaneState,
 } from './lib/tmux.js'
 import { ALL_TERMINAL_BACKENDS } from './config/terminalConfig.js'
