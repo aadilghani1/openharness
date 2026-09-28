@@ -270,6 +270,7 @@ class TerminalSession extends ChangeNotifier {
   List<int> _utf8Tail = const [];
   final List<int> _inputBytes = [];
   Timer? _heartbeat;
+  DateTime? _lastStreamActivityAt;
   Timer? _ackTimer;
   Timer? _inputTimer;
   Timer? _resizeTimer;
@@ -368,6 +369,7 @@ class TerminalSession extends ChangeNotifier {
     _pendingScrollLines = 0;
     _lastInputFlushAt = null;
     _lastResizeFlushAt = null;
+    _lastStreamActivityAt = null;
     _renderTail = Future<void>.value();
     _inputSendTail = Future<void>.value();
     streamId = null;
@@ -577,6 +579,14 @@ class TerminalSession extends ChangeNotifier {
         if (_activeUpload?.beginAccepted.isCompleted == false) {
           _activeUpload!.beginAccepted.complete(accepted);
         }
+        // Older daemons only sent this text. A vanished stream cannot accept input or upload
+        // chunks; retain its screen and reopen once, without replaying the failed paste.
+        if (!accepted &&
+            (payload['code'] == 'TERMINAL_STREAM_NOT_FOUND' ||
+                payload['reason'] ==
+                    'no live terminal stream for this pane (reopen it and try again)')) {
+          await _recoverByReopen(reason: 'TERMINAL_STREAM_NOT_FOUND');
+        }
         return true;
       case 'terminal_chunked_upload_progress':
         if (!_matchesStream(payload)) return true;
@@ -767,6 +777,7 @@ class TerminalSession extends ChangeNotifier {
             _resyncTimer?.cancel();
             _resyncTimer = null;
             status = TerminalSessionStatus.controlling;
+            _lastStreamActivityAt = _now();
             _markForAck(bytes.length);
             notifyListeners();
             final measured = _measuredViewport;
@@ -787,6 +798,7 @@ class TerminalSession extends ChangeNotifier {
             }
             _expectedSeq = frame.seq + 1;
             _lastRenderedSeq = frame.seq;
+            _lastStreamActivityAt = _now();
             _markForAck(0);
             return;
           }
@@ -804,6 +816,7 @@ class TerminalSession extends ChangeNotifier {
           }
           _expectedSeq = frame.seq + 1;
           _lastRenderedSeq = frame.seq;
+          _lastStreamActivityAt = _now();
           _markForAck(bytes.length);
         })
         .catchError((Object error, StackTrace stackTrace) async {
@@ -1458,6 +1471,16 @@ class TerminalSession extends ChangeNotifier {
     final sent = await send('terminal_alive', {'streamId': streamId});
     if (!sent && _isCurrent(generation)) {
       transportLost('Terminal heartbeat was not sent');
+      return;
+    }
+    // The daemon sends sync frames every five seconds even when the terminal is idle. Sending
+    // successfully only proves the shared socket is open, not that THIS stream still exists.
+    final lastActivity = _lastStreamActivityAt;
+    if (_isCurrent(generation) &&
+        status == TerminalSessionStatus.controlling &&
+        lastActivity != null &&
+        _now().difference(lastActivity) >= const Duration(seconds: 15)) {
+      await _requestResync('TERMINAL_STREAM_TIMEOUT');
     }
   }
 
