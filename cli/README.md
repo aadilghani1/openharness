@@ -28,6 +28,22 @@ native module to compile — the same `cli.js` runs everywhere.
 
 Windows is not supported.
 
+## Swarm tabs and agent communication
+
+Turn on **Settings → Experimental → Swarm collaboration** to try it; it is **off by default**.
+Each tab is a swarm, with membership supplied by its agent panes. Agents keep their engines and contexts,
+automatically discover peers in their tab, ask a focused question, and continue with the answer.
+**Cmd+Shift+A — Ask outside this swarm** explicitly permits the focused agent to find
+a relevant peer in another tab for its current task. It uses directory tools, without opening a picker.
+Open **Swarm conversation** through Cmd+Shift+P to inspect questions and replies.
+Desktop/web and mobile show the same shared history. Explicit cross-channel questions use
+`harness channel ask ... --cross-channel`; ordinary discovery stays within the tab.
+
+See the [channel guide](../docs/tab-channels.md) for the account opt-in, ownership,
+scope, and verification limits. Run `harness channel
+--help` for commands. The underlying [team protocol](../docs/agent-teams.md) and advanced
+`harness team` CLI remain available; delivery preserves busy sessions, drafts, and dialogs.
+
 ## Remote media previews
 
 Harness Desktop can download an agent's image/video and open it on the viewing

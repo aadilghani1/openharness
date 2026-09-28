@@ -41,6 +41,7 @@ import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'settings_page.dart';
 import 'terminal_action_column.dart';
+import 'team_page.dart';
 import 'terminal_chrome_scroll.dart';
 import 'terminal_header.dart';
 import 'terminal_input_dock.dart';
@@ -2390,6 +2391,21 @@ class _TerminalPageState extends State<TerminalPage>
         // the computers are a row in Settings.
         PhoneSheetSection(
           actions: [
+            PhoneSheetAction(
+              icon: LucideIcons.users300,
+              label: 'Swarm conversation',
+              chevron: true,
+              onTap: () => Navigator.of(context).push(
+                phoneRoute(
+                  (_) => TeamPage(
+                    notifier: widget.notifier,
+                    machineId: widget.machineId,
+                    tabId: widget.notifier.activeDeskTabId,
+                    agentId: widget.agentId,
+                  ),
+                ),
+              ),
+            ),
             // In the sample: the way back out, where a person looks for "what else can I do".
             if (SampleMode.maybeOf(context) case final sample?)
               PhoneSheetAction(

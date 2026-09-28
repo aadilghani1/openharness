@@ -170,6 +170,8 @@ import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
 import { foldTranscript, lastTurnTextFromRawLines, lineToEvents, newTurnState, type LiveEvent, type TurnState } from './lib/normalize.js'
 import { AskQuestionController, parseEngineQuestionPane, pollsQuestions, QuestionWatcher } from './lib/askQuestion.js'
+import { teamWriteHold } from './teams/preflight.js'
+import { TeamError } from './teams/model.js'
 import { CommanderMirror, SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from './lib/commander.js'
 import {
   setSummaryPoolDeviceConnected,
@@ -384,6 +386,8 @@ Machine:
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every session, live or stopped (--limit=N, --json)
+  harness channel --help       consult agents in a tab and read shared collaboration history
+  harness team --help          advanced team commands and correlated agent replies
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
   harness version              print the installed version (v${VERSION})
@@ -2514,9 +2518,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onDelivery: (event) => {
       autonomousDeviceService?.delivery(event)
       backend.orchestratorDelivery(event)
+      backend.teamDelivery(event)
+    },
+    beforeTeamWrite: async session => {
+      const capture = await captureTerminal(session.agentId)
+      return teamWriteHold(session.engine, capture)
     },
     validateRuntime: validateTerminal,
     inject: (id, text) => deviceInput.legacyWrite(id, () => submitTerminalAction(id, text)),
+    injectTeam: (id, text, deliveryId) => deviceInput.legacyWrite(id, async () => {
+      const session = registry.resolve(id)
+      const reason = session ? teamWriteHold(session.engine, await captureTerminal(id)) : 'team_waiting_unavailable'
+      if (reason) return { state: 'failed', dispatch: 'not_started', reason }
+      if (!backend.teamCanWrite(deliveryId)) return terminalActionNotStarted('team_waiting_control')
+      return submitTerminalAction(id, text)
+    }),
     sendKey: (id, key) => deviceInput.legacyWrite(id, () => keyTerminalAction(id, key)),
     capture: captureTerminal,
     onError: (sessionId, message) => {
@@ -5808,6 +5824,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   backend.onMessage = (id, content, deliveryId) => submitAgent(id, content, deliveryId)
   backend.onCancelOrchestratorMessage = id => input.cancelDelivery(id)
+  backend.readChannelDesk = async () => {
+    const response = await proxyBackend('GET', '/api/tab-channels')
+    if (response.status === 404) throw new TeamError('CHANNELS_UNSUPPORTED', 'Tab channels are not enabled on this Harness server.')
+    if (response.status !== 200 || response.body.success !== true) throw new Error('The saved channel directory is unavailable.')
+    return response.body.data
+  }
+  backend.writeChannelSettings = async enabled => {
+    const response = await proxyBackend('PATCH', '/api/tab-channels/settings', { enabled })
+    if (response.status === 404) throw new TeamError('CHANNELS_UNSUPPORTED', 'Update the Harness server to configure swarm collaboration.')
+    if (response.status !== 200 || response.body.success !== true) throw new TeamError('CHANNEL_SETTINGS_FAILED', 'The swarm setting could not be saved. Refresh Settings to check its state.')
+    return response.body.data
+  }
+  backend.startTeams()
 
   // Keep the log file under its cap. This daemon writes it through an inherited stdout fd, so a size
   // check on a timer is the only place that can see it grow — `prepareLogFile` at spawn time alone
@@ -7140,6 +7169,8 @@ async function logsExportCommand(json: boolean): Promise<void> {
 }
 
 import { orchestratorCommand } from './orchestrator/command.js'
+import { teamCommand } from './teams/command.js'
+import { channelCommand } from './teams/channelCommand.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 const [, , cmd, ...rest] = process.argv
@@ -7241,6 +7272,12 @@ const enterSafeMode = (err: unknown): void => {
 }
 
 switch (cmd) {
+  case 'team':
+    teamCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'channel':
+    channelCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break

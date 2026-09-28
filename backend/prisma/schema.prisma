@@ -630,6 +630,29 @@ model Desk {
   @@map("desks")
 }
 
+/// Routing only; channel messages and member capabilities stay on the host daemon.
+/// A deterministic _id makes concurrent claims atomic using MongoDB's built-in
+/// unique primary index. This never changes the format of the shared desk.
+model TabChannel {
+  id            String   @id @map("_id") @db.ObjectId
+  userId        String
+  tabId         String
+  hostMachineId String
+  createdAt     DateTime @default(now())
+
+  @@map("tab_channels")
+}
+
+/// Explicit account opt-in for automatic swarm collaboration; absence means off.
+model TabChannelSettings {
+  id        String  @id @map("_id") @db.ObjectId
+  userId    String
+  enabled   Boolean @default(false)
+  revision  Int     @default(0)
+
+  @@map("tab_channel_settings")
+}
+
 /// A sign-in Harness issued ITSELF rather than through the Autonomous account service — today only
 /// to a phone that scanned a signed-in computer's Add Phone QR (lib/harnessSession.ts). The account
 /// service has no way for one signed-in device to sign in another, so the computer asks for a

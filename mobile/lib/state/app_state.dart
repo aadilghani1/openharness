@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../analytics/analytics.dart';
+import '../teams/team_controller.dart';
 import '../api/api_client.dart';
 import '../viewer/direct_auth_api.dart';
 import '../viewer/sign_in_browser.dart';
@@ -2934,6 +2935,14 @@ class AppNotifier extends ChangeNotifier {
     currentUser = null;
     machines = [];
     machineStates.clear();
+    for (final controller in _teamControllers.values) {
+      controller.dispose();
+    }
+    _teamControllers.clear();
+    for (final controller in _channelControllers.values) {
+      controller.dispose();
+    }
+    _channelControllers.clear();
     // ⚠️ The warm-start cache is this account's machine ids, so it goes with the
     // session. Left behind, the next launch would dial the previous account's
     // machines before its own fetch could say they are not its own — reaching
@@ -4890,6 +4899,50 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  final _teamControllers = <String, TeamController>{};
+  final _channelControllers = <String, TeamController>{};
+  TeamController channelController(String tabId, String gatewayMachineId) =>
+      _channelControllers.putIfAbsent(tabId, () {
+        late final TeamController controller;
+        controller = TeamController(
+          channelTabId: tabId,
+          request: (payload) => teamRequest(
+            controller.team?['machineId'] as String? ?? gatewayMachineId,
+            payload,
+          ),
+        );
+        return controller;
+      });
+  TeamController teamController(String machineId) =>
+      _teamControllers.putIfAbsent(
+        machineId,
+        () => TeamController(
+          request: (payload) => teamRequest(machineId, payload),
+        ),
+      );
+
+  Future<Map<String, dynamic>> teamRequest(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      return await _conn(
+        machineId,
+      ).request('team', payload: payload, timeout: const Duration(seconds: 35));
+    } on WsRequestFailure catch (e) {
+      throw TeamRequestError(
+        e.code == 'UNSUPPORTED'
+            ? 'Update Harness on this machine to use agent collaboration.'
+            : e.toString(),
+        uncertain: const {
+          'UNCONFIRMED',
+          'DISCONNECTED',
+          'TEAM_UNAVAILABLE',
+        }.contains(e.code),
+      );
+    }
+  }
+
   /// The Git choices [path] offers, read ON the machine that owns it.
   ///
   /// ⚠️ **The phone never looks at a repository itself, and could not.** The
@@ -5295,10 +5348,10 @@ class AppNotifier extends ChangeNotifier {
     // Created HERE, so it joins the tab this phone is in — the way an agent
     // created in a window joins that window's tab. See [PhoneDesk.adopt] for
     // what happens when the phone is in no tab.
-    _desk.adopt(
-      (machineId: machineId, agentId: agent.id),
-      name: agent.displayName,
-    );
+    _desk.adopt((
+      machineId: machineId,
+      agentId: agent.id,
+    ), name: agent.displayName);
     await assignAgentToPane(
       null,
       machineId,
@@ -7036,10 +7089,7 @@ class AppNotifier extends ChangeNotifier {
     if (!_canAttachPane(pane)) return;
     final session = pane.session;
     if (session == null) {
-      await _attachSession(
-        pane,
-        takeControl: intent == AttachIntent.person,
-      );
+      await _attachSession(pane, takeControl: intent == AttachIntent.person);
     } else {
       if (intent == AttachIntent.person) session.takeover = true;
       await session.reopen();
@@ -7550,6 +7600,14 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
+    for (final controller in _teamControllers.values) {
+      controller.dispose();
+    }
+    _teamControllers.clear();
+    for (final controller in _channelControllers.values) {
+      controller.dispose();
+    }
+    _channelControllers.clear();
     _localGitProjects.dispose();
     _disposed = true;
     if (signingIn) cliLogin.cancel();

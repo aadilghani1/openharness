@@ -148,6 +148,20 @@ describe('remote-password link + relay session crypto (interop with the real E2e
       expect(sealedResult.payload).not.toHaveProperty('stdout')
       expect(crypto.unwrapIncoming(sealedResult)?.payload).toEqual(gridResult)
 
+      // Team capabilities, peer context, and answers stay opaque to the relay in both directions.
+      for (const type of ['team', 'team_delivery']) {
+        const request = { requestId: `private-${type}`, memberKey: 'member-capability', text: 'private peer question' }
+        const sealed = crypto.wrapOutgoing({ type, payload: request })
+        expect(JSON.stringify(sealed)).not.toContain('member-capability')
+        expect(JSON.stringify(sealed)).not.toContain('private peer question')
+        expect(manager.unwrapDown('session-conn', sealed)?.payload).toEqual(request)
+        expect(manager.unwrapDown('session-conn', sealed)).toBeNull() // replay
+        const answer = { requestId: request.requestId, text: 'private correlated answer' }
+        const response = manager.wrapTarget('session-conn', `${type}_result`, answer)!
+        expect(JSON.stringify(response)).not.toContain('private correlated answer')
+        expect(crypto.unwrapIncoming(response)?.payload).toEqual(answer)
+      }
+
       // Creation recovery must take the same encrypted route as creation; its result contains
       // the agent's name and working folder. The relay sees neither the receipt nor those fields.
       const checking = { requestId: 'check-1', creationId: 'creation-fixture-001' }

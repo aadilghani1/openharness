@@ -9,6 +9,7 @@ import 'sections/about_section.dart';
 import 'sections/account_section.dart';
 import 'sections/debug_section.dart';
 import 'sections/devices_section.dart';
+import 'sections/experimental_section.dart';
 import 'sections/shortcuts_section.dart';
 import 'sections/tracking_section.dart';
 import 'sections/usage_section.dart';
@@ -184,6 +185,9 @@ class _SettingsBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final screen = switch (section) {
+      SettingsSection.experimental => ExperimentalSection(
+        controller: notifier.swarmSettings,
+      ),
       SettingsSection.account => AccountSection(notifier: notifier),
       SettingsSection.usage => const UsageSection(),
       SettingsSection.customize => throw StateError(

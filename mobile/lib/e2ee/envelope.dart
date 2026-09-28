@@ -14,6 +14,8 @@ const int e2eVersion = 1;
 /// fails nowhere on the phone: the frame simply leaves in the clear, and the machine refuses it with
 /// E2EE_REQUIRED (for terminal_* the relay drops it as TERMINAL_FRAME_REJECTED).
 const Set<String> encryptedDownTypes = {
+  'team',
+  'team_delivery',
   'message',
   'question_response',
   'agents_list',

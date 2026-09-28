@@ -95,6 +95,7 @@ import '../state/command_bar_catalog.dart';
 import '../widgets/harness_command_bar.dart';
 import '../orchestrator/orchestrator_launcher.dart';
 import '../orchestrator/orchestrator_workspace.dart';
+import '../teams/team_workspace.dart';
 import '../state/workspace_learning.dart';
 import '../state/workspace_onboarding.dart';
 import '../widgets/workspace_quick_start.dart';
@@ -3660,6 +3661,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _dialog(() => showTaskPalette(context, app)),
     ShortcutAction.orchestrate: () =>
         _dialog(() => showOrchestratorLauncher(context, app)),
+    ShortcutAction.team: () =>
+        _dialog(() => showChannelWorkspace(context, app)),
+    ShortcutAction.askOutsideSwarm: () async {
+      final message = await app.askOutsideSwarm();
+      _showPaneActionHint(message);
+    },
     ShortcutAction.reload: app.retryMachines,
     ShortcutAction.showLayout: () =>
         _dialog(() => showLayoutPalette(context, app)),
@@ -3736,6 +3743,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (id == 'keyboard.open_config') return _keymap.store != null;
     if (id == 'keyboard.pause_guide') return _learning.active;
+    if (id == 'channel.ask_outside') {
+      final pane = app.focusedPane;
+      final machine = pane == null ? null : app.stateOf(pane.machineId);
+      return pane?.agentId != null &&
+          !pane!.isWeb &&
+          machine != null &&
+          !machine.machine.isShared &&
+          _focusedAgent?.engine != 'terminal';
+    }
     if (id == 'agent.share' || id == 'pane.toggle_viewer') {
       final focused = WorkspacePaneContext.focused(app);
       final agent = focused?.agent;

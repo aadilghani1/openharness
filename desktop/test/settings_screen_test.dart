@@ -77,6 +77,7 @@ void main() {
     expect(find.text('HELP'), findsOneWidget);
     expect(find.text('Usage'), findsNWidgets(2));
     expect(find.text('Customize'), findsOneWidget);
+    expect(find.text('Experimental'), findsOneWidget);
     expect(find.text('Keyboard shortcuts'), findsOneWidget);
     expect(find.text('About'), findsOneWidget);
     expect(find.text('Back to app'), findsOneWidget);

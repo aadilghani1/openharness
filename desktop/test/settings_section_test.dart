@@ -36,6 +36,7 @@ void main() {
       SettingsSection.notifications,
       SettingsSection.devices,
       SettingsSection.account,
+      SettingsSection.experimental,
       SettingsSection.shortcuts,
       SettingsSection.about,
     ]);

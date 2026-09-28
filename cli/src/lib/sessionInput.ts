@@ -97,11 +97,15 @@ interface InputState {
 }
 
 export interface SessionInputDeps {
+  /** A team-only preflight at the actual write boundary. A reason proves no paste occurred. */
+  beforeTeamWrite?: (session: RegisteredSession) => Promise<string | null>
   onDelivery?: (event: SessionInputDelivery) => void
   getSession: (sessionId: string) => RegisteredSession | undefined
   validateRuntime: (session: RegisteredSession) => Promise<boolean>
   /** Boolean is retained for direct controller tests and legacy embedders. Production returns dispatch evidence. */
   inject: (terminalTarget: string, content: string) => Promise<boolean | TerminalActionResult>
+  /** Host serializes the preflight and paste with other terminal writers. */
+  injectTeam?: (terminalTarget: string, content: string, deliveryId: string) => Promise<boolean | TerminalActionResult>
   sendKey: (terminalTarget: string, key: string) => Promise<boolean | TerminalActionResult>
   capture?: (terminalTarget: string) => Promise<string | null>
   onError: (sessionId: string, message: string) => void
@@ -184,7 +188,11 @@ export class SessionInputController {
 
   submit(sessionId: string, content: string, deliveryId?: string): void {
     const session = this.controlSession(sessionId)
-    if (!session) { this.delivery(sessionId, deliveryId, 'rejected', 'agent_gone'); this.deps.onError(sessionId, 'This agent is no longer available.'); return }
+    if (!session) {
+      this.delivery(sessionId, deliveryId, 'rejected', 'agent_gone')
+      if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This agent is no longer available.')
+      return
+    }
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
     if (state.controlLocked
@@ -232,10 +240,17 @@ export class SessionInputController {
 
   onTurnStarted(sessionId: string, userMessage: string): void {
     const state = this.state(sessionId)
+    // Claude 2.1.283 records bracketed pastes inside an envelope with matching
+    // opening/closing IDs. Compare its exact payload, never a substring of a
+    // different prompt or text outside the envelope. Other engines remain exact.
+    const pasted = this.controlSession(sessionId)?.engine === 'claude'
+      ? /^\s*<pasted_content id="([a-f0-9]+)">\r?\n([\s\S]*)\r?\n<\/pasted_content id="\1">\s*$/.exec(userMessage)
+      : null
+    const observedFingerprint = fingerprint(pasted?.[2] ?? userMessage)
     if (state.deliveryId && state.writing) state.observedStart = userMessage
     else if (state.deliveryId && state.deliveryFingerprint) this.finishDelivery(sessionId, state,
-      state.deliveryFingerprint === fingerprint(userMessage) ? 'started' : 'unknown',
-      state.deliveryFingerprint === fingerprint(userMessage) ? undefined : 'prompt_mismatch')
+      state.deliveryFingerprint === observedFingerprint ? 'started' : 'unknown',
+      state.deliveryFingerprint === observedFingerprint ? undefined : 'prompt_mismatch')
     if (state.settleTimer) clearTimeout(state.settleTimer)
     state.settleTimer = null
     state.settling = false
@@ -247,7 +262,7 @@ export class SessionInputController {
     // confirmed started.
     void this.clearCursorEcho(sessionId, userMessage)
     if (state.awaitingFingerprint) {
-      const matched = state.awaitingFingerprint === fingerprint(userMessage)
+      const matched = state.awaitingFingerprint === observedFingerprint
       if (!matched) console.warn(`[inject] ${sessionId.slice(0, 8)} observed a different terminal prompt while awaiting submit`)
       state.awaitingFingerprint = null
       state.awaitingContent = null
@@ -412,11 +427,16 @@ export class SessionInputController {
       if (!(await this.deps.validateRuntime(session))) {
         console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
         this.finishDelivery(sessionId, state, 'rejected', 'runtime_gone_pre_paste')
-        this.deps.onError(sessionId, 'This agent process is no longer running.')
+        if (!deliveryId.startsWith('team:')) this.deps.onError(sessionId, 'This agent process is no longer running.')
         return
       }
       if (state.cancelled || this.states.get(sessionId) !== state) return
-      if (session.engine === 'cursor') {
+      if (deliveryId.startsWith('team:')) {
+        const held = this.deps.beforeTeamWrite ? await this.deps.beforeTeamWrite(session) : 'team_waiting_unavailable'
+        if (state.cancelled || this.states.get(sessionId) !== state) return
+        if (held) { this.finishDelivery(sessionId, state, 'rejected', held); return }
+      }
+      if (session.engine === 'cursor' && !deliveryId.startsWith('team:')) {
         // Cursor leaves the previous prompt sitting in its composer after the turn completes — the text is
         // still on the "→" line long after the answer and its recap have arrived. sendToTmux() types into
         // whatever is already there, so the next message is APPENDED to the last one and the pair is
@@ -435,9 +455,14 @@ export class SessionInputController {
       }
       if (state.cancelled || this.states.get(sessionId) !== state) return
       state.writing = true
-      const delivery = await this.deps.inject(session.agentId, content)
+      const delivery = await (deliveryId.startsWith('team:') && this.deps.injectTeam
+        ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.deps.inject(session.agentId, content))
       state.writing = false
       if (state.cancelled || this.states.get(sessionId) !== state) return
+      if (typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started' && delivery.reason.startsWith('team_waiting_')) {
+        this.finishDelivery(sessionId, state, 'rejected', delivery.reason)
+        return
+      }
       const accepted = typeof delivery === 'boolean'
         ? delivery
         : delivery.state === 'succeeded' || delivery.dispatch === 'possibly_executed'
@@ -509,6 +534,14 @@ export class SessionInputController {
   }
 
   private async retrySubmit(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
+    if (state.deliveryId?.startsWith('team:')) {
+      // Team traffic is automatic. A missing transcript start is not permission to press Enter
+      // again: the message may already be in the engine's queue. Inbox/reply correlation can
+      // still finish the exchange even when the terminal receipt remains uncertain.
+      if (++state.observes <= SUBMIT_MAX_OBSERVES) this.armSubmitCheck(sessionId, session, state)
+      else this.failAmbiguousSubmission(sessionId, state)
+      return
+    }
     if (session.engine === 'cursor') {
       const capture = await this.deps.capture?.(session.agentId)
       if (!state.awaitingFingerprint || state.turnOpen) return
@@ -633,7 +666,11 @@ export class SessionInputController {
     const next = state.queue.shift()
     if (!next) return
     const session = this.controlSession(sessionId)
-    if (!session) { this.delivery(sessionId, next.deliveryId, 'rejected', 'agent_gone'); this.deps.onError(sessionId, 'This agent is no longer available.'); return }
+    if (!session) {
+      this.delivery(sessionId, next.deliveryId, 'rejected', 'agent_gone')
+      if (!next.deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This agent is no longer available.')
+      return
+    }
     void this.inject(sessionId, session, next.content, next.deliveryId)
   }
 
@@ -642,7 +679,7 @@ export class SessionInputController {
     const queuedBytes = state.queue.reduce((sum, item) => sum + item.bytes, 0)
     if (state.queue.length >= MAX_QUEUE_ITEMS || queuedBytes + bytes > MAX_QUEUE_BYTES) {
       this.delivery(sessionId, deliveryId, 'rejected', 'queue_full')
-      this.deps.onError(sessionId, 'This agent already has too many queued messages. Try again after the current operation finishes.')
+      if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This agent already has too many queued messages. Try again after the current operation finishes.')
       return
     }
     state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId })
@@ -650,11 +687,11 @@ export class SessionInputController {
   }
 
   private dropExpired(sessionId: string, state: InputState): void {
-    const before = state.queue.length
     const now = Date.now()
+    const expiredLocalInput = state.queue.some(item => item.expiresAt <= now && !item.deliveryId?.startsWith('team:'))
     for (const item of state.queue) if (item.expiresAt <= now) this.delivery(sessionId, item.deliveryId, 'rejected', 'queue_expired')
     state.queue = state.queue.filter((item) => item.expiresAt > now)
-    if (state.queue.length < before) this.deps.onError(sessionId, 'A queued message expired before the agent became available.')
+    if (expiredLocalInput) this.deps.onError(sessionId, 'A queued message expired before the agent became available.')
   }
 }
 

@@ -73,6 +73,8 @@ enum ShortcutAction {
   restartAgent,
   routeTask,
   orchestrate,
+  team,
+  askOutsideSwarm,
   reload,
   showLayout,
   pinPane,
@@ -305,6 +307,16 @@ const List<AppShortcut> kAppShortcuts = [
   ),
 
   // --- actions --------------------------------------------------------------
+  AppShortcut(
+    action: ShortcutAction.askOutsideSwarm,
+    activator: SingleActivator(
+      LogicalKeyboardKey.keyA,
+      meta: true,
+      shift: true,
+    ),
+    label: 'Ask outside this swarm',
+    group: ShortcutGroup.actions,
+  ),
   AppShortcut(
     action: ShortcutAction.newAgent,
     activator: SingleActivator(LogicalKeyboardKey.keyN, meta: true),

@@ -78,6 +78,8 @@ import '../usage/models_menu_controller.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
 import '../orchestrator/orchestrator_controller.dart';
+import '../teams/team_controller.dart';
+import '../teams/swarm_settings_controller.dart';
 import '../notify/agent_alerts.dart';
 import '../notify/alert_sounds.dart';
 import '../notify/system_notifications.dart';
@@ -911,6 +913,115 @@ class AppNotifier extends ChangeNotifier {
   String get activeSwarmId => activeSwarm.id;
 
   final _orchestratorProjects = <String, OrchestratorController>{};
+  final _teamControllers = <String, TeamController>{};
+  final _channelControllers = <String, TeamController>{};
+  SwarmSettingsController? _swarmSettings;
+  SwarmSettingsController get swarmSettings =>
+      _swarmSettings ??= SwarmSettingsController(
+        request: (payload) {
+          final gateway = channelGateway(localMachineState?.machine.machineId);
+          if (gateway == null) {
+            throw const TeamRequestError(
+              'Connect one of your machines to configure swarm collaboration.',
+            );
+          }
+          return teamRequest(gateway, payload);
+        },
+      );
+
+  /// The first hop may change; the request still names its original tab and
+  /// the daemon routes it to that tab's saved host. Observation links cannot
+  /// carry owner collaboration commands.
+  String? channelGateway(String? preferredMachineId) {
+    final candidates = <MachineState>[
+      ?machineStates[preferredMachineId],
+      ...machineStates.values,
+    ].where((state) => !state.machine.isShared);
+    return (candidates
+                .where(
+                  (state) =>
+                      state.connectionStatus == ConnectionStatus.connected,
+                )
+                .firstOrNull ??
+            candidates.firstOrNull)
+        ?.machine
+        .machineId;
+  }
+
+  TeamController channelController(String tabId, String gatewayMachineId) =>
+      _channelControllers.putIfAbsent(tabId, () {
+        late final TeamController controller;
+        controller = TeamController(
+          channelTabId: tabId,
+          request: (payload) {
+            final machineId =
+                controller.team?['machineId'] as String? ??
+                channelGateway(gatewayMachineId);
+            if (machineId == null) {
+              throw const TeamRequestError(
+                'Connect one of your machines to use swarm collaboration.',
+              );
+            }
+            return teamRequest(machineId, payload);
+          },
+        );
+        return controller;
+      });
+
+  Future<String> askOutsideSwarm() async {
+    final authRevision = _authRevision;
+    final tabId = activeSwarmId;
+    final tabName = activeSwarm.name;
+    final pane = focusedPane;
+    if (pane == null || pane.agentId == null || pane.isWeb) {
+      return 'Focus an agent in this tab to ask another swarm.';
+    }
+    if (stateOf(pane.machineId)?.machine.isShared != false) {
+      return 'Shared agents are view-only.';
+    }
+    final agentId = pane.agentId!, machineId = pane.machineId;
+    // Flush the captured membership before asking. A later tab switch cannot
+    // redirect this instruction or substitute a newly focused agent.
+    await _deskFlush();
+    if (_disposed || !_authWorkCurrent(authRevision)) {
+      return 'Workspace closed.';
+    }
+    final result = await channelController(
+      tabId,
+      machineId,
+    ).consult(machineId, agentId, outsideSwarm: true);
+    return '$tabName · $result';
+  }
+
+  Future<Map<String, dynamic>> teamRequest(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      return await _conn(
+        machineId,
+      ).request('team', payload: payload, timeout: const Duration(seconds: 35));
+    } on WsRequestFailure catch (e) {
+      throw TeamRequestError(
+        e.code == 'UNSUPPORTED'
+            ? 'Update Harness on this machine to use agent collaboration.'
+            : e.toString(),
+        uncertain: const {
+          'UNCONFIRMED',
+          'DISCONNECTED',
+          'TEAM_UNAVAILABLE',
+        }.contains(e.code),
+      );
+    }
+  }
+
+  TeamController teamController(String machineId) =>
+      _teamControllers.putIfAbsent(
+        machineId,
+        () => TeamController(
+          request: (payload) => teamRequest(machineId, payload),
+        ),
+      );
 
   Future<Map<String, dynamic>> orchestratorRequest(
     String machineId,
@@ -3493,6 +3604,16 @@ class AppNotifier extends ChangeNotifier {
       controller.dispose();
     }
     _orchestratorProjects.clear();
+    for (final controller in _teamControllers.values) {
+      controller.dispose();
+    }
+    _teamControllers.clear();
+    for (final controller in _channelControllers.values) {
+      controller.dispose();
+    }
+    _channelControllers.clear();
+    _swarmSettings?.dispose();
+    _swarmSettings = null;
     final starter = Swarm(id: 'swarm-${_nextSwarmId++}');
     swarms
       ..clear()
@@ -11248,6 +11369,13 @@ class AppNotifier extends ChangeNotifier {
       _orchestratorProjects['$machineId/${payload['id']}']?.changed();
       return;
     }
+    if (type == 'team_changed') {
+      _teamControllers[machineId]?.changed();
+      for (final controller in _channelControllers.values) {
+        controller.changed();
+      }
+      return;
+    }
     // Only terminal protocol frames visit the session pool. Heartbeats, dial
     // scroll and discovery events must not await every retained terminal.
     // Each session still sees terminal frames: ready replies match their own
@@ -11752,6 +11880,16 @@ class AppNotifier extends ChangeNotifier {
     viewer?.auth.dispose();
     _modelManager?.dispose();
     _modelsMenu?.dispose();
+    for (final controller in _teamControllers.values) {
+      controller.dispose();
+    }
+    _teamControllers.clear();
+    for (final controller in _channelControllers.values) {
+      controller.dispose();
+    }
+    _channelControllers.clear();
+    _swarmSettings?.dispose();
+    _swarmSettings = null;
     for (final project in _orchestratorProjects.values) {
       project.dispose();
     }

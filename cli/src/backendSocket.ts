@@ -22,6 +22,7 @@ import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/auton
 import { WebSocket } from 'ws'
 import { watchSocketLiveness, type LivenessWatch } from './lib/wsLiveness.js'
 import { stat, readFile, readdir } from 'fs/promises'
+import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'path'
 import { hostname, homedir } from 'os'
 import { env } from './config/env.js'
@@ -59,6 +60,12 @@ import { installedDsh, listInstalledDsh } from './dsh/installed.js'
 import { OrchestratorService } from './orchestrator/service.js'
 import { OrchestratorError } from './orchestrator/model.js'
 import { orchestratorRequest } from './orchestrator/wire.js'
+import { TeamService } from './teams/service.js'
+import { ChannelDirectory } from './teams/channels.js'
+import { TeamMailbox } from './teams/mailbox.js'
+import { teamRequest, teamDeliveryRequest, TEAM_REQUEST_TYPES, teamFailure } from './teams/wire.js'
+import { teamRpc } from './teams/client.js'
+import { Address, Id, Receipt, TeamError, type MemberRuntime } from './teams/model.js'
 import { shellQuote } from './orchestrator/prompts.js'
 import type { SessionInputDelivery } from './lib/sessionInput.js'
 import { engineLabel } from './lib/agentNames.js'
@@ -542,6 +549,79 @@ export class BackendSocket {
     this.orchestratorService?.delivery(event)
   }
   private orchestratorService: OrchestratorService | null = null
+  /** Isolated daemon fixtures can override these without touching installed state. */
+  teamStateDir = join(env.ADAPTER_DATA_DIR, 'teams')
+  teamCommand: string | null = null
+  private teamService: TeamService | null = null
+  private teamMailboxService: TeamMailbox | null = null
+  readChannelDesk: (() => Promise<unknown>) | null = null
+  writeChannelSettings: ((enabled: boolean) => Promise<unknown>) | null = null
+  private channelsEnabled = false
+  private channelDirectory: ChannelDirectory | null = null
+  private channels(): ChannelDirectory {
+    if (!this.readChannelDesk) throw new TeamError('CHANNELS_UNSUPPORTED', 'Tab channels are not available on this daemon.')
+    return this.channelDirectory ??= new ChannelDirectory({
+      machineId: this.machineId, service: this.teams(), readDesk: () => this.readChannelDesk!(),
+      writeSettings: async enabled => {
+        if (!this.writeChannelSettings) throw new TeamError('CHANNELS_UNSUPPORTED', 'Update Harness to configure swarm collaboration.')
+        return this.writeChannelSettings(enabled)
+      },
+      enabledChanged: enabled => { this.channelsEnabled = enabled; this.teamMailboxService?.pump() },
+      forward: (machineId, payload) => teamRpc({ port: env.PORT, machineId, dataDir: env.ADAPTER_DATA_DIR }, 'team', payload),
+    })
+  }
+  refreshChannels(): void { if (this.readChannelDesk) void this.channels().refresh(true).catch(() => {}) }
+  teamDelivery(event: SessionInputDelivery): void { this.teamMailboxService?.observe(event) }
+  teamCanWrite(deliveryId: string): boolean { return this.teamMailboxService?.canWrite(deliveryId) ?? false }
+  private localTeamRuntime(agentId: string): MemberRuntime | null {
+    const agent = registry.byAgent(agentId)
+    return agent ? { name: projectDisplayName(agent), engine: agent.engine, cwd: agent.cwd ?? undefined,
+      available: agent.active && registry.terminalAvailable(agentId),
+      ...(!agent.active ? { reason: 'Session is paused or offline.' } : {}) } : null
+  }
+  private teamMailbox(): TeamMailbox {
+    return this.teamMailboxService ??= new TeamMailbox({
+      stateDir: join(this.teamStateDir, 'mailboxes'),
+      channelsEnabled: () => this.channelsEnabled,
+      runtime: id => this.localTeamRuntime(id),
+      send: (id, text, deliveryId) => {
+        if (!this.onMessage) throw new TeamError('UNAVAILABLE', 'Agent input is not ready.')
+        this.onMessage(id, text, deliveryId)
+      },
+      cancel: id => this.onCancelOrchestratorMessage?.(id) ?? false,
+    })
+  }
+  private teams(): TeamService {
+    return this.teamService ??= new TeamService({
+      stateDir: join(this.teamStateDir, 'ledgers'), machineId: this.machineId,
+      command: address => address.machineId === this.machineId
+        ? this.teamCommand ?? `${[process.execPath, ...process.execArgv, process.argv[1]].map(shellQuote).join(' ')} team --port ${env.PORT}`
+        : 'harness team',
+      runtime: async address => {
+        Address.parse(address)
+        if (address.machineId === this.machineId) return this.localTeamRuntime(address.agentId)
+        const result = await teamRpc({ port: env.PORT, machineId: address.machineId, dataDir: env.ADAPTER_DATA_DIR }, 'team_delivery', { action: 'runtime', agentId: address.agentId })
+        return result.runtime as MemberRuntime | null
+      },
+      delivery: async (address, action, delivery) => {
+        if (address.machineId === this.machineId) {
+          const mailbox = this.teamMailbox()
+          return action === 'send' ? mailbox.accept(delivery) : action === 'status' ? mailbox.status(delivery.id)
+            : action === 'hold' || action === 'release' ? mailbox.hold(delivery.id, action === 'hold') : mailbox.cancel(delivery.id, action === 'consume')
+        }
+        const result = await teamRpc({ port: env.PORT, machineId: address.machineId, dataDir: env.ADAPTER_DATA_DIR }, 'team_delivery', { action, delivery })
+        return result.receipt == null ? null : Receipt.parse(result.receipt)
+      },
+      changed: (id, revision) => this.sendLocal({ type: 'team_changed', payload: { id, revision } }),
+    })
+  }
+  /** Resume persisted queues after input wiring is ready, even with no UI attached. */
+  startTeams(): void {
+    if (this.readChannelDesk) this.channels().start()
+    if (!existsSync(this.teamStateDir)) return
+    try { this.teamMailbox().start(); this.teams().start() }
+    catch { console.warn('[teams] preserved unreadable team state; inspect Team for recovery') }
+  }
   /** The commander asks this for every turn that ends — see OrchestratorService.roleOf. */
   orchestratorRoleOf(agentId: string): ReturnType<OrchestratorService['roleOf']> {
     return this.orchestration().roleOf(agentId)
@@ -1027,6 +1107,9 @@ export class BackendSocket {
     this.closed = true
     this.stopGridModelsPush()
     this.orchestratorService?.stop()
+    this.teamService?.stop()
+    this.teamMailboxService?.stop()
+    this.channelDirectory?.stop()
     this.viewerForwarder.closeAll()
     if (this.heartbeat) this.heartbeat.stop()
     if (this.appPing) clearInterval(this.appPing)
@@ -1404,7 +1487,7 @@ export class BackendSocket {
     const resultType = `${type}_result`
     if (connId && deviceDump.enabled && this.e2ee.sessionRole(connId) === 'device') deviceDump.record('out', 'legacy', connId, { type: resultType, payload: { requestId, ...payload } })
     // Before the E2EE wrap: an RPC reply is only readable here.
-    if (env.LOG_FRAMES && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type)) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
+    if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type)) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
       return
@@ -1531,7 +1614,7 @@ export class BackendSocket {
     // than as an opaque __e2e envelope.
     // Terminal frames contain raw keystrokes, paste text and screen bytes after
     // unwrap. Never pass them to the frame logger, even in diagnostic mode.
-    if (env.LOG_FRAMES && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'orchestrator' && !SHARE_REQUEST_TYPES.has(type)) {
+    if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'orchestrator' && !SHARE_REQUEST_TYPES.has(type)) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => this.emitReply(connId, t, rid, p)
@@ -1593,6 +1676,7 @@ export class BackendSocket {
     // window the revision and let it fetch `/api/desk` through this daemon. Backend-only, like
     // machine_meta — a local client cannot make the window re-read anything by sending this.
     if (type === 'desk_changed') {
+      this.refreshChannels()
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
       this.sendLocal({ type: 'desk_changed', payload: { revision: typeof revision === 'number' ? revision : 0 } })
       return
@@ -1639,6 +1723,25 @@ export class BackendSocket {
 
     const payload = (frame.payload ?? {}) as Record<string, unknown>
     const requestId = payload.requestId
+
+    if (TEAM_REQUEST_TYPES.has(type)) {
+      // Observers were handled above; only the owner or a paired owner client reaches this route.
+      if (!local && this.e2ee.sessionRole(connId) !== 'web') {
+        reply(type, requestId, { error: 'OWNER_REQUIRED', detail: 'Team communication requires an owner connection.' })
+        return
+      }
+      void Promise.resolve().then(async () => {
+        if (type === 'team') {
+          if (String(payload.action).startsWith('channel_')) return this.channels().request(payload)
+          if (typeof payload.teamId === 'string' && this.teams().isChannel(payload.teamId)
+              && ['ask', 'get', 'members'].includes(String(payload.action))) await this.channels().refresh(payload.action === 'ask')
+          return teamRequest(this.teams(), payload)
+        }
+        if (payload.action === 'runtime') return { runtime: this.localTeamRuntime(Id.parse(payload.agentId)) }
+        return teamDeliveryRequest(this.teamMailbox(), payload)
+      }).then(result => reply(type, requestId, result)).catch(error => reply(type, requestId, teamFailure(error)))
+      return
+    }
 
     if (type === 'api_connections') {
       if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Manage APIs on this computer.' }); return }
