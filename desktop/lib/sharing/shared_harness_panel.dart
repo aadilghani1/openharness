@@ -16,6 +16,8 @@ import '../terminal/terminal_session.dart';
 import '../widgets/terminal_panel.dart';
 import '../ws/ws_conn.dart';
 import '../viewer/observer_relay_codec.dart';
+import '../widgets/terminal_text_action.dart';
+import 'harness_comments.dart';
 
 class SharedHarnessPanel extends StatefulWidget {
   const SharedHarnessPanel({
@@ -26,12 +28,18 @@ class SharedHarnessPanel extends StatefulWidget {
     required this.hasAccess,
     required this.visible,
     required this.onClose,
+    this.link = false,
+    this.linkEnvironment,
+    this.onSignIn,
   });
   final AppNotifier notifier;
   final TerminalPane pane;
   final SharedHarness grant;
   final bool hasAccess, visible;
   final VoidCallback onClose;
+  final bool link;
+  final String? linkEnvironment;
+  final VoidCallback? onSignIn;
   @override
   State<SharedHarnessPanel> createState() => _SharedHarnessPanelState();
 }
@@ -53,6 +61,8 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
   bool _viewerChosen = false;
   String _lastViewerState = '';
   int _generation = 0;
+  bool _commentsSelected = false, _commentsOpened = false;
+  final _commentUpdates = ValueNotifier<int>(0);
   @override
   void initState() {
     super.initState();
@@ -77,9 +87,11 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
     );
     _connection = WsConn(
       wsBaseUrl: widget.notifier.config.wsBaseUrl,
-      autonomousEnv: widget.notifier.config.autonomousEnv,
+      autonomousEnv:
+          widget.linkEnvironment ?? widget.notifier.config.autonomousEnv,
       machineId: widget.pane.machineId,
       observerShareId: widget.grant.id,
+      observerLink: widget.link,
       transportKind: viewer == null
           ? WsTransportKind.localPlaintext
           : WsTransportKind.cloudE2ee,
@@ -88,6 +100,8 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
           ? widget.notifier.localDaemonTransport
           : null,
       accessTokenProvider: (force, failedToken) async => viewer == null
+          ? ''
+          : widget.link && !await viewer.auth.hasSession()
           ? ''
           : viewer.auth.accessToken(force: force, failedToken: failedToken),
       relayCodecs: viewer == null
@@ -153,6 +167,8 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
                     ? 'Live viewer'
                     : 'Opening the viewer…');
           });
+        } else if (type == 'observer_comments') {
+          _commentUpdates.value++;
         } else {
           await _terminal.handleFrame(type, payload);
         }
@@ -222,7 +238,17 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
   void dispose() {
     unawaited(_connection.close());
     _terminal.dispose();
+    _commentUpdates.dispose();
     super.dispose();
+  }
+
+  void _retry() {
+    unawaited(_connection.close());
+    _terminal.dispose();
+    _ended = false;
+    _failure = null;
+    _status = ConnectionStatus.connecting;
+    setState(_start);
   }
 
   @override
@@ -233,50 +259,54 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
     return Column(
       children: [
         Container(
-          height: 44,
-          padding: const EdgeInsets.only(left: 12, right: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           color: grid.AppSurface.recess,
-          child: Row(
+          child: Column(
             children: [
-              const Icon(Icons.visibility_outlined, size: 16),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  widget.grant.name,
-                  overflow: TextOverflow.ellipsis,
-                  style: grid.AppType.monoLabel(
-                    fontWeight: grid.AppFont.semibold,
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      widget.grant.name,
+                      overflow: TextOverflow.ellipsis,
+                      style: terminalContentStyle().copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'View only',
-                style: grid.AppType.monoLabel(fontWeight: grid.AppFont.regular),
-              ),
-              const SizedBox(width: 12),
-              Tooltip(
-                message:
-                    _failure ??
-                    (live
-                        ? 'Watching ${widget.pane.sharedOwnerName ?? 'the owner'}’s harness'
-                        : 'Waiting for the owner’s machine. Reconnecting automatically.'),
-                child: Text(
-                  _ended
-                      ? 'Sharing ended'
-                      : live
-                      ? 'Live'
-                      : 'Reconnecting',
-                  style: grid.AppType.monoLabel(
-                    fontWeight: grid.AppFont.regular,
-                    color: grid.AppPalette.textSecondary,
+                  const SizedBox(width: 8),
+                  Text('View only', style: terminalContentStyle()),
+                  IconButton(
+                    tooltip: 'Close shared harness',
+                    onPressed: widget.onClose,
+                    icon: const Icon(Icons.close, size: 16),
                   ),
-                ),
+                ],
               ),
-              IconButton(
-                tooltip: 'Close shared harness',
-                onPressed: widget.onClose,
-                icon: const Icon(Icons.close, size: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _ended
+                          ? 'Sharing ended'
+                          : live
+                          ? 'Live'
+                          : 'Reconnecting',
+                      style: terminalContentStyle(
+                        color: grid.AppPalette.textSecondary,
+                      ),
+                    ),
+                  ),
+                  if (_ended && widget.hasAccess)
+                    TerminalTextAction(label: 'Retry', onPressed: _retry),
+                  TerminalTextAction(
+                    label: _commentsSelected ? 'Watch' : 'Comments',
+                    onPressed: () => setState(() {
+                      _commentsSelected = !_commentsSelected;
+                      _commentsOpened = true;
+                    }),
+                  ),
+                ],
               ),
             ],
           ),
@@ -290,109 +320,170 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
           ),
         Expanded(
           child: LayoutBuilder(
-            builder: (context, constraints) {
-              Widget terminal() => TerminalPanel(
-                notifier: widget.notifier,
-                session: _terminal,
-                focused: widget.notifier.isPaneFocused(widget.pane.id),
-                visible: widget.visible,
-                showHeader: false,
-                readOnly: true,
-                viewportSize: constraints.biggest,
-              );
-              Widget viewer() => ColoredBox(
-                color: grid.AppPalette.windowBg,
-                child: Center(
-                  child: _image == null
-                      ? Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
+            builder: (context, size) {
+              final wide = size.maxWidth >= 1000;
+              final commentsWidth = wide
+                  ? (terminalCellSizeOf(context).width * 44).clamp(
+                      280.0,
+                      size.maxWidth * .45,
+                    )
+                  : size.maxWidth;
+              return Stack(
+                children: [
+                  Positioned.fill(
+                    right: _commentsSelected && wide ? commentsWidth : 0,
+                    child: Offstage(
+                      offstage: _commentsSelected && !wide,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          Widget terminal() => TerminalPanel(
+                            notifier: widget.notifier,
+                            session: _terminal,
+                            focused: widget.notifier.isPaneFocused(
+                              widget.pane.id,
+                            ),
+                            visible: widget.visible,
+                            showHeader: false,
+                            readOnly: true,
+                            viewportSize: constraints.biggest,
+                          );
+                          Widget viewer() => ColoredBox(
+                            color: grid.AppPalette.windowBg,
+                            child: Center(
+                              child: _image == null
+                                  ? Padding(
+                                      padding: const EdgeInsets.all(24),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          if (!_ended)
+                                            const Skeleton(
+                                              width: 220,
+                                              height: 130,
+                                            ),
+                                          const SizedBox(height: 14),
+                                          Text(
+                                            _viewerMessage,
+                                            textAlign: TextAlign.center,
+                                            style: grid.AppType.body(
+                                              color:
+                                                  grid.AppPalette.textSecondary,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                  : Image.memory(
+                                      _image!,
+                                      gaplessPlayback: true,
+                                      fit: BoxFit.contain,
+                                      semanticLabel:
+                                          'Live output from ${widget.grant.name}',
+                                      errorBuilder: (_, _, _) => const Text(
+                                        'Waiting for the next viewer frame.',
+                                      ),
+                                    ),
+                            ),
+                          );
+                          if (constraints.maxWidth >= 880) {
+                            return Row(
+                              children: [
+                                Expanded(flex: 5, child: terminal()),
+                                VerticalDivider(
+                                  width: 1,
+                                  color: grid.AppPalette.textFaint,
+                                ),
+                                Expanded(flex: 4, child: viewer()),
+                              ],
+                            );
+                          }
+                          return Column(
                             children: [
-                              if (!_ended)
-                                const Skeleton(width: 220, height: 130),
-                              const SizedBox(height: 14),
-                              Text(
-                                _viewerMessage,
-                                textAlign: TextAlign.center,
-                                style: grid.AppType.body(
-                                  color: grid.AppPalette.textSecondary,
+                              Row(
+                                children: [
+                                  TextButton(
+                                    onPressed: () => setState(() {
+                                      _viewerChosen = true;
+                                      _viewerSelected = false;
+                                    }),
+                                    child: Text(
+                                      'Terminal',
+                                      style: TextStyle(
+                                        fontWeight: !_viewerSelected
+                                            ? FontWeight.w600
+                                            : FontWeight.normal,
+                                      ),
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => setState(() {
+                                      _viewerChosen = true;
+                                      _viewerSelected = true;
+                                    }),
+                                    child: Text(
+                                      'Viewer',
+                                      style: TextStyle(
+                                        fontWeight: _viewerSelected
+                                            ? FontWeight.w600
+                                            : FontWeight.normal,
+                                      ),
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  Flexible(
+                                    child: Text(
+                                      widget.pane.sharedOwnerName ??
+                                          'Shared harness',
+                                      overflow: TextOverflow.ellipsis,
+                                      style: grid.AppType.monoLabel(
+                                        fontWeight: grid.AppFont.regular,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                ],
+                              ),
+                              Expanded(
+                                child: IndexedStack(
+                                  index: _viewerSelected ? 1 : 0,
+                                  children: [terminal(), viewer()],
                                 ),
                               ),
                             ],
-                          ),
-                        )
-                      : Image.memory(
-                          _image!,
-                          gaplessPlayback: true,
-                          fit: BoxFit.contain,
-                          semanticLabel:
-                              'Live output from ${widget.grant.name}',
-                          errorBuilder: (_, _, _) =>
-                              const Text('Waiting for the next viewer frame.'),
-                        ),
-                ),
-              );
-              if (constraints.maxWidth >= 880) {
-                return Row(
-                  children: [
-                    Expanded(flex: 5, child: terminal()),
-                    VerticalDivider(width: 1, color: grid.AppPalette.textFaint),
-                    Expanded(flex: 4, child: viewer()),
-                  ],
-                );
-              }
-              return Column(
-                children: [
-                  Row(
-                    children: [
-                      TextButton(
-                        onPressed: () => setState(() {
-                          _viewerChosen = true;
-                          _viewerSelected = false;
-                        }),
-                        child: Text(
-                          'Terminal',
-                          style: TextStyle(
-                            fontWeight: !_viewerSelected
-                                ? FontWeight.w600
-                                : FontWeight.normal,
-                          ),
-                        ),
+                          );
+                        },
                       ),
-                      TextButton(
-                        onPressed: () => setState(() {
-                          _viewerChosen = true;
-                          _viewerSelected = true;
-                        }),
-                        child: Text(
-                          'Viewer',
-                          style: TextStyle(
-                            fontWeight: _viewerSelected
-                                ? FontWeight.w600
-                                : FontWeight.normal,
-                          ),
-                        ),
-                      ),
-                      const Spacer(),
-                      Flexible(
-                        child: Text(
-                          widget.pane.sharedOwnerName ?? 'Shared harness',
-                          overflow: TextOverflow.ellipsis,
-                          style: grid.AppType.monoLabel(
-                            fontWeight: grid.AppFont.regular,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                    ],
-                  ),
-                  Expanded(
-                    child: IndexedStack(
-                      index: _viewerSelected ? 1 : 0,
-                      children: [terminal(), viewer()],
                     ),
                   ),
+                  if (_commentsOpened)
+                    Positioned(
+                      top: 0,
+                      bottom: 0,
+                      right: 0,
+                      width: commentsWidth,
+                      child: Offstage(
+                        offstage: !_commentsSelected,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: grid.AppPalette.windowBg,
+                            border: Border(
+                              left: BorderSide(color: grid.AppPalette.divider),
+                            ),
+                          ),
+                          child: HarnessComments(
+                            updates: _commentUpdates,
+                            onSignIn: widget.onSignIn,
+                            manage: (action, payload) => _connection.request(
+                              'observer_$action',
+                              payload: {
+                                'agentId': widget.grant.agentId,
+                                ...payload,
+                              },
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               );
             },

@@ -305,6 +305,7 @@ void main() {
         tester.widget<Text>(find.text('GPT-6 Astra')).style!.fontWeight,
         FontWeight.bold,
       );
+      expect(tester.getSize(control).height, 28);
       await hover.moveTo(Offset.zero);
       await tester.pumpAndSettle();
       await mount('GPT-5.6 Sol');

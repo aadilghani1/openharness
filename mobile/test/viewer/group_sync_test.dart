@@ -268,10 +268,12 @@ void main() {
         late FakeRelaySocket denied;
         denied = FakeRelaySocket(
           onFrame: (frame) {
-            if (frame['type'] == 'machine_select')
+            if (frame['type'] == 'machine_select') {
               denied.emit('connected', {'machineId': ms.machineId});
-            if (frame['type'] == 'e2e_hello')
+            }
+            if (frame['type'] == 'e2e_hello') {
               denied.emit('e2e_denied', {'reason': 'unpaired'});
+            }
           },
         );
         final refused = await syncTrustGroup(

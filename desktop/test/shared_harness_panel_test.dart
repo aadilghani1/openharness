@@ -81,7 +81,7 @@ void main() {
     },
   );
 
-  for (final width in [1100.0, 620.0]) {
+  for (final width in [1100.0, 620.0, 390.0]) {
     testWidgets(
       'shared pane live output, reconnect, revocation and renewal at width $width',
       (tester) async {
@@ -141,6 +141,17 @@ void main() {
                       rows: 33,
                     ),
                   )!,
+                );
+              } else if (frame['type'] == 'observer_comments') {
+                ws.add(
+                  jsonEncode({
+                    'type': 'observer_comments',
+                    'payload': {
+                      'requestId': p['requestId'],
+                      'comments': [],
+                      'canComment': true,
+                    },
+                  }),
                 );
               } else if (frame['type'] == 'observer_viewer') {
                 ws.add(
@@ -205,6 +216,27 @@ void main() {
         await settleNetwork(() => find.text('Live').evaluate().isNotEmpty);
         expect(requests.first['payload'], containsPair('shareId', 'grant'));
         expect(find.text('View only'), findsOneWidget);
+        await tester.tap(find.text('[ Comments ]'));
+        await settleNetwork(
+          () => find.byKey(const Key('comment-input')).evaluate().isNotEmpty,
+        );
+        await tester.enterText(
+          find.byKey(const Key('comment-input')),
+          'Keep this draft',
+        );
+        await tester.tap(find.text('[ Watch ]'));
+        await tester.pump();
+        await tester.tap(find.text('[ Comments ]'));
+        await tester.pump();
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('comment-input')))
+              .controller!
+              .text,
+          'Keep this draft',
+        );
+        await tester.tap(find.text('[ Watch ]'));
+        await tester.pump();
         // Receiving the request on the server does not mean its reply has
         // reached the UI yet. Wait for the response we are about to inspect.
         await settleNetwork(

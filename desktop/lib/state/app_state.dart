@@ -923,13 +923,22 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     Map<String, dynamic> payload,
   ) async {
-    if (machineId != localMachineState?.machine.machineId) {
+    final machine = stateOf(machineId);
+    if (machine == null ||
+        machine.machine.isShared ||
+        machine.needsLink ||
+        machine.nodeOnline == false ||
+        machine.connectionStatus != ConnectionStatus.connected) {
       throw StateError(
-        'Orchestrator projects currently run on this computer only.',
+        'Connect this machine to start an orchestrator project.',
       );
     }
+    final connection = _conn(machineId);
+    if (!connection.isReady) {
+      throw StateError('Reconnect this machine to manage its projects.');
+    }
     try {
-      return await _conn(machineId).request(
+      return await connection.request(
         'orchestrator',
         payload: payload,
         timeout: const Duration(seconds: 35),
@@ -937,7 +946,7 @@ class AppNotifier extends ChangeNotifier {
     } on WsRequestFailure catch (e) {
       if (e.code == 'UNSUPPORTED') {
         throw StateError(
-          'Update the local Harness CLI to use the orchestrator.',
+          'Update Harness on this machine to use the orchestrator.',
         );
       }
       rethrow;
@@ -1703,6 +1712,9 @@ class AppNotifier extends ChangeNotifier {
   bool signingIn = false;
   bool _sessionExpired = false;
   bool get sessionExpired => _sessionExpired;
+
+  @visibleForTesting
+  void handleAuthFailureForTest(String message) => _signedOutAtRuntime(message);
   bool signingOut = false;
   String? signOutError;
   Future<void>? _logoutInFlight;
@@ -2422,12 +2434,22 @@ class AppNotifier extends ChangeNotifier {
   /// Held in memory, not on disk, and cleared the moment the machine is chosen
   /// again: someone who clicks that row is asking to see it.
   final Set<String> _dismissedLinkPrompts = {};
+  String? _requestedMachineLink;
+
+  /// Explicit setup navigation must remain available even when a browser has
+  /// another connected machine and suppresses its automatic startup picker.
+  String? get requestedMachineLink => _requestedMachineLink;
+
+  void acknowledgeMachineLinkRequest(String machineId) {
+    if (_requestedMachineLink == machineId) _requestedMachineLink = null;
+  }
 
   bool isLinkPromptDismissed(String machineId) =>
       _dismissedLinkPrompts.contains(machineId);
 
   void dismissLinkPrompt(String machineId) {
     if (_disposed) return;
+    acknowledgeMachineLinkRequest(machineId);
     if (_dismissedLinkPrompts.add(machineId)) notifyListeners();
   }
 
@@ -2451,6 +2473,27 @@ class AppNotifier extends ChangeNotifier {
     for (final state in machineStates.values) {
       if (state.isLocalMachine) {
         return state; // the flag is the STATE's, not the machine row's
+      }
+    }
+    return null;
+  }
+
+  /// Default host for machine-scoped tools. A dialog freezes this choice while someone edits it.
+  /// Native windows retain their local host; a browser uses the focused linked host first.
+  MachineState? get ownedActionMachine {
+    if (viewer == null) return localMachineState;
+    for (final id in [
+      focusedPane?.machineId,
+      selectedMachineId,
+      ...machineStates.keys,
+    ]) {
+      final machine = machineStates[id];
+      if (machine != null &&
+          !machine.machine.isShared &&
+          !machine.needsLink &&
+          machine.nodeOnline != false &&
+          machine.connectionStatus == ConnectionStatus.connected) {
+        return machine;
       }
     }
     return null;
@@ -2487,9 +2530,13 @@ class AppNotifier extends ChangeNotifier {
   }
 
   Future<RouteAnswer?> routeTask(String text) async {
-    final machineId = localMachineState?.machine.machineId;
-    final connection = machineId == null ? null : _pool?[machineId];
-    if (connection == null) return null;
+    final machineId = ownedActionMachine?.machine.machineId;
+    final connection = machineId == null
+        ? null
+        : viewer == null
+        ? (_pool?[machineId])
+        : _conn(machineId);
+    if (connection == null || !connection.isReady) return null;
     try {
       final reply = await connection.request(
         'route_task',
@@ -2527,13 +2574,27 @@ class AppNotifier extends ChangeNotifier {
     String agentMachineId,
     String text,
   ) async {
-    final localId = localMachineState?.machine.machineId;
-    if (localId == null) return 'No local machine is connected.';
-    final connection = _pool?[localId];
-    if (connection == null) return 'No local machine is connected.';
-    // The task goes to the LOCAL daemon whichever machine the agent is on: it owns the dispatch that
-    // knows the difference (its own registry, or the fleet link to the other computer). Sending it down
-    // the remote machine's own socket would be a second delivery path for the same thing.
+    final localId = viewer == null
+        ? localMachineState?.machine.machineId
+        : agentMachineId.isNotEmpty
+        ? agentMachineId
+        : ownedActionMachine?.machine.machineId;
+    if (localId == null) return 'Connect a machine to send a task.';
+    final targetMachine = stateOf(localId);
+    if (viewer != null &&
+        (targetMachine == null ||
+            targetMachine.machine.isShared ||
+            targetMachine.needsLink ||
+            targetMachine.nodeOnline == false ||
+            targetMachine.connectionStatus != ConnectionStatus.connected)) {
+      return 'Reconnect this machine to send the task.';
+    }
+    final connection = viewer == null ? (_pool?[localId]) : _conn(localId);
+    if (connection == null || !connection.isReady) {
+      return 'Reconnect this machine to send the task.';
+    }
+    // Desktop dispatches through its local daemon; a browser uses the agent's linked owner.
+    // Both enter the same daemon task-delivery path, including refusal acknowledgements.
     try {
       final reply = await connection.request(
         'route_send',
@@ -2556,6 +2617,47 @@ class AppNotifier extends ChangeNotifier {
     final target = agentMachineId.isNotEmpty ? agentMachineId : localId;
     await selectAgent(target, agentId);
     return null;
+  }
+
+  Future<Map<String, dynamic>> resolveCommandBar(
+    Map<String, dynamic> request, {
+    required CancelToken cancelToken,
+  }) async {
+    if (viewer == null) {
+      return api.resolveCommandBar(request, cancelToken: cancelToken);
+    }
+    if (cancelToken.isCancelled) throw cancelToken.cancelError!;
+    final machine = ownedActionMachine;
+    if (machine == null) {
+      throw ApiException('Connect a machine, or choose an action below.');
+    }
+    final connection = _conn(machine.machine.machineId);
+    if (!connection.isReady) {
+      throw ApiException('Reconnect this machine, or choose an action below.');
+    }
+    try {
+      return await Future.any([
+        connection.request(
+          'command_bar',
+          payload: {'request': request},
+          timeout: const Duration(seconds: 16),
+        ),
+        cancelToken.whenCancel.then<Map<String, dynamic>>(
+          (error) => throw error,
+        ),
+      ]);
+    } on WsRequestFailure catch (failure) {
+      throw ApiException(
+        failure.code == 'UNSUPPORTED'
+            ? 'Update Harness on this machine to use smart commands.'
+            : failure.detail ??
+                  'This machine could not answer. Choose an action below.',
+      );
+    } on WsRequestTimeout {
+      throw ApiException(
+        'This machine did not answer. Update Harness or choose an action below.',
+      );
+    }
   }
 
   MachineState? get activeMachineState {
@@ -3530,6 +3632,7 @@ class AppNotifier extends ChangeNotifier {
     _draftSwarmReturns.clear();
     _localMismatchReported.clear();
     _dismissedLinkPrompts.clear();
+    _requestedMachineLink = null;
     for (final controller in _orchestratorProjects.values) {
       controller.dispose();
     }
@@ -4154,6 +4257,36 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
+  /// The browser controls only a linked, owned machine's managed viewer. Requests fail while
+  /// disconnected rather than replaying old clicks after a new connection takes over.
+  Future<Map<String, dynamic>> viewerSurface(
+    String machineId,
+    String agentId,
+    Map<String, dynamic> payload,
+  ) {
+    final machine = machineStates[machineId];
+    if (machine == null ||
+        machine.machine.isShared ||
+        machine.needsLink ||
+        machine.nodeOnline == false ||
+        machine.connectionStatus != ConnectionStatus.connected) {
+      return Future.error(
+        StateError('Reconnect this machine to open its viewer.'),
+      );
+    }
+    final connection = _conn(machineId);
+    if (!connection.isReady) {
+      return Future.error(
+        StateError('Reconnect this machine to open its viewer.'),
+      );
+    }
+    return connection.request(
+      'viewer_surface',
+      payload: {...payload, 'agentId': agentId},
+      timeout: const Duration(seconds: 25),
+    );
+  }
+
   int _machineInventoryRevision = 0;
 
   bool _machineInventoryCurrent(int auth, int request) =>
@@ -4204,6 +4337,10 @@ class AppNotifier extends ChangeNotifier {
       return null;
     } catch (error) {
       if (!_machineInventoryCurrent(revision, request)) return null;
+      if (viewer != null && isUnauthorizedError(error)) {
+        _signedOutAtRuntime('Your sign-in expired. Sign in again.');
+        return null;
+      }
       if (isTransientApiError(error)) {
         _scheduleMachineRecovery(revision);
       } else {
@@ -5526,11 +5663,25 @@ class AppNotifier extends ChangeNotifier {
   Future<Map<String, dynamic>> apiConnections(
     String machineId,
     Map<String, dynamic> payload,
-  ) => _conn(machineId).request(
-    'api_connections',
-    payload: payload,
-    timeout: const Duration(seconds: 10),
-  );
+  ) async {
+    final machine = stateOf(machineId);
+    if (machine == null ||
+        machine.machine.isShared ||
+        machine.needsLink ||
+        machine.nodeOnline == false ||
+        machine.connectionStatus != ConnectionStatus.connected) {
+      throw StateError('Reconnect this machine to manage its APIs.');
+    }
+    final connection = _conn(machineId);
+    if (!connection.isReady) {
+      throw StateError('Reconnect this machine to manage its APIs.');
+    }
+    return connection.request(
+      'api_connections',
+      payload: payload,
+      timeout: const Duration(seconds: 10),
+    );
+  }
 
   Future<Map<String, dynamic>> controlLocalModel(
     String machineId,
@@ -7052,6 +7203,26 @@ class AppNotifier extends ChangeNotifier {
     await _loadMachineData(machine, force: true);
   }
 
+  /// Arm the selected owner's daemon through an already linked browser. Never queue a QR code
+  /// across reconnection: closing the dialog must end future pairing attempts.
+  Future<Map<String, dynamic>> pairPhone(String machineId, String code) {
+    final machine = stateOf(machineId);
+    if (machine == null ||
+        machine.machine.isShared ||
+        machine.needsLink ||
+        machine.nodeOnline == false ||
+        machine.connectionStatus != ConnectionStatus.connected) {
+      return Future.value({'error': 'BACKEND_DOWN'});
+    }
+    final connection = _conn(machineId);
+    if (!connection.isReady) return Future.value({'error': 'BACKEND_DOWN'});
+    return connection.request(
+      'phone_pair',
+      payload: {'code': code},
+      timeout: const Duration(seconds: 60),
+    );
+  }
+
   /// What every connected REMOTE machine's agent accounts have spent, asked in
   /// parallel and read there with that machine's own credentials (`usage_read`).
   ///
@@ -7224,7 +7395,7 @@ class AppNotifier extends ChangeNotifier {
         'MEDIA_CHANGED' => 'The file changed while downloading. Wait for it to finish generating and try again.',
         'MEDIA_UNSUPPORTED' => 'This file is not a supported image or video.',
         'MEDIA_INVALID_REQUEST' =>
-          'Use a full path or a path inside this agent’s working folder.',
+          'This file is outside the folders Harness reads for this agent. Use one in its working folder or a temp folder.',
         'AGENT_NOT_FOUND' =>
           'This agent is no longer available. Reconnect and try again.',
         'NOT_TEXT' || 'FILE_TOO_LARGE' => 'Update the Harness CLI on this remote machine to open media previews.',
@@ -9692,6 +9863,7 @@ class AppNotifier extends ChangeNotifier {
     _dismissedLinkPrompts.remove(machineId);
     selectedMachineId = machineId;
     if (machine.isRemote && !machine.isLocalMachine && machine.needsLink) {
+      _requestedMachineLink = machineId;
       notifyListeners();
       return;
     }

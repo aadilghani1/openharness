@@ -911,10 +911,12 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pumpAndSettle();
-      // With no machine to open an agent on, New opens machine setup in the shared picker.
+      // Creation without a machine opens the same picker as Cmd-M.
       expect(resourceScope('@'), findsOneWidget);
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      expect(resourceSearch(tester).rows.last.title, 'Add machine');
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(find.text('Add machine · App'), findsOneWidget);
@@ -1131,7 +1133,7 @@ void main() {
         ),
         findsNothing,
       );
-      expect(resourceSearch(tester).selected!.machineId, machine.machineId);
+      expect(resourceSearch(tester).selected?.machineId, machine.machineId);
       expect(find.text('Offline'), findsWidgets);
       expect(find.text('Harness is offline'), findsNothing);
       expect(find.text('harness start'), findsNothing);
@@ -1183,12 +1185,7 @@ void main() {
 
     await openWorkspaceManagement(tester, 'machines');
     await tester.pumpAndSettle();
-    await selectResource(
-      tester,
-      resourceSearch(tester).rows
-          .firstWhere((row) => row.machineId == 'link-machine')
-          .id,
-    );
+    await selectResource(tester, 'machine:link-machine');
     await tester.tap(
       find.byKey(const ValueKey('resource-action:picker.resource_connect')),
     );
@@ -1268,12 +1265,7 @@ void main() {
 
     await openWorkspaceManagement(tester, 'machines');
     await tester.pumpAndSettle();
-    await selectResource(
-      tester,
-      resourceSearch(tester).rows
-          .firstWhere((row) => row.machineId == 'link-machine')
-          .id,
-    );
+    await selectResource(tester, 'machine:link-machine');
     await tester.tap(
       find.byKey(const ValueKey('resource-action:picker.resource_connect')),
     );

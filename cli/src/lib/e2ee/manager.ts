@@ -542,6 +542,25 @@ export class E2eeManager {
     if (reply) this.deps.sendTo(connId, reply)
   }
 
+  /** A linked browser can arm phone pairing on its own machine, just as the local desktop can.
+   * The code travels only inside the existing encrypted session. Possessing an account token or
+   * an observer link is not enough; the caller must already hold a paired web identity. */
+  async pairPhoneFromTrustedWeb(connId: string, p: Record<string, unknown>): Promise<void> {
+    if (this.sessions.get(connId)?.role !== 'web') return
+    const reply = (payload: Record<string, unknown>): void => {
+      const frame = this.wrapRpcReply(connId, 'phone_pair_result', p.requestId, payload)
+      if (frame) this.deps.sendTo(connId, frame)
+    }
+    const code = C.normalizeCode(typeof p.code === 'string' ? p.code : '')
+    if (!/^[A-Z2-9]{16}$/.test(code)) { reply({ error: 'BAD_CODE' }); return }
+    // A phone uses the web role. Never consume a hardware pairing or the caller's own intent.
+    if (!this.slot || this.slot.role !== 'web' || this.slot.connId === connId) {
+      reply({ error: 'NO_INTENT' }); return
+    }
+    const result = await this.onPair(code)
+    reply(result.ok ? { ok: true, label: result.label, fingerprint: result.fingerprint } : { error: result.error })
+  }
+
   /** Called by the hook server when the user runs `harness pair <code>`. Resolves when done/failed. */
   onPair(code: string): Promise<PairResult> {
     return new Promise<PairResult>((resolve) => {
