@@ -23,7 +23,8 @@ const TIMES = [
   '2000-01-01T00:00:00.000Z', '2026-09-13T00:00:00.000Z', '2026-09-26T23:59:59.999Z', '2026-09-27T00:00:00.000Z',
   '2026-10-11T00:00:00.000Z', '2027-09-27T12:00:00.000Z', '2999-12-31T23:59:59.999Z',
 ]
-const daemon = (id: string) => ({ id, hatchedAt: '2026-09-27T00:00:00.000Z', egg: 'first', shiny: false, bond: 0, xp: 0, version: '0.1' })
+const uid = (label: string) => Buffer.from(label).toString('hex').padEnd(24, '0').slice(0, 24)
+const daemon = (id: string) => ({ uid: uid(id), id, seed: 0, shiny: false, xp: 0, bond: 0, version: '0.1', hatched: '2026-09-27T00:00:00.000Z', egg: 'first' })
 /** A small seeded generator, so a run is reproducible. */
 function seeded(seed: number) {
   let a = seed >>> 0
@@ -82,7 +83,7 @@ describe('drops on hold: unix and tty', () => {
   })
 
   it('never seeds a unix or tty daemon, regular or secret, at any date', () => {
-    const guest = { daemons: [daemon('tim'), ...HELD_IDS.map(daemon)], eggs: [], pair: 'vim' }
+    const guest = { daemons: [daemon('tim'), ...HELD_IDS.map(daemon)], eggs: [], paired: uid('vim') }
     for (const at of TIMES) {
       const r = applyZooOps(emptyZoo(), [{ op: 'zoo.seed', zoo: guest }], seeded(1), new Date(at))
       const ids = r.zoo.daemons.map((d) => d.id)
@@ -90,13 +91,13 @@ describe('drops on hold: unix and tty', () => {
       if (Date.parse(at) >= INIT_RELEASE) {
         // tim comes along; the pair a guest had on a held daemon falls to the one that did.
         expect(ids, at).toEqual(['tim'])
-        expect(r.zoo.pair, at).toBe('tim')
+        expect(r.zoo.paired, at).toBe(r.zoo.daemons[0].uid)
       } else {
         expect(r.changed, at).toBe(false)
       }
     }
     // Held daemons alone are nothing to seed.
-    expect(applyZooOps(emptyZoo(), [{ op: 'zoo.seed', zoo: { daemons: HELD_IDS.map(daemon), pair: 'vim' } }], seeded(1), NOW).changed).toBe(false)
+    expect(applyZooOps(emptyZoo(), [{ op: 'zoo.seed', zoo: { daemons: HELD_IDS.map(daemon), paired: uid('vim') } }], seeded(1), NOW).changed).toBe(false)
   })
 
   it('draws a history egg whose date names a held daemon from the usual pool', () => {
@@ -115,7 +116,7 @@ describe('drops on hold: unix and tty', () => {
         const r = applyZooOps(zoo, [{ op: 'zoo.hatch', eggId: 'h' }], seeded(seed), NOW)
         // Exactly what the usual draw gives with the same dice.
         const usual = draw(zoo, 'history', seeded(seed), NOW)!
-        expect(r.hatched).toEqual([{ eggId: 'h', daemonId: usual.id, shiny: usual.shiny }])
+        expect(r.hatched).toEqual([expect.objectContaining({ eggId: 'h', daemonId: usual.id, shiny: usual.shiny })])
         expect(INIT_REGULARS).toContain(r.hatched[0].daemonId)
         expect(r.zoo.daemons[0].egg).toBe('history')
       }
@@ -123,6 +124,6 @@ describe('drops on hold: unix and tty', () => {
     // A date naming a released daemon still gives it: the hold, not the date, is what sends the egg to the pool.
     const gnu = { ...emptyZoo(), eggs: [{ id: 'h', kind: 'history', grantedAt: '2027-09-27T12:00:00.000Z', date: '2027-09-27' }] }
     expect(historyDaemon(gnu, '2027-09-27', NOW)?.id).toBe('gnu')
-    expect(applyZooOps(gnu, [{ op: 'zoo.hatch', eggId: 'h' }], () => 1, NOW).hatched).toEqual([{ eggId: 'h', daemonId: 'gnu', shiny: false }])
+    expect(applyZooOps(gnu, [{ op: 'zoo.hatch', eggId: 'h' }], () => 1, NOW).hatched).toEqual([expect.objectContaining({ eggId: 'h', daemonId: 'gnu', shiny: false })])
   })
 })

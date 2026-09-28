@@ -40,6 +40,37 @@ List<String> wrapWords(String text, int width) {
   return out;
 }
 
+/// An individual's flags as card lines, [width] at most (card.mjs
+/// `flagLines`): wrapped at spaces as a long command is, every line but the
+/// last ending in ` \` and the lines after the first indented two.
+List<String> flagLines(String flags, int width) {
+  final words = flags.split(' ');
+  final out = <String>[];
+  var line = '';
+  for (final (i, word) in words.indexed) {
+    final indent = out.isNotEmpty ? '  ' : '';
+    final next = '$indent$line $word';
+    // A line that breaks keeps room for its ` \`; the last line may run to
+    // the edge.
+    if (line.isEmpty) {
+      line = word;
+    } else if (next.length <= width - 2 ||
+        (i == words.length - 1 && next.length <= width)) {
+      line += ' $word';
+    } else {
+      out.add('$indent$line \\');
+      line = word;
+    }
+  }
+  out.add('${out.isNotEmpty ? '  ' : ''}$line');
+  return out;
+}
+
+/// `1 in 2,130`: a rarity's N with a comma every three digits (card.mjs
+/// `oneInText`).
+String oneInText(int n) =>
+    '1 in ${n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',')}';
+
 /// What a card shows of [d] at [version]: its line portrait at rest, or for a
 /// daemon drawn filled its portrait plate, `idle`, frame 0 (card.mjs
 /// `cardLines(..., { plate })`). A plate daemon with no baked plate — a roster
@@ -62,15 +93,20 @@ List<String> cardPortrait(DaemonRoster roster, DaemonDef d, String version) {
 }
 
 /// The card as lines of printable ASCII, 42 columns wide: the portrait at its
-/// version (a filled daemon's portrait plate, [plate] when given), the number,
-/// rarity, name, lineage and first words.
+/// version (a filled daemon's portrait plate, [plate] when given: an
+/// individual's own once harnessd has drawn it), the number, rarity, name,
+/// lineage and first words. An individual passes its [traits] and the [name]
+/// it was given: the card says `pip the tim`, then its flags and how rare it
+/// is.
 List<String> cardLines(
   DaemonRoster roster,
   DaemonDef d, {
   String? version,
   bool shiny = false,
   int? serial,
+  String? name,
   String? nickname,
+  DaemonTraits? traits,
   String? hatched,
   String? egg,
   List<String>? plate,
@@ -87,8 +123,9 @@ List<String> cardLines(
       '${drop.name.toUpperCase()}';
   final rarity = '${shiny ? 'SHINY ' : ''}${d.rarity.toUpperCase()}';
   final gap = _inner - head.length - rarity.length;
-  final name =
-      '${nickname != null ? '$nickname the ' : ''}${d.id} $v'
+  final called = name ?? nickname;
+  final title =
+      '${called != null ? '$called the ' : ''}${d.id} $v'
       '${serial != null ? '  #${serial.toString().padLeft(4, '0')}' : ''}';
   final portrait = plate ?? cardPortrait(roster, d, v);
   final width = portrait.fold<int>(0, (w, l) => l.length > w ? l.length : w);
@@ -102,7 +139,15 @@ List<String> cardLines(
     row(''),
     for (final line in portrait) row('$left$line'),
     row(''),
-    row('  $name'),
+    row('  $title'),
+    if (traits != null) ...[
+      for (final line in flagLines(
+        individualFlags(roster, d.id, traits),
+        _inner - 2,
+      ))
+        row('  $line'),
+      row('  ${oneInText(oneIn(roster, d.id, traits))}'),
+    ],
     row('  ${d.familyLine}'),
     row(''),
     for (final line in wrapWords('"${d.first}"', _inner - 2)) row('  $line'),
@@ -111,20 +156,28 @@ List<String> cardLines(
   ];
 }
 
-/// The card of a daemon you own: its version, shine, serial, nickname, the
-/// day it hatched and its egg. A guest's daemon (`origin: 'local'`) has no
+/// The card of an individual you own: its version, shine, serial, name, its
+/// flags and how rare it is (not for seed 0, the species as it was before
+/// individuals), the day it hatched and its egg; on its own portrait [plate]
+/// when harnessd has drawn it. A guest's daemon (`origin: 'local'`) has no
 /// serial: only the server mints.
-List<String> ownedCardLines(DaemonRoster roster, DaemonDef d, ZooDaemon mine) =>
-    cardLines(
-      roster,
-      d,
-      version: mine.version,
-      shiny: mine.shiny,
-      serial: mine.origin == 'local' ? null : mine.serial,
-      nickname: mine.nickname,
-      hatched: mine.hatchedDay,
-      egg: mine.egg,
-    );
+List<String> ownedCardLines(
+  DaemonRoster roster,
+  DaemonDef d,
+  ZooDaemon mine, {
+  List<String>? plate,
+}) => cardLines(
+  roster,
+  d,
+  version: mine.version,
+  shiny: mine.shiny,
+  serial: mine.origin == 'local' ? null : mine.serial,
+  name: mine.name,
+  traits: mine.seed == 0 ? null : mine.traits(roster),
+  hatched: mine.hatchedDay,
+  egg: mine.egg,
+  plate: plate,
+);
 
 /// The rows of [cardLines] that hold the portrait, `[from, to)`: the rows a
 /// card colours with the daemon's colour, or a plate's down its gradient
@@ -132,8 +185,12 @@ List<String> ownedCardLines(DaemonRoster roster, DaemonDef d, ZooDaemon mine) =>
 ({int from, int to}) cardPortraitRows(
   DaemonRoster roster,
   DaemonDef d,
-  String version,
-) => (from: 3, to: 3 + cardPortrait(roster, d, version).length);
+  String version, {
+  List<String>? plate,
+}) => (
+  from: 3,
+  to: 3 + (plate ?? cardPortrait(roster, d, version)).length,
+);
 
 /// `#0042`: a serial as the card writes it.
 String serialLabel(int serial) => '#${serial.toString().padLeft(4, '0')}';
@@ -142,14 +199,32 @@ String serialLabel(int serial) => '#${serial.toString().padLeft(4, '0')}';
 /// columns in Slack, GitHub and a chat app.
 String fencedCard(List<String> lines) => '```\n${lines.join('\n')}\n```';
 
-/// A daemon on a shelf (card.mjs's `{ id, shiny, dupes }`): whether it is
-/// shiny, and how many duplicates merged into it.
+/// A species on a shelf (card.mjs's `{ id, shiny, dupes }`): whether one of
+/// it is shiny, and how many more of it there are than one (individuals, or
+/// duplicates merged into one before individuals).
 class ShelfEntry {
   const ShelfEntry(this.id, {this.shiny = false, this.dupes = 0});
   ShelfEntry.of(ZooDaemon d) : this(d.id, shiny: d.shiny, dupes: d.dupes);
   final String id;
   final bool shiny;
   final int dupes;
+}
+
+/// A zoo's individuals as shelf entries, one per species in the order it was
+/// first hatched: `x3` for three tims, shiny when any of them is.
+List<ShelfEntry> shelfEntriesOf(Iterable<ZooDaemon> individuals) {
+  final by = <String, ShelfEntry>{};
+  for (final d in individuals) {
+    final had = by[d.id];
+    by[d.id] = had == null
+        ? ShelfEntry.of(d)
+        : ShelfEntry(
+            d.id,
+            shiny: had.shiny || d.shiny,
+            dupes: had.dupes + 1 + d.dupes,
+          );
+  }
+  return by.values.toList();
 }
 
 /// Plain ids, none shiny, none doubled.

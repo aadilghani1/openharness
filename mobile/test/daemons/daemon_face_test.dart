@@ -258,7 +258,7 @@ void main() {
       );
       expect(face.def, isNull);
       // A turn and one more: two of the three the first egg needs.
-      expect(face.glyph, r'\_.._/');
+      expect(face.glyph, r"\_(*')_/");
       expect(face.semantics, contains('2 of 3 habits'));
       doc = {
         'revision': 2,
@@ -274,7 +274,7 @@ void main() {
       zoo.noticeRevision(2);
       async.flushMicrotasks();
       expect(face.eggReady, isTrue);
-      expect(face.glyph, r'\_o.o_/');
+      expect(face.glyph, r'\_(oo)_/');
       // A boop on an egg is nothing.
       face.boop();
       expect(face.animating, isFalse);

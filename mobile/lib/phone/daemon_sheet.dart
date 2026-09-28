@@ -6,7 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:harness_mobile/daemons/card.dart';
 import 'package:harness_mobile/daemons/daemon_face.dart';
 import 'package:harness_mobile/daemons/daemon_lines.dart';
+import 'package:harness_mobile/daemons/eggs.dart';
+import 'package:harness_mobile/daemons/individual_art.dart';
 import 'package:harness_mobile/daemons/plates.dart';
+import 'package:harness_mobile/daemons/render.dart';
 import 'package:harness_mobile/daemons/roster.dart';
 import 'package:harness_mobile/daemons/zoo.dart';
 import 'package:harness_mobile/daemons/zoo_client.dart';
@@ -36,10 +39,13 @@ Future<void> showDaemonSheet(BuildContext context, DaemonHostState host) {
     ),
     builder: (sheetContext) => DaemonSheet(
       face: host.face,
+      art: host.app.individualArt,
       facts: () => host.facts,
       onHatch: (egg) {
         Navigator.of(sheetContext).pop();
-        unawaited(hatchEgg(navigator, host.face, egg));
+        unawaited(
+          hatchEgg(navigator, host.face, egg, art: host.app.individualArt),
+        );
       },
     ),
   ).whenComplete(host.zoo.seenXp);
@@ -58,18 +64,20 @@ class DaemonSheet extends StatelessWidget {
     required this.face,
     required this.facts,
     required this.onHatch,
+    this.art,
   });
 
   final DaemonFace face;
   final DaemonFacts Function() facts;
   final void Function(ZooEgg egg) onHatch;
+  final IndividualArt? art;
 
   ZooClient get zoo => face.zoo;
   DaemonRoster get roster => face.roster;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([face, zoo]),
+    listenable: Listenable.merge([face, zoo, ?art]),
     builder: (context, _) {
       final def = face.def;
       return SafeArea(
@@ -99,8 +107,8 @@ class DaemonSheet extends StatelessWidget {
     final daemon = face.daemon!;
     final mood = face.mood;
     final line = daemonLine(roster, def, mood, facts());
-    final nick = daemon.nickname;
     final colour = def.colorFor(shiny: daemon.shiny);
+    final traits = daemon.traits(roster);
     final rarity =
         '${daemon.shiny ? 'SHINY ' : ''}${def.rarity.toUpperCase()}'
         '  ${cardNumber(roster, def)}';
@@ -121,6 +129,13 @@ class DaemonSheet extends StatelessWidget {
                 version: daemon.version,
                 mood: mood,
                 shiny: daemon.shiny,
+                traits: traits,
+                art: art?.frames(
+                  daemon,
+                  PlateSize.portrait,
+                  daemon.version,
+                  mood: mood,
+                ),
                 ground: def.darkOnly ? DaemonInk.pitch : DaemonInk.deep,
                 animate: face.motionEnabled,
               )
@@ -133,7 +148,7 @@ class DaemonSheet extends StatelessWidget {
         runSpacing: 4,
         children: [
           Text(
-            face.name,
+            daemon.title,
             key: const ValueKey('daemon-name'),
             style: DaemonInk.sans(
               size: 24,
@@ -143,8 +158,7 @@ class DaemonSheet extends StatelessWidget {
             ),
           ),
           Text(
-            '${nick == null ? daemon.version : '${def.id} ${daemon.version}'}'
-            '${serial == null ? '' : '  ${serialLabel(serial)}'}',
+            '${daemon.version}${serial == null ? '' : '  ${serialLabel(serial)}'}',
             key: const ValueKey('daemon-version'),
             style: DaemonInk.mono(size: 14, color: colour),
           ),
@@ -155,6 +169,17 @@ class DaemonSheet extends StatelessWidget {
         rarity,
         style: DaemonInk.mono(size: 12, color: DaemonInk.rarity(def.rarity)),
       ),
+      if (traits != null) ...[
+        const SizedBox(height: 8),
+        Text(
+          individualFlags(roster, def.id, traits),
+          style: DaemonInk.mono(size: 12),
+        ),
+        Text(
+          oneInText(oneIn(roster, def.id, traits)),
+          style: DaemonInk.mono(size: 12, color: DaemonInk.dim),
+        ),
+      ],
       const SizedBox(height: 12),
       _Said(
         key: const ValueKey('daemon-line'),
@@ -183,8 +208,15 @@ class DaemonSheet extends StatelessWidget {
           style: DaemonInk.mono(size: 12, color: DaemonInk.green),
         ),
       if (zoo.zoo.eggs.isNotEmpty) ...[const _Caption('EGGS'), ..._eggRows()],
+      ..._earningRows(),
       const _Caption('ZOO'),
-      _Shelves(zoo: zoo, roster: roster, now: face.now()),
+      _Shelves(
+        zoo: zoo,
+        roster: roster,
+        now: face.now(),
+        art: art,
+        animate: face.motionEnabled,
+      ),
       if (_habitsLeft) ...[
         const _Caption('HABITS'),
         _habitIntro(),
@@ -209,10 +241,20 @@ class DaemonSheet extends StatelessWidget {
       _ShareCard(
         roster: roster,
         def: def,
-        lines: ownedCardLines(roster, def, daemon),
+        lines: ownedCardLines(
+          roster,
+          def,
+          daemon,
+          plate: art
+              ?.frames(daemon, PlateSize.portrait, daemon.version)
+              ?.first
+              .rows,
+        ),
         version: daemon.version,
         shiny: daemon.shiny,
         serial: serial,
+        traits: traits,
+        art: art?.frames(daemon, PlateSize.portrait, daemon.version)?.first,
       ),
     ];
   }
@@ -287,17 +329,18 @@ class DaemonSheet extends StatelessWidget {
     final ready = zoo.readyEgg != null;
     final many = zoo.zoo.eggs.length > 1;
     final done = zoo.zoo.habits.toSet();
-    final glyph = face.glyph;
+    final nearest = face.nearest;
     return [
       _Panel(
         key: const ValueKey('daemon-nest'),
         semantics: ready
             ? 'An egg, ready to hatch'
             : 'A nest: ${done.length} of ${zoo.habitsNeeded} habits',
-        child: _Art(
-          [glyph],
-          colour: ready ? DaemonInk.yellow : DaemonInk.dim,
-          size: 30,
+        child: EggPlateView(
+          roster: roster,
+          kind: nearest?.kind ?? 'first',
+          stage: nearest?.stage ?? 'p0',
+          animate: face.motionEnabled,
         ),
       ),
       const SizedBox(height: 14),
@@ -323,17 +366,47 @@ class DaemonSheet extends StatelessWidget {
         _habitIntro(),
       if (!ready) ...[const SizedBox(height: 12), ..._habitRows()],
       if (zoo.zoo.eggs.isNotEmpty) ...[const _Caption('EGGS'), ..._eggRows()],
+      ..._earningRows(),
     ];
   }
 
   List<Widget> _eggRows() => [
     for (final egg in zoo.zoo.eggs)
       _EggRow(
-        look: face.eggLook(egg),
+        roster: roster,
+        animate: face.motionEnabled,
         kind: egg.kind,
         date: egg.date,
         busy: zoo.hatchingEgg != null,
         onHatch: () => onHatch(egg),
+      ),
+  ];
+
+  List<Widget> _earningRows() => [
+    if (earningEggs(roster, zoo.zoo, face.now()).isNotEmpty)
+      const _Caption('EARNING'),
+    for (final egg in earningEggs(roster, zoo.zoo, face.now()))
+      Row(
+        key: ValueKey('daemon-earning-${egg.kind}'),
+        children: [
+          SizedBox(
+            width: 100,
+            child: EggPlateView(
+              roster: roster,
+              kind: egg.kind,
+              stage: egg.stage,
+              fontSize: 7,
+              animate: face.motionEnabled,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              '${egg.kind} egg  ${egg.done}/${egg.need}',
+              style: DaemonInk.mono(size: 12),
+            ),
+          ),
+        ],
       ),
   ];
 }
@@ -661,14 +734,17 @@ class _Habit extends StatelessWidget {
 
 class _EggRow extends StatelessWidget {
   const _EggRow({
-    required this.look,
+    required this.roster,
+    required this.animate,
     required this.kind,
     required this.date,
     required this.busy,
     required this.onHatch,
   });
 
-  final String look, kind;
+  final DaemonRoster roster;
+  final bool animate;
+  final String kind;
   final String? date;
   final bool busy;
   final VoidCallback onHatch;
@@ -678,12 +754,14 @@ class _EggRow extends StatelessWidget {
     padding: const EdgeInsets.symmetric(vertical: 2),
     child: Row(
       children: [
-        ConstrainedBox(
-          constraints: const BoxConstraints(minWidth: 72),
-          child: Text(
-            look,
-            textScaler: TextScaler.noScaling,
-            style: DaemonInk.mono(size: 14, color: DaemonInk.yellow),
+        SizedBox(
+          width: 100,
+          child: EggPlateView(
+            roster: roster,
+            kind: kind,
+            stage: 'p4',
+            fontSize: 7,
+            animate: animate,
           ),
         ),
         const SizedBox(width: 8),
@@ -729,15 +807,23 @@ class _EggRow extends StatelessWidget {
 /// is fifty columns, wider than a phone), and a tap on a daemon you own
 /// pairs it.
 class _Shelves extends StatelessWidget {
-  const _Shelves({required this.zoo, required this.roster, required this.now});
+  const _Shelves({
+    required this.zoo,
+    required this.roster,
+    required this.now,
+    this.art,
+    required this.animate,
+  });
 
   final ZooClient zoo;
   final DaemonRoster roster;
   final DateTime now;
+  final IndividualArt? art;
+  final bool animate;
 
   @override
   Widget build(BuildContext context) {
-    final owned = [for (final d in zoo.zoo.daemons) ShelfEntry.of(d)];
+    final owned = shelfEntriesOf(zoo.zoo.daemons);
     final drops = shelfDrops(roster, now);
     // Only what a shelf shows can be tapped: a daemon of a drop on hold (a
     // zoo from before may hold one) has no shelf, and is counted nowhere.
@@ -753,6 +839,16 @@ class _Shelves extends StatelessWidget {
         for (final (i, drop) in drops.indexed) ...[
           if (i > 0) const SizedBox(height: 16),
           _Shelf(zoo: zoo, roster: roster, drop: drop, owned: owned, now: now),
+          if (drop.stateAt(now) == DropState.released)
+            for (final def in roster.daemons.where((d) => d.drop == drop.id))
+              if (zoo.zoo.daemons.any((d) => d.id == def.id))
+                _Individuals(
+                  zoo: zoo,
+                  roster: roster,
+                  def: def,
+                  art: art,
+                  animate: animate,
+                ),
         ],
         if (owned.where((o) => shown.contains(o.id)).length > 1) ...[
           const SizedBox(height: 10),
@@ -820,11 +916,21 @@ class _Shelf extends StatelessWidget {
                       drop: drop,
                       announced: announced,
                       paired: cell.daemon?.id == pair,
-                      onPair: cell.daemon == null || cell.daemon!.id == pair
+                      onPair:
+                          cell.daemon == null ||
+                              cell.daemon!.id == pair ||
+                              zoo.zoo.daemons
+                                      .where((d) => d.id == cell.daemon!.id)
+                                      .length !=
+                                  1
                           ? null
                           : () {
                               HapticFeedback.selectionClick();
-                              zoo.pair(cell.daemon!.id);
+                              zoo.pair(
+                                zoo.zoo.daemons
+                                    .firstWhere((d) => d.id == cell.daemon!.id)
+                                    .uid,
+                              );
                             },
                     ),
                   ),
@@ -934,6 +1040,130 @@ class _ShelfCell extends StatelessWidget {
   }
 }
 
+/// Every hatch stays selectable, including two individuals of the same species.
+class _Individuals extends StatelessWidget {
+  const _Individuals({
+    required this.zoo,
+    required this.roster,
+    required this.def,
+    this.art,
+    required this.animate,
+  });
+
+  final ZooClient zoo;
+  final DaemonRoster roster;
+  final DaemonDef def;
+  final IndividualArt? art;
+  final bool animate;
+
+  @override
+  Widget build(BuildContext context) {
+    final individuals = zoo.zoo.daemons.where((d) => d.id == def.id).toList();
+    final catalog = def.traits;
+    final rolled = [
+      for (final d in individuals)
+        if (d.traits(roster) != null) d.traits(roster)!,
+    ];
+    final colours = {for (final t in rolled) t.colour};
+    final marks = {
+      for (final t in rolled)
+        if (t.marks != null) t.marks!,
+    };
+    final extras = {
+      for (final t in rolled)
+        if (t.extra != null) t.extra!,
+    };
+    String seen(String kind, Set<String> values, int total) =>
+        '$kind ${values.length}/$total: ${values.isEmpty ? "none yet" : values.join(", ")}';
+    return Column(
+      key: ValueKey('daemon-individuals-${def.id}'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 16),
+        Text(
+          '${def.id}  ${individuals.length}',
+          style: DaemonInk.mono(size: 14, color: DaemonInk.bright),
+        ),
+        if (catalog != null)
+          Text(
+            [
+              seen('colours', colours, catalog.colours.length),
+              seen(
+                'markings',
+                marks,
+                catalog.marks.where((m) => m.$1 != null).length,
+              ),
+              seen(
+                'extras',
+                extras,
+                catalog.extras.where((e) => e.name != null).length,
+              ),
+            ].join('\n'),
+            key: ValueKey('daemon-traits-${def.id}'),
+            style: DaemonInk.mono(size: 11, color: DaemonInk.dim),
+          ),
+        for (final d in individuals)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (def.plate)
+                  SizedBox(
+                    width: 100,
+                    child: DaemonPlateView(
+                      roster: roster,
+                      def: def,
+                      size: PlateSize.portrait,
+                      version: d.version,
+                      shiny: d.shiny,
+                      traits: d.traits(roster),
+                      art: art?.frames(d, PlateSize.portrait, d.version),
+                      fontSize: 7,
+                      animate: animate,
+                    ),
+                  ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      TextButton(
+                        key: ValueKey('daemon-pair-${d.uid}'),
+                        onPressed: zoo.paired?.uid == d.uid
+                            ? null
+                            : () => zoo.pair(d.uid),
+                        child: Text(
+                          '${zoo.paired?.uid == d.uid ? "> " : ""}${d.title}${d.shiny ? " *" : ""}',
+                          style: DaemonInk.mono(
+                            size: 12,
+                            color: zoo.paired?.uid == d.uid
+                                ? DaemonInk.green
+                                : DaemonInk.bright,
+                          ),
+                        ),
+                      ),
+                      if (d.traits(roster) case final traits?) ...[
+                        Text(
+                          individualFlags(roster, def.id, traits),
+                          style: DaemonInk.mono(size: 11),
+                        ),
+                        Text(
+                          oneInText(oneIn(roster, def.id, traits)),
+                          style: DaemonInk.mono(size: 11, color: DaemonInk.dim),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 /// The card people share, and a button that copies it as a fenced code block.
 class _ShareCard extends StatefulWidget {
   const _ShareCard({
@@ -943,6 +1173,8 @@ class _ShareCard extends StatefulWidget {
     required this.version,
     required this.shiny,
     this.serial,
+    this.traits,
+    this.art,
   });
 
   final DaemonRoster roster;
@@ -951,6 +1183,8 @@ class _ShareCard extends StatefulWidget {
   final String version;
   final bool shiny;
   final int? serial;
+  final DaemonTraits? traits;
+  final PlateFrame? art;
 
   @override
   State<_ShareCard> createState() => _ShareCardState();
@@ -980,6 +1214,8 @@ class _ShareCardState extends State<_ShareCard> {
         version: widget.version,
         shiny: widget.shiny,
         serial: widget.serial,
+        traits: widget.traits,
+        art: widget.art,
         ground: DaemonInk.deep,
       ),
       const SizedBox(height: 8),

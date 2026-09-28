@@ -88,6 +88,8 @@ import { PairToken } from './pair/token.js'
 import { pairCommand as pairControlCommand, pairRequest, pairVerb, type PairClientDeps } from './pair/client.js'
 import { serveMcp } from './pair/mcp.js'
 import { PairHarness, type PairEngine } from './pair/pairHarness.js'
+import { individualName, pairedIndividual } from './pair/individuals.js'
+import { PlateService } from './pair/plateService.js'
 import { inProjects, PairConfigFile, pairConfigPath, ruleRunner, type PairConfig } from './pair/rules.js'
 import { LessonSignals } from './pair/learn/signals.js'
 import { LessonDistiller } from './pair/learn/distill.js'
@@ -3809,7 +3811,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // is no account zoo: a guest's window keeps its own and says which daemon is paired in `daemon_presence`
   // (pair/brain.ts), which is what `guestPair` holds. A backend that cannot be reached keeps the last answer
   // rather than switching pairing off on a blip.
-  let zooPair: { known: boolean; pair: string | null; autonomy: Autonomy; consent: boolean; consentAt: string | null } = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY, consent: false, consentAt: null }
+  // `pair` is the paired individual's SPECIES (its voice and lore; the zoo names the individual by uid) and
+  // `name` what the person calls it, `pip the tim` (pair/individuals.ts).
+  // INDIVIDUAL ART (pair/plateService.ts): each individual's plates, drawn here in a worker thread with the
+  // generated models, kept under the data folder, served to windows (`daemon_plate_get`, Unix socket) and
+  // phones (`pair_plate_get`, sealed). Idle, and nothing on disk touched, while daemons are off.
+  const plates = new PlateService({ dir: join(env.ADAPTER_DATA_DIR, 'pair', 'plates') })
+  let zooPair: { known: boolean; pair: string | null; name: string | null; autonomy: Autonomy; consent: boolean; consentAt: string | null } = { known: false, pair: null, name: null, autonomy: DEFAULT_AUTONOMY, consent: false, consentAt: null }
   let guestPair: string | null = null
   let guestAutonomy: Autonomy | null = null
   let guestConsent = false
@@ -3823,28 +3831,36 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A request: a step above `suggest` waits for the person's yes at a window (pair/gate.ts), and a yes
     // holds only under the consent (`epoch`) it was given in.
     pairGate.setRequested(pairing.autonomy, { keepConfirmed: !pairing.consented, epoch: pairing.epoch })
-    pairSensor.setPair(pairing.pair)
+    // A guest window names only a species; the account's zoo names the individual too.
+    pairSensor.setPair(pairing.pair, zooPair.known && pairing.pair === zooPair.pair ? zooPair.name : null)
     // Pairing on or off already refreshed the brain (onPairToggled); another daemon paired, or the dial moved,
     // reaches the windows attached here now. The brain sends only what they were not already sent.
     pairBrain?.refresh()
   }
   onZooRead = (result) => {
     if (result.status === 200) {
-      const zoo = (result.body.data as { zoo?: { pair?: unknown; autonomy?: unknown; consent?: { watching?: unknown; at?: unknown } | null } } | undefined)?.zoo
-      const pair = zoo?.pair
+      const zoo = (result.body.data as { zoo?: { autonomy?: unknown; consent?: { watching?: unknown; at?: unknown } | null } } | undefined)?.zoo
+      // The zoo holds individuals and `paired` names one by uid; the brain speaks as its species.
+      const paired = pairedIndividual(zoo)
+      const pair = paired && isRosterDaemon(paired.id) ? paired : null
       const at = zoo?.consent?.at
       zooPair = {
-        known: true, pair: isRosterDaemon(pair) ? pair : null, autonomy: isAutonomy(zoo?.autonomy) ? zoo.autonomy : DEFAULT_AUTONOMY,
+        known: true, pair: pair?.id ?? null, name: pair ? individualName(pair) : null,
+        autonomy: isAutonomy(zoo?.autonomy) ? zoo.autonomy : DEFAULT_AUTONOMY,
         consent: zoo?.consent?.watching === true, consentAt: typeof at === 'string' && at.length <= 64 ? at : null,
       }
+      // A uid not seen before is a hatch: its art is drawn now, before a window asks (idle while daemons are off).
+      plates.observeZoo(zoo)
     } else if (result.status === 401) {
-      zooPair = { known: false, pair: null, autonomy: DEFAULT_AUTONOMY, consent: false, consentAt: null }
+      zooPair = { known: false, pair: null, name: null, autonomy: DEFAULT_AUTONOMY, consent: false, consentAt: null }
     }
     applyPair()
   }
   // Only a server with the zoo on sends it: the switch asks at once, whatever it had cached.
   backend.onZooChanged = () => daemons.zooChanged()
   backend.pairService = pairSensor
+  // The phone's sealed `pair_plate_get` (a window's `daemon_plate_get` is bound with the local socket).
+  backend.plateService = { get: (payload) => plates.get(payload) as Promise<Record<string, unknown>> }
   // `harness pair` and the MCP server: DAEMONS_OFF while off, before any verb runs.
   backend.daemonsOn = () => daemons.on()
   // An open question the watcher already announced before pairing came on is announced again, so the
@@ -4526,6 +4542,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // to it, paused when idle. Mode ask, the harnessd MCP server injected, a fresh token every launch.
   const pairHarness = new PairHarness({
     pairedDaemon: () => pairSensor.pairedDaemon(),
+    pairedName: () => pairSensor.pairedName(),
     engine: async () => {
       const found = await probeEngines(['claude', 'codex']).catch(() => [])
       return (['claude', 'codex'] as PairEngine[]).find((engine) => found.some((e) => e.engine === engine && e.installed)) ?? null
@@ -4654,6 +4671,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let learnTick: ReturnType<typeof setInterval> | null = null
   let pairConfigTick: ReturnType<typeof setInterval> | null = null
   onDaemonsChanged = (on) => {
+    plates.setOn(on)
     if (on) {
       // pair.jsonc is read when something needs it, and on this tick: a "daemons": false in it switches
       // everything off within the tick (before the rest of the file is read), and any other change asks for
@@ -4937,6 +4955,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Presence: whether the person is here (the zoo's away turns) always; the rest only while daemons are
     // on. Signed out, a window bound to this machine saying its guest zoo has the person's consent is what
     // turns them on (guests keep working as before, but only when a window asks).
+    // An individual's art, for any client on the socket: DAEMONS_OFF while off (the service says so).
+    onDaemonPlate: (_connId, payload, reply) => {
+      void plates.get(payload).then((answer) => { reply({ type: 'daemon_plate', payload: { requestId: payload.requestId, ...answer } }) })
+    },
     onDaemonPresence: (connId, payload, meta) => {
       zooPresence.presence(connId, payload)
       if (meta.ui && 'consent' in payload) daemons.guestConsent(payload.consent === true)

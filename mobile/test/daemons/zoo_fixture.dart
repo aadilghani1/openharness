@@ -61,6 +61,8 @@ class FakeZooBackend {
   };
   String nextDaemon = 'tux';
   bool nextShiny = true;
+  int nextSeed = 13;
+  int _individualSerial = 0;
   int? nextSerial;
   List<Map<String, dynamic>> grants = [];
   static const _levels = [0, 50, 150, 300, 600];
@@ -92,7 +94,12 @@ class FakeZooBackend {
         case 'zoo.habit':
           zoo['habits'] = [...zoo['habits'] as List, op['key']];
         case 'zoo.pair':
-          zoo['pair'] = op['id'];
+          zoo[op.containsKey('uid') ? 'paired' : 'pair'] =
+              op['uid'] ?? op['id'];
+        case 'zoo.nickname':
+          for (final d in zoo['daemons'] as List) {
+            if ((d as Map)['uid'] == op['uid']) d['name'] = op['name'];
+          }
         case 'zoo.consent':
           final consent = zoo['consent'] as Map?;
           if (consent?['watching'] == op['watching']) break;
@@ -108,6 +115,28 @@ class FakeZooBackend {
             for (final d in zoo['daemons'] as List? ?? const [])
               Map<String, dynamic>.from(d as Map),
           ];
+          if (zoo.containsKey('paired')) {
+            final born = {
+              'uid': (++_individualSerial).toRadixString(16).padLeft(24, '0'),
+              'id': nextDaemon,
+              'seed': nextSeed,
+              'serial': nextSerial,
+              'hatched': '2026-09-28T10:00:00Z',
+              'egg': 'turn',
+              'shiny': nextShiny,
+              'xp': 0,
+              'bond': 0,
+              'version': '0.1',
+            };
+            zoo['daemons'] = [...daemons, born];
+            zoo['paired'] ??= born['uid'];
+            hatched.add({
+              'eggId': op['eggId'],
+              'daemonId': nextDaemon,
+              ...born,
+            });
+            break;
+          }
           final had = daemons.where((d) => d['id'] == nextDaemon).firstOrNull;
           if (had != null) {
             final before = (had['xp'] as int?) ?? 0;

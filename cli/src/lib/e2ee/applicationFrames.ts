@@ -3,7 +3,8 @@
  * do not send these frames; older targets answer UNSUPPORTED before any command is attempted.
  *
  * ONE place for every extension: the grid fleet RPCs (#90), harness sharing (`SHARE_*`), CLI-to-CLI
- * viewer forwarding (`VIEWER_DOWN_TYPES`, #85) and the pair brain's machine-to-machine `PAIR_*`. A type listed in none of these travels plaintext, and
+ * viewer forwarding (`VIEWER_DOWN_TYPES`, #85), the pair brain's machine-to-machine `PAIR_*` and the phone's
+ * individual art (`PLATE_*`). A type listed in none of these travels plaintext, and
  * the two callers (relayClient's wrap, backendSocket's unwrap and reply) must agree — they used to
  * spell the union inline, in three places, and merging two of these features meant merging the spelling.
  */
@@ -27,8 +28,15 @@ export const PAIR_PUSHES = new Set(['pair_event'])
 /** The loopback-only `pair` request's reply. Listed so a relayed `pair` (refused LOCAL_ONLY) is answered
  * sealed and to that connection alone, not broadcast. */
 const LOCAL_PAIR_RESULT = 'pair_result'
+/** An individual's art for the phone (pair/plateService.ts; a window asks `daemon_plate_get` over the Unix
+ * socket instead). Sealed both ways, answered to that connection alone. Its reply is `pair_plate`, not
+ * `pair_plate_get_result`: see rpcResultType. */
+export const PLATE_REQUEST = 'pair_plate_get'
+export const PLATE_RESULT = 'pair_plate'
 export const isPairFrameType = (type: string): boolean =>
-  PAIR_REQUESTS.has(type) || PAIR_RESULTS.has(type) || PAIR_PUSHES.has(type)
+  PAIR_REQUESTS.has(type) || PAIR_RESULTS.has(type) || PAIR_PUSHES.has(type) || type === PLATE_REQUEST || type === PLATE_RESULT
+/** The reply's type for a request: `<type>_result`, except the plate's `pair_plate`. */
+export const rpcResultType = (type: string): string => type === PLATE_REQUEST ? PLATE_RESULT : `${type}_result`
 /**
  * Whether a `pair_*` frame that arrived through the relay may be believed. `RelaySessionCrypto` passes a
  * never-wrapped frame straight through (control frames are plaintext), so without this the relay could
@@ -48,7 +56,7 @@ export function admitRelayedPairFrame(frame: { type?: unknown; payload?: unknown
 }
 export const encryptDownFrame = (type: string): boolean =>
   isEncryptedDownType(type) || MACHINE_REQUESTS.has(type) || FLEET_REQUESTS.has(type) || SHARE_REQUEST_TYPES.has(type) || VIEWER_DOWN_TYPES.has(type)
-  || PAIR_REQUESTS.has(type)
+  || PAIR_REQUESTS.has(type) || type === PLATE_REQUEST
 /** Client→daemon requests that older daemons took in the clear and no longer do. A client seals them
  * only for a daemon whose e2e_welcome says `strictDown` — an older one would never open the envelope
  * and would read the request as empty. A daemon that says `strictDown` refuses them unsealed. */
@@ -64,4 +72,4 @@ export const encryptDownFrameFor = (type: string, peer: { strictDown: boolean })
 const QUESTION_RESULT = 'question_response_result'
 export const encryptRpcResult = (type: string): boolean =>
   ENCRYPTED_RPC_RESULT_TYPES.has(type) || MACHINE_RESULTS.has(type) || FLEET_RESULTS.has(type) || SHARE_RESULT_TYPES.has(type)
-  || PAIR_RESULTS.has(type) || type === LOCAL_PAIR_RESULT || type === QUESTION_RESULT
+  || PAIR_RESULTS.has(type) || type === LOCAL_PAIR_RESULT || type === QUESTION_RESULT || type === PLATE_RESULT

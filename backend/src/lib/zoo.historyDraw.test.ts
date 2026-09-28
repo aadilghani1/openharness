@@ -15,18 +15,18 @@ const egg = { id: 'h', kind: 'history', grantedAt: '2026-09-27T12:00:00.000Z', d
 const now = new Date('2026-09-27T12:00:00.000Z')
 
 describe('a history egg whose daemon a drop holds', () => {
-  it('gives that daemon, rolling only for shiny', () => {
+  it('gives that daemon, rolling only for shiny (then the individual\'s seed and uid)', () => {
     const calls: number[] = []
     const rng = (n: number) => { calls.push(n); return 1 }
     const r = applyZooOps({ ...emptyZoo(), eggs: [egg] }, [{ op: 'zoo.hatch', eggId: 'h' }], rng, now)
-    expect(r.hatched).toEqual([{ eggId: 'h', daemonId: 'beastie', shiny: false }])
-    expect(calls).toEqual([256])
+    expect(r.hatched).toEqual([expect.objectContaining({ eggId: 'h', daemonId: 'beastie', shiny: false, seed: 2, uid: '000000010000000100000001' })])
+    expect(calls).toEqual([256, 2 ** 32 - 1, 2 ** 32, 2 ** 32, 2 ** 32])
     expect(r.zoo.pity).toBe(0)                                             // it is a secret: pity resets
     expect(r.zoo.daemons[0]).toMatchObject({ id: 'beastie', egg: 'history' })
   })
 
   it('draws from the usual pool once you own it', () => {
-    const owned = { ...emptyZoo(), daemons: [{ id: 'beastie', hatchedAt: now.toISOString(), egg: 'night', shiny: false, bond: 0, xp: 0, version: '0.1' }], eggs: [egg] }
+    const owned = { ...emptyZoo(), daemons: [{ uid: 'b'.repeat(24), id: 'beastie', seed: 0, shiny: false, xp: 0, bond: 0, version: '0.1', hatched: now.toISOString(), egg: 'night' }], eggs: [egg] }
     expect(historyDaemon(owned, egg.date)).toBeNull()
     const r = applyZooOps(owned, [{ op: 'zoo.hatch', eggId: 'h' }], (n) => n - 1, now)
     expect(r.hatched[0].daemonId).not.toBe('beastie')

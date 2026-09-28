@@ -297,13 +297,119 @@ void main() {
     expect(find.textContaining('drop 2'), findsNothing);
   });
 
+  testWidgets(
+    'two individuals of one species have separate names, traits and pair actions',
+    (tester) async {
+      const pip = 'aaaaaaaaaaaaaaaaaaaaaaaa', dot = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+      backend.zoo = {
+        'daemons': [
+          {
+            'uid': pip,
+            'id': 'tim',
+            'name': 'pip',
+            'seed': 13,
+            'serial': 42,
+            'hatched': '',
+            'egg': 'first',
+          },
+          {
+            'uid': dot,
+            'id': 'tim',
+            'name': 'dot',
+            'seed': 17,
+            'serial': 43,
+            'hatched': '',
+            'egg': 'turn',
+          },
+        ],
+        'paired': pip,
+        'eggs': [],
+        'firstEgg': true,
+        'setupEgg': true,
+      };
+      final app = await _pump(tester, backend);
+      await _openSheet(tester);
+      final group = find.byKey(const ValueKey('daemon-individuals-tim'));
+      await tester.scrollUntilVisible(group, 200, scrollable: _sheetScroll);
+      expect(find.byKey(const ValueKey('daemon-traits-tim')), findsOneWidget);
+      expect(find.text('> pip the tim'), findsOneWidget);
+      final pick = find.byKey(const ValueKey('daemon-pair-$dot'));
+      await tester.scrollUntilVisible(pick, 200, scrollable: _sheetScroll);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(pick);
+      await app.zoo.settle();
+      await tester.pump();
+      expect(app.zoo.paired!.uid, dot);
+      expect(backend.written, contains(equals({'op': 'zoo.pair', 'uid': dot})));
+      expect(find.text('> dot the tim'), findsOneWidget);
+      expect(find.textContaining('tim -c'), findsWidgets);
+      expect(find.textContaining('1 in '), findsWidgets);
+    },
+  );
+
+  testWidgets(
+    'a repeated species hatches a named individual without merging its sibling',
+    (tester) async {
+      backend.zoo = {
+        'daemons': [
+          {
+            'uid': 'aaaaaaaaaaaaaaaaaaaaaaaa',
+            'id': 'tim',
+            'name': 'pip',
+            'seed': 13,
+            'serial': 42,
+            'hatched': '',
+            'egg': 'first',
+          },
+        ],
+        'paired': 'aaaaaaaaaaaaaaaaaaaaaaaa',
+        'eggs': [
+          {'id': 'e0', 'kind': 'turn', 'grantedAt': ''},
+        ],
+        'firstEgg': true,
+        'setupEgg': true,
+      };
+      backend.nextDaemon = 'tim';
+      backend.nextSeed = 17;
+      backend.nextSerial = 43;
+      final app = await _pump(tester, backend, reduceMotion: true);
+      await _openSheet(tester);
+      await tester.ensureVisible(find.text('Hatch'));
+      await tester.tap(find.text('Hatch'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(app.zoo.zoo.daemons, hasLength(2));
+      expect(find.byKey(const ValueKey('daemon-hatch-merged')), findsNothing);
+      final name = find.byKey(const ValueKey('daemon-hatch-name'));
+      await tester.ensureVisible(name);
+      await tester.enterText(name, 'dot');
+      await tester.pump();
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('daemon-hatch-done')),
+      );
+      await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
+      await app.zoo.settle();
+      await tester.pump(const Duration(milliseconds: 300));
+      final born = app.zoo.zoo.daemons.last;
+      expect(born.title, 'dot the tim');
+      expect(born.seed, 17);
+      expect(
+        backend.written,
+        contains(
+          equals({'op': 'zoo.nickname', 'uid': born.uid, 'name': 'dot'}),
+        ),
+      );
+      expect(app.zoo.zoo.daemons.first.name, 'pip');
+    },
+  );
+
   testWidgets('before any daemon the sheet is the nest and its habits', (
     tester,
   ) async {
     backend.zoo = _nest(habits: const ['turn', 'split', 'find']);
     await _pump(tester, backend);
     // A turn and two more: the egg is ready to arrive.
-    expect(find.text(r' \_o.o_/  '), findsOneWidget);
+    expect(find.text(r" \_(*')_/ "), findsOneWidget);
     await _openSheet(tester);
     expect(find.text('A daemon is incubating'), findsOneWidget);
     expect(find.text('[x]'), findsNWidgets(3));
@@ -321,7 +427,7 @@ void main() {
     );
     backend.nextDaemon = 'tim';
     final app = await _pump(tester, backend);
-    expect(find.text(r' \_o.o_/  '), findsOneWidget);
+    expect(find.text(r' \_(oo)_/ '), findsOneWidget);
     await _openSheet(tester);
     expect(find.text('Your egg is ready'), findsOneWidget);
     await tester.tap(find.text('Hatch'));
@@ -386,6 +492,9 @@ void main() {
     expect(card, contains('tim 0.1'));
     expect(card, contains('first egg'));
 
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('daemon-hatch-share')),
+    );
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-share')));
     await tester.pump();
     expect(platform.clipboard, '```\n$card\n```');
@@ -395,6 +504,7 @@ void main() {
     );
 
     // The account's first daemon: Done asks whether it may watch.
+    await tester.ensureVisible(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-consent')), findsOneWidget);
@@ -448,46 +558,52 @@ void main() {
     );
   });
 
-  testWidgets('beastie, a secret out of the dark, starts pitch black and then lights up', (tester) async {
-    backend.zoo = _nest(egg: true);
-    backend.nextDaemon = 'beastie';
-    await _pump(tester, backend);
-    await _openSheet(tester);
-    await tester.tap(find.text('Hatch'));
-    var pitch = false;
-    for (var i = 0; i < 60; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-      if (find
-          .byKey(const ValueKey('daemon-hatch-pitch'))
-          .evaluate()
-          .isNotEmpty) {
-        pitch = true;
-        // Nothing of it is shown yet: only the dark.
-        expect(find.byKey(const ValueKey('daemon-hatch-sprite')), findsNothing);
-        final scaffold = tester.widget<Scaffold>(
-          find.byKey(const ValueKey('daemon-hatch')),
-        );
-        expect(scaffold.backgroundColor, const Color(0xFF000000));
-        break;
+  testWidgets(
+    'beastie, a secret out of the dark, starts pitch black and then lights up',
+    (tester) async {
+      backend.zoo = _nest(egg: true);
+      backend.nextDaemon = 'beastie';
+      await _pump(tester, backend);
+      await _openSheet(tester);
+      await tester.tap(find.text('Hatch'));
+      var pitch = false;
+      for (var i = 0; i < 60; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (find
+            .byKey(const ValueKey('daemon-hatch-pitch'))
+            .evaluate()
+            .isNotEmpty) {
+          pitch = true;
+          // Nothing of it is shown yet: only the dark.
+          expect(
+            find.byKey(const ValueKey('daemon-hatch-sprite')),
+            findsNothing,
+          );
+          final scaffold = tester.widget<Scaffold>(
+            find.byKey(const ValueKey('daemon-hatch')),
+          );
+          expect(scaffold.backgroundColor, const Color(0xFF000000));
+          break;
+        }
       }
-    }
-    expect(pitch, isTrue);
-    await _toCard(tester);
-    // Unlike the grue, it does not live in the dark: the lights come on.
-    expect(
-      tester
-          .widget<Scaffold>(find.byKey(const ValueKey('daemon-hatch')))
-          .backgroundColor,
-      isNot(const Color(0xFF000000)),
-    );
-    expect(find.byKey(const ValueKey('daemon-hatch-pitch')), findsNothing);
-    expect(
-      tester
-          .widget<Text>(find.byKey(const ValueKey('daemon-hatch-stamp')))
-          .data,
-      startsWith('[ * SHINY * SECRET ]  #S/09'),
-    );
-  });
+      expect(pitch, isTrue);
+      await _toCard(tester);
+      // Unlike the grue, it does not live in the dark: the lights come on.
+      expect(
+        tester
+            .widget<Scaffold>(find.byKey(const ValueKey('daemon-hatch')))
+            .backgroundColor,
+        isNot(const Color(0xFF000000)),
+      );
+      expect(find.byKey(const ValueKey('daemon-hatch-pitch')), findsNothing);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('daemon-hatch-stamp')))
+            .data,
+        startsWith('[ * SHINY * SECRET ]  #S/09'),
+      );
+    },
+  );
 
   testWidgets('Reduce Motion goes straight to the card', (tester) async {
     backend.zoo = _nest(egg: true);
@@ -510,6 +626,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
     expect(find.byKey(const ValueKey('daemon-hatch-failed')), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.pumpAndSettle();
     expect(app.zoo.readyEgg, isNotNull);
@@ -652,7 +769,8 @@ void main() {
     // Larger text does not grow art that would only be scaled back down (the
     // words around it grow, and move it).
     await still('grue', rows.length, textScale: 2);
-    expect(tester.getRect(box).size, first.size);
+    expect(tester.getRect(box).width, closeTo(first.width, .01));
+    expect(tester.getRect(box).height, closeTo(first.height, .01));
   });
 
   testWidgets('a still of the reveal draws any moment', (tester) async {
@@ -898,7 +1016,13 @@ void main() {
     await tester.scrollUntilVisible(tim, 200, scrollable: _sheetScroll);
     expect(tester.getSemantics(tim).label, 'tim, shiny, 2 of it, paired');
     expect(find.text('> tim* x2'), findsOneWidget);
-    expect(find.text('gnu'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('daemon-shelf-gnu')),
+        matching: find.text('gnu'),
+      ),
+      findsOneWidget,
+    );
     final sprite = tester.widget<Text>(
       find.descendant(of: tim, matching: find.byType(Text)).first,
     );
@@ -1043,8 +1167,15 @@ void main() {
     await _pump(tester, backend);
     await _openSheet(tester);
     await tester.pump(const Duration(seconds: 1));
-    expect(find.text(rules.eggs['setup']!.look), findsOneWidget);
-    expect(find.text(r'\_$_/'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is EggPlateView &&
+            widget.kind == 'setup' &&
+            widget.stage == 'p4',
+      ),
+      findsOneWidget,
+    );
     expect(find.text('setup egg'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-hatch-setup')), findsOneWidget);
     // The setup egg has not been granted yet: the habits say when it comes.
@@ -1127,6 +1258,7 @@ void main() {
           .data,
       'level up · bond 2/4 · now tim 1.0',
     );
+    await tester.ensureVisible(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.pumpAndSettle();
     expect(app.zoo.zoo.daemon('tim')!.dupes, 1);
@@ -1203,6 +1335,7 @@ void main() {
     final app = await _pump(tester, backend, reduceMotion: true);
     await hatchToCard(tester);
     expect(find.byKey(const ValueKey('daemon-consent')), findsNothing);
+    await tester.ensureVisible(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.pump();
     // The same full screen, now asking.
@@ -1248,6 +1381,7 @@ void main() {
     backend.nextDaemon = 'tim';
     final app = await _pump(tester, backend, reduceMotion: true);
     await hatchToCard(tester);
+    await tester.ensureVisible(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.pump();
     await tester.ensureVisible(
@@ -1282,6 +1416,7 @@ void main() {
     backend.nextDaemon = 'tim';
     await _pump(tester, backend, reduceMotion: true);
     await hatchToCard(tester);
+    await tester.ensureVisible(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('daemon-hatch')), findsNothing);
@@ -1293,6 +1428,7 @@ void main() {
     backend.nextSerial = 9;
     await _pump(tester, backend, reduceMotion: true);
     await hatchToCard(tester);
+    await tester.ensureVisible(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('daemon-hatch')), findsNothing);
@@ -1463,6 +1599,7 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     expect(revealSprite(tester), ('plate 1.0', false));
     // A duplicate is never asked about, even though it is a card's Done.
+    await tester.ensureVisible(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('daemon-hatch')), findsNothing);
@@ -1545,6 +1682,7 @@ void main() {
       ('[o|o]', false),
     ]);
     expect(find.byKey(const ValueKey('daemon-hatch-plate')), findsNothing);
+    await tester.ensureVisible(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-done')));
     await tester.pumpAndSettle();
     await tester.pump(const Duration(seconds: 1));

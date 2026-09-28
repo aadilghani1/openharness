@@ -11,14 +11,28 @@
  * The draw happens here and only here. Clients never send a result; `rng` is injected so tests are
  * deterministic, and is `crypto.randomInt` in production. Eggs earned from work are granted here too:
  * a client reports turns, never eggs.
+ *
+ * A zoo holds INDIVIDUALS (daemons/README.md, "Individuals"): every hatch is its own, with a server-made
+ * `uid`, a `seed` its traits follow from (never stored as truth: lib/zooTraits.ts), and a serial. A
+ * species hatched again is one more individual, never a merge. Ops name an individual by its uid.
  */
 import { createHash, randomInt } from 'node:crypto'
 import { z } from 'zod'
 import { DAEMON_ROSTER } from './daemonRoster.g.js'
 
 export const ZOO_MAX_EGGS = 12
-export const ZOO_MAX_DAEMONS = 64
-export const ZOO_NICKNAME_MAX = 24
+/** Individuals one zoo holds. Full, a hatch is dropped and its egg waits in the nest (earned eggs are
+ *  then held, and past 64 held become xp, as for a full nest). */
+export const ZOO_MAX_DAEMONS = 256
+export const ZOO_NAME_MAX = 24
+/** The highest seed; a hatch draws one from 1 to this. 0 is the species' default traits (an individual
+ *  from before individuals, or a guest's). */
+export const ZOO_SEED_MAX = 4_294_967_295
+/** An account's first hatches are always a species it does not own (when the egg can give one). */
+export const ZOO_FIRST_NEW = 4
+/** After this many hatches in a row with no new species, the next is a new one (while an unowned released
+ *  regular exists). */
+export const ZOO_NEW_AFTER = 8
 /** Far past anything a real account reaches (it resets on every secret); a bound keeps the draw's
  *  integer weights inside `randomInt`'s range whatever a stored document says. */
 export const ZOO_MAX_PITY = 1_000_000
@@ -35,8 +49,8 @@ export const ZOO_TURN_MAX_N = 50
 /** The most agent-minutes one `zoo.turn` may report: a day for each of its turns (harnessd counts at most
  *  a day for one turn). The daily cap bounds what they earn long before this. */
 export const ZOO_TURN_MAX_MINUTES = ZOO_TURN_MAX_N * 24 * 60
-/** How many duplicates one daemon remembers; far past anything drawn. */
-export const ZOO_MAX_DUPES = 1_000_000
+/** How many duplicates an old record remembered (read, then dropped: see `parseZoo`). */
+const LEGACY_MAX_DUPES = 1_000_000
 /** The highest serial a daemon may carry. */
 const ZOO_MAX_SERIAL = 1_000_000_000
 /** A report may be this many days later than the latest local day on Earth still allows (a retry after
@@ -191,25 +205,55 @@ const key = z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/)
 const isoTime = z.string().max(40).refine((s) => !Number.isNaN(Date.parse(s)), 'not a time')
 const localDay = z.string().max(10).refine(isLocalDay, 'not a YYYY-MM-DD day')
 /** 1–24 printable ASCII once trimmed: what a status line and a card can draw on every terminal. */
-export const zooNicknameSchema = z.string().trim().regex(/^[\x20-\x7e]{1,24}$/, 'nickname must be 1-24 printable ASCII characters')
+export const zooNameSchema = z.string().trim().regex(/^[\x20-\x7e]{1,24}$/, 'a name must be 1-24 printable ASCII characters')
+/** An individual's id: 24 lowercase hex, made by the server (random at a hatch, derived for an old record). */
+export const zooUidSchema = z.string().regex(/^[0-9a-f]{24}$/, 'a uid is 24 lowercase hex characters')
+const bond = z.number().int().min(0).max(1_000_000)
+const version = z.string().refine((v) => VERSIONS.includes(v), 'unknown version')
+/** Its mint number: the nth of its species the server hatched (`DaemonMint`). */
+const serial = z.number().int().min(1).max(ZOO_MAX_SERIAL)
+/** `local`: hatched in a guest's zoo on a client, brought in by `zoo.seed`; it has no serial. */
+const origin = z.literal('local')
 
+/** One individual as stored and served. */
 export const zooDaemonSchema = z.object({
+  uid: zooUidSchema,
+  /** Its species: a roster id. */
+  id: daemonId,
+  /** What its traits follow from (lib/zooTraits.ts `rollTraits`). 0: the species' default traits. */
+  seed: z.number().int().min(0).max(ZOO_SEED_MAX),
+  /** Absent on a guest's individual and on one hatched before serials. */
+  serial: serial.optional(),
+  /** The name the person gave it (at the hatch, or later). */
+  name: zooNameSchema.optional(),
+  shiny: z.boolean(),
+  xp: z.number().int().min(0).max(ZOO_MAX_XP),
+  bond,
+  version,
+  /** When it hatched. */
+  hatched: isoTime,
+  /** The kind of egg it came from. */
+  egg: key,
+  origin: origin.optional(),
+}).strict()
+
+/**
+ * A daemon as stored before individuals: one record per species, a duplicate merged into it (`dupes`).
+ * Read as one individual per record (see `parseZoo`); never written again.
+ */
+const legacyDaemonSchema = z.object({
   id: daemonId,
   hatchedAt: isoTime,
   egg: key,
   shiny: z.boolean(),
-  nickname: zooNicknameSchema.optional(),
-  bond: z.number().int().min(0).max(1_000_000),
+  nickname: zooNameSchema.optional(),
+  bond,
   /** Absent on a daemon stored before xp existed; read as the least xp its bond needs. */
   xp: z.number().int().min(0).max(ZOO_MAX_XP).optional(),
-  version: z.string().refine((v) => VERSIONS.includes(v), 'unknown version'),
-  /** How many duplicates merged into this one (the shelf's `x2` is one). Absent: none. */
-  dupes: z.number().int().min(1).max(ZOO_MAX_DUPES).optional(),
-  /** Its mint number: the nth of its kind the server hatched (`DaemonMint`). Absent on a guest's daemon
-   *  and on one hatched before serials. */
-  serial: z.number().int().min(1).max(ZOO_MAX_SERIAL).optional(),
-  /** `local`: hatched in a guest's zoo on a client, brought in by `zoo.seed`; it has no serial. */
-  origin: z.literal('local').optional(),
+  version,
+  dupes: z.number().int().min(1).max(LEGACY_MAX_DUPES).optional(),
+  serial: serial.optional(),
+  origin: origin.optional(),
 }).strict()
 /** `date` is the history date a history egg remembers (`YYYY-MM-DD`, the year its week began); its MM-DD
  *  picks the daemon it leans toward. */
@@ -219,7 +263,7 @@ export const zooEggSchema = z.object({
   origin: z.literal('local').optional(),
 }).strict()
 
-export type ZooDaemon = Omit<z.infer<typeof zooDaemonSchema>, 'xp'> & { xp: number }
+export type ZooDaemon = z.infer<typeof zooDaemonSchema>
 export type ZooEgg = z.infer<typeof zooEggSchema>
 /** An egg earned while the nest was full, waiting for room. */
 export interface ZooHeld { kind: string; date?: string }
@@ -273,9 +317,11 @@ const isAutonomy = (value: unknown): value is ZooAutonomy =>
   typeof value === 'string' && (ZOO_AUTONOMY_LEVELS as readonly string[]).includes(value)
 
 export interface Zoo {
+  /** Every individual, in the order they hatched. */
   daemons: ZooDaemon[]
   eggs: ZooEgg[]
-  pair: string | null
+  /** The uid of the paired individual, or null. */
+  paired: string | null
   /** The autonomy dial. Account state like the pair, so every machine's brain reads the same level. */
   autonomy: ZooAutonomy
   /** Whether the person agreed to their daemon watching, and when (null: never asked yet). */
@@ -286,33 +332,36 @@ export interface Zoo {
   setupEgg: boolean
   /** Hatches of eggs that can hold a secret since the last secret. */
   pity: number
+  /** Hatches in a row that gave a species already owned: at `ZOO_NEW_AFTER` the next is a new one. */
+  sinceNew: number
   /** sha256 of each easter word already used. */
   easter: string[]
   progress: ZooProgress
 }
 export interface ZooDoc { revision: number; zoo: Zoo }
 /**
- * What one hatch gave. A duplicate (a daemon already owned) merged into the one you have: `duplicate`
- * and the `xp` it gave. `serial` is the new daemon's mint number, set by the route (routes/zoo.ts).
+ * What one hatch gave: the new individual as it hatched, with the egg it came from and its species again
+ * as `daemonId`. `serial` is its mint number, set by the route (routes/zoo.ts).
  */
-export interface Hatched { eggId: string; daemonId: string; shiny: boolean; duplicate?: true; xp?: number; serial?: number }
+export type Hatched = ZooDaemon & { eggId: string; daemonId: string }
 /** An egg that arrived in the nest during this request (earned now, or held until there was room): its
  *  `eggId`. Or one earned with 64 already held, which became `xp` for the paired daemon instead. */
 export interface Grant { kind: string; eggId?: string; xp?: number }
-/** A daemon whose bond reached a new level during this request, and the version it is now. */
-export interface LevelUp { id: string; level: number; version: string }
+/** An individual whose bond reached a new level during this request (`id` its species), and the version
+ *  it is now. */
+export interface LevelUp { uid: string; id: string; level: number; version: string }
 
 /**
- * What a client DRAWS from the zoo, as one comparable string: every daemon (its level and version, never
- * its xp alone), the eggs, the pair, the dial, consent, the habits and the first and setup eggs. The route
- * publishes `zoo_changed` only when this moved (routes/zoo.ts): a `zoo.turn` or `zoo.lesson` that only
- * tallied — progress, batch ids, xp short of a level — reaches clients on their next natural read, instead
- * of pulling every daemon, window and phone back to `GET /api/zoo` every active minute.
+ * What a client DRAWS from the zoo, as one comparable string: every individual (its level and version,
+ * never its xp alone), the eggs, the pair, the dial, consent, the habits and the first and setup eggs. The
+ * route publishes `zoo_changed` only when this moved (routes/zoo.ts): a `zoo.turn` or `zoo.lesson` that
+ * only tallied — progress, batch ids, xp short of a level — reaches clients on their next natural read,
+ * instead of pulling every daemon, window and phone back to `GET /api/zoo` every active minute.
  */
 export function shownZoo(zoo: Zoo): string {
   return JSON.stringify({
     daemons: zoo.daemons.map(({ xp: _xp, ...shown }) => shown),
-    eggs: zoo.eggs, pair: zoo.pair, autonomy: zoo.autonomy, consent: zoo.consent,
+    eggs: zoo.eggs, paired: zoo.paired, autonomy: zoo.autonomy, consent: zoo.consent,
     habits: zoo.habits, firstEgg: zoo.firstEgg, setupEgg: zoo.setupEgg,
   })
 }
@@ -322,16 +371,20 @@ export const zooShownChanged = (before: Zoo, after: Zoo): boolean => shownZoo(be
 
 export const emptyProgress = (): ZooProgress =>
   ({ turns: 0, days: {}, weeks: [], nights: [], machines: [], marathon: [], history: [], held: [], batches: [], lessons: [] })
-export const emptyZoo = (): Zoo =>
-  ({ daemons: [], eggs: [], pair: null, autonomy: ZOO_DEFAULT_AUTONOMY, consent: null, habits: [], firstEgg: false, setupEgg: false, pity: 0, easter: [], progress: emptyProgress() })
+export const emptyZoo = (): Zoo => ({
+  daemons: [], eggs: [], paired: null, autonomy: ZOO_DEFAULT_AUTONOMY, consent: null, habits: [], firstEgg: false, setupEgg: false,
+  pity: 0, sinceNew: 0, easter: [], progress: emptyProgress(),
+})
 
 // Names in ops are plain strings rather than roster enums on purpose: a newer client naming a habit or
-// a word this server does not know yet gets that op dropped, not the whole batch refused.
+// a word this server does not know yet gets that op dropped, not the whole batch refused. An individual is
+// named by its uid; a well-formed uid the zoo does not hold drops the op like any other missing name.
 export const zooOpSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('zoo.habit'), key }).strict(),
   z.object({ op: z.literal('zoo.hatch'), eggId: key }).strict(),
-  z.object({ op: z.literal('zoo.pair'), id: daemonId }).strict(),
-  z.object({ op: z.literal('zoo.nickname'), id: daemonId, nickname: zooNicknameSchema.nullable() }).strict(),
+  z.object({ op: z.literal('zoo.pair'), uid: zooUidSchema }).strict(),
+  // The name given at the hatch, or later; null clears it.
+  z.object({ op: z.literal('zoo.nickname'), uid: zooUidSchema, name: zooNameSchema.nullable() }).strict(),
   // A level this server does not know (a newer client's) is dropped, not refused, like any unknown name.
   z.object({ op: z.literal('zoo.autonomy'), level: z.string().min(1).max(32) }).strict(),
   // The first-day consent screen's answer: whether the daemon may watch at all.
@@ -355,7 +408,8 @@ export const zooOpSchema = z.discriminatedUnion('op', [
     hour: z.number().int().min(0).max(23),
     machineId: key,
   }).strict().refine((op) => (op.away ?? 0) <= op.n, 'away counts turns, so it is at most n'),
-  // A lesson the person approved (daemons/LEARNING.md): bond for the daemon that found it. harnessd sends it.
+  // A lesson the person approved (daemons/LEARNING.md): bond for the daemon that found it, named by its
+  // species (see applyLesson for which individual). harnessd sends it.
   // SELF-REPORTED like `zoo.turn`: the approval happened on a machine the server cannot see, so a person can
   // only ever grow their own daemons with it (a retry of one lesson id grows nothing).
   z.object({ op: z.literal('zoo.lesson'), lessonId: key, daemonId }).strict(),
@@ -429,12 +483,42 @@ function parseProgress(raw: unknown, strict: boolean): ZooProgress {
   }
 }
 
-/** A daemon's bond and version follow its xp. A daemon stored before xp existed gets the least xp its
+/** An individual's bond and version follow its xp. A daemon stored before xp existed gets the least xp its
  *  stored bond needs, so reading never lowers a level. */
-function grown(d: z.infer<typeof zooDaemonSchema>): ZooDaemon {
+function grown(d: Omit<ZooDaemon, 'xp'> & { xp?: number }): ZooDaemon {
   const xp = d.xp ?? BOND_LEVELS[Math.min(d.bond, BOND_LEVELS.length - 1)]
   const bond = levelFor(xp)
   return { ...d, xp, bond, version: versionFor(bond) }
+}
+
+/**
+ * The uid an old record reads with: the first 24 hex of sha256 over the account and the species (and,
+ * for a second record of one species, which one it is), so every read of the same old zoo, before and
+ * after it is next written, names each individual the same.
+ */
+export function legacyUid(userId: string, id: string, nth = 0): string {
+  return createHash('sha256').update(`harness-zoo\0${userId}\0${id}${nth ? `\0${nth}` : ''}`).digest('hex').slice(0, 24)
+}
+
+/**
+ * One stored individual, or an old record read as one (`seed` 0, the species' default traits; its
+ * `nickname` its name, its `hatchedAt` its hatch, its `dupes` dropped: the xp they gave is in its xp).
+ * `nth` counts the old records of each species read so far. Null: malformed.
+ */
+function readDaemon(item: unknown, userId: string, nth: Map<string, number>): ZooDaemon | null {
+  if (Object.hasOwn(record(item), 'uid')) {
+    const parsed = zooDaemonSchema.safeParse(item)
+    return parsed.success ? grown(parsed.data) : null
+  }
+  const old = legacyDaemonSchema.safeParse(item)
+  if (!old.success) return null
+  const { id, hatchedAt, egg, shiny, nickname, bond, xp, version, serial, origin } = old.data
+  const k = nth.get(id) ?? 0
+  nth.set(id, k + 1)
+  return grown({
+    uid: legacyUid(userId, id, k), id, seed: 0, ...(serial ? { serial } : {}), ...(nickname ? { name: nickname } : {}),
+    shiny, xp, bond, version, hatched: hatchedAt, egg, ...(origin ? { origin } : {}),
+  })
 }
 
 /** Easter words used, as hashes. A word stored before words were hashed reads as its hash; a seed keeps
@@ -452,33 +536,30 @@ function parseEaster(raw: unknown, strict: boolean): string[] {
   return out
 }
 
-/** A second record of a daemon already read (a zoo from before duplicates merged) folds into the first:
- *  counted in its `dupes`, shiny if either was. It gives no xp: that is a hatch's to give. */
-function fold(into: ZooDaemon, dup: ZooDaemon): void {
-  into.dupes = Math.min((into.dupes ?? 0) + 1 + (dup.dupes ?? 0), ZOO_MAX_DUPES)
-  if (dup.shiny) into.shiny = true
-}
-
 /**
  * The zoo as stored (Json), validated entry by entry; anything malformed is dropped rather than served.
  *
  * `roster: true` (a guest's seed) also drops what the roster does not know: daemons, egg kinds,
  * habits and words. A STORED zoo keeps a well-formed daemon id the roster lacks — a roster rolled back
  * must not delete someone's daemon on their next write.
+ *
+ * A zoo stored before individuals (one record per species, duplicates merged into its `dupes`, `pair` a
+ * species id) reads as individuals: each record one, with `legacyUid(userId, id)` (a second record of one
+ * species, from before duplicates merged, its own), and `paired` the first individual of the old pair's
+ * species. The next write stores it in the new shape, with the same uids: reading it again changes nothing.
  */
-export function parseZoo(raw: unknown, opts: { roster?: boolean } = {}): Zoo {
+export function parseZoo(raw: unknown, opts: { roster?: boolean; userId?: string } = {}): Zoo {
   const src = record(raw)
   const strict = !!opts.roster
   const daemons: ZooDaemon[] = []
   if (Array.isArray(src.daemons)) {
+    const nth = new Map<string, number>()
     for (const item of src.daemons) {
-      const parsed = zooDaemonSchema.safeParse(item)
-      if (!parsed.success) continue
-      if (strict && (!ROSTER_IDS.has(parsed.data.id) || !eggRule(parsed.data.egg))) continue
-      const d = grown(parsed.data)
-      const first = daemons.find((x) => x.id === d.id)
-      if (first) fold(first, d)
-      else if (daemons.length < ZOO_MAX_DAEMONS) daemons.push(d)
+      if (daemons.length >= ZOO_MAX_DAEMONS) break
+      const d = readDaemon(item, opts.userId ?? '', nth)
+      if (!d || daemons.some((x) => x.uid === d.uid)) continue
+      if (strict && (!ROSTER_IDS.has(d.id) || !eggRule(d.egg))) continue
+      daemons.push(d)
     }
   }
   const eggs: ZooEgg[] = []
@@ -491,20 +572,23 @@ export function parseZoo(raw: unknown, opts: { roster?: boolean } = {}): Zoo {
       if (eggs.length >= ZOO_MAX_EGGS) break
     }
   }
-  const pair = typeof src.pair === 'string' && daemons.some((d) => d.id === src.pair) ? src.pair : null
-  const pity = typeof src.pity === 'number' && Number.isInteger(src.pity) && src.pity >= 0 ? Math.min(src.pity, ZOO_MAX_PITY) : 0
+  // `paired` names a uid; a zoo from before individuals said `pair`, a species id.
+  const paired = Object.hasOwn(src, 'paired')
+    ? (typeof src.paired === 'string' && daemons.some((d) => d.uid === src.paired) ? src.paired : null)
+    : (typeof src.pair === 'string' ? daemons.find((d) => d.id === src.pair)?.uid ?? null : null)
   const consent = record(src.consent)
   return {
     daemons,
     eggs,
-    pair,
+    paired,
     autonomy: isAutonomy(src.autonomy) ? src.autonomy : ZOO_DEFAULT_AUTONOMY,
     consent: typeof consent.watching === 'boolean' && typeof consent.at === 'string' && isoTime.safeParse(consent.at).success
       ? { watching: consent.watching, at: consent.at } : null,
     habits: uniqueStrings(src.habits, (h) => !strict || HABIT_KEYS.has(h), 64),
     firstEgg: src.firstEgg === true,
     setupEgg: src.setupEgg === true,
-    pity,
+    pity: wholeIn(src.pity, ZOO_MAX_PITY),
+    sinceNew: wholeIn(src.sinceNew, ZOO_MAX_PITY),
     easter: parseEaster(src.easter, strict),
     progress: parseProgress(src.progress, strict),
   }
@@ -515,19 +599,31 @@ export function parseZoo(raw: unknown, opts: { roster?: boolean } = {}): Zoo {
 const WEIGHT_UNITS = 1_000_000
 
 /**
+ * Whether this zoo's next hatch owes a species it does not own: one of its first `ZOO_FIRST_NEW` hatches
+ * (while the egg could give any new species), or the next after `ZOO_NEW_AFTER` in a row with none (while
+ * an unowned released regular exists). A zoo's individuals are its hatches: none is ever taken away.
+ */
+function owesNew(zoo: Zoo, fresh: number, secrets: number): boolean {
+  return (zoo.daemons.length < ZOO_FIRST_NEW && fresh + secrets > 0) || (zoo.sinceNew >= ZOO_NEW_AFTER && fresh > 0)
+}
+
+/**
  * Who can come out of an egg of `kind` for this zoo at `now`, and how likely, in whole units (README,
  * "The draw"):
  *
- *  1. Eligible: every released regular (not a secret) you do not own; once you own every released
- *     regular, every released regular again (a duplicate). Secrets sit outside the set: an unowned
- *     released secret is eligible, but only from an egg whose `weights.secret` is above 0.
+ *  1. Eligible: every released regular (not a secret), owned or not: a species you own hatches again as
+ *     one more individual. Secrets sit outside the set: an unowned released secret is eligible, but only
+ *     from an egg whose `weights.secret` is above 0; one you own never comes again.
  *  2. Weight: `weights[rarity] / (eligible of that rarity)`, plus `pity * pityPerMiss` for a secret,
  *     times `boost[id]`. A rarity with no eligible daemon gives its weight to nothing.
  *  3. The pity guarantee: from an egg that can hold a secret, when `pity` is one short of
  *     `secretGuaranteeAt` and a released secret is unowned, only the unowned secrets are eligible.
+ *  4. A new species owed (`owesNew`): only the species you do not own are eligible — the unowned
+ *     regulars and, from an egg that can hold one, the unowned secrets — weighed as in 2.
  *
- * An egg whose eligible daemons all weigh nothing (an easter egg once every legendary and secret is
- * owned) draws as if everything were owned — duplicates of what it can give — rather than giving nobody.
+ * When what 4 leaves weighs nothing (an easter egg, which gives only legendaries and secrets, once those
+ * are owned) the egg draws as usual, and a new species is still owed to the next hatch. An egg whose
+ * eligible daemons all weigh nothing draws from every released daemon rather than giving nobody.
  */
 export function drawWeights(zoo: Zoo, kind: string, now: Date = new Date()): Array<{ id: string; rarity: string; weight: number }> {
   const egg = eggRule(kind)
@@ -548,13 +644,20 @@ export function drawWeights(zoo: Zoo, kind: string, now: Date = new Date()): Arr
       return { id: d.id, rarity: d.rarity, weight: Math.round((base + pity) * boost * WEIGHT_UNITS) }
     })
   }
+  const weighs = (weights: ReturnType<typeof weigh>) => weights.some((w) => w.weight > 0)
   if (secrets.length && zoo.pity + 1 >= RULES.secretGuaranteeAt) return weigh(secrets)
-  const eligible = new Set([...(fresh.length ? fresh : regulars), ...secrets])
+  if (owesNew(zoo, fresh.length, secrets.length)) {
+    const unowned = new Set([...fresh, ...secrets])
+    const weights = weigh(released.filter((d) => unowned.has(d)))
+    if (weighs(weights)) return weights
+  }
+  const eligible = new Set([...regulars, ...secrets])
   const weights = weigh(released.filter((d) => eligible.has(d)))
-  return weights.some((w) => w.weight > 0) ? weights : weigh(released)
+  return weighs(weights) ? weights : weigh(released)
 }
 
-/** One draw: who hatches, then (independently) whether it is shiny. `rng` is called in that order. */
+/** One draw: which species hatches, then (independently) whether it is shiny. `rng` is called in that
+ *  order. (The hatch then draws the individual's seed and uid: see `hatchOne`.) */
 export function draw(zoo: Zoo, kind: string, rng: Rng, now: Date = new Date()): { id: string; rarity: string; shiny: boolean } | null {
   const weights = drawWeights(zoo, kind, now)
   const total = weights.reduce((sum, w) => sum + w.weight, 0)
@@ -619,7 +722,22 @@ function grantEgg(zoo: Zoo, kind: string, rng: Rng, now: Date, out: Outcome, dat
   return true
 }
 
-/** xp for one daemon; a new level bumps bond and version and is answered in `levelUps`. */
+const UID_WORDS = 3                                          // three 32-bit draws: 24 hex, 96 bits
+const UID_WORD = 0x1_0000_0000
+
+/** A fresh uid, unlike any individual's in the zoo. */
+function newUid(zoo: Pick<Zoo, 'daemons'>, rng: Rng): string {
+  for (;;) {
+    let uid = ''
+    for (let i = 0; i < UID_WORDS; i++) uid += rng(UID_WORD).toString(16).padStart(8, '0')
+    if (!zoo.daemons.some((d) => d.uid === uid)) return uid
+  }
+}
+
+/** A hatch's seed: a whole number from 1 to `ZOO_SEED_MAX` (0 is kept for the default traits). */
+const newSeed = (rng: Rng): number => 1 + rng(ZOO_SEED_MAX)
+
+/** xp for one individual; a new level bumps bond and version and is answered in `levelUps`. */
 function grow(d: ZooDaemon, xp: number, out: Outcome): void {
   if (xp <= 0) return
   d.xp = Math.min(d.xp + xp, ZOO_MAX_XP)
@@ -627,11 +745,11 @@ function grow(d: ZooDaemon, xp: number, out: Outcome): void {
   if (level <= d.bond) return
   d.bond = level
   d.version = versionFor(level)
-  out.levelUps.push({ id: d.id, level, version: d.version })
+  out.levelUps.push({ uid: d.uid, id: d.id, level, version: d.version })
 }
 
-/** The paired daemon: the first one hatched with the paired id. */
-const pairedDaemon = (zoo: Zoo): ZooDaemon | undefined => zoo.pair === null ? undefined : zoo.daemons.find((x) => x.id === zoo.pair)
+/** The paired individual. */
+const pairedDaemon = (zoo: Zoo): ZooDaemon | undefined => zoo.paired === null ? undefined : zoo.daemons.find((x) => x.uid === zoo.paired)
 
 /** xp for the paired daemon. Nothing without a pair. */
 function addXp(zoo: Zoo, xp: number, out: Outcome): void {
@@ -768,13 +886,15 @@ type LessonOp = Extract<ZooOp, { op: 'zoo.lesson' }>
 /**
  * A lesson the person approved (daemons/LEARNING.md, "The zoo"): `rules.lessonXp` for the daemon that
  * found it when you own it, else for the paired one (the finder may be a guest's daemon that never came
- * along to this account). Once per lesson id: a retry of a report that landed grows nothing. With neither daemon,
- * nothing grows and the id is not remembered.
+ * along to this account). The report names a species: the paired individual when it is of that species
+ * (the pair brain found it), else the first of that species hatched. Once per lesson id: a retry of a
+ * report that landed grows nothing. With neither, nothing grows and the id is not remembered.
  */
 function applyLesson(zoo: Zoo, op: LessonOp, out: Outcome): boolean {
   const p = zoo.progress
   if (p.lessons.includes(op.lessonId)) return false
-  const d = zoo.daemons.find((x) => x.id === op.daemonId) ?? pairedDaemon(zoo)
+  const paired = pairedDaemon(zoo)
+  const d = (paired?.id === op.daemonId ? paired : zoo.daemons.find((x) => x.id === op.daemonId)) ?? paired
   if (!d) return false
   grow(d, RULES.lessonXp, out)
   p.lessons = [...p.lessons, op.lessonId].slice(-ZOO_LESSON_MEMORY)
@@ -802,23 +922,53 @@ const cloneProgress = (p: ZooProgress): ZooProgress => ({
 const clone = (zoo: Zoo): Zoo => ({
   daemons: zoo.daemons.map((d) => ({ ...d })),
   eggs: zoo.eggs.map((e) => ({ ...e })),
-  pair: zoo.pair,
+  paired: zoo.paired,
   autonomy: zoo.autonomy,
   consent: zoo.consent ? { ...zoo.consent } : null,
   habits: [...zoo.habits],
   firstEgg: zoo.firstEgg,
   setupEgg: zoo.setupEgg,
   pity: zoo.pity,
+  sinceNew: zoo.sinceNew,
   easter: [...zoo.easter],
   progress: cloneProgress(zoo.progress),
 })
+
+type HatchOp = Extract<ZooOp, { op: 'zoo.hatch' }>
+
+/**
+ * Hatch one egg: draw the species (and shiny), then the individual's seed and uid, in that order of
+ * `rng` calls. Every hatch is a new individual — a species you own too — at 0.1, paired when nothing is.
+ * A full zoo (`ZOO_MAX_DAEMONS`) hatches nothing and the egg stays where it is.
+ */
+function hatchOne(zoo: Zoo, op: HatchOp, rng: Rng, now: Date, out: Outcome): boolean {
+  const i = zoo.eggs.findIndex((e) => e.id === op.eggId)
+  if (i < 0 || zoo.daemons.length >= ZOO_MAX_DAEMONS) return false
+  const egg = zoo.eggs[i]
+  const drawn = drawEgg(zoo, egg, rng, now)
+  if (!drawn) return false                                     // a kind this roster cannot draw
+  const isNew = !zoo.daemons.some((d) => d.id === drawn.id)
+  zoo.eggs.splice(i, 1)
+  // The pity counts only hatches that could have been a secret.
+  if (drawn.rarity === 'secret') zoo.pity = 0
+  else if (holdsSecret(egg.kind)) zoo.pity = Math.min(zoo.pity + 1, ZOO_MAX_PITY)
+  zoo.sinceNew = isNew ? 0 : Math.min(zoo.sinceNew + 1, ZOO_MAX_PITY)
+  const seed = newSeed(rng)
+  const d: ZooDaemon = {
+    uid: newUid(zoo, rng), id: drawn.id, seed, shiny: drawn.shiny, xp: 0, bond: 0, version: FIRST_VERSION,
+    hatched: now.toISOString(), egg: egg.kind,
+  }
+  zoo.daemons.push(d)
+  if (zoo.paired === null) zoo.paired = d.uid
+  out.hatched.push({ eggId: egg.id, daemonId: d.id, ...d })
+  return true
+}
 
 /**
  * Apply one op to `zoo` IN PLACE (applyZooOps hands it a copy). Returns whether anything changed; what
  * it hatched, granted or levelled goes into `out`.
  *
- * A daemon is one record per roster id: a duplicate merges into it. `zoo.pair` and `zoo.nickname` name a
- * daemon by id (a zoo stored with two records of one id is folded when read: see parseZoo).
+ * Every hatch is its own individual; `zoo.pair` and `zoo.nickname` name one by its uid.
  */
 function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx: ZooContext): boolean {
   switch (op.op) {
@@ -829,34 +979,11 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
       if (maybeGrantHabitEggs(zoo, rng, now, out)) changed = true
       return changed
     }
-    case 'zoo.hatch': {
-      const i = zoo.eggs.findIndex((e) => e.id === op.eggId)
-      if (i < 0) return false
-      const egg = zoo.eggs[i]
-      const drawn = drawEgg(zoo, egg, rng, now)
-      if (!drawn) return false                                   // a kind this roster cannot draw
-      const original = zoo.daemons.find((d) => d.id === drawn.id)
-      if (!original && zoo.daemons.length >= ZOO_MAX_DAEMONS) return false
-      zoo.eggs.splice(i, 1)
-      // The pity counts only hatches that could have been a secret.
-      if (drawn.rarity === 'secret') zoo.pity = 0
-      else if (holdsSecret(egg.kind)) zoo.pity = Math.min(zoo.pity + 1, ZOO_MAX_PITY)
-      if (original) {
-        // A duplicate grows the one you have, and a shiny one makes it shiny.
-        original.dupes = Math.min((original.dupes ?? 0) + 1, ZOO_MAX_DUPES)
-        if (drawn.shiny) original.shiny = true
-        grow(original, RULES.duplicateXp, out)
-        out.hatched.push({ eggId: egg.id, daemonId: drawn.id, shiny: drawn.shiny, duplicate: true, xp: RULES.duplicateXp })
-        return true
-      }
-      zoo.daemons.push({ id: drawn.id, hatchedAt: now.toISOString(), egg: egg.kind, shiny: drawn.shiny, bond: 0, xp: 0, version: FIRST_VERSION })
-      if (zoo.pair === null) zoo.pair = drawn.id
-      out.hatched.push({ eggId: egg.id, daemonId: drawn.id, shiny: drawn.shiny })
-      return true
-    }
+    case 'zoo.hatch':
+      return hatchOne(zoo, op, rng, now, out)
     case 'zoo.pair': {
-      if (zoo.pair === op.id || !zoo.daemons.some((d) => d.id === op.id)) return false
-      zoo.pair = op.id
+      if (zoo.paired === op.uid || !zoo.daemons.some((d) => d.uid === op.uid)) return false
+      zoo.paired = op.uid
       return true
     }
     // The dial and consent are plain assignments, in the order the person made them; what they changed is
@@ -875,10 +1002,10 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
       return false
     }
     case 'zoo.nickname': {
-      const d = zoo.daemons.find((x) => x.id === op.id)
-      if (!d || (d.nickname ?? null) === op.nickname) return false
-      if (op.nickname === null) delete d.nickname
-      else d.nickname = op.nickname
+      const d = zoo.daemons.find((x) => x.uid === op.uid)
+      if (!d || (d.name ?? null) === op.name) return false
+      if (op.name === null) delete d.name
+      else d.name = op.name
       return true
     }
     case 'zoo.easter': {
@@ -893,23 +1020,28 @@ function applyZooOp(zoo: Zoo, op: ZooOp, rng: Rng, now: Date, out: Outcome, ctx:
       if (!isEmpty(zoo)) return false
       const seed = parseZoo(op.zoo, { roster: true })
       // A guest's zoo lived on a client: everything in it is self-reported. What comes in is only what a
-      // client could not have made valuable — regular daemon ids, fresh at 0.1 (no shiny, no xp, no bond,
-      // no duplicates, no serial), the first and turn eggs, and the habits — all marked `local`. Pity,
-      // secrets, the eggs that can hold one (night, easter), easter words, progress, the dial and consent
-      // stay the account's own. A daemon of a drop not yet released could not have hatched anywhere, so it
-      // stays out too.
+      // client could not have made valuable — its individuals of regular species, each fresh at 0.1 with
+      // the species' default traits (seed 0: no rolled look, no shiny, no xp, no bond, no serial), the
+      // first and turn eggs, and the habits — all marked `local`. Pity, secrets, the eggs that can hold one
+      // (night, easter), easter words, progress, the dial and consent stay the account's own. A daemon of a
+      // drop not yet released could not have hatched anywhere, so it stays out too. Uids and egg ids are
+      // the server's to give: each is made new on the way in.
       const regular = new Set(releasedDaemons(now).filter((d) => d.rarity !== 'secret').map((d) => d.id))
-      const daemons = seed.daemons.filter((d) => regular.has(d.id)).map((d): ZooDaemon => ({
-        id: d.id, hatchedAt: d.hatchedAt, egg: d.egg, shiny: false, bond: 0, xp: 0, version: FIRST_VERSION,
-        ...(d.nickname ? { nickname: d.nickname } : {}), origin: 'local',
-      }))
+      const came = seed.daemons.filter((d) => regular.has(d.id))
+      const daemons: ZooDaemon[] = []
+      for (const d of came) {
+        daemons.push({
+          uid: newUid({ daemons }, rng), id: d.id, seed: 0, ...(d.name ? { name: d.name } : {}),
+          shiny: false, xp: 0, bond: 0, version: FIRST_VERSION, hatched: d.hatched, egg: d.egg, origin: 'local',
+        })
+      }
       const kept = seed.eggs.filter((e) => SEEDED_EGGS.has(e.kind))
       if (!daemons.length && !kept.length && !seed.habits.length) return false
-      // Egg ids are the server's to give: a seeded egg is renamed on the way in.
       const eggs: ZooEgg[] = []
       for (const egg of kept) eggs.push({ id: newEggId({ eggs }, rng), kind: egg.kind, grantedAt: egg.grantedAt, origin: 'local' })
-      const pair = seed.pair && daemons.some((d) => d.id === seed.pair) ? seed.pair : daemons[0]?.id ?? null
-      Object.assign(zoo, { daemons, eggs, pair, habits: seed.habits, firstEgg: seed.firstEgg, setupEgg: seed.setupEgg, pity: 0, easter: [] })
+      const pairedAt = came.findIndex((d) => d.uid === seed.paired)
+      const paired = (pairedAt >= 0 ? daemons[pairedAt] : daemons[0])?.uid ?? null
+      Object.assign(zoo, { daemons, eggs, paired, habits: seed.habits, firstEgg: seed.firstEgg, setupEgg: seed.setupEgg, pity: 0, sinceNew: 0, easter: [] })
       return true
     }
     case 'zoo.turn':
