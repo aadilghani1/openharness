@@ -144,22 +144,32 @@ tooltip explains that this is recent confirmed work and gives its observation
 time. Git remains the source of branch names for every engine. When several
 branches have equal recent evidence, show the count instead of selecting one.
 
-Details group each branch with its PRs, put recent work and open PRs first, and
-fold completed work behind one action when other PRs need attention. If every
-recorded PR is completed, expand the history by default. Keep a user's explicit
-expand/collapse choice through refreshes. Show a shared repository once, align PR
-states on the right, and keep head/base names and check times in inspection
-details. Size the dialog to its contents with bounded scrolling. Escape returns
-focus to the terminal.
+Details use two plain tabs: **Pull requests** and **Branches**. The heading is
+the session name and shared repository; do not append “Work” or “Recent work.”
+Pull requests is the default, with one row per PR regardless of branch reuse.
+Put the title on the left and the state on the right. Below it, show the PR number,
+head/base branches and GitHub date. Use terminal green for Open, magenta for
+Merged, red for Closed and muted text for Draft/Unknown. State text remains
+readable without relying on color. Keep selection to the title line.
+
+Open/draft PRs come first; merged and closed PRs stay visible in the same list.
+Order them by actual GitHub update/merge/close time, never lookup time. The
+Branches tab contains the branch inventory, with checked-out branches labeled.
+Both lists retain their scroll positions. Left/Right on the tab controls switches
+views. Narrow windows use the shorter “PRs” tab label and wrap the tabs without
+shrinking text. Size the dialog to its contents with bounded scrolling. Escape
+returns focus to the terminal.
 Older daemons keep exact-branch project search, with Escape returning through its
 scopes. Names never establish identity. Branch navigation does not check out or
 create a branch. Unknown/multiple/unavailable work uses plain muted context text,
 without a Git branch symbol when no single branch is displayed; the same action
 remains inspectable.
 
-![Session branches with synthetic data](images/session-branches.png)
+![Pull requests with synthetic data](images/session-pull-requests.png)
 
-![Completed PRs expanded](images/session-branches-completed.png)
+![Branches in a separate tab](images/session-branches.png)
+
+![Merged PRs remain visible](images/session-branches-completed.png)
 
 Render these fixtures with `HARNESS_GIT_CONTEXT_CAPTURE_DIR=/tmp/work-dialog
 flutter test test/session_work_dialog_test.dart`. Local macOS captures load the

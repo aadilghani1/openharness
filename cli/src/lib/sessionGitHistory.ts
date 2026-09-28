@@ -25,7 +25,12 @@ const date = (v: unknown): v is string => typeof v === 'string' && Number.isFini
 export function comparePullRequests(a: RecordedPullRequest, b: RecordedPullRequest): number {
   const rank = (p: RecordedPullRequest) => p.result?.status !== 'found' ? 1
     : p.result.state === 'Open' || p.result.state === 'Draft' ? 0 : 2
-  return rank(a) - rank(b) || Date.parse(b.at) - Date.parse(a.at)
+  const time = (p: RecordedPullRequest) => {
+    const pr = p.result?.status === 'found' ? p.result : null
+    const value = pr?.state === 'Merged' ? pr.mergedAt : pr?.state === 'Closed' ? pr.closedAt : pr?.updatedAt ?? pr?.createdAt
+    return value && date(value) ? Date.parse(value) : Date.parse(p.at)
+  }
+  return rank(a) - rank(b) || time(b) - time(a)
     || (a.url === b.url ? 0 : a.url < b.url ? -1 : 1)
 }
 function valid(value: unknown): value is GitHistory {
