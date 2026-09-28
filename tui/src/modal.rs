@@ -303,6 +303,18 @@ pub fn external_rows(app: &App) -> Vec<Row> {
     }).collect()
 }
 
+/// A hit's snippet on one line: its marks taken off, from a little before the first match
+/// (`…`), at most a line's worth.
+pub fn snippet_line(snippet: &str) -> String {
+    let at = snippet.find('\u{2}').unwrap_or(0);
+    let flat = |s: &str| s.replace(['\u{2}', '\u{3}'], "").split_whitespace().collect::<Vec<_>>().join(" ");
+    let before: Vec<char> = flat(&snippet[..at]).chars().collect();
+    let lead = if before.len() > 24 { format!("…{} ", before[before.len() - 23..].iter().collect::<String>().trim_start()) } else if before.is_empty() { String::new() } else { format!("{} ", before.iter().collect::<String>()) };
+    let text = format!("{lead}{}", flat(&snippet[at..]));
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() > 110 { format!("{}…", chars[..109].iter().collect::<String>()) } else { text }
+}
+
 /// The sessions, when there is more than one: `work: 2 windows`, the one on screen `(attached)`.
 pub fn session_rows(app: &App) -> Vec<Row> {
     let all = app.session_list();

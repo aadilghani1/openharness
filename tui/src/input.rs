@@ -582,6 +582,12 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
                 Some(order) => { let at = |id: &str| order.iter().position(|o| o == id).unwrap_or(usize::MAX); rows.sort_by_key(|r| at(&r.id)) }
                 None => picker.hold = Some(rows.iter().map(|r| r.id.clone()).collect()),
             }
+            // A row found by what was said in it shows where (its words lit as a match is), in
+            // place of its detail — part of its line, so fzf lights what the query found there.
+            for r in rows.iter_mut() {
+                let hit = app.said.iter().find(|s| s.turn >= 0 && (if s.external.is_some() { format!("external:{}:{}", s.machine, s.session_id) } else { format!("{}:{}", s.machine, s.agent_id) }) == r.id);
+                if let Some(h) = hit { r.detail = vec![ratatui::text::Span::styled(modal::snippet_line(&h.snippet), ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM))]; r.volatile_detail = false }
+            }
             picker.said = app.said.iter().map(|s| if s.external.is_some() { format!("external:{}:{}", s.machine, s.session_id) } else { format!("{}:{}", s.machine, s.agent_id) }).collect();
             picker.said_query = app.said_for.clone();
             picker.set_rows(rows);

@@ -115,6 +115,21 @@ Feel:
 Known and accepted for now: a link-window across two terminals' sessions; after `new-window -a` in
 a grouped session the other session's current window stays where it was (tmux keeps it by index).
 
+## Branch `hn-polish` (after the handoff)
+
+A few more fixes landed on `hn-polish`, branched from `ship-hn` at the handoff commit; it is a
+fast-forward of `ship-hn` (merge it there first):
+- `new-window` with no daemon says so and makes no window.
+- A window one row tall shows its pane, with no title row over it.
+- Keys typed while a machine's link is down are kept and sent when it is back.
+- The answer guard says "Read the question first" on a list just opened.
+- A conversation's preview says it resumes without permission prompts.
+- The `?` help list: keys searchable (`?C-b z`), ranked by score, not pre-lit.
+- C-b s rows found by what was said show the matched snippet as their detail (lit by fzf).
+
+Tests: 98 unit tests and the end-to-end tests pass. (A fresh worktree needs `cli/node_modules`
+for the mock daemon; a symlink to another worktree's is enough.)
+
 ## Suggested next steps
 
 1. Fix the items above, re-running the matching reviewer repros.
