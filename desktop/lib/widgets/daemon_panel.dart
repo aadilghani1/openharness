@@ -396,7 +396,17 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: body,
+                    children: [
+                      if (face.zoo.isPreview) ...[
+                        Text(
+                          'Local preview · clears on window close',
+                          key: const ValueKey('daemon-preview-label'),
+                          style: _ink(_muted),
+                        ),
+                        SizedBox(height: _cell.height),
+                      ],
+                      ...body,
+                    ],
                   ),
                 ),
               ),
@@ -765,16 +775,17 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       Wrap(
         spacing: _cell.width * 2,
         children: [
-          for (final kind in _eggKinds) () {
-            order.add('egg:$kind');
-            return _eggButton(kind);
-          }(),
+          for (final kind in _eggKinds)
+            () {
+              order.add('egg:$kind');
+              return _eggButton(kind);
+            }(),
         ],
       ),
     ],
     // Nothing is watched until the person says so (and after a yes, the
     // second step, suggest, until it is answered).
-    if (!zoo.watching || _consentStep != null)
+    if (!face.zoo.isPreview && (!zoo.watching || _consentStep != null))
       ..._consentSection(order, name, inline: true),
     ..._pairNowSections(order, name),
   ];
@@ -1231,8 +1242,10 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
           ),
         ],
       ),
-      ..._autonomySection(order, name),
-      ..._consentSection(order, name),
+      if (!face.zoo.isPreview) ...[
+        ..._autonomySection(order, name),
+        ..._consentSection(order, name),
+      ],
     ];
   }
 

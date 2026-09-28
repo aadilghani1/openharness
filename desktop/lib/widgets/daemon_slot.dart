@@ -283,10 +283,12 @@ class DaemonSlotButton extends StatelessWidget {
     required this.face,
     required this.onPressed,
     this.selected = false,
+    this.tooltip,
   });
   final DaemonFace face;
   final VoidCallback onPressed;
   final bool selected;
+  final String Function()? tooltip;
 
   @override
   Widget build(BuildContext context) {
@@ -313,7 +315,7 @@ class DaemonSlotButton extends StatelessWidget {
             child: WorkspaceBarControl(
               key: const ValueKey('daemon-slot'),
               label: face.label,
-              tooltip: face.tooltip,
+              tooltip: tooltip?.call() ?? face.tooltip,
               selected: selected,
               onPressed: face.revealing || face.zoo.hatchingEgg != null
                   ? null

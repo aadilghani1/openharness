@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shortcuts/keymap_native.dart';
 import 'package:harness/shortcuts/keymap.dart';
@@ -9,6 +10,38 @@ import 'package:harness/shortcuts/keymap_commands.dart';
 import 'keymap_host_test.dart' show MemoryKeymap;
 
 void main() {
+  test('the preview chord follows the desktop platform and stays hidden', () {
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    for (final platform in [
+      TargetPlatform.macOS,
+      TargetPlatform.linux,
+      TargetPlatform.windows,
+    ]) {
+      debugDefaultTargetPlatformOverride = platform;
+      final map = MemoryKeymap();
+      final chord = platform == TargetPlatform.macOS
+          ? 'cmd+alt+shift+d'
+          : 'ctrl+alt+shift+d';
+      for (final context in [
+        KeymapContext.workspace,
+        KeymapContext.terminal,
+        KeymapContext.picker,
+      ]) {
+        expect(
+          map.current.match(context, [KeyStroke.parse(chord)]).command,
+          'app.daemon_preview',
+        );
+      }
+      expect(harnessCommandById['app.daemon_preview']!.hidden, isTrue);
+      expect(
+        map.current.match(KeymapContext.workspace, [
+          KeyStroke.parse('cmd+ctrl+alt+shift+d'),
+        ]).command,
+        isNull,
+      );
+      map.dispose();
+    }
+  });
   test('disabled commands are not claimed by native shortcuts', () {
     final keymap = MemoryKeymap();
     addTearDown(keymap.dispose);
@@ -30,7 +63,9 @@ void main() {
     addTearDown(() => daemonCommandsActive.value = false);
     expect(daemonCommandsActive.value, isFalse);
     final off = jsonEncode(nativeKeymapSnapshot(keymap));
-    expect(off, isNot(contains('app.daemon')));
+    expect(off, isNot(contains('"app.daemon"')));
+    expect(off, isNot(contains('"app.daemon_talk"')));
+    expect(off, contains('"app.daemon_preview"'));
     expect(off, isNot(contains('alt+cmd+t')));
     daemonCommandsActive.value = true;
     final on = jsonEncode(nativeKeymapSnapshot(keymap));

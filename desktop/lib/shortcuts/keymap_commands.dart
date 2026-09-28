@@ -29,6 +29,11 @@ class HarnessCommand {
   /// Workspace defaults come from the live shortcut table. A command cannot
   /// quietly propose different keys from the ones the user already uses.
   List<String> get keys {
+    if (id == 'app.daemon_preview' &&
+        (defaultTargetPlatform == TargetPlatform.linux ||
+            defaultTargetPlatform == TargetPlatform.windows)) {
+      return const ['ctrl+alt+shift+d'];
+    }
     if (!kIsWeb &&
         id == 'navigation.commands' &&
         defaultTargetPlatform == TargetPlatform.linux) {
@@ -98,6 +103,14 @@ Map<ShortcutAction, List<String>> _readWorkspaceKeys() {
 }
 
 final harnessCommands = <HarnessCommand>[
+  if (!kIsWeb)
+    const HarnessCommand(
+      'app.daemon_preview',
+      'Toggle creature preview',
+      ShortcutGroup.actions,
+      extraKeys: ['cmd+alt+shift+d'],
+      hidden: true,
+    ),
   const HarnessCommand(
     'navigation.command_bar',
     'Ask Harness',

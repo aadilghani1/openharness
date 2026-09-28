@@ -38,11 +38,11 @@ for (key, command) in [
   try checkKeymap(defaults.match([stroke(key)], context: "workspace").binding?.command == command,
     "Preserve the current default for \(key)")
 }
-try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+p")) == nil,
+try checkKeymap(defaults.viewerWorkspaceCommand(stroke("cmd+p")) == nil,
   "The pane picker chord is not mistaken for an orchestrator command")
-try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+b")) == nil,
+try checkKeymap(defaults.viewerWorkspaceCommand(stroke("cmd+b")) == nil,
   "The viewer bridge does not change single-agent routing")
-try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+shift+p")) == nil,
+try checkKeymap(defaults.viewerWorkspaceCommand(stroke("cmd+shift+p")) == nil,
   "The viewer bridge does not take the command palette chord")
 for context in HarnessNativeKeymap.contexts {
   try checkKeymap(defaults.match([stroke("cmd+m")], context: context).binding?.command == "machines.list",
@@ -157,8 +157,8 @@ let prefix: [String: Any] = ["keys": ["cmd+k"], "command": "example", "hint": "�
 let remappedOrchestrator = HarnessNativeKeymap(payload([
   ["keys": ["cmd+y"], "command": "project.orchestrate", "hint": "⌘Y", "repeatable": false],
 ]))!
-try checkKeymap(remappedOrchestrator.viewerOrchestratorCommand(stroke("cmd+p")) == nil &&
-  remappedOrchestrator.viewerOrchestratorCommand(stroke("cmd+y")) == "project.orchestrate",
+try checkKeymap(remappedOrchestrator.viewerWorkspaceCommand(stroke("cmd+p")) == nil &&
+  remappedOrchestrator.viewerWorkspaceCommand(stroke("cmd+y")) == "project.orchestrate",
   "Native viewers respect an orchestrator shortcut remap")
 let sequence: [String: Any] = ["keys": ["cmd+k", "cmd+n"], "command": "example", "hint": "⌘K ⌘N", "repeatable": false]
 try checkKeymap(HarnessNativeKeymap(payload([prefix, sequence])) == nil, "Reject ambiguous prefixes atomically")

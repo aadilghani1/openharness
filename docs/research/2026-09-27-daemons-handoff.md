@@ -112,6 +112,27 @@ temporary directory. The script supplies temporary HOME/adapter data, starts onl
 cleans up its own server/processes. `E2E_SNAPSHOTS` keeps the screens and card. Widget screenshots
 use `HARNESS_DAEMON_CAPTURE_DIR`.
 
+## Hidden desktop test preview (2026-09-28)
+
+On the desktop branch, **Command-Option-Shift-D** toggles a local creature in
+the focus bar (**Ctrl-Alt-Shift-D** on Linux/Windows). It works signed in or out
+with no server rollout. It starts with tim and a ready turn egg; the panel
+supports hatching, naming, pairing and temporary motion/quiet settings. The
+preview keeps its collection only for the window's lifetime, never uploads it,
+and sends no creature/brain frames. Individual artwork uses the bundled fallback.
+The visible guest preview setting has been removed. See
+`desktop/design/daemons.md` for behavior and repeatable validation.
+
+Validation: 270 daemon/keyboard/startup tests passed; final focused widget and
+keymap reruns passed; targeted Dart analysis is clean. The native AppKit suite
+passed 1,098 checks, including the hidden shortcut with a native web view focused.
+Real-font preview renders at 640 and 1,280 points were inspected. All tests used
+synthetic state and stubbed tmux; no live desktop app was launched.
+
+This does not authorize merging the draft PRs or launching a worktree app
+against real state. Test distribution uses the normal Desktop internal build
+workflow with self-update disabled.
+
 ## What is left
 
 Release later according to `2026-09-27-daemons-rollout.md`: land the prerequisite fixes, server dark,

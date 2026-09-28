@@ -103,7 +103,6 @@ import '../daemons/daemon_face.dart';
 import '../daemons/daemon_plate_client.dart';
 import '../daemons/daemon_habits.dart';
 import '../daemons/daemon_settings.dart';
-import '../daemons/daemons_preview.dart';
 import '../daemons/pair_rules_file.dart';
 import '../daemons/zoo.dart';
 import '../daemons/zoo_controller.dart';
@@ -154,8 +153,8 @@ class SwarmScreen extends StatefulWidget {
   /// The daemon's clock (tests pass the fake one).
   final DateTime Function()? daemonClock;
 
-  /// Daemons (preview): whether a guest's window has its local zoo. Tests
-  /// pass their own; the app reads the one loaded at start-up.
+  /// Test seam for the guest's durable local zoo. The app's hidden preview
+  /// uses a separate, window-only collection and never seeds an account.
   final ValueListenable<bool>? daemonsPreview;
   @override
   State<SwarmScreen> createState() => _SwarmScreenState();
@@ -223,14 +222,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
       widget.zooTransport ?? (kUnderTest ? null : ApiZooTransport(app.api));
   late final _daemonSettings = DaemonSettings(
     storage: kUnderTest ? null : HarnessFileStore.shared,
+    canPersist: () => _daemonPreviewOverride == null,
   );
   late final _face = DaemonFace(
     _zoo,
     now: widget.daemonClock,
     settings: _daemonSettings,
   );
-  late final ValueListenable<bool> _daemonsPreview =
-      widget.daemonsPreview ?? daemonsPreviewStore;
+  late final ValueListenable<bool>? _daemonsPreview = widget.daemonsPreview;
+
+  /// Null leaves the server rollout gate in charge. The hidden shortcut
+  /// selects a local preview, or explicitly hides all daemons in this window.
+  bool? _daemonPreviewOverride;
   late final _brain = DaemonBrain(
     send: _sendDaemonFrame,
     storage: kUnderTest ? null : HarnessFileStore.shared,
@@ -445,7 +448,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // A line with keys is acknowledged once it, and what its keys would do,
     // are on screen (`daemon_shown`); its keys arm a moment later.
     _face.voiceLine.addListener(_voiceChanged);
-    _daemonsPreview.addListener(_syncDaemon);
+    _daemonsPreview?.addListener(_syncDaemon);
     app.agentPulse.addListener(_face.pulse);
     _face.dialogOpen = () =>
         _dialogOpen ||
@@ -461,6 +464,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _face.plates = _plates;
     _brainSubscriptions.addAll([
       app.daemonFrames.listen((f) {
+        if (_daemonPreviewOverride != null) return;
         if (f.type == 'daemon_plate') {
           _plates.receive(f.type, f.payload);
           return;
@@ -573,7 +577,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _toolbarNotices.removeListener(_toolbarNoticesChanged);
     _toolbarNotices.dispose();
     HardwareKeyboard.instance.removeHandler(_noteKey);
-    _daemonsPreview.removeListener(_syncDaemon);
+    _daemonsPreview?.removeListener(_syncDaemon);
     _slotTimer?.cancel();
     if (_daemonCommandsOn) daemonCommandsActive.value = false;
     unawaited(_zooPushes?.cancel());
@@ -715,6 +719,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       mounted && _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen;
 
   void _runShortcut(String id) {
+    if (id == 'app.daemon_preview') {
+      if (_canExecuteCommand(id)) _toggleDaemonPreview();
+      return;
+    }
     _closeDaemonHint();
     _closeDaemon(restoreFocus: false);
     _closeModelsControls(restoreFocus: false);
@@ -949,13 +957,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _syncDaemon() {
-    // Signed in, the server decides (`GET /api/zoo`: 200 on, 404 off); a
-    // guest's local zoo only with Daemons (preview) on.
-    _zoo.bind(
-      _accountScope,
-      remote: app.isGuest ? null : _zooTransport,
-      enabled: !app.isGuest || _daemonsPreview.value,
-    );
+    if (_daemonPreviewOverride == true) {
+      _zoo.showPreview();
+    } else {
+      _zoo.bind(
+        _daemonPreviewOverride == false ? null : _accountScope,
+        remote: app.isGuest || _daemonPreviewOverride == false
+            ? null
+            : _zooTransport,
+        enabled:
+            _daemonPreviewOverride != false &&
+            (!app.isGuest || _daemonsPreview?.value == true),
+      );
+    }
     _zoo.recheckIfDue();
     final backendOnline = app.backendOnline;
     // A reconnect asks again, on or off.
@@ -1095,7 +1109,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (app.inForeground) _zoo.noteDay();
     // A guest's turns earn eggs in its local zoo. Signed in, harnessd reports
     // them to the account; sending them here too would count them twice.
-    if (app.isGuest) {
+    if (app.isGuest || _zoo.isPreview) {
       for (final machine in app.machineStates.values) {
         final id = machine.machine.machineId;
         final seen = _zooTurnsSeen[id] ?? 0;
@@ -2999,7 +3013,31 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// A `daemon_*` or `pair` frame to this computer's harnessd, only while
   /// daemons are on here: off (or not decided yet), nothing is sent.
   bool _sendDaemonFrame(String type, Map<String, dynamic> payload) =>
-      _zoo.loaded && app.sendDaemonFrame(type, payload);
+      _daemonPreviewOverride == null &&
+      _zoo.loaded &&
+      app.sendDaemonFrame(type, payload);
+
+  void _toggleDaemonPreview() {
+    final hadOverlay = _daemonOverlay != null || _hatchOverlay != null;
+    _daemonPreviewOverride = _daemonPreviewOverride != true;
+    // Existing work is a baseline; only turns finishing during the preview
+    // should earn its eggs. No terminal focus or input changes on reveal.
+    _zooTurnsSeen
+      ..clear()
+      ..addEntries(
+        app.machineStates.values.map(
+          (machine) => MapEntry(machine.machine.machineId, machine.zooTurns),
+        ),
+      );
+    _closeDaemonHint();
+    _closeDaemon(restoreFocus: false);
+    _closeHatch(restoreFocus: false);
+    _face.dismissVoice();
+    _brain.reset();
+    _plates.reset();
+    _syncDaemon();
+    if (hadOverlay) _returnFocusToPane();
+  }
 
   Map<String, Object?> get _daemonPayload {
     final theme = terminalThemeFor(
@@ -3020,7 +3058,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'busy': _face.revealing || _zoo.hatchingEgg != null,
       'label': _face.label,
       'detail': _face.detail,
-      'tooltip': _face.tooltip,
+      'tooltip': _daemonTooltip,
       // Exactly as sent, keys first: native makes the offered keys buttons,
       // once the line is armed (drawn, with its detail, a moment ago).
       'voice': _nativeVoice,
@@ -3047,6 +3085,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
     return split.keys.isEmpty
         ? '$nick$voice'
         : '[${split.keys.join('/')}] $nick${split.rest}';
+  }
+
+  String get _daemonTooltip {
+    if (!_zoo.isPreview) return _face.tooltip;
+    final shortcut = _keymap.hint('app.daemon_preview');
+    return '${_face.tooltip}\nLocal preview'
+        '${shortcut == null ? '' : ' · $shortcut to hide'}';
   }
 
   /// Whether a key on the spoken line counts yet.
@@ -3358,7 +3403,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _search?.refreshCommands();
     }
     if (on) {
-      if (!_daemonSettingsLoaded) {
+      if (!_daemonSettingsLoaded && !_zoo.isPreview) {
         _daemonSettingsLoaded = true;
         unawaited(_daemonSettings.load());
       }
@@ -3732,8 +3777,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
           face: _face,
           brain: _brain.active ? _brain : null,
           onAnswer: _answerLine,
-          onOpenConversation: _pairHarness == null ? null : _openConversation,
-          onOpenRules: () => unawaited(_openPairRules()),
+          onOpenConversation: _zoo.isPreview || _pairHarness == null
+              ? null
+              : _openConversation,
+          onOpenRules: _zoo.isPreview
+              ? null
+              : () => unawaited(_openPairRules()),
           talkShortcut: _keymap.hint('app.daemon_talk'),
           focusTalk: talk,
           onClose: _closeDaemon,
@@ -3787,7 +3836,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               constraints: BoxConstraints(
                 maxHeight: (constraints.maxHeight - top - 20).clamp(0, 720),
               ),
-              child: child,
+              child: KeymapProvider(keymap: _keymap, child: child),
             ),
           ),
         ],
@@ -3845,7 +3894,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           before: before,
           // Nobody has said yet whether it may watch: after the card, the
           // first-day screen (README, "What your daemon sees").
-          needsConsent: before.consent == null,
+          needsConsent: !_zoo.isPreview && before.consent == null,
           onConsent: (watching) => _zoo.consent(watching: watching),
           onSuggest: () => _zoo.autonomy('suggest'),
           plates: _plates,
@@ -5060,6 +5109,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     'app.store': _openStore,
     'app.daemon': _toggleDaemon,
     'app.daemon_talk': _talkToDaemon,
+    'app.daemon_preview': _toggleDaemonPreview,
     'agent.add': _addAgent,
     if (kDebugSurfaceEnabled) 'app.onboarding_review': _newTab,
     'agent.rename': () => _editAgent(),
@@ -5123,6 +5173,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (id == 'keyboard.quick_start' ||
         id == 'keyboard.practice' ||
         id == 'app.onboarding_review' ||
+        id == 'app.daemon_preview' ||
         // A viewer has no daemon of its own to pair a phone with.
         id == 'app.add_phone') {
       return app.viewer == null;
@@ -6140,6 +6191,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               if (_slotShown)
                 DaemonSlotButton(
                   face: _face,
+                  tooltip: () => _daemonTooltip,
                   selected: _daemonOverlay != null,
                   onPressed: _activateDaemon,
                 ),

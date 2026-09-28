@@ -1162,6 +1162,7 @@ private extension SwarmTitlebar {
       "The menu yields the remapped search shortcut to Flutter")
     try checkTitlebar(!main.performKeyEquivalent(with: open), "Menu equivalents defer before input dispatch")
     setKeymap(defaults)
+    try checkCreaturePreviewKeys(defaults, window: window, menu: main)
     try checkTitlebar(strip.newButton.toolTip == "New Tab ⌘T", "Keymap reload restores the current New Tab hint")
     try checkTitlebar(strip.newButton.accessibilityLabel() == "New Tab", "The plus announces New Tab")
     try checkTitlebar(main.defersToInput(event("n", 45, .command)) && main.defersToInput(event("t", 17, .command)),
@@ -1252,6 +1253,18 @@ private extension SwarmTitlebar {
     _ = main.performKeyEquivalent(with: event("x", 7, .command))
     try checkTitlebar(messenger.calls.count == beforeViewer + 2, "Unbinding disables viewer launch dispatch")
     setKeymap(defaults)
+    let beforePreview = messenger.calls.count
+    try checkTitlebar(main.performKeyEquivalent(with: event("d", 2, [.command, .option, .shift])),
+      "The hidden creature shortcut works with a native viewer focused")
+    try checkTitlebar(messenger.calls.count == beforePreview + 1 &&
+      (messenger.calls.last?.arguments as? [String: String])?["command"] == "app.daemon_preview",
+      "The native viewer toggles the creature exactly once")
+    let repeatPreview = NSEvent.keyEvent(with: .keyDown, location: .zero,
+      modifierFlags: [.command, .option, .shift], timestamp: 0,
+      windowNumber: window.windowNumber, context: nil, characters: "d",
+      charactersIgnoringModifiers: "d", isARepeat: true, keyCode: 2)!
+    try checkTitlebar(main.performKeyEquivalent(with: repeatPreview) && messenger.calls.count == beforePreview + 1,
+      "Holding the hidden shortcut over a native viewer never toggles repeatedly")
   }
 
   func checkNativeContainer(messenger: TitlebarCheckMessenger) throws {
@@ -1609,10 +1622,49 @@ private extension NSWindow {
   }
 }
 
+private func checkCreaturePreviewKeys(_ map: HarnessNativeKeymap, window: NSWindow, menu: HarnessKeymapMenu) throws {
+  let event = NSEvent.keyEvent(with: .keyDown, location: .zero,
+    modifierFlags: [.command, .option, .shift], timestamp: 0,
+    windowNumber: window.windowNumber, context: nil, characters: "d",
+    charactersIgnoringModifiers: "d", isARepeat: false, keyCode: 2)!
+  let stroke = HarnessKeyStroke.fromEvent(event)!
+  let binding = map.match([stroke], context: "workspace").binding
+  try checkTitlebar(binding?.command == "app.daemon_preview" &&
+    binding?.menuAction == nil && binding?.repeatable == false,
+    "The hidden creature shortcut has no menu item and never repeats")
+  try checkTitlebar(menu.defersToInput(event) && !menu.performKeyEquivalent(with: event),
+    "Command-Option-Shift-D reaches Flutter exactly once")
+  let dispatch = HarnessNativeKeyDispatch(map)
+  try checkTitlebar(dispatch.dispatch(stroke, keyCode: 2, context: "terminal", owner: window).command == "app.daemon_preview",
+    "The same hidden shortcut is available to a native field")
+  let held = dispatch.dispatch(stroke, keyCode: 2, repeated: true, context: "terminal", owner: window)
+  try checkTitlebar(held.handled && held.command == nil && dispatch.release(2),
+    "Holding the creature shortcut consumes repeat and release without toggling again")
+}
+
 let titlebarCheckApp = NSApplication.shared
 titlebarCheckApp.setActivationPolicy(.prohibited)
 titlebarCheckApp.appearance = NSAppearance(named: .darkAqua)
 do {
+  if CommandLine.arguments.contains("--daemon-preview") {
+    guard let path = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_KEYMAP_FIXTURE"],
+      let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: [String: Any]],
+      let values = fixture["defaults"], let map = HarnessNativeKeymap(values) else {
+      throw TitlebarCheckFailure(message: "Export the Dart keymap fixture before checking the preview")
+    }
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),
+      styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    let menu = HarnessKeymapMenu(title: "Preview test")
+    menu.update(map, window: window)
+    try checkCreaturePreviewKeys(map, window: window, menu: menu)
+    let strip = SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 52))
+    try strip.checkDaemon()
+    try strip.checkDaemonOff()
+    window.close()
+    print("AppKit creature preview: \(titlebarCheckCount) checks passed; no windows displayed.")
+    exit(0)
+  }
   let paletteValues: [String: Any] = [
     "tabBar": Int64(0xff1b2030), "workspace": Int64(0xff252d43),
     "search": Int64(0xff262f46), "accent": Int64(0xffb1c7f5),

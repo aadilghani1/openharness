@@ -18,10 +18,13 @@ import 'package:flutter/foundation.dart';
 import '../core/local_key_value_store.dart';
 
 class DaemonSettings extends ChangeNotifier {
-  DaemonSettings({this.storage});
+  DaemonSettings({this.storage, this.canPersist});
 
   static const storageKey = 'daemons.settings.v1';
   final LocalKeyValueStore? storage;
+
+  /// A temporary preview must not read or replace the real preferences.
+  final bool Function()? canPersist;
 
   /// The panel's tabs, in order (1–4).
   static const tabs = ['now', 'zoo', 'lessons', 'settings'];
@@ -56,10 +59,11 @@ class DaemonSettings extends ChangeNotifier {
   /// Read what was kept. A missing or unreadable value keeps the defaults:
   /// motion on, quiet off.
   Future<void> load() async {
+    if (canPersist?.call() == false) return;
     try {
       final raw = await storage?.read(storageKey);
       final value = raw == null ? null : jsonDecode(raw);
-      if (_disposed || value is! Map) return;
+      if (_disposed || canPersist?.call() == false || value is! Map) return;
       final motion = value['motion'], quiet = value['quiet'];
       final tab = value['tab'];
       var changed = false;
@@ -82,11 +86,8 @@ class DaemonSettings extends ChangeNotifier {
   void _changed() {
     if (_disposed) return;
     notifyListeners();
-    final data = jsonEncode({
-      'motion': _motion,
-      'quiet': _quiet,
-      'tab': _tab,
-    });
+    if (canPersist?.call() == false) return;
+    final data = jsonEncode({'motion': _motion, 'quiet': _quiet, 'tab': _tab});
     _saving = _saving.then((_) async {
       try {
         await storage?.write(storageKey, data);

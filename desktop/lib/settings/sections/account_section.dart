@@ -1,20 +1,14 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
-import '../../daemons/daemons_preview.dart';
 import '../../screens/login_screen.dart';
 import '../../shared/widgets/section_scaffold.dart';
 import '../../shared/widgets/setting_row.dart';
 import '../../state/app_state.dart';
 
 class AccountSection extends StatelessWidget {
-  const AccountSection({super.key, required this.notifier, this.previewStore});
+  const AccountSection({super.key, required this.notifier});
 
   final AppNotifier notifier;
-
-  /// Injected by tests; the app reads the one loaded at start-up.
-  final DaemonsPreviewStore? previewStore;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -53,29 +47,6 @@ class AccountSection extends StatelessWidget {
                       }
                     },
                     child: const Text('Sign in'),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                // Signed out there is no server to say whether this computer
-                // has daemons: they stay off until the person asks for them.
-                ValueListenableBuilder<bool>(
-                  valueListenable: previewStore ?? daemonsPreviewStore,
-                  builder: (context, on, _) => SettingRow(
-                    title: 'Daemons (preview)',
-                    detail:
-                        'A daemon in the status line that hatches from your '
-                        'work and watches your harnesses. Kept on this '
-                        'computer.',
-                    control: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Switch(
-                        key: const Key('settings-daemons-preview'),
-                        value: on,
-                        onChanged: (next) => unawaited(
-                          (previewStore ?? daemonsPreviewStore).set(next),
-                        ),
-                      ),
-                    ),
                   ),
                 ),
               ],

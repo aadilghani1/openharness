@@ -175,12 +175,12 @@ final class HarnessNativeKeymap {
     bindings[context]?.first(where: { $0.command == command })?.hint
   }
 
-  // WKWebView is a native responder, so it does not forward this app action
+  // WKWebView is a native responder, so it does not forward these app actions
   // through Flutter's keyboard dispatcher. Respect the resolved user binding,
   // including remapping/unbinding, instead of hard-coding Command-P in AppKit.
-  func viewerOrchestratorCommand(_ stroke: HarnessKeyStroke) -> String? {
+  func viewerWorkspaceCommand(_ stroke: HarnessKeyStroke) -> String? {
     let command = match([stroke], context: "workspace").binding?.command
-    return command == "project.orchestrate" ? command : nil
+    return command == "project.orchestrate" || command == "app.daemon_preview" ? command : nil
   }
 
   /// Only explicitly identified Harness rows change. AppKit's Edit, Window,
@@ -243,7 +243,7 @@ final class HarnessKeymapMenu: NSMenu {
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
     if let ownerWindow, (event.window ?? NSApp.keyWindow) === ownerWindow,
        let stroke = HarnessKeyStroke.fromEvent(event),
-       let command = keymap?.viewerOrchestratorCommand(stroke) {
+       let command = keymap?.viewerWorkspaceCommand(stroke) {
       var responder = ownerWindow.firstResponder as? NSView
       while let view = responder {
         if view is WKWebView {

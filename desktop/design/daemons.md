@@ -22,10 +22,40 @@ existed, exactly:
   6 h. It is asked again on `zoo_changed`, on a reconnect, and once the last
   answer is 6 h old (`ZooController.recheckIfDue`, checked as the window syncs:
   no timer is kept for it).
-- **Signed out**, there is no server to ask: a guest's local zoo is off until
-  the person turns on **Daemons (preview)** in Settings ▸ Account
-  (`daemons_preview` in the local store, `lib/daemons/daemons_preview.dart`,
-  loaded before the first frame). Off, nothing local is even read.
+- **Signed out**, there is no server to ask, so the creature stays hidden.
+  The old Settings ▸ Account preview switch is removed and its saved value
+  is no longer loaded.
+
+### Hidden focus-bar preview
+
+Press **Command-Option-Shift-D** on macOS (**Ctrl-Alt-Shift-D** on Linux or
+Windows) to show a test tim at the far right of the focus bar. Press it again
+to hide the creature, its panel and any hatch. The command is
+`app.daemon_preview`: it uses the shared, remappable keymap and native Mac
+bridge but has no menu item, command-search result or shortcut-help row.
+Holding the chord never toggles repeatedly. Showing it preserves input focus;
+hiding an open panel returns focus to the workspace.
+
+This works signed in or out, even while the server rollout is off. The window
+gets a separate in-memory collection with tim and one ready turn egg. Click
+the creature to open its panel; open the egg there to test hatching and naming.
+Only turns finishing after activation count toward preview progress. Hide/show keeps that
+window's collection; closing the window discards it. Motion, Quiet and the
+panel tab also stay temporary. There is no collection upload, guest seeding,
+brain traffic, rules-file access, account consent or autonomy change. Art uses
+the bundled species fallback; individual plate requests remain off.
+
+The preview is opt-in for each window. Hiding it also suppresses an account's
+creature for the rest of that window, including after pushes or reconnects.
+Otherwise the existing account rollout still decides whether the real zoo is
+available. This shortcut does not enable the server or harnessd feature.
+
+Checks: `test/daemon_off_test.dart`, `test/daemons/zoo_preview_test.dart`,
+`test/keymap_native_test.dart`, and the hidden-preview cases in
+`test/daemon_review_render_test.dart`. Export `HARNESS_KEYMAP_FIXTURE_PATH`
+when running the keymap test, then point `HARNESS_TITLEBAR_KEYMAP_FIXTURE` at
+that JSON and run `bash tool/check_swarm_titlebar.sh /path/to/flutter
+--daemon-preview` for the production AppKit slot and keyboard checks.
 
 Off (and while it is not known yet) means: no status slot and no space kept
 for it (the Flutter bar and native lay out the bar from before daemons; native
@@ -36,7 +66,7 @@ unless the zoo has loaded; frames harnessd sends are heard but nothing of them
 shows), no `xyzzy` row, and the daemon's commands are not bound
 (`HarnessCommand.daemon`, `daemonCommandsActive`): ⌘⌥T reaches the pane as it
 did before, and neither the command list, the shortcut list, keyboard practice
-nor the native keymap has them. The daemon's settings file is read only once
+nor the native keymap has them. The hidden preview toggle is the sole exception. The daemon's settings file is read only once
 daemons are on. Switching off while on takes all of it away at once.
 
 `test/daemon_off_test.dart` holds all of this to the bar from before daemons
@@ -70,7 +100,7 @@ daemons are on.
 | Motion, Quiet and the panel's last tab, kept per computer | `lib/daemons/daemon_settings.dart` (`daemons.settings.v1`) |
 | zoo shape, rules, local draw | `lib/daemons/zoo.dart` |
 | zoo state: account, guest, seed; on, off or not known yet | `lib/daemons/zoo_controller.dart` |
-| Daemons (preview), a guest's switch | `lib/daemons/daemons_preview.dart`, the row in `lib/settings/sections/account_section.dart` |
+| Hidden local preview | `app.daemon_preview` in the shared keymap; `SwarmScreen._toggleDaemonPreview`; `ZooController.showPreview` |
 | moods, blinks, work steps, tally, voice | `lib/daemons/daemon_face.dart` |
 | the pair brain's frames, shown and armed, confirms, talk and `pair` requests | `lib/daemons/daemon_brain.dart` |
 | lessons (list, show, skip, revert; taught only by the live line's key) | `lib/daemons/daemon_lessons.dart` |
@@ -100,23 +130,13 @@ news. Writes are queued and retried; every op is idempotent. Habits, pair and
 nickname show at once and are confirmed by the answer; eggs and draws are the
 server's.
 
-A guest who turned on Daemons (preview) keeps a local zoo
-(`daemons.zoo.v1.local` in the app's local store)
-with the same shape and rules (economy v2, `backend/src/lib/zoo.ts`), drawn on
-the client: regulars first and secrets only from eggs whose `weights.secret`
-is above 0 (drop 1: night and easter), the pity counting only those eggs and
-guaranteeing the secret at `secretGuaranteeAt`; only released drops draw (a
-drop on hold is hidden whatever its dates, and a seed keeps none of it); a
-duplicate merges into the one you have (`+duplicateXp`, `dupes`, a shiny one
-makes yours shiny, never pairs); a guest's daemons are `origin: local` and
-carry no serial; easter words are kept as their sha256; a zoo stored with two
-records of one daemon reads as one. The autonomy dial is zoo state too
-(`zoo.autonomy`, `watch` when never set), and so is the first-day consent
-(`zoo.consent { watching }`, kept as `consent { watching, at }`; null until
-answered; a yes puts the dial at `watch`). The zoo is sent once with
-`zoo.seed` the first time an account's zoo answers; the server keeps the
-account's own dial and consent. A 404 is off (see above): the window no longer
-falls back to the local zoo.
+The guest local-zoo rules remain for compatibility and tests, with the same
+shape and rules as the server (`daemons.zoo.v1.local`). Each hatch is a separate
+individual with its own UID and seed; repeated species never merge XP. Local
+individuals carry no server serial. An existing guest zoo can be seeded once
+when an account's zoo first answers, preserving the account's own dial and
+consent. A 404 never falls back to that local zoo. The hidden preview uses a
+separate `ZooSource.preview` and cannot read, write or seed this durable zoo.
 
 At sign-in the guest's zoo is queued first, ahead of any habit report, and
 only when the account holds no daemon, egg or habit (the server refuses it

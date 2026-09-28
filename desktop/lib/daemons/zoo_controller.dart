@@ -13,7 +13,8 @@
 /// to ask) is [DaemonsSwitch.off]: nothing is shown, read, kept or sent, and
 /// the window behaves exactly as it did before daemons existed. A failed read
 /// is not an answer: whatever was known stands, and it is asked again. A
-/// guest's local zoo is off unless the person turned on Daemons (preview).
+/// guest's durable local zoo stays off. The hidden desktop shortcut opens a
+/// separate, window-only preview with no account or persistence.
 library;
 
 import 'dart:async';
@@ -79,11 +80,11 @@ enum DaemonsSwitch {
   unknown,
 
   /// The server has no zoo for this account (404), harnessd is switched off
-  /// (`DAEMONS_OFF`), or a guest did not turn on the preview. Everything
+  /// (`DAEMONS_OFF`), or a guest has not opened the hidden preview. Everything
   /// daemon-related stays hidden and silent.
   off,
 
-  /// `GET /api/zoo` answered 200, or a guest turned on the preview.
+  /// `GET /api/zoo` answered 200, or the hidden local preview is on.
   on,
 }
 
@@ -96,6 +97,9 @@ enum ZooSource {
 
   /// This installation's local zoo: a guest, or a harnessd without a zoo.
   local,
+
+  /// A window-only test collection. Never stored, seeded or sent to an account.
+  preview,
 }
 
 class ZooController extends ChangeNotifier {
@@ -136,6 +140,8 @@ class ZooController extends ChangeNotifier {
   bool _disposed = false;
   bool _seeded = false;
   Zoo _local = Zoo.empty;
+  Zoo? _previewZoo;
+  static const _previewScope = 'preview';
   final _days = <String>{};
   final _easterAsked = <String>{};
   bool _hintSeen = false;
@@ -162,6 +168,7 @@ class ZooController extends ChangeNotifier {
   Stream<ZooEvent> get events => _events.stream;
   bool get loaded => _source != ZooSource.none;
   bool get isAccount => _source == ZooSource.account;
+  bool get isPreview => _scope == _previewScope;
   Zoo get zoo => _zoo;
   int get revision => _revision;
   String? get hatchingEgg => _hatchingEgg;
@@ -237,7 +244,7 @@ class ZooController extends ChangeNotifier {
   /// Choose whose zoo this window shows: `guest`, `account:<id>`, or null
   /// while that is not known yet. A new scope forgets everything. An account
   /// is asked through [remote] (none: off); a guest's local zoo shows only
-  /// when [enabled] (the Daemons (preview) setting) and is otherwise off
+  /// when [enabled] and is otherwise off
   /// without reading anything.
   void bind(String? scope, {ZooTransport? remote, bool enabled = true}) {
     if (_disposed ||
@@ -264,13 +271,19 @@ class ZooController extends ChangeNotifier {
     _easterAsked.clear();
     _hintSeen = false;
     final generation = ++_generation;
-    if (scope != null && (!enabled || (remote == null && scope != 'guest'))) {
+    if (scope != null &&
+        (!enabled || (remote == null && scope != 'guest' && !isPreview))) {
       // Nothing to ask, nothing to read: off from the start.
       _off = true;
     }
     notifyListeners();
     if (scope != null && !_off) unawaited(_load(generation));
   }
+
+  /// The hidden focus-bar preview works even with the server feature off.
+  /// Keep its collection in this controller only, across hide/show, and never
+  /// use the guest's persisted zoo (which can later be seeded to an account).
+  void showPreview() => bind(_previewScope);
 
   /// Daemons are off: `DAEMONS_OFF` from harnessd, or a 404 on a write. All
   /// of it goes, at once; an account is asked again later ([recheckIfDue],
@@ -314,8 +327,32 @@ class ZooController extends ChangeNotifier {
   bool _current(int generation) => !_disposed && generation == _generation;
 
   Future<void> _load(int generation) async {
+    if (isPreview) {
+      final at = _now().toUtc().toIso8601String();
+      _source = ZooSource.preview;
+      _hintSeen = true;
+      _show(
+        _previewZoo ??= Zoo(
+          daemons: [
+            ZooDaemon(
+              uid: 'preview-tim',
+              id: 'tim',
+              hatched: at,
+              egg: 'first',
+              version: '1.0',
+              xp: 150,
+            ),
+          ],
+          pair: 'preview-tim',
+          firstEgg: true,
+          eggs: [ZooEgg(id: 'preview-egg', kind: 'turn', grantedAt: at)],
+        ),
+        baseline: true,
+      );
+      return;
+    }
     if (_remote == null) {
-      // A guest who turned on the preview: its local zoo.
+      // The durable guest zoo, retained for compatibility and test fixtures.
       await _readPrefs();
       if (!_current(generation)) return;
       _adoptLocal();
@@ -707,8 +744,12 @@ class ZooController extends ChangeNotifier {
 
   List<ZooHatch> _applyLocal(List<Map<String, dynamic>> ops) {
     final result = applyZooOps(roster, _zoo, ops, random: _random, now: _now());
-    _local = result.zoo;
-    _saveLocal();
+    if (isPreview) {
+      _previewZoo = result.zoo;
+    } else {
+      _local = result.zoo;
+      _saveLocal();
+    }
     _show(result.zoo);
     return result.hatched;
   }
@@ -717,10 +758,13 @@ class ZooController extends ChangeNotifier {
 
   /// A guest's finished turns, counted here with the server's rules
   /// (`zoo.turn`: the daily cap, earned eggs, the pair's xp), [away] of them
-  /// finished while the person was away. Never while signed in: harnessd
-  /// reports those turns, and they would count twice.
+  /// finished while the person was away. Never for an account zoo: harnessd
+  /// reports those turns, and they would count twice. A preview counts them
+  /// only in memory, even while its window is signed in.
   void recordTurns(int n, {required String machineId, int away = 0}) {
-    if (!loaded || isAccount || _scope != 'guest' || n <= 0) return;
+    if (!loaded || isAccount || (_scope != 'guest' && !isPreview) || n <= 0) {
+      return;
+    }
     final now = _now();
     var machine = machineId.replaceAll(_unsafe, '-');
     if (machine.isEmpty) machine = 'local';
@@ -837,7 +881,7 @@ class ZooController extends ChangeNotifier {
 
   void _savePrefs() {
     final scope = _scope;
-    if (scope == null) return;
+    if (scope == null || isPreview) return;
     _write(prefsKey(scope), {
       'days': (_days.toList()..sort()),
       'hintSeen': _hintSeen,

@@ -37,6 +37,7 @@ import 'package:harness/widgets/daemon_slot.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle, TerminalTheme;
 
 import 'daemons/zoo_test.dart' show FakeZooTransport;
+import 'keymap_host_test.dart' show key;
 import 'support/real_fonts.dart';
 import 'support/status_bar_layout.dart' show seedStatusBarWorkspace;
 import 'swarm_state_test.dart' show createApp;
@@ -1934,6 +1935,42 @@ void main() {
       );
       expect(find.byKey(const ValueKey('daemon-hatch-card')), findsNothing);
       await tester.pumpWidget(const SizedBox());
+    });
+  }
+
+  for (final width in [640.0, 1280.0]) {
+    testWidgets('hidden creature preview panel at ${width.toInt()}', (tester) async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      seedStatusBarWorkspace(app);
+      app.currentUser = const CurrentUserProfile(id: 'preview', email: 'preview@example.test');
+      final zoo = ZooController();
+      addTearDown(zoo.dispose);
+      final remote = FakeZooTransport(available: false);
+      await _capture(
+        tester,
+        'hidden-preview-panel-${width.toInt()}',
+        Size(width, 620),
+        (context) => SwarmScreen(
+          notifier: app,
+          nativeTabs: false,
+          projectStore: SwarmProjectStore(),
+          zoo: zoo,
+          zooTransport: remote,
+          daemonClock: () => tester.binding.clock.now(),
+        ),
+        act: () async {
+          expect(find.byKey(const ValueKey('daemon-slot')), findsNothing);
+          await key(tester, LogicalKeyboardKey.keyD, cmd: true, alt: true, shift: true);
+          await tester.pump(const Duration(seconds: 1));
+          await tester.tap(find.byKey(const ValueKey('daemon-slot')));
+          await tester.pump();
+        },
+      );
+      expect(find.byKey(const ValueKey('daemon-preview-label')), findsOneWidget);
+      expect(remote.batches, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 11));
     });
   }
 
