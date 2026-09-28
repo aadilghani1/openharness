@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import tempfile
+from native_shapes import defines
 native = Path(__file__).resolve().parent / '../main/ui/habitat'
 source = (native/'ui_habitat.c').read_text()
 def function(name):
@@ -45,6 +46,7 @@ static void ht_gesture_guard(int *g,uint32_t t){(void)g;(void)t;}
 static bool draft_emit(const ht_draft_command_t *c,void *ctx){(void)c;(void)ctx;return true;}
 #define COPY(dst,src) snprintf(dst,sizeof(dst),"%s",src)
 '''
+code += defines('UI_FONT', source=source)
 for name in ['copy','question_rows','draft_page','ui_voice_draft','ui_draft_state']:
     code+=function(name)
 code+=r'''

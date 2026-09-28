@@ -15,6 +15,22 @@ const context = (branch: string, extra: Partial<SessionGitContext> = {}): Sessio
 })
 afterEach(async () => { await Promise.all(dirs.splice(0).map(p => rm(p, { recursive: true, force: true }))) })
 describe('durable session Git history', () => {
+  it('orders completed PRs by GitHub event time across refreshes and restarts', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'git-history-')); dirs.push(dir)
+    const store = new SessionGitHistoryStore(dir)
+    for (const [number, state, mergedAt, closedAt] of [
+      [12, 'Merged', '2026-09-20T10:00:00Z', undefined],
+      [13, 'Closed', undefined, '2026-09-22T10:00:00Z'],
+      [14, 'Open', undefined, undefined],
+    ] as const) {
+      const url = `https://github.com/acme/app/pull/${number}`
+      await store.recordPullRequest(target, { url, cwd: '/ship-hn', at },
+        { status: 'found', number, url, state, mergedAt, closedAt }, at)
+    }
+    await store.settled()
+    const saved = await new SessionGitHistoryStore(dir).get(target)
+    expect(saved.pullRequests.map(p => p.result?.status === 'found' ? p.result.number : null)).toEqual([14, 13, 12])
+  })
   it('merges saved URL aliases after a repository rename without downgrading newer status', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'git-history-')); dirs.push(dir)
     const store = new SessionGitHistoryStore(dir)

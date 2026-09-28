@@ -2,6 +2,10 @@
 #include "terminal.h"
 // Model is protected by display_lock; DMA never holds that lock.
 bool habitat_scene_take(ht_scene_t *out);
+// Capture under the model lock after taking a scene, acknowledge only after
+// its pixels finish DMA. Zero means there is no unread card in that frame.
+uint32_t habitat_scene_receipt(void);
+void habitat_scene_presented(uint32_t receipt);
 void habitat_tick(void);
 uint32_t habitat_next_wake_ms(void);
 bool habitat_is_voice_view(void);

@@ -13,6 +13,7 @@ import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../core/runtime_platform.dart';
 import '../analytics/analytics.dart';
+import '../api/api_client.dart';
 import '../core/desktop_window.dart';
 import '../core/harness_file_store.dart';
 import '../core/project_folder.dart';
@@ -29,6 +30,7 @@ import '../shared/theme/workspace_bar_style.dart';
 import '../sharing/share_harness_dialog.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/status_line_style.dart';
+import '../shared/theme/pull_request_icon.dart';
 import '../shortcuts/app_shortcuts.dart';
 import '../core/models.dart';
 import '../shortcuts/app_keymap.dart';
@@ -39,6 +41,7 @@ import '../shortcuts/keymap_native.dart';
 import '../shortcuts/keymap_settings.dart';
 import '../state/app_state.dart';
 import '../state/harness_sessions.dart';
+import '../state/harness_activity.dart';
 import '../state/harness_placement.dart';
 import '../state/new_harness.dart';
 import '../state/device_form.dart';
@@ -61,8 +64,9 @@ import '../widgets/add_phone_dialog.dart';
 import '../widgets/layout_palette.dart';
 import '../widgets/move_pane_palette.dart';
 import '../widgets/engine_identity.dart';
-import '../widgets/status_line.dart';
+import '../widgets/harness_activity_mark.dart';
 import '../widgets/workspace_status_line.dart';
+import '../widgets/workspace_pull_request_label.dart';
 import '../widgets/workspace_bar_control.dart';
 import '../widgets/session_work_dialog.dart';
 import '../widgets/web_download_button.dart';
@@ -101,6 +105,7 @@ import '../state/command_bar_catalog.dart';
 import '../widgets/harness_command_bar.dart';
 import '../orchestrator/orchestrator_launcher.dart';
 import '../orchestrator/orchestrator_workspace.dart';
+import '../teams/team_workspace.dart';
 import '../state/workspace_learning.dart';
 import '../state/workspace_onboarding.dart';
 import '../daemons/daemon_brain.dart';
@@ -226,11 +231,21 @@ class _SwarmScreenState extends State<SwarmScreen> {
         storage: kUnderTest ? null : HarnessFileStore.shared,
         now: widget.daemonClock,
       );
-  late final ZooTransport? _zooTransport =
-      widget.zooTransport ?? (kUnderTest ? null : ApiZooTransport(app.api));
+  ApiClient? _zooApi;
+  ZooTransport? _apiZooTransport;
+  ZooTransport? get _zooTransport {
+    if (widget.zooTransport != null) return widget.zooTransport;
+    if (kUnderTest) return null;
+    if (!identical(_zooApi, app.api)) {
+      _zooApi = app.api;
+      _apiZooTransport = ApiZooTransport(app.api);
+    }
+    return _apiZooTransport;
+  }
+
   late final _daemonSettings = DaemonSettings(
     storage: kUnderTest ? null : HarnessFileStore.shared,
-    canPersist: () => _daemonPreviewOverride == null,
+    canPersist: () => !_zoo.isPreview,
   );
   late final _face = DaemonFace(
     _zoo,
@@ -240,15 +255,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
   late final ValueListenable<bool>? _daemonsPreview = widget.daemonsPreview;
 
   late final _experimentalFeatures =
-      widget.experimentalFeatures ?? experimentalFeaturesStore;
+      widget.experimentalFeatures ?? app.experimentalFeatures;
 
-  /// An explicit local choice overrides the separate account rollout. This
-  /// stays null for installations that have never tried the test collection.
-  late bool? _daemonPreviewOverride = _creaturePreviewChoice;
-  bool? get _creaturePreviewChoice =>
-      ExperimentalFeature.focusBarCreature.available && app.viewer == null
-      ? _experimentalFeatures.choice(ExperimentalFeature.focusBarCreature)
-      : null;
+  bool get _showShareButton =>
+      _experimentalFeatures.enabled(ExperimentalFeature.shareButton);
+
+  late bool _creatureEnabled = _creatureChoice;
+  bool get _creatureChoice =>
+      ExperimentalFeature.focusBarCreature.available &&
+      app.viewer == null &&
+      _experimentalFeatures.enabled(ExperimentalFeature.focusBarCreature);
   late final _brain = DaemonBrain(
     send: _sendDaemonFrame,
     storage: kUnderTest ? null : HarnessFileStore.shared,
@@ -472,7 +488,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _face.voiceLine.addListener(_voiceChanged);
     _daemonsPreview?.addListener(_syncDaemon);
     _experimentalFeatures.addListener(_experimentalFeaturesChanged);
-    if (_daemonPreviewOverride == true) _baselinePreviewTurns();
     app.agentPulse.addListener(_face.pulse);
     _face.dialogOpen = () =>
         _dialogOpen ||
@@ -483,12 +498,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _zooPushes = app.zooPushes.listen(_zoo.pushed);
     // The pair brain, when this computer's harnessd has one.
     _brain.addListener(_brainChanged);
-    // A look at the `+n` clears the brain's count too.
+    // A look at the finished-turn count clears the brain's count too.
     _face.onSeen = () => unawaited(_brain.doneSeen());
     _face.plates = _plates;
     _brainSubscriptions.addAll([
       app.daemonFrames.listen((f) {
-        if (_daemonPreviewOverride != null) return;
+        if (_zoo.isPreview || !_zoo.loaded) return;
         if (f.type == 'daemon_plate') {
           _plates.receive(f.type, f.payload);
           return;
@@ -560,7 +575,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     super.didChangeDependencies();
     // Only the one flag: depending on all of MediaQuery rebuilt the workspace
     // on every resize.
-    _reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final motionChanged = reduceMotion != _reduceMotion;
+    _reduceMotion = reduceMotion;
     _daemonEnvironmentChanged();
     final keymap = KeymapTheme.of(context);
     if (keymap != _providedKeymap) {
@@ -570,7 +587,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     _syncKeymap();
     final current = ModalRoute.isCurrentOf(context) ?? true;
-    if (_routeIsCurrent == current) return;
+    if (_routeIsCurrent == current) {
+      if (motionChanged && _native) _syncNative();
+      return;
+    }
     _routeIsCurrent = current;
     if (!current &&
         (_search != null ||
@@ -1076,19 +1096,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _syncDaemon() {
-    if (_daemonPreviewOverride == true) {
-      _zoo.showPreview();
-    } else {
-      _zoo.bind(
-        _daemonPreviewOverride == false ? null : _accountScope,
-        remote: app.isGuest || _daemonPreviewOverride == false
-            ? null
-            : _zooTransport,
-        enabled:
-            _daemonPreviewOverride != false &&
-            (!app.isGuest || _daemonsPreview?.value == true),
-      );
-    }
+    _zoo.bind(
+      _accountScope,
+      remote: app.isGuest ? null : _zooTransport,
+      enabled: app.isGuest ? _daemonsPreview?.value == true : _creatureEnabled,
+    );
     _zoo.recheckIfDue();
     final backendOnline = app.backendOnline;
     // A reconnect asks again, on or off.
@@ -1535,6 +1547,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final barStyle = workspaceBarTextStyle();
     final payload = {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
+      'reduceMotion': _reduceMotion,
       'activeId': app.activeSwarmId,
       // The selected tab is drawn with keyboard focus: ⏎ goes into it.
       'tabsFocused': app.tabStripFocused && _tabStripFocus.hasPrimaryFocus,
@@ -1604,29 +1617,36 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 terminalTheme,
                 segmentOffset: parts?.segments.length ?? 0,
               ),
+              'label': _pullRequest.value!.label,
+              'iconAsset': pullRequestIconAsset(_pullRequest.value!.state),
+              'iconColor': pullRequestIconColor(
+                _pullRequest.value!.state,
+                terminalTheme,
+                color: prefs.color,
+              ).toARGB32(),
               'url': _pullRequest.value!.url.toString(),
-              'detail':
-                  'Open pull request #${_pullRequest.value!.number} on GitHub',
+              'detail': '${_pullRequest.value!.label} — Open on GitHub',
               'interactive': true,
             },
       'canReopen': app.canReopenLastClosed,
       'canFind': _canFindTerminal,
       'canClosePane': app.focusedPane != null,
-      'shareAction': {
-        'text': WorkspaceShareButton.text,
-        'label': _shareLabel(focused),
-        'tooltip': _shareTooltip(focused),
-        'enabled': _canExecuteCommand('agent.share'),
-        'paneId': focused?.pane.id,
-        'machineId': focused?.pane.machineId,
-        'agentId': focused?.agentId,
-        'background': WorkspaceShareButton.backgroundFor(
-          _canExecuteCommand('agent.share'),
-        ).toARGB32(),
-        'foreground': WorkspaceShareButton.foregroundFor(
-          _canExecuteCommand('agent.share'),
-        ).toARGB32(),
-      },
+      if (_showShareButton)
+        'shareAction': {
+          'text': WorkspaceShareButton.text,
+          'label': _shareLabel(focused),
+          'tooltip': _shareTooltip(focused),
+          'enabled': _canExecuteCommand('agent.share'),
+          'paneId': focused?.pane.id,
+          'machineId': focused?.pane.machineId,
+          'agentId': focused?.agentId,
+          'background': WorkspaceShareButton.backgroundFor(
+            _canExecuteCommand('agent.share'),
+          ).toARGB32(),
+          'foreground': WorkspaceShareButton.foregroundFor(
+            _canExecuteCommand('agent.share'),
+          ).toARGB32(),
+        },
       'paneActions': {
         'restartAgent': _canExecuteCommand('agent.restart'),
         'shareAgent': _canExecuteCommand('agent.share'),
@@ -1707,6 +1727,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       app.questionFor(p.machineId, p.agentId!) != null,
                 )
                 .length,
+            if (tabActivity(app, swarm) case final activity?)
+              'activity': {
+                'mark': activity.mark,
+                'label': activity.label,
+                'working': activity == HarnessActivity.working,
+                'color': activityColor(
+                  activity,
+                  terminalTheme,
+                  color: prefs.color,
+                ).toARGB32(),
+              },
           },
       ],
     };
@@ -1841,6 +1872,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     final args = call.arguments is Map ? call.arguments as Map : const {};
     if (call.method == 'shareAgent' && args.containsKey('paneId')) {
+      if (!_showShareButton) return;
       final focused = WorkspacePaneContext.focused(app);
       if (focused == null ||
           focused.pane.id != args['paneId'] ||
@@ -3200,16 +3232,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// A `daemon_*` or `pair` frame to this computer's harnessd, only while
   /// daemons are on here: off (or not decided yet), nothing is sent.
   bool _sendDaemonFrame(String type, Map<String, dynamic> payload) =>
-      _daemonPreviewOverride == null &&
-      _zoo.loaded &&
-      app.sendDaemonFrame(type, payload);
+      !_zoo.isPreview && _zoo.loaded && app.sendDaemonFrame(type, payload);
 
   void _experimentalFeaturesChanged() {
-    final choice = _creaturePreviewChoice;
-    if (_daemonPreviewOverride == choice) return;
+    setState(() {});
+    if (_native) _syncNative();
+    final choice = _creatureChoice;
+    if (_creatureEnabled == choice) return;
     final hadOverlay = _daemonOverlay != null || _hatchOverlay != null;
-    _daemonPreviewOverride = choice;
-    _baselinePreviewTurns();
+    _creatureEnabled = choice;
     _closeDaemonHint();
     _closeDaemon(restoreFocus: false);
     _closeHatch(restoreFocus: false);
@@ -3221,18 +3252,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (hadOverlay && _routeIsCurrent && !_dialogOpen) _returnFocusToPane();
   }
 
-  void _baselinePreviewTurns() {
-    // Existing work is a baseline; only turns finishing during the preview
-    // should earn its eggs. No terminal focus or input changes on reveal.
-    _zooTurnsSeen
-      ..clear()
-      ..addEntries(
-        app.machineStates.values.map(
-          (machine) => MapEntry(machine.machine.machineId, machine.zooTurns),
-        ),
-      );
-  }
-
   Map<String, Object?> get _daemonPayload {
     final theme = terminalThemeFor(
       grid.AppTheme.palette.value,
@@ -3242,11 +3261,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'visible': _slotShown,
       'glyph': _face.glyph,
       // The ten cells as drawn (centred on the base sprite, a shiny `*` in
-      // the gutter) and the tally beside them (`+3 +1 egg`).
+      // the gutter). Counts and progress stay out of the focus bar.
       'cell': _face.cell,
-      'tally': _face.tally,
       'foreground': daemonSlotInk(_face, theme).withValues(alpha: 1).toARGB32(),
-      'tallyColor': daemonDimInk(theme).toARGB32(),
       'patch': daemonSlotPatch(_face, theme)?.toARGB32(),
       'open': _daemonOverlay != null,
       'busy': _face.revealing || _zoo.hatchingEgg != null,
@@ -5374,6 +5391,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _dialog(() => showTaskPalette(context, app)),
     ShortcutAction.orchestrate: () =>
         _dialog(() => showOrchestratorLauncher(context, app)),
+    ShortcutAction.team: () =>
+        _dialog(() => showChannelWorkspace(context, app)),
     ShortcutAction.reload: app.retryMachines,
     ShortcutAction.showLayout: () =>
         _dialog(() => showLayoutPalette(context, app)),
@@ -6230,25 +6249,24 @@ class _SwarmScreenState extends State<SwarmScreen> {
         terminalThemeStore.value,
       );
       final names = workspaceTabNames(app);
+      final activities = [for (final tab in app.swarms) tabActivity(app, tab)];
       final labels = [
         for (var index = 0; index < app.swarms.length; index++)
           '${index + 1}:${names[app.swarms[index].id]}',
       ];
       // No space is kept for the slot until it is shown: off (or not decided
       // yet) the bar is exactly the one it was before daemons existed.
-      final tally = _slotShown ? _face.tally : '';
       final daemonSpace = _slotShown
-          ? cell.width *
-                (_face.roster.rules.statusCells +
-                    2 +
-                    (tally.isEmpty ? 0 : tally.length + 1))
+          ? cell.width * (_face.roster.rules.statusCells + 2)
           : 0.0;
       final toolHeight = workspaceBarControlHeight(context);
       final pr = _pullRequest.value;
       final downloadWidth = kIsWeb
           ? WebDownloadButton.widthOf(context) + cell.width
           : 0.0;
-      final shareWidth = WorkspaceShareButton.widthOf(context) + cell.width;
+      final shareWidth = _showShareButton
+          ? WorkspaceShareButton.widthOf(context) + cell.width
+          : 0.0;
       final contentWidth = math.max(
         0.0,
         constraints.maxWidth -
@@ -6257,39 +6275,71 @@ class _SwarmScreenState extends State<SwarmScreen> {
             shareWidth -
             daemonSpace,
       );
-      final tabBudget = contentWidth * .45;
-      _tabWidths = [
-        for (final label in labels)
-          math.min(
-            math.min(label.characters.length + 2, 24) * cell.width,
-            tabBudget,
-          ),
-      ];
-      final total = _tabWidths.fold(0.0, (sum, width) => sum + width);
-      final tabsWidth = math.min(total, tabBudget);
       final focused = WorkspacePaneContext.focused(app);
       final prefs = appearancePrefsStore.value.prompt;
       final parts = focused?.format(prefs);
-      final prParts = pr == null
-          ? null
-          : pullRequestStatusLineParts(
-              number: pr.number,
-              state: pr.state,
-              style: prefs.statusStyle,
-            );
+      final contextWidth = parts == null
+          ? 0.0
+          : workspaceStatusLineWidthsOf(
+              context,
+              parts,
+            ).fold(0.0, (a, b) => a + b);
+      final modelWidth = focused != null && modelPickerSupports(focused.engine)
+          ? workspaceBarTextSizeOf(context, focused.provider).width + cell.width
+          : 0.0;
       final joined =
           prefs.statusStyle.segmented &&
           parts != null &&
           parts.segments.isNotEmpty &&
-          prParts != null;
-      final prBackground = joined
-          ? statusLinePaintSegments(
-              prParts,
+          pr != null;
+      final prBackground = !joined
+          ? null
+          : statusLinePaintSegments(
+              pullRequestStatusLineParts(
+                number: pr.number,
+                state: pr.state,
+                style: prefs.statusStyle,
+              ),
               theme,
               color: prefs.color,
               segmentOffset: parts.segments.length,
-            ).first.background
-          : null;
+            ).single.background;
+      final prWidth = pr == null
+          ? 0.0
+          : WorkspacePullRequestLabel.widthOf(
+                  context,
+                  pr.number,
+                  style: prefs.statusStyle,
+                ) +
+                (joined ? 0 : cell.width);
+      // Reserve only the context's actual width, capped at 40% / 52 cells.
+      // Tabs get the rest; unused tab space flows back to the full context.
+      final statusBudget = math.min(
+        math.max(
+          contextWidth + modelWidth + prWidth,
+          _slotShown ? cell.width * 32 : 0,
+        ),
+        math.min(contentWidth * .4, cell.width * 52),
+      );
+      final tabBudget = math.max(0.0, contentWidth - statusBudget);
+      _tabWidths = [
+        for (var i = 0; i < labels.length; i++)
+          math.max(
+            activities[i] == null ? 0 : ('${i + 1}:'.length + 4) * cell.width,
+            math.min(
+              math.min(
+                    labels[i].characters.length +
+                        2 +
+                        (activities[i] == null ? 0 : 2),
+                    24,
+                  ) *
+                  cell.width,
+              tabBudget,
+            ),
+          ),
+      ];
+      final total = _tabWidths.fold(0.0, (sum, width) => sum + width);
+      final tabsWidth = math.min(total, tabBudget);
       _revealSelectedTab(tabsWidth);
       // The context, and the pull request beside it: exactly the bar from
       // before daemons existed, which the daemon's line covers only while
@@ -6339,22 +6389,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 child: WorkspaceBarControl(
                   key: const ValueKey('workspace-pull-request'),
                   label: '${pr.label} — Open on GitHub',
-                  tooltip: 'Open pull request #${pr.number} on GitHub',
+                  tooltip: '${pr.label} — Open on GitHub',
                   onPressed: _shortcutsEnabled
                       ? () => _openFocusedPullRequest(pr.url.toString())
                       : null,
-                  builder: (context, emphasized) => SizedBox(
-                    height: toolHeight,
-                    child: Center(
-                      widthFactor: 1,
-                      child: StatusLine(
-                        parts: prParts!,
-                        workspaceBar: true,
-                        emphasized: emphasized,
-                        color: prefs.color,
-                        segmentOffset: parts?.segments.length ?? 0,
-                      ),
-                    ),
+                  builder: (context, emphasized) => WorkspacePullRequestLabel(
+                    number: pr.number,
+                    state: pr.state,
+                    emphasized: emphasized,
+                    color: prefs.color,
+                    style: prefs.statusStyle,
+                    segmentOffset: parts?.segments.length ?? 0,
                   ),
                 ),
               ),
@@ -6381,6 +6426,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   itemBuilder: (context, index) {
                     final swarm = app.swarms[index];
                     final selected = app.activeSwarmId == swarm.id;
+                    final activity = activities[index];
+                    final nameHint = workspaceTabTooltip(
+                      labels[index],
+                      swarm.name,
+                      clipped:
+                          workspaceBarTextSizeOf(context, labels[index]).width +
+                              (activity == null ? 0 : cell.width * 2) >
+                          _tabWidths[index] - cell.width * 2,
+                    );
+                    final tabHint = [
+                      ?nameHint,
+                      if (activity != null) activity.label,
+                    ].join('\n');
                     return ReorderableDragStartListener(
                       key: ValueKey(swarm.id),
                       index: index,
@@ -6401,17 +6459,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           onDoubleTap: () => _rename(swarm.id),
                           child: Center(
                             child: WorkspaceBarControl(
-                              label: '${labels[index]}: ${swarm.name}',
-                              tooltip: workspaceTabTooltip(
-                                labels[index],
-                                swarm.name,
-                                clipped:
-                                    workspaceBarTextSizeOf(
-                                      context,
-                                      labels[index],
-                                    ).width >
-                                    _tabWidths[index] - cell.width * 2,
-                              ),
+                              label:
+                                  '${labels[index]}: ${swarm.name}${activity == null ? '' : ', ${activity.label}'}',
+                              tooltip: tabHint.isEmpty ? null : tabHint,
                               selectedBackground: grid.AppPalette.swarmWelcome,
                               selected: selected,
                               highlighted:
@@ -6428,16 +6478,76 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                     horizontal: cell.width,
                                   ),
                                   child: Center(
-                                    child: Text(
-                                      labels[index],
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      textAlign: TextAlign.center,
-                                      style: workspaceBarTextStyle(
-                                        color: theme.foreground,
-                                        emphasized: emphasized,
-                                      ),
-                                    ),
+                                    child: activity == null
+                                        ? Text(
+                                            labels[index],
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            textAlign: TextAlign.center,
+                                            style: workspaceBarTextStyle(
+                                              color: theme.foreground,
+                                              emphasized: emphasized,
+                                            ),
+                                          )
+                                        : Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                '${index + 1}:',
+                                                style: workspaceBarTextStyle(
+                                                  color: theme.foreground,
+                                                  emphasized: emphasized,
+                                                ),
+                                              ),
+                                              Flexible(
+                                                child: Text(
+                                                  names[swarm.id]!,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: workspaceBarTextStyle(
+                                                    color: theme.foreground,
+                                                    emphasized: emphasized,
+                                                  ),
+                                                ),
+                                              ),
+                                              SizedBox(width: cell.width),
+                                              ListenableBuilder(
+                                                listenable: _tabScroll,
+                                                builder: (context, _) {
+                                                  final left = _tabWidths
+                                                      .take(index)
+                                                      .fold(
+                                                        0.0,
+                                                        (a, b) => a + b,
+                                                      );
+                                                  final offset =
+                                                      _tabScroll.hasClients
+                                                      ? _tabScroll.offset
+                                                      : 0.0;
+                                                  return ActivityMark(
+                                                    key: ValueKey(
+                                                      'tab-activity:${swarm.id}',
+                                                    ),
+                                                    activity: activity,
+                                                    color: activityColor(
+                                                      activity,
+                                                      theme,
+                                                      color: prefs.color,
+                                                    ),
+                                                    emphasized: emphasized,
+                                                    tooltip: false,
+                                                    visible:
+                                                        left <
+                                                            offset +
+                                                                tabsWidth &&
+                                                        left + _tabWidths[index] >
+                                                            offset,
+                                                  );
+                                                },
+                                              ),
+                                            ],
+                                          ),
                                   ),
                                 ),
                               ),
@@ -6496,15 +6606,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   selected: _daemonOverlay != null,
                   onPressed: _activateDaemon,
                 ),
-              SizedBox(width: cell.width),
-              WorkspaceShareButton(
-                key: const ValueKey('workspace-share-button'),
-                label: _shareLabel(focused),
-                tooltip: _shareTooltip(focused),
-                onPressed: _canExecuteCommand('agent.share')
-                    ? () => _runShortcut('agent.share')
-                    : null,
-              ),
+              if (_showShareButton) ...[
+                SizedBox(width: cell.width),
+                WorkspaceShareButton(
+                  key: const ValueKey('workspace-share-button'),
+                  label: _shareLabel(focused),
+                  tooltip: _shareTooltip(focused),
+                  onPressed: _canExecuteCommand('agent.share')
+                      ? () => _runShortcut('agent.share')
+                      : null,
+                ),
+              ],
               SizedBox(width: cell.width),
             ],
           ),

@@ -357,6 +357,7 @@ static void render_task(void *arg)
 #endif
         habitat_tick();
         bool fresh = habitat_scene_take(&scenes[front ^ 1]);
+        uint32_t receipt = habitat_scene_receipt();
         uint32_t wake_ms = habitat_next_wake_ms();
 #ifdef DEVICE_RENDER_STRESS
         if (stress_wake_ms < wake_ms) wake_ms = stress_wake_ms;
@@ -394,6 +395,7 @@ static void render_task(void *arg)
 #endif
             front ^= 1;
             painted = true;
+            if (receipt) habitat_scene_presented(receipt);
         }
         if (!on && fresh) {
             front ^= 1;

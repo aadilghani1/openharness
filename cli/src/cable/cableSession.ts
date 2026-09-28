@@ -654,6 +654,7 @@ export class CableSession {
       this.opening = false
     }
     if (!opened) return   // no dial plugged in — this daemon's resting state
+    if (this.stopped) { await opened.close('stopped while opening'); return }
     // Nothing reaches this line holding a live port — tick() only calls in when the link is closed — but
     // assigning over one would strand it exactly as above, and the cost of being sure is one branch.
     if (this.link) await this.link.close('replaced')

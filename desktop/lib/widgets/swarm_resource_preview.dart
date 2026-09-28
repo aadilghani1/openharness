@@ -1043,74 +1043,177 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         catalog.manager.scanning ? 'Finding models…' : 'No matching models',
       ]);
     }
+    final cell = terminalCellSizeOf(context);
+    final theme = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    );
     final local = entry.local;
     final owner = entry.controller ?? catalog.manager;
     final operation = local == null ? null : owner.operationFor(local);
     final pending = local != null && owner.pendingId == local.id;
-    String window(double seconds) => seconds % 86400 == 0
-        ? '${(seconds / 86400).toInt()}d'
-        : seconds % 3600 == 0
-        ? '${(seconds / 3600).toInt()}h'
-        : '${seconds.toInt()}s';
+    final opActive = operation?.active == true;
+    // API entries have their own dedicated preview; keep main's dispatch.
     if (entry.api != null) return _apiPreview(entry);
-    return _details([
-      entry.name,
-      if (widget.search.modelUseErrorId == entry.id)
-        ?widget.search.modelUseError,
-      [
-        if (local == null) entry.source,
-        ?entry.node,
-        if (local?.sizeBytes case final size?)
-          '${(size / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB',
-      ].join(' · '),
-      if (local != null) ...[
-        if (local.running &&
-            (local.tokensPerSecond != null || local.requests != null))
-          [
-            if (local.tokensPerSecond case final speed?)
-              '${speed.toStringAsFixed(1)} tok/s',
-            if (local.requests != null && local.windowSeconds != null)
-              '${local.requests!.toInt()} requests / ${window(local.windowSeconds!)}',
-          ].join(' · '),
-        if (local.resting) 'Resting until your next message',
-        if (pending || operation?.active == true || operation?.failed == true)
-          catalog.localStatus(local, controller: owner),
-        ?operation?.error,
-        if (!local.downloaded &&
-            !owner.supportsDownload &&
-            local.canStart &&
-            !pending &&
-            operation?.active != true)
-          'Downloads and starts on ${entry.node ?? 'this machine'}.',
-      ] else if (entry.status != 'Available')
-        entry.status,
-      if (widget.search.modelUseReason(row) case final reason?
-          when reason != 'No active harness' &&
-              reason != entry.status &&
-              reason != 'Tools only' &&
-              reason != 'Download first')
-        switch (reason) {
-          'Claude only' => 'Use this subscription in a Claude harness.',
-          'Codex only' => 'Use this subscription in a Codex harness.',
-          'Other account' =>
-            'This account is not signed in on the harness’s machine.',
-          'Not serving' => 'Not serving on ${entry.node ?? 'its host'}.',
-          _ => reason,
-        },
-      if (entry.own && local == null && owner.scanning)
-        'Finding model controls…',
-      if (!identical(owner, catalog.manager)) ...[
-        if (owner.machine?.connectionStatus != ConnectionStatus.connected)
-          'Connect to ${entry.node} to manage its models.'
-        else
-          ?owner.error,
+
+    String bytesLabel(double? bytes) {
+      if (bytes == null) return '—';
+      return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+    }
+
+    String windowLabel(double? seconds) {
+      if (seconds == null) return '—';
+      if (seconds > 0 && seconds % 86400 == 0) {
+        return '${(seconds / 86400).toInt()}d';
+      }
+      if (seconds > 0 && seconds % 3600 == 0) {
+        return '${(seconds / 3600).toInt()}h';
+      }
+      return '${(seconds / 60).round()}m';
+    }
+
+    // The status word is the catalog's own [localStatus] so the pane and the
+    // list row can never disagree (both come from the same [_refresh] snapshot);
+    // no re-derivation from a possibly-stale operation on the pane side.
+    final statusWord =
+        local != null ? catalog.localStatus(local, controller: owner) : entry.status;
+
+    // Suitability against this machine's usable memory, per plan §5. Only local
+    // models carry a "fits this machine" meaning; shared/api/subscription nodes
+    // have no per-node memory here, so fit is left out for them.
+    final memory = owner.memoryBytes;
+    String? fitsLabel() {
+      final size = local?.sizeBytes;
+      if (memory == null || local == null || size == null) return null;
+      if (size <= memory) {
+        final gb = (memory / (1024 * 1024 * 1024)).toStringAsFixed(0);
+        return '✓ fits $gb GB';
+      }
+      return 'needs ${(size / (1024 * 1024 * 1024)).toStringAsFixed(0)} GB';
+    }
+
+    Widget labelValue(String label, String value) {
+      return Padding(
+        padding: EdgeInsets.only(bottom: cell.height * .6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            SizedBox(
+              width: cell.width * 9,
+              child: Text(
+                label,
+                style: terminalContentStyle(color: theme.muted),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                value,
+                style: terminalContentStyle(color: theme.foreground),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    Widget errorLine(String text) {
+      return Padding(
+        padding: EdgeInsets.only(top: cell.height),
+        child: Text(
+          text,
+          style: terminalContentStyle(color: theme.yellow),
+        ),
+      );
+    }
+
+    return ListView(
+      controller: _scroll,
+      padding: EdgeInsets.symmetric(
+        horizontal: cell.width * 2,
+        vertical: cell.height,
+      ),
+      children: [
+        Text(
+          entry.name,
+          style: terminalContentStyle(color: theme.foreground)
+              .copyWith(fontWeight: FontWeight.bold),
+        ),
+        SizedBox(height: cell.height),
+        Text(
+          statusWord,
+          style: terminalContentStyle(color: theme.foreground),
+        ),
+        if (widget.search.modelUseErrorId == entry.id &&
+            widget.search.modelUseError != null)
+          errorLine(widget.search.modelUseError!),
+        SizedBox(height: cell.height),
+        labelValue(
+          'Machine',
+          entry.node ?? (entry.source == 'Local' ? 'This Mac' : entry.source),
+        ),
+        if (local != null) ...[
+          if (fitsLabel() case final fits?) labelValue('Fits', fits),
+          labelValue('Size', bytesLabel(local.sizeBytes)),
+          labelValue('Quant', local.quant ?? '—'),
+          if (local.running && local.tokensPerSecond != null)
+            labelValue('Speed',
+                '${local.tokensPerSecond!.toStringAsFixed(1)} tok/s'),
+          if (local.running &&
+              local.requests != null &&
+              local.windowSeconds != null)
+            labelValue(
+              'Window',
+              '${local.requests!.toInt()} req / ${windowLabel(local.windowSeconds)}',
+            ),
+          if (local.resting) labelValue('State', 'Resting until your next message'),
+          if (!local.downloaded &&
+              !owner.supportsDownload &&
+              local.canStart &&
+              !pending &&
+              !opActive)
+            errorLine(
+                'Downloads and starts on ${entry.node ?? 'this machine'}.'),
+        ],
+        if (entry.api case final api?) ...[
+          labelValue('Host', api.baseUrl),
+          labelValue('Key', api.keyEnv),
+        ],
+        if (entry.subscription case final subscription?) ...[
+          ...((subscription['details'] as List?) ?? const [])
+              .map((d) => '$d')
+              .where((d) => d != entry.status)
+              .take(3)
+              .map((d) => labelValue('Detail', d)),
+        ],
+        labelValue('Source', entry.source),
+        if (widget.search.modelUseReason(row) case final reason?
+            when reason != 'No active harness' &&
+                reason != entry.status &&
+                reason != 'Tools only' &&
+                reason != 'Download first')
+          errorLine(switch (reason) {
+            'Claude only' => 'Use this subscription in a Claude harness.',
+            'Codex only' => 'Use this subscription in a Codex harness.',
+            'Other account' =>
+              'This account is not signed in on the harness’s machine.',
+            'Not serving' => 'Not serving on ${entry.node ?? 'its host'}.',
+            _ => reason,
+          }),
+        if (entry.own && local == null && owner.scanning)
+          errorLine('Finding model controls…'),
+        if (!identical(owner, catalog.manager)) ...[
+          if (owner.machine?.connectionStatus != ConnectionStatus.connected)
+            errorLine('Connect to ${entry.node} to manage its models.')
+          else if (owner.error case final err?)
+            errorLine(err),
+        ],
+        if (operation?.error case final err?) errorLine(err),
+        if (catalog.manager.error case final err?) errorLine(err),
+        SizedBox(height: cell.height),
+        _actionButtons(),
       ],
-      if (entry.subscription case final subscription?) ...[
-        ...((subscription['details'] as List?) ?? const [])
-            .map((detail) => '$detail')
-            .where((detail) => detail != entry.status),
-      ],
-    ], controls: true);
+    );
   }
 
   static const _kDetailLabelColumns = 9;

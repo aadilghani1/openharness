@@ -31,9 +31,9 @@ release-backend:
 release-desktop:
 	bash desktop/scripts/release-desktop.sh $(ARGS)
 
-## release-web: ship the browser app to harness.autonomous.ai from this repo — tag this commit
-## vX.Y.Z_web (CI builds the bundle), pin the website repo's manifest to it through a merged PR, then
-## cut the website's own release tag (ArgoCD deploys). Re-run with the same version to resume.
+## release-web: ship the browser app to harness.autonomous.ai — tag this commit vX.Y.Z_web; CI builds
+## the Flutter bundle into website/'s image and pushes it (ArgoCD deploys). Re-run with the same version
+## to resume waiting on a tag that already exists.
 ## ARGS="--dry-run" to preview, ARGS="--minor" or ARGS="X.Y.Z" to bump differently.
 release-web:
 	bash desktop/scripts/release-web.sh $(ARGS)

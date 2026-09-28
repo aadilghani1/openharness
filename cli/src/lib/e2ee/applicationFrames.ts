@@ -11,6 +11,7 @@
 import { ENCRYPTED_RPC_RESULT_TYPES, isEncryptedDownType } from './core.js'
 import { SHARE_REQUEST_TYPES, SHARE_RESULT_TYPES } from '../../sharing/protocol.js'
 import { VIEWER_DOWN_TYPES } from '../viewerWire.js'
+import { TEAM_REQUEST_TYPES, TEAM_RESULT_TYPES } from '../../teams/wire.js'
 export const OWNER_COMMAND_TYPES = new Set(['command_bar', 'route_task', 'route_send'])
 
 const FLEET_REQUESTS = new Set(['grid_fleet_capabilities', 'grid_fleet_run', 'grid_fleet_cancel',
@@ -58,7 +59,7 @@ export function admitRelayedPairFrame(frame: { type?: unknown; payload?: unknown
 }
 export const encryptDownFrame = (type: string): boolean =>
   isEncryptedDownType(type) || MACHINE_REQUESTS.has(type) || FLEET_REQUESTS.has(type) || SHARE_REQUEST_TYPES.has(type) || VIEWER_DOWN_TYPES.has(type)
-  || PAIR_REQUESTS.has(type) || type === PLATE_REQUEST
+  || PAIR_REQUESTS.has(type) || type === PLATE_REQUEST || TEAM_REQUEST_TYPES.has(type)
 /** Client→daemon requests that older daemons took in the clear and no longer do. A client seals them
  * only for a daemon whose e2e_welcome says `strictDown` — an older one would never open the envelope
  * and would read the request as empty. A daemon that says `strictDown` refuses them unsealed. */
@@ -74,4 +75,4 @@ export const encryptDownFrameFor = (type: string, peer: { strictDown: boolean })
 const QUESTION_RESULT = 'question_response_result'
 export const encryptRpcResult = (type: string): boolean =>
   ENCRYPTED_RPC_RESULT_TYPES.has(type) || MACHINE_RESULTS.has(type) || FLEET_RESULTS.has(type) || SHARE_RESULT_TYPES.has(type)
-  || PAIR_RESULTS.has(type) || type === LOCAL_PAIR_RESULT || type === QUESTION_RESULT || type === PLATE_RESULT
+  || PAIR_RESULTS.has(type) || type === LOCAL_PAIR_RESULT || type === QUESTION_RESULT || type === PLATE_RESULT || TEAM_RESULT_TYPES.has(type)

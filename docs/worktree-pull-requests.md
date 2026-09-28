@@ -8,22 +8,33 @@ for locating code, not user-facing identities.
 
 The focused bar shows the branch at the most recent confirmed Git work location,
 plus its matching PR link when there is one. Other checked-out branches appear
-as a compact count, for example `ship-hn · +3`. This is recent work, not a claim
+as a compact count, for example `ship-hn +3`. This is recent work, not a claim
 that an agent is executing there now. Hovering explains the observation time.
 Without a unique recent location, one checked-out branch appears by name and
 multiple branches appear as `2 branches` (or the corresponding count). Historical
 branches do not increase this count. A dependent viewer uses its owner's context.
 
 Click the branch, or use **Branches and pull requests** in the desktop command
-picker. Each branch appears once, with its PR links, titles and GitHub states
-directly beneath it. Recent work leads, followed by branches with open or draft
-PRs. Completed work folds into **Completed**, except PRs on the recent work
-branch, whose state remains visible. The repository appears once when shared.
-Hover or accessibility inspection exposes full titles, head/base branches and
-GitHub check times. Short lists fit their content; long lists scroll within a
-bounded dialog. Temporary folder names and subdirectory lists are not shown.
-Matching repository and branch names are one visible branch even when several
-local copies exist; different repositories remain distinct.
+picker. The dialog has two tabs: **Pull requests** and **Branches**. Its heading
+is the session name, with the shared repository below it.
+
+**Pull requests** is the default. Each PR appears once, with its title and state
+on the first line, then its number, head/base branches and GitHub date. Open and
+draft PRs come first, followed by unresolved records and merged/closed PRs.
+Within each group, GitHub dates determine the order: update time for open PRs,
+merge time for merged PRs, and close time for closed PRs. Missing dates are not
+invented from refresh times; older records retain their observation order.
+All saved PRs remain available in the scrolling list, including completed PRs.
+There is no completed-history toggle and no branch grouping in this view.
+
+**Branches** lists the session's associated branches separately, with checked-out
+branches first and labeled **Checked out**. Matching repository and branch names
+are one visible branch even when several local copies exist; different repositories
+remain distinct. Temporary folders are never displayed.
+
+The tabs support Left/Right navigation and retain their scroll positions.
+Hover and accessibility inspection expose full titles and the actual GitHub check
+time. Short lists fit their content; long lists scroll within a bounded dialog.
 
 | Fact | Source |
 | --- | --- |
@@ -33,6 +44,7 @@ local copies exist; different repositories remain distinct.
 | Branch history | Saved Git observations for this conversation |
 | Additional checkout association | Previously verified observations or successful tool activity |
 | PR identity and state | GitHub, matched by head repository and branch, or a recorded PR URL |
+| PR dates | GitHub's created, updated, merged and closed timestamps |
 
 The Git reader works for every engine, including Claude Code, Codex and Grok.
 No transcript or successful tool receipt is required for the assigned branch,
@@ -61,7 +73,8 @@ history is labeled. Short-lived branches switched away between observations,
 and activity deleted before it was observed, cannot be reconstructed reliably.
 
 Opening details checks a bounded page of four saved branch identities and four
-PR URLs. **Show more** continues discovery and history refresh. GitHub results
+PR URLs. **Load more** continues discovery and history refresh; it does not hide
+already saved records behind another display limit. GitHub results
 are cached for 60 seconds with their actual check times. A failed lookup retains
 saved PR state. Offline clients show saved data with an offline label. Deleted
 checkouts do not delete branch/PR history. A merged PR is not proof of a release

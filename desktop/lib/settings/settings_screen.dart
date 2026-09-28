@@ -203,7 +203,8 @@ class _SettingsBody extends StatelessWidget {
       ),
       SettingsSection.notifications => const NotificationsSection(),
       SettingsSection.experimental => ExperimentalSection(
-        store: experimentalFeatures,
+        store: experimentalFeatures ?? notifier.experimentalFeatures,
+        controller: notifier.swarmSettings,
       ),
       SettingsSection.devices => const DevicesSection(),
       SettingsSection.shortcuts => const ShortcutsSection(),

@@ -25,6 +25,8 @@ import 'package:harness/shortcuts/keyboard_practice.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/harness_customize_pane.dart';
 
+import 'support/experimental_settings.dart';
+
 import 'swarm_state_test.dart' show MemoryStore;
 
 void main() {
@@ -84,6 +86,7 @@ void main() {
     expect(find.text('HELP'), findsOneWidget);
     expect(find.text('Usage'), findsNWidgets(2));
     expect(find.text('Customize'), findsOneWidget);
+    expect(find.text('Experimental'), findsOneWidget);
     expect(find.text('Keyboard shortcuts'), findsOneWidget);
     expect(find.text('About'), findsOneWidget);
     expect(find.text('Back to app'), findsOneWidget);
@@ -143,7 +146,7 @@ void main() {
     'Experimental is searchable and its labelled switch works by keyboard',
     (tester) async {
       final storage = MemoryStore();
-      final experiments = ExperimentalFeaturesStore(storage: storage);
+      final experiments = MemoryExperimentalFeaturesStore(storage: storage);
       addTearDown(experiments.dispose);
       await openSettings(tester, experiments: experiments);
       await tester.enterText(
@@ -158,8 +161,16 @@ void main() {
       expect(tester.widget<Switch>(toggle).value, isFalse);
       final semantics = tester.ensureSemantics();
       expect(
-        find.bySemanticsLabel(RegExp('Focus-bar creature')),
-        findsOneWidget,
+        tester.getSemantics(toggle),
+        matchesSemantics(
+          label: 'Focus-bar creature',
+          hasToggledState: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          isFocusable: true,
+          hasTapAction: true,
+          hasFocusAction: true,
+        ),
       );
       semantics.dispose();
       // Search → matching nav row → switch.
@@ -170,14 +181,18 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.widget<Switch>(toggle).value, isTrue);
       expect(
-        storage.values[ExperimentalFeature.focusBarCreature.storageKey],
+        storage.values[experimentFixtureKey(
+          ExperimentalFeature.focusBarCreature,
+        )],
         'on',
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.space);
       await tester.pumpAndSettle();
       expect(tester.widget<Switch>(toggle).value, isFalse);
       expect(
-        storage.values[ExperimentalFeature.focusBarCreature.storageKey],
+        storage.values[experimentFixtureKey(
+          ExperimentalFeature.focusBarCreature,
+        )],
         'off',
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);

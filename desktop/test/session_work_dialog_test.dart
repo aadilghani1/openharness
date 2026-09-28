@@ -59,7 +59,7 @@ void main() {
     addTearDown(() => terminalFontStore.value = old);
   });
   testWidgets(
-    'opening work details preserves launch context and only follows the selected PR link',
+    'PRs appear once and branches are a separate keyboard-accessible view',
     (tester) async {
       final opened = <Uri>[];
       final git = gitFixture();
@@ -74,6 +74,7 @@ void main() {
         'baseBranch': 'main',
         'headRepository': 'acme/app',
         'title': 'Keep complete session previews',
+        'updatedAt': '2026-09-27T13:00:00Z',
       });
       git['history']['branches'].add({
         'cwd': '/removed-temporary-checkout',
@@ -95,6 +96,7 @@ void main() {
           'baseBranch': 'main',
           'headRepository': 'acme/app',
           'title': 'Keep NFC conversations in order',
+          'mergedAt': '2026-09-26T13:00:00Z',
         },
       });
       final boundary = GlobalKey();
@@ -126,13 +128,17 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.textContaining('/silent-beacon'), findsNothing);
       expect(find.textContaining('/ship-hn'), findsNothing);
-      expect(find.text('hn/preview-fix'), findsOneWidget);
-      expect(find.text('Recent work'), findsOneWidget);
-      expect(find.text('acme/app · 2 branches · 2 PRs'), findsOneWidget);
-      expect(find.text('#12'), findsOneWidget);
+      expect(find.text('hn/preview-fix'), findsNothing);
+      expect(find.text('Recent work'), findsNothing);
+      expect(find.text('hn'), findsOneWidget);
+      expect(find.text('acme/app'), findsOneWidget);
+      expect(find.text('Pull requests (2)'), findsOneWidget);
+      expect(find.text('Branches (2)'), findsOneWidget);
+      expect(find.textContaining('#12 ·'), findsOneWidget);
       expect(find.text('Keep complete session previews'), findsOneWidget);
-      expect(find.text('#119'), findsNothing);
-      expect(find.text('[ Completed (1) ]'), findsOneWidget);
+      expect(find.textContaining('#119 ·'), findsOneWidget);
+      expect(find.text('2026-09-26'), findsOneWidget);
+      expect(find.textContaining('completed'), findsNothing);
       expect(find.textContaining('Checked 2026'), findsNothing);
       expect(
         tester
@@ -142,7 +148,7 @@ void main() {
       );
       expect(find.text('Work location unknown'), findsNothing);
 
-      await captureDialog(tester, boundary, 'work-last-observed');
+      await captureDialog(tester, boundary, 'pull-requests');
       await tester.tap(
         find.byKey(
           const ValueKey('work-pr-https://github.com/acme/app/pull/12'),
@@ -150,18 +156,104 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(opened, [Uri.parse('https://github.com/acme/app/pull/12')]);
-      await tester.tap(find.byKey(const ValueKey('work-completed')));
+      await tester.tap(find.byKey(const ValueKey('git-branches-tab')));
       await tester.pumpAndSettle();
       expect(find.text('hn/nfc'), findsOneWidget);
-      expect(find.text('#119'), findsOneWidget);
-      expect(find.text('Keep NFC conversations in order'), findsOneWidget);
+      expect(find.text('hn/preview-fix'), findsOneWidget);
+      expect(find.text('Checked out'), findsOneWidget);
+      expect(find.text('Keep NFC conversations in order'), findsNothing);
       expect(tester.takeException(), isNull);
-      await captureDialog(tester, boundary, 'work-completed');
+      await captureDialog(tester, boundary, 'branches');
+      tester
+          .widget<TextButton>(find.byKey(const ValueKey('git-branches-tab')))
+          .focusNode!
+          .requestFocus();
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pumpAndSettle();
+      expect(find.text('Keep NFC conversations in order'), findsOneWidget);
+      expect(find.text('Checked out'), findsNothing);
     },
   );
 
   testWidgets(
-    'completed history remains reachable beside a full open PR page',
+    'merged PRs remain visible in GitHub date order and loading more preserves history',
+    (tester) async {
+      final git = gitFixture();
+      final saved = Map<String, Object>.from(
+        git['history']['pullRequests'][0] as Map,
+      );
+      git['history']['pullRequests'] = [
+        for (final (number, title, date) in [
+          (12, 'Earlier change', '2026-09-20'),
+          (13, 'Latest change', '2026-09-22'),
+          (14, 'Another change', '2026-09-21'),
+        ])
+          {
+            ...saved,
+            'url': 'https://github.com/acme/app/pull/$number',
+            'result': {
+              ...(saved['result'] as Map),
+              'url': 'https://github.com/acme/app/pull/$number',
+              'state': 'Merged',
+              'number': number,
+              'title': title,
+              'headBranch': 'hn/preview-fix',
+              'baseBranch': 'main',
+              'mergedAt': '${date}T13:00:00Z',
+            },
+          },
+      ];
+      final calls = <int>[];
+      final boundary = GlobalKey();
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1000, 720);
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              body: SessionWorkDialog(
+                agent: workAgent(git: git),
+                read: (offset) async {
+                  calls.add(offset);
+                  return {
+                    'gitContext': git,
+                    'history': git['history'],
+                    'nextOffset': offset == 0 ? 4 : null,
+                  };
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester.getTopLeft(find.text('Latest change')).dy,
+        lessThan(tester.getTopLeft(find.text('Another change')).dy),
+      );
+      expect(
+        tester.getTopLeft(find.text('Another change')).dy,
+        lessThan(tester.getTopLeft(find.text('Earlier change')).dy),
+      );
+      expect(find.text('Merged'), findsNWidgets(3));
+      expect(find.textContaining('completed'), findsNothing);
+      await captureDialog(tester, boundary, 'merged-pull-requests');
+      await tester.tap(find.text('[ Load more ]'));
+      await tester.pumpAndSettle();
+      expect(calls, [0, 4]);
+      expect(find.text('Merged'), findsNWidgets(3));
+      expect(find.text('[ Load more ]'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'scrolling to merged PRs and changing appearance preserves the focused link',
     (tester) async {
       final git = manyPrFixture();
       final opened = <Uri>[];
@@ -183,9 +275,6 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('#122'), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('work-completed')));
-      await tester.pumpAndSettle();
       final target = find.byKey(
         const ValueKey('work-pr-https://github.com/acme/app/pull/122'),
       );
@@ -193,7 +282,7 @@ void main() {
         target,
         100,
         scrollable: find.descendant(
-          of: find.byKey(const ValueKey('work-branch-list')),
+          of: find.byKey(const ValueKey('git-prs-list')),
           matching: find.byType(Scrollable),
         ),
       );
@@ -223,7 +312,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(FocusManager.instance.primaryFocus, same(focus));
       expect(target.hitTestable(), findsOneWidget);
-      expect(find.text('[ Hide completed ]'), findsOneWidget);
+      expect(find.textContaining('completed'), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
@@ -306,7 +395,7 @@ void main() {
             ),
           );
           await tester.pumpAndSettle();
-          expect(find.text('Offline · saved data'), findsOneWidget);
+          expect(find.text('Offline'), findsOneWidget);
           expect(tester.takeException(), isNull);
           final output =
               Platform.environment['HARNESS_GIT_CONTEXT_CAPTURE_DIR'];

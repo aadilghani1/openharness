@@ -42,6 +42,7 @@ import { ensureUtf8Locale } from './lib/childLocale.js'
 import { DialLog } from './cable/dialLog.js'
 import { buildLogBundle, bundleFileName, redactSecretsInText } from './lib/logBundle.js'
 import { CableSession } from './cable/cableSession.js'
+import { CableFleet } from './cable/cableFleet.js'
 import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor } from './cable/cableHost.js'
 import { terminalActivity } from './cable/terminalActivity.js'
 
@@ -202,6 +203,8 @@ import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
 import { foldTranscript, lastTurnTextFromRawLines, lineToEvents, newTurnState, type LiveEvent, type TurnState } from './lib/normalize.js'
 import { AskQuestionController, parseEngineQuestionPane, pollsQuestions, QuestionWatcher } from './lib/askQuestion.js'
+import { teamWriteHold } from './teams/preflight.js'
+import { TeamError } from './teams/model.js'
 import { CommanderMirror, SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from './lib/commander.js'
 import {
   setSummaryPoolDeviceConnected,
@@ -314,7 +317,7 @@ function terminalHintMachineName(): string {
 
 // The dial's session, held at module scope for the same reason `backendRef` is: shutdown() is defined
 // before the wiring that creates it, and the port has to be released on the way out.
-let cableRef: CableSession | null = null
+let cableRef: CableFleet | null = null
 /** The same object the session holds — module scope so the recap gates can ask which machine is selected
  *  without threading it through every constructor between here and there. */
 let cableHostRef: DaemonCableHost | null = null
@@ -421,6 +424,8 @@ Machine:
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every session, live or stopped (--limit=N, --json)
+  harness channel --help       consult agents in a tab and read shared collaboration history
+  harness team --help          advanced team commands and correlated agent replies
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
   harness version              print the installed version (v${VERSION})
@@ -2528,9 +2533,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onDelivery: (event) => {
       autonomousDeviceService?.delivery(event)
       backend.orchestratorDelivery(event)
+      backend.teamDelivery(event)
+    },
+    beforeTeamWrite: async session => {
+      const capture = await captureTerminal(session.agentId)
+      return teamWriteHold(session.engine, capture)
     },
     validateRuntime: validateTerminal,
     inject: (id, text) => deviceInput.legacyWrite(id, () => submitTerminalAction(id, text)),
+    injectTeam: (id, text, deliveryId) => deviceInput.legacyWrite(id, async () => {
+      const session = registry.resolve(id)
+      const reason = session ? teamWriteHold(session.engine, await captureTerminal(id)) : 'team_waiting_unavailable'
+      if (reason) return { state: 'failed', dispatch: 'not_started', reason }
+      if (!backend.teamCanWrite(deliveryId)) return terminalActionNotStarted('team_waiting_control')
+      return submitTerminalAction(id, text)
+    }),
     sendKey: (id, key) => deviceInput.legacyWrite(id, () => keyTerminalAction(id, key)),
     capture: captureTerminal,
     onError: (sessionId, message) => {
@@ -4250,9 +4267,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // route and hears about everyone else's edits as `desk_changed` (backendSocket.ts).
     onDeskRead: () => proxyBackend('GET', '/api/desk'),
     onDeskOps: (body) => proxyBackend('POST', '/api/desk/ops', body),
+    onExperimentalRead: () => proxyBackend('GET', '/api/experimental-settings'),
+    onExperimentalWrite: (body) => proxyBackend('PATCH', '/api/experimental-settings', body),
     // The account's zoo — see backend routes/zoo.ts. Same shape as the desk: read and ops proxied,
-    // everyone else's changes heard as `zoo_changed`. Signed out, proxyBackend answers 401 NOT_SIGNED_IN
-    // and a guest keeps its zoo locally until it seeds this one.
+    // everyone else's changes heard as `zoo_changed`. The backend requires the account's creature
+    // opt-in. Signed out, proxyBackend answers 401 NOT_SIGNED_IN.
     // Killed on this computer (lib/daemonsSwitch.ts): a 404 DAEMONS_OFF without asking, which a window reads
     // exactly as the server's own 404 — daemons hidden. Otherwise verbatim, and the switch learns from it.
     onZooRead: () => zooProxy.read(),
@@ -6384,6 +6403,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   backend.onMessage = (id, content, deliveryId) => submitAgent(id, content, deliveryId)
   backend.onCancelOrchestratorMessage = id => input.cancelDelivery(id)
+  backend.readChannelDesk = async () => {
+    const response = await proxyBackend('GET', '/api/tab-channels')
+    if (response.status === 404) throw new TeamError('CHANNELS_UNSUPPORTED', 'Tab channels are not enabled on this Harness server.')
+    if (response.status !== 200 || response.body.success !== true) throw new Error('The saved channel directory is unavailable.')
+    return response.body.data
+  }
+  backend.writeChannelSettings = async enabled => {
+    const response = await proxyBackend('PATCH', '/api/tab-channels/settings', { enabled })
+    if (response.status === 404) throw new TeamError('CHANNELS_UNSUPPORTED', 'Update the Harness server to configure swarm collaboration.')
+    if (response.status !== 200 || response.body.success !== true) throw new TeamError('CHANNEL_SETTINGS_FAILED', 'The swarm setting could not be saved. Refresh Settings to check its state.')
+    return response.body.data
+  }
+  backend.startTeams()
 
   // Keep the log file under its cap. This daemon writes it through an inherited stdout fd, so a size
   // check on a timer is the only place that can see it grow — `prepareLogFile` at spawn time alone
@@ -6730,7 +6762,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (existsSync(legacyDialLog)) {
     try { writeFileSync(legacyDialLog, `moved to ${join(env.HARNESS_LOGS_DIR, 'dial-YYYYMMDD.log')}\n`) } catch { /* best effort */ }
   }
-  const cable = new CableSession(cableHost, new DialLog(env.HARNESS_LOGS_DIR))
+  const cable = new CableFleet(CableSession, cableHost, env.HARNESS_LOGS_DIR, DialLog,
+    { serials: process.env.HARNESS_DIAL_SERIALS?.split(',').map(s => s.trim()).filter(Boolean) })
   cableRef = cable
 
   const deviceStore = createDeviceStore({ dataDir: env.ADAPTER_DATA_DIR, machineId: backend.machineId,
@@ -7827,6 +7860,8 @@ async function logsExportCommand(json: boolean): Promise<void> {
 }
 
 import { orchestratorCommand } from './orchestrator/command.js'
+import { teamCommand } from './teams/command.js'
+import { channelCommand } from './teams/channelCommand.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 // `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
@@ -7931,6 +7966,12 @@ const enterSafeMode = (err: unknown): void => {
 }
 
 switch (cmd) {
+  case 'team':
+    teamCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'channel':
+    channelCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break

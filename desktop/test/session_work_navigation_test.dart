@@ -58,10 +58,7 @@ void main() {
         final pane = app.adoptSessionForTest(terminal('hn', input));
         final session = pane.session;
         await mount(tester, app, nativeTabs: native);
-        expect(
-          WorkspacePaneContext.focused(app)?.branch,
-          'hn/preview-fix · +1',
-        );
+        expect(WorkspacePaneContext.focused(app)?.branch, 'hn/preview-fix +1');
         if (native) {
           final fields =
               ((updates.last['focusedContext'] as Map)['fields'] as List)

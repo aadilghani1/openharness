@@ -36,7 +36,169 @@ private extension NSView {
   }
 }
 
+private extension SwarmTabStrip {
+  func checkActivityMarks() throws {
+    func payload(_ mark: String, _ label: String, working: Bool = false) -> [String: Any] {
+      ["mark": mark, "label": label, "working": working, "color": Int64(0xff64d2ff)]
+    }
+    let states: [(String, String)] = [("⠋", "Working"), ("?", "Needs your input"),
+      ("✗", "Failed"), ("✓", "Finished · unread"), ("", "Idle"),
+      ("◌", "Starting"), ("||", "Paused"), ("⊘", "Offline")]
+    update(["enabled": true, "activeId": "activity", "tabs": [
+      ["id": "activity", "name": "desktop", "label": "1:desktop", "activity": payload("⠋", "Working", working: true)]
+    ]])
+    let tab = tabs[0]
+    try checkTitlebar(activityTimer == nil, "A hidden native strip runs no animation timer")
+    try tab.checkActivityDrawing(states: states)
+    try tab.checkShortNamesFit()
+    update(["enabled": true, "reduceMotion": true, "activeId": "activity", "tabs": [
+      ["id": "activity", "name": "desktop", "label": "1:desktop", "activity": payload("⠋", "Working", working: true)]
+    ]])
+    try checkTitlebar(activityTimer == nil && tab.activityFrame == 0, "Reduce Motion parks the native spinner")
+    update(["enabled": true, "tabs": []])
+    try checkTitlebar(activityTimer == nil, "Removing the last working tab leaves no timer")
+  }
+}
+
+private extension SwarmTabButton {
+  func checkActivityDrawing(states: [(String, String)]) throws {
+    func payload(_ mark: String, _ label: String) -> [String: Any] {
+      ["mark": mark, "label": label, "color": Int64(0xff64d2ff)]
+    }
+    let width = preferredWidth
+    let rect = activityRect
+    try checkTitlebar(label.string == "1:desktop" && activitySpace == cellWidth * 2,
+      "Activity measures its gap and cell separately from the tab name")
+    try checkTitlebar(rect.minX > ("1:desktop" as NSString).size(withAttributes: [.font: labelFont]).width,
+      "The native activity follows the complete tab name")
+    var pictures = Set<Data>()
+    for frame in 0..<10 {
+      // Sample inside each interval: Date's reference-epoch conversion can put
+      // an exact decimal boundary a fraction of a microsecond before it.
+      try checkTitlebar(harnessActivityFrame(at: Date(timeIntervalSince1970: Double(frame) / 10 + 0.05)) == frame,
+        "The native spinner uses hn's exact 100ms frame \(frame)")
+      activityFrame = frame
+      pictures.insert(renderedPixels())
+      try checkTitlebar(preferredWidth == width && activityRect == rect,
+        "A spinner frame never moves native tab text")
+    }
+    try checkTitlebar(pictures.count == 10, "All ten Braille frames render distinctly")
+    for (mark, label) in states {
+      activity = SwarmTabActivity(payload(mark, label))
+      layoutSubtreeIfNeeded()
+      try checkTitlebar(preferredWidth == width && activityRect == rect,
+        "\(label) occupies the same reserved cell")
+      try checkTitlebar(toolTip == label && selectButton.accessibilityHelp() == label,
+        "\(label) has readable hover and accessibility descriptions")
+      for narrow in [CGFloat(28), CGFloat(56), width] {
+        frame.size.width = narrow
+        let bitmap = renderedBitmap()
+        if let capture = ProcessInfo.processInfo.environment["HARNESS_ACTIVITY_CAPTURE_DIR"] {
+          try bitmap.representation(using: .png, properties: [:])!.write(to:
+            URL(fileURLWithPath: capture).appendingPathComponent("native-\(label)-\(Int(narrow)).png"))
+        }
+        let colored = (0..<bitmap.pixelsWide).contains { x in
+          (0..<bitmap.pixelsHigh).contains { y in
+            guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                  pixel.alphaComponent > 0.2 else { return false }
+            // Antialiased dots need not contain a fully opaque ink pixel.
+            // Only the mark has cyan chroma; the title and background are gray.
+            return pixel.blueComponent - pixel.redComponent > 0.15 &&
+              pixel.greenComponent - pixel.redComponent > 0.10 &&
+              pixel.blueComponent - pixel.greenComponent > 0.04
+          }
+        }
+        try checkTitlebar(colored == !mark.isEmpty,
+          "\(label) \(mark.isEmpty ? "stays unmarked" : "remains visible") at tab width \(narrow)")
+      }
+      frame.size.width = width
+    }
+  }
+
+  func checkShortNamesFit() throws {
+    for name in ["1:desktop", "2:device", "3:swarm", "4:daemons", "5:web", "6:tui", "7:mobile"] {
+      displayLabel = name
+      activity = SwarmTabActivity(["mark": "", "label": "Idle", "color": Int64(0xff999999)])
+      frame.size.width = preferredWidth
+      let available = activityRect.minX - cellWidth - contentRect.minX
+      try checkTitlebar(available >= max(label.size().width, emphasizedLabel.size().width),
+        "\(name) fits at its preferred width in both weights without a false ellipsis")
+    }
+  }
+}
+
 private extension SwarmContextButton {
+  func checkPullRequestIcons() throws {
+    let previous = Self.statusIcons
+    defer { Self.statusIcons = previous }
+    Self.statusIcons = SwarmHistoryIcons(assetURL: { asset in
+      guard let root = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_ASSETS"] else { return nil }
+      return URL(fileURLWithPath: root).appendingPathComponent(String(asset.dropFirst("assets/".count)))
+    })
+    font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    let states: [(String, String, Int64)] = [("Open", "git-pull-request", 0xff3fb950),
+      ("Merged", "git-merge", 0xffbc8cff), ("Closed", "git-pull-request-closed", 0xfff85149),
+      ("Draft", "git-pull-request-draft", 0xff9198a1)]
+    var shapes = Set<Data>()
+    var width: CGFloat?
+    for (state, name, color) in states {
+      var payload: [String: Any] = ["text": "#436", "label": "#436 \(state)",
+        "detail": "#436 \(state) — Open on GitHub", "interactive": true,
+        "iconAsset": "assets/octicons/\(name).svg", "iconColor": color,
+        "segments": [["text": "#436", "foreground": Int64(0xffdddddd)]]]
+      update(payload, enabled: true)
+      frame = NSRect(x: 0, y: 0, width: preferredWidth, height: 28)
+      let bitmap = renderedBitmap()
+      let expected = statusColor(color, fallback: .clear).usingColorSpace(.sRGB)!
+      let colored = (0..<13).contains { x in
+        (0..<28).contains { y in
+          guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), pixel.alphaComponent > 0.4 else { return false }
+          return abs(pixel.redComponent - expected.redComponent) < 0.03 &&
+            abs(pixel.greenComponent - expected.greenComponent) < 0.03 &&
+            abs(pixel.blueComponent - expected.blueComponent) < 0.03
+        }
+      }
+      try checkTitlebar(colored && accessibilityValue() as? String == "#436 \(state)" && toolTip?.contains(state) == true,
+        "\(state) draws its colored Octicon and retains the full accessible/hover status")
+      width = width ?? preferredWidth
+      try checkTitlebar(preferredWidth == width, "Changing PR state never moves the title bar")
+      if let capture = ProcessInfo.processInfo.environment["HARNESS_ACTIVITY_CAPTURE_DIR"] {
+        try bitmap.representation(using: .png, properties: [:])!.write(to:
+          URL(fileURLWithPath: capture).appendingPathComponent("native-pr-\(state).png"))
+      }
+      payload["iconColor"] = Int64(0xffdddddd)
+      update(payload, enabled: true)
+      shapes.insert(renderedPixels())
+      // A ribbon uses the PR state as its fill; the same Octicon and number
+      // must use contrasting ink inside it, not the standalone icon's tint.
+      payload["segmented"] = true
+      payload["roundedEnd"] = true
+      payload["segments"] = [["text": "#436", "foreground": Int64(0xff111111),
+        "background": color]]
+      update(payload, enabled: true)
+      frame.size.width = preferredWidth
+      let ribbon = renderedBitmap()
+      let cell = ("m" as NSString).size(withAttributes: [.font: textFont]).width
+      let iconInk = (Int(cell)..<Int(cell) + 13).contains { x in
+        (0..<28).contains { y in
+          guard let pixel = ribbon.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+          // The thin 13px strokes are antialiased at this fixture's 1x scale.
+          return pixel.alphaComponent > 0.9 && pixel.redComponent < expected.redComponent * 0.7 &&
+            pixel.greenComponent < expected.greenComponent * 0.7 &&
+            pixel.blueComponent < expected.blueComponent * 0.7
+        }
+      }
+      let fill = ribbon.colorAt(x: 1, y: 14)!.usingColorSpace(.sRGB)!
+      try checkTitlebar(iconInk && abs(fill.redComponent - expected.redComponent) < 0.03 &&
+        abs(fill.greenComponent - expected.greenComponent) < 0.03 &&
+        abs(fill.blueComponent - expected.blueComponent) < 0.03,
+        "\(state) draws contrasting icon ink inside the final colored ribbon block")
+      try checkTitlebar(abs(preferredWidth - width! - cell * 3) < 1,
+        "The PR ribbon reserves only the shared segment padding and end cap")
+    }
+    try checkTitlebar(shapes.count == 4, "All four PR states remain distinct with Color off")
+  }
+
   func checkThemeSymbolsAndCaps() throws {
     font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     textAlignment = .left
@@ -499,7 +661,7 @@ private extension SwarmTabStrip {
     try checkTitlebar(voiceLabel.isHidden && !contextButton.isHidden && !pullRequestButton.isHidden &&
       !focusedModelButton.isHidden && unmoved(),
       "Silence restores the status exactly where it was")
-    // The ten cells as Flutter drew them, the tally beside them, the grue's patch.
+    // The ten cells as Flutter drew them and the grue's patch. No count labels.
     let cellWidth = ceil(workspaceBarTextWidth("m", font: daemonButton.font!))
     daemon["glyph"] = "[o o]"
     daemon["cell"] = "  [o o]   "
@@ -514,17 +676,18 @@ private extension SwarmTabStrip {
     daemon["cell"] = "*  [o o]  "
     updateDaemon(daemon)
     try checkTitlebar(daemonButton.cells.hasPrefix("*") && unmoved(), "A shiny daemon's * sits in the gutter")
-    daemon["tally"] = "+3 +1 egg"
+    let spriteOnly = daemonButton.renderedPixels()
+    // Obsolete count fields cannot widen the slot or draw extra labels.
+    daemon["tally"] = "3 done, 1 egg"
+    daemon["tallyCells"] = 13
     daemon["tallyColor"] = 0xff808080
     updateDaemon(daemon)
-    try checkTitlebar(abs(daemonButton.frame.width - cellWidth * CGFloat(10 + 1 + 9)) < 0.5 &&
-      daemonButton.frame.maxX == daemonFrame.maxX && contextButton.frame.maxX <= daemonButton.frame.minX,
-      "The tally widens the control to the left and the status makes room")
-    daemon["tally"] = "+3 and far too many words"
-    updateDaemon(daemon)
-    try checkTitlebar(daemonButton.tally.isEmpty && daemonButton.frame == daemonFrame,
-      "A tally that is not short printable ASCII draws nothing")
+    try checkTitlebar(abs(daemonButton.frame.width - cellWidth * 10) < 0.5 && unmoved() &&
+      daemonButton.renderedPixels() == spriteOnly,
+      "Only the creature occupies the native focus bar, without count labels or reserved space")
     daemon["tally"] = nil
+    daemon["tallyCells"] = nil
+    daemon["tallyColor"] = nil
     daemon["cell"] = "   .   .  "
     daemon["patch"] = 0xff000000
     updateDaemon(daemon)
@@ -575,6 +738,12 @@ private extension SwarmTabStrip {
     emit = { method, args in calls.append((method, args as? [String: Any] ?? [:])) }
     for width in [CGFloat(360), CGFloat(520), CGFloat(1280)] {
       setFrameSize(NSSize(width: width, height: 40))
+      var hidden = state
+      hidden.removeValue(forKey: "shareAction")
+      update(hidden)
+      let withoutShare = barFrames()
+      try checkTitlebar(shareButton.isHidden && !shareButton.isEnabled && shareButton.frame.width == 0,
+        "The Share experiment reserves no space while off at width \(width)")
       update(state)
       try checkTitlebar(!shareButton.isHidden && shareButton.isEnabled &&
         shareButton.frame.width == shareButton.preferredWidth &&
@@ -582,6 +751,10 @@ private extension SwarmTabStrip {
         contextButton.frame.maxX < shareButton.frame.minX &&
         newButton.frame.maxX < shareButton.frame.minX,
         "Share stays prominent at the right edge without overlapping tabs or context at width \(width)")
+      update(hidden)
+      try checkTitlebar(barFrames() == withoutShare,
+        "Turning Share off restores the original toolbar layout at width \(width)")
+      update(state)
     }
     try checkTitlebar(shareButton.accessibilityLabel() == "Share Website launch" &&
       shareButton.toolTip == "Share Website launch · ⇧⌘S",
@@ -755,6 +928,7 @@ private extension SwarmTabStrip {
       abs(tail!.blueComponent - expectedJoin!.blueComponent) < 0.02,
       "The last arrow paints through to the adjacent PR background without a dark divider")
     try join.checkThemeSymbolsAndCaps()
+    try SwarmContextButton().checkPullRequestIcons()
     let contextFields: [[String: Any]] = ["machine", "project", "branch"].map { field in
       ["text": field, "field": field, "paneId": 7, "interactive": true,
        "detail": "Find harnesses: \(field)",
@@ -947,7 +1121,7 @@ private extension SwarmTabStrip {
       try checkTitlebar(messenger.calls.count == before + 1, "Each native tab activation sends one action")
     }
     tab.attention = true
-    try checkTitlebar(buttons[0].accessibilityHelp()?.contains("needing input") == true,
+    try checkTitlebar(buttons[0].accessibilityHelp()?.contains("Needs your input") == true,
       "The attention dot has an accessible description")
     tab.attention = false
     try checkTitlebar(buttons[0].accessibilityHelp() == nil, "Resolved attention clears its accessible description")
@@ -1214,7 +1388,7 @@ private extension SwarmTitlebar {
     try checkTitlebar(strip.newButton.accessibilityLabel() == "New Tab", "The plus announces New Tab")
     try checkTitlebar(main.defersToInput(event("n", 45, .command)) && main.defersToInput(event("t", 17, .command)),
       "Command-N and Command-T reach creation and New Tab")
-    try checkTitlebar(main.defersToInput(event("p", 35, .command)), "Command-P reaches Open Harness")
+    try checkTitlebar(main.defersToInput(event("p", 35, .command)), "Command-P reaches Harnesses")
     try checkTitlebar(main.defersToInput(event("p", 35, [.command, .shift])), "Command-Shift-P reaches commands")
     try checkTitlebar(main.defersToInput(event("o", 31, .command)), "Command-O reaches the project picker")
     try checkTitlebar(!main.defersToInput(event(";", 41, .command)) &&
@@ -1225,8 +1399,12 @@ private extension SwarmTitlebar {
       "Command-I reaches Flutter exactly once")
     try checkTitlebar(main.defersToInput(event("m", 46, .command)) &&
       !main.performKeyEquivalent(with: event("m", 46, .command)),
-      "Command-M reaches Flutter exactly once instead of invoking a native window action")
-    try checkTitlebar(!main.defersToInput(event("u", 32, .command)), "Command-U is no longer claimed")
+      "Command-M reaches Machines exactly once instead of invoking a native window action")
+    try checkTitlebar(main.defersToInput(event("s", 1, .command)) &&
+      !main.performKeyEquivalent(with: event("s", 1, .command)),
+      "Command-S reaches Store exactly once")
+    try checkTitlebar(!main.defersToInput(event("u", 32, .command)), "Command-U has no default workspace action")
+    try checkTitlebar(!main.defersToInput(event("y", 16, .command)), "Command-Y has no default workspace action")
     flutterKeyContext = "picker"
     syncMenuKeys()
     try checkTitlebar(!main.performKeyEquivalent(with: event("\u{f701}", 125)), "Result arrows are owned by the shared picker")
@@ -1248,7 +1426,7 @@ private extension SwarmTitlebar {
     }
     actionsEnabled = true
     // Orchestrator has no default chord now. Exercise an explicit user binding;
-    // Cmd-O opens projects; Cmd-P opens search through the exported default keymap.
+    // Cmd-O opens projects; Cmd-Shift-P opens commands through the exported default keymap.
     let viewerMap = HarnessNativeKeymap(["version": 1, "contexts": [
       "workspace": [["keys": ["cmd+y"], "command": "project.orchestrate", "hint": "⌘Y", "repeatable": false]],
       "terminal": [], "picker": [], "project": [],
@@ -1461,7 +1639,7 @@ private extension SwarmTitlebar {
     let closedItems = historyMenu.items.filter { $0.action == #selector(closedHistoryAction(_:)) }
     try checkTitlebar(recentItems.count == 15 && closedItems.count == 10, "Chrome-style direct History sections remain bounded")
     try checkTitlebar(historyMenu.items.filter { !$0.isSeparatorItem }.prefix(2).map(\.title) == ["Back", "Forward"], "History begins with Back and Forward")
-    try checkTitlebar(historyMenu.items.last?.title == "Show Full History" && historyMenu.items.last?.keyEquivalent == "y", "Full History uses Command-Y")
+    try checkTitlebar(historyMenu.items.last?.title == "Show Full History" && historyMenu.items.last?.keyEquivalent.isEmpty == true, "Full History remains available without a default shortcut")
     try checkTitlebar(historyMenu.items.allSatisfy { $0.submenu == nil }, "Recent work is available without nested menus")
     let recent = recentItems[0]
     let closed = closedItems[0]
@@ -1733,6 +1911,7 @@ do {
   try strip.checkAgentIdentity()
   try strip.checkSharedTypography()
   try strip.checkShareAction()
+  try strip.checkActivityMarks()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
   try strip.checkDaemon()
   try strip.checkDaemonOff()

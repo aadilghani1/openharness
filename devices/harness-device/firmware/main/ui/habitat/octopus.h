@@ -1,5 +1,6 @@
 #pragma once
 #include "tim.h"
+#include "character_layout.h"
 
 enum { HT_OCTOPUS_FRAMES = 63, HT_OCTOPUS_COLS = 54, HT_OCTOPUS_ROWS = 27,
        HT_OCTOPUS_DURATION = 5210 };
@@ -11,13 +12,7 @@ extern const ht_font_t ht_octopus_font_2, ht_octopus_font_4, ht_octopus_font_6, 
 #ifdef DEVICE_LAYOUT_BENCH
 void ht_octopus_fast_scene(bool enabled);
 #endif
-typedef struct {
-    ht_tim_motion_t reaction;
-    uint32_t last_ms, next_ms;
-    uint16_t phase;
-    uint8_t frame, remainder, rate;
-    bool initialized, running;
-} ht_octopus_motion_t;
+typedef ht_character_motion_t ht_octopus_motion_t;
 
 // Wall-clock poses, no frame backlog. Pause the large body during touch and
 // microphone capture; only the small face reacts while recording.
@@ -44,3 +39,6 @@ void ht_octopus_portrait(ht_scene_t *scene, const ht_tim_face_t *face, uint8_t f
 void ht_recap_lines(ht_scene_t *scene, int y, uint16_t ink, const char *recap);
 // Short answers borrow spare reading space for a larger, still-secondary companion.
 bool ht_octopus_short_recap(const char *recap);
+
+void ht_octopus_draw(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, uint16_t ink,
+                     ht_character_size_t size, int y);

@@ -4,7 +4,7 @@ One shared status line, using compact monospace text and measured character cell
 Follow the [terminal workspace design system](terminal-workspace.md).
 
 ```text
-1:api  2:web  3:blender  +          M2  autonomous-harness  (main)   [ Share ]
+1:api ?  2:web ⠹  3:blender ✓  +          M2  autonomous-harness  (main)   [ Share ]
 ```
 
 ## Tabs on the left
@@ -54,6 +54,60 @@ The new-tab `+` uses a plain-text control: no resting
 box, with bold text on hover or keyboard
 focus. Keep its New Tab tooltip and shortcut hint.
 
+### Harness activity
+
+Use hn's activity states in two existing places: after the tab name
+(`2:web ⠹`), and after the title in a pane header (`[engine] Session name ⠹`).
+Idle has no visible mark. Viewer headers show their owner's state. Shells, unknown agents, and
+utility tabs have no harness activity mark. Keep the existing engine icon.
+The mark replaces the native tab's old orange attention indicator; it adds no
+new bar, counter, badge, or permanent legend. Hover and accessibility descriptions
+explain each symbol.
+
+![Activity marks in existing tabs and pane headers, rendered with synthetic state at 640 px](images/workspace-activity.png)
+
+| Mark | Meaning | Terminal color |
+| --- | --- | --- |
+| `?` | Needs your input | Yellow |
+| `✗` | Last turn or launch failed | Red |
+| `✓` | Finished and unread | Green |
+| `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` | Working, one frame per 100 ms | Cyan |
+| `◌` | Starting | Yellow |
+| None | Idle | — |
+| `\|\|` | Paused | Muted foreground |
+| `⊘` | Offline | Muted foreground |
+
+A tab shows its most urgent member in the order above, counting a harness and
+its viewers once. For an individual harness, offline/paused/launch state takes
+precedence; a current question takes precedence over working. A new turn masks
+old results. Seeing a completion clears its unread check, but viewing a failed
+turn does not clear the failure. A pane hidden by zoom or an inactive/utility
+tab is not seen. Existing unread storage remains an in-memory, bounded list;
+these marks are not a durable event history.
+
+Reserve one measured cell for the mark and one for the gap, including when idle
+is blank, so state changes never move the names or adjacent tabs. Paused uses
+two ASCII pipes at 65% font size with quarter-cell negative letter spacing:
+short, thin strokes centered in the same cell. Keep native and Flutter metrics
+in sync. The question mark stays plain yellow. Animate only the
+mark, never the label, width, terminal, or method-channel payload. Long tabs
+shorten their names and scroll; preserve room for the number and mark. SF Mono
+does not contain Braille, so Flutter explicitly falls back to the platform's
+symbol font inside that fixed cell. Native text uses CoreText fallback.
+
+Flutter shares one clock; AppKit has one local clock. Both derive the same frame
+from Unix time. No visible working mark means no timer. Hidden panes and
+offscreen tabs do not animate; background/inactive apps and Reduce Motion stop
+the clock. Reduce Motion keeps the first Braille frame with its Working label.
+Colors follow the terminal palette and the Color preference.
+
+State rules live in `lib/state/harness_activity.dart`, with the Flutter mark in
+`lib/widgets/harness_activity_mark.dart`. `harness_activity_test.dart`,
+`workspace_activity_test.dart`, and the native titlebar checks cover state,
+acknowledgement, fixed geometry, visibility, and animation. Set
+`HARNESS_ACTIVITY_CAPTURE_DIR` when running the workspace activity test to
+capture synthetic Flutter screenshots and the native tab payload.
+
 Tab labels, status text, pane titles, and model selectors use **13 pt SF Mono,
 regular weight at rest** on macOS. Linux uses its platform monospace stack at the same
 size. Use `workspaceBarTextStyle()` and `workspaceBarCellSizeOf(context)` from
@@ -95,9 +149,12 @@ Pane edges have no floating split buttons. Split Right and Split Down remain
 keyboard commands (Cmd-R and Cmd-D by default), with File menu and command-search
 access. Keep the resize gaps available for resizing.
 
-Share is a persistent primary action at the far right of the top bar, with a
-flat accent fill, white text, and the same fixed font and control height as the
-other bar actions. Reserve its width before allocating tabs and context. Web
+Settings → Experimental → Share button is off by default on desktop and web.
+The choice persists locally and updates the bar immediately; when off, no button
+or space is reserved. [Settings reference](images/share-experimental.png).
+When enabled, Share is a primary action at the far right
+of the top bar, with a flat accent fill, white text, and the same fixed font and
+control height as the other bar actions. Reserve its width before allocating tabs and context. Web
 keeps Download app as a secondary text action immediately before Share.
 Clicking Share or pressing Cmd-Shift-S (Alt-Shift-S on web) opens the existing
 public/private link dialog for the focused agent. The tooltip and accessibility
@@ -136,25 +193,37 @@ text and hand cursor as the status symbols. Machine opens the shared picker scop
 identity; project opens its harnesses across matching remote checkouts; branch
 opens the focused session's branches and PRs when the daemon supplies `gitContext`.
 When recent successful work identifies one Git branch, show its name followed
-by the count of other checked-out branches, for example `ship-hn · +3`. The
+by the count of other checked-out branches, for example `ship-hn +3`. The
 tooltip explains that this is recent confirmed work and gives its observation
 time. Git remains the source of branch names for every engine. When several
 branches have equal recent evidence, show the count instead of selecting one.
 
-Details group each branch with its PRs, put recent work and open PRs first, and
-fold completed work behind one action. Show a shared repository once, align PR
-states on the right, and keep head/base names and check times in inspection
-details. Size the dialog to its contents with bounded scrolling. Escape returns
-focus to the terminal.
+Details use two plain tabs: **Pull requests** and **Branches**. The heading is
+the session name and shared repository; do not append “Work” or “Recent work.”
+Pull requests is the default, with one row per PR regardless of branch reuse.
+Put the title on the left and the state on the right. Below it, show the PR number,
+head/base branches and GitHub date. Use terminal green for Open, magenta for
+Merged, red for Closed and muted text for Draft/Unknown. State text remains
+readable without relying on color. Keep selection to the title line.
+
+Open/draft PRs come first; merged and closed PRs stay visible in the same list.
+Order them by actual GitHub update/merge/close time, never lookup time. The
+Branches tab contains the branch inventory, with checked-out branches labeled.
+Both lists retain their scroll positions. Left/Right on the tab controls switches
+views. Narrow windows use the shorter “PRs” tab label and wrap the tabs without
+shrinking text. Size the dialog to its contents with bounded scrolling. Escape
+returns focus to the terminal.
 Older daemons keep exact-branch project search, with Escape returning through its
 scopes. Names never establish identity. Branch navigation does not check out or
 create a branch. Unknown/multiple/unavailable work uses plain muted context text,
 without a Git branch symbol when no single branch is displayed; the same action
 remains inspectable.
 
-![Session branches with synthetic data](images/session-branches.png)
+![Pull requests with synthetic data](images/session-pull-requests.png)
 
-![Completed PRs expanded](images/session-branches-completed.png)
+![Branches in a separate tab](images/session-branches.png)
+
+![Merged PRs remain visible](images/session-branches-completed.png)
 
 Render these fixtures with `HARNESS_GIT_CONTEXT_CAPTURE_DIR=/tmp/work-dialog
 flutter test test/session_work_dialog_test.dart`. Local macOS captures load the
@@ -166,12 +235,13 @@ Customize Harness → Status offers twelve saved themes, grouped into Minimal
 and Powerline, with a preview of the same sample pane beneath each choice.
 Selection covers only the name row. Tab and Shift-Tab move between choices;
 Enter or Space selects, scrolls the choice into view, and saves it. The selected
-theme also previews PR status. Previews inherit the terminal font and cell size;
-the workspace bar uses the fixed 13 pt bar font. Controls keep the plain terminal design.
+theme also previews PR status. The individual examples inherit the terminal font
+and cell size; the combined bar preview uses the actual fixed 13 pt workspace
+font. Controls keep the plain terminal design.
 
 | Theme | Treatment |
 | --- | --- |
-| Plain (default) | Monochrome `machine  project  (branch)`, including the PR |
+| Plain (default) | Monochrome `machine  project  (branch)` with a colored PR state icon |
 | Robbyrussell | Green arrow, cyan project, blue `git:(` with red branch |
 | Pure | Blue project, muted machine/branch, magenta prompt mark |
 | Powerlevel10k Lean | Unboxed yellow machine, blue project, green branch symbol and ASCII `>` |
@@ -210,16 +280,28 @@ ink from the named palette (or black/white where necessary) so small text on
 these filled segments has at least 4.5:1 contrast. Preserve the terminal font,
 the existing bold-only hover cue, and stable field widths.
 
-The rightmost PR label belongs to the focused harness, including when its viewer
-has focus. Display `#298 Merged` (or Draft/Open/Closed), with a separate link
-to that PR. Plain themes leave one text cell before the label. Segmented themes
-connect it directly to the preceding arrow, making one continuous bar while
-retaining the PR click target. The selected-theme preview
-shows that same joined line. State colors come from the selected status palette:
-muted for Draft, green for Open, magenta for Merged, and red for Closed. Turning
-Color off applies a monochrome treatment to context and PR together. Plain always
-uses the terminal foreground even when Color is enabled. Existing `standard`
+The rightmost PR link belongs to the focused harness, including when its viewer
+has focus. Display the original GitHub Octicon and `#298`: green pull request
+for Open, purple merge for Merged, red closed pull request for Closed, and gray
+draft pull request for Draft. Use the shared SVG assets in `assets/octicons`,
+with light/dark state colors resolved in Dart for both Flutter and AppKit.
+In Plain and shell layouts, the number stays in ordinary foreground, with one
+cell before the compact link. In Powerline layouts, the PR continues the branch
+ribbon without a gap: its state color fills the final block, and the icon and
+number use contrasting ink. Keep the outer cap and internal joins consistent
+with the selected preset. The full state and link action remain available on
+hover and through accessibility. The selected-theme preview shows the same control.
+Color off makes both context and PR monochrome; the four shapes remain distinct.
+Existing `standard`
 settings resolve to Plain; existing `powerlevel10k` settings resolve to Lean.
+
+Tabs take the available space after a compact context budget, instead of being
+limited to 45% of the bar. Context reserves its measured width up to 40% of the
+remaining space or 52 cells; unused tab space returns to context. With the
+companion enabled, keep room for its message line. Shorten long branch names
+in the middle before squeezing machine/project, retaining the full name in
+the tooltip and navigation action. Tab labels measure the name, status gap,
+and status cell separately so short names never acquire a false ellipsis.
 
 References: [Oh My Zsh themes](https://github.com/ohmyzsh/ohmyzsh/wiki/Themes),
 [Pure](https://github.com/sindresorhus/pure),
@@ -248,7 +330,8 @@ References: [Zsh prompt parameters](https://zsh.sourceforge.io/Doc/Release/Param
 [Powerlevel10k](https://github.com/romkatv/powerlevel10k).
 
 Pane headers keep task identity and the hover-only close action. The top bar
-contains tabs, New Tab, focused model/machine/project/branch/PR context, and Share.
+contains tabs, New Tab, focused model/machine/project/branch/PR context, and the
+optional Share button.
 Do not add a standalone Search label or category icons at the right edge.
 Context links open the corresponding scope in the unified picker. Global
 search remains available through Cmd-P and the app menu.
@@ -264,20 +347,23 @@ Leave a window drag area between tabs and context and prevent overlap in
 narrow windows. Native menus and commands remain available.
 
 Only while daemons are on (the account's `GET /api/zoo` answered 200, or a
-person enabled the hidden local preview with Command-Option-Shift-D), the daemon sits at the far right, directly
+person enabled Settings → Experimental → Focus-bar creature), the daemon sits at the far right, directly
 after the focused context and PR. Off, or before that is known, nothing is
 reserved for it and the bar is exactly the one described above; when it turns
 on, the slot waits for a quiet moment (no button held, the pointer off the
 bar) so tabs never move under a click. On:
 the paired daemon's sprite, or the nest while the first egg incubates
-(`\_O_/` `~\_O_/~` `\_.._/` `\_o.o_/`). Its one-cell inner gutters provide
+(`\_(  )_/` `\_(/\)_/` `\_(*')_/` `\_(oo)_/`). Its one-cell inner gutters provide
 separation; add no extra gap or divider. Use the same 13 pt workspace font as
 the status line with ligatures off, and reserve eight character cells plus
 one-cell gutters, the sprite centred on its version's base sprite, so moods,
 work frames and a nap's `z` never move nearby text. It draws in the status
 line's own text colour, never its daemon colour (those fail contrast on a
-status bar). A shiny daemon's `*` sits in the left gutter. To its left, dim, a
-small tally: `+3` turns finished since you looked, `+1 egg` while eggs wait.
+status bar). A shiny daemon's `*` sits in the left gutter. Show only the egg
+or creature in this fixed slot: no completed-turn count, egg count, or label
+beside it. Additional eggs, progress, and activity details belong in the panel.
+The slot keeps the same width while work finishes, eggs arrive, and the pointer
+enters or leaves, so neither the creature nor its neighbors move.
 Its name and progress belong in the tooltip and panel, never beside the
 sprite. Clicking a ready egg hatches it; otherwise a click boops the daemon and
 opens its panel. When something needs you or failed, its one line replaces the

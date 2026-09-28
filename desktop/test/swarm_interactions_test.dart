@@ -176,6 +176,66 @@ void main() {
     );
   }
 
+  for (final native in [false, true]) {
+    testWidgets(
+      'Cmd-W preserves term renamed to office beside another term (native=$native)',
+      (tester) async {
+        const channel = MethodChannel('harness/swarm_tabs');
+        final updates = <Map>[];
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'update') updates.add(call.arguments as Map);
+          return true;
+        });
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        final app = createApp();
+        addTearDown(app.dispose);
+        final projects = SwarmProjectStore(storage: MemoryStore());
+        addTearDown(projects.dispose);
+        final input = <TerminalBinaryFrame>[];
+        final session = terminal('a0', input);
+        app.machineStates['m']!.nodeOnline = true;
+        final pane = app.adoptSessionForTest(session);
+        final office = app.activeSwarm;
+        app.renameSwarm(office.id, 'term');
+        app.newSwarm(name: 'term');
+        final term = app.activeSwarm;
+        app.adoptSessionForTest(terminal('a1', input));
+        app.selectSwarm(office.id);
+        await mount(tester, app, projects: projects, nativeTabs: native);
+
+        await chord(tester, LogicalKeyboardKey.keyR, shift: true);
+        await tester.enterText(
+          find.byKey(const Key('tab-rename-input')),
+          'office',
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+        expect(office.name, 'office');
+        expect(office.nameIsCustom, isTrue);
+
+        app.selectSwarm(term.id);
+        await tester.pump();
+        await chord(tester, LogicalKeyboardKey.keyW);
+        expect(app.swarms, [office]);
+        expect(app.activeSwarm, same(office));
+        expect(office.name, 'office');
+        expect(office.panes.single, same(pane));
+        expect(pane.session, same(session));
+        expect(input, isEmpty);
+        if (native) {
+          final tab = (updates.last['tabs'] as List).single as Map;
+          expect(tab['id'], office.id);
+          expect(tab['label'], '1:office');
+        } else {
+          expect(find.text('office'), findsOneWidget);
+        }
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
   testWidgets(
     'welcome opens the shared search and supports readline selection',
     (tester) async {

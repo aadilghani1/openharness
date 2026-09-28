@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/settings/experimental_features.dart';
+import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/sharing/share_harness_dialog.dart';
 import 'package:harness/shortcuts/app_keymap.dart';
@@ -20,9 +22,11 @@ import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/workspace_share_button.dart';
 import 'package:harness/ws/ws_conn.dart';
 
+import 'support/experimental_settings.dart';
+
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'swarm_screen_test.dart' show terminal;
-import 'swarm_state_test.dart' show createApp;
+import 'swarm_state_test.dart' show createApp, MemoryStore;
 
 class _SharingConnection extends WsConn {
   _SharingConnection()
@@ -52,6 +56,8 @@ void main() {
   final button = find.byKey(const ValueKey('workspace-share-button'));
   late AppNotifier app;
   late MemoryKeymap keymap;
+  late MemoryStore preferences;
+  late ExperimentalFeaturesStore experiments;
   late _SharingConnection connection;
   final input = <TerminalBinaryFrame>[];
 
@@ -63,18 +69,25 @@ void main() {
     app = createApp(connectionForTest: (_) => connection);
     app.stateOf('m')!.nodeOnline = true;
     keymap = MemoryKeymap();
+    preferences = MemoryStore();
+    experiments = MemoryExperimentalFeaturesStore(storage: preferences);
     input.clear();
   });
   tearDown(() {
     app.dispose();
     keymap.dispose();
+    experiments.dispose();
   });
 
   Future<void> mount(
     WidgetTester tester, {
     bool native = false,
+    bool enableShareButton = true,
     Size size = const Size(1280, 800),
   }) async {
+    if (enableShareButton) {
+      await experiments.set(ExperimentalFeature.shareButton, true);
+    }
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = size;
     addTearDown(tester.view.reset);
@@ -83,7 +96,11 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: KeymapProvider(
           keymap: keymap,
-          child: SwarmScreen(notifier: app, nativeTabs: native),
+          child: SwarmScreen(
+            notifier: app,
+            nativeTabs: native,
+            experimentalFeatures: experiments,
+          ),
         ),
       ),
     );
@@ -97,6 +114,84 @@ void main() {
     alt: kIsWeb,
     shift: true,
   );
+
+  for (final native in [false, true]) {
+    testWidgets(
+      'Share defaults hidden and its saved Settings toggle updates the toolbar (native=$native)',
+      (tester) async {
+        const feature = ExperimentalFeature.shareButton;
+        const channel = MethodChannel('harness/swarm_tabs');
+        final updates = <Map>[];
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'update') updates.add(call.arguments as Map);
+          return true;
+        });
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        final session = terminal('a0', input);
+        final pane = app.adoptSessionForTest(session);
+        await mount(tester, native: native, enableShareButton: false);
+        expect(experiments.choice(feature), isFalse);
+        expect(button, findsNothing);
+        if (native) expect(updates.last['shareAction'], isNull);
+
+        Future<void> openExperimental() async {
+          await key(
+            tester,
+            LogicalKeyboardKey.comma,
+            cmd: !kIsWeb,
+            alt: kIsWeb,
+          );
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Experimental'));
+          await tester.pumpAndSettle();
+        }
+
+        await openExperimental();
+        final toggle = find.byKey(const ValueKey('experimental-share_button'));
+        expect(tester.widget<Switch>(toggle).value, isFalse);
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        expect(tester.widget<Switch>(toggle).value, isTrue);
+        expect(preferences.values[experimentFixtureKey(feature)], 'on');
+        await tester.tap(find.byKey(const Key('settings-back-button')));
+        await tester.pumpAndSettle();
+        expect(find.byType(SettingsScreen), findsNothing);
+        final shownTarget = native ? updates.last['shareAction'] as Map : null;
+        if (native) {
+          expect(shownTarget!['enabled'], isTrue);
+        } else {
+          expect(button, findsOneWidget);
+        }
+
+        await openExperimental();
+        expect(tester.widget<Switch>(toggle).value, isTrue);
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        expect(preferences.values[experimentFixtureKey(feature)], 'off');
+        await tester.tap(find.byKey(const Key('settings-back-button')));
+        await tester.pumpAndSettle();
+        expect(button, findsNothing);
+        if (native) {
+          expect(updates.last['shareAction'], isNull);
+          final done = Completer<void>();
+          messenger.handlePlatformMessage(
+            channel.name,
+            const StandardMethodCodec().encodeMethodCall(
+              MethodCall('shareAgent', shownTarget),
+            ),
+            (_) => done.complete(),
+          );
+          await tester.pumpAndSettle();
+          expect(done.isCompleted, isTrue);
+        }
+        expect(connection.shares, isEmpty);
+        expect(input, isEmpty);
+        expect(pane.session, same(session));
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
 
   testWidgets(
     'button and shortcut share only the focused agent and return terminal focus',

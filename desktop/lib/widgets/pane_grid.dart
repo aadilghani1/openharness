@@ -32,6 +32,7 @@ import 'new_agent_dialog.dart';
 import 'delete_agent_dialog.dart';
 import 'restart_agent_action.dart';
 import 'terminal_panel.dart';
+import 'harness_activity_mark.dart';
 import 'web_pane_panel.dart';
 import 'pane_resize_handle.dart';
 import 'box_chrome.dart';
@@ -1176,18 +1177,19 @@ class _PaneCell extends StatelessWidget {
   Widget _build(BuildContext context) {
     grid.AppTheme.watch(context);
     final focused = visible && notifier.isPaneFocused(pane.id);
+    // Keep the selected pane clear while a menu or the tab strip owns keyboard
+    // focus. This is paint only: inactive terminals stay mounted and clickable.
+    final dimmed = !_single && notifier.focusedPaneId != pane.id;
     final agentId = pane.agentId;
     final blocked =
         agentId != null &&
         notifier.questionFor(pane.machineId, agentId) != null;
     return Listener(
-      // Translucent so the press still reaches the renderer underneath: on
-      // macOS the terminal is a WebView and AppKit gives it first responder on
-      // its own, so this only has to keep the app's idea of the current tile in
-      // step with the one the keyboard already went to.
+      // The same press selects the pane and reaches its terminal or viewer.
       behavior: HitTestBehavior.translucent,
       onPointerDown: (_) => notifier.focusPane(pane.id),
       child: Container(
+        key: ValueKey('pane-frame:${pane.id}'),
         decoration: BoxDecoration(
           // UNCHANGED, and deliberately: the terminal renders its own background
           // inside this box, so a tile that stops matching the window colour
@@ -1205,19 +1207,20 @@ class _PaneCell extends StatelessWidget {
             terminalPaneBorder(focused: !_single && focused),
           ),
         ),
-        // Attention, drawn OVER the terminal and inside the border above, so a
-        // pane can carry both at once — this one is blocked AND focused is a
-        // normal state, not a conflict to resolve. It is amber and 2px against
-        // the border's 1px accent precisely so the two never read as each
-        // other. Unlike focus, it shows on a single pane too: with one tile
-        // there is nowhere else focus could be, but there is very much a
-        // question waiting.
-        foregroundDecoration: blocked
-            ? BoxDecoration(
-                border: Border.all(color: grid.AppPalette.warn, width: 2),
-                borderRadius: BorderRadius.circular(_paneRadius),
-              )
-            : null,
+        // A neutral gray veil lifts inactive backgrounds and softens their text
+        // without changing terminal colors. Paint attention above the veil so
+        // a waiting question keeps its full-strength amber rim. Keep this
+        // decoration present even when clear: inserting/removing it would
+        // reparent the terminal and lose its input, scroll and selection state.
+        foregroundDecoration: BoxDecoration(
+          color: dimmed
+              ? const Color(0xFF9D9D9D).withValues(alpha: .30)
+              : null,
+          border: blocked
+              ? Border.all(color: grid.AppPalette.warn, width: 2)
+              : null,
+          borderRadius: BorderRadius.circular(_paneRadius),
+        ),
         // Keeps a terminal's constant repainting inside its own layer instead
         // of dirtying the whole grid. No key: nothing reads this boundary, it
         // only has to exist.
@@ -1320,6 +1323,7 @@ class _PaneContent extends StatelessWidget {
         notifier: notifier,
         pane: pane,
         title: viewerPaneName(owner, machine?.dsh.entries ?? const []),
+        visible: visible,
         ownerName: owner?.name ?? pane.ownerAgentId ?? 'Viewer',
         ownerEngine: owner?.identityEngine,
         ownerDisplayName: owner?.identityDisplayName,
@@ -1340,6 +1344,14 @@ class _PaneContent extends StatelessWidget {
     }
     final session = pane.session;
     final wantedAgentId = pane.agentId;
+    final activityMark = wantedAgentId == null
+        ? null
+        : HarnessActivityMark(
+            app: notifier,
+            machineId: pane.machineId,
+            agentId: wantedAgentId,
+            visible: visible,
+          );
     final agent = machine?.agents
         .where((agent) => agent.id == wantedAgentId)
         .firstOrNull;
@@ -1508,6 +1520,7 @@ class _PaneContent extends StatelessWidget {
       final waiting = !listFailed && !notifier.machineInventoryLoaded;
       final stale = notifier.machinesAreStale;
       return _PaneStatus(
+        activity: activityMark,
         title: wantedAgentId == null ? 'Machine' : kUntitledPane,
         icon: listFailed || stale ? Icons.cloud_off : Icons.link_off,
         message: listFailed
@@ -1525,6 +1538,7 @@ class _PaneContent extends StatelessWidget {
     }
     if (needsLink) {
       return _PaneStatus(
+        activity: activityMark,
         title: agentName ?? machine.machine.displayName,
         icon: Icons.link_off,
         message:
@@ -1545,6 +1559,7 @@ class _PaneContent extends StatelessWidget {
     }
     if (offline) {
       return _Guide(
+        activity: activityMark,
         single: single && !swarmMode,
         onClose: close,
         title: agentName ?? machine.machine.displayName,
@@ -1561,6 +1576,7 @@ class _PaneContent extends StatelessWidget {
     }
     if (wantedAgentId == null) {
       return _PaneStatus(
+        activity: activityMark,
         title: machine.machine.displayName,
         icon: Icons.check_circle_outline,
         message: 'This machine is ready. Drag an agent here to open it.',
@@ -1569,6 +1585,7 @@ class _PaneContent extends StatelessWidget {
     }
     if (agentName == null) {
       return _PaneStatus(
+        activity: activityMark,
         title: wantedAgentId,
         icon: Icons.help_outline,
         message: 'This agent is no longer on ${machine.machine.displayName}.',
@@ -1577,6 +1594,7 @@ class _PaneContent extends StatelessWidget {
     }
     if (agent != null && !agent.terminalAvailable) {
       return _PaneStatus(
+        activity: activityMark,
         title: agentName,
         icon: Icons.terminal,
         message:
@@ -1591,6 +1609,7 @@ class _PaneContent extends StatelessWidget {
     // would promise something that is never coming.
     if (!machine.terminalNoTakeoverAvailable) {
       return _PaneStatus(
+        activity: activityMark,
         title: agentName,
         icon: Icons.terminal,
         message:
@@ -1605,6 +1624,7 @@ class _PaneContent extends StatelessWidget {
       );
     }
     return _PaneStatus(
+      activity: activityMark,
       title: agentName,
       icon: Icons.hourglass_empty,
       message: 'Attaching…',
@@ -1953,6 +1973,7 @@ class _Guide extends StatelessWidget {
     required this.single,
     required this.onClose,
     required this.title,
+    this.activity,
     required this.compactMessage,
     required this.compactIcon,
     required this.full,
@@ -1961,6 +1982,7 @@ class _Guide extends StatelessWidget {
   final bool single;
   final VoidCallback onClose;
   final String title;
+  final Widget? activity;
   final String compactMessage;
   final IconData compactIcon;
   final Widget full;
@@ -1977,12 +1999,13 @@ class _Guide extends StatelessWidget {
           if (single) return full;
           return Column(
             children: [
-              _PaneHeader(title: title, onClose: onClose),
+              _PaneHeader(title: title, onClose: onClose, activity: activity),
               Expanded(child: full),
             ],
           );
         }
         return _PaneStatus(
+          activity: activity,
           title: title,
           icon: compactIcon,
           message: compactMessage,
@@ -1996,9 +2019,10 @@ class _Guide extends StatelessWidget {
 /// The same 46pt strip TerminalPanel draws, for the tiles that have no terminal
 /// to draw one — so the close button never moves between states.
 class _PaneHeader extends StatelessWidget {
-  const _PaneHeader({required this.title, this.onClose});
+  const _PaneHeader({required this.title, this.onClose, this.activity});
 
   final String title;
+  final Widget? activity;
   final VoidCallback? onClose;
 
   @override
@@ -2015,13 +2039,20 @@ class _PaneHeader extends StatelessWidget {
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
-                    title,
-                    overflow: TextOverflow.ellipsis,
-                    style: grid.AppType.monoLabel(
-                      color: AppColors.text,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          title,
+                          overflow: TextOverflow.ellipsis,
+                          style: grid.AppType.monoLabel(
+                            color: AppColors.text,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      ?activity,
+                    ],
                   ),
                 ),
                 if (onClose != null) PaneCloseButton(onPressed: onClose!),
@@ -2037,6 +2068,7 @@ class _PaneHeader extends StatelessWidget {
 class _PaneStatus extends StatelessWidget {
   const _PaneStatus({
     required this.title,
+    this.activity,
     required this.icon,
     required this.message,
     this.onClose,
@@ -2046,6 +2078,7 @@ class _PaneStatus extends StatelessWidget {
   });
 
   final String title;
+  final Widget? activity;
   final IconData icon;
   final String message;
   final VoidCallback? onClose;
@@ -2061,7 +2094,7 @@ class _PaneStatus extends StatelessWidget {
     grid.AppTheme.watch(context);
     return Column(
       children: [
-        _PaneHeader(title: title, onClose: onClose),
+        _PaneHeader(title: title, onClose: onClose, activity: activity),
         Divider(height: 1, color: AppColors.border),
         Expanded(
           child: Center(

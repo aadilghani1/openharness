@@ -182,13 +182,25 @@ Silent by default.
 
 ## Off switches
 
-Every daemon deploy ships dark: until daemons are turned on, nothing here changes anything for anyone.
+Every account starts with the creature off. **Settings → Experimental → Focus-bar creature** enables
+it for that account on every supported desktop. Its eggs, creatures, names and progress live in the
+account's zoo; closing a window or turning the switch off does not erase them. Signed-out windows
+cannot enable it. The former window-only preview collection is not imported into an account.
+Old installation-wide switch values are not imported either; opt in once for the signed-in account.
+Deploy the backend settings routes and CLI proxy before the desktop update that reads them.
 
-- **Server** (`backend/src/lib/daemonsSwitch.ts`). `HARNESS_DAEMONS` is off unless `true`. Off, the zoo
+- **Account** (`backend/src/routes/experimentalSettings.ts`). `focus_bar_creature` defaults false.
+  Without an explicit opt-in, both zoo routes return 404 before reading or writing the collection.
+  `GET /api/experimental-settings` only reads; `PATCH` changes one switch and requires the authenticated
+  account's id so a delayed save cannot change another account. Different switches can be changed by
+  two clients without overwriting each other. Switch changes invalidate connected clients through
+  `desk_changed`; a creature change also sends `zoo_changed` to wake or stop harnessd.
+- **Server** (`backend/src/lib/daemonsSwitch.ts`). `HARNESS_DAEMONS` defaults `true`, making account
+  opt-in available. Explicit false disables the module. Off, the zoo
   routes are not registered — `/api/zoo` and `/api/zoo/ops` answer the server's ordinary 404 — nothing
-  publishes `zoo_changed` and no socket subscribes to it. On, `HARNESS_DAEMONS_USERS` (comma-separated user
-  ids or emails; empty is everyone) limits the zoo to those accounts; any other gets the same 404 before
-  anything is read or written.
+  writes the zoo and no socket subscribes to `zoo_changed`. On, `HARNESS_DAEMONS_USERS` (comma-separated
+  user ids or emails; empty is everyone) limits which accounts may opt in; any other gets the same 404
+  before its collection is read or written.
 - **harnessd** (`cli/src/lib/daemonsSwitch.ts`). Idle until `GET /api/zoo` answers 200: no `zoo.turn`
   reporter, no `zoo.lesson` credit, no PairSensor or journal, no brain, no learning (signals, distilling,
   usage, lessons in launches), no pair harness, no pair.jsonc tick — no timers, no files, no model warm-up,

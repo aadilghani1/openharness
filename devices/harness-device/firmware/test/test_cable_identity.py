@@ -113,6 +113,12 @@ int main(void) {
     }
     p=cJSON_Parse("{\"selected\":\"tab\",\"items\":[],\"tiles\":[{\"x1\":0,\"y1\":0,\"x2\":1000,\"y2\":1000},{\"x1\":-1,\"y1\":0,\"x2\":1000,\"y2\":1000},{\"x1\":0,\"y1\":0,\"x2\":1e300,\"y2\":1000},{\"x1\":0,\"y1\":0,\"x2\":10,\"y2\":1e999}]}");
     assert(p);handle_swarms(p);cJSON_Delete(p);assert(tile_count==1);
+    p=cJSON_Parse("{\"items\":[{\"agentId\":\"failed\",\"failed\":true},{\"agentId\":\"question\",\"question\":true},{\"agentId\":\"legacy\"}]}");
+    assert(p);handle_notifications(p);cJSON_Delete(p);
+    assert(notice_count==3 && notices[0].failed && !notices[0].question &&
+           notices[1].question && !notices[1].failed && !notices[2].question && !notices[2].failed);
+    p=cJSON_Parse("{\"items\":[{\"agentId\":\"failed\"}]}");
+    assert(p);handle_notifications(p);cJSON_Delete(p);assert(notice_count==1&&!notices[0].failed);
     char profile[sizeof models[0].id],bad_profile[sizeof models[0].id+1];
     memset(profile,'p',sizeof profile-1);profile[sizeof profile-1]=0;
     snprintf(bad_profile,sizeof bad_profile,"%sx",profile);

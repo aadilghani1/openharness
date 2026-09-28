@@ -28,7 +28,7 @@ code = r'''
 static bool cable_client_supports(uint32_t features) { (void)features; return true; }
 '''
 code += defines('ID_MAX','CABLE_NAME_MAX')
-code += defines('QUESTION_MAX','OPTION_MAX','PANE_RESULT_BYTES',source=source)
+code += defines('QUESTION_MAX','OPTION_MAX','PANE_RESULT_BYTES','UI_FONT','Q_ROWS',source=source)
 code += source[source.index('typedef enum {'):source.index('typedef struct {\n    char id[ID_MAX], name[CABLE_NAME_MAX]')]
 code += source[source.index('typedef struct {\n    char key[256]'):source.index('static EXT_RAM_BSS_ATTR struct {')]
 code += r'''
@@ -49,7 +49,7 @@ static cJSON object(cJSON *children,int n) {
     for (int i=0;i<n;i++) children[i].next=i+1<n ? &children[i+1] : NULL;
     return (cJSON){.type=JOBJECT,.child=n ? children : NULL};
 }
-static struct { question_t q; bool voice_open,voice_waiting; uint32_t voice_question_revision; int voice_question_index; view_t voice_return; char title[80],message[256]; view_t view; int offset,pressed,hit_count,active,notice_count; char pending_focus[ID_MAX],opening_notice[ID_MAX]; bool connected; hit_t hits[24]; } s;
+static struct { question_t q; bool voice_open,voice_waiting; uint32_t voice_question_revision,notice_sequence; int voice_question_index; view_t voice_return; char title[80],message[256]; view_t view; int offset,pressed,hit_count,active,notice_count; char pending_focus[ID_MAX],opening_notice[ID_MAX]; bool connected; hit_t hits[24]; } s;
 typedef struct { char id[64],name[96]; } agent_t;
 static agent_t agents[2]={{.id="a",.name="Research helper"},{.id="b",.name="Remote helper"}};
 static bool b_known;
@@ -79,9 +79,11 @@ static bool queue(action_t a) {
     if (congested) return false;
     queued=a; if (a.kind==A_ANSWER) queued_answers++; return true;
 }
-static void notice_add(const char *id,const char *name,const char *machine,const char *text,bool question) {
+static void notice_add(const char *id,const char *name,const char *machine,const char *text,bool question,bool failed) {
+    assert(!failed); // Asking a question cannot manufacture a failure notification.
     (void)id;(void)name;(void)machine;(void)text;assert(question);notices++;
 }
+static void notice_forget_read(const char *id) { assert(id && *id); }
 static void notice_remove(const char *id,bool all) { assert(id && all);removed++; }
 static void cable_client_question_read(const char *id,const char *fetch) { assert(id && fetch);reads++; }
 static bool cable_client_answer_reviewed(const char *id,const char *fetch,const char *token,const uint8_t *choices,const char drafts[][48],int n) {
@@ -192,7 +194,7 @@ int main(int argc,char **argv) {
     assert(s.view==QUESTION);act(A_QUESTION_REVIEW,0);assert(s.view==ANSWER_REVIEW && s.q.item[0].draft[0]);
     act(A_QUESTION_BACK,0);act(A_QUESTION_CHOICES,0);act(A_CHOICE,1);assert(!s.q.item[0].draft[0] && s.q.item[0].selected==2);
     reset(false);assert(question_rows(long_question)>6);render(dir,"question");
-    question_move(10000);assert(s.offset==question_rows(long_question)-5);render(dir,"question-end");
+    question_move(10000);assert(s.offset==question_rows(long_question)-Q_ROWS);render(dir,"question-end");
     act(A_ANSWER,0);assert(!queued_answers); // Prompt never sends, and no default is selected.
     act(A_QUESTION_CHOICES,0);assert(s.view==CHOICE && !s.q.item[0].selected);
     act(A_QUESTION_REVIEW,0);assert(s.view==CHOICE);

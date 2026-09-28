@@ -1,6 +1,5 @@
 /// The paired daemon's face in the status line: its mood, its blinks, the
-/// frames it steps through while agents work, the small tally beside it and
-/// the one line it says.
+/// frames it steps through while agents work and the one line it says.
 ///
 /// The rules are the README's (`daemons/README.md`, Moods, Motion and blinks,
 /// Voice). Moods come from work, never from the clock: there is no idle timer.
@@ -14,7 +13,7 @@
 /// - **Interruptions**: only a harness waiting on you and a failure take over
 ///   the status line, in the message yellow, at most one line nobody asked for
 ///   every two minutes, never about the pane in front of you, and only after
-///   Enter, a pane switch or 8 s without a key. Finished turns become `+3`
+///   Enter, a pane switch or 8 s without a key. Finished turns become `3 done`
 ///   beside the daemon, cleared when you look. Replies (a boop, its first
 ///   words, why an answer failed, the pair answering you) are dim. Quiet
 ///   silences everything.
@@ -226,15 +225,15 @@ class DaemonFace extends ChangeNotifier {
   final _turns = <String, int>{}, _fails = <String, int>{};
   bool _baselined = false;
 
-  // The tally: finished turns since you looked, and while you were away.
+  // Activity details: finished turns since you looked, and while you were away.
   int _doneCount = 0, _doneWhileAway = 0;
   Timer? _seenTimer;
 
-  /// You looked at the `+n`: the brain hears `doneSeen`.
+  /// You looked at the finished-turn count: the brain hears `doneSeen`.
   VoidCallback? onSeen;
 
-  /// Coming back to the window is a look at the `+n`, once it has been in
-  /// front this long.
+  /// Coming back to the window is a look at the finished-turn count, once it
+  /// has been in front this long.
   static const seenAfterFocus = Duration(seconds: 4);
 
   // Held faces.
@@ -447,19 +446,6 @@ class DaemonFace extends ChangeNotifier {
       daemonShown ? baseWidth(roster, d, versionIndex) : null,
     );
     return daemonShown && shiny ? '*${c.substring(1)}' : c;
-  }
-
-  /// Beside the slot: `+3` turns finished since you looked, `+1 egg` while
-  /// eggs wait to be opened. Empty before the first hatch (the slot is the
-  /// egg then) and while a reveal runs.
-  String get tally {
-    if (!visible || _revealing || def == null) return '';
-    final eggs = eggsWaiting;
-    final done = doneCount;
-    return [
-      if (done > 0) '+$done',
-      if (eggs > 0) '+$eggs ${eggs == 1 ? 'egg' : 'eggs'}',
-    ].join(' ');
   }
 
   /// `tim: bell in codex@office: run the migration?` while it speaks; a line
@@ -679,7 +665,7 @@ class DaemonFace extends ChangeNotifier {
       } else {
         look(force: true);
       }
-      // Back at the window: the `+n` has been seen once it had a moment.
+      // Back at the window: finished turns are seen after a moment in front.
       _seenTimer?.cancel();
       _seenTimer = doneCount == 0
           ? null
@@ -979,7 +965,7 @@ class DaemonFace extends ChangeNotifier {
   }
 
   /// A new egg or a level-up, here or on another client. Neither is a line:
-  /// the egg waits beside the slot (`+1 egg`) until it is opened, and a
+  /// the egg waits after the slot (`1 egg`) until it is opened, and a
   /// level-up is a slow blink.
   void _zooEvent(ZooEvent event) {
     if (_disposed) return;
@@ -1103,7 +1089,7 @@ class DaemonFace extends ChangeNotifier {
   /// the window's own alerts; `ask` (the pair wants your key) is yellow and at
   /// once; `say` (the pair answering you) is a dim reply; `auto` (a rule or
   /// the pair acted) is dim, and the face shows it as done. A finished turn
-  /// or a return is never a line (the tally and the brief carry them). A
+  /// or a return is never a line (the expression and brief carry them). A
   /// second line with the same id replaces it in place, with the time the
   /// brain says it has left.
   void sayFromBrain(DaemonSay say) {

@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -12,15 +13,17 @@ import 'package:harness/daemons/roster.dart';
 import 'package:harness/daemons/zoo.dart';
 import 'package:harness/daemons/zoo_controller.dart';
 import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/state/swarm_catalog.dart' show SwarmProjectStore;
 
+import 'support/experimental_settings.dart';
 import 'daemons/zoo_test.dart' show FakeZooTransport;
 import 'keymap_host_test.dart' show key;
 import 'swarm_screen_test.dart' show terminal;
-import 'swarm_state_test.dart' show createApp;
+import 'swarm_state_test.dart' show createApp, MemoryStore;
 
 const _habits5 = ['turn', 'split', 'find', 'machine', 'store'];
 
@@ -57,6 +60,9 @@ void main() {
     // Daemons (preview). The off cases are in daemon_off_test.dart.
     bool guestPreview = true,
   }) async {
+    final experiments = MemoryExperimentalFeaturesStore(storage: MemoryStore());
+    addTearDown(experiments.dispose);
+    await experiments.set(ExperimentalFeature.focusBarCreature, true);
     remote = FakeZooTransport()
       ..zoo = seed
       ..revision = 1
@@ -79,6 +85,7 @@ void main() {
           notifier: app,
           nativeTabs: native,
           projectStore: SwarmProjectStore(),
+          experimentalFeatures: experiments,
           zoo: zoo,
           zooTransport: remote,
           daemonClock: () => tester.binding.clock.now(),
@@ -766,8 +773,8 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('finished turns are a +N beside the slot, cleared when you '
-      'look; Quiet and Motion are switches in the panel', (tester) async {
+  testWidgets('finished turns keep the creature alone and still in the bar; '
+      'Quiet and Motion are switches in the panel', (tester) async {
     app.stateOf('m')!
       ..nodeOnline = true
       ..connectionStatus = ConnectionStatus.connected;
@@ -776,6 +783,7 @@ void main() {
     app.adoptSessionForTest(terminal('a0', []));
     app.adoptSessionForTest(terminal('a1', []));
     await tester.pump();
+    final beforeTurns = tester.getRect(slot);
     // a1 is in front: its turn is seen already; a0's is not.
     for (final id in ['a0', 'a1']) {
       await app.handleMachineEventForTest('m', {
@@ -791,12 +799,38 @@ void main() {
     final focused = app.focusedPane!.agentId;
     expect(focused, isNotNull);
     expect(
-      tester.widget<Text>(find.byKey(const ValueKey('daemon-slot-tally'))).data,
-      '+1',
+      tester.getRect(slot),
+      beforeTurns,
+      reason: 'finished turns do not take more focus-bar space',
+    );
+    expect(
+      find.descendant(of: slot, matching: find.byType(Text)),
+      findsOneWidget,
+      reason: 'only the creature is drawn, without labels or counts',
     );
     expect(find.byKey(const ValueKey('daemon-voice')), findsNothing);
-    await tester.tap(slot);
+    final glyphTarget = find.byKey(const ValueKey('daemon-slot-glyph'));
+    final beforeHover = tester.getRect(glyphTarget);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(beforeHover.center);
     await tester.pump();
+    expect(find.byKey(const ValueKey('daemon-slot-tally')), findsNothing);
+    expect(
+      tester.getRect(glyphTarget),
+      beforeHover,
+      reason: 'hover must not move the creature away from the click',
+    );
+    await tester.tapAt(beforeHover.center);
+    await tester.pump();
+    await mouse.moveTo(Offset.zero);
+    await tester.pump();
+    expect(
+      tester.getRect(glyphTarget),
+      beforeHover,
+      reason: 'leaving the creature keeps the same fixed slot',
+    );
     expect(find.byKey(const ValueKey('daemon-slot-tally')), findsNothing);
     // The switches are on the settings tab: 4.
     await key(tester, LogicalKeyboardKey.digit4);
@@ -881,9 +915,9 @@ void main() {
     );
     await tester.pump();
     expect(
-      tester.widget<Text>(find.byKey(const ValueKey('daemon-slot-tally'))).data,
-      '+1 egg',
-      reason: 'an egg waits beside the slot until it is opened',
+      find.descendant(of: slot, matching: find.byType(Text)),
+      findsOneWidget,
+      reason: 'additional eggs wait in the panel, without a bar count',
     );
     await tester.tap(slot);
     await tester.pump();
@@ -902,7 +936,9 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('native hears the ten cells and the tally', (tester) async {
+  testWidgets('native hears only the ten cells, without count labels', (
+    tester,
+  ) async {
     final states = <Map>[];
     const channel = MethodChannel('harness/swarm_tabs');
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
@@ -934,7 +970,9 @@ void main() {
     );
     await tester.pump();
     expect(states.last['cell'], '* (o o)   ');
-    expect(states.last['tally'], '+1 egg');
+    expect(states.last.containsKey('tally'), isFalse);
+    expect(states.last.containsKey('tallyCells'), isFalse);
+    expect(states.last.containsKey('tallyColor'), isFalse);
     expect(states.last['patch'], isNull, reason: 'a dark theme');
     await unmount(tester);
   });
@@ -1202,7 +1240,7 @@ void main() {
       await unmount(tester);
     });
 
-    testWidgets('+n is the brain\'s count of finished turns; a look sends '
+    testWidgets('done is the brain\'s count of finished turns; a look sends '
         'doneSeen; auto is done and journaled; asleep is calm', (tester) async {
       await mount(tester, seed: zooWithTim);
       await tester.pump();
@@ -1231,10 +1269,9 @@ void main() {
         ),
       );
       expect(
-        tester
-            .widget<Text>(find.byKey(const ValueKey('daemon-slot-tally')))
-            .data,
-        '+3',
+        find.descendant(of: slot, matching: find.byType(Text)),
+        findsOneWidget,
+        reason: 'remote completions do not add a focus-bar count',
       );
       expect(glyph(tester), '(o o)', reason: 'asleep is never a failure');
       // It acted within rules: drawn like done.

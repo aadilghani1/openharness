@@ -269,14 +269,13 @@ Color? daemonSlotPatch(DaemonFace face, TerminalTheme theme) {
   return daemonBackdrop(def);
 }
 
-/// The tally's ink (`+3`, `+1 egg`) and a reply's: the status line's text,
-/// dimmer. Never the alert yellow.
+/// A reply's ink: the status line's text, dimmer. Never the alert yellow.
 Color daemonDimInk(TerminalTheme theme) =>
     theme.foreground.withValues(alpha: .62);
 
-/// The status line's daemon: its tally (`+3 +1 egg`), then ten cells (eight
-/// and a one-cell gutter each side) in the workspace bar's font. Only this
-/// widget repaints when the face changes.
+/// The status line's daemon: ten cells (eight and a one-cell gutter each
+/// side). Counts and progress belong in its panel. Only this widget
+/// repaints on a new face.
 class DaemonSlotButton extends StatelessWidget {
   const DaemonSlotButton({
     super.key,
@@ -303,7 +302,6 @@ class DaemonSlotButton extends StatelessWidget {
         if (!face.visible) return const SizedBox.shrink();
         final cell = workspaceBarCellSizeOf(context);
         final theme = currentTerminalTheme();
-        final tally = face.tally;
         final patch = daemonSlotPatch(face, theme);
         return MouseRegion(
           onEnter: (_) {
@@ -322,50 +320,30 @@ class DaemonSlotButton extends StatelessWidget {
                   : onPressed,
               builder: (context, emphasized) => SizedBox(
                 height: workspaceBarControlHeight(context),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+                width: cell.width * (face.roster.rules.statusCells + 2),
+                child: Stack(
+                  alignment: Alignment.centerLeft,
                   children: [
-                    if (tally.isNotEmpty) ...[
-                      SizedBox(width: cell.width),
-                      Text(
-                        tally,
-                        key: const ValueKey('daemon-slot-tally'),
-                        maxLines: 1,
-                        softWrap: false,
-                        style: workspaceBarTextStyle(
-                          color: daemonDimInk(theme),
-                          emphasized: emphasized,
-                        ).copyWith(fontFeatures: daemonTextFeatures),
+                    if (patch != null)
+                      Positioned(
+                        left: cell.width,
+                        width: cell.width * face.roster.rules.statusCells,
+                        height: cell.height,
+                        child: ColoredBox(
+                          key: const ValueKey('daemon-slot-patch'),
+                          color: patch,
+                        ),
                       ),
-                    ],
-                    SizedBox(
-                      width: cell.width * (face.roster.rules.statusCells + 2),
-                      child: Stack(
-                        alignment: Alignment.centerLeft,
-                        children: [
-                          if (patch != null)
-                            Positioned(
-                              left: cell.width,
-                              width: cell.width * face.roster.rules.statusCells,
-                              height: cell.height,
-                              child: ColoredBox(
-                                key: const ValueKey('daemon-slot-patch'),
-                                color: patch,
-                              ),
-                            ),
-                          Text(
-                            face.cell,
-                            key: const ValueKey('daemon-slot-glyph'),
-                            maxLines: 1,
-                            softWrap: false,
-                            overflow: TextOverflow.clip,
-                            style: workspaceBarTextStyle(
-                              color: daemonSlotInk(face, theme),
-                              emphasized: emphasized,
-                            ).copyWith(fontFeatures: daemonTextFeatures),
-                          ),
-                        ],
-                      ),
+                    Text(
+                      face.cell,
+                      key: const ValueKey('daemon-slot-glyph'),
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.clip,
+                      style: workspaceBarTextStyle(
+                        color: daemonSlotInk(face, theme),
+                        emphasized: emphasized,
+                      ).copyWith(fontFeatures: daemonTextFeatures),
                     ),
                   ],
                 ),

@@ -21,6 +21,15 @@ phone and hn release steps, and the server allowlist, remain separate work.
 The Experimental preview needs none of them: it uses a window-only test
 collection, defaults off, and sends no creature or brain frames.
 
+The first desktop release, `1.2.16`, shipped the preview with a pre-hatched tim.
+The egg-first correction removes that seed: a new preview now starts with an
+unhatched egg, follows the existing habit rules, and reveals a creature only
+when the user opens the earned egg. The on/off setting still persists and the
+collection still lives only for the window. Validation: 203 focused creature,
+workspace and settings tests, six real-font render checks, and targeted Dart
+analysis pass. The workspace regression exercises the whole egg → habits →
+explicit hatch → reveal → name flow with synthetic activity.
+
 Integration preserves current main's Share action, API models, account and
 terminal fixes, strict question matching, trust groups and E2EE core. The
 disabled-creature layout reference was measured independently on main
@@ -159,8 +168,10 @@ On the desktop branch, open **Settings → Experimental → Focus-bar creature**
 This replaces the hidden activation shortcut; that binding and command are
 removed. Experimental is the shared home for future feature toggles. The
 switch saves its choice on this computer and applies it before the first frame.
-It works signed in or out with no server rollout. It starts with tim and a
-ready turn egg; the panel supports hatching, naming, pairing and temporary
+It works signed in or out with no server rollout. It starts with an unhatched
+egg, earned through the normal first-egg habits (a finished turn and any two
+others), then opened explicitly. No creature is preselected. The panel
+supports hatching, naming, pairing and temporary
 motion/quiet settings. Only the on/off preference persists: the test collection
 clears on window close, is never uploaded, and sends no creature/brain frames.
 Individual artwork uses the bundled fallback. The old Account preview switch

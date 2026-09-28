@@ -246,6 +246,8 @@ class ModelSearchCatalog extends ChangeNotifier {
                 words.subtitle ??
                 (manager.models?.reachable == false
                     ? 'Unavailable'
+                    : section.own
+                    ? 'Suggested'
                     : 'Available'),
           ),
         );
@@ -266,8 +268,13 @@ class ModelSearchCatalog extends ChangeNotifier {
     local.sort((a, b) {
       final state = rank(a.owner, a.model).compareTo(rank(b.owner, b.model));
       if (state != 0) return state;
-      final name = a.model.name.compareTo(b.model.name);
-      if (name != 0) return name;
+      // Preserve the daemon's grid-ranking order (the order the catalog
+      // service returned), not an alphabetised re-sort — so the top models
+      // match `grid catalog` / `list` instead of listing alphabetical first.
+      final aIndex = a.owner.localModels.indexOf(a.model);
+      final bIndex = b.owner.localModels.indexOf(b.model);
+      final order = aIndex.compareTo(bIndex);
+      if (order != 0) return order;
       final host = (a.owner.machine?.machine.displayName ?? '').compareTo(
         b.owner.machine?.machine.displayName ?? '',
       );
@@ -362,7 +369,29 @@ class ModelSearchCatalog extends ChangeNotifier {
         ? 'Running'
         : model.downloaded
         ? 'Downloaded'
-        : 'Available';
+        : 'Suggested';
+  }
+
+  /// The inline status word for a list row: a short word with no progress
+  /// percentage (the percentage lives in the pane/detail). Operation and pending
+  /// states map to their bare label so the row never repeats the "42%".
+  String localStatusWord(LocalModel model, {ModelManagerController? controller}) {
+    final owner = controller ?? manager;
+    final operation = owner.operationFor(model);
+    if (operation?.active == true) return operation!.label;
+    if (owner.pendingId == model.id) {
+      return owner.pendingDownload
+          ? 'Downloading'
+          : owner.pendingStart
+          ? 'Starting'
+          : 'Stopping';
+    }
+    if (operation?.failed == true) return 'Failed';
+    return model.running
+        ? 'Running'
+        : model.downloaded
+        ? 'Downloaded'
+        : 'Suggested';
   }
 
   @override

@@ -19,13 +19,21 @@ static uint32_t punctuation_alias(uint32_t cp)
 }
 static const ht_font_t *glyph_font(const ht_font_t *font, uint32_t cp)
 {
+    if (font == &ht_mono_28) {
+        if (cp == 0x2713) return &ht_done_28;
+        if (cp == 0x2717) return &ht_failed_28;
+    }
     // Authored arrows in a recap use the same precomputed glyph as its marker.
     // Identical cell metrics: no scaling, allocation, or extra text runs.
     // ht_open_20's cell is 12 x 28 — mono_20's exactly, which is what made this free. The recap now
     // draws in mono_28 (17 x 38) and there is no open_28, so an authored arrow there renders a 12 px
     // glyph in a 17 px cell: readable, visibly smaller than the words beside it, and better than the
     // '?' the alternative gives. A precomputed 17 x 38 ↗ would settle it properly.
-    return cp == 0x2197 && (font == &ht_mono_20 || font == &ht_mono_28) ? &ht_open_20 : font;
+    if (font == &ht_mono_20 || font == &ht_mono_28) {
+        if (cp == 0x2197) return &ht_open_20;
+        if (cp == 0xe000) return font == &ht_mono_28 ? &ht_bell_28 : &ht_bell_20;
+    }
+    return font;
 }
 static uint32_t font_codepoint(const ht_font_t *font, uint32_t cp)
 {
@@ -62,6 +70,16 @@ uint32_t ht_utf8_next(const char **p)
         c = '?';
     *p = (const char *)s;
     return c;
+}
+uint8_t ht_shimmer_phase(uint32_t now)
+{
+    unsigned step = (now / 64) % 32;
+    return (uint8_t)(1 + (step < 20 ? step : 20));
+}
+uint32_t ht_shimmer_wake_ms(uint32_t now)
+{
+    unsigned step = (now / 64) % 32;
+    return (step < 20 ? 64 : (32 - step) * 64) - now % 64;
 }
 void ht_scene_clear(ht_scene_t *s, uint16_t bg)
 {
@@ -232,6 +250,18 @@ ht_rect_t ht_run_bounds(const ht_run_t *r)
     }
     return (ht_rect_t){r->x, r->y, r->w, r->font->height};
 }
+static int shimmer_center(const ht_run_t *r, ht_rect_t box)
+{
+    unsigned phase = r->shimmer > 21 ? 21 : r->shimmer;
+    return box.x - 48 + (box.w + 96) * (int)(phase - 1) / 20;
+}
+static ht_rect_t shimmer_band(const ht_run_t *r)
+{
+    ht_rect_t box = ht_run_bounds(r);
+    int cx = shimmer_center(r, box);
+    int left = imax(box.x, cx - 48), right = imin(box.x + box.w, cx + 48);
+    return (ht_rect_t){left, box.y, imax(0, right - left), box.h};
+}
 static bool intersect(ht_rect_t a, ht_rect_t b)
 {
     return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
@@ -343,6 +373,16 @@ void ht_damage(const ht_scene_t *a, const ht_scene_t *b, ht_damage_t *d)
                 continue;
             if (i < a->count && i < b->count) {
                 const ht_run_t *old = &a->runs[i], *next = &b->runs[i];
+                if (old->arc && old->arc == next->arc && old->shimmer && next->shimmer &&
+                    old->x == next->x && old->y == next->y && old->w == next->w &&
+                    old->font == next->font && old->fg == next->fg && old->bg == next->bg &&
+                    old->colors == next->colors && !strcmp(old->text, next->text)) {
+                    // Only the old/new highlight bands change. The rotated glyph
+                    // mask and the dim text outside those bands stay untouched.
+                    damage_add(d, shimmer_band(old), rows);
+                    damage_add(d, shimmer_band(next), rows);
+                    continue;
+                }
                 if (!old->arc && !next->arc && old->x == next->x && old->y == next->y && old->w == next->w &&
                     old->font == next->font && old->fg == next->fg && old->bg == next->bg) {
                     const char *p = old->text, *q = next->text;
@@ -367,7 +407,9 @@ void ht_damage(const ht_scene_t *a, const ht_scene_t *b, ht_damage_t *d)
                             pc = font_codepoint(old->font, pc);
                             qc = font_codepoint(old->font, qc);
                         }
-                        if (pc != qc) {
+                        if (pc != qc || (pc != ' ' &&
+                            (old->colors ? old->colors[cell] : old->fg) !=
+                            (next->colors ? next->colors[cell] : next->fg))) {
                             if (first < 0)
                                 first = cell;
                             last = cell;
@@ -580,7 +622,8 @@ static void arc_prepare(const ht_run_t *r, arc_cache_t *cache)
         } else
 #endif
         {
-            const uint8_t *ink = f == &ht_open_20 ? ht_open_20_ink[0] : ht_mono_20_ink[c - f->first];
+            const uint8_t *ink = f == &ht_open_20 ? ht_open_20_ink[0] :
+                f == &ht_bell_20 ? ht_bell_20_ink[0] : ht_mono_20_ink[c - f->first];
             // Source pixels outside this box are transparent. Include a full
             // bilinear halo and two destination pixels for fixed-point rounding.
             int ox = (ink[0] + ink[2]) * 128 - (6 * 256 - 128);
@@ -638,6 +681,24 @@ static void arc_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     arc_prepare(r, cache);
     if (!cache->mask_bytes) return;
     uint16_t palette[4] = {0, blend(r->fg,r->bg,1), blend(r->fg,r->bg,2), be16(r->fg)};
+    // Colour a cached mask: no glyph rotation, allocations or extra text runs.
+    // Sixteen brightness levels use 128 bytes of bounded stack scratch.
+    uint16_t sweep[16][4];
+    int center = 0;
+    if (r->shimmer) {
+        center = shimmer_center(r, ht_run_bounds(r));
+        for (unsigned level = 0; level < 16; level++) {
+            unsigned opacity = 100 + level * 155 / 15, inverse = 255 - opacity;
+            unsigned red = ((r->fg >> 11) * opacity + (r->bg >> 11) * inverse + 127) / 255;
+            unsigned green = (((r->fg >> 5) & 63) * opacity + ((r->bg >> 5) & 63) * inverse + 127) / 255;
+            unsigned blue = ((r->fg & 31) * opacity + (r->bg & 31) * inverse + 127) / 255;
+            uint16_t ink = (uint16_t)((red << 11) | (green << 5) | blue);
+            sweep[level][0] = 0;
+            sweep[level][1] = blend(ink, r->bg, 1);
+            sweep[level][2] = blend(ink, r->bg, 2);
+            sweep[level][3] = be16(ink);
+        }
+    }
     int x0 = imax(clip.x,r->x), x1 = imin(clip.x+clip.w,r->x+r->w);
     int y0 = imax(clip.y,r->y), y1 = imin(clip.y+clip.h,r->y+HT_ARC_HEIGHT);
     for (int y = y0; y < y1; y++) for (int h = 0; h < 2; h++) {
@@ -651,7 +712,14 @@ static void arc_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         uint16_t *dst = out + (y-clip.y)*clip.w + left-clip.x;
         for (int x = left; x < right; x++, k++, dst++) {
             unsigned a = (mask[k >> 2] >> ((3-(k&3))*2)) & 3;
-            if (a) *dst = palette[a];
+            if (a) {
+                if (r->shimmer) {
+                    int distance = x - center;
+                    if (distance < 0) distance = -distance;
+                    unsigned level = distance >= 48 ? 0 : 15 - (unsigned)distance * 15 / 48;
+                    *dst = sweep[level][a];
+                } else *dst = palette[a];
+            }
         }
     }
 }
@@ -672,13 +740,13 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
                 fill(out + (y - clip.y) * clip.w + x1 - clip.x, (size_t)(x2 - x1), be16(r->bg));
         uint16_t palette[4] = {be16(r->bg), blend(r->fg, r->bg, 1), blend(r->fg, r->bg, 2),
                                be16(r->fg)};
-        bool cached = glyph_cache_prepare(f, r->fg, r->bg);
+        bool cached = !r->colors && glyph_cache_prepare(f, r->fg, r->bg);
         bool ascii = f->first == 32 && f->last >= 126;
 #ifdef DEVICE_LAYOUT_BENCH
         ascii = ascii && raster_fast_ascii;
 #endif
         const char *p = r->text;
-        int gx = r->x;
+        int gx = r->x, cell = 0;
         while (*p && gx < x2) {
             uint32_t c = (uint8_t)*p;
             if (ascii && c < 128) {
@@ -689,6 +757,12 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
                 c = font_codepoint(f, c);
             }
             if (gx + f->width > x1 && c != ' ') {
+                if (r->colors) {
+                    uint16_t fg = r->colors[cell];
+                    palette[1] = blend(fg, r->bg, 1);
+                    palette[2] = blend(fg, r->bg, 2);
+                    palette[3] = be16(fg);
+                }
                 const ht_font_t *face = glyph_font(f, c);
                 size_t stride = ((size_t)face->width * face->height + 3) / 4;
                 const uint8_t *glyph = face->pixels + (c - face->first) * stride;
@@ -715,6 +789,7 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
                 }
             }
             gx += f->width;
+            cell++;
         }
     }
 }

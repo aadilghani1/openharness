@@ -12,7 +12,9 @@ import { voiceRoutes } from './routes/voice.js'
 import { harnessShareRoutes } from './routes/harnessShares.js'
 import { harnessLinkRoutes } from './routes/harnessLinks.js'
 import { deskRoutes } from './routes/desk.js'
+import { tabChannelRoutes } from './routes/tabChannels.js'
 import { zooRoutes } from './routes/zoo.js'
+import { experimentalSettingsRoutes } from './routes/experimentalSettings.js'
 import { describeDaemonsSwitch } from './lib/daemonsSwitch.js'
 import { handleObserverUpgrade } from './lib/observerWs.js'
 import { deviceAuthRoutes } from './routes/deviceAuth.js'
@@ -169,9 +171,10 @@ async function start(): Promise<void> {
   await app.register(harnessShareRoutes)
   await app.register(harnessLinkRoutes)
   await app.register(deskRoutes)          // the account's tabs, the same on every computer (lib/desk.ts)
-  // The account's daemons and eggs, the same on every client (lib/zoo.ts). Dark unless HARNESS_DAEMONS is
-  // on (lib/daemonsSwitch.ts): off, nothing is registered and /api/zoo answers the ordinary 404.
-  await app.register(zooRoutes, { daemons: DAEMONS })
+  if (env.HARNESS_CHANNELS) await app.register(tabChannelRoutes)
+  await app.register(experimentalSettingsRoutes, { daemons: DAEMONS })
+  // Availability is separate from opt-in: every account starts off, and its collection is retained.
+  await app.register(zooRoutes, { daemons: DAEMONS, requireAccountOptIn: true })
   logger.info(describeDaemonsSwitch(DAEMONS))
 
   // Dedicated public subdomain app-proxy on its own port (Host-header routed → tunnelled to the node app).

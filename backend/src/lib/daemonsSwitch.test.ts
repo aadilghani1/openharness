@@ -28,7 +28,7 @@ describe('the daemons switch', () => {
 
   it('says what it does in the boot log without naming anyone', () => {
     expect(describeDaemonsSwitch(DAEMONS_DARK)).toBe('daemons: off (HARNESS_DAEMONS)')
-    expect(describeDaemonsSwitch(parseDaemonsSwitch('true'))).toBe('daemons: on for everyone')
-    expect(describeDaemonsSwitch(parseDaemonsSwitch('true', 'a@example.com'))).toBe('daemons: on for 1 allowlisted account')
+    expect(describeDaemonsSwitch(parseDaemonsSwitch('true'))).toBe('daemons: available (account opt-in required)')
+    expect(describeDaemonsSwitch(parseDaemonsSwitch('true', 'a@example.com'))).toBe('daemons: available to 1 allowlisted account (account opt-in required)')
   })
 })

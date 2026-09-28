@@ -41,6 +41,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/workspace_bar_style.dart';
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
+import 'harness_activity_mark.dart';
 import 'grid_model_picker.dart';
 import 'pane_header_actions.dart';
 import 'pane_model_status.dart';
@@ -2366,7 +2367,7 @@ class _TerminalPanelState extends State<TerminalPanel>
         pickerController: _pickerController,
       );
     }
-    return _header!;
+    return TickerMode(enabled: widget.visible, child: _header!);
   }
 }
 
@@ -2672,6 +2673,11 @@ class _TerminalHeader extends StatelessWidget {
                             ),
                           ),
                         ),
+                      ),
+                      HarnessActivityMark(
+                        app: notifier,
+                        machineId: session.machineId,
+                        agentId: session.agentId,
                       ),
                       if (status != null || starting != null || !compact)
                         const SizedBox(width: 8),

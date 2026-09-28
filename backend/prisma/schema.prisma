@@ -630,6 +630,41 @@ model Desk {
   @@map("desks")
 }
 
+/// Routing only; channel messages and member capabilities stay on the host daemon.
+/// A deterministic _id makes concurrent claims atomic using MongoDB's built-in
+/// unique primary index. This never changes the format of the shared desk.
+model TabChannel {
+  id            String   @id @map("_id") @db.ObjectId
+  userId        String
+  tabId         String
+  hostMachineId String
+  createdAt     DateTime @default(now())
+
+  @@map("tab_channels")
+}
+
+/// Explicit account opt-in for automatic swarm collaboration; absence means off.
+model TabChannelSettings {
+  id        String  @id @map("_id") @db.ObjectId
+  userId    String
+  enabled   Boolean @default(false)
+  revision  Int     @default(0)
+
+  @@map("tab_channel_settings")
+}
+
+/// Explicit account opt-ins; missing choices stay off. Each write changes one feature.
+model ExperimentalSettings {
+  id               String  @id @map("_id") @db.ObjectId
+  userId           String
+  focusBarCreature Boolean @default(false)
+  shareButton      Boolean @default(false)
+  revision         Int     @default(0)
+
+  @@index([userId])
+  @@map("experimental_settings")
+}
+
 /// The account's ZOO: the daemons it hatched, the eggs waiting, which one is paired, and the
 /// first-egg habits done so far — one document per user, the same on every client, like the desk
 /// but separate from it (daemons/README.md, "The zoo"). Written through `POST /api/zoo/ops`

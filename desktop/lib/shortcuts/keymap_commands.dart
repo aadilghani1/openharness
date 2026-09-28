@@ -493,6 +493,22 @@ final harnessCommands = <HarnessCommand>[
     action: ShortcutAction.orchestrate,
   ),
   const HarnessCommand(
+    'team.open',
+    'Swarm conversation: view this tab’s collaboration',
+    ShortcutGroup.actions,
+    action: ShortcutAction.team,
+    keywords: [
+      'communicate',
+      'collaborate',
+      'message',
+      'question',
+      'reply',
+      'inbox',
+      'swarm',
+      'channel',
+    ],
+  ),
+  const HarnessCommand(
     'app.customize',
     'Customize Harness',
     ShortcutGroup.actions,
