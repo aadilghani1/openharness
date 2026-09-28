@@ -10211,7 +10211,16 @@ class AppNotifier extends ChangeNotifier {
   /// the way a rail click does — that is an open, not a focus, and it claims
   /// only its own terminal.
   Future<void> focusAgentFromDevice(String machineId, String agentId) async {
-    final existing = paneOfAgent(machineId, agentId);
+    // Device focus can name a pane on another tab. The current-tab lookup
+    // alone turns that focus into an Add and copies the view into this tab.
+    final existing =
+        paneOfAgent(machineId, agentId) ??
+        allPanes
+            .where(
+              (pane) =>
+                  pane.machineId == machineId && pane.agentId == agentId,
+            )
+            .firstOrNull;
     if (existing == null) {
       await _fromDevice(
         () =>
