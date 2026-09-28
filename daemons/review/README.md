@@ -1,31 +1,64 @@
 # Daemons review pages
 
-Self-contained HTML pages used to review the daemons' art and design with the product owner. Open any
-of them straight from disk in a browser (`open daemons/review/eggs.html`); they need no server. Edit
-them here and commit: these files are the review pages, not copies of something elsewhere.
+Open [index.html](index.html) directly from disk. The previews embed their styles, scripts,
+and data; no server, account, external fonts, or artifact host is needed. These repo files
+are the review pages. Keep future reviews local too.
 
-| page | what it shows |
+| Page | What to review |
 |---|---|
-| `eggs.html` | How an egg cracks: the nine states (five while you earn it, four when you open it) with each state's status-line one-liner, every egg kind's shell, and a hatch player (pick progress and what is inside). Approved. |
-| `traits.html` | Traits for all ten drop-1 species: colour families, markings, shape and rare extras with their odds, six rolled individuals each with flags, `1 in N`, and the status-line one-liner. |
-| `lookbook.html` | The lookbook as it was reviewed: `daemons/lookbook.html` plus the review-only sections (drop 1 showcase with the paper look, twelve tims with traits, the first filled eggs). The canonical lookbook is `daemons/lookbook.html`, which `generate.mjs` refreshes from the roster. |
-| `overnight/index.html` | The overnight build report (26-27 Sep): PRs, screenshots from tests, decisions and open questions at that time. Superseded in places by drop init; see `docs/research/2026-09-27-daemons-handoff.md`. |
+| [eggs.html](eggs.html) | All nine shell stages, including rocking; eight egg kinds; correct status sprites; progress and eligible rarities; a seekable opening with pause, resume, replay, and reset. |
+| [traits.html](traits.html) | Ten species, six examples each, with current art, trait odds, flags, sample seeds, and status sprites. Filter by species, trait, or text. |
+| [lookbook.html](lookbook.html) | The reviewed terminal world: zoo, moods, growth, twelve tims, and the same egg player. Current individual rules replace the old duplicate-to-XP simulator. Later voice/memory examples are labeled as illustrative. |
+| [overnight/index.html](overnight/index.html) | The historical 26–27 September build report. Original screenshots and counts stay dated; the report links to the later handoff. Images open at full size. |
 
-## How they were built
+Motion follows the system preference, can be paused, stops while the page is hidden, and
+avoids repainting offscreen art. The art fits its available width using measured font cells.
+Each page has local navigation, a skip link, keyboard focus, and no external asset requests.
 
-The pages embed their data, so they open anywhere. The scripts that made that data are in `src/`, as
-they were written during the review; they are reference, not part of the build:
+## Editing and building
 
-- `src/eggs/`: the egg prototype (`egg2.mjs`, now `daemons/plates/egg.mjs`), the prototype shader with
-  the material channel (`plate.mjs`, now in `daemons/tools/plate.mjs`), `build2.mjs` (bakes the eggs the
-  page embeds), `sheet.mjs` (prints the nine states as text), `epv2.mjs` (a preview CLI).
-- `src/traits/`: each species' trait prototype (`<id>.mjs`, now `daemons/plates/<id>.mjs`),
-  `samples.mjs` (picks and renders six individuals), `page-data.mjs` (gathers the traits page's data),
-  `one-liners.json` and `check-one-liners.mjs` (the extras' status-line sprites, now in roster.json).
-- `src/lookbook/`: the section templates and injectors for the review-only lookbook sections, and the
-  plate preview tools used while drawing drop init.
+Edit the HTML templates, CSS, and JavaScript in `tools/`, then rebuild the standalone pages:
 
-Paths in those scripts are placeholders: `REPO` is the repository root, `SCRATCH` the directory the
-script ran from, `FLUTTER_BIN` a Flutter 3.47.2 `bin`. To reuse one, point those at real paths. New
-review pages should be written here directly, from the repo's own models (`daemons/plates`,
-`daemons/tools`), so they stay in step with what ships.
+```sh
+node daemons/review/tools/build.mjs
+node daemons/review/tools/build.mjs --check
+```
+
+Commit both the sources and the generated HTML. The build uses `roster.json`, `plates.json`,
+the actual reference colour functions and sprite renderer, and the models in `daemons/plates/`.
+It keeps the originally selected sample seeds. Samples are examples, not server-issued serials.
+“1 in N” covers colour, markings, extra, and eyes within a species; shape, temperament, species
+rarity, and shiny are separate.
+
+Sample art is re-rendered when the roster or model inputs change. Otherwise the build reuses
+the embedded frames; `--rebake` forces a fresh render. Run the canonical generator first when
+changing the roster or models. This review build does not edit the canonical
+`daemons/lookbook.html` or generated client contracts.
+
+## Checks
+
+Node builds require no packages. The DOM regression checks use one pinned development dependency:
+
+```sh
+npm ci --prefix daemons/review/tools --ignore-scripts
+npm test --prefix daemons/review/tools
+```
+
+Checks cover local links and labels, unique IDs, embedded script execution, all egg kinds and
+eligible rarities, earning gates, timed playback, pause/resume/reset/seek, reduced motion,
+head-first emergence, trait filtering, and the current reference data and material colours.
+The DOM harness uses simulated time and font metrics. It does **not** establish browser layout
+or pixel-level appearance. Browser visual inspection was blocked by the local-file URL policy
+during this polish pass; that remains an explicit verification limitation.
+
+## Original prototypes
+
+`src/` preserves the scripts used during the original review. They are historical references,
+not inputs to the current build:
+
+- `src/eggs/`: early shell models, material shader, preview CLI, and nine-stage sheet.
+- `src/traits/`: early species models, sample selection, catalogue data, and one-liner checks.
+- `src/lookbook/`: early templates and injectors for the additional lookbook sections.
+
+Their `REPO`, `SCRATCH`, and `FLUTTER_BIN` paths are placeholders. New work should use the
+current models and `tools/build.mjs`, so reviews stay in step with the implementation.

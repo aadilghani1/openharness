@@ -120,6 +120,16 @@ Release later according to `2026-09-27-daemons-rollout.md`: land the prerequisit
 CLI, apps, then enable for the founder via `HARNESS_DAEMONS_USERS`. Keep the current PRs as drafts;
 this continuation does not authorize merging them or launching a worktree app against real state.
 
+## Local review polish · 28 September
+
+Start at [`daemons/review/index.html`](../../daemons/review/index.html); the
+[review README](../../daemons/review/README.md) documents source templates, rebuilds, and
+repeatable DOM checks. Eggs and individuals now use current art and rules, the old duplicate
+simulator is retired, and historical material is labeled. The separate early companion reviews
+on `pull-and-rebuild` also have a local index and native controls. No production code or runtime
+state was changed for this review pass. DOM behavior was checked; browser visual inspection
+remains unverified because the browser tool rejected local-file URLs.
+
 ## Safety rules for whoever continues
 
 - Tests must never reach a real tmux server: unset `TMUX` and `TMUX_PANE`, use a private
