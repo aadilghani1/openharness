@@ -1,17 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
-import '../core/harness_file_store.dart';
-import '../core/local_key_value_store.dart';
+import '../api/api_client.dart';
 import '../core/viewer_mode.dart';
 
-/// The catalog behind Settings → Experimental. Add new opt-in features here
-/// so their labels, storage keys and switches stay together.
 enum ExperimentalFeature {
   focusBarCreature(
     'focus_bar_creature',
     'Focus-bar creature',
-    'Start with an egg in the focus bar. Work toward hatching your companion. '
-        'Its test collection resets when you close the window.',
+    'Start with an egg in the focus bar. Your collection and progress are saved to your account.',
   ),
   shareButton(
     'share_button',
@@ -21,82 +19,173 @@ enum ExperimentalFeature {
 
   const ExperimentalFeature(this.id, this.label, this.description);
   final String id, label, description;
-
-  String get storageKey => 'experimental.$id';
-
   bool get available => switch (this) {
-    // The creature preview belongs to the native desktop workspace.
     focusBarCreature => !kIsWeb && !kViewerMode,
     shareButton => true,
   };
 }
 
-/// Per-installation preferences, loaded before the first frame. Experiments are
-/// off until chosen; neither an account nor a server can opt a user into one.
-class ExperimentalFeaturesStore extends ChangeNotifier {
-  ExperimentalFeaturesStore({LocalKeyValueStore? storage})
-    : _storage = storage ?? HarnessFileStore.shared;
+abstract interface class ExperimentalSettingsTransport {
+  Future<Map<String, dynamic>> read();
+  Future<Map<String, dynamic>> write(
+    String accountId,
+    ExperimentalFeature feature,
+    bool enabled,
+  );
+}
 
-  final LocalKeyValueStore _storage;
+class ApiExperimentalSettingsTransport
+    implements ExperimentalSettingsTransport {
+  ApiExperimentalSettingsTransport(this.api);
+  final ApiClient api;
+  @override
+  Future<Map<String, dynamic>> read() => api.experimentalSettings();
+  @override
+  Future<Map<String, dynamic>> write(
+    String accountId,
+    ExperimentalFeature feature,
+    bool enabled,
+  ) => api.setExperimentalSetting(accountId, feature.id, enabled);
+}
+
+/// Account opt-ins. No installation-wide cache can enable another account's experiments.
+/// Changes are displayed only after acknowledgement; reads never write or migrate local choices.
+class ExperimentalFeaturesStore extends ChangeNotifier {
+  ExperimentalFeaturesStore({this.pollInterval = const Duration(seconds: 30)});
+  final Duration pollInterval;
   final _choices = <ExperimentalFeature, bool>{};
-  final _edits = <ExperimentalFeature, int>{};
-  Future<void>? _saving;
-  bool _disposed = false;
+  final _available = <ExperimentalFeature, bool>{};
+  ExperimentalSettingsTransport? _transport;
+  String? accountId;
+  int _generation = 0, _epoch = 0, _revision = -1;
+  bool loaded = false, saving = false, _disposed = false;
+  String? error;
+  ExperimentalFeature? savingFeature, errorFeature;
+  Future<void>? _reading;
+  Timer? _poll;
 
   bool enabled(ExperimentalFeature feature) => choice(feature) == true;
+  bool? choice(ExperimentalFeature feature) =>
+      loaded ? _choices[feature] : null;
+  bool isAvailable(ExperimentalFeature feature) => _available[feature] != false;
+  bool get signedIn => accountId != null;
 
-  /// Null means no local choice. This lets the creature preserve the separate
-  /// account rollout until a person explicitly overrides it with this preview.
-  bool? choice(ExperimentalFeature feature) => _choices[feature];
-
-  Future<void> load() async {
-    final edits = Map.of(_edits);
-    try {
-      final values = await _storage.readMany(
-        ExperimentalFeature.values.map((feature) => feature.storageKey),
-      );
-      if (_disposed) return;
-      var changed = false;
-      for (final feature in ExperimentalFeature.values) {
-        if (_edits[feature] != edits[feature]) continue;
-        final value = switch (values[feature.storageKey]) {
-          'on' => true,
-          'off' => false,
-          _ => null,
-        };
-        if (choice(feature) == value) continue;
-        changed = true;
-        if (value == null) {
-          _choices.remove(feature);
-        } else {
-          _choices[feature] = value;
-        }
+  void bind(String? account, {ExperimentalSettingsTransport? transport}) {
+    if (_disposed || (accountId == account && _transport == transport)) return;
+    ++_generation;
+    ++_epoch;
+    accountId = account;
+    _transport = transport;
+    loaded = saving = false;
+    savingFeature = errorFeature = null;
+    error = null;
+    _revision = -1;
+    _choices.clear();
+    _available.clear();
+    _reading = null;
+    _poll?.cancel();
+    _poll = null;
+    _notify();
+    if (account != null && transport != null) {
+      unawaited(refresh());
+      if (pollInterval > Duration.zero) {
+        _poll = Timer.periodic(pollInterval, (_) => unawaited(refresh()));
       }
-      if (changed) notifyListeners();
-    } catch (_) {
-      // Missing or unreadable preferences never opt someone into an experiment.
     }
   }
 
-  /// Apply immediately and serialize writes so the last flip wins. A failed
-  /// save is reported to the caller and does not poison later writes or retries.
-  Future<void> set(ExperimentalFeature feature, bool on) {
-    _edits[feature] = (_edits[feature] ?? 0) + 1;
-    final changed = choice(feature) != on;
-    _choices[feature] = on;
-    if (changed && !_disposed) notifyListeners();
-    final pending = (_saving ?? Future<void>.value()).then(
-      (_) => _storage.write(feature.storageKey, on ? 'on' : 'off'),
-    );
-    _saving = pending.then<void>((_) {}, onError: (Object _, StackTrace _) {});
-    return pending;
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  bool _current(int generation) => !_disposed && generation == _generation;
+
+  Future<void> refresh() {
+    if (_disposed || accountId == null || _transport == null || saving) {
+      return Future.value();
+    }
+    final pending = _reading;
+    if (pending != null) return pending;
+    late final Future<void> reading;
+    reading = _read(_generation, _epoch).whenComplete(() {
+      if (identical(_reading, reading)) _reading = null;
+    });
+    return _reading = reading;
+  }
+
+  Future<void> _read(int generation, int epoch) async {
+    try {
+      final result = await _transport!.read();
+      if (!_current(generation) || epoch != _epoch) return;
+      _apply(result);
+      error = null;
+      errorFeature = null;
+    } catch (_) {
+      if (!_current(generation) || epoch != _epoch) return;
+      error = 'Couldn’t read your account settings. Refresh to try again.';
+    }
+    _notify();
+  }
+
+  void _apply(Map<String, dynamic> result) {
+    final revision = result['revision'];
+    final features = result['features'];
+    final available = result['available'];
+    if (result['accountId'] != accountId ||
+        revision is! int ||
+        revision < 0 ||
+        features is! Map ||
+        ExperimentalFeature.values.any(
+          (feature) => features[feature.id] is! bool,
+        )) {
+      throw const FormatException('Invalid account settings');
+    }
+    if (revision < _revision) return;
+    _revision = revision;
+    for (final feature in ExperimentalFeature.values) {
+      _choices[feature] = features[feature.id] as bool;
+      _available[feature] = available is! Map || available[feature.id] != false;
+    }
+    loaded = true;
+  }
+
+  Future<void> set(ExperimentalFeature feature, bool on) async {
+    if (_disposed ||
+        !loaded ||
+        saving ||
+        accountId == null ||
+        _transport == null) {
+      return;
+    }
+    final generation = _generation;
+    ++_epoch;
+    saving = true;
+    savingFeature = feature;
+    error = null;
+    errorFeature = null;
+    _notify();
+    try {
+      final result = await _transport!.write(accountId!, feature, on);
+      if (!_current(generation)) return;
+      _apply(result);
+    } catch (_) {
+      if (!_current(generation)) return;
+      error =
+          'Couldn’t confirm the change. Refresh to check your saved setting.';
+      errorFeature = feature;
+    } finally {
+      if (_current(generation)) {
+        saving = false;
+        savingFeature = null;
+        _notify();
+      }
+    }
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _poll?.cancel();
     super.dispose();
   }
 }
-
-final experimentalFeaturesStore = ExperimentalFeaturesStore();

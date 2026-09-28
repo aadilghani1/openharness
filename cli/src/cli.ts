@@ -4266,9 +4266,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // route and hears about everyone else's edits as `desk_changed` (backendSocket.ts).
     onDeskRead: () => proxyBackend('GET', '/api/desk'),
     onDeskOps: (body) => proxyBackend('POST', '/api/desk/ops', body),
+    onExperimentalRead: () => proxyBackend('GET', '/api/experimental-settings'),
+    onExperimentalWrite: (body) => proxyBackend('PATCH', '/api/experimental-settings', body),
     // The account's zoo — see backend routes/zoo.ts. Same shape as the desk: read and ops proxied,
-    // everyone else's changes heard as `zoo_changed`. Signed out, proxyBackend answers 401 NOT_SIGNED_IN
-    // and a guest keeps its zoo locally until it seeds this one.
+    // everyone else's changes heard as `zoo_changed`. The backend requires the account's creature
+    // opt-in. Signed out, proxyBackend answers 401 NOT_SIGNED_IN.
     // Killed on this computer (lib/daemonsSwitch.ts): a 404 DAEMONS_OFF without asking, which a window reads
     // exactly as the server's own 404 — daemons hidden. Otherwise verbatim, and the switch learns from it.
     onZooRead: () => zooProxy.read(),

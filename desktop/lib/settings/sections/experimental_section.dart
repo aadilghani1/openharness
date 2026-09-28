@@ -21,44 +21,26 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
   @override
   void initState() {
     super.initState();
+    unawaited((widget.store ?? _fallbackStore).refresh());
     final controller = widget.controller;
     if (controller != null) unawaited(controller.refresh());
   }
 
-  Future<void> _set(
-    BuildContext context,
-    ExperimentalFeaturesStore preferences,
-    ExperimentalFeature feature,
-    bool on,
-  ) async {
-    try {
-      await preferences.set(feature, on);
-    } catch (_) {
-      if (!context.mounted || preferences.enabled(feature) != on) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text(
-            'This change couldn’t be saved. It will last for this window.',
-          ),
-          action: SnackBarAction(
-            label: 'Retry',
-            onPressed: () => unawaited(
-              _set(context, preferences, feature, preferences.enabled(feature)),
-            ),
-          ),
-        ),
-      );
-    }
+  final _fallbackStore = ExperimentalFeaturesStore();
+
+  @override
+  void dispose() {
+    _fallbackStore.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final preferences = widget.store ?? experimentalFeaturesStore;
+    final preferences = widget.store ?? _fallbackStore;
     final features = ExperimentalFeature.values.where((f) => f.available);
     return SectionScaffold(
       title: 'Experimental',
-      subtitle:
-          'Try features that are still taking shape. Turn them off any time.',
+      subtitle: 'Try features that are still taking shape. These settings sync across your account.',
       child: SingleChildScrollView(
         child: ListenableBuilder(
           listenable: Listenable.merge([preferences, widget.controller]),
@@ -66,21 +48,67 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             spacing: 10,
             children: [
+              if (!preferences.loaded ||
+                  (preferences.error != null &&
+                      preferences.errorFeature == null))
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      preferences.error ??
+                          (preferences.signedIn
+                              ? 'Loading your account settings…'
+                              : 'Sign in to choose experiments for your account.'),
+                    ),
+                    if (preferences.error != null)
+                      TextButton(
+                        onPressed: () => unawaited(preferences.refresh()),
+                        child: const Text('Refresh settings'),
+                      ),
+                  ],
+                ),
               for (final feature in features)
-                MergeSemantics(
-                  child: SettingRow(
-                    title: feature.label,
-                    detail: feature.description,
-                    control: Align(
+                SettingRow(
+                  title: feature.label,
+                  detail: feature.description,
+                  control: Semantics(
+                    label: feature.label,
+                    child: Align(
                       alignment: Alignment.centerLeft,
                       child: Switch(
                         key: ValueKey('experimental-${feature.id}'),
                         value: preferences.enabled(feature),
-                        onChanged: (on) =>
-                            unawaited(_set(context, preferences, feature, on)),
+                        onChanged:
+                            preferences.loaded &&
+                                !preferences.saving &&
+                                (preferences.isAvailable(feature) ||
+                                    preferences.enabled(feature))
+                            ? (on) => unawaited(preferences.set(feature, on))
+                            : null,
                       ),
                     ),
                   ),
+                  footer: preferences.savingFeature == feature
+                      ? Semantics(liveRegion: true, child: Text('Saving…'))
+                      : preferences.errorFeature == feature
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Semantics(
+                              liveRegion: true,
+                              child: Text(preferences.error!),
+                            ),
+                            TextButton(
+                              onPressed: () => unawaited(preferences.refresh()),
+                              child: const Text('Refresh setting'),
+                            ),
+                          ],
+                        )
+                      : preferences.loaded && !preferences.isAvailable(feature)
+                      ? const Text(
+                          'This experiment is unavailable on this server.',
+                        )
+                      : null,
                 ),
               if (widget.controller case final controller?)
                 _SwarmCollaborationSetting(controller: controller),
@@ -108,7 +136,7 @@ class _SwarmCollaborationSetting extends StatelessWidget {
       title: 'Swarm collaboration',
       detail:
           'Let agents automatically consult only peers in the same tab. '
-          'Off by default. This setting applies to your account.',
+          'Off by default.',
       control: Semantics(
         label: 'Swarm collaboration',
         child: Align(

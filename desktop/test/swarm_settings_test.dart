@@ -10,6 +10,8 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/teams/swarm_settings_controller.dart';
 
 import 'support/real_fonts.dart';
+import 'support/experimental_settings.dart';
+import 'swarm_state_test.dart' show MemoryStore;
 
 void main() {
   setUpAll(loadRealFonts);
@@ -116,6 +118,11 @@ void main() {
           },
         );
         final capture = GlobalKey();
+        final preferences = MemoryExperimentalFeaturesStore(
+          storage: MemoryStore(),
+        );
+        addTearDown(preferences.dispose);
+        await preferences.refresh();
         await tester.pumpWidget(
           MaterialApp(
             debugShowCheckedModeBanner: false,
@@ -123,7 +130,10 @@ void main() {
             home: Scaffold(
               body: RepaintBoundary(
                 key: capture,
-                child: ExperimentalSection(controller: controller),
+                child: ExperimentalSection(
+                  store: preferences,
+                  controller: controller,
+                ),
               ),
             ),
           ),

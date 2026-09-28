@@ -13,6 +13,7 @@ import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../core/runtime_platform.dart';
 import '../analytics/analytics.dart';
+import '../api/api_client.dart';
 import '../core/desktop_window.dart';
 import '../core/harness_file_store.dart';
 import '../core/project_folder.dart';
@@ -227,11 +228,21 @@ class _SwarmScreenState extends State<SwarmScreen> {
         storage: kUnderTest ? null : HarnessFileStore.shared,
         now: widget.daemonClock,
       );
-  late final ZooTransport? _zooTransport =
-      widget.zooTransport ?? (kUnderTest ? null : ApiZooTransport(app.api));
+  ApiClient? _zooApi;
+  ZooTransport? _apiZooTransport;
+  ZooTransport? get _zooTransport {
+    if (widget.zooTransport != null) return widget.zooTransport;
+    if (kUnderTest) return null;
+    if (!identical(_zooApi, app.api)) {
+      _zooApi = app.api;
+      _apiZooTransport = ApiZooTransport(app.api);
+    }
+    return _apiZooTransport;
+  }
+
   late final _daemonSettings = DaemonSettings(
     storage: kUnderTest ? null : HarnessFileStore.shared,
-    canPersist: () => _daemonPreviewOverride == null,
+    canPersist: () => !_zoo.isPreview,
   );
   late final _face = DaemonFace(
     _zoo,
@@ -241,18 +252,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
   late final ValueListenable<bool>? _daemonsPreview = widget.daemonsPreview;
 
   late final _experimentalFeatures =
-      widget.experimentalFeatures ?? experimentalFeaturesStore;
+      widget.experimentalFeatures ?? app.experimentalFeatures;
 
   bool get _showShareButton =>
       _experimentalFeatures.enabled(ExperimentalFeature.shareButton);
 
-  /// An explicit local choice overrides the separate account rollout. This
-  /// stays null for installations that have never tried the test collection.
-  late bool? _daemonPreviewOverride = _creaturePreviewChoice;
-  bool? get _creaturePreviewChoice =>
-      ExperimentalFeature.focusBarCreature.available && app.viewer == null
-      ? _experimentalFeatures.choice(ExperimentalFeature.focusBarCreature)
-      : null;
+  late bool _creatureEnabled = _creatureChoice;
+  bool get _creatureChoice =>
+      ExperimentalFeature.focusBarCreature.available &&
+      app.viewer == null &&
+      _experimentalFeatures.enabled(ExperimentalFeature.focusBarCreature);
   late final _brain = DaemonBrain(
     send: _sendDaemonFrame,
     storage: kUnderTest ? null : HarnessFileStore.shared,
@@ -476,7 +485,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _face.voiceLine.addListener(_voiceChanged);
     _daemonsPreview?.addListener(_syncDaemon);
     _experimentalFeatures.addListener(_experimentalFeaturesChanged);
-    if (_daemonPreviewOverride == true) _baselinePreviewTurns();
     app.agentPulse.addListener(_face.pulse);
     _face.dialogOpen = () =>
         _dialogOpen ||
@@ -492,7 +500,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _face.plates = _plates;
     _brainSubscriptions.addAll([
       app.daemonFrames.listen((f) {
-        if (_daemonPreviewOverride != null) return;
+        if (_zoo.isPreview || !_zoo.loaded) return;
         if (f.type == 'daemon_plate') {
           _plates.receive(f.type, f.payload);
           return;
@@ -1080,19 +1088,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _syncDaemon() {
-    if (_daemonPreviewOverride == true) {
-      _zoo.showPreview();
-    } else {
-      _zoo.bind(
-        _daemonPreviewOverride == false ? null : _accountScope,
-        remote: app.isGuest || _daemonPreviewOverride == false
-            ? null
-            : _zooTransport,
-        enabled:
-            _daemonPreviewOverride != false &&
-            (!app.isGuest || _daemonsPreview?.value == true),
-      );
-    }
+    _zoo.bind(
+      _accountScope,
+      remote: app.isGuest ? null : _zooTransport,
+      enabled: app.isGuest ? _daemonsPreview?.value == true : _creatureEnabled,
+    );
     _zoo.recheckIfDue();
     final backendOnline = app.backendOnline;
     // A reconnect asks again, on or off.
@@ -3206,18 +3206,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// A `daemon_*` or `pair` frame to this computer's harnessd, only while
   /// daemons are on here: off (or not decided yet), nothing is sent.
   bool _sendDaemonFrame(String type, Map<String, dynamic> payload) =>
-      _daemonPreviewOverride == null &&
-      _zoo.loaded &&
-      app.sendDaemonFrame(type, payload);
+      !_zoo.isPreview && _zoo.loaded && app.sendDaemonFrame(type, payload);
 
   void _experimentalFeaturesChanged() {
     setState(() {});
     if (_native) _syncNative();
-    final choice = _creaturePreviewChoice;
-    if (_daemonPreviewOverride == choice) return;
+    final choice = _creatureChoice;
+    if (_creatureEnabled == choice) return;
     final hadOverlay = _daemonOverlay != null || _hatchOverlay != null;
-    _daemonPreviewOverride = choice;
-    _baselinePreviewTurns();
+    _creatureEnabled = choice;
     _closeDaemonHint();
     _closeDaemon(restoreFocus: false);
     _closeHatch(restoreFocus: false);
@@ -3227,18 +3224,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _syncDaemon();
     // A setting change must leave keyboard focus in Settings.
     if (hadOverlay && _routeIsCurrent && !_dialogOpen) _returnFocusToPane();
-  }
-
-  void _baselinePreviewTurns() {
-    // Existing work is a baseline; only turns finishing during the preview
-    // should earn its eggs. No terminal focus or input changes on reveal.
-    _zooTurnsSeen
-      ..clear()
-      ..addEntries(
-        app.machineStates.values.map(
-          (machine) => MapEntry(machine.machine.machineId, machine.zooTurns),
-        ),
-      );
   }
 
   Map<String, Object?> get _daemonPayload {

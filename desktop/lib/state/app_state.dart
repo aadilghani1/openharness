@@ -47,6 +47,7 @@ import '../core/project_preview.dart';
 import '../core/repository_clone.dart';
 import '../core/retry.dart';
 import '../settings/config_store.dart';
+import '../settings/experimental_features.dart';
 import '../stats/harness_stats.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/terminal_theme.dart';
@@ -864,7 +865,35 @@ class AppNotifier extends ChangeNotifier {
   );
 
   AppStatus status = AppStatus.bootstrapping;
-  CurrentUserProfile? currentUser;
+  CurrentUserProfile? _currentUser;
+  CurrentUserProfile? get currentUser => _currentUser;
+  set currentUser(CurrentUserProfile? profile) {
+    _currentUser = profile;
+    final id = profile?.id;
+    experimentalFeatures.bind(
+      id,
+      transport: id == null ? null : _experimentTransport,
+    );
+  }
+
+  final experimentalFeatures = ExperimentalFeaturesStore(
+    pollInterval: kUnderTest ? Duration.zero : const Duration(seconds: 30),
+  );
+  final ExperimentalSettingsTransport? experimentalSettingsTransport;
+  ApiClient? _experimentApi;
+  ExperimentalSettingsTransport? _apiExperimentTransport;
+  ExperimentalSettingsTransport? get _experimentTransport {
+    if (experimentalSettingsTransport != null) {
+      return experimentalSettingsTransport;
+    }
+    if (kUnderTest) return null;
+    if (!identical(_experimentApi, api)) {
+      _experimentApi = api;
+      _apiExperimentTransport = ApiExperimentalSettingsTransport(api);
+    }
+    return _apiExperimentTransport;
+  }
+
   List<Machine> machines = [];
   final Map<String, MachineState> machineStates = {};
   final Set<String> expandedMachines = {};
@@ -1913,6 +1942,7 @@ class AppNotifier extends ChangeNotifier {
     AgentAlerts? agentAlerts,
     AgentUnread? agentUnread,
     SystemNotifications? systemNotifications,
+    this.experimentalSettingsTransport,
   }) : alerts = alerts ?? AlertSounds(store: alertSoundStore),
        agentAlerts = agentAlerts ?? AgentAlerts(),
        systemNotifications =
@@ -3892,6 +3922,7 @@ class AppNotifier extends ChangeNotifier {
   /// Remove the old account's live objects without overwriting its saved desk.
   /// In particular, multiple emptied tabs must not prevent the next restore.
   void _clearAccountWorkspace() {
+    experimentalFeatures.bind(null);
     ++_layoutRevision;
     // Sign-out sends the desk nothing: the tabs closing here are this window
     // leaving the account, not the person closing them.
@@ -12556,6 +12587,8 @@ class AppNotifier extends ChangeNotifier {
         unawaited(_rereadMachinesInBackground(pushed: true));
         break;
       case 'desk_changed':
+        unawaited(experimentalFeatures.refresh());
+        if (_swarmSettings case final settings?) unawaited(settings.refresh());
         // Another window — on another computer, or this one — changed the
         // tabs. The payload is only the revision; the document is fetched.
         final deskRevision = payload['revision'];
@@ -12971,6 +13004,7 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
+    experimentalFeatures.dispose();
     viewer?.auth.dispose();
     _deviceVisit?.dispose();
     _modelManager?.dispose();

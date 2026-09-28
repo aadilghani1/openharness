@@ -218,6 +218,14 @@ injection point (`main_local_manual.dart` overrides it). `bootstrap()` → `_pre
 `cliLogin.checkStatus()` → `_finishBootstrapSignedIn()` (restore pane layout, create `WsPool`, ensure
 the daemon, `api.me()`, `refreshMachines()`).
 
+Experimental switches are account state. `AppNotifier.experimentalFeatures` binds after `api.me()`
+identifies the account, clears on sign-out/account change, and rejects stale responses. It uses
+`/api/experimental-settings`, refreshes on account invalidations and a 30-second fallback poll, and
+shows changes only after server acknowledgement. Do not restore the old unscoped local keys at startup.
+Swarm collaboration keeps its existing account settings RPC. The creature switch opens the account's
+`ZooController` collection; disabling it hides the creature without deleting eggs, individuals or progress.
+Window-only preview collections are test/render fixtures, not a user setting.
+
 Per-machine runtime state is `MachineState` (connection status, transport mode, agents, `nodeOnline`
 from `node_status` pushes — distinct from our own socket status, pending offline agent, turn activity).
 

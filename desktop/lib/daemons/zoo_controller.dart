@@ -13,8 +13,8 @@
 /// to ask) is [DaemonsSwitch.off]: nothing is shown, read, kept or sent, and
 /// the window behaves exactly as it did before daemons existed. A failed read
 /// is not an answer: whatever was known stands, and it is asked again. A
-/// guest's durable local zoo stays off. Settings → Experimental opens a
-/// separate, window-only preview with no account or persistence.
+/// guest's durable local zoo stays off. Settings → Experimental opens the
+/// account collection. The window-only preview is reserved for render fixtures.
 library;
 
 import 'dart:async';
@@ -80,11 +80,11 @@ enum DaemonsSwitch {
   unknown,
 
   /// The server has no zoo for this account (404), harnessd is switched off
-  /// (`DAEMONS_OFF`), or a guest has not enabled the experimental preview. Everything
-  /// daemon-related stays hidden and silent.
+  /// (`DAEMONS_OFF`), or the account has not opted in. Everything daemon-related
+  /// stays hidden and silent.
   off,
 
-  /// `GET /api/zoo` answered 200, or the experimental local preview is on.
+  /// `GET /api/zoo` answered 200, or a test fixture enabled a local collection.
   on,
 }
 
@@ -280,7 +280,7 @@ class ZooController extends ChangeNotifier {
     if (scope != null && !_off) unawaited(_load(generation));
   }
 
-  /// The hidden focus-bar preview works even with the server feature off.
+  /// A render fixture can preview a creature with the server feature off.
   /// Keep its collection in this controller only, across hide/show, and never
   /// use the guest's persisted zoo (which can later be seeded to an account).
   void showPreview() => bind(_previewScope);
@@ -394,7 +394,7 @@ class ZooController extends ChangeNotifier {
 
   Future<void> _fetch(int generation) async {
     final remote = _remote;
-    if (remote == null) return;
+    if (remote == null || !_enabled || !_current(generation)) return;
     Map<String, dynamic>? raw;
     _fetching = true;
     try {

@@ -140,6 +140,9 @@ export interface HookServerHandlers {
   /** POST /api/desk/ops — the window's tab edits, applied on the backend (its routes/desk.ts); a
    *  local write, so CSRF-guarded like a rename. */
   onDeskOps?: (body: unknown) => Promise<PairOutcome>
+  /** The account's Experimental switches, proxied with the daemon's own identity. */
+  onExperimentalRead?: () => Promise<PairOutcome>
+  onExperimentalWrite?: (body: unknown) => Promise<PairOutcome>
   /** GET /api/zoo — the account's daemons and eggs (daemons/README.md); proxied like the desk. */
   onZooRead?: () => Promise<PairOutcome>
   /** POST /api/zoo/ops — habits, hatches, pair and nickname, applied on the backend (its routes/zoo.ts),
@@ -721,6 +724,17 @@ export function startHookServer(
         let body: unknown
         try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
         await proxied(() => handlers.onDeskOps!(body)); return
+      }
+      if (req.method === 'GET' && url === '/api/experimental-settings') {
+        if (!handlers.onExperimentalRead) { json(503, { error: 'UNAVAILABLE' }); return }
+        await proxied(handlers.onExperimentalRead); return
+      }
+      if (req.method === 'PATCH' && url === '/api/experimental-settings') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onExperimentalWrite) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
+        await proxied(() => handlers.onExperimentalWrite!(body)); return
       }
       if (req.method === 'GET' && url === '/api/zoo') {
         if (!handlers.onZooRead) { json(503, { error: 'UNAVAILABLE' }); return }

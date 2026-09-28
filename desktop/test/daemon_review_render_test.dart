@@ -23,12 +23,14 @@ import 'package:harness/daemons/render.dart';
 import 'package:harness/daemons/roster.dart';
 import 'package:harness/daemons/zoo.dart';
 import 'package:harness/daemons/zoo_controller.dart';
-import 'package:harness/core/models.dart' show CurrentUserProfile, ConnectionStatus;
+import 'package:harness/core/models.dart'
+    show CurrentUserProfile, ConnectionStatus;
 import 'package:harness/core/agent_git_context.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/shared/theme/prompt_style.dart';
 import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/state/swarm_catalog.dart' show SwarmProjectStore;
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/workspace_bar_style.dart';
@@ -41,7 +43,7 @@ import 'package:harness/widgets/daemon_slot.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle, TerminalTheme;
 
 import 'daemons/zoo_test.dart' show FakeZooTransport;
-import 'package:harness/settings/experimental_features.dart';
+import 'support/experimental_settings.dart';
 import 'support/real_fonts.dart';
 import 'support/status_bar_layout.dart' show seedStatusBarWorkspace;
 import 'swarm_state_test.dart' show MemoryStore, createApp;
@@ -990,8 +992,11 @@ void main() {
     );
     expect(find.text('api@office Bash: npm test'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-answer-y')), findsWidgets);
-    expect(find.text('3 done'), findsNothing,
-        reason: 'finished turns affect the face without adding a bar count');
+    expect(
+      find.text('3 done'),
+      findsNothing,
+      reason: 'finished turns affect the face without adding a bar count',
+    );
     await tester.pumpWidget(const SizedBox());
     for (final (_, face) in rows) {
       face.sync(const DaemonWatch());
@@ -1945,19 +1950,26 @@ void main() {
   }
 
   for (final width in [640.0, 1280.0]) {
-    testWidgets('experimental creature preview panel at ${width.toInt()}', (tester) async {
+    testWidgets('experimental account creature panel at ${width.toInt()}', (
+      tester,
+    ) async {
       final app = createApp();
       addTearDown(app.dispose);
       seedStatusBarWorkspace(app);
-      app.currentUser = const CurrentUserProfile(id: 'preview', email: 'preview@example.test');
+      app.currentUser = const CurrentUserProfile(
+        id: 'preview',
+        email: 'preview@example.test',
+      );
       final zoo = ZooController();
       addTearDown(zoo.dispose);
-      final remote = FakeZooTransport(available: false);
-      final experiments = ExperimentalFeaturesStore(storage: MemoryStore());
+      final remote = FakeZooTransport();
+      final experiments = MemoryExperimentalFeaturesStore(
+        storage: MemoryStore(),
+      );
       addTearDown(experiments.dispose);
       await _capture(
         tester,
-        'experimental-preview-panel-${width.toInt()}',
+        'experimental-account-panel-${width.toInt()}',
         Size(width, 620),
         (context) => SwarmScreen(
           notifier: app,
@@ -1976,23 +1988,36 @@ void main() {
           await tester.pump();
         },
       );
-      expect(find.byKey(const ValueKey('daemon-preview-label')), findsOneWidget);
-      expect(remote.batches, isEmpty);
+      expect(find.byKey(const ValueKey('daemon-preview-label')), findsNothing);
+      expect(zoo.isAccount, isTrue);
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 11));
     });
   }
 
-  for (final (native, width) in [(false, 640.0), (false, 1280.0), (true, 1280.0)]) {
-    testWidgets('creature alone beside Git at $width native=$native', (tester) async {
+  for (final (native, width) in [
+    (false, 640.0),
+    (false, 1280.0),
+    (true, 1280.0),
+  ]) {
+    testWidgets('creature alone beside Git at $width native=$native', (
+      tester,
+    ) async {
       final appearance = appearancePrefsStore.value;
       appearancePrefsStore.value = appearance.copyWith(
-        prompt: const PromptPrefs(statusStyle: StatusLineStyle.powerlevel10kRainbow),
+        prompt: const PromptPrefs(
+          statusStyle: StatusLineStyle.powerlevel10kRainbow,
+        ),
       );
       addTearDown(() => appearancePrefsStore.value = appearance);
       final app = createApp();
       addTearDown(app.dispose);
       seedStatusBarWorkspace(app);
+      final experiments = MemoryExperimentalFeaturesStore(
+        storage: MemoryStore(),
+      );
+      addTearDown(experiments.dispose);
+      await experiments.set(ExperimentalFeature.focusBarCreature, true);
       final git = gitFixture(branch: 'continue-daemons');
       final project = git['current'] as Map<String, dynamic>;
       git['state'] = 'multiple';
@@ -2000,7 +2025,12 @@ void main() {
       git['checkouts'] = [
         project,
         for (var i = 0; i < 3; i++)
-          {...project, 'cwd': '/fixture-$i', 'root': '/fixture-$i', 'branch': 'work-$i'},
+          {
+            ...project,
+            'cwd': '/fixture-$i',
+            'root': '/fixture-$i',
+            'branch': 'work-$i',
+          },
       ];
       git['recentWork'] = {'project': project, 'at': '2026-09-27T13:00:00Z'};
       final machine = app.stateOf('m')!;
@@ -2013,21 +2043,32 @@ void main() {
       final zoo = ZooController(storage: _Memory());
       addTearDown(zoo.dispose);
       final remote = FakeZooTransport()
-        ..zoo = _paired('gnu', version: '0.1', eggs: const [
-          ZooEgg(id: 'one', kind: 'turn', grantedAt: ''),
-          ZooEgg(id: 'two', kind: 'week', grantedAt: ''),
-        ]);
+        ..zoo = _paired(
+          'gnu',
+          version: '0.1',
+          eggs: const [
+            ZooEgg(id: 'one', kind: 'turn', grantedAt: ''),
+            ZooEgg(id: 'two', kind: 'week', grantedAt: ''),
+          ],
+        );
       const channel = MethodChannel('harness/swarm_tabs');
       Map<String, dynamic>? state;
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
-        if (call.method == 'update') state = Map<String, dynamic>.from(call.arguments as Map);
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        if (call.method == 'update') {
+          state = Map<String, dynamic>.from(call.arguments as Map);
+        }
         if (call.method == 'daemonState') state?['daemon'] = call.arguments;
         return null;
       });
       addTearDown(() async {
         await tester.pumpWidget(const SizedBox());
         await tester.pump();
-        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        );
       });
       await _capture(
         tester,
@@ -2039,12 +2080,16 @@ void main() {
           projectStore: SwarmProjectStore(),
           zoo: zoo,
           zooTransport: remote,
+          experimentalFeatures: experiments,
           daemonClock: () => tester.binding.clock.now(),
         ),
         act: () async {
           app.notifyListeners();
           await tester.pump();
-          await app.handleMachineEventForTest('m', {'type': 'turn_ended', 'agentId': 'a0'});
+          await app.handleMachineEventForTest('m', {
+            'type': 'turn_ended',
+            'agentId': 'a0',
+          });
           await tester.pump(const Duration(milliseconds: 3100));
         },
       );
@@ -2055,16 +2100,25 @@ void main() {
         expect(daemon.containsKey('tallyCells'), isFalse);
         if (_output case final output?) {
           await tester.runAsync(() async {
-            await File('$output/creature-only-native.json').writeAsString(jsonEncode(state));
-            await File('$output/catalog.json').writeAsString(jsonEncode([
-              {'id': 'creature-only-native', 'label': 'Git branches | creature'},
-            ]));
+            await File('$output/creature-only-native.json')
+                .writeAsString(jsonEncode(state));
+            await File('$output/catalog.json').writeAsString(
+              jsonEncode([
+                {
+                  'id': 'creature-only-native',
+                  'label': 'Git branches | creature',
+                },
+              ]),
+            );
           });
         }
       } else {
         final slot = find.byKey(const ValueKey('daemon-slot'));
         final cell = workspaceBarCellSizeOf(tester.element(slot));
-        expect(find.descendant(of: slot, matching: find.byType(Text)), findsOneWidget);
+        expect(
+          find.descendant(of: slot, matching: find.byType(Text)),
+          findsOneWidget,
+        );
         expect(tester.getRect(slot).width, cell.width * 10);
         expect(tester.getRect(slot).right, lessThanOrEqualTo(width));
       }
@@ -2101,6 +2155,13 @@ void main() {
           ..revision = 1;
         final switchOn = ValueNotifier(preview);
         addTearDown(switchOn.dispose);
+        final experiments = MemoryExperimentalFeaturesStore(
+          storage: MemoryStore(),
+        );
+        addTearDown(experiments.dispose);
+        if (!guest) {
+          await experiments.set(ExperimentalFeature.focusBarCreature, true);
+        }
         await _capture(
           tester,
           'workspace-bar-$name-${width.toInt()}',
@@ -2112,6 +2173,7 @@ void main() {
             zoo: zoo,
             zooTransport: remote,
             daemonsPreview: switchOn,
+            experimentalFeatures: experiments,
           ),
           settle: const Duration(milliseconds: 200),
         );

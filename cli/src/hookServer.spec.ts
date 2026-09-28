@@ -254,6 +254,22 @@ describe('the desk proxy', () => {
   })
 })
 
+describe('account Experimental settings proxy', () => {
+  it('reads through the account proxy and guards writes with the local header', async () => {
+    const snapshot = { accountId: 'owner', revision: 0, features: { focus_bar_creature: false, share_button: false } }
+    const write = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { ...snapshot, echo: body } } }))
+    const { base } = await start({ onExperimentalRead: async () => ({ status: 200, body: { success: true, data: snapshot } }), onExperimentalWrite: write })
+    expect((await (await fetch(`${base}/api/experimental-settings`)).json())).toEqual({ success: true, data: snapshot })
+    const body = { accountId: 'owner', feature: 'share_button', enabled: true }
+    expect((await fetch(`${base}/api/experimental-settings`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).status).toBe(403)
+    expect(write).not.toHaveBeenCalled()
+    const saved = await fetch(`${base}/api/experimental-settings`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: JSON.stringify(body) })
+    expect(saved.status).toBe(200)
+    expect(write).toHaveBeenCalledExactlyOnceWith(body)
+    expect((await fetch(`${base}/api/experimental-settings`, { method: 'PATCH', headers: { 'x-adapter-local': '1' }, body: '{bad' })).status).toBe(400)
+  })
+})
+
 describe('the zoo proxy', () => {
   it('reads the zoo ungated and writes its ops only with the local header, body passed through', async () => {
     const zoo = { daemons: [], eggs: [], pair: null, habits: [], firstEgg: false, pity: 0, easter: [] }

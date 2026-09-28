@@ -26,7 +26,8 @@
  * Dark unless the server's daemons switch is on (lib/daemonsSwitch.ts, `HARNESS_DAEMONS`): off, none of
  * this is registered and both paths answer the server's ordinary 404; on with an allowlist
  * (`HARNESS_DAEMONS_USERS`), an account outside it gets that same 404 before anything is read or written.
- * A client reads the 404 as "daemons are off" and shows nothing of them.
+ * Production also requires the account's focus_bar_creature opt-in; absent or false returns 404
+ * without reading or changing its collection. A client reads 404 as "daemons are off" and hides it.
  */
 import type { FastifyInstance } from 'fastify'
 import { Prisma } from '@prisma/client'
@@ -37,6 +38,7 @@ import { daemonsFor, DAEMONS_DARK, type DaemonsSwitch } from '../lib/daemonsSwit
 import { applyZooOps, emptyZoo, parseZoo, zooOpsBodySchema, zooShownChanged, type Hatched, type Zoo, type ZooContext, type ZooDoc, type ZooOp } from '../lib/zoo.js'
 import { validateBody } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
+import { readExperimentalSettings } from '../lib/experimentalSettings.js'
 
 const WRITE_ATTEMPTS = 5
 /** Two first-ever hatches of one daemon at once both try to create its counter; the loser increments. */
@@ -103,6 +105,8 @@ function keepSerials(pool: SerialPool, used: Array<[string, number]>): void {
 export interface ZooRouteOptions {
   /** Whether this server has daemons, and for whom. Absent: dark, nothing registered. */
   daemons?: DaemonsSwitch
+  /** Production requires the account's explicit Experimental choice as well as server availability. */
+  requireAccountOptIn?: boolean
 }
 
 export async function zooRoutes(app: FastifyInstance, opts: ZooRouteOptions = {}): Promise<void> {
@@ -113,6 +117,9 @@ export async function zooRoutes(app: FastifyInstance, opts: ZooRouteOptions = {}
   // this plugin, so it guards these routes only.
   app.addHook('preHandler', async (req, reply) => {
     if (!daemonsFor(daemons, req.user)) return reply.callNotFound()
+    if (opts.requireAccountOptIn && !(await readExperimentalSettings(req.user!.sub)).features.focus_bar_creature) {
+      return reply.callNotFound()
+    }
   })
 
   app.get('/api/zoo', async (req, reply) => {
