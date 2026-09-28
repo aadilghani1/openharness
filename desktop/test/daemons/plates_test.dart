@@ -12,6 +12,7 @@ import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/daemons/daemon_face.dart';
 import 'package:harness/daemons/plates.dart';
 import 'package:harness/daemons/render.dart';
+import 'package:harness/daemons/individuals.dart';
 import 'package:harness/daemons/roster.dart';
 import 'package:harness/daemons/zoo.dart';
 import 'package:harness/daemons/zoo_controller.dart';
@@ -232,6 +233,10 @@ void main() {
           shiny: f['shiny'] == true,
           serial: f['serial'] as int?,
           nickname: f['nickname'] as String?,
+          name: f['name'] as String?,
+          traits: f['seed'] is int
+              ? rollTraits(roster, d.id, f['seed'] as int)
+              : null,
           hatched: f['hatched'] as String?,
           egg: f['egg'] as String?,
         );
@@ -317,10 +322,10 @@ void main() {
         [
           {
             'op': 'zoo.seed',
-            'zoo': const Zoo(
+            'zoo': Zoo(
               daemons: [
-                ZooDaemon(id: 'fish', hatchedAt: '', egg: 'first'),
-                ZooDaemon(id: 'gnu', hatchedAt: '', egg: 'turn'),
+                ZooDaemon(id: 'fish', hatched: '', egg: 'first'),
+                ZooDaemon(id: 'gnu', hatched: '', egg: 'turn'),
               ],
               pair: 'fish',
               habits: ['turn'],
@@ -331,7 +336,7 @@ void main() {
         now: at,
       ).zoo;
       expect(seeded.daemons.map((d) => d.id), ['gnu']);
-      expect(seeded.pair, 'gnu');
+      expect(seeded.pair, legacyZooUid('gnu'));
       // History dates: 08-25 tux, 09-09 bug, 09-27 gnu.
       expect(roster.rules.historyDates['08-25'], 'tux');
       expect(roster.rules.historyDates['09-09'], 'bug');
@@ -343,17 +348,17 @@ void main() {
     Future<DaemonFace> panel(WidgetTester tester, DateTime at) async {
       final storage = _Memory()
         ..values[ZooController.localZooKey] = jsonEncode({
-          'zoo': const Zoo(
+          'zoo': Zoo(
             daemons: [
               ZooDaemon(
                 id: 'tim',
-                hatchedAt: '2026-09-27T09:00:00Z',
+                hatched: '2026-09-27T09:00:00Z',
                 egg: 'first',
                 version: '2.0',
                 xp: 600,
               ),
               // Owned before its drop went on hold: never on a shelf.
-              ZooDaemon(id: 'fish', hatchedAt: '', egg: 'turn'),
+              ZooDaemon(id: 'fish', hatched: '', egg: 'turn'),
             ],
             pair: 'tim',
             habits: ['turn', 'split', 'find'],
@@ -431,7 +436,7 @@ void main() {
           roster,
           roster.byId('tim')!,
           version: '2.0',
-          hatchedAt: '2026-09-27T09:00:00Z',
+          hatched: '2026-09-27T09:00:00Z',
           egg: 'first',
         ),
       );

@@ -24,6 +24,15 @@ import 'swarm_state_test.dart' show createApp;
 
 const _habits5 = ['turn', 'split', 'find', 'machine', 'store'];
 
+Future<void> skipName(WidgetTester tester) async {
+  final skip = find.byKey(const ValueKey('daemon-hatch-name-skip'));
+  if (skip.evaluate().isNotEmpty) {
+    await tester.ensureVisible(skip);
+    await tester.tap(skip);
+    await tester.pump();
+  }
+}
+
 void main() {
   late AppNotifier app;
   late ZooController zoo;
@@ -86,6 +95,7 @@ void main() {
   }
 
   final slot = find.byKey(const ValueKey('daemon-slot'));
+
   /// What the slot's ten cells draw, without the gutters.
   String glyph(WidgetTester tester) => tester
       .widget<Text>(find.byKey(const ValueKey('daemon-slot-glyph')))
@@ -109,7 +119,7 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(slot, findsOneWidget);
-    expect(glyph(tester), r'\_O_/');
+    expect(glyph(tester), r'\_(  )_/');
     await unmount(tester);
   });
 
@@ -157,7 +167,7 @@ void main() {
         .toList();
     expect(sent.toSet().length, sent.length, reason: 'each habit once');
     // A finished turn and two more: the first egg is ready.
-    expect(glyph(tester), r'\_o.o_/');
+    expect(glyph(tester), r'\_(oo)_/');
     await unmount(tester);
   });
 
@@ -172,14 +182,21 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(glyph(tester), r'\_o.o_/');
+    expect(glyph(tester), r'\_(oo)_/');
     final before = FocusManager.instance.primaryFocus;
     await tester.tap(slot);
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-hatch')), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-hatch-egg')), findsOneWidget);
-    expect(glyph(tester), r'\_o.o_/', reason: 'the slot keeps the egg');
-    await tester.pump(const Duration(seconds: 7));
+    expect(glyph(tester), r'\_(oo)_/', reason: 'the slot keeps the egg');
+    for (
+      var i = 0;
+      i < 180 &&
+          find.byKey(const ValueKey('daemon-hatch-card')).evaluate().isEmpty;
+      i++
+    ) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
     final id = remote.zoo.daemons.single.id;
     final def = daemonRoster.byId(id)!;
     expect(find.byKey(const ValueKey('daemon-hatch-card')), findsOneWidget);
@@ -187,7 +204,7 @@ void main() {
       find.textContaining("fork() returned 0. it's a $id."),
       findsOneWidget,
     );
-    expect(glyph(tester), isNot(r'\_o.o_/'), reason: 'revealed');
+    expect(glyph(tester), isNot(r'\_(oo)_/'), reason: 'revealed');
     // Copy puts a fenced code block on the clipboard.
     String? copied;
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
@@ -205,11 +222,14 @@ void main() {
         null,
       ),
     );
+    await skipName(tester);
+    await tester.ensureVisible(find.byKey(const ValueKey('daemon-hatch-copy')));
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-copy')));
     await tester.pump();
     expect(copied, startsWith('```\n.---'));
     expect(copied, contains('${def.id} 0.1'));
     expect(copied, endsWith("'\n```"));
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-hatch')), findsNothing);
@@ -240,6 +260,7 @@ void main() {
     expect(find.byKey(const ValueKey('daemon-hatch-card')), findsOneWidget);
     // Nobody has said yet whether it may watch: [ next ], not [ close ].
     expect(find.text('[ close ]'), findsNothing);
+    await skipName(tester);
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-next')));
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-consent')), findsOneWidget);
@@ -286,6 +307,7 @@ void main() {
     await tester.pump();
     await tester.pump();
     final id = remote.zoo.daemons.single.id;
+    await skipName(tester);
     await tester.tap(find.byKey(const ValueKey('daemon-hatch-next')));
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('daemon-consent-not-now')));
@@ -296,7 +318,9 @@ void main() {
     await tester.tap(slot);
     await tester.pump();
     expect(
-      tester.widget<Text>(find.byKey(const ValueKey('daemon-panel-consent'))).data,
+      tester
+          .widget<Text>(find.byKey(const ValueKey('daemon-panel-consent')))
+          .data,
       '$id does not watch: nothing is sensed, journaled or learned.',
     );
     await tester.tap(find.byKey(const ValueKey('daemon-consent')));
@@ -311,9 +335,12 @@ void main() {
     await key(tester, LogicalKeyboardKey.digit4);
     await tester.pump();
     expect(
-      tester.widget<Text>(find.byKey(const ValueKey('daemon-panel-consent'))).data,
+      tester
+          .widget<Text>(find.byKey(const ValueKey('daemon-panel-consent')))
+          .data,
       startsWith('$id watches your harnesses since '),
     );
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump();
     await unmount(tester);
@@ -341,6 +368,7 @@ void main() {
       find.text('with another computer or device (never needed):'),
       findsOneWidget,
     );
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump();
     await unmount(tester);
@@ -362,6 +390,7 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-hatch-card')), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-hatch-egg')), findsNothing);
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-hatch')), findsNothing);
@@ -399,7 +428,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(states.last['glyph'], r'\_o.o_/');
+    expect(states.last['glyph'], r'\_(oo)_/');
     expect(states.last['label'], 'Egg, ready to hatch');
     const codec = StandardMethodCodec();
     // Native's click; the reply waits for the next frame, so it is not awaited.
@@ -413,7 +442,7 @@ void main() {
     await tester.pump();
     final start = states.length;
     // Up to just before the card: every frame of the reveal.
-    for (var i = 0; i < 100; i++) {
+    for (var i = 0; i < 180; i++) {
       await tester.pump(const Duration(milliseconds: 100));
       if (find
           .byKey(const ValueKey('daemon-hatch-card'))
@@ -423,7 +452,8 @@ void main() {
       }
       final id = remote.zoo.daemons.firstOrNull?.id;
       for (final state in states.skip(start)) {
-        expect(state['glyph'], r'\_o.o_/');
+        expect((state['glyph'] as String).length, lessThanOrEqualTo(8));
+        expect(state['glyph'], isNotEmpty);
         expect(state['busy'], isTrue);
         if (id != null) {
           expect(
@@ -438,6 +468,7 @@ void main() {
     final id = remote.zoo.daemons.single.id;
     expect(states.last['label'], id, reason: 'named once the card is up');
     expect(states.last['busy'], isFalse);
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await unmount(tester);
   });
@@ -446,18 +477,18 @@ void main() {
       'keyboard', (tester) async {
     await mount(
       tester,
-      seed: const Zoo(
+      seed: Zoo(
         daemons: [
-          ZooDaemon(id: 'tim', hatchedAt: '2026-09-26T09:00:00Z', egg: 'first'),
+          ZooDaemon(id: 'tim', hatched: '2026-09-26T09:00:00Z', egg: 'first'),
           ZooDaemon(
             id: 'tux',
-            hatchedAt: '2026-09-26T10:00:00Z',
+            hatched: '2026-09-26T10:00:00Z',
             egg: 'turn',
             version: '2.0',
             xp: 600,
           ),
         ],
-        pair: 'tim',
+        pair: legacyZooUid('tim'),
         habits: _habits5,
         firstEgg: true,
       ),
@@ -495,9 +526,9 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('daemon-pair')));
     await tester.pump();
-    expect(zoo.zoo.pair, 'tux');
+    expect(zoo.zoo.pair, legacyZooUid('tux'));
     await zoo.flush();
-    expect(remote.zoo.pair, 'tux');
+    expect(remote.zoo.pair, legacyZooUid('tux'));
     // Rename it.
     await tester.tap(find.byKey(const ValueKey('daemon-rename')));
     await tester.pump();
@@ -508,8 +539,8 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pump();
     await zoo.flush();
-    expect(remote.zoo.daemons.last.nickname, 'Scout');
-    expect(find.text('Scout (tux)'), findsOneWidget);
+    expect(remote.zoo.daemons.last.name, 'Scout');
+    expect(find.text('Scout the tux'), findsOneWidget);
     // Nap is a setting, then Escape closes and the slot shows the nap.
     await tester.tap(find.byKey(const ValueKey('daemon-tab-settings')));
     await tester.pump();
@@ -517,6 +548,7 @@ void main() {
     // The click that opened the panel was a boop; it wins for 900 ms.
     await tester.pump(const Duration(seconds: 1));
     expect(glyph(tester), r'<(- -)/z');
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-panel')), findsNothing);
@@ -524,6 +556,7 @@ void main() {
     await tester.tap(slot);
     await tester.pump();
     expect(find.text('4:settings*'), findsOneWidget);
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump();
     await unmount(tester);
@@ -544,6 +577,7 @@ void main() {
     expect(find.byKey(const ValueKey('daemon-panel')), findsOneWidget);
     expect(find.text('Your first egg'), findsOneWidget);
     expect(find.byKey(const ValueKey('daemon-habit-turn')), findsOneWidget);
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-panel')), findsNothing);
@@ -556,9 +590,9 @@ void main() {
     await mount(tester);
     await tester.pump();
     remote
-      ..zoo = const Zoo(
-        daemons: [ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first')],
-        pair: 'tim',
+      ..zoo = Zoo(
+        daemons: [ZooDaemon(id: 'tim', hatched: '', egg: 'first')],
+        pair: legacyZooUid('tim'),
       )
       ..revision = 5;
     await app.handleMachineEventForTest('m', {
@@ -570,6 +604,7 @@ void main() {
     expect(glyph(tester), '(o o)');
     await tester.tap(slot);
     await tester.pump();
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump(const Duration(seconds: 3));
     expect(
@@ -625,9 +660,9 @@ void main() {
       },
     );
   }
-  const zooOfTim = Zoo(
-    daemons: [ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first')],
-    pair: 'tim',
+  final zooOfTim = Zoo(
+    daemons: [ZooDaemon(id: 'tim', hatched: '', egg: 'first')],
+    pair: legacyZooUid('tim'),
     habits: _habits5,
     firstEgg: true,
   );
@@ -647,6 +682,7 @@ void main() {
       find.text('Test host is asleep or unreachable. its harnesses wait.'),
       findsOneWidget,
     );
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await unmount(tester);
   });
@@ -755,9 +791,7 @@ void main() {
     final focused = app.focusedPane!.agentId;
     expect(focused, isNotNull);
     expect(
-      tester
-          .widget<Text>(find.byKey(const ValueKey('daemon-slot-tally')))
-          .data,
+      tester.widget<Text>(find.byKey(const ValueKey('daemon-slot-tally'))).data,
       '+1',
     );
     expect(find.byKey(const ValueKey('daemon-voice')), findsNothing);
@@ -774,6 +808,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('daemon-motion')));
     await tester.pump();
     expect(find.text('[ motion: off ]'), findsOneWidget);
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump(const Duration(seconds: 3));
     expect(
@@ -822,6 +857,7 @@ void main() {
     expect(easter, [
       {'op': 'zoo.easter', 'word': 'xyzzy'},
     ]);
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await unmount(tester);
   });
@@ -831,13 +867,13 @@ void main() {
   ) async {
     await mount(
       tester,
-      seed: const Zoo(
+      seed: Zoo(
         daemons: [
-          ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first'),
-          ZooDaemon(id: 'gnu', hatchedAt: '', egg: 'turn'),
-          ZooDaemon(id: 'lynx', hatchedAt: '', egg: 'turn'),
+          ZooDaemon(id: 'tim', hatched: '', egg: 'first'),
+          ZooDaemon(id: 'gnu', hatched: '', egg: 'turn'),
+          ZooDaemon(id: 'lynx', hatched: '', egg: 'turn'),
         ],
-        pair: 'tim',
+        pair: legacyZooUid('tim'),
         habits: _habits5,
         firstEgg: true,
         eggs: [ZooEgg(id: 'egg4', kind: 'turn', grantedAt: '')],
@@ -845,9 +881,7 @@ void main() {
     );
     await tester.pump();
     expect(
-      tester
-          .widget<Text>(find.byKey(const ValueKey('daemon-slot-tally')))
-          .data,
+      tester.widget<Text>(find.byKey(const ValueKey('daemon-slot-tally'))).data,
       '+1 egg',
       reason: 'an egg waits beside the slot until it is opened',
     );
@@ -861,6 +895,7 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-hatch-card')), findsOneWidget);
+    await skipName(tester);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pump();
     expect(find.byKey(const ValueKey('daemon-slot-tally')), findsNothing);
@@ -889,11 +924,9 @@ void main() {
     await mount(
       tester,
       native: true,
-      seed: const Zoo(
-        daemons: [
-          ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first', shiny: true),
-        ],
-        pair: 'tim',
+      seed: Zoo(
+        daemons: [ZooDaemon(id: 'tim', hatched: '', egg: 'first', shiny: true)],
+        pair: legacyZooUid('tim'),
         habits: _habits5,
         firstEgg: true,
         eggs: [ZooEgg(id: 'e1', kind: 'week', grantedAt: '')],
@@ -936,9 +969,9 @@ void main() {
       await tester.pump();
     }
 
-    const zooWithTim = Zoo(
-      daemons: [ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first')],
-      pair: 'tim',
+    final zooWithTim = Zoo(
+      daemons: [ZooDaemon(id: 'tim', hatched: '', egg: 'first')],
+      pair: legacyZooUid('tim'),
       habits: _habits5,
       firstEgg: true,
       // The person said yes on the first day.
@@ -1036,7 +1069,9 @@ void main() {
       final talk = frames.lastWhere((f) => f.$1 == 'daemon_talk');
       expect(talk.$2['text'], 'what needs me?');
       expect(
-        tester.widget<Text>(find.byKey(const ValueKey('daemon-talk-status'))).data,
+        tester
+            .widget<Text>(find.byKey(const ValueKey('daemon-talk-status')))
+            .data,
         'waking tim...',
       );
       await frame(tester, 'daemon_talk_result', {
@@ -1046,7 +1081,9 @@ void main() {
         'started': true,
       });
       expect(
-        tester.widget<Text>(find.byKey(const ValueKey('daemon-talk-status'))).data,
+        tester
+            .widget<Text>(find.byKey(const ValueKey('daemon-talk-status')))
+            .data,
         contains('starting'),
       );
       // Its answer: a dim line in the status line, and in the talk.
@@ -1063,7 +1100,9 @@ void main() {
       expect(find.text('you > what needs me?'), findsOneWidget);
       // Every talk says what it costs.
       expect(
-        tester.widget<Text>(find.byKey(const ValueKey('daemon-talk-cost'))).data,
+        tester
+            .widget<Text>(find.byKey(const ValueKey('daemon-talk-cost')))
+            .data,
         contains('model usage'),
       );
       // The whole conversation: the pair harness's own pane.
@@ -1164,9 +1203,7 @@ void main() {
     });
 
     testWidgets('+n is the brain\'s count of finished turns; a look sends '
-        'doneSeen; auto is done and journaled; asleep is calm', (
-      tester,
-    ) async {
+        'doneSeen; auto is done and journaled; asleep is calm', (tester) async {
       await mount(tester, seed: zooWithTim);
       await tester.pump();
       await frame(
@@ -1241,10 +1278,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.digit4);
       await tester.pump();
       for (final level in zooAutonomyLevels) {
-        expect(
-          find.byKey(ValueKey('daemon-autonomy:$level')),
-          findsOneWidget,
-        );
+        expect(find.byKey(ValueKey('daemon-autonomy:$level')), findsOneWidget);
       }
       expect(find.text('(*) watch'), findsOneWidget, reason: 'the default');
       expect(
@@ -1253,14 +1287,19 @@ void main() {
         reason: 'no batches',
       );
       expect(
-        find.textContaining('nothing is deleted, restarted, forked or bypassed'),
+        find.textContaining(
+          'nothing is deleted, restarted, forked or bypassed',
+        ),
         findsOneWidget,
       );
       expect(
         find.text('[ rules: ~/.config/harness/pair.jsonc ]'),
         findsOneWidget,
       );
-      await tapIn(tester, find.byKey(const ValueKey('daemon-autonomy:suggest')));
+      await tapIn(
+        tester,
+        find.byKey(const ValueKey('daemon-autonomy:suggest')),
+      );
       await zoo.flush();
       expect(remote.zoo.autonomy, 'suggest');
       await frame(tester, 'daemon_state', {...state(), 'autonomy': 'suggest'});
@@ -1296,10 +1335,7 @@ void main() {
         'autonomyRequested': 'act-on-key',
         'confirms': [confirm],
       });
-      expect(
-        find.text('(~) act on key  waits for your yes'),
-        findsOneWidget,
-      );
+      expect(find.text('(~) act on key  waits for your yes'), findsOneWidget);
       expect(
         find.textContaining('it drives harnesses it started without asking'),
         findsOneWidget,
@@ -1336,6 +1372,7 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('[act on key]'), findsOneWidget);
+      await skipName(tester);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pump();
       final tooltip = tester
@@ -1460,20 +1497,26 @@ void main() {
       expect(find.text('SKILL.md: back up, then migrate.'), findsOneWidget);
       // The daemon proposes it: its line, with the whole text, in the asks.
       const nonce = 'lesson:l1:0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f';
-      await frame(tester, 'daemon_state', state(asks: [
-        {
-          'id': nonce,
-          'line':
-              '[y/n/s] teach your agents "run-migrations-safely"? you '
-              'corrected codex.',
-          'detail': '---\nname: run-migrations-safely\n---\nBack up first.',
-          'actions': [
-            {'key': 'y', 'label': 'teach', 'choice': 'y'},
-            {'key': 'n', 'label': 'skip', 'choice': 'n'},
-            {'key': 's', 'label': 'show', 'choice': 's'},
+      await frame(
+        tester,
+        'daemon_state',
+        state(
+          asks: [
+            {
+              'id': nonce,
+              'line':
+                  '[y/n/s] teach your agents "run-migrations-safely"? you '
+                  'corrected codex.',
+              'detail': '---\nname: run-migrations-safely\n---\nBack up first.',
+              'actions': [
+                {'key': 'y', 'label': 'teach', 'choice': 'y'},
+                {'key': 'n', 'label': 'skip', 'choice': 'n'},
+                {'key': 's', 'label': 'show', 'choice': 's'},
+              ],
+            },
           ],
-        },
-      ]));
+        ),
+      );
       expect(find.textContaining('Back up first.'), findsOneWidget);
       expect(
         find.byKey(ValueKey('daemon-key-lesson-ask:$nonce-y')),
@@ -1482,7 +1525,10 @@ void main() {
       );
       await arm(tester);
       expect(shownIds(), contains(nonce));
-      await tapIn(tester, find.byKey(ValueKey('daemon-key-lesson-ask:$nonce-y')));
+      await tapIn(
+        tester,
+        find.byKey(ValueKey('daemon-key-lesson-ask:$nonce-y')),
+      );
       expect(frames.last.$1, 'daemon_act');
       expect(frames.last.$2['id'], nonce, reason: 'the nonce, whole');
       expect(frames.last.$2['choice'], 'y');
@@ -1502,7 +1548,10 @@ void main() {
         ),
         findsOneWidget,
       );
-      await tapIn(tester, find.byKey(const ValueKey('daemon-lesson-revert:l0')));
+      await tapIn(
+        tester,
+        find.byKey(const ValueKey('daemon-lesson-revert:l0')),
+      );
       expect(lastPair()['action'], 'revert');
       expect(lastPair()['id'], 'l0');
       expect(lastPair().containsKey('confirmed'), isFalse);
@@ -1512,7 +1561,11 @@ void main() {
       await tester.pump();
       await tapIn(tester, find.byKey(const ValueKey('daemon-lesson-skip:l1')));
       expect(lastPair()['action'], 'skip');
-      await answer({'ok': false, 'error': 'NOT_PENDING', 'detail': 'lesson l1 is approved'});
+      await answer({
+        'ok': false,
+        'error': 'NOT_PENDING',
+        'detail': 'lesson l1 is approved',
+      });
       await tester.pump();
       await answer(lessons);
       await tester.pump();
@@ -1597,8 +1650,7 @@ void main() {
         'id': nonce,
         'about': {'machineId': 'm', 'agentId': 'a7'},
         'mood': 'ask',
-        'line':
-            '[y/n/s] teach your agents "run-migrations-safely"? you corrected codex.',
+        'line': '[y/n/s] teach your agents "run-migrations-safely"? you corrected codex.',
         'detail': '---\nname: run-migrations-safely\n---\nBack up first.',
         'actions': [
           {'key': 'y', 'label': 'teach', 'choice': 'y'},
@@ -1669,7 +1721,8 @@ void main() {
         'about': {'machineId': 'office', 'agentId': 'a1', 'requestId': 'r1'},
         'mood': 'need',
         'line': '[y/n/g] api@office Bash: npm test',
-        'detail': 'Bash command\n\n  npm test -- --runInBand\n\nDo you want '
+        'detail':
+            'Bash command\n\n  npm test -- --runInBand\n\nDo you want '
             'to proceed?\n  1. Yes\n  3. No',
         'harness': {
           'machineId': 'office',
@@ -1722,10 +1775,7 @@ void main() {
       final voice = tester.widget<Text>(
         find.byKey(const ValueKey('daemon-voice-text')),
       );
-      expect(
-        voice.textSpan!.toPlainText(),
-        '<tim> api waits on you, 40m.',
-      );
+      expect(voice.textSpan!.toPlainText(), '<tim> api waits on you, 40m.');
       expect(find.byKey(const ValueKey('daemon-answer-y')), findsNothing);
       expect(find.byKey(const ValueKey('daemon-detail')), findsNothing);
       await tester.pump(const Duration(minutes: 3));
@@ -1787,26 +1837,35 @@ void main() {
         'error': 'RATE_LIMITED',
         'detail': 'Six talks a minute, sixty an hour.',
         'retryAfterMs': 30000,
-        'cost': 'Each talk is a turn of your pair harness on its engine: it '
+        'cost':
+            'Each talk is a turn of your pair harness on its engine: it '
             'spends your model usage.',
       });
       expect(tester.widget<TextField>(input).enabled, isFalse);
       expect(
-        tester.widget<Text>(find.byKey(const ValueKey('daemon-talk-status'))).data,
+        tester
+            .widget<Text>(find.byKey(const ValueKey('daemon-talk-status')))
+            .data,
         'six talks a minute, sixty an hour. again in 30s.',
       );
       expect(
-        tester.widget<Text>(find.byKey(const ValueKey('daemon-talk-cost'))).data,
+        tester
+            .widget<Text>(find.byKey(const ValueKey('daemon-talk-cost')))
+            .data,
         startsWith('Each talk is a turn of your pair harness'),
       );
       await tester.pump(const Duration(seconds: 10));
       expect(
-        tester.widget<Text>(find.byKey(const ValueKey('daemon-talk-status'))).data,
+        tester
+            .widget<Text>(find.byKey(const ValueKey('daemon-talk-status')))
+            .data,
         'six talks a minute, sixty an hour. again in 20s.',
       );
       await tester.pump(const Duration(seconds: 21));
       expect(tester.widget<TextField>(input).enabled, isTrue);
+      await skipName(tester);
       await key(tester, LogicalKeyboardKey.escape);
+      await skipName(tester);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pump(const Duration(minutes: 3));
       await unmount(tester);

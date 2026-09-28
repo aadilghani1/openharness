@@ -128,14 +128,15 @@ List<String> morphPortrait(
   }
 
   final a = fit(from), b = fit(to);
-  final differ = [
-    for (var r = 0; r < rows; r++)
-      for (var c = 0; c < cols; c++)
-        if (a[r][c] != b[r][c]) (r, c),
-  ]..sort((x, y) {
-      final bx = _bayer[x.$1 % 4][x.$2 % 4], by = _bayer[y.$1 % 4][y.$2 % 4];
-      return bx != by ? bx - by : (x.$1 * cols + x.$2) - (y.$1 * cols + y.$2);
-    });
+  final differ =
+      [
+        for (var r = 0; r < rows; r++)
+          for (var c = 0; c < cols; c++)
+            if (a[r][c] != b[r][c]) (r, c),
+      ]..sort((x, y) {
+        final bx = _bayer[x.$1 % 4][x.$2 % 4], by = _bayer[y.$1 % 4][y.$2 % 4];
+        return bx != by ? bx - by : (x.$1 * cols + x.$2) - (y.$1 * cols + y.$2);
+      });
   final turned = (differ.length * step.clamp(0, steps) / steps).round();
   for (final (r, c) in differ.take(turned)) {
     a[r][c] = b[r][c];
@@ -376,10 +377,11 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
   void _tellSlot() {
     final stage = hatchSlotStage(_stage);
     if (stage == null) return;
-    widget.onStage?.call(
-      stage,
-      sprite: stage == 'hatchling' ? _hatchlingSprite : null,
-    );
+    final sprite = stage == 'hatchling' ? _hatchlingSprite : null;
+    // The first stage is set in initState, while the parent's overlay builds.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onStage?.call(stage, sprite: sprite);
+    });
   }
 
   /// The hatchling's 0.1 sprite, as an individual shows it (its extra).
@@ -467,7 +469,12 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
     if (owned != null && !hatch.duplicate) widget.plates?.prefetch(owned);
     final grew = hatch.duplicate && _grew != null;
     if (!widget.reduceMotion && !_skip) {
-      if (!await _play(HatchStage.rock, 'rock', each: ms?.rock ?? 65, times: 2)) {
+      if (!await _play(
+        HatchStage.rock,
+        'rock',
+        each: ms?.rock ?? 65,
+        times: 2,
+      )) {
         return;
       }
       if (!await _play(
@@ -495,7 +502,11 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       _markRevealed();
       if (grew) {
         if (!await _wait(1400)) return;
-        for (var step = 1; step <= 3 && !widget.reduceMotion && !_skip; step++) {
+        for (
+          var step = 1;
+          step <= 3 && !widget.reduceMotion && !_skip;
+          step++
+        ) {
           _show(() {
             _stage = HatchStage.grew;
             _morph = step;
@@ -589,7 +600,13 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         DaemonMood.idle,
         motion: false,
       );
-      return _Hatchling([PlateFrame(rows, [for (final r in rows) '.' * r.length])], 170, traits);
+      return _Hatchling(
+        [
+          PlateFrame(rows, [for (final r in rows) '.' * r.length]),
+        ],
+        170,
+        traits,
+      );
     }
     final owned = _owned;
     final art = owned == null
@@ -684,7 +701,9 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
 
   DaemonTraits? get _traits {
     final hatch = _hatch;
-    return hatch == null ? null : rollTraits(roster, hatch.daemonId, hatch.seed);
+    return hatch == null
+        ? null
+        : rollTraits(roster, hatch.daemonId, hatch.seed);
   }
 
   /// Its own portrait plate, once harnessd has drawn it (for the card).
@@ -791,14 +810,11 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         final background = pitch ? daemonPitch : theme.background;
         // On the black stage the ink is light, whatever the theme.
         final fg = pitch ? const Color(0xffd0d0d0) : theme.foreground;
-        final ink = terminalContentStyle(
-          color: fg,
-        ).copyWith(fontFeatures: daemonTextFeatures);
+        final ink = terminalContentStyle(color: fg)
+            .copyWith(fontFeatures: daemonTextFeatures);
         final muted = fg.withValues(alpha: .6);
         return CallbackShortcuts(
-          bindings: {
-            const SingleActivator(LogicalKeyboardKey.escape): _escape,
-          },
+          bindings: {const SingleActivator(LogicalKeyboardKey.escape): _escape},
           child: Focus(
             focusNode: _focus,
             onKeyEvent: _onKey,
@@ -914,7 +930,9 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
         _stage == HatchStage.rise || _stage == HatchStage.silhouette;
     final hFrame = hatchling == null
         ? null
-        : hatchling.frames[silhouetted ? 0 : _loopTick % hatchling.frames.length];
+        : hatchling.frames[silhouetted
+              ? 0
+              : _loopTick % hatchling.frames.length];
     final hRows = hFrame?.rows.length ?? 0;
     final risen = min(_risen ?? hRows, hRows);
     final rim = top + _rim(frame);
@@ -949,7 +967,9 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
                 shiny: shiny,
                 background: background,
               );
-    final lineColour = def == null ? faint : daemonColor(def, theme, shiny: shiny);
+    final lineColour = def == null
+        ? faint
+        : daemonColor(def, theme, shiny: shiny);
     final rows = <String>[];
     final colours = <List<Color?>>[];
     for (var r = 0; r < canvasRows; r++) {
@@ -959,12 +979,16 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
       final rowColours = <Color?>[];
       for (var c = 0; c < width; c++) {
         final ec = c - eggLeft;
-        final eggCh = er >= 0 && er < frame.rows.length && ec >= 0 &&
+        final eggCh =
+            er >= 0 &&
+                er < frame.rows.length &&
+                ec >= 0 &&
                 ec < frame.rows[er].length
             ? frame.rows[er][ec]
             : ' ';
         final hc = c - hLeft;
-        final hCh = hFrame != null &&
+        final hCh =
+            hFrame != null &&
                 hr >= 0 &&
                 hr < hRows &&
                 r < rim + sunk &&
@@ -1033,12 +1057,14 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
           }),
           semanticsLabel: switch (_stage) {
             HatchStage.egg || HatchStage.rock => 'An egg, hatching',
-            HatchStage.burst || HatchStage.tumble || HatchStage.open =>
-              'The egg opens',
+            HatchStage.burst ||
+            HatchStage.tumble ||
+            HatchStage.open => 'The egg opens',
             HatchStage.rise || HatchStage.silhouette => 'A silhouette',
-            _ => def == null
-                ? 'A hatchling'
-                : '${def.id} ${roster.rules.versions.first}',
+            _ =>
+              def == null
+                  ? 'A hatchling'
+                  : '${def.id} ${roster.rules.versions.first}',
           },
           style: style,
         ),

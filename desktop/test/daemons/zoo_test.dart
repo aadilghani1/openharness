@@ -66,7 +66,13 @@ class FakeZooTransport implements ZooTransport {
       ..._doc,
       'hatched': [
         for (final h in result.hatched)
-          {'eggId': h.eggId, 'daemonId': h.daemonId, 'shiny': h.shiny},
+          {
+            'eggId': h.eggId,
+            'daemonId': h.daemonId,
+            'uid': h.uid,
+            'seed': h.seed,
+            'shiny': h.shiny,
+          },
       ],
     };
   }
@@ -98,7 +104,7 @@ void main() {
       zoo = apply(zoo, [habit('resume'), habit('days')]).zoo;
       expect(zoo.setupEgg, isTrue);
       expect(zoo.eggs.map((e) => e.kind), ['first', 'setup']);
-      expect(roster.rules.eggs['setup']!.look, r'\_$_/');
+      expect(roster.rules.eggs['setup']!.mark, r'$');
       zoo = apply(zoo, [habit('elsewhere')]).zoo;
       expect(zoo.eggs, hasLength(2), reason: 'each once');
     });
@@ -118,8 +124,11 @@ void main() {
       expect(zoo.eggs, isEmpty);
       final d = zoo.daemons.single;
       expect(d.id, result.hatched.single.daemonId);
-      expect(zoo.pair, d.id);
-      expect([d.version, d.egg, d.origin, d.serial], ['0.1', 'first', 'local', null]);
+      expect(zoo.pair, d.uid);
+      expect(
+        [d.version, d.egg, d.origin, d.serial],
+        ['0.1', 'first', 'local', null],
+      );
       expect(zoo.pity, 0, reason: 'a first egg can never be beastie');
       final night = apply(
         zoo.copyWith(
@@ -135,7 +144,7 @@ void main() {
       );
     });
 
-    test('regulars first; secrets only from night and easter eggs', () {
+    test('the first four are new; secrets only from night and easter eggs', () {
       var zoo = Zoo.empty;
       final random = Random(3);
       final seen = <String>[];
@@ -143,18 +152,19 @@ void main() {
         for (final d in roster.released(now))
           if (!d.secret) d.id,
       ];
-      for (var i = 0; i < regulars.length; i++) {
+      for (var i = 0; i < 4; i++) {
         final id = drawDaemon(roster, zoo, 'marathon', random, now: now)!;
         expect(zoo.owns(id), isFalse);
         seen.add(id);
         zoo = zoo.copyWith(
           daemons: [
             ...zoo.daemons,
-            ZooDaemon(id: id, hatchedAt: '', egg: 'marathon'),
+            ZooDaemon(id: id, hatched: '', egg: 'marathon'),
           ],
         );
       }
-      expect(seen.toSet(), regulars.toSet(), reason: 'never beastie');
+      expect(seen.toSet(), hasLength(4));
+      expect(seen, isNot(contains('beastie')));
       // Every regular owned: duplicates again, still never beastie from a
       // marathon egg; a night egg can still give it.
       for (var i = 0; i < 200; i++) {
@@ -163,13 +173,17 @@ void main() {
           isNot('beastie'),
         );
       }
+      expect(drawWeights(roster, zoo, 'night', now: now).map((w) => w.$1.id), [
+        ...regulars,
+        'beastie',
+      ]);
       expect(
-        drawWeights(roster, zoo, 'night', now: now).map((w) => w.$1.id),
-        [...regulars, 'beastie'],
-      );
-      expect(
-        drawWeights(roster, Zoo.empty, 'first', now: now)
-            .where((w) => w.$1.secret),
+        drawWeights(
+          roster,
+          Zoo.empty,
+          'first',
+          now: now,
+        ).where((w) => w.$1.secret),
         isEmpty,
       );
       // Before drop 1's release nothing hatches.
@@ -243,67 +257,88 @@ void main() {
       );
     });
 
-    test('a duplicate merges: +150 xp, x2, a shiny one makes yours shiny, '
-        'and it never pairs', () {
+    test('a same-species hatch is a separate individual, without merge xp', () {
       final regulars = [
         for (final d in roster.released(now))
           if (!d.secret) d.id,
       ];
       final zoo = Zoo(
         daemons: [
-          for (final id in regulars) ZooDaemon(id: id, hatchedAt: '', egg: 'turn'),
+          for (final id in regulars)
+            ZooDaemon(id: id, hatched: '', egg: 'turn'),
         ],
-        pair: 'tim',
+        pair: legacyZooUid('tim'),
         eggs: const [ZooEgg(id: 't1', kind: 'turn', grantedAt: '')],
       );
       final r = apply(zoo, [
         {'op': 'zoo.hatch', 'eggId': 't1'},
       ]);
       final hatch = r.hatched.single;
-      expect(hatch.duplicate, isTrue);
-      expect(hatch.xp, roster.rules.duplicateXp);
-      expect(r.zoo.daemons, hasLength(regulars.length), reason: 'no new one');
-      final merged = r.zoo.daemons.firstWhere((d) => d.id == hatch.daemonId);
-      expect(merged.dupes, 1);
-      expect(merged.count, 2);
-      expect(merged.xp, 150);
-      expect(merged.version, '1.0', reason: '150 xp is level 2');
-      expect(r.levelUps.single.id, hatch.daemonId);
-      expect(r.zoo.pair, 'tim');
-      // A zoo stored with two records of one daemon reads as one.
-      final folded = Zoo.fromJson({
-        'daemons': [
-          {'id': 'tux', 'hatchedAt': '', 'egg': 'turn'},
-          {'id': 'tux', 'hatchedAt': '', 'egg': 'week', 'shiny': true},
-          {'id': 'tux', 'hatchedAt': '', 'egg': 'week', 'dupes': 2},
+      final born = r.zoo.byUid(hatch.uid)!;
+      expect(hatch.duplicate, isFalse);
+      expect(r.zoo.daemons, hasLength(regulars.length + 1));
+      expect(born.id, hatch.daemonId);
+      expect(born.seed, inInclusiveRange(1, 0xffffffff));
+      expect(born.seed, hatch.seed);
+      expect(born.uid, matches(RegExp(r'^[a-f0-9]{24}$')));
+      expect(born.uid, isNot(legacyZooUid(born.id)));
+      expect(born.xp, 0);
+      expect(r.levelUps, isEmpty);
+      expect(r.zoo.pair, zoo.pair);
+      expect(
+        r.zoo.daemons.take(regulars.length).map((d) => d.xp),
+        everyElement(0),
+      );
+      expect(
+        Zoo.fromJson(r.zoo.toJson(), roster).daemons,
+        hasLength(regulars.length + 1),
+      );
+    });
+
+    test('eight repeated species make the next hatch new', () {
+      final zoo = Zoo(
+        daemons: [
+          for (var i = 0; i < 9; i++)
+            ZooDaemon(
+              uid: 'individual-$i',
+              id: 'tim',
+              hatched: '',
+              egg: 'turn',
+            ),
         ],
-      }, roster);
-      expect(folded.daemons.single.dupes, 4);
-      expect(folded.daemons.single.shiny, isTrue);
-      expect(folded.daemons.single.egg, 'turn');
+      );
+      expect(zoo.hatchesWithoutNew, 8);
+      final weights = drawWeights(roster, zoo, 'turn', now: now);
+      expect(weights, isNotEmpty);
+      expect(weights.map((w) => w.$1.id), isNot(contains('tim')));
+      final earlier = zoo.copyWith(daemons: zoo.daemons.take(8).toList());
+      expect(
+        drawWeights(roster, earlier, 'turn', now: now).map((w) => w.$1.id),
+        contains('tim'),
+      );
     });
 
     test('pair, nickname, easter and seed follow the rules', () {
-      var zoo = const Zoo(
+      var zoo = Zoo(
         daemons: [
-          ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first'),
-          ZooDaemon(id: 'gnu', hatchedAt: '', egg: 'turn'),
+          ZooDaemon(id: 'tim', hatched: '', egg: 'first'),
+          ZooDaemon(id: 'gnu', hatched: '', egg: 'turn'),
         ],
-        pair: 'tim',
+        pair: legacyZooUid('tim'),
       );
       zoo = apply(zoo, [
-        {'op': 'zoo.pair', 'id': 'tux'},
-        {'op': 'zoo.pair', 'id': 'gnu'},
-        {'op': 'zoo.nickname', 'id': 'gnu', 'nickname': 'x' * 25},
-        {'op': 'zoo.nickname', 'id': 'gnu', 'nickname': 'café'},
-        {'op': 'zoo.nickname', 'id': 'tim', 'nickname': ' Pip '},
+        {'op': 'zoo.pair', 'uid': legacyZooUid('tux')},
+        {'op': 'zoo.pair', 'uid': legacyZooUid('gnu')},
+        {'op': 'zoo.nickname', 'uid': legacyZooUid('gnu'), 'name': 'x' * 25},
+        {'op': 'zoo.nickname', 'uid': legacyZooUid('gnu'), 'name': 'café'},
+        {'op': 'zoo.nickname', 'uid': legacyZooUid('tim'), 'name': ' Pip '},
         {'op': 'zoo.easter', 'word': 'plugh'},
         {'op': 'zoo.easter', 'word': ' XYZZY '},
         {'op': 'zoo.easter', 'word': 'xyzzy'},
       ]).zoo;
-      expect(zoo.pair, 'gnu');
-      expect(zoo.daemons[1].nickname, isNull);
-      expect(zoo.daemons[0].nickname, 'Pip');
+      expect(zoo.pair, legacyZooUid('gnu'));
+      expect(zoo.daemons[1].name, isNull);
+      expect(zoo.daemons[0].name, 'Pip');
       expect(zoo.eggs.single.kind, 'easter');
       // Words never ship: the zoo keeps the hash, as the roster lists it.
       expect(zoo.easter, [easterHash('xyzzy')]);
@@ -316,9 +351,9 @@ void main() {
         reason: 'a word stored before hashing reads as its hash',
       );
       zoo = apply(zoo, [
-        {'op': 'zoo.nickname', 'id': 'tim', 'nickname': null},
+        {'op': 'zoo.nickname', 'uid': legacyZooUid('tim'), 'name': null},
       ]).zoo;
-      expect(zoo.daemons[0].nickname, isNull);
+      expect(zoo.daemons[0].name, isNull);
       // Seed applies only to an empty zoo.
       final seeded = apply(Zoo.empty, [
         {
@@ -369,10 +404,7 @@ void main() {
       zoo = apply(Zoo.empty, [
         {
           'op': 'zoo.seed',
-          'zoo': const Zoo(
-            habits: ['turn'],
-            autonomy: 'suggest',
-          ).toJson(),
+          'zoo': Zoo(habits: ['turn'], autonomy: 'suggest').toJson(),
         },
       ]).zoo;
       expect(zoo.autonomy, 'suggest');
@@ -489,9 +521,9 @@ void main() {
       return (zoo: zoo, grants: grants, levelUps: levelUps);
     }
 
-    const tim = Zoo(
-      daemons: [ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first')],
-      pair: 'tim',
+    final tim = Zoo(
+      daemons: [ZooDaemon(id: 'tim', hatched: '', egg: 'first')],
+      pair: legacyZooUid('tim'),
     );
 
     test('the roster carries the earn and bond rules', () {
@@ -508,7 +540,7 @@ void main() {
         '09-27',
         '10-31',
       ]);
-      expect(roster.rules.eggs['history']!.look, r'\_47_/');
+      expect(roster.rules.eggs['history']!.mark, '#');
       expect(
         [
           earn.minutesPerTurn,
@@ -600,7 +632,9 @@ void main() {
       );
       // Every 10 agent-minutes is one more counted turn.
       expect(
-        play(Zoo.empty, [turn('2026-09-21', 1, minutes: 25)]).zoo.progress.turns,
+        play(Zoo.empty, [
+          turn('2026-09-21', 1, minutes: 25),
+        ]).zoo.progress.turns,
         3,
       );
       // No drop holds the moth yet: the usual pool.
@@ -617,7 +651,9 @@ void main() {
       expect(r.zoo.daemons.single.xp, 75);
       expect(r.zoo.daemons.single.bond, 1);
       expect(r.zoo.daemons.single.version, '0.1');
-      expect(r.levelUps, [(id: 'tim', level: 1, version: '0.1')]);
+      expect(r.levelUps, [
+        (uid: legacyZooUid('tim'), id: 'tim', level: 1, version: '0.1'),
+      ]);
       final more = play(r.zoo, [
         for (var d = 24; d <= 27; d++) turn('2026-09-$d', 20),
       ]);
@@ -631,7 +667,7 @@ void main() {
     test('a full nest holds earned eggs and lets them in after a hatch', () {
       final full = Zoo(
         daemons: tim.daemons,
-        pair: 'tim',
+        pair: legacyZooUid('tim'),
         eggs: [
           for (var i = 0; i < Zoo.maxEggs; i++)
             ZooEgg(id: 'e$i', kind: 'turn', grantedAt: ''),
@@ -672,14 +708,16 @@ void main() {
       final r = play(
         Zoo(
           daemons: tim.daemons,
-          pair: 'tim',
+          pair: legacyZooUid('tim'),
           eggs: [
             for (var i = 0; i < Zoo.maxEggs; i++)
               ZooEgg(id: 'e$i', kind: 'turn', grantedAt: ''),
           ],
           progress: ZooProgress(
             turns: 39,
-            held: [for (var i = 0; i < ZooProgress.maxHeld; i++) ('turn', null)],
+            held: [
+              for (var i = 0; i < ZooProgress.maxHeld; i++) ('turn', null),
+            ],
           ),
         ),
         [turn('2026-09-21', 1)],
@@ -880,6 +918,51 @@ void main() {
       },
     );
 
+    test('two tims are named and paired independently by uid', () async {
+      const firstUid = '000000000000000000000001';
+      const secondUid = '000000000000000000000002';
+      final remote = FakeZooTransport()
+        ..zoo = Zoo(
+          daemons: [
+            ZooDaemon(
+              uid: firstUid,
+              id: 'tim',
+              seed: 17,
+              serial: 42,
+              hatched: '2026-09-27',
+              egg: 'first',
+            ),
+            ZooDaemon(
+              uid: secondUid,
+              id: 'tim',
+              seed: 42,
+              serial: 43,
+              hatched: '2026-09-27',
+              egg: 'turn',
+            ),
+          ],
+          pair: firstUid,
+        );
+      final zoo = controller();
+      addTearDown(zoo.dispose);
+      zoo.bind('account:u1', remote: remote);
+      await pumpEventQueue();
+      expect(zoo.nickname(secondUid, ' dot '), isTrue);
+      zoo.pair(secondUid);
+      await zoo.flush();
+      expect(remote.batches.expand((ops) => ops), [
+        {'op': 'zoo.nickname', 'uid': secondUid, 'name': 'dot'},
+        {'op': 'zoo.pair', 'uid': secondUid},
+      ]);
+      expect(zoo.paired?.uid, secondUid);
+      expect(remote.zoo.byUid(firstUid)?.name, isNull);
+      expect(remote.zoo.byUid(secondUid)?.name, 'dot');
+      expect(remote.zoo.toJson()['paired'], secondUid);
+      expect(zoo.nickname(secondUid, null), isTrue);
+      await zoo.flush();
+      expect(remote.zoo.byUid(secondUid)?.name, isNull);
+    });
+
     test('zoo_changed refetches only when it is news', () async {
       final remote = FakeZooTransport()..revision = 3;
       final zoo = controller();
@@ -891,9 +974,9 @@ void main() {
       await pumpEventQueue();
       expect(remote.fetches, 1);
       remote
-        ..zoo = const Zoo(
-          daemons: [ZooDaemon(id: 'tux', hatchedAt: '', egg: 'first')],
-          pair: 'tux',
+        ..zoo = Zoo(
+          daemons: [ZooDaemon(id: 'tux', hatched: '', egg: 'first')],
+          pair: legacyZooUid('tux'),
         )
         ..revision = 4;
       zoo.pushed(4);
@@ -959,9 +1042,9 @@ void main() {
         expect(zoo.isAccount, isTrue);
         // And off again: a 404 on a write takes everything away at once.
         remote
-          ..zoo = const Zoo(
-            daemons: [ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first')],
-            pair: 'tim',
+          ..zoo = Zoo(
+            daemons: [ZooDaemon(id: 'tim', hatched: '', egg: 'first')],
+            pair: legacyZooUid('tim'),
           )
           ..revision = 2;
         zoo.pushed(2);
@@ -993,9 +1076,9 @@ void main() {
       'switchOff (DAEMONS_OFF from harnessd) hides everything at once',
       () async {
         final remote = FakeZooTransport()
-          ..zoo = const Zoo(
-            daemons: [ZooDaemon(id: 'gnu', hatchedAt: '', egg: 'first')],
-            pair: 'gnu',
+          ..zoo = Zoo(
+            daemons: [ZooDaemon(id: 'gnu', hatched: '', egg: 'first')],
+            pair: legacyZooUid('gnu'),
           );
         final zoo = controller();
         addTearDown(zoo.dispose);
@@ -1142,9 +1225,9 @@ void main() {
       'new eggs and level-ups are events; reads and seeds are not',
       () async {
         final remote = FakeZooTransport()
-          ..zoo = const Zoo(
-            daemons: [ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first')],
-            pair: 'tim',
+          ..zoo = Zoo(
+            daemons: [ZooDaemon(id: 'tim', hatched: '', egg: 'first')],
+            pair: legacyZooUid('tim'),
             eggs: [ZooEgg(id: 'old', kind: 'turn', grantedAt: '')],
           )
           ..revision = 1;
@@ -1158,10 +1241,10 @@ void main() {
         // Another window's grant and level-up arrive as zoo_changed.
         remote
           ..zoo = remote.zoo.copyWith(
-            daemons: const [
+            daemons: [
               ZooDaemon(
                 id: 'tim',
-                hatchedAt: '',
+                hatched: '',
                 egg: 'first',
                 xp: 160,
                 bond: 2,
@@ -1214,9 +1297,9 @@ void main() {
 
     test('a new scope forgets the previous account at once', () async {
       final remote = FakeZooTransport()
-        ..zoo = const Zoo(
-          daemons: [ZooDaemon(id: 'gnu', hatchedAt: '', egg: 'first')],
-          pair: 'gnu',
+        ..zoo = Zoo(
+          daemons: [ZooDaemon(id: 'gnu', hatched: '', egg: 'first')],
+          pair: legacyZooUid('gnu'),
         );
       final zoo = controller();
       addTearDown(zoo.dispose);

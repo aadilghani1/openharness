@@ -7,12 +7,14 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/daemons/render.dart';
+import 'package:harness/daemons/individuals.dart';
 import 'package:harness/daemons/roster.dart';
 
 void main() {
   final frames =
       jsonDecode(File('../daemons/frames.json').readAsStringSync()) as Map;
   final roster = daemonRoster;
+  final printable = RegExp(r'^[\x20-\x7e]*$');
 
   test('the generated roster parses and matches roster.json', () {
     final source =
@@ -128,7 +130,13 @@ void main() {
 
   test('every card matches card.mjs', () {
     final cards = frames['cards'] as List;
-    expect(cards, hasLength(roster.daemons.length * 6));
+    expect(
+      cards,
+      hasLength(
+        roster.daemons.length * 6 +
+            roster.daemons.where((d) => d.traits != null).length,
+      ),
+    );
     for (final raw in cards) {
       final f = raw as Map;
       final d = roster.byId(f['id'] as String)!;
@@ -139,6 +147,10 @@ void main() {
         shiny: f['shiny'] == true,
         serial: f['serial'] as int?,
         nickname: f['nickname'] as String?,
+        name: f['name'] as String?,
+        traits: f['seed'] is int
+            ? rollTraits(roster, d.id, f['seed'] as int)
+            : null,
         hatched: f['hatched'] as String?,
         egg: f['egg'] as String?,
       );
@@ -161,8 +173,8 @@ void main() {
       roster,
       roster.byId('tim')!,
       version: '1.0',
-      nickname: 'pip',
-      hatchedAt: '2026-09-26T09:42:00Z',
+      name: 'pip',
+      hatched: '2026-09-26T09:42:00Z',
       egg: 'week',
     );
     expect(zooCard, contains('|   pip the tim 1.0                      |'));
@@ -170,15 +182,65 @@ void main() {
     expect(cardCodeBlock(zooCard), startsWith('```\n.---'));
   });
 
-  test('every nest matches render.mjs nestStage', () {
-    final nests = frames['nests'] as List;
-    expect(nests, isNotEmpty);
-    for (final raw in nests) {
-      final f = raw as Map;
-      final habits = [for (final h in f['habits'] as List) h as String];
-      expect(nestStage(roster, habits), f['stage'], reason: '$habits');
-      expect(nestFor(roster, habits), f['out'], reason: '$habits');
+  test('every egg stage matches render.mjs eggStage', () {
+    final cases = (frames['eggStages'] as List).cast<Map>();
+    expect(cases, isNotEmpty);
+    for (final c in cases) {
+      expect(
+        eggStage(c['done'] as int, c['need'] as int, ready: c['ready'] == true),
+        c['stage'],
+        reason: '$c',
+      );
     }
+  });
+
+  test('the first and setup eggs follow habits, as habitProgress', () {
+    final cases = (frames['firstEgg'] as List).cast<Map>();
+    expect(cases, isNotEmpty);
+    for (final c in cases) {
+      final habits = (c['habits'] as List).cast<String>();
+      final kind = c['kind'] as String;
+      final p = habitProgress(roster, habits, kind: kind);
+      final why = '$kind $habits';
+      expect(p.$1, c['done'], reason: why);
+      expect(p.$2, c['need'], reason: why);
+      final stage = eggStage(p.$1, p.$2);
+      expect(stage, c['stage'], reason: why);
+      expect(eggLine(roster, kind, stage), c['out'], reason: why);
+    }
+  });
+
+  test('every egg line matches render.mjs eggLine', () {
+    final cases = (frames['eggLines'] as List).cast<Map>();
+    expect(cases, hasLength(greaterThan(100)));
+    final unsafe = [
+      for (final p
+          in (jsonDecode(
+                File('../daemons/roster.json').readAsStringSync(),
+              )['rules']['ligatureUnsafe']
+              as List))
+        p as String,
+    ];
+    for (final c in cases) {
+      final out = c['stage'] == 'hatchling'
+          ? eggLine(roster, 'first', 'hatchling', sprite: c['sprite'] as String)
+          : eggLine(
+              roster,
+              c['kind'] as String,
+              c['stage'] as String,
+              lid: c['lid'] as String?,
+            );
+      final why = '${c['kind']} ${c['stage']} ${c['lid']} ${c['id']}';
+      expect(out, c['out'], reason: why);
+      expect(out.length, lessThanOrEqualTo(roster.rules.statusCells));
+      expect(printable.hasMatch(out), isTrue, reason: why);
+      for (final pair in unsafe) {
+        expect(out.contains(pair), isFalse, reason: '$why has $pair');
+      }
+    }
+    // Every hatchling line is its 0.1 sprite between the halves of its shell.
+    expect(eggLine(roster, 'first', 'hatchling', sprite: '(o o)'), ')(o o)(');
+    expect(eggLine(roster, 'first', 'hatchling', sprite: '1234567'), '1234567');
   });
 
   test('every banner matches renderBanner in the shared face', () {
@@ -195,9 +257,8 @@ void main() {
     // size.
     for (final d in roster.daemons) {
       expect(
-        bannerRows(
-          d.id,
-        ).every((r) => r.length <= roster.rules.plate!.revealCols),
+        bannerRows(d.id)
+            .every((r) => r.length <= roster.rules.plate!.revealCols),
         isTrue,
         reason: d.id,
       );
@@ -206,16 +267,59 @@ void main() {
     expect(silhouette('o   o'), '#   #');
   });
 
-  test('egg frames keep their width while they wobble and crack', () {
-    for (final frame in [
-      eggFrame(roster),
-      eggFrame(roster, offset: -1),
-      eggFrame(roster, offset: 1, crack: 1),
-      eggFrame(roster, crack: 2),
-      eggPopFrame(roster),
-    ]) {
-      final rows = frame.split('\n');
-      expect(rows.every((r) => r.length == 18), isTrue, reason: frame);
+  test('every trait roll, its flags and rarity match render.mjs', () {
+    final cases = (frames['traitRolls'] as List).cast<Map>();
+    expect(cases, hasLength(greaterThan(200)));
+    for (final c in cases) {
+      final id = c['id'] as String, seed = c['seed'] as int;
+      final traits = rollTraits(roster, id, seed)!;
+      final why = '$id $seed';
+      expect(traits.toJson(), c['traits'], reason: why);
+      expect(
+        traits.toJson().keys.toList(),
+        (c['traits'] as Map).keys.toList(),
+        reason: why,
+      );
+      expect(individualFlags(roster, id, traits), c['flags'], reason: why);
+      expect(oneIn(roster, id, traits), c['oneIn'], reason: why);
     }
+    // Every plate species has a catalogue; a line-art one has none to roll.
+    expect(rollTraits(roster, 'tmux', 42), isNull);
+    final zero = rollTraits(roster, 'tim', 0)!;
+    expect(zero.colour, roster.byId('tim')!.traits!.colours.first.name);
+    expect(zero.props.values.every((v) => v == 1), isTrue);
+    expect(zero.fidgety, isFalse);
+  });
+
+  test('every individual sprite matches renderIndividualSprite', () {
+    final cases = (frames['individualSprites'] as List).cast<Map>();
+    expect(cases, hasLength(greaterThan(1000)));
+    for (final c in cases) {
+      final id = c['id'] as String, seed = c['seed'] as int;
+      final traits = rollTraits(roster, id, seed);
+      final vi = roster.versionIndex(c['v'] as String);
+      final mood = daemonMoodNamed(c['mood'] as String)!;
+      final out = renderIndividualSprite(
+        roster,
+        id,
+        traits,
+        vi,
+        mood,
+        t: c['t'] as int,
+        lid: c['lid'] as String?,
+      );
+      final why =
+          '$id $seed ${c['v']} ${c['mood']} t=${c['t']} lid=${c['lid']}';
+      expect(out, c['out'], reason: why);
+      final d = individualDaemon(roster, id, traits);
+      expect(
+        statusCell(roster, out, baseWidth(roster, d!, vi)),
+        c['cell'],
+        reason: why,
+      );
+    }
+    // No extra and calm: the species itself.
+    final plain = rollTraits(roster, 'tim', 0);
+    expect(individualDaemon(roster, 'tim', plain), same(roster.byId('tim')));
   });
 }

@@ -36,7 +36,7 @@ class DaemonPlateClient extends ChangeNotifier {
   DaemonPlateClient({
     required this.send,
     DaemonRoster? roster,
-    this.answerWithin = const Duration(seconds: 12),
+    this.answerWithin = const Duration(minutes: 2),
     this.retryAfter = const Duration(minutes: 1),
     DateTime Function()? now,
   }) : roster = roster ?? daemonRoster,
@@ -114,6 +114,12 @@ class DaemonPlateClient extends ChangeNotifier {
     DaemonMood mood,
   ) {
     final requestId = 'plate-${++_next}';
+    _pending[requestId] = key;
+    _asked[key] = Timer(answerWithin, () {
+      _pending.remove(requestId);
+      _asked.remove(key);
+      _failedAt[key] = _now();
+    });
     final sent = send('daemon_plate_get', {
       'requestId': requestId,
       'uid': d.uid,
@@ -124,15 +130,10 @@ class DaemonPlateClient extends ChangeNotifier {
       'mood': mood.name,
     });
     if (!sent) {
-      _failedAt[key] = _now();
-      return;
-    }
-    _pending[requestId] = key;
-    _asked[key] = Timer(answerWithin, () {
       _pending.remove(requestId);
-      _asked.remove(key);
+      _asked.remove(key)?.cancel();
       _failedAt[key] = _now();
-    });
+    }
   }
 
   /// A local frame from this computer's harness process. Only
@@ -144,7 +145,7 @@ class DaemonPlateClient extends ChangeNotifier {
     final key = _pending.remove(requestId);
     if (key == null) return;
     _asked.remove(key)?.cancel();
-    final art = _parse(payload);
+    final art = _parse(payload, key);
     if (art == null) {
       _failedAt[key] = _now();
       return;
@@ -158,14 +159,42 @@ class DaemonPlateClient extends ChangeNotifier {
   }
 
   /// Frames that all have their rows and material rows, and share one size.
-  static DaemonIndividualArt? _parse(Map<String, dynamic> payload) {
+  DaemonIndividualArt? _parse(Map<String, dynamic> payload, String key) {
     if (payload['error'] != null) return null;
+    final parts = key.split(' ');
+    if (payload['uid'] != parts[0] ||
+        payload['size'] != parts[3] ||
+        payload['version'] != parts[4] ||
+        payload['mood'] != parts[5]) {
+      return null;
+    }
     final raw = payload['frames'];
-    if (raw is! List || raw.isEmpty || raw.length > 64) return null;
+    if (raw is! List || raw.isEmpty || raw.length > 8) return null;
+    final rules = roster.rules.plate;
+    final portrait = parts[3] == 'portrait';
+    final width = portrait
+        ? rules?.portraitCols ?? 28
+        : rules?.revealCols ?? 56;
+    final height =
+        (portrait ? rules?.portraitRows ?? 12 : rules?.revealRows ?? 24) +
+        (rules?.room ?? 0) * (portrait ? 1 : 2);
     final frames = <PlateFrame>[];
     for (final f in raw) {
+      if (f is! Map || f['mats'] is! String) return null;
       final frame = PlateFrame.fromJson(f);
-      if (frame == null || frame.rows.length > 64) return null;
+      if (frame == null ||
+          frame.rows.length > height ||
+          frame.rows.first.isEmpty) {
+        return null;
+      }
+      for (var i = 0; i < frame.rows.length; i++) {
+        if (frame.rows[i].length > width ||
+            frame.rows[i].length != frame.rows.first.length ||
+            !RegExp(r'^[\x20-\x7e]*$').hasMatch(frame.rows[i]) ||
+            !RegExp(r'^[.magse p]*$').hasMatch(frame.mats[i])) {
+          return null;
+        }
+      }
       if (frames.isNotEmpty &&
           (frame.rows.length != frames.first.rows.length ||
               frame.rows.first.length != frames.first.rows.first.length)) {

@@ -154,7 +154,7 @@ void main() {
     final storage = _Memory()
       ..values[ZooController.localZooKey] = jsonEncode({
         'zoo': Zoo(
-          daemons: [ZooDaemon(id: id, hatchedAt: '', egg: 'first')],
+          daemons: [ZooDaemon(id: id, hatched: '', egg: 'first')],
           pair: id,
         ).toJson(),
         'seeded': true,

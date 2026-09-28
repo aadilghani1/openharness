@@ -93,7 +93,7 @@ Zoo _paired(
   daemons: [
     ZooDaemon(
       id: id,
-      hatchedAt: '2026-09-26T09:42:00Z',
+      hatched: '2026-09-26T09:42:00Z',
       egg: 'first',
       version: version,
       shiny: shiny,
@@ -103,7 +103,7 @@ Zoo _paired(
     for (final other in more ?? const <String>[])
       ZooDaemon(
         id: other,
-        hatchedAt: '2026-09-26T10:00:00Z',
+        hatched: '2026-09-26T10:00:00Z',
         egg: 'turn',
         // A duplicate grows on its own: the second tux has reached 1.0.
         xp: other == 'tux' ? 150 : 0,
@@ -442,25 +442,25 @@ void main() {
     (
       'hatch-1-egg',
       'tim',
-      HatchFrame(stage: HatchStage.egg, egg: eggFrame(_roster)),
+      HatchFrame(stage: HatchStage.egg, frame: 0),
       Brightness.dark,
     ),
     (
       'hatch-2-wobble',
       'tim',
-      HatchFrame(stage: HatchStage.egg, egg: eggFrame(_roster, offset: -1)),
+      HatchFrame(stage: HatchStage.egg, frame: 3),
       Brightness.dark,
     ),
     (
       'hatch-3-crack',
       'tim',
-      HatchFrame(stage: HatchStage.crack, egg: eggFrame(_roster, crack: 2)),
+      HatchFrame(stage: HatchStage.burst, frame: 3),
       Brightness.dark,
     ),
     (
       'hatch-4-pop',
       'tim',
-      HatchFrame(stage: HatchStage.pop, egg: eggPopFrame(_roster)),
+      HatchFrame(stage: HatchStage.tumble, frame: 5),
       Brightness.dark,
     ),
     (
@@ -491,28 +491,25 @@ void main() {
     (
       'hatch-tell-rare-crack',
       'yak',
-      HatchFrame(stage: HatchStage.crack, egg: eggFrame(_roster, crack: 2)),
+      HatchFrame(stage: HatchStage.burst, frame: 3),
       Brightness.dark,
     ),
     (
       'hatch-tell-legendary-pop',
       'tux',
-      HatchFrame(
-        stage: HatchStage.pop,
-        egg: eggPopFrame(_roster, sparks: true),
-      ),
+      HatchFrame(stage: HatchStage.tumble, frame: 5),
       Brightness.dark,
     ),
     (
       'hatch-tell-secret-dark-before-crack',
       'beastie',
-      HatchFrame(stage: HatchStage.crack, egg: eggFrame(_roster)),
+      HatchFrame(stage: HatchStage.burst, frame: 0),
       Brightness.dark,
     ),
     (
       'hatch-tell-secret-crack-light-theme',
       'beastie',
-      HatchFrame(stage: HatchStage.crack, egg: eggFrame(_roster, crack: 1)),
+      HatchFrame(stage: HatchStage.burst, frame: 3),
       Brightness.light,
     ),
     (
@@ -580,14 +577,28 @@ void main() {
           DaemonMood.idle,
         );
         final shown = tester.widget<Text>(
-          find.byKey(const ValueKey('daemon-hatch-portrait')),
+          find.byKey(
+            ValueKey(
+              frame.stage == HatchStage.silhouette
+                  ? 'daemon-hatch-silhouette'
+                  : 'daemon-hatch-portrait',
+            ),
+          ),
         );
-        expect(
-          shown.textSpan?.toPlainText() ?? shown.data,
-          frame.stage == HatchStage.silhouette
-              ? plate.map(silhouette).join('\n')
-              : plate.join('\n'),
-        );
+        final text = shown.textSpan?.toPlainText() ?? shown.data!;
+        // The hatchling stands inside the open shell; the shell hides its
+        // bottom rows, while its upper rows keep the baked portrait.
+        final visible = plate.where((r) => r.trim().isNotEmpty).take(5);
+        for (final row in visible) {
+          expect(
+            text,
+            contains(
+              frame.stage == HatchStage.silhouette
+                  ? silhouette(row).trim()
+                  : row.trim(),
+            ),
+          );
+        }
       }
       await tester.pumpWidget(const SizedBox());
     });
@@ -625,6 +636,36 @@ void main() {
   final today = localDayOf(DateTime.now());
   final panels = <(String, Zoo, Brightness, DaemonWatch, String?)>[
     (
+      'panel-two-tims',
+      Zoo(
+        daemons: [
+          ZooDaemon(
+            uid: '000000000000000000000001',
+            id: 'tim',
+            seed: 17,
+            serial: 42,
+            name: 'pip',
+            hatched: '2026-09-27',
+            egg: 'first',
+          ),
+          ZooDaemon(
+            uid: '000000000000000000000002',
+            id: 'tim',
+            seed: 42,
+            serial: 43,
+            name: 'dot',
+            hatched: '2026-09-27',
+            egg: 'turn',
+          ),
+        ],
+        pair: '000000000000000000000001',
+        firstEgg: true,
+      ),
+      Brightness.dark,
+      const DaemonWatch(),
+      null,
+    ),
+    (
       'panel-nest',
       const Zoo(habits: ['turn', 'split', 'store']),
       Brightness.dark,
@@ -640,7 +681,7 @@ void main() {
     ),
     (
       'panel-egg-ready',
-      const Zoo(
+      Zoo(
         habits: ['turn', 'split', 'find', 'machine', 'store'],
         firstEgg: true,
         eggs: [ZooEgg(id: 'egg1', kind: 'first', grantedAt: '')],
@@ -758,6 +799,23 @@ void main() {
         ),
       );
       expect(find.byKey(const ValueKey('daemon-panel')), findsOneWidget);
+      if (name == 'panel-two-tims') {
+        expect(find.textContaining('pip the tim'), findsWidgets);
+        expect(find.textContaining('dot the tim'), findsOneWidget);
+        expect(find.textContaining('1 in '), findsWidgets);
+        final second = find.byKey(
+          const ValueKey('daemon-who-000000000000000000000002'),
+        );
+        await tester.ensureVisible(second);
+        await tester.tap(second);
+        await tester.pump();
+        final pair = find.byKey(const ValueKey('daemon-pair'));
+        await tester.ensureVisible(pair);
+        await tester.tap(pair);
+        await tester.pump();
+        expect(face.zoo.paired?.uid, '000000000000000000000002');
+        expect(face.zoo.zoo.daemons, hasLength(2));
+      }
       if (name == 'panel-card') {
         expect(find.byKey(const ValueKey('daemon-card-text')), findsOneWidget);
         expect(
@@ -768,7 +826,7 @@ void main() {
       }
       if (name == 'panel-tim-zoo-box') {
         expect(find.text('[ ? ]'), findsNWidgets(6));
-        expect(find.text('1.0 x2'), findsOneWidget);
+        expect(find.text('1.0'), findsOneWidget);
         expect(find.textContaining('28/40'), findsOneWidget);
         // Drop init only: unix and tty are on hold, so no shelf, silhouette
         // or count of theirs shows.
@@ -1725,9 +1783,8 @@ void main() {
         daemons: [
           ZooDaemon(
             id: 'tim',
-            hatchedAt: '2026-09-26T09:42:00Z',
+            hatched: '2026-09-26T09:42:00Z',
             egg: 'first',
-            dupes: 1,
             xp: to == '2.0' ? 600 : 150,
             bond: to == '2.0' ? 4 : 2,
             version: to,
@@ -1824,11 +1881,10 @@ void main() {
       final after = before.copyWith(
         daemons: [
           before.daemons.first,
-          const ZooDaemon(
+          ZooDaemon(
             id: 'yak',
-            hatchedAt: '2026-09-26T10:00:00Z',
+            hatched: '2026-09-26T10:00:00Z',
             egg: 'turn',
-            dupes: 1,
             shiny: true,
             xp: 150,
             bond: 2,
@@ -1867,7 +1923,7 @@ void main() {
           ),
         ),
       );
-      expect(find.text('yak x2 · +150 xp'), findsOneWidget);
+      expect(find.text('yak · +150 xp'), findsOneWidget);
       expect(
         find.text('another yak. +150 xp. yours is shiny now.'),
         findsOneWidget,

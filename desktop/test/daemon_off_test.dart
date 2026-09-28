@@ -34,8 +34,8 @@ import 'support/status_bar_layout.dart';
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show MemoryStore, createApp;
 
-const _tim = Zoo(
-  daemons: [ZooDaemon(id: 'tim', hatchedAt: '', egg: 'first')],
+final _tim = Zoo(
+  daemons: [ZooDaemon(id: 'tim', hatched: '', egg: 'first')],
   pair: 'tim',
   habits: ['turn', 'split', 'find', 'machine', 'store'],
   firstEgg: true,
@@ -78,13 +78,13 @@ void main() {
   Future<void> mount(
     WidgetTester tester, {
     bool on = false,
-    Zoo seed = _tim,
+    Zoo? seed,
     bool native = false,
     Completer<void>? gate,
     WorkspaceOnboarding? onboarding,
   }) async {
     remote = FakeZooTransport(available: on)
-      ..zoo = seed
+      ..zoo = seed ?? _tim
       ..revision = 1
       ..gate = gate;
     zoo = ZooController(random: Random(1));

@@ -210,9 +210,8 @@ class ZooController extends ChangeNotifier {
   ZooEggProgress? get nearestEgg =>
       zoo_rules.nearestEgg(roster, _zoo, now: _now());
 
-  static String _lower(String label) => label.isEmpty
-      ? label
-      : '${label[0].toLowerCase()}${label.substring(1)}';
+  static String _lower(String label) =>
+      label.isEmpty ? label : '${label[0].toLowerCase()}${label.substring(1)}';
 
   /// The individual in the status line, with its species' roster entry.
   ZooDaemon? get paired => _zoo.paired;
@@ -538,12 +537,11 @@ class ZooController extends ChangeNotifier {
     _sendLater(op);
   }
 
-  /// Pair the individual [uid] (`zoo.pair { uid }`). The species id rides
-  /// along for a server from before individuals, which pairs by species.
+  /// Pair the individual [uid] (`zoo.pair { uid }`).
   void pair(String uid) {
     final daemon = _zoo.byUid(uid);
     if (!loaded || daemon == null || _zoo.pair == uid) return;
-    final op = {'op': 'zoo.pair', 'uid': uid, 'id': daemon.id};
+    final op = {'op': 'zoo.pair', 'uid': uid};
     if (!isAccount) {
       _applyLocal([op]);
       return;
@@ -581,8 +579,7 @@ class ZooController extends ChangeNotifier {
 
   /// Name the individual [uid] (`zoo.nickname { uid, name }`: 1-24
   /// printable characters, trimmed), or clear it with null. Answers false for
-  /// a name the rules refuse. The species id and `nickname` ride along for a
-  /// server from before individuals.
+  /// a name the rules refuse.
   bool nickname(String uid, String? name) {
     final daemon = _zoo.byUid(uid);
     if (!loaded || daemon == null) return false;
@@ -591,13 +588,7 @@ class ZooController extends ChangeNotifier {
       return false;
     }
     final named = value == null || value.isEmpty ? null : value;
-    final op = {
-      'op': 'zoo.nickname',
-      'uid': uid,
-      'name': named,
-      'id': daemon.id,
-      'nickname': named,
-    };
+    final op = {'op': 'zoo.nickname', 'uid': uid, 'name': named};
     if (!isAccount) {
       _applyLocal([op]);
       return true;

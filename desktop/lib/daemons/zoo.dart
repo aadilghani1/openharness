@@ -25,7 +25,9 @@ final _hashShape = RegExp(r'^[0-9a-f]{64}$');
 /// lowercased. The roster lists only these (`rules.easterHashes`).
 String easterHash(String word) => [
   for (final b
-      in const DartSha256().hashSync(utf8.encode(word.trim().toLowerCase())).bytes)
+      in const DartSha256()
+          .hashSync(utf8.encode(word.trim().toLowerCase()))
+          .bytes)
     b.toRadixString(16).padLeft(2, '0'),
 ].join();
 
@@ -44,7 +46,12 @@ bool validNickname(String? value) =>
 
 /// How much the paired daemon may do on its own (`daemons/BRAIN.md`,
 /// "Autonomy dial"; `backend/src/lib/zoo.ts` `ZOO_AUTONOMY_LEVELS`).
-const zooAutonomyLevels = ['watch', 'suggest', 'act-on-key', 'act-within-rules'];
+const zooAutonomyLevels = [
+  'watch',
+  'suggest',
+  'act-on-key',
+  'act-within-rules',
+];
 
 /// What a zoo that never set the dial means: it watches and tells you
 /// (`backend/src/lib/zoo.ts` `ZOO_DEFAULT_AUTONOMY`). `suggest` and above are
@@ -160,7 +167,10 @@ String versionFor(DaemonRoster roster, int level) {
 /// species, 24 hex like the server's, and never mistaken for a species id.
 String legacyZooUid(String id) => [
   for (final b
-      in const DartSha256().hashSync(utf8.encode('zoo:legacy:$id')).bytes.take(12))
+      in const DartSha256()
+          .hashSync(utf8.encode('zoo:legacy:$id'))
+          .bytes
+          .take(12))
     b.toRadixString(16).padLeft(2, '0'),
 ].join();
 
@@ -557,7 +567,7 @@ class Zoo {
   Map<String, dynamic> toJson() => {
     'daemons': [for (final d in daemons) d.toJson()],
     'eggs': [for (final e in eggs) e.toJson()],
-    'pair': pair,
+    'paired': pair,
     'autonomy': autonomy,
     'consent': consent?.toJson(),
     'habits': habits,
@@ -588,7 +598,7 @@ class Zoo {
       if (egg != null && !eggs.any((x) => x.id == egg.id)) eggs.add(egg);
     }
     final habitKeys = roster.rules.habits.map((h) => h.key).toSet();
-    final pair = raw['pair'] ?? raw['paired'];
+    final pair = raw.containsKey('paired') ? raw['paired'] : raw['pair'];
     return Zoo(
       daemons: daemons,
       eggs: eggs.take(maxEggs).toList(),
@@ -681,12 +691,7 @@ class ZooHatch {
 /// stage that makes; [egg] is the earned one waiting in the nest (`p4`).
 @immutable
 class ZooEggProgress {
-  const ZooEggProgress(
-    this.kind,
-    this.done,
-    this.need, {
-    this.egg,
-  });
+  const ZooEggProgress(this.kind, this.done, this.need, {this.egg});
   final String kind;
   final int done, need;
   final ZooEgg? egg;
@@ -730,10 +735,7 @@ List<ZooEggProgress> eggsBeingEarned(
     if (eggs.containsKey('week') && !p.weeks.contains(week))
       ZooEggProgress(
         'week',
-        min(
-          p.days.keys.where((d) => isoWeek(d) == week).length,
-          earn.weekDays,
-        ),
+        min(p.days.keys.where((d) => isoWeek(d) == week).length, earn.weekDays),
         earn.weekDays,
       ),
     if (eggs.containsKey('night'))
@@ -751,7 +753,11 @@ List<ZooEggProgress> eggsBeingEarned(
 /// egg waiting in the nest (`p4`) if there is one, else the egg being
 /// earned with the highest done / need (the first of a tie, in the
 /// README's order).
-ZooEggProgress? nearestEgg(DaemonRoster roster, Zoo zoo, {required DateTime now}) {
+ZooEggProgress? nearestEgg(
+  DaemonRoster roster,
+  Zoo zoo, {
+  required DateTime now,
+}) {
   if (zoo.eggs.firstOrNull case final egg?) {
     return ZooEggProgress(egg.kind, 1, 1, egg: egg);
   }
@@ -1035,8 +1041,7 @@ class _ZooRules {
     }
   }
 
-  void _addXp(int xp) =>
-      _grow(daemons.indexWhere((d) => d.uid == pair), xp);
+  void _addXp(int xp) => _grow(daemons.indexWhere((d) => d.uid == pair), xp);
 
   /// xp for one daemon; a new level is answered in `levelUps`.
   void _grow(int at, int xp) {
@@ -1068,8 +1073,7 @@ class _ZooRules {
         if (egg == null || !roster.rules.eggs.containsKey(egg.kind)) return;
         if (daemons.length >= Zoo.maxDaemons) return;
         final own = egg.kind == 'history' ? _historyDaemon(egg.date) : null;
-        final id =
-            own ?? drawDaemon(roster, zoo, egg.kind, random, now: now);
+        final id = own ?? drawDaemon(roster, zoo, egg.kind, random, now: now);
         if (id == null) return;
         final shiny = random.nextInt(roster.rules.shinyOneIn) == 0;
         eggs = [...eggs.where((e) => e.id != egg.id)];

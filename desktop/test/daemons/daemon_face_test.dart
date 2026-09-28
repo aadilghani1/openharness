@@ -74,7 +74,7 @@ void main() {
           daemons: [
             ZooDaemon(
               id: id,
-              hatchedAt: '2026-09-26T09:00:00Z',
+              hatched: '2026-09-26T09:00:00Z',
               egg: 'first',
               version: version,
               shiny: shiny,
@@ -128,7 +128,7 @@ void main() {
     zoo.bind('guest');
     await tester.pump();
     expect(face.visible, isTrue);
-    expect(face.glyph, r'\_O_/');
+    expect(face.glyph, r'\_(  )_/');
     expect(face.tally, '', reason: 'before the first hatch the slot is the egg');
   });
 
@@ -623,14 +623,14 @@ void main() {
   ) async {
     await mount(
       tester,
-      custom: const Zoo(
+      custom: Zoo(
         habits: ['turn', 'split', 'find', 'machine', 'store'],
         firstEgg: true,
         eggs: [ZooEgg(id: 'egg1', kind: 'first', grantedAt: '')],
       ),
     );
     expect(face.eggReady, isTrue);
-    expect(face.glyph, r'\_o.o_/');
+    expect(face.glyph, r'\_(oo)_/');
     // Drop init is out from 2026-09-27 (UTC): only then can an egg hatch.
     clock.value = DateTime(2026, 9, 28, 12);
     face.beginReveal();
@@ -638,13 +638,13 @@ void main() {
     expect(hatched, isNotNull);
     expect(zoo.paired?.id, hatched!.daemonId);
     expect(face.daemon, isNull);
-    expect(face.glyph, r'\_o.o_/');
+    expect(face.glyph, r'\_(oo)_/');
     expect(face.label, 'Hatching');
     expect(face.tooltip.contains(hatched.daemonId), isFalse);
     face.endReveal();
     final def = daemonRoster.byId(hatched.daemonId)!;
     expect(face.label, def.id);
-    expect(face.glyph, isNot(r'\_o.o_/'));
+    expect(face.glyph, isNot(r'\_(oo)_/'));
     expect(face.voice, '${def.id}: ${def.first}');
     expect(face.voiceAlert, isFalse);
     await pass(tester, const Duration(seconds: 6));
@@ -652,16 +652,16 @@ void main() {
 
   testWidgets('the nest shows habits done', (tester) async {
     await mount(tester, custom: const Zoo(habits: ['split']));
-    expect(face.glyph, r'~\_O_/~');
+    expect(face.glyph, r'\_(/\)_/');
     expect(face.label, 'Egg');
     expect(face.detail, '1 of 3 habits');
     expect(face.tooltip, contains('Finish a turn in a harness, and any 2 more.'));
     zoo.habit('find');
     zoo.habit('store');
-    expect(face.glyph, r'\_.._/', reason: 'without a finished turn, two count');
+    expect(face.glyph, r"\_(*')_/", reason: 'without a finished turn, two count');
     expect(face.detail, '2 of 3 habits');
     zoo.habit('turn');
-    expect(face.glyph, r'\_o.o_/');
+    expect(face.glyph, r'\_(oo)_/');
     expect(face.eggReady, isTrue);
   });
 
@@ -678,10 +678,10 @@ void main() {
     clock.value = DateTime(2026, 10, 6, 12);
     zoo.recordTurns(20, machineId: 'm');
     expect(zoo.zoo.eggs.single.kind, 'turn');
-    expect(face.glyph, r'\_O_/');
+    expect(face.glyph, r'\_(oo)_/');
     expect(face.voice, isNull, reason: 'an egg is not an interruption');
     expect(face.tally, '+1 egg');
-    expect(face.tooltip, contains(r'\_O_/ x1 waiting'));
+    expect(face.tooltip, contains(r'\_(oo)_/ x1 waiting'));
     await pass(tester, const Duration(seconds: 3));
     expect(face.glyph, ',(o o),', reason: 'the daemon comes back');
     expect(face.tally, '+1 egg', reason: 'the egg still waits');
