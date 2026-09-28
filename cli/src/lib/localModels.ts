@@ -199,7 +199,7 @@ export class LocalModels {
     // not every compatible row across all pages — the picker shows one page.
     const response = await this.request(url, {
       method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ browse: true, page_size: 50, device: {
+      body: JSON.stringify({ browse: true, page: 1, page_size: 50, device: {
         device_class: device.device_class, usable_bytes: device.usable_bytes, backend: device.backend,
       } }), signal: AbortSignal.timeout(20_000), redirect: 'error',
     })
