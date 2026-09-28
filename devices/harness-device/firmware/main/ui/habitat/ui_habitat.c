@@ -560,8 +560,8 @@ static void render_companion(ht_scene_t *f)
     control(f, 71, 193, 324, s.straight_title ? "Edge text  Straight" : "Edge text  Curved", A_FACE, 0, true);
     control(f, 71, 257, 324, s.rim_enabled ? "[x] Rim scrolling" : "[ ] Rim scrolling", A_RIM, 0, true);
     control(f, 71, 321, 324, s.quiet ? "[x] Still character" : "[ ] Still character", A_QUIET, 0, true);
-    control(f, 95, 381, 120, s.nap ? "[ wake ]" : "[ nap ]", A_NAP, 0, true);
-    control(f, 251, 381, 120, "[ home ]", A_HOME, 0, true);
+    control(f, 95, 381, 120, s.nap ? "[wake]" : "[nap]", A_NAP, 0, true);
+    control(f, 251, 381, 120, "[home]", A_HOME, 0, true);
 }
 static bool choose_character(int id)
 {
@@ -645,7 +645,7 @@ static void render_quick(ht_scene_t *f)
 static void page_controls(ht_scene_t *f, int count)
 {
     control(f, 111, 390, 60, "<", A_UP, 0, s.offset > 0);
-    control(f, 183, 390, 108, "[ home ]", A_HOME, 0, true);
+    control(f, 183, 390, 108, "[home]", A_HOME, 0, true);
     control(f, 321, 390, 36, ">", A_DOWN, count, s.offset + 3 < count);
 }
 // Secondary screens retain explicit choices. The main face is the touch surface itself.
@@ -744,7 +744,7 @@ static void render_agents(ht_scene_t *f)
     if (s.offset < 0) s.offset = 0;
     if (!s.count) {
         center(f, 192, s.loading ? "Loading..." : "No panes in this tab.", FG);
-        control(f, 155, 283, 156, "Choose a tab", A_TABS, 0, s.connected);
+        control(f, 131, 283, 204, "Choose a tab", A_TABS, 0, s.connected);
         return;
     }
     for (int row = 0; row < TAB_ROWS && s.offset + row < s.count; row++) {
@@ -819,12 +819,12 @@ static void render_question(ht_scene_t *f)
      * The choices screen is still one drag away, which is what the position line says.
      */
     control(f,54,336,119,"[later]",A_HOME,0,true);
-        control(f,190,336,85,q->draft[0] ? "[draft]" : "[say]",
+        control(f,184,336,119,q->draft[0] ? "[draft]" : "[say]",
                 q->draft[0] ? A_QUESTION_REVIEW : A_QUESTION_SAY,0,!s.q.pending);
-        control(f,292,336,102,"[next]",A_QUESTION_CHOICES,0,!s.q.pending);
+        control(f,313,336,102,"[next]",A_QUESTION_CHOICES,0,!s.q.pending);
     } else {
         control(f,79,346,153,"[ later ]",A_HOME,0,true);
-        control(f,226,381,168,"[ choices ]",A_QUESTION_CHOICES,0,!s.q.pending);
+        control(f,236,346,153,"[choices]",A_QUESTION_CHOICES,0,!s.q.pending);
     }
 }
 static void render_choices(ht_scene_t *f)
@@ -853,9 +853,11 @@ static void render_answer_review(ht_scene_t *f)
     text(f,125,109,216,label,DIM);
     question_text(f,q->answer);
     if (s.q.speech_error[0]) ht_wrap(f,77,319,312,2,0,&ht_mono_20,ERROR,s.q.speech_error);
-    control(f,88,366,102,"[back]",A_QUESTION_BACK,0,!s.q.pending);
-    if (q->draft[0]) control(f,198,387,84,"[again]",A_QUESTION_SAY,0,!s.q.pending);
-    control(f,q->draft[0] ? 294 : 232,387,q->draft[0] ? 96 : 152,s.q.pending ? "Waiting..." : s.q.index+1 < s.q.count ? "[ next ]" : "[ send ]",
+    if (s.q.pending) { center(f, 346, "Waiting...", DIM); return; }
+    int footer_y = q->draft[0] ? 332 : 366;
+    control(f,q->draft[0] ? 54 : 88,footer_y,102,"[back]",A_QUESTION_BACK,0,true);
+    if (q->draft[0]) control(f,176,footer_y,119,"[again]",A_QUESTION_SAY,0,true);
+    control(f,q->draft[0] ? 313 : 258,footer_y,102,s.q.index+1 < s.q.count ? "[next]" : "[send]",
         A_ANSWER,0,s.connected && !s.q.pending && (q->selected || q->draft[0]));
 }
 static const char *settings_item(int wanted, action_kind_t *action)
@@ -1031,7 +1033,7 @@ static void render_selection(ht_scene_t *f)
     }
     if (selection.error[0]) {
         ht_wrap(f, 65, 180, 336, 5, 0, UI_FONT, FG, selection.error);
-        control(f, 137, 349, 192, "[ try again ]", A_SELECT_BEGIN, 0, s.connected);
+        control(f, 137, 349, 192, "[try again]", A_SELECT_BEGIN, 0, s.connected);
         return;
     }
     char status[64];
@@ -1042,7 +1044,7 @@ static void render_selection(ht_scene_t *f)
         else COPY(status, "No matches");
     }
     center(f, 167, (selection.rows || selection.query[0]) ? status : "Look at your desktop", FG);
-    ht_wrap(f, 65, 211, 336, 4, 0, UI_FONT, FG,
+    ht_wrap(f, 65, 203, 336, 3, 0, UI_FONT, FG,
             selection.excerpt[0] ? selection.excerpt : selection.pending ? "Finding the text..." : selection.query[0] ? "Try another phrase." : "Blank line");
     if (ht_selection_ready(&selection) && selection.excerpt[0]) {
         s.hits[s.hit_count++] = (hit_t){{53, 151, 360, 184}, A_PET, 0, true};
@@ -1051,12 +1053,12 @@ static void render_selection(ht_scene_t *f)
         control(f, 137, 349, 192, "[ find ]", A_SELECT_FIND, 0, ht_selection_ready(&selection));
         return;
     }
-    control(f, 55, 349, 108, "[ find ]", A_SELECT_FIND, 0, ht_selection_ready(&selection));
-    control(f, 173, 349, 108, selection.query[0] ? "[ lines ]" : selection.extending ? "[ range ]" : "[ line ]",
+    control(f, 46, 332, 102, "[find]", A_SELECT_FIND, 0, ht_selection_ready(&selection));
+    control(f, 165, 332, 119, selection.query[0] ? "[lines]" : selection.extending ? "[range]" : "[line]",
             A_SELECT_EXTEND, 0, ht_selection_ready(&selection) && selection.rows > 0);
-    control(f, 291, 349, 120, "[ carry ]", A_CARRY, 0,
+    control(f, 301, 332, 119, "[carry]", A_CARRY, 0,
             ht_selection_ready(&selection) && selection.excerpt[0]);
-    center(f, 395, selection.pending ? "choosing..." : "drag / tap to talk", DIM);
+    center(f, 395, selection.pending ? "choosing..." : "drag to read", DIM);
 }
 static void render_form(ht_scene_t *f)
 {
@@ -1069,20 +1071,23 @@ static void render_form(ht_scene_t *f)
     text(f, 77, 158, 312, p->previous, DIM);
     ht_wrap(f, 65, 199, 336, 2, 0, UI_FONT, ACCENT,
             p->label[0] ? p->label : form.failed ? "Could not open" : "Opening...");
-    ht_wrap(f, 65, 261, 336, 2, 0, UI_FONT, FG, p->detail);
+    if (!p->error[0]) ht_wrap(f, 65, 275, 336, 2, 0, UI_FONT, FG, p->busy ? p->status : p->detail);
     if (!form.pending && p->active && p->enabled && !p->busy && !form.failed)
         s.hits[s.hit_count++] = (hit_t){{49, 185, 368, 124}, A_FORM_MAIN, 0, true};
-    if (p->error[0]) ht_wrap(f, 71, 319, 324, 2, 0, &ht_mono_20, ERROR, p->error);
-    else text(f, 77, 339, 312, p->busy ? p->status : p->next, DIM);
-    control(f, 83, 379, 96, "[back]", A_FORM_BACK, 0, !form.pending || finding);
-    control(f, 185, 379, 84, "[say]", A_FORM_SAY, 0,
+    // The current choice and its detail own the center; footer actions keep
+    // a full line at the larger interface size. Errors replace the detail.
+    if (p->error[0]) ht_wrap(f, 65, 275, 336, 2, 0, UI_FONT, ERROR, p->error);
+    control(f, 60, 352, 102, "[back]", A_FORM_BACK, 0, !form.pending || finding);
+    control(f, 173, 352, 85, "[say]", A_FORM_SAY, 0,
             !form.pending && !form.failed && p->active && p->can_query && !p->busy);
     char action[44];
     snprintf(action, sizeof action, "[%.23s]", form.failed ? "retry" : p->busy ? "wait" :
              form.pending && form.pending_op != HT_FORM_STATE ? "..." : !strcmp(p->action, "check status") ? "check" : p->action[0] ? p->action : "wait");
-    control(f, 277, 379, 120, action, A_FORM_MAIN, 0,
+    control(f, 267, 352, 136, action, A_FORM_MAIN, 0,
             !form.pending && (form.failed || (p->active && p->enabled && !p->busy)));
 }
+// Keep the scroll limit and drawn rows identical at the 28 px text size.
+#define DRAFT_ROWS 3
 static void render_draft(ht_scene_t *f)
 {
     const ht_draft_page_t *p = &draft.page;
@@ -1091,10 +1096,10 @@ static void render_draft(ht_scene_t *f)
     char position[48];
     snprintf(position, sizeof position, "draft / part %d of %d", p->position, p->total);
     center(f, 111, position, DIM);
-    int rows = question_rows(p->text), last = rows > 5 ? rows - 5 : 0;
+    int rows = question_rows(p->text), last = rows > DRAFT_ROWS ? rows - DRAFT_ROWS : 0;
     if (s.offset > last) s.offset = last;
-    ht_wrap(f, 59, 153, 348, 5, s.offset, UI_FONT, FG, p->text);
-    if (rows > 5) snprintf(position, sizeof position, "%d-%d / %d  drag to read", s.offset+1, s.offset+5, rows);
+    ht_wrap(f, 59, 153, 348, DRAFT_ROWS, s.offset, UI_FONT, FG, p->text);
+    if (rows > DRAFT_ROWS) snprintf(position, sizeof position, "%d-%d / %d  drag to read", s.offset+1, s.offset+DRAFT_ROWS, rows);
     else COPY(position, p->total > 1 ? "drag for other parts" : p->context);
     text(f, 71, 297, 324, position, DIM);
     if (p->error[0]) ht_wrap(f, 65, 326, 336, 2, 0, &ht_mono_20, ERROR, p->error);
@@ -1104,9 +1109,9 @@ static void render_draft(ht_scene_t *f)
         "tap to re-speak part", DIM);
     bool editable = !draft.pending && !draft.failed && !p->locked;
     s.hits[s.hit_count++] = (hit_t){{49, 139, 368, 151}, A_DRAFT_EDIT, 0, editable};
-    control(f, 83, 386, 156, p->locked ? "[ close ]" : "[ discard ]", A_DRAFT_DISCARD, 0, !draft.pending);
+    control(f, 83, 370, 156, p->locked ? "[close]" : "[discard]", A_DRAFT_DISCARD, 0, !draft.pending);
     bool checking = draft.failed || p->locked;
-    control(f, 281, 386, 120, checking ? "[ check ]" : "[ send ]",
+    control(f, 281, 370, 120, checking ? "[check]" : "[send]",
         checking ? A_DRAFT_STATE : A_DRAFT_SEND, 0, !draft.pending && (checking || p->can_send));
 }
 static void render_draft_options(ht_scene_t *f)
@@ -1117,7 +1122,7 @@ static void render_draft_options(ht_scene_t *f)
     control(f, 65, 167, 336, "Add to message", A_DRAFT_APPEND, 0, editable);
     control(f, 65, 245, 336, "Undo last edit", A_DRAFT_UNDO, 0, editable && draft.page.can_undo);
     control(f, 65, 323, 336, "Back to draft", A_DRAFT_BACK, 0, true);
-    center(f, 395, draft.page.locked ? "Check the terminal" : "Nothing sent yet", DIM);
+    center(f, 380, draft.page.locked ? "Check terminal" : "Nothing sent yet", DIM);
 }
 static void render_settings(ht_scene_t *f)
 {
@@ -1217,7 +1222,7 @@ bool habitat_scene_take(ht_scene_t *f)
         if (a)
             ht_wrap(f, 59, 125, 348, 5, s.offset, UI_FONT, FG, a->full);
         control(f, 119, 387, 72, "<", A_UP, 0, s.offset > 0);
-        control(f, 217, 387, 144, "[ desktop ]", A_DESKTOP, 0, s.connected);
+        control(f, 205, 366, 153, "[desktop]", A_DESKTOP, 0, s.connected);
         break;
     }
     case COMPANION:
@@ -1227,8 +1232,8 @@ bool habitat_scene_take(ht_scene_t *f)
         heading(f, "stop this turn?");
         center(f, 185, "Your work stays.", FG);
         center(f, 227, "This turn stops.", DIM);
-        control(f, 83, 355, 156, "[ keep going ]", A_HOME, 0, true);
-        control(f, 263, 355, 120, "[ stop ]", A_STOP_YES, 0, s.connected);
+        control(f, 83, 355, 156, "[cancel]", A_HOME, 0, true);
+        control(f, 263, 355, 120, "[stop]", A_STOP_YES, 0, s.connected);
         break;
     case MODELS:
         heading(f, "model");
@@ -1403,11 +1408,11 @@ static void question_move(int delta)
         int step=s.q.drag>0 ? 1 : -1; s.q.drag-=step*40;
         question_item_t *q=&s.q.item[s.q.index];
         const char *value=s.view==QUESTION ? q->prompt : s.view==CHOICE ? q->options[s.q.choice] : q->answer;
-        int last=question_rows(value)-5; if (last<0) last=0;
+        int last=question_rows(value)-Q_ROWS; if (last<0) last=0;
         if (step>0 && s.offset<last) s.offset++;
         else if (step<0 && s.offset>0) s.offset--;
         else if (s.view==CHOICE && s.q.choice+step>=0 && s.q.choice+step<q->count) {
-            s.q.choice+=step; s.offset=step>0 ? 0 : question_rows(q->options[s.q.choice])-5;
+            s.q.choice+=step; s.offset=step>0 ? 0 : question_rows(q->options[s.q.choice])-Q_ROWS;
             if (s.offset<0) s.offset=0;
         }
         change();
@@ -1429,7 +1434,7 @@ static void draft_move(int delta, uint32_t now)
     while (s.draft_drag >= 40 || s.draft_drag <= -40) {
         int step = s.draft_drag > 0 ? 1 : -1;
         s.draft_drag -= step * 40;
-        int last = question_rows(draft.page.text) - 5;
+        int last = question_rows(draft.page.text) - DRAFT_ROWS;
         if (last < 0) last = 0;
         if (step > 0 && s.offset < last) s.offset++;
         else if (step < 0 && s.offset > 0) s.offset--;

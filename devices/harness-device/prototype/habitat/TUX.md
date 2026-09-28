@@ -124,3 +124,27 @@ microphone reactions and colour-aware incremental redraws against full frames.
 It also checks preference persistence and runs the production gesture, voice,
 recap and notification tests once per character. Tim's original rendering
 reference tests remain in place.
+
+## Main integration and orange-dial trial — 2026-09-28
+
+Integrated the `88c0e5c4` handoff onto `main` at `621a2b8f`. Retained the
+handoff's hold-and-slide menu and single bottom caption. Kept main's larger
+interface font and four-row lists; corrected their question/draft scroll limits
+and secondary-screen buttons so text remains reachable and action labels fit.
+The form shows the current choice and detail, with errors replacing the detail.
+
+Validation used ESP-IDF 5.5, separate Tim/Tux build directories, and the production
+Habitat configuration above. Both images are 777,664 bytes. The complete device
+gate passed: 19 built-bridge checks, 796 host tests, framed bridge-to-renderer
+replay, and the native ASan/UBSan suite. The touch/notification soak exercises
+200,000 updates per character. Rendered screenshots were reviewed for both
+characters. These host checks do not establish physical display latency.
+
+The orange trial dial received `0.0.87-tux.1363.4` by verified USB OTA and reported
+that version after reboot. A user voice test reached the selected pane. Mute
+remained enabled. The production reference dial was not flashed, and the installed
+desktop app and CLI 0.3.25 were left unchanged. The multi-dial bridge is integrated
+and tested in this checkout; a simultaneous two-dial hardware trial remains open.
+
+Desktop notification placement above the creature and the relevance policy for
+old-session/swarm-introduction notifications remain separate follow-up work.

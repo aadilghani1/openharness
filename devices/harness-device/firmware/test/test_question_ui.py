@@ -28,7 +28,7 @@ code = r'''
 static bool cable_client_supports(uint32_t features) { (void)features; return true; }
 '''
 code += defines('ID_MAX','CABLE_NAME_MAX')
-code += defines('QUESTION_MAX','OPTION_MAX','PANE_RESULT_BYTES',source=source)
+code += defines('QUESTION_MAX','OPTION_MAX','PANE_RESULT_BYTES','UI_FONT','Q_ROWS',source=source)
 code += source[source.index('typedef enum {'):source.index('typedef struct {\n    char id[ID_MAX], name[CABLE_NAME_MAX]')]
 code += source[source.index('typedef struct {\n    char key[256]'):source.index('static EXT_RAM_BSS_ATTR struct {')]
 code += r'''
@@ -192,7 +192,7 @@ int main(int argc,char **argv) {
     assert(s.view==QUESTION);act(A_QUESTION_REVIEW,0);assert(s.view==ANSWER_REVIEW && s.q.item[0].draft[0]);
     act(A_QUESTION_BACK,0);act(A_QUESTION_CHOICES,0);act(A_CHOICE,1);assert(!s.q.item[0].draft[0] && s.q.item[0].selected==2);
     reset(false);assert(question_rows(long_question)>6);render(dir,"question");
-    question_move(10000);assert(s.offset==question_rows(long_question)-5);render(dir,"question-end");
+    question_move(10000);assert(s.offset==question_rows(long_question)-Q_ROWS);render(dir,"question-end");
     act(A_ANSWER,0);assert(!queued_answers); // Prompt never sends, and no default is selected.
     act(A_QUESTION_CHOICES,0);assert(s.view==CHOICE && !s.q.item[0].selected);
     act(A_QUESTION_REVIEW,0);assert(s.view==CHOICE);

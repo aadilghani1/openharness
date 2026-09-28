@@ -12,7 +12,10 @@ source = Path(os.environ.get('UI_SOURCE', native / 'ui_habitat.c')).read_text()
 def function(name):
     m = re.search(r'^[^\n]*\b' + name + r'\([^;]*?\)\n\{.*?^\}', source, re.M | re.S)
     assert m, name
-    return m.group(0) + '\n'
+    body = m.group(0)
+    if name == 'control':
+        body = body.replace('{', "{\n    if (label[0] == '[') assert(ht_can_display(label, UI_FONT, w, 1));", 1)
+    return body + '\n'
 
 code = r'''
 #include "runtime.h"
@@ -36,7 +39,7 @@ code = r'''
 '''
 # Keep real protocol capacities: a larger fake buffer can hide target truncation.
 code += defines('ID_MAX','CABLE_NAME_MAX','SWARM_ID_MAX','SWARMS_MAX','CABLE_MAX_AGENTS','MAX_PROJECTS')
-code += defines('NOTICES','QUESTION_MAX','OPTION_MAX','PANE_MEMORY_MAX',source=source)
+code += defines('NOTICES','QUESTION_MAX','OPTION_MAX','PANE_MEMORY_MAX','UI_FONT','Q_ROWS','DRAFT_ROWS',source=source)
 if '#define PANE_RESULT_BYTES ' in source:
     code += defines('PANE_RESULT_BYTES', source=source)
 code += '\n'.join(re.findall(r'^#define TAB_\w+ \d+$', source, re.M)) + '\n'
@@ -963,7 +966,7 @@ int main(int argc, char **argv) {
     int sends=visit_sends; habitat_touch(false,173,410,1150);
     assert(!visit.pending && visit.available && visit_sends==sends && carry.active);
     reset(); s.view=SETTINGS; s.offset=6; scene_take(); assert(action_enabled(A_LATEST)); portrait(dir,"reading-controls");
-    tap(1000,233,300); assert(visit.pending && visit.op==HT_VISIT_LATEST && visit_sends==1 && !starts);
+    tap(1000,233,336); assert(visit.pending && visit.op==HT_VISIT_LATEST && visit_sends==1 && !starts);
     action_t old_visit=visit_queued; visit_work(old_visit); assert(visit_wire==1 && !strcmp(visit_wire_op,"latest"));
     char visit_request[32]; snprintf(visit_request,sizeof visit_request,"visit-%lu",(unsigned long)visit.request);
     cJSON visit_fields[]={
@@ -984,10 +987,10 @@ int main(int argc, char **argv) {
     reset(); dispatch((action_t){.kind=A_LATEST,.id="a"}); old_visit=visit_queued;
     ht_visit_close(&visit); visit_work(old_visit); assert(!visit_wire); // A cancelled queued action cannot jump later.
     dispatch((action_t){.kind=A_LATEST,.id="a"}); visit_work(old_visit); assert(!visit_wire && visit.pending);
-    reset(); s.view=SETTINGS; s.offset=6; scene_take(); habitat_touch(true,233,300,1000); s.active=1;
-    habitat_touch(false,233,300,1080); assert(!visit_sends && !starts); // Destination changed under the finger.
+    reset(); s.view=SETTINGS; s.offset=6; scene_take(); habitat_touch(true,233,336,1000); s.active=1;
+    habitat_touch(false,233,336,1080); assert(!visit_sends && !starts); // Destination changed under the finger.
     reset(); s.view=SETTINGS; s.offset=6; scene_take(); congestion=true;
-    tap(1000,233,300); assert(!visit.pending && !visit_sends && s.view==MESSAGE);
+    tap(1000,233,336); assert(!visit.pending && !visit_sends && s.view==MESSAGE);
     reset(); s.connected=false; s.view=SETTINGS; scene_take(); assert(!action_enabled(A_LATEST));
     workspace_setup(); assert(!action_enabled(A_TABS)); portrait(dir,"workspace-home");
     for(int i=0;i<scene.count;i++) assert(!strstr(scene.runs[i].text,"Product") && !strstr(scene.runs[i].text,"[ tabs ]"));
@@ -1133,12 +1136,12 @@ int main(int argc, char **argv) {
     }
     ui_notif_seen(NULL);assert(s.notice_count==NOTICES);
     ui_notif_replace(NULL,1000);assert(s.view==HOME&&!s.notice_count);
-    // Five names fit without losing the sixth tab; list drags respond before UP.
+    // Four larger names fit; the fifth and sixth remain reachable before UP.
     workspace_setup(); s.tab_count=6;
     strcpy(s.tabs[4].id,"tab-4"); strcpy(s.tabs[4].name,"Tools");
     strcpy(s.tabs[5].id,"tab-5"); strcpy(s.tabs[5].name,"Notes");
     dispatch((action_t){.kind=A_TABS}); scene_take(); portrait(dir,"tabs-names");
-    assert(s.view==TABS && s.hit_count==6 && !action_enabled(A_UP) && !action_enabled(A_DOWN));
+    assert(s.view==TABS && s.hit_count==5 && !action_enabled(A_UP) && !action_enabled(A_DOWN));
     assert(!action_enabled(A_MACHINES));
     int highlighted=0;
     for(int i=0;i<scene.count;i++) {
@@ -1151,10 +1154,10 @@ int main(int argc, char **argv) {
         assert(s.hits[i].action==A_TAB && s.hits[i].rect.h>=48);
         if(i>1) assert(s.hits[i].rect.y>=s.hits[i-1].rect.y+s.hits[i-1].rect.h);
     }
-    habitat_touch(true,233,300,3000); habitat_touch(true,233,240,3060); scene_take();
+    habitat_touch(true,233,300,3000); habitat_touch(true,233,220,3060); scene_take();
     assert(s.offset==1 && s.view==TABS && !tab_switches && !starts && !moves);
     habitat_touch(false,233,160,3120); scene_take();
-    assert(s.offset==1 && s.view==TABS && !tab_switches && !starts);
+    assert(s.offset==2 && s.view==TABS && !tab_switches && !starts);
     portrait(dir,"tabs-scrolled");
     tap(3300,233,360); assert(tab_switches==1 && !strcmp(tab_target,"tab-5") && !starts);
     // A short list never scrolls into an empty page; out-and-back is not a tap.
@@ -1169,16 +1172,16 @@ int main(int argc, char **argv) {
         snprintf(s.tabs[i].name,sizeof s.tabs[i].name,"Workspace %d",i);
     }
     strcpy(s.selected_tab,"tab-23"); dispatch((action_t){.kind=A_TABS}); scene_take();
-    assert(s.offset==19 && s.hit_count==6 && s.hits[5].value==23);
+    assert(s.offset==20 && s.hit_count==5 && s.hits[4].value==23);
     portrait(dir,"tabs-last");
-    habitat_touch(true,233,180,5000); habitat_touch(true,233,300,5060); scene_take();
-    assert(s.offset==17 && !tab_switches && !starts);
-    habitat_touch(false,233,300,5120); assert(s.offset==17);
+    habitat_touch(true,233,180,5000); habitat_touch(true,233,308,5060); scene_take();
+    assert(s.offset==18 && !tab_switches && !starts);
+    habitat_touch(false,233,308,5120); assert(s.offset==18);
     // Reversing the scroll preference only changes direction, never the target.
     scroll_reversed=true; scene_take();
-    habitat_touch(true,233,180,5300); habitat_touch(true,233,300,5360);
-    habitat_touch(false,233,300,5420); scene_take();
-    assert(s.offset==19 && !tab_switches && !starts); scroll_reversed=false;
+    habitat_touch(true,233,180,5300); habitat_touch(true,233,308,5360);
+    habitat_touch(false,233,308,5420); scene_take();
+    assert(s.offset==20 && !tab_switches && !starts); scroll_reversed=false;
     // A changed roster during contact cancels the stale choice and clamps view.
     habitat_touch(true,233,360,5600); ui_swarms_replace(s.tabs,2,"tab-1");
     habitat_touch(false,233,360,5675); scene_take();
@@ -1197,7 +1200,7 @@ int main(int argc, char **argv) {
     workspace_setup(); habitat_touch(true,233,230,1000);
     habitat_touch(true,233,230,1700); habitat_touch(true,100,230,1800);
     habitat_touch(false,100,230,1900); scene_take(); portrait(dir,"tabs-from-gesture");
-    tap(2100,233,294); // Fourth row: Research. The normal switch receipt still applies.
+    tap(2100,233,336); // Fourth row: Research. The normal switch receipt still applies.
     assert(tab_switches==1 && !strcmp(tab_target,"tab-3") && s.loading && s.view==MESSAGE);
     uint32_t serial=workspace.serial;
     ui_land_after_reload(); assert(s.loading); // A periodic refresh is not a switch receipt.
@@ -1380,10 +1383,10 @@ int main(int argc, char **argv) {
         .detail="Claude Code\nM2:~/code/harness"};
     ht_form_reply(&form,"form-test",form.request,true,&page,101); s.view=FORM; scene_take();
     portrait(dir,"new-harness");
-    tap(1000,290,405); assert(form_actions==2 && form_command.op==HT_FORM_ACTIVATE && !starts);
+    tap(1000,290,375); assert(form_actions==2 && form_command.op==HT_FORM_ACTIVATE && !starts);
     page.revision++; ht_form_reply(&form,"form-test",form.request,true,&page,1090); scene_take();
-    tap(1200,290,405); assert(form_actions==2); // a double tap cannot launch twice
-    tap(1700,290,405); assert(form_actions==3 && !starts);
+    tap(1200,290,375); assert(form_actions==2); // a double tap cannot launch twice
+    tap(1700,290,375); assert(form_actions==3 && !starts);
     ht_form_reply(&form,"form-test",form.request,true,&page,1800); scene_take();
     int before=form_actions;
     habitat_touch(true,233,260,2500); habitat_touch(true,234,180,2590); habitat_touch(false,234,180,2660);
@@ -1414,25 +1417,25 @@ int main(int argc, char **argv) {
     strcpy(s.q.item[0].options[0],"This file"); strcpy(s.q.item[0].options[1],"Whole project"); strcpy(s.q.item[0].options[2],"Leave it");
     scene_take(); habitat_touch(true,233,270,1000); habitat_touch(true,233,150,1100); habitat_touch(false,233,150,1180);
     assert(s.offset==3 && !starts && !question_sends && !s.q.item[0].selected);
-    scene_take(); tap(2000,300,393); assert(s.view==CHOICE);
+    scene_take(); tap(2000,300,370); assert(s.view==CHOICE);
     scene_take(); habitat_touch(true,233,240,2500); habitat_touch(true,233,195,2580); habitat_touch(false,233,195,2650);
     assert(s.q.choice==1 && !s.q.item[0].selected && !question_sends);
-    scene_take(); tap(3000,233,340); assert(s.q.item[0].selected==2);
+    scene_take(); tap(3000,233,320); assert(s.q.item[0].selected==2);
     scene_take(); tap(4000,305,393); assert(s.view==ANSWER_REVIEW && !question_sends);
     scene_take(); tap(4150,305,393); assert(!question_sends); // Rapid second tap cannot skip review.
     scene_take(); tap(4800,305,393); assert(question_sends==1 && s.q.pending && !starts);
     strcpy(s.agents[0].name,"Research helper");
     s.q.pending=false;s.q.item[0].selected=0;s.q.item[0].can_text=true;question_sends=0;view(QUESTION);scene_take();
-    habitat_touch(true,223,390,6000);habitat_touch(true,223,280,6100);habitat_touch(false,223,280,6180);
+    habitat_touch(true,223,350,6000);habitat_touch(true,223,280,6100);habitat_touch(false,223,280,6180);
     assert(!starts && !question_sends); // Drag beginning on Say still reads.
-    scene_take();tap(7000,223,390);assert(starts==1 && s.view==VOICE && s.voice_return==QUESTION);
+    scene_take();tap(7000,223,350);assert(starts==1 && s.view==VOICE && s.voice_return==QUESTION);
     assert(!strcmp(target,"a") && !strcmp(voice_context,"token-a"));scene_take();portrait(dir,"question-listening");
     tap(7140,233,220);assert(!stops); // Say's second tap cannot instantly end the new capture.
     tap(7800,233,220);assert(stops==1 && !question_sends);
     s.voice_open=false;strcpy(s.q.item[0].draft,"reviewed-draft");
     strcpy(s.q.item[0].answer,"Keep the public API. Only change the parser.");view(ANSWER_REVIEW);
-    ht_gesture_guard(&gesture,9000);scene_take();tap(9050,330,399);assert(!question_sends);
-    scene_take();tap(9600,330,399);assert(question_sends==1);
+    ht_gesture_guard(&gesture,9000);scene_take();tap(9050,330,350);assert(!question_sends);
+    scene_take();tap(9600,330,350);assert(question_sends==1);
 
     reset(); tap(1000,233,220); scene_take();
     habitat_touch(true,233,220,2000); surface_tick(2675); assert(s.voice_review_preview); scene_take(); portrait(dir,"voice-review-hold");
@@ -1451,6 +1454,9 @@ int main(int argc, char **argv) {
     scene_take();habitat_touch(true,233,250,2000);habitat_touch(true,233,170,2080);habitat_touch(false,233,170,2160);
     assert(!starts && s.offset==2 && !draft_actions);scene_take();
     habitat_touch(true,233,250,3000);habitat_touch(true,233,90,3080);habitat_touch(false,233,90,3160);
+    assert(!draft_actions && !starts);
+    scene_take();
+    habitat_touch(true,233,280,3200); habitat_touch(true,233,60,3260); habitat_touch(false,233,60,3340);
     assert(draft_actions==1 && draft_command.op==HT_DRAFT_MOVE && !starts);
     draft_page.revision=2;draft_page.position=2;strcpy(draft_page.text,"And keep the documentation up to date.");
     ht_draft_reply(&draft,draft_page.id,draft.request,true,&draft_page);scene_take();tap(4000,233,220);
@@ -1486,18 +1492,18 @@ int main(int argc, char **argv) {
     scene_take(); portrait(dir,"panes");
     reset(); s.count=8; s.active=7;
     for(int i=0;i<8;i++) { snprintf(s.agents[i].id,sizeof s.agents[i].id,"pane-%d",i); snprintf(s.agents[i].name,sizeof s.agents[i].name,"Pane %d",i); }
-    view(AGENTS); scene_take(); assert(s.hit_count==6);
+    view(AGENTS); scene_take(); assert(s.hit_count==5);
     habitat_touch(true,233,380,1000); habitat_touch(true,233,100,1300);
-    assert(s.offset==3 && !starts && !switches && !moves);
+    assert(s.offset==4 && !starts && !switches && !moves);
     habitat_touch(false,233,100,1375); scene_take();
-    assert(s.offset==3 && !strcmp(make_action(s.hits[5]).id,"pane-7"));
+    assert(s.offset==4 && !strcmp(make_action(s.hits[4]).id,"pane-7"));
     portrait(dir,"panes-last");
     // Every advertised optional control is present, none appear for a legacy host.
     reset(); host_features=0; view(SETTINGS); scene_take();
     assert(settings_count()==7 && !action_enabled(A_FORM) && !action_enabled(A_LATEST));
     portrait(dir,"controls-core");
     habitat_touch(true,233,370,1000); habitat_touch(true,233,160,1250); habitat_touch(false,233,160,1300);
-    scene_take(); assert(s.offset==2 && action_enabled(A_MUTE) && action_enabled(A_BRIGHT));
+    scene_take(); assert(s.offset==3 && action_enabled(A_MUTE) && action_enabled(A_BRIGHT));
     portrait(dir,"controls-core-scroll");
     dispatch((action_t){.kind=A_FIND}); assert(s.view==AGENTS && !form_actions && !starts);
     dispatch((action_t){.kind=A_LATEST,.id="a"}); assert(!visit_sends);
