@@ -464,6 +464,21 @@ class DaemonFace extends ChangeNotifier {
     ].join(', ');
   }
 
+  bool _pointerInside = false;
+  int _heldTallyCells = 0;
+
+  /// Keep the click target still when looking clears a count. Empty space
+  /// is released once the pointer leaves; new counts can still grow it.
+  int get tallyCells =>
+      _heldTallyCells > tally.length ? _heldTallyCells : tally.length;
+
+  void setPointerInside(bool inside) {
+    if (_pointerInside == inside) return;
+    _pointerInside = inside;
+    _heldTallyCells = inside ? tally.length : 0;
+    _update(force: true);
+  }
+
   /// `tim: bell in codex@office: run the migration?` while it speaks; a line
   /// from the pair brain exactly as sent (`[y/n/g] api@office: npm test`).
   String? get voice => _voice.value;
@@ -1287,6 +1302,12 @@ class DaemonFace extends ChangeNotifier {
 
   void _update({DaemonMood? before, bool force = false}) {
     if (_disposed) return;
+    if (!visible) {
+      _pointerInside = false;
+      _heldTallyCells = 0;
+    } else if (_pointerInside && tally.length > _heldTallyCells) {
+      _heldTallyCells = tally.length;
+    }
     final now = mood;
     _runMotion(now);
     final glyph = this.glyph;

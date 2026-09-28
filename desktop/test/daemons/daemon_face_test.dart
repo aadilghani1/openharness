@@ -918,8 +918,10 @@ void main() {
     );
     face.sync(const DaemonWatch(doneCount: 1));
     expect(face.tally, '1 done, 2 eggs');
+    face.setPointerInside(true);
     face.sync(const DaemonWatch(doneCount: 1234));
     expect(face.tally, '999+ done, 2 eggs');
+    final heldCells = face.tallyCells;
     expect(face.tooltip, contains('1234'));
     expect(face.detail, contains('1234 finished'));
     face.seen();
@@ -928,6 +930,12 @@ void main() {
       '2 eggs',
       reason: 'looking clears work, never unhatched eggs',
     );
+    expect(face.tallyCells, heldCells, reason: 'hover keeps the click target still');
+    face.setPointerInside(false);
+    expect(face.tallyCells, '2 eggs'.length);
+    face.setPointerInside(true);
+    zoo.bind(null);
+    expect(face.tallyCells, 0, reason: 'off reserves no space');
     await settle(tester);
   });
 

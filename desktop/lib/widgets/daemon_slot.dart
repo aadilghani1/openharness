@@ -307,9 +307,11 @@ class DaemonSlotButton extends StatelessWidget {
         final patch = daemonSlotPatch(face, theme);
         return MouseRegion(
           onEnter: (_) {
+            face.setPointerInside(true);
             face.look();
             face.seen();
           },
+          onExit: (_) => face.setPointerInside(false),
           child: Semantics(
             value: face.detail,
             child: WorkspaceBarControl(
@@ -354,19 +356,25 @@ class DaemonSlotButton extends StatelessWidget {
                         ],
                       ),
                     ),
-                    if (tally.isNotEmpty) ...[
-                      Text(
-                        tally,
-                        key: const ValueKey('daemon-slot-tally'),
-                        maxLines: 1,
-                        softWrap: false,
-                        style: workspaceBarTextStyle(
-                          color: daemonDimInk(theme),
-                          emphasized: emphasized,
-                        ).copyWith(fontFeatures: daemonTextFeatures),
+                    if (face.tallyCells > 0)
+                      SizedBox(
+                        width: cell.width * (face.tallyCells + 1),
+                        child: tally.isEmpty
+                            ? null
+                            : Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  tally,
+                                  key: const ValueKey('daemon-slot-tally'),
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  style: workspaceBarTextStyle(
+                                    color: daemonDimInk(theme),
+                                    emphasized: emphasized,
+                                  ).copyWith(fontFeatures: daemonTextFeatures),
+                                ),
+                              ),
                       ),
-                      SizedBox(width: cell.width),
-                    ],
                   ],
                 ),
               ),

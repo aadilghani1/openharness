@@ -1901,8 +1901,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (call.method == 'daemonLook') {
       if (!_zoo.loaded) return;
+      _face.setPointerInside(true);
       _face.look();
       _face.seen();
+      return;
+    }
+    if (call.method == 'daemonLeave') {
+      _face.setPointerInside(false);
       return;
     }
     if (call.method == 'daemonAnswer') {
@@ -3253,6 +3258,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // the gutter), followed by the labeled tally (`3 done, 1 egg`).
       'cell': _face.cell,
       'tally': _face.tally,
+      'tallyCells': _face.tallyCells,
       'foreground': daemonSlotInk(_face, theme).withValues(alpha: 1).toARGB32(),
       'tallyColor': daemonDimInk(theme).toARGB32(),
       'patch': daemonSlotPatch(_face, theme)?.toARGB32(),
@@ -6246,12 +6252,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ];
       // No space is kept for the slot until it is shown: off (or not decided
       // yet) the bar is exactly the one it was before daemons existed.
-      final tally = _slotShown ? _face.tally : '';
+      final tallyCells = _slotShown ? _face.tallyCells : 0;
       final daemonSpace = _slotShown
           ? cell.width *
                 (_face.roster.rules.statusCells +
                     2 +
-                    (tally.isEmpty ? 0 : tally.length + 1))
+                    (tallyCells == 0 ? 0 : tallyCells + 1))
           : 0.0;
       final toolHeight = workspaceBarControlHeight(context);
       final pr = _pullRequest.value;
