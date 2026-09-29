@@ -147,7 +147,7 @@ try:
     before = len(api()['inputs'])
     mouse(0, x + 3, y + 2)
     mouse(0, x + 3, y + 2, release=True)
-    wait(lambda: any(i['text'] == '\x1b[<0;4;3M' for i in api()['inputs'][before:]), 'mouse coordinates start inside the inset content')
+    wait(lambda: {'\x1b[<0;4;3M', '\x1b[<0;4;3m'} <= {i['text'] for i in api()['inputs'][before:]}, 'mouse press and release start inside the inset content')
     print('PASS pane UI: same layout across appearances; mouse coordinates match PTY content', flush=True)
 
     # Titles and padding focus the pane without sending a click to its program.
@@ -156,7 +156,7 @@ try:
     mouse(0, second_x, 1)
     mouse(0, second_x, 1, release=True)
     wait(lambda: value('#{pane_id}') == second, 'click the pane header')
-    assert len(api()['inputs']) == before
+    assert len(api()['inputs']) == before, api()['inputs'][before:]
     mouse(0, border, 10)
     mouse(32, border + 3, 10)
     mouse(0, border + 3, 10, release=True)
@@ -224,7 +224,7 @@ try:
     before = len(api()['inputs'])
     mouse(0, x + 2, y + 2 + 1)
     mouse(0, x + 2, y + 2 + 1, release=True)
-    wait(lambda: any(i['text'] == '\x1b[<0;3;2M' for i in api()['inputs'][before:]), 'top status rows and program mouse coordinates')
+    wait(lambda: {'\x1b[<0;3;2M', '\x1b[<0;3;2m'} <= {i['text'] for i in api()['inputs'][before:]}, 'top status rows and program mouse coordinates')
     hn('set', '-g', 'status-position', 'bottom')
     hn('set', '-g', 'status', 'on')
     # OSC replies are metadata, not keystrokes. Surface defaults follow live light/dark changes.
