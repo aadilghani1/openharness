@@ -154,6 +154,11 @@ jobs:
           E2E_PORT: 19297
           HN_SOCKET_NAME: hn-ci-e2e
         run: bash tests/e2e.sh
+      - name: Layout keys and shared desk synchronization
+        env:
+          HN_LAYOUT_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
+          HN_LAYOUT_TEST_PORT: 19801
+        run: python3 -u tests/layout-sync.py
       - name: Terminal lease expiry and stalled-open recovery
         env:
           HN_RECONNECT_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
