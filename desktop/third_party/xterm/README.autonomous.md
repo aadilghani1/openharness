@@ -13,6 +13,14 @@ fix and the regression in `test/terminal_session_test.dart` passes against it.
 
 ## Local patches
 
+- **Pane-local wheel coordinates** (`lib/src/terminal_view.dart`). Convert the
+  pointer's global position to renderer-local coordinates before constructing
+  alternate-screen mouse-wheel reports. Offset panes otherwise report the
+  wrong cell (often clamped to the bottom/right edge), so a TUI can receive a
+  wheel event over its prompt instead of its scrollable content. Regression:
+  `test/swarm_terminal_scroll_test.dart` checks every four-pane preset, exact
+  emitted coordinates, and normal-buffer history scrolling.
+
 - **Browser accessibility input and editor switching**
   (`lib/src/ui/custom_text_edit.dart`). The browser's text-input strategy needs
   an editable semantics node when accessibility is enabled. The custom adapter

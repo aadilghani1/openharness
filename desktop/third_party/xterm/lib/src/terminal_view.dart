@@ -298,7 +298,9 @@ class TerminalViewState extends State<TerminalView> {
       terminal: widget.terminal,
       simulateScroll: widget.simulateScroll,
       onAltBufferScroll: widget.onAltBufferScroll,
-      getCellOffset: (offset) => renderTerminal.getCellOffset(offset),
+      // Pointer events carry window coordinates; each pane owns a local grid.
+      getCellOffset: (offset) =>
+          renderTerminal.getCellOffset(renderTerminal.globalToLocal(offset)),
       getLineHeight: () => renderTerminal.lineHeight,
       child: child,
     );
