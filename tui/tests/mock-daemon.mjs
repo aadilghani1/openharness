@@ -150,6 +150,10 @@ const dial = { said: {}, replies: [], messages: [] }
 const counts = {}
 const windows = new Set()
 // Opt-in faults for reconnect.py. No real daemon or agent is involved.
+// Controlled desk latency/failures for layout reconciliation tests, on private ports only.
+const layoutTest = process.env.MOCK_LAYOUT === '1'
+if (layoutTest && !(port >= 19800 && port <= 19809)) throw new Error('unsafe layout test port')
+const layoutFaults = { delays: [], failures: [], writes: [] }
 const reconnect = process.env.MOCK_RECONNECT === '1'
 if (reconnect && !(port >= 19780 && port <= 19789)) throw new Error('unsafe reconnect test port')
 const connections = new Map()
@@ -164,6 +168,17 @@ let demoAsked = false
 
 const json = (res, body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success: true, data: body })) }
 const server = http.createServer((req, res) => {
+  if (layoutTest && req.url === '/test/layout') {
+    if (req.method === 'GET') return json(res, layoutFaults)
+    let body = ''
+    req.on('data', c => { body += c })
+    req.on('end', () => {
+      const f = JSON.parse(body)
+      for (const key of ['delays', 'failures']) if (Array.isArray(f[key])) layoutFaults[key] = f[key]
+      json(res, layoutFaults)
+    })
+    return
+  }
   if (reconnect && req.url === '/test/reconnect') {
     if (req.method === 'GET') return json(res, { opens, inputs, counts, connections: [...connections.values()].map(c => ({
       id: c.id, machine: c.machine, streams: [...c.streams].map(([id, s]) => ({ id, agent: s.agent.id })),
@@ -224,7 +239,16 @@ const server = http.createServer((req, res) => {
     // Applied as the daemon's desk store applies them (MOCK_DESK=fixed: left as it is).
     let body = ''
     req.on('data', (c) => { body += c })
-    req.on('end', () => {
+    req.on('end', async () => {
+      const delay = layoutTest ? (layoutFaults.delays.shift() || 0) : 0
+      const failure = layoutTest ? (layoutFaults.failures.shift() || 0) : 0
+      if (layoutTest) layoutFaults.writes.push(JSON.parse(body || '{}'))
+      if (delay) await new Promise(resolve => setTimeout(resolve, delay))
+      if (failure) {
+        res.writeHead(failure, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ success: false, error: 'injected desk failure' }))
+        return
+      }
       let ops = []
       try { ops = JSON.parse(body || '{}').ops || [] } catch {}
       if (process.env.MOCK_DESK === 'fixed') ops = []
