@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
@@ -24,6 +26,11 @@ import '../terminal/terminal_theme_store.dart';
 import '../terminal/terminal_viewport.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import 'terminal_pane_badges.dart';
+
+/// A run of output rows drawn and pressed as one — [TerminalPanel.lineBands]. [first] and [last]
+/// are absolute buffer lines, inclusive; [key] is the host's own name for it, and [label] is what a
+/// screen reader says.
+typedef TerminalLineBand = ({String key, int first, int last, String label});
 
 /// One agent's terminal: xterm, its input, its scrollback and its links.
 ///
@@ -89,6 +96,15 @@ class TerminalPanel extends StatefulWidget {
   /// when the host took it: on the phone, an answer's own line while a question is open.
   final bool Function(String line)? onLineTap;
 
+  /// Runs of output rows drawn on a faint band, each one tap target — on the phone, an open
+  /// question's answers. Asked again on every paint and every tap rather than held, so a band
+  /// stays on its lines as the pane scrolls and repaints. Null draws none.
+  final List<TerminalLineBand> Function(Terminal terminal)? lineBands;
+
+  /// A tap anywhere on a [lineBands] band, its description lines included. Taken before
+  /// [onLineTap], and whether or not [onInputTap] is set: a band is drawn to be pressed.
+  final void Function(TerminalLineBand band)? onBandTap;
+
   /// Test seam for OS actions; normal panes use the platform launcher.
   final TerminalLinkOpener? linkOpener;
   final RemoteMediaDownloader? mediaDownloader;
@@ -105,6 +121,8 @@ class TerminalPanel extends StatefulWidget {
     this.jumpToEndRequest = 0,
     this.onInputTap,
     this.onLineTap,
+    this.lineBands,
+    this.onBandTap,
     this.linkOpener,
     this.mediaDownloader,
   });
@@ -155,6 +173,17 @@ class _TerminalPanelState extends State<TerminalPanel>
     null,
   );
   String? _pressedLink;
+
+  /// The [TerminalLineBand.key] under a finger that is down on it: drawn brighter until the finger
+  /// lifts or the pane scrolls. A notifier for the reason [_hoveredLink] is one — a press repaints
+  /// the bands, not the pane.
+  final ValueNotifier<String?> _pressedBand = ValueNotifier(null);
+
+  /// The bands' own box, which a band's rect is measured into — see [_bandRect].
+  final GlobalKey _bandsKey = GlobalKey();
+
+  /// Whether [_releaseBandOnUp] is on the pointer router, waiting for the pressing finger to lift.
+  bool _bandReleaseRouted = false;
 
   /// Whether the tap in progress was claimed for [TerminalPanel.onInputTap].
   bool _inputTapClaimed = false;
@@ -304,6 +333,8 @@ class _TerminalPanelState extends State<TerminalPanel>
     _hoveredLink.dispose();
     _linkModifierDown.dispose();
     _previewProgress.dispose();
+    _unrouteBandRelease();
+    _pressedBand.dispose();
     super.dispose();
   }
 
@@ -952,6 +983,8 @@ class _TerminalPanelState extends State<TerminalPanel>
   void _onScrollChanged() {
     _rememberFollowTail();
     _scheduleLinkRefresh();
+    // A press that turned into a scroll is no longer a press.
+    _pressedBand.value = null;
   }
 
   String? _linkAtPointer(Offset globalPosition) {
@@ -975,10 +1008,29 @@ class _TerminalPanelState extends State<TerminalPanel>
   bool _onTerminalTapDown(TapDownDetails details, CellOffset cell) {
     _inputTapClaimed = false;
     if (_onLinkTapDown(details, cell)) return true;
-    if (widget.onInputTap == null || _controller.selection != null) {
-      return false;
+    if (_controller.selection != null) return false;
+    final band = _bandAt(cell.y);
+    if (band == null && widget.onInputTap == null) return false;
+    _pressedBand.value = band?.key;
+    if (band != null && !_bandReleaseRouted) {
+      _bandReleaseRouted = true;
+      GestureBinding.instance.pointerRouter.addGlobalRoute(_releaseBandOnUp);
     }
     return _inputTapClaimed = true;
+  }
+
+  /// Up or gone, the finger is off the band — whatever xterm makes of it. Its tap has no cancel,
+  /// and a press that became a long press, or a drag with nothing to scroll, would stay lit.
+  void _releaseBandOnUp(PointerEvent event) {
+    if (event is! PointerUpEvent && event is! PointerCancelEvent) return;
+    _unrouteBandRelease();
+    _pressedBand.value = null;
+  }
+
+  void _unrouteBandRelease() {
+    if (!_bandReleaseRouted) return;
+    _bandReleaseRouted = false;
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(_releaseBandOnUp);
   }
 
   void _onTerminalTapUp(TapUpDetails details, CellOffset cell) {
@@ -987,6 +1039,12 @@ class _TerminalPanelState extends State<TerminalPanel>
       return;
     }
     _inputTapClaimed = false;
+    _pressedBand.value = null;
+    // Read again, not remembered from the press: what is under the finger now is what it meant.
+    if (_bandAt(cell.y) case final band?) {
+      widget.onBandTap?.call(band);
+      return;
+    }
     final buffer = _viewTerminal.buffer;
     if (cell.y >= 0 &&
         cell.y < buffer.lines.length &&
@@ -995,6 +1053,42 @@ class _TerminalPanelState extends State<TerminalPanel>
     }
     if (!isPromptTap(buffer, cell.y)) return;
     widget.onInputTap?.call();
+  }
+
+  /// The bands the host asks for now, or none when there is nothing to press them with.
+  List<TerminalLineBand> _bands() {
+    if (widget.onBandTap == null) return const [];
+    return widget.lineBands?.call(_viewTerminal) ?? const [];
+  }
+
+  /// The band drawn across buffer line [line], if any.
+  TerminalLineBand? _bandAt(int line) {
+    for (final band in _bands()) {
+      if (line >= band.first && line <= band.last) return band;
+    }
+    return null;
+  }
+
+  /// Where [band] is drawn, in the bands' own box: the full width, its rows' height less a point
+  /// top and bottom, so two answers on adjacent rows read as two. Null before layout.
+  ///
+  /// Measured through the terminal's render box rather than worked out from the line height, so
+  /// the scroll offset and xterm's own padding are counted exactly as its text is.
+  Rect? _bandRect(TerminalLineBand band) {
+    final render = _laidOutTerminalView()?.renderTerminal;
+    final box = _bandsKey.currentContext?.findRenderObject();
+    if (render == null || box is! RenderBox || !render.attached) return null;
+    if (!box.attached || !box.hasSize) return null;
+    final origin = box.globalToLocal(render.localToGlobal(Offset.zero));
+    final top = render.getOffset(CellOffset(0, band.first)).dy;
+    final bottom =
+        render.getOffset(CellOffset(0, band.last)).dy + render.lineHeight;
+    return Rect.fromLTRB(
+      0,
+      origin.dy + top + 1,
+      box.size.width,
+      origin.dy + bottom - 1,
+    );
   }
 
   /// Whether a tap on a link opens it. On a phone, always: there is no ⌘ or ctrl to hold, and a
@@ -1082,6 +1176,10 @@ class _TerminalPanelState extends State<TerminalPanel>
     grid.AppTheme.watch(context);
     final session = widget.session;
     _syncTerminal(session.terminal);
+    final foreground = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    ).foreground;
     return ColoredBox(
       color: grid.AppPalette.windowBg,
       child: Column(
@@ -1181,6 +1279,29 @@ class _TerminalPanelState extends State<TerminalPanel>
                     ),
                   ),
                 ),
+                // The bands the host asks for — on the phone, an open question's answers. They
+                // take no hit themselves: a tap goes through to xterm, which hands it to [_bandAt].
+                if (widget.lineBands != null && widget.onBandTap != null)
+                  Positioned.fill(
+                    child: CustomPaint(
+                      key: _bandsKey,
+                      painter: _LineBandPainter(
+                        bands: _bands,
+                        rectOf: _bandRect,
+                        pressed: _pressedBand,
+                        color: foreground.withValues(alpha: 0.06),
+                        pressedColor: foreground.withValues(alpha: 0.16),
+                        onTap: (band) => widget.onBandTap?.call(band),
+                        // Output, a scroll and a press are what move or light a band; a new
+                        // question rebuilds the page, and with it this painter.
+                        repaint: Listenable.merge([
+                          session.outputTicks,
+                          _scrollController,
+                          _pressedBand,
+                        ]),
+                      ),
+                    ),
+                  ),
                 // Both bars tick once per transferred chunk. Listening here
                 // keeps that traffic off the pane's own element, so a paste
                 // or a preview download cannot stutter the live terminal.
@@ -1217,6 +1338,72 @@ class _TerminalPanelState extends State<TerminalPanel>
       ),
     );
   }
+}
+
+/// [TerminalPanel.lineBands], drawn: a faint wash across each band's rows, brighter while pressed.
+///
+/// ⚠️ **Over the text, not under it.** xterm owns its render box's whole background (see
+/// `RenderTerminal._paint`), so there is no under; the wash is light enough to leave the text as it
+/// is, the way xterm's own selection sits over the glyphs it marks.
+///
+/// Each band is also a button to a screen reader, named by [TerminalLineBand.label]: the rows are
+/// only paint to VoiceOver, and the answers must still be there to press.
+class _LineBandPainter extends CustomPainter {
+  _LineBandPainter({
+    required this.bands,
+    required this.rectOf,
+    required this.pressed,
+    required this.color,
+    required this.pressedColor,
+    required this.onTap,
+    required Listenable repaint,
+  }) : super(repaint: repaint);
+
+  final List<TerminalLineBand> Function() bands;
+  final Rect? Function(TerminalLineBand band) rectOf;
+  final ValueListenable<String?> pressed;
+  final Color color;
+  final Color pressedColor;
+  final void Function(TerminalLineBand band) onTap;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint();
+    for (final band in bands()) {
+      final rect = rectOf(band);
+      if (rect == null || !rect.overlaps(Offset.zero & size)) continue;
+      paint.color = band.key == pressed.value ? pressedColor : color;
+      canvas.drawRect(rect, paint);
+    }
+  }
+
+  /// Never hit: the tap belongs to xterm underneath, which finds the band itself.
+  @override
+  bool? hitTest(Offset position) => false;
+
+  @override
+  SemanticsBuilderCallback get semanticsBuilder =>
+      (size) => [
+        for (final band in bands())
+          if (rectOf(band) case final rect?
+              when rect.overlaps(Offset.zero & size))
+            CustomPainterSemantics(
+              key: ValueKey<String>('line-band-${band.key}'),
+              rect: rect.intersect(Offset.zero & size),
+              properties: SemanticsProperties(
+                button: true,
+                label: band.label,
+                textDirection: TextDirection.ltr,
+                onTap: () => onTap(band),
+              ),
+            ),
+      ];
+
+  @override
+  bool shouldRepaint(_LineBandPainter old) => true;
+
+  @override
+  bool shouldRebuildSemantics(_LineBandPainter old) => true;
 }
 
 /// The "⌘-click to open" hint, and the click cursor that goes with it.

@@ -545,8 +545,8 @@ class _TerminalPageState extends State<TerminalPage>
     final view = _questionWatcher?.view;
     final open = view != null && view.answerable;
     _tellDaemon(open ? view : null);
-    // VoiceOver hears it too, once per question: the keys appearing beside the mic and the
-    // terminal repainting say nothing to someone who cannot see them.
+    // VoiceOver hears it too, once per question: the answers lighting up in the terminal say
+    // nothing to someone who cannot see them.
     if (open && view.question != _questionAnnounced) {
       _questionAnnounced = view.question;
       unawaited(
@@ -623,10 +623,10 @@ class _TerminalPageState extends State<TerminalPage>
     if (watcher == null || _keyboardSettling) return;
     if (!(_readFacts().session?.acceptsInput ?? false)) return;
     final view = watcher.view;
-    // ⚠️ **A dialog the bar can answer raises nothing.** Its answers are keys on the status line
-    // and words said to the mic (prompt mode); a keyboard would cover both, and push the bar that
-    // holds them off the screen. Only a dialog the bar cannot answer — multi-select — still asks
-    // for the keyboard's keys.
+    // ⚠️ **A dialog the page can answer raises nothing.** Its answers are a tap on their own lines
+    // and words said to the mic (prompt mode); a keyboard would cover both, and a tap on the pane
+    // under it is xterm's. Only a dialog the page cannot answer — multi-select — still asks for
+    // the keyboard's keys.
     if (view != null && view.answerable && !view.multi) return;
     if (view != null && view.answerable) {
       final key = view.fingerprint;
@@ -916,16 +916,10 @@ class _TerminalPageState extends State<TerminalPage>
     });
   }
 
-  /// The two answers beside the mic while a question is open — its first (`1 yes`) and its last
-  /// (`3 no`). The ones between are a tap on their own line in the terminal, where what they
-  /// mean is written in full ([_onLineTap]). Null when there is nothing to press: a question
-  /// that takes several answers, or one only partly on screen.
-  (QuestionKey, QuestionKey?)? _answerKeys(QuestionPaneView view) {
-    if (!view.answerable || view.multi) return null;
-    final keys = questionKeys(view);
-    if (keys.isEmpty) return null;
-    return (keys.first, keys.length > 1 ? keys.last : null);
-  }
+  /// Whether [view]'s answers are each one tap: not a question that takes several answers, nor one
+  /// only partly on screen.
+  static bool _answersTappable(QuestionPaneView view) =>
+      view.answerable && !view.multi;
 
   /// The mic's centre, up from the terminal's foot: where Siri's orb stands, just over the home
   /// strip — where the thumb already is. Fixed in points, not rows: the terminal's size must not
@@ -943,13 +937,14 @@ class _TerminalPageState extends State<TerminalPage>
   /// home strip, and no further. The terminal fills the screen; the mic floats over it, the way
   /// Siri's orb floats over the home screen (the owner: "we need to fill the screen 100%").
   ///
-  /// ⚠️ **Except while the agent asks.** Its answers are the lines at its foot, and the keys
-  /// beside the mic would sit on them: the question lifts clear of the keys until it is answered.
+  /// ⚠️ **Except while the agent asks.** Its answers are the lines at its foot — and the lines to
+  /// tap — and the line above the mic asks for the answer: the question lifts clear of it until it
+  /// is answered.
   double get _clearAboveMic =>
       _questionWatcher?.view != null ? _statusBottom + 22 : _windowBottomInset;
 
   /// The line above the mic, highest first: a two-second message (`✓ 1 yes`, or an error in red),
-  /// what a take is doing, a question with no keys to offer, the sample's next step. Null when
+  /// what a take is doing, how to answer the question open, the sample's next step. Null when
   /// there is nothing to say.
   ///
   /// ⚠️ **The two-second message outranks the take.** The take's line was first, and a take the
@@ -968,8 +963,12 @@ class _TerminalPageState extends State<TerminalPage>
       return _StatusLine(text: said.text, color: said.color);
     }
     final view = _questionWatcher?.view;
-    if (view != null && _answerKeys(view) == null) {
+    if (view != null && !_answersTappable(view)) {
       return _StatusLine(text: 'answer on screen', color: tty.yellow);
+    }
+    // In the sample its guide says this in its own words, and counts the step — see [_sampleGuide].
+    if (_answersOnScreen && SampleMode.maybeOf(context) == null) {
+      return _StatusLine(text: 'tap an answer · or say it', color: tty.yellow);
     }
     // Not while reading back through the history: the line sat on the rows being read, halving
     // one ("FAIL src/auth/…"). It is back the moment the reader is at the end again.
@@ -980,12 +979,47 @@ class _TerminalPageState extends State<TerminalPage>
     return null;
   }
 
-  /// [_answerKeys] while they can be pressed here: not over the keyboard, nor while recording.
-  (QuestionKey, QuestionKey?)? get _answersBesideMic {
+  /// Whether the open question's answers are bands to tap in the terminal right now — not under
+  /// the keyboard, where a tap on the pane is xterm's.
+  ///
+  /// ⚠️ **No keys beside the mic, by the owner's call (2026-09-29).** The first and last answers
+  /// were keys either side of it: on a 360pt Android the first ran off the screen's edge, both
+  /// labels were cut to a word ("làm app/tr…"), and the answers between had no key at all. Each
+  /// answer is now its own lines, in full, where it is read — see [_answerBands].
+  bool get _answersOnScreen {
     final view = _questionWatcher?.view;
-    if (view == null || _ownsInput || _keyBarUp) return null;
-    if (VoiceLine.shows(widget.voice)) return null;
-    return _answerKeys(view);
+    if (view == null || _ownsInput || _keyBarUp) return false;
+    return _answersTappable(view);
+  }
+
+  /// The open question's answers where the terminal draws them — each its row and the description
+  /// under it — as the bands [TerminalPanel] lays over them. See [questionAnswerLines].
+  List<TerminalLineBand> _answerBands(Terminal terminal) {
+    final view = _questionWatcher?.view;
+    if (view == null || !_answersTappable(view)) return const [];
+    final labels = {for (final row in view.rows) row.number: row.label};
+    return [
+      for (final answer in questionAnswerLines(terminal, view))
+        (
+          key: answer.number,
+          first: answer.first,
+          last: answer.last,
+          label: 'Answer ${answer.number} ${labels[answer.number] ?? ''}',
+        ),
+    ];
+  }
+
+  /// A tap on an answer's band: it presses that answer, as a tap on its row does ([_onLineTap]).
+  void _onAnswerBand(TerminalLineBand band) {
+    final view = _questionWatcher?.view;
+    if (view == null || !_answersTappable(view)) return;
+    for (final key in questionKeys(view)) {
+      if (key.number == band.key) {
+        HapticFeedback.selectionClick();
+        _answer(view, key);
+        return;
+      }
+    }
   }
 
   /// A tap on a row of the terminal while a question is open: on an answer's own line —
@@ -1998,6 +2032,12 @@ class _TerminalPageState extends State<TerminalPage>
                                                           ),
                                                         ),
                                                   onLineTap: _onLineTap,
+                                                  // The open question's answers, each a band
+                                                  // across its lines — see [_answersOnScreen].
+                                                  lineBands: _answersOnScreen
+                                                      ? _answerBands
+                                                      : null,
+                                                  onBandTap: _onAnswerBand,
                                                   // Where the reader is in the history —
                                                   // what holds the view still under them.
                                                   scrollback: _scrollback,
@@ -2226,35 +2266,8 @@ class _TerminalPageState extends State<TerminalPage>
                           ),
                         ),
                       ),
-                    // An agent's question: its first and last answers, `1 yes` and `3 no`, as keys
-                    // either side of the mic — which never moves. The rest are a tap on their line.
-                    if (_answersBesideMic case (final first, final last)?) ...[
-                      Positioned(
-                        right:
-                            MediaQuery.sizeOf(context).width / 2 +
-                            VoiceMicButton.extent / 2 +
-                            20 -
-                            _Keycap.slop,
-                        bottom: _micCenter - _Keycap.touch / 2,
-                        child: _AnswerKeycap(
-                          answer: first,
-                          onTap: () => _answer(_questionWatcher!.view!, first),
-                        ),
-                      ),
-                      if (last != null)
-                        Positioned(
-                          left:
-                              MediaQuery.sizeOf(context).width / 2 +
-                              VoiceMicButton.extent / 2 +
-                              20 -
-                              _Keycap.slop,
-                          bottom: _micCenter - _Keycap.touch / 2,
-                          child: _AnswerKeycap(
-                            answer: last,
-                            onTap: () => _answer(_questionWatcher!.view!, last),
-                          ),
-                        ),
-                    ],
+                    // An agent's question has no keys out here: each answer is a band on its own
+                    // lines in the terminal — see [_answersOnScreen].
                     // The sample, done: what it was, and the way to the real thing. Once.
                     if (_showEndCard)
                       Positioned.fill(
@@ -3281,118 +3294,6 @@ class _SlideAway extends StatelessWidget {
       );
     },
   );
-}
-
-/// One of a question's answers beside the mic: `1 yes`, its digit in the asking yellow.
-class _AnswerKeycap extends StatelessWidget {
-  const _AnswerKeycap({required this.answer, required this.onTap});
-
-  final QuestionKey answer;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return _Keycap(
-      semanticsLabel: 'Answer ${answer.number} ${answer.label}',
-      minWidth: 88,
-      haptic: HapticFeedback.selectionClick,
-      onTap: onTap,
-      child: ConstrainedBox(
-        // Room for `2 always`; a longer answer ends in an ellipsis — its line says it in full.
-        constraints: const BoxConstraints(maxWidth: 120),
-        child: Text.rich(
-          TextSpan(
-            children: [
-              TextSpan(
-                text: '${answer.number} ',
-                style: tty.style(
-                  size: TtySize.row,
-                  color: tty.yellow,
-                  weight: FontWeight.w600,
-                ),
-              ),
-              TextSpan(
-                text: answer.label,
-                style: tty.style(size: TtySize.row),
-              ),
-            ],
-          ),
-          maxLines: 1,
-          softWrap: false,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ),
-    );
-  }
-}
-
-/// A key on the raised plane: 6pt corners, no outline, darker under the finger on the way down.
-/// Drawn [height] tall inside a 44pt touch that reaches [slop] past it on every side.
-class _Keycap extends StatefulWidget {
-  const _Keycap({
-    required this.semanticsLabel,
-    required this.onTap,
-    required this.child,
-    required this.haptic,
-    this.minWidth = 48,
-  });
-
-  final String semanticsLabel;
-  final VoidCallback onTap;
-  final Widget child;
-  final Future<void> Function() haptic;
-  final double minWidth;
-
-  static const double height = 36;
-  static const double touch = 52;
-  static const double slop = (touch - height) / 2;
-
-  @override
-  State<_Keycap> createState() => _KeycapState();
-}
-
-class _KeycapState extends State<_Keycap> {
-  bool _down = false;
-
-  void _set(bool down) {
-    if (_down != down) setState(() => _down = down);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    final raised = ttyRaised(tty);
-    return Semantics(
-      button: true,
-      label: widget.semanticsLabel,
-      excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTapDown: (_) => _set(true),
-        onTapCancel: () => _set(false),
-        onTapUp: (_) => _set(false),
-        onTap: () {
-          unawaited(widget.haptic());
-          widget.onTap();
-        },
-        child: Padding(
-          padding: const EdgeInsets.all(_Keycap.slop),
-          child: Container(
-            height: _Keycap.height,
-            constraints: BoxConstraints(minWidth: widget.minWidth),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: _down ? Color.lerp(raised, tty.ground, 0.5) : raised,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: widget.child,
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// Holds the agent's last line at the foot of the screen while the output is followed at its end,

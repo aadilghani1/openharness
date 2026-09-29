@@ -539,6 +539,68 @@ bool _isLastThingOnScreen(List<String> lines, int footer) {
   return true;
 }
 
+/// How many lines one answer may run to, its own row included — a label the
+/// pane wrapped and a description of three or four lines on a narrow phone.
+const int _maxAnswerLines = 8;
+
+/// Where each answer of [view] is drawn on [terminal]'s buffer: its own row and
+/// the lines under it that belong to it, as absolute buffer line indices, top
+/// answer first. What the phone draws a band across and takes a tap on.
+///
+/// ⚠️ **The lowest dialog only**, as [readQuestionPane] reads it. The walk goes
+/// up from the bottom, takes the first row of each answer it meets, and stops
+/// at row 1 — an answered copy of the same question in the scrollback above is
+/// never the one found.
+///
+/// A line belongs to the answer above it while it is indented at least as far
+/// as that answer's label: Claude draws the description there, and a wrapped
+/// label carries on there. A blank line, any other row (`5. Type something.`),
+/// a rule or the footer ends it.
+List<({String number, int first, int last})> questionAnswerLines(
+  Terminal terminal,
+  QuestionPaneView view,
+) {
+  final lines = terminal.buffer.lines;
+  final total = lines.length;
+  if (total == 0 || view.rows.isEmpty) return const [];
+  String text(int i) =>
+      lines[i].toString().replaceAll('\u00a0', ' ').trimRight();
+  final wanted = {for (final row in view.rows) row.number: row.label};
+  final found = <({String number, int first, int last})>[];
+  final from = total - _bufferScan < 0 ? 0 : total - _bufferScan;
+  for (var i = total - 1; i >= from && wanted.isNotEmpty; i--) {
+    final line = text(i);
+    final match = _row.firstMatch(line);
+    if (match == null) continue;
+    final number = match.group(1)!;
+    final label = wanted[number];
+    if (label == null || !line.contains(label)) continue;
+    wanted.remove(number);
+    // The label's column: past `❯ 1. `, wherever the caret and the digits put it.
+    final indent = line.indexOf(
+      match.group(2)!,
+      line.indexOf('$number.') + number.length + 1,
+    );
+    var last = i;
+    for (var j = i + 1; j < total && j - i < _maxAnswerLines; j++) {
+      final next = text(j);
+      if (next.trim().isEmpty ||
+          _row.hasMatch(next) ||
+          _ruleTop.hasMatch(next.trim()) ||
+          _footer.hasMatch(next)) {
+        break;
+      }
+      if (next.length - next.trimLeft().length < indent) break;
+      last = j;
+    }
+    found.add((number: number, first: i, last: last));
+    // Row 1 is the dialog's top: every other answer is below it.
+    if (number == '1') break;
+  }
+  found.sort((a, b) => a.first.compareTo(b.first));
+  return found;
+}
+
 QuestionPaneRow? _parseRow(String line, QuestionEngine engine) {
   final m = _row.firstMatch(line);
   if (m == null) return null;
