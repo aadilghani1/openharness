@@ -54,6 +54,7 @@ import { engineSessionTitle } from './lib/sessionTitle.js'
 import { installAmpPlugin, installCodexHooks, installCommandCodeHooks, installCursorHooks, installDevinHooks, installGrokHooks, installAgyHooks, installCopilotHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension, installSessionHooks } from './lib/hooks.js'
 import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
 import { clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, writeSafeModeMarker } from './lib/daemonSafeMode.js'
+import { awakeTimeout } from './lib/sleepAware.js'
 import {
   BIND_WAIT_MS, connectFailure, defaultLaunchDeps, removePidFileIf, waitForBind, waitForReady,
 } from './lib/daemonLaunch.js'
@@ -206,6 +207,7 @@ import { AskQuestionController, parseEngineQuestionPane, pollsQuestions, Questio
 import { teamWriteHold } from './teams/preflight.js'
 import { TeamError } from './teams/model.js'
 import { CommanderMirror, SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from './lib/commander.js'
+import { AgentNotifications } from './lib/agentNotifications.js'
 import {
   setSummaryPoolDeviceConnected,
   shutdownSummaryPool,
@@ -2685,6 +2687,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let openToolsOf: (sessionId: string) => Array<{ name: string; input: unknown }> = () => []
   // What is still being asked, by session — handed to a window that connects later (openQuestions below).
   const openQuestions = new Map<string, Record<string, unknown>>()
+  const agentNotifications = new AgentNotifications()
   const questionWatcher = new QuestionWatcher({
     getSession: (id) => registry.resolve(id),
     capture: captureTerminal,
@@ -2698,7 +2701,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         type: 'commander_question',
         agentId: agentIdFor(sessionId),
         dbSessionId: sessionId,
-        payload: { requestId, questions: shaped },
+        payload: { requestId, questions: shaped, notification: agentNotifications.asked(sessionId, requestId) },
       }
       backend.sendCommander(asked)
       // ...and to the window on this computer. `sendCommander` is `webEligible: false`, so until this
@@ -2724,6 +2727,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // waiting, down the SAME path the question itself took, so the dial and the WiFi device cannot
     // disagree about whether a question is still open.
     onQuestionGone: (sessionId, requestId) => {
+      agentNotifications.answered(sessionId, requestId)
       deviceInput.setUserAction(agentIdFor(sessionId), false)
       const closed = {
         type: 'commander_question_close',
@@ -2784,6 +2788,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     return role?.role === 'worker' || (role?.role === 'director' && role.busy)
   }
   const mirror = new CommanderMirror({
+    notifications: agentNotifications,
+    notifyWithoutDevice: true,
     send: (frame) => backend.sendCommander(frame),
     sendWeb: (frame) => backend.send(frame), // turn_summary_pending / turn_summary → web indicator
     hasDevice: () => deviceIsWatching(),        // device-gate the LLM recap (mirror node)
@@ -3125,7 +3131,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (learnFrom && daemons.on() && !isTerminalEngine(learnFrom.engine)) {
       lessonUsage.ingest({ cwd: learnFrom.cwd ?? null }, events, { replay: !!(opts?.resumed || opts?.replay) })
     }
-    mirror.ingest(events, sessionId)
+    mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
     // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
     if (!opts?.replay) autonomousDeviceService?.stream(agentIdFor(sessionId), events)
   }
@@ -7959,9 +7965,11 @@ const enterSafeMode = (err: unknown): void => {
   // Bounded on purpose. A cause that has since cleared — tmux not yet on PATH after a reboot, a lock
   // file, a port held for a moment — would otherwise leave the machine wedged in a state nobody
   // respawns over, because not-ready is exactly what stops the app trying again.
+  // Counted in AWAKE time: a plain timer spent a closed lid on this clock and exited the daemon on the
+  // first loop turn after the wake, taking every local terminal with it (see lib/sleepAware.ts).
   if (env.ADAPTER_SAFE_MODE_MS > 0) {
-    setTimeout(() => leave(`no fix arrived within ${Math.round(env.ADAPTER_SAFE_MODE_MS / 60_000)}m — letting a clean start try`, 1),
-      env.ADAPTER_SAFE_MODE_MS).unref?.()
+    awakeTimeout(() => leave(`no fix arrived within ${Math.round(env.ADAPTER_SAFE_MODE_MS / 60_000)}m — letting a clean start try`, 1),
+      env.ADAPTER_SAFE_MODE_MS)
   }
 }
 

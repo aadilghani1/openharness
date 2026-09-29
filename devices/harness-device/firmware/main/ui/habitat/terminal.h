@@ -4,8 +4,17 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#define HT_WIDTH 466
-#define HT_HEIGHT 466
+// THE FACE, as a build fact rather than a literal.
+//
+// 466 is the round dial and 720 is the Pro. It arrives as a -D from main/CMakeLists.txt instead of from
+// sdkconfig.h on purpose: this header is also compiled by the host-side layout and damage benches, which
+// have no IDF config at all, and they want the dial's geometry. So the default lives here and only the
+// P4 build overrides it.
+#ifndef HT_FACE_PX
+#define HT_FACE_PX 466
+#endif
+#define HT_WIDTH HT_FACE_PX
+#define HT_HEIGHT HT_FACE_PX
 #define HT_RUNS 40
 #define HT_TEXT_BYTES 128
 #define HT_DAMAGE_MAX 24
@@ -89,7 +98,8 @@ const char *ht_take_line(const char **cursor, int cells);
 int ht_wrap(ht_scene_t *scene, int x, int y, int width, int lines, int skip, const ht_font_t *font,
             uint16_t fg, const char *text);
 void ht_damage(const ht_scene_t *before, const ht_scene_t *after, ht_damage_t *out);
-// Output is big-endian RGB565, ready for CO5300 DMA. Buffer holds region.w * region.h pixels.
+// Output is RGB565 in THIS BOARD'S panel order — byte-swapped for the dial's CO5300 over QSPI, native
+// for the Pro's ST7703 DPI framebuffer. See panel16() in terminal.c. Buffer holds region.w * region.h.
 void ht_raster(const ht_scene_t *scene, ht_rect_t region, uint16_t *out);
 uint32_t ht_utf8_next(const char **cursor);
 // Question/answer text must fit in full and contain glyphs available on this device.

@@ -722,6 +722,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     const heartbeat = watchSocketLiveness(ws, {
       deadlineMs: LOCAL_IDLE_DEADLINE_MS,
       onIdle: (idleMs) => console.log(`[local-ws] ${connId} no traffic for ${Math.round(idleMs / 1000)}s — terminating`),
+      // The app is on this computer and slept with us: a wake re-probes it, it never ends the socket.
+      onWake: (sleptMs) => console.log(`[local-ws] ${connId} woke after ${Math.round(sleptMs / 1000)}s asleep — re-probing`),
     })
 
     const cleanup = (): void => {

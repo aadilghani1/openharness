@@ -86,9 +86,9 @@ checks hold the AppKit bar to the same with the daemon hidden.
 
 **Appearing.** When daemons turn on (the first 200, or the preview switched
 on), the slot takes its space at the first quiet moment: no mouse button held,
-the pointer off the bar, and no key or pointer event for 800 ms (at once when
+the pointer off the bottom status bar, and no key or pointer event for 800 ms (at once when
 nothing has been touched yet). Native holds the slot back the same way while a
-button is down or the pointer is on its strip (`daemonMayAppear`). Tabs never
+button is down or the pointer is on its footer (`daemonMayAppear`). Controls never
 move under a click.
 
 **The welcome's steps are not the daemon's habits.** `WorkspaceOnboarding` is
@@ -216,7 +216,8 @@ place to practise it.
 
 ## Status slot
 
-Eight cells plus a one-cell gutter each side, far right of the status bar, in
+Eight cells plus a one-cell gutter each side in the bottom status bar, before
+the optional Share action and model selector, in
 the bar's font with ligatures off. The face sends its ten cells as drawn
 (`statusCell` centred on the version's base sprite, so a borrowed baton or a
 nap's `z` grows to the right and the face never shifts). A status cell is

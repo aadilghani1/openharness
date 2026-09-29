@@ -1,4 +1,5 @@
 import '../core/models.dart';
+import '../core/runtime_model_name.dart';
 import '../shared/theme/prompt_style.dart';
 import '../shared/theme/status_line_style.dart';
 import '../widgets/engine_identity.dart';
@@ -140,6 +141,12 @@ class WorkspacePaneContext {
   final String? branch;
   String? get agentId => pane.isWeb ? pane.ownerAgentId : pane.agentId;
   String? get engine => agent?.engine ?? pane.session?.engineId;
+  String get modelLabel => modelLabelWithEffort(
+    provider,
+    agent?.gridModel == null && agent?.modelName != null
+        ? agent?.modelEffort
+        : null,
+  );
   String get suffix => branch == null ? '' : '  ($branch)';
   String get text => '$location$suffix';
   StatusLineParts format(PromptPrefs prefs) {

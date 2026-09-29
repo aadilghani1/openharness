@@ -9,6 +9,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   private let channel: FlutterMethodChannel
   private let accessory = NSTitlebarAccessoryViewController()
   private let strip = SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 40))
+  private var statusBarHeight: NSLayoutConstraint?
   private var observers: [NSObjectProtocol] = []
   private var configured = false
   private var actionsEnabled = false
@@ -55,6 +56,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         self.canGoForward = state["canGoForward"] as? Bool == true
         self.updateHistory(state["history"] as? [[String: Any]] ?? [], closed: state["closedHistory"] as? [[String: Any]] ?? [])
         self.strip.update(state)
+        self.statusBarHeight?.constant = self.strip.preferredStatusBarHeight
         self.window?.backgroundColor = self.strip.palette.tabBar
         result(nil)
       case "machinesState":
@@ -106,7 +108,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["daemon", "focusedModel", "focusedContext", "harnessControls", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["daemon", "focusedModel", "focusedContext", "harnessControls", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "notificationInbox", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -133,9 +135,10 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // handling the action. The controller accepts ordinary keys, but Flutter's
     // view wrapper only forwards Command equivalents for its input view.
     if let current = window.firstResponder as? NSView,
-       current.isDescendant(of: content) { return }
+       current.isDescendant(of: content),
+       !current.isDescendant(of: strip.statusBar) { return }
     func input(in view: NSView) -> NSView? {
-      guard !view.isHidden else { return nil }
+      guard !view.isHidden, view !== strip.statusBar else { return nil }
       if view.acceptsFirstResponder { return view }
       for child in view.subviews {
         if let target = input(in: child) { return target }
@@ -195,6 +198,19 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     accessory.layoutAttribute = .right
     accessory.view = strip
     window.addTitlebarAccessoryViewController(accessory)
+    if let content = window.contentView {
+      let footer = strip.statusBar
+      footer.translatesAutoresizingMaskIntoConstraints = false
+      content.addSubview(footer)
+      let height = footer.heightAnchor.constraint(equalToConstant: strip.preferredStatusBarHeight)
+      statusBarHeight = height
+      NSLayoutConstraint.activate([
+        footer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+        footer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+        footer.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+        height,
+      ])
+    }
     resize()
     installWorkspaceMenus()
     if let keymap { setKeymap(keymap) }
@@ -933,6 +949,83 @@ private final class SwarmStatusSymbolButton: SwarmIconButton {
   }
 }
 
+/// Plain toolbar icons emphasize the glyph without a button well.
+private class SwarmPlainIconButton: SwarmIconButton {
+  var foreground = NSColor.white { didSet { needsDisplay = true } }
+
+  override func draw(_ dirtyRect: NSRect) {
+    let emphasized = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
+    // Draw only the glyph: AppKit can paint a hover bezel even on a borderless
+    // NSButton. Emphasis belongs to the bell, never a background around it.
+    if let symbol = image?.withSymbolConfiguration(NSImage.SymbolConfiguration(
+      pointSize: 17, weight: emphasized ? .semibold : .regular)) {
+      let rect = NSRect(x: (bounds.width - symbol.size.width) / 2,
+        y: (bounds.height - symbol.size.height) / 2,
+        width: symbol.size.width, height: symbol.size.height)
+      NSGraphicsContext.current?.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
+      symbol.draw(in: rect)
+      foreground.withAlphaComponent(isEnabled ? (emphasized ? 1 : 0.75) : 0.28).setFill()
+      rect.fill(using: .sourceIn)
+      NSGraphicsContext.current?.cgContext.endTransparencyLayer()
+    }
+  }
+}
+
+/// A fixed-width bell with the same unread count as the Flutter popup.
+private final class SwarmNotificationButton: SwarmPlainIconButton {
+  var count = 0 { didSet { needsDisplay = true } }
+  override func draw(_ dirtyRect: NSRect) {
+    super.draw(dirtyRect)
+    guard count > 0 else { return }
+    let label = NSAttributedString(string: count > 99 ? "99+" : "\(count)", attributes: [
+      .font: NSFont.systemFont(ofSize: 9, weight: .semibold), .foregroundColor: NSColor.white,
+    ])
+    let width = max(13, ceil(label.size().width) + 6)
+    let badge = NSRect(x: bounds.maxX - width,
+      y: isFlipped ? bounds.minY : bounds.maxY - 13, width: width, height: 13)
+    NSColor(srgbRed: 207.0 / 255, green: 64.0 / 255, blue: 56.0 / 255, alpha: 1).setFill()
+    NSBezierPath(roundedRect: badge, xRadius: 6.5, yRadius: 6.5).fill()
+    label.draw(at: NSPoint(x: badge.midX - label.size().width / 2, y: badge.midY - label.size().height / 2))
+  }
+}
+
+/// A quiet filled pill, with the Store's colorful mark as its focal point.
+/// Drawing the content keeps the same spacing across AppKit button styles.
+private final class SwarmStoreButton: SwarmIconButton {
+  var palette = SwarmNativePalette() { didSet { needsDisplay = true } }
+  var preferredWidth: CGFloat {
+    ceil(workspaceBarTextWidth(title,
+      font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular))) + 52
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+      xRadius: bounds.height / 2, yRadius: bounds.height / 2)
+    palette.workspace.setFill()
+    shape.fill()
+    let alpha: CGFloat = !isEnabled ? 0.04 : isHighlighted ? 0.24 : hovered ? 0.18 : 0.10
+    palette.accent.withAlphaComponent(alpha).setFill()
+    shape.fill()
+    palette.accent.withAlphaComponent(hasKeyboardFocus && isEnabled ? 0.85 : 0.12).setStroke()
+    shape.lineWidth = hasKeyboardFocus && isEnabled ? 1.5 : 1
+    shape.stroke()
+    image?.draw(in: NSRect(x: 12, y: (bounds.height - 16) / 2, width: 16, height: 16),
+      from: .zero, operation: .sourceOver, fraction: isEnabled ? 1 : 0.45,
+      respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.lineBreakMode = .byTruncatingTail
+    let attributes: [NSAttributedString.Key: Any] = [
+      .paragraphStyle: paragraph,
+      .font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+      .foregroundColor: palette.accent.withAlphaComponent(isEnabled ? 1 : 0.45),
+    ]
+    let text = title as NSString
+    let height = text.size(withAttributes: attributes).height
+    text.draw(in: NSRect(x: 36, y: (bounds.height - height) / 2,
+      width: max(0, bounds.width - 48), height: height), withAttributes: attributes)
+  }
+}
+
 /// Flat primary action; Dart supplies the same colors and text as Flutter.
 private final class SwarmShareButton: SwarmIconButton {
   var background = NSColor.clear { didSet { needsDisplay = true } }
@@ -1467,8 +1560,18 @@ private struct SwarmTabActivity: Equatable {
   }
 }
 
+private final class SwarmStatusBar: NSView {
+  var onLayout: (() -> Void)?
+  override var mouseDownCanMoveWindow: Bool { false }
+  override func layout() { super.layout(); onLayout?() }
+}
+
 private final class SwarmTabStrip: NSView {
   private(set) var palette = SwarmNativePalette()
+  fileprivate let statusBar = SwarmStatusBar(frame: NSRect(x: 0, y: 0, width: 900, height: 28))
+  // Same gutter as kWorkspaceInset in Flutter. It belongs to the footer's
+  // centering area rather than only above it, leaving equal top/bottom space.
+  var preferredStatusBarHeight: CGFloat { workspaceBarControlHeight(barFont) + 9.5 }
   var emit: ((String, Any?) -> Void)?
   private let scroll = SwarmStripScrollView()
   private let document = NSView()
@@ -1478,6 +1581,9 @@ private final class SwarmTabStrip: NSView {
   private var focusedModelTarget: [String: Any]?
   fileprivate let pullRequestButton = SwarmContextButton()
   fileprivate let shareButton = SwarmShareButton()
+  fileprivate let notificationsButton = SwarmNotificationButton()
+  fileprivate let searchButton = SwarmPlainIconButton()
+  fileprivate let storeButton = SwarmStoreButton()
   private var shareTarget: [String: Any]?
   private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
   fileprivate let daemonButton = SwarmSymbolButton()
@@ -1502,6 +1608,8 @@ private final class SwarmTabStrip: NSView {
 
   override init(frame: NSRect) {
     super.init(frame: frame)
+    statusBar.isHidden = true
+    statusBar.onLayout = { [weak self] in self?.layoutStatusBar() }
     wantsLayer = true
     scroll.drawsBackground = false
     scroll.hasHorizontalScroller = false
@@ -1526,27 +1634,27 @@ private final class SwarmTabStrip: NSView {
       guard let self, self.actionsEnabled else { return }
       self.emit?("focusedContext", ["field": field, "paneId": paneId])
     }
-    addSubview(contextButton)
+    statusBar.addSubview(contextButton)
     focusedModelButton.isBordered = false
     focusedModelButton.textAlignment = .center
     focusedModelButton.target = self
     focusedModelButton.action = #selector(openFocusedModel)
     focusedModelButton.setAccessibilityLabel("Switch focused pane model")
     focusedModelButton.isHidden = true
-    addSubview(focusedModelButton)
+    statusBar.addSubview(focusedModelButton)
     pullRequestButton.isBordered = false
     pullRequestButton.target = self
     pullRequestButton.action = #selector(openFocusedPullRequest)
     pullRequestButton.setAccessibilityLabel("Open pull request on GitHub")
     pullRequestButton.isHidden = true
-    addSubview(pullRequestButton)
+    statusBar.addSubview(pullRequestButton)
     voiceLabel.isHidden = true
     voiceLabel.onAction = { [weak self] key in
       guard let self, self.actionsEnabled, !self.voiceLabel.isHidden else { return }
       // The plain channel path: an answer never moves keyboard focus.
       self.emit?("daemonAnswer", ["key": key])
     }
-    addSubview(voiceLabel)
+    statusBar.addSubview(voiceLabel)
     daemonButton.isBordered = false
     daemonButton.title = ""
     daemonButton.isHidden = true
@@ -1557,7 +1665,38 @@ private final class SwarmTabStrip: NSView {
       guard let self, self.actionsEnabled, !self.daemonButton.isHidden else { return }
       self.emit?("daemonLook", nil)
     }
-    addSubview(daemonButton)
+    statusBar.addSubview(daemonButton)
+    notificationsButton.isBordered = false
+    notificationsButton.focusRingType = .none
+    notificationsButton.title = ""
+    notificationsButton.image = NSImage(systemSymbolName: "bell", accessibilityDescription: nil)
+    notificationsButton.imagePosition = .imageOnly
+    notificationsButton.target = self
+    notificationsButton.action = #selector(openNotifications)
+    notificationsButton.isEnabled = false
+    notificationsButton.setAccessibilityLabel("Notifications")
+    addSubview(notificationsButton)
+    searchButton.isBordered = false
+    searchButton.focusRingType = .none
+    searchButton.title = ""
+    searchButton.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
+    searchButton.imagePosition = .imageOnly
+    searchButton.isEnabled = false
+    searchButton.target = self
+    searchButton.action = #selector(openSearch)
+    searchButton.setAccessibilityLabel("Search harnesses")
+    addSubview(searchButton)
+    storeButton.isBordered = false
+    storeButton.title = "Harness Store"
+    storeButton.font = barFont
+    storeButton.palette = palette
+    storeButton.image = SwarmHistoryIcons().image(engine: "store", asset: "assets/store/polymath.png")
+    storeButton.isEnabled = false
+    storeButton.focusRingType = .none
+    storeButton.target = self
+    storeButton.action = #selector(openStore)
+    storeButton.setAccessibilityLabel("Harness Store")
+    addSubview(storeButton)
     shareButton.isBordered = false
     shareButton.title = "[ Share ]"
     shareButton.target = self
@@ -1565,8 +1704,16 @@ private final class SwarmTabStrip: NSView {
     shareButton.isEnabled = false
     shareButton.isHidden = true
     shareButton.setAccessibilityLabel("Share")
-    addSubview(shareButton)
-    setAccessibilityChildren([scroll, newButton, focusedModelButton, contextButton, pullRequestButton, voiceLabel, daemonButton, shareButton])
+    statusBar.addSubview(shareButton)
+    // Flutter owns its content view's accessibility children. Expose the
+    // native footer through our native chrome tree while keeping its geometry
+    // attached to the content bottom.
+    statusBar.setAccessibilityElement(true)
+    statusBar.setAccessibilityRole(.group)
+    statusBar.setAccessibilityLabel("Focused pane status")
+    statusBar.setAccessibilityParent(self)
+    setAccessibilityChildren([scroll, newButton, searchButton, notificationsButton, storeButton, statusBar])
+    statusBar.setAccessibilityChildren([contextButton, pullRequestButton, voiceLabel, daemonButton, shareButton, focusedModelButton])
     registerForDraggedTypes([swarmPasteboardType])
     scroll.contentView.postsBoundsChangedNotifications = true
     for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification,
@@ -1625,6 +1772,7 @@ private final class SwarmTabStrip: NSView {
     let nextPalette = SwarmNativePalette(values)
     guard nextPalette != palette else { return }
     palette = nextPalette
+    storeButton.palette = palette
     newButton.contentTintColor = palette.accent
     for tab in tabs { tab.palette = palette }
     needsDisplay = true
@@ -1635,6 +1783,7 @@ private final class SwarmTabStrip: NSView {
     // Workspace teardown clears its controls without changing appearance.
     if let palette = state["palette"] as? [String: Any] { updatePalette(palette) }
     actionsEnabled = state["enabled"] as? Bool == true
+    statusBar.isHidden = (state["tabs"] as? [Any])?.isEmpty != false
     reduceMotion = state["reduceMotion"] as? Bool == true
     if let style = state["barStyle"] as? [String: Any] {
       let size = CGFloat(min(36, max(8, (style["size"] as? NSNumber)?.doubleValue ?? 13)))
@@ -1648,6 +1797,12 @@ private final class SwarmTabStrip: NSView {
       control.foreground = terminalForeground
       control.isEnabled = actionsEnabled
     }
+    storeButton.font = barFont
+    storeButton.isEnabled = actionsEnabled
+    searchButton.foreground = terminalForeground
+    searchButton.isEnabled = actionsEnabled
+    searchButton.toolTip = state["searchTooltip"] as? String ?? "Search harnesses"
+    storeButton.toolTip = state["storeTooltip"] as? String ?? "Harness Store"
     focusedModelButton.font = barFont
     focusedModelButton.foreground = terminalForeground
     focusedModelButton.contentPadding = ("m" as NSString).size(withAttributes: [.font: barFont]).width
@@ -1671,6 +1826,12 @@ private final class SwarmTabStrip: NSView {
     shareButton.setAccessibilityLabel(shareTarget?["label"] as? String ?? "Share")
     shareButton.setAccessibilityHelp(shareButton.toolTip)
     hasPullRequest = state["pullRequest"] != nil
+    notificationsButton.count = max(0, state["unread"] as? Int ?? 0)
+    notificationsButton.foreground = terminalForeground
+    notificationsButton.isEnabled = actionsEnabled
+    notificationsButton.toolTip = notificationsButton.count == 0
+      ? "Notifications" : "Notifications · \(notificationsButton.count) unread"
+    notificationsButton.setAccessibilityValue("\(notificationsButton.count) unread")
     daemonButton.font = barFont
     daemonButton.foreground = terminalForeground
     voiceLabel.font = barFont
@@ -1744,7 +1905,7 @@ private final class SwarmTabStrip: NSView {
     if let gate = daemonMayAppear { return gate() }
     guard NSEvent.pressedMouseButtons == 0 else { return false }
     guard let window else { return true }
-    return !bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+    return !statusBar.bounds.contains(statusBar.convert(window.mouseLocationOutsideOfEventStream, from: nil))
   }
 
   /// Try the held state again; the timer stops once it is shown or withdrawn.
@@ -1819,7 +1980,7 @@ private final class SwarmTabStrip: NSView {
   private func applyStatusVisibility() {
     voiceLabel.isHidden = !voiceActive
     contextButton.isHidden = voiceActive
-    focusedModelButton.isHidden = !hasFocusedModel || voiceActive
+    focusedModelButton.isHidden = !hasFocusedModel
     pullRequestButton.isHidden = !hasPullRequest || voiceActive
     voiceLabel.needsDisplay = true
   }
@@ -1833,24 +1994,17 @@ private final class SwarmTabStrip: NSView {
     let cell = ceil(("m" as NSString).size(withAttributes: [.font: barFont]).width)
     let trailing = cell
     let toolHeight = workspaceBarControlHeight(barFont)
-    let shareWidth = shareButton.isHidden ? 0 : shareButton.preferredWidth
-    let shareSpace = shareWidth > 0 ? shareWidth + cell : 0
-    shareButton.frame = NSRect(x: bounds.width - trailing - shareWidth,
-      y: (bounds.height - toolHeight) / 2, width: shareWidth, height: toolHeight)
-    let daemonWidth = daemonButton.isHidden ? 0 : daemonButton.preferredWidth
-    let statusRight = bounds.width - trailing - shareSpace - daemonWidth
-    daemonButton.frame = NSRect(x: statusRight,
-      y: (bounds.height - toolHeight) / 2, width: daemonWidth, height: toolHeight)
-    // Compact windows keep a scrolling tab list; context never overlaps it.
-    let available = max(0, bounds.width - cell * 7 - shareSpace - daemonWidth)
-    let naturalStatus = contextButton.preferredWidth
-      + (hasFocusedModel ? focusedModelButton.preferredWidth + cell : 0)
-      + (hasPullRequest ? pullRequestButton.preferredWidth + (contextButton.isSegmented && pullRequestButton.isSegmented ? 0 : cell) : 0)
-    // Match Flutter: context reserves only what it needs, up to 40% / 52 cells.
-    // Extra room from a short tab list returns to the full context below.
-    // Keep a usable message line even on an empty tab when the daemon is on.
-    let statusBudget = min(max(naturalStatus, daemonWidth > 0 ? cell * 32 : 0), min(available * 0.4, cell * 52))
-    let tabBudget = max(0, available - statusBudget)
+    let storeWidth = min(storeButton.preferredWidth,
+      max(0, bounds.width - cell * 14))
+    storeButton.frame = NSRect(x: bounds.width - trailing - storeWidth,
+      y: (bounds.height - toolHeight) / 2, width: storeWidth, height: toolHeight)
+    let iconWidth = cell * 4
+    notificationsButton.frame = NSRect(x: storeButton.frame.minX - iconWidth,
+      y: (bounds.height - toolHeight) / 2, width: iconWidth, height: toolHeight)
+    searchButton.frame = NSRect(x: notificationsButton.frame.minX - iconWidth,
+      y: (bounds.height - toolHeight) / 2, width: iconWidth, height: toolHeight)
+    // Only navigation actions share the tab row. Context has the full footer.
+    let tabBudget = max(0, searchButton.frame.minX - cell * 5)
     let widths = tabs.map { max($0.minimumWidth, min($0.preferredWidth, tabBudget)) }
     let total = widths.reduce(0, +)
     let occupied = min(total, tabBudget)
@@ -1865,24 +2019,10 @@ private final class SwarmTabStrip: NSView {
     }
     newButton.frame = NSRect(x: scroll.frame.maxX, y: (bounds.height - toolHeight) / 2,
       width: cell * 3, height: toolHeight)
-    let statusWidth = max(0, statusRight - newButton.frame.maxX - cell * 2)
-    voiceLabel.frame = NSRect(x: statusRight - statusWidth, y: (bounds.height - toolHeight) / 2,
-      width: statusWidth, height: toolHeight)
-    let prWidth = hasPullRequest ? min(pullRequestButton.preferredWidth, statusWidth * 0.45) : 0
-    let joined = contextButton.isSegmented && pullRequestButton.isSegmented && prWidth > 0
-    let prGap = prWidth > 0 && !joined ? cell : 0
-    pullRequestButton.frame = NSRect(x: statusRight - prWidth, y: (bounds.height - toolHeight) / 2,
-      width: prWidth, height: toolHeight)
-    let remaining = max(0, statusWidth - prWidth - prGap)
-    let modelWidth = hasFocusedModel ? min(focusedModelButton.preferredWidth, remaining * 0.35) : 0
-    let modelGap = modelWidth > 0 ? min(cell, remaining - modelWidth) : 0
-    let contextWidth = min(contextButton.preferredWidth, max(0, remaining - modelWidth - modelGap))
-    contextButton.frame = NSRect(x: statusRight - prWidth - prGap - contextWidth, y: (bounds.height - toolHeight) / 2,
-      width: contextWidth, height: toolHeight)
-    focusedModelButton.frame = NSRect(x: contextButton.frame.minX - modelGap - modelWidth,
-      y: (bounds.height - toolHeight) / 2, width: modelWidth, height: toolHeight)
-    contextButton.nextBackground = joined && pullRequestButton.drawsSegments
-      ? pullRequestButton.firstBackground : nil
+    if statusBar.superview == nil {
+      statusBar.setFrameSize(NSSize(width: bounds.width, height: preferredStatusBarHeight))
+    }
+    layoutStatusBar()
     let geometryChanged = scroll.frame.size != previousScrollSize || document.frame.size != previousDocumentSize
     if let active, revealActiveAfterLayout || (activeWasVisible && (geometryChanged || tabOrderChanged)) {
       document.scrollToVisible(active.frame)
@@ -1890,6 +2030,39 @@ private final class SwarmTabStrip: NSView {
     revealActiveAfterLayout = false
     tabOrderChanged = false
     syncActivityAnimation()
+  }
+  private func layoutStatusBar() {
+    let cell = ceil(("m" as NSString).size(withAttributes: [.font: barFont]).width)
+    let height = workspaceBarControlHeight(barFont)
+    let y = (statusBar.bounds.height - height) / 2
+    let available = max(0, statusBar.bounds.width - cell * 2)
+    let daemonWidth = daemonButton.isHidden ? 0 : min(daemonButton.preferredWidth, available * 0.5)
+    let shareWidth = shareButton.isHidden ? 0 : min(shareButton.preferredWidth, available * 0.3)
+    let modelBudget = max(0, available - daemonWidth - shareWidth - cell * 4)
+    let modelWidth = hasFocusedModel ? min(focusedModelButton.preferredWidth, modelBudget * 0.4) : 0
+    focusedModelButton.frame = NSRect(x: statusBar.bounds.width - cell - modelWidth,
+      y: y, width: modelWidth, height: height)
+    let shareRight = focusedModelButton.frame.minX - (modelWidth > 0 ? cell : 0)
+    shareButton.frame = NSRect(x: shareRight - shareWidth, y: y, width: shareWidth, height: height)
+    let daemonRight = shareButton.frame.minX - (shareWidth > 0 ? cell : 0)
+    daemonButton.frame = NSRect(x: daemonRight - daemonWidth, y: y, width: daemonWidth, height: height)
+    let contextRight = daemonButton.frame.minX - cell * 2
+    let statusWidth = max(0, contextRight - cell)
+    voiceLabel.frame = NSRect(x: cell, y: y, width: statusWidth, height: height)
+    let prWidth = hasPullRequest ? min(pullRequestButton.preferredWidth, statusWidth * 0.3) : 0
+    let joined = contextButton.isSegmented && pullRequestButton.isSegmented && prWidth > 0
+    let prGap = prWidth > 0 && !joined ? cell : 0
+    let contextWidth = min(contextButton.preferredWidth, max(0, statusWidth - prWidth - prGap))
+    contextButton.frame = NSRect(x: cell, y: y, width: contextWidth, height: height)
+    pullRequestButton.frame = NSRect(x: contextButton.frame.maxX + prGap,
+      y: y, width: prWidth, height: height)
+    contextButton.nextBackground = joined && pullRequestButton.drawsSegments
+      ? pullRequestButton.firstBackground : nil
+    // The footer has a different parent from the titlebar. Lay out its field
+    // links after allocating their row, including offscreen render fixtures.
+    contextButton.layoutSubtreeIfNeeded()
+    pullRequestButton.layoutSubtreeIfNeeded()
+    focusedModelButton.layoutSubtreeIfNeeded()
   }
   override func draw(_ dirtyRect: NSRect) {
     // A fine rule joins the flat tabs to the workspace.
@@ -1925,6 +2098,15 @@ private final class SwarmTabStrip: NSView {
   }
   @objc private func openDaemon() {
     if actionsEnabled && daemonButton.isEnabled { emit?("daemon", nil) }
+  }
+  @objc private func openNotifications() {
+    if actionsEnabled && notificationsButton.isEnabled { emit?("notificationInbox", nil) }
+  }
+  @objc private func openSearch() {
+    if actionsEnabled && searchButton.isEnabled { emit?("sessions", nil) }
+  }
+  @objc private func openStore() {
+    if actionsEnabled && storeButton.isEnabled { emit?("store", nil) }
   }
   @objc private func openFocusedPullRequest() {
     if actionsEnabled && pullRequestButton.isEnabled, let url = pullRequestButton.actionURL {

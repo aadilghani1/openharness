@@ -21,7 +21,18 @@ import '../viewer/sign_in_browser.dart';
 import '../viewer/direct_link.dart';
 import '../viewer/viewer_services.dart';
 import '../viewer/viewer_location.dart';
-import '../viewer/group_sync.dart' show GroupSyncOutcome;
+import '../e2ee/bytes.dart' show b64d;
+import '../e2ee/keys.dart' show fingerprint;
+import '../viewer/group_sync.dart'
+    show
+        GroupMember,
+        GroupRoster,
+        GroupSyncOutcome,
+        adoptHandedRoster,
+        admitGroupMember,
+        handoffRoster,
+        openHandedRoster,
+        sealHandedRoster;
 import '../auth/auth_session.dart';
 import '../auth/peer_link_client.dart';
 import '../auth/sign_in_client.dart';
@@ -39,6 +50,7 @@ import '../core/engine_availability.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/test_run.dart';
+import '../core/web_form_factor.dart';
 import '../core/models.dart';
 import '../core/machine_resources.dart';
 import '../core/project_folder.dart';
@@ -544,6 +556,9 @@ class AppNotifier extends ChangeNotifier {
   /// Which agents have news nobody has looked at. Marked on the same two
   /// moments and NOT behind the banner or sound switches — see [AgentUnread].
   final AgentUnread agentUnread;
+  // Delivery deduplication only. The daemon owns notification eligibility for
+  // both desktop and device; a raw turn_ended is not a completed result.
+  final Set<String> _deliveredNotifications = {};
 
   AppConfig config;
   late ApiClient api;
@@ -2535,10 +2550,10 @@ class AppNotifier extends ChangeNotifier {
   /// The dial belongs to whichever daemon owns the cable, and only a complete
   /// roster lets that one judge; the others store a list they never use, which
   /// costs nothing and saves the window from having to know which is which.
-  /// THE WHOLE UNREAD LIST, for a dial that has just lost its own.
+  /// The newest eight unread harnesses, for a dial that has lost its drawer.
   ///
   /// The dial keeps its drawer in RAM, so a reboot — an OTA, a replug, a flash —
-  /// wipes it while this window still holds every mark. Measured: a turn ended
+  /// wipes it while this window still holds its marks. Measured: a turn ended
   /// at 17:46:19, the dial came back at 17:46:26, a question arrived at
   /// 17:46:28, and the two screens then read 2 and 1 forever.
   ///
@@ -2546,12 +2561,13 @@ class AppNotifier extends ChangeNotifier {
   /// can hand it over the moment a cable attaches, without a round trip to a
   /// window that may be busy. Ids and kinds only — the daemon already knows each
   /// agent's name, machine and last recap, and re-deriving them here would be a
-  /// second place for them to be wrong.
+  /// second place for them to be wrong. The desktop inbox can retain more than
+  /// the dial's eight rows; sending only that window preserves the wire limit.
   void _announceUnreadToDial() {
     final pool = _pool;
     if (pool == null) return;
     final items = [
-      for (final mark in agentUnread.newestFirst)
+      for (final mark in agentUnread.newestFirst.take(8))
         {
           'agentId': mark.agentId,
           'machineId': mark.machineId,
@@ -3536,6 +3552,7 @@ class AppNotifier extends ChangeNotifier {
   }) async {
     _guestDeskRestorePending = true;
     signedIn = false;
+    phoneLink = null;
     currentUser = null;
     analyticsAccount.clear();
     if (banner != null) {
@@ -4236,16 +4253,88 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  Future<void> login() async {
+  /// The QR a sign-in by phone is showing (`harness login --qr`), or null. See [login].
+  SignInQr? pendingSignInQr;
+
+  /// The sign-in in progress was started for the phone (`login(qr: true)`), so its QR square is
+  /// held before the code arrives.
+  bool signingInByPhone = false;
+
+  /// Where a sign-in by phone is: `approved`, then (after the window is signed in) `linked`,
+  /// `synced`. Null otherwise.
+  String? signInQrStage;
+
+  /// Once signed in by phone, the link that follows it: the phone joining this computer and this
+  /// computer joining the phone's trust group. The sign-in sheet shows its steps and closes once
+  /// it is done (`showSignInSheet`); null otherwise.
+  PhoneLinkStatus? phoneLink;
+
+  void dismissPhoneLink() {
+    if (phoneLink == null) return;
+    phoneLink = null;
+    notifyListeners();
+  }
+
+  /// One event of a sign-in by phone's link leg (`harness login --qr --json` after its first result).
+  void _phoneLinkProgress(String stage, Map<String, dynamic> event) {
+    final now = phoneLink;
+    switch (stage) {
+      case 'linked':
+        final label = event['label'];
+        phoneLink = PhoneLinkStatus.linking(
+          label is String && label.trim().isNotEmpty ? label.trim() : null,
+        );
+      case 'synced':
+        final machines = event['machines'];
+        phoneLink = PhoneLinkStatus.done(now?.phone, [
+          if (machines is List)
+            for (final m in machines)
+              if (m is Map && m['name'] is String) m['name'] as String,
+        ]);
+      case 'result' when event['status'] != 'success':
+        final message = event['message'];
+        phoneLink = PhoneLinkStatus.failed(
+          now?.phone,
+          message is String && message.isNotEmpty ? message : null,
+        );
+      case 'ended' when now != null && !now.settled:
+        phoneLink = PhoneLinkStatus.failed(now.phone, null);
+      default:
+        return;
+    }
+    notifyListeners();
+  }
+
+  /// Switch a sign-in by phone to the browser's SSO page instead.
+  Future<void> useBrowserSignIn() async {
+    if (signingIn) cancelLogin();
+    await login(qr: false);
+  }
+
+  /// Signs in. A CLI-backed build signs in **by phone** unless [qr] is false: the CLI shows a QR
+  /// ([pendingSignInQr]) that a phone already signed in scans and approves — no browser — and the
+  /// same scan links the phone and brings this computer into its trust group. A viewer build (web,
+  /// mobile) signs in with SSO; it is the thing that approves, not the thing approved.
+  Future<void> login({bool? qr}) async {
     if (_disposed || signingIn || signingOut || signOutError != null) return;
+    // By phone: a CLI-backed window, and a web desktop. A phone's own browser (web mobile) is the
+    // approver, and signs itself in by SSO.
+    // A CLI-backed desktop signs in through the browser until the harness CLI's QR sign-in is
+    // released; asked for explicitly (`qr: true`), it is already understood here.
+    final byPhone = qr ?? (kIsWeb && !isMobileWeb);
     final wasGuest = isGuest;
+    ({String code, String userCode, String? sealedRoster})? browserJoin;
     final revision = _invalidateAuthWork();
     _closedHistory.clear();
     _monitorHarnesses.clear();
     _lastError = null;
     status = AppStatus.bootstrapping;
     signingIn = true;
+    signingInByPhone = qr == true; // the QR square is held from the start
     pendingAuthorizeUrl = null;
+    pendingSignInQr = null;
+    signInQrStage = null;
+    phoneLink = null;
     notifyListeners();
     try {
       if (_workspaceCleanup case final cleanup?) {
@@ -4253,6 +4342,35 @@ class AppNotifier extends ChangeNotifier {
         if (!_authWorkCurrent(revision)) return;
       }
       await cliLogin.login(
+        qr: byPhone
+            ? SignInQrListener(
+                onQr: (shown) {
+                  if (!_authWorkCurrent(revision)) return;
+                  pendingSignInQr = shown;
+                  notifyListeners();
+                },
+                onProgress: (stage, event) {
+                  if (_disposed || !_authWorkCurrent(revision)) return;
+                  // A browser's approval carries the phone's group, sealed under the QR's code.
+                  if (stage == 'approved' &&
+                      event['code'] is String &&
+                      event['userCode'] is String) {
+                    final sealed = event['sealedRoster'];
+                    browserJoin = (
+                      code: event['code'] as String,
+                      userCode: event['userCode'] as String,
+                      sealedRoster: sealed is String ? sealed : null,
+                    );
+                  }
+                  if (stage == 'approved') {
+                    signInQrStage = stage;
+                    notifyListeners();
+                  } else {
+                    _phoneLinkProgress(stage, event);
+                  }
+                },
+              )
+            : null,
         onAuthorizeUrl: (url) {
           if (!_authWorkCurrent(revision)) return;
           if (pendingAuthorizeUrl == url) return;
@@ -4268,7 +4386,15 @@ class AppNotifier extends ChangeNotifier {
       );
       if (!_authWorkCurrent(revision)) return;
       _loginAuthorized = true;
+      // Signed in by phone: the CLI goes on to link that phone and join its group (see
+      // [_phoneLinkProgress]) — unless it already reported, which a fast phone can.
+      if (byPhone && phoneLink == null) {
+        phoneLink = viewer == null || browserJoin != null
+            ? const PhoneLinkStatus.waiting()
+            : null;
+      }
       pendingAuthorizeUrl = null;
+      pendingSignInQr = null;
       _resetLoginBrowser();
       notifyListeners();
       // The CLI has just restarted its daemon onto the account's machineId, so a
@@ -4282,6 +4408,9 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       _guestDeskRestorePending = false;
+      if (browserJoin case final join?) {
+        unawaited(_joinGroupFromPhone(join, revision));
+      }
       analytics.signedIn();
       // Restarts the clock even if `_trackAppOpened` already started one: this
       // person met the login screen, so their wait begins where the launch's
@@ -4313,6 +4442,8 @@ class AppNotifier extends ChangeNotifier {
         _resetLoginBrowser();
         _loginAuthorized = false;
         pendingAuthorizeUrl = null;
+        pendingSignInQr = null;
+        signingInByPhone = false;
         signingIn = false;
       }
     }
@@ -4375,7 +4506,11 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || !canCancelLogin) return;
     final revision = _invalidateAuthWork();
     signingIn = false;
+    signingInByPhone = false;
     pendingAuthorizeUrl = null;
+    pendingSignInQr = null;
+    signInQrStage = null;
+    phoneLink = null;
     status = isGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
     _lastError = null;
     _lastErrorRetryable = false;
@@ -5249,6 +5384,7 @@ class AppNotifier extends ChangeNotifier {
           prev.engineIconHint != agent.engineIconHint ||
           prev.codexHome != agent.codexHome ||
           prev.modelName != agent.modelName ||
+          prev.modelEffort != agent.modelEffort ||
           prev.parentAgentId != agent.parentAgentId ||
           prev.project != agent.project ||
           prev.gitContext != agent.gitContext ||
@@ -5351,6 +5487,123 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Pairs with [machineId] by the one-time code in its QR (`harness link qr`, or Add Phone) — no
+  /// password — then reconnects it and brings it into the trust group. Viewer builds only: a
+  /// CLI-backed build shows the QR rather than scanning one. Null on success, or what to show.
+  Future<String?> connectWithCode(
+    String machineId,
+    String code, {
+    String? expectedFingerprint,
+  }) async {
+    final result = await peerLinks.connectWithCode(
+      machineId,
+      code,
+      label: kIsWeb ? browserLabel() : (localHostnameOrNull() ?? 'Harness'),
+      displayName: machineStates[machineId]?.machine.displayName,
+      expectedFingerprint: expectedFingerprint,
+    );
+    if (result.error != null) return result.error;
+    final targetId = result.linkedMachineId ?? machineId;
+    final state = machineStates[targetId];
+    if (state != null) {
+      state.needsLink = false;
+      state.agentLoadStatus = AgentLoadStatus.idle;
+      notifyListeners();
+      await _pool?.closeMachine(targetId);
+      _connectMachine(state);
+    }
+    unawaited(_syncGroup(targetId, spread: true));
+    return null;
+  }
+
+  /// A web desktop just signed in by phone: it and the phone now hold each other's keys — the phone
+  /// took this browser into its roster, and handed back its own, sealed under the QR's code. Opening
+  /// that is the whole join: every machine is pinned here, and the sign-in page is done. Telling the
+  /// machines is background work ([_spreadGroup]), which the phone is doing too.
+  Future<void> _joinGroupFromPhone(
+    ({String code, String userCode, String? sealedRoster}) join,
+    int revision,
+  ) async {
+    final keys = viewer?.keys;
+    final sealed = join.sealedRoster;
+    final raw = keys == null || sealed == null
+        ? null
+        : openHandedRoster(sealed, code: join.code, userCode: join.userCode);
+    if (raw == null) {
+      phoneLink = const PhoneLinkStatus.failed(
+        null,
+        'your phone sent no devices — update Harness there',
+      );
+      notifyListeners();
+      return;
+    }
+    try {
+      await adoptHandedRoster(keys!, raw);
+    } catch (_) {
+      if (_disposed || !_authWorkCurrent(revision)) return;
+      phoneLink = const PhoneLinkStatus.failed(
+        null,
+        "this browser's keys could not be saved",
+      );
+      notifyListeners();
+      return;
+    }
+    if (_disposed || !_authWorkCurrent(revision)) return;
+    final machines = await _groupMachines();
+    for (final id in machines) {
+      // The inventory can change under these awaits: a machine gone from it is skipped, not dialled.
+      final state = machineStates[id];
+      if (state == null || !state.needsLink) continue;
+      state.needsLink = false;
+      state.agentLoadStatus = AgentLoadStatus.idle;
+      await _pool?.closeMachine(id);
+      _connectMachine(state);
+    }
+    if (_disposed || !_authWorkCurrent(revision)) return;
+    phoneLink = PhoneLinkStatus.done('your phone', [
+      for (final id in machines)
+        if (machineStates[id] case final state?) state.machine.displayName,
+    ]);
+    notifyListeners();
+    unawaited(_spreadGroup(retry: true, revision: revision));
+  }
+
+  /// The account's machines this device holds a key for: the group members it can reach. A roster
+  /// can still name machines from another account; those are not dialled.
+  Future<List<String>> _groupMachines() async {
+    final keys = viewer?.keys;
+    if (keys == null) return const [];
+    return [
+      for (final p in await keys.peers())
+        if (machineStates.containsKey(p.machineId)) p.machineId,
+    ];
+  }
+
+  /// Background: swap rosters with the group machines that are online, so what this device just
+  /// learned — or just became — reaches the whole group. With [retry] (a device that just joined) it
+  /// tries again a few times: a machine refuses a key it has not heard of yet, and hears of it from
+  /// the approving device's own round moments later.
+  Future<void> _spreadGroup({bool retry = false, int? revision}) async {
+    const waits = [
+      Duration.zero,
+      Duration(seconds: 3),
+      Duration(seconds: 10),
+      Duration(seconds: 30),
+    ];
+    for (final wait in retry ? waits : waits.take(1)) {
+      if (wait > Duration.zero) await Future<void>.delayed(wait);
+      if (_disposed || (revision != null && !_authWorkCurrent(revision))) {
+        return;
+      }
+      final online = [
+        for (final id in await _groupMachines())
+          if (machineStates[id]?.nodeOnline != false) id,
+      ];
+      if (online.isEmpty) continue;
+      await _syncGroup(online.first, spread: true);
+    }
+  }
+
   final Map<String, DateTime> _groupSyncedAt = {};
   static const _groupResync = Duration(minutes: 5);
 
@@ -5371,7 +5624,9 @@ class AppNotifier extends ChangeNotifier {
     // Fire-and-forget from the connection handler: a state file that is locked for a moment must not
     // surface as an unhandled error. The next session retries.
     try {
-      final label = localHostnameOrNull() ?? 'Desktop';
+      final label = kIsWeb
+          ? browserLabel()
+          : (localHostnameOrNull() ?? 'Desktop');
       final GroupSyncOutcome outcome = await links.syncGroup(
         machineId,
         label: label,
@@ -7277,7 +7532,8 @@ class AppNotifier extends ChangeNotifier {
       // times its tab came to the front, and a badge that stopped counting it
       // would be saying the work was done because somebody glanced at it. It
       // goes when the question is ANSWERED (`commander_question_close`).
-      if (agentUnread.kindFor(w.machineId, w.agentId) != AlertKind.done) {
+      final kind = agentUnread.kindFor(w.machineId, w.agentId);
+      if (kind == null || kind == AlertKind.needsYou) {
         continue;
       }
       _forgetUnread(w.machineId, w.agentId);
@@ -7419,7 +7675,8 @@ class AppNotifier extends ChangeNotifier {
   /// Same rule as the sweep: arriving at a blocked harness is not answering it,
   /// so its mark stays. See [seeWatchedAgents].
   void markAgentSeen(String machineId, String agentId) {
-    if (agentUnread.kindFor(machineId, agentId) != AlertKind.done) return;
+    final kind = agentUnread.kindFor(machineId, agentId);
+    if (kind == null || kind == AlertKind.needsYou) return;
     _forgetUnread(machineId, agentId);
   }
 
@@ -7574,7 +7831,11 @@ class AppNotifier extends ChangeNotifier {
     modelStarts.start(machineId, agentId);
   }
 
-  void _cancelTurnActivity(String machineId, String agentId) {
+  void _cancelTurnActivity(
+    String machineId,
+    String agentId, {
+    bool clearQuestion = true,
+  }) {
     final key = _turnActivityKey(machineId, agentId);
     _turnActivityWatchdogs.remove(key)?.cancel();
     // Every ordinary end of a turn comes through here — `turn_ended`, a
@@ -7587,11 +7848,9 @@ class AppNotifier extends ChangeNotifier {
     modelStarts.end(machineId, agentId);
     final machine = machineStates[machineId];
     machine?.processingAgentIds.remove(agentId);
-    // A question cannot outlive its own turn — the daemon's watcher says the
-    // same thing from the other end, tearing down and announcing a close when
-    // the turn ends. Clearing here as well means the row cannot survive a close
-    // frame that was dropped, and this is also the path a deleted agent takes.
-    machine?.blockedAgents.remove(agentId);
+    // Raw turn endings do not decide whether a question is answered. The
+    // shared daemon question-close event does. Disconnect/deletion still clear.
+    if (clearQuestion) machine?.blockedAgents.remove(agentId);
   }
 
   void _clearMachineActivity(MachineState machine) {
@@ -7621,6 +7880,104 @@ class AppNotifier extends ChangeNotifier {
     if (machine == null) return;
     _connectMachine(machine);
     await _loadMachineData(machine, force: true);
+  }
+
+  /// Approves a sign-in QR — a browser's (`k=v`), or a machine's with [machine] — and takes the asker
+  /// into this device's trust group:
+  ///
+  /// 1. the browser's key, as the backend has it ([pub]), must be the one the QR's fingerprint names
+  ///    — the camera is the channel the server cannot touch;
+  /// 2. the approval hands the browser this device's roster, sealed under the QR's [code], so it can
+  ///    pin every machine without dialling one first;
+  /// 3. the browser joins this device's roster. That exchange is the approval; telling the
+  ///    machines follows in the background ([_spreadGroup]).
+  ///
+  /// Returns the machines the browser will reach, or an error code: `FINGERPRINT` (a different
+  /// key), `UNSUPPORTED` (no trust group here), `STORAGE` (this device's keys could not be read or
+  /// written), or the backend's refusal. Never throws.
+  Future<({String? error, int machines, String? machineId})> approveSignInByQr({
+    required String userCode,
+    required String code,
+    required String pub,
+    required String label,
+    String? qrFingerprint,
+    bool machine = false,
+  }) async {
+    final keys = viewer?.keys;
+    if (keys == null) {
+      return (error: 'UNSUPPORTED', machines: 0, machineId: null);
+    }
+    final List<int> pubBytes;
+    try {
+      pubBytes = b64d(pub);
+    } on FormatException {
+      return (error: 'FINGERPRINT', machines: 0, machineId: null);
+    }
+    String plain(String v) =>
+        v.toUpperCase().replaceAll(RegExp('[^0-9A-Z]'), '');
+    if (pubBytes.length != 32 ||
+        (qrFingerprint != null &&
+            plain(fingerprint(pubBytes)) != plain(qrFingerprint))) {
+      return (error: 'FINGERPRINT', machines: 0, machineId: null);
+    }
+    final GroupRoster roster;
+    try {
+      roster = await handoffRoster(
+        keys,
+        selfLabel: kIsWeb
+            ? browserLabel()
+            : (localHostnameOrNull() ?? 'Harness'),
+      );
+    } catch (_) {
+      return (error: 'STORAGE', machines: 0, machineId: null);
+    }
+    String? machineId;
+    try {
+      final sealed = sealHandedRoster(roster, code: code, userCode: userCode);
+      if (machine) {
+        machineId = await api.approveMachineSignIn(
+          userCode,
+          sealedRoster: sealed,
+        );
+      } else {
+        await api.approveBrowserSignIn(userCode, sealedRoster: sealed);
+      }
+    } catch (e) {
+      return (error: '$e', machines: 0, machineId: null);
+    }
+    try {
+      await admitGroupMember(
+        keys,
+        GroupMember(
+          pub: pub,
+          kind: machine ? 'machine' : 'viewer',
+          label: label,
+          at: DateTime.now().millisecondsSinceEpoch,
+          machineId: machine ? machineId : null,
+        ),
+      );
+      // A machine is one this device dials: pinned now, by the key the QR vouched for.
+      if (machine && machineId != null) {
+        await keys.pin(machineId, pubBytes, label: label);
+      }
+    } catch (_) {
+      // Signed in all the same; the browser's own round tells the machines, and this device hears
+      // of it from them on its next sync.
+    }
+    // The two now hold each other's keys: done. Telling the rest of the group is background work —
+    // after a machine list that has the new machine on it.
+    unawaited(() async {
+      if (machine) {
+        try {
+          await refreshMachines();
+        } catch (_) {}
+      }
+      await _spreadGroup();
+    }());
+    final reach = (await _groupMachines())
+        .where((id) => id != machineId)
+        .length;
+    return (error: null, machines: reach, machineId: machineId);
   }
 
   /// Arm the selected owner's daemon through an already linked browser. Never queue a QR code
@@ -10223,8 +10580,7 @@ class AppNotifier extends ChangeNotifier {
         paneOfAgent(machineId, agentId) ??
         allPanes
             .where(
-              (pane) =>
-                  pane.machineId == machineId && pane.agentId == agentId,
+              (pane) => pane.machineId == machineId && pane.agentId == agentId,
             )
             .firstOrNull;
     if (existing == null) {
@@ -12833,46 +13189,12 @@ class AppNotifier extends ChangeNotifier {
         final requestId = payload['requestId'];
         if (agentId != null) {
           final open = machine.blockedAgents[agentId];
-          // A stale close must not wipe the question that REPLACED it when a
-          // dialog advanced to its next page. That is the only thing the id
-          // guards, so it is asked as its own question and nothing else hangs
-          // off it.
-          final supersededByANewerQuestion =
-              open != null &&
-              requestId is String &&
-              requestId.isNotEmpty &&
-              open.requestId != requestId;
-          if (!supersededByANewerQuestion) {
+          if (open != null && open.requestId == requestId) {
             machine.blockedAgents.remove(agentId);
-            // A question stops being unread when it is ANSWERED, wherever that
-            // happened — here, in the pane by hand, on the dial, in another
-            // window. Being looked at is not enough: the badge counts what is
-            // still waiting on a person.
-            //
-            // ⚠️ NOT nested inside "the dialog is still open". It was, and the
-            // mark then outlived its own question: answering makes the turn end
-            // too, `_cancelTurnActivity` clears `blockedAgents` on the way past,
-            // and whichever of the two frames lands first decides whether this
-            // runs at all. The close is the authoritative word that the question
-            // is answered; the dialog bookkeeping is a separate thing that may
-            // already have been tidied.
-            //
-            // WHATEVER THE MARK IS, not only a question's.
-            //
-            // Answering ENDS THE TURN for these engines — measured, one
-            // millisecond apart and the turn first:
-            //
-            //   18:04:58.534 [turn] 395050e8 ended · 65175ms
-            //   18:04:58.535 [question] 395050e8 answered elsewhere · closing
-            //
-            // so the `done` that lands with every answer overwrote the question
-            // mark and the badge never went down. Reading it as news is wrong on
-            // its face: a turn that ended in the same breath as your own answer
-            // is not something that happened while you were away.
-            //
-            // A close means somebody just dealt with this agent. Anything unread
-            // for it at that moment is about the work they were standing over.
-            _forgetUnread(machine.machine.machineId, agentId);
+            // An old question close cannot erase a newer completed result.
+            if (agentUnread.kindFor(machineId, agentId) == AlertKind.needsYou) {
+              _forgetUnread(machineId, agentId);
+            }
           }
         }
         break;
@@ -12908,6 +13230,20 @@ class AppNotifier extends ChangeNotifier {
         // agent first becomes busy. Expiry and turn end publish separately.
         if (!changed) return;
         break;
+      case 'turn_summary':
+        final notification = payload['notification'];
+        final agentId = _eventAgentId(machine, event, payload);
+        if (agentId == null || notification is! Map) return;
+        final id = notification['id'];
+        if (id is! String || id.isEmpty || notification['kind'] != 'done') {
+          return;
+        }
+        if (!_deliveredNotifications.add('$machineId/$id')) return;
+        while (_deliveredNotifications.length > 512) {
+          _deliveredNotifications.remove(_deliveredNotifications.first);
+        }
+        _raiseAlert(machine, agentId, AlertKind.done);
+        break;
       case 'turn_ended':
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
@@ -12918,7 +13254,7 @@ class AppNotifier extends ChangeNotifier {
           // project of four specialists put one row on the dial and five marks
           // here. Same predicate now, asked on the daemon: `isSubagentSession`.
           if (event['subagent'] != true) {
-            _raiseAlert(machine, agentId, AlertKind.done);
+            final failed = event['error'] != null || payload['error'] != null;
             final agent = machine.agents
                 .where((a) => a.id == agentId)
                 .firstOrNull;
@@ -12932,7 +13268,6 @@ class AppNotifier extends ChangeNotifier {
                       pane.agentId == agentId &&
                       pane.session != null,
                 );
-            final failed = event['error'] != null || payload['error'] != null;
             // Activity belongs to the harness, even if its pane is currently
             // detached. The zoo counters below still count only our own work.
             if (agent != null && !isTerminalEngine(agent.engine)) {
@@ -12969,7 +13304,11 @@ class AppNotifier extends ChangeNotifier {
               machine.zooTurns++;
             }
           }
-          _cancelTurnActivity(machine.machine.machineId, agentId);
+          _cancelTurnActivity(
+            machine.machine.machineId,
+            agentId,
+            clearQuestion: false,
+          );
         } else {
           final sessionId = _eventSessionId(event, payload);
           if (sessionId != null) {
@@ -13105,3 +13444,36 @@ final appStateProvider = Provider<AppNotifier>((ref) {
   app.bootstrap();
   return app;
 });
+
+/// Where the link after a sign-in by phone stands — see [AppNotifier.phoneLink].
+class PhoneLinkStatus {
+  const PhoneLinkStatus.waiting()
+    : stage = PhoneLinkStage.waiting,
+      phone = null,
+      machines = const [],
+      error = null;
+  const PhoneLinkStatus.linking(this.phone)
+    : stage = PhoneLinkStage.linking,
+      machines = const [],
+      error = null;
+  const PhoneLinkStatus.done(this.phone, this.machines)
+    : stage = PhoneLinkStage.done,
+      error = null;
+  const PhoneLinkStatus.failed(this.phone, this.error)
+    : stage = PhoneLinkStage.failed,
+      machines = const [];
+
+  final PhoneLinkStage stage;
+
+  /// The phone's name as it sealed it in the link, once linked.
+  final String? phone;
+
+  /// The other machines this computer now reaches, by name.
+  final List<String> machines;
+  final String? error;
+
+  bool get settled =>
+      stage == PhoneLinkStage.done || stage == PhoneLinkStage.failed;
+}
+
+enum PhoneLinkStage { waiting, linking, done, failed }

@@ -287,7 +287,7 @@ void main() {
   });
 
   testWidgets(
-    'Share keeps its corner at narrow widths and follows custom shortcuts',
+    'Share stays in the footer at narrow widths and follows custom shortcuts',
     (tester) async {
       app.adoptSessionForTest(terminal('a0', input));
       await mount(tester, size: const Size(520, 800));
@@ -295,12 +295,13 @@ void main() {
         find.byKey(const ValueKey('workspace-status-bar')),
       );
       expect(tester.getRect(button).right, lessThanOrEqualTo(bar.right));
+      expect(bar.contains(tester.getRect(button).center), isTrue);
       expect(
-        tester.getRect(button).left,
+        tester.getRect(button).top,
         greaterThan(
           tester
-              .getRect(find.byKey(const ValueKey('swarm-new-tab-button')))
-              .right,
+              .getRect(find.byKey(const ValueKey('workspace-tab-bar')))
+              .bottom,
         ),
       );
       expect(tester.takeException(), isNull);

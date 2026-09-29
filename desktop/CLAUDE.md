@@ -285,8 +285,8 @@ its headless debug timings do not establish native display or network latency.
   `grid.AppTheme.brightness`, which `_GridTokenScope` in `main.dart` sets from `Theme.of(context)`.
   Chrome widgets call `grid.AppTheme.watch(context)` at the top of `build` so `const` subtrees still
   repaint on a theme flip.
-- The [workspace status bar](design/workspace-status-bar.md) places compact numbered tabs on the left
-  and focused-pane context on the right. Automatic names use the strongest shared harness type,
+- The [workspace status bar](design/workspace-status-bar.md) places compact numbered tabs and global actions at the top,
+  with focused machine/repo/branch/PR at the bottom left and the model at the bottom right. Automatic names use the strongest shared harness type,
   project, or machine, preferring traits that distinguish tabs and excluding dependent viewers.
   The context follows a viewer's owner and uses the compact project label, never a worktree path
   or marker. User-renamed tabs always retain their saved name. Customize Harness → Status

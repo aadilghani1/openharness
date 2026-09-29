@@ -12,6 +12,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/shared/theme/prompt_style.dart';
 import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/state/swarm.dart';
@@ -113,7 +114,20 @@ void main() {
     if (Platform.environment['HARNESS_WORKSPACE_CONTROLS_CAPTURE_DIR'] !=
         null) {
       await loadRealFonts();
+      await (FontLoader('packages/lucide_icons_flutter/Lucide')..addFont(
+            rootBundle.load('packages/lucide_icons_flutter/assets/lucide.ttf'),
+          ))
+          .load();
       if (Platform.isMacOS) {
+        await (FontLoader('Apple Symbols')..addFont(
+              Future.value(
+                ByteData.sublistView(
+                  await File('/System/Library/Fonts/Apple Symbols.ttf')
+                      .readAsBytes(),
+                ),
+              ),
+            ))
+            .load();
         final bytes = ByteData.sublistView(
           await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
         );
@@ -187,9 +201,9 @@ void main() {
           findsNothing,
         );
         if (native) {
-          expect(updates.last['focusedModel']['text'], 'GPT-6 Astra');
+          expect(updates.last['focusedModel']['text'], 'GPT-6 Astra · High');
         } else {
-          expect(find.text('GPT-6 Astra'), findsOneWidget);
+          expect(find.text('GPT-6 Astra · High'), findsOneWidget);
           expect(find.text('Fable'), findsNothing);
           await captureControls(tester, 'focused-model');
           expect(
@@ -203,12 +217,12 @@ void main() {
         app.focusPane(first.id);
         await tester.pump();
         if (native) {
-          expect(updates.last['focusedModel']['text'], 'Fable');
+          expect(updates.last['focusedModel']['text'], 'Fable · High');
           await activate(second.id, 'a1');
           expect(find.text('Local-Test-Model'), findsNothing);
           await activate(first.id, 'a0');
         } else {
-          expect(find.text('GPT-6 Astra'), findsNothing);
+          expect(find.text('GPT-6 Astra · High'), findsNothing);
           await tester.tap(selectors);
         }
         await tester.pumpAndSettle();
@@ -351,6 +365,7 @@ void main() {
             name: 'Feature',
             engine: 'codex',
             modelName: 'GPT-6 Astra',
+            modelEffort: 'max',
             terminalAvailable: true,
             project: AgentProject(
               name: 'repo',
@@ -513,11 +528,7 @@ void main() {
                       .emphasized,
                   isFalse,
                 );
-                await captureControls(
-                  tester,
-                  'bar-hover-${style.name}',
-                  height: 100,
-                );
+                await captureControls(tester, 'bar-hover-${style.name}');
               }
             }
             await mouse.removePointer();
@@ -930,7 +941,7 @@ void main() {
   });
 
   testWidgets(
-    'compact tabs sit to the left of one focused context and switch workspaces',
+    'top navigation and bottom context stay separate while switching workspaces',
     (tester) async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -944,14 +955,21 @@ void main() {
       expect(find.text('2:'), findsOneWidget);
       final context = find.byKey(const ValueKey('workspace-pane-context'));
       expect(
-        tester.getRect(context).left,
+        tester.getRect(context).top,
         greaterThan(
-          tester.getRect(find.byKey(ValueKey(app.activeSwarmId))).right,
+          tester.getRect(find.byKey(ValueKey(app.activeSwarmId))).bottom,
         ),
       );
       final secondTab = find.byKey(ValueKey(app.activeSwarmId));
       final barControls = find.byType(WorkspaceBarControl);
-      final bar = find.byKey(const ValueKey('workspace-status-bar'));
+      final bar = find.byKey(const ValueKey('workspace-tab-bar'));
+      final footer = tester.getRect(
+        find.byKey(const ValueKey('workspace-status-bar')),
+      );
+      expect(footer.bottom, 800);
+      expect(footer.height, 37.5);
+      expect(tester.getRect(context).center.dy, footer.center.dy);
+      expect(footer.contains(tester.getRect(context).center), isTrue);
       for (final element in barControls.evaluate()) {
         final control = element.widget as WorkspaceBarControl;
         final rect = tester.getRect(find.byWidget(control));
@@ -972,9 +990,14 @@ void main() {
           expect(tester.getRect(fill).bottom, tester.getRect(bar).bottom);
         }
       }
-      expect(tester.getSize(secondTab).width, lessThan(150));
-      expect(find.byKey(const ValueKey('swarm-search-button')), findsNothing);
-      for (final old in ['harnesses', 'machines', 'models', 'store', 'help']) {
+      expect(
+        tester.getSize(secondTab).width,
+        lessThan(workspaceBarCellSizeOf(tester.element(secondTab)).width * 12),
+        reason: 'short tab labels keep their compact width in a roomy window',
+      );
+      expect(find.byKey(const ValueKey('swarm-search-button')), findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-store-button')), findsOneWidget);
+      for (final old in ['harnesses', 'machines', 'models', 'help']) {
         expect(find.byKey(ValueKey('swarm-$old-button')), findsNothing);
       }
       expect(
@@ -1004,7 +1027,7 @@ void main() {
           expect(tester.getRect(context).right, lessThan(width));
         }
       }
-      await captureControls(tester, 'unified-search-toolbar', height: 100);
+      await captureControls(tester, 'workspace-bottom-bar');
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpWidget(const SizedBox());
     },

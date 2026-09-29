@@ -143,6 +143,13 @@ void main() {
         'type': 'turn_ended',
         'agentId': 'a0',
       });
+      await app.handleEventForTest('m', {
+        'type': 'turn_summary',
+        'agentId': 'a0',
+        'payload': {
+          'notification': {'id': 'result-a0', 'kind': 'done'},
+        },
+      });
       expect(harnessActivity(app, 'm', 'a0'), HarnessActivity.done);
       app.markAgentSeen('m', 'a0');
       expect(harnessActivity(app, 'm', 'a0'), HarnessActivity.idle);
@@ -162,6 +169,13 @@ void main() {
       await app.handleEventForTest('m', {
         'type': 'turn_ended',
         'agentId': 'a1',
+      });
+      await app.handleEventForTest('m', {
+        'type': 'turn_summary',
+        'agentId': 'a1',
+        'payload': {
+          'notification': {'id': 'result-a1', 'kind': 'done'},
+        },
       });
       expect(harnessActivity(app, 'm', 'a1'), HarnessActivity.done);
       app.seeWatchedAgents();

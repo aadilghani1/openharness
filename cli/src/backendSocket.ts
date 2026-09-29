@@ -20,7 +20,7 @@ import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/auton
  */
 
 import { WebSocket } from 'ws'
-import { watchSocketLiveness, type LivenessWatch } from './lib/wsLiveness.js'
+import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from './lib/wsLiveness.js'
 import { stat, readFile, readdir } from 'fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'path'
@@ -1058,6 +1058,8 @@ export class BackendSocket {
 
       this.heartbeat = watchSocketLiveness(ws, {
         onIdle: (idleMs) => console.log(`[backend] no traffic for ${Math.round(idleMs / 1000)}s — terminating the link`),
+        onWake: (sleptMs, hungUp) => console.log(`[backend] woke after ${Math.round(sleptMs / 1000)}s asleep — ${hungUp ? 'the backend has hung up, redialing' : 're-probing the link'}`),
+        peerGivesUpAfterMs: BACKEND_IDLE_DEADLINE_MS,
       })
 
       // App-level ping refreshes the backend's presence key (TTL 30s). The window's presence rides

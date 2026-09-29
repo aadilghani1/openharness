@@ -84,6 +84,12 @@ typedef enum {
     A_NOTICE,
     A_TABS,
     A_TAB, A_TAB_REFRESH,
+#if HT_FACE_PX >= 720
+    // The Pro's tab strip, walked two at a time. Declared only on the square face: the dispatch
+    // switch is built with -Werror=switch, so an action that exists but is never handled is a
+    // compile error rather than a silent no-op.
+    A_TAB_STRIP_LEFT, A_TAB_STRIP_RIGHT,
+#endif
     A_MACHINES,
     A_MACHINE,
     A_VOICE,
@@ -182,6 +188,21 @@ static EXT_RAM_BSS_ATTR struct {
     int pet_pose;
     uint32_t pet_until, nap_until, last_celebration;
     cable_swarm_t tabs[SWARMS_MAX];
+#if HT_FACE_PX >= 720
+    // Set when a tab was chosen from the strip, consumed by ui_land_after_reload(). A one-shot flag
+    // rather than changing where every reload lands: the same function catches a boot and a
+    // reconnect, and those still belong on the companion face.
+    bool land_on_desk;
+    int tab_first;           // the strip's left-most tab; yours while you walk it
+    int tab_strip_drag;      // accumulated horizontal travel while walking the strip
+    bool tab_strip_held;     // this contact began on the strip, so it is the strip's to consume
+    // The selected tab's SHAPE, as the window laid it out: normalised 0..1000 rectangles plus the
+    // agent at each seat, tagged with the tab they belong to. The dial has no spatial desk and no
+    // use for these — see cable_client.c.
+    cable_tile_t tiles[SWARM_TILES_MAX];
+    int tile_count;
+    char tile_tab[ID_MAX];
+#endif
     int tab_count, tab_drag;
     char selected_tab[ID_MAX];
     cable_machine_t machines[CABLE_MAX_MACHINES];
@@ -245,6 +266,11 @@ static ht_gesture_t gesture;
 static ht_character_t character;
 static ht_character_caption_t home_caption;
 static action_t pressed_action;
+#if HT_FACE_PX >= 720
+// The rectangle the contact went down on. A written control activates when the finger comes up inside
+// it, so the rect has to outlive s.pressed, which the release path clears before it decides anything.
+static ht_rect_t pressed_rect;
+#endif
 static bool queue(action_t a);
 static void view(view_t v);
 static const char *voice_status(void);
@@ -590,6 +616,45 @@ static void control(ht_scene_t *f, int x, int y, int w, const char *label, actio
     ht_text(f, x, y, w, UI_FONT, enabled ? (a == A_STOP_YES ? ERROR : n == s.pressed ? ACCENT : FG) : DIM,
             n == s.pressed ? SEL : BG, label);
 }
+#if HT_FACE_PX >= 720
+/*
+ * A ONE-PANE TAB HAS NO LAYOUT WORTH SHOWING.
+ *
+ * The desk exists to say WHERE an agent is among others. With one pane there is no "among": the page
+ * is a single rectangle filling the glass and a name in the corner of it, and every visit costs a tap
+ * to get past. So a tab with one pane opens on the companion instead.
+ *
+ * Read off cable_swarm_t.panes rather than counted from the tiles, because this decides where to GO
+ * and the rectangles arrive a frame later than the decision does. `panes` counts tiles of any kind —
+ * a tab holding one terminal and no agent is still one pane — which is the count this question is
+ * actually asking about. A daemon too old to send it reports panes == agents, which lands the same way.
+ */
+static int pro_panes_of(const char *id)
+{
+    if (!id || !*id) return 0;
+    for (int i = 0; i < s.tab_count; i++)
+        if (!strcmp(id, s.tabs[i].id)) return s.tabs[i].panes;
+    return 0;
+}
+/*
+ * A LABEL IS NOT A GESTURE.
+ *
+ * ht_gesture_end() classifies a contact as TAP only between 25 and 350 ms, and as HOLD only between
+ * 650 and 1800 — so a press of 400 ms is neither, and returns HT_TOUCH_NONE. On the dial almost every
+ * target is the companion itself, where that dead band is invisible. This face is made of written
+ * controls, and a deliberate press on a small written label lands in it constantly: the symptom is a
+ * button that works perhaps half the time, which reads as a broken screen rather than as a timing rule.
+ *
+ * These are the controls that say what they do. A press that did not move activates them, full stop.
+ * A_PET is deliberately NOT here: its tap and its hold mean two different things, and that is the one
+ * place on this face where duration is content.
+ */
+static bool pro_written_control(action_kind_t a)
+{
+    return a == A_VOICE_ABORT || a == A_TAB || a == A_TAB_STRIP_LEFT || a == A_TAB_STRIP_RIGHT ||
+           a == A_INBOX || a == A_AGENT || a == A_AGENTS || a == A_NOTICE;
+}
+#endif
 static bool home_footer(action_kind_t action)
 {
     return action == A_TABS || action == A_INBOX || action == A_AGENTS || action == A_RETURN || action == A_CARRY_DROP;
@@ -765,6 +830,118 @@ static void command_face(ht_scene_t *f, const char *heading_, const char *subjec
         s.hits[s.hit_count++] = links[i];
     }
 }
+#if HT_FACE_PX >= 720
+/*
+ * THE FIRST LINE IS THE TAB STRIP — every tab, not just the one you are in.
+ *
+ * The dial names the current tab on the arc above the agent and stops there, because a curved line
+ * that wide is all the room it has. A square has a whole 54-cell row, which is enough to carry the
+ * switcher itself: the names in sequence, the one you are in filled with SEL, and a tap that goes
+ * straight to that tab's panes.
+ *
+ * TWO RUNS, NOT ONE PER TAB. The strip is drawn once in DIM across the full width, then the selected
+ * label is drawn again over it with the selection fill. Six tabs as six runs would cost six of the
+ * forty a scene has, and the agent's result page already spends 27 on the companion and 6 on the
+ * recap. Two is what the budget can afford, and overdraw is free here — later runs paint over earlier
+ * ones by construction.
+ *
+ * The hit rects are per tab and cost nothing from that budget.
+ */
+static void pro_tab_strip(ht_scene_t *f)
+{
+    const int CELLS = 648 / ht_mono_20.width;   /* 54 */
+    if (s.tab_count <= 0) {
+        ht_text(f, 36, 40, 648, &ht_mono_20, DIM, BG, s.loading ? "loading tabs" : "no tabs");
+        return;
+    }
+    int sel = -1;
+    for (int i = 0; i < s.tab_count; i++)
+        if (!strcmp(s.selected_tab, s.tabs[i].id)) { sel = i; break; }
+
+    /* A tab costs its name plus a space either side — the same space that becomes the selection's
+     * padding, so a filled tab never has its first letter against the fill's edge. */
+    int span[SWARMS_MAX], cells[SWARMS_MAX];
+    for (int i = 0; i < s.tab_count; i++) {
+        int n = 0;
+        for (const char *q = s.tabs[i].name; *q; ) { ht_utf8_next(&q); n++; }
+        cells[i] = n > 14 ? 14 : n;        /* one long name must not eat the whole line */
+        span[i] = cells[i] + 2;
+    }
+    if (s.tab_first < 0) s.tab_first = 0;
+    if (s.tab_first >= s.tab_count) s.tab_first = s.tab_count - 1;
+
+    /*
+     * WALKING THE STRIP. `tab_first` is yours while you use < and >, and the device only overrides it
+     * when the tab you are actually in has scrolled off — otherwise the strip would snap back under
+     * your finger every time you moved it.
+     *
+     * The arrows cost two cells each and are only reserved when there is something past that edge, so
+     * a strip that fits uses the whole line.
+     */
+    for (int pass = 0; pass < 2; pass++) {
+        int left_arrow = s.tab_first > 0 ? 2 : 0, room = CELLS - left_arrow, used = 0, last = s.tab_first;
+        while (last < s.tab_count && used + span[last] <= room) { used += span[last]; last++; }
+        if (last < s.tab_count) {                       /* something past the right edge: reserve > */
+            room -= 2;
+            while (last > s.tab_first + 1 && used > room) used -= span[--last];
+        }
+        if (pass || sel < 0 || (sel >= s.tab_first && sel < last)) {
+            /* draw */
+            char strip[HT_TEXT_BYTES];
+            size_t bytes = 0;
+            int at = left_arrow, sel_x = -1, sel_cells = 0;
+            char sel_text[40] = "";
+            if (left_arrow) { strip[bytes++] = '<'; strip[bytes++] = ' '; }
+            for (int i = s.tab_first; i < last; i++) {
+                char label[40];
+                int n = 0; size_t lb = 0;
+                label[lb++] = ' ';
+                for (const char *q = s.tabs[i].name; *q && n < cells[i]; n++) {
+                    const char *begin = q;
+                    ht_utf8_next(&q);
+                    size_t w = (size_t)(q - begin);
+                    if (lb + w + 2 >= sizeof label) break;
+                    memcpy(label + lb, begin, w); lb += w;
+                }
+                label[lb++] = ' '; label[lb] = 0;
+                if (bytes + lb + 3 >= sizeof strip) break;
+                memcpy(strip + bytes, label, lb); bytes += lb;
+                if (i == sel) { sel_x = at; sel_cells = span[i]; snprintf(sel_text, sizeof sel_text, "%s", label); }
+                if (s.hit_count < 24)
+                    s.hits[s.hit_count++] = (hit_t){{(int16_t)(36 + at * ht_mono_20.width), 26,
+                                                     (int16_t)(span[i] * ht_mono_20.width), 56},
+                                                    A_TAB, i, s.connected};
+                at += span[i];
+            }
+            bool right_arrow = last < s.tab_count;
+            if (right_arrow) {
+                while (at < CELLS - 1 && bytes + 2 < sizeof strip) { strip[bytes++] = ' '; at++; }
+                if (bytes + 1 < sizeof strip) strip[bytes++] = '>';
+            }
+            strip[bytes] = 0;
+            ht_text(f, 36, 40, 648, &ht_mono_20, DIM, BG, strip);
+            if (sel_x >= 0)
+                ht_text(f, 36 + sel_x * ht_mono_20.width, 40, sel_cells * ht_mono_20.width,
+                        &ht_mono_20, ACCENT, SEL, sel_text);
+            if (left_arrow && s.hit_count < 24)
+                s.hits[s.hit_count++] = (hit_t){{36, 26, 48, 56}, A_TAB_STRIP_LEFT, 0, true};
+            if (right_arrow && s.hit_count < 24)
+                s.hits[s.hit_count++] = (hit_t){{36 + (CELLS - 2) * ht_mono_20.width, 26, 48, 56},
+                                                A_TAB_STRIP_RIGHT, 0, true};
+            return;
+        }
+        /* The tab we are in is off the strip. Anchor on it and lay the line out again. */
+        s.tab_first = sel;
+        while (s.tab_first > 0) {
+            int back = s.tab_first - 1, total = span[back], k = back + 1;
+            while (k <= sel) total += span[k++];
+            if (total + 4 > CELLS) break;      /* 4 = room for both arrows */
+            s.tab_first = back;
+        }
+    }
+}
+
+#endif
 static void render_workspace_preview(ht_scene_t *f)
 {
     int i=workspace.choice;
@@ -779,6 +956,9 @@ static void render_home(ht_scene_t *f)
     if (!s.connected || s.loading) { render_brand(f); return; }
     if (s.quick_open) { render_quick(f); return; }
     if (workspace.touching && workspace.moved && !workspace.cancelled) { render_workspace_preview(f); return; }
+#if HT_FACE_PX >= 720
+    pro_tab_strip(f);   // the first line is the whole switcher on this face
+#endif
     agent_t *a = active();
     // The top caption belongs to the current pane; only completed work gets
     // a recap. The bell has its own lower target, outside the voice surface.
@@ -799,7 +979,14 @@ static void render_home(ht_scene_t *f)
     ht_character_face_t f_ = {.recipient = caption, .status = bell ? "" : status,
         .hint = "",
         .detail = "",
-        .mood = character_mood(), .pose = character.motion.reaction.pose, .straight_title = s.straight_title,
+        .mood = character_mood(), .pose = character.motion.reaction.pose,
+#if HT_FACE_PX >= 720
+        // Always straight here. ht_arc_title bends text around a 205 px radius baked into
+        // arc_trig[32][2]; at 720 the same table draws the name through the companion.
+        .straight_title = true,
+#else
+        .straight_title = s.straight_title,
+#endif
         .footer_action = carry.active || carry.error[0] || visit.available,
         .ink = bell && !unread ? DIM : FG, .foreground = FG, .dim = DIM,
         .primary_title = true, .roomy_reading = true};
@@ -816,8 +1003,12 @@ static void render_home(ht_scene_t *f)
     s.status_phase = status_animated() ? ht_shimmer_phase(ms()) : 0;
     for (int i = 0; i < f->count; i++) {
         ht_run_t *run = &f->runs[i];
-        if (run->arc == 1 || (s.straight_title && run->font == &ht_mono_20 &&
-                             (run->y == 41 || run->y == 69))) {
+        if (run->arc == 1 || (run->font == &ht_mono_20 &&
+#if HT_FACE_PX >= 720
+                             (run->y == 80 || run->y == 108))) {
+#else
+                             s.straight_title && (run->y == 41 || run->y == 69))) {
+#endif
             run->fg = rotating ? ht_character_caption_ink(FG, BG, home_caption.opacity) : FG;
             if (run->arc) run->shimmer = s.status_phase;
         }
@@ -832,7 +1023,11 @@ static void render_home(ht_scene_t *f)
     }
     if (!carry.active && !carry.error[0] && !visit.available) {
         // Both phases of the caption open the same pane picker.
+#if HT_FACE_PX >= 720
+        s.hits[s.hit_count++] = (hit_t){{36, 76, 648, 46}, A_AGENTS, 0, true};
+#else
         s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
+#endif
         for (int i = 0; i < f->count; i++) if (f->runs[i].arc == 1) {
             ht_rect_t r = ht_run_bounds(&f->runs[i]);
             s.caption_arc = (ht_rect_t){r.x - 14, r.y - 14, r.w + 28, r.h + 28};
@@ -840,13 +1035,214 @@ static void render_home(ht_scene_t *f)
         }
     }
     if (bell)
+#if HT_FACE_PX >= 720
+        // Under the bell at HT_NOTIFICATION_Y, in the row the hint leaves empty on this face.
+        s.hits[s.hit_count++] = (hit_t){{144, 646, 432, 66}, A_INBOX, 0, unread > 0};
+#else
         s.hits[s.hit_count++] = (hit_t){{83, 382, 300, 84}, A_INBOX, 0, unread > 0};
+#endif
     // The bell and the creature never share a target, even when the bell is
     // dimmed or its count changes under a finger. Centre always starts voice.
+#if HT_FACE_PX >= 720
+    // The font_16 companion exactly: 54*8 x 27*16 at x=(720-432)/2, y=140.
+    s.hits[s.hit_count++] = (hit_t){{144, 140, 432, 432}, A_PET, 0, true};
+#else
     s.hits[s.hit_count++] = (hit_t){{33, 66, 400, 316}, A_PET, 0, true};
+#endif
 }
+#if HT_FACE_PX >= 720
+/*
+ * PAGE ONE: the tab's agents, in the window's own layout.
+ *
+ * The desktop does not send a list, it sends a SHAPE — normalised rectangles from
+ * app_state.dart's activeTileShape, one per pane, including the ones this device cannot drive, because
+ * "a shell or a viewer holds its place in the grid, and dropping it would leave the shape with a hole
+ * in it". So the device is not choosing a layout here. It is being told one, and its only job is to
+ * land it on a cell grid without lying about the proportions.
+ *
+ * 54 x 18 CELLS, and both numbers are chosen for their divisors. Every preset in pane_preset.dart is
+ * built from halves, thirds, sixths and ninths; 54 and 18 divide by all four, so a half is exactly a
+ * half and a third is exactly a third with no rounding drift anywhere. 54 * 12 x 18 * 28 = 648 x 504,
+ * which is 1.286:1 against the window's 1.344:1 — within 4.3%.
+ *
+ * (The LVGL desk on this same board is 656 x 600 = 1.093:1. Its comment still claims 1.34:1, which was
+ * true at the original DESK_GRID_H 488; raising it to 600 for the extra room left every rectangle the
+ * window sends 23% too tall. Worth fixing there separately.)
+ *
+ * A TILE IS THREE RUNS, not a box: a rule of ':' along its top edge, the name a row below it, and the
+ * state as a WORD a row below that. Nine tiles is 27 runs, plus the tab row, the status and the control
+ * row — 30 of HT_RUNS 40. A fourth line per tile would not fit, and neither would a tenth tile.
+ * The ':' is from the octopus's own density ramp; ht_mono_* covers 32..255 and has no box-drawing set
+ * at all, so a border made of U+2500 would be an empty cell on the glass.
+ */
+enum { DESK_COLS = 54, DESK_ROWS = 18, DESK_X = 36, DESK_Y = 100 };
+static int desk_col(int v) { return (v * DESK_COLS + 500) / 1000; }
+static int desk_row(int v) { return (v * DESK_ROWS + 500) / 1000; }
+static int desk_agent(const char *id)
+{
+    if (!id || !*id) return -1;
+    for (int i = 0; i < s.count; i++) if (!strcmp(s.agents[i].id, id)) return i;
+    return -1;
+}
+static void render_desk(ht_scene_t *f)
+{
+    pro_tab_strip(f);
+    // The shape must be the SELECTED tab's. A roster that has moved on while the shape has not is the
+    // one case that would draw agents at another tab's seats, so it falls back to saying so.
+    bool tagged = !strcmp(s.tile_tab, s.selected_tab);
+    /*
+     * EVERY NAMED SEAT MUST RESOLVE, or this shape belongs to a roster we do not have yet.
+     *
+     * The window's shape and the device's roster ride DIFFERENT frames, so after a tab switch the
+     * rectangles routinely land a beat before the agents that go in them. Drawing anyway fills the
+     * desk with the word "pane" — every seat unnamed — and it stays that way in the eye long after
+     * the roster arrives, because that is what the person saw. The LVGL desk on this board hit
+     * exactly this and answered it the same way (desk_tiles_usable in ui_screens.c).
+     *
+     * A seat with an empty agentId is a shell or a viewer and is legitimately unnamed; only the named
+     * ones have to be found.
+     */
+    int named = 0, resolved = 0;
+    for (int i = 0; i < s.tile_count; i++) {
+        if (!s.tiles[i].agent_id[0]) continue;
+        named++;
+        if (desk_agent(s.tiles[i].agent_id) >= 0) resolved++;
+    }
+    /*
+     * ONE SEAT THAT NEVER RESOLVES MUST NOT HOLD THE WHOLE DESK.
+     *
+     * Requiring every named seat was right for the transient case and wrong for the steady one: a
+     * window can hold a pane this device's roster does not carry — an agent on another machine, or one
+     * the roster filters — and then "3 of 4 named" is the permanent truth, not a beat of lag. Waiting
+     * on it showed a sentence instead of a desk, forever.
+     *
+     * So the bar is that SOMETHING resolves. Nothing resolving is the roster being a frame behind, and
+     * that is the case worth waiting out; the odd unresolvable seat is drawn as what it is.
+     */
+    bool ready = named == 0 || resolved > 0;
+    bool shaped = s.tile_count > 0 && tagged && ready;
+    if (!shaped) {
+        // Three different failures used to read as one sentence, which is no use to anyone standing in
+        // front of the device: nothing to lay out, a shape that belongs to another tab, or a window
+        // that has not described this one yet.
+        ht_center(f, 330, UI_FONT, FG,
+                  s.loading            ? "Loading..."
+                  : !s.count           ? "No panes in this tab."
+                  : !s.tile_count      ? "No layout from the app yet."
+                  : !tagged            ? "Layout is for another tab."
+                                       : "Matching panes to agents...");
+        if (!ready && tagged && s.tile_count) {
+            // The counts, so a shape that never resolves can be told from one that is merely early.
+            char why[64];
+            snprintf(why, sizeof why, "%d of %d named %s roster %d", resolved, named, "\xc2\xb7", s.count);
+            ht_center(f, 386, &ht_mono_20, DIM, why);
+        }
+        return;
+    }
+    /*
+     * THE SEPARATORS ARE ONE RUN PER GRID ROW, not one per tile edge.
+     *
+     * A run is a single line of text, so a VERTICAL line costs one run per row it crosses — eighteen
+     * of them for a full-height boundary, and a 3 x 3 desk has two such boundaries. That is the whole
+     * scene budget spent on lines. Drawing the grid into a character buffer first and emitting one run
+     * per row inverts the cost: every vertical boundary at that row shares the run, so the lines cost
+     * 18 runs no matter how many columns the window is using.
+     *
+     * Budget, against HT_RUNS 40: 18 line rows + 2 per tile + the tab strip's 2 + the status. Nine
+     * tiles is 39. That is the ceiling, and it is why a tile gets two text rows and not three.
+     */
+    char grid[DESK_ROWS][DESK_COLS + 1];
+    memset(grid, ' ', sizeof grid);
+    int working = 0, idle = 0;
+    struct { int16_t x, y, w; int ai; bool pane; const char *state; } seat[SWARM_TILES_MAX];
+    int seats = 0;
+
+    for (int i = 0; i < s.tile_count; i++) {
+        const cable_tile_t *t = &s.tiles[i];
+        int c0 = desk_col(t->x1), c1 = desk_col(t->x2);
+        int r0 = desk_row(t->y1), r1 = desk_row(t->y2);
+        if (c1 <= c0 || r1 <= r0) continue;          // a rectangle thinner than one cell
+        if (c1 > DESK_COLS) c1 = DESK_COLS;
+        if (r1 > DESK_ROWS) r1 = DESK_ROWS;
+        // The tile's top edge, across its own width.
+        for (int c = c0; c < c1; c++) grid[r0][c] = ':';
+        /*
+         * The left edge, full height, TWO COLUMNS of the same ':' — one column reads as a hairline
+         * between two panes that are themselves full of text, which is not enough separation at a
+         * glance. Doubling the column rather than changing the character keeps the dotted texture the
+         * rest of the face is drawn in; '|' or '=' made it a different object entirely.
+         *
+         * Only where it is an INTERIOR boundary. The canvas has no outer border: the face's own margin
+         * is the border, and a box drawn around the whole grid would read as a window inside a window.
+         *
+         * The second column costs one cell of the tile's width, which is why the labels below start
+         * two cells in.
+         */
+        if (c0 > 0)
+            for (int r = r0; r < r1; r++) {
+                grid[r][c0] = ':';
+                if (c0 + 1 < DESK_COLS) grid[r][c0 + 1] = ':';
+            }
+
+        int ai = desk_agent(t->agent_id);
+        agent_t *a = ai >= 0 ? &s.agents[ai] : NULL;
+        if (a && a->busy) working++; else if (a) idle++;
+        if (seats < SWARM_TILES_MAX)
+            seat[seats++] = (typeof(seat[0])){
+                (int16_t)(DESK_X + c0 * ht_mono_20.width), (int16_t)(DESK_Y + r0 * ht_mono_20.height),
+                (int16_t)((c1 - c0) * ht_mono_20.width), ai, !t->agent_id[0],
+                !t->agent_id[0] ? "pane" : !a ? "unknown"
+                                 : a->busy ? "working" : a->recap_ready ? "done" : "idle"};
+        if (s.hit_count < 24)
+            s.hits[s.hit_count++] = (hit_t){{(int16_t)(DESK_X + c0 * ht_mono_20.width),
+                                             (int16_t)(DESK_Y + r0 * ht_mono_20.height),
+                                             (int16_t)((c1 - c0) * ht_mono_20.width),
+                                             (int16_t)((r1 - r0) * ht_mono_20.height)},
+                                            A_AGENT, ai, ai >= 0 && s.connected};
+    }
+
+    for (int r = 0; r < DESK_ROWS; r++) {
+        grid[r][DESK_COLS] = 0;
+        if (!memchr(grid[r], ':', DESK_COLS)) continue;   // a row with no line on it costs no run
+        ht_ascii_text(f, DESK_X, DESK_Y + r * ht_mono_20.height, DESK_COLS * ht_mono_20.width,
+                      &ht_mono_20, DIM, BG, grid[r], DESK_COLS);
+    }
+
+    // The labels go on top of the lines, inset by one cell on each side so a name can never paint out
+    // the boundary of the tile beside it.
+    for (int i = 0; i < seats; i++) {
+        int ai = seat[i].ai;
+        bool focused = ai >= 0 && ai == s.active;
+        // Two cells in from the doubled rule, and one clear of the next tile's, so a name can never
+        // paint out either column of a boundary.
+        int w = seat[i].w - 3 * ht_mono_20.width;
+        if (w < ht_mono_20.width) continue;
+        char label[HT_TEXT_BYTES];
+        // Three states, three words: a seat with no agent at all is a shell or a viewer ("pane"); a
+        // seat naming an agent this device does not carry is "agent"; the rest have their own name.
+        snprintf(label, sizeof label, "%s", seat[i].pane ? "pane" : ai < 0 ? "agent" : s.agents[ai].name);
+        ht_text(f, seat[i].x + 2 * ht_mono_20.width, seat[i].y + ht_mono_20.height, w, &ht_mono_20,
+                !s.connected ? DIM : focused ? ACCENT : seat[i].pane ? DIM : FG, BG, label);
+        ht_text(f, seat[i].x + 2 * ht_mono_20.width, seat[i].y + 2 * ht_mono_20.height, w, &ht_mono_20,
+                DIM, BG, seat[i].state);
+    }
+    /* The unread count leads here too, in the same brackets and the same place as on the agent face,
+     * so one habit reaches the inbox from either page. */
+    char tally[64];
+    if (s.notice_count > 0)
+        snprintf(tally, sizeof tally, "[%d]  %d working %s %d idle", s.notice_count, working, "\xc2\xb7", idle);
+    else
+        snprintf(tally, sizeof tally, "%d working %s %d idle", working, "\xc2\xb7", idle);
+    ht_center(f, 600, UI_FONT, s.notice_count > 0 ? ACCENT : DIM, tally);
+}
+#endif
 static void render_agents(ht_scene_t *f)
 {
+#if HT_FACE_PX >= 720
+    // On a square the pane list IS the desk: the window's shape, not a column of rows.
+    render_desk(f);
+    return;
+#endif
     heading(f, "panes");
     int last = s.count > TAB_ROWS ? s.count - TAB_ROWS : 0;
     if (s.offset > last) s.offset = last;
@@ -1699,18 +2095,42 @@ static void dispatch(action_t a)
         s.offset=first<0 ? 0 : first>last ? last : first;
         break;
     }
+#if HT_FACE_PX >= 720
+    case A_TAB_STRIP_LEFT:
+    case A_TAB_STRIP_RIGHT:
+        // Two at a time: one felt like nothing had happened on a strip this wide.
+        s.tab_first += a.kind == A_TAB_STRIP_LEFT ? -2 : 2;
+        if (s.tab_first < 0) s.tab_first = 0;
+        if (s.tab_first >= s.tab_count) s.tab_first = s.tab_count ? s.tab_count - 1 : 0;
+        change();
+        break;
+#endif
     case A_MACHINES:
         view(MACHINES);
         break;
     case A_TAB:
         if (!s.connected || s.voice_open || s.loading || workspace_index(a.id)<0) break;
+#if HT_FACE_PX >= 720
+        // Choosing a tab asks to see ITS PANES — unless there is only one, in which case the pane IS
+        // the tab and the companion is the answer.
+        if (!strcmp(a.id,s.selected_tab)) { view(pro_panes_of(a.id) > 1 ? AGENTS : HOME); break; }
+        s.land_on_desk = pro_panes_of(a.id) > 1;
+#else
         if (!strcmp(a.id,s.selected_tab)) { view(HOME); break; }
+#endif
         if (ht_workspace_request(&workspace,a.id,ms())) {
             a.revision=workspace.serial;
             if (!queue(a)) { workspace_failed("Device busy. Choose the tab again."); break; }
             ht_visit_close(&visit); s.pending_focus[0]=0;
+#if HT_FACE_PX >= 720
+            // NO INTERSTITIAL. Going to MESSAGE meant leaving the companion for a near-empty screen
+            // and coming back — two whole-face repaints for well under a second, which reads as the
+            // screen flashing rather than as progress. The panes page is where this is going anyway.
+            view(AGENTS); s.loading=true;
+#else
             COPY(s.title,"Switching tab"); COPY(s.message,"Opening your workspace...");
             view(MESSAGE); s.loading=true;
+#endif
         }
         break;
     case A_MACHINE:
@@ -2204,6 +2624,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             if (h.enabled && hit_contains(&h, x, y, surface)) {
                 s.pressed = i;
                 pressed_action = make_action(h);
+#if HT_FACE_PX >= 720
+                pressed_rect = h.rect;
+#endif
                 break;
             }
         }
@@ -2211,6 +2634,11 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         if (surface && !home_footer(pressed_action.kind) && s.rim_enabled && ht_scroll_on_rim(x, y)) pressed_action.kind = A_NONE;
         if (surface && pressed_action.kind==A_TABS && !s.touch_brake)
             ht_workspace_touch(&workspace,workspace_index(s.selected_tab),s.tab_count,x,y,now);
+#if HT_FACE_PX >= 720
+        // The strip's band is the first row of the face — 26..82 plus a thumb's margin.
+        s.tab_strip_held = (s.view == HOME || s.view == AGENT || s.view == AGENTS) && y < 96;
+        s.tab_strip_drag = 0;
+#endif
         ht_gesture_begin(&gesture, x, y, now, ((uint32_t)s.view << 8) | pressed_action.kind);
         if (pressed_action.kind != A_PET && pressed_action.kind != A_FORM_MAIN && pressed_action.kind != A_FORM_SAY &&
             pressed_action.kind != A_ANSWER && pressed_action.kind != A_DRAFT_SEND && pressed_action.kind != A_DRAFT_EDIT &&
@@ -2248,6 +2676,27 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             int travel = (s.last_y - y) * (scroll_reversed ? -1 : 1);
             ht_selection_move(&selection, travel, now);
             change();
+#if HT_FACE_PX >= 720
+        } else if (s.tab_strip_held && gesture.axis == 2) {
+            /*
+             * WALKING THE STRIP BY DRAGGING IT, which is what the LVGL tab strip on this board did and
+             * what a row of names on a touchscreen should do. The arrows stay for precision; this is
+             * for getting somewhere.
+             *
+             * 90 px a tab, not one tab per pixel of travel: the strip is 648 px wide and a tab is about
+             * 150 of it, so a drag that moves the line by roughly half a tab advances one. Accumulated
+             * rather than derived from the total, so a slow drag and a fast one cover the same ground.
+             */
+            s.tab_strip_drag += s.last_x - x;
+            while (s.tab_strip_drag >= 90 && s.tab_first < s.tab_count - 1) {
+                s.tab_strip_drag -= 90; s.tab_first++; change();
+            }
+            while (s.tab_strip_drag <= -90 && s.tab_first > 0) {
+                s.tab_strip_drag += 90; s.tab_first--; change();
+            }
+            if (s.tab_first <= 0 && s.tab_strip_drag < -90) s.tab_strip_drag = -90;
+            if (s.tab_first >= s.tab_count - 1 && s.tab_strip_drag > 90) s.tab_strip_drag = 90;
+#endif
         } else ht_scroll_move(&scroll, x, y, now);
         if (gesture.moved && s.pressed >= 0) {
             s.pressed = -1;
@@ -2276,6 +2725,30 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             s.quick_open = false;
             if (choice) dispatch((action_t){.kind = destinations[choice]});
             change();
+#if HT_FACE_PX >= 720
+        } else if (s.tab_strip_held && gesture.moved && gesture.axis == 2) {
+            // The strip consumed this contact while it was moving; its end is not a choice.
+        } else if (pro_written_control(pressed_action.kind) &&
+                   x >= pressed_rect.x && x < pressed_rect.x + pressed_rect.w &&
+                   y >= pressed_rect.y && y < pressed_rect.y + pressed_rect.h) {
+            /*
+             * A BUTTON, JUDGED BY WHERE THE FINGER CAME UP — not by how far it wandered, and not by
+             * how long it stayed.
+             *
+             * ht_gesture_move() calls a contact "moved" at 12 px, which on this panel is 1.20 mm; a
+             * deliberate press with a fingertip drifts two to four. So a rule keyed on !gesture.moved
+             * fires for a still finger and not for a real one, and the scroll layer — same 12 px
+             * claim — has already taken the contact by the time the branch below is reached, which is
+             * why this sits above it.
+             *
+             * Down on the control, up on the control, activate. Drift inside it is a press; drift out
+             * of it is a cancel, which the bounds test gives for free. The strip's drag is checked
+             * first, so dragging the tab row scrolls it rather than choosing whichever tab the finger
+             * happened to leave.
+             */
+            ht_gesture_cancel(&gesture);
+            dispatch(pressed_action);
+#endif
         } else if (scrolled || s.touch_cancelled) {
             // Motion owns this entire contact, even if the finger returns to its starting point.
         } else if (result == HT_TOUCH_TAP && s.touch_brake) {
@@ -2372,6 +2845,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         }
         change();
     }
+#if HT_FACE_PX >= 720
+    if (!down) { s.tab_strip_held = false; s.tab_strip_drag = 0; }
+#endif
     s.touch_down = down;
     s.last_x = x;
     s.last_y = y;
@@ -2991,7 +3467,14 @@ void ui_land_after_reload(void)
     if (s.loading && (workspace.phase==HT_WORKSPACE_IDLE || workspace.phase==HT_WORKSPACE_READY)) {
         ht_workspace_cancel_request(&workspace);
         s.loading = false;
+#if HT_FACE_PX >= 720
+        // Re-checked here as well as at the tap: the swarm row can arrive with a truer pane count
+        // between asking for a tab and landing in it, and this is the last moment it matters.
+        view(s.land_on_desk && pro_panes_of(s.selected_tab) > 1 ? AGENTS : HOME);
+        s.land_on_desk = false;
+#else
         view(HOME);
+#endif
     }
     change();
     display_unlock();
@@ -3351,6 +3834,37 @@ void ui_swarms_replace(const cable_swarm_t *rows, int count, const char *selecte
     }
     change(); display_unlock();
 }
+#if HT_FACE_PX >= 720
+void ui_tiles_replace(const cable_tile_t *rows, int count, const char *tab)
+{
+    display_lock();
+    int bounded = count < 0 ? 0 : count > SWARM_TILES_MAX ? SWARM_TILES_MAX : count;
+    if (!rows) bounded = 0;
+    bool changed = bounded != s.tile_count || strcmp(s.tile_tab, tab ? tab : "");
+    for (int i = 0; !changed && i < bounded; i++)
+        changed = memcmp(&rows[i], &s.tiles[i], sizeof *rows) != 0;
+    s.tile_count = bounded;
+    if (bounded) memcpy(s.tiles, rows, (size_t)bounded * sizeof *rows);
+    COPY(s.tile_tab, tab);
+    // Only repaint when the shape actually moved. The window sends this frame on every roster change,
+    // and a desk that redraws on an unchanged shape is 27 runs of damage for nothing.
+    if (changed) change();
+    if (changed) {
+        int named = 0, resolved = 0;
+        for (int i = 0; i < bounded; i++) {
+            if (!s.tiles[i].agent_id[0]) continue;
+            named++;
+            for (int k = 0; k < s.count; k++)
+                if (!strcmp(s.agents[k].id, s.tiles[i].agent_id)) { resolved++; break; }
+        }
+        ESP_LOGI("habitat", "tiles: %d for '%s' (sel '%s') · named %d resolved %d of roster %d · "
+                 "first tile a='%s' roster0='%s'", bounded, tab ? tab : "", s.selected_tab,
+                 named, resolved, s.count,
+                 bounded ? s.tiles[0].agent_id : "", s.count ? s.agents[0].id : "");
+    }
+    display_unlock();
+}
+#endif
 void ui_show_machines(void)
 {
     display_lock();

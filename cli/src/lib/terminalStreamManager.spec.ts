@@ -619,6 +619,29 @@ describe('TerminalStreamManager', () => {
       && frame.payload.reason === 'heartbeat timeout')).toBe(true)
   })
 
+  // Node's clock keeps running while a Mac sleeps, so a lid closed for forty minutes reached the next
+  // sweep as forty minutes without `terminal_alive` and closed every stream at the wake — measured
+  // 2026-09-28 as `[terminal-stream] closed` on every local terminal the moment the lid opened.
+  it('carries a lease over the time the computer slept, and still expires it on awake silence', async () => {
+    let asleepMs = 0
+    await manager.stop()
+    manager = newManager({ now: () => Date.now() + asleepMs })
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    await vi.advanceTimersByTimeAsync(20_000)
+    asleepMs += 2_280_000 // the lid closes; no timer runs until it opens again
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(stream.closed).toBe(false)
+    expect(sent.some((frame) => frame.type === 'terminal_closed')).toBe(false)
+
+    // Awake and still silent: the lease runs out on awake time, as before.
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(stream.closed).toBe(true)
+    expect(sent.some((frame) => frame.type === 'terminal_closed'
+      && frame.payload.reason === 'heartbeat timeout')).toBe(true)
+  })
+
   // The incumbent's banner says WHO took over, so the close it gets carries what the winner
   // declared on open — verbatim through a relay, since the daemon never learns a peer's name.
   it('names the taker on the close when the winner introduced itself', async () => {

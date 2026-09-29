@@ -159,6 +159,13 @@ void main() {
           'type': 'turn_ended',
           'agentId': 'a2',
         });
+        await app.handleEventForTest('m', {
+          'type': 'turn_summary',
+          'agentId': 'a2',
+          'payload': {
+            'notification': {'id': 'result-a2', 'kind': 'done'},
+          },
+        });
         await tester.pump(const Duration(milliseconds: 100));
         if (native) {
           expect(nativeActivity(second.id)['mark'], '✓');

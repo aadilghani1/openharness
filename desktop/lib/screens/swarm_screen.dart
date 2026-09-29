@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'dart:async';
+
 import 'dart:convert';
 
 import 'package:file_selector/file_selector.dart';
@@ -9,6 +10,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../core/runtime_platform.dart';
@@ -40,6 +42,9 @@ import '../shortcuts/keymap_host.dart';
 import '../shortcuts/keymap_native.dart';
 import '../shortcuts/keymap_settings.dart';
 import '../state/app_state.dart';
+import '../state/notification_inbox.dart';
+import '../widgets/notification_inbox.dart';
+import '../widgets/workspace_notifications_button.dart';
 import '../state/harness_sessions.dart';
 import '../state/harness_activity.dart';
 import '../state/harness_placement.dart';
@@ -71,6 +76,7 @@ import '../widgets/workspace_bar_control.dart';
 import '../widgets/session_work_dialog.dart';
 import '../widgets/web_download_button.dart';
 import '../widgets/workspace_share_button.dart';
+import '../widgets/workspace_store_button.dart';
 import '../widgets/grid_model_picker.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
@@ -1003,14 +1009,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   int get _attention => _sessions.where((row) => row.needsInput).length;
 
-  /// Agents carrying news nobody has looked at.
-  ///
-  /// This is what the icon's badge counts now, and it is a wider question than
-  /// [_attention]: a harness that FINISHED is also something to go and see, and
-  /// the badge that only counted blocked ones said nothing at all about the
-  /// work that was actually done while you were away. The panel behind the icon
-  /// still separates the two — its "Needs input" tab is exactly [_attention].
-  int get _unread => app.agentUnread.count;
+  /// The bell and its list count the same current questions and unread results.
+  int get _unread => notificationInbox(app).length;
 
   /// Whose window this is, or null while a signed-in window still waits for
   /// its profile. Syncing earlier keyed the first reads by a temporary scope
@@ -1549,6 +1549,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'reduceMotion': _reduceMotion,
       'activeId': app.activeSwarmId,
+      'searchTooltip':
+          'Search harnesses ${_keymap.hint('harnesses.list') ?? ''}',
+      'storeTooltip': 'Harness Store ${_keymap.hint('app.store') ?? ''}',
       // The selected tab is drawn with keyboard focus: ⏎ goes into it.
       'tabsFocused': app.tabStripFocused && _tabStripFocus.hasPrimaryFocus,
       // Only once the slot is shown: until then (and whenever daemons are
@@ -1565,10 +1568,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'focusedModel': focused == null || !modelPickerSupports(focused.engine)
           ? null
           : {
-              'text': focused.provider,
+              'text': focused.modelLabel,
               'segments': [
                 {
-                  'text': focused.provider,
+                  'text': focused.modelLabel,
                   'foreground': terminalTheme.foreground.toARGB32(),
                 },
               ],
@@ -1673,12 +1676,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           },
       ],
       'attention': _attention,
-      // The badge the NATIVE titlebar draws. It is a wider question than
-      // `attention`, which counts only harnesses that are blocked: a harness
-      // that FINISHED is also something to go and see. Sent beside the old key
-      // rather than replacing it, because the native side still words its
-      // accessibility value from "needs input" and an older Runner ignores a
-      // key it does not know.
+      // The native bell uses the same inbox count as its Flutter counterpart.
       'unread': _unread,
       'sessionsOpen': _harnessesVisible,
       'machinesOpen': _machinesVisible,
@@ -2186,6 +2184,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         app.focusedPane?.session?.find(TerminalFindAction.previous);
       case 'notifications':
         unawaited(_notifications());
+      case 'notificationInbox':
+        unawaited(_showNotificationInbox());
       case 'settings':
         await _settings();
       case 'addPhone':
@@ -2202,6 +2202,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           'renameActive',
           'commands',
           'notifications',
+          'notificationInbox',
           'addAgent',
           'newAgent',
           'newTerminal',
@@ -2407,6 +2408,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
       app,
       keymap: _keymap,
       onConnectMachine: () => unawaited(_openMachines()),
+      // The QR's `f`: the phone refuses a machine proving a different key.
+      machineFingerprint: app.viewer == null
+          ? null
+          : (remote) => machineFingerprintOf(app, remote),
+      // This computer's daemon keeps the group; a viewer's lives in the browser.
+      // The desktop app keeps its Add Phone as it was until the harness CLI's QR work is released.
+      groupMachines: null,
     ),
   );
 
@@ -3556,10 +3564,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // Until the slot has its place: whether a button is held and whether
       // the pointer is on the bar, so it never arrives under a click.
       _pointerHeld = event.down;
+      final workspace = context.findRenderObject();
       _pointerOverBar =
           !_native &&
           event is! PointerRemovedEvent &&
-          event.position.dy <= _tabBarHeight;
+          workspace is RenderBox &&
+          workspace.globalToLocal(event.position).dy >=
+              workspace.size.height - _statusBarHeight;
       _noteWindowInput();
     }
     if (!_zoo.loaded) return;
@@ -4010,7 +4021,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     setState(() {});
   }
 
-  /// The panel and the hatch reveal float beside the status slot, at the top
+  /// The panel and the hatch reveal float above the status slot, at the bottom
   /// right, with a barrier that closes them: [cells] terminal cells wide at
   /// most (the reveal is wider, for a plate's 56 columns).
   Widget _anchoredBesideSlot({
@@ -4020,6 +4031,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }) => LayoutBuilder(
     builder: (context, constraints) {
       final top = _native ? 0.0 : _tabBarHeight;
+      final bottom = _statusBarHeight;
       return Stack(
         children: [
           Positioned.fill(
@@ -4031,7 +4043,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
             ),
           ),
           Positioned(
-            top: top + 8,
+            bottom: bottom + 8,
             right: 10,
             width: (constraints.maxWidth - 20).clamp(
               0,
@@ -4039,7 +4051,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
             ),
             child: ConstrainedBox(
               constraints: BoxConstraints(
-                maxHeight: (constraints.maxHeight - top - 20).clamp(0, 720),
+                maxHeight: (constraints.maxHeight - top - bottom - 20).clamp(
+                  0,
+                  720,
+                ),
               ),
               child: KeymapProvider(keymap: _keymap, child: child),
             ),
@@ -5218,6 +5233,33 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _toggleSessions(filter: SessionFilter.needsInput);
   }
 
+  Future<void> _showNotificationInbox() => _dialog(() async {
+    await showNotificationInbox(
+      context,
+      app: app,
+      topInset: _native ? 0 : _tabBarHeight,
+      onOpen: (row) async {
+        final destination = swarmDestinations(app)
+            .where(
+              (item) =>
+                  item.machineId == row.machineId &&
+                  item.agentId == row.agentId,
+            )
+            .firstOrNull;
+        if (destination == null) return false;
+        final opened = await activateSwarmDestination(
+          app,
+          destination,
+          destinationSwarmId: app.activeSwarmId,
+        );
+        // Only successful navigation acknowledges a result. Questions remain
+        // pending until the daemon confirms they have been answered.
+        if (opened) app.markAgentSeen(row.machineId, row.agentId);
+        return opened;
+      },
+    );
+  });
+
   Future<void> _openSpokenTask(SpokenTaskRequest request) async {
     final spoken = SpokenTask(
       voiceId: request.voiceId,
@@ -5848,11 +5890,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           ? const SizedBox.shrink()
                           : MediaQuery.withNoTextScaling(child: _tabStrip()),
                     ),
-                    if (_native)
-                      _focusedModelPicker(
-                        WorkspacePaneContext.focused(app),
-                        menuOnly: true,
-                      ),
                     if (_learning.active)
                       WorkspaceQuickStart(
                         learning: _learning,
@@ -5960,7 +5997,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               child: Padding(
                                 padding: app.panes.isEmpty
                                     ? EdgeInsets.zero
-                                    : const EdgeInsets.all(kWorkspaceInset),
+                                    : const EdgeInsets.fromLTRB(
+                                        kWorkspaceInset,
+                                        kWorkspaceInset,
+                                        kWorkspaceInset,
+                                        0,
+                                      ),
                                 child: Focus.withExternalFocusNode(
                                   focusNode: _canvasFocus,
                                   includeSemantics: false,
@@ -6086,6 +6128,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
                         ],
                       ),
                     ),
+                    MediaQuery.withNoTextScaling(
+                      child: _native
+                          ? SizedBox(
+                              key: const ValueKey('workspace-status-bar'),
+                              height: _statusBarHeight,
+                              child: _focusedModelPicker(
+                                WorkspacePaneContext.focused(app),
+                                menuOnly: true,
+                              ),
+                            )
+                          : _statusBar(),
+                    ),
                   ],
                 ),
               ),
@@ -6207,6 +6261,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       machineId: focused.pane.machineId,
       currentModel: focused.agent?.gridModel,
       subscriptionModel: focused.agent?.modelName,
+      subscriptionEffort: focused.agent?.modelEffort,
       webSearch: focused.agent?.gridWebSearch,
       engineLabel: focused.engine,
       onOpen: () {
@@ -6241,52 +6296,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
   }
 
-  Widget _tabStrip() => LayoutBuilder(
+  // Include the pane's former bottom gutter in this row, so its controls sit
+  // halfway between the pane edge and window bottom. Pane height is unchanged.
+  double get _statusBarHeight =>
+      workspaceBarControlHeight(context) + kWorkspaceInset;
+
+  Widget _statusBar() => LayoutBuilder(
     builder: (context, constraints) {
       final cell = workspaceBarCellSizeOf(context);
+      final focused = WorkspacePaneContext.focused(app);
+      final prefs = appearancePrefsStore.value.prompt;
+      final parts = focused?.format(prefs);
+      final pr = _pullRequest.value;
       final theme = terminalThemeFor(
         grid.AppTheme.palette.value,
         terminalThemeStore.value,
       );
-      final names = workspaceTabNames(app);
-      final activities = [for (final tab in app.swarms) tabActivity(app, tab)];
-      final labels = [
-        for (var index = 0; index < app.swarms.length; index++)
-          '${index + 1}:${names[app.swarms[index].id]}',
-      ];
-      // No space is kept for the slot until it is shown: off (or not decided
-      // yet) the bar is exactly the one it was before daemons existed.
-      final daemonSpace = _slotShown
-          ? cell.width * (_face.roster.rules.statusCells + 2)
-          : 0.0;
-      final toolHeight = workspaceBarControlHeight(context);
-      final pr = _pullRequest.value;
-      final downloadWidth = kIsWeb
-          ? WebDownloadButton.widthOf(context) + cell.width
-          : 0.0;
-      final shareWidth = _showShareButton
-          ? WorkspaceShareButton.widthOf(context) + cell.width
-          : 0.0;
-      final contentWidth = math.max(
-        0.0,
-        constraints.maxWidth -
-            cell.width * 7 -
-            downloadWidth -
-            shareWidth -
-            daemonSpace,
-      );
-      final focused = WorkspacePaneContext.focused(app);
-      final prefs = appearancePrefsStore.value.prompt;
-      final parts = focused?.format(prefs);
-      final contextWidth = parts == null
-          ? 0.0
-          : workspaceStatusLineWidthsOf(
-              context,
-              parts,
-            ).fold(0.0, (a, b) => a + b);
-      final modelWidth = focused != null && modelPickerSupports(focused.engine)
-          ? workspaceBarTextSizeOf(context, focused.provider).width + cell.width
-          : 0.0;
       final joined =
           prefs.statusStyle.segmented &&
           parts != null &&
@@ -6304,24 +6329,151 @@ class _SwarmScreenState extends State<SwarmScreen> {
               color: prefs.color,
               segmentOffset: parts.segments.length,
             ).single.background;
-      final prWidth = pr == null
-          ? 0.0
-          : WorkspacePullRequestLabel.widthOf(
-                  context,
-                  pr.number,
+      final available = math.max(0.0, constraints.maxWidth - cell.width * 2);
+      final daemonWidth = _slotShown
+          ? math.min(
+              cell.width * (_face.roster.rules.statusCells + 2),
+              available * .5,
+            )
+          : 0.0;
+      final shareWidth = _showShareButton
+          ? math.min(WorkspaceShareButton.widthOf(context), available * .3)
+          : 0.0;
+      final downloadWidth = kIsWeb ? available * .16 : 0.0;
+      final modelWidth =
+          math.max(
+            0.0,
+            available -
+                daemonWidth -
+                shareWidth -
+                downloadWidth -
+                cell.width * 5,
+          ) *
+          .4;
+      final paneContext = Row(
+        children: [
+          if (focused != null)
+            Flexible(
+              child: WorkspaceStatusLine(
+                key: const ValueKey('workspace-pane-context'),
+                parts: parts!,
+                links: _contextLinks(focused),
+                color: prefs.color,
+                nextBackground: prBackground,
+              ),
+            ),
+          if (pr != null) ...[
+            if (!joined) SizedBox(width: cell.width),
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: constraints.maxWidth * .2),
+              child: WorkspaceBarControl(
+                key: const ValueKey('workspace-pull-request'),
+                label: '${pr.label} — Open on GitHub',
+                tooltip: '${pr.label} — Open on GitHub',
+                onPressed: _shortcutsEnabled
+                    ? () => _openFocusedPullRequest(pr.url.toString())
+                    : null,
+                builder: (context, emphasized) => WorkspacePullRequestLabel(
+                  number: pr.number,
+                  state: pr.state,
+                  emphasized: emphasized,
+                  color: prefs.color,
                   style: prefs.statusStyle,
-                ) +
-                (joined ? 0 : cell.width);
-      // Reserve only the context's actual width, capped at 40% / 52 cells.
-      // Tabs get the rest; unused tab space flows back to the full context.
-      final statusBudget = math.min(
-        math.max(
-          contextWidth + modelWidth + prWidth,
-          _slotShown ? cell.width * 32 : 0,
-        ),
-        math.min(contentWidth * .4, cell.width * 52),
+                  segmentOffset: parts?.segments.length ?? 0,
+                ),
+              ),
+            ),
+          ],
+        ],
       );
-      final tabBudget = math.max(0.0, contentWidth - statusBudget);
+      return Material(
+        key: const ValueKey('workspace-status-bar'),
+        type: MaterialType.transparency,
+        child: SizedBox(
+          height: _statusBarHeight,
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: cell.width),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _zoo.loaded
+                      ? DaemonVoiceLine(
+                          face: _face,
+                          brain: _brain,
+                          onAnswer: _shortcutsEnabled ? _answerDaemon : null,
+                          fallback: paneContext,
+                        )
+                      : paneContext,
+                ),
+                if (kIsWeb) ...[
+                  SizedBox(width: cell.width),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: downloadWidth),
+                    child: const WebDownloadButton(),
+                  ),
+                ],
+                if (_slotShown)
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: daemonWidth),
+                    child: DaemonSlotButton(
+                      face: _face,
+                      tooltip: () => _daemonTooltip,
+                      selected: _daemonOverlay != null,
+                      onPressed: _activateDaemon,
+                    ),
+                  ),
+                if (_showShareButton) ...[
+                  SizedBox(width: cell.width),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: shareWidth),
+                    child: WorkspaceShareButton(
+                      key: const ValueKey('workspace-share-button'),
+                      label: _shareLabel(focused),
+                      tooltip: _shareTooltip(focused),
+                      onPressed: _canExecuteCommand('agent.share')
+                          ? () => _runShortcut('agent.share')
+                          : null,
+                    ),
+                  ),
+                ],
+                if (focused != null && modelPickerSupports(focused.engine)) ...[
+                  SizedBox(width: cell.width * 2),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: modelWidth),
+                    child: _focusedModelPicker(focused),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  Widget _tabStrip() => LayoutBuilder(
+    builder: (context, constraints) {
+      final cell = workspaceBarCellSizeOf(context);
+      final theme = terminalThemeFor(
+        grid.AppTheme.palette.value,
+        terminalThemeStore.value,
+      );
+      final names = workspaceTabNames(app);
+      final activities = [for (final tab in app.swarms) tabActivity(app, tab)];
+      final labels = [
+        for (var index = 0; index < app.swarms.length; index++)
+          '${index + 1}:${names[app.swarms[index].id]}',
+      ];
+      final toolHeight = workspaceBarControlHeight(context);
+      final prefs = appearancePrefsStore.value.prompt;
+      final storeWidth = math.min(
+        WorkspaceStoreButton.widthOf(context),
+        math.max(0.0, constraints.maxWidth - cell.width * 14),
+      );
+      final tabBudget = math.max(
+        0.0,
+        constraints.maxWidth - cell.width * 6 - storeWidth - cell.width * 8,
+      );
       _tabWidths = [
         for (var i = 0; i < labels.length; i++)
           math.max(
@@ -6341,71 +6493,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final total = _tabWidths.fold(0.0, (sum, width) => sum + width);
       final tabsWidth = math.min(total, tabBudget);
       _revealSelectedTab(tabsWidth);
-      // The context, and the pull request beside it: exactly the bar from
-      // before daemons existed, which the daemon's line covers only while
-      // daemons are on.
-      final paneContext = Align(
-        alignment: Alignment.centerRight,
-        child: SizedBox(
-          child: SizedBox(
-            key: const ValueKey('workspace-pane-context'),
-            child: focused == null
-                ? const SizedBox.shrink()
-                : LayoutBuilder(
-                    builder: (context, constraints) => Row(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        if (modelPickerSupports(focused.engine) &&
-                            constraints.maxWidth >= cell.width * 12) ...[
-                          ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: constraints.maxWidth * .35,
-                            ),
-                            child: _focusedModelPicker(focused),
-                          ),
-                          SizedBox(width: cell.width),
-                        ],
-                        Flexible(
-                          child: WorkspaceStatusLine(
-                            parts: parts!,
-                            links: _contextLinks(focused),
-                            color: prefs.color,
-                            nextBackground: prBackground,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-          ),
-        ),
-      );
-      final prControl = pr == null
-          ? const <Widget>[]
-          : <Widget>[
-              if (!joined) SizedBox(width: cell.width),
-              ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: contentWidth * .28),
-                child: WorkspaceBarControl(
-                  key: const ValueKey('workspace-pull-request'),
-                  label: '${pr.label} — Open on GitHub',
-                  tooltip: '${pr.label} — Open on GitHub',
-                  onPressed: _shortcutsEnabled
-                      ? () => _openFocusedPullRequest(pr.url.toString())
-                      : null,
-                  builder: (context, emphasized) => WorkspacePullRequestLabel(
-                    number: pr.number,
-                    state: pr.state,
-                    emphasized: emphasized,
-                    color: prefs.color,
-                    style: prefs.statusStyle,
-                    segmentOffset: parts?.segments.length ?? 0,
-                  ),
-                ),
-              ),
-            ];
       return Material(
-        key: const ValueKey('workspace-status-bar'),
+        key: const ValueKey('workspace-tab-bar'),
         color: grid.AppPalette.swarmTabBar,
         child: SizedBox(
           height: math.max(_tabBarHeight, cell.height * 2),
@@ -6568,55 +6657,41 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 theme,
                 tooltip: 'New Tab ${_keymap.hint('swarm.new') ?? ''}',
               ),
-              SizedBox(width: cell.width * 2),
-              Expanded(
-                // While the daemon speaks, its line replaces the context, as
-                // tmux's message line replaces the status line.
-                child: _zoo.loaded
-                    ? DaemonVoiceLine(
-                        face: _face,
-                        brain: _brain,
-                        onAnswer: _shortcutsEnabled ? _answerDaemon : null,
-                        fallback: paneContext,
-                      )
-                    : paneContext,
+              const Spacer(),
+              WorkspaceBarControl(
+                key: const ValueKey('swarm-search-button'),
+                label: 'Search harnesses',
+                tooltip:
+                    'Search harnesses ${_keymap.hint('harnesses.list') ?? ''}',
+                onPressed: _shortcutsEnabled ? _toggleSessions : null,
+                builder: (context, emphasized) => SizedBox(
+                  width: cell.width * 4,
+                  height: toolHeight,
+                  child: Icon(
+                    LucideIcons.search,
+                    size: 17,
+                    color: theme.foreground.withValues(
+                      alpha: !_shortcutsEnabled
+                          ? .28
+                          : emphasized
+                          ? 1
+                          : .75,
+                    ),
+                  ),
+                ),
               ),
-              if (pr != null)
-                if (_zoo.loaded)
-                  ValueListenableBuilder<String?>(
-                    valueListenable: _face.voiceLine,
-                    builder: (context, voice, _) => voice != null
-                        ? const SizedBox.shrink()
-                        : Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: prControl,
-                          ),
-                  )
-                else
-                  ...prControl,
-              if (kIsWeb) ...[
-                SizedBox(width: cell.width),
-                const WebDownloadButton(),
-              ],
-              // Beside Share in the focus bar (desktop/design/daemons.md).
-              if (_slotShown)
-                DaemonSlotButton(
-                  face: _face,
-                  tooltip: () => _daemonTooltip,
-                  selected: _daemonOverlay != null,
-                  onPressed: _activateDaemon,
-                ),
-              if (_showShareButton) ...[
-                SizedBox(width: cell.width),
-                WorkspaceShareButton(
-                  key: const ValueKey('workspace-share-button'),
-                  label: _shareLabel(focused),
-                  tooltip: _shareTooltip(focused),
-                  onPressed: _canExecuteCommand('agent.share')
-                      ? () => _runShortcut('agent.share')
-                      : null,
-                ),
-              ],
+              WorkspaceNotificationsButton(
+                key: const ValueKey('workspace-notifications-button'),
+                count: _unread,
+                foreground: theme.foreground,
+                onPressed: _shortcutsEnabled ? _showNotificationInbox : null,
+              ),
+              WorkspaceStoreButton(
+                key: const ValueKey('swarm-store-button'),
+                width: storeWidth,
+                tooltip: 'Harness Store ${_keymap.hint('app.store') ?? ''}',
+                onPressed: _shortcutsEnabled ? _openStore : null,
+              ),
               SizedBox(width: cell.width),
             ],
           ),

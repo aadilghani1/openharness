@@ -701,9 +701,13 @@ static void handle_swarms(const cJSON *p)
     if (selected && strlen(selected) >= ID_MAX) selected = NULL;
     ui_swarms_replace(rows, n, selected);
 
-#ifndef DEVICE_HABITAT
-    /* …and the selected tab's shape, which rides the same frame so the two can never be read half
-     * updated: a grid drawn against the previous tab's rectangles puts agents where they are not. */
+/* …and the selected tab's shape, which rides the same frame so the two can never be read half
+ * updated: a grid drawn against the previous tab's rectangles puts agents where they are not.
+ *
+ * THE ROUND DIAL IS THE ONLY BUILD THAT SKIPS THIS. A spatial desk needs corners: habitat on the dial
+ * shows its panes as a list of rows and has no use for a rectangle, while habitat on the Pro draws the
+ * app's own shape and needs every one of them. */
+#if !defined(DEVICE_HABITAT) || defined(CONFIG_IDF_TARGET_ESP32P4)
     static cable_tile_t tiles[SWARM_TILES_MAX];
     int tn = 0;
     const cJSON *ti = NULL;

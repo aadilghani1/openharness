@@ -4,6 +4,7 @@ import { deflateSync } from 'node:zlib'
 import { ENGINES } from '../engines/types.js'
 import type { RegisteredSession } from './registry.js'
 import { writeImageToOsClipboard } from './osClipboard.js'
+import { sleptFor } from './sleepAware.js'
 import { writePasteDropFile, writePasteImageFile } from './pasteDropFiles.js'
 import type { TerminalBackendCoordinator } from './terminalBackendCoordinator.js'
 import { terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
@@ -77,6 +78,7 @@ export function clientDescriptorFrom(raw: unknown): TerminalClientDescriptor | u
 const PROTOCOL_VERSION = 3
 const HEARTBEAT_TIMEOUT_MS = 30_000
 const SYNC_INTERVAL_MS = 5_000
+const EXPIRY_SWEEP_MS = 5_000
 const OUTPUT_FLUSH_MS = 8
 // The terminal the person is typing into on the loopback desktop gains nothing from the 8ms window:
 // a frame across 127.0.0.1 costs tens of microseconds, and the app already folds every write between
@@ -213,10 +215,12 @@ export class TerminalStreamManager {
   private readonly focusByConn = new Map<string, string | null>()
   private readonly now: () => number
   private readonly expiryTimer: ReturnType<typeof setInterval>
+  private lastSweepAt: number
 
   constructor(private readonly deps: TerminalStreamManagerDeps) {
     this.now = deps.now ?? (() => Date.now())
-    this.expiryTimer = setInterval(() => this.expireLeases(), 5_000)
+    this.lastSweepAt = this.now()
+    this.expiryTimer = setInterval(() => this.expireLeases(), EXPIRY_SWEEP_MS)
     this.expiryTimer.unref?.()
   }
 
@@ -1200,6 +1204,15 @@ export class TerminalStreamManager {
 
   private expireLeases(): void {
     const now = this.now()
+    // A sweep that arrives long after its period is the computer waking up, and the time asleep is
+    // nobody's silence: the window slept too, and could not have sent `terminal_alive`. Every lease is
+    // carried over the gap, so the window's first heartbeat after the wake finds its stream still
+    // there. Closing them all here is what put every local terminal on "reconnecting" at each wake.
+    const slept = sleptFor(now - this.lastSweepAt, EXPIRY_SWEEP_MS)
+    this.lastSweepAt = now
+    if (slept > 0) {
+      for (const state of this.streams.values()) state.expiresAt += slept
+    }
     for (const state of [...this.streams.values()]) {
       if (!state.closing && state.expiresAt <= now) void this.closeStream(state, 'heartbeat timeout', true)
       else if (!state.closing && now - state.lastSyncAt >= SYNC_INTERVAL_MS) this.sendSync(state, now)
