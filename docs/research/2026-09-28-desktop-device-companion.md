@@ -15,7 +15,7 @@ species. The user will select Tim under Settings → Experimental. This is not a
 request to reset an existing account collection or replace an owned individual.
 
 This builds on PR #442 (`c500b8a5`), #444 (`805d3deb`), and the tab-switcher and
-notification-read integration in #445 (`7da2c3da`): shared Tim/Tux character
+notification-read integration in #445 (`aaa9b656`): shared Tim/Tux character
 rendering, local animation, tap-to-speak, the separate bell/inbox, and one
 CableSession per device.
 The existing account collection and pair brain remain the source of persistent
@@ -44,8 +44,9 @@ identity and work observations; the desktop owns the presentation sent to USB.
   their text. Keep tap-to-speak and the bell/inbox from #442. Device requests return to the
   owning desktop window; only its acknowledged state changes identity or eggs.
 - Respect the Experimental switch, quiet mode and Reduce Motion. Disabling the
-  companion hides it on both surfaces without erasing the collection. Account
-  changes clear the previous individual's device state and artwork.
+  companion hides it on the desktop and restores the device's saved standard
+  character, recaps and controls without erasing the collection. Account changes
+  clear the previous individual's device state and artwork.
 
 ### Device interaction
 
@@ -120,7 +121,28 @@ installed app, services or physical device during implementation and host tests.
 Prepare reviewable builds before any separately authorized hardware rollout. This
 implementation has not been installed in the running desktop app or flashed.
 
-## Validation (28 September 2026)
+## Off-state correction and refreshed base (29 September 2026)
+
+Rebased onto #445 at `aaa9b656`, preserving its current tab gestures, readable
+Unicode fallbacks and Pro layout. Companion capability stays limited to the
+round ESP32-S3 Habitat device.
+
+An initial disabled snapshot or an On → Off transition now restores the ordinary
+device character and renderer. Previously the device retained the desktop-owned
+renderer after clearing its artwork, leaving a blank portrait. The regression
+first reproduced that failure, then passed with the fix: 32 pixel-for-pixel and
+touch-target comparisons across Tim/Tux, initial Off/On → Off, home, work,
+recaps, voice, character settings, tabs, notifications and carried text. Voice,
+hold-to-tabs, disabling under a Hatch contact and re-enabling also pass.
+
+On this base, 203 desktop companion/workspace tests, 264 CLI bridge/compatibility
+tests, TypeScript checking, the full native firmware suite and companion touch
+replay pass. Desktop, CLI and ESP32-S3 firmware builds pass. The complete Dart →
+USB → C replay still passes with 1,368 accepted messages, 303 intended refusals
+and 1,192 matching incremental/full frames. Nothing was installed or flashed;
+physical-device validation remains outstanding.
+
+## Earlier validation (28 September 2026)
 
 - Baseline: #442's character, preference, renderer, touch/inbox (200,000 operations
   per character) and seven mocked USB fleet checks passed in an isolated review.
@@ -224,8 +246,12 @@ An acceptance receipt is not a hatch result: only the desktop's subsequently
 published, server-confirmed collection can reveal a baby. Commands time out
 without retries or local collection changes.
 
-The Experimental switch clears state without deleting the collection. Account
-or selected-individual changes clear cached art and pending actions. Physical
+The Experimental switch clears state without deleting the collection. Off uses
+the ordinary device character renderer and touch behavior, including during
+voice, rather than an empty companion renderer. This integration advertises
+Companion support on the ESP32-S3 round Habitat device only; the Pro keeps its
+existing renderer and layout. Account or selected-individual changes clear
+cached art and pending actions. Physical
 link loss retains the last portrait still and dim; reconnect establishes a fresh
 serial baseline and restores authoritative state. Unsupported species remain
 outside this Tim-first experiment; existing individuals are never converted.

@@ -101,7 +101,10 @@ typedef enum {
     A_VOICE,
     A_VOICE_STOP,
     A_VOICE_ABORT,
-    A_PET, A_DESKTOP_COMPANION,
+    A_PET,
+#ifdef DEVICE_DESKTOP_COMPANION
+    A_DESKTOP_COMPANION,
+#endif
     A_COMPANION,
     A_CHARACTER, A_CHARACTER_SAVE,
     A_NAP,
@@ -687,8 +690,10 @@ static bool pro_written_control(action_kind_t a)
 #endif
 static bool home_footer(action_kind_t action)
 {
-    return action == A_TABS || action == A_INBOX || action == A_AGENTS || action == A_RETURN ||
-        action == A_CARRY_DROP || action == A_DESKTOP_COMPANION;
+#ifdef DEVICE_DESKTOP_COMPANION
+    if (action == A_DESKTOP_COMPANION) return true;
+#endif
+    return action == A_TABS || action == A_INBOX || action == A_AGENTS || action == A_RETURN || action == A_CARRY_DROP;
 }
 static bool hit_contains(const hit_t *hit, int x, int y, bool surface)
 {
@@ -752,8 +757,8 @@ static void render_companion(ht_scene_t *f)
     char label[48];
     snprintf(label, sizeof label, "Character  %s", ht_character_name(character.id));
 #ifdef DEVICE_DESKTOP_COMPANION
-    if(desktop_companion.managed) {
-        snprintf(label,sizeof label,"%s in Harness",desktop_companion.enabled?(desktop_companion.name[0]?desktop_companion.name:"Egg"):"Companion off");
+    if(desktop_companion.enabled) {
+        snprintf(label,sizeof label,"%s in Harness",desktop_companion.name[0]?desktop_companion.name:"Egg");
         control(f,71,129,324,label,A_CHARACTER,0,false);
     } else
 #endif
@@ -761,15 +766,15 @@ static void render_companion(ht_scene_t *f)
     control(f, 71, 193, 324, s.straight_title ? "Edge text  Straight" : "Edge text  Curved", A_FACE, 0, true);
     control(f, 71, 257, 324, s.rim_enabled ? "[x] Rim scrolling" : "[ ] Rim scrolling", A_RIM, 0, true);
     control(f, 71, 321, 324, s.quiet ? "[x] Still character" : "[ ] Still character", A_QUIET, 0, true);
-    bool napping=s.nap, can_nap=true;
 #ifdef DEVICE_DESKTOP_COMPANION
-    if(desktop_companion.managed) {
-        napping=!strcmp(desktop_companion.emotion,"asleep");
-        can_nap=s.connected&&desktop_companion.enabled&&!desktop_companion.pending&&
+    if(desktop_companion.enabled) {
+        bool napping=!strcmp(desktop_companion.emotion,"asleep");
+        bool can_nap=s.connected&&!desktop_companion.pending&&
             !strcmp(desktop_companion.phase,"creature")&&desktop_companion.uid[0];
-    }
+        control(f, 95, 381, 120, napping ? "[wake]" : "[nap]", A_NAP, 0, can_nap);
+    } else
 #endif
-    control(f, 95, 381, 120, napping ? "[wake]" : "[nap]", A_NAP, 0, can_nap);
+    control(f, 95, 381, 120, s.nap ? "[wake]" : "[nap]", A_NAP, 0, true);
 #ifdef DEVICE_DESKTOP_COMPANION
     if(desktop_companion.enabled) {
         bool egg=!strcmp(desktop_companion.phase,"egg");
@@ -1019,7 +1024,7 @@ static void render_home(ht_scene_t *f)
     s.caption_arc = (ht_rect_t){0};
     if (!s.connected || s.loading) {
 #ifdef DEVICE_DESKTOP_COMPANION
-        if (!s.connected && desktop_companion.managed && desktop_companion.enabled) {
+        if (!s.connected && desktop_companion.enabled) {
             const ht_character_face_t offline = {.recipient="Harness offline",.status="",.hint="reconnect",
                 .foreground=FG,.dim=DIM,.ink=DIM,.mood=HT_CHARACTER_OFFLINE,.primary_title=true};
             desktop_companion.brightness=s.brightness;
@@ -1080,7 +1085,9 @@ static void render_home(ht_scene_t *f)
     if (visit.available) f_.hint = "";
 #ifdef DEVICE_DESKTOP_COMPANION
     desktop_companion.brightness=s.brightness;
-    if (desktop_companion.managed) ht_companion_face(f, &desktop_companion, &f_, recap);
+    // A disabled snapshot still owns its serial baseline, not the device UI.
+    // Restore the saved character and its ordinary layout when the experiment is off.
+    if (desktop_companion.enabled) ht_companion_face(f, &desktop_companion, &f_, recap);
     else
 #endif
     ht_character_face(f, &character, &f_, ACCENT, recap);
@@ -1649,7 +1656,7 @@ static void render_voice(ht_scene_t *f)
     f_.focus = f_.detail && *f_.detail;
 #ifdef DEVICE_DESKTOP_COMPANION
     desktop_companion.brightness=s.brightness;
-    if(desktop_companion.managed)ht_companion_face(f,&desktop_companion,&f_,NULL);
+    if(desktop_companion.enabled)ht_companion_face(f,&desktop_companion,&f_,NULL);
     else
 #endif
     ht_character_face(f, &character, &f_, ACCENT, NULL);
@@ -1976,7 +1983,7 @@ static action_t make_action(hit_t h)
 {
     action_t a = {.kind = h.action, .value = h.value, .revision = s.q.revision};
 #ifdef DEVICE_DESKTOP_COMPANION
-    if(h.action==A_DESKTOP_COMPANION||(h.action==A_NAP&&desktop_companion.managed)) {
+    if(h.action==A_DESKTOP_COMPANION||(h.action==A_NAP&&desktop_companion.enabled)) {
         a.kind=A_DESKTOP_COMPANION;
         if(h.action==A_NAP)a.value=!strcmp(desktop_companion.emotion,"asleep")?3:2;
         a.revision=desktop_companion.epoch;
@@ -2424,7 +2431,7 @@ static void dispatch(action_t a)
         break;
     case A_NAP:
 #ifdef DEVICE_DESKTOP_COMPANION
-        if(desktop_companion.managed) {companion_request(!strcmp(desktop_companion.emotion,"asleep")?3:2);break;}
+        if(desktop_companion.enabled) {companion_request(!strcmp(desktop_companion.emotion,"asleep")?3:2);break;}
 #endif
         s.nap = !s.nap;
         s.nap_until = ms() + 15 * 60 * 1000;

@@ -5,7 +5,9 @@ to open Tabs. The device no longer exposes a Controls menu. With the desktop
 Companion experiment enabled, Harness owns the egg and selected Tim. Tapping
 the egg also starts voice; a ready egg has a separate bottom Hatch button.
 Pet, nap and wake remain in the desktop companion UI. The dial retains its
-character preference for use with hosts without companion support.
+character preference for use with hosts without companion support or with the
+desktop experiment turned off. Off restores the ordinary portrait, recaps and
+controls; the desktop collection and growth progress are preserved.
 
 `firmware/main/ui/habitat/character.h` is the application interface. Characters
 implement the same eight moods: idle, working, attention, done, offline, asleep,

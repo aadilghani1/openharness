@@ -37,6 +37,54 @@ static bool companion_receipt(const char *id,bool ok) {
     cJSON_AddStringToObject(p,"requestId",id);cJSON_AddBoolToObject(p,"ok",ok);
     bool accepted=ht_companion_receive(&desktop_companion,p,ms());cJSON_Delete(p);return accepted;
 }
+static void companion_off(void) {
+    cJSON *p=cJSON_Parse("{\"t\":\"companion.state\",\"v\":1,\"serial\":2,\"window\":\"desktop-fixture\",\"epoch\":7,\"revision\":2,\"enabled\":false}");
+    assert(p&&ht_companion_receive(&desktop_companion,p,ms()));cJSON_Delete(p);scene_take();
+    assert(desktop_companion.managed&&!desktop_companion.enabled&&!desktop_companion.pending);
+}
+static void companion_off_checks(void) {
+    static uint16_t expected[HT_WIDTH*HT_HEIGHT],actual[HT_WIDTH*HT_HEIGHT];
+    // Compare rendered pixels and touch targets with the ordinary device path,
+    // both on an initial disabled snapshot and after a ready egg was enabled.
+    for(int toggled=0;toggled<2;toggled++)for(int state=0;state<8;state++) {
+        reset();
+        if(state==1){s.agents[0].busy=true;strcpy(s.agents[0].tool,"Reading files");}
+        if(state==2){strcpy(s.agents[0].preview,"Saved result stays visible");s.agents[0].recap_ready=true;}
+        if(state==3)tap(1000,233,220);
+        if(state==4)view(COMPANION);
+        if(state==5){workspace_setup();view(TABS);}
+        if(state==6)ui_notify_task_done("b","Pane B","M2","A result");
+        if(state==7)carry_return_setup(true);
+        scene_take();
+        ht_raster(&scene,(ht_rect_t){0,0,HT_WIDTH,HT_HEIGHT},expected);
+        hit_t hits[24];int count=s.hit_count;memcpy(hits,s.hits,sizeof hits);
+        if(toggled)companion_state("egg","p4",1,7);
+        companion_off();
+        ht_raster(&scene,(ht_rect_t){0,0,HT_WIDTH,HT_HEIGHT},actual);
+        assert(!memcmp(expected,actual,sizeof expected));
+        assert(count==s.hit_count&&!action_enabled(A_DESKTOP_COMPANION));
+        for(int i=0;i<count;i++) {
+            const hit_t *a=&hits[i],*b=&s.hits[i];
+            assert(a->rect.x==b->rect.x&&a->rect.y==b->rect.y&&a->rect.w==b->rect.w&&a->rect.h==b->rect.h);
+            assert(a->action==b->action&&a->value==b->value&&a->enabled==b->enabled);
+        }
+        if(state==4)assert(make_action((hit_t){.action=A_NAP}).kind==A_NAP);
+    }
+    // Off still speaks and holds to Tabs. Turning off under a hatch contact
+    // cannot turn that release into either voice or a stale hatch request.
+    workspace_setup();companion_state("egg","p4",1,7);companion_off();
+    tap(1000,233,220);assert(starts==1&&recording&&!companion_requests);
+    tap(2000,233,220);assert(stops==1&&!recording);
+    dispatch((action_t){.kind=A_VOICE_ABORT});
+    habitat_touch(true,233,220,3000);surface_tick(3650);scene_take();
+    assert(s.view==TABS&&!action_enabled(A_SETTINGS)&&!companion_requests);
+    habitat_touch(false,233,220,3750);assert(!tab_switches);
+    reset();companion_state("egg","p4",1,7);habitat_touch(true,233,375,1000);
+    companion_off();habitat_touch(false,233,375,1075);assert(!starts&&!companion_requests);
+    // Re-enabling resumes only the newly supplied state.
+    companion_state("egg","p4",3,7);assert(action_enabled(A_DESKTOP_COMPANION));
+    reset();puts("Companion off: ordinary pixels/targets, recaps, voice, tabs, controls, notifications and toggle contacts PASS");
+}
 static void companion_checks(void) {
     // The same voice contact works before, during and after hatching.
     const char *stages[]={"p0","p1","p2","p3","p4","rock","burst","tumble","open","hatchling"};
@@ -129,6 +177,7 @@ static void companion_checks(void) {
     reset();puts("Desktop companion touch: voice at every life stage, separate hatch/bell, hold-to-tabs, owner, receipts, pending voice, timeout and queue refusal PASS");
 }
 '''
-    marker = 'int main(int argc, char **argv) {'
+    marker = '    test_character = getenv("HABITAT_TEST_TUX") ? HT_CHARACTER_TUX : HT_CHARACTER_TIM;'
     assert code.count(marker) == 1
-    return code.replace(marker, checks + marker + '\ncompanion_checks();\n')
+    code = code.replace('int main(int argc, char **argv) {', checks + 'int main(int argc, char **argv) {')
+    return code.replace(marker, marker + '\ncompanion_off_checks();companion_checks();\n')
