@@ -482,7 +482,9 @@ void display_init(void)
         assert(pixels[i]);
     }
     display_bump_activity();
-    assert(xTaskCreatePinnedToCore(render_task, "habitat_render", 6144, NULL, 5, &renderer, 1) ==
+    // The ROM inflater keeps its Huffman tables on the calling task's stack.
+    // Illustrated companions can become active at any time over the USB link.
+    assert(xTaskCreatePinnedToCore(render_task, "habitat_render", 24576, NULL, 5, &renderer, 1) ==
            pdPASS);
     touch_init();
     ESP_LOGI("habitat", "direct C renderer on a %dpx face: two %d-byte internal DMA buffers over %s",
