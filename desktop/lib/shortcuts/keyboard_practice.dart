@@ -38,7 +38,7 @@ class KeyboardLesson {
     'swarm.new' => '[work]  [new tab]\nFind a harness, or create one',
     'agent.open' ||
     'agent.add' => '[agent 1] │ [agent 2]\nBoth agents share this tab.',
-    'agent.new' => 'agent    Claude Code\nmachine  dev\nproject  ~/work/payments\ntask     (optional)\nCreate is selected. Up/Down + Enter edits an argument. Permissions and profiles are inside Agent.',
+    'agent.new' => 'Codex · This Mac · payments\nWhat’s next? (optional)\nNew harness is selected. Return starts with these settings; Tab reaches each control. Model, approvals, and Codex profile are below the message.',
     'pane.zoom' => '[agent 2 — full workspace]\nPress the same key to restore the other panes.',
     'pane.close' =>
       '[agent 1]\nThe second view closes. Its agent keeps running.',
@@ -51,12 +51,12 @@ class KeyboardLesson {
       'project  ~/work/\nShift-Tab walks path candidates backward.',
     'picker.cancel' => '> ready\nEscape steps back from a nested chooser, then returns to the terminal.',
     'creation.agent' => 'agent    Claude Code\nFilter the agents, then Enter to choose. Escape returns to the launch menu.',
-    'creation.project' => 'project on This Mac\nresearch    website    payments\nNew project / Open folder / Clone GitHub repository\nType to filter projects. Up/Down selects; Enter chooses; Escape goes back.',
+    'creation.project' => 'repo on This Mac\nresearch    website    payments\nNew project / Open folder / Clone GitHub repository\nType to filter repos. Up/Down selects; Enter chooses; Escape goes back.',
     'creation.project_new' => 'name     payments processing\nCreate payments-processing\nThis Mac:~/harnesses/payments-processing',
-    'creation.project_existing' => 'folder   ~/work/payments\nEnter a folder path, or press Enter to browse on the selected machine.',
+    'creation.project_existing' => 'Open folder\nChoose a folder on the selected machine. Cancelling returns to the Repo list.',
     'creation.project_repository' => 'repo     https://github.com/openai/codex\nChoose the repository, then launch to clone it and start the agent.',
     'creation.project_machine' => 'machine  Office\nChoose where the project lives. Folders are scoped to that machine.',
-    'creation.project_browse' => 'Browse folders\nChoose a folder on the selected machine; cancelling returns to the folder prompt.',
+    'creation.project_browse' => 'Browse folders\nChoose a folder on the selected machine; cancelling returns to the previous chooser.',
     'creation.project_recent_1' ||
     'creation.project_recent_2' ||
     'creation.project_recent_3' ||
@@ -65,11 +65,11 @@ class KeyboardLesson {
     'creation.project_recent_6' ||
     'creation.project_recent_7' ||
     'creation.project_recent_8' ||
-    'creation.project_recent_9' => 'Recent project selected\nThe launch summary now uses this folder on the selected machine.',
-    'creation.task' => 'task     fix the tests\nEnter starts the agent with this first task. Escape keeps the draft.',
-    'creation.options' => 'options\nChange permissions or the Codex profile.',
-    'picker.more_options' =>
-      'more options\nPermissions · Codex profile · repository',
+    'creation.project_recent_9' => 'Repo selected\nThe composer now uses this folder on the selected machine.',
+    'creation.task' => 'What’s next?\nEnter adds a line. Use New harness to start; Escape keeps the draft.',
+    'creation.options' =>
+      'Model\nChoose a model for this harness. For Terminal, choose a repo.',
+    'picker.more_options' => 'New harness\nOpen the composer from search. In the composer, choose a model; Terminal opens the Repo list.',
     'picker.toggle_preview' =>
       'results │ preview\nToggle again to hide the preview.',
     'agent.stop' => 'Stop Harness?\n> Cancel    Stop\nStopping ends the running harness; its saved conversation is kept. Closing a pane only closes a view.',

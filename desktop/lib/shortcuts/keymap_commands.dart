@@ -768,8 +768,8 @@ final harnessCommands = <HarnessCommand>[
   for (final (name, key, label) in [
     ('agent', null, 'Choose the new agent'),
     ('project', null, 'Choose the new agent’s project'),
-    ('task', null, 'Edit the new agent’s first task'),
-    ('options', null, 'Edit the new agent’s advanced options'),
+    ('task', null, 'Edit the new agent’s first message'),
+    ('options', null, 'Choose the new agent’s model'),
     // Project is a text filter. Keep these command identities available for
     // explicit user remaps, without taking ordinary letters from the editor.
     ('project_new', null, 'Name a new project'),

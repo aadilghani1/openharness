@@ -47,17 +47,19 @@ class DesktopDialogSurface extends StatelessWidget {
     super.key,
     required this.child,
     this.radius = DesktopChrome.dialogRadius,
+    this.elevation = 16,
   });
 
   final Widget child;
   final double radius;
+  final double elevation;
 
   @override
   Widget build(BuildContext context) => Material(
     color: DesktopChrome.surface,
     surfaceTintColor: Colors.transparent,
-    elevation: 24,
-    shadowColor: Colors.black.withValues(alpha: .3),
+    elevation: elevation,
+    shadowColor: Colors.black.withValues(alpha: .24),
     shape: DesktopChrome.shape(radius: radius),
     clipBehavior: Clip.antiAlias,
     child: child,
@@ -76,7 +78,7 @@ class DesktopDialogBackdrop extends StatelessWidget {
       onTap: onDismiss,
       child: ColoredBox(
         color: Colors.black.withValues(
-          alpha: Theme.of(context).brightness == Brightness.dark ? .38 : .20,
+          alpha: Theme.of(context).brightness == Brightness.dark ? .76 : .40,
         ),
       ),
     ),
@@ -90,6 +92,7 @@ class DesktopPill extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.icon,
+    this.leading,
     this.menu = false,
     this.selected,
     this.tooltip,
@@ -99,11 +102,15 @@ class DesktopPill extends StatelessWidget {
     this.focusNode,
     this.foregroundColor,
     this.compact = false,
+    this.quiet = false,
+    this.capsule = false,
+    this.textSize = 13,
   });
 
   final String label;
   final VoidCallback? onPressed;
   final IconData? icon;
+  final Widget? leading;
   final bool menu, monospace;
   final bool? selected;
   final String? tooltip;
@@ -112,6 +119,8 @@ class DesktopPill extends StatelessWidget {
   final FocusNode? focusNode;
   final Color? foregroundColor;
   final bool compact;
+  final bool quiet, capsule;
+  final double textSize;
 
   @override
   Widget build(BuildContext context) {
@@ -123,41 +132,57 @@ class DesktopPill extends StatelessWidget {
           TextButton.styleFrom(
             foregroundColor: ink,
             disabledForegroundColor: ink.withValues(alpha: .38),
-            backgroundColor: ink.withValues(
-              alpha: selected == true ? .13 : .055,
+            backgroundColor: quiet
+                ? Colors.transparent
+                : ink.withValues(alpha: selected == true ? .13 : .055),
+            minimumSize: Size(
+              0,
+              compact
+                  ? 28
+                  : capsule
+                  ? 32
+                  : 34,
             ),
-            minimumSize: Size(0, compact ? 28 : 34),
             padding: EdgeInsets.symmetric(
-              horizontal: compact ? 9 : 11,
-              vertical: compact ? 4 : 7,
+              horizontal: quiet
+                  ? 6
+                  : compact
+                  ? 9
+                  : 11,
+              vertical: compact || capsule ? 4 : 7,
             ),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(capsule ? 20 : 8),
             ),
-            textStyle: DesktopChrome.text(size: 13),
+            textStyle: DesktopChrome.text(size: textSize),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             splashFactory: NoSplash.splashFactory,
           ).copyWith(
-            side: WidgetStateProperty.resolveWith(
-              (states) => BorderSide(
-                color: states.contains(WidgetState.focused)
-                    ? DesktopChrome.focusRing
-                    : DesktopChrome.rim,
-                width: states.contains(WidgetState.focused) ? 2 : 1,
-              ),
+            side: WidgetStatePropertyAll(
+              BorderSide(color: quiet ? Colors.transparent : DesktopChrome.rim),
+            ),
+            backgroundColor: WidgetStateProperty.resolveWith(
+              (states) => states.contains(WidgetState.focused)
+                  ? ink.withValues(alpha: .10)
+                  : quiet
+                  ? Colors.transparent
+                  : ink.withValues(alpha: selected == true ? .13 : .055),
             ),
             overlayColor: WidgetStateProperty.resolveWith(
               (states) =>
                   states.contains(WidgetState.hovered) ||
                       states.contains(WidgetState.pressed)
-                  ? ink.withValues(alpha: .07)
+                  ? ink.withValues(alpha: .05)
                   : Colors.transparent,
             ),
           ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (icon != null) ...[Icon(icon, size: 16), const SizedBox(width: 7)],
+          if (leading != null || icon != null) ...[
+            leading ?? Icon(icon, size: 16),
+            const SizedBox(width: 7),
+          ],
           Flexible(
             child: Text(
               label,

@@ -91,20 +91,11 @@ void main() {
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
-    controller.move(
-      controller.options.indexWhere(
-            (row) => row.id == NewHarnessController.browseId,
-          ) -
-          controller.cursor,
-    );
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
     FocusManager.instance.primaryFocus?.unfocus();
     picker.answer.complete(null);
     await tester.pumpAndSettle();
+    expect(picker.opened, 1);
+    expect(controller.field, NewHarnessField.projectMenu);
     expect(FocusManager.instance.primaryFocus?.debugLabel, 'new-harness-query');
     await typeHarnessQuery(tester, 'robotics');
     expect(controller.query, 'robotics');
@@ -139,17 +130,6 @@ void main() {
           ) -
           controller.cursor,
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
-    controller.move(
-      controller.options.indexWhere(
-            (row) => row.id == NewHarnessController.browseId,
-          ) -
-          controller.cursor,
-    );
-    await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     expect(picker.opened, 1);
@@ -189,17 +169,6 @@ void main() {
           ) -
           controller.cursor,
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
-    controller.move(
-      controller.options.indexWhere(
-            (row) => row.id == NewHarnessController.browseId,
-          ) -
-          controller.cursor,
-    );
-    await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     await tester.pump();

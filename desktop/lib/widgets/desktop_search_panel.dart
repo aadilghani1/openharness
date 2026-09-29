@@ -368,10 +368,10 @@ class _SearchScopesState extends State<_SearchScopes> {
         child: Container(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(9),
-            border: Border.all(
-              color: _focused ? DesktopChrome.focusRing : Colors.transparent,
-              width: 2,
-            ),
+            border: Border.all(color: Colors.transparent),
+            color: _focused
+                ? DesktopChrome.foreground.withValues(alpha: .08)
+                : Colors.transparent,
           ),
           child: Listener(
             onPointerUp: (_) {
@@ -383,7 +383,9 @@ class _SearchScopesState extends State<_SearchScopes> {
               groupValue: widget.selected,
               backgroundColor: DesktopChrome.foreground.withValues(alpha: .045),
               thumbColor: Color.alphaBlend(
-                DesktopChrome.foreground.withValues(alpha: .10),
+                DesktopChrome.foreground.withValues(
+                  alpha: _focused ? .16 : .10,
+                ),
                 DesktopChrome.surface,
               ),
               padding: const EdgeInsets.all(3),

@@ -3,6 +3,7 @@ import 'support/launch_menu.dart';
 
 import 'dart:async';
 
+import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,6 +22,21 @@ import 'swarm_interactions_test.dart' as interactions;
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_screen_test.dart' as workspace;
 import 'swarm_state_test.dart' show createApp;
+
+class _SelectedFolder extends FileSelectorPlatform {
+  _SelectedFolder(this.path);
+  final String path;
+  int opened = 0;
+
+  @override
+  Future<String?> getDirectoryPath({
+    String? initialDirectory,
+    String? confirmButtonText,
+  }) async {
+    opened++;
+    return path;
+  }
+}
 
 class _Connection extends WsConn {
   _Connection({this.profiles = const []})
@@ -404,12 +420,21 @@ void main() {
       final app = createApp(connectionForTest: (_) => connection);
       addTearDown(app.dispose);
       app.machineStates['m']!.nodeOnline = true;
+      final folderPicker = _SelectedFolder(projectQuery);
+      if (projectQuery.startsWith('/')) {
+        final previousPicker = FileSelectorPlatform.instance;
+        FileSelectorPlatform.instance = folderPicker;
+        addTearDown(() => FileSelectorPlatform.instance = previousPicker);
+      }
       app.adoptSessionForTest(terminal('a0', []));
       final original = app.activeSwarm;
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyT);
       await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
+      if (projectQuery.startsWith('/')) {
+        app.machineStates['m']!.localOnly = true;
+      }
       final input = find.byKey(const ValueKey('new-harness-query'));
       tester
               .widget<NewHarnessForm>(find.byType(NewHarnessForm))
@@ -430,10 +455,18 @@ void main() {
         ),
       );
       await tester.pump();
-      await tester.enterText(input, projectQuery);
-      await tester.pump(const Duration(milliseconds: 250));
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
+      if (projectQuery.startsWith('/')) {
+        await tester.pumpAndSettle();
+        expect(folderPicker.opened, 1);
+        // Only the folder picker uses the local fixture. Launch still goes
+        // through the fake daemon used by every placement assertion below.
+        app.machineStates['m']!.localOnly = false;
+      } else {
+        await tester.enterText(input, projectQuery);
+        await tester.pump(const Duration(milliseconds: 250));
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+      }
       await openLaunchRow(tester, 'mode');
       await tester.tap(
         find.byKey(const ValueKey('new-harness-option-readOnly')),

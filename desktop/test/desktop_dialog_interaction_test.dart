@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -78,15 +79,30 @@ class _DialogConnection extends WsConn {
 }
 
 class _Workspace {
-  _Workspace(this.app, this.keymap, this.connections, this.input);
+  _Workspace(this.app, this.keymap, this.connections, this.input, this.folders);
 
   final AppNotifier app;
   final MemoryKeymap keymap;
   final Map<String, _DialogConnection> connections;
   final List<TerminalBinaryFrame> input;
+  final _FolderPicker folders;
 
   Iterable<Map<String, dynamic>> get starts =>
       connections.values.expand((connection) => connection.starts);
+}
+
+class _FolderPicker extends FileSelectorPlatform {
+  int opened = 0;
+  Completer<String?>? pending;
+
+  @override
+  Future<String?> getDirectoryPath({
+    String? initialDirectory,
+    String? confirmButtonText,
+  }) {
+    opened++;
+    return pending?.future ?? Future.value(null);
+  }
 }
 
 final _form = find.byType(NewHarnessForm);
@@ -117,6 +133,10 @@ Future<_Workspace> _mount(
   final previousEntry = newHarnessOpensInBox;
   newHarnessOpensInBox = true;
   addTearDown(() => newHarnessOpensInBox = previousEntry);
+  final previousFolderPicker = FileSelectorPlatform.instance;
+  final folders = _FolderPicker();
+  FileSelectorPlatform.instance = folders;
+  addTearDown(() => FileSelectorPlatform.instance = previousFolderPicker);
   final connections = <String, _DialogConnection>{};
   final app = createApp(
     connectionForTest: (machine) =>
@@ -157,19 +177,17 @@ Future<_Workspace> _mount(
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
   });
-  return _Workspace(app, map, connections, input);
+  return _Workspace(app, map, connections, input, folders);
 }
 
 Future<void> _new(WidgetTester tester) async {
   await key(tester, LogicalKeyboardKey.keyN, cmd: true);
   await tester.pump(const Duration(milliseconds: 100));
+  await tester.pumpAndSettle();
   expect(_form, findsOneWidget);
-  // These journeys exercise the expanded composer. Compact entry has its own
-  // test-drive suite; enter task mode through the same visible control.
-  if (_task.evaluate().isEmpty) {
-    await tester.tap(find.byKey(const ValueKey('new-harness-task-toggle')));
-    await tester.pumpAndSettle();
-  }
+  // These journeys start from the visible editor. The launch-entry suite
+  // independently verifies the empty dialog's initial New harness focus.
+  await _tabTo(tester, _task);
 }
 
 Future<void> _nativeCommand(WidgetTester tester, String command) async {
@@ -191,11 +209,11 @@ Future<void> _tabTo(WidgetTester tester, Finder target) async {
 }
 
 const _nativeSmokeJourneys = {
-  'Add task focuses the editor and Return never launches',
+  'Tab reaches the visible editor and Return never launches',
   'Tab and Shift-Tab remain inside the composer and reach controls',
   'Space opens a focused chooser without starting',
   'Return opens a focused chooser without starting',
-  'machine appears above project in the compact header',
+  'agent machine and repo appear in order above the composer',
   'Tab leaves a chooser without applying its highlight',
   'Shift-Tab leaves a chooser without applying its highlight',
   'Escape closes only the chooser and returns to its control',
@@ -215,7 +233,7 @@ void main({bool nativeSmoke = false}) {
     );
   }
 
-  journey('Add task focuses the editor and Return never launches', (
+  journey('Tab reaches the visible editor and Return never launches', (
     tester,
   ) async {
     final workspace = await _mount(tester, withTerminal: true);
@@ -235,7 +253,6 @@ void main({bool nativeSmoke = false}) {
   ) async {
     await _mount(tester, withTerminal: true);
     await _new(tester);
-    await openLaunchRow(tester, 'advanced');
     final seen = <String>{};
     for (var i = 0; i < 32; i++) {
       await key(tester, LogicalKeyboardKey.tab);
@@ -287,16 +304,27 @@ void main({bool nativeSmoke = false}) {
     );
   }
 
-  journey('machine appears above project in the compact header', (
+  journey('agent machine and repo appear in order above the composer', (
     tester,
   ) async {
     await _mount(tester);
     await _new(tester);
+    final agent = find.byKey(const ValueKey('new-harness-field-agent'));
     final machine = find.byKey(const ValueKey('new-harness-machine'));
     final project = find.byKey(const ValueKey('new-harness-field-project'));
+    expect(tester.getTopLeft(agent).dy, tester.getTopLeft(machine).dy);
+    expect(tester.getTopLeft(machine).dy, tester.getTopLeft(project).dy);
     expect(
-      tester.getBottomLeft(machine).dy,
-      lessThan(tester.getTopLeft(project).dy),
+      tester.getTopRight(agent).dx,
+      lessThan(tester.getTopLeft(machine).dx),
+    );
+    expect(
+      tester.getTopRight(machine).dx,
+      lessThan(tester.getTopLeft(project).dx),
+    );
+    expect(
+      tester.getBottomLeft(project).dy,
+      lessThan(tester.getTopLeft(_task).dy),
     );
   });
 
@@ -318,9 +346,7 @@ void main({bool nativeSmoke = false}) {
             tester,
             find.byKey(
               ValueKey(
-                reverse
-                    ? 'new-harness-field-project'
-                    : 'new-harness-field-approvals',
+                reverse ? 'new-harness-field-start' : 'new-harness-machine',
               ),
             ),
           ),
@@ -413,9 +439,6 @@ void main({bool nativeSmoke = false}) {
               : 'new-harness-field-$field',
         ),
       );
-      if (['model', 'branch', 'profile'].contains(field)) {
-        await openLaunchRow(tester, 'advanced');
-      }
       await tester.tap(opener);
       await tester.pump();
       expect(_chooser, findsOneWidget);
@@ -439,7 +462,6 @@ void main({bool nativeSmoke = false}) {
   for (final (action, prompt) in [
     (NewHarnessController.newProjectId, NewHarnessField.projectName),
     (NewHarnessController.repositoryId, NewHarnessField.projectRepository),
-    (NewHarnessController.existingProjectId, NewHarnessField.project),
   ]) {
     journey('$action uses the selected machine and Escape returns one level', (
       tester,
@@ -478,6 +500,53 @@ void main({bool nativeSmoke = false}) {
       );
       expect(workspace.starts, isEmpty);
     });
+  }
+
+  for (final path in <String?>[null, '/work/picked-repo']) {
+    journey(
+      'Open Folder goes directly to the native picker (${path == null ? 'cancel' : 'choose'})',
+      (tester) async {
+        final workspace = await _mount(tester);
+        await _new(tester);
+        await tester.enterText(
+          _task,
+          'Keep this message while choosing a repo',
+        );
+        final box = _box(tester);
+        final project = box.project;
+        workspace.folders.pending = Completer<String?>();
+        await openLaunchRow(tester, 'project');
+        await tester.tap(
+          find.byKey(const ValueKey('new-harness-option-project:existing')),
+        );
+        await tester.pump();
+        expect(workspace.folders.opened, 1);
+        expect(workspace.starts, isEmpty);
+        workspace.folders.pending!.complete(path);
+        await tester.pumpAndSettle();
+        expect(box.task, 'Keep this message while choosing a repo');
+        expect(box.machineId, 'm');
+        if (path == null) {
+          expect(box.project, project);
+          expect(box.field, NewHarnessField.projectMenu);
+          expect(_chooser, findsOneWidget);
+          expect(_ownsFocus(tester, _query), isTrue);
+          await key(tester, LogicalKeyboardKey.escape);
+        } else {
+          expect(box.project.folder, path);
+          expect(_chooser, findsNothing);
+        }
+        expect(_form, findsOneWidget);
+        expect(
+          _ownsFocus(
+            tester,
+            find.byKey(const ValueKey('new-harness-field-project')),
+          ),
+          isTrue,
+        );
+        expect(workspace.starts, isEmpty);
+      },
+    );
   }
 
   for (final dismissal in ['Escape', 'outside click']) {
@@ -521,6 +590,191 @@ void main({bool nativeSmoke = false}) {
     expect(workspace.input, isEmpty);
     expect(workspace.starts, isEmpty);
   });
+
+  journey(
+    'long mixed mouse and keyboard setup keeps the draft and dismisses one level',
+    (tester) async {
+      final workspace = await _mount(tester, withTerminal: true);
+      await _new(tester);
+      const task =
+          'Explore the API first.\nKeep the UI simple — then discuss it.';
+      await tester.enterText(_task, task);
+      final original = _box(tester);
+      final project = original.project;
+      final machine = original.machineId;
+      Finder field(String name) =>
+          find.byKey(ValueKey('new-harness-field-$name'));
+
+      void expectStableDraft() {
+        expect(_form, findsOneWidget);
+        expect(_box(tester), same(original));
+        expect(original.task, task);
+        expect(tester.widget<TextField>(_task).controller!.text, task);
+        expect(original.project, project);
+        expect(original.machineId, machine);
+        expect(workspace.starts, isEmpty);
+        expect(workspace.input, isEmpty);
+        expect(tester.takeException(), isNull);
+      }
+
+      Future<void> open(Finder opener, {required bool keyboard}) async {
+        if (keyboard) {
+          await _tabTo(tester, opener);
+          await key(tester, LogicalKeyboardKey.enter);
+        } else {
+          await tester.ensureVisible(opener);
+          await tester.tap(opener);
+        }
+        await tester.pumpAndSettle();
+        expect(_chooser, findsOneWidget);
+        expect(_ownsFocus(tester, _query), isTrue);
+        expectStableDraft();
+      }
+
+      Future<void> choose(
+        String id,
+        String query, {
+        required bool keyboard,
+      }) async {
+        await tester.enterText(_query, query);
+        await tester.pumpAndSettle();
+        if (keyboard) {
+          expect(original.selected?.id, id);
+          await key(tester, LogicalKeyboardKey.enter);
+        } else {
+          final option = find.byKey(ValueKey('new-harness-option-$id'));
+          await tester.ensureVisible(option);
+          await tester.tap(option);
+        }
+        await tester.pumpAndSettle();
+        expect(_chooser, findsNothing);
+        expectStableDraft();
+      }
+
+      final chosenModes = <String, String>{};
+      for (var round = 0; round < 4; round++) {
+        final keyboard = round.isOdd;
+        final engine = keyboard ? 'codex' : 'claude';
+        await open(field('agent'), keyboard: keyboard);
+        await choose(engine, engine, keyboard: !keyboard);
+        expect(original.engine, engine);
+        expect(original.mode, chosenModes[engine] ?? 'auto');
+        expect(field('profile'), keyboard ? findsOneWidget : findsNothing);
+
+        final (mode, modeLabel) = switch (round) {
+          1 => ('full', 'Full access'),
+          2 => ('auto', 'Auto-approve'),
+          _ => ('ask', 'Ask first'),
+        };
+        await open(field('approvals'), keyboard: !keyboard);
+        await choose(mode, modeLabel, keyboard: keyboard);
+        expect(original.mode, mode);
+        chosenModes[engine] = mode;
+
+        if (engine == 'codex') {
+          final profile = round == 1 ? '/profiles/work' : null;
+          await open(field('profile'), keyboard: keyboard);
+          await choose(
+            profile == null ? 'profile:default' : 'profile:$profile',
+            profile == null ? 'Default' : 'Work',
+            keyboard: !keyboard,
+          );
+          expect(original.draft.profile?.path, profile);
+        }
+
+        final model = original.modelLabel;
+        await open(field('model'), keyboard: !keyboard);
+        await key(tester, LogicalKeyboardKey.arrowDown);
+        await tester.tapAt(const Offset(10, 400));
+        await tester.pumpAndSettle();
+        expect(_chooser, findsNothing);
+        expect(_ownsFocus(tester, field('model')), isTrue);
+        expect(original.modelLabel, model);
+        expectStableDraft();
+
+        final worktree = original.worktree;
+        if (keyboard) {
+          await _tabTo(tester, field('worktree'));
+          await key(tester, LogicalKeyboardKey.space);
+        } else {
+          await tester.tap(field('worktree'));
+        }
+        await tester.pumpAndSettle();
+        expect(original.worktree, !worktree);
+        expect(
+          find.text(original.worktree ? 'Worktree on' : 'Worktree off'),
+          findsOneWidget,
+        );
+        final branch = original.worktree ? 'feature' : 'main';
+        await open(field('branch'), keyboard: keyboard);
+        await choose('refs/heads/$branch', branch, keyboard: !keyboard);
+        expect(original.branchRef, 'refs/heads/$branch');
+
+        await open(field('project'), keyboard: !keyboard);
+        final newFolder = find.byKey(
+          const ValueKey('new-harness-option-project:name'),
+        );
+        await tester.ensureVisible(newFolder);
+        await tester.tap(newFolder);
+        await tester.pumpAndSettle();
+        expect(original.field, NewHarnessField.projectName);
+        final folderDraft = 'scratch-round-$round';
+        await tester.enterText(_query, folderDraft);
+        await tester.pumpAndSettle();
+        expect(tester.widget<TextField>(_query).controller!.text, folderDraft);
+        expect(_chooser, findsOneWidget);
+        expectStableDraft();
+        await tester.tap(
+          find.byKey(const ValueKey('new-harness-chooser-back')),
+        );
+        await tester.pumpAndSettle();
+        expect(original.field, NewHarnessField.projectMenu);
+        expect(_chooser, findsOneWidget);
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(_chooser, findsNothing);
+        expect(_ownsFocus(tester, field('project')), isTrue);
+        expectStableDraft();
+
+        final machineControl = find.byKey(
+          const ValueKey('new-harness-machine'),
+        );
+        await open(machineControl, keyboard: keyboard);
+        await tester.enterText(_query, 'unavailable-machine-$round');
+        await tester.pumpAndSettle();
+        expect(find.text('No matches'), findsOneWidget);
+        await tester.tapAt(const Offset(10, 400));
+        await tester.pumpAndSettle();
+        expect(_chooser, findsNothing);
+        expect(_ownsFocus(tester, machineControl), isTrue);
+        expectStableDraft();
+      }
+
+      final accepted = original.draft;
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await tester.pumpAndSettle();
+      expect(_form, findsNothing);
+      expect(_ownsFocus(tester, _search), isTrue);
+      await tester.enterText(_search, 'review');
+      await key(tester, LogicalKeyboardKey.arrowDown);
+      await _new(tester);
+      final restored = _box(tester).draft;
+      expect(restored.task, task);
+      expect(restored.engine, accepted.engine);
+      expect(restored.machineId, accepted.machineId);
+      expect(restored.project, accepted.project);
+      expect(restored.permissionMode, accepted.permissionMode);
+      expect(restored.profile?.path, accepted.profile?.path);
+      expect(restored.worktree, accepted.worktree);
+      expect(restored.branchRef, accepted.branchRef);
+      expect(_ownsFocus(tester, _task), isTrue);
+      expect(_chooser, findsNothing);
+      expect(_search, findsNothing);
+      expect(workspace.starts, isEmpty);
+      expect(workspace.input, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   journey('remapped chooser keys and native cancel have the same hierarchy', (
     tester,
@@ -605,7 +859,7 @@ void main({bool nativeSmoke = false}) {
 
   for (final (command, field) in [
     ('creation.project_new', NewHarnessField.projectName),
-    ('creation.project_existing', NewHarnessField.project),
+    ('creation.project_existing', NewHarnessField.projectMenu),
     ('creation.project_repository', NewHarnessField.projectRepository),
   ]) {
     journey('$command remap works in the project keymap context', (
@@ -620,44 +874,55 @@ void main({bool nativeSmoke = false}) {
       await openLaunchRow(tester, 'project');
       final machine = _box(tester).machineId;
       await key(tester, LogicalKeyboardKey.keyB, ctrl: true, alt: true);
+      await tester.pumpAndSettle();
       expect(_chooser, findsOneWidget);
       expect(_box(tester).field, field);
       expect(_box(tester).machineId, machine);
       expect(_ownsFocus(tester, _query), isTrue);
+      expect(
+        workspace.folders.opened,
+        command == 'creation.project_existing' ? 1 : 0,
+      );
       expect(workspace.starts, isEmpty);
     });
   }
 
-  journey('creation options and recent-project shortcuts preserve the task', (
-    tester,
-  ) async {
-    final workspace = await _mount(
-      tester,
-      bindings: '''{"bindings":[
+  journey(
+    'legacy options command opens Model and recent-project shortcuts preserve the task',
+    (tester) async {
+      final workspace = await _mount(
+        tester,
+        bindings: '''{"bindings":[
       {"keys":"ctrl+alt+o","command":"creation.options","when":"picker"},
       {"keys":"ctrl+alt+1","command":"creation.project_recent_1","when":"project"}
     ]}''',
-    );
-    await _new(tester);
-    await tester.enterText(_task, 'Keep task while applying direct shortcuts');
-    await key(tester, LogicalKeyboardKey.keyO, ctrl: true, alt: true);
-    expect(_box(tester).advancedOpen, isTrue);
-    expect(
-      find.byKey(const ValueKey('new-harness-field-profile')),
-      findsOneWidget,
-    );
-    await openLaunchRow(tester, 'project');
-    final expected = _box(tester).options
-        .firstWhere(
-          (option) => !option.synthetic && option.project?.folder != null,
-        )
-        .project;
-    await key(tester, LogicalKeyboardKey.digit1, ctrl: true, alt: true);
-    expect(_chooser, findsNothing);
-    expect(_box(tester).project, expected);
-    expect(_box(tester).task, 'Keep task while applying direct shortcuts');
-    expect(workspace.starts, isEmpty);
-  });
+      );
+      await _new(tester);
+      await tester.enterText(
+        _task,
+        'Keep task while applying direct shortcuts',
+      );
+      await key(tester, LogicalKeyboardKey.keyO, ctrl: true, alt: true);
+      expect(_box(tester).field, NewHarnessField.model);
+      expect(_chooser, findsOneWidget);
+      expect(_ownsFocus(tester, _query), isTrue);
+      expect(
+        find.byKey(const ValueKey('new-harness-field-profile')),
+        findsOneWidget,
+      );
+      await openLaunchRow(tester, 'project');
+      final expected = _box(tester).options
+          .firstWhere(
+            (option) => !option.synthetic && option.project?.folder != null,
+          )
+          .project;
+      await key(tester, LogicalKeyboardKey.digit1, ctrl: true, alt: true);
+      expect(_chooser, findsNothing);
+      expect(_box(tester).project, expected);
+      expect(_box(tester).task, 'Keep task while applying direct shortcuts');
+      expect(workspace.starts, isEmpty);
+    },
+  );
 
   journey(
     'machine shortcut from a project prompt keeps its nested return path',
@@ -721,12 +986,10 @@ void main({bool nativeSmoke = false}) {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('new-harness-task-toggle')));
-    await tester.pumpAndSettle();
     await tester.enterText(_task, 'Browse without losing this task');
     await key(tester, LogicalKeyboardKey.keyO, ctrl: true);
     expect(browses, 1);
-    expect(box.field, NewHarnessField.project);
+    expect(box.field, NewHarnessField.projectMenu);
     expect(_chooser, findsOneWidget);
     expect(_ownsFocus(tester, _query), isTrue);
     expect(box.task, 'Browse without losing this task');
@@ -738,7 +1001,6 @@ void main({bool nativeSmoke = false}) {
   for (final (door, field, draft) in [
     ('project:name', NewHarnessField.projectName, 'keyboard-plans'),
     ('project:repository', NewHarnessField.projectRepository, 'openai/codex'),
-    ('project:existing', NewHarnessField.project, '/work/review-draft'),
   ]) {
     for (final machine in ['m', 'studio']) {
       journey(
@@ -779,30 +1041,45 @@ void main({bool nativeSmoke = false}) {
     }
   }
 
-  journey('mouse Change Machine preserves the typed folder when cancelled', (
-    tester,
-  ) async {
-    final workspace = await _mount(tester);
-    await _new(tester);
-    workspace.app.machineStates['m']!.localOnly = false;
-    await openLaunchRow(tester, 'project');
-    await tester.tap(
-      find.byKey(const ValueKey('new-harness-option-project:existing')),
-    );
-    await tester.pump();
-    await tester.enterText(_query, '/work/review-draft');
-    await tester.pump(const Duration(milliseconds: 250));
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const ValueKey('new-harness-option-project:machine')),
-    );
-    await tester.pump();
-    expect(_box(tester).field, NewHarnessField.machine);
-    await key(tester, LogicalKeyboardKey.escape);
-    expect(_box(tester).field, NewHarnessField.project);
-    expect(_box(tester).query, '/work/review-draft');
-    expect(_ownsFocus(tester, _query), isTrue);
-  });
+  journey(
+    'cancelling the remote folder browser preserves the repo and message',
+    (tester) async {
+      final workspace = await _mount(tester);
+      await _new(tester);
+      final box = _box(tester);
+      final originalProject = box.project;
+      await tester.enterText(
+        _task,
+        'Keep this message while browsing remotely',
+      );
+      workspace.app.machineStates['m']!.localOnly = false;
+      await openLaunchRow(tester, 'project');
+      await tester.tap(
+        find.byKey(const ValueKey('new-harness-option-project:existing')),
+      );
+      await tester.pumpAndSettle();
+      final browser = find.byKey(
+        const ValueKey('desktop-remote-folder-dialog'),
+      );
+      expect(browser, findsOneWidget);
+      expect(_form, findsNothing);
+      await tester.enterText(
+        find.descendant(of: browser, matching: find.byType(TextField)),
+        '/work/review-draft',
+      );
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(_form, findsOneWidget);
+      expect(box.field, NewHarnessField.projectMenu);
+      expect(box.project, originalProject);
+      expect(box.task, 'Keep this message while browsing remotely');
+      expect(_ownsFocus(tester, _query), isTrue);
+      expect(workspace.folders.opened, 0);
+      expect(workspace.starts, isEmpty);
+    },
+  );
 
   for (final owner in ['task', 'chooser']) {
     journey('IME owns editing, dismissal, and native commands in the $owner', (

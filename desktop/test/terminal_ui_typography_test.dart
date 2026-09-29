@@ -302,7 +302,7 @@ void main() {
       final box = checkText(tester, atLeast: 1);
       final start = find.descendant(
         of: find.byKey(const ValueKey('new-harness-field-start')),
-        matching: find.text('Start'),
+        matching: find.text('New harness'),
       );
       TextStyle startStyle() =>
           DefaultTextStyle.of(tester.element(start)).style

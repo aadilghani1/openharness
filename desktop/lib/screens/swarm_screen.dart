@@ -880,7 +880,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final target = _search!.targetId;
       final split = _search!.split;
       final placement = _search!.placement;
-      final task = _search!.createTask;
+      final fallbackTask = _search!.createTask;
       final selected = _search!.selected;
       final machineId =
           _search!.scopedMachineId ??
@@ -892,7 +892,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           swarmId: target,
           split: split,
           placement: placement,
-          task: task,
+          fallbackTask: fallbackTask,
         ),
       );
       return;
@@ -2474,6 +2474,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     String? engine,
     String? projectName,
     String? task,
+    String? fallbackTask,
     HarnessPlacement? placement,
     _NewHarnessSource source = _NewHarnessSource.workspace,
     bool Function()? stillCurrent,
@@ -2488,9 +2489,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     final target = swarmId ?? search?.targetId ?? app.activeSwarmId;
     final requestedSplit = split ?? search?.split;
-    // ⌘N from inside the search keeps what was typed: it is what the create
-    // row would have started the harness on.
-    if (newHarnessOpensInBox) task ??= search?.createTask;
+    // Search text seeds a fresh composer, but switching back with ⌘N must not
+    // replace a draft. Explicit create rows and Store examples pass task.
+    if (newHarnessOpensInBox) fallbackTask ??= search?.createTask;
     if (app.activeSwarmId != target) return;
     // A fresh launcher uses saved choices on this computer. Only an explicit
     // split inherits its source pane; changing focus never changes Cmd-N's
@@ -2541,7 +2542,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         split: requestedSplit,
         engine: engine,
         placement: placement,
-        task: task,
+        task: task ?? fallbackTask,
       );
       return;
     }
@@ -2558,6 +2559,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           initialFolder == null &&
           source == _NewHarnessSource.product,
       task: task,
+      fallbackTask: fallbackTask,
       draftContext: (
         source: source,
         machineId: id,
@@ -2640,6 +2642,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     String? projectName,
     bool autoProject = false,
     String? task,
+    String? fallbackTask,
     NewHarnessDraft? draft,
     _NewHarnessContext? draftContext,
     required String swarmId,
@@ -2700,11 +2703,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (_native) _preparePaneFocus();
     _canvasFocus.descendantsAreFocusable = false;
     _newHarnessContext = origin;
-    // Consume once. Explicit text from search starts a fresh task with the
-    // inherited defaults; an empty search resumes this context's whole draft.
+    // Consume once. ⌘N resumes this context's whole draft, even after typing
+    // in search. Only an explicit new-task action replaces ordinary edits.
     final savedDraft = _newHarnessDrafts[origin];
     // A lost reply always restores its exact receipt. Otherwise explicit
-    // product/machine choices and freshly typed tasks win over old defaults.
+    // product/machine choices and explicit task requests win over old defaults.
     final resumed =
         draft ??
         (savedDraft != null &&
@@ -2720,7 +2723,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       harnessId: harnessId,
       folder: folder,
       projectName: projectName,
-      task: task,
+      task: task ?? (resumed == null ? fallbackTask : null),
       draft: resumed,
       autoProject: autoProject,
       offersStore: true,

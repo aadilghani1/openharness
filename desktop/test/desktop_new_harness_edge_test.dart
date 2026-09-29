@@ -218,11 +218,6 @@ Future<_Fixture> _mount(
     ),
   );
   await tester.pumpAndSettle();
-  if (find.byKey(const ValueKey('new-harness-task')).evaluate().isEmpty &&
-      box.takesTask) {
-    await tester.tap(find.byKey(const ValueKey('new-harness-task-toggle')));
-    await tester.pumpAndSettle();
-  }
   return fixture;
 }
 
@@ -361,25 +356,33 @@ void main() {
     },
   );
 
-  testWidgets(
-    'header and chooser close buttons dismiss exactly their own level',
-    (tester) async {
-      final fixture = await _mount(tester);
-      await tester.tap(find.byKey(const ValueKey('new-harness-machine')));
-      await tester.pumpAndSettle();
-      await tester.enterText(_query, 'no such agent exists');
-      await tester.pumpAndSettle();
-      expect(find.text('No matches. Try another search.'), findsOneWidget);
-      fixture.box.warn('Choose an installed agent to continue.');
-      await tester.pumpAndSettle();
-      expect(find.text('Choose an installed agent to continue.'), findsWidgets);
-      await tester.tap(find.byKey(const ValueKey('new-harness-chooser-close')));
-      await tester.pumpAndSettle();
-      expect(fixture.closes, 0);
-      await tester.tap(find.byKey(const ValueKey('new-harness-close')));
-      expect(fixture.closes, 1);
-    },
-  );
+  testWidgets('Escape closes the chooser before the composer close button', (
+    tester,
+  ) async {
+    final fixture = await _mount(tester);
+    await tester.tap(find.byKey(const ValueKey('new-harness-machine')));
+    await tester.pumpAndSettle();
+    await tester.enterText(_query, 'no such agent exists');
+    await tester.pumpAndSettle();
+    expect(find.text('No matches'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('new-harness-chooser-close')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('new-harness-chooser-back')),
+      findsNothing,
+    );
+    fixture.box.warn('Choose an installed agent to continue.');
+    await tester.pumpAndSettle();
+    expect(find.text('Choose an installed agent to continue.'), findsWidgets);
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(_query, findsNothing);
+    expect(fixture.closes, 0);
+    await tester.tap(find.byKey(const ValueKey('new-harness-close')));
+    expect(fixture.closes, 1);
+  });
 
   testWidgets('Change machine backs to the same nested folder prompt', (
     tester,
@@ -406,13 +409,21 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(_query, '~developer');
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(
-        const ValueKey(
-          'new-harness-option-${NewHarnessController.changeMachineId}',
-        ),
+    final changeMachine = find.byKey(
+      const ValueKey(
+        'new-harness-option-${NewHarnessController.changeMachineId}',
       ),
     );
+    final chooserBounds = tester.getRect(
+      find.byKey(const ValueKey('new-harness-chooser-surface')),
+    );
+    final rowBounds = tester.getRect(changeMachine);
+    expect(
+      rowBounds.bottom,
+      lessThanOrEqualTo(chooserBounds.bottom),
+      reason: 'Both folder actions must fit: $rowBounds in $chooserBounds.',
+    );
+    await tester.tap(changeMachine);
     await tester.pumpAndSettle();
     expect(fixture.box.field, NewHarnessField.machine);
     await tester.tap(find.byKey(const ValueKey('new-harness-chooser-back')));
@@ -521,29 +532,32 @@ void main() {
     },
   );
 
-  testWidgets(
-    'Options shortcut opens a visible profile chooser at enlarged text',
-    (tester) async {
-      final fixture = await _mount(
-        tester,
-        size: const Size(760, 700),
-        scale: 1.5,
-      );
-      await key(tester, LogicalKeyboardKey.period, cmd: true);
-      await tester.pumpAndSettle();
-      expect(fixture.box.advancedOpen, isTrue);
-      final profile = find.byKey(const ValueKey('new-harness-field-profile'));
-      await tester.ensureVisible(profile);
-      await tester.tap(profile);
-      await tester.pumpAndSettle();
-      expect(find.text('Codex profile'), findsWidgets);
-      expect(
-        find.byKey(const ValueKey('new-harness-chooser-surface')).hitTestable(),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
-      await key(tester, LogicalKeyboardKey.escape);
-      expect(fixture.closes, 0);
-    },
-  );
+  testWidgets('direct profile chooser stays visible at enlarged text', (
+    tester,
+  ) async {
+    final fixture = await _mount(
+      tester,
+      size: const Size(760, 700),
+      scale: 1.5,
+    );
+    final profile = find.byKey(const ValueKey('new-harness-field-profile'));
+    await tester.ensureVisible(profile);
+    await tester.tap(profile);
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<Semantics>(find.byKey(const ValueKey('new-harness-choices')))
+          .properties
+          .label,
+      'Codex profile',
+    );
+    expect(find.text('Codex profile'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('new-harness-chooser-surface')).hitTestable(),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    await key(tester, LogicalKeyboardKey.escape);
+    expect(fixture.closes, 0);
+  });
 }

@@ -398,6 +398,39 @@ void main() {
         expect(scrolling.offset, 0);
       }
       expect(storage.values.values.any((v) => v.contains('swarm.new')), isTrue);
+      await key(tester, LogicalKeyboardKey.escape);
+      for (final command in [
+        'agent.new',
+        'creation.project',
+        'creation.project_existing',
+        'creation.project_browse',
+        'creation.project_recent_1',
+        'creation.task',
+        'creation.options',
+        'picker.more_options',
+      ]) {
+        final label = harnessCommandById[command]!.label;
+        await openLesson(tester, label);
+        switch (command) {
+          case 'agent.new':
+            await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+          case 'creation.project_browse':
+            await key(tester, LogicalKeyboardKey.keyO, ctrl: true);
+          case 'picker.more_options':
+            await key(tester, LogicalKeyboardKey.period, cmd: true);
+          default:
+            await tester.enterText(
+              find.byKey(const ValueKey('practice-command')),
+              label,
+            );
+            await key(tester, LogicalKeyboardKey.enter);
+        }
+        await tester.pumpAndSettle();
+        expect(find.text('[x] $label'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await key(tester, LogicalKeyboardKey.escape);
+        expect(filter, findsOneWidget);
+      }
       await tester.pumpWidget(const SizedBox());
     });
   }

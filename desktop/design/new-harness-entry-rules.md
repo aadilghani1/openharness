@@ -216,11 +216,15 @@ worktree: the retry selects that worktree's branch with Worktree off.
   The current tab controls placement; a saved draft cannot redirect it to an old destination.
 - Store drafts belong to the explicitly requested product and machine. Opening
   Blender cannot restore Workshop's agent, task, or generated project name.
-- Escape discards ordinary Cmd-N edits. Explicit Store entries can resume their
-  compatible draft, including the selected agent. Store Open still wins if the
-  harness or machine was changed inside that saved draft.
-- A newly typed search task or Store example starts from that entry's defaults.
-  Repeating the same request while its draft is already open keeps its edits.
+- Closing Cmd-N keeps its draft for that context. Explicit Store entries can
+  resume their compatible draft, including the selected agent. Store Open still
+  wins if the harness or machine was changed inside that saved draft.
+- Cmd-N from search resumes the same-context draft, including its task and
+  selected options. Search text seeds the task only when no compatible draft
+  resumes; browsing search must not replace an interrupted composer.
+- Explicitly choosing a new-task search result or a Store example starts the
+  requested task from that entry's defaults. Repeating the same request while
+  its draft is already open keeps its edits.
 - A request awaiting confirmation is an exception: restore its exact values and
   receipt. A new task must not silently turn an uncertain start into a duplicate.
   An in-flight or uncertain draft cannot be replaced while it is open.

@@ -1,10 +1,87 @@
 # Friendly desktop validation
 
-The polished checkpoint `e888bda8` was validated on 2026-09-29 on
-`experiment/friendly-desktop`, against `a26237c9`. This remains an unmerged
-experiment for local review. The compact iteration below adds the team feedback.
+Validation on `experiment/friendly-desktop`, against `a26237c9`. This remains
+an unmerged experiment for local review. The earlier checkpoints are recorded
+below; the latest iteration uses the agreed VS Code-style composer.
 
-## Polished checkpoint results
+## Minimal composer iteration
+
+The form is 860 points wide, with Agent, Machine, and Repo across the top and
+the existing agent brand marks. The optional message editor says “What’s next?”
+and keeps New harness inside its lower-right corner. The initial focus still
+supports Cmd-N followed by Return. Model, Approvals, and Codex Profile are small,
+text-only controls below. Worktree on/off and Branch stay together on the right,
+moving together below the other settings in narrow windows or at larger text
+sizes. The title, Add task toggle, and Options disclosure are removed.
+
+Keyboard focus uses a subtle fill without thick outlines or layout movement.
+Cmd-N and Cmd-P share the darker backdrop and softened dialog shadow. Choosers
+start at search, size to their contents, and omit visible headings, close
+buttons, and key legends. A back control remains for nested prompts. Long names
+truncate visually while retaining complete tooltips and accessibility labels.
+
+Open Folder… invokes the selected machine's native local dialog or remote
+browser immediately. Cancelling preserves the draft and returns to the Repo
+list; choosing a folder returns focus to Repo. Its menu row has no submenu
+chevron. Legacy terminal presentation and launch validation are preserved.
+
+Cmd-N resumes an interrupted draft even after typing in Cmd-P. Search text seeds
+a new composer when no compatible draft exists; explicit new-task search
+actions and Store examples still use their requested task. Pending launch
+receipts keep their exact reviewed values.
+
+Independent AI review added 26 composer journeys in
+`test/desktop_composer_layout_test.dart`, alongside the updated launch fixtures.
+These cover the visual hierarchy, full Tab/Shift-Tab traversal, empty and
+multiline launch, live shortcut remapping, all dropdowns, outside clicks,
+Codex-only profiles, Terminal focus, folder cancellation/acceptance, long names,
+light/dark themes, narrow windows, and 160% text size. They pass with the normal
+test font and with real UI fonts. A four-round mixed mouse/keyboard journey
+changes agents and settings, reopens menus, filters lists, cancels by click and
+Escape, then switches through search and restores the complete draft.
+
+Review found and verified fixes for competing focus restoration after folder
+acceptance, a stale Return hint after focus moved into the editor, clipped
+Change Machine actions in short folder menus, and search text replacing an
+unsent message when switching back to the composer.
+
+Synthetic screenshots were visually inspected in both themes, with decoded
+agent assets and real shadows enabled. No live-account screenshots are committed.
+The native fixture uses injected Flutter keys and fake daemons, and does not
+establish physical AppKit IME or VoiceOver behavior.
+
+Final unit/widget validation on 2026-09-29, against `a26237c9`:
+
+| Check | Result |
+| --- | --- |
+| Full desktop unit/widget suite | 4,500 passed; 12 skipped |
+| Native macOS interaction fixture | 19 passed across four sequential shards |
+| App, test, and integration-test analysis | No issues |
+| Formatting | 19 changed Dart files; no changes needed |
+| Normal macOS debug build | Passed; opened for review |
+| Changed executable-line coverage | 1,986 / 1,986 (100%) |
+| Complete creation form and controller | 3,627 / 3,627 (100%) |
+| Resource picker coverage gate | 1,265 / 1,265 (100%) |
+
+All three coverage gates passed against a single fresh full-suite trace. Source
+hashes remained unchanged during the run; no stale traces or coverage exclusions
+were used. These are executable-line measurements, not exhaustive branch or
+input coverage. Unscoped analysis also reports 12 pre-existing info lints in
+unchanged `third_party/xterm` files.
+
+After the native fixture finished, the normal `lib/main.dart` app was rebuilt
+with analytics disabled and opened for review. Cmd-N opens the final composer.
+
+The single-process native fixture encountered background frame-delivery
+throttling after roughly 30 seconds. Diagnostics showed responsive Dart timers
+and native queries, with drawing reduced to about one frame every ten seconds,
+even while the display was awake. All 19 independent journeys then passed once
+each across four fresh native processes (5 + 5 + 4 + 5), with the original
+assertions, timeouts, lifecycle, and frame policy unchanged. Temporary diagnostic
+code was removed. This is a validation-environment limitation, not a claimed
+product fix.
+
+## Earlier polished checkpoint
 
 | Check | Result |
 | --- | --- |
@@ -22,7 +99,7 @@ the broad coverage run were replaced with fresh traces; obsolete line offsets
 were not combined. No coverage exclusions were added. The measurements cover
 executable lines, not every branch or possible input.
 
-## Interaction review
+## Earlier interaction review
 
 The added suites exercise keyboard and mouse behavior through rendered widgets
 with fake application state and daemon responses:
@@ -49,16 +126,15 @@ Independent AI developers reviewed synthetic user journeys and rendered
 screens. Their findings led to fixes for hidden selected scopes, stale preview
 callbacks, immediate action focus, clipping, and editor movement. Native visual
 review checked the floating frames and shadows, typography, option lists,
-search results, and previews. The finished normal app is left on Cmd-N.
+search results, and previews. At that checkpoint, the normal app was left on Cmd-N.
 
 ## Reproduction
 
 Run from `desktop/` with the repository's Flutter/Dart toolchain:
 
 ```sh
-flutter test --no-pub --reporter expanded
-dart analyze lib test integration_test/friendly_desktop_e2e_test.dart
-flutter test --no-pub --coverage
+flutter test --no-pub --coverage --reporter expanded
+flutter analyze --no-pub lib test integration_test
 node tool/check_new_harness_coverage.mjs coverage/lcov.info
 node tool/check_resource_picker_coverage.mjs coverage/lcov.info
 python3 tool/check_portability_coverage.py --base a26237c9 --lcov desktop/coverage/lcov.info
@@ -67,16 +143,20 @@ python3 tool/check_portability_coverage.py --base a26237c9 --lcov desktop/covera
 On macOS, run the isolated native fixture, then restore the normal review app:
 
 ```sh
-FLUTTER_TEST=1 flutter test -d macos --no-pub --dart-define=HARNESS_TEST=true integration_test/friendly_desktop_e2e_test.dart --reporter expanded
-flutter build macos --debug --no-pub --target lib/main.dart --dart-define=HARNESS_ANALYTICS_DISABLED=true
+caffeinate -d -i -u env FLUTTER_TEST=1 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer flutter test -d macos --no-pub --dart-define=HARNESS_TEST=true integration_test/friendly_desktop_e2e_test.dart --reporter expanded
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer flutter build macos --debug --no-pub --target lib/main.dart --dart-define=HARNESS_ANALYTICS_DISABLED=true
 ```
+
+If this host throttles a background native test window, add `--total-shards=4`
+and run `--shard-index=0`, `1`, `2`, and `3` in separate sequential processes.
+Run every shard and check the combined test count; do not skip slow assertions.
 
 Native tests inject Flutter keys and use fake daemons. They do not establish
 physical AppKit IME or VoiceOver behavior. Linux widget variants passed; no
 Linux native build was performed. Live-account review remained read-only, and
 live screenshots are not repository fixtures.
 
-## Compact launch iteration
+## Earlier compact launch checkpoint
 
 Final validation on 2026-09-29, against `a26237c9`:
 

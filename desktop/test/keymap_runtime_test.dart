@@ -128,7 +128,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.keyK, ctrl: true);
       expect(box.cursor, cursor);
       expect(box.engine, engine);
-      // Remapped Tab switches panes without walking rows or applying a choice.
+      // Remapped reverse Tab leaves choices without applying the highlight.
       await key(tester, LogicalKeyboardKey.keyH, ctrl: true);
       expect(harnessChoicesActive(tester), isFalse);
       expect(box.engine, engine);
@@ -136,13 +136,29 @@ void main() {
       expect(harnessChoicesActive(tester), isTrue);
       expect(box.engine, engine);
       await key(tester, LogicalKeyboardKey.escape);
-      await focusLaunchRow(tester, 'advanced');
-      final expanded = box.advancedOpen;
+      await focusLaunchRow(tester, 'model');
+      final model = box.modelLabel;
       await key(tester, LogicalKeyboardKey.enter);
-      expect(box.advancedOpen, !expanded);
-      await focusLaunchRow(tester, 'advanced');
+      expect(box.field, NewHarnessField.model);
+      expect(harnessChoicesActive(tester), isTrue);
+      // Model is now a direct control. Remapped forward Tab dismisses its
+      // chooser and continues to Approvals without changing the model.
+      await key(tester, LogicalKeyboardKey.keyL, ctrl: true);
+      expect(harnessChoicesActive(tester), isFalse);
+      expect(box.modelLabel, model);
+      var approvalsFocused = false;
+      FocusManager.instance.primaryFocus?.context?.visitAncestorElements((e) {
+        approvalsFocused =
+            e.widget.key == const ValueKey('new-harness-field-approvals');
+        return !approvalsFocused;
+      });
+      expect(approvalsFocused, isTrue);
+      await focusLaunchRow(tester, 'model');
       await key(tester, LogicalKeyboardKey.enter);
-      expect(box.advancedOpen, expanded);
+      expect(harnessChoicesActive(tester), isTrue);
+      await key(tester, LogicalKeyboardKey.escape);
+      expect(harnessChoicesActive(tester), isFalse);
+      expect(box.modelLabel, model);
       expect(app.panes, isEmpty);
       await tester.pumpWidget(const SizedBox());
     },

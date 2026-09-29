@@ -179,8 +179,6 @@ void main() {
       brightness: brightness,
       scale: scale,
     );
-    await tester.tap(find.byKey(const ValueKey('new-harness-task-toggle')));
-    await tester.pumpAndSettle();
     return (controller, daemon, map);
   }
 

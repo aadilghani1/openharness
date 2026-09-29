@@ -11,7 +11,10 @@ import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
+import 'package:harness/state/swarm_navigation.dart';
+import 'package:harness/state/swarm_search.dart';
 import 'package:harness/store/store_screen.dart';
+import 'package:harness/widgets/desktop_search_panel.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_search_input.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -205,7 +208,7 @@ void main() {
         expect(
           find.descendant(
             of: find.byKey(const ValueKey('new-harness-field-start')),
-            matching: find.text('Start'),
+            matching: find.text('New harness'),
           ),
           findsOneWidget,
         );
@@ -260,6 +263,30 @@ void main() {
       );
     }
   }
+
+  testWidgets(
+    'a Store example replaces an ordinary draft for the same product',
+    (tester) async {
+      await mount(tester);
+      await product(tester, 'autonomous/workshop');
+      await nameProject(tester, 'interrupted-workshop');
+      box(tester).setTask('Keep exploring this earlier idea');
+      await dismiss(tester);
+
+      await product(
+        tester,
+        'autonomous/workshop',
+        task: 'Build a reading nook',
+      );
+      expect(box(tester).task, 'Build a reading nook');
+      expect(box(tester).harnessId, 'autonomous/workshop');
+      expect(box(tester).project.generated, isNotNull);
+      expect(box(tester).project.name, isNot('interrupted-workshop'));
+      expect(connections.values.expand((c) => c.starts), isEmpty);
+      await dismiss(tester);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets(
     'Store machine choices have separate drafts and override edited defaults',
@@ -518,6 +545,80 @@ void main() {
   });
 
   testWidgets(
+    'explicit creation from search uses its requested task over an ordinary draft',
+    (tester) async {
+      await mount(tester, store: false);
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      await nameProject(tester, 'interrupted-review');
+      box(tester).setTask('Explore the earlier idea');
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      final search = find.byKey(const ValueKey('swarm-search-input'));
+      await tester.enterText(search, 'Build the new idea');
+      final panel = tester.widget<DesktopSearchPanel>(
+        find.byType(DesktopSearchPanel),
+      );
+      // The creation action carries an explicit task, independently of Cmd-N
+      // switching between the search palette and an interrupted composer.
+      panel.onChoose(
+        SwarmSearchSelection(
+          SwarmDestination(
+            id: kSwarmCreateRowId,
+            title: 'New harness',
+            detail: 'Build the new idea',
+            swarmId: null,
+            current: false,
+            isCreate: true,
+            task: 'Build the new idea',
+          ),
+          SwarmSearchAction.open,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(box(tester).task, 'Build the new idea');
+      expect(box(tester).project.folder, '/work/openharness');
+      expect(box(tester).project.name, isNull);
+      expect(box(tester).engine, 'codex');
+      expect(box(tester).placement, HarnessPlacement.currentTab);
+      expect(connections.values.expand((c) => c.starts), isEmpty);
+      await dismiss(tester);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('Cmd-N restores an uncertain start after editing search', (
+    tester,
+  ) async {
+    await mount(tester, store: false);
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+    final original = box(tester)..setTask('Review this exact request');
+    final starting = original.create();
+    await tester.pump();
+    final connection = connections['m']!;
+    expect(connection.starts, hasLength(1));
+    connection.replies.single.completeError(
+      const WsRequestTimeout('agent_create'),
+    );
+    expect(await starting, NewHarnessOutcome.failed);
+    await tester.pump();
+    expect(original.checking, isTrue);
+    final receipt = original.draft.attempt;
+    await dismiss(tester);
+
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await tester.enterText(
+      find.byKey(const ValueKey('swarm-search-input')),
+      'Something else to look up',
+    );
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+    expect(box(tester).checking, isTrue);
+    expect(box(tester).task, 'Review this exact request');
+    expect(box(tester).draft.attempt, same(receipt));
+    expect(connection.starts, hasLength(1));
+    await dismiss(tester);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
     'Cmd-N keeps drafts with their source pane and uses defaults in another',
     (tester) async {
       await mount(tester, store: false);
@@ -574,6 +675,10 @@ void main() {
       await acceptSetupOrSearch(tester);
       expect(find.byType(NewHarnessForm), findsNothing);
       expect(connections.values.expand((c) => c.starts), isEmpty);
+      await tester.enterText(
+        find.byKey(const ValueKey('swarm-search-input')),
+        'Find a different existing harness',
+      );
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       draft = box(tester);
       expect(draft.task, 'Check keyboard focus');
