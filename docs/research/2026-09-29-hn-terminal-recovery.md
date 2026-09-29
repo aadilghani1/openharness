@@ -41,6 +41,14 @@ recovering panes. Opens wait until machine selection succeeds.
   all private tmux pane IDs/process IDs before and after. OAuth and the model
   process are deterministic fixtures. Existing browser/viewer checks also passed.
 - The reconnect PTY test is included in both Linux architecture jobs in CI.
+- Initial full CI passed both Linux architecture jobs and the backend job. The CLI
+  job found an existing store-matrix assertion requiring all package arguments to
+  be empty, contradicted by KiCad's current default-engine arguments. The failure
+  reproduced locally with CLI/store files identical to the base branch. The test
+  now checks actual arguments on every engine, preserving default-engine flags
+  and verifying they do not leak to other engines. No launch behavior changes.
+  The other initial failure exceeded a 1.5-second fuzz-test budget by 10 ms; its
+  unchanged targeted rerun passed. The timing bound remains unchanged.
 
 ## Reproduce
 
