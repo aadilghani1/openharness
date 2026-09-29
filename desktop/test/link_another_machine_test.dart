@@ -18,15 +18,6 @@ import 'package:harness/widgets/machines_manager.dart';
 import 'keymap_host_test.dart' show key, MemoryKeymap;
 
 class _Links implements PeerLinkClient {
-  @override
-  Future<CliLinkConnectResult> connectWithCode(
-    String machineId,
-    String code, {
-    required String label,
-    String? displayName,
-    String? expectedFingerprint,
-  }) async => const CliLinkConnectResult(error: 'not used');
-
   final requests = <String>[];
   @override
   Future<CliLinkConnectResult> connect(
@@ -179,7 +170,9 @@ void main() {
       expect(tester.widget<TextField>(_input).focusNode!.hasFocus, isTrue);
       expect(find.text('build-box is linked.'), findsOneWidget);
       expect(
-        find.text('Already linked. Open its agents from New Tab or New Pane.'),
+        find.text(
+          'Already linked. Open its harnesses from New Swarm or New Pane.',
+        ),
         findsOneWidget,
       );
       await key(tester, LogicalKeyboardKey.escape);

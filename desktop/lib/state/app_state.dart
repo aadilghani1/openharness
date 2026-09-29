@@ -14,25 +14,13 @@ import 'package:flutter/widgets.dart'
     show AppLifecycleState, BuildContext, StringCharacters, WidgetsBinding;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../analytics/analytics.dart';
 import '../models/model_manager_controller.dart';
 import '../api/api_client.dart';
 import '../viewer/sign_in_browser.dart';
 import '../viewer/direct_link.dart';
 import '../viewer/viewer_services.dart';
 import '../viewer/viewer_location.dart';
-import '../e2ee/bytes.dart' show b64d;
-import '../e2ee/keys.dart' show fingerprint;
-import '../viewer/group_sync.dart'
-    show
-        GroupMember,
-        GroupRoster,
-        GroupSyncOutcome,
-        adoptHandedRoster,
-        admitGroupMember,
-        handoffRoster,
-        openHandedRoster,
-        sealHandedRoster;
+import '../viewer/group_sync.dart' show GroupSyncOutcome;
 import '../auth/auth_session.dart';
 import '../auth/peer_link_client.dart';
 import '../auth/sign_in_client.dart';
@@ -50,7 +38,6 @@ import '../core/engine_availability.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/test_run.dart';
-import '../core/web_form_factor.dart';
 import '../core/models.dart';
 import '../core/machine_resources.dart';
 import '../core/project_folder.dart';
@@ -77,6 +64,7 @@ import 'grid_pictures.dart';
 import 'model_start_watch.dart';
 import 'harness_placement.dart';
 import 'desk_sync.dart';
+import 'machine_profile.dart';
 import 'pane_layout_store.dart';
 import 'terminal_pane.dart';
 import 'device_visit.dart';
@@ -739,16 +727,6 @@ class AppNotifier extends ChangeNotifier {
     machine.agents.map((agent) => previewKey(machine.machine.machineId, agent)),
   );
 
-  /// When this launch became signed in, and by which route — until the first
-  /// message of that session has been reported, after which it is null.
-  ///
-  /// One record for the whole app, not one per agent: the question is how long
-  /// somebody sits signed in before talking to anything at all, and which agent
-  /// they finally picked is `agent_created`'s business. A session where nobody
-  /// ever sends a message simply leaves this set until sign-out or quit, which
-  /// is exactly the population the event exists to measure the absence of.
-  ({DateTime at, String from})? _awaitingFirstMessage;
-
   final Map<String, Timer> _offlineRetryTimers = {};
   // Periodic retry for a machine the relay reported NO_PEER_LINK for — a `harness link connect` run
   // in a terminal (or another app instance) has no way to notify this one, so this is what makes the
@@ -921,6 +899,14 @@ class AppNotifier extends ChangeNotifier {
 
   /// Swarms own arrangements; a shared pane owns one live terminal controller.
   final List<Swarm> swarms = [Swarm(id: 'swarm-1')];
+
+  /// null shows every machine's tabs. A machine id shows only tabs whose
+  /// agents all live on that computer. The account desk is not rewritten:
+  /// the other computers' tabs stay, they are just not drawn here.
+  String? _machineProfileId;
+  String? get machineProfileId => _machineProfileId;
+  List<Swarm> get profileSwarms =>
+      swarmsForMachineProfile(swarms, _machineProfileId);
 
   // ── the desk: the account's tabs, the same on every computer ─────────────
   //
@@ -1198,7 +1184,7 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String agentId,
   ) async {
-    newSwarm(name: 'Inspect agent');
+    newSwarm(name: 'Inspect harness');
     await addAgentToSwarm(machineId, agentId, swarmId: activeSwarmId);
   }
 
@@ -1419,13 +1405,33 @@ class AppNotifier extends ChangeNotifier {
   /// Command-number follows the current visual tab order, retaining each tab's
   /// focused pane. A missing position is a no-op, never a pane selection.
   void selectSwarmByIndex(int index) {
-    if (index < 0 || index >= swarms.length) return;
-    selectSwarm(swarms[index].id);
+    final view = profileSwarms;
+    if (index < 0 || index >= view.length) return;
+    selectSwarm(view[index].id);
   }
 
   void stepSwarm(int delta) {
-    final index = swarms.indexOf(activeSwarm);
-    selectSwarm(swarms[(index + delta) % swarms.length].id);
+    final view = profileSwarms;
+    if (view.isEmpty) return;
+    final index = view.indexWhere((swarm) => swarm.id == activeSwarmId);
+    var next = index < 0 ? (delta < 0 ? -1 : 0) : index + delta;
+    next %= view.length;
+    if (next < 0) next += view.length;
+    selectSwarm(view[next].id);
+  }
+
+  /// Show every machine, or only [machineId]. An empty value is every machine.
+  /// The hidden tabs stay on the account desk.
+  void setMachineProfile(String? machineId) {
+    final next = machineId == null || machineId.isEmpty ? null : machineId;
+    if (next == _machineProfileId) return;
+    _machineProfileId = next;
+    unawaited(_paneLayout?.saveMachineProfile(next));
+    if (!profileSwarms.any((swarm) => swarm.id == _activeSwarmId)) {
+      _ensureProfileFocus();
+      _persistLayout();
+    }
+    notifyListeners();
   }
 
   void renameSwarm(String id, String name) {
@@ -1440,10 +1446,23 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void reorderSwarm(String id, int destination) {
-    final index = swarms.indexWhere((s) => s.id == id);
-    if (index < 0) return;
-    final swarm = swarms.removeAt(index);
-    swarms.insert(destination.clamp(0, swarms.length), swarm);
+    final view = List<Swarm>.of(profileSwarms);
+    final from = view.indexWhere((swarm) => swarm.id == id);
+    if (from < 0) return;
+    final moved = view.removeAt(from);
+    view.insert(destination.clamp(0, view.length), moved);
+    if (view.length == swarms.length) {
+      swarms
+        ..clear()
+        ..addAll(view);
+    } else {
+      var next = 0;
+      for (var i = 0; i < swarms.length; i++) {
+        if (swarmMatchesMachineProfile(swarms[i], _machineProfileId)) {
+          swarms[i] = view[next++];
+        }
+      }
+    }
     _persistLayout();
     notifyListeners();
   }
@@ -1454,10 +1473,14 @@ class AppNotifier extends ChangeNotifier {
     if (index < 0) return;
     // Held ⌘W must not manufacture and close an endless sequence of blank
     // welcome tabs, evicting the real work from recently closed history.
-    if (swarms.length == 1 &&
-        swarms.single.panes.isEmpty &&
-        swarms.single.name == Swarm.defaultName &&
-        swarms.single.presets.isEmpty) {
+    // Under a machine profile the hidden tabs do not count as something still
+    // open: the last visible welcome is the one this window can see.
+    final visible = profileSwarms;
+    if (visible.length == 1 &&
+        visible.single.id == id &&
+        visible.single.panes.isEmpty &&
+        visible.single.name == Swarm.defaultName &&
+        visible.single.presets.isEmpty) {
       return;
     }
     final removed = swarms.removeAt(index);
@@ -1484,7 +1507,13 @@ class AppNotifier extends ChangeNotifier {
       ),
     );
     if (_activeSwarmId == id) {
-      _activeSwarmId = swarms[index.clamp(0, swarms.length - 1)].id;
+      // The next full-list tab may belong to another computer. Land on the
+      // next tab this profile still shows. With none left the profile shows
+      // every tab (see [profileSwarms]) rather than a new one being made: a
+      // profile only hides, it never adds to the account desk.
+      _activeSwarmId =
+          profileNeighborId(swarms, _machineProfileId, index) ??
+          swarms[index.clamp(0, swarms.length - 1)].id;
       // The tab beside it is shown and selected, but its terminal is not where
       // the next key goes: that key was typed at the work that just closed. The
       // keyboard waits on the tab strip ([tabStripFocused]). A fresh welcome
@@ -2398,7 +2427,7 @@ class AppNotifier extends ChangeNotifier {
   /// The colours the panes are actually painted with — the terminal theme in
   /// force, not the app palette by assumption (Tango is its own scheme).
   static Map<String, String> terminalThemeColours() {
-    final theme = terminalThemeFor(
+    final theme = terminalScreenThemeFor(
       grid.AppTheme.palette.value,
       terminalThemeStore.value,
     );
@@ -2538,6 +2567,26 @@ class AppNotifier extends ChangeNotifier {
               'focusRevision': _deviceFocusRevision,
           });
     if (pending != null) unawaited(pending.catchError((_) => false));
+  }
+
+  /*
+   * Change one device's settings.
+   *
+   * Addressed by the fleet's id: a desk can hold two robots, and a preference belongs to the glass it
+   * was set on. Only the named fields go — absent means unchanged, so two windows open on one device
+   * cannot overwrite each other with whatever each of them last saw.
+   *
+   * Nothing is awaited and nothing is written here optimistically. The device answers with what it now
+   * HOLDS, which arrives as the next `dial_status`; that is also what corrects this window when the
+   * change was refused.
+   */
+  void setDeviceSettings(String id, Map<String, Object?> patch) {
+    if (patch.isEmpty) return;
+    final machineId = localMachineState?.machine.machineId;
+    final connection = machineId == null ? null : _pool?[machineId];
+    if (connection == null) return;
+    final pending = connection.sendTerminalFrame('dial_settings', {'id': id, ...patch});
+    unawaited(pending.catchError((_) => false));
   }
 
   /// Tell the daemon which agents have a tile on the grid, so the dial can stay
@@ -3020,29 +3069,7 @@ class AppNotifier extends ChangeNotifier {
         _lastError = 'Could not complete sign-in. Please sign in again.';
       }
       notifyListeners();
-    } finally {
-      // A `finally` rather than a call per exit path: bootstrap resolves four
-      // ways (environment not ready, signed out, signed in, thrown) and the
-      // launch happened in all four. `retryEnvironmentSetup` re-enters here,
-      // which is why the event itself is once-per-launch.
-      _trackAppOpened();
     }
-  }
-
-  bool _appOpenedTracked = false;
-
-  /// `app_opened`, once, with the answer bootstrap actually reached. Sent from
-  /// here rather than from the first frame because `signed_in` is not known
-  /// until the CLI has been asked, and a first-frame event would report every
-  /// launch as signed out.
-  void _trackAppOpened() {
-    if (_appOpenedTracked) return;
-    _appOpenedTracked = true;
-    final signedIn = status == AppStatus.authenticated;
-    analytics.appOpened(signedIn: signedIn);
-    // A returning user is signed in before the app is even on screen, so their
-    // wait starts here rather than at a sign-in that never happens.
-    if (signedIn) _armFirstMessage('launch');
   }
 
   /// Runs before we invoke a single Harness subcommand. A fresh mac used to
@@ -3118,11 +3145,6 @@ class AppNotifier extends ChangeNotifier {
       mode: mode,
     );
     environmentReadiness = result;
-    if (!quiet ||
-        result.isReady ||
-        result.phase == EnvironmentSetupPhase.failed) {
-      analytics.environmentPrepared(ready: result.isReady);
-    }
     return result;
   }
 
@@ -3312,7 +3334,6 @@ class AppNotifier extends ChangeNotifier {
     } finally {
       _environmentSetupInFlight = false;
       notifyListeners();
-      _trackAppOpened();
     }
   }
 
@@ -3557,9 +3578,7 @@ class AppNotifier extends ChangeNotifier {
   }) async {
     _guestDeskRestorePending = true;
     signedIn = false;
-    phoneLink = null;
     currentUser = null;
-    analyticsAccount.clear();
     if (banner != null) {
       _lastError = banner;
       _lastErrorRetryable = true;
@@ -3711,7 +3730,7 @@ class AppNotifier extends ChangeNotifier {
   /// Who is signed in, from the daemon. Shared by the boot path and by the
   /// retry path, because a boot that found the daemon still connecting now
   /// finishes THROUGH the retry path — and a session that never learns its
-  /// own account has an empty footer and unattributed analytics.
+  /// own account has an empty footer.
   Future<void> _loadProfile() {
     final pending = _profileInFlight;
     if (pending != null) return pending;
@@ -3731,12 +3750,7 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       if (me != null) {
-        final profile = CurrentUserProfile.fromMe(me);
-        currentUser = profile;
-        // Every event from here on is filed under the account, including ones
-        // queued while this call was still in flight — the queue reads the
-        // account per event, not per launch.
-        analyticsAccount.set(id: profile.id, email: profile.email);
+        currentUser = CurrentUserProfile.fromMe(me);
         notifyListeners();
       }
     } catch (error) {
@@ -3916,8 +3930,6 @@ class AppNotifier extends ChangeNotifier {
     currentUser = null;
     signingIn = false;
     pendingAuthorizeUrl = null;
-    _awaitingFirstMessage = null;
-    analyticsAccount.clear();
     final previousMachineId = localMachineState?.machine.machineId;
     _clearAccountWorkspace();
     // A VIEWER has nowhere to be but its login screen — no daemon, nothing of
@@ -4258,88 +4270,16 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// The QR a sign-in by phone is showing (`harness login --qr`), or null. See [login].
-  SignInQr? pendingSignInQr;
-
-  /// The sign-in in progress was started for the phone (`login(qr: true)`), so its QR square is
-  /// held before the code arrives.
-  bool signingInByPhone = false;
-
-  /// Where a sign-in by phone is: `approved`, then (after the window is signed in) `linked`,
-  /// `synced`. Null otherwise.
-  String? signInQrStage;
-
-  /// Once signed in by phone, the link that follows it: the phone joining this computer and this
-  /// computer joining the phone's trust group. The sign-in sheet shows its steps and closes once
-  /// it is done (`showSignInSheet`); null otherwise.
-  PhoneLinkStatus? phoneLink;
-
-  void dismissPhoneLink() {
-    if (phoneLink == null) return;
-    phoneLink = null;
-    notifyListeners();
-  }
-
-  /// One event of a sign-in by phone's link leg (`harness login --qr --json` after its first result).
-  void _phoneLinkProgress(String stage, Map<String, dynamic> event) {
-    final now = phoneLink;
-    switch (stage) {
-      case 'linked':
-        final label = event['label'];
-        phoneLink = PhoneLinkStatus.linking(
-          label is String && label.trim().isNotEmpty ? label.trim() : null,
-        );
-      case 'synced':
-        final machines = event['machines'];
-        phoneLink = PhoneLinkStatus.done(now?.phone, [
-          if (machines is List)
-            for (final m in machines)
-              if (m is Map && m['name'] is String) m['name'] as String,
-        ]);
-      case 'result' when event['status'] != 'success':
-        final message = event['message'];
-        phoneLink = PhoneLinkStatus.failed(
-          now?.phone,
-          message is String && message.isNotEmpty ? message : null,
-        );
-      case 'ended' when now != null && !now.settled:
-        phoneLink = PhoneLinkStatus.failed(now.phone, null);
-      default:
-        return;
-    }
-    notifyListeners();
-  }
-
-  /// Switch a sign-in by phone to the browser's SSO page instead.
-  Future<void> useBrowserSignIn() async {
-    if (signingIn) cancelLogin();
-    await login(qr: false);
-  }
-
-  /// Signs in. A CLI-backed build signs in **by phone** unless [qr] is false: the CLI shows a QR
-  /// ([pendingSignInQr]) that a phone already signed in scans and approves — no browser — and the
-  /// same scan links the phone and brings this computer into its trust group. A viewer build (web,
-  /// mobile) signs in with SSO; it is the thing that approves, not the thing approved.
-  Future<void> login({bool? qr}) async {
+  Future<void> login() async {
     if (_disposed || signingIn || signingOut || signOutError != null) return;
-    // By phone: a CLI-backed window, and a web desktop. A phone's own browser (web mobile) is the
-    // approver, and signs itself in by SSO.
-    // A CLI-backed desktop signs in through the browser until the harness CLI's QR sign-in is
-    // released; asked for explicitly (`qr: true`), it is already understood here.
-    final byPhone = qr ?? (kIsWeb && !isMobileWeb);
     final wasGuest = isGuest;
-    ({String code, String userCode, String? sealedRoster})? browserJoin;
     final revision = _invalidateAuthWork();
     _closedHistory.clear();
     _monitorHarnesses.clear();
     _lastError = null;
     status = AppStatus.bootstrapping;
     signingIn = true;
-    signingInByPhone = qr == true; // the QR square is held from the start
     pendingAuthorizeUrl = null;
-    pendingSignInQr = null;
-    signInQrStage = null;
-    phoneLink = null;
     notifyListeners();
     try {
       if (_workspaceCleanup case final cleanup?) {
@@ -4347,35 +4287,6 @@ class AppNotifier extends ChangeNotifier {
         if (!_authWorkCurrent(revision)) return;
       }
       await cliLogin.login(
-        qr: byPhone
-            ? SignInQrListener(
-                onQr: (shown) {
-                  if (!_authWorkCurrent(revision)) return;
-                  pendingSignInQr = shown;
-                  notifyListeners();
-                },
-                onProgress: (stage, event) {
-                  if (_disposed || !_authWorkCurrent(revision)) return;
-                  // A browser's approval carries the phone's group, sealed under the QR's code.
-                  if (stage == 'approved' &&
-                      event['code'] is String &&
-                      event['userCode'] is String) {
-                    final sealed = event['sealedRoster'];
-                    browserJoin = (
-                      code: event['code'] as String,
-                      userCode: event['userCode'] as String,
-                      sealedRoster: sealed is String ? sealed : null,
-                    );
-                  }
-                  if (stage == 'approved') {
-                    signInQrStage = stage;
-                    notifyListeners();
-                  } else {
-                    _phoneLinkProgress(stage, event);
-                  }
-                },
-              )
-            : null,
         onAuthorizeUrl: (url) {
           if (!_authWorkCurrent(revision)) return;
           if (pendingAuthorizeUrl == url) return;
@@ -4391,15 +4302,7 @@ class AppNotifier extends ChangeNotifier {
       );
       if (!_authWorkCurrent(revision)) return;
       _loginAuthorized = true;
-      // Signed in by phone: the CLI goes on to link that phone and join its group (see
-      // [_phoneLinkProgress]) — unless it already reported, which a fast phone can.
-      if (byPhone && phoneLink == null) {
-        phoneLink = viewer == null || browserJoin != null
-            ? const PhoneLinkStatus.waiting()
-            : null;
-      }
       pendingAuthorizeUrl = null;
-      pendingSignInQr = null;
       _resetLoginBrowser();
       notifyListeners();
       // The CLI has just restarted its daemon onto the account's machineId, so a
@@ -4413,27 +4316,11 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       _guestDeskRestorePending = false;
-      if (browserJoin case final join?) {
-        unawaited(_joinGroupFromPhone(join, revision));
-      }
-      analytics.signedIn();
-      // Restarts the clock even if `_trackAppOpened` already started one: this
-      // person met the login screen, so their wait begins where the launch's
-      // did not.
-      _armFirstMessage('sign_in');
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
       status = wasGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
       _lastError = error.toString();
       _lastErrorRetryable = true;
-      // A short code, never `error.toString()` — a CLI failure carries paths
-      // and host names, and this stream is not the place for them. Only the
-      // two the TYPE can tell apart: a cancelled sign-in and a refused one both
-      // arrive as a `StateError` differing in message text, and matching on
-      // English sentences is how a stream starts lying after a copy edit.
-      analytics.signInFailed(
-        error is CliNotAvailableException ? 'cli_missing' : 'failed',
-      );
       if (wasGuest && _guestDeskRestorePending && !signedIn) {
         unawaited(_becomeGuest(revision: revision));
       }
@@ -4447,8 +4334,6 @@ class AppNotifier extends ChangeNotifier {
         _resetLoginBrowser();
         _loginAuthorized = false;
         pendingAuthorizeUrl = null;
-        pendingSignInQr = null;
-        signingInByPhone = false;
         signingIn = false;
       }
     }
@@ -4511,11 +4396,7 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || !canCancelLogin) return;
     final revision = _invalidateAuthWork();
     signingIn = false;
-    signingInByPhone = false;
     pendingAuthorizeUrl = null;
-    pendingSignInQr = null;
-    signInQrStage = null;
-    phoneLink = null;
     status = isGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
     _lastError = null;
     _lastErrorRetryable = false;
@@ -4568,7 +4449,6 @@ class AppNotifier extends ChangeNotifier {
     final becomesGuest = viewer == null && localManualFixture == null;
     if (!becomesGuest) status = AppStatus.unauthenticated;
     currentUser = null;
-    analyticsAccount.clear();
     notifyListeners();
     // Clear saved credentials alongside connection cleanup. A new login must
     // wait for both, otherwise the old logout can delete its fresh session.
@@ -4578,12 +4458,6 @@ class AppNotifier extends ChangeNotifier {
         : Future<void>.sync(cliLogin.logout)
               .then((_) => true, onError: (Object _) => false);
     _clearAccountWorkspace();
-    analytics.signedOut();
-    // A session that ended without a message reports nothing — its absence IS
-    // the finding, and a stale clock would attach that wait to whoever signs in
-    // next.
-    _awaitingFirstMessage = null;
-    analyticsAccount.clear();
     notifyListeners();
     await _workspaceCleanup;
     final didClear = await cleared;
@@ -5492,123 +5366,6 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Pairs with [machineId] by the one-time code in its QR (`harness link qr`, or Add Phone) — no
-  /// password — then reconnects it and brings it into the trust group. Viewer builds only: a
-  /// CLI-backed build shows the QR rather than scanning one. Null on success, or what to show.
-  Future<String?> connectWithCode(
-    String machineId,
-    String code, {
-    String? expectedFingerprint,
-  }) async {
-    final result = await peerLinks.connectWithCode(
-      machineId,
-      code,
-      label: kIsWeb ? browserLabel() : (localHostnameOrNull() ?? 'Harness'),
-      displayName: machineStates[machineId]?.machine.displayName,
-      expectedFingerprint: expectedFingerprint,
-    );
-    if (result.error != null) return result.error;
-    final targetId = result.linkedMachineId ?? machineId;
-    final state = machineStates[targetId];
-    if (state != null) {
-      state.needsLink = false;
-      state.agentLoadStatus = AgentLoadStatus.idle;
-      notifyListeners();
-      await _pool?.closeMachine(targetId);
-      _connectMachine(state);
-    }
-    unawaited(_syncGroup(targetId, spread: true));
-    return null;
-  }
-
-  /// A web desktop just signed in by phone: it and the phone now hold each other's keys — the phone
-  /// took this browser into its roster, and handed back its own, sealed under the QR's code. Opening
-  /// that is the whole join: every machine is pinned here, and the sign-in page is done. Telling the
-  /// machines is background work ([_spreadGroup]), which the phone is doing too.
-  Future<void> _joinGroupFromPhone(
-    ({String code, String userCode, String? sealedRoster}) join,
-    int revision,
-  ) async {
-    final keys = viewer?.keys;
-    final sealed = join.sealedRoster;
-    final raw = keys == null || sealed == null
-        ? null
-        : openHandedRoster(sealed, code: join.code, userCode: join.userCode);
-    if (raw == null) {
-      phoneLink = const PhoneLinkStatus.failed(
-        null,
-        'your phone sent no devices — update Harness there',
-      );
-      notifyListeners();
-      return;
-    }
-    try {
-      await adoptHandedRoster(keys!, raw);
-    } catch (_) {
-      if (_disposed || !_authWorkCurrent(revision)) return;
-      phoneLink = const PhoneLinkStatus.failed(
-        null,
-        "this browser's keys could not be saved",
-      );
-      notifyListeners();
-      return;
-    }
-    if (_disposed || !_authWorkCurrent(revision)) return;
-    final machines = await _groupMachines();
-    for (final id in machines) {
-      // The inventory can change under these awaits: a machine gone from it is skipped, not dialled.
-      final state = machineStates[id];
-      if (state == null || !state.needsLink) continue;
-      state.needsLink = false;
-      state.agentLoadStatus = AgentLoadStatus.idle;
-      await _pool?.closeMachine(id);
-      _connectMachine(state);
-    }
-    if (_disposed || !_authWorkCurrent(revision)) return;
-    phoneLink = PhoneLinkStatus.done('your phone', [
-      for (final id in machines)
-        if (machineStates[id] case final state?) state.machine.displayName,
-    ]);
-    notifyListeners();
-    unawaited(_spreadGroup(retry: true, revision: revision));
-  }
-
-  /// The account's machines this device holds a key for: the group members it can reach. A roster
-  /// can still name machines from another account; those are not dialled.
-  Future<List<String>> _groupMachines() async {
-    final keys = viewer?.keys;
-    if (keys == null) return const [];
-    return [
-      for (final p in await keys.peers())
-        if (machineStates.containsKey(p.machineId)) p.machineId,
-    ];
-  }
-
-  /// Background: swap rosters with the group machines that are online, so what this device just
-  /// learned — or just became — reaches the whole group. With [retry] (a device that just joined) it
-  /// tries again a few times: a machine refuses a key it has not heard of yet, and hears of it from
-  /// the approving device's own round moments later.
-  Future<void> _spreadGroup({bool retry = false, int? revision}) async {
-    const waits = [
-      Duration.zero,
-      Duration(seconds: 3),
-      Duration(seconds: 10),
-      Duration(seconds: 30),
-    ];
-    for (final wait in retry ? waits : waits.take(1)) {
-      if (wait > Duration.zero) await Future<void>.delayed(wait);
-      if (_disposed || (revision != null && !_authWorkCurrent(revision))) {
-        return;
-      }
-      final online = [
-        for (final id in await _groupMachines())
-          if (machineStates[id]?.nodeOnline != false) id,
-      ];
-      if (online.isEmpty) continue;
-      await _syncGroup(online.first, spread: true);
-    }
-  }
-
   final Map<String, DateTime> _groupSyncedAt = {};
   static const _groupResync = Duration(minutes: 5);
 
@@ -5629,9 +5386,7 @@ class AppNotifier extends ChangeNotifier {
     // Fire-and-forget from the connection handler: a state file that is locked for a moment must not
     // surface as an unhandled error. The next session retries.
     try {
-      final label = kIsWeb
-          ? browserLabel()
-          : (localHostnameOrNull() ?? 'Desktop');
+      final label = localHostnameOrNull() ?? 'Desktop';
       final GroupSyncOutcome outcome = await links.syncGroup(
         machineId,
         label: label,
@@ -6681,7 +6436,7 @@ class AppNotifier extends ChangeNotifier {
           unawaited(connection.forceReconnect());
         }
       } else {
-        machine.agentsLoadError = 'Could not load agents: $error';
+        machine.agentsLoadError = 'Could not load harnesses: $error';
       }
       // A NO_PEER_LINK close already set needsLink (via onLocalFailure) perhaps a microtask before
       // this catch runs — don't downgrade that specific, actionable state back to a generic error.
@@ -6864,19 +6619,46 @@ class AppNotifier extends ChangeNotifier {
   /// socket is back. Consumed by [_onMachineConnected].
   final Set<String> _dshProbeOnReconnect = {};
 
-  Future<String?> installDsh(String machineId, String id) =>
-      _installOrUpdateDsh(machineId, id, update: false);
+  /// [trustUnverified] is the person's answer to the Store's warning about a
+  /// package Harness has not reviewed ([DshEntry.unverified]). Without it such
+  /// a package is refused here, so a way into an install that has no warning
+  /// of its own — New Harness, a future caller — cannot run a stranger's setup
+  /// script unannounced.
+  Future<String?> installDsh(
+    String machineId,
+    String id, {
+    bool trustUnverified = false,
+  }) => _installOrUpdateDsh(
+    machineId,
+    id,
+    update: false,
+    trustUnverified: trustUnverified,
+  );
 
-  Future<String?> updateDsh(String machineId, String id) =>
-      _installOrUpdateDsh(machineId, id, update: true);
+  Future<String?> updateDsh(
+    String machineId,
+    String id, {
+    bool trustUnverified = false,
+  }) => _installOrUpdateDsh(
+    machineId,
+    id,
+    update: true,
+    trustUnverified: trustUnverified,
+  );
 
   Future<String?> _installOrUpdateDsh(
     String machineId,
     String id, {
     required bool update,
+    required bool trustUnverified,
   }) async {
     final machine = machineStates[machineId];
     if (machine == null) return 'Machine not found';
+    final entry = machine.dsh[id];
+    if (entry != null && entry.unverified && !trustUnverified) {
+      return '${entry.name} is not reviewed by Harness. Open it in the Store '
+          'to check its source before you ${update ? 'update' : 'install'} it.';
+    }
     final machineName = machine.machine.displayName;
     final action = update ? 'Update' : 'Install';
     final verb = update ? 'update' : 'install';
@@ -7745,40 +7527,6 @@ class AppNotifier extends ChangeNotifier {
     return session is String && session.isNotEmpty ? session : null;
   }
 
-  /// Starts the clock `app_first_message` measures. [from] is `sign_in` for a
-  /// fresh log-in and `launch` for an app opened with a session already there.
-  ///
-  /// One body, called by both routes and by the test seam below — a second
-  /// place building this record is a second place to get it wrong.
-  void _armFirstMessage(String from) =>
-      _awaitingFirstMessage = (at: DateTime.now(), from: from);
-
-  /// Closes that clock out, once.
-  ///
-  /// A one-shot latch rather than a counter: the record is read and cleared in
-  /// the same breath, so every turn after the first finds nothing and there is
-  /// never a "which message is this" to get wrong.
-  ///
-  /// ⚠️ Called from `turn_started` ONLY, never from the other two routes into
-  /// [_markAgentProcessing]. A `turn_heartbeat`, and an adopted agent found
-  /// already mid-turn when this app connected, are both work that was under way
-  /// before anybody here typed anything — counting either would report a
-  /// near-zero wait for a returning user who has not said a word.
-  void _reportFirstMessage() {
-    if (_awaitingFirstMessage case final login?) {
-      _awaitingFirstMessage = null;
-      analytics.appFirstMessage(
-        from: login.from,
-        secondsSinceLogin: DateTime.now().difference(login.at).inSeconds,
-      );
-    }
-  }
-
-  /// [_armFirstMessage], for a test: signing in needs a live CLI, and what is
-  /// worth pinning is what the first turn AFTER it does.
-  @visibleForTesting
-  void armFirstMessageForTest(String from) => _armFirstMessage(from);
-
   String _turnActivityKey(String machineId, String agentId) =>
       '$machineId\u0000$agentId';
 
@@ -7919,104 +7667,6 @@ class AppNotifier extends ChangeNotifier {
     if (machine == null) return;
     _connectMachine(machine);
     await _loadMachineData(machine, force: true);
-  }
-
-  /// Approves a sign-in QR — a browser's (`k=v`), or a machine's with [machine] — and takes the asker
-  /// into this device's trust group:
-  ///
-  /// 1. the browser's key, as the backend has it ([pub]), must be the one the QR's fingerprint names
-  ///    — the camera is the channel the server cannot touch;
-  /// 2. the approval hands the browser this device's roster, sealed under the QR's [code], so it can
-  ///    pin every machine without dialling one first;
-  /// 3. the browser joins this device's roster. That exchange is the approval; telling the
-  ///    machines follows in the background ([_spreadGroup]).
-  ///
-  /// Returns the machines the browser will reach, or an error code: `FINGERPRINT` (a different
-  /// key), `UNSUPPORTED` (no trust group here), `STORAGE` (this device's keys could not be read or
-  /// written), or the backend's refusal. Never throws.
-  Future<({String? error, int machines, String? machineId})> approveSignInByQr({
-    required String userCode,
-    required String code,
-    required String pub,
-    required String label,
-    String? qrFingerprint,
-    bool machine = false,
-  }) async {
-    final keys = viewer?.keys;
-    if (keys == null) {
-      return (error: 'UNSUPPORTED', machines: 0, machineId: null);
-    }
-    final List<int> pubBytes;
-    try {
-      pubBytes = b64d(pub);
-    } on FormatException {
-      return (error: 'FINGERPRINT', machines: 0, machineId: null);
-    }
-    String plain(String v) =>
-        v.toUpperCase().replaceAll(RegExp('[^0-9A-Z]'), '');
-    if (pubBytes.length != 32 ||
-        (qrFingerprint != null &&
-            plain(fingerprint(pubBytes)) != plain(qrFingerprint))) {
-      return (error: 'FINGERPRINT', machines: 0, machineId: null);
-    }
-    final GroupRoster roster;
-    try {
-      roster = await handoffRoster(
-        keys,
-        selfLabel: kIsWeb
-            ? browserLabel()
-            : (localHostnameOrNull() ?? 'Harness'),
-      );
-    } catch (_) {
-      return (error: 'STORAGE', machines: 0, machineId: null);
-    }
-    String? machineId;
-    try {
-      final sealed = sealHandedRoster(roster, code: code, userCode: userCode);
-      if (machine) {
-        machineId = await api.approveMachineSignIn(
-          userCode,
-          sealedRoster: sealed,
-        );
-      } else {
-        await api.approveBrowserSignIn(userCode, sealedRoster: sealed);
-      }
-    } catch (e) {
-      return (error: '$e', machines: 0, machineId: null);
-    }
-    try {
-      await admitGroupMember(
-        keys,
-        GroupMember(
-          pub: pub,
-          kind: machine ? 'machine' : 'viewer',
-          label: label,
-          at: DateTime.now().millisecondsSinceEpoch,
-          machineId: machine ? machineId : null,
-        ),
-      );
-      // A machine is one this device dials: pinned now, by the key the QR vouched for.
-      if (machine && machineId != null) {
-        await keys.pin(machineId, pubBytes, label: label);
-      }
-    } catch (_) {
-      // Signed in all the same; the browser's own round tells the machines, and this device hears
-      // of it from them on its next sync.
-    }
-    // The two now hold each other's keys: done. Telling the rest of the group is background work —
-    // after a machine list that has the new machine on it.
-    unawaited(() async {
-      if (machine) {
-        try {
-          await refreshMachines();
-        } catch (_) {}
-      }
-      await _spreadGroup();
-    }());
-    final reach = (await _groupMachines())
-        .where((id) => id != machineId)
-        .length;
-    return (error: null, machines: reach, machineId: machineId);
   }
 
   /// Arm the selected owner's daemon through an already linked browser. Never queue a QR code
@@ -8210,9 +7860,9 @@ class AppNotifier extends ChangeNotifier {
         'MEDIA_TOO_LARGE' => 'Remote previews support files up to 512 MB. Use a smaller export or transfer this file separately.',
         'MEDIA_CHANGED' => 'The file changed while downloading. Wait for it to finish generating and try again.',
         'MEDIA_UNSUPPORTED' => 'This file is not a supported image or video.',
-        'MEDIA_INVALID_REQUEST' => 'This file is outside the folders Harness reads for this agent. Use one in its working folder or a temp folder.',
+        'MEDIA_INVALID_REQUEST' => 'This file is outside the folders Harness reads for this harness. Use one in its working folder or a temp folder.',
         'AGENT_NOT_FOUND' =>
-          'This agent is no longer available. Reconnect and try again.',
+          'This harness is no longer available. Reconnect and try again.',
         'NOT_TEXT' || 'FILE_TOO_LARGE' => 'Update the Harness CLI on this remote machine to open media previews.',
         _ => 'The remote machine could not read this file. Check that it is accessible and try again.',
       });
@@ -8593,12 +8243,12 @@ class AppNotifier extends ChangeNotifier {
       return 'The layout changed. Close this dialog and split the pane again.';
     }
     final target = swarms.where((s) => s.id == targetId).firstOrNull;
-    if (target == null) return 'This tab was closed';
+    if (target == null) return 'This swarm was closed';
     if (placement != null && (target.isStore || target.isOrchestrator)) {
-      return 'Open a new tab to add a harness.';
+      return 'Open a new swarm to add a harness.';
     }
     if (target.panes.length >= maxPanes) {
-      return 'This tab is full. Open a new tab to start a harness.';
+      return 'This swarm is full. Open a new swarm to start a harness.';
     }
     return null;
   }
@@ -8963,7 +8613,7 @@ class AppNotifier extends ChangeNotifier {
     if (_creationPlacementError(targetId, split, placement: placement) !=
         null) {
       _lastError =
-          'The harness started, but its original tab or layout changed. '
+          'The harness started, but its original swarm or layout changed. '
           'Use New Pane to find it.';
       _lastErrorRetryable = false;
       notifyListeners();
@@ -9146,15 +8796,15 @@ class AppNotifier extends ChangeNotifier {
       return Future.value('Shared harnesses are view-only.');
     }
     if (pendingAgentStop(machineId, agentId) != null) {
-      return Future.value('The agent is stopping.');
+      return Future.value('The harness is stopping.');
     }
     final agent = machine.agents
         .where((agent) => agent.id == agentId)
         .firstOrNull;
-    if (agent == null) return Future.value('Agent not found');
+    if (agent == null) return Future.value('Harness not found');
     if (_pendingAgentRename(machineId, agentId) case final pending?) {
       if (pending.name == trimmed) return pending.result.future;
-      return Future.value('A rename is already in progress for this agent.');
+      return Future.value('A rename is already in progress for this harness.');
     }
     if (agent.name == trimmed) return Future.value();
     final request = _AgentRename(machine, agent, _authRevision, trimmed);
@@ -9174,7 +8824,7 @@ class AppNotifier extends ChangeNotifier {
         payload: {'agentId': agentId, 'name': request.name},
       );
       if (!_agentRenameCurrent(request)) {
-        error = 'The agent changed while saving. Refresh and try again.';
+        error = 'The harness changed while saving. Refresh and try again.';
         return;
       }
       if (result['error'] case final String code) {
@@ -9199,8 +8849,8 @@ class AppNotifier extends ChangeNotifier {
       _renameAgent(request.machine, agentId, name);
     } catch (failure) {
       error = failure is WsRequestTimeout
-          ? 'Could not confirm the rename. Refresh agents to check the name.'
-          : 'Could not rename the agent. Try again.';
+          ? 'Could not confirm the rename. Refresh harnesses to check the name.'
+          : 'Could not rename the harness. Try again.';
     } finally {
       if (identical(_agentRenames[(machineId, agentId)], request)) {
         _agentRenames.remove((machineId, agentId));
@@ -9396,7 +9046,7 @@ class AppNotifier extends ChangeNotifier {
         .firstOrNull;
     if (agent == null) {
       return Future.value(
-        'The agent is no longer listed. Refresh to check its status.',
+        'The harness is no longer listed. Refresh to check its status.',
       );
     }
     final request = _AgentStop(machine, agent, _authRevision);
@@ -9431,7 +9081,7 @@ class AppNotifier extends ChangeNotifier {
           current == null ||
           current.sessionId != agent.sessionId) {
         return Future.value(
-          'The agent changed. Close this prompt and check it before stopping.',
+          'The harness changed. Close this prompt and check it before stopping.',
         );
       }
       return deleteAgent(machineId, agentId);
@@ -9448,7 +9098,7 @@ class AppNotifier extends ChangeNotifier {
       if (request.confirmed) return;
       if (!_agentStopCurrent(request)) {
         error =
-            'The agent changed while stopping. Refresh to check its status.';
+            'The harness changed while stopping. Refresh to check its status.';
         return;
       }
       if (result['error'] case final String code) {
@@ -9467,9 +9117,8 @@ class AppNotifier extends ChangeNotifier {
         error = switch (failure) {
           WsRequestFailure(:final code, :final detail) =>
             'Stop failed: ${detail != null && detail.isNotEmpty ? detail : code}',
-          WsRequestTimeout() =>
-            'Could not confirm the stop. Refresh agents to check its status.',
-          _ => 'Could not stop the agent. Try again.',
+          WsRequestTimeout() => 'Could not confirm the stop. Refresh harnesses to check its status.',
+          _ => 'Could not stop the harness. Try again.',
         };
       }
     } finally {
@@ -9602,7 +9251,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (pendingAgentStop(machineId, agentId) != null) {
       return const RestartAgentResult(
-        error: 'The agent is stopping.',
+        error: 'The harness is stopping.',
         retryable: false,
       );
     }
@@ -9610,7 +9259,7 @@ class AppNotifier extends ChangeNotifier {
         attempt.agent?.id != agentId ||
         !_restartCurrent(attempt, beforeSend: !attempt.awaitingConfirmation)) {
       return const RestartAgentResult(
-        error: 'The agent changed. Close this prompt and check it before restarting.',
+        error: 'The harness changed. Close this prompt and check it before restarting.',
         retryable: false,
       );
     }
@@ -9657,7 +9306,8 @@ class AppNotifier extends ChangeNotifier {
     }
     if (!_restartCurrent(attempt)) {
       return const RestartAgentResult(
-        error: 'The agent changed while restarting. Check its current status.',
+        error:
+            'The harness changed while restarting. Check its current status.',
         retryable: false,
       );
     }
@@ -9686,7 +9336,7 @@ class AppNotifier extends ChangeNotifier {
         return RestartAgentResult(
           error: resuming
               ? 'The machine is still resuming the harness. Select it again in a moment.'
-              : 'The machine is still restarting the agent. Check again in a moment.',
+              : 'The machine is still restarting the harness. Check again in a moment.',
         );
       case 'missing':
       case 'unconfirmed':
@@ -9694,7 +9344,7 @@ class AppNotifier extends ChangeNotifier {
       case 'unavailable':
         attempt._awaitingConfirmation = false;
         return const RestartAgentResult(
-          error: 'The restarted agent is no longer available. Close this prompt and check current agents.',
+          error: 'The restarted harness is no longer available. Close this prompt and check current harnesses.',
           retryable: false,
         );
       case 'failed':
@@ -9782,8 +9432,8 @@ class AppNotifier extends ChangeNotifier {
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
             resuming
                 ? 'Update the harness CLI on this machine to open saved harnesses.'
-                : 'Update the harness CLI on this machine to restart an agent.',
-          'AGENT_BUSY' => 'Another operation is changing this agent. Wait for it to finish, then retry.',
+                : 'Update the harness CLI on this machine to restart a harness.',
+          'AGENT_BUSY' => 'Another operation is changing this harness. Wait for it to finish, then retry.',
           'RESUME_UNAVAILABLE' => 'The saved conversation is unavailable. The harness can still be started fresh.',
           'RESUME_SESSION_MISMATCH' => 'The harness came back on a different conversation. The saved one is still kept.',
           'RESUME_FAILED' => 'The harness did not come back. Its output and conversation are kept.',
@@ -9877,13 +9527,13 @@ class AppNotifier extends ChangeNotifier {
     final machine = machineStates[machineId];
     if (machine == null) return Future.value('Machine not found');
     if (machine.machine.isShared) {
-      return Future.value('Shared agents are view-only.');
+      return Future.value('Shared harnesses are view-only.');
     }
     final source = machine.agents
         .where((agent) => agent.id == agentId)
         .firstOrNull;
     if (source == null) {
-      return Future.value('The source agent is no longer available.');
+      return Future.value('The source harness is no longer available.');
     }
     final engine = source.engine;
     if (engine == null) {
@@ -9891,7 +9541,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (!source.canClone) {
       return Future.value(
-        '${source.displayName} runs on a grid; cloning a grid agent is not supported.',
+        '${source.displayName} runs on a grid; cloning a grid harness is not supported.',
       );
     }
     final terminal = isTerminalEngine(engine);
@@ -10047,7 +9697,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (!_machineWorkCurrent(machine, attempt._authRevision)) {
       return const ForkAgentResult(
-        error: 'The machine changed while forking. Check its agents after reconnecting.',
+        error: 'The machine changed while forking. Check its harnesses after reconnecting.',
       );
     }
     if ((checking ||
@@ -10121,7 +9771,7 @@ class AppNotifier extends ChangeNotifier {
       return ForkAgentResult(
         agentId: fork.id,
         level: result['level'] == 'handoff' ? 'handoff' : 'native',
-        notice: 'The fork was created but has since stopped. Use New Pane to check current agents.',
+        notice: 'The fork was created but has since stopped. Use New Pane to check current harnesses.',
       );
     }
     _upsertAgent(machine, fork);
@@ -10131,10 +9781,10 @@ class AppNotifier extends ChangeNotifier {
     String? notice;
     if (target == null || !swarms.contains(target)) {
       notice =
-          'Fork created. Its original tab closed; use New Pane to open it.';
+          'Fork created. Its original swarm closed; use New Pane to open it.';
     } else if (target.panes.length >= maxPanes && !keepFocus) {
       notice =
-          'Fork created. Its original tab is full; use New Tab to open it.';
+          'Fork created. Its original swarm is full; use New Swarm to open it.';
     } else {
       if (target.panes.length >= maxPanes) {
         newSwarm(name: fork.name);
@@ -10161,7 +9811,7 @@ class AppNotifier extends ChangeNotifier {
       ? detail
       : switch (code) {
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
-            'Update the harness CLI on this machine to fork an agent.',
+            'Update the harness CLI on this machine to fork a harness.',
           'AGENT_BUSY' =>
             'This harness is working. Wait for its turn to finish, then fork.',
           _ => 'Fork failed: $code',
@@ -10779,7 +10429,7 @@ class AppNotifier extends ChangeNotifier {
         existing == null &&
         targetPanes.length >= maxPanes) {
       _lastError =
-          'This tab holds $maxPanes agents. Open another tab to add more.';
+          'This swarm holds $maxPanes harnesses. Open another swarm to add more.';
       _lastErrorRetryable = false;
       notifyListeners();
       return;
@@ -11372,7 +11022,7 @@ class AppNotifier extends ChangeNotifier {
               .firstOrNull;
     if (twin == null && target.panes.length >= maxPanes) {
       _lastError =
-          'That tab holds $maxPanes agents. Close one there to move this in.';
+          'That swarm holds $maxPanes harnesses. Close one there to move this in.';
       _lastErrorRetryable = false;
       notifyListeners();
       return false;
@@ -12006,6 +11656,12 @@ class AppNotifier extends ChangeNotifier {
       // Treating it as a gesture here can start a terminal takeover loop.
       _paneFocusByUser = false;
     }
+    final visible = profileSwarms;
+    if (visible.isNotEmpty && visible.every((s) => s.id != _activeSwarmId)) {
+      _activeSwarmId = visible.first.id;
+      selectedMachineId = focusedPane?.machineId;
+      _paneFocusByUser = false;
+    }
 
     // Streams nobody shows any more.
     for (final pane in released.toSet()) {
@@ -12034,8 +11690,20 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _ensureProfileFocus() {
+    if (_machineProfileId == null || _machineProfileId!.isEmpty) return;
+    if (profileSwarms.any((swarm) => swarm.id == _activeSwarmId)) return;
+    // Never empty while the desk has a tab: a profile that matches none shows
+    // them all (swarmsForMachineProfile), so nothing is made to fill it.
+    final visible = profileSwarms;
+    if (visible.isEmpty) return;
+    _activeSwarmId = visible.first.id;
+    selectedMachineId = focusedPane?.machineId;
+  }
+
   void _persistLayout() {
     if (workspaceEnabled?.call() == false) return;
+    _ensureProfileFocus();
     for (final pane in allPanes) {
       if (pane.agentId case final id?) {
         rememberOpenedHarness(pane.machineId, id);
@@ -12098,9 +11766,15 @@ class AppNotifier extends ChangeNotifier {
     final initialSwarm = activeSwarm;
     final revision = _layoutRevision;
     final authRevision = _authRevision;
+    final savedProfile = await store.loadMachineProfile();
     final saved = await store.loadSwarms();
     final known = await store.loadMonitorHarnesses(saved);
     if (!_authWorkCurrent(authRevision)) return;
+    // This window's own choice, never the desk's. No saved choice — a window
+    // that never picked one — is All machines.
+    _machineProfileId = savedProfile == null || savedProfile.isEmpty
+        ? null
+        : savedProfile;
     for (final (machine, agent) in known) {
       rememberOpenedHarness(machine, agent);
     }
@@ -12239,11 +11913,17 @@ class AppNotifier extends ChangeNotifier {
         _activeSwarmId = restored.any((s) => s.id == saved['activeId'])
             ? saved['activeId'] as String
             : restored.first.id;
+        final restoredActive = _activeSwarmId;
+        // A saved active tab can belong to another computer. The profile
+        // choice has to win on launch, or the strip hides the tab on screen.
+        _ensureProfileFocus();
         while (swarms.any((s) => s.id == 'swarm-$_nextSwarmId')) {
           _nextSwarmId++;
         }
         _autoPickedAgent = true;
-        if (hadDuplicateStarters) _persistLayout();
+        if (hadDuplicateStarters || _activeSwarmId != restoredActive) {
+          _persistLayout();
+        }
         notifyListeners();
         return;
       }
@@ -12649,7 +12329,7 @@ class AppNotifier extends ChangeNotifier {
         focusedPane?.agentId != agentId) {
       visit.dispose();
       _deviceVisit = null;
-      return fail('That agent could not be opened.');
+      return fail('That harness could not be opened.');
     }
     if (!latest &&
         identical(focusedPane, visit.origin) &&
@@ -13255,10 +12935,6 @@ class AppNotifier extends ChangeNotifier {
         break;
       case 'turn_started':
       case 'turn_heartbeat':
-        // A turn that STARTS is somebody sending something; a heartbeat is a
-        // turn already under way, which for an agent this app merely reconnected
-        // to is work nobody here just asked for.
-        if (type == 'turn_started') _reportFirstMessage();
         var changed = false;
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
@@ -13499,36 +13175,3 @@ final appStateProvider = Provider<AppNotifier>((ref) {
   app.bootstrap();
   return app;
 });
-
-/// Where the link after a sign-in by phone stands — see [AppNotifier.phoneLink].
-class PhoneLinkStatus {
-  const PhoneLinkStatus.waiting()
-    : stage = PhoneLinkStage.waiting,
-      phone = null,
-      machines = const [],
-      error = null;
-  const PhoneLinkStatus.linking(this.phone)
-    : stage = PhoneLinkStage.linking,
-      machines = const [],
-      error = null;
-  const PhoneLinkStatus.done(this.phone, this.machines)
-    : stage = PhoneLinkStage.done,
-      error = null;
-  const PhoneLinkStatus.failed(this.phone, this.error)
-    : stage = PhoneLinkStage.failed,
-      machines = const [];
-
-  final PhoneLinkStage stage;
-
-  /// The phone's name as it sealed it in the link, once linked.
-  final String? phone;
-
-  /// The other machines this computer now reaches, by name.
-  final List<String> machines;
-  final String? error;
-
-  bool get settled =>
-      stage == PhoneLinkStage.done || stage == PhoneLinkStage.failed;
-}
-
-enum PhoneLinkStage { waiting, linking, done, failed }

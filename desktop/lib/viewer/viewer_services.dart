@@ -45,7 +45,7 @@ class ViewerServices {
     return ViewerServices._(
       keys: store,
       auth: auth,
-      login: DirectLogin(auth: auth, keys: store),
+      login: DirectLogin(auth: auth),
       links: DirectLink(keys: store, auth: auth, config: config),
       relayCodecs: viewerRelayCodecs(store),
       transportPlugins: transportPlugins ?? harnessTransportPlugins,

@@ -1,3 +1,5 @@
+import 'core/app_version.dart';
+
 import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
@@ -8,11 +10,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 
-import 'analytics/analytics_lifecycle.dart';
 import 'core/crash_log.dart';
 import 'core/desktop_window.dart';
 import 'screens/login_screen.dart';
 import 'state/app_state.dart';
+import 'stats/stats_lifecycle.dart';
 import 'viewer/viewer_services.dart';
 import 'ws/terminal_transport_plugin.dart';
 import 'shared/theme/app_theme.dart' as grid;
@@ -24,9 +26,8 @@ import 'widgets/environment_preflight_screen.dart';
 import 'widgets/environment_setup_screen.dart';
 import 'widgets/export_logs_dialog.dart';
 import 'widgets/flash_firmware_dialog.dart';
+import 'widgets/linux_menu_bar.dart';
 import 'core/startup.dart';
-import 'core/test_run.dart';
-import 'core/web_form_factor.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
 import 'shortcuts/app_keymap.dart';
@@ -38,9 +39,6 @@ import 'sharing/shared_agent_location.dart';
 import 'sharing/shared_agent_page.dart';
 import 'viewer/viewer_location.dart';
 import 'viewer/viewer_page.dart';
-import 'viewer/pending_pair.dart';
-import 'viewer/pending_pair_store.dart';
-import 'widgets/add_machine_dialog.dart';
 
 /// The screen an app puts up once someone is signed in — the desktop's swarm of
 /// panes, or the phone's one-agent-at-a-time shell. It is the only thing the two
@@ -125,9 +123,9 @@ class HarnessApp extends StatelessWidget {
       ),
       // The design system's own `buildAppTheme` — see the note where a second,
       // hand-written `ThemeData` used to shadow it, in `lib/theme/app_theme.dart`.
-      // Harness Desktop is dark-only: one theme, no `darkTheme`/`themeMode` to
-      // resolve between.
-      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      // One theme, no `darkTheme`/`themeMode` to resolve between: the chosen
+      // palette says whether it is light or dark.
+      theme: grid.buildAppTheme(brightness: prefs.palette.brightness),
       // The chosen point size is already applied to every style and terminal
       // cell. A second UI scale would make the chrome disagree with the grid.
       builder: (context, child) => MediaQuery.withNoTextScaling(
@@ -140,7 +138,7 @@ class HarnessApp extends StatelessWidget {
                 ),
         ),
       ),
-      home: AnalyticsLifecycle(
+      home: StatsLifecycle(
         child: RootShell(authenticatedScreen: authenticatedScreen),
       ),
     );
@@ -154,9 +152,9 @@ class HarnessApp extends StatelessWidget {
 /// mounted with. [grid.BrightnessScope] marks the ones that called
 /// `AppTheme.watch` dirty directly, across that boundary.
 ///
-/// Pinned to [Brightness.dark] rather than read from `Theme.of(context)`:
-/// Harness Desktop is dark-only, and there is no other theme for `Theme.of`
-/// to ever resolve to here.
+/// Set from the palette rather than read from `Theme.of(context)`: the palette
+/// is where light or dark is chosen, and [HarnessApp] builds the theme from the
+/// same value, so the two cannot disagree.
 class _GridTokenScope extends StatelessWidget {
   const _GridTokenScope({required this.child});
 
@@ -164,7 +162,7 @@ class _GridTokenScope extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    grid.AppTheme.brightness.value = Brightness.dark;
+    grid.AppTheme.brightness.value = grid.AppTheme.palette.value.brightness;
     return grid.BrightnessScope(child: child);
   }
 }
@@ -189,85 +187,12 @@ class _RootShellState extends ConsumerState<RootShell>
   bool _menuDialogOpen = false;
   SharedAgentLocation? _sharedLocation;
 
-  /// A machine's QR opened here by a phone's camera (`/pair#…`), held across sign-in
-  /// (`viewer/pending_pair_store.dart`) and asked about once this tab is signed in.
-  PendingPair? _pendingPair;
-  bool _pendingPairAsked = false;
-
   @override
   void initState() {
     super.initState();
-    if (kIsWeb) {
-      // Before anything else reads the URL: the code leaves the address bar here.
-      _pendingPair = const PendingPairStore().capture(DateTime.now());
-    }
     if (kIsWeb) _sharedLocation = SharedAgentLocation.parse(Uri.base);
     WidgetsBinding.instance.addObserver(this);
     _appMenuChannel.setMethodCallHandler(_onAppMenu);
-  }
-
-  ({String name, String? fingerprint})? _pairingWith() {
-    final pending = _pendingPair;
-    if (pending == null || pending.isExpired(DateTime.now())) return null;
-    final fp = pending.code.fingerprint;
-    return (
-      name: pending.code.hostname ?? 'this machine',
-      fingerprint: fp == null ? null : spacedFingerprint(fp),
-    );
-  }
-
-  /// Whether this visit to the web sign-in page already began a sign-in by phone. Once per visit:
-  /// someone who cancels, or picks SSO, is not sent back to the QR behind their back.
-  bool _webQrStarted = false;
-
-  /// A web desktop's sign-in page opens on its QR — nothing to press first. Not a phone's browser
-  /// (it approves, and cannot scan itself), not a tab opened by a machine's QR or a shared link
-  /// (those arrive to do something else), and never under `flutter test`.
-  void _startWebQr(AppNotifier app) {
-    if (_webQrStarted || !kIsWeb || isMobileWeb || kUnderTest) return;
-    if (_pairingWith() != null || _sharedLocation != null) return;
-    if (app.signingIn || app.signingOut || app.lastError != null) return;
-    _webQrStarted = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && app.status == AppStatus.unauthenticated) {
-        unawaited(app.login(qr: true));
-      }
-    });
-  }
-
-  /// The group join after a web sign-in by phone has settled: the page moves on to home by itself —
-  /// a moment to read "reaches N machines", a little longer for a problem, which the Machines list
-  /// can still fix from there.
-  bool _phoneLinkHolding = false;
-  void _holdPhoneLink(AppNotifier app) {
-    final link = app.phoneLink;
-    if (_phoneLinkHolding || link == null || !link.settled) return;
-    _phoneLinkHolding = true;
-    final failed = link.stage == PhoneLinkStage.failed;
-    Timer(Duration(milliseconds: failed ? 4000 : 1500), () {
-      _phoneLinkHolding = false;
-      if (mounted) app.dismissPhoneLink();
-    });
-  }
-
-  /// Signed in (or just back from SSO) with a scanned machine code waiting: ask about it, once.
-  void _askAboutPendingPair(AppNotifier app) {
-    final pending = _pendingPair;
-    if (pending == null || _pendingPairAsked) return;
-    _pendingPairAsked = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      const PendingPairStore().clear();
-      _pendingPair = null;
-      unawaited(
-        showAddMachineDialog(
-          context,
-          app,
-          pending.code,
-          expired: pending.isExpired(DateTime.now()),
-        ),
-      );
-    });
   }
 
   @override
@@ -289,8 +214,17 @@ class _RootShellState extends ConsumerState<RootShell>
   }
 
   Future<void> _onAppMenu(MethodCall call) async {
+    await runAppMenuAction(call.method);
+  }
+
+  /// Runs one app-menu action.
+  ///
+  /// The macOS native menu reports over `harness/app_menu`; the Linux menu bar
+  /// ([LinuxMenuBar]) fires the same strings directly, so one switch serves
+  /// both platforms.
+  Future<void> runAppMenuAction(String action) async {
     if (!mounted) return;
-    switch (call.method) {
+    switch (action) {
       case 'checkForUpdates':
         final app = ref.read(appStateProvider);
         await _menuDialog(() => checkForUpdatesAndShowResult(context, app));
@@ -307,6 +241,18 @@ class _RootShellState extends ConsumerState<RootShell>
         await _menuDialog(() => showShortcutsSheet(context));
       case 'keyboardPractice':
         await _menuDialog(() => showKeyboardPractice(context));
+      case 'showAbout':
+        // macOS shows AppKit's standard About panel; the Linux bar's row lands
+        // here, with the version the Linux release stamps beside the binary.
+        final version = await runningAppVersion();
+        if (!mounted) return;
+        await _menuDialog(
+          () async => showAboutDialog(
+            context: context,
+            applicationName: 'Harness',
+            applicationVersion: version,
+          ),
+        );
       case 'increaseTerminalFontSize':
         await terminalFontStore.increaseSize();
       case 'decreaseTerminalFontSize':
@@ -351,7 +297,7 @@ class _RootShellState extends ConsumerState<RootShell>
             // the user's own screen away twice per sign-in: once on the click
             // and again on success.
             screen = app.signingIn
-                ? LoginScreen(notifier: app, pairingWith: _pairingWith())
+                ? LoginScreen(notifier: app)
                 : BootstrappingScreen(statusMessage: app.bootStatusMessage);
           case AppStatus.checkingEnvironment:
             screen = EnvironmentPreflightScreen(
@@ -360,15 +306,8 @@ class _RootShellState extends ConsumerState<RootShell>
           case AppStatus.preparingEnvironment:
             screen = EnvironmentSetupScreen(notifier: app);
           case AppStatus.unauthenticated:
-            screen = LoginScreen(notifier: app, pairingWith: _pairingWith());
-            _startWebQr(app);
-          case AppStatus.authenticated when kIsWeb && app.phoneLink != null:
-            // Signed in by phone: the sign-in page stays up through the link that follows and
-            // moves on once it is done — as the desktop app's sign-in sheet does.
-            screen = LoginScreen(notifier: app, onClose: app.dismissPhoneLink);
-            _holdPhoneLink(app);
+            screen = LoginScreen(notifier: app);
           case AppStatus.authenticated:
-            _webQrStarted = false;
             final viewerLocation = kIsWeb
                 ? ViewerLocation.parse(Uri.base)
                 : null;
@@ -381,7 +320,6 @@ class _RootShellState extends ConsumerState<RootShell>
                     ),
                   )
                 : widget.authenticatedScreen(app);
-            _askAboutPendingPair(app);
         }
         // Preserve the fragment pin while dialogs navigate; an OAuth callback can restore it later.
         if (kIsWeb) _sharedLocation ??= SharedAgentLocation.parse(Uri.base);
@@ -402,6 +340,9 @@ class _RootShellState extends ConsumerState<RootShell>
         // must stay reachable.
         return Column(
           children: [
+            // The app's commands as a menu strip (Linux only; macOS carries
+            // them in its native menu bar, and this renders nothing there).
+            LinuxMenuBar(onAction: runAppMenuAction),
             if (app.hasAvailableUpdate &&
                 app.status != AppStatus.bootstrapping &&
                 app.status != AppStatus.checkingEnvironment &&

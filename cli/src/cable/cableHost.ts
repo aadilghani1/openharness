@@ -621,7 +621,7 @@ export class DaemonCableHost implements CableHost {
 
   visit(command: VisitCommand): Promise<VisitResult> {
     const machineId = command.agentId ? this.machineOf(command.agentId) : undefined
-    if ((command.op === 'open' || command.op === 'latest') && !machineId) return Promise.resolve({ ok: false, active: false, error: 'That agent is no longer available.' })
+    if ((command.op === 'open' || command.op === 'latest') && !machineId) return Promise.resolve({ ok: false, active: false, error: 'That harness is no longer available.' })
     return this.wiring.visit?.({ ...command, machineId }) ??
       Promise.resolve({ ok: false, active: false, error: 'Update Harness to visit an alert.' })
   }

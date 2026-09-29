@@ -18,12 +18,24 @@ static int imax(int a, int b) { return a > b ? a : b; }
  * exactly what the first Pro build did. The function was called panel16() then, which is why this one is
  * not — a name that promises a swap it no longer always performs is worse than no name at all.
  */
-#if HT_FACE_PX >= 720
-static uint16_t panel16(uint16_t v) { return v; }
-#else
 static uint16_t panel16(uint16_t v) { return (uint16_t)((v << 8) | (v >> 8)); }
-#endif
-static uint32_t punctuation_alias(uint32_t cp)
+// The eight Vietnamese letters outside 0x1EA0-0x1EF9, mapped onto the tail the generator appends
+// to that block. Returns 0 for anything that is not Vietnamese. Order matches VIET_TAIL in
+// scripts/gen_habitat_fonts.py; the two must be changed together.
+static uint32_t viet_codepoint(uint32_t cp)
+{
+    // 0x1EFA..0x1F01 is the tail itself: the raster path aliases, then asks again with the result,
+    // so this has to answer the same thing twice.
+    if (cp >= 0x1ea0 && cp <= 0x1f01) return cp;
+    switch (cp) {
+    case 0x102: return 0x1efa; case 0x103: return 0x1efb;
+    case 0x110: return 0x1efc; case 0x111: return 0x1efd;
+    case 0x1a0: return 0x1efe; case 0x1a1: return 0x1eff;
+    case 0x1af: return 0x1f00; case 0x1b0: return 0x1f01;
+    default: return 0;
+    }
+}
+static uint32_t cell_alias(uint32_t cp)
 {
     // One cell in, one cell out. Keep the original UTF-8 in the scene/wire;
     // reuse existing ASCII pixels for typographic punctuation outside Latin-1.
@@ -32,8 +44,10 @@ static uint32_t punctuation_alias(uint32_t cp)
     case 0x2212: return '-';
     case 0x2018: case 0x2019: case 0x201a: case 0x201b: return '\'';
     case 0x201c: case 0x201d: case 0x201e: case 0x201f: return '"';
-    default: return cp;
+    default: break;
     }
+    uint32_t viet = viet_codepoint(cp);
+    return viet ? viet : cp;
 }
 static const ht_font_t *glyph_font(const ht_font_t *font, uint32_t cp)
 {
@@ -49,6 +63,13 @@ static const ht_font_t *glyph_font(const ht_font_t *font, uint32_t cp)
         if (cp == 0x2192) return font == &ht_mono_28 ? &ht_right_28 : &ht_right_20;
         if (cp == 0xe000) return font == &ht_mono_28 ? &ht_bell_28 : &ht_bell_20;
     }
+    // After the icon substitutions above, which claim codepoints inside this range.
+    if (viet_codepoint(cp)) {
+        if (font == &ht_mono_16) return &ht_viet_16;
+        if (font == &ht_mono_20) return &ht_viet_20;
+        if (font == &ht_mono_24) return &ht_viet_24;
+        if (font == &ht_mono_28) return &ht_viet_28;
+    }
     return font;
 }
 static uint32_t font_codepoint(const ht_font_t *font, uint32_t cp)
@@ -56,7 +77,7 @@ static uint32_t font_codepoint(const ht_font_t *font, uint32_t cp)
     // Space is always an empty cell, including compact Unicode-only atlases.
     if (cp == ' ' || (cp >= font->first && cp <= font->last)) return cp;
     font = glyph_font(font, cp);
-    cp = punctuation_alias(cp);
+    cp = cell_alias(cp);
     if (cp >= font->first && cp <= font->last) return cp;
     return font->first <= '?' && font->last >= '?' ? '?' : ' ';
 }
@@ -94,7 +115,7 @@ static bool native_glyph(const ht_font_t *font, uint32_t cp)
 {
     if (cp < 32 || (cp >= 127 && cp < 160)) return false;
     const ht_font_t *face = glyph_font(font, cp);
-    cp = punctuation_alias(cp);
+    cp = cell_alias(cp);
     return cp >= face->first && cp <= face->last;
 }
 static const char *display_fallback(uint32_t cp, char scratch[12])
@@ -327,7 +348,7 @@ bool ht_can_display(const char *text, const ht_font_t *font, int width, int line
         const char *start = p;
         uint32_t cp = ht_utf8_next(&p);
         const ht_font_t *glyph = glyph_font(font, cp);
-        if (cp < glyph->first || cp > glyph->last) cp = punctuation_alias(cp);
+        if (cp < glyph->first || cp > glyph->last) cp = cell_alias(cp);
         if (cp != '\n' && cp != ' ' && (cp < glyph->first || cp > glyph->last || (cp >= 127 && cp < 160)))
             return false;
         // Even native fractions expand to several cells. Never approve text
@@ -422,11 +443,7 @@ static ht_rect_t united(ht_rect_t a, ht_rect_t b)
 //
 // The dial keeps its byte array: 360 entries of uint16_t is 1,440 bytes of render-task stack, and the
 // 466 face has no need of them.
-#if HT_WIDTH / 2 > 255
-typedef uint16_t damage_coord_t;
-#else
 typedef uint8_t damage_coord_t;
-#endif
 typedef struct {
     damage_coord_t left[HT_HEIGHT / 2], right[HT_HEIGHT / 2];
 } damage_rows_t;
@@ -619,15 +636,9 @@ static uint16_t blend(uint16_t fg, uint16_t bg, unsigned alpha)
 // #define, not enum: the unrolled copy in the rasteriser selects its cases with #if, and the
 // preprocessor cannot see an enum constant — it reads the name as 0. That is precisely how the first
 // version of the widened cache shipped columns 5..7 unwritten while looking correct in the source.
-#if HT_FACE_PX >= 720
-#define GLYPH_PIXELS 128
-#define GLYPH_MAX_W  8
-#define GLYPH_MAX_H  16
-#else
 #define GLYPH_PIXELS 50
 #define GLYPH_MAX_W  5
 #define GLYPH_MAX_H  10
-#endif
 enum { GLYPH_SLOTS = 24, ASCII_COUNT = 95 };
 typedef struct {
     uint16_t pixels[GLYPH_SLOTS][GLYPH_PIXELS];
@@ -961,11 +972,6 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
                         // guard let those atlases in.
                         const uint16_t *src = colored + k;
                         switch (xb - xa) {
-#if GLYPH_MAX_W >= 8
-                        case 8: dst[7] = src[7]; /* fall through */
-                        case 7: dst[6] = src[6]; /* fall through */
-                        case 6: dst[5] = src[5]; /* fall through */
-#endif
                         case 5: dst[4] = src[4]; /* fall through */
                         case 4: dst[3] = src[3]; /* fall through */
                         case 3: dst[2] = src[2]; /* fall through */

@@ -21,7 +21,7 @@ class _Cli extends CliLogin {
   var cancellations = 0;
   var statusChecks = 0;
   @override
-  Future<void> login({required void Function(String) onAuthorizeUrl, SignInQrListener? qr}) {
+  Future<void> login({required void Function(String) onAuthorizeUrl}) {
     final attempt = _Attempt(onAuthorizeUrl);
     attempts.add(attempt);
     return attempt.done.future;

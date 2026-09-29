@@ -40,15 +40,6 @@ import 'support/restart_connection.dart';
 import 'terminal_find_test.dart' show findField, finishFind, output;
 
 class _PreviewLink implements PeerLinkClient {
-  @override
-  Future<CliLinkConnectResult> connectWithCode(
-    String machineId,
-    String code, {
-    required String label,
-    String? displayName,
-    String? expectedFingerprint,
-  }) async => const CliLinkConnectResult(error: 'not used');
-
   final result = Completer<CliLinkConnectResult>();
   @override
   Future<CliLinkConnectResult> connect(
@@ -1039,7 +1030,7 @@ void main() {
         'state': 'failed',
         'failure': {
           'code': 'AGENT_BUSY',
-          'detail': 'Another operation is changing this agent. Wait for it to finish, then retry.',
+          'detail': 'Another operation is changing this harness. Wait for it to finish, then retry.',
         },
       });
       await tester.pumpAndSettle();

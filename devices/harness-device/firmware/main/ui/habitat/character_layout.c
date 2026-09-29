@@ -161,14 +161,17 @@ void ht_inbox_card(ht_scene_t *s, const char *mark, const char *name,
 }
 void ht_notification_bell(ht_scene_t *s, unsigned count, uint16_t ink)
 {
+    ht_notification_bell_at(s, count, ink, HT_NOTIFICATION_Y);
+}
+void ht_notification_bell_at(ht_scene_t *s, unsigned count, uint16_t ink, int y)
+{
     char number[12];
     snprintf(number, sizeof number, "%u", count);
     int digits = count ? (int)strlen(number) * ht_mono_28.width : 0;
     int width = ht_bell_footer.width + (count ? 8 + digits : 0);
     int x = (HT_WIDTH - width) / 2;
-    ht_text(s, x, HT_NOTIFICATION_Y, ht_bell_footer.width, &ht_bell_footer,
-            ink, s->background, HT_BELL);
-    if (count) ht_text(s, x + ht_bell_footer.width + 8, HT_NOTIFICATION_Y, digits,
+    ht_text(s, x, y, ht_bell_footer.width, &ht_bell_footer, ink, s->background, HT_BELL);
+    if (count) ht_text(s, x + ht_bell_footer.width + 8, y, digits,
                        &ht_mono_28, ink, s->background, number);
 }
 static void recipient(ht_scene_t *s, const ht_character_face_t *f, int y)
@@ -190,41 +193,14 @@ void ht_character_layout(ht_scene_t *s, const ht_character_face_t *f, uint8_t fr
     bool compact = f->focus || f->carrying;
     ht_character_size_t size = result ? (brief ? HT_CHARACTER_BRIEF : HT_CHARACTER_READING) :
         compact ? HT_CHARACTER_COMPACT : HT_CHARACTER_FULL;
-#if HT_FACE_PX >= 720
-    // Live work keeps the FULL companion here: 432 px of it fits above the status band with room to
-    // spare, so there is no reason to drop a rung the way the round face has to.
-    int y = result ? HT_CHARACTER_READING_Y : 140;
-    if (result && brief) y = HT_CHARACTER_BRIEF_Y;
-#else
     int y = result ? (brief ? 78 : 72) : compact ? 113 : 98;
     if (result && f->roomy_reading) y = HT_CHARACTER_READING_Y;
     else if (!compact && f->roomy_reading) { size = HT_CHARACTER_COMPACT; y = 114; }
-#endif
     paint(s, f, frame, ink, size, y);
     if (!f->single_label) {
-#if HT_FACE_PX >= 720
-        // Under the tab strip at y=40, which is chrome about which book you are in; the name is the
-        // content. There is no arc branch here at all: ht_arc_title bends text around a 205 px radius
-        // baked into arc_trig[32][2], and on a square there is no rim to bend it around.
-        recipient(s, f, 80);
-#else
         if (f->straight_title) recipient(s, f, 41);
         else ht_arc_title(s, f->primary_title ? f->foreground : f->dim, f->recipient);
-#endif
     }
-#if HT_FACE_PX >= 720
-    // SIX ROWS OF 656, AND NO WIDTH TABLE. Every row on the dial is a different width because each
-    // one is a different chord; here they are all the same, so the tables below do not exist on this
-    // face rather than existing unused.
-    if (result) recap_lines(s, brief ? HT_CHARACTER_BRIEF_TEXT_Y : HT_CHARACTER_READING_TEXT_Y,
-        656, brief ? 3 : HT_CHARACTER_RECAP_ROWS, false, NULL, f->foreground, recap,
-        &ht_mono_28, HT_CHARACTER_RECAP_CHARS);
-    else lines(s, 542, 656, 1, &ht_mono_20, f->dim, compact ? f->detail : "", false, NULL);
-    // Straight, both of them. ht_arc_status bakes a 205 px radius into arc_trig[32][2] and there is
-    // no rim here to bend text around.
-    lines(s, 600, 656, 1, &ht_mono_28, f->ink, f->status, false, NULL);
-    lines(s, 660, 656, 1, &ht_mono_20, f->dim, f->hint, false, NULL);
-#else
     // Keep slots stable through long titles and animation; damage stays local.
     static const int reading_widths[] = {396, 396, 384, 372, 348, 324, 276};
     static const int brief_widths[] = {372, 348, 324};
@@ -240,5 +216,4 @@ void ht_character_layout(ht_scene_t *s, const ht_character_face_t *f, uint8_t fr
     if (!f->footer_action && !f->straight_title) ht_arc_status(s, f->ink, f->status);
     else lines(s, f->footer_action ? 369 : 385, 276, 1, &ht_mono_20, f->ink, f->status, false, NULL);
     lines(s, 417, 210, 1, &ht_mono_20, f->dim, f->hint, false, NULL);
-#endif
 }
