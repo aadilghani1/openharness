@@ -1199,6 +1199,22 @@ impl App {
         state.retry_at = Some(Instant::now() + wait);
     }
 
+    /// Tell every connected machine's daemon the terminal's own colours (`theme_set`), so it
+    /// paints the panes to match and the agents in them read the right light/dark. Called when
+    /// the terminal answers OSC 11 and again when a machine connects; the daemon restyles the
+    /// existing sessions too, as the desktop app's `theme_set` does.
+    pub fn push_theme(&mut self) {
+        let Some((bg, fg)) = crate::term_out::terminal_colours() else { return };
+        let machines: Vec<String> = self.fleet.machines.iter()
+            .filter(|m| self.link(&m.id).is_some())
+            .map(|m| m.id.clone()).collect();
+        for machine_id in machines {
+            let Some(link) = self.link(&machine_id) else { continue };
+            let bg = bg.clone(); let fg = fg.clone();
+            self.spawn(async move { link.rpc("theme_set", json!({ "background": bg, "foreground": fg }), Duration::from_secs(5)).await }, |_app, _reply| {});
+        }
+    }
+
     // ── machine events ───────────────────────────────────────────────────────
 
     pub fn on_machine(&mut self, machine_id: String, generation: u64, event: MachineEvent) {
@@ -1215,6 +1231,7 @@ impl App {
                 if let Some(machine) = self.fleet.machine_mut(&machine_id) { machine.reach = Reach::Ready }
                 if machine_id == self.fleet.local_id && !crate::local::is_local(&machine_id) { self.daemon_down = false; crate::dial::reconnected(self) }
                 self.relist(&machine_id);
+                self.push_theme();
                 // Its home folder, so its paths read `~/…` like this machine's do.
                 if !self.homes.contains_key(&machine_id) {
                     if let Some(link) = self.link(&machine_id) {
@@ -3611,15 +3628,35 @@ impl App {
     /// where they are not `default` (NO_COLOR or not: tmux doesn't read it).
     pub fn status_style(&self) -> Style {
         let mut s = self.style_of("status-style", self.active, None);
+        let mut own = !self.look.status_bg.is_none() || !self.look.status_fg.is_none();
         for (name, fg) in [("status-fg", true), ("status-bg", false)] {
             let c = self.options.get(name, "", None).and_then(|v| crate::tmuxconf::colour(&v)).filter(|c| *c != Color::Reset);
-            if let Some(c) = c { s = if fg { s.fg(c) } else { s.bg(c) } }
+            if let Some(c) = c { own = true; s = if fg { s.fg(c) } else { s.bg(c) } }
+        }
+        // No status colours of its own and the terminal has told us what it looks like: the bar
+        // takes the theme's own colours — its background the terminal's background, its text the
+        // readable opposite — so it is a visible bar in the theme (a dark bar, light text on a
+        // dark terminal), not a transparent one, and not tmux's stock green.
+        if !own {
+            let (bg, fg, _) = crate::theme::palette();
+            s = s.bg(bg).fg(fg);
         }
         s
     }
 
     /// message-style (tmux's yellow), for messages and prompts.
-    pub fn message_style(&self) -> Style { self.style_of("message-style", self.active, None) }
+    pub fn message_style(&self) -> Style {
+        let mut s = self.style_of("message-style", self.active, None);
+        let own = self.look.message_fg.is_some() || self.look.message_bg.is_some();
+        // No message colours of its own and the terminal has told us what it looks like: the
+        // message line shows the theme's readable text on the terminal's own background (left
+        // transparent), so it blends with the theme instead of tmux's stock yellow.
+        if !own {
+            let (_, fg, _) = crate::theme::palette();
+            s = s.bg(Color::Reset).fg(fg);
+        }
+        s
+    }
 
     /// mode-keys as it stands (tmux's default: emacs, unless $VISUAL or $EDITOR is a vi).
     pub fn mode_keys_emacs(&self) -> bool {

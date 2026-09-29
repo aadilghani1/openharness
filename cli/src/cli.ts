@@ -1945,7 +1945,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const title = engineSessionTitle(session, terminals.titleFor(session, titles))
       if (!title) continue
       const before = projectDisplayName(session)
-      const updated = registry.updateTitle(session.sessionId, title)
+      // Fall back to the agent id: a terminal that became an engine harness (e.g. opencode typed
+      // into a New Terminal) has no engine session id — nothing fired a session-start hook — but its
+      // pane title is still readable and should still rename the harness.
+      const updated = registry.updateTitle(session.sessionId || session.agentId, title)
       if (!updated) continue
       const after = projectDisplayName(updated)
       if (after !== before) {
