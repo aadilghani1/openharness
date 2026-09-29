@@ -298,6 +298,35 @@ try {
   await page.close()
   assert.ok((await owner.rpc('agents_list')).agents.some(a => a.id === agentId))
   pass('closing the browser leaves the harness running')
+
+  // A real daemon expires the stream if this disposable hn process stops sending alive/acks.
+  // Its tmux program must survive; waking the client must restore the existing pane and input.
+  await hn('new-session', '-d', '-s', 'recovery')
+  await hn('open-harness', '-s', agentId)
+  const terminalPane = (await hn('display-message', '-p', '#{pane_id}')).stdout.trim()
+  await until('real terminal before pause', async () => (await hn('capture-pane', '-p', '-t', terminalPane)).stdout.includes('HN_VIEWER_ENGINE_READY'))
+  const terminalBefore = (await exec(tmux, ['-L', prefix, 'list-panes', '-a', '-F', '#{pane_id} #{pane_pid}'], { env: daemonEnv })).stdout
+  const hnPid = Number((await hn('display-message', '-p', '#{pid}')).stdout.trim())
+  assert.ok(Number.isInteger(hnPid) && hnPid > 1)
+  const command = (await exec('ps', ['-p', String(hnPid), '-o', 'command='])).stdout.trim()
+  assert.ok(command.startsWith(hnBinary + ' ') && command.includes(`-L ${prefix} `), 'only stop this fixture hn')
+  const daemonLog = join(root, 'daemon.log')
+  const logStart = (await readFile(daemonLog, 'utf8')).length
+  process.kill(hnPid, 'SIGSTOP')
+  try {
+    await until('actual daemon heartbeat expiry', async () => (await readFile(daemonLog, 'utf8')).slice(logStart).includes("reason: 'heartbeat timeout'"), 45000)
+  } finally {
+    process.kill(hnPid, 'SIGCONT')
+  }
+  // capture-pane contains the previous screen during reconnect; the input round trip proves live I/O.
+  await until('real terminal accepts input after lease expiry', async () => {
+    await hn('send-keys', '-t', terminalPane, '-l', 'HN_LEASE_RECOVERED')
+    return (await hn('capture-pane', '-p', '-t', terminalPane)).stdout.includes('ECHO:HN_LEASE_RECOVERED')
+  }, 15000)
+  const terminalAfter = (await exec(tmux, ['-L', prefix, 'list-panes', '-a', '-F', '#{pane_id} #{pane_pid}'], { env: daemonEnv })).stdout
+  assert.equal(terminalAfter, terminalBefore, 'recovery must keep the same programs')
+  assert.equal((await hn('display-message', '-p', '-t', terminalPane, '#{pane_id}')).stdout.trim(), terminalPane)
+  pass('real daemon lease expiry recovers the same hn pane and process with working terminal input')
   await owner.rpc('agent_delete', { agentId: controlsId }); controlsId = null
   await owner.rpc('agent_delete', { agentId }); agentId = null
   complete = true

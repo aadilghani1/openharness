@@ -2569,6 +2569,26 @@ class AppNotifier extends ChangeNotifier {
     if (pending != null) unawaited(pending.catchError((_) => false));
   }
 
+  /*
+   * Change one device's settings.
+   *
+   * Addressed by the fleet's id: a desk can hold two robots, and a preference belongs to the glass it
+   * was set on. Only the named fields go — absent means unchanged, so two windows open on one device
+   * cannot overwrite each other with whatever each of them last saw.
+   *
+   * Nothing is awaited and nothing is written here optimistically. The device answers with what it now
+   * HOLDS, which arrives as the next `dial_status`; that is also what corrects this window when the
+   * change was refused.
+   */
+  void setDeviceSettings(String id, Map<String, Object?> patch) {
+    if (patch.isEmpty) return;
+    final machineId = localMachineState?.machine.machineId;
+    final connection = machineId == null ? null : _pool?[machineId];
+    if (connection == null) return;
+    final pending = connection.sendTerminalFrame('dial_settings', {'id': id, ...patch});
+    unawaited(pending.catchError((_) => false));
+  }
+
   /// Tell the daemon which agents have a tile on the grid, so the dial can stay
   /// quiet about a turn that finished in front of the person.
   ///

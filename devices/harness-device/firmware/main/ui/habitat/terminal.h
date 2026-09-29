@@ -4,17 +4,14 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-// THE FACE, as a build fact rather than a literal.
+// THE FACE. One device, one size: the 466 round dial.
 //
-// 466 is the round dial and 720 is the Pro. It arrives as a -D from main/CMakeLists.txt instead of from
-// sdkconfig.h on purpose: this header is also compiled by the host-side layout and damage benches, which
-// have no IDF config at all, and they want the dial's geometry. So the default lives here and only the
-// P4 build overrides it.
-#ifndef HT_FACE_PX
-#define HT_FACE_PX 466
-#endif
-#define HT_WIDTH HT_FACE_PX
-#define HT_HEIGHT HT_FACE_PX
+// This was a -D from the build for as long as there were two boards; it is a literal again now that the
+// Pro has its own firmware. Kept as a named pair rather than 466 sprinkled through the compositor,
+// because the arithmetic that reads it — chords, the rim annulus, the damage bands — is about a face
+// and not about a number.
+#define HT_WIDTH 466
+#define HT_HEIGHT 466
 #define HT_RUNS 40
 #define HT_TEXT_BYTES 128
 #define HT_DAMAGE_MAX 24
@@ -31,14 +28,35 @@ extern const ht_font_t ht_right_20, ht_right_28, ht_open_28;
 extern const uint8_t ht_right_20_ink[1][4];
 // One authored outline bell in a normal terminal cell, not an emoji font.
 #define HT_BELL "\xee\x80\x80"
+// The microphone on the Focus face's [ say ]. Private use, one past the bell. A 26 px round cell like
+// ht_bell_footer's, because a mic squeezed into a 17 px letter cell is a smudge — and like the bell it
+// is drawn DIRECTLY rather than routed through glyph_font(), so it never has to match a parent font.
+#define HT_MIC "\xee\x80\x81"
+#define HT_SPARK "\xee\x80\x82"
+// One bar of the recording waveform, in sixteen heights — ht_wave's cell is ONE bar, not the whole
+// meter, so the seven bars are seven runs placed at the old firmware's own 22.4 px pitch and each
+// picks its own height. HT_WAVE_LEVELS - 1 is the tallest, 121 px, which is what bar four rested at.
+#define HT_WAVE_FIRST  0xe010u
+#define HT_WAVE_LEVELS 16
 extern const ht_font_t ht_bell_20, ht_bell_28;
-extern const ht_font_t ht_bell_footer, ht_done_28, ht_failed_28;
+extern const ht_font_t ht_bell_footer, ht_done_28, ht_failed_28, ht_mic_footer;
+// The voice screen: one sparkle, and six bar heights that a row of nine draws a waveform with.
+extern const ht_font_t ht_spark, ht_wave;
+// One badge per engine, from U+E020 in the order focus.c lists them. 24 px in a 38 px cell, so a
+// mark sits beside a name in ht_mono_28 without being squeezed into a letter's width.
+extern const ht_font_t ht_engine;
+#define HT_ENGINE_FIRST 0xe020u
 #define HT_DONE "\xe2\x9c\x93"
 #define HT_FAILED "\xe2\x9c\x97"
 extern const uint8_t ht_bell_20_ink[1][4];
 // The lock's dot is the only 40 px glyph used by the daily UI. Keep its exact
 // pixels without retaining the other 94 glyphs of the gallery font in flash.
 extern const ht_font_t ht_lock_dot;
+// Vietnamese, one atlas per mono size. ht_font_t carries a single contiguous range and a dense
+// 32..0x1EF9 would be 7,898 cells, so these cover 0x1EA0..0x1EF9 plus an eight-cell tail holding
+// the letters that live outside it (A-breve, D-stroke, O-horn, U-horn and their lowercase).
+// Same fixed cell as the mono face they stand in for; terminal.c routes them in glyph_font().
+extern const ht_font_t ht_viet_16, ht_viet_20, ht_viet_24, ht_viet_28;
 typedef struct {
     int16_t x, y, w, h;
 } ht_rect_t;

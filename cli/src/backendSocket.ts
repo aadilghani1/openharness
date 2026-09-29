@@ -324,8 +324,9 @@ export function deviceAgentRow(raw: unknown): boolean {
 }
 
 /**
- * How many models the DEVICE picker may receive. Matches its own PICK_MAX (ui_screens.c) so the wheel
- * never renders more rows than it was built for; the web picker is unbounded and still gets everything.
+ * How many models the DEVICE picker may receive. It has room for 48 (`models[48]` in ui_habitat.c) and
+ * is handed half of that, so the list it draws is never one it was not built for; the web picker is
+ * unbounded and still gets everything.
  */
 const DEVICE_PICKER_MAX_MODELS = 24
 

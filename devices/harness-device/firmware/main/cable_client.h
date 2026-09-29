@@ -334,3 +334,10 @@ bool cable_client_answer_reviewed(const char *agent_id, const char *request_id, 
                                   const uint8_t *choices, const char drafts[][48], int count);
 
 void cable_client_draft(const char *id, const char *op, uint32_t request, uint32_t revision, int delta);
+
+// ── SETTINGS ────────────────────────────────────────────────────────────────────────────────────────
+// The device's preferences live on the desktop, because a 466 circle has no room for a settings tree.
+// The device still owns them: it reports what it holds with every `hello` and again whenever they
+// change here, and answers a `settings.set` with `settings.state` — on refusal too, carrying the values
+// read back, so a rejected change corrects the app instead of leaving it hopeful.
+void cable_client_report_settings(void);

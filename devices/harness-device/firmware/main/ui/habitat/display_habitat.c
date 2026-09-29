@@ -16,15 +16,8 @@ void cable_transport_benchmark(void);
 #include "board.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-// The Pro. Its bring-up is shared with its LVGL renderer (ui/pro_panel_bus.c) rather than copied, so a
-// corrected DSI timing or a changed backlight curve cannot apply to one renderer and not the other.
-#include "esp_lcd_mipi_dsi.h"
-#include "pro_panel_bus.h"
-#else
 #include "esp_lcd_co5300.h"
 #include "driver/spi_master.h"
-#endif
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
@@ -63,7 +56,6 @@ enum { RENDER_MODEL, RENDER_POWER, RENDER_DAMAGE, RENDER_RASTER, RENDER_DMA,
        RENDER_SUBMIT, RENDER_HEALTH, RENDER_WAIT };
 static atomic_uint render_stage, render_progress_ms;
 static esp_timer_handle_t render_guard;
-#if !defined(CONFIG_IDF_TARGET_ESP32P4)
 // The CO5300's power-on register sequence. The Pro has no equivalent here: the ST7703's own
 // init lives inside waveshare/esp_lcd_st7703 and is applied by esp_lcd_panel_init().
 static const co5300_lcd_init_cmd_t init_cmds[] = {
@@ -82,7 +74,6 @@ static const co5300_lcd_init_cmd_t init_cmds[] = {
     {0x11, NULL, 0, 600},
     {0x29, NULL, 0, 0},
 };
-#endif
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 static uint32_t elapsed_since(const atomic_uint *stamp)
 {
@@ -209,15 +200,6 @@ static bool fence_release(void)
     // the DPI one (esp_lcd_panel_dpi.c). Saying so is the contract; yielding here as well is not.
     return wake == pdTRUE;
 }
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-static bool color_done(esp_lcd_panel_handle_t p, esp_lcd_dpi_panel_event_data_t *event, void *ctx)
-{
-    (void)p;
-    (void)event;
-    (void)ctx;
-    return fence_release();
-}
-#else
 static bool color_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *event,
                        void *ctx)
 {
@@ -226,7 +208,6 @@ static bool color_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data
     (void)ctx;
     return fence_release();
 }
-#endif
 void display_lock_at(const char *who)
 {
     (void)who;
@@ -408,13 +389,7 @@ static void render_task(void *arg)
         bool on = !display_is_asleep();
         if (on != panel_on) {
             render_progress(RENDER_POWER);
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-            // Backlit, so "off" is the light. Cutting the DSI stream would need a full re-init to come
-            // back from, and the wake has to feel instant.
-            pro_backlight_enable(on);
-#else
             ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, on));
-#endif
             panel_on = on;
         }
         // A touch/PWR wake can arrive after we sampled `on`, including during
@@ -465,17 +440,6 @@ void display_init(void)
     model_lock = xSemaphoreCreateRecursiveMutex();
     dma_done = xSemaphoreCreateBinary();
     assert(model_lock && dma_done);
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-    // The whole bring-up is ui/pro_panel_bus.c's, shared with the LVGL renderer. All that is left here
-    // is the fence callback, because what it signals is this renderer's business, not the panel's.
-    pro_backlight_init();
-    ESP_ERROR_CHECK(pro_panel_bus_open(&panel, NULL));
-    const esp_lcd_dpi_panel_event_callbacks_t cbs = {.on_color_trans_done = color_done};
-    ESP_ERROR_CHECK(esp_lcd_dpi_panel_register_event_callbacks(panel, &cbs, NULL));
-    // Full brightness only now. The boost has been enabled since pro_backlight_init() with duty at 0,
-    // so nothing was ever shown of an uninitialised framebuffer.
-    pro_backlight_set(255);
-#else
     const spi_bus_config_t bus =
         CO5300_PANEL_BUS_QSPI_CONFIG(BSP_LCD_QSPI_SCLK, BSP_LCD_QSPI_D0, BSP_LCD_QSPI_D1,
                                      BSP_LCD_QSPI_D2, BSP_LCD_QSPI_D3, HT_WIDTH * STRIP_LINES * 2);
@@ -497,7 +461,6 @@ void display_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
-#endif
     for (int i = 0; i < 2; i++) {
         pixels[i] =
             heap_caps_malloc(HT_WIDTH * STRIP_LINES * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
@@ -509,10 +472,6 @@ void display_init(void)
     touch_init();
     ESP_LOGI("habitat", "direct C renderer on a %dpx face: two %d-byte internal DMA buffers over %s",
              HT_WIDTH, HT_WIDTH * STRIP_LINES * 2,
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-             "MIPI-DSI");
-#else
              "40MHz QSPI");
-#endif
 }
 void display_init_ota(void) { display_init(); }
