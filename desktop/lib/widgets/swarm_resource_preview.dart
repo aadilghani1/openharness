@@ -24,6 +24,7 @@ import 'api_picker_form.dart';
 import 'swarm_search_preview.dart';
 import 'swarm_preview_scroll.dart';
 import 'terminal_text_action.dart';
+import 'desktop_chrome.dart';
 
 const resourcePickerCommands = {
   'picker.resource_toggle',
@@ -1075,8 +1076,9 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     // The status word is the catalog's own [localStatus] so the pane and the
     // list row can never disagree (both come from the same [_refresh] snapshot);
     // no re-derivation from a possibly-stale operation on the pane side.
-    final statusWord =
-        local != null ? catalog.localStatus(local, controller: owner) : entry.status;
+    final statusWord = local != null
+        ? catalog.localStatus(local, controller: owner)
+        : entry.status;
 
     // Suitability against this machine's usable memory, per plan §5. Only local
     // models carry a "fits this machine" meaning; shared/api/subscription nodes
@@ -1120,10 +1122,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     Widget errorLine(String text) {
       return Padding(
         padding: EdgeInsets.only(top: cell.height),
-        child: Text(
-          text,
-          style: terminalContentStyle(color: theme.yellow),
-        ),
+        child: Text(text, style: terminalContentStyle(color: theme.yellow)),
       );
     }
 
@@ -1140,10 +1139,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
               .copyWith(fontWeight: FontWeight.bold),
         ),
         SizedBox(height: cell.height),
-        Text(
-          statusWord,
-          style: terminalContentStyle(color: theme.foreground),
-        ),
+        Text(statusWord, style: terminalContentStyle(color: theme.foreground)),
         if (widget.search.modelUseErrorId == entry.id &&
             widget.search.modelUseError != null)
           errorLine(widget.search.modelUseError!),
@@ -1157,8 +1153,10 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           labelValue('Size', bytesLabel(local.sizeBytes)),
           labelValue('Quant', local.quant ?? '—'),
           if (local.running && local.tokensPerSecond != null)
-            labelValue('Speed',
-                '${local.tokensPerSecond!.toStringAsFixed(1)} tok/s'),
+            labelValue(
+              'Speed',
+              '${local.tokensPerSecond!.toStringAsFixed(1)} tok/s',
+            ),
           if (local.running &&
               local.requests != null &&
               local.windowSeconds != null)
@@ -1166,14 +1164,16 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
               'Window',
               '${local.requests!.toInt()} req / ${windowLabel(local.windowSeconds)}',
             ),
-          if (local.resting) labelValue('State', 'Resting until your next message'),
+          if (local.resting)
+            labelValue('State', 'Resting until your next message'),
           if (!local.downloaded &&
               !owner.supportsDownload &&
               local.canStart &&
               !pending &&
               !opActive)
             errorLine(
-                'Downloads and starts on ${entry.node ?? 'this machine'}.'),
+              'Downloads and starts on ${entry.node ?? 'this machine'}.',
+            ),
         ],
         if (entry.api case final api?) ...[
           labelValue('Host', api.baseUrl),
@@ -1435,6 +1435,20 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           grid.AppTheme.palette.value,
           terminalThemeStore.value,
         );
+        final desktop = DesktopChrome.of(context);
+        final actions = [
+          if (!_isManagement)
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                cell.width * 2,
+                cell.height,
+                cell.width * 2,
+                0,
+              ),
+              child: _actionButtons(),
+            ),
+          _controlHints(),
+        ];
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -1480,6 +1494,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                 ),
               ),
             Expanded(
+              flex: desktop ? 3 : 1,
               child: _editingApi
                   ? ApiPickerForm(
                       key: _apiFormKey,
@@ -1533,17 +1548,19 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                 !widget.search.showsTypeHints &&
                 !_editingMachine &&
                 !_editingApi) ...[
-              if (!_isManagement)
-                Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    cell.width * 2,
-                    cell.height,
-                    cell.width * 2,
-                    0,
+              if (desktop)
+                Flexible(
+                  flex: 2,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: actions,
+                    ),
                   ),
-                  child: _actionButtons(),
-                ),
-              _controlHints(),
+                )
+              else
+                ...actions,
             ],
           ],
         );

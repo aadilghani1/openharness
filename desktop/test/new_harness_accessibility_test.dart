@@ -60,9 +60,10 @@ void main() {
         .controller;
     expect(box.engine, 'claude');
     expect(harnessChoicesActive(tester), isFalse);
-    await key(tester, LogicalKeyboardKey.arrowDown);
-    expect(box.field, NewHarnessField.harness);
-    await key(tester, LogicalKeyboardKey.arrowDown);
+    // Arrow keys now edit the task; project is an ordinary accessible button.
+    final task = find.byKey(const ValueKey('new-harness-task'));
+    expect(tester.widget<TextField>(task).focusNode!.hasFocus, isTrue);
+    await tester.tap(find.byKey(const ValueKey('new-harness-field-project')));
     expect(box.field, NewHarnessField.projectMenu);
     expect(input, isEmpty);
     semantics.dispose();

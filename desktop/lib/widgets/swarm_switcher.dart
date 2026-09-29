@@ -17,6 +17,7 @@ import '../shared/theme/status_line_style.dart';
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
+import 'desktop_chrome.dart';
 import 'search_result_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -465,6 +466,7 @@ class SwarmSearchResults extends StatefulWidget {
     this.bios = false,
     this.header,
     this.previewBuilder,
+    this.showPreview = true,
   });
   final SwarmSearchController search;
   final ValueChanged<SwarmSearchSelection> onChoose;
@@ -478,6 +480,7 @@ class SwarmSearchResults extends StatefulWidget {
   final bool bios;
   final Widget? header;
   final Widget Function()? previewBuilder;
+  final bool showPreview;
   @override
   State<SwarmSearchResults> createState() => _SwarmSearchResultsState();
 }
@@ -521,7 +524,8 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
     required bool sideBySide,
     required bool unavailable,
   }) {
-    final stacked = search.hasPreview && !sideBySide;
+    final hasPreview = widget.showPreview && search.hasPreview;
+    final stacked = hasPreview && !sideBySide;
     if (stacked && search.resultsFromBottom) return constraints.maxHeight;
     final available = stacked
         ? (constraints.maxHeight - 8) * 5 / 11
@@ -537,7 +541,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
         : widget.terminal
         ? 9
         : 12;
-    final count = search.hasPreview
+    final count = hasPreview
         ? capacity.clamp(1, maxRows)
         : search.rows.length.clamp(1, capacity.clamp(1, maxRows));
     final listHeight = chrome + count * _rowHeight;
@@ -670,6 +674,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
       terminalThemeStore.value,
     );
     final scale = MediaQuery.textScalerOf(context);
+    final desktop = DesktopChrome.of(context);
     final cell = widget.bios ? terminalCellSizeOf(context) : Size.zero;
     final acceptKey = effectiveCommandHint(
       context,
@@ -690,7 +695,8 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final sideBySide = constraints.maxWidth >= widget.sideBySideMinWidth;
-        final resultWidth = search.hasPreview && sideBySide
+        final resultWidth =
+            widget.showPreview && search.hasPreview && sideBySide
             ? (constraints.maxWidth - 1) * .6
             : constraints.maxWidth;
         final stacked =
@@ -712,6 +718,10 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           // All Cmd-P types put context in the preview and use one row per
           // result. Other pickers retain their descriptions and spacing.
           _rowHeight = cell.height * (singleLine ? 1 : 3);
+        }
+        if (desktop) {
+          _rowHeight =
+              scale.scale(14) * (search.isCommandMode ? 1.5 : 2.8) + 16;
         }
         final height = widget.fitRows
             ? _fittedHeight(
@@ -816,14 +826,20 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                     if (focused) _focusResult(row.id);
                   },
                   selected: highlighted,
-                  selectedColor: Colors.white,
+                  selectedColor: desktop
+                      ? DesktopChrome.foreground
+                      : Colors.white,
                   hoverColor: Colors.transparent,
                   // BoxRowHighlight draws the selection, the same
                   // in both modes of the box.
                   selectedTileColor: Colors.transparent,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(
-                      widget.terminal ? 0 : 6,
+                      widget.terminal
+                          ? 0
+                          : desktop
+                          ? 10
+                          : 6,
                     ),
                   ),
                   dense: true,
@@ -836,6 +852,22 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                   // selection; prefixes only appear in the input.
                   leading: widget.terminal
                       ? null
+                      : desktop
+                      ? Icon(
+                          row.isProject
+                              ? Icons.folder_outlined
+                              : row.isMachine
+                              ? Icons.laptop_mac_rounded
+                              : row.isModel
+                              ? Icons.auto_awesome_outlined
+                              : row.isStore
+                              ? Icons.widgets_outlined
+                              : row.isCommand
+                              ? Icons.keyboard_command_key_rounded
+                              : Icons.terminal_rounded,
+                          size: 18,
+                          color: DesktopChrome.muted,
+                        )
                       : Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -883,9 +915,18 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                     search: search,
                     row: row,
                     terminal: widget.terminal,
-                    stacked: stacked,
+                    stacked: desktop || stacked,
                   ),
-                  trailing: widget.terminal
+                  trailing: desktop
+                      ? row.shortcut == null
+                            ? null
+                            : Text(
+                                row.shortcut!,
+                                style: grid.AppType.monoMeta(
+                                  color: DesktopChrome.muted,
+                                ),
+                              )
+                      : widget.terminal
                       ? (highlighted
                             ? Text(
                                 acceptKey ?? '',
@@ -942,7 +983,18 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                   _focusResult(row.id);
                 }
               },
-              child: widget.bios
+              child: desktop
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Material(
+                        color: highlighted
+                            ? DesktopChrome.foreground.withValues(alpha: .09)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        child: tile,
+                      ),
+                    )
+                  : widget.bios
                   ? tile
                   : BoxRowHighlight(
                       terminal: widget.terminal,
@@ -997,7 +1049,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                               : search.adding
                               ? 'No matching harnesses'
                               : 'No matching results',
-                          style: widget.bios
+                          style: desktop
+                              ? DesktopChrome.text(color: DesktopChrome.muted)
+                              : widget.bios
                               ? terminalContentStyle(
                                   color: theme.foreground.withValues(
                                     alpha: .54,
@@ -1069,7 +1123,12 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                                     child: Text(
                                       item.heading!,
                                       maxLines: 1,
-                                      style: widget.bios
+                                      style: desktop
+                                          ? DesktopChrome.text(
+                                              size: 12,
+                                              color: DesktopChrome.muted,
+                                            )
+                                          : widget.bios
                                           ? terminalContentStyle(
                                               color: theme.foreground
                                                   .withValues(alpha: .54),
@@ -1106,7 +1165,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                                 : 'No room to open this ${selected.isSwarm || selected.isGroup ? 'group' : 'harness'}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: widget.bios
+                            style: desktop
+                                ? DesktopChrome.text(color: DesktopChrome.muted)
+                                : widget.bios
                                 ? terminalContentStyle(
                                     color: theme.foreground.withValues(
                                       alpha: .54,
@@ -1127,7 +1188,8 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           ),
         );
         final preview =
-            search.hasPreview &&
+            widget.showPreview &&
+                search.hasPreview &&
                 (!widget.bios || sideBySide || widget.previewBuilder != null)
             ? widget.previewBuilder?.call() ??
                   SwarmSearchPreview(
@@ -1324,6 +1386,80 @@ class _SearchRowContentState extends State<_SearchRowContent> {
             (terms.isEmpty || matches.length < terms.take(12).toSet().length)
         ? hit
         : null;
+    if (DesktopChrome.of(context)) {
+      final unavailable = widget.search.sessionUnavailable(row);
+      final api = row.isModel ? widget.search.apiRowState(row) : null;
+      final action = row.isModel ? widget.search.modelRowAction(row) : null;
+      final status = unavailable ?? action ?? api?.hint;
+      final activity = widget.search.activityOf(row);
+      final age = activity == null
+          ? null
+          : widget.search.openedAt.difference(activity).inMinutes < 1
+          ? 'now'
+          : harnessActivityAge(activity, widget.search.openedAt);
+      final detail = row.terminalDetail ?? row.detail;
+      return Semantics(
+        label: '${row.title}\n$detail${status == null ? '' : ', $status'}',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                if (api != null) ...[
+                  Icon(
+                    api.open
+                        ? Icons.expand_more_rounded
+                        : Icons.chevron_right_rounded,
+                    size: 16,
+                    color: DesktopChrome.muted,
+                  ),
+                  const SizedBox(width: 4),
+                ],
+                Expanded(
+                  child: SearchResultText(
+                    row.title,
+                    matches: matches.where((match) => match.title),
+                    style: DesktopChrome.text(
+                      color: unavailable == null
+                          ? DesktopChrome.foreground
+                          : DesktopChrome.muted,
+                    ),
+                  ),
+                ),
+                if (status ?? age case final trailing?) ...[
+                  const SizedBox(width: 12),
+                  Text(
+                    trailing,
+                    style: DesktopChrome.text(
+                      size: 12,
+                      color: DesktopChrome.muted,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            if (!row.isCommand && (detail.isNotEmpty || snippet != null)) ...[
+              const SizedBox(height: 2),
+              snippet != null
+                  ? SessionSnippetText(
+                      snippet,
+                      style: DesktopChrome.text(
+                        size: 12,
+                        color: DesktopChrome.muted,
+                      ),
+                    )
+                  : SearchResultText(
+                      detail,
+                      matches: matches.where((match) => !match.title),
+                      style: grid.AppType.monoMeta(color: DesktopChrome.muted)
+                          .copyWith(fontSize: 12),
+                    ),
+            ],
+          ],
+        ),
+      );
+    }
     if (widget.bios) {
       final theme = terminalThemeFor(
         grid.AppTheme.palette.value,
@@ -1341,11 +1477,11 @@ class _SearchRowContentState extends State<_SearchRowContent> {
         color: row.isNote
             ? muted
             : !widget.enabled ||
-                (row.isModel &&
-                    !widget.search.isModelDownloadsRow(row) &&
-                    !widget.search.canExpandApi(row) &&
-                    !widget.search.canSelectModel(row) &&
-                    !widget.search.canGetModel(row))
+                  (row.isModel &&
+                      !widget.search.isModelDownloadsRow(row) &&
+                      !widget.search.canExpandApi(row) &&
+                      !widget.search.canSelectModel(row) &&
+                      !widget.search.canGetModel(row))
             ? theme.foreground.withValues(alpha: .28)
             : row.isCreate || widget.search.isModelDownloadsRow(row)
             ? theme.cursor
@@ -1440,7 +1576,8 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                         maxLines: 1,
                         style: terminalContentStyle(color: muted),
                       ),
-                    ] else if (widget.search.modelRowStatus(row) case final status?) ...[
+                    ] else if (widget.search.modelRowStatus(row)
+                        case final status?) ...[
                       SizedBox(width: cell.width * 2),
                       Text(
                         status,

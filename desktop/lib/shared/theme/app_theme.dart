@@ -927,11 +927,11 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
   final textTheme = _appTextTheme(scheme.onSurface, scheme.onSurfaceVariant);
 
   return ThemeData(
-    filledButtonTheme: FilledButtonThemeData(style: _filledButtonStyle()),
+    filledButtonTheme: FilledButtonThemeData(style: _filledButtonStyle(scheme)),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: _outlinedButtonStyle(scheme),
     ),
-    textButtonTheme: TextButtonThemeData(style: _textButtonStyle()),
+    textButtonTheme: TextButtonThemeData(style: _textButtonStyle(scheme)),
     useMaterial3: true,
     brightness: brightness,
     colorScheme: scheme,
@@ -1400,7 +1400,7 @@ OutlineInputBorder _fieldBorder(Color color, {double width = 1}) =>
 /// **not** inherit `fontFamily` from the text theme, so a button must receive
 /// the UI font explicitly.
 TextStyle get _buttonTextStyle =>
-    AppType.label(fontWeight: AppControl.fontWeight);
+    AppType.body(fontWeight: AppControl.fontWeight);
 
 /// A text field's own text: [AppType.mono] — what the user types is set the
 /// way a terminal sets it, at the scale of the button beside it.
@@ -1420,9 +1420,7 @@ TextStyle _fieldTextStyle(Color color) => AppType.mono(color: color);
 /// the `Icon` itself still has to be handed this size at the call site.
 const double kFieldIconSize = 18;
 
-RoundedRectangleBorder get _buttonShape => RoundedRectangleBorder(
-  borderRadius: BorderRadius.circular(AppControl.radius),
-);
+StadiumBorder get _buttonShape => const StadiumBorder();
 
 /// The primary action: a solid accent capsule.
 /// A filled button that destroys something.
@@ -1441,7 +1439,13 @@ ButtonStyle dangerButtonStyle() => FilledButton.styleFrom(
   foregroundColor: Colors.white,
 );
 
-ButtonStyle _filledButtonStyle() => FilledButton.styleFrom(
+ButtonStyle _filledButtonStyle(ColorScheme scheme) => FilledButton.styleFrom(
+  backgroundColor: Color.alphaBlend(
+    scheme.onSurface.withValues(alpha: .10),
+    scheme.surface,
+  ),
+  foregroundColor: scheme.onSurface,
+  side: BorderSide(color: scheme.onSurface.withValues(alpha: .14)),
   animationDuration: Duration.zero,
   minimumSize: Size(0, AppControl.heightScaled),
   padding: AppControl.paddingScaled,
@@ -1468,14 +1472,18 @@ ButtonStyle _outlinedButtonStyle(ColorScheme scheme) =>
       padding: AppControl.paddingScaled,
       shape: _buttonShape,
       textStyle: _buttonTextStyle,
-      side: BorderSide(color: scheme.outline),
+      side: BorderSide(color: scheme.onSurface.withValues(alpha: .14)),
+      backgroundColor: scheme.onSurface.withValues(alpha: .04),
       foregroundColor: scheme.onSurface,
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       visualDensity: VisualDensity.standard,
     );
 
-/// The tertiary action: text only, for the quiet way out of a dialog.
-ButtonStyle _textButtonStyle() => TextButton.styleFrom(
+/// A quiet capsule for secondary dialog and workspace actions.
+ButtonStyle _textButtonStyle(ColorScheme scheme) => TextButton.styleFrom(
+  foregroundColor: scheme.onSurface,
+  backgroundColor: scheme.onSurface.withValues(alpha: .055),
+  side: BorderSide(color: scheme.onSurface.withValues(alpha: .10)),
   animationDuration: Duration.zero,
   minimumSize: Size(0, AppControl.heightScaled),
   padding: AppControl.paddingSmallScaled,

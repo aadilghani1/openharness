@@ -205,7 +205,7 @@ void main() {
         expect(
           find.descendant(
             of: find.byKey(const ValueKey('new-harness-field-start')),
-            matching: find.text('New Harness'),
+            matching: find.text('Start'),
           ),
           findsOneWidget,
         );

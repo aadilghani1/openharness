@@ -16,6 +16,7 @@ import '../state/new_harness.dart';
 import '../state/device_form.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
+import 'desktop_chrome.dart';
 
 /// Agent, Project, and collapsed Options in a compact terminal grid.
 /// Enter on the selected launch action starts with the displayed defaults.
@@ -31,6 +32,7 @@ class NewHarnessForm extends StatefulWidget {
     this.onLinkProfile,
     this.onNeedsForm,
     this.devicePort,
+    this.desktop = false,
   });
 
   final NewHarnessController controller;
@@ -39,6 +41,7 @@ class NewHarnessForm extends StatefulWidget {
   final FutureOr<void> Function()? onBrowse;
   final VoidCallback? onStore, onLinkProfile, onNeedsForm;
   final DeviceFormPort? devicePort;
+  final bool desktop;
 
   @override
   State<NewHarnessForm> createState() => _NewHarnessFormState();
@@ -61,6 +64,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   final _focus = FocusNode(debugLabel: 'new-harness-form');
   final _inputFocus = FocusNode(debugLabel: 'new-harness-query');
   final _queryText = TextEditingController();
+  late final _taskText = TextEditingController(text: box.task);
+  final _taskFocus = FocusNode(debugLabel: 'New harness task');
   final _fieldsScroll = ScrollController();
   final _choicesScroll = ScrollController();
   _Row _row = _Row.start;
@@ -102,7 +107,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       if (!mounted) return;
       if (box.checking) _row = _Row.start;
       _syncField();
-      _focus.requestFocus();
+      (widget.desktop && !box.checking ? _taskFocus : _focus).requestFocus();
     });
   }
 
@@ -113,6 +118,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     terminalThemeStore.removeListener(_onBox);
     _inputFocus.dispose();
     _queryText.dispose();
+    _taskText.dispose();
+    _taskFocus.dispose();
     _fieldsScroll.dispose();
     _choicesScroll.dispose();
     _focus.dispose();
@@ -162,7 +169,12 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   void _focusEditor() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      (_picking ? _inputFocus : _focus).requestFocus();
+      (_picking
+              ? _inputFocus
+              : widget.desktop
+              ? _taskFocus
+              : _focus)
+          .requestFocus();
     });
   }
 
@@ -242,9 +254,14 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   // Names in existing lists, never a shell command, folder path or repository
   // URL. Speaking filters; choosing and creating remain distinct gestures.
   static const _voiceSearchFields = {
-    NewHarnessField.harness, NewHarnessField.agent, NewHarnessField.projectMenu,
-    NewHarnessField.machine, NewHarnessField.model, NewHarnessField.branch,
-    NewHarnessField.profile, NewHarnessField.mode,
+    NewHarnessField.harness,
+    NewHarnessField.agent,
+    NewHarnessField.projectMenu,
+    NewHarnessField.machine,
+    NewHarnessField.model,
+    NewHarnessField.branch,
+    NewHarnessField.profile,
+    NewHarnessField.mode,
   };
 
   Map<String, dynamic> _deviceSnapshot() {
@@ -273,8 +290,12 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       'position': index < 0 ? 0 : index + 1,
       'total': count,
       'busy': box.busy || box.linkingProfile,
-      'canQuery': !box.locked && !_isComposing() && _fieldOf(_row) != null &&
-          blocked == null && _voiceSearchFields.contains(box.field),
+      'canQuery':
+          !box.locked &&
+          !_isComposing() &&
+          _fieldOf(_row) != null &&
+          blocked == null &&
+          _voiceSearchFields.contains(box.field),
       'query': box.query,
       'enabled':
           !box.busy &&
@@ -336,11 +357,16 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       if (!box.locked) _picking ? _stepMatch(delta) : _moveRow(delta);
     } else if (op == 'activate') {
       if (_deviceSnapshot()['enabled'] == true) _confirm();
-    } else if (op == 'query' && _deviceSnapshot()['canQuery'] == true && text != null) {
+    } else if (op == 'query' &&
+        _deviceSnapshot()['canQuery'] == true &&
+        text != null) {
       // A recognizer often adds a final period to a spoken name. Preserve the
       // name, Unicode and internal punctuation; never interpret it as a command.
-      final query = text.replaceAll(RegExp(r'[\r\n]+'), ' ').trim()
-          .replaceFirst(RegExp(r'[.!?。！？]+$'), '').trim();
+      final query = text
+          .replaceAll(RegExp(r'[\r\n]+'), ' ')
+          .trim()
+          .replaceFirst(RegExp(r'[.!?。！？]+$'), '')
+          .trim();
       if (query.isNotEmpty) _onTyped(query);
     }
     if (mounted) {
@@ -495,8 +521,11 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       _blocked(_row) == null;
 
   bool _isComposing() =>
-      _queryText.value.composing.isValid &&
-      !_queryText.value.composing.isCollapsed;
+      (_queryText.value.composing.isValid &&
+          !_queryText.value.composing.isCollapsed) ||
+      (_taskFocus.hasFocus &&
+          _taskText.value.composing.isValid &&
+          !_taskText.value.composing.isCollapsed);
 
   /// Typing filters the focused field's choices; Return commits the selection.
   void _onTyped(String value) {
@@ -790,6 +819,22 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
+    if (widget.desktop && !_picking) {
+      if (_isComposing()) return KeyEventResult.skipRemainingHandlers;
+      if (event.logicalKey == LogicalKeyboardKey.escape) {
+        if (event is KeyDownEvent) _cancel();
+        return KeyEventResult.handled;
+      }
+      if (KeymapTheme.of(context) == null &&
+          HardwareKeyboard.instance.isMetaPressed &&
+          event.logicalKey == LogicalKeyboardKey.enter) {
+        if (event is KeyDownEvent) unawaited(_start());
+        return KeyEventResult.handled;
+      }
+      // The multiline editor and native button focus own ordinary editing,
+      // Enter, and Tab. Typing must never become a configuration search.
+      return KeyEventResult.ignored;
+    }
     if (event is KeyRepeatEvent &&
         (event.logicalKey == LogicalKeyboardKey.enter ||
             event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
@@ -906,16 +951,24 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   TerminalTheme get _theme =>
       terminalThemeFor(grid.AppTheme.palette.value, terminalThemeStore.value);
 
-  Color get _faint => _theme.foreground.withValues(alpha: .54);
+  Color get _faint => widget.desktop
+      ? DesktopChrome.muted
+      : _theme.foreground.withValues(alpha: .54);
 
   // Only the column that owns the keys carries Open Harness's full highlight.
-  Color get _activeFill => _theme.selection;
+  Color get _activeFill => widget.desktop
+      ? DesktopChrome.foreground.withValues(alpha: .10)
+      : _theme.selection;
 
   /// A machine that cannot be picked — unlinked or offline — in dark grey,
   /// darker than the faint of an idle list, so it recedes rather than warns.
-  Color get _unavailableInk => _theme.foreground.withValues(alpha: .28);
+  Color get _unavailableInk => widget.desktop
+      ? DesktopChrome.foreground.withValues(alpha: .38)
+      : _theme.foreground.withValues(alpha: .28);
 
-  Color get _idleFill => _theme.foreground.withValues(alpha: .04);
+  Color get _idleFill =>
+      (widget.desktop ? DesktopChrome.foreground : _theme.foreground)
+          .withValues(alpha: .04);
 
   /// One face, one size, everywhere on this screen — and it is the
   /// TERMINAL's size, the one ⌘+ and ⌘− set, not the UI's fixed 13pt. A box
@@ -924,8 +977,11 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// Its line height IS the row, so every line of every text on this form —
   /// wrapped ones included — lands on the grid by itself. A two-line notice
   /// is exactly two rows; nothing needs a box around it to stay in step.
-  TextStyle _ink([Color? color]) =>
-      terminalContentStyle(color: color ?? _theme.foreground);
+  TextStyle _ink([Color? color]) => widget.desktop
+      ? DesktopChrome.text(
+          color: color == _theme.foreground ? DesktopChrome.foreground : color,
+        )
+      : terminalContentStyle(color: color ?? _theme.foreground);
 
   /// THE GRID. A terminal has two units and positions nothing in pixels:
   ///
@@ -943,6 +999,11 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   double _rowHeight = 20;
 
   void _measureGrid(BuildContext context) {
+    if (widget.desktop) {
+      _cell = 8;
+      _rowHeight = (MediaQuery.textScalerOf(context).scale(14) * 1.45 + 12);
+      return;
+    }
     final cell = terminalCellSizeOf(context);
     _cell = cell.width;
     _rowHeight = cell.height;
@@ -1013,14 +1074,20 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       contextKind: KeymapContext.picker,
       composing: _isComposing,
       actions: {
-        'picker.accept': () => _runCommand(_confirm),
+        if (widget.desktop)
+          'picker.add_here': () {
+            if (!_isComposing() && !_picking) unawaited(_start());
+          },
+        if (!widget.desktop || _picking) ...{
+          'picker.accept': () => _runCommand(_confirm),
+          'picker.next': () =>
+              _runCommand(() => _picking ? _stepMatch(1) : _moveRow(1)),
+          'picker.previous': () =>
+              _runCommand(() => _picking ? _stepMatch(-1) : _moveRow(-1)),
+          'picker.complete': () => _runCommand(_switchPane),
+          'picker.complete_back': () => _runCommand(_switchPane),
+        },
         'picker.cancel': () => _runCommand(_cancel),
-        'picker.next': () =>
-            _runCommand(() => _picking ? _stepMatch(1) : _moveRow(1)),
-        'picker.previous': () =>
-            _runCommand(() => _picking ? _stepMatch(-1) : _moveRow(-1)),
-        'picker.complete': () => _runCommand(_switchPane),
-        'picker.complete_back': () => _runCommand(_switchPane),
         'picker.more_options': () {
           if (!box.locked) _toggleAdvanced();
         },
@@ -1029,66 +1096,78 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         key: const ValueKey('new-harness-form'),
         focusNode: _focus,
         onKeyEvent: _onKey,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final columns = (constraints.maxWidth / _cell).floor();
-            final rows = (constraints.maxHeight / _rowHeight).floor();
-            final mainColumns = columns.clamp(1, 56);
-            final contentRows =
-                _rows.length +
-                5 +
-                (box.task.isNotEmpty ? 1 : 0) +
-                _noticeRows(context, mainColumns);
-            final mainRows = rows.clamp(1, contentRows);
-            final left = (columns - mainColumns) ~/ 2;
-            final top = (rows - mainRows) ~/ 2;
-            final available = columns - left - mainColumns - 1;
-            final beside = available >= 28;
-            final showChoices = _hasChoices && (_picking || !_hideChoices);
-            final pickerColumns = beside
-                ? available.clamp(28, 40)
-                : mainColumns;
-            final notice = _picking ? box.error ?? box.status : null;
-            final pickerRows = rows.clamp(
-              1,
-              16 +
-                  (notice == null
-                      ? 0
-                      : 1 + _textRows(context, notice, pickerColumns - 6)),
-            );
-            final pickerTop = top.clamp(0, rows - pickerRows);
-            final replaceForm = _picking && !beside;
-            return Stack(
-              children: [
-                Positioned(
-                  left: left * _cell,
-                  top: (replaceForm ? pickerTop : top) * _rowHeight,
-                  width: mainColumns * _cell,
-                  height: (replaceForm ? pickerRows : mainRows) * _rowHeight,
-                  child: _surface(
-                    const ValueKey('new-harness-surface'),
-                    _installing != null
-                        ? _installPane(_installing!)
-                        : replaceForm
-                        ? _sidePane()
-                        : _items(),
-                  ),
-                ),
-                if (showChoices && beside)
-                  Positioned(
-                    left: (left + mainColumns + 1) * _cell,
-                    top: pickerTop * _rowHeight,
-                    width: pickerColumns * _cell,
-                    height: pickerRows * _rowHeight,
-                    child: _surface(
-                      const ValueKey('new-harness-chooser-surface'),
-                      _sidePane(),
-                    ),
-                  ),
-              ],
-            );
-          },
-        ),
+        child: widget.desktop
+            ? Material(
+                type: MaterialType.transparency,
+                child: _desktopComposer(),
+              )
+            : LayoutBuilder(
+                builder: (context, constraints) {
+                  final columns = (constraints.maxWidth / _cell).floor();
+                  final rows = (constraints.maxHeight / _rowHeight).floor();
+                  final mainColumns = columns.clamp(1, 56);
+                  final contentRows =
+                      _rows.length +
+                      5 +
+                      (box.task.isNotEmpty ? 1 : 0) +
+                      _noticeRows(context, mainColumns);
+                  final mainRows = rows.clamp(1, contentRows);
+                  final left = (columns - mainColumns) ~/ 2;
+                  final top = (rows - mainRows) ~/ 2;
+                  final available = columns - left - mainColumns - 1;
+                  final beside = available >= 28;
+                  final showChoices =
+                      _hasChoices && (_picking || !_hideChoices);
+                  final pickerColumns = beside
+                      ? available.clamp(28, 40)
+                      : mainColumns;
+                  final notice = _picking ? box.error ?? box.status : null;
+                  final pickerRows = rows.clamp(
+                    1,
+                    16 +
+                        (notice == null
+                            ? 0
+                            : 1 +
+                                  _textRows(
+                                    context,
+                                    notice,
+                                    pickerColumns - 6,
+                                  )),
+                  );
+                  final pickerTop = top.clamp(0, rows - pickerRows);
+                  final replaceForm = _picking && !beside;
+                  return Stack(
+                    children: [
+                      Positioned(
+                        left: left * _cell,
+                        top: (replaceForm ? pickerTop : top) * _rowHeight,
+                        width: mainColumns * _cell,
+                        height:
+                            (replaceForm ? pickerRows : mainRows) * _rowHeight,
+                        child: _surface(
+                          const ValueKey('new-harness-surface'),
+                          _installing != null
+                              ? _installPane(_installing!)
+                              : replaceForm
+                              ? _sidePane()
+                              : _items(),
+                        ),
+                      ),
+                      if (showChoices && beside)
+                        Positioned(
+                          left: (left + mainColumns + 1) * _cell,
+                          top: pickerTop * _rowHeight,
+                          width: pickerColumns * _cell,
+                          height: pickerRows * _rowHeight,
+                          child: _surface(
+                            const ValueKey('new-harness-chooser-surface'),
+                            _sidePane(),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
       ),
     );
     return TextSelectionTheme(
@@ -1103,15 +1182,363 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
 
   Widget _surface(Key key, Widget child) => Material(
     key: key,
-    elevation: 0,
-    color: _theme.background,
+    elevation: widget.desktop ? 16 : 0,
+    shadowColor: Colors.black.withValues(alpha: .3),
+    color: widget.desktop ? DesktopChrome.surface : _theme.background,
     surfaceTintColor: Colors.transparent,
-    shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(kTerminalCornerRadius),
-      side: terminalPaneBorder(focused: true),
-    ),
+    shape: widget.desktop
+        ? DesktopChrome.shape()
+        : RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(kTerminalCornerRadius),
+            side: terminalPaneBorder(focused: true),
+          ),
     clipBehavior: Clip.antiAlias,
     child: DefaultTextStyle.merge(style: _ink(), child: child),
+  );
+
+  Widget _desktopComposer() => DesktopChrome(
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final choosing = _picking || _installing != null;
+        final width = constraints.maxWidth.clamp(0.0, 760.0);
+        final shortcut = effectiveCommandHint(
+          context,
+          'picker.add_here',
+          contextKind: KeymapContext.picker,
+        );
+        final folder = box.project.folder;
+        final projectName =
+            box.project.name ??
+            folder
+                ?.split(RegExp(r'[/\\]'))
+                .where((part) => part.isNotEmpty)
+                .lastOrNull ??
+            'Choose project';
+        Widget choice(
+          _Row row,
+          IconData icon, {
+          String? label,
+          bool mono = false,
+        }) => ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: (width - 24).clamp(0.0, 340.0)),
+          child: DesktopPill(
+            key: ValueKey('new-harness-field-${row.name}'),
+            label: label ?? _value(row),
+            semanticLabel: '${_label(row)}, ${label ?? _value(row)}',
+            icon: icon,
+            menu: true,
+            monospace: mono,
+            tooltip: '${_label(row)}: ${_blocked(row) ?? _value(row)}',
+            onPressed: box.locked || _blocked(row) != null
+                ? null
+                : () => _activateRow(row),
+          ),
+        );
+        final canStart =
+            !box.busy &&
+            !box.linkingProfile &&
+            box.requiredChoice == null &&
+            !box.taskTooLong;
+        final start = FilledButton.icon(
+          key: const ValueKey('new-harness-field-start'),
+          onPressed: canStart ? _start : null,
+          icon: box.busy
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 1.5),
+                )
+              : const Icon(Icons.arrow_upward_rounded, size: 17),
+          label: Text(
+            box.busy
+                ? 'Starting…'
+                : box.checking
+                ? 'Check status'
+                : 'Start',
+          ),
+          style: FilledButton.styleFrom(
+            backgroundColor: DesktopChrome.foreground,
+            foregroundColor: DesktopChrome.surface,
+            minimumSize: const Size(92, 36),
+            shape: const StadiumBorder(),
+            textStyle: DesktopChrome.text(medium: true),
+          ),
+        );
+        return Stack(
+          children: [
+            Offstage(
+              offstage: choosing,
+              child: Align(
+                alignment: const Alignment(0, -.1),
+                child: SizedBox(
+                  width: width,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(left: 4, bottom: 22),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'New harness',
+                                  style: DesktopChrome.text(
+                                    size: 24,
+                                    medium: true,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'Close',
+                                onPressed: () {
+                                  if (box.requestDismiss()) widget.onClose();
+                                },
+                                icon: const Icon(Icons.close_rounded, size: 19),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            choice(
+                              _Row.project,
+                              Icons.folder_outlined,
+                              label: projectName,
+                            ),
+                            if (box.isGitProject ||
+                                box.checkingGit ||
+                                box.gitError != null)
+                              choice(
+                                _Row.branch,
+                                Icons.account_tree_outlined,
+                                mono: true,
+                              ),
+                            DesktopPill(
+                              key: const ValueKey('new-harness-machine'),
+                              label: box.machineLabel,
+                              icon: Icons.laptop_mac_rounded,
+                              menu: true,
+                              onPressed: box.locked
+                                  ? null
+                                  : () {
+                                      _selectRow(_Row.project);
+                                      box.focusField(NewHarnessField.machine);
+                                      setState(() => _listOpen = true);
+                                      _focusEditor();
+                                    },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        Material(
+                          key: const ValueKey('new-harness-composer'),
+                          color: DesktopChrome.field,
+                          shape: DesktopChrome.shape(radius: 20),
+                          clipBehavior: Clip.antiAlias,
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                TextField(
+                                  key: const ValueKey('new-harness-task'),
+                                  controller: _taskText,
+                                  focusNode: _taskFocus,
+                                  minLines: 3,
+                                  maxLines: 8,
+                                  readOnly: box.locked || !box.takesTask,
+                                  style: DesktopChrome.text(size: 17),
+                                  cursorWidth: 2,
+                                  cursorColor: DesktopChrome.foreground,
+                                  textCapitalization:
+                                      TextCapitalization.sentences,
+                                  onChanged: box.setTask,
+                                  onTapOutside: (_) {},
+                                  decoration: InputDecoration(
+                                    hintText: box.takesTask
+                                        ? 'What would you like to work on?'
+                                        : 'Open a terminal in this project',
+                                    hintStyle: DesktopChrome.text(
+                                      size: 17,
+                                      color: DesktopChrome.muted,
+                                    ),
+                                    border: InputBorder.none,
+                                    enabledBorder: InputBorder.none,
+                                    focusedBorder: InputBorder.none,
+                                    isCollapsed: true,
+                                    filled: false,
+                                  ),
+                                ),
+                                const SizedBox(height: 18),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 10,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  children: [
+                                    choice(_Row.agent, Icons.code_rounded),
+                                    if (!box.isTerminal)
+                                      choice(
+                                        _Row.model,
+                                        Icons.auto_awesome_outlined,
+                                      ),
+                                  ],
+                                ),
+                                const SizedBox(height: 14),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        box.taskTooLong
+                                            ? 'Your message is too long.'
+                                            : box.takesTask
+                                            ? 'Add a task, or start with an empty session.'
+                                            : box.task.isNotEmpty
+                                            ? 'Your draft is kept when you switch agents.'
+                                            : 'A shell, ready for your commands.',
+                                        style: DesktopChrome.text(
+                                          size: 12,
+                                          color: DesktopChrome.muted,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    start,
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            if (box.hasModes)
+                              choice(
+                                _Row.approvals,
+                                Icons.verified_user_outlined,
+                              ),
+                            if (box.canUseWorktree)
+                              DesktopPill(
+                                key: const ValueKey(
+                                  'new-harness-field-worktree',
+                                ),
+                                label: 'New worktree',
+                                icon: box.worktree
+                                    ? Icons.check_box_outlined
+                                    : Icons.check_box_outline_blank,
+                                selected: box.worktree,
+                                tooltip: 'Start in an isolated Git worktree',
+                                onPressed: box.locked
+                                    ? null
+                                    : box.toggleWorktree,
+                              ),
+                            if (box.usesProfile)
+                              DesktopPill(
+                                key: const ValueKey(
+                                  'new-harness-field-advanced',
+                                ),
+                                label: 'Options',
+                                icon: Icons.tune_rounded,
+                                selected: box.advancedOpen,
+                                onPressed: box.locked ? null : _toggleAdvanced,
+                              ),
+                          ],
+                        ),
+                        if (box.advancedOpen && box.usesProfile) ...[
+                          const SizedBox(height: 10),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: choice(
+                              _Row.profile,
+                              Icons.person_outline_rounded,
+                              label: 'Profile · ${_value(_Row.profile)}',
+                            ),
+                          ),
+                        ],
+                        if (box.requiredChoice case final required?) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            required.message,
+                            style: DesktopChrome.text(color: _theme.red),
+                          ),
+                        ],
+                        if ((box.error != null || box.status != null) &&
+                            box.error != box.requiredChoice?.message) ...[
+                          const SizedBox(height: 12),
+                          _status(),
+                        ],
+                        if (shortcut != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 14, right: 4),
+                            child: Text(
+                              '$shortcut  Start',
+                              textAlign: TextAlign.right,
+                              style: grid.AppType.monoMeta(
+                                color: DesktopChrome.muted,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            if (choosing)
+              Align(
+                alignment: const Alignment(0, -.12),
+                child: SizedBox(
+                  width: width.clamp(0.0, 560.0),
+                  height: constraints.maxHeight.clamp(0.0, 500.0),
+                  child: _surface(
+                    const ValueKey('new-harness-chooser-surface'),
+                    Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 8, 16, 0),
+                          child: Row(
+                            children: [
+                              IconButton(
+                                tooltip: 'Back to new harness',
+                                onPressed: box.busy
+                                    ? null
+                                    : () => _runCommand(_cancel),
+                                icon: const Icon(
+                                  Icons.arrow_back_rounded,
+                                  size: 18,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                _installing != null
+                                    ? 'Setting up your harness'
+                                    : _label(_row),
+                                style: DesktopChrome.text(medium: true),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          child: _installing != null
+                              ? _installPane(_installing!)
+                              : _sidePane(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    ),
   );
 
   Widget _items() => Padding(
@@ -1503,17 +1930,21 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       key: _searchKey,
       padding: EdgeInsets.symmetric(horizontal: _margin),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.baseline,
+        crossAxisAlignment: widget.desktop
+            ? CrossAxisAlignment.center
+            : CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: [
           SizedBox(
             width: _gutter,
-            child: Text(
-              '>',
-              key: const ValueKey('new-harness-prompt'),
-              textAlign: TextAlign.center,
-              style: _ink(_picking ? _theme.foreground : _faint),
-            ),
+            child: widget.desktop
+                ? Icon(Icons.search_rounded, size: 18, color: _faint)
+                : Text(
+                    '>',
+                    key: const ValueKey('new-harness-prompt'),
+                    textAlign: TextAlign.center,
+                    style: _ink(_picking ? _theme.foreground : _faint),
+                  ),
           ),
           Expanded(
             child: Actions(
@@ -1532,7 +1963,9 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                 readOnly: box.locked,
                 showCursor: _picking,
                 style: _ink(_theme.foreground),
-                cursorColor: _theme.cursor,
+                cursorColor: widget.desktop
+                    ? DesktopChrome.foreground
+                    : _theme.cursor,
                 cursorWidth: 2,
                 cursorRadius: Radius.zero,
                 cursorOpacityAnimates: false,
@@ -1569,7 +2002,16 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                 key: const ValueKey('new-harness-refresh'),
                 canRequestFocus: false,
                 onTap: box.refreshingChoices ? null : box.refreshChoices,
-                child: Text('[ Refresh ]', style: _ink(_faint)),
+                child: widget.desktop
+                    ? Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Icon(
+                          Icons.refresh_rounded,
+                          size: 18,
+                          color: _faint,
+                        ),
+                      )
+                    : Text('[ Refresh ]', style: _ink(_faint)),
               ),
             ),
         ],
@@ -1655,7 +2097,17 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
             // description with it made the selection two rows tall and the
             // list read as blocks rather than lines.
             Container(
-              color: on && _picking ? _activeFill : Colors.transparent,
+              color: widget.desktop
+                  ? null
+                  : on && _picking
+                  ? _activeFill
+                  : Colors.transparent,
+              decoration: widget.desktop
+                  ? BoxDecoration(
+                      color: on && _picking ? _activeFill : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                    )
+                  : null,
               padding: EdgeInsets.symmetric(horizontal: _margin),
               height: _rowHeight,
               alignment: Alignment.centerLeft,

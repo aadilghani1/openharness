@@ -1,5 +1,10 @@
 # Terminal dialog design system
 
+For the unmerged Cmd-N / Cmd-P and button experiment, follow
+[friendly-desktop-experiment.md](friendly-desktop-experiment.md). The behavior
+and data-safety requirements below still apply; its presentation follows the
+user's newer desktop direction.
+
 **Fixed cells. Plain text. One-line selection.**
 
 This is the dialog chapter of the [terminal workspace design system](terminal-workspace.md).

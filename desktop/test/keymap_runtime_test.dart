@@ -95,7 +95,7 @@ Future<void> tabToResult(WidgetTester tester, {String? id}) async {
 
 void main() {
   testWidgets(
-    'New Harness remapped navigation works in both fields and choices',
+    'New Harness uses Tab for controls and remapped navigation in choices',
     (tester) async {
       final previousEntry = newHarnessOpensInBox;
       newHarnessOpensInBox = true;
@@ -119,18 +119,7 @@ void main() {
       final box = tester
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
-      bool selected(String row) =>
-          tester
-              .widget<Semantics>(find.byKey(ValueKey('new-harness-field-$row')))
-              .properties
-              .selected ==
-          true;
-      await key(tester, LogicalKeyboardKey.keyJ, ctrl: true);
-      expect(selected('agent'), isTrue);
-      await key(tester, LogicalKeyboardKey.keyK, ctrl: true);
-      expect(selected('start'), isTrue);
-      await key(tester, LogicalKeyboardKey.keyJ, ctrl: true);
-      await key(tester, LogicalKeyboardKey.enter);
+      await openLaunchRow(tester, 'agent');
       expect(box.field, NewHarnessField.harness);
       final cursor = box.cursor;
       final engine = box.engine;
@@ -142,17 +131,17 @@ void main() {
       // Remapped Tab switches panes without walking rows or applying a choice.
       await key(tester, LogicalKeyboardKey.keyH, ctrl: true);
       expect(harnessChoicesActive(tester), isFalse);
-      expect(selected('agent'), isTrue);
       expect(box.engine, engine);
-      await key(tester, LogicalKeyboardKey.keyL, ctrl: true);
+      await openLaunchRow(tester, 'agent');
       expect(harnessChoicesActive(tester), isTrue);
       expect(box.engine, engine);
       await key(tester, LogicalKeyboardKey.escape);
       await focusLaunchRow(tester, 'advanced');
       final expanded = box.advancedOpen;
-      await key(tester, LogicalKeyboardKey.arrowRight);
+      await key(tester, LogicalKeyboardKey.enter);
       expect(box.advancedOpen, !expanded);
-      await key(tester, LogicalKeyboardKey.arrowLeft);
+      await focusLaunchRow(tester, 'advanced');
+      await key(tester, LogicalKeyboardKey.enter);
       expect(box.advancedOpen, expanded);
       expect(app.panes, isEmpty);
       await tester.pumpWidget(const SizedBox());

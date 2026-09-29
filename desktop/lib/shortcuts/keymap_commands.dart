@@ -731,7 +731,7 @@ final harnessCommands = <HarnessCommand>[
     ),
   const HarnessCommand(
     'picker.add_here',
-    'Add the selected agent',
+    'Start or add the selected harness',
     ShortcutGroup.actions,
     extraKeys: ['cmd+enter'],
     context: KeymapContext.picker,

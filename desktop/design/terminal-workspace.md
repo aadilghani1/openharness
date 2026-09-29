@@ -1,5 +1,9 @@
 # Terminal workspace design system
 
+The unmerged [friendly desktop experiment](friendly-desktop-experiment.md)
+overrides dialog and button presentation on its review branch, following the
+user's 2026-09-28 direction. Terminal panes and workspace bars retain this system.
+
 Harness should feel like a terminal workspace, from its tab bar to its welcome
 page, dialogs, and contextual controls. **Text first. Keyboard first. Fixed
 cells.** Use this document for new workspace surfaces and visual reviews.

@@ -1053,6 +1053,18 @@ class NewHarnessController extends ChangeNotifier {
   /// starts it with nothing sent. Kept while the other answers are changed.
   String task = '';
 
+  /// The desktop composer edits the first message independently of whichever
+  /// configuration chooser is open. It never repurposes that chooser's query.
+  void setTask(String value) {
+    if (locked || task == value) return;
+    task = value;
+    error = taskTooLong
+        ? 'A first message can be $kFirstTaskMaxLength characters; '
+              'this is ${value.trim().length}.'
+        : null;
+    notifyListeners();
+  }
+
   /// The permission mode picked, by id; an engine without it uses its default.
   String _mode = kDefaultPermissionMode;
 

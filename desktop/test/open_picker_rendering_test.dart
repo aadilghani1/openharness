@@ -14,8 +14,6 @@ import 'package:harness/terminal/terminal_theme_store.dart';
 import 'package:harness/widgets/search_result_text.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
-import 'package:harness/widgets/engine_identity.dart';
-import 'package:harness/widgets/prompt_context.dart';
 import 'package:xterm/xterm.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
@@ -27,7 +25,7 @@ import 'swarm_state_test.dart' show createApp;
 
 void main() {
   testWidgets(
-    'terminal dialogs follow the live pane theme without losing focus',
+    'desktop dialogs keep native controls and terminal previews through theme changes',
     (tester) async {
       final originalPalette = grid.AppTheme.palette.value;
       final originalTheme = terminalThemeStore.value;
@@ -92,20 +90,13 @@ void main() {
         final panel = tester.widget<Material>(
           find.byKey(const ValueKey('swarm-search-results')),
         );
-        expect(panel.color, pane.theme.background);
-        expect(field.style!.color, pane.theme.foreground);
-        expect(field.cursorColor, pane.theme.cursor);
+        expect(panel.color, grid.AppPalette.cardBg);
+        expect(field.style!.color, grid.AppPalette.textPrimary);
+        expect(field.cursorColor, grid.AppPalette.textPrimary);
         expect(editor.selectionColor, pane.theme.selection);
-        final row = find.byKey(
-          ValueKey('swarm-search-line:${search.selected!.id}'),
-        );
-        expect(tester.widget<Container>(row).color, pane.theme.selection);
-        final cell = terminalCellSizeOf(tester.element(input));
-        expect(tester.getSize(row).height, closeTo(cell.height, .01));
-        expect(
-          tester.getSize(find.byKey(ValueKey(search.selected!.id))).height,
-          closeTo(cell.height, .01),
-        );
+        final row = find.byKey(ValueKey(search.selected!.id));
+        expect(tester.widget<ListTile>(row).selected, isTrue);
+        expect(tester.getSize(row).height, greaterThan(40));
         expect(field.cursorWidth, 2);
         final rowTitles = tester.widgetList<SearchResultText>(
           find.byWidgetPredicate(
@@ -119,9 +110,9 @@ void main() {
           final row = search.rows.firstWhere((row) => row.title == title.text);
           expect(
             title.style.color,
-            search.canSubmit(row)
-                ? pane.theme.foreground
-                : pane.theme.foreground.withValues(alpha: .28),
+            search.sessionUnavailable(row) == null
+                ? grid.AppPalette.textPrimary
+                : grid.AppPalette.textSecondary,
           );
         }
         final previewText = tester.widgetList<Text>(
@@ -131,11 +122,7 @@ void main() {
           ),
         );
         expect(previewText, isNotEmpty);
-        for (final style in [
-          field.style!,
-          ...rowTitles.map((text) => text.style),
-          ...previewText.map((text) => text.style!),
-        ]) {
+        for (final style in [...previewText.map((text) => text.style!)]) {
           expect(style.fontFamily, pane.textStyle.fontFamily);
           expect(style.fontFamilyFallback, pane.textStyle.fontFamilyFallback);
           expect(style.fontSize, pane.textStyle.fontSize);
@@ -193,7 +180,7 @@ void main() {
               ),
             )
             .map((text) => text.text),
-        ['Checkout retries'],
+        contains('Checkout retries'),
       );
       expect(find.text('git: feat/safe-retries'), findsNothing);
       await tester.enterText(input, 'Workspace sync');
@@ -228,37 +215,16 @@ void main() {
         expect(
           tester
               .widget<Material>(
-                find.byKey(const ValueKey('new-harness-surface')),
+                find.byKey(const ValueKey('new-harness-chooser-surface')),
               )
               .color,
-          pane.theme.background,
+          grid.AppPalette.cardBg,
         );
-        expect(field.style!.color, pane.theme.foreground);
-        expect(field.cursorColor, pane.theme.cursor);
+        expect(field.style!.color, grid.AppPalette.textPrimary);
+        expect(field.cursorColor, grid.AppPalette.textPrimary);
         expect(editor.selectionColor, pane.theme.selection);
-        expect(
-          tester
-              .widgetList<Container>(
-                find.descendant(of: setup, matching: find.byType(Container)),
-              )
-              .where((container) => container.color == pane.theme.selection),
-          hasLength(1),
-        );
-        for (final style in [
-          field.style!,
-          ...tester
-              .widgetList<Text>(
-                find.descendant(of: setup, matching: find.byType(Text)),
-              )
-              .map((text) => text.style!),
-        ]) {
-          expect(style.fontFamily, pane.textStyle.fontFamily);
-          expect(style.fontFamilyFallback, pane.textStyle.fontFamilyFallback);
-          expect(style.fontSize, pane.textStyle.fontSize);
-          expect(style.height, pane.textStyle.height);
-          expect(style.letterSpacing, 0);
-          expect(style.wordSpacing, 0);
-        }
+        expect(field.style!.fontFamily, grid.AppType.body().fontFamily);
+        expect(field.style!.fontSize, 14);
         expect(box.selected?.id, selectedOption);
         expect(field.controller, same(setupController));
         expect(setupController.value, setupEditing);
@@ -312,55 +278,24 @@ void main() {
         of: results,
         matching: find.byWidgetPredicate(
           (widget) =>
-              widget is InkWell &&
+              widget is ListTile &&
               widget.key is ValueKey<String> &&
               rowIds.contains((widget.key! as ValueKey<String>).value),
         ),
       );
-      final input = find.byKey(const ValueKey('swarm-search-input'));
-      final cell = terminalCellSizeOf(tester.element(input));
-      for (final row in rows.evaluate()) {
-        final id = (row.widget.key! as ValueKey<String>).value;
-        final line = find.byKey(ValueKey('swarm-search-line:$id'));
-        expect(
-          tester.getSize(line).height,
-          closeTo(cell.height, .01),
-          reason: 'Selection occupies exactly one terminal line.',
-        );
-        expect(
-          tester.getSize(find.byKey(ValueKey(id))).height,
-          closeTo(cell.height, .01),
-          reason: 'The entire result occupies one line, with no spacer row.',
-        );
-        final title = find
-            .descendant(of: line, matching: find.byType(Text))
-            .first;
-        expect(
-          tester.getTopLeft(title).dx,
-          closeTo(tester.getTopLeft(input).dx, .01),
-        );
-      }
       final first = find.byKey(ValueKey(search.rows[0].id));
       final second = find.byKey(ValueKey(search.rows[1].id));
+      final rowHeight =
+          tester.getTopLeft(second).dy - tester.getTopLeft(first).dy;
+      expect(rowHeight, greaterThanOrEqualTo(48));
+      expect(rows.evaluate(), isNotEmpty);
       expect(
-        tester.getTopLeft(second).dy - tester.getTopLeft(first).dy,
-        closeTo(cell.height, .01),
+        find.descendant(of: results, matching: find.byType(Icon)),
+        findsWidgets,
       );
-      for (final type in [
-        ListTile,
-        Icon,
-        Image,
-        EngineMark,
-        PromptContextView,
-      ]) {
-        expect(
-          find.descendant(of: results, matching: find.byType(type)),
-          findsNothing,
-        );
-      }
       expect(search.rows.length, greaterThan(50));
       final list = find.byKey(const ValueKey('swarm-search-result-list'));
-      final capacity = (tester.getSize(list).height / cell.height).ceil();
+      final capacity = (tester.getSize(list).height / rowHeight).ceil();
       expect(rows.evaluate().length, lessThanOrEqualTo(capacity + 2));
       expect(rows.evaluate().length, lessThan(search.rows.length));
       final visited = <String>{};

@@ -6,6 +6,7 @@ import '../state/swarm_search.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart';
+import 'desktop_chrome.dart';
 
 /// The shared input for the start page, Open Agent and split searches.
 /// Flutter owns the caret and result navigation; native chrome only opens it.
@@ -78,6 +79,33 @@ class SwarmSearchInput extends StatelessWidget {
   }
 
   Widget _buildInput(BuildContext context) {
+    if (DesktopChrome.of(context)) {
+      return TextField(
+        key: inputKey,
+        groupId: groupId ?? EditableText,
+        controller: controller,
+        focusNode: focusNode,
+        autofocus: autofocus,
+        onChanged: onChanged,
+        onTap: onOpen,
+        onTapOutside: (_) => onTapOutside?.call(),
+        autocorrect: false,
+        enableSuggestions: false,
+        style: DesktopChrome.text(size: 17),
+        cursorColor: DesktopChrome.foreground,
+        cursorWidth: 2,
+        decoration: InputDecoration(
+          hintText: hintText ?? search?.hint ?? kSwarmSearchHint,
+          hintStyle: DesktopChrome.text(size: 17, color: DesktopChrome.muted),
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          filled: false,
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+        ),
+      );
+    }
     final open = search != null;
     final terminalStyle = terminal || prompt != null;
     final theme = terminalThemeFor(
