@@ -1,8 +1,10 @@
 /// Ported from the desktop's `lib/state/session_preview.dart`, so a phone
 /// search reaches the same session content the desktop's Open Agent picker
 /// does. Keep the two in step; the additions here are
-/// [SessionPreview.searchParts], which the phone's result rows quote from, and
-/// [SessionPreviewStore.markStale], for turns a sleeping phone never heard.
+/// [SessionPreview.searchParts], which the phone's result rows quote from,
+/// [SessionPreviewStore.markStale], for turns a sleeping phone never heard, and
+/// [SessionPreview.recap] with [SessionPreviewStore.isReading], for the recap
+/// under each row of the Harnesses list.
 library;
 
 import 'dart:async';
@@ -28,6 +30,15 @@ class SessionPreview {
   /// `notify/done_notice.dart` stays silent for it. Unlike [completedText] it
   /// never carries over from an earlier turn.
   String? turnReply;
+
+  /// The headline of the turn [savedText] came from — the `summary` event's
+  /// `recap`, one line of at most 200 characters on the wire — or null where
+  /// that turn had none.
+  ///
+  /// ⚠️ **Dropped the moment a turn this phone watched end says something.**
+  /// From then on the reply on record is that turn's, which this headline was
+  /// not written for; the next read brings the new turn's own.
+  String? recap;
   String _streamText = '';
   String? _searchText;
   bool turnOpen = false,
@@ -84,6 +95,7 @@ class SessionPreview {
     earlierRequest,
     liveText,
     responseExcerpt,
+    recap,
     ...earlierResponses,
     activity,
   }.whereType<String>().toList();
@@ -134,6 +146,15 @@ class SessionPreviewStore extends ChangeNotifier {
   /// events; without this the copy taken before it stays the one searched
   /// until [freshFor] runs out and something happens to warm it again.
   void markStale(SessionPreviewKey key) => _records[key]?._attemptedAt = null;
+
+  /// Whether [key] is being read, or is queued to be — what lets a row hold a
+  /// placeholder for content on its way rather than grow when it lands.
+  ///
+  /// False for a key that can no longer be fetched: a queued read of it is
+  /// dropped without a word ([_drain]), and a placeholder waiting on it would
+  /// wait for ever.
+  bool isReading(SessionPreviewKey key) =>
+      (_inFlight.contains(key) || _queue.contains(key)) && canFetch(key);
 
   SessionPreview _entry(SessionPreviewKey key) {
     final entry = _records.remove(key) ?? SessionPreview();
@@ -207,16 +228,24 @@ class SessionPreviewStore extends ChangeNotifier {
         final events = reply['events'];
         if (events is List) {
           final responses = <String>[];
+          String? headline;
           for (final event in events.take(3)) {
             if (event is! Map || event['kind'] != 'summary') continue;
             final text =
                 previewText(event['fullText'], limit: 6000) ??
                 previewText(event['text'], limit: 6000) ??
                 previewText(event['recap'], limit: 6000);
-            if (text != null && !responses.contains(text)) responses.add(text);
+            if (text == null || responses.contains(text)) continue;
+            // The headline of the event [savedText] is taken from, and of no
+            // other: an earlier turn's would sit over the wrong reply.
+            if (responses.isEmpty) {
+              headline = previewText(event['recap'], limit: 400);
+            }
+            responses.add(text);
           }
           if (responses.isNotEmpty) {
             entry.savedText = responses.first;
+            entry.recap = headline;
             entry.earlierResponses
               ..clear()
               ..addAll(responses.skip(1));
@@ -295,7 +324,10 @@ class SessionPreviewStore extends ChangeNotifier {
         entry.turnOpen = false;
         entry.interrupted = payload['aborted'] == true;
         entry.turnReply = entry.liveText;
-        if (entry.liveText != null) entry.completedText = entry.liveText;
+        if (entry.liveText != null) {
+          entry.completedText = entry.liveText;
+          entry.recap = null;
+        }
         entry.liveText = null;
         entry.activity = null;
     }

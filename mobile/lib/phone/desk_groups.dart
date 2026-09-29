@@ -86,6 +86,63 @@ List<DeskGroup> deskGroups(AppNotifier notifier, List<AgentEntry> visible) {
   ];
 }
 
+/// One tab as the Harnesses list narrows to it: its id, its name, and every
+/// agent it names.
+///
+/// ⚠️ **Not a [DeskGroup].** A group keeps only the agents with a terminal —
+/// what a swipe can land on — and this list also draws stopped work, which a
+/// tap resumes. A filter built from groups would hide a tab's stopped agents
+/// under that tab while All still showed them.
+class DeskTabFilter {
+  const DeskTabFilter({
+    required this.id,
+    required this.name,
+    required this.keys,
+  });
+
+  final String id;
+  final String name;
+
+  /// [DeskPaneRef.key] of every agent on the tab, reachable or not.
+  final Set<String> keys;
+
+  /// Whether the tab names no agent at all, as against naming agents this
+  /// phone cannot reach right now.
+  bool get isEmpty => keys.isEmpty;
+
+  bool holds(AgentEntry entry) => keys.contains(
+    DeskPaneRef(machineId: entry.machineId, agentId: entry.agent.id).key,
+  );
+}
+
+/// The desk's tabs, in the desk's order, each named as the tab strip names it.
+///
+/// Empty where the desk has no tabs or has not answered — and then there is
+/// nothing to narrow by, so the list draws no filter at all.
+List<DeskTabFilter> deskTabFilters(
+  AppNotifier notifier,
+  List<AgentEntry> visible,
+) {
+  final tabs = notifier.deskTabs;
+  if (tabs.isEmpty) return const [];
+  final known = {
+    for (final entry in visible)
+      DeskPaneRef(machineId: entry.machineId, agentId: entry.agent.id).key:
+          entry.agent,
+  };
+  return [
+    for (final tab in tabs)
+      DeskTabFilter(
+        id: tab.id,
+        name: deskTabName(
+          tab,
+          tab.panes.isEmpty ? null : known[tab.panes.first.key],
+        ),
+        keys: {for (final pane in tab.panes) pane.key},
+      ),
+  ];
+}
+
 /// What a tab is called — the desktop's rule (`AppNotifier._syncAgentName`).
 ///
 /// A name somebody gave it stands. Otherwise the tab is named after its first

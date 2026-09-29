@@ -9,6 +9,9 @@ import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/external_session.dart';
 
 import 'agent_index.dart';
+import 'agent_recap.dart';
+import 'desk_groups.dart';
+import 'desk_tab_filter_bar.dart';
 import 'find_row.dart';
 import 'fzf.dart' show fzfAge;
 import 'phone_destination.dart';
@@ -81,12 +84,13 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
   void openFirst() {
     final search = widget.controller;
     final showing = widget.showing;
+    final shown = _narrowed(search.rows, _tab(_tabs(search)));
     final rows = search.matchQuery.trim().isEmpty && showing != null
         ? [
-            for (final row in search.rows)
+            for (final row in shown)
               if (!_isShowing(row, showing)) row,
           ]
-        : search.rows;
+        : shown;
     for (final row in rows) {
       if (search.canSubmit(row)) {
         _tap(row);
@@ -101,6 +105,15 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
   /// let a second tap start another would leave two agents restarting for one
   /// person who only meant to open one.
   String? _resuming;
+
+  /// The desk tab the list is narrowed to; null is All. Only ever a choice: a tab closed on another
+  /// computer while it was picked leaves the list on All ([_tab]) rather than on a filter nothing
+  /// on screen names.
+  String? _tabId;
+
+  /// The rows whose recap is unfolded, by [PhoneDestination.id]. Kept across a change of tab or
+  /// query, so a recap somebody opened is still open when they come back to it.
+  final _unfolded = <String>{};
 
   /// The order Find opened with — each row's section (needs you, recent, the one on screen,
   /// paused) and place in it, by id. Held while Find is open: a harness that starts or stops
@@ -150,27 +163,103 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     builder: (context, _) {
       AppTheme.watch(context);
       final search = widget.controller;
-      return _find(search, search.rows);
+      final all = search.rows;
+      final tabs = _tabs(search);
+      final tab = _tab(tabs);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Under the field, and only over the plain list of harnesses: a mode lists commands,
+          // models or places, none of which is on a tab.
+          if (tabs.isNotEmpty)
+            DeskTabFilterBar(
+              choices: [
+                DeskTabFilterChoice(
+                  id: null,
+                  name: 'All',
+                  count: _sessions(all),
+                ),
+                for (final each in tabs)
+                  DeskTabFilterChoice(
+                    id: each.id,
+                    name: each.name,
+                    count: all.where((row) => _inTab(each, row)).length,
+                  ),
+              ],
+              selected: tab?.id,
+              onSelected: (id) => setState(() => _tabId = id),
+            ),
+          Expanded(
+            child: _find(
+              search,
+              _narrowed(all, tab),
+              tab: tab,
+              everywhere: _sessions(all),
+            ),
+          ),
+        ],
+      );
     },
   );
+
+  /// Whether this is Find's plain list of harnesses — no mode (`>`, `?`, a group, `:`) and not
+  /// walked into one project or machine. The only list the tab chips narrow.
+  static bool _plain(PhoneSearchController search) =>
+      !search.isCommandMode &&
+      !search.isHelpMode &&
+      !search.isGroupMode &&
+      !search.isModelMode &&
+      !search.canGoBack;
+
+  /// The desk's tabs as the chips offer them: none off the plain list, and none where the desk has
+  /// no tabs or has not answered — and then no chips are drawn at all.
+  List<DeskTabFilter> _tabs(PhoneSearchController search) => _plain(search)
+      ? deskTabFilters(widget.notifier, agentIndex(widget.notifier))
+      : const [];
+
+  /// The picked tab among [tabs]; null is All.
+  DeskTabFilter? _tab(List<DeskTabFilter> tabs) =>
+      tabs.where((tab) => tab.id == _tabId).firstOrNull;
+
+  static bool _inTab(DeskTabFilter tab, PhoneDestination row) {
+    final entry = row.entry;
+    return entry != null && tab.holds(entry);
+  }
+
+  /// [rows] narrowed to [tab] — to harnesses only, since a tab holds nothing else: a machine, a
+  /// project, a conversation Harness did not start are on no tab.
+  static List<PhoneDestination> _narrowed(
+    List<PhoneDestination> rows,
+    DeskTabFilter? tab,
+  ) => tab == null
+      ? rows
+      : [
+          for (final row in rows)
+            if (_inTab(tab, row)) row,
+        ];
+
+  /// The sessions among [rows] — harnesses and the conversations Harness did not start — which is
+  /// what All's chip counts.
+  static int _sessions(List<PhoneDestination> rows) =>
+      rows.where((row) => row.isAgent || row.external != null).length;
 
   /// Find's list: grows down from the field at the top. With nothing typed, `needs you` (newest
   /// question first) then `recent`, the harness on screen last, `+ New Harness` at the end; typed,
   /// the matches in their order, then the commands that match, then `+ New Harness in <project>`.
   /// See docs/plans/2026-09-26-003-mobile-find-new-spec.md.
-  Widget _find(PhoneSearchController search, List<PhoneDestination> rows) {
+  Widget _find(
+    PhoneSearchController search,
+    List<PhoneDestination> rows, {
+    required DeskTabFilter? tab,
+    required int everywhere,
+  }) {
     // The words, less any time ("dial last week" lights "dial").
     final terms = phoneSearchTerms(search.wordsQuery);
     final showing = widget.showing;
     final now = DateTime.now();
     final tty = Tty.of(context);
     final typed = search.matchQuery.trim().isNotEmpty;
-    final plain =
-        !search.isCommandMode &&
-        !search.isHelpMode &&
-        !search.isGroupMode &&
-        !search.isModelMode &&
-        !search.canGoBack;
+    final plain = _plain(search);
     bool asking(PhoneDestination row) => row.entry?.isWaiting ?? false;
     DateTime since(PhoneDestination row) {
       final entry = row.entry;
@@ -242,28 +331,52 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     final project = search.projectMatch;
     final children = <Widget>[];
     var index = 0;
-    Widget row(PhoneDestination row) =>
-        _findRow(row, terms, now, tty, selected: index++ == selectedAt);
+    // A row, and under it what its session last came to.
+    List<Widget> row(PhoneDestination row) => [
+      _findRow(row, terms, now, tty, selected: index++ == selectedAt),
+      ?_recap(row),
+    ];
     if (needsYou.isNotEmpty) {
       children.add(FindHeader('needs you', color: tty.yellow));
-      children.addAll(needsYou.map(row));
+      children.addAll(needsYou.expand(row));
       children.add(const FindHeader('recent'));
     }
-    children.addAll(rest.map(row));
-    if (current != null) children.add(row(current));
+    children.addAll(rest.expand(row));
+    if (current != null) children.addAll(row(current));
     // At the end and without a heading: each one's own word on the right says `paused`.
-    children.addAll(pausedRows.map(row));
+    children.addAll(pausedRows.expand(row));
     if (ordered.isEmpty) {
       children.add(
         Padding(
           padding: const EdgeInsets.fromLTRB(Tty.origin, 20, Tty.origin, 8),
           child: TtyText(
-            search.total == 0 && !typed ? 'No harnesses running.' : 'No match.',
+            switch (tab) {
+              null =>
+                search.total == 0 && !typed
+                    ? 'No harnesses running.'
+                    : 'No match.',
+              _ when typed => 'No match in ${tab.name}.',
+              _ when tab.isEmpty => 'No harnesses in ${tab.name} yet.',
+              _ => 'Nothing in ${tab.name} can be reached right now.',
+            },
             color: tty.faint,
             size: TtySize.row,
           ),
         ),
       );
+      // The way out of an empty tab, where the eye already is — rather than back up at a chip the
+      // rail may have scrolled away.
+      if (tab != null && (!typed || everywhere > 0)) {
+        children.add(
+          FindRow(
+            title: 'Show all tabs',
+            detail: typed
+                ? '$everywhere ${everywhere == 1 ? 'match' : 'matches'} in all tabs'
+                : null,
+            onTap: () => setState(() => _tabId = null),
+          ),
+        );
+      }
     }
     if (search.commandMatches.isNotEmpty) {
       children.add(const FindHeader('commands'));
@@ -297,6 +410,28 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       padding: EdgeInsets.zero,
       children: children,
     );
+  }
+
+  /// What [row]'s session last came to, folded under it — or its place held while it is read, or
+  /// nothing for a row that is not a harness or a session that has not said anything yet.
+  Widget? _recap(PhoneDestination row) {
+    if (!row.isAgent) return null;
+    final previews = widget.notifier.sessionPreviews;
+    final key = row.previewKey;
+    final recap = phoneRecap(previews, key);
+    if (recap != null) {
+      return AgentRecap(
+        recap: recap,
+        expanded: _unfolded.contains(row.id),
+        onToggle: () => setState(() {
+          if (!_unfolded.remove(row.id)) _unfolded.add(row.id);
+        }),
+      );
+    }
+    if (key != null && previews.isReading(key)) {
+      return const AgentRecapPlaceholder();
+    }
+    return null;
   }
 
   /// One harness (or command) as a Find row — see [FindRow].
@@ -573,10 +708,11 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     // The neighbours are the rows as drawn, not the Agents tab's list: swiping
     // walks exactly what the query returned, in the order the person was
     // looking at when they tapped.
+    final search = widget.controller;
     openAgentPager(
       context,
       widget.notifier,
-      phoneSearchAgentEntries(widget.controller.rows),
+      phoneSearchAgentEntries(_narrowed(search.rows, _tab(_tabs(search)))),
       entry,
     );
   }
