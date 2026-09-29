@@ -8,6 +8,26 @@ below the circle and square fade to a faint line and the figure carries the icon
 Unlike the rounds before it this revision carries no clip path: its own rounded
 tile is the first element and nothing is drawn outside it.
 
+The macOS menu bar uses a lowercase `hn` lettermark outlined from
+[Departure Mono Regular](https://departuremono.com/) 1.500 by Helena Zhang
+(SIL Open Font License 1.1). Its pixel forms occupy 18 × 12pt inside a 20pt canvas.
+The letters are stored as vector paths, without a runtime font dependency, with
+enough space beside them for the bottom-right unread badge. Its source is
+`desktop/macos/Runner/Assets.xcassets/HarnessStatusIcon.imageset/HarnessStatusIcon.svg`;
+edit that vector directly. AppKit tints the template for the menu bar's appearance
+and composes the unread badge at runtime, slightly outside the mark to keep
+the mark visible.
+
+Four app icon proposals reuse the Departure Mono `hn`, with green, graphite,
+and light backgrounds. [Review them in Dock mockups](hn-dock-options/dock-options.png);
+the proposed icon is under the Harness label and the current app icon is at the
+right. These are preview assets. Regenerate them on a Mac with Visual Studio Code
+installed, from the repository root:
+
+```sh
+swift docs/branding/app-logo/render-hn-dock-options.swift
+```
+
 Earlier rounds, kept for reference:
 
 - `harness-logo-3.svg`: the untouched SVG supplied on 2026-09-22, which shipped

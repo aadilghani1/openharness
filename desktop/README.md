@@ -181,14 +181,25 @@ upstream package upgrade without preserving the local rendering and IME fixes.
 
 ## Harness manager
 
-The terminal icon to the left of Harness Store opens a compact list across your
+On macOS, a pixel-style `hn` in Departure Mono follows the system menu bar's appearance and
+carries a small circular unread badge at its bottom-right corner,
+including zero (`99+` above 99; the tooltip keeps the exact count). Open it for
+sessions with unread results or questions, grouped
+by project and marked with blue dots. Read sessions disappear from the list;
+an empty inbox says “No unread notifications.” The menu also offers New Harness,
+Clear All Notifications, Open Harness, Settings, and Quit. Selecting a
+conversation reuses its existing pane and
+brings the window forward. Clear All dismisses the displayed notifications
+without answering pending questions or clearing newer arrivals. Linux and the
+browser keep the in-window notification bell.
+
+The search icon to the left of Harness Store opens a compact list across your
 machines. Each harness shows its agent and name, followed by its machine, project,
 branch, and last activity (`5m`, `1h`, `2d`). Search matches names, machines,
 projects, branches, and pending questions. Filter All, Needs input, Running, or
 Paused; sort by recently active, name, machine, or project.
 
-Needs input replaces the separate bell. A red count badge at the terminal icon’s
-top-right corner appears only when harnesses need input. An amber help action
+The Needs input filter remains available independently of read notifications. An amber help action
 opens the waiting harness; its question appears on a third line in the Needs input
 view. The same view opens with **⌘⇧I**. Questions update live and stale actions
 cannot redirect you after a question is answered or replaced elsewhere.

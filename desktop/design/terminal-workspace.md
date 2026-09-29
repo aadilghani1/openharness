@@ -20,11 +20,13 @@ Standalone actions can use brackets, such as `[ Customize Harness ]`, instead
 of rounded buttons with pictograms. A checkbox is
 `[x]` or `[ ]`. Harness search has no prefix; `#` selects projects and `>` selects
 commands as editable text. `@`, `:`, and `*` scope machines, models, and Store
-inside the same picker. The top row keeps swarms, `+`, a plain search icon, the
-notification bell, and the rounded Harness Store button. The bottom row holds focused
-machine/repo/branch/PR links on the left and the model selector on the right.
-Keep descriptive tooltips and accessible names. Search and bell are deliberate
-icon exceptions; the bell shows a count only when there is something to see.
+inside the same picker. The top row keeps swarms, `+`, a plain search icon, and the
+rounded Harness Store button. On macOS, notifications live in the system menu
+bar; Flutter's Linux and browser bars keep the notification bell. The bottom row
+holds focused machine/repo/branch/PR links on the left and the model selector on
+the right. Keep descriptive tooltips and accessible names. Search and the fallback
+bell are deliberate icon exceptions. The macOS menu bar keeps its count visible
+at zero; the fallback bell shows a badge only when there is something to see.
 Store restores its colorful polymath mark and a quiet filled pill. The bottom
 context has no separate background or divider.
 

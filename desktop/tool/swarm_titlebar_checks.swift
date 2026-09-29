@@ -729,8 +729,8 @@ private extension SwarmTabStrip {
       "Workspace teardown hides the daemon")
   }
 
-  func checkNotifications() throws {
-    var state: [String: Any] = ["enabled": true, "unread": 9,
+  func checkTopActions() throws {
+    var state: [String: Any] = ["enabled": true,
       "tabs": [["id": "work", "name": "Desktop"]], "activeId": "work",
       "focusedContext": ["text": "Office project", "segments": [["text": "Office project"]]]]
     var calls: [String] = []
@@ -738,38 +738,28 @@ private extension SwarmTabStrip {
     for width in [CGFloat(360), CGFloat(640), CGFloat(1280)] {
       setFrameSize(NSSize(width: width, height: 40))
       update(state)
-      try checkTitlebar(notificationsButton.isEnabled && notificationsButton.frame.width > 0 &&
-        notificationsButton.frame.maxX <= bounds.width &&
-        searchButton.frame.maxX <= notificationsButton.frame.minX &&
-        notificationsButton.frame.maxX <= storeButton.frame.minX &&
+      try checkTitlebar(searchButton.isEnabled && searchButton.frame.width > 0 &&
+        searchButton.frame.maxX == storeButton.frame.minX &&
         storeButton.frame.maxX <= bounds.width &&
         newButton.frame.maxX < searchButton.frame.minX &&
         contextButton.superview === statusBar,
-        "Search, bell and Store stay visible after the tabs at width \(width)")
-      let frame = notificationsButton.frame
-      state["unread"] = 101
-      update(state)
-      try checkTitlebar(notificationsButton.frame == frame,
-        "Unread count changes do not move the native toolbar")
+        "Search and Store stay adjacent after the tabs at width \(width)")
+      try checkTitlebar(!subviews.contains { $0.accessibilityLabel() == "Notifications" },
+        "Notifications live in the macOS menu bar, with no duplicate titlebar bell")
     }
-    try checkTitlebar(notificationsButton.accessibilityLabel() == "Notifications" &&
-      notificationsButton.accessibilityValue() as? String == "101 unread",
-      "The native bell exposes its exact count even when its badge reads 99+")
-    notificationsButton.performClick(nil)
     searchButton.performClick(nil)
     storeButton.performClick(nil)
-    try checkTitlebar(calls == ["notificationInbox", "sessions", "store"],
-      "Top actions open the existing notifications, search and Store surfaces")
+    try checkTitlebar(calls == ["sessions", "store"],
+      "Top actions open the existing search and Store surfaces")
     state["enabled"] = false
     update(state)
-    notificationsButton.performClick(nil)
     searchButton.performClick(nil)
     storeButton.performClick(nil)
-    try checkTitlebar(!notificationsButton.isEnabled && !searchButton.isEnabled && !storeButton.isEnabled && calls.count == 3,
-      "A modal prevents the bell from dispatching another action")
+    try checkTitlebar(!searchButton.isEnabled && !storeButton.isEnabled && calls.count == 2,
+      "A modal prevents toolbar actions")
     update([:])
-    try checkTitlebar(notificationsButton.count == 0 && !notificationsButton.isEnabled,
-      "Teardown clears the unread badge and disables the bell")
+    try checkTitlebar(!searchButton.isEnabled && !storeButton.isEnabled,
+      "Teardown disables the toolbar")
   }
 
   func checkShareAction() throws {
@@ -1059,10 +1049,10 @@ private extension SwarmTabStrip {
     try tabs[0].checkDoubleClickIsolation()
     try checkTitlebar(tabs.count == 24 && newButton.isEnabled, "All overflow tabs and New Swarm remain available")
     try checkTitlebar(scroll.frame.maxX <= newButton.frame.minX &&
-      newButton.frame.maxX < searchButton.frame.minX, "Tabs precede the search, bell and Store controls")
+      newButton.frame.maxX < searchButton.frame.minX, "Tabs precede the search and Store controls")
     try checkTitlebar(tabs[0].frame.width < 120 && tabs[0].displayLabel == "1:code",
       "Overflow tabs keep a readable minimum width and their numbered names")
-    try checkTitlebar(subviews.count == 5 && statusBar.subviews.count == 6 && pullRequestButton.isHidden && focusedModelButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
+    try checkTitlebar(subviews.count == 4 && statusBar.subviews.count == 6 && pullRequestButton.isHidden && focusedModelButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
       "Navigation lives in the titlebar and focused context lives in the footer")
     let controls = [newButton]
     for (control, symbol) in zip(controls, ["+"]) {
@@ -1972,7 +1962,7 @@ do {
   try strip.checkAgentIdentity()
   try strip.checkSharedTypography()
   try strip.checkShareAction()
-  try strip.checkNotifications()
+  try strip.checkTopActions()
   try strip.checkActivityMarks()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
   try strip.checkDaemon()
@@ -1986,7 +1976,7 @@ do {
     content.view = TitlebarCheckContentView(frame: NSRect(x: 0, y: 0, width: 1280, height: 700))
     window.contentViewController = content
     let messenger = TitlebarCheckMessenger()
-    let titlebar = SwarmTitlebar(window: window, messenger: messenger)
+    let titlebar = SwarmTitlebar(window: window, messenger: messenger, installStatusItem: false)
     if let path = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_KEYMAP_FIXTURE"] {
       let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as! [String: [String: Any]]
       let before = titlebarCheckCount

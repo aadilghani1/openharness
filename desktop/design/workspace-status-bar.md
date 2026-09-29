@@ -190,7 +190,29 @@ follow a dependent viewer's owner.
 
 ## Notifications
 
-A small bell sits in the top row between the search icon and the Harness Store button. Reserve four bar cells on both native macOS and Flutter; counts
+On macOS, the Harness menu bar mark is a lowercase `hn` in Departure Mono Regular,
+stored as vector outlines and rendered as a monochrome template. A small circular
+count badge sits at the bottom-right corner, including zero. The badge
+sits slightly outside the letters so both remain legible. The combined template
+adapts to the menu bar's light, dark, and selected appearances. It keeps a fixed size, showing `99+`
+above 99 with the exact count in its tooltip and accessibility
+value. Its native menu lists only harnesses with unread
+notifications, grouped by project, adding machine names when more than one
+machine is represented. Read sessions disappear; an empty inbox says “No unread
+notifications.” Blue dots mark unread rows. Long titles truncate with
+their full text and context in tooltips; unavailable rows are disabled. Rows
+stay in place while the menu is open. New Harness, Clear All Notifications,
+Open Harness, Settings, and Quit follow the conversations. The window's titlebar
+has search and Store without a duplicate bell.
+
+Clear All acknowledges only the notifications in the displayed snapshot. Newer
+results and replacement questions stay unread. Opening a conversation restores
+its existing pane before bringing the window forward. Reading a question clears
+its notification, while the question itself remains pending until answered.
+The menu uses AppKit's standard keyboard navigation and accessibility.
+
+On Linux and the web, a small bell sits in the top row between the search icon
+and the Harness Store button. Reserve four bar cells in Flutter; counts
 never move the other controls. Put the count at the bell's upper-right corner,
 hide it at zero, show `99+` above 99, and keep the exact count in accessibility text.
 The bell has no background or button well, including on hover and keyboard
