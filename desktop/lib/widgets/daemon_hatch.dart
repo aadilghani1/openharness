@@ -962,7 +962,11 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
                 Opacity(
                   opacity: 1 - growth,
                   child: DaemonIllustration(
-                    art: IllustratedArt.daemon(def.id, version: growFrom),
+                    art: IllustratedArt.daemon(
+                      def.id,
+                      version: growFrom,
+                      traits: _traits,
+                    ),
                   ),
                 ),
                 Opacity(
@@ -970,6 +974,7 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
                   child: DaemonIllustration(
                     art: IllustratedArt.daemon(
                       def.id,
+                      traits: _traits,
                       version: version,
                       mood: mood,
                     ),
@@ -1142,7 +1147,11 @@ class _DaemonHatchRevealState extends State<DaemonHatchReveal> {
                 key: const ValueKey('daemon-hatch-card'),
                 lines: card,
                 illustration: IllustratedArt.supports(def.id)
-                    ? IllustratedArt.daemon(def.id, version: version)
+                    ? IllustratedArt.daemon(
+                        def.id,
+                        version: version,
+                        traits: _traits,
+                      )
                     : null,
                 portraitRows:
                     art?.frames.first.rows.length ??

@@ -58,9 +58,8 @@ String _str(Object? value) => value is String ? value : '';
 String? _opt(Object? value) =>
     value is String && value.isNotEmpty ? value : null;
 int _int(Object? value) => value is num ? value.toInt() : 0;
-DateTime? _at(Object? value) => value is num
-    ? DateTime.fromMillisecondsSinceEpoch(value.toInt())
-    : null;
+DateTime? _at(Object? value) =>
+    value is num ? DateTime.fromMillisecondsSinceEpoch(value.toInt()) : null;
 
 /// The keys a line offers, first, as the brain writes them (`voice.ts`
 /// `keysPrefix`): `[y/n/s/g] `, in that order, only the ones offered. `s`
@@ -473,7 +472,11 @@ class DaemonActed {
 
   /// `rule: api@office answered "Yes"`, as the brain's `auto` line says it.
   String get line =>
-      '$by: $name ${text.isNotEmpty ? text : action.isNotEmpty ? action : 'acted'}';
+      '$by: $name ${text.isNotEmpty
+          ? text
+          : action.isNotEmpty
+          ? action
+          : 'acted'}';
 
   static DaemonActed? fromJson(Object? raw) => raw is Map
       ? DaemonActed(
@@ -628,10 +631,7 @@ class DaemonSay {
               confirm['kind'] is String &&
               confirm['nonce'] is String &&
               (confirm['nonce'] as String).isNotEmpty
-          ? (
-              kind: confirm['kind'] as String,
-              nonce: confirm['nonce'] as String,
-            )
+          ? (kind: confirm['kind'] as String, nonce: confirm['nonce'] as String)
           : null,
     );
   }
@@ -1090,18 +1090,19 @@ class DaemonBrain extends ChangeNotifier {
     _ => detail ?? 'the answer did not go through.',
   };
 
-  static String talkErrorWords(String? code, [String? detail]) =>
-      switch (code) {
-        'PAIR_OFF' => 'nothing is paired: pair a daemon first.',
-        'NO_ENGINE' => 'the pair runs on Claude Code or Codex; neither is here.',
-        'INSTALL_FAILED' =>
-          'the pair harness could not be installed. try again.',
-        'EMPTY' => 'say something first.',
-        'RATE_LIMITED' => 'six talks a minute, sixty an hour.',
-        'UI_ONLY' => 'talk comes only from a window on this computer.',
-        'UNSUPPORTED' => 'this harnessd cannot talk yet. update it.',
-        _ => detail ?? 'the words did not reach it.',
-      };
+  static String talkErrorWords(
+    String? code, [
+    String? detail,
+  ]) => switch (code) {
+    'PAIR_OFF' => 'nothing is paired: pair a daemon first.',
+    'NO_ENGINE' => 'the pair runs on Claude Code or Codex; neither is here.',
+    'INSTALL_FAILED' => 'the pair harness could not be installed. try again.',
+    'EMPTY' => 'say something first.',
+    'RATE_LIMITED' => 'six talks a minute, sixty an hour.',
+    'UI_ONLY' => 'talk comes only from a window on this computer.',
+    'UNSUPPORTED' => 'this harnessd cannot talk yet. update it.',
+    _ => detail ?? 'the words did not reach it.',
+  };
 
   /// Answer a line (or an ask, or a brief item) with one of its actions.
   /// Only once it is armed: this window drew it, and what it would do, a
@@ -1155,7 +1156,11 @@ class DaemonBrain extends ChangeNotifier {
     final requestId = _id(12);
     final done = Completer<Map<String, dynamic>>();
     _requests[requestId] = done;
-    final sent = send('pair', {...payload, 'verb': verb, 'requestId': requestId});
+    final sent = send('pair', {
+      ...payload,
+      'verb': verb,
+      'requestId': requestId,
+    });
     if (!sent) {
       _requests.remove(requestId);
       return {'ok': false, 'error': 'UNREACHABLE'};
@@ -1212,6 +1217,7 @@ class DaemonBrain extends ChangeNotifier {
     required bool active,
     Duration? away,
     String? pair,
+    Map<String, dynamic>? companion,
     String? autonomy,
     bool? consent,
     String? focusMachineId,
@@ -1223,7 +1229,8 @@ class DaemonBrain extends ChangeNotifier {
       'active': active,
       if (away != null) 'awayMs': away.inMilliseconds,
       'desk': desk,
-      'pair': ?pair,
+      if (pair != null || consent != null) 'pair': pair,
+      'companion': ?companion,
       'autonomy': ?autonomy,
       'consent': ?consent,
       'focusMachineId': focusAgentId == null ? null : focusMachineId,
@@ -1251,12 +1258,18 @@ class DaemonBrain extends ChangeNotifier {
 
   /// A guest's local zoo changed its pair, dial or consent: the brain hears
   /// it.
-  Future<void> guest({String? pair, String? autonomy, bool? consent}) async {
+  Future<void> guest({
+    String? pair,
+    Map<String, dynamic>? companion,
+    String? autonomy,
+    bool? consent,
+  }) async {
     final desk = await this.desk();
     if (_disposed) return;
     send('daemon_presence', {
       'desk': desk,
       'pair': pair,
+      'companion': ?companion,
       'autonomy': autonomy,
       'consent': ?consent,
     });
@@ -1274,7 +1287,9 @@ class DaemonBrain extends ChangeNotifier {
     }
     _armTimers.clear();
     for (final waiting in _requests.values) {
-      if (!waiting.isCompleted) waiting.complete({'ok': false, 'error': 'GONE'});
+      if (!waiting.isCompleted) {
+        waiting.complete({'ok': false, 'error': 'GONE'});
+      }
     }
     _requests.clear();
     _talkRequest = null;

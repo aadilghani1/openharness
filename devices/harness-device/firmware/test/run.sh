@@ -208,6 +208,7 @@ if [[ -n "${IDF_PATH:-}" ]]; then
         "$here/../main/cable_scroll.c" "$IDF_PATH/components/json/cJSON/cJSON.c"
     "$out/test_cable_scroll"
     python3 "$here/test_cable_json_parse.py"
+    python3 "$here/test_companion_protocol.py"
     python3 "$here/test_cable_identity.py"
     python3 "$here/test_cable_models.py"
     python3 "$here/test_cable_outbound.py"

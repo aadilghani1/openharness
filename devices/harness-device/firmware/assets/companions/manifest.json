@@ -1,5 +1,5 @@
 {
-  "format": "zlib(RGB565BE + alpha8)",
+  "format": "zlib(RGB565BE + alpha8 + shade8 + coat8 + marks4x8)",
   "species": [
     "tim",
     "gnu",
@@ -17,8 +17,8 @@
     108
   ],
   "source_sha256": "243e84c08b314f2b0b6da5dfa4f9065761fd1fa4a2cffcce89d043adb827bc7b",
-  "bytes": 2565632,
-  "sha256": "26f5da578a65cfd129c6d4070a200f10518901261a02efe24ad6c29bbaac1c04",
-  "cache_bytes": 278427,
+  "bytes": 4615346,
+  "sha256": "1a507a57c927e31f0ae17876a9a59455d3ebf8b4bf27ab0e97915945f12c5aad",
+  "cache_bytes": 835281,
   "unique_blocks": 909
 }

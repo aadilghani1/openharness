@@ -5,9 +5,38 @@ library;
 import 'daemon_face.dart';
 import 'illustrated_alignment.g.dart';
 import 'roster.dart';
+import 'individuals.dart';
+import 'illustrated_styles.g.dart';
 
 class IllustratedArt {
-  const IllustratedArt._(this.stem, this.frames);
+  const IllustratedArt._(
+    this.stem,
+    this.frames, {
+    this.colour = -1,
+    this.mark = 0,
+  });
+  final int colour, mark;
+  Map<String, int> get style => {'colour': colour, 'mark': mark};
+  bool get styled => colour >= 0 || mark > 0;
+  int get frameMs {
+    final parts = stem.split('_');
+    final table = illustratedStyles[parts.first]?['timing'] as List?;
+    final mood = parts.length > 2
+        ? (parts[2] == 'back' ? 'done' : parts[2])
+        : '';
+    final index = const [
+      'idle',
+      'work',
+      'need',
+      'done',
+      'fail',
+      'nap',
+      'boop',
+    ].indexOf(mood);
+    return table == null || index < 0
+        ? 190
+        : (table[index] as int).clamp(80, 600);
+  }
 
   static const species = [
     'tim',
@@ -73,6 +102,7 @@ class IllustratedArt {
     String version = '0.1',
     DaemonMood mood = DaemonMood.idle,
     bool blink = false,
+    DaemonTraits? traits,
   }) {
     if (!supports(species)) throw ArgumentError.value(species, 'species');
     final age = switch (version) {
@@ -81,9 +111,18 @@ class IllustratedArt {
       _ => 'baby',
     };
     final expression = blink && mood != DaemonMood.nap ? 'blink' : mood.name;
+    final styles = illustratedStyles[species]!;
+    final colour = traits == null || traits.seed == 0
+        ? -1
+        : (styles['colours'] as List).indexOf(traits.colour);
+    final mark = traits == null || traits.seed == 0
+        ? 0
+        : (styles['marks'] as List).indexOf(traits.marks).clamp(0, 4);
     return IllustratedArt._(
       '${species}_${age}_$expression',
       daemonFrames[expression]!,
+      colour: colour,
+      mark: mark,
     );
   }
 
@@ -95,6 +134,10 @@ class IllustratedArt {
 
   final String stem;
   final int frames;
+  bool get finite =>
+      stem.endsWith('_done') ||
+      stem.endsWith('_boop') ||
+      stem.endsWith('_back');
 
   /// Optical centre of the registered idle pose, in source pixels. All frames
   /// keep this same anchor so breathing, jumps and hatching don't get recentered
@@ -117,17 +160,12 @@ class IllustratedArt {
         version: face.daemon!.version,
         mood: face.mood,
         blink: face.lid != null,
+        traits: face.traits,
       );
     }
     final egg = face.eggArtwork;
     return egg == null ? null : IllustratedArt.egg(kind: egg.$1, stage: egg.$2);
   }
 
-  static int frameForFace(DaemonFace face) => !face.motionEnabled
-      ? 0
-      : face.mood == DaemonMood.back
-      ? face.t ~/ 130
-      : face.mood == DaemonMood.work
-      ? face.steps
-      : 0;
+  static int frameForFace(DaemonFace face) => face.artFrame;
 }

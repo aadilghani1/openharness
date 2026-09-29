@@ -75,6 +75,12 @@ static struct {
 } s;
 static ht_gesture_t gesture;
 static ht_character_t character;
+static bool companion_celebrating, follow_companion=true;
+static uint32_t celebration_began;
+static char celebration_label[64];
+static ht_character_id_t desktop_companion=HT_CHARACTER_COUNT;
+static struct { char name[25]; } desktop_identity;
+static void select_companion(void) {}
 static ht_character_caption_t home_caption;
 static ht_character_id_t test_character;
 static unsigned notice_reads_sent; static action_t notice_read_queued;
@@ -929,6 +935,19 @@ static void bell_checks(const char *dir) {
         found=true;
     }
     assert(!found && !action_enabled(A_INBOX));
+    // Identity stays available over USB, while its permanent name never takes
+    // the notification footer. Even a brief milestone yields to a new bell.
+    desktop_companion=HT_CHARACTER_ILLUSTRATED_TIM;
+    strcpy(desktop_identity.name,"tim #0001"); scene_take();
+    for(int i=0;i<scene.count;i++) assert(!strstr(scene.runs[i].text,"tim #0001"));
+    companion_celebrating=true; strcpy(celebration_label,"Tim grew!");
+    cable_notif_t during_growth={.agent_id="b",.name="Other pane",.summary="Ready."};
+    ui_notif_replace(&during_growth,1); scene_take();
+    assert(status_is(HT_BELL " 1") && action_enabled(A_INBOX));
+    for(int i=0;i<scene.count;i++) assert(!strstr(scene.runs[i].text,"grew!"));
+    companion_celebrating=false; desktop_companion=HT_CHARACTER_COUNT;
+    memset(&desktop_identity,0,sizeof desktop_identity);
+    reset();
     // A restored host failure is distinct from a completed task. Questions
     // keep priority; an ordinary fresh result must clear any old failure mark.
     cable_notif_t failed={.agent_id="b",.name="Website",.failed=true,

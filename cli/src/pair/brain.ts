@@ -77,7 +77,7 @@ export interface PairBrainDeps {
   }
   /** A guest's window says which daemon its local zoo pairs (daemon_presence.pair), its dial, and whether
    *  the person agreed to being watched (`consent`, the first-day screen's answer). */
-  onGuestPair?: (daemonId: string | null) => void
+  onGuestPair?: (daemonId: string | null, identity?: unknown) => void
   onGuestAutonomy?: (autonomy: string | null) => void
   onGuestConsent?: (watching: boolean) => void
   /** The brain started or stopped thinking (cli.ts keeps the router's worker warm while it does). */
@@ -190,7 +190,7 @@ export class PairBrain {
    */
   onPresence(connId: string, payload: Record<string, unknown>, meta: { ui: boolean } = { ui: true }): void {
     if (meta.ui && 'consent' in payload) this.deps.onGuestConsent?.(payload.consent === true)
-    if (meta.ui && 'pair' in payload) this.deps.onGuestPair?.(typeof payload.pair === 'string' ? payload.pair : null)
+    if (meta.ui && 'pair' in payload) this.deps.onGuestPair?.(typeof payload.pair === 'string' ? payload.pair : null, payload.companion)
     if (meta.ui && 'autonomy' in payload) this.deps.onGuestAutonomy?.(typeof payload.autonomy === 'string' ? payload.autonomy : null)
     const prior = this.presence.get(connId)
     // What the person is looking at: never spoken about. `null` clears it; absent keeps what was said.

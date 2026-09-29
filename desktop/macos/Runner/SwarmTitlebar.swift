@@ -1137,28 +1137,72 @@ private final class SwarmDaemonArt {
     cache.totalCostLimit = 2 * 1024 * 1024
   }
 
-  func image(asset: String?) -> NSImage? {
-    guard let asset, Self.opens(asset), !missing.contains(asset) else { return nil }
-    if let image = cache.object(forKey: asset as NSString) { return image }
-    guard let url = assetURL(asset),
-          let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-          let frame = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: 64,
-            kCGImageSourceShouldCacheImmediately: true,
-          ] as CFDictionary) else {
-      // Assets are immutable for the lifetime of the app. Bound failed lookups
-      // too, so a missing animation frame does not reopen the file every tick.
-      if missing.count < 128 { missing.insert(asset) }
-      return nil
+  private lazy var palettes: [String: [[[Int]]]] = {
+    guard let url = assetURL("assets/daemon-art/styles.json"), let data = try? Data(contentsOf: url), data.count < 32768,
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Any]] else { return [:] }
+    return object.compactMapValues { $0["palettes"] as? [[[Int]]] }
+  }()
+
+  private func frame(_ asset: String) -> CGImage? {
+    guard Self.opens(asset), let url=assetURL(asset), let source=CGImageSourceCreateWithURL(url as CFURL,nil) else { return nil }
+    return CGImageSourceCreateThumbnailAtIndex(source,0,[
+      kCGImageSourceCreateThumbnailFromImageAlways:true,kCGImageSourceCreateThumbnailWithTransform:true,
+      kCGImageSourceThumbnailMaxPixelSize:64,kCGImageSourceShouldCacheImmediately:true] as CFDictionary)
+  }
+
+  private func rgba(_ image: CGImage) -> [UInt8]? {
+    var bytes=[UInt8](repeating:0,count:image.width*image.height*4)
+    let valid=bytes.withUnsafeMutableBytes { memory -> Bool in
+      guard let context=CGContext(data:memory.baseAddress,width:image.width,height:image.height,bitsPerComponent:8,
+        bytesPerRow:image.width*4,space:CGColorSpace(name:CGColorSpace.sRGB)!,
+        bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { return false }
+      context.draw(image,in:CGRect(x:0,y:0,width:image.width,height:image.height));return true
     }
-    let scale = 32 / CGFloat(max(frame.width, frame.height))
-    let image = NSImage(cgImage: frame,
-      size: NSSize(width: CGFloat(frame.width) * scale, height: CGFloat(frame.height) * scale))
-    cache.setObject(image, forKey: asset as NSString, cost: frame.bytesPerRow * frame.height)
+    return valid ? bytes : nil
+  }
+
+  func image(asset: String?, style: [String: Any]? = nil) -> NSImage? {
+    guard let asset,Self.opens(asset) else { return nil }
+    let colour=style?["colour"] as? Int ?? -1, mark=style?["mark"] as? Int ?? 0
+    let validColour=(-1...5).contains(colour) ? colour : -1, validMark=(0...4).contains(mark) ? mark : 0
+    let key="\(asset):\(validColour):\(validMark)"
+    guard !missing.contains(key) else { return nil }
+    if let image=cache.object(forKey:key as NSString) { return image }
+    guard var decoded=frame(asset) else { if missing.count<128 { missing.insert(key) };return nil }
+    let species=asset.components(separatedBy:"/").last?.components(separatedBy:"_").first ?? ""
+    if (validColour>=0 || validMark>0), let table=palettes[species],
+      let material=frame(asset.replacingOccurrences(of:".png",with:"_material.png")),
+      let marks=frame(asset.replacingOccurrences(of:".png",with:"_marks.png")),
+      material.width==decoded.width,material.height==decoded.height,marks.width==decoded.width,marks.height==decoded.height,
+      var pixels=rgba(decoded),let m=rgba(material),let k=rgba(marks) {
+      let palette=validColour>=0 && validColour<table.count ? table[validColour] : nil
+      for at in stride(from:0,to:pixels.count,by:4) {
+        let alpha=Int(pixels[at+3]),shade=Int(m[at]),weight=Int(m[at+1])
+        let marking=validMark==1 ? Int(m[at+2]) : validMark>=2 ? Int(k[at+validMark-2]) : 0
+        for channel in 0..<3 {
+          var value=alpha>0 ? min(255,Int(pixels[at+channel])*255/alpha) : 0
+          if let palette,palette.count==2,palette[0].count==3,palette[1].count==3 {
+            let dark=palette[0][channel],light=palette[1][channel]
+            value=max(0,min(255,(value*(255-weight)+dark*weight+(light-dark)*shade+127)/255))
+          }
+          value=value*(255-marking*100/255)/255
+          pixels[at+channel]=UInt8((value*alpha+127)/255)
+        }
+      }
+      let transformed=pixels.withUnsafeMutableBytes { memory -> CGImage? in
+        let context=CGContext(data:memory.baseAddress,width:decoded.width,height:decoded.height,bitsPerComponent:8,
+          bytesPerRow:decoded.width*4,space:CGColorSpace(name:CGColorSpace.sRGB)!,
+          bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
+        return context?.makeImage()
+      }
+      if let transformed { decoded=transformed }
+    }
+    let scale=32/CGFloat(max(decoded.width,decoded.height))
+    let image=NSImage(cgImage:decoded,size:NSSize(width:CGFloat(decoded.width)*scale,height:CGFloat(decoded.height)*scale))
+    cache.setObject(image,forKey:key as NSString,cost:decoded.bytesPerRow*decoded.height)
     return image
   }
+
 }
 
 private func statusColor(_ value: Any?, fallback: NSColor) -> NSColor {
@@ -2091,7 +2135,7 @@ private final class SwarmTabStrip: NSView {
     daemonButton.state = state["open"] as? Bool == true ? .on : .off
     daemonButton.glyph = validDaemonGlyph(state["glyph"] as? String) ?? ""
     daemonButton.cells = validDaemonText(state["cell"] as? String, cells: daemonButton.columns + 2) ?? ""
-    daemonButton.art = wanted ? daemonArt.image(asset: state["art"] as? String) : nil
+    daemonButton.art = wanted ? daemonArt.image(asset: state["art"] as? String, style: state["artStyle"] as? [String: Any]) : nil
     daemonButton.artCenter = daemonArt.center(asset: state["art"] as? String)
     daemonButton.foreground = statusColor(state["foreground"], fallback: terminalForeground)
     daemonButton.patch = state["patch"] is NSNumber ? statusColor(state["patch"], fallback: .black) : nil

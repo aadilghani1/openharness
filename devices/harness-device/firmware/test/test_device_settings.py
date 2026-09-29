@@ -39,6 +39,7 @@ code = r'''
 #include <string.h>
 
 #define CFG_VLANG_MAX 8
+typedef struct { char id[16],uid[65],name[25],version[4]; uint32_t seed; int8_t colour; uint8_t mark; } ui_companion_t;
 typedef struct {
     uint8_t brightness;
     uint8_t character;
@@ -46,6 +47,7 @@ typedef struct {
     bool muted, quiet, straight_title, focus_face, scroll_reversed, round;
     bool follow_companion;
     char companion[16];
+    ui_companion_t companion_details;
     char voicelang[CFG_VLANG_MAX];
 } ui_settings_t;
 enum {
@@ -61,12 +63,22 @@ typedef struct { action_kind_t kind; } action_t;
 // The pieces of the screen these functions touch, and nothing else.
 static struct {
     int brightness;
-    bool muted, quiet, focus_face, straight_title;
+    bool muted, quiet, focus_face, straight_title, connected, nap, touch_down;
+    int view;
 } s;
 static bool scroll_reversed;
 static ht_character_t character;
 static ht_character_id_t device_skin, desktop_companion = HT_CHARACTER_COUNT;
-static bool follow_companion = true;
+static bool follow_companion = true, companion_celebrating;
+static ui_companion_t desktop_identity, celebration_identity;
+static uint32_t celebration_began;
+static char celebration_tokens[8][96], celebration_label[64];
+static unsigned celebration_next;
+enum { HOME, READING };
+static bool asleep;
+static bool display_is_asleep(void) { return asleep; }
+static uint32_t ms(void) { return 1000; }
+static ht_character_mood_t character_mood(void) { return HT_CHARACTER_IDLE; }
 #define ESP_LOGI(...) ((void)0)
 static void display_set_brightness(uint8_t value) { (void)value; }
 static bool congestion, changed;
@@ -95,6 +107,8 @@ static void cable_client_report_settings(void);
 '''
 code += pending + '\n'
 code += function('select_companion') + '\n'
+code += function('ui_set_companion_identity') + '\n'
+code += function('ui_companion_celebrate') + '\n'
 code += function('ui_set_companion') + '\n'
 code += function('ui_settings_read') + '\n'
 code += function('ui_settings_apply') + '\n'
@@ -188,6 +202,31 @@ int main(void)
     assert(ui_settings_apply(&want, UI_SETTING_FOLLOW_COMPANION, error, sizeof error));
     assert(character.id == HT_CHARACTER_BEASTIE);
     worker_once(); assert(!(nvs_options & 16));
+
+    // Fresh events are temporary and never alter the paired identity or NVS.
+    ui_companion_t pip={.id="tim",.uid="pip",.name="Pip",.version="0.1",.seed=42,.colour=2,.mark=1};
+    assert(ui_set_companion_identity(&pip));
+    assert(character.companion_style.stage==0 && character.companion_style.colour==2 && character.companion_style.mark==1);
+    assert(!strcmp(now().companion_details.uid,"pip"));
+    s.connected=true; s.view=HOME; before_pair=writes;
+    ui_companion_t dot={.id="gnu",.uid="dot",.name="Dot",.version="1.0",.colour=3};
+    assert(ui_companion_celebrate(&dot,"grow","dot:grow:1.0") && companion_celebrating);
+    assert(character.id==HT_CHARACTER_GNU && !strcmp(now().companion,"tim"));
+    assert(!strcmp(now().companion_details.uid,"pip") && writes==before_pair);
+    companion_celebrating=false;
+    assert(ui_companion_celebrate(&dot,"grow","dot:grow:1.0") && !companion_celebrating);
+    s.quiet=true;
+    assert(ui_companion_celebrate(&dot,"hatch","quiet-event") && !companion_celebrating);
+    s.quiet=false;
+    assert(ui_companion_celebrate(&dot,"hatch","quiet-event") && !companion_celebrating);
+    asleep=true;
+    assert(ui_companion_celebrate(&dot,"hatch","sleep-event") && !companion_celebrating);
+    asleep=false;s.view=READING;
+    assert(ui_companion_celebrate(&dot,"hatch","reading-event") && !companion_celebrating);
+    assert(!ui_companion_celebrate(&dot,"bad","bad-event"));
+    dot.colour=6;assert(!ui_set_companion_identity(&dot));
+    assert(!ui_companion_celebrate(&dot,"grow","invalid-style"));
+    assert(writes==before_pair);
 
     // A full action queue is a refusal the app can act on, not a silent loss.
     congestion = true;

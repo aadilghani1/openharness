@@ -68,6 +68,7 @@ typedef struct {
     const void *asset;
     uint32_t revision;
     uint16_t width, height;
+    uint8_t species, colour, mark;
 } ht_sprite_t;
 typedef struct {
     int16_t x, y, w;

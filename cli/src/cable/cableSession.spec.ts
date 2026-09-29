@@ -157,6 +157,37 @@ describe('cable session', () => {
     } finally { await session.stop() }
   })
 
+  it('syncs individual changes and sends fresh celebrations once without replay on hello', async () => {
+    let identity = {id:'tim',uid:'tim_1',seed:42,name:'Pip',version:'0.1' as '0.1'|'1.0',colour:2,mark:1}
+    let event: import('./companionIdentity.js').CompanionMilestone | null = null
+    const {session,port}=await connect(makeHost({companion:()=>identity.id, companionIdentity:()=>identity, companionMilestone:()=>event}))
+    const settings={...companionSettings,companionProtocol:2,companionDetails:null as unknown}
+    try {
+      port.say({t:'hello',product:'harness',mac:'aa:bb',settings})
+      await vi.waitFor(()=>expect(port.sent).toContainEqual({t:'companion.set',id:'tim',identity}))
+      port.say({t:'settings.state',settings:{...settings,companion:'tim',companionDetails:identity}})
+      identity={...identity,name:'Dot',version:'1.0',colour:3,mark:2}
+      await session['syncCompanion']()
+      expect(port.sent.filter(m=>m.t==='companion.set').at(-1)).toEqual({t:'companion.set',id:'tim',identity})
+      port.say({t:'settings.state',settings:{...settings,companion:'tim',companionDetails:identity}})
+      event={token:'tim_1:grow:1.0',kind:'grow',at:Date.now(),companion:identity}
+      await session['syncCompanion'](); await session['syncCompanion']()
+      expect(port.sent.filter(m=>m.t==='companion.celebrate')).toHaveLength(1)
+      port.say({t:'hello',product:'harness',mac:'aa:bb',settings})
+      await session['syncCompanion']()
+      expect(port.sent.filter(m=>m.t==='companion.celebrate')).toHaveLength(1)
+      event={...event,token:'old-event',at:Date.now()-9_000}
+      await session['syncCompanion']()
+      expect(port.sent.filter(m=>m.t==='companion.celebrate')).toHaveLength(1)
+      port.say({t:'settings.state',settings:{...settings,quiet:true}})
+      event={...event,token:'quiet-event',at:Date.now()}
+      await session['syncCompanion']()
+      port.say({t:'settings.state',settings:{...settings,quiet:false}})
+      await session['syncCompanion']()
+      expect(port.sent.filter(m=>m.t==='companion.celebrate')).toHaveLength(1)
+    } finally { await session.stop() }
+  })
+
   it('honours follow-off, refuses unknown species and never sends companion commands to old firmware', async () => {
     let paired = 'gnu'
     const { session, port } = await connect(makeHost({ companion: () => paired }))

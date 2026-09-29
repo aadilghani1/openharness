@@ -88,6 +88,7 @@ bool ht_character_select(ht_character_t *c, ht_character_id_t id)
     if (!c || (unsigned)id >= HT_CHARACTER_COUNT) return false;
     if (c->id == id) return true;
     memset(&c->motion, 0, sizeof c->motion);
+    c->companion_style = (ht_companion_style_t){.stage=2,.colour=255};
     c->id = id;
     return true;
 }
@@ -95,6 +96,8 @@ bool ht_character_tick(ht_character_t *c, uint32_t now, ht_character_mood_t mood
                        bool quiet, bool visible, bool down, int x, unsigned level, uint32_t activity)
 {
     if ((unsigned)mood >= HT_CHARACTER_MOODS) mood = HT_CHARACTER_IDLE;
+    if (ht_character_species(c->id)) return ht_illustrated_tick_species(&c->motion,
+        c->id-HT_CHARACTER_ILLUSTRATED_TIM,now,mood,quiet,visible,down,x,level,activity);
     return definition(c->id)->tick(&c->motion, now, mood, quiet, visible, down, x, level, activity);
 }
 bool ht_character_delivery_tick(ht_character_t *c, uint32_t now, bool pending,
@@ -125,6 +128,7 @@ bool ht_character_delivery_tick(ht_character_t *c, uint32_t now, bool pending,
 static ht_character_face_t delivery_face(const ht_character_t *c, const ht_character_face_t *f)
 {
     ht_character_face_t face = *f;
+    face.companion_style = c->companion_style;
     face.pose.mail = f->unread && !f->carrying && f->mood != HT_CHARACTER_LISTENING
         ? 1 + c->delivery.lift : 0;
     return face;

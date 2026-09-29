@@ -897,7 +897,11 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
               key: const ValueKey('daemon-card-text'),
               lines: card,
               illustration: IllustratedArt.supports(def.id)
-                  ? IllustratedArt.daemon(def.id, version: viewing.version)
+                  ? IllustratedArt.daemon(
+                      def.id,
+                      version: viewing.version,
+                      traits: traits,
+                    )
                   : null,
               portraitRows: portraitRows,
               style: _ink(),
@@ -1554,6 +1558,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
                           art: IllustratedArt.daemon(
                             d.id,
                             version: first.version,
+                            traits: face.zoo.traitsOf(first),
                           ),
                           size: _cell.height * 2,
                           semanticsLabel:

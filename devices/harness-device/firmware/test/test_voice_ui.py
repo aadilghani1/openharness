@@ -49,6 +49,9 @@ static ht_draft_t draft;
 static ht_workspace_t workspace;
 enum { HT_CHARACTER_COUNT = 13 };
 static int desktop_companion;
+typedef struct { int8_t colour; } ui_companion_t;
+static ui_companion_t desktop_identity;
+static bool companion_celebrating;
 static void select_companion(void) {}
 static ht_tab_carousel_t tab_carousel;
 static struct {

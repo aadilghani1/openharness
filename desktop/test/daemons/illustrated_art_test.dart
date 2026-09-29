@@ -68,7 +68,9 @@ void main() {
       }
 
       final before = frame();
-      await tester.pump(const Duration(milliseconds: 190));
+      await tester.pump(
+        Duration(milliseconds: IllustratedArt.daemon(id).frameMs),
+      );
       expect(frame(), isNot(before));
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 1));
@@ -145,7 +147,7 @@ void main() {
       );
       await tester.pumpWidget(host(portrait()));
       expect(asset(tester), endsWith('tim_adult_idle_0.png'));
-      await tester.pump(const Duration(milliseconds: 190));
+      await tester.pump(const Duration(milliseconds: 210));
       expect(asset(tester), endsWith('tim_adult_idle_1.png'));
       await tester.pumpWidget(host(portrait(), reduced: true));
       await tester.pump(const Duration(seconds: 3));
@@ -154,7 +156,7 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
       expect(asset(tester), endsWith('tim_adult_idle_0.png'));
       await tester.pumpWidget(host(portrait()));
-      await tester.pump(const Duration(milliseconds: 190));
+      await tester.pump(const Duration(milliseconds: 210));
       expect(asset(tester), endsWith('tim_adult_idle_1.png'));
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 2));
@@ -168,9 +170,7 @@ void main() {
       final art = IllustratedArt.tim(version: '1.0', mood: DaemonMood.need);
       await tester.pumpWidget(host(DaemonIllustration(art: art, size: 32)));
       expect(asset(tester), contains('/slot/'));
-      final compact =
-          tester.widget<Image>(find.byType(Image)).image as ResizeImage;
-      expect(compact.width, lessThanOrEqualTo(64));
+      expect(tester.widget<Image>(find.byType(Image)).image, isA<AssetImage>());
       await tester.pumpWidget(
         host(DaemonIllustration(art: art, silhouette: Colors.black)),
       );

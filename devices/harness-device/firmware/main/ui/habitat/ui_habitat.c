@@ -251,11 +251,19 @@ static bool selection_emit(const ht_select_command_t *command, void *ctx);
 static ht_gesture_t gesture;
 static ht_character_t character;
 static ht_character_id_t device_skin, desktop_companion = HT_CHARACTER_COUNT;
-static bool follow_companion = true;
+static bool follow_companion = true, companion_celebrating;
+static ui_companion_t desktop_identity, celebration_identity;
+static uint32_t celebration_began;
+static char celebration_tokens[8][96], celebration_label[64];
+static unsigned celebration_next;
 static void select_companion(void)
 {
-    ht_character_select(&character, follow_companion && desktop_companion < HT_CHARACTER_COUNT
-        ? desktop_companion : device_skin);
+    const ui_companion_t *identity=companion_celebrating?&celebration_identity:&desktop_identity;
+    ht_character_id_t selected=companion_celebrating?ht_character_companion(identity->id):desktop_companion;
+    ht_character_select(&character, follow_companion && selected < HT_CHARACTER_COUNT ? selected : device_skin);
+    character.companion_style=(ht_companion_style_t){
+        .stage=!strcmp(identity->version,"0.1")?0:!strcmp(identity->version,"1.0")?1:2,
+        .colour=identity->colour<0?255:(uint8_t)identity->colour,.mark=identity->mark};
 }
 static ht_character_caption_t home_caption;
 static action_t pressed_action;
@@ -736,6 +744,9 @@ static void dispatch(action_t a);   // the hold below acts at once; defined with
 static void surface_tick(uint32_t now)
 {
     notice_flush_reads(now);
+    if (companion_celebrating && (now-celebration_began>=2400 || s.view!=HOME || s.quiet || !follow_companion || display_is_asleep() || character_mood()==HT_CHARACTER_ATTENTION)) {
+        companion_celebrating=false; select_companion(); change();
+    }
     if (s.view == TABS && !display_is_asleep() && ht_tab_carousel_tick(&tab_carousel, now)) change();
     if (home_caption_tick(now)) change();
     uint8_t phase = status_animated() ? ht_shimmer_phase(now * status_speed()) : 0;
@@ -760,7 +771,7 @@ static void surface_tick(uint32_t now)
     }
     ht_character_mood_t mood = s.view == VOICE ?
         (!s.voice_start_pending && !s.voice_waiting && audio_client_recording() ? HT_CHARACTER_LISTENING : HT_CHARACTER_WORKING) :
-        character_mood();
+        companion_celebrating ? HT_CHARACTER_DONE : character_mood();
     if (ht_character_tick(&character, now, mood, s.quiet, visible,
                            s.touch_down && !s.touch_cancelled, s.last_x,
                            mood == HT_CHARACTER_LISTENING ? audio_client_input_level() : 0, s.character_activity))
@@ -831,13 +842,15 @@ static void render_home(ht_scene_t *f)
     uint32_t since = a && a->busy && a->busy_ms ? (ms() - a->busy_ms) / 1000 : 0;
     int tab_index = workspace_index(s.selected_tab);
     ht_character_face_t f_ = {.recipient = caption, .status = bell ? "" : status,
-        .hint = "",
+        // The lower text seat belongs to notifications and useful status.
+        // A companion's name lives in the desktop Zoo, not a permanent footer.
+        .hint = companion_celebrating && !bell && !status[0] ? celebration_label : "",
         .tab = tab_index >= 0 ? s.tabs[tab_index].name : "",
         .engine = a ? a->engine : "",
         .activity = activity,
         .elapsed = since > 65535 ? 65535 : (uint16_t)since,
         .detail = "",
-        .mood = character_mood(), .pose = character.motion.reaction.pose,
+        .mood = companion_celebrating ? HT_CHARACTER_DONE : character_mood(), .pose = character.motion.reaction.pose,
         .straight_title = s.straight_title,
         .footer_action = carry.active || carry.error[0] || visit.available,
         .ink = FG, .foreground = FG, .dim = DIM,
@@ -2642,8 +2655,11 @@ void ui_settings_read(ui_settings_t *out)
     out->muted = s.muted;
     out->character = (uint8_t)device_skin;
     out->follow_companion = follow_companion;
-    const char *species = ht_character_species(character.id);
-    if (species) snprintf(out->companion, sizeof out->companion, "%s", species);
+    const char *species = follow_companion ? ht_character_species(desktop_companion) : NULL;
+    if (species) {
+        snprintf(out->companion, sizeof out->companion, "%s", species);
+        out->companion_details=desktop_identity;
+    }
     out->quiet = s.quiet;
     out->straight_title = s.straight_title;
     out->focus_face = s.focus_face;
@@ -2673,7 +2689,7 @@ bool ui_settings_apply(const ui_settings_t *want, uint32_t fields, char *error, 
             return false;
         }
     }
-    if ((fields & UI_SETTING_VOICELANG) && strlen(want->voicelang) >= CFG_VLANG_MAX) {
+    if ((fields & UI_SETTING_VOICELANG) && !memchr(want->voicelang, '\0', sizeof want->voicelang)) {
         if (error) snprintf(error, cap, "Language code is too long.");
         return false;
     }
@@ -2704,17 +2720,50 @@ void ui_settings_changed(void)
 {
     cable_client_report_settings();
 }
+bool ui_set_companion_identity(const ui_companion_t *identity)
+{
+    ht_character_id_t id=ht_character_companion(identity?identity->id:NULL);
+    if (identity && (id==HT_CHARACTER_COUNT || identity->colour < -1 || identity->colour>5 || identity->mark>4 ||
+        (strcmp(identity->version,"0.1") && strcmp(identity->version,"1.0") && strcmp(identity->version,"2.0")))) return false;
+    display_lock();
+    desktop_companion=id; companion_celebrating=false;
+    desktop_identity=identity?*identity:(ui_companion_t){.colour=-1};
+    select_companion(); change(); display_unlock();
+    ESP_LOGI("companion","desktop=%s uid=%s version=%s colour=%d mark=%u",identity?identity->id:"none",
+        identity?identity->uid:"",identity?identity->version:"",identity?identity->colour:-1,identity?identity->mark:0);
+    return true;
+}
 bool ui_set_companion(const char *species)
 {
-    ht_character_id_t id = ht_character_companion(species);
-    if (species && id == HT_CHARACTER_COUNT) return false;
+    if (!species) return ui_set_companion_identity(NULL);
+    if (ht_character_companion(species)==HT_CHARACTER_COUNT) return false;
+    ui_companion_t identity={.colour=-1};
+    snprintf(identity.id,sizeof identity.id,"%s",species);
+    snprintf(identity.uid,sizeof identity.uid,"%s",species);
+    snprintf(identity.name,sizeof identity.name,"%s",species);
+    snprintf(identity.version,sizeof identity.version,"2.0");
+    return ui_set_companion_identity(&identity);
+}
+bool ui_companion_celebrate(const ui_companion_t *identity,const char *kind,const char *token)
+{
+    if (!identity || !token || !token[0] || strlen(token)>=sizeof celebration_tokens[0] ||
+        (!kind || (strcmp(kind,"hatch") && strcmp(kind,"grow"))) ||
+        ht_character_companion(identity->id)==HT_CHARACTER_COUNT || identity->colour < -1 || identity->colour > 5 || identity->mark > 4 ||
+        (strcmp(identity->version,"0.1") && strcmp(identity->version,"1.0") && strcmp(identity->version,"2.0"))) return false;
     display_lock();
-    desktop_companion = id;
-    select_companion();
-    change();
-    display_unlock();
-    ESP_LOGI("companion", "desktop=%s active=%s", species ? species : "none", ht_character_name(character.id));
-    return true;
+    bool seen=false;
+    for (unsigned i=0;i<8;i++) if (!strcmp(token,celebration_tokens[i])) seen=true;
+    if (!seen) {
+        snprintf(celebration_tokens[celebration_next++%8],sizeof celebration_tokens[0],"%s",token);
+        // A sleeping/reading/quiet dial consumes the event without scheduling a later surprise.
+        if (follow_companion && s.connected && !s.quiet && !s.nap && s.view==HOME && !display_is_asleep() && !s.touch_down && character_mood()!=HT_CHARACTER_ATTENTION) {
+            celebration_identity=*identity; companion_celebrating=true; celebration_began=ms();
+            snprintf(celebration_label,sizeof celebration_label,"%.24s %s",identity->name,!strcmp(kind,"hatch")?"hatched!":"grew!");
+            select_companion(); change();
+            ESP_LOGI("companion","milestone=%s token=%s",kind,token);
+        }
+    }
+    display_unlock(); return true;
 }
 void ui_set_brightness(uint8_t level)
 {
@@ -2731,6 +2780,7 @@ void ui_set_connected(bool value)
     display_lock();
     if (!value) {
         desktop_companion = HT_CHARACTER_COUNT;
+        desktop_identity=(ui_companion_t){.colour=-1}; companion_celebrating=false;
         select_companion();
         input_cancel();
         s.voice_retry_until = 0;

@@ -5,7 +5,7 @@ It is independent of the firmware build. `daemon_art.py` is a local copy of the
 approved Pro illustration source; `generate.py` exports all ten and eggs.
 No runtime Python, SVG parsing, external bitmap, or network service is involved.
 
-Regenerate with Python 3 and Pillow:
+Regenerate with Python 3, Pillow and NumPy:
 
 ```sh
 python3 daemons/tools/illustrated/generate.py
@@ -14,7 +14,7 @@ python3 daemons/tools/illustrated/generate.py
 The exporter writes identical zero-based asset keys under
 `desktop/assets/daemon-art/slot/` (64 × 64) and `portrait/` (350 × 350).
 `manifest.json` records all files, frame counts, source hashes, dimensions,
-compressed bytes, image hashes and alpha bounds. Every delivered PNG is reopened
+compressed bytes, image hashes and alpha bounds. Every base PNG is reopened
 and checked for lossless equality and a fully transparent outer pixel border.
 
 Daemon keys are `{species}_{baby|young|adult}_{mood}_{frame}`. Versions `0.1`, `1.0`, and
@@ -38,15 +38,25 @@ letting them protrude below it early in the rise. The irregular rim is at
 `y=181..200`, with its centre near `y=198`; the shell floor is `y=316`.
 `review/hatch-composition.png` checks silhouette and colour registration.
 
-There are 1,124 logical keys and 2,248 PNGs (38.6 MB combined). One predecoded image per displayed
+There are 1,124 base keys and 2,248 base PNGs, plus 3,600 RGB material PNGs. The manifest records the total bytes. One predecoded image per displayed
 frame is enough for AppKit or Flutter; no runtime geometry evaluation is needed.
 Static/reduced-motion views use frame 0. Use the manifest's count maps rather
 than the ASCII plates' different frame counts. Contact sheets under `review/`
 are development artifacts, not application assets.
 
-These are curated species illustrations. Arbitrary rolled colours, markings,
-accessories, and individual proportions are not represented. Preserve their
-metadata; do not imply that a generic recolouring renders those traits exactly.
+`appearance.py` authors the six rolled coat families and four named markings per species.
+`_material.png` stores shade, coat coverage and marking 1; `_marks.png` stores
+markings 2–4. These data images are opaque RGB so premultiplication cannot corrupt
+the channels. Flutter, AppKit and the round firmware apply the same integer shader;
+eyes and other protected features retain their original colours. Seed 0 keeps the
+approved unmodified palette. Rolled accessories and individual proportions remain
+metadata; only growth, coat and markings are illustrated.
+
+`styles.json` and `illustrated_styles.g.dart` share colour/mark order and species
+motion timing. Done and boop reactions end after four frames. Decorative idle motion
+is separate from work activity and stops in quiet mode, reduced motion and background
+windows. The round dial shares adult layer data and shrinks only active layers into
+five fixed PSRAM caches, rather than storing every identity or growth combination.
 
 `alignment.json` and `illustrated_alignment.g.dart` are generated from idle alpha
 bounds. Flutter and AppKit use these stable anchors for all moods, centering

@@ -2072,8 +2072,8 @@ void main() {
       expect(frames.single.$2['active'], isTrue);
       expect(
         frames.single.$2.containsKey('pair'),
-        isFalse,
-        reason: 'no pair yet',
+        isTrue,
+        reason: 'an empty guest pair explicitly clears an older connection',
       );
       // A guest's pair lives in its local zoo: the brain hears it paired.
       for (final key in _habits5) {

@@ -13,6 +13,7 @@ import 'package:harness/daemons/daemon_face.dart';
 import 'package:harness/daemons/plates.dart';
 import 'package:harness/daemons/render.dart';
 import 'package:harness/daemons/individuals.dart';
+import 'package:harness/daemons/illustrated_art.dart';
 import 'package:harness/daemons/roster.dart';
 import 'package:harness/daemons/zoo.dart';
 import 'package:harness/daemons/zoo_controller.dart';
@@ -346,13 +347,19 @@ void main() {
   });
 
   group('the zoo tab', () {
-    Future<DaemonFace> panel(WidgetTester tester, DateTime at) async {
+    Future<DaemonFace> panel(
+      WidgetTester tester,
+      DateTime at, {
+      int seed = 0,
+    }) async {
       final storage = _Memory()
         ..values[ZooController.localZooKey] = jsonEncode({
           'zoo': Zoo(
             daemons: [
               ZooDaemon(
                 id: 'tim',
+                uid: seed == 0 ? null : 'review_tim',
+                seed: seed,
                 hatched: '2026-09-27T09:00:00Z',
                 egg: 'first',
                 version: '2.0',
@@ -361,7 +368,7 @@ void main() {
               // Owned before its drop went on hold: never on a shelf.
               ZooDaemon(id: 'fish', hatched: '', egg: 'turn'),
             ],
-            pair: 'tim',
+            pair: seed == 0 ? 'tim' : 'review_tim',
             habits: ['turn', 'split', 'find'],
             firstEgg: true,
           ).toJson(),
@@ -401,6 +408,28 @@ void main() {
       await tester.pump();
       return face;
     }
+
+    testWidgets(
+      'collection thumbnail and portrait use the same individual material',
+      (tester) async {
+        final face = await panel(
+          tester,
+          DateTime.utc(2026, 9, 28, 12),
+          seed: 123456,
+        );
+        final expected = IllustratedArt.daemon('tim', traits: face.traits);
+        final illustrations = tester
+            .widgetList<DaemonIllustration>(find.byType(DaemonIllustration))
+            .where((w) => w.art.stem.startsWith('tim_'))
+            .toList();
+        expect(illustrations.length, greaterThanOrEqualTo(2));
+        for (final illustration in illustrations) {
+          expect(illustration.art.style, expected.style);
+          expect(illustration.art.styled, isTrue);
+        }
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
 
     testWidgets('released: drop init only; unix and tty on hold show '
         'nowhere, not even what you own of them', (tester) async {
@@ -507,9 +536,9 @@ void main() {
       (tester) async {
         await tester.pumpWidget(host(portrait('gnu')));
         expect(imageAsset(tester), endsWith('gnu_adult_idle_0.png'));
-        await tester.pump(const Duration(milliseconds: 190));
+        await tester.pump(const Duration(milliseconds: 260));
         expect(imageAsset(tester), endsWith('gnu_adult_idle_1.png'));
-        await tester.pump(const Duration(milliseconds: 190 * 3));
+        await tester.pump(const Duration(milliseconds: 260 * 3));
         expect(imageAsset(tester), endsWith('gnu_adult_idle_0.png'));
         await tester.pumpWidget(host(portrait('gnu', mood: DaemonMood.work)));
         expect(imageAsset(tester), endsWith('gnu_adult_work_0.png'));
@@ -529,7 +558,7 @@ void main() {
       await tester.pump(const Duration(seconds: 2));
       expect(imageAsset(tester), endsWith('gnu_adult_idle_0.png'));
       await tester.pumpWidget(host(portrait('gnu')));
-      await tester.pump(const Duration(milliseconds: 380));
+      await tester.pump(const Duration(milliseconds: 520));
       expect(imageAsset(tester), endsWith('gnu_adult_idle_2.png'));
       await tester.pumpWidget(host(portrait('gnu'), reduceMotion: true));
       expect(imageAsset(tester), endsWith('gnu_adult_idle_0.png'));

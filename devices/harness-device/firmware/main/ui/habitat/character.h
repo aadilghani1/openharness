@@ -12,6 +12,7 @@ typedef enum {
 typedef struct {
     ht_character_id_t id;
     ht_character_motion_t motion;
+    ht_companion_style_t companion_style;
     struct {
         uint32_t sequence, began;
         uint8_t lift;

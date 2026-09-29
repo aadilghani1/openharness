@@ -171,6 +171,7 @@ class _DaemonPortraitState extends State<DaemonPortrait> {
           version: w.version,
           mood: w.mood,
           blink: w.lid != null,
+          traits: w.traits,
         ),
         size: w.size == PlateSize.reveal ? 350 : 240,
         animate: w.animate && !w.silhouette && w.rows == null,

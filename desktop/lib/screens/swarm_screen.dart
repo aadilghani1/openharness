@@ -296,6 +296,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _zoo,
     now: widget.daemonClock,
     settings: _daemonSettings,
+    animateIllustrations: true,
   );
   late final ValueListenable<bool>? _daemonsPreview = widget.daemonsPreview;
 
@@ -326,6 +327,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   final _brainSubscriptions = <StreamSubscription<Object?>>[];
   DateTime? _awaySince;
   String? _presencePair;
+  String? _presenceCompanion;
   String? _presenceAutonomy;
   bool? _presenceConsent;
   String? _presenceFocus;
@@ -3317,6 +3319,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'glyph': _face.glyph,
       'art': IllustratedArt.forFace(_face)
           ?.asset(IllustratedArt.frameForFace(_face), slot: true),
+      'artStyle': IllustratedArt.forFace(_face)?.style,
       // The ten cells as drawn (centred on the base sprite, a shiny `*` in
       // the gutter). Counts and progress stay out of the focus bar.
       'cell': _face.cell,
@@ -3759,11 +3762,30 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   /// `daemon_presence`: whether you are at this window, how long you were
   /// away, and (for a guest, whose zoo is local) which daemon it pairs with.
+  Map<String, dynamic>? get _guestCompanion {
+    final paired = _zoo.paired;
+    if (!app.isGuest || paired == null || !IllustratedArt.supports(paired.id))
+      return null;
+    return {
+      'id': paired.id,
+      'uid': paired.uid,
+      'seed': paired.seed,
+      'name':
+          paired.name ??
+          (paired.serial == null
+              ? paired.id
+              : '${paired.id} #${paired.serial.toString().padLeft(4, '0')}'),
+      'version': paired.version,
+      ...IllustratedArt.daemon(paired.id, traits: _zoo.traitsOf(paired)).style,
+    };
+  }
+
   Future<void> _sendPresence({Duration? away, Duration? idle}) async {
     if (!_zoo.loaded || !_brain.active) return;
     // harnessd knows the pair by its species.
     final pair = app.isGuest ? _zoo.zoo.byUid(_zoo.zoo.pair)?.id : null;
     _presencePair = pair;
+    _presenceCompanion = jsonEncode(_guestCompanion);
     final pane = app.focusedPane;
     final agentId = pane?.agentId;
     _presenceFocus = agentId == null ? null : '${pane!.machineId}/$agentId';
@@ -3774,6 +3796,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       active: app.inForeground && idle == null,
       away: idle ?? away,
       pair: pair,
+      companion: _guestCompanion,
       autonomy: _presenceAutonomy,
       consent: _presenceConsent,
       focusMachineId: agentId == null ? null : pane!.machineId,
@@ -3867,14 +3890,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (app.isGuest &&
         _brain.active &&
         (_zoo.zoo.byUid(_zoo.zoo.pair)?.id != _presencePair ||
+            jsonEncode(_guestCompanion) != _presenceCompanion ||
             _zoo.zoo.autonomy != _presenceAutonomy ||
             _zoo.zoo.watching != _presenceConsent)) {
       _presencePair = _zoo.zoo.byUid(_zoo.zoo.pair)?.id;
+      _presenceCompanion = jsonEncode(_guestCompanion);
       _presenceAutonomy = _zoo.zoo.autonomy;
       _presenceConsent = _zoo.zoo.watching;
       unawaited(
         _brain.guest(
           pair: _presencePair,
+          companion: _guestCompanion,
           autonomy: _presenceAutonomy,
           consent: _presenceConsent,
         ),

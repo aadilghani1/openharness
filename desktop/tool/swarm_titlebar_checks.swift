@@ -607,6 +607,16 @@ private extension SwarmTabStrip {
         "Native PNG decoding bounds \(file.lastPathComponent) to its slot-sized bitmap")
     }
     let species = ["tim", "gnu", "lynx", "mutt", "yak", "gopher", "bug", "tux", "auk", "beastie"]
+    for id in species {
+      let asset = "assets/daemon-art/slot/\(id)_baby_idle_0.png"
+      let normal = art.image(asset: asset)!
+      let styled = art.image(asset: asset, style: ["colour": 2, "mark": 1])!
+      let other = art.image(asset: asset, style: ["colour": 4, "mark": 3])!
+      try checkTitlebar(styled !== normal && other !== styled && styled.tiffRepresentation != normal.tiffRepresentation,
+        "Rolled coat and markings change native pixels for \(id)")
+      try checkTitlebar(art.image(asset: asset, style: ["colour": 2, "mark": 1]) === styled,
+        "An individual reuses its decoded native frame for \(id)")
+    }
     let stages = ["egg_first_p0_0", "egg_first_p4_0", "egg_first_burst_0", "egg_first_open_0"] +
       species.flatMap { id in ["baby", "young", "adult"].map { "\(id)_\($0)_idle_0" } }
     let bar = SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 40))
