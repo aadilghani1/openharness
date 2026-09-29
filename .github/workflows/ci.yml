@@ -99,7 +99,12 @@ jobs:
       # 1,871 tests over 144 files, ~30s. The four `*.real.spec.ts` / `localE2e.spec.ts` suites that
       # need a live tmux or Cursor are gated behind RUN_* env vars and stay skipped here —
       # `npm run test:tmux-real` and friends are how those are run, on a machine that has them.
-      - run: npx vitest run
+      # The guard fuzz suite measures a wall-clock CPU budget. Sibling workers running
+      # subprocess fixtures can deschedule it past that bound on a shared runner.
+      # Run it separately with the same assertions and deadline; every test still runs.
+      - run: npx vitest run --exclude src/pair/learn/guard.fuzz.spec.ts
+      - name: Guard fuzz and bounded hostile-input time
+        run: npx vitest run src/pair/learn/guard.fuzz.spec.ts
 
       - name: Verify hn launcher repair in an existing installation
         run: |

@@ -48,7 +48,12 @@ recovering panes. Opens wait until machine selection succeeds.
   now checks actual arguments on every engine, preserving default-engine flags
   and verifying they do not leak to other engines. No launch behavior changes.
   The other initial failure exceeded a 1.5-second fuzz-test budget by 10 ms; its
-  unchanged targeted rerun passed. The timing bound remains unchanged.
+  unchanged targeted rerun passed. Another full run exceeded the bound by 12 ms
+  on a different input. CI now runs that suite separately from sibling workers;
+  all tests and the timing bound remain unchanged. A Linux viewer-fixture cleanup
+  race also surfaced after its assertions passed: deleting its home could race
+  the final headless-client save. Both viewer and reconnect fixtures now wait for
+  their own clients to exit before removing the test home.
 
 ## Reproduce
 

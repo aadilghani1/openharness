@@ -203,7 +203,17 @@ finally:
                 os.kill(int(match[1]), 15)
             except ProcessLookupError:
                 pass
-    if mock is not None:
-        mock.terminate()
-        mock.wait(timeout=5)
+    def clients():
+        rows = subprocess.check_output(['ps', '-ax', '-o', 'pid=,command='], text=True).splitlines()
+        return [row for row in rows if len(parts := row.strip().split(None, 1)) == 2
+                and parts[1].startswith(str(HN) + ' ') and f'-L {PREFIX} ' in parts[1]]
+    try:
+        deadline = time.monotonic() + 5
+        while clients() and time.monotonic() < deadline:
+            time.sleep(.05)
+        assert not clients(), 'recovery test clients did not exit'
+    finally:
+        if mock is not None:
+            mock.terminate()
+            mock.wait(timeout=5)
     shutil.rmtree(BASE)
