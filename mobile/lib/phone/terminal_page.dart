@@ -954,7 +954,7 @@ class _TerminalPageState extends State<TerminalPage>
   ///
   /// ⚠️ **The two-second message outranks the take.** The take's line was first, and a take the
   /// question refused — `✗ no match — tap an answer` — never showed its reason: the refusal also
-  /// leaves the take's generic "Not sent — this terminal isn't taking input" standing, which
+  /// leaves the take's generic "Not sent · terminal isn't taking input" standing, which
   /// covered the one line that said what to do, and blamed the terminal instead.
   Widget? _statusLine() {
     final tty = Tty.of(context);
@@ -3547,8 +3547,15 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
   );
 }
 
-/// The line above the mic, on the terminal gutter with an opaque ground.
+/// The line above the mic, centred over it with an opaque ground.
 /// Its fixed yellow dot uses the same asking colour as Find.
+///
+/// ⚠️ **Centred, not on the gutter**, by the owner's call (2026-09-29): it stands over the mic,
+/// which is centred too. A second line centres the same way.
+///
+/// ⚠️ **Wraps to a second line rather than cut.** What is said here fits one line (see
+/// `VoiceNotice`), but not on every phone at every text size — and a warning cut mid-word hid
+/// what to do. Positioned by its foot, a second line grows up over the terminal, off the mic.
 class _StatusLine extends StatelessWidget {
   const _StatusLine({required this.text, this.color, this.dot = false});
 
@@ -3567,15 +3574,23 @@ class _StatusLine extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(Tty.origin, 8, Tty.origin, below),
           child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (dot) ...[
-                Container(
-                  key: const ValueKey('sample-guide-dot'),
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: tty.yellow,
-                    shape: BoxShape.circle,
+                // Centred on the first line, not between two.
+                Padding(
+                  padding: const EdgeInsets.only(
+                    top: (TtySize.meta * 1.2 - 6) / 2,
+                  ),
+                  child: Container(
+                    key: const ValueKey('sample-guide-dot'),
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: tty.yellow,
+                      shape: BoxShape.circle,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -3583,7 +3598,8 @@ class _StatusLine extends StatelessWidget {
               Flexible(
                 child: Text(
                   text,
-                  maxLines: 1,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: tty.style(
                     size: TtySize.meta,
